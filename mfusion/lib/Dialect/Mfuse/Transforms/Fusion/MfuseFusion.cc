@@ -16,12 +16,10 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.h"
 
-#include <cstdlib>
 #include <functional>
 #include <utility>
 #include <vector>
 
-#include "llvm/Support/raw_ostream.h"
 #include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPasses.h"
 #include "mlir/IR/Operation.h"
@@ -35,33 +33,10 @@ namespace mlir {
 
 namespace mfuse {
 
-namespace {
-
-const char kPrintIrEnvName[] = "MFUSION_PRINT_IR";
-const char kPrintIrEnvValue[] = "1";
-
-/// Returns true when MFUSION_PRINT_IR is set to "1" (enable per-pass IR dump).
-inline bool isPrintIrEnabled() {
-  const char* v = std::getenv(kPrintIrEnvName);
-  return v && (std::string(v) == kPrintIrEnvValue);
-}
-
-/// Prints the current module IR to llvm::outs() with a short title.
-void printIrAfterPass(llvm::StringRef passName, Operation* op) {
-  llvm::outs() << "\n" << std::string(80, '=') << "\n";
-  llvm::outs() << "MFuse Fusion IR after pass: " << passName << "\n";
-  llvm::outs() << std::string(80, '=') << "\n";
-  OpPrintingFlags flags;
-  op->print(llvm::outs(), flags);
-  llvm::outs() << "\n";
-}
-
-}  // namespace
-
 struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
-    std::vector<std::pair<const char*, PassCreator>> passes = {
+    std::vector<std::pair<const char *, PassCreator>> passes = {
         // Conv-related fusion passes:
         {"fuse-biasadd-conv", []() { return createFuseBiasaddConvPass(); }},
         {"fuse-conv2d-cast", []() { return createFuseConv2DCastPass(); }},
@@ -83,35 +58,19 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
          []() { return createFuseMatmulTransposeWeightPass(); }},
         {"fuse-batch-matmul",
          []() { return createFuseBatchMatMulPass(); }},
-        {"fuse-batch-matmul-to-mul", []() { return createFuseBatchMatMulToMulPass(); }},
+        {"fuse-batchmatmul-to-mul", []() { return createFuseBatchMatMulToMulPass(); }},
         {"fuse-matmul-reshape-bias-add",
          []() { return createFuseMatmulReshapeBiasAddPass(); }},
 
         {"fuse-gelu", []() { return createFuseGeluPass(); }},
         // RmsNorm is fused on Torch dialect (torch-fusion) before convert-torch-to-mfuse.
         // fuse-add-rms-norm can then fold adjacent add ops with the resulting aclnn.rms_norm.
-        {"fuse-add-rms-norm", []() { return createFuseAddRmsNormPass(); }},
+        {"fuse-addrmsnorm", []() { return createFuseAddRmsNormPass(); }},
         {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
     };
 
-    const bool printIr = isPrintIrEnabled();
-
-    if (printIr) {
-      Operation* op = getOperation();
-      for (const auto& [name, creator] : passes) {
-        PassManager pm(&getContext());
-        pm.addPass(creator());
-        if (failed(pm.run(op))) {
-          signalPassFailure();
-          return;
-        }
-        printIrAfterPass(name, op);
-      }
-      return;
-    }
-
     PassManager pm(&getContext());
-    for (const auto& [name, creator] : passes) {
+    for (const auto &[name, creator] : passes) {
       (void)name;
       pm.addPass(creator());
     }
