@@ -55,10 +55,10 @@ def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
 //===----------------------------------------------------------------------===//
 
 def FuseBiasaddConv : Pass<"fuse-biasadd-conv", "::mlir::ModuleOp"> {
-  let summary = "Fuse Conv2D (no bias) and Add (bias) into Conv2DWithBias";
+  let summary = "Fuse aclnn.conv2d (no bias) and Add (bias) into aclnn.conv2d_with_bias";
   let description = [{
-    Fuses Conv2D without bias followed by BiasAdd/Add into a single
-    Conv2DWithBias. Does not fuse when Conv2D already has bias or shapes are dynamic.
+    Fuses aclnn.conv2d without bias followed by BiasAdd/Add into a single
+    aclnn.conv2d_with_bias. Does not fuse when conv already has bias or shapes are dynamic.
   }];
   let constructor = "mlir::mfuse::createFuseBiasaddConvPass()";
   let dependentDialects = [
@@ -68,11 +68,11 @@ def FuseBiasaddConv : Pass<"fuse-biasadd-conv", "::mlir::ModuleOp"> {
 }
 
 def FuseConv2DCast : Pass<"fuse-conv2d-cast", "::mlir::ModuleOp"> {
-  let summary = "Fuse Conv2D (f16) and Cast (f32) into Conv2D with f32 result";
+  let summary = "Fuse aclnn.conv2d (f16) and Cast (f32) into aclnn.conv2d with f32 result";
   let description = [{
-    Fuses Conv2D with float16 output followed by Cast to float32 into a single
-    Conv2D with float32 result. Does not fuse when Conv2D/Cast is dynamic or
-    any Conv2D input is from StridedRead. Conv must have exactly one user (the Cast)
+    Fuses aclnn.conv2d with float16 output followed by Cast to float32 into a single
+    aclnn.conv2d with float32 result. Does not fuse when conv/Cast is dynamic or
+    any conv input is from StridedRead. Conv must have exactly one user (the Cast)
     to fuse; only the Cast op is replaced (Conv is not erased).
   }];
   let constructor = "mlir::mfuse::createFuseConv2DCastPass()";
@@ -219,6 +219,53 @@ def FuseSwiGlu : Pass<"fuse-swi-glu", "::mlir::ModuleOp"> {
     2. Mul(Reshape(SplitWithSize(Reshape(input))[0]), Silu(Reshape(SplitWithSize(Reshape(input))[1])))
   }];
   let constructor = "mlir::mfuse::createFuseSwiGluPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseBatchNorm : Pass<"fuse-batch-norm", "::mlir::ModuleOp"> {
+  let summary = "Fuse decomposed eval batch norm into mfuse.aclnn.batch_norm";
+  let description = [{
+    The pass flag `fuse-batch-norm` matches **eval-mode** BN subgraphs written as
+    decomposed `torch.aten.batch_norm`-like chains. The fused mfuse BN op is always
+    `mfuse.aclnn.batch_norm` (eval defaults on attributes).
+
+    Recognizes the mfuse decomposition (sub, inv_std via sqrt/reciprocal, optional mul-by-1,
+    channel reshapes, mul, add) and replaces it with `mfuse.aclnn.batch_norm`.
+
+    By default, mean and running_var must be provably computed from `x` as E(x) / Var(x)
+    over NCHW spatial dims. Enable `allow-external-batch-norm-stats` to also accept
+    inference-style running_mean / running_var from block arguments, constants, or
+    reshape(constants) without requiring that online subgraph.
+  }];
+  let options = [
+    Option<"allowExternalBatchNormStats", "allow-external-batch-norm-stats", "bool", "false",
+           "When true, accept external running_mean/running_var (args, constants, or "
+           "reshape(constants)). Default false requires explicit E(x)/Var(x) validation.">
+  ];
+  let constructor = "mlir::mfuse::createFuseBatchNormPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseConvBatchNorm : Pass<"fuse-conv-batchnorm", "::mlir::ModuleOp"> {
+  let summary = "Fold aclnn.conv2d[/with_bias] + aclnn.batch_norm into aclnn.conv2d_with_bias";
+  let description = [{
+    Fuses `mfuse.aclnn.conv2d` or `mfuse.aclnn.conv2d_with_bias` followed by
+    `mfuse.aclnn.batch_norm` (inference, constant tensors) by folding BN into
+    convolution weight and bias constants.
+
+    Constraints (aligned with ConvBatchnormFusionPass intent):
+    - Conv filter (and bias, when present) must be constants.
+    - BatchNorm running_mean/running_var/weight/bias must be constants.
+    - Conv output must feed only the BatchNorm op.
+    - Dynamic/unsupported constant shapes are not fused.
+  }];
+  let constructor = "mlir::mfuse::createFuseConvBatchNormPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"

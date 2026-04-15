@@ -33,8 +33,8 @@ namespace mlir {
 namespace mfuse {
 namespace {
 
-// Reference: conv2d_cast_fusion_pass.cc pattern 2: Conv2D (fp16) -> Cast (fp32) -> Conv2D (fp32), remove Cast.
-// Constraints: no dynamic; Conv2D inputs not from StridedRead.
+// Reference: conv2d_cast_fusion_pass.cc pattern 2: AclnnConv2D (fp16) -> Cast (fp32) -> AclnnConv2D (fp32), remove
+// Cast. Constraints: no dynamic; AclnnConv2D inputs not from StridedRead.
 
 /// Find any CastOp user of \p value that casts f16 to f32. Returns the first matching CastOp if found.
 static CastOp getF16ToF32Cast(Value value) {
@@ -69,17 +69,17 @@ static bool isDefinedByStridedRead(Value value) {
   return def->getName().getStringRef().contains("strided_read");
 }
 
-/// Pattern: Conv2D (f16) -> Cast (f32) -> Conv2D (f32 output).
+/// Pattern: AclnnConv2D (f16) -> Cast (f32) -> AclnnConv2D (f32 output).
 /// Constraints:
-/// - Conv2D input f16, Cast output f32.
-/// - Conv2D and Cast are not dynamic (static shapes).
-/// - No Conv2D input is produced by StridedRead.
+/// - AclnnConv2D input f16, Cast output f32.
+/// - AclnnConv2D and Cast are not dynamic (static shapes).
+/// - No AclnnConv2D input is produced by StridedRead.
 /// - Conv has exactly one user (the f16->f32 Cast); otherwise we do not fuse to avoid increasing conv count.
-class FuseConv2DCastPattern : public OpRewritePattern<Conv2DOp> {
+class FuseConv2DCastPattern : public OpRewritePattern<AclnnConv2DOp> {
  public:
-  using OpRewritePattern<Conv2DOp>::OpRewritePattern;
+  using OpRewritePattern<AclnnConv2DOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(Conv2DOp convOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(AclnnConv2DOp convOp, PatternRewriter &rewriter) const override {
     Value convResult = convOp.getResult();
     auto castOp = getF16ToF32Cast(convResult);
     if (!castOp) {
@@ -100,14 +100,17 @@ class FuseConv2DCastPattern : public OpRewritePattern<Conv2DOp> {
       return rewriter.notifyMatchFailure(convOp, "conv input from StridedRead");
     }
 
-    MLOG(DEBUG) << "FuseConv2DCastPattern matched Conv2DOp@" << convOp.getLoc() << " + Cast(f16->f32)@"
-                << castOp.getLoc() << " -> single Conv2D(f32)";
+    MLOG(DEBUG) << "FuseConv2DCastPattern matched AclnnConv2DOp@" << convOp.getLoc() << " + Cast(f16->f32)@"
+                << castOp.getLoc() << " -> single AclnnConv2D(f32)";
 
     Type outType = castOp.getResult().getType();
-    Value newConv = rewriter.create<Conv2DOp>(convOp.getLoc(), outType, convOp.getInput(), convOp.getWeight());
-    MLOG(DEBUG) << "FuseConv2DCast: created Conv2DOp@" << newConv.getDefiningOp()->getLoc() << " (f32 output)";
+    Value newConv = rewriter.create<AclnnConv2DOp>(convOp.getLoc(), outType, convOp.getInput(), convOp.getWeight(),
+                                                   convOp.getStride(), convOp.getPadding(), convOp.getDilation(),
+                                                   convOp.getTransposedAttr(), convOp.getOutputPadding(),
+                                                   convOp.getGroupsAttr());
+    MLOG(DEBUG) << "FuseConv2DCast: created AclnnConv2DOp@" << newConv.getDefiningOp()->getLoc() << " (f32 output)";
     rewriter.replaceOp(castOp, newConv);
-    MLOG(DEBUG) << "FuseConv2DCast: replaced CastOp with Conv2DOp";
+    MLOG(DEBUG) << "FuseConv2DCast: replaced CastOp with AclnnConv2DOp";
     return success();
   }
 };
