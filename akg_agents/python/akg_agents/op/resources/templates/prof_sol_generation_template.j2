@@ -55,6 +55,9 @@ def run_sol_generation_profile():
 
         with open("definition.json", "r", encoding="utf-8") as f:
             definition_dict = json.load(f)
+        # Preprocess hf_id: empty string is invalid for NonEmptyString, convert to None
+        if "hf_id" in definition_dict and definition_dict["hf_id"] == "":
+            definition_dict["hf_id"] = None
         with open("workload.jsonl", "r", encoding="utf-8") as f:
             workloads = [json.loads(line) for line in f if line.strip()]
 
