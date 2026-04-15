@@ -1330,8 +1330,8 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     return 0;
   }
 
-  unsigned depDepth = computeEffectiveDepDepth(dstInfo.loops, dstAccesses);
-  depDepth = std::max(depDepth, plan.depInfo.loopDepth);
+  // unsigned depDepth = computeEffectiveDepDepth(dstInfo.loops, dstAccesses);
+  unsigned depDepth = plan.depInfo.loopDepth;
   unsigned loopDepth = dstInfo.loopDepth;
   if (!srcInfo.isPerfect) {
     loopDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
