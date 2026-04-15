@@ -825,6 +825,63 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
   return tileSizePerBlock;
 }
 
+static bool isNoSplitAxis(const AxisPtr &axis, bool isReduceOp) {
+  if (!axis || !axis->loop) {
+    return false;
+  }
+  auto loopOp = axis->getLoopOperation();
+  if (!loopOp) {
+    return false;
+  }
+  return (isReduceOp && loopOp->hasAttr(kReductionLoopAttr)) ||
+         loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr);
+}
+
+static bool isTransposeAxis(const AxisPtr &axis) {
+  if (!axis || !axis->loop) {
+    return false;
+  }
+  if (auto loopOp = axis->getLoopOperation()) {
+    return loopOp->hasAttr(kTransposeLoopAttr);
+  }
+  return false;
+}
+
+static unsigned getLargestFactorLE(int64_t value, int64_t limit) {
+  if (value <= 1 || limit <= 1) {
+    return 1;
+  }
+  for (int64_t factor = std::min(value, limit); factor >= 1; --factor) {
+    if (value % factor == 0) {
+      return static_cast<unsigned>(factor);
+    }
+  }
+  return 1;
+}
+
+static void applyExactAxisTiling(const AxisPtr &axis, unsigned outerTile, unsigned innerTile, size_t &maxLevelToTile) {
+  if (!axis) {
+    return;
+  }
+
+  if (axis->configs[kTileCfg].size() > 2) {
+    axis->configs[kTileCfg].resize(2);
+  }
+  while (axis->configs[kTileCfg].size() < 2) {
+    axis->doExtraTile();
+  }
+  for (int level = 0; level < 2; ++level) {
+    auto tileConfig = axis->tryGetConfig(level, kTileCfg);
+    if (!tileConfig) {
+      continue;
+    }
+    tileConfig->constraints.clear();
+    tileConfig->value = level == 0 ? static_cast<int>(outerTile) : static_cast<int>(innerTile);
+    axis->tryAddConstraint(level, Constraint({tileConfig->value}), kTileCfg);
+  }
+  maxLevelToTile = std::max(maxLevelToTile, static_cast<size_t>(2));
+}
+
 static void configureDynamicAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
   // Ensure we have at least 2 levels for dynamic axes.
   for (size_t i = axis->configs[kTileCfg].size(); i < 2; ++i) {
@@ -941,6 +998,52 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   }
 }
 
+static void applyBandTiling(const SmallVector<AxisPtr, 4> &bandAxes, const SmallVector<unsigned, 4> &tileSizes,
+                            unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile, bool isReduceOp) {
+  int transposeStart = -1;
+  for (size_t i = 0; i < bandAxes.size(); ++i) {
+    if (isTransposeAxis(bandAxes[i])) {
+      transposeStart = static_cast<int>(i);
+      break;
+    }
+  }
+
+  SmallVector<unsigned, 4> transposeTiles;
+  bool canUseTransposeTiling = transposeStart >= 0;
+  for (size_t i = static_cast<size_t>(std::max(transposeStart, 0));
+       canUseTransposeTiling && i < bandAxes.size(); ++i) {
+    canUseTransposeTiling =
+      bandAxes[i]->hasConstantBounds() && isTransposeAxis(bandAxes[i]) && !isNoSplitAxis(bandAxes[i], isReduceOp);
+  }
+
+  if (canUseTransposeTiling) {
+    size_t transposeStartIdx = static_cast<size_t>(transposeStart);
+    transposeTiles.assign(bandAxes.size() - transposeStartIdx, 1);
+    int64_t remainingVectorSize = kVectorMaxSize;
+    for (size_t i = bandAxes.size(); i-- > transposeStartIdx;) {
+      int64_t extentValue =
+        std::max<int64_t>(bandAxes[i]->getConstantUpperBound() - bandAxes[i]->getConstantLowerBound(), 1);
+      unsigned tile = getLargestFactorLE(extentValue, remainingVectorSize);
+      transposeTiles[i - transposeStartIdx] = tile;
+      if (remainingVectorSize > 1) {
+        remainingVectorSize = std::max<int64_t>(remainingVectorSize / std::max<int64_t>(tile, 1), 1);
+      }
+    }
+  }
+
+  for (size_t i = 0; i < bandAxes.size(); ++i) {
+    const auto &axis = bandAxes[i];
+    if (canUseTransposeTiling && static_cast<int>(i) >= transposeStart) {
+      unsigned tile = transposeTiles[i - static_cast<size_t>(transposeStart)];
+      applyExactAxisTiling(axis, tile, tile, maxLevelToTile);
+      continue;
+    }
+
+    bool axisIsNoSplit = isNoSplitAxis(axis, isReduceOp);
+    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsNoSplit);
+  }
+}
+
 SmallVector<AxisPtr> NpuDefaultTileStrategy::collectAxes(const NpuModelGraphPtr npuGraph) {
   SmallVector<AxisPtr> axes;
   npuGraph->rootAxis->forEachAxisTopDown([&axes](const AxisPtr axis) {
@@ -993,22 +1096,32 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
   constexpr unsigned innerTileSize = 512;
   constexpr unsigned blockNumber = 40;
 
-  for (const auto &axis : axes) {
-    auto rankIt = bandRankMap.find(axis->bandIdx);
-    if (rankIt == bandRankMap.end()) {
+  if (!tileSizes.empty()) {
+    for (const auto &axis : axes) {
+      auto rankIt = bandRankMap.find(axis->bandIdx);
+      if (rankIt == bandRankMap.end()) {
+        continue;
+      }
+
+      bool axisIsNoSplit = isNoSplitAxis(axis, isReduceOp);
+      processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsNoSplit);
+    }
+    npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
+    return;
+  }
+
+  std::unordered_map<size_t, SmallVector<AxisPtr, 4>> axesByBand;
+  std::for_each(axes.begin(), axes.end(), [&](const AxisPtr &axis) {
+    axesByBand[axis->bandIdx].push_back(axis);
+  });
+
+  for (auto &[bandIdx, bandAxes] : axesByBand) {
+    if (bandRankMap.find(bandIdx) == bandRankMap.end()) {
       continue;
     }
-
-    // No-split axes use explicit full/no-split tile metadata.
-    bool isFullTileAxis = false;
-    auto *loopOp = axis ? axis->getLoopOperation() : nullptr;
-    if (loopOp && isReduceOp && loopOp->hasAttr(kReductionLoopAttr)) {
-      isFullTileAxis = true;
-    } else if (loopOp && loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
-      isFullTileAxis = true;
-    }
-
-    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isFullTileAxis);
+    std::sort(bandAxes.begin(), bandAxes.end(),
+              [](const AxisPtr &lhs, const AxisPtr &rhs) { return lhs->axisIdx < rhs->axisIdx; });
+    applyBandTiling(bandAxes, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceOp);
   }
 
   npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);

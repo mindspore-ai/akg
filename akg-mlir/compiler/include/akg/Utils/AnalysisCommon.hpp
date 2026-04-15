@@ -64,6 +64,7 @@ constexpr auto kReductionYLoopAttr = "reduction_y";
 constexpr auto kReductionAllLoopAttr = "reduction_all";
 constexpr auto kReductionInitAttr = "reduction_init";
 constexpr auto kVectorSize = 4096;
+constexpr auto kVectorMaxSize = 8192;
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
 constexpr auto kVectorize512Bit = 512;
@@ -79,6 +80,7 @@ constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;
+constexpr auto kTransposeLoopAttr = "transpose";
 
 const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039,
                                           100000049, 100000073, 100000079, 100000081, 100000091};
