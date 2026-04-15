@@ -14,10 +14,10 @@ func.func @test_elementwise_static(
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
 
-  // CHECK: %[[MAX:.*]] = arith.constant 4096 : index
-  // CHECK: %[[X_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[MAX]]], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
-  // CHECK: %[[Y_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[MAX]]], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
-  // CHECK: %[[ALPHA_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[MAX]]] : f32 to !npuvector<1024xf32>
+  // CHECK: %[[MAX:.*]] = arith.constant 1024 : index
+  // CHECK: %[[X_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [{{.*}}] [{{.*}}], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
+  // CHECK: %[[Y_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [{{.*}}] [{{.*}}], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
+  // CHECK: %[[ALPHA_VEC:.*]] = npuvector.broadcast %{{.*}}[{{.*}}] [{{.*}}] : f32 to !npuvector<1024xf32>
   // CHECK: %[[AX_VEC:.*]] = arith.mulf %[[ALPHA_VEC]], %[[X_VEC]] : !npuvector<1024xf32>
   // CHECK: %[[RESULT_VEC:.*]] = arith.addf %[[AX_VEC]], %[[Y_VEC]] : !npuvector<1024xf32>
   // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<1024xf32>, memref<1024xf32>
@@ -29,7 +29,7 @@ func.func @test_elementwise_static(
     %ax = arith.mulf %alpha, %x : f32
     %result = arith.addf %ax, %y : f32
     memref.store %result, %Z[%i] : memref<1024xf32>
-  } {vector=4096}
+  } {vector=1024}
   return
 }
 
@@ -49,13 +49,13 @@ func.func @test_elementwise_dynamic(
   // CHECK: %[[MAX:.*]] = arith.constant 4096 : index
   // CHECK: %[[TRIP:.*]] = arith.subi %[[DIM]], %{{.*}} : index
   // CHECK: %[[VEC_SIZE:.*]] = arith.minsi %[[TRIP]], %[[MAX]] : index
-  // CHECK: scf.for {{.*}} = %{{.*}} to %[[DIM]] step %{{.*}} {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VEC_SIZE]]] [%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   %[[SCALE_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
-  // CHECK:   %[[SCALED_VEC:.*]] = arith.mulf %[[V_VEC]], %[[SCALE_VEC]] : !npuvector<?xf32>
-  // CHECK:   %[[BIAS_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
-  // CHECK:   %[[RESULT_VEC:.*]] = arith.addf %[[SCALED_VEC]], %[[BIAS_VEC]] : !npuvector<?xf32>
-  // CHECK:   npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<?xf32>, memref<?xf32>
+  // CHECK: %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VEC_SIZE]]] [%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK: %[[SCALE_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
+  // CHECK: %[[SCALED_VEC:.*]] = arith.mulf %[[V_VEC]], %[[SCALE_VEC]] : !npuvector<?xf32>
+  // CHECK: %[[BIAS_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
+  // CHECK: %[[RESULT_VEC:.*]] = arith.addf %[[SCALED_VEC]], %[[BIAS_VEC]] : !npuvector<?xf32>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<?xf32>, memref<?xf32>
+  // CHECK-NOT: scf.for
 
   scf.for %i = %c0 to %N step %c1 {
     %v = memref.load %input[%i] : memref<?xf32>
@@ -404,11 +404,17 @@ func.func @test_multidim_elementwise_dynamic(
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
-  // CHECK: scf.for {{.*}} to {{.*}} step {{.*}} {
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
   // CHECK: npuvector.transfer_read
   // CHECK: npuvector.transfer_read
   // CHECK: arith.addf
   // CHECK: npuvector.transfer_write
+  // CHECK-NOT: scf.for
   scf.for %i = %c0 to %M step %c1 {
     scf.for %j = %c0 to %N step %c1 {
       %va = memref.load %a[%i, %j] : memref<?x?xf32>
@@ -565,10 +571,16 @@ func.func @test_multidim_transpose_dynamic(
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
-  // CHECK: scf.for {{.*}} to {{.*}} step {{.*}} {
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
   // CHECK: npuvector.transfer_read
   // CHECK: npuvector.transpose
   // CHECK: npuvector.transfer_write
+  // CHECK-NOT: scf.for
 
   scf.for %i = %c0 to %M step %c1 {
     scf.for %j = %c0 to %N step %c1 {
@@ -588,11 +600,20 @@ func.func @test_multidim_transpose_dynamic_with_scf_if(
   %c1 = arith.constant 1 : index
   %c2 = arith.constant 2.0 : f32
 
-  // CHECK: scf.for {{.*}} to {{.*}} step {{.*}} {
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
+  // CHECK: arith.constant 4096
+  // CHECK: arith.subi
+  // CHECK: arith.minsi
   // CHECK: npuvector.transfer_read
+  // CHECK: arith.cmpi
   // CHECK: scf.if
+  // CHECK: npuvector.broadcast
+  // CHECK: arith.mulf
   // CHECK: npuvector.transpose
   // CHECK: npuvector.transfer_write
+  // CHECK-NOT: scf.for
 
   scf.for %i = %c0 to %M step %c1 {
     scf.for %j = %c0 to %N step %c1 {
@@ -788,7 +809,8 @@ func.func @test_transpose_mixed_static_affine_inner(
   %c16 = arith.constant 16 : index
   %c32 = arith.constant 32 : index
 
-  // CHECK: scf.for {{.*}} to {{.*}} step {{.*}} {
+  // CHECK: affine.apply
+  // CHECK: affine.min
   // CHECK: npuvector.transfer_read
   // CHECK: npuvector.transpose {{.*}} [1, 0]
   // CHECK: npuvector.transfer_write
@@ -1083,10 +1105,10 @@ func.func @test_extf_dynamic(%input: memref<?xbf16>, %output: memref<?xf32>) {
   // CHECK: %[[MAX:.*]] = arith.constant 4096 : index
   // CHECK: %[[TRIP:.*]] = arith.subi %[[DIM]], %{{.*}} : index
   // CHECK: %[[VEC_SIZE:.*]] = arith.minsi %[[TRIP]], %[[MAX]] : index
-  // CHECK: scf.for {{.*}} = %{{.*}} to %[[DIM]] step %{{.*}} {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VEC_SIZE]]] [%[[MAX]]], %{{.*}} : memref<?xbf16>, !npuvector<?xbf16>
-  // CHECK:   %[[RESULT_VEC:.*]] = npuvector.extf %[[V_VEC]] : !npuvector<?xbf16> to !npuvector<?xf32>
-  // CHECK:   npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<?xf32>, memref<?xf32>
+  // CHECK: %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VEC_SIZE]]] [%[[MAX]]], %{{.*}} : memref<?xbf16>, !npuvector<?xbf16>
+  // CHECK: %[[RESULT_VEC:.*]] = npuvector.extf %[[V_VEC]] : !npuvector<?xbf16> to !npuvector<?xf32>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<?xf32>, memref<?xf32>
+  // CHECK-NOT: scf.for
 
   scf.for %i = %c0 to %N step %c1 {
     %v = memref.load %input[%i] : memref<?xbf16>
