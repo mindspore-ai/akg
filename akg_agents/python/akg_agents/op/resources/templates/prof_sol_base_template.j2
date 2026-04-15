@@ -5,6 +5,9 @@ import time
 import sys
 
 import torch
+{% if backend == "ascend" %}
+from akg_agents.op.verifier.profiler import profiler_npu
+{% endif %}
 
 from sol_correctness import set_seed
 
@@ -56,7 +59,7 @@ def run_sol_base_profile():
         warmup_times = {{ warmup_times }}
         run_times = {{ run_times }}
         all_workload_times_ms = []
-        method = "sol_base_profiler_npu" if backend == "ascend" else "sol_base_do_bench"
+        method = "sol_base_profiler_npu" if backend == "ascend" else "sol_base_loop_timer"
 
         for wl_idx, workload_dict in enumerate(workloads):
             workload_obj = Workload.model_validate(workload_dict)
@@ -73,18 +76,31 @@ def run_sol_base_profile():
             def base_fn(_inputs=inputs_list):
                 return ref_run(*_inputs)
 
-            for _ in range(warmup_times):
-                _ = base_fn()
-                sync_device(backend)
+            if backend == "ascend":
+                execution_time_us = profiler_npu(
+                    base_fn,
+                    warmup=warmup_times,
+                    active=run_times,
+                    prof_dir_name=f"prof_sol_base_workload_{wl_idx:03d}",
+                    keep_res=False,
+                    suppress_warnings=True,
+                    clear_l2_cache=True,
+                    dsl="triton_ascend",
+                )
+                execution_time_ms = execution_time_us / 1000.0
+            else:
+                for _ in range(warmup_times):
+                    _ = base_fn()
+                    sync_device(backend)
 
-            sync_device(backend)
-            start_time = time.perf_counter()
-            for _ in range(run_times):
-                _ = base_fn()
                 sync_device(backend)
-            end_time = time.perf_counter()
+                start_time = time.perf_counter()
+                for _ in range(run_times):
+                    _ = base_fn()
+                    sync_device(backend)
+                end_time = time.perf_counter()
 
-            execution_time_ms = (end_time - start_time) * 1000.0 / max(run_times, 1)
+                execution_time_ms = (end_time - start_time) * 1000.0 / max(run_times, 1)
             all_workload_times_ms.append(execution_time_ms)
             print(f"[{{ op_name }}] Workload {wl_idx + 1}/{len(workloads)} base time: {execution_time_ms * 1000:.4f} us")
 
