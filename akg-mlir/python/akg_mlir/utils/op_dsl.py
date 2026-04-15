@@ -19,7 +19,7 @@ import inspect
 import itertools
 from copy import deepcopy
 import numpy as np
-from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY, format_py_value, gen_slice_scatter, gen_slice_tensor, gen_constant_pad_nd
+from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY, format_py_value, gen_slice_scatter, gen_slice_tensor, gen_constant_pad_nd, gen_broadcast_to
 
 
 def get_attr(attr_desc, attr_type):
