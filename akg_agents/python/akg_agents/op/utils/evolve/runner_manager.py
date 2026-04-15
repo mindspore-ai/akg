@@ -35,6 +35,7 @@ from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.evolve import evolve
+from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.environment_check import check_env_for_task
 from .result_collector import RealtimeResultCollector
@@ -76,6 +77,7 @@ class RunnerConfig:
         # 任务配置
         self.op_name = "relu_op"
         self.task_desc = "Path/to/your/tasks/relu_task.py"
+        self._sol_problem_dir = None
 
     @classmethod
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> 'RunnerConfig':
@@ -84,6 +86,7 @@ class RunnerConfig:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 yaml_config = yaml.safe_load(f)
+            config_dir = Path(config_path).expanduser().resolve().parent
 
             # 基础配置
             if 'base' in yaml_config:
@@ -127,16 +130,25 @@ class RunnerConfig:
             # 任务配置（仅在非批量调用模式下加载）
             if not skip_task_config and 'task' in yaml_config:
                 task_config = yaml_config['task']
-                config.op_name = task_config.get('op_name', config.op_name)
+                explicit_op_name = task_config.get('op_name')
+                if explicit_op_name:
+                    config.op_name = explicit_op_name
 
-                task_desc_value = task_config.get('task_desc', config.task_desc)
-                if task_desc_value and isinstance(task_desc_value, str):
-                    try:
-                        with open(task_desc_value, 'r', encoding='utf-8') as f:
-                            config.task_desc = f.read().strip()
-                    except Exception as e:
-                        print(f"Error: Failed to read task description file {task_desc_value}: {e}")
-                        config.task_desc = None
+                sol_problem_dir = task_config.get('sol_problem_dir')
+                if sol_problem_dir and isinstance(sol_problem_dir, str):
+                    resolved_sol_dir = resolve_path_from_base(sol_problem_dir, config_dir)
+                    sol_op_name, task_desc, resolved_sol_dir = load_sol_task(resolved_sol_dir)
+                    config.op_name = explicit_op_name or sol_op_name
+                    config.task_desc = task_desc.strip()
+                    config._sol_problem_dir = resolved_sol_dir
+                else:
+                    task_desc_value = task_config.get('task_desc', config.task_desc)
+                    if task_desc_value and isinstance(task_desc_value, str):
+                        resolved_task_path = resolve_path_from_base(task_desc_value, config_dir)
+                        task_op_name, task_desc, resolved_sol_dir = load_task_source(resolved_task_path)
+                        config.op_name = explicit_op_name or task_op_name or config.op_name
+                        config.task_desc = task_desc.strip()
+                        config._sol_problem_dir = resolved_sol_dir
 
             return config
         except Exception as e:
@@ -1020,4 +1032,3 @@ async def run_batch_evolve(config_path: str = None) -> None:
     except Exception as e:
         print(f"\n批量执行过程中发生错误: {e}")
         traceback.print_exc()
-
