@@ -24,7 +24,6 @@
 import sys
 import asyncio
 import os
-import json
 from pathlib import Path
 
 # 添加项目根目录到sys.path
@@ -42,47 +41,11 @@ from akg_agents.op.utils.evolve.runner_manager import (
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.config.config_validator import load_config
+from akg_agents.op.utils.sol_utils import load_sol_task
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.op.evolve import evolve
 from akg_agents.core.worker.manager import get_worker_manager
-
-
-def load_sol_task(sol_dir: str):
-    """Load SOL dataset: returns (op_name, task_desc, sol_problem_dir)"""
-    case_dir = Path(sol_dir).resolve()
-    if not (case_dir / "definition.json").exists():
-        raise FileNotFoundError(f"SOL dataset missing definition.json: {case_dir}")
-    
-    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
-        def_json = f.read()
-    definition = json.loads(def_json)
-    op_name = definition.get("name", case_dir.name)
-    
-    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
-        ref_py = f.read()
-    
-    workload_sample = ""
-    workload_file = case_dir / "workload.jsonl"
-    if workload_file.exists():
-        with open(workload_file, "r", encoding="utf-8") as f:
-            lines = [l.strip() for l in f if l.strip()]
-        if lines:
-            first = json.loads(lines[0])
-            workload_sample = (
-                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
-                f"```json\n{json.dumps(first, indent=2)}\n```"
-            )
-    
-    task_desc = (
-        f"请实现一个 Triton Ascend 算子。\n\n"
-        f"## definition.json\n```json\n{def_json}\n```\n\n"
-        f"## reference.py\n```python\n{ref_py}\n```"
-        f"{workload_sample}\n\n"
-        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
-    )
-    
-    return op_name, task_desc, str(case_dir)
 
 
 def print_usage():
@@ -321,4 +284,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
