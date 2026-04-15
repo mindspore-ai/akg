@@ -35,19 +35,20 @@ namespace mlir {
 namespace mfuse {
 namespace {
 
-/// Returns (convOut, convInput, convWeight) if \p v is produced by mfuse.conv2d; else (null, null, null).
+/// Returns (convOut, convInput, convWeight) if \p v is produced by mfuse.aclnn.conv2d; else (null, null, null).
 static std::tuple<Value, Value, Value> getConvOperands(Value v) {
   Value src = v;
   if (auto cast = v.getDefiningOp<mlir::UnrealizedConversionCastOp>())
     if (cast.getOperands().size() == 1) src = cast.getOperand(0);
   Operation *def = src.getDefiningOp();
   if (!def) return {Value(), Value(), Value()};
-  if (auto c = dyn_cast<Conv2DOp>(def))
+  if (auto c = dyn_cast<AclnnConv2DOp>(def)) {
     return {src, c.getInput(), c.getWeight()};
+  }
   return {Value(), Value(), Value()};
 }
 
-/// Shared fusion: Add(conv_out, bias) -> Conv2DWithBias. \p opToReplace is the Add op.
+/// Shared fusion: Add(conv_out, bias) -> AclnnConv2DWithBias. \p opToReplace is the Add op.
 static LogicalResult tryFuseBiasaddConv(Operation *opToReplace, Value lhs, Value rhs,
                                         PatternRewriter &rewriter) {
   auto [convOut, convInput, convWeight] = getConvOperands(lhs);
@@ -60,6 +61,11 @@ static LogicalResult tryFuseBiasaddConv(Operation *opToReplace, Value lhs, Value
     bias = lhs;
   }
   if (convInput) {
+    auto *convDefOp = convOut.getDefiningOp();
+    auto conv2d = dyn_cast<AclnnConv2DOp>(convDefOp);
+    if (!conv2d) {
+      return rewriter.notifyMatchFailure(opToReplace, "expected mfuse.aclnn.conv2d defining conv output");
+    }
     auto convOutType = dyn_cast<RankedTensorType>(convOut.getType());
     if (!convOutType || hasDynamicShape(convOut.getType()) || hasDynamicShape(convInput.getType()) ||
         hasDynamicShape(convWeight.getType())) {
@@ -96,14 +102,17 @@ static LogicalResult tryFuseBiasaddConv(Operation *opToReplace, Value lhs, Value
 
     Location loc = opToReplace->getLoc();
     Type resultType = opToReplace->getResult(0).getType();
-    Value newConv = rewriter.create<Conv2DWithBiasOp>(loc, resultType, convInput, convWeight, actualBias);
-    MLOG(DEBUG) << "FuseBiasaddConv: matched @" << loc << " -> Conv2DWithBias";
+    Value newConv = rewriter.create<AclnnConv2DWithBiasOp>(
+      loc, resultType, convInput, convWeight, actualBias, conv2d.getStride(), conv2d.getPadding(),
+      conv2d.getDilation(), conv2d.getTransposedAttr(), conv2d.getOutputPadding(), conv2d.getGroupsAttr());
+    MLOG(DEBUG) << "FuseBiasaddConv: matched @" << loc << " -> AclnnConv2DWithBias";
     rewriter.replaceOp(opToReplace, newConv);
     return success();
   }
   MLOG(DEBUG) << "FuseBiasaddConv: no match @" << opToReplace->getLoc()
-              << " - add operands are not (conv2d, bias) or (bias, conv2d)";
-  return rewriter.notifyMatchFailure(opToReplace, "add operands are not (conv2d, bias) or (bias, conv2d)");
+              << " - add operands are not (aclnn.conv2d, bias) or (bias, aclnn.conv2d)";
+  return rewriter.notifyMatchFailure(opToReplace,
+                                     "add operands are not (aclnn.conv2d, bias) or (bias, aclnn.conv2d)");
 }
 
 /// Matches mfuse.add (e.g. after decompose lowered aclnn.add to add).

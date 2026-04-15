@@ -101,6 +101,32 @@ class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse
   }
 };
 
+/// Converts mfuse.aclnn.batch_norm -> torch.aten.batch_norm (same operand order as Torch-MLIR).
+class ConvertMfuseAclnnBatchNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnBatchNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnBatchNormOp op, OpAdaptor adaptor,
+                                        mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Type resultType = getTypeConverter()->convertType(op.getOutput().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "failed to convert aclnn.batch_norm output type");
+    }
+    mlir::Location loc = op.getLoc();
+    mlir::Value training =
+      rewriter.create<TorchD::ConstantBoolOp>(loc, op.getTraining());
+    mlir::Value momentum = rewriter.create<TorchD::ConstantFloatOp>(
+      loc, rewriter.getF64FloatAttr(op.getMomentumAttr().getValueAsDouble()));
+    mlir::Value eps =
+      rewriter.create<TorchD::ConstantFloatOp>(loc, rewriter.getF64FloatAttr(op.getEpsilonAttr().getValueAsDouble()));
+    mlir::Value cudnn = rewriter.create<TorchD::ConstantBoolOp>(loc, op.getCudnnEnable());
+    rewriter.replaceOpWithNewOp<TorchD::AtenBatchNormOp>(
+      op, resultType, adaptor.getInput(), adaptor.getWeight(), adaptor.getBias(), adaptor.getRunningMean(),
+      adaptor.getRunningVar(), training, momentum, eps, cudnn);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.aclnn.rms_norm -> torch.npu.npu_rms_norm, materializing epsilon as Torch scalar.
 class ConvertMfuseAclnnRmsNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnRmsNormOp> {
  public:
@@ -332,6 +358,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
+  patterns.add<ConvertMfuseAclnnBatchNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
