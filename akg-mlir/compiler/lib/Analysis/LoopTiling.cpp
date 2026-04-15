@@ -215,7 +215,7 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
 // Attribute marking helpers
 static bool isInnermostScfLoop(mlir::scf::ForOp forOp);
 static Value stripIndexLikeCasts(Value value);
-static bool isTransposeLikeInnermostLoop(mlir::scf::ForOp forOp);
+static void markBandTransposeLoops(func::FuncOp funcOp);
 static ReduceDirection getReduceType(mlir::scf::ForOp loop);
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize);
 static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder);
@@ -257,6 +257,7 @@ static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::For
                                                    llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                    unsigned tileSizesNum, mlir::IRMapping &mapping,
                                                    mlir::OpBuilder &builder);
+static LogicalResult sinkTransposePointLoops(func::FuncOp funcOp, mlir::OpBuilder &builder);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
 static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp outerLoop,
@@ -493,6 +494,15 @@ static void clearNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
   });
 }
 
+static void clearValuelessBroadcastLoopAttr(func::FuncOp funcOp) {
+  funcOp.walk([](mlir::scf::ForOp loop) {
+    if (!loop->getAttrOfType<UnitAttr>(kBroadcastLoopAttr)) {
+      return;
+    }
+    loop->removeAttr(kBroadcastLoopAttr);
+  });
+}
+
 // Helper function to get constant index value from Value
 static std::optional<int64_t> getConstantIndexValue(mlir::Value value) {
   // BlockArgument (e.g., iter_args) has no defining op, getDefiningOp() returns nullptr
@@ -718,6 +728,8 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
   if (bandsToUse.empty()) {
     return success();
   }
+
+  markBandTransposeLoops(funcOp);
 
   if (std::any_of(bandsToUse.begin(), bandsToUse.end(),
                   [&](const auto &band) { return failed(verifyBandIsNestedChain(band)); })) {
@@ -1707,67 +1719,139 @@ static Value stripIndexLikeCasts(Value value) {
   }
 }
 
-// Detect transpose-like loops in lowered form:
-// exactly one load and one store, same index multiset, different index order.
-static bool isTransposeLikeInnermostLoop(mlir::scf::ForOp forOp) {
-  memref::LoadOp loadOp;
-  memref::StoreOp storeOp;
+static void tryMarkTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<mlir::scf::ForOp> lhsOrder,
+                                      ArrayRef<mlir::scf::ForOp> rhsOrder, UnitAttr transposeAttr) {
+  if (lhsOrder.size() < 2 || rhsOrder.size() < 2) {
+    return;
+  }
 
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (auto curLoad = dyn_cast<memref::LoadOp>(&op)) {
-      if (loadOp) {
-        return false;
+  llvm::DenseSet<Operation *> rhsLoops;
+  for (mlir::scf::ForOp loop : rhsOrder) {
+    rhsLoops.insert(loop.getOperation());
+  }
+
+  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
+  for (mlir::scf::ForOp loop : lhsOrder) {
+    if (rhsLoops.contains(loop.getOperation())) {
+      lhsCommonOrder.push_back(loop);
+    }
+  }
+
+  llvm::DenseSet<Operation *> lhsLoops;
+  for (mlir::scf::ForOp loop : lhsOrder) {
+    lhsLoops.insert(loop.getOperation());
+  }
+
+  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  for (mlir::scf::ForOp loop : rhsOrder) {
+    if (lhsLoops.contains(loop.getOperation())) {
+      rhsCommonOrder.push_back(loop);
+    }
+  }
+
+  if (lhsCommonOrder.size() < 2 || lhsCommonOrder.size() != rhsCommonOrder.size()) {
+    return;
+  }
+  if (lhsCommonOrder.back() == rhsCommonOrder.back()) {
+    return;
+  }
+
+  size_t commonPrefix = 0;
+  while (commonPrefix < lhsCommonOrder.size() && lhsCommonOrder[commonPrefix] == rhsCommonOrder[commonPrefix]) {
+    ++commonPrefix;
+  }
+  if (!std::is_permutation(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(),
+                           rhsCommonOrder.begin() + commonPrefix, rhsCommonOrder.end())) {
+    return;
+  }
+
+  if (std::find(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(), band.back()) ==
+        lhsCommonOrder.end()) {
+    return;
+  }
+
+  for (mlir::scf::ForOp loop : band) {
+    loop->removeAttr(kBroadcastLoopAttr);
+    loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+  }
+
+  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
+    (*it)->setAttr(kTransposeLoopAttr, transposeAttr);
+  }
+  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
+    (*it)->setAttr(kTransposeLoopAttr, transposeAttr);
+  }
+}
+
+static void markBandTransposeLoops(func::FuncOp funcOp) {
+  std::vector<LeafBranchBandPlan> leafBranchPlans;
+  bool hasUnsupportedTreeShape = false;
+  if (failed(buildLeafBranchBandPlans(funcOp, leafBranchPlans, hasUnsupportedTreeShape)) || hasUnsupportedTreeShape) {
+    funcOp.emitWarning("skip transpose loop marking: unsupported band shape");
+    return;
+  }
+  if (leafBranchPlans.size() != 1) {
+    funcOp.emitWarning("skip transpose loop marking: only single-band kernels are supported");
+    return;
+  }
+
+  auto extractLoopOrder = [](Operation *op, ArrayRef<mlir::scf::ForOp> band) {
+    SmallVector<mlir::scf::ForOp, 4> order;
+    auto appendIfMatch = [&](Value idx) {
+      Value strippedIdx = stripIndexLikeCasts(idx);
+      for (mlir::scf::ForOp loop : band) {
+        if (stripIndexLikeCasts(loop.getInductionVar()) == strippedIdx) {
+          order.push_back(loop);
+          break;
+        }
       }
-      loadOp = curLoad;
+    };
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      for (Value idx : loadOp.getIndices()) {
+        appendIfMatch(idx);
+      }
+    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      for (Value idx : storeOp.getIndices()) {
+        appendIfMatch(idx);
+      }
+    }
+    return order;
+  };
+
+  const LeafBranchBandPlan &plan = leafBranchPlans.front();
+  SmallVector<SmallVector<mlir::scf::ForOp, 6>, 4> leafBands;
+  if (!plan.representativeBand.empty()) {
+    leafBands.push_back(plan.representativeBand);
+    for (mlir::scf::ForOp peerLeaf : plan.peerLeafLoops) {
+      SmallVector<mlir::scf::ForOp, 6> peerBand(plan.representativeBand.begin(), plan.representativeBand.end());
+      peerBand.back() = peerLeaf;
+      leafBands.push_back(std::move(peerBand));
+    }
+  }
+
+  auto transposeAttr = UnitAttr::get(funcOp.getContext());
+  for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
+    if (band.empty()) {
       continue;
     }
-    if (auto curStore = dyn_cast<memref::StoreOp>(&op)) {
-      if (storeOp) {
-        return false;
+
+    mlir::scf::ForOp leafLoop = band.back();
+    SmallVector<Operation *, 8> memOps;
+    for (Operation &op : leafLoop.getBody()->without_terminator()) {
+      if (isa<memref::LoadOp, memref::StoreOp>(op)) {
+        memOps.push_back(&op);
       }
-      storeOp = curStore;
+    }
+
+    for (size_t i = 0; i < memOps.size(); ++i) {
+      SmallVector<mlir::scf::ForOp, 4> lhsOrder = extractLoopOrder(memOps[i], band);
+      for (size_t j = i + 1; j < memOps.size(); ++j) {
+        SmallVector<mlir::scf::ForOp, 4> rhsOrder = extractLoopOrder(memOps[j], band);
+        tryMarkTransposeOrderPair(band, lhsOrder, rhsOrder, transposeAttr);
+      }
     }
   }
-
-  if (!loadOp || !storeOp) {
-    return false;
-  }
-
-  if (storeOp.getValue() != loadOp.getResult()) {
-    return false;
-  }
-
-  ValueRange loadIndices = loadOp.getIndices();
-  ValueRange storeIndices = storeOp.getIndices();
-  if (loadIndices.size() != storeIndices.size() || loadIndices.empty()) {
-    return false;
-  }
-
-  bool hasDifferentOrder = false;
-  llvm::DenseMap<Value, int64_t> loadIndexCount;
-  llvm::DenseMap<Value, int64_t> storeIndexCount;
-
-  for (size_t i = 0; i < loadIndices.size(); ++i) {
-    Value loadIdx = stripIndexLikeCasts(loadIndices[i]);
-    Value storeIdx = stripIndexLikeCasts(storeIndices[i]);
-    ++loadIndexCount[loadIdx];
-    ++storeIndexCount[storeIdx];
-    if (loadIdx != storeIdx) {
-      hasDifferentOrder = true;
-    }
-  }
-
-  if (!hasDifferentOrder || loadIndexCount.size() != storeIndexCount.size()) {
-    return false;
-  }
-
-  for (const auto &it : loadIndexCount) {
-    if (storeIndexCount.lookup(it.first) != it.second) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 // Detect reduction type by scanning all ops inside the loop.
@@ -1840,12 +1924,33 @@ static mlir::scf::ForOp findVectorAttrTargetLoop(mlir::scf::ForOp startLoop, boo
   return mlir::scf::ForOp();
 }
 
+static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder,
+                                                 int64_t vectorSize) {
+  bool restrictToPointLoops = hasPointLoopInAncestorChain(innermostLoop);
+
+  for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (!curLoop->hasAttr(kTransposeLoopAttr)) {
+      break;
+    }
+    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /*skipDeleteLoops=*/true)) {
+      continue;
+    }
+
+    int64_t targetVectorSize = vectorSize;
+    if (auto pointVectorSizeAttr = curLoop->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
+      targetVectorSize = pointVectorSizeAttr.getInt();
+    }
+    curLoop->setAttr(kTransposeLoopAttr, builder.getI64IntegerAttr(targetVectorSize));
+  }
+}
+
 // Mark all innermost scf.for loops with vector attribute.
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize) {
   funcOp->walk([&](mlir::scf::ForOp forOp) {
     if (isInnermostScfLoop(forOp)) {
       auto reduceType = ReduceDirection::UNKNOWN;
-      if (isTransposeLikeInnermostLoop(forOp)) {
+      if (forOp->hasAttr(kTransposeLoopAttr)) {
+        markTransposeLoopChainWithVectorAttr(forOp, builder, vectorSize);
         return;
       }
 
@@ -2610,6 +2715,12 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
     }
   }
 
+  if (failed(sinkTransposePointLoops(originalKernel, builder))) {
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
+    originalKernel.emitError("failed to sink transpose point loops for linear band " + std::to_string(bandIdx));
+    return failure();
+  }
+
   return success();
 }
 
@@ -2799,6 +2910,7 @@ static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &build
   clearTemporaryLoopIdentificationAttrs(originalKernel);
   setBlockDimAttribute(originalKernel, builder);
   markOutermostLoopsForParallelMapping(originalKernel, builder);
+  clearValuelessBroadcastLoopAttr(originalKernel);
 }
 
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape) {
@@ -3053,6 +3165,93 @@ static void replaceLoopYield(mlir::scf::ForOp loop, llvm::ArrayRef<mlir::Value> 
   terminator->erase();
   builder.setInsertionPointToEnd(body);
   builder.create<mlir::scf::YieldOp>(loop.getLoc(), newOperands);
+}
+
+static mlir::scf::ForOp getUniqueChildLoop(mlir::scf::ForOp loop) {
+  mlir::scf::ForOp childLoop;
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    auto childFor = dyn_cast<mlir::scf::ForOp>(op);
+    if (!childFor) {
+      continue;
+    }
+    if (childLoop) {
+      return mlir::scf::ForOp();
+    }
+    childLoop = childFor;
+  }
+  return childLoop;
+}
+
+static LogicalResult sinkTransposePointLoops(func::FuncOp funcOp, mlir::OpBuilder &builder) {
+  auto isTransposePointLoop = [](mlir::scf::ForOp loop) {
+    return loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kTransposeLoopAttr);
+  };
+
+  SmallVector<mlir::scf::ForOp, 8> transposePointLoops;
+  funcOp.walk([&](mlir::scf::ForOp loop) {
+    if (isTransposePointLoop(loop)) {
+      transposePointLoops.push_back(loop);
+    }
+  });
+
+  for (mlir::scf::ForOp pointLoop : transposePointLoops) {
+    while (pointLoop && isTransposePointLoop(pointLoop)) {
+      mlir::scf::ForOp childLoop = getUniqueChildLoop(pointLoop);
+      if (!childLoop) {
+        break;
+      }
+
+      mlir::scf::ForOp nextPointLoop;
+      mlir::scf::ForOp nextPointParent;
+      for (mlir::scf::ForOp loop = childLoop; loop; loop = getUniqueChildLoop(loop)) {
+        if (isTransposePointLoop(loop)) {
+          nextPointLoop = loop;
+          break;
+        }
+        nextPointParent = loop;
+      }
+      if (!nextPointLoop || !nextPointParent) {
+        break;
+      }
+
+      SmallVector<Operation *, 8> segmentOps;
+      llvm::SmallDenseSet<Value, 4> forbiddenValues;
+      forbiddenValues.insert(pointLoop.getInductionVar());
+      for (Value regionIterArg : pointLoop.getRegionIterArgs()) {
+        forbiddenValues.insert(regionIterArg);
+      }
+      for (Operation &op : pointLoop.getBody()->without_terminator()) {
+        segmentOps.push_back(&op);
+        for (Value operand : op.getOperands()) {
+          if (forbiddenValues.contains(operand)) {
+            return failure();
+          }
+        }
+      }
+      if (segmentOps.empty()) {
+        break;
+      }
+
+      Operation *insertBefore = pointLoop.getOperation();
+      for (Operation *op : segmentOps) {
+        op->moveBefore(insertBefore);
+      }
+
+      nextPointLoop->moveBefore(pointLoop.getBody()->getTerminator());
+      pointLoop->moveBefore(nextPointParent.getBody()->getTerminator());
+
+      if (pointLoop.getNumResults() == nextPointLoop.getNumResults()) {
+        SmallVector<Value, 4> nextResults(nextPointLoop.getResults());
+        replaceLoopYield(pointLoop, nextResults, builder);
+      }
+      if (nextPointParent.getNumResults() == pointLoop.getNumResults()) {
+        SmallVector<Value, 4> parentResults(pointLoop.getResults());
+        replaceLoopYield(nextPointParent, parentResults, builder);
+      }
+    }
+  }
+
+  return success();
 }
 
 static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::ForOp> band,
