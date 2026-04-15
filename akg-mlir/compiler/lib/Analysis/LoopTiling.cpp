@@ -1206,7 +1206,8 @@ static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum,
 }
 
 static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
-                                       mlir::scf::ForOp newLoop, mlir::OpBuilder &builder) {
+                                       mlir::scf::ForOp newLoop, bool dropMappedOutermostFirstLevelIterArgs,
+                                       mlir::OpBuilder &builder) {
   if (!origLoop) {
     return;
   }
@@ -1224,10 +1225,9 @@ static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, 
       return;
     }
 
-    // For reduction loops: delete only middle-level trivial wrappers (no iter_args/results).
-    // Keep first-level loops (i==0) even if trivial.
-    // First-level iter_args retention is controlled separately by mapped-outermost policy.
-    if (i > 0 && i < tileNum && newLoop.getNumResults() == 0 && newLoop.getNumRegionIterArgs() == 0) {
+    // For reduce-x/all, wrapper levels are single-iteration shells after no-split tiling.
+    // Keep only the mapped outermost first-level shell as the result-free map_for_to_forall carrier.
+    if (i < tileNum && !(dropMappedOutermostFirstLevelIterArgs && i == 0 && j == 0)) {
       newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
     }
 
@@ -1321,7 +1321,8 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
     }
   }
 
-  updateLoopAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
+  updateLoopAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, dropMappedOutermostFirstLevelIterArgs,
+                             loopBuilder);
   recordTileLevelInfoForLoop(i, j, tileNum, curTile, tileSizeValues, kernelsizeConstant, newLoop, tileLevelInfo);
 }
 
