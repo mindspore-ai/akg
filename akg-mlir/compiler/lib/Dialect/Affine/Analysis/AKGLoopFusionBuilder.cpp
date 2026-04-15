@@ -1280,6 +1280,30 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
   }
 }
 
+// Re-derive the effective dependence depth in the dstInfo.loops coordinate system.
+// Walks loops from outermost to innermost and finds the innermost loop whose IV is referenced by any access
+static unsigned computeEffectiveDepDepth(ArrayRef<affine::AffineForOp> loops, ArrayRef<Operation *> accesses) {
+  // 0 = no IV reference found
+  unsigned depth = 0;
+  for (unsigned i = 0; i < loops.size(); ++i) {
+    Value iv = const_cast<affine::AffineForOp &>(loops[i]).getInductionVar();
+    for (Operation *op : accesses) {
+      bool referenced = false;
+      if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
+        referenced = llvm::is_contained(loadOp.getMapOperands(), iv);
+      } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+        referenced = llvm::is_contained(storeOp.getMapOperands(), iv);
+      }
+      if (referenced) {
+        // 1-indexed; keep overwriting -> innermost wins
+        depth = i + 1;
+        break;
+      }
+    }
+  }
+  return depth;
+}
+
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
   llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan,
@@ -1306,6 +1330,8 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     return 0;
   }
 
+  unsigned depDepth = computeEffectiveDepDepth(dstInfo.loops, dstAccesses);
+  depDepth = std::max(depDepth, plan.depInfo.loopDepth);
   unsigned loopDepth = dstInfo.loopDepth;
   if (!srcInfo.isPerfect) {
     loopDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
@@ -1317,7 +1343,7 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   unsigned maxDepth = 0;
   for (unsigned depth = loopDepth; depth >= 1; --depth) {
     if (strategy.getStrategy() == affine::FusionStrategy::ProducerConsumer) {
-      if (plan.depInfo.loopDepth < depth) {
+      if (depDepth < depth) {
         continue;
       }
     }
