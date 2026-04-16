@@ -426,64 +426,52 @@ static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
   return valueDependsOnTarget(value, loop.getInductionVar(), visitedValues, visitedOps);
 }
 
-static mlir::scf::ForOp findInnermostContiguousStoreLoop(Operation *op, Value contiguousIndex) {
-  if (!op || !contiguousIndex) {
-    return mlir::scf::ForOp();
-  }
-
-  for (Operation *parent = op->getParentOp(); parent; parent = parent->getParentOp()) {
-    auto forOp = dyn_cast<mlir::scf::ForOp>(parent);
-    if (!forOp) {
-      continue;
-    }
-    if (valueDependsOnLoopIV(contiguousIndex, forOp)) {
-      return forOp;
-    }
-  }
-
-  return mlir::scf::ForOp();
-}
-
 static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
-  if (!loop) {
-    return false;
-  }
-
-  bool isInnerDimension = false;
-  loop.getBody()->walk([&](Operation *op) {
-    SmallVector<Value, 4> indices;
-    if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      indices.append(store.getIndices().begin(), store.getIndices().end());
-    } else {
-      return WalkResult::advance();
+  bool hasBroadcastLoad = false;
+  bool hasInnerDimStore = false;
+  loop.walk([&](Operation *op) {
+    if (hasBroadcastLoad && hasInnerDimStore) {
+      return;
     }
-
-    if (indices.empty()) {
-      return WalkResult::advance();
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (!hasBroadcastLoad && llvm::none_of(load.getIndices(),
+              [&](Value idx) { return valueDependsOnLoopIV(idx, loop); })) {
+        hasBroadcastLoad = true;
+      }
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (!hasInnerDimStore && !store.getIndices().empty() &&
+          valueDependsOnLoopIV(store.getIndices().back(), loop)) {
+        hasInnerDimStore = true;
+      }
     }
-
-    mlir::scf::ForOp innermostContiguousLoop = findInnermostContiguousStoreLoop(op, indices.back());
-    if (innermostContiguousLoop == loop) {
-      isInnerDimension = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
   });
-
-  return isInnerDimension;
+  return hasBroadcastLoad && hasInnerDimStore;
 }
 
 static void setNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
   OpBuilder builder(funcOp.getContext());
+  bool hasOuterInnerDimensionBroadcastLoop = false;
   funcOp.walk([&](mlir::scf::ForOp loop) {
-    if (!loop->hasAttr(kBroadcastLoopAttr) || isInnerDimensionBroadcastLoop(loop)) {
+    if (!loop->hasAttr(kBroadcastLoopAttr)) {
       if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
         loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
       }
       return;
     }
-    loop->setAttr(kNotInnerDimensionBroadcastLoopAttr, builder.getUnitAttr());
+    if (isInnerDimensionBroadcastLoop(loop)) {
+      hasOuterInnerDimensionBroadcastLoop = true;
+    } else if (hasOuterInnerDimensionBroadcastLoop) {
+      loop->removeAttr(kBroadcastLoopAttr);
+    } else {
+      loop->setAttr(kNotInnerDimensionBroadcastLoopAttr, builder.getUnitAttr());
+    }
   });
+  if (!hasOuterInnerDimensionBroadcastLoop) {
+    funcOp.walk([&](mlir::scf::ForOp loop) {
+      loop->removeAttr(kBroadcastLoopAttr);
+      loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+    });
+  }
 }
 
 static void clearNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
@@ -491,6 +479,13 @@ static void clearNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
     if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
       loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
     }
+  });
+}
+
+static void clearAllBroadcastLoopAttrs(func::FuncOp funcOp) {
+  funcOp.walk([](mlir::scf::ForOp loop) {
+    loop->removeAttr(kBroadcastLoopAttr);
+    loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
   });
 }
 
@@ -715,6 +710,10 @@ static void collectRepresentativeBands(ArrayRef<LeafBranchBandPlan> plans,
       bands.push_back(plan.representativeBand);
     }
   }
+}
+
+static bool hasTreeBandStructure(ArrayRef<LeafBranchBandPlan> plans) {
+  return llvm::any_of(plans, [](const LeafBranchBandPlan &plan) { return plan.hasLeafBranching; });
 }
 
 static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling,
@@ -1941,8 +1940,28 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
     if (auto pointVectorSizeAttr = curLoop->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
       targetVectorSize = pointVectorSizeAttr.getInt();
     }
-    curLoop->setAttr(kTransposeLoopAttr, builder.getI64IntegerAttr(targetVectorSize));
+    curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(targetVectorSize));
+    curLoop->removeAttr(kTransposeLoopAttr);
   }
+}
+
+static bool hasReductionVectorAttr(mlir::scf::ForOp loop) {
+  return loop && (loop->hasAttr(kReductionLoopAttr) || loop->hasAttr(kReductionXLoopAttr) ||
+                  loop->hasAttr(kReductionYLoopAttr) || loop->hasAttr(kReductionAllLoopAttr));
+}
+
+static void markBroadcastLoopChainWithVectorAttr(mlir::scf::ForOp vectorTarget, OpBuilder &builder,
+                                                  int64_t pointVectorSize) {
+  vectorTarget.walk([&](mlir::scf::ForOp loop) {
+    if (!loop || loop == vectorTarget || hasReductionVectorAttr(loop)) {
+      return;
+    }
+    int64_t targetVectorSize = pointVectorSize;
+    if (auto pointVectorSizeAttr = loop->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
+      targetVectorSize = pointVectorSizeAttr.getInt();
+    }
+    loop->setAttr(kBroadcastLoopAttr, builder.getI64IntegerAttr(targetVectorSize));
+  });
 }
 
 // Mark all innermost scf.for loops with vector attribute.
@@ -1963,6 +1982,7 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
             targetVectorSize = pointVectorSizeAttr.getInt();
           }
           if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
+            markBroadcastLoopChainWithVectorAttr(vectorTarget, builder, vectorSize);
             vectorTarget->removeAttr(kBroadcastLoopAttr);
           }
           vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(targetVectorSize));
@@ -2597,6 +2617,7 @@ static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel,
 
   // Unsupported tree shape keeps stage-1 skip behavior.
   if (hasUnsupportedTreeShape) {
+    clearAllBroadcastLoopAttrs(originalKernel);
     markInnermostLoopsWithVectorAttr(originalKernel, builder, kVectorSize);
     originalKernel->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(1));
     shouldReturnEarly = true;
@@ -2614,6 +2635,7 @@ static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel,
     }
 
     if (hasUnsupportedTreeShape) {
+      clearAllBroadcastLoopAttrs(originalKernel);
       markInnermostLoopsWithVectorAttr(originalKernel, builder, kVectorSize);
       originalKernel->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(1));
       shouldReturnEarly = true;
@@ -2929,7 +2951,13 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
 
-  setNotInnerDimensionBroadcastLoopAttr(originalKernel);
+  const bool hasTreeStructure = hasTreeBandStructure(leafBranchPlans);
+  if (hasTreeStructure) {
+    // Tree-shaped bands do not support the broadcast-specific vector path yet.
+    clearAllBroadcastLoopAttrs(originalKernel);
+  } else {
+    setNotInnerDimensionBroadcastLoopAttr(originalKernel);
+  }
   [[maybe_unused]] auto clearBroadcastTagGuard =
     llvm::make_scope_exit([&] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
   (void)clearBroadcastTagGuard;
