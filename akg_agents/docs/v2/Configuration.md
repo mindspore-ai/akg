@@ -64,6 +64,7 @@ Configuration for a single LLM model.
 | `base_url` | string | — | API endpoint URL |
 | `api_key` | string | — | API key |
 | `model_name` | string | — | Model name |
+| `provider_type` | string | `"openai"` | Provider type: `"openai"` (OpenAI-compatible protocol) or `"anthropic"` (Anthropic protocol) |
 | `temperature` | float | `0.2` | Sampling temperature |
 | `max_tokens` | int | `8192` | Maximum output tokens |
 | `top_p` | float | `0.9` | Top-p sampling |
@@ -71,6 +72,39 @@ Configuration for a single LLM model.
 | `presence_penalty` | float | `None` | Presence penalty (optional) |
 | `timeout` | int | `300` | Request timeout in seconds |
 | `extra_body` | object | `{}` | Extra parameters passed through to the API request body (e.g., thinking/reasoning config) |
+
+### Provider Type Selection
+
+AKG Agents supports two API protocols:
+
+| `provider_type` | Protocol | API Path | Use Case |
+|-----------------|----------|----------|----------|
+| `"openai"` | OpenAI-compatible | `/chat/completions` | DeepSeek, OpenAI, Zhipu, Qwen, Doubao, SiliconFlow, and most providers |
+| `"anthropic"` | Anthropic | `/v1/messages` | Kimi Coding Plan, Claude API, and other Anthropic protocol providers |
+
+**Important**: When using Kimi Coding Plan, you must set `provider_type=anthropic`:
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.kimi.com/coding",
+      "api_key": "sk-kimi-xxx",
+      "model_name": "kimi-for-coding",
+      "provider_type": "anthropic"
+    }
+  }
+}
+```
+
+Or via environment variables:
+
+```bash
+export AKG_AGENTS_BASE_URL="https://api.kimi.com/coding"
+export AKG_AGENTS_API_KEY="sk-kimi-xxx"
+export AKG_AGENTS_MODEL_NAME="kimi-for-coding"
+export AKG_AGENTS_PROVIDER_TYPE="anthropic"
+```
 
 ### Model Levels
 

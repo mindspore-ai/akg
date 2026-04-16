@@ -38,6 +38,7 @@ Anthropic LLM Provider - 支持 Anthropic 协议的 LLM 提供者
 """
 
 import logging
+import httpx
 from typing import AsyncIterator, Dict, Any, List, Optional
 
 try:
@@ -62,6 +63,7 @@ class AnthropicProvider:
         base_url: str = "https://api.anthropic.com",
         timeout: int = 300,
         extra_body: Optional[Dict[str, Any]] = None,
+        verify_ssl: bool = False,
         **kwargs
     ):
         """
@@ -75,14 +77,23 @@ class AnthropicProvider:
                      - Claude: https://api.anthropic.com
             timeout: 超时时间（秒）
             extra_body: 额外请求参数（Anthropic 协议中较少使用）
+            verify_ssl: 是否验证 SSL 证书（默认 False，用于企业代理环境）
             **kwargs: 其他配置
         """
         self.model_name = model_name
         self.extra_body = extra_body or {}
+        self.verify_ssl = verify_ssl
         self.config = kwargs
 
         if AsyncAnthropic is None:
             raise ImportError("请安装 anthropic: pip install anthropic")
+
+        # 创建自定义 http client 以支持 SSL 验证配置
+        # httpx 默认会使用系统代理环境变量 (HTTP_PROXY, HTTPS_PROXY 等)
+        http_client = httpx.AsyncClient(
+            verify=verify_ssl,
+            timeout=httpx.Timeout(timeout, connect=60.0),
+        )
 
         # Anthropic SDK 会自动追加 /v1/messages
         # 所以 base_url 不应该带 /v1 后缀
@@ -90,10 +101,11 @@ class AnthropicProvider:
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
+            http_client=http_client,
         )
 
         logger.info(
-            f"Initialized AnthropicProvider: model={model_name}, base_url={base_url}"
+            f"Initialized AnthropicProvider: model={model_name}, base_url={base_url}, verify_ssl={verify_ssl}"
         )
 
     async def generate(
@@ -200,8 +212,9 @@ class AnthropicProvider:
         tool_calls = []
         finish_reason = ""
 
-        with self.client.messages.stream(**request_kwargs) as stream:
-            for event in stream:
+        # 使用 async with 和 async for 处理异步流
+        async with self.client.messages.stream(**request_kwargs) as stream:
+            async for event in stream:
                 if event.type == "content_block_delta":
                     delta = event.delta
 
@@ -231,7 +244,7 @@ class AnthropicProvider:
                     finish_reason = "end_turn"
 
             # 获取最终消息
-            final_message = stream.get_final_message()
+            final_message = await stream.get_final_message()
             usage = final_message.usage
 
         yield {
