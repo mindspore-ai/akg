@@ -207,7 +207,7 @@ func.func @test_reduction_y_no_iter_args(
   %c64 = arith.constant 64 : index
   %c1 = arith.constant 1 : index
 
-  // CHECK: memref.load
+  // CHECK: npuvector.transfer_read
   // CHECK: npuvector.transfer_read
   // CHECK: arith.addf {{.*}} {reduction_axes = [0 : index], reduction_type = "y"}
   // CHECK: npuvector.transfer_write
