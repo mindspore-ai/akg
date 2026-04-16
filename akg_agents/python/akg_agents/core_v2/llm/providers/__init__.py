@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .openai_provider import LLMProvider
+"""
+LLM Providers - 支持 OpenAI 和 Anthropic 协议
 
-__all__ = ["LLMProvider"]
+- LLMProvider (OpenAI): OpenAI 兼容协议（GPT、DeepSeek、智谱等）
+- AnthropicProvider: Anthropic 协议（Kimi Coding Plan、Claude）
+"""
+
+from .openai_provider import LLMProvider
+from .anthropic_provider import AnthropicProvider
+
+__all__ = ["LLMProvider", "AnthropicProvider"]

@@ -26,7 +26,7 @@ from langchain_core.embeddings import Embeddings
 from akg_agents.core_v2.config import get_settings
 from .client import LLMClient
 from .cache import attach_cache_to_client
-from .providers.openai_provider import LLMProvider
+from .providers import LLMProvider, AnthropicProvider
 from .providers.embedding_provider import OpenAICompatibleEmbeddings
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,7 @@ def create_llm_client(
             final_presence_penalty = presence_penalty
             final_timeout = kwargs.pop("timeout", 300)
             final_extra_body = kwargs.pop("extra_body", {})
+            final_provider_type = kwargs.pop("provider_type", "openai")
             # 向后兼容：thinking_enabled=True → 默认 extra_body
             if not final_extra_body and kwargs.pop("thinking_enabled", False):
                 final_extra_body = {"thinking": {"type": "enabled"}}
@@ -140,24 +141,36 @@ def create_llm_client(
         final_presence_penalty = presence_penalty if presence_penalty is not None else model_config.presence_penalty
         final_timeout = kwargs.pop("timeout", model_config.timeout)
         final_extra_body = kwargs.pop("extra_body", model_config.extra_body)
+        final_provider_type = kwargs.pop("provider_type", model_config.provider_type)
         # 向后兼容：thinking_enabled=True → 默认 extra_body
         if not final_extra_body and kwargs.pop("thinking_enabled", False):
             final_extra_body = {"thinking": {"type": "enabled"}}
 
     logger.info(
         f"Creating LLMClient: level={model_level}, model={final_model_name}, "
-        f"base_url={final_base_url}, extra_body={bool(final_extra_body)}"
+        f"base_url={final_base_url}, provider_type={final_provider_type}, extra_body={bool(final_extra_body)}"
     )
 
-    # 创建 Provider
-    provider = LLMProvider(
-        model_name=final_model_name,
-        api_key=final_api_key,
-        base_url=final_base_url,
-        timeout=final_timeout,
-        extra_body=final_extra_body,
-        **kwargs
-    )
+    # 根据 provider_type 创建 Provider
+    if final_provider_type == "anthropic":
+        provider = AnthropicProvider(
+            model_name=final_model_name,
+            api_key=final_api_key,
+            base_url=final_base_url,
+            timeout=final_timeout,
+            extra_body=final_extra_body,
+            **kwargs
+        )
+    else:
+        # 默认使用 OpenAI 兼容协议
+        provider = LLMProvider(
+            model_name=final_model_name,
+            api_key=final_api_key,
+            base_url=final_base_url,
+            timeout=final_timeout,
+            extra_body=final_extra_body,
+            **kwargs
+        )
 
     # 创建 Client
     client = LLMClient(

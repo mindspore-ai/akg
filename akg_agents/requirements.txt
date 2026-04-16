@@ -21,3 +21,4 @@ python-multipart>=0.0.6
 importlib-metadata>=6.0.0
 typer>=0.9.0
 prompt_toolkit>=3.0.0
+anthropic
