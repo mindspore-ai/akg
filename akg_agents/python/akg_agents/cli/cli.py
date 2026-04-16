@@ -49,7 +49,8 @@ for handler in root_logger.handlers:
 
 # 添加文件日志（固定路径，覆盖写）
 from pathlib import Path
-log_dir = Path(os.path.expanduser("~/akg_agents_logs"))
+from akg_agents.utils import DEFAULT_LOG_DIR
+log_dir = Path(os.path.expanduser(DEFAULT_LOG_DIR))
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "akg_agents.log"
 file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")

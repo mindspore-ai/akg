@@ -98,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--arch", type=str, default="a100", help="Architecture type")
     parser.add_argument("--device-id", type=int, default=0, help="Device ID to use")
     parser.add_argument("--timeout", type=int, default=300, help="Timeout per case in seconds")
-    parser.add_argument("--log-dir", type=str, default="~/akg_agents_logs/sol_batch", help="Directory to save logs")
+    parser.add_argument("--log-dir", type=str, default=os.environ.get("AKG_AGENTS_LOG_DIR", "~/akg_agents_logs/sol_batch").strip() or "~/akg_agents_logs/sol_batch", help="Directory to save logs")
     
     args = parser.parse_args()
     

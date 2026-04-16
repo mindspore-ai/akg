@@ -188,8 +188,7 @@ async def main(args):
         task_desc = f.read()
 
     output_path = args.output_path or os.path.join(
-        os.path.expanduser("~/akg_agents_logs"),
-        f"workflow_{args.workflow}_{int(time.time())}",
+        os.path.expanduser(os.environ.get("AKG_AGENTS_LOG_DIR", "~/akg_agents_logs").strip() or "~/akg_agents_logs"),
     )
     output_path = os.path.abspath(os.path.expanduser(output_path))
     os.makedirs(output_path, exist_ok=True)
