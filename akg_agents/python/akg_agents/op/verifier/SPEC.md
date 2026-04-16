@@ -12,6 +12,7 @@ verifier/
 ├── sol_verifier.py            # SOL-ExecBench 格式验证的专用生成器
 ├── profiler.py                # NPU/CUDA 性能采集
 ├── profiler_utils.py          # profile 脚本执行、msprof/nsys 解析
+├── roofline_utils.py          # 通过已安装的 solar Python 包计算 roofline
 ├── l2_cache_clear.py          # Ascend L2 cache 清理
 └── adapters/                  # 三类适配器
     ├── factory.py             # get_backend_adapter / get_dsl_adapter / get_framework_adapter
@@ -51,6 +52,14 @@ verifier/
 ### KernelVerifier 核心逻辑
 
 `KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例，然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
+
+### Roofline 集成
+
+- roofline 通过 `roofline_utils.py` 直接调用已安装的 `solar` Python API（`graph/einsum/analysis/perf`）
+- AKG **不依赖**本地 `SOLAR` 工作树路径；运行时只要求 `import solar` 成功
+- 原先不在 Solar 正式包里的接入逻辑（如 solbench wrapper / Ascend arch config）由 AKG 自己维护
+- **不要**修改 `SOLAR` 仓库源码或对其打 patch
+- roofline 失败只能降级为“无 roofline 数据”，**不能**影响原有 correctness / profile 主流程
 
 ## Autotune 双模式验证
 
