@@ -277,24 +277,25 @@ static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
   return {false, isDynamic};
 }
 
-static std::optional<arith::AtomicRMWKind> detectReductionKind(scf::ForOp loop) {
+static std::optional<arith::AtomicRMWKind> detectReductionKindForOperand(
+    scf::ForOp loop, unsigned resultIndex) {
   if (loop.getInitArgs().empty()) {
     return std::nullopt;
   }
 
   auto yieldOp = dyn_cast<scf::YieldOp>(loop.getBody()->getTerminator());
-  if (!yieldOp || yieldOp.getNumOperands() == 0) {
+  if (!yieldOp || resultIndex >= yieldOp.getNumOperands()) {
     return std::nullopt;
   }
 
-  Value yieldValue = yieldOp.getOperand(0);
+  Value yieldValue = yieldOp.getOperand(resultIndex);
   Operation *defOp = yieldValue.getDefiningOp();
 
   if (!defOp) {
     return std::nullopt;
   }
 
-  Value iterArg = loop.getRegionIterArgs()[0];
+  Value iterArg = loop.getRegionIterArgs()[resultIndex];
 
   if (auto addOp = dyn_cast<arith::AddFOp>(defOp)) {
     if (addOp.getLhs() == iterArg || addOp.getRhs() == iterArg) {
@@ -321,6 +322,10 @@ static std::optional<arith::AtomicRMWKind> detectReductionKind(scf::ForOp loop) 
   }
 
   return std::nullopt;
+}
+
+static std::optional<arith::AtomicRMWKind> detectReductionKind(scf::ForOp loop) {
+  return detectReductionKindForOperand(loop, 0);
 }
 
 static Value createNeutralValue(
@@ -426,18 +431,26 @@ static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
     }
   }
 
-  Value neutralVec;
+  SmallVector<Value> neutralVecs;
   if (ctx.mode == VectorizationMode::ReductionX ||
       ctx.mode == VectorizationMode::ReductionY) {
     if (!ctx.scalarLoop.getInitArgs().empty()) {
-      auto kind = detectReductionKind(ctx.scalarLoop);
-      if (!kind) return nullptr;
+      if (ctx.mode == VectorizationMode::ReductionX &&
+          ctx.scalarLoop.getNumRegionIterArgs() > 1) {
+        return nullptr;
+      }
 
-      Type elemType = ctx.scalarLoop.getRegionIterArgs()[0].getType();
-      neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
-      if (!neutralVec) return nullptr;
+      for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
+        auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
+        if (!kind) return nullptr;
 
-      ctx.reductionKind = kind;
+        Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
+        Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
+        if (!neutralVec) return nullptr;
+        neutralVecs.push_back(neutralVec);
+      }
+
+      ctx.reductionKind = detectReductionKindForOperand(ctx.scalarLoop, 0);
       ctx.origInit = ctx.scalarLoop.getInitArgs()[0];
     }
   }
@@ -468,10 +481,10 @@ static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
   }
 
   scf::ForOp vecLoop;
-  if (neutralVec) {
+  if (!neutralVecs.empty()) {
     vecLoop = ctx.builder.create<scf::ForOp>(
         loc, lowerBound, upperBound, newStepValue,
-        ValueRange{neutralVec},
+        ValueRange(neutralVecs),
         [](OpBuilder &, Location, Value, ValueRange) {});
   } else {
     vecLoop = ctx.builder.create<scf::ForOp>(
@@ -1468,11 +1481,14 @@ static void finalizeReductionY(VectorizationContext &ctx) {
   }
 
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
-  Value scalarYieldValue = scalarYield.getOperand(0);
-  Value vecYieldValue = ctx.valueMapping.lookupOrNull(scalarYieldValue);
-
-  if (!vecYieldValue) {
-    return;
+  SmallVector<Value> vecYieldVals;
+  vecYieldVals.reserve(scalarYield.getNumOperands());
+  for (Value operand : scalarYield.getOperands()) {
+    Value mapped = ctx.valueMapping.lookupOrNull(operand);
+    if (!mapped) {
+      return;
+    }
+    vecYieldVals.push_back(mapped);
   }
 
   Block *body = ctx.vecLoop.getBody();
@@ -1480,15 +1496,14 @@ static void finalizeReductionY(VectorizationContext &ctx) {
     body->back().erase();
   }
   ctx.builder.setInsertionPointToEnd(body);
-  ctx.builder.create<scf::YieldOp>(loc, vecYieldValue);
+  ctx.builder.create<scf::YieldOp>(loc, vecYieldVals);
 
   ctx.builder.setInsertionPointAfter(ctx.vecLoop);
-
-  Value vectorResult = ctx.vecLoop.getResult(0);
-  Value scalarResult = ctx.scalarLoop.getResult(0);
-
-  if (!scalarResult.use_empty()) {
-    scalarResult.replaceAllUsesWith(vectorResult);
+  for (auto [scalarResult, vecResult] :
+       llvm::zip(ctx.scalarLoop.getResults(), ctx.vecLoop.getResults())) {
+    if (!scalarResult.use_empty()) {
+      scalarResult.replaceAllUsesWith(vecResult);
+    }
   }
 
   Operation *parent = ctx.scalarLoop->getParentOp();
