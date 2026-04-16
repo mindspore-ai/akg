@@ -4,6 +4,7 @@ langchain-community>=0.4.0
 langchain-core>=0.3.0
 langgraph>=1.0.0
 openai>=1.0.0
+anthropic>=0.30.0
 PyYAML>=6.0.0
 autopep8>=2.0.0
 jinja2>=3.1.0
@@ -21,4 +22,3 @@ python-multipart>=0.0.6
 importlib-metadata>=6.0.0
 typer>=0.9.0
 prompt_toolkit>=3.0.0
-anthropic

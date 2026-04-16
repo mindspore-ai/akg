@@ -13,30 +13,25 @@
 # limitations under the License.
 
 """
-测试 Kimi Coding Plan API 调用
+测试 Anthropic 兼容 API 调用
 
-Kimi Coding Plan 使用 Anthropic 协议，不是 OpenAI 协议。
-关键配置：
-- baseUrl: https://api.kimi.com/coding (不带 /v1，因为 Anthropic SDK 会自动追加 /v1/messages)
-- model: kimi-for-coding
-- protocol: anthropic-messages
+测试任意兼容 Anthropic 协议的 API（如 Claude、Kimi Coding Plan 等）。
+使用 AKG Agents 统一配置系统，支持 ~/.akg/settings.json、.akg/settings.json、环境变量。
 
 运行方式：
     cd /path/to/akg_agents
-    python tools/v2/use_llm_check/test_kimi_api.py
+    source env.sh
+    python tools/v2/use_llm_check/test_anthropic_api.py
 """
 
 import asyncio
 import os
 
-# Kimi Coding Plan 配置
-KIMI_API_KEY = os.getenv("KIMI_API_KEY", "YOUR_API_KEY")
-KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.kimi.com/coding")
-KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-for-coding")
+from akg_agents.core_v2.config import get_settings, print_settings_info
 
 
 async def test_anthropic_sdk():
-    """使用 Anthropic SDK 测试 Kimi API"""
+    """使用 Anthropic SDK 测试 API"""
     print("\n" + "=" * 60)
     print("测试方法 1: Anthropic SDK (推荐)")
     print("=" * 60)
@@ -44,19 +39,31 @@ async def test_anthropic_sdk():
     try:
         from anthropic import AsyncAnthropic
 
+        # 从 AKG Agents 配置获取参数
+        settings = get_settings()
+        model_config = settings.models.get("standard", {})
+
+        api_key = model_config.api_key
+        base_url = model_config.base_url
+        model_name = model_config.model_name
+
+        if api_key == "YOUR_API_KEY" or not api_key:
+            print("❌ 请先配置 API Key（环境变量或 settings.json）")
+            return False
+
         client = AsyncAnthropic(
-            api_key=KIMI_API_KEY,
-            base_url=KIMI_BASE_URL,  # Anthropic SDK 会自动追加 /v1/messages
+            api_key=api_key,
+            base_url=base_url,  # Anthropic SDK 会自动追加 /v1/messages
         )
 
         print(f"配置:")
-        print(f"  base_url: {KIMI_BASE_URL}")
-        print(f"  model: {KIMI_MODEL}")
-        print(f"  实际请求路径: {KIMI_BASE_URL}/v1/messages")
+        print(f"  base_url: {base_url}")
+        print(f"  model: {model_name}")
+        print(f"  实际请求路径: {base_url}/v1/messages")
         print()
 
         response = await client.messages.create(
-            model=KIMI_MODEL,
+            model=model_name,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": "你好，请用一句话介绍你自己"}
@@ -79,85 +86,42 @@ async def test_anthropic_sdk():
         return False
 
 
-async def test_openai_sdk():
-    """使用 OpenAI SDK 测试 Kimi API（不推荐，可能失败）"""
-    print("\n" + "=" * 60)
-    print("测试方法 2: OpenAI SDK (不推荐 - Kimi 不支持 OpenAI 协议)")
-    print("=" * 60)
-
-    try:
-        from openai import AsyncOpenAI
-
-        # 尝试不同的 base_url 配置
-        configs = [
-            # 配置 1: 带 /v1 后缀
-            {
-                "base_url": KIMI_BASE_URL + "/v1",
-                "endpoint": "/chat/completions",
-                "desc": "带 /v1 后缀 (可能拼成 /v1/v1/chat/completions 导致 404)"
-            },
-            # 配置 2: 不带 /v1 后缀
-            {
-                "base_url": KIMI_BASE_URL,
-                "endpoint": "/v1/chat/completions",
-                "desc": "不带 /v1 后缀 (标准 OpenAI 路径)"
-            },
-        ]
-
-        for config in configs:
-            print(f"\n尝试配置: {config['desc']}")
-            print(f"  base_url: {config['base_url']}")
-            print(f"  期望 endpoint: {config['endpoint']}")
-
-            try:
-                client = AsyncOpenAI(
-                    api_key=KIMI_API_KEY,
-                    base_url=config["base_url"],
-                )
-
-                response = await client.chat.completions.create(
-                    model=KIMI_MODEL,
-                    messages=[{"role": "user", "content": "你好"}],
-                    max_tokens=100,
-                )
-
-                print(f"✅ 成功！响应: {response.choices[0].message.content}")
-                return True
-
-            except Exception as e:
-                print(f"❌ 失败: {e}")
-
-        return False
-
-    except ImportError:
-        print("❌ 需要安装 openai SDK: pip install openai")
-        return False
-
-
 async def test_httpx_direct():
     """使用 httpx 直接发送 Anthropic 格式请求"""
     print("\n" + "=" * 60)
-    print("测试方法 3: httpx 直接请求 (Anthropic 协议)")
+    print("测试方法 2: httpx 直接请求 (Anthropic 协议)")
     print("=" * 60)
 
     import httpx
     import json
 
-    url = f"{KIMI_BASE_URL}/v1/messages"
+    # 从 AKG Agents 配置获取参数
+    settings = get_settings()
+    model_config = settings.models.get("standard", {})
+
+    api_key = model_config.api_key
+    base_url = model_config.base_url
+    model_name = model_config.model_name
+
+    if api_key == "YOUR_API_KEY" or not api_key:
+        print("❌ 请先配置 API Key（环境变量或 settings.json）")
+        return False
+
+    url = f"{base_url}/v1/messages"
     headers = {
-        "x-api-key": KIMI_API_KEY,
+        "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": KIMI_MODEL,
+        "model": model_name,
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": "你好，请用一句话介绍你自己"}]
     }
 
     print(f"请求详情:")
     print(f"  URL: {url}")
-    print(f"  Headers: x-api-key={KIMI_API_KEY[:20]}...")
+    print(f"  Headers: x-api-key={api_key[:20]}...")
     print(f"  Payload: {json.dumps(payload, ensure_ascii=False)}")
 
     try:
@@ -184,11 +148,19 @@ async def test_httpx_direct():
 async def main():
     """运行所有测试"""
     print("=" * 60)
-    print("Kimi Coding Plan API 测试")
+    print("Anthropic 兼容 API 测试")
     print("=" * 60)
-    print(f"API Key: {KIMI_API_KEY[:20]}...")
-    print(f"Base URL: {KIMI_BASE_URL}")
-    print(f"Model: {KIMI_MODEL}")
+
+    # 打印配置信息
+    print_settings_info("standard")
+
+    # 从配置获取参数用于显示
+    settings = get_settings()
+    model_config = settings.models.get("standard", {})
+    api_key = model_config.api_key or "YOUR_API_KEY"
+
+    print(f"\n配置摘要:")
+    print(f"  API Key: {api_key[:20]}...")
 
     # 测试 Anthropic SDK
     anthropic_ok = await test_anthropic_sdk()
@@ -196,24 +168,28 @@ async def main():
     # 测试 httpx 直接请求
     httpx_ok = await test_httpx_direct()
 
-    # 测试 OpenAI SDK (预期会失败)
-    openai_ok = await test_openai_sdk()
-
     print("\n" + "=" * 60)
     print("测试结果总结")
     print("=" * 60)
     print(f"Anthropic SDK: {'✅ 成功' if anthropic_ok else '❌ 失败'}")
     print(f"httpx 直接请求: {'✅ 成功' if httpx_ok else '❌ 失败'}")
-    print(f"OpenAI SDK: {'✅ 成功' if openai_ok else '❌ 失败 (预期)'}")
 
     if anthropic_ok or httpx_ok:
-        print("\n💡 结论: Kimi Coding Plan 使用 Anthropic 协议")
-        print("   项目需要添加 Anthropic Provider 支持才能使用 Kimi API")
+        print("\n💡 结论: API 使用 Anthropic 协议，调用成功")
+        print("   配置方式:")
+        print("   1. 环境变量:")
+        print("      export AKG_AGENTS_BASE_URL=https://api.anthropic.com")
+        print("      export AKG_AGENTS_API_KEY=sk-xxx")
+        print("      export AKG_AGENTS_MODEL_NAME=claude-sonnet-4-20250514")
+        print("      export AKG_AGENTS_PROVIDER_TYPE=anthropic")
+        print("")
+        print("   2. settings.json:")
+        print("      ~/.akg/settings.json 或 .akg/settings.json")
     else:
         print("\n⚠️  所有测试都失败了，请检查:")
         print("   1. API Key 是否正确")
-        print("   2. 网络是否能访问 api.kimi.com")
-        print("   3. Kimi Coding Plan 是否已激活")
+        print("   2. 网络是否能访问 API 服务")
+        print("   3. provider_type 是否为 anthropic")
 
 
 if __name__ == "__main__":
