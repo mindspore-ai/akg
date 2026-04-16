@@ -397,6 +397,12 @@ bool FusionAnalyzer::connectLastNodesToTarget(unsigned srcGroupId, unsigned dstG
       FusionPlan newPlan;
       newPlan.fusedGroup = FuseEdge(lastNodeId, dstGroupId);
       newPlan.fusedBand = FuseEdge(lastNodeGroup->rootId, dstGroup->rootId);
+      auto oldCacheKey = std::make_pair(srcGroupId, dstGroupId);
+      auto newCacheKey = std::make_pair(lastNodeId, dstGroupId);
+      if (groupDependenciesCache.find(oldCacheKey) != groupDependenciesCache.end() &&
+          groupDependenciesCache.find(newCacheKey) == groupDependenciesCache.end()) {
+        groupDependenciesCache[newCacheKey] = groupDependenciesCache[oldCacheKey];
+      }
       addFusionPlan(newPlan);
     }
   }
@@ -467,11 +473,15 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
   unsigned fromGroupId = plan.fusedGroup.from;
   unsigned toGroupId = plan.fusedGroup.to;
 
-  auto cacheKey = std::make_pair(fromGroupId, toGroupId);
-  auto cacheIt = groupDependenciesCache.find(cacheKey);
-  if (cacheIt != groupDependenciesCache.end()) {
-    plan.depInfo = cacheIt->second;
-  }
+  auto updateDepInfoFromCache = [&](unsigned srcId, unsigned dstId) {
+    auto key = std::make_pair(srcId, dstId);
+    auto it = groupDependenciesCache.find(key);
+    if (it != groupDependenciesCache.end()) {
+      plan.depInfo = it->second;
+    }
+  };
+
+  updateDepInfoFromCache(fromGroupId, toGroupId);
   plan.isSubviewFusion = checkSubviewFusion(plan.depInfo.predNodeId, plan.depInfo.targetNodeId);
   plan.fusionType = "V";
 
@@ -483,11 +493,21 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
 
   for (auto depGroupId : toDepGroups) {
     if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
-      auto depCacheKey = std::make_pair(depGroupId, toGroupId);
-      auto depCacheIt = groupDependenciesCache.find(depCacheKey);
-      if (depCacheIt != groupDependenciesCache.end()) {
-        plan.depInfo = depCacheIt->second;
-      }
+      updateDepInfoFromCache(depGroupId, toGroupId);
+      plan.fusionType = "H";
+      return;
+    }
+  }
+
+  auto fromDepGroups = depGraph.getDependentGroups(fromGroupId);
+  if (fromDepGroups.count(toGroupId)) {
+    plan.fusionType = "H";
+    return;
+  }
+
+  for (auto depGroupId : fromDepGroups) {
+    if (hasEdgeInFusionPlans(depGroupId, toGroupId)) {
+      updateDepInfoFromCache(depGroupId, fromGroupId);
       plan.fusionType = "H";
       return;
     }
@@ -724,6 +744,12 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 
       // No backward intersection points, fuse the new fuseplan into the old fuseplan
       auto [srcGroup, dstGroup] = determineFusionOrder(oldGroup, newGroup);
+      auto oldCacheKey = std::make_pair(fusePlan.fusedGroup.from, fusePlan.fusedGroup.to);
+      auto newCacheKey = std::make_pair(srcGroup->groupId, dstGroup->groupId);
+      if (groupDependenciesCache.find(oldCacheKey) != groupDependenciesCache.end() &&
+          groupDependenciesCache.find(newCacheKey) == groupDependenciesCache.end()) {
+        groupDependenciesCache[newCacheKey] = groupDependenciesCache[oldCacheKey];
+      }
 
       // Connect all last nodes in paths from srcGroup to dstGroup
       bool pathsConnected = connectLastNodesToTarget(srcGroup->groupId, dstGroup->groupId);
