@@ -587,7 +587,7 @@ void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
 }
 
 // Single-pass removal of affine.for loops whose bodies contain no store operations.
-// Walks bottom-up (reverse) so inner dead loops are erased before outer ones.
+// walk() uses PostOrder by default, so inner dead loops are erased before outer ones.
 void ReductionSiblingRecomputePass::eraseDeadLoops(func::FuncOp func) {
   SmallVector<affine::AffineForOp> deadLoops;
   func.walk([&](affine::AffineForOp forOp) {
@@ -604,7 +604,7 @@ void ReductionSiblingRecomputePass::eraseDeadLoops(func::FuncOp func) {
       deadLoops.push_back(forOp);
     }
   });
-  for (affine::AffineForOp loop : llvm::reverse(deadLoops)) {
+  for (affine::AffineForOp loop : deadLoops) {
     loop.erase();
   }
 }
