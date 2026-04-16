@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <iostream>
 #include <fstream>
@@ -150,7 +151,9 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
                     const py::args &args, py::kwargs kwargs) {
   void *external_stream = nullptr;
   if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
-    external_stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
+    intptr_t h = kwargs["stream"].cast<intptr_t>();
+    external_stream =
+      (h == 0) ? reinterpret_cast<void *>(static_cast<uintptr_t>(-1)) : reinterpret_cast<void *>(h);
   }
   py::list processed_args = kwargs["processed_args"].cast<py::list>();
   akg_log_init();
