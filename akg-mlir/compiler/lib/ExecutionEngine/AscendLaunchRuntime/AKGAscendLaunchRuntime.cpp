@@ -210,7 +210,11 @@ AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, 
   set_device_id(device_id);
   use_mem_pool_ = use_mem_pool;
   if (external_stream != nullptr) {
-    stream_ = external_stream;
+    if (reinterpret_cast<uintptr_t>(external_stream) == static_cast<uintptr_t>(-1)) {
+      stream_ = nullptr;
+    } else {
+      stream_ = external_stream;
+    }
     owns_stream_ = false;
   }
 }
@@ -244,6 +248,11 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
   if (!initialized_) {
     return;
   }
+  if (!owns_stream_) {
+    initialized_ = false;
+    DLOG(INFO) << "Ascend finalize end (external stream / PTA, skipped device reset)";
+    return;
+  }
   if (rt_context_ != nullptr) {
     auto ret = aclrtSetCurrentContext(rt_context_);
     if (ret != ACL_SUCCESS) {
@@ -261,7 +270,9 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
 
 bool AscendKernelRuntime::Init() {
   if (initialized_) {
-    SetCurrentContext();
+    if (owns_stream_) {
+      SetCurrentContext();
+    }
     return true;
   }
 
@@ -291,6 +302,17 @@ void AscendKernelRuntime::CreateContext() {
 
 bool AscendKernelRuntime::InitDevice() {
   DLOG(INFO) << "InitDevice: " << device_id_;
+
+  if (!owns_stream_) {
+    auto ret = aclrtGetCurrentContext(&rt_context_);
+    if (ret != ACL_SUCCESS || rt_context_ == nullptr) {
+      DLOG(WARNING) << "External stream mode: aclrtGetCurrentContext failed, ret["
+                    << GetErrorMsg(ret) << "], context will be nullptr";
+      rt_context_ = nullptr;
+    }
+    return true;
+  }
+
   uint32_t device_count = 0;
   auto ret = aclrtGetDeviceCount(&device_count);
   if (ret != ACL_SUCCESS) {
