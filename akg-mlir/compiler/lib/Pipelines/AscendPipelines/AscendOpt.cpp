@@ -108,6 +108,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::affine::createAffineLoopInvariantCodeMotionPass());
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+    nestedFusionPM.addPass(mlir::createSubviewAllocElimPass());
     nestedFusionPM.addPass(mlir::createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
     nestedFusionPM.addPass(mlir::createLegalizeTypeForAscendPass());
