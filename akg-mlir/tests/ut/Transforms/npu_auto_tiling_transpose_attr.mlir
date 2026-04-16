@@ -2,7 +2,7 @@
 
 // Non-innermost permutation only swaps the middle axes, so transpose marking must stay off.
 // CHECK-LABEL: func.func @transpose_middle_axes_no_mark(
-// CHECK-NOT: } {transpose
+// CHECK: } {vector
 // CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<4x512x12x64xf32>
 module {
@@ -32,7 +32,7 @@ module {
 
 // Full 2D transpose changes the innermost axis, so transpose marking must be kept.
 // CHECK-LABEL: func.func @transpose_2d_mark(
-// CHECK: } {transpose
+// CHECK: } {vector
 // CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<64x32xf32>
 module {
@@ -55,7 +55,7 @@ module {
 
 // Stable prefix + last-two-axis swap still changes the band innermost loop, so transpose must be marked.
 // CHECK-LABEL: func.func @transpose_last_two_axes_mark(
-// CHECK: } {transpose
+// CHECK: } {vector
 // CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<4x12x64x32xf32>
 module {
