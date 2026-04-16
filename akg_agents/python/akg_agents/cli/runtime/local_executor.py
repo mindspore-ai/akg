@@ -74,7 +74,8 @@ class LocalExecutor:
         base_default = mc.get("default") or "standard"
         mc.setdefault("default", base_default)
         if "log_dir" not in config or config["log_dir"] is None:
-            config["log_dir"] = "~/akg_agents_logs"
+            from akg_agents.utils import DEFAULT_LOG_DIR
+            config["log_dir"] = DEFAULT_LOG_DIR
         return config
 
     def _load_common_config(self) -> Dict:
@@ -87,7 +88,8 @@ class LocalExecutor:
         config.setdefault("enable_auto_compact", True)
         config.setdefault("auto_compact_ratio", 0.8)
         if "log_dir" not in config or config["log_dir"] is None:
-            config["log_dir"] = "~/akg_agents_logs"
+            from akg_agents.utils import DEFAULT_LOG_DIR
+            config["log_dir"] = DEFAULT_LOG_DIR
         return config
 
     def _build_response_state(self, state: dict) -> dict:
