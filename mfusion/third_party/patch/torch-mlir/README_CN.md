@@ -102,33 +102,33 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 将 torch-mlir 中使用的新版 LLVM/MLIR API 降级回旧版本 API，主要涉及以下变更：
 
 1. **Pattern Rewrite API 重命名**：
-   - `applyPatternsGreedily` → `applyPatternsAndFoldGreedily`
-   - `applyOpPatternsGreedily` → `applyOpPatternsAndFold`
+  - `applyPatternsGreedily` → `applyPatternsAndFoldGreedily`
+  - `applyOpPatternsGreedily` → `applyOpPatternsAndFold`
 
 2. **GreedyRewriteConfig 配置方式变化**：
-   - `config.setUseTopDownTraversal(true)` → `config.useTopDownTraversal = true`
-   - `config.setMaxIterations(...)` → `config.maxIterations = ...`
-   - `config.setStrictness(...)` → `config.strictMode = ...`
+  - `config.setUseTopDownTraversal(true)` → `config.useTopDownTraversal = true`
+  - `config.setMaxIterations(...)` → `config.maxIterations = ...`
+  - `config.setStrictness(...)` → `config.strictMode = ...`
 
 3. **DataFlow Analysis API 重命名**：
-   - `GenericLatticeAnchorBase` → `GenericProgramPointBase`
-   - `LatticeAnchor` → `ProgramPoint`
-   - `registerAnchorKind` → `registerPointKind`
-   - `getLatticeAnchor` → `getProgramPoint`
-   - `getProgramPointAfter(op)` → `ProgramPoint(op)`
+  - `GenericLatticeAnchorBase` → `GenericProgramPointBase`
+  - `LatticeAnchor` → `ProgramPoint`
+  - `registerAnchorKind` → `registerPointKind`
+  - `getLatticeAnchor` → `getProgramPoint`
+  - `getProgramPointAfter(op)` → `ProgramPoint(op)`
 
 4. **Bufferization API 变化**：
-   - `bufferization::ToBufferOp` → `bufferization::ToMemrefOp`
+  - `bufferization::ToBufferOp` → `bufferization::ToMemrefOp`
 
 5. **OpConversionPattern API 变化**：
-   - `OneToNOpAdaptor` → `OpAdaptor`
+  - `OneToNOpAdaptor` → `OpAdaptor`
 
 6. **FunctionOpInterface API 变化**：
-   - `func.eraseArguments()` 返回类型从 `LogicalResult` 变为 `void`
+  - `func.eraseArguments()` 返回类型从 `LogicalResult` 变为 `void`
 
 7. **其他 API 调整**：
-   - `getBackwardSlice()` 不再返回 `LogicalResult`
-   - APInt 构造函数需要显式类型转换以避免编译错误
+  - `getBackwardSlice()` 不再返回 `LogicalResult`
+  - APInt 构造函数需要显式类型转换以避免编译错误
 
 **修改的文件：**
 
@@ -154,17 +154,36 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 ### 006-disable-aten-fold-constant.patch
 
 **描述：**  
-禁用 `aten.ones`、`aten.zeros`、`aten.full` 的常量折叠，使这三类 Op 在 canonicalization 时不再被折叠为 `torch.vtensor.literal`。
+禁用 `aten.ones`、`aten.zeros`、`aten.full` 和 `aten.clone` 的fold方法，使这些 Op 在 canonicalization 时不再被折叠。
 
 **问题：**  
-在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若上述 Op 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠为 `torch.vtensor.literal`，导致后续 pipeline 中出现 literal，与当前处理方式不符。
+在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若`aten.ones`、`aten.zeros`、`aten.full` 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠，导致后续 pipeline 中出现不符合预期的操作，与当前处理方式不符。若`aten.clone` 启用了 `hasFolder` 并实现了 `fold()`，可能会将本来非连续转连续的处理操作优化掉，导致后续算子的输入异常。
 
 **解决方案：**
 
-1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这三类 Op 声明 fold。
-2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold` 的完整实现块（约 130 行），与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
+1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp` 和 `AtenCloneOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这些 Op 声明 fold。
+2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold` 和 `AtenCloneOp::fold` 的完整实现块，与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
 
 **修改的文件：**
+
+- `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td`
+- `lib/Dialect/Torch/IR/TorchOps.cpp`
+
+### 007-disable-adaptive-avg-pool2d-canonicalizer.patch
+
+**描述：**  
+禁用 `aten._adaptive_avg_pool2d` 的规范化器，防止其在 canonicalization 过程中被替换为 `aten.adaptive_avg_pool2d`。
+
+**问题：**  
+在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中 `aten._adaptive_avg_pool2d` 操作的规范化器会将其替换为 `aten.adaptive_avg_pool2d`，而`aten.adaptive_avg_pool2d`算子已经被decompose处理过，在当前阶段不应该出现，这会导致后续执行报错。
+
+**解决方案：**
+
+1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `Aten_AdaptiveAvgPool2dOp` 的 `let hasCanonicalizer = 1;`，使 TableGen 不再为该 Op 生成规范化器相关代码。
+2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `Aten_AdaptiveAvgPool2dOp::getCanonicalizationPatterns` 方法的完整实现块，与 .td 中取消 hasCanonicalizer 保持一致。
+
+**修改的文件：**
+
 - `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td`
 - `lib/Dialect/Torch/IR/TorchOps.cpp`
 

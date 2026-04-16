@@ -24,7 +24,6 @@
 namespace mlir::mfuse {
 namespace {
 
-constexpr int64_t kRank2D = 2;
 constexpr int64_t kRankBatchMatmul = 3;  // rank >= 3 -> aclnn.batch_matmul
 constexpr int64_t kAlphaOne = 1;
 
