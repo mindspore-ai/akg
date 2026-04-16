@@ -1002,10 +1002,16 @@ struct ShapeNormalState {
       return ops;
     }
     if (targetSymShape.empty()) {
-      Type newType =
-        manager.updateSymbolicShape(MemRefType::get(getAxesSizes(targetSymShape), elementType), inputSymshape);
+      auto inputMemRefTy = cast<MemRefType>(newRet.getType());
+      Type newType = MemRefType::get(getAxesSizes(targetSymShape), elementType);
+      if (auto stridedLayout = dyn_cast<StridedLayoutAttr>(inputMemRefTy.getLayout())) {
+        auto scalarLayout =
+          StridedLayoutAttr::get(inputMemRefTy.getContext(), stridedLayout.getOffset(), ArrayRef<int64_t>{});
+        newType = MemRefType::get({}, elementType, scalarLayout, inputMemRefTy.getMemorySpace());
+      }
+      newType = manager.updateSymbolicShape(newType, inputSymshape);
       SmallVector<ReassociationIndices> reassociation;
-      auto collapseOp = rewriter.create<memref::CollapseShapeOp>(loc, newType, newRet, reassociation);
+      auto collapseOp = rewriter.create<memref::CollapseShapeOp>(loc, cast<MemRefType>(newType), newRet, reassociation);
       ops.push_back(collapseOp);
       entryMaterializedOps.insert(collapseOp);
       ops.push_back(CastToTargetSymShape(collapseOp.getResult(), targetSymShape, rewriter, loc).getDefiningOp());
@@ -1472,10 +1478,6 @@ struct CollapseShapeAdapter final : OpAdapter {
     Value newSrc = state.ssaMap.lookup(oldSrc) ? state.ssaMap.lookup(oldSrc) : oldSrc;
     SmallVector<std::string> newSrcSymShape = state.getValueSymbolicShape(newSrc);
     SmallVector<std::string> targetResultSymShape = state.computeTargetSymShape(oldResult);
-    if (targetResultSymShape.empty()) {
-      if (state.ssaMap.lookup(oldSrc)) op->setOperand(0, state.ssaMap.lookup(oldSrc));
-      return;
-    }
     if (targetResultSymShape == newSrcSymShape) {
       state.ssaMap[oldResult] = newSrc;
       oldResult.replaceAllUsesWith(newSrc);
