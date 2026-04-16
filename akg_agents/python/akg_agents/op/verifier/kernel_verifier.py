@@ -1500,7 +1500,15 @@ if __name__ == "__main__":
 """
         return code
 
-    def save_speedup_result(self, speedup: float, base_time: float, gen_time: float, unique_dir: str):
+    def save_speedup_result(
+        self,
+        speedup: float,
+        base_time: float,
+        gen_time: float,
+        unique_dir: str,
+        roofline_time: Optional[float] = None,
+        roofline_speedup: Optional[float] = None,
+    ):
         """保存加速比结果到txt文件"""
         try:
             profiling_dir = os.path.join(os.path.expanduser(self.log_dir), self.op_name, "profiling")
@@ -1511,7 +1519,13 @@ if __name__ == "__main__":
             with open(filepath, 'a', encoding='utf-8') as f:
                 f.write(f"op_name: {self.op_name}, task_id: {self.task_id}, unique_dir: {unique_dir}, ")
                 f.write(f"base_time: {base_time:.6f} us, generation_time: {gen_time:.6f} us, ")
-                f.write(f"speedup: {speedup:.6f}x\n")
+                f.write(f"speedup: {speedup:.6f}x")
+                if roofline_time is not None and roofline_speedup is not None:
+                    f.write(
+                        f", roofline_time: {roofline_time:.6f} us, "
+                        f"roofline_speedup: {roofline_speedup:.6f}x"
+                    )
+                f.write("\n")
 
             logger.debug(f"[{self.task_id}:{self.op_name}] 加速比结果已保存")
 
@@ -1531,6 +1545,8 @@ if __name__ == "__main__":
                 - gen_time: 生成代码执行时间（微秒）
                 - base_time: 基准代码执行时间（微秒）
                 - speedup: 加速比
+                - roofline_time: SOLAR fused roofline 时间（微秒，可选）
+                - roofline_speedup: roofline_time / gen_time（可选）
                 - autotune_summary: autotune配置详情（仅triton DSL）
         """
         # 【关键】对于 LocalWorker 和 RemoteWorker，在方法开始时就 acquire device
@@ -1643,7 +1659,15 @@ if __name__ == "__main__":
                 **profile_settings,
                 'backend': self.backend,
                 'dsl': self.dsl,
-                'op_name': self.op_name
+                'op_name': self.op_name,
+                'framework': self.framework,
+                'arch': self.arch,
+                'bench_type': self.bench_type,
+                'enable_roofline': profile_settings.get('enable_roofline', True),
+                'roofline_arch_config': profile_settings.get(
+                    'roofline_arch_config',
+                    self.config.get('roofline_arch_config')
+                ),
             }
 
             result = await self.worker.profile(package_data, self.task_id, self.op_name, full_settings)
@@ -1658,16 +1682,29 @@ if __name__ == "__main__":
             gen_time = result.get('gen_time')
             base_time = result.get('base_time')
             speedup = result.get('speedup', 0.0)
+            roofline_time = result.get('roofline_time')
+            roofline_speedup = result.get('roofline_speedup', 0.0)
+            roofline_result = result.get('roofline')
 
             # 处理 None 值用于日志输出
             gen_time_display = gen_time if gen_time is not None else float('inf')
             base_time_display = base_time if base_time is not None else float('inf')
 
-            self.save_speedup_result(speedup, base_time_display, gen_time_display, unique_dir_name)
+            self.save_speedup_result(
+                speedup,
+                base_time_display,
+                gen_time_display,
+                unique_dir_name,
+                roofline_time=roofline_time,
+                roofline_speedup=roofline_speedup if roofline_time is not None else None,
+            )
 
             speedup_percent = speedup * 100.0
             logger.info(f"orig performance is {base_time_display:.2f} us")
             logger.info(f"akg_agents performance is {gen_time_display:.2f} us")
+            if roofline_time is not None:
+                logger.info(f"solar roofline performance is {roofline_time:.2f} us")
+                logger.info(f"roofline speedup is {roofline_speedup:.4f}x")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
 
             # 构建返回结果
@@ -1675,6 +1712,9 @@ if __name__ == "__main__":
                 'gen_time': gen_time_display,
                 'base_time': base_time_display,
                 'speedup': speedup,
+                'roofline_time': roofline_time,
+                'roofline_speedup': roofline_speedup,
+                'roofline': roofline_result,
                 'unique_dir': unique_dir_name  # 添加 unique_dir
             }
 
@@ -1691,7 +1731,10 @@ if __name__ == "__main__":
             return {
                 'gen_time': None,
                 'base_time': None,
-                'speedup': 0.0
+                'speedup': 0.0,
+                'roofline_time': None,
+                'roofline_speedup': 0.0,
+                'roofline': None,
             }
         finally:
             # 【关键】在方法结束时统一释放设备
