@@ -145,6 +145,7 @@ class ModelConfig:
     timeout: int = 300
     extra_body: Dict[str, Any] = field(default_factory=dict)  # 透传到 API 请求的额外参数（如 thinking/reasoning）
     extra: Dict[str, Any] = field(default_factory=dict)       # 其他扩展字段（不透传到 API）
+    provider_type: str = "openai"  # Provider 类型: "openai" (OpenAI 兼容协议) 或 "anthropic" (Anthropic 协议)
     
     @property
     def thinking_enabled(self) -> bool:
@@ -190,7 +191,8 @@ class ModelConfig:
                 presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
                 extra_body=extra_body,
-                extra=data.get("extra", {})
+                extra=data.get("extra", {}),
+                provider_type=data.get("provider_type", "openai"),
             )
         else:
             return cls(
@@ -204,7 +206,8 @@ class ModelConfig:
                 presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
                 extra_body=extra_body,
-                extra=data.get("extra", {})
+                extra=data.get("extra", {}),
+                provider_type=data.get("provider_type", "openai"),
             )
     
     @classmethod
@@ -233,6 +236,7 @@ class ModelConfig:
             max_tokens=int(env_max_tokens) if env_max_tokens else 8192,
             timeout=int(env_timeout) if env_timeout else 300,
             extra_body=extra_body,
+            provider_type=get_akg_env_var(f"{prefix}PROVIDER_TYPE", "openai"),
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -245,7 +249,8 @@ class ModelConfig:
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "timeout": self.timeout,
-            "extra": self.extra
+            "extra": self.extra,
+            "provider_type": self.provider_type,
         }
         if self.extra_body:
             result["extra_body"] = self.extra_body
@@ -268,7 +273,8 @@ class ModelConfig:
             presence_penalty=other.presence_penalty if other.presence_penalty is not None else self.presence_penalty,
             timeout=other.timeout if other.timeout != 300 else self.timeout,
             extra_body={**self.extra_body, **other.extra_body},
-            extra={**self.extra, **other.extra}
+            extra={**self.extra, **other.extra},
+            provider_type=other.provider_type if other.provider_type != "openai" else self.provider_type,
         )
 
 
@@ -615,6 +621,7 @@ def _print_model_info(level: str, model: "ModelConfig", source: str, indent: str
     print(f"{indent}  model_name: {model.model_name}")
     print(f"{indent}  base_url: {model.base_url}")
     print(f"{indent}  api_key: {_mask_key(model.api_key)}")
+    print(f"{indent}  provider_type: {model.provider_type}")
     print(f"{indent}  temperature: {model.temperature}")
     if model.extra_body:
         print(f"{indent}  extra_body: {model.extra_body}")
