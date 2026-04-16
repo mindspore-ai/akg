@@ -40,6 +40,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -311,6 +312,25 @@ static void createHIVMElementwiseBinaryOp(ConversionPatternRewriter &rewriter, L
   HIVMElementwiseBinaryCreator<HIVMOp>::create(rewriter, loc, lhs, rhs, resBuf);
 }
 
+// If this binary op's sole result is the i-th scf.yield operand inside an scf.for, reuse
+// forOp.getInitArgs()[i] as the HIVM output buffer (in-place on the loop-carried memref).
+// Returns null to fall back to allocMemRef when not applicable.
+static Value tryGetInPlaceInitIfResultIsYieldOperand(Operation *arithOp) {
+  Block *body = arithOp->getBlock();
+  auto yieldOp = dyn_cast<scf::YieldOp>(body->getTerminator());
+  auto forOp = dyn_cast<scf::ForOp>(body->getParent()->getParentOp());
+  if (!yieldOp || !forOp) {
+    return {};
+  }
+  Value result = arithOp->getResult(0);
+  for (unsigned i = 0, n = yieldOp.getNumOperands(); i < n; ++i) {
+    if (yieldOp.getOperand(i) == result && i < forOp.getInitArgs().size()) {
+      return forOp.getInitArgs()[i];
+    }
+  }
+  return {};
+}
+
 template <typename ArithOp, typename HIVMOp>
 struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
   using OpConversionPattern<ArithOp>::OpConversionPattern;
@@ -362,12 +382,15 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     }
 
     auto memRefType = MemRefType::get(shapeAndElem->first, shapeAndElem->second);
-    auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhsMemRef);
-    if (failed(resBufOr)) {
-      return failure();
+    Value resBuf = tryGetInPlaceInitIfResultIsYieldOperand(op.getOperation());
+    if (!resBuf) {
+      auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhsMemRef);
+      if (failed(resBufOr)) {
+        return failure();
+      }
+      resBuf = *resBufOr;
+      propagateBufferSizeMark(rewriter, loc, lhsMemRef, resBuf);
     }
-    Value resBuf = *resBufOr;
-    propagateBufferSizeMark(rewriter, loc, lhsMemRef, resBuf);
 
     createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf);
 
@@ -1000,12 +1023,15 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
     }
 
     auto memRefType = MemRefType::get(shapeAndElem->first, shapeAndElem->second);
-    auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhs);
-    if (failed(resBufOr)) {
-      return failure();
+    Value resBuf = tryGetInPlaceInitIfResultIsYieldOperand(op.getOperation());
+    if (!resBuf) {
+      auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhs);
+      if (failed(resBufOr)) {
+        return failure();
+      }
+      resBuf = *resBufOr;
+      propagateBufferSizeMark(rewriter, loc, lhs, resBuf);
     }
-    Value resBuf = *resBufOr;
-    propagateBufferSizeMark(rewriter, loc, lhs, resBuf);
 
     createHIVMElementwiseBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf);
 
@@ -1678,28 +1704,30 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
   }
 };
 
-
 struct ScfForToHIVM : public OpConversionPattern<scf::ForOp> {
   using OpConversionPattern<scf::ForOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(scf::ForOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    // Only handle loops that have at least one vector-typed iteration argument.
     if (llvm::none_of(op.getResultTypes(), [](Type t) {
           return isa<VectorType>(t) || isa<npuvector::NPUVectorType>(t);
         })) {
       return failure();
     }
 
+    SmallVector<Value> newInitArgs(adaptor.getInitArgs().begin(),
+                                   adaptor.getInitArgs().end());
+
     auto newForOp = rewriter.create<scf::ForOp>(
         op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(),
-        adaptor.getStep(), adaptor.getInitArgs());
+        adaptor.getStep(), newInitArgs);
 
     Block &oldBlock = op.getRegion().front();
     Block &newBlock = newForOp.getRegion().front();
 
-    SmallVector<Value> newBlockArgs(newBlock.getArguments().begin(), newBlock.getArguments().end());
+    SmallVector<Value> newBlockArgs(newBlock.getArguments().begin(),
+                                    newBlock.getArguments().end());
 
     rewriter.mergeBlocks(&oldBlock, &newBlock, newBlockArgs);
 
@@ -2118,8 +2146,10 @@ static Value traceMemRefToRoot(Value v, int maxSteps = 32) {
 
     if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
       current = subview.getSource();
-    } else if (auto cast = dyn_cast<memref::ReinterpretCastOp>(def)) {
+    } else if (auto cast = dyn_cast<memref::CastOp>(def)) {
       current = cast.getSource();
+    } else if (auto reinterp = dyn_cast<memref::ReinterpretCastOp>(def)) {
+      current = reinterp.getSource();
     } else if (auto reshape = dyn_cast<memref::ReshapeOp>(def)) {
       current = reshape.getSource();
     } else if (auto expand = dyn_cast<memref::ExpandShapeOp>(def)) {
@@ -2339,7 +2369,11 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(
   return success();
 }
 
-static bool tryRewriteNPUVectorTransferWriteToAllocSlicedDest(
+/// Unified optimized lowering when transfer_write dest traces to memref.alloc/alloca.
+/// Traces dataToWrite through scf.for results to find the actual buffer (alloc),
+/// then inserts a subview of dest before that buffer's earliest use and RAUW-replaces it.
+/// Falls back to hivm::StoreOp when dataToWrite does not originate from an alloc.
+static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(
     npuvector::TransferWriteOp op,
     Location loc,
     Value dest,
@@ -2349,41 +2383,55 @@ static bool tryRewriteNPUVectorTransferWriteToAllocSlicedDest(
     ArrayRef<OpFoldResult> sizes,
     ArrayRef<OpFoldResult> strides,
     ConversionPatternRewriter &rewriter) {
-  Value root = traceMemRefToRoot(dest);
-  if (!isRootFromAlloc(root)) {
-    return false;
-  }
-  Operation *producer = nullptr;
-  for (Operation *user : dataToWrite.getUsers()) {
-    if (isa<annotation::MarkOp>(user)) {
-      continue;
-    }
-    producer = user;
-    break;
-  }
-  if (producer) {
-    rewriter.setInsertionPoint(producer);
-    Value slicedDest = rewriter.create<memref::SubViewOp>(
-        loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
-    for (unsigned i = 0, e = producer->getNumOperands(); i < e; ++i) {
-      if (producer->getOperand(i) == dataToWrite) {
-        rewriter.modifyOpInPlace(producer, [&]() {
-          producer->setOperand(i, slicedDest);
-        });
+  auto resultMemType = cast<MemRefType>(resultType);
+
+  // Trace through scf.for result to the underlying init buffer.
+  Value actualBuf = dataToWrite;
+  if (auto forOp = dataToWrite.getDefiningOp<scf::ForOp>()) {
+    for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
+      if (forOp.getResult(i) == dataToWrite) {
+        actualBuf = forOp.getInitArgs()[i];
         break;
       }
     }
-    for (Operation *user : llvm::make_early_inc_range(dataToWrite.getUsers())) {
-      if (isa<annotation::MarkOp>(user)) {
-        rewriter.eraseOp(user);
-      }
-    }
-    if (auto allocOp = dataToWrite.getDefiningOp<memref::AllocOp>()) {
-      rewriter.eraseOp(allocOp);
-    }
   }
+
+  // Require actualBuf from alloc/alloca for RAUW; otherwise fallback to Store.
+  Operation *allocDef = actualBuf.getDefiningOp();
+  if (!allocDef || !isa<memref::AllocOp, memref::AllocaOp>(allocDef)) {
+    rewriter.setInsertionPoint(op);
+    Value slicedDest = rewriter.create<memref::SubViewOp>(
+        loc, resultMemType, dest, offsets, sizes, strides);
+    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, slicedDest);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  // Strip annotation::MarkOps attached to actualBuf.
+  for (Operation *user : llvm::make_early_inc_range(actualBuf.getUsers())) {
+    if (isa<annotation::MarkOp>(user))
+      rewriter.eraseOp(user);
+  }
+
+  // Insert subview before earliest same-block user of actualBuf (SSA dominance).
+  Block *block = op->getBlock();
+  Operation *insertPt = op.getOperation();
+  for (Operation *user : actualBuf.getUsers()) {
+    if (user == op.getOperation())
+      continue;
+    if (user->getBlock() == block && user->isBeforeInBlock(insertPt))
+      insertPt = user;
+  }
+  rewriter.setInsertionPoint(insertPt);
+  Value slicedDest = rewriter.create<memref::SubViewOp>(
+      loc, resultMemType, dest, offsets, sizes, strides);
+
+  rewriter.replaceAllUsesWith(actualBuf, slicedDest);
   rewriter.eraseOp(op);
-  return true;
+
+  if (allocDef->use_empty())
+    rewriter.eraseOp(allocDef);
+  return success();
 }
 
 struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
@@ -2396,6 +2444,27 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
 
     Value dataToWrite = adaptor.getVector();
     Value dest = adaptor.getSource();
+
+    // No-op when data and dest share the same alloc root (for results: map through init args).
+    if (isa<MemRefType>(dataToWrite.getType()) &&
+        isa<MemRefType>(dest.getType())) {
+      Value dataRoot = dataToWrite;
+      if (auto forOp = dataToWrite.getDefiningOp<scf::ForOp>()) {
+        for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
+          if (forOp.getResult(i) == dataToWrite) {
+            dataRoot = traceMemRefToRoot(forOp.getInitArgs()[i]);
+            break;
+          }
+        }
+      } else {
+        dataRoot = traceMemRefToRoot(dataToWrite);
+      }
+      Value destRoot = traceMemRefToRoot(dest);
+      if (dataRoot == destRoot && isRootFromAlloc(destRoot)) {
+        rewriter.eraseOp(op);
+        return success();
+      }
+    }
 
     if (!isa<MemRefType>(dest.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref destination");
@@ -2416,6 +2485,9 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
                                                 rewriter);
     }
 
+    Value destRoot = traceMemRefToRoot(dest);
+    const bool destIsAllocRoot = isRootFromAlloc(destRoot);
+
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
@@ -2429,23 +2501,16 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     auto resultType = memref::SubViewOp::inferRankReducedResultType(
         dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
 
-    if (tryRewriteNPUVectorTransferWriteToAllocSlicedDest(
-            op, loc, dest, dataToWrite, resultType, offsets, sizes, strides,
-            rewriter)) {
-      return success();
+    if (destIsAllocRoot) {
+      return lowerNPUVectorTransferWriteAllocRootOptimized(
+          op, loc, dest, dataToWrite, resultType, offsets, sizes, strides, rewriter);
     }
 
+    rewriter.setInsertionPoint(op);
     Value slicedDest = rewriter.create<memref::SubViewOp>(
         loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
-
-    rewriter.create<hivm::StoreOp>(
-        loc,
-        TypeRange{},
-        dataToWrite,
-        slicedDest);
-
+    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, slicedDest);
     rewriter.eraseOp(op);
-
     return success();
   }
 };
@@ -2656,6 +2721,74 @@ struct NPUVectorIndexCastToHIVM : public OpConversionPattern<npuvector::IndexCas
 
 }  // namespace
 
+/// Second-phase rewrite: strip scf.for iter_args/results after partial conversion; replace
+/// iter_args with inits; empty yield; remap for results to yielded memref or init[i].
+/// Runs as greedy patterns after applyPartialConversion (not inside conversion pattern set).
+struct ScfForStripRedundantCarriedValues : public OpRewritePattern<scf::ForOp> {
+  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::ForOp forOp,
+                                PatternRewriter &rewriter) const override {
+    unsigned n = forOp.getNumRegionIterArgs();
+    if (n == 0) {
+      return failure();
+    }
+    if (forOp.getInitArgs().size() != n) {
+      return failure();
+    }
+
+    Block *oldBody = forOp.getBody();
+    auto yieldOp = dyn_cast<scf::YieldOp>(oldBody->getTerminator());
+    if (!yieldOp || yieldOp.getNumOperands() != n) {
+      return failure();
+    }
+
+    SmallVector<Value> resultReplacements;
+    resultReplacements.reserve(n);
+    for (unsigned i = 0; i < n; ++i) {
+      Value yielded = yieldOp.getOperand(i);
+      if (isa<MemRefType>(yielded.getType())) {
+        resultReplacements.push_back(yielded);
+      } else {
+        resultReplacements.push_back(forOp.getInitArgs()[i]);
+      }
+    }
+
+    Location loc = forOp.getLoc();
+    rewriter.setInsertionPoint(forOp);
+    scf::ForOp newFor = rewriter.create<scf::ForOp>(
+        loc, forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep());
+
+    Block *newBody = newFor.getBody();
+    forOp.getInductionVar().replaceAllUsesWith(newFor.getInductionVar());
+    for (auto [oldIterArg, initVal] :
+         llvm::zip(forOp.getRegionIterArgs(), forOp.getInitArgs())) {
+      oldIterArg.replaceAllUsesWith(initVal);
+    }
+
+    if (Operation *term = newBody->getTerminator()) {
+      rewriter.eraseOp(term);
+    }
+
+    Operation *oldTerminator = oldBody->getTerminator();
+    for (Operation &op : llvm::make_early_inc_range(*oldBody)) {
+      if (&op == oldTerminator) {
+        break;
+      }
+      op.moveBefore(newBody, newBody->end());
+    }
+
+    rewriter.setInsertionPointToEnd(newBody);
+    rewriter.create<scf::YieldOp>(loc);
+
+    for (unsigned i = 0; i < n; ++i) {
+      forOp.getResult(i).replaceAllUsesWith(resultReplacements[i]);
+    }
+    rewriter.eraseOp(forOp);
+    return success();
+  }
+};
+
 void hivm::populateArithToHIVMConversionPatterns(
     RewritePatternSet &patterns) {
 
@@ -2826,6 +2959,14 @@ void ArithToHIVMConversionPass::runOnOperation() {
   hivm::populateArithToHIVMConversionPatterns(patterns);
   if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
     signalPassFailure();
+    return;
+  }
+
+  RewritePatternSet stripPatterns(&getContext());
+  stripPatterns.add<ScfForStripRedundantCarriedValues>(stripPatterns.getContext());
+  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(stripPatterns)))) {
+    signalPassFailure();
+    return;
   }
 }
 }  // namespace
