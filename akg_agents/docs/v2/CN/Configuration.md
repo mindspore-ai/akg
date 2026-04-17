@@ -64,6 +64,7 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 | `base_url` | string | — | API 端点 URL |
 | `api_key` | string | — | API 密钥 |
 | `model_name` | string | — | 模型名称 |
+| `provider_type` | string | `"openai"` | Provider 类型：`"openai"`（OpenAI 兼容协议）或 `"anthropic"`（Anthropic 协议） |
 | `temperature` | float | `0.2` | 采样温度 |
 | `max_tokens` | int | `8192` | 最大输出 token 数 |
 | `top_p` | float | `0.9` | Top-p 采样 |
@@ -71,6 +72,39 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 | `presence_penalty` | float | `None` | 存在惩罚（可选） |
 | `timeout` | int | `300` | 请求超时时间（秒） |
 | `extra_body` | object | `{}` | 透传到 API 请求体的额外参数（如 thinking/reasoning 配置） |
+
+### Provider 类型选择
+
+AKG Agents 支持两种 API 协议：
+
+| `provider_type` | 协议 | API 路径 | 适用场景 |
+|-----------------|------|---------|---------|
+| `"openai"` | OpenAI 兼容协议 | `/chat/completions` | DeepSeek、OpenAI、智谱、通义千问、豆包、SiliconFlow 等大部分服务商 |
+| `"anthropic"` | Anthropic 协议 | `/v1/messages` | Kimi Coding Plan、Claude API 等 Anthropic 协议服务商 |
+
+**重要**：使用 Kimi Coding Plan 时，必须设置 `provider_type=anthropic`：
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.kimi.com/coding",
+      "api_key": "sk-kimi-xxx",
+      "model_name": "kimi-for-coding",
+      "provider_type": "anthropic"
+    }
+  }
+}
+```
+
+或通过环境变量：
+
+```bash
+export AKG_AGENTS_BASE_URL="https://api.kimi.com/coding"
+export AKG_AGENTS_API_KEY="sk-kimi-xxx"
+export AKG_AGENTS_MODEL_NAME="kimi-for-coding"
+export AKG_AGENTS_PROVIDER_TYPE="anthropic"
+```
 
 ### 模型级别
 
