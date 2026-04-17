@@ -3,9 +3,13 @@
     "complex": {
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "api_key": "your-zhipu-api-key",
-      "model_name": "glm-4.7",
-      "temperature": 0.2,
-      "max_tokens": 131072
+      "model_name": "glm-5.1",
+      "temperature": 1,
+      "timeout": 600,
+      "max_tokens": 16384,
+      "extra_body": {
+        "enable_thinking": true
+      }
     },
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
@@ -13,6 +17,7 @@
       "model_name": "deepseek-reasoner",
       "temperature": 0.2,
       "max_tokens": 65536,
+      "timeout": 400,
       "extra_body": {
         "thinking": {"type": "enabled"}
       }
@@ -22,6 +27,7 @@
       "api_key": "your-deepseek-api-key",
       "model_name": "deepseek-chat",
       "temperature": 0.3,
+      "timeout": 300,
       "max_tokens": 8192
     }
   },

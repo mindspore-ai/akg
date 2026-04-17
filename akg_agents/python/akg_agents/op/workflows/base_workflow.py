@@ -156,7 +156,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
 
         # 1. log_dir（若尚未设置）
         if "log_dir" not in config:
-            log_root = os.path.expanduser("~/akg_agents_logs")
+            from akg_agents.utils import DEFAULT_LOG_DIR
+            log_root = os.path.expanduser(DEFAULT_LOG_DIR)
             config["log_dir"] = str(
                 Path(log_root) / f"Task_{next(tempfile._get_candidate_names())}"
             )
