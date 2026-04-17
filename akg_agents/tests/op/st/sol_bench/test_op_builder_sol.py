@@ -18,7 +18,7 @@ def get_test_config() -> dict:
             "agent_model_config": {
                 "op_task_builder": "standard",
             },
-            "log_dir": os.path.expanduser("~/akg_agents_logs/test_op_builder_sol"),
+            "log_dir": os.path.expanduser(os.environ.get("AKG_AGENTS_LOG_DIR", "~/akg_agents_logs/test_op_builder_sol").strip() or "~/akg_agents_logs/test_op_builder_sol"),
             "op_task_builder_max_iterations": 5
         }
 

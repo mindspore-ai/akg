@@ -110,8 +110,8 @@ def main():
         help="agent 模型配置文件（相对于 python/akg_agents/）",
     )
     parser.add_argument(
-        "--log-dir", default="~/akg_agents_logs",
-        help="agent 日志根目录（默认 ~/akg_agents_logs）",
+        "--log-dir", default=os.environ.get("AKG_AGENTS_LOG_DIR", "~/akg_agents_logs").strip() or "~/akg_agents_logs",
+        help="agent 日志根目录（默认读取 AKG_AGENTS_LOG_DIR 环境变量，未设置则 ~/akg_agents_logs）",
     )
     parser.add_argument(
         "--tracking-md", default=None,

@@ -16,6 +16,8 @@
 
 import logging
 
+from akg_agents.utils import DEFAULT_LOG_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +70,7 @@ class Defaults:
     """默认值常量"""
 
     WORKFLOW_NAME = "coder_only_workflow"
-    LOG_DIR = "~/akg_agents_logs"
+    LOG_DIR = DEFAULT_LOG_DIR
     STREAM_UPDATE_INTERVAL = 0.3  # 流式渲染更新间隔（秒）- 真流式渲染
 
 

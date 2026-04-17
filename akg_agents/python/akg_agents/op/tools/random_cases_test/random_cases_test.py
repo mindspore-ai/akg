@@ -63,11 +63,12 @@ def main():
             return
     
     # 加载配置
+    from akg_agents.utils import DEFAULT_LOG_DIR
     config = {
         'dsl': 'triton',
         'backend': 'cuda',
         'arch': 'a100',
-        'log_dir': '~/akg_agents_logs'
+        'log_dir': DEFAULT_LOG_DIR
     }
     
     # 运行测试

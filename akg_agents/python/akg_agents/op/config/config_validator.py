@@ -39,7 +39,10 @@ class ConfigValidator:
         if 'log_dir' not in self.config:
             raise ValueError("配置文件中缺少 log_dir 字段")
 
-        root_dir = os.path.expanduser(self.config['log_dir'])
+        # 环境变量优先，未设置则走 yaml 配置
+        env_dir = (os.environ.get("AKG_AGENTS_LOG_DIR") or "").strip()
+        base = env_dir if env_dir else self.config['log_dir']
+        root_dir = os.path.expanduser(base)
         self.config['log_dir'] = Path(root_dir) / f"Task_{next(tempfile._get_candidate_names())}"
 
     def validate_docs_dir(self):

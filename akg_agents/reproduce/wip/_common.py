@@ -191,7 +191,7 @@ async def run_benchmark(
 
     os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
-    log_dir = config.get("log_dir", "~/akg_agents_logs")
+    log_dir = config.get("log_dir", os.environ.get("AKG_AGENTS_LOG_DIR", "~/akg_agents_logs").strip() or "~/akg_agents_logs")
     log_dir_expanded = os.path.expanduser(log_dir)
 
     total_tasks = len(ops) * pass_n

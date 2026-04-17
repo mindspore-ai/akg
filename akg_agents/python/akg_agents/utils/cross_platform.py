@@ -53,7 +53,7 @@ async def generate_reference_with_profile(
     backend: str = "cuda",
     arch: str = "a100",
     framework: str = "torch",
-    log_dir: str = "~/akg_agents_logs",
+    log_dir: str = None,
     task_id: str = "0",
     warmup_times: int = 5,
     run_times: int = 50,
@@ -82,8 +82,11 @@ async def generate_reference_with_profile(
     import torch
     
     result = CrossPlatformReferenceResult()
-    
+
     # 创建 KernelVerifier 实例
+    if log_dir is None:
+        from akg_agents.utils import DEFAULT_LOG_DIR
+        log_dir = DEFAULT_LOG_DIR
     config = {'log_dir': log_dir}
     verifier = KernelVerifier(
         op_name=op_name,
