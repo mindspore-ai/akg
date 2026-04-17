@@ -1231,3 +1231,118 @@ func.func @test_scf_if_with_store(
   } {vector=128}
   return
 }
+
+// -----
+
+// Four tests for if-conditions along the vectorization axis (slice path):
+// (1) sge: affine(-IV+117) >= 0, lb=0, cmpi RHS 0
+// (2) sle: IV <= 117, lb=0, cmpi RHS 117
+// (3) Non-zero lb: same predicate as (1), lb=32..160 (trip 128), cmpi RHS still 0
+// (4) Non-zero RHS constant: IV <= 100, lb=0, cmpi RHS 100
+
+#map_if_iv = affine_map<(d0) -> (-d0 + 117)>
+#map_if_iv_id = affine_map<(d0) -> (d0)>
+
+// CHECK-LABEL: func.func @test_scf_if_iv_affine_upper_bound
+func.func @test_scf_if_iv_affine_upper_bound(%m: memref<128xf32>, %out: memref<128xf32>) {
+  %c0 = arith.constant 0 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+
+  // CHECK: arith.constant 118 : index
+  // CHECK: arith.cmpi ne
+  // CHECK: scf.if
+  // CHECK: npuvector.transfer_read %{{.*}}[%{{.*}}] [{{.*}}] [{{.*}}], %{{.*}} : memref<128xf32>, !npuvector<?xf32>
+  // CHECK: npuvector.transfer_write %{{.*}}, %{{.*}}[%{{.*}}] : !npuvector<?xf32>, memref<128xf32>
+  // CHECK-NOT: scf.for
+
+  scf.for %i = %c0 to %c128 step %c1 {
+    %t = affine.apply #map_if_iv(%i)
+    %cond = arith.cmpi sge, %t, %c0 {skip_vectorize} : index
+    scf.if %cond {
+      %v = memref.load %m[%i] : memref<128xf32>
+      memref.store %v, %out[%i] : memref<128xf32>
+    }
+  } {vector=128}
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_scf_if_iv_affine_sle
+func.func @test_scf_if_iv_affine_sle(%m: memref<128xf32>, %out: memref<128xf32>) {
+  %c0 = arith.constant 0 : index
+  %c117 = arith.constant 117 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+
+  // CHECK: arith.constant 118 : index
+  // CHECK: arith.cmpi ne
+  // CHECK: scf.if
+  // CHECK: npuvector.transfer_read
+  // CHECK: npuvector.transfer_write
+  // CHECK-NOT: scf.for
+
+  scf.for %i = %c0 to %c128 step %c1 {
+    %t = affine.apply #map_if_iv_id(%i)
+    %cond = arith.cmpi sle, %t, %c117 {skip_vectorize} : index
+    scf.if %cond {
+      %v = memref.load %m[%i] : memref<128xf32>
+      memref.store %v, %out[%i] : memref<128xf32>
+    }
+  } {vector=128}
+  return
+}
+
+// -----
+
+// Tile [32,160) ∩ [0,118) = [32,118), hence extent=86.
+// CHECK-LABEL: func.func @test_scf_if_iv_nonzero_lb
+// CHECK-DAG: arith.constant 32 : index
+// CHECK: arith.constant 118 : index
+// CHECK: arith.cmpi ne
+// CHECK: scf.if
+// CHECK: npuvector.transfer_read
+// CHECK: npuvector.transfer_write
+// CHECK-NOT: scf.for
+func.func @test_scf_if_iv_nonzero_lb(%m: memref<256xf32>, %out: memref<256xf32>) {
+  %c0 = arith.constant 0 : index
+  %c32 = arith.constant 32 : index
+  %c160 = arith.constant 160 : index
+  %c1 = arith.constant 1 : index
+  scf.for %i = %c32 to %c160 step %c1 {
+    %t = affine.apply #map_if_iv(%i)
+    %cond = arith.cmpi sge, %t, %c0 {skip_vectorize} : index
+    scf.if %cond {
+      %v = memref.load %m[%i] : memref<256xf32>
+      memref.store %v, %out[%i] : memref<256xf32>
+    }
+  } {vector=128}
+  return
+}
+
+// -----
+
+// Tile [0,128) ∩ [0,101) = [0,101), hence extent=101; slice constant 101 from RHS 100 (sle).
+// CHECK-LABEL: func.func @test_scf_if_iv_nonzero_rhs
+// CHECK: arith.constant 101 : index
+// CHECK: arith.cmpi ne
+// CHECK: scf.if
+// CHECK: npuvector.transfer_read
+// CHECK: npuvector.transfer_write
+// CHECK-NOT: scf.for
+func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>) {
+  %c0 = arith.constant 0 : index
+  %c100 = arith.constant 100 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+  scf.for %i = %c0 to %c128 step %c1 {
+    %t = affine.apply #map_if_iv_id(%i)
+    %cond = arith.cmpi sle, %t, %c100 {skip_vectorize} : index
+    scf.if %cond {
+      %v = memref.load %m[%i] : memref<128xf32>
+      memref.store %v, %out[%i] : memref<128xf32>
+    }
+  } {vector=128}
+  return
+}
