@@ -77,6 +77,32 @@ def akg_restore_copy(dst, src):
     torch.npu.synchronize()
 
 
+def _restore_saved_tensors(saved, args):
+    """Restore saved output tensors back to the live kernel arguments."""
+    for idx, saved_val in saved.items():
+        akg_restore_copy(args[idx], saved_val)
+
+
+def _wrap_kernel_call_with_restore(kernel_call, restore_info):
+    """Wrap benchmark calls with Triton-like pre/post restore semantics."""
+    if restore_info is None:
+        return kernel_call
+
+    saved = restore_info['saved']
+    args = restore_info['args']
+
+    def wrapped_call():
+        _restore_saved_tensors(saved, args)
+        try:
+            return kernel_call()
+        finally:
+            # Leave every benchmark iteration with the original output state
+            # so a later config cannot inherit stale values from an earlier one.
+            _restore_saved_tensors(saved, args)
+
+    return wrapped_call
+
+
 # ============================================================================
 # _bench patch: 禁用原生 restore_value 的 copy_()，
 # 让 kernel_call 只包含纯 kernel，restore 交给 benchmarker 用命名 kernel 做。
@@ -305,21 +331,10 @@ def patch_driver_benchmarker():
 
         def patched_get_benchmarker():
             def custom_benchmarker(kernel_call, quantiles=(0.5, 0.2, 0.8)):
+                fn_to_profile = _wrap_kernel_call_with_restore(kernel_call, _restore_info)
+
                 try:
                     from akg_agents.op.verifier.profiler import profiler_npu
-
-                    if _restore_info is not None:
-                        saved = _restore_info['saved']
-                        args = _restore_info['args']
-
-                        def wrapped_call():
-                            for idx, saved_val in saved.items():
-                                akg_restore_copy(args[idx], saved_val)
-                            kernel_call()
-
-                        fn_to_profile = wrapped_call
-                    else:
-                        fn_to_profile = kernel_call
 
                     time_us = profiler_npu(
                         fn_to_profile,
@@ -334,7 +349,7 @@ def patch_driver_benchmarker():
 
                 except ImportError:
                     original_benchmarker = original_get_benchmarker()
-                    return original_benchmarker(kernel_call, quantiles)
+                    return original_benchmarker(fn_to_profile, quantiles)
 
             return custom_benchmarker
 
