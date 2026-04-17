@@ -4,35 +4,90 @@
 
 ## 1. 概述
 
-LLM 模块提供统一的大语言模型访问接口，基于 OpenAI 兼容 API，支持多种模型提供商。
+LLM 模块提供统一的大语言模型访问接口，支持两种 API 协议：
+
+- **OpenAI 兼容协议**（默认）— 适用于大部分 LLM 服务商
+- **Anthropic 协议** — 仅用于 Kimi Coding Plan（api.kimi.com/coding）
 
 核心组件：
 
 - **LLMProvider** — OpenAI 兼容 API 提供者
+- **AnthropicProvider** — Anthropic 协议 API 提供者（Kimi Coding Plan）
 - **LLMClient** — 高层客户端，带 Token 计数和流式输出
 - **工厂函数** — `create_llm_client()` 和 `create_embedding_model()`
 - **OpenAICompatibleEmbeddings** — 用于 RAG 的 Embedding 模型
 
 ## 2. 支持的提供商
 
-所有提供商通过同一 OpenAI 兼容接口访问：
+### OpenAI 兼容协议（`provider_type="openai"`，默认）
 
 | 提供商 | 示例模型 |
 |--------|----------|
 | OpenAI | GPT-4o, o3, o4-mini |
 | DeepSeek | deepseek-chat, deepseek-reasoner |
-| Claude | 通过 Anthropic 的 OpenAI 兼容层 |
+| Claude | claude-3-5-sonnet（通过 OpenAI 兼容层） |
 | 智谱 GLM | GLM-4 系列 |
-| Moonshot / Kimi | kimi-k2, kimi-k2.5 |
+| Moonshot / Kimi | kimi-k2, kimi-k2.5（普通 API） |
 | 通义千问 / DashScope | qwen-plus, qwq |
 | 豆包 / 火山引擎 | doubao-seed |
 | 硅基流动 SiliconFlow | 各类模型 |
 | vLLM | 本地部署 |
 | Ollama | 本地模型 |
 
+### Anthropic 协议（`provider_type="anthropic"`）
+
+| 提供商 | 示例模型 | 说明 |
+|--------|----------|------|
+| Kimi Coding Plan | kimi-for-coding | `https://api.kimi.com/coding` 端点使用 Anthropic 协议 |
+
+> **注意**：Kimi 的普通 API（如 kimi-k2）使用 OpenAI 兼容协议，只有 Kimi Coding Plan（api.kimi.com/coding）需要设置 `provider_type="anthropic"`。
+
 > 各 provider 的具体配置示例（含 thinking/reasoning 参数），请参考 [`settings.example.more.json`](../../examples/settings.example.more.json)。
 
-## 3. LLMProvider
+## 3. Provider 选择
+
+通过 `provider_type` 参数选择 API 协议：
+
+```python
+from akg_agents.core_v2.llm import create_llm_client
+
+# OpenAI 兼容协议（默认，适用于大部分服务商）
+client = create_llm_client(
+    model_name="deepseek-chat",
+    base_url="https://api.deepseek.com/beta/",
+    api_key="your-key",
+    provider_type="openai"  # 可省略，默认值
+)
+
+# Kimi Coding Plan（需要 Anthropic 协议）
+client = create_llm_client(
+    model_name="kimi-for-coding",
+    base_url="https://api.kimi.com/coding",
+    api_key="your-key",
+    provider_type="anthropic"  # 必须指定
+)
+```
+
+或通过配置文件/环境变量：
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.kimi.com/coding",
+      "api_key": "sk-kimi-xxx",
+      "model_name": "kimi-for-coding",
+      "provider_type": "anthropic"
+    }
+  }
+}
+```
+
+```bash
+export AKG_AGENTS_PROVIDER_TYPE="anthropic"
+```
+
+## 4. LLMProvider（OpenAI 兼容协议）
 
 `LLMProvider` 是基于 `AsyncOpenAI` 的底层 API 客户端。
 

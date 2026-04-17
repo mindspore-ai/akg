@@ -4,35 +4,90 @@
 
 ## 1. Overview
 
-The LLM module provides a unified interface for accessing Large Language Models through OpenAI-compatible APIs. It supports multiple providers with a single API surface.
+The LLM module provides a unified interface for large language model access, supporting two API protocols:
+
+- **OpenAI-compatible protocol** (default) — For most LLM providers
+- **Anthropic protocol** — Only for Kimi Coding Plan (api.kimi.com/coding)
 
 Key components:
 
 - **LLMProvider** — OpenAI-compatible API provider
+- **AnthropicProvider** — Anthropic protocol API provider (Kimi Coding Plan)
 - **LLMClient** — High-level client with token counting and streaming
 - **Factory functions** — `create_llm_client()` and `create_embedding_model()`
 - **OpenAICompatibleEmbeddings** — Embedding model for RAG
 
 ## 2. Supported Providers
 
-All providers are accessed through the same OpenAI-compatible interface:
+### OpenAI-Compatible Protocol (`provider_type="openai"`, default)
 
 | Provider | Examples |
 |----------|----------|
 | OpenAI | GPT-4o, o3, o4-mini |
 | DeepSeek | deepseek-chat, deepseek-reasoner |
-| Claude | Via Anthropic's OpenAI-compatible layer |
+| Claude | claude-3-5-sonnet (via OpenAI-compatible layer) |
 | GLM (Zhipu) | GLM-4 series |
-| Moonshot / Kimi | kimi-k2, kimi-k2.5 |
+| Moonshot / Kimi | kimi-k2, kimi-k2.5 (standard API) |
 | Qwen / DashScope | qwen-plus, qwq |
 | Doubao / Volcengine | doubao-seed |
 | SiliconFlow | Various models via SiliconFlow |
 | vLLM | Local deployment |
 | Ollama | Local models |
 
+### Anthropic Protocol (`provider_type="anthropic"`)
+
+| Provider | Example Models | Notes |
+|----------|----------------|-------|
+| Kimi Coding Plan | kimi-for-coding | `https://api.kimi.com/coding` endpoint uses Anthropic protocol |
+
+> **Note**: Kimi's standard API (e.g., kimi-k2) uses OpenAI-compatible protocol. Only Kimi Coding Plan (api.kimi.com/coding) requires `provider_type="anthropic"`.
+
 > See [`settings.example.more.json`](../../examples/settings.example.more.json) for provider-specific configuration examples including thinking/reasoning parameters.
 
-## 3. LLMProvider
+## 3. Provider Selection
+
+Select API protocol via `provider_type` parameter:
+
+```python
+from akg_agents.core_v2.llm import create_llm_client
+
+# OpenAI-compatible protocol (default, for most providers)
+client = create_llm_client(
+    model_name="deepseek-chat",
+    base_url="https://api.deepseek.com/beta/",
+    api_key="your-key",
+    provider_type="openai"  # optional, default value
+)
+
+# Kimi Coding Plan (requires Anthropic protocol)
+client = create_llm_client(
+    model_name="kimi-for-coding",
+    base_url="https://api.kimi.com/coding",
+    api_key="your-key",
+    provider_type="anthropic"  # must be specified
+)
+```
+
+Or via config file/environment variables:
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.kimi.com/coding",
+      "api_key": "sk-kimi-xxx",
+      "model_name": "kimi-for-coding",
+      "provider_type": "anthropic"
+    }
+  }
+}
+```
+
+```bash
+export AKG_AGENTS_PROVIDER_TYPE="anthropic"
+```
+
+## 4. LLMProvider (OpenAI-Compatible Protocol)
 
 `LLMProvider` is the low-level API client based on `AsyncOpenAI`.
 
