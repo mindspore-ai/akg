@@ -168,15 +168,21 @@ class InitializationProcessor:
             logger.info("Island model: Disabled (simple evolution mode)")
         
         # 创建 HandwriteLoader（共享，基于 Skill 系统的案例加载）
-        handwrite_loader = HandwriteLoader(
-            dsl=self.config.dsl,
-            backend=self.config.backend,
-            op_name=self.config.op_name,
-            task_desc=self.config.task_desc,
-            config=self.config.config,
-        )
-        await handwrite_loader.select_relevant_pairs()
-        logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected pairs")
+        # kernelgen_only_workflow 不需要 handwrite（KernelGen 使用内部 skill 选择）
+        workflow = self.config.config.get("default_workflow", "kernelgen_only_workflow")
+        if workflow == "kernelgen_only_workflow":
+            logger.info("Skipping HandwriteLoader for kernelgen_only_workflow (KernelGen uses internal skill selection)")
+            handwrite_loader = None
+        else:
+            handwrite_loader = HandwriteLoader(
+                dsl=self.config.dsl,
+                backend=self.config.backend,
+                op_name=self.config.op_name,
+                task_desc=self.config.task_desc,
+                config=self.config.config,
+            )
+            await handwrite_loader.select_relevant_pairs()
+            logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected pairs")
         
         # 初始化数据结构
         init_data = {
@@ -193,27 +199,33 @@ class InitializationProcessor:
         if self.config.use_islands:
             init_data['island_impls'] = [[] for _ in range(self.config.num_islands)]
             init_data['elite_pool'] = []
-            init_data['island_handwrite_samplers'] = [
-                HandwriteSampler(
-                    loader=handwrite_loader,
-                    sample_num=self.config.handwrite_sample_num,
-                    decay_rate=self.config.handwrite_decay_rate
-                )
-                for _ in range(self.config.num_islands)
-            ]
-            if any(sampler._total_count > 0 for sampler in init_data['island_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.num_islands} independent HandwriteSamplers for islands")
+            if handwrite_loader:
+                init_data['island_handwrite_samplers'] = [
+                    HandwriteSampler(
+                        loader=handwrite_loader,
+                        sample_num=self.config.handwrite_sample_num,
+                        decay_rate=self.config.handwrite_decay_rate
+                    )
+                    for _ in range(self.config.num_islands)
+                ]
+                if any(sampler._total_count > 0 for sampler in init_data['island_handwrite_samplers']):
+                    logger.info(f"Initialized {self.config.num_islands} independent HandwriteSamplers for islands")
+            else:
+                init_data['island_handwrite_samplers'] = [None] * self.config.num_islands
         else:
-            init_data['individual_handwrite_samplers'] = [
-                HandwriteSampler(
-                    loader=handwrite_loader,
-                    sample_num=self.config.handwrite_sample_num,
-                    decay_rate=self.config.handwrite_decay_rate
-                )
-                for _ in range(self.config.parallel_num)
-            ]
-            if any(sampler._total_count > 0 for sampler in init_data['individual_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.parallel_num} independent HandwriteSamplers for individuals")
+            if handwrite_loader:
+                init_data['individual_handwrite_samplers'] = [
+                    HandwriteSampler(
+                        loader=handwrite_loader,
+                        sample_num=self.config.handwrite_sample_num,
+                        decay_rate=self.config.handwrite_decay_rate
+                    )
+                    for _ in range(self.config.parallel_num)
+                ]
+                if any(sampler._total_count > 0 for sampler in init_data['individual_handwrite_samplers']):
+                    logger.info(f"Initialized {self.config.parallel_num} independent HandwriteSamplers for individuals")
+            else:
+                init_data['individual_handwrite_samplers'] = [None] * self.config.parallel_num
         
         return init_data
 
@@ -364,7 +376,8 @@ class TaskCreationProcessor:
                     island_inspirations[island_idx].append(sampled)
                 
                 island_meta_prompts[island_idx] = load_meta_prompts(self.config.dsl, self.config.tasks_per_island)
-                sampled_handwrite = self.init_data['island_handwrite_samplers'][island_idx].sample()
+                sampler = self.init_data['island_handwrite_samplers'][island_idx]
+                sampled_handwrite = sampler.sample() if sampler else []
                 island_handwrite_suggestions[island_idx] = sampled_handwrite
         
         return {
@@ -395,6 +408,7 @@ class TaskCreationProcessor:
             meta_prompts = load_meta_prompts(self.config.dsl, self.config.parallel_num)
             handwrite_suggestions_list = [
                 self.init_data['individual_handwrite_samplers'][pid].sample()
+                if self.init_data['individual_handwrite_samplers'][pid] else []
                 for pid in range(self.config.parallel_num)
             ]
         

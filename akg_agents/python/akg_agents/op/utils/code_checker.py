@@ -108,6 +108,7 @@ class CheckError:
     detail: str
     suggestion: str
     code_snippet: str
+    fix_strategy: str = "fix"  # "fix" 或 "rewrite"
 
 
 class CodeChecker:
@@ -182,7 +183,8 @@ class CodeChecker:
                 "error_type": "empty_code",
                 "detail": "代码为空，无法进行检查",
                 "suggestion": "请生成有效的代码",
-                "code_snippet": ""
+                "code_snippet": "",
+                "fix_strategy": "rewrite"
             }
             return False, self._format_errors([empty_err]), [empty_err]
 
@@ -284,7 +286,8 @@ class CodeChecker:
   - 检查缩进是否正确
   - 检查关键字拼写是否正确
   - 检查冒号、逗号等符号是否遗漏""",
-                "code_snippet": code_snippet
+                "code_snippet": code_snippet,
+                "fix_strategy": "fix"
             })
             logger.warning(f"CodeChecker: Python syntax error at line {line_num}: {error_msg}")
 
@@ -336,7 +339,8 @@ class CodeChecker:
   - 检查是否有不合法的表达式或语法结构
   - 检查变量名、函数名是否合法
   - 检查是否有 Python 版本不兼容的写法""",
-                "code_snippet": code_snippet
+                "code_snippet": code_snippet,
+                "fix_strategy": "fix"
             })
             logger.warning(f"CodeChecker: py_compile error at line {line_num}: {error_str}")
         except Exception as e:
@@ -383,7 +387,8 @@ class CodeChecker:
                             "error_type": "import_error",
                             "detail": f"模块 '{alias.name}' 无法导入（环境中不存在此模块）",
                             "suggestion": f"请检查模块名 '{alias.name}' 是否拼写正确，或确认该模块是否需要安装",
-                            "code_snippet": ""
+                            "code_snippet": "",
+                            "fix_strategy": "fix"
                         })
                         logger.warning(
                             f"CodeChecker: import error at line {node.lineno}: "
@@ -404,7 +409,8 @@ class CodeChecker:
                             "error_type": "import_error",
                             "detail": f"模块 '{node.module}' 无法导入（环境中不存在此模块）",
                             "suggestion": f"请检查模块名 '{node.module}' 是否拼写正确，或确认该模块是否需要安装",
-                            "code_snippet": ""
+                            "code_snippet": "",
+                            "fix_strategy": "fix"
                         })
                         logger.warning(
                             f"CodeChecker: import error at line {node.lineno}: "
@@ -461,7 +467,8 @@ class CodeChecker:
                         f"第 {line_num} 行包含非代码的中文文本，请删除或改为注释（在行首加 #）。"
                         f"如果是有意使用的中文变量名，请忽略此警告。"
                     ),
-                    "code_snippet": ""
+                    "code_snippet": "",
+                    "fix_strategy": "fix"
                 })
                 logger.warning(
                     f"CodeChecker: stray Chinese text at line {line_num}: '{chinese_text}'"
@@ -516,7 +523,8 @@ class CodeChecker:
                     "请确保代码中包含至少一个 @triton.jit 装饰的 kernel 函数，"
                     "并在 ModelNew.forward() 中通过 kernel[grid](...) 语法调用它。"
                 ),
-                "code_snippet": ""
+                "code_snippet": "",
+                "fix_strategy": "rewrite"
             })
             return errors
 
@@ -548,7 +556,8 @@ class CodeChecker:
                     "请在 ModelNew.forward() 或其辅助方法中，"
                     "通过 kernel_name[grid_size](...) 语法启动 triton kernel。"
                 ),
-                "code_snippet": ""
+                "code_snippet": "",
+                "fix_strategy": "rewrite"
             })
 
         # --- C. 检查 forward() 中的 torch 高层计算 API 调用 ---
@@ -603,7 +612,8 @@ class CodeChecker:
                     "请将这些核心计算操作移入 triton kernel 中实现，"
                     "forward() 仅负责准备输入、启动 kernel 和返回输出。"
                 ),
-                "code_snippet": ""
+                "code_snippet": "",
+                "fix_strategy": "rewrite"
             })
 
         # SOFT 类：kernel 未调用 → 硬失败；kernel 已调用 → 仅警告
@@ -622,7 +632,8 @@ class CodeChecker:
                         "这些简单操作（exp/relu/sum 等）如果只是 kernel 的前后处理可以保留，"
                         "但前提是必须有 kernel 承担主要计算。"
                     ),
-                    "code_snippet": ""
+                    "code_snippet": "",
+                    "fix_strategy": "rewrite"
                 })
             else:
                 logger.warning(
@@ -679,7 +690,8 @@ class CodeChecker:
                     "      restore_value=['output_ptr'],  # 必须添加\n"
                     "  )"
                 ),
-                "code_snippet": ""
+                "code_snippet": "",
+                "fix_strategy": "fix"
             })
             logger.warning(
                 f"CodeChecker: @triton.autotune at line {autotune_line} missing restore_value"

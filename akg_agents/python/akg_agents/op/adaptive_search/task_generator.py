@@ -104,7 +104,7 @@ class TaskGenerator:
             return
 
         # 检查 workflow 类型，kernelgen_only_workflow 不需要 handwrite
-        workflow = self.config.get("default_workflow", "")
+        workflow = self.config.get("default_workflow", "kernelgen_only_workflow")
         if workflow == "kernelgen_only_workflow":
             logger.info("Skipping handwrite initialization for kernelgen_only_workflow (KernelGen uses internal skill selection)")
             self._handwrite_initialized = True
@@ -236,7 +236,7 @@ class TaskGenerator:
             config=self.config,
             framework=self.framework,
             task_type="profile",
-            workflow=None,  # 从 config 读取 default_workflow，不硬编码
+            workflow=self.config.get("default_workflow", "kernelgen_only_workflow"),
             inspirations=[],  # 初始任务无灵感
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,
@@ -282,7 +282,7 @@ class TaskGenerator:
             config=self.config,
             framework=self.framework,
             task_type="profile",
-            workflow=None,  # 从 config 读取 default_workflow，不硬编码
+            workflow=self.config.get("default_workflow", "kernelgen_only_workflow"),
             inspirations=inspirations,
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,

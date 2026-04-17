@@ -22,7 +22,7 @@ island:
 
 # 设备配置
 devices:
-  device_list: [6]        # 可用设备列表
+  device_list: [0]        # 可用设备列表
 
 # 任务配置
 task:

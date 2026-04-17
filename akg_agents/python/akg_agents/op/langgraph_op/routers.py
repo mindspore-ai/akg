@@ -285,8 +285,9 @@ class RouterFactory:
         因此不设最大重试次数——每次生成代码后都应该 check，失败就回去修。
         外层 workflow 的 max_iterations 已经能兜底防止死循环。
 
-        当启用 fix_code_gen 时，语法错误优先走增量修复（更高效）；
-        仅当 fix_code_gen 连续失败时回退到完整重新生成。
+        路由逻辑（按 fix_strategy 标签）：
+        - "fix": 适合 FixCodeGen 增量修复（语法/编译/import 等小错误）
+        - "rewrite": 需要完全重写（DSL 合规性错误，如算子退化）
 
         Args:
             config: 配置字典
@@ -304,9 +305,25 @@ class RouterFactory:
                 logger.info(f"[Task {task_id}] CodeChecker passed, routing to verifier")
                 return "verifier"
 
+            # 直接从 code_check_details 判断是否有 rewrite 类型错误
+            errors = state.get("code_check_details", [])
+            has_rewrite_error = any(
+                err.get("fix_strategy", "rewrite") == "rewrite" for err in errors
+            )
+
+            if has_rewrite_error:
+                # DSL 合规性错误（算子退化等），需要完全重写
+                logger.info(
+                    f"[Task {task_id}] CodeChecker detected rewrite-required errors "
+                    f"(DSL compliance/degradation), routing to {code_gen_agent}"
+                )
+                return code_gen_agent
+
+            # 语法/编译/import 等小错误
             if enable_fix_code_gen:
                 logger.info(
-                    f"[Task {task_id}] CodeChecker failed, routing to fix_code_gen for incremental fix"
+                    f"[Task {task_id}] CodeChecker detected fixable errors, "
+                    f"routing to fix_code_gen for incremental fix"
                 )
                 return "fix_code_gen"
 
