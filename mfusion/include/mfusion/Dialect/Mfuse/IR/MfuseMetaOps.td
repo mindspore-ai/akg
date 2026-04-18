@@ -746,6 +746,8 @@ def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementTyp
 
   let results = (outs AnyRankedTensor:$output);
 
+  let hasCanonicalizeMethod = 1;
+
   let assemblyFormat = [{
     $input `,` $perm attr-dict `:` functional-type(operands, results)
   }];
