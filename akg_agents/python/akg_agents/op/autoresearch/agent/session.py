@@ -5,8 +5,16 @@ Manages:
   - Session save/load for --resume
   - Heartbeat file (PID lock + status)
   - Turn-level JSONL logging
-  - Editable file snapshot/restore for atomic rollback
   - Plan archival
+
+Git operations (head check, dirty-file detection) are delegated to a
+``GitRepo`` injected via the constructor — SessionStore no longer
+imports git helpers directly.
+
+Editable-file snapshot/restore moved out of this class entirely as
+part of the P5 unification: it now lives on
+``ExperimentRunner.file_state`` (a ``FileStateManager``), so callers
+get one rollback owner instead of "snapshot here, git rollback there".
 
 File logging (stdout tee) is handled by FileLogger (agent/file_logger.py).
 """
@@ -16,19 +24,27 @@ import logging
 import os
 import shutil
 import time
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from ..framework.runner import git_current_commit, git_dirty_files
+if TYPE_CHECKING:
+    from ..framework.git_repo import GitRepo
 
 logger = logging.getLogger(__name__)
 
 
 class SessionStore:
-    """Manages agent session persistence, heartbeat, and file snapshots."""
+    """Manages agent session persistence and heartbeat.
 
-    def __init__(self, task_dir: str, config, verbose: bool = True):
+    The constructor takes a ``GitRepo`` instance for the head/dirty
+    checks performed during save/load. Tests can inject a stub
+    ``GitRepo`` (no monkey-patching of imports needed).
+    """
+
+    def __init__(self, task_dir: str, config, git: "GitRepo",
+                 verbose: bool = True):
         self.task_dir = task_dir
         self.config = config
+        self.git = git
         self.verbose = verbose
 
     # -- Session directory --------------------------------------------------
@@ -56,38 +72,28 @@ class SessionStore:
                 logger.warning(f"Failed to write {path}: {e}")
 
         session_data = {
-            "version": 2,
+            "version": 3,
             "task_name": self.config.name,
             "model": state.get("model", ""),
-            "eval_calls_made": state.get("eval_calls_made", 0),
-            "total_api_calls": state.get("total_api_calls", 0),
-            "consecutive_failures": state.get("consecutive_failures", 0),
-            "consecutive_no_edit_turns": state.get("consecutive_no_edit_turns", 0),
+            # P3: all counters live under a single "counters" key. Old
+            # sessions had counters as top-level fields; RunCounters.from_dict
+            # handles both formats on load.
+            "counters": state.get("counters") or {},
             "baseline_commit": state.get("baseline_commit"),
-            "head_commit": git_current_commit(self.task_dir),
+            "head_commit": self.git.current_commit(),
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         if "plan_state" in state:
             session_data["plan_state"] = state["plan_state"]
+        # SkillBuilder registry — persist when non-empty so --resume
+        # can restore the per-skill applied_versions and
+        # unbound_at_versions badges (there are no terminal states;
+        # the badges drive binding priority via SkillRecord.tier()).
+        if state.get("skill_state"):
+            session_data["skill_state"] = state["skill_state"]
         if state.get("last_diagnosis"):
             session_data["last_diagnosis"] = state["last_diagnosis"]
         _atomic_write(self._session_path("session.json"), session_data)
-
-        plan = state.get("plan")
-        plan_path = self._session_path("plan.md")
-        if plan:
-            try:
-                with open(plan_path, "w", encoding="utf-8") as f:
-                    f.write(plan)
-            except Exception:
-                pass
-        else:
-            # Remove stale plan.md so load() won't revive a cleared plan
-            if os.path.exists(plan_path):
-                try:
-                    os.remove(plan_path)
-                except Exception:
-                    pass
 
     def load(self) -> Optional[dict]:
         """Restore session. Returns state dict on success, None on failure."""
@@ -104,7 +110,7 @@ class SessionStore:
 
             saved_head = session.get("head_commit")
             if saved_head:
-                current_head = git_current_commit(self.task_dir)
+                current_head = self.git.current_commit()
                 if current_head is None or saved_head != current_head:
                     logger.warning("HEAD mismatch — ignoring session")
                     return None
@@ -114,26 +120,37 @@ class SessionStore:
                        self.config.program_file, self.config.ref_file, "task.yaml"]:
                 if f and f not in semantic_files:
                     semantic_files.append(f)
-            dirty = git_dirty_files(self.task_dir, semantic_files)
+            dirty = self.git.dirty_files(semantic_files)
             if dirty is None or dirty:
                 logger.warning("Dirty files — ignoring session")
                 return None
 
             state = {
-                "eval_calls_made": session.get("eval_calls_made", 0),
-                "consecutive_failures": session.get("consecutive_failures", 0),
-                "consecutive_no_edit_turns": session.get("consecutive_no_edit_turns", 0),
                 "baseline_commit": session.get("baseline_commit"),
-                "total_api_calls": session.get("total_api_calls", 0),
                 "last_diagnosis": session.get("last_diagnosis"),
             }
+            # P3: counters live under "counters" in v3+. The full session
+            # dict is also passed through so RunCounters.from_dict can fall
+            # back to legacy top-level fields for v2 sessions.
+            if "counters" in session:
+                state["counters"] = session["counters"]
+            else:
+                # Legacy v2 schema — pass the whole session dict; the
+                # caller (RunCounters.from_dict) filters for known fields.
+                state["counters"] = session
+
+            # SkillBuilder state — empty dict means "no skills tracked"
+            # which SkillBuilder.skill_state_from_dict treats as a no-op,
+            # so it's safe to default the missing key to {}.
+            state["skill_state"] = session.get("skill_state", {})
 
             # plan_state is the sole source of truth when present
             if "plan_state" in session:
                 state["plan_state"] = session["plan_state"]
             else:
-                # Legacy fallback: old session only has plan.md
-                plan_path = self._session_path("plan.md")
+                # Legacy fallback: read the single plan.md that
+                # FeedbackBuilder._persist_plan writes to task_dir.
+                plan_path = os.path.join(self.task_dir, "plan.md")
                 if os.path.exists(plan_path):
                     with open(plan_path, "r", encoding="utf-8") as f:
                         content = f.read().strip()
@@ -141,8 +158,9 @@ class SessionStore:
                         state["plan"] = content
 
             if self.verbose:
-                print(f"[AgentLoop] Resumed: eval={state['eval_calls_made']}, "
-                      f"turns={state['total_api_calls']}", flush=True)
+                ctr = state["counters"]
+                print(f"[AgentLoop] Resumed: eval={ctr.get('eval_calls_made', 0)}, "
+                      f"turns={ctr.get('total_api_calls', 0)}", flush=True)
             return state
 
         except Exception as e:
@@ -160,20 +178,42 @@ class SessionStore:
 
     # -- Heartbeat ----------------------------------------------------------
 
-    def update_heartbeat(self, total_api_calls: int, eval_calls_made: int,
+    def update_heartbeat(self, counters, *,
                          max_rounds: int, model: str, best_str: str = "",
-                         extra: str = ""):
+                         extra: str = "", phase: str = "",
+                         context_tokens: int = 0, context_limit: int = 0,
+                         elapsed_sec: float = 0):
+        c = counters
         lines = [
-            f"pid:         {os.getpid()}",
-            f"task:        {self.config.name}",
-            f"model:       {model}",
-            f"eval_rounds: {eval_calls_made}/{max_rounds}",
-            f"api_calls:   {total_api_calls}",
-            f"best:        {best_str or 'N/A'}",
-            f"updated_at:  {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            "── run ──",
+            f"pid:           {os.getpid()}",
+            f"task:          {self.config.name}",
+            f"model:         {model}",
+            f"phase:         {phase or 'unknown'}",
+            "",
+            "── progress ──",
+            f"eval_rounds:   {c.eval_calls_made}/{max_rounds}",
+            f"api_calls:     {c.total_api_calls}",
+            f"total_keeps:   {c.total_keeps}",
+            f"best:          {best_str or 'N/A'}",
+            "",
+            "── health ──",
+            f"consec_fail:   {c.consecutive_failures}",
+            f"no_improve:    {c.consecutive_no_improvement}",
+            f"no_edit_turns: {c.consecutive_no_edit_turns}",
+            f"no_tool_turns: {c.consecutive_no_tool_turns}",
+            f"compact_fail:  {c.compact_failures}",
         ]
+        if context_limit:
+            pct = int(100 * context_tokens / context_limit) if context_tokens else 0
+            lines.append(f"context:       {context_tokens}/{context_limit} ({pct}%)")
+        if elapsed_sec > 0:
+            m, s = divmod(int(elapsed_sec), 60)
+            lines.append("")
+            lines.append(f"elapsed:       {m}m{s:02d}s")
+        lines.append(f"updated_at:    {time.strftime('%Y-%m-%d %H:%M:%S')}")
         if extra:
-            lines.append(f"last_action: {extra}")
+            lines.append(f"last_action:   {extra}")
         hb_path = os.path.join(self.task_dir, self.config.agent.heartbeat_file)
         try:
             with open(hb_path, "w", encoding="utf-8") as f:
@@ -241,31 +281,3 @@ class SessionStore:
         except Exception:
             pass
 
-    # -- File snapshots ----------------------------------------------------
-
-    def snapshot_editable_files(self) -> dict:
-        """Snapshot all editable files before edits."""
-        snapshots = {}
-        for fname in self.config.editable_files:
-            fpath = os.path.join(self.task_dir, fname)
-            if os.path.exists(fpath):
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    snapshots[fname] = f.read()
-        return snapshots
-
-    def restore_snapshots(self, snapshots: dict):
-        """Restore editable files to pre-turn state."""
-        for fname in self.config.editable_files:
-            fpath = os.path.join(self.task_dir, fname)
-            if fname in snapshots:
-                try:
-                    with open(fpath, "w", encoding="utf-8") as f:
-                        f.write(snapshots[fname])
-                except Exception as e:
-                    logger.warning(f"Failed to restore {fname}: {e}")
-            else:
-                if os.path.exists(fpath):
-                    try:
-                        os.remove(fpath)
-                    except Exception as e:
-                        logger.warning(f"Failed to remove {fname}: {e}")

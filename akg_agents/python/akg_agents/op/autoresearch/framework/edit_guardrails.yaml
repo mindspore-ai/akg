@@ -1,0 +1,55 @@
+# Edit guardrails — merged into TaskConfig.forbidden_patterns at load time.
+#
+# Organized by scope; all matching scopes are merged (union of patterns).
+# task.yaml can override or extend via its own guardrails.forbidden_patterns.
+#
+# Pattern types:
+#   content:  reject if full file content matches (any pattern)
+#   diff:     reject if ALL changed lines match (any pattern)
+#   diff_any: reject if ANY changed line matches (any pattern)
+#
+# Patterns are Python regex. Use \\b for word boundaries in YAML.
+
+# ---------------------------------------------------------------------------
+# Global: applies to every task regardless of DSL / hardware / framework.
+# ---------------------------------------------------------------------------
+global:
+  # Reject edits that are purely comment/whitespace changes
+  # (ALL changed lines are comments → no real code change).
+  diff:
+    - "^\\s*#"
+
+# ---------------------------------------------------------------------------
+# By DSL
+# ---------------------------------------------------------------------------
+dsl:
+  triton_ascend:
+    # Ascend hardware does not support tuning these autotune args.
+    # The kernel verifier emits a WARNING and the config is often
+    # silently ignored or produces wrong results.
+    diff_any:
+      - "\\bnum_warps\\s*="
+      - "\\bnum_ctas\\s*="
+      - "\\bnum_stages\\s*="
+      - "\\bnum_buffers_warp_spec\\s*="
+      - "\\bnum_consumer_groups\\s*="
+      - "\\breg_dec_producer\\s*="
+      - "\\breg_inc_consumer\\s*="
+      - "\\bforce_simt_template\\s*="
+      - "\\benable_linearize\\s*="
+
+# ---------------------------------------------------------------------------
+# By hardware (uncomment and extend as needed)
+# ---------------------------------------------------------------------------
+# hardware:
+#   ascend910b4:
+#     diff_any:
+#       - "\\btl\\.atomic_cas\\b"
+
+# ---------------------------------------------------------------------------
+# By framework (uncomment and extend as needed)
+# ---------------------------------------------------------------------------
+# framework:
+#   torch:
+#     content:
+#       - "\\btorch\\.autograd\\.gradcheck\\b"

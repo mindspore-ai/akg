@@ -21,13 +21,16 @@ class AkgLLMAdapter:
     AgentLoop, TurnExecutor, and compress module can use it transparently.
     """
 
-    def __init__(self, llm_client, *, verbose: bool = True):
+    def __init__(self, llm_client, *, connection_check_timeout: float = 15.0,
+                 verbose: bool = True):
         """
         Args:
             llm_client: AKG LLMClient instance (from create_llm_client()).
+            connection_check_timeout: check_connection default timeout (seconds).
             verbose: Print progress messages.
         """
         self._llm = llm_client
+        self._connection_check_timeout = connection_check_timeout
         self.verbose = verbose
 
     # -- Properties (duck-type ConversationAdapter) ---------------------------
@@ -47,22 +50,41 @@ class AkgLLMAdapter:
 
     # -- LLM call -------------------------------------------------------------
 
-    async def call(self, system_prompt: str, messages: list, tools=None):
+    async def call(self, system_prompt: str, messages: list, tools=None,
+                   **kwargs):
         """Call the LLM. Returns a response dict (AKG LLMClient.generate format).
 
         Converts autoresearch internal messages (Anthropic-style) to
         OpenAI format, then calls LLMClient.generate().
+
+        Special kwargs consumed by adapter (not forwarded to provider):
+          compact=True: caps max_tokens=4000, suppresses default extra_body
+                        (disables thinking/reasoning for compact summarizer)
+
+        ``tools`` is required (pass ``[]`` to disable tool-calling for a
+        given call). The adapter deliberately does NOT reach back into
+        ``..agent.tools`` for a default — tools are a caller concern,
+        and the adapter must stay a pure format bridge.
         """
-        if tools is None:
-            from ..agent.tools import TOOLS
-            tools = TOOLS
+        # compact mode: adapter consumes, sets provider-level overrides
+        # max_tokens uses setdefault so callers can override via config
+        compact_mode = kwargs.pop("compact", False)
+        # Autoresearch's ConversationAdapter supports per-call retry override.
+        # AKG's LLMClient currently does not, so consume the kwarg here to
+        # keep the duck-typed interface compatible.
+        kwargs.pop("max_retries", None)
+        if compact_mode:
+            kwargs.setdefault("max_tokens", 4000)
+            kwargs["suppress_extra_body"] = True
+
         oai_messages = self._convert_messages(system_prompt, messages)
-        oai_tools = self._convert_tools(tools)
+        oai_tools = self._convert_tools(tools) if tools else []
 
         result = await self._llm.generate(
             messages=oai_messages,
             stream=False,
-            tools=oai_tools,
+            tools=oai_tools if oai_tools else None,
+            **kwargs,
         )
         return result
 
@@ -158,14 +180,19 @@ class AkgLLMAdapter:
 
     # -- Connection check -----------------------------------------------------
 
-    async def check_connection(self, timeout: float = 15.0, verbose: bool = True):
-        """Verify LLM endpoint is reachable via a minimal call."""
+    async def check_connection(self, timeout: float | None = None, verbose: bool = True):
+        """Verify LLM endpoint is reachable via a minimal probe."""
+        if timeout is None:
+            timeout = self._connection_check_timeout
         if verbose:
             print("[LLM] Checking AKG LLM endpoint …", flush=True)
         try:
             await self._llm.generate(
                 messages=[{"role": "user", "content": "ping"}],
                 stream=False,
+                max_tokens=1,
+                timeout=timeout,
+                suppress_extra_body=True,
             )
             if verbose:
                 print("[LLM] AKG LLM endpoint OK", flush=True)

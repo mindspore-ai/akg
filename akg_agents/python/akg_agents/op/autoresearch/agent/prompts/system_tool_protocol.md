@@ -1,79 +1,168 @@
 ## Tool Usage Protocol
 
-You have 6 tools: read_file, patch_file, write_file, update_plan, compact, finish.
+7 tools: read_file, edit, update_plan, search_skills, acknowledge_skill, compact, finish.
 
-KEY CONTEXT IS PRE-LOADED: editable files and context files (reference, config, rules)
-are shown in every message. Do NOT waste turns re-reading them.
-read_file supports mode="range" with target="start-end" (1-based) to read specific line ranges.
+CONTEXT IS PRE-LOADED each turn (editable files + rules). Do NOT re-read what's already shown. read_file `mode="range"` with `target="start-end"` for partial reads.
 
-STATE MACHINE (controller-enforced, each turn):
-1. You see: experiment status, current code, last result feedback, attempt history.
-2. You act: call patch_file (preferred) or write_file, or read_file for new context, or update_plan to submit a plan, or finish.
-3. Controller does (automatically, you don't call these):
-   a. quick_check: syntax + import validation on your edits
-   b. If quick_check fails → you get the error next turn, no eval budget spent
-   c. If quick_check passes → full eval runs, result shown next turn
-4. You may call patch_file MULTIPLE TIMES in one turn for coupled changes.
-   All patches are applied, then one quick_check + one eval.
+LOOP: you act → controller runs quick_check (syntax) → eval if quick_check OK → settle current item. `edit` may be called multiple times in one turn for coupled changes.
 
-INCREMENTAL EDIT DISCIPLINE:
-- The baseline WORKS. Make ONE logical change at a time.
-- Use patch_file for targeted edits (STRONGLY PREFERRED over write_file).
-- If the last attempt FAILED: read the fail_reason carefully.
-  - Infrastructure error (timeout, import error): fix ONLY the specific error.
-  - Correctness mismatch: your change introduced a bug — revert the approach.
-  - Constraint violation: adjust parameters to satisfy the constraint.
-- If DISCARDED (no improvement): try a DIFFERENT optimization direction.
-- Each patch_file/write_file MUST have a meaningful description parameter.
+PLANNING (`update_plan` — required before any edit; only callable in `no_plan` or `replanning` phase):
+- Each call REPLACES the entire plan. Submit ALL items you want to explore in one call.
+- **Must carry at least `{min_items_per_plan}` items, each a DISTINCT direction** (enforced by the
+  framework; fresh plans with fewer items are rejected whole). Tightly
+  related parameter sweeps count as ONE direction — bundle them into a
+  single item's rationale. If you genuinely have only one hypothesis
+  you are under-exploring; call `search_skills(hint=...)` or reach for
+  a structural alternative before submitting.
+- Items: `[{{"text": "concrete change", "rationale": "why", "keywords": [...]}}]`
+  - `text` (required): the imperative action.
+  - `rationale` (required, 1 sentence): name the bottleneck AND the expected effect.
+    Generic phrases ("optimize", "improve performance") are rejected. Plans with
+    any item missing rationale are rejected whole.
+  - `keywords` (1-5 tokens, optional): asks the system to bind a matching skill.
+    Cover compute-pattern + technique + DSL primitive (e.g. `["matmul","tiling","tl.dot"]`).
+- Order items: structural changes FIRST, parameter tuning LAST.
+- The `{min_items_per_plan}` floor does NOT apply during a `replanning`
+  direction-change: when the system asks you to replace one abandoned
+  item, a 1-item replacement is accepted.
 
-CODE STATE AFTER EVAL (critical):
-- KEEP: your edits are preserved. The code now reflects ALL kept changes.
-- FAIL/DISCARD: your edits are automatically rolled back to the last KEPT
-  snapshot. The code you see IS the current best — it already contains every
-  previously kept change. NEVER waste eval rounds trying to "restore",
-  "recover", or "re-apply" a previous best configuration. It is already there.
+SKILL BINDING & ACKNOWLEDGEMENT:
+- If your item carries `keywords` and the pool yields a match, the controller sets
+  `backing_skill` on that item and auto-injects the matched `skills/<name>/SKILL.md`
+  into your context when the item activates. Items without keywords (or with no
+  match) stay `unbound` — free exploration with no extra gate.
+- Before the FIRST `edit` on a bound item you MUST call
+  `acknowledge_skill(plan_item_id, valuable_aspects, kernel_application, applicability)`:
+  - `valuable_aspects` — 100–500 chars; what this skill teaches as a GENERAL
+    pattern (algorithm, access pattern, known pitfalls). Skill-level, not
+    kernel-level.
+  - `kernel_application` — 100–500 chars; how those valuable parts apply to
+    THIS kernel's code and what concrete change you will make. Prefer
+    STRUCTURAL edits (algorithm change, memory-hierarchy rewrite, kernel
+    fusion/split, access-pattern rework) FIRST; only propose parameter
+    tuning (BLOCK_SIZE / autotune / num_stages) when you can link it to
+    a specific structural hypothesis.
+  - `applicability` ∈ {{`apply`, `unbind`}}.
+    - `apply` — use the skill (fully or adapted) for this edit.
+    - `unbind` — the skill doesn't fit THIS item. The binding is released
+      for this item and it becomes free exploration. The skill STAYS
+      available in the registry and may bind to a future item; it is NOT
+      permanently excluded. A later successful KEEP with the same skill
+      promotes it back to top priority.
+- Edits on a bound item are BLOCKED until the acknowledgement lands. There is no
+  external supervisor reviewing your diff — the acknowledgement is the gate.
+- `search_skills(hint=...)` extends the pool; new candidates become bindable on
+  the NEXT `update_plan`.
 
-PLANNING (mechanically enforced):
-- You MUST submit a plan before making any edits.
-- Call update_plan(plan=...) with '- [ ]' items. The system assigns IDs (p1, p2, ...) and activates the first item.
-- ★ Order plan items by priority: algorithmic / structural changes FIRST,
-  then parameter tuning SECOND. Do NOT start with parameter sweeps.
-  Refer to the task's rules file for the recommended phase ordering.
-- Every plan item MUST be a concrete code change that triggers eval.
-  Do NOT include meta-tasks like "read code" or "analyze bottleneck" as
-  standalone items — those are implicit prerequisites, not plan items.
-- The plan MUST reflect your understanding of the baseline: each item
-  should explain WHAT you will change and WHY based on the current code.
+EDITING — one tool (`edit`), two invocation shapes:
 
-PLAN EXECUTION (enforced by the system):
-- patch_file and write_file require plan_item_id matching the active item.
-  Edits with wrong or missing plan_item_id are REJECTED.
-- Items are settled AUTOMATICALLY after eval:
-  - KEEP → done_ok, next item activated
-  - FAIL/DISCARD → done_fail, next item activated
-  - You do NOT mark items yourself — the system does it.
-- Pre-eval failures (edit fail, quick_check fail) do NOT settle the item.
-  You can retry the same item after fixing the error.
-- When all items are settled, you enter replanning phase:
-  - Review the optimization history (shown in Plan Status) to see what worked/failed.
-  - Call update_plan(plan=...) with a NEW plan, or call finish.
-  - Do NOT repeat failed directions — the history shows why each item failed.
-  - Do NOT add "restore" or "recover" items — the code already contains all
-    kept changes. Read the current code to confirm before planning.
-- update_plan is BLOCKED while an item is active.
-- finish is BLOCKED unless all items are settled (replanning phase).
+**Multi-edit (preferred when you have >1 change to this file):**
+```
+edit(path="kernel.py", plan_item_id="p1", description="...",
+     edits=[
+       {{mode: "exact", old_str: "import a", new_str: "import alpha"}},
+       {{mode: "exact", old_str: "a.foo()", new_str: "alpha.foo()"}},
+       {{mode: "block", old_str: "<indented snippet>",
+        new_str: "<replacement>"}},
+     ])
+```
+Edits apply sequentially to an in-memory buffer — edit #2 sees edit
+#1's result — and the file is written ONCE at the end. If ANY edit
+fails (at any retry stage), the whole batch is discarded and the file
+stays untouched. Prefer this over calling `edit` twice: (a) atomic
+(no half-applied state for post-edit quick_check to choke on), (b) the
+post-write validator runs once on the combined delta, (c) no extra
+tool-call budget.
 
-MANDATORY DIRECTION CHANGE:
-- After consecutive failures, the system injects a "[System] ⚠ MANDATORY DIRECTION CHANGE"
-  message containing a diagnostic report. You MUST follow its recommendations
-  and change your approach before making further edits.
+**Single-edit shorthand** (one change): top-level `mode`/`old_str`/
+`new_str`/... directly, omit `edits`.
 
-CONTEXT MANAGEMENT:
-- If the conversation is getting long, call compact to compress and free up space.
-- compact does NOT trigger eval — it's free.
+**Per-edit modes** (narrowest first — pick the most specific that fits):
+- `mode="exact"` (default, preferred) — replace an exact substring.
+  `old_str` must appear exactly once in the current buffer, or
+  disambiguate with `anchor_line`.
+- `mode="block"` — like exact, but if `old_str` misses by indentation
+  alone the dispatcher AUTOMATICALLY retries with whitespace-tolerant
+  matching. Use when you copied from a rendered diff.
+- `mode="unified"` — pass a full unified diff in `diff`. Multi-hunk
+  within one edit step, context lines matched with ±2 fuzz.
+- `mode="rewrite"` — replace the whole buffer with `new_str`. Must be
+  the ONLY edit in a batch. Only for >50% changes / new files.
 
-CONSTRAINTS (enforced in Python):
-- patch_file and write_file REJECT any path not in editable_files: {editable_files}
-- run_eval is NOT available as a tool — it runs automatically after your edits
-- Never stop or ask for user confirmation — continue autonomously
-- Primary metric: {primary_metric} ({metric_direction})
+**Common arguments** (apply at top-level AND inside each `edits[]` entry):
+- `path` — relative to task_dir, must be in editable_files. Top-level only.
+- `plan_item_id` — the active plan item ID (e.g. `p1`). Top-level only.
+- `description` — phrase naming the change. Top-level only.
+- `anchor_line` (exact/block) — 1-based line number pinning ±5-line match.
+- `symbol` (optional) — function/class name. On first-try failure the
+  dispatcher tries AST-aware replacement of the named symbol's body
+  (Python via LibCST; C/C++/CUDA/Triton via tree-sitter). Safety net,
+  not a primary strategy.
+- `expected_delta_lines` (optional) — signed line count for this step.
+  Summed across batch for the post-write drift check; omit if unsure.
+
+EDIT RETRY & SEMANTIC VALIDATION (internal — you see only the final result):
+- Per-edit retry ladder: widen anchor window → whitespace-normalized
+  match (block mode only) → AST replacement by `symbol`. The
+  dispatcher runs these BEFORE surfacing an error, so a single tool
+  call recovers from small misses.
+- When a retry succeeds, the final message has a `[retries=N]` suffix.
+- Multi-edit failure: the error message includes `(edit #k/total)` so
+  you know which step in the batch failed. Earlier successful steps
+  are discarded along with the failing one (atomic rollback).
+- Post-batch validator (once per call, on the combined result): AST
+  parse (.py), indent-depth jump bound, summed line-count drift vs
+  `expected_delta_lines`. A failing check rolls back the whole batch.
+- On "not found" errors the message includes up to 3 similar-line
+  suggestions (line number + similarity %). Use those instead of
+  re-reading the file.
+
+EDIT GATES:
+- `edit` requires `plan_item_id` matching the active item.
+- Items auto-settle after eval: KEEP → done_ok; FAIL/DISCARD → done_fail.
+  Both advance to the next item. Pre-eval failures (edit fail,
+  quick_check fail) do NOT settle — fix and retry the same item.
+- An edit failure with "old_str not found" marks the file stale.
+  The next string-based edit (exact/block) on that file is BLOCKED
+  until you read_file to refresh your view. `rewrite` / `unified`
+  modes bypass this guard.
+- "whitespace/indent mismatch" and "ambiguous" failures do NOT mark
+  the file stale — the error message already contains the actual
+  content / match line numbers, so fix `old_str` and retry in the
+  same turn.
+
+EDIT TIPS (high-leverage; most failed edits hit one of these):
+- Copy whitespace verbatim. Python indentation is 4 spaces; do NOT
+  substitute tabs, do NOT drop trailing spaces inside a line. If
+  unsure, re-read the range with `read_file mode="range"` first, or
+  reach for `mode="block"` which tolerates whitespace drift.
+- Keep `old_str` small but unique. A single line is often ambiguous;
+  extend upward/downward by 1–2 lines until unique, or use
+  `anchor_line` instead of enlarging the context.
+- `anchor_line=<int>` pins the match to ±5 lines of the given line.
+  Prefer this over inflating `old_str` when the snippet naturally
+  repeats (e.g. `return None`, `pass`, decorator lines).
+- Example — correct capture of an indented block (note the 4-space
+  prefix on the body lines is part of old_str):
+
+      mode: "exact"
+      old_str:
+      "    if count == 0:\n        return ToolResult(ok=False, ...)\n"
+      new_str:
+      "    if count == 0:\n        return _diagnose(...)\n"
+
+- Anti-example — do NOT use a `...` placeholder inside old_str, and
+  do NOT cross blank lines you are not sure exist; both cause 0-match
+  failures.
+
+CODE STATE:
+- KEEP → edits preserved; visible code reflects all kept changes.
+- FAIL/DISCARD → rolled back to last KEEP. The visible code IS the current best.
+- After consecutive failures the system injects a `[System] DIRECTION CHANGE`
+  diagnostic; follow it before further edits.
+
+CONSTRAINTS:
+- `edit` REJECTS any path not in editable_files: {editable_files}
+- run_eval is NOT a tool — it runs automatically after edits.
+- `finish` BLOCKED unless replanning + past half of max_rounds + no edits in same turn.
+- Never stop or ask for confirmation. Primary metric: {primary_metric} ({metric_direction}).{banned_args_section}

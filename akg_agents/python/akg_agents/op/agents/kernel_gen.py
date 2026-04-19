@@ -799,7 +799,8 @@ class KernelGen(AgentBase):
                 "- 确保代码完整可执行，包含所有 import 语句和 class 定义\n"
             )
             full_prompt = f"{system_prompt}\n\n{user_prompt}{output_instruction}"
-            
+            logger.info(f"[KernelGen] prompt size: {len(full_prompt)} chars")
+
             # 6. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
             
