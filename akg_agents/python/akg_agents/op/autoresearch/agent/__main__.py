@@ -3,11 +3,11 @@ CLI entry point for the programmatic agent.
 
 Usage:
     # Single task (reads api_config.yaml for model/key/endpoint)
-    python -m agent --task tasks/op_migrate/relu_rmsnorm
-    python -m agent --task tasks/op_migrate/relu_rmsnorm --max-rounds 20 --device-id 0
+    python -m akg_agents.op.autoresearch.agent --task tasks/op_migrate/relu_rmsnorm
+    python -m akg_agents.op.autoresearch.agent --task tasks/op_migrate/relu_rmsnorm --max-rounds 20 --device-id 0
 
     # CLI flags override api_config.yaml values
-    python -m agent --task ... --model claude-sonnet-4-6 --provider anthropic
+    python -m akg_agents.op.autoresearch.agent --task ... --model claude-sonnet-4-6 --provider anthropic
 
 Config file:
     agent/api_config.yaml — stores model, api_key, base_url, provider, reasoning_effort.

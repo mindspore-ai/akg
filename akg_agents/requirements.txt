@@ -22,3 +22,9 @@ python-multipart>=0.0.6
 importlib-metadata>=6.0.0
 typer>=0.9.0
 prompt_toolkit>=3.0.0
+# Optional AST-aware edit backends for autoresearch `edit` tool. Both
+# are imported lazily and the tool falls back to string/whitespace
+# matching when either is missing — safe to skip on constrained envs.
+libcst>=1.1.0
+tree-sitter>=0.21.0
+tree-sitter-cpp>=0.22.0

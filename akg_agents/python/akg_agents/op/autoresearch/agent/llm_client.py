@@ -37,6 +37,8 @@ class ConversationAdapter:
         retry_initial_backoff: float = 5.0,
         retry_max_backoff_rate_limit: float = 120.0,
         retry_max_backoff_other: float = 30.0,
+        max_retries: int = 5,
+        connection_check_timeout: float = 15.0,
         verbose: bool = True,
     ):
         self.model = model
@@ -48,6 +50,8 @@ class ConversationAdapter:
         self._retry_initial_backoff = retry_initial_backoff
         self._retry_max_backoff_rate_limit = retry_max_backoff_rate_limit
         self._retry_max_backoff_other = retry_max_backoff_other
+        self._max_retries = max_retries
+        self._connection_check_timeout = connection_check_timeout
 
         self.client = self._create_client(api_key, base_url, call_timeout)
 
@@ -83,14 +87,17 @@ class ConversationAdapter:
 
     # -- Retry logic --------------------------------------------------------
 
-    async def _retry_with_backoff(self, fn, max_retries: int = 5):
+    async def _retry_with_backoff(self, fn, max_retries: int | None = None):
+        if max_retries is None:
+            max_retries = self._max_retries
+        max_retries = max_attempts = max(max_retries, 1)
         if self.provider == "openai":
             from openai import RateLimitError
         else:
             from anthropic import RateLimitError
 
         backoff = self._retry_initial_backoff
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, max_attempts + 1):
             t0 = time.monotonic()
             if self.verbose:
                 print(f"  [LLM] calling {self.provider}:{self.model} "
@@ -100,7 +107,7 @@ class ConversationAdapter:
             except Exception as e:
                 etype = type(e).__name__
                 logger.warning(f"{etype} on attempt {attempt}: {e}")
-                if attempt == max_retries:
+                if attempt == max_attempts:
                     raise
                 cap = (self._retry_max_backoff_rate_limit
                        if isinstance(e, RateLimitError)
@@ -117,42 +124,59 @@ class ConversationAdapter:
 
     # -- LLM call ----------------------------------------------------------
 
-    async def call(self, system_prompt: str, messages: list, tools=None):
+    async def call(self, system_prompt: str, messages: list, tools=None,
+                   **kwargs):
         """Call LLM with the current messages list. Returns the raw API response.
 
         Args:
             tools: Tool schemas to send. Defaults to the main agent TOOLS.
                    Pass a custom list for subagents with different tool sets.
+                   Pass [] to explicitly disable tools.
+            compact: If True, caps max_tokens=4000 and disables thinking/reasoning.
         """
         if tools is None:
             tools = TOOLS
+        compact = kwargs.pop("compact", False)
+        max_retries = kwargs.pop("max_retries", None)
+        max_tok = kwargs.pop("max_tokens",
+                             4000 if compact else self._llm_max_tokens)
+        tb = 0 if compact else self.thinking_budget
         if self.provider == "openai":
-            return await self._call_openai(system_prompt, messages, tools)
+            return await self._call_openai(system_prompt, messages, tools,
+                                            max_tok=max_tok, tb=tb,
+                                            compact=compact,
+                                            max_retries=max_retries)
         else:
-            return await self._call_anthropic(system_prompt, messages, tools)
+            return await self._call_anthropic(system_prompt, messages, tools,
+                                               max_tok=max_tok, tb=tb,
+                                               max_retries=max_retries)
 
-    async def _call_anthropic(self, system_prompt: str, messages: list, tools):
-        max_tok = self._llm_max_tokens
-        thinking_budget = self.thinking_budget
+    async def _call_anthropic(self, system_prompt: str, messages: list, tools,
+                              max_tok: int, tb: int,
+                              max_retries: int | None = None):
 
         async def _do_call():
             kwargs = dict(
                 model=self.model,
                 system=system_prompt,
                 messages=messages,
-                tools=tools,
                 max_tokens=max_tok,
             )
-            if thinking_budget and thinking_budget > 0:
-                kwargs["max_tokens"] = thinking_budget + max_tok
+            if tools:
+                kwargs["tools"] = tools
+            if tb and tb > 0:
+                kwargs["max_tokens"] = tb + max_tok
                 kwargs["thinking"] = {
                     "type": "enabled",
-                    "budget_tokens": thinking_budget,
+                    "budget_tokens": tb,
                 }
             return await self.client.messages.create(**kwargs)
-        return await self._retry_with_backoff(_do_call)
+        return await self._retry_with_backoff(
+            _do_call, max_retries=max_retries)
 
-    async def _call_openai(self, system_prompt: str, messages: list, tools):
+    async def _call_openai(self, system_prompt: str, messages: list, tools,
+                           max_tok: int, tb: int, compact: bool = False,
+                           max_retries: int | None = None):
         oai_messages = [{"role": "system", "content": system_prompt}]
         for msg in messages:
             if msg["role"] == "user":
@@ -199,31 +223,33 @@ class ConversationAdapter:
                 "parameters": t["input_schema"],
             }}
             for t in tools
-        ]
+        ] if tools else []
 
-        max_tok = self._llm_max_tokens
-        thinking_budget = self.thinking_budget
         async def _do_call():
             kwargs = {
                 "model": self.model,
                 "messages": oai_messages,
-                "tools": oai_tools,
                 "max_tokens": max_tok,
                 "store": False,
             }
-            if self.reasoning_effort:
-                kwargs.setdefault("extra_body", {})
-                kwargs["extra_body"]["reasoning"] = {"effort": self.reasoning_effort}
-            if thinking_budget and thinking_budget > 0:
-                kwargs["max_tokens"] = thinking_budget + max_tok
-                kwargs.setdefault("extra_body", {})
-                kwargs["extra_body"]["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget,
-                }
+            if oai_tools:
+                kwargs["tools"] = oai_tools
+            # compact mode: no reasoning/thinking
+            if not compact:
+                if self.reasoning_effort:
+                    kwargs.setdefault("extra_body", {})
+                    kwargs["extra_body"]["reasoning"] = {"effort": self.reasoning_effort}
+                if tb and tb > 0:
+                    kwargs["max_tokens"] = tb + max_tok
+                    kwargs.setdefault("extra_body", {})
+                    kwargs["extra_body"]["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": tb,
+                    }
             return await self.client.chat.completions.create(**kwargs)
 
-        return await self._retry_with_backoff(_do_call)
+        return await self._retry_with_backoff(
+            _do_call, max_retries=max_retries)
 
     # -- Response parsing (provider-agnostic) ------------------------------
 
@@ -260,8 +286,13 @@ class ConversationAdapter:
         else:
             return response.stop_reason
 
-    def append_assistant(self, messages: list, response):
-        """Append assistant turn to messages (provider-agnostic)."""
+    def append_assistant(self, buffer, response):
+        """Append assistant turn to the conversation buffer (provider-agnostic).
+
+        ``buffer`` is a ConversationBuffer; we call ``buffer.append(...)``
+        rather than mutating a raw list, so the buffer's owner sees the
+        change without losing single-ownership semantics.
+        """
         if self.provider == "openai":
             choice = response.choices[0]
             msg = {
@@ -280,9 +311,9 @@ class ConversationAdapter:
                     }
                     for tc in choice.message.tool_calls
                 ]
-            messages.append(msg)
+            buffer.append(msg)
         else:
-            messages.append({
+            buffer.append({
                 "role": "assistant",
                 "content": response.content,
             })
@@ -300,7 +331,9 @@ class ConversationAdapter:
 
     # -- Connection check --------------------------------------------------
 
-    async def check_connection(self, timeout: float = 15.0, verbose: bool = True):
+    async def check_connection(self, timeout: float | None = None, verbose: bool = True):
+        if timeout is None:
+            timeout = self._connection_check_timeout
         import httpx
         if verbose:
             print("[LLM] Checking endpoint …", flush=True)

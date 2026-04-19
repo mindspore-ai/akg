@@ -17,7 +17,7 @@ import logging
 
 from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.op.config.config_validator import load_config
-from akg_agents.core.worker.manager import register_local_worker
+from akg_agents.core.worker.manager import register_local_worker, register_remote_worker
 from akg_agents.utils.task_label import resolve_task_label
 
 logger = logging.getLogger(__name__)
@@ -170,12 +170,19 @@ async def main():
                         choices=["ascend", "cuda", "cpu"])
     parser.add_argument("--arch", type=str, default=None)
     parser.add_argument("--framework", type=str, default="torch")
-    parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument("--device-id", type=int, default=None)
+    parser.add_argument("--worker-url", "--worker_url", dest="worker_url",
+                        type=str, default=None,
+                        help="Remote Worker Service URL(s), comma-separated "
+                             "(e.g. 127.0.0.1:9111). Mutually exclusive with --device-id.")
     parser.add_argument("--max-rounds", type=int, default=20)
     parser.add_argument("--gen-retries", type=int, default=5,
                         help="Max retries for code generation (reference and seed)")
 
     args = parser.parse_args()
+
+    if args.worker_url and args.device_id is not None:
+        parser.error("--worker-url and --device-id are mutually exclusive")
 
     # Backend presets
     _BACKEND_PRESETS = {
@@ -222,7 +229,19 @@ async def main():
     op_name = args.op_name or (derive_op_name(args.desc) if args.desc else "custom_op")
 
     # ---- Run ----
-    await register_local_worker([args.device_id], backend=args.backend, arch=args.arch)
+    if args.worker_url:
+        from akg_agents.cli.service.worker_service import WorkerService
+        urls = WorkerService.parse_workers(args.worker_url)
+        if not urls:
+            raise ValueError(f"No valid worker URLs parsed from: {args.worker_url}")
+        for url in urls:
+            await register_remote_worker(
+                backend=args.backend, arch=args.arch, worker_url=url,
+            )
+            print(f"[run_autoresearch] Registered remote worker: {url}")
+    else:
+        device_id = args.device_id if args.device_id is not None else 0
+        await register_local_worker([device_id], backend=args.backend, arch=args.arch)
 
     config = load_config(dsl=args.dsl, backend=args.backend)
     config["task_label"] = resolve_task_label(op_name=op_name, parallel_index=1)
