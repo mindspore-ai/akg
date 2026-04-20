@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
+from akg_agents.core_v2.skill.skill_selector import arch_to_hardware
 
 logger = logging.getLogger(__name__)
 
@@ -465,10 +466,12 @@ class SkillWriter:
             op_name = compressed.get("op_name", "")
             backend = compressed.get("backend", "")
             dsl = compressed.get("dsl", "")
+            arch = compressed.get("arch", "")
         else:
             op_name = compressed.op_name
             backend = compressed.backend
             dsl = compressed.dsl
+            arch = compressed.arch
 
         _desc_map = {
             "expert_tuning": f"{op_name} 专家调优经验",
@@ -483,6 +486,10 @@ class SkillWriter:
             meta["backend"] = backend
         if dsl:
             meta["dsl"] = dsl.lower()
+        # 将 arch 转换为 hardware 系列名称写入 metadata
+        if arch:
+            hardware = arch_to_hardware(arch)
+            meta["hardware"] = hardware
 
         category = "fix" if case_type == "fix" else "improvement"
         frontmatter = {
