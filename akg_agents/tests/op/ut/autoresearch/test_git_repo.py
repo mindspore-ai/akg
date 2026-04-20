@@ -107,6 +107,7 @@ class TestGitRepoReadOps:
 
         called = [0]
         original = subprocess.run
+
         def counting_run(*args, **kwargs):
             if args and isinstance(args[0], list) and "rev-parse" in args[0]:
                 called[0] += 1

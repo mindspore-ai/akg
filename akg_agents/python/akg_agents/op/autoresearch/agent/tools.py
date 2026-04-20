@@ -181,21 +181,21 @@ def execute_read_file(path: str, task_dir: str,
     if mode == "range":
         if not target:
             return ToolResult(ok=False,
-                message="ERROR: mode='range' requires target (e.g. '50-100')", kind="read")
+                              message="ERROR: mode='range' requires target (e.g. '50-100')", kind="read")
         try:
             parts = target.split("-")
             start = int(parts[0])
             end = int(parts[1]) if len(parts) > 1 else start
         except (ValueError, IndexError):
             return ToolResult(ok=False,
-                message=f"ERROR: invalid range '{target}', expected 'start-end'", kind="read")
+                              message=f"ERROR: invalid range '{target}', expected 'start-end'", kind="read")
         start = max(1, start)
         end = min(end, total_lines)
         if start > total_lines:
             return ToolResult(ok=False,
-                message=f"ERROR: start line {start} exceeds file length ({total_lines} lines)",
-                kind="read")
-        extracted = "\n".join(source_lines[start - 1 : end])
+                              message=f"ERROR: start line {start} exceeds file length ({total_lines} lines)",
+                              kind="read")
+        extracted = "\n".join(source_lines[start - 1: end])
         header = f"[{rel_path}: lines {start}-{end} of {total_lines}, {total_chars} chars total]"
         return ToolResult(ok=True, message=f"{header}\n{extracted}", kind="read")
 
@@ -383,7 +383,7 @@ def _diagnose_patch_mismatch(content: str, old_str: str, path: str) -> str:
                     break
     else:
         for i in range(len(lines) - old_line_count + 1):
-            block = "\n".join(lines[i : i + old_line_count])
+            block = "\n".join(lines[i: i + old_line_count])
             if _norm(block) == norm_old:
                 matches.append((i + 1, block))
                 if len(matches) > 3:
@@ -1456,7 +1456,7 @@ def build_tool_handlers(task_dir: str, config: "TaskConfig") -> dict:
     handles them as state mutations before dispatching to this map.
     """
     return {
-        "read_file":  lambda **kw: execute_read_file(
+        "read_file": lambda **kw: execute_read_file(
             kw["path"], task_dir,
             mode=kw.get("mode", "full"),
             target=kw.get("target"),

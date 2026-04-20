@@ -104,10 +104,6 @@ class LLMProvider:
         **kwargs
     ) -> Dict[str, Any]:
         """生成文本（非流式）"""
-        # suppress_extra_body: if True, skip merging provider default extra_body.
-        # Used by compact summarizer to disable thinking/reasoning.
-        suppress = kwargs.pop("suppress_extra_body", False)
-
         request_kwargs = {
             "model": self.model_name,
             "messages": messages,
@@ -117,8 +113,8 @@ class LLMProvider:
         if tools:
             request_kwargs["tools"] = tools
 
-        # 透传 extra_body（合并��用方可能传入的 extra_body）
-        if self.extra_body and not suppress:
+        # 透传 extra_body（合并调用方可能传入的 extra_body）
+        if self.extra_body:
             existing = request_kwargs.get("extra_body", {})
             request_kwargs["extra_body"] = {**self.extra_body, **existing}
 
@@ -208,8 +204,6 @@ class LLMProvider:
         **kwargs
     ) -> AsyncIterator[Dict[str, Any]]:
         """流式生成文本"""
-        suppress = kwargs.pop("suppress_extra_body", False)
-
         request_kwargs = {
             "model": self.model_name,
             "messages": messages,
@@ -221,7 +215,7 @@ class LLMProvider:
             request_kwargs["tools"] = tools
 
         # 透传 extra_body
-        if self.extra_body and not suppress:
+        if self.extra_body:
             existing = request_kwargs.get("extra_body", {})
             request_kwargs["extra_body"] = {**self.extra_body, **existing}
         

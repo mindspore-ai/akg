@@ -517,7 +517,7 @@ class _TurnHandlerHarness:
 
     def call(self, args: dict) -> str:
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             self.executor._handle_update_plan(args, counters=self.counters)
         )
 

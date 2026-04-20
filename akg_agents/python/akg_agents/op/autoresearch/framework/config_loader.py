@@ -182,8 +182,8 @@ def load_yaml_config(task_dir: str) -> Optional[TaskConfig]:
         backend=backend,
         framework=framework,
         hardware=arch
-                or raw.get("metadata", {}).get("hardware")
-                or raw.get("metadata", {}).get("arch"),
+        or raw.get("metadata", {}).get("hardware")
+        or raw.get("metadata", {}).get("arch"),
         task_override=guardrails.get("forbidden_patterns"),
     )
 

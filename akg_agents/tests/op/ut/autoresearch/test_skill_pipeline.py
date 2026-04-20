@@ -22,7 +22,7 @@ This file covers the stateless, side-effect-free building blocks:
   - ``render_skills_markdown`` / ``render_ranked_skill_block``
   - ``_parse_and_validate_query_keywords``
   - ``generate_query_keywords`` (with a stub LLM)
-  - ``ConversationAdapter._retry_with_backoff`` anti-regression
+  - ``AkgLLMAdapter._retry_with_backoff`` anti-regression
   - source-level invariants (no kernel_gen import) + the module-level
     catalog cache
 
@@ -36,9 +36,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from akg_agents.op.autoresearch.adapters.llm_adapter import AkgLLMAdapter
 from akg_agents.op.autoresearch.agent import skill_adapter as sa
 from akg_agents.op.autoresearch.agent import skill_rendering as sr
-from akg_agents.op.autoresearch.agent.llm_client import ConversationAdapter
 from akg_agents.op.autoresearch.agent.skill_adapter import (
     QueryKeywords,
     extract_fallback_keywords,
@@ -543,27 +543,25 @@ class TestGenerateQueryKeywords:
         assert result == expected
 
 
-class TestConversationAdapterRetry:
-    @pytest.mark.asyncio
-    async def test_max_retries_zero_still_invokes_fn_once(self):
-        try:
-            import openai  # noqa: F401
-        except ImportError:
-            pytest.skip("openai package not installed")
-
-        adapter = ConversationAdapter.__new__(ConversationAdapter)
-        adapter.provider = "openai"
+class TestAkgLLMAdapterRetry:
+    def _bare_adapter(self) -> AkgLLMAdapter:
+        adapter = AkgLLMAdapter.__new__(AkgLLMAdapter)
         adapter.verbose = False
-        adapter.model = "test-model"
         adapter._max_retries = 5
         adapter._retry_initial_backoff = 0.0
         adapter._retry_max_backoff_rate_limit = 0.0
         adapter._retry_max_backoff_other = 0.0
+        adapter._llm = SimpleNamespace(
+            provider=SimpleNamespace(model_name="test-model"),
+        )
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_max_retries_zero_still_invokes_fn_once(self):
+        adapter = self._bare_adapter()
 
         call_count = [0]
-        sentinel = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content='{"must_have":["matmul"]}'))]
-        )
+        sentinel = SimpleNamespace(content="ok")
 
         async def fake_fn():
             call_count[0] += 1
@@ -572,6 +570,33 @@ class TestConversationAdapterRetry:
         result = await adapter._retry_with_backoff(fake_fn, max_retries=0)
         assert call_count[0] == 1
         assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_transient_error_retries_then_succeeds(self):
+        adapter = self._bare_adapter()
+
+        attempts = [0]
+        sentinel = SimpleNamespace(content="ok")
+
+        async def fake_fn():
+            attempts[0] += 1
+            if attempts[0] < 3:
+                raise RuntimeError("transient")
+            return sentinel
+
+        result = await adapter._retry_with_backoff(fake_fn, max_retries=5)
+        assert attempts[0] == 3
+        assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_exhausted_retries_raise_last_error(self):
+        adapter = self._bare_adapter()
+
+        async def always_fail():
+            raise RuntimeError("nope")
+
+        with pytest.raises(RuntimeError, match="nope"):
+            await adapter._retry_with_backoff(always_fail, max_retries=2)
 
 
 class TestRenderRankedSkillBlock:

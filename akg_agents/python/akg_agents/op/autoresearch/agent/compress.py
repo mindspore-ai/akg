@@ -93,8 +93,8 @@ def estimate_tokens(messages: list, chars_per_token: int = 4) -> int:
 
 
 def estimate_full_request_tokens(messages: list, system_prompt: str,
-                                  tools: list = None,
-                                  chars_per_token: int = 3) -> int:
+                                 tools: list = None,
+                                 chars_per_token: int = 3) -> int:
     """Estimate total API request tokens (messages + system + tools)."""
     total = len(json.dumps(_normalize_messages(messages)))
     total += len(system_prompt)
@@ -519,7 +519,7 @@ async def _analyze_plan_md(llm, config, task_dir: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_kernel_attachment(task_dir: str, config,
-                              *, max_chars_override: Optional[int] = None) -> list:
+                             *, max_chars_override: Optional[int] = None) -> list:
     """Full editable files. Capped at ``compact_kernel_sanity_cap``
     chars per file (default 80 000) with a warning flag appended.
     ``max_chars_override`` lets the PTL-recovery ``force_rebuild`` path
@@ -557,7 +557,7 @@ def _build_plan_attachment(plan_analysis_text: str) -> list:
 
 
 def _build_ranking_attachment(task_dir: str,
-                               *, max_chars: Optional[int] = None) -> list:
+                              *, max_chars: Optional[int] = None) -> list:
     """Full ranking.md content. No truncation in the normal auto_compact
     path (``max_chars=None``). Empty if the file is missing.
 

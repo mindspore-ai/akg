@@ -1,12 +1,26 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 ConversationBuffer — Single owner of the autoresearch message list.
 
 Before P2 the conversation message list (`_messages`) had no clear
 owner: AgentLoop initialized it but TurnExecutor mutated it directly,
-compress.py replaced it with a new list, and llm_client.py mutated it
-in-place via ``append_assistant``. Four files all touched the same
-list with different semantics (in-place vs replace), making it hard
-to reason about message lifecycle and adding rollback safe-points.
+compress.py replaced it with a new list, and the LLM adapter mutated
+it in-place via ``append_assistant``. Four call sites all touched the
+same list with different semantics (in-place vs replace), making it
+hard to reason about message lifecycle and adding rollback safe-points.
 
 ConversationBuffer fixes that by being the sole owner of the list.
 All callers receive a buffer instance and use its public methods:
@@ -29,7 +43,7 @@ class ConversationBuffer:
     """Single owner of the autoresearch conversation message list.
 
     All mutations go through this class. AgentLoop holds an instance;
-    TurnExecutor / compress.py / llm_client all RECEIVE the buffer
+    TurnExecutor / compress.py / the LLM adapter all RECEIVE the buffer
     instead of the raw list.
 
     Provides clear semantics for:
