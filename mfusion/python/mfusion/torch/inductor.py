@@ -55,9 +55,12 @@ def _run_composite_fusion_stage(
     stage_label: str,
     composite_pipeline: str,
     internal_passes: tuple[str, ...],
+    pre_canonicalize: bool = False,
 ) -> None:
     """Run torch-fusion or mfuse-fusion: one PM when quiet, per-pass when verbose IR is enabled."""
     if runner.enabled_verbose_internal_ir:
+        if pre_canonicalize:
+            runner.run("builtin.module(canonicalize)", f"{stage_label} / pre-canonicalize")
         for name in internal_passes:
             runner.run(f"builtin.module({name})", f"{stage_label} / {name}")
         runner.run("builtin.module(canonicalize)", f"{stage_label} / canonicalize")
@@ -90,8 +93,9 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     _run_composite_fusion_stage(
         runner,
         "Torch Fusion",
-        "builtin.module(torch-fusion,canonicalize)",
+        "builtin.module(canonicalize,torch-fusion,canonicalize)",
         _TORCH_FUSION_INTERNAL_PASSES,
+        pre_canonicalize=True,
     )
 
     runner.run(

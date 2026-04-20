@@ -689,6 +689,21 @@ mlir::LogicalResult ReshapeOp::canonicalize(ReshapeOp op, mlir::PatternRewriter 
   return mlir::success();
 }
 
+// Canonicalize reciprocal(sqrt(x)) -> rsqrt(x)
+mlir::LogicalResult ReciprocalOp::canonicalize(ReciprocalOp op, mlir::PatternRewriter &rewriter) {
+  auto sqrtOp = op.getInput().getDefiningOp<SqrtOp>();
+  if (!sqrtOp) {
+    return mlir::failure();
+  }
+
+  auto rsqrt = rewriter.create<RsqrtOp>(op.getLoc(), op.getResult().getType(), sqrtOp.getInput());
+  rewriter.replaceOp(op, rsqrt.getResult());
+  if (sqrtOp->use_empty()) {
+    rewriter.eraseOp(sqrtOp);
+  }
+  return mlir::success();
+}
+
 // Canonicalize: drop identity permute; fuse permute(permute(x, inner), outer) -> permute(x, fused) or x.
 mlir::LogicalResult PermuteOp::canonicalize(PermuteOp op, mlir::PatternRewriter &rewriter) {
   llvm::SmallVector<int64_t, 8> outerPerm;
