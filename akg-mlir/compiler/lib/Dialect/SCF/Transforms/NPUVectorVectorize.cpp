@@ -27,6 +27,12 @@
 //      └── N-D: nested loops each with vector=N, collected via
 //               collectVectorizationStrategy into a multi-dim VectorizationContext
 //               (broadcast/reduction_y inner loops are not collected as vector dims)
+//   Vectorization axis (which loop's IV drives the tile / loopToVectorDim):
+//     - Loops tagged `vector=N`, `reduction_x`, or `reduction_all`: that loop's IV
+//       is the vectorization axis for that nest.
+//     - Loops tagged `reduction_y` or `broadcast`: that loop's IV is NOT the axis;
+//       the axis is the ancestor `vector=` loop's IV (vectorizationAxis /
+//       vectorAxisVectorDim).
 //   3. Create and populate vectorized loop
 //      ├── vectorizeLoad → npuvector.transfer_read (+ npuvector.transpose if needed)
 //      ├── vectorizeStore → npuvector.transfer_write (+ npuvector.transpose if needed)
@@ -40,6 +46,7 @@
 #include <algorithm>
 #include <iterator>
 #include <numeric>
+#include <optional>
 
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -106,6 +113,11 @@ struct VectorizationContext {
   // Used by vectorizeStore to compute the correct transpose permutation.
   DenseMap<Value, SmallVector<int>> valueDimOrder;
 
+  /// When set (ReductionY/Broadcast nested under an already-vectorized loop),
+  /// `getVectorDimForIV(vectorizationAxis)` returns this dim so loads indexed
+  /// by the parent IV (e.g. memref.load %m[%outer_iv]) use transfer_read.
+  std::optional<unsigned> vectorAxisVectorDim;
+
   VectorizationContext(OpBuilder &b, SmallVector<int64_t> vecSizes,
                       SmallVector<Value> vecSizeVals, SmallVector<Value> maxVals,
                       VectorizationMode m, scf::ForOp loop, Value vecAxis = nullptr)
@@ -157,6 +169,8 @@ struct VectorizationContext {
         if (forOp.getInductionVar() == iv) return static_cast<int>(dim);
       }
     }
+    if (vectorizationAxis && iv == vectorizationAxis && vectorAxisVectorDim)
+      return static_cast<int>(*vectorAxisVectorDim);
     return -1;
   }
 };
@@ -164,9 +178,11 @@ struct VectorizationContext {
 static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx,
                                       npuvector::NPUVectorType targetType = {});
 static void ensureReductionYield(VectorizationContext &ctx);
-static LogicalResult vectorizeLoop(scf::ForOp scalarLoop, int64_t actualStep, Value vfValue,
-                                   Value maxStepValue, VectorizationMode mode,
-                                   OpBuilder &builder, Value vecAxis, Value outerIVMapping = Value());
+static LogicalResult vectorizeLoop(
+    scf::ForOp scalarLoop, int64_t actualStep, Value vfValue, Value maxStepValue,
+    VectorizationMode mode, OpBuilder &builder, Value vecAxis,
+    Value outerIVMapping = Value(),
+    std::optional<unsigned> vecAxisVectorDim = std::nullopt);
 static LogicalResult vectorizeLoopMultiDim(scf::ForOp scalarLoop,
                                            VectorizationContext &parentCtx);
 
@@ -952,6 +968,89 @@ static void registerNestedLoopResults(scf::ForOp nestedForOp, VectorizationConte
   }
 }
 
+/// Nested `scf.for` after multi-dim / None / nested-elementwise fast paths: resolve step,
+/// outer IV mapping, `vectorAxisVectorDim`, and run `vectorizeLoop` (single split from
+/// handleNestedForOp for Lizard CCN).
+static LogicalResult vectorizeNestedForRemainder(scf::ForOp nestedForOp,
+                                                VectorizationContext &ctx,
+                                                VectorizationMode nestedMode,
+                                                int64_t nestedMaxStep) {
+  const bool nestedIsRYOrB =
+      nestedMode == VectorizationMode::ReductionY ||
+      nestedMode == VectorizationMode::Broadcast;
+
+  int64_t nestedActualStep;
+  Value nestedVectorSizeValue;
+  Value nestedMaxStepValue;
+  Value nestedVecAxis;
+
+  if (nestedIsRYOrB) {
+    nestedActualStep = ctx.getActualStep();
+    nestedVectorSizeValue = ctx.getVectorSizeValue();
+    nestedMaxStepValue = ctx.getMaxStepValue();
+    nestedVecAxis = ctx.getVectorizationAxis();
+  } else {
+    nestedActualStep = computeStaticVectorSize(nestedForOp, nestedMaxStep);
+
+    OpBuilder attrBuilder(ctx.builder.getContext());
+    attrBuilder.setInsertionPoint(nestedForOp);
+    nestedMaxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
+        nestedForOp.getLoc(), nestedMaxStep);
+
+    if (ctx.isDynamic()) {
+      nestedVectorSizeValue = computeDynamicVectorSize(
+          nestedForOp, nestedMaxStepValue, attrBuilder, nestedForOp.getLoc());
+    } else {
+      nestedVectorSizeValue = nullptr;
+    }
+
+    nestedVecAxis = nestedForOp.getInductionVar();
+  }
+
+  Value outerIVMapping = Value();
+  std::optional<unsigned> vecAxisVectorDim;
+  if (nestedIsRYOrB && nestedVecAxis) {
+    outerIVMapping = ctx.valueMapping.lookupOrDefault(nestedVecAxis);
+
+    if (!outerIVMapping || outerIVMapping == nestedVecAxis) {
+      cloneScalarOp(*nestedForOp.getOperation(), ctx);
+      return success();
+    }
+
+    for (auto &[op, dim] : ctx.loopToVectorDim) {
+      if (auto fo = dyn_cast<scf::ForOp>(op)) {
+        if (fo.getInductionVar() == nestedVecAxis) {
+          vecAxisVectorDim = dim;
+          break;
+        }
+      }
+    }
+    if (!vecAxisVectorDim &&
+        nestedVecAxis == ctx.scalarLoop.getInductionVar()) {
+      auto it = ctx.loopToVectorDim.find(ctx.scalarLoop.getOperation());
+      if (it != ctx.loopToVectorDim.end())
+        vecAxisVectorDim = it->second;
+    }
+  }
+
+  if (!ctx.builder.getInsertionBlock()) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  updateNestedLoopOperands(nestedForOp, ctx);
+
+  if (failed(vectorizeLoop(nestedForOp, nestedActualStep, nestedVectorSizeValue,
+                          nestedMaxStepValue, nestedMode, ctx.builder,
+                          nestedVecAxis, outerIVMapping, vecAxisVectorDim))) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  registerNestedLoopResults(nestedForOp, ctx);
+  return success();
+}
+
 static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, VectorizationContext &ctx) {
   if (ctx.loopToVectorDim.count(nestedForOp)) {
     if (failed(vectorizeLoopMultiDim(nestedForOp, ctx))) {
@@ -976,63 +1075,7 @@ static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, VectorizationCont
     return success();
   }
 
-  int64_t nestedActualStep;
-  Value nestedVectorSizeValue;
-  Value nestedMaxStepValue;
-  Value nestedVecAxis;
-
-  if (nestedMode == VectorizationMode::ReductionY ||
-      nestedMode == VectorizationMode::Broadcast) {
-    nestedActualStep = ctx.getActualStep();
-    nestedVectorSizeValue = ctx.getVectorSizeValue();
-    nestedMaxStepValue = ctx.getMaxStepValue();
-    nestedVecAxis = ctx.getVectorizationAxis();
-  } else {
-    nestedActualStep = computeStaticVectorSize(nestedForOp, nestedMaxStep);
-
-    OpBuilder attrBuilder(ctx.builder.getContext());
-    attrBuilder.setInsertionPoint(nestedForOp);
-    nestedMaxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
-        nestedForOp.getLoc(), nestedMaxStep);
-
-    if (ctx.isDynamic()) {
-      nestedVectorSizeValue = computeDynamicVectorSize(
-          nestedForOp, nestedMaxStepValue, attrBuilder, nestedForOp.getLoc());
-    } else {
-      nestedVectorSizeValue = nullptr;
-    }
-
-    nestedVecAxis = nestedForOp.getInductionVar();
-  }
-
-  Value outerIVMapping = Value();
-  if ((nestedMode == VectorizationMode::ReductionY ||
-       nestedMode == VectorizationMode::Broadcast) &&
-      nestedVecAxis) {
-    outerIVMapping = ctx.valueMapping.lookupOrDefault(nestedVecAxis);
-
-    if (!outerIVMapping || outerIVMapping == nestedVecAxis) {
-      cloneScalarOp(*nestedForOp.getOperation(), ctx);
-      return success();
-    }
-  }
-
-  if (!ctx.builder.getInsertionBlock()) {
-    cloneScalarOp(*nestedForOp.getOperation(), ctx);
-    return success();
-  }
-
-  updateNestedLoopOperands(nestedForOp, ctx);
-
-  if (failed(vectorizeLoop(nestedForOp, nestedActualStep, nestedVectorSizeValue,
-                          nestedMaxStepValue, nestedMode, ctx.builder,
-                          nestedVecAxis, outerIVMapping))) {
-    cloneScalarOp(*nestedForOp.getOperation(), ctx);
-    return success();
-  }
-
-  registerNestedLoopResults(nestedForOp, ctx);
-  return success();
+  return vectorizeNestedForRemainder(nestedForOp, ctx, nestedMode, nestedMaxStep);
 }
 
 static LogicalResult vectorizeOneOp(Operation &op, VectorizationContext &ctx) {
@@ -1131,7 +1174,13 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
   }
 
   if (!ctx.loopToVectorDim.count(ctx.scalarLoop)) {
-    ctx.loopToVectorDim[ctx.scalarLoop] = 0;
+    const bool innerIvIsScalarForNestedVecAxis =
+        (ctx.mode == VectorizationMode::ReductionY ||
+         ctx.mode == VectorizationMode::Broadcast) &&
+        ctx.vectorizationAxis &&
+        ctx.vectorizationAxis != ctx.scalarLoop.getInductionVar();
+    if (!innerIvIsScalarForNestedVecAxis)
+      ctx.loopToVectorDim[ctx.scalarLoop] = 0;
   }
 
   if (ctx.mode == VectorizationMode::ReductionX ||
@@ -1814,11 +1863,22 @@ static LogicalResult vectorizeLoop(
     VectorizationMode mode,
     OpBuilder &builder,
     Value vecAxis,
-    Value outerIVMapping) {
+    Value outerIVMapping,
+    std::optional<unsigned> vecAxisVectorDim) {
 
   VectorizationContext ctx(builder, actualStep, vfValue, maxStepValue, mode, scalarLoop, vecAxis);
+  if (vecAxisVectorDim)
+    ctx.vectorAxisVectorDim = vecAxisVectorDim;
 
-  ctx.loopToVectorDim[scalarLoop] = 0;
+  // ReductionY/Broadcast: inner loop IV stays scalar; tile axes come from the
+  // parent vecAxis (see vectorAxisVectorDim). Do not register inner IV as dim 0
+  // or loads like memref.load %m[%inner, %parent_iv] mis-attribute the vector dim.
+  const bool innerIvIsScalarForNestedVecAxis =
+      (mode == VectorizationMode::ReductionY ||
+       mode == VectorizationMode::Broadcast) &&
+      vecAxis && vecAxis != scalarLoop.getInductionVar();
+  if (!innerIvIsScalarForNestedVecAxis)
+    ctx.loopToVectorDim[scalarLoop] = 0;
 
   if (failed(applyNestedVecAxisMapping(mode, vecAxis, outerIVMapping, ctx)))
     return failure();
@@ -1878,8 +1938,8 @@ static void runNormal1DPath(scf::ForOp loop, VectorizationMode mode,
                                            loop.getLoc())
                 : Value();
   int64_t actualStep = computeStaticVectorSize(loop, maxStepFromAttr);
-  (void)vectorizeLoop(loop, actualStep, vectorSizeValue, maxStepValue,
-                     mode, builder, loop.getInductionVar());
+  (void)vectorizeLoop(loop, actualStep, vectorSizeValue, maxStepValue, mode, builder,
+                     loop.getInductionVar(), Value(), std::nullopt);
 }
 
 class NPUVectorVectorizePass
