@@ -117,7 +117,7 @@ class SessionStore:
 
             semantic_files = list(self.config.editable_files)
             for f in [self.config.eval_script, self.config.smoke_test_script,
-                       self.config.program_file, self.config.ref_file, "task.yaml"]:
+                      self.config.program_file, self.config.ref_file, "task.yaml"]:
                 if f and f not in semantic_files:
                     semantic_files.append(f)
             dirty = self.git.dirty_files(semantic_files)
@@ -280,4 +280,3 @@ class SessionStore:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             pass
-

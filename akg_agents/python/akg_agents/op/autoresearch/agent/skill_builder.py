@@ -135,7 +135,8 @@ class SkillBuilder:
         the latest selection context wins; this matters for plan.md's
         "Selected: skill (reason)" line.
         """
-        name = getattr(skill, "name", None) or skill.get("name") if isinstance(skill, dict) else getattr(skill, "name", None)
+        name = getattr(skill, "name", None) or skill.get("name") if isinstance(
+            skill, dict) else getattr(skill, "name", None)
         if not name:
             return
         existing = self._skills.get(name)

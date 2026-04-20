@@ -502,13 +502,29 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
             # ---- 6. Create LLM adapter ----
             session_id = str(state.get("session_id") or "").strip()
+            agent_model_config = workflow_config.get("agent_model_config", {})
             llm_client = create_llm_client(
-                model_level=workflow_config.get(
-                    "agent_model_config", {},
-                ).get("coder", "standard"),
+                model_level=agent_model_config.get("coder", "standard"),
                 session_id=session_id or None,
             )
-            adapter = AkgLLMAdapter(llm_client)
+            # Fast client for auto_compact / keyword generation — no thinking,
+            # low latency. Falls back to the main client if the "fast" level
+            # isn't configured (or if the caller pinned an explicit
+            # agent_model_config.fast override).
+            fast_level = agent_model_config.get("fast", "fast")
+            try:
+                fast_llm_client = create_llm_client(
+                    model_level=fast_level,
+                    session_id=session_id or None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[AutoresearchWorkflow] fast model level '%s' unavailable "
+                    "(%s); falling back to main client for compact summaries.",
+                    fast_level, exc,
+                )
+                fast_llm_client = None
+            adapter = AkgLLMAdapter(llm_client, fast_client=fast_llm_client)
 
             # ---- 7. Run AgentLoop ----
             # Suppress verbose verifier/worker INFO logs during agent loop.

@@ -1220,7 +1220,7 @@ class FeedbackBuilder:
         # protocol already carries. Purely textual; no side effects.
         if eval_status in ("FAIL", "DISCARD"):
             lines.append(self._render_reflection_prompt(eval_status,
-                                                         eval_record))
+                                                        eval_record))
 
         lines.append(f"\n{self.format_status()}")
 
@@ -1228,7 +1228,7 @@ class FeedbackBuilder:
 
     @staticmethod
     def _render_reflection_prompt(eval_status: str,
-                                   eval_record: dict) -> str:
+                                  eval_record: dict) -> str:
         """Short reflection ribbon appended after FAIL / DISCARD.
 
         Asks three concrete questions: what was the hypothesis, why

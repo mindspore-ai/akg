@@ -1,39 +1,69 @@
 """
-AkgLLMAdapter — Wraps AKG's LLMClient to be duck-type compatible with
-autoresearch's ConversationAdapter interface.
+AkgLLMAdapter — Wraps AKG's LLMClient so autoresearch's agent loop
+(AgentLoop, TurnExecutor, compress, subagents) can talk to it with a
+stable interface.
 
-AKG LLMClient uses OpenAI-compatible format internally.
-Autoresearch uses Anthropic-style messages internally (tool_use/tool_result blocks).
-This adapter bridges the two formats.
+AKG LLMClient uses OpenAI-compatible format internally; autoresearch
+uses Anthropic-style messages (tool_use / tool_result blocks). This
+adapter bridges the two formats and adds the retry / response-parsing
+helpers the agent loop needs on top of ``LLMClient``.
 """
 
+import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class AkgLLMAdapter:
-    """Duck-type compatible with ConversationAdapter.
+    """The single LLM access point for the autoresearch agent loop.
 
-    Wraps AKG's LLMClient (OpenAI-compatible) so that autoresearch's
-    AgentLoop, TurnExecutor, and compress module can use it transparently.
+    Wraps AKG's LLMClient (OpenAI-compatible) and exposes the surface
+    AgentLoop / TurnExecutor / compress / subagents consume:
+      - ``call(system_prompt, messages, tools, **kwargs)`` with retry
+      - ``extract_tool_calls`` / ``append_assistant`` / ``get_stop_reason``
+        / ``get_response_text`` — response-parsing helpers
+      - ``check_connection`` — reachability probe
+      - ``client`` / ``model`` / ``provider`` properties (read by
+        ``compress.py`` and logging)
     """
 
-    def __init__(self, llm_client, *, connection_check_timeout: float = 15.0,
+    def __init__(self, llm_client, *, fast_client=None,
+                 retry_initial_backoff: float = 5.0,
+                 retry_max_backoff_rate_limit: float = 120.0,
+                 retry_max_backoff_other: float = 60.0,
+                 max_retries: int = 5,
+                 connection_check_timeout: float = 15.0,
                  verbose: bool = True):
         """
         Args:
-            llm_client: AKG LLMClient instance (from create_llm_client()).
+            llm_client: Main AKG LLMClient instance (from create_llm_client()).
+                        Used for the ReAct agent loop.
+            fast_client: Optional LLMClient bound to the "fast" model level.
+                        ``call(compact=True, ...)`` routes here — non-thinking,
+                        low-latency tasks (auto_compact summaries, keyword bag
+                        generation). If None, falls back to ``llm_client``.
+            retry_initial_backoff: Initial backoff delay (seconds) on failure.
+            retry_max_backoff_rate_limit: Backoff cap for RateLimitError.
+            retry_max_backoff_other: Backoff cap for other transient errors.
+            max_retries: Max attempts per ``call`` (callers can override
+                         per-call via ``max_retries`` kwarg).
             connection_check_timeout: check_connection default timeout (seconds).
             verbose: Print progress messages.
         """
         self._llm = llm_client
+        self._fast_llm = fast_client or llm_client
+        self._retry_initial_backoff = retry_initial_backoff
+        self._retry_max_backoff_rate_limit = retry_max_backoff_rate_limit
+        self._retry_max_backoff_other = retry_max_backoff_other
+        self._max_retries = max_retries
         self._connection_check_timeout = connection_check_timeout
         self.verbose = verbose
 
-    # -- Properties (duck-type ConversationAdapter) ---------------------------
+    # -- Properties (read by compress / logging) -------------------------------
 
     @property
     def client(self):
@@ -58,35 +88,96 @@ class AkgLLMAdapter:
         OpenAI format, then calls LLMClient.generate().
 
         Special kwargs consumed by adapter (not forwarded to provider):
-          compact=True: caps max_tokens=4000, suppresses default extra_body
-                        (disables thinking/reasoning for compact summarizer)
+          compact=True: routes the call to the fast LLM client (bound to
+                        the "fast" model level in settings.json, typically
+                        configured without ``extra_body.thinking``) and
+                        caps max_tokens=4000. Used by auto_compact
+                        summaries and keyword bag generation.
 
         ``tools`` is required (pass ``[]`` to disable tool-calling for a
         given call). The adapter deliberately does NOT reach back into
         ``..agent.tools`` for a default — tools are a caller concern,
         and the adapter must stay a pure format bridge.
         """
-        # compact mode: adapter consumes, sets provider-level overrides
-        # max_tokens uses setdefault so callers can override via config
+        # compact mode: adapter picks the fast client and caps output.
+        # max_tokens uses setdefault so callers can override via config.
         compact_mode = kwargs.pop("compact", False)
-        # Autoresearch's ConversationAdapter supports per-call retry override.
-        # AKG's LLMClient currently does not, so consume the kwarg here to
-        # keep the duck-typed interface compatible.
-        kwargs.pop("max_retries", None)
+        max_retries = kwargs.pop("max_retries", None)
         if compact_mode:
             kwargs.setdefault("max_tokens", 4000)
-            kwargs["suppress_extra_body"] = True
 
+        llm = self._fast_llm if compact_mode else self._llm
         oai_messages = self._convert_messages(system_prompt, messages)
         oai_tools = self._convert_tools(tools) if tools else []
 
-        result = await self._llm.generate(
-            messages=oai_messages,
-            stream=False,
-            tools=oai_tools if oai_tools else None,
-            **kwargs,
-        )
-        return result
+        async def _do_call():
+            return await llm.generate(
+                messages=oai_messages,
+                stream=False,
+                tools=oai_tools if oai_tools else None,
+                **kwargs,
+            )
+
+        return await self._retry_with_backoff(_do_call, max_retries=max_retries)
+
+    # -- Retry ---------------------------------------------------------------
+
+    async def _retry_with_backoff(self, fn, max_retries: Optional[int] = None):
+        """Exponential-backoff retry around ``fn``.
+
+        ``fn`` is an async zero-arg callable (the concrete provider call).
+        Rate-limit errors get a longer backoff cap than transient errors.
+        ``max_retries=0`` still invokes ``fn`` once — it caps the number
+        of additional retries, matching long-running agent-loop
+        expectations.
+        """
+        if max_retries is None:
+            max_retries = self._max_retries
+        max_attempts = max(max_retries, 1)
+
+        try:
+            from openai import RateLimitError
+        except ImportError:
+            RateLimitError = None  # fallback: all errors treated as "other"
+
+        backoff = self._retry_initial_backoff
+        model_label = getattr(self._llm.provider, "model_name", "?")
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            t0 = time.monotonic()
+            if self.verbose:
+                print(
+                    f"  [LLM] calling {model_label} "
+                    f"(attempt {attempt}/{max_retries}) …",
+                    flush=True,
+                )
+            try:
+                response = await fn()
+            except Exception as e:
+                last_exc = e
+                etype = type(e).__name__
+                logger.warning(f"{etype} on attempt {attempt}: {e}")
+                if attempt == max_attempts:
+                    raise
+                cap = (
+                    self._retry_max_backoff_rate_limit
+                    if RateLimitError is not None and isinstance(e, RateLimitError)
+                    else self._retry_max_backoff_other
+                )
+                if self.verbose:
+                    print(
+                        f"  [LLM] {etype} — waiting {backoff:.0f}s …",
+                        flush=True,
+                    )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, cap)
+                continue
+            elapsed = time.monotonic() - t0
+            if self.verbose:
+                print(f"  [LLM] response in {elapsed:.1f}s", flush=True)
+            return response
+        # Defensive: unreachable — the loop always raises or returns.
+        raise last_exc if last_exc is not None else RuntimeError("retry exhausted")
 
     # -- Response parsing -----------------------------------------------------
 
@@ -187,12 +278,11 @@ class AkgLLMAdapter:
         if verbose:
             print("[LLM] Checking AKG LLM endpoint …", flush=True)
         try:
-            await self._llm.generate(
+            await self._fast_llm.generate(
                 messages=[{"role": "user", "content": "ping"}],
                 stream=False,
                 max_tokens=1,
                 timeout=timeout,
-                suppress_extra_body=True,
             )
             if verbose:
                 print("[LLM] AKG LLM endpoint OK", flush=True)
@@ -204,7 +294,9 @@ class AkgLLMAdapter:
     def _convert_messages(self, system_prompt: str, messages: list) -> list[dict]:
         """Convert autoresearch internal messages (Anthropic-style) to OpenAI format.
 
-        Mirrors ConversationAdapter._call_openai message conversion logic.
+        Preserves Anthropic content-block semantics through the
+        conversion so the agent loop can keep pairing tool_use and
+        tool_result blocks correctly across turns.
         """
         oai_messages = [{"role": "system", "content": system_prompt}]
 

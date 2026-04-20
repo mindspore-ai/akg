@@ -2,7 +2,7 @@
 AgentLoop — Single-task autonomous optimization loop.
 
 Orchestrator that delegates to:
-  - ConversationAdapter (agent/llm_client.py) — LLM communication
+  - AkgLLMAdapter (adapters/llm_adapter.py) — LLM communication
   - TurnExecutor (agent/turn.py) — per-turn tool dispatch, rollback, eval
   - SessionStore (agent/session.py) — persistence, heartbeat, snapshots
   - FeedbackBuilder (agent/feedback.py) — plan tracking, system messages
@@ -15,6 +15,7 @@ Core loop:
       update state from turn_result
 """
 
+from .turn import TurnExecutor
 import asyncio
 import json
 import logging
@@ -32,7 +33,6 @@ from .conversation import ConversationBuffer
 from .counters import RunCounters
 from .tools import execute_run_eval, TOOLS
 from .subagents import DiagnoseHandler
-from .llm_client import ConversationAdapter
 from .session import SessionStore
 from .feedback import FeedbackBuilder
 from .file_logger import FileLogger
@@ -48,7 +48,7 @@ from dataclasses import dataclass as _dataclass
 class PostEvalDecision:
     """Post-eval action: diagnose or none."""
     kind: str  # 'diagnose' | 'none'
-from .turn import TurnExecutor
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +78,13 @@ class AgentLoop:
     def __init__(
         self,
         task_dir: str,
-        model: str = "claude-sonnet-4-6",
+        *,
+        llm_adapter,
         device_id: int = 0,
         max_rounds: Optional[int] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        provider: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
         verbose: bool = True,
         skip_branch_switch: bool = False,
         resume: bool = False,
-        llm_adapter=None,
         eval_fn=None,
     ):
         self.task_dir = os.path.abspath(task_dir)
@@ -100,36 +96,12 @@ class AgentLoop:
         self.config = load_task_config(self.task_dir)
         self.max_rounds = max_rounds if max_rounds is not None else self.config.max_rounds
 
-        # LLM: injected adapter takes priority, otherwise create standalone
-        if llm_adapter is not None:
-            self._llm = llm_adapter
-            self.model = llm_adapter.model
-            self.provider = llm_adapter.provider
-        else:
-            # Auto-detect provider
-            if provider is None:
-                if any(kw in model.lower() for kw in ("gpt-", "codex", "o1", "o3", "o4")):
-                    provider = "openai"
-                else:
-                    provider = "anthropic"
-            self.model = model
-            self.provider = provider
-
-            agent_cfg = self.config.agent
-            self._llm = ConversationAdapter(
-                model=model, provider=self.provider,
-                call_timeout=agent_cfg.call_timeout,
-                api_key=api_key, base_url=base_url,
-                reasoning_effort=reasoning_effort,
-                thinking_budget=agent_cfg.thinking_budget,
-                llm_max_tokens=agent_cfg.llm_max_tokens,
-                retry_initial_backoff=agent_cfg.retry_initial_backoff,
-                retry_max_backoff_rate_limit=agent_cfg.retry_max_backoff_rate_limit,
-                retry_max_backoff_other=agent_cfg.retry_max_backoff_other,
-                max_retries=agent_cfg.llm_max_retries,
-                connection_check_timeout=agent_cfg.llm_connection_check_timeout,
-                verbose=verbose,
-            )
+        # LLM: always injected (workflow and debug entry both build an
+        # AkgLLMAdapter on top of LLMClient — no ad-hoc provider wiring
+        # inside the loop).
+        self._llm = llm_adapter
+        self.model = llm_adapter.model
+        self.provider = llm_adapter.provider
 
         # Framework runner first (owns GitRepo + FileStateManager) so the
         # session and other components can borrow its sub-components
@@ -230,7 +202,7 @@ class AgentLoop:
 
         pre_commit = self.runner.git.current_commit()
         eval_json = await execute_run_eval("baseline — unmodified code", self.runner,
-                                            raw_output_tail=self.config.agent.raw_output_tail)
+                                           raw_output_tail=self.config.agent.raw_output_tail)
         # Baseline isn't a "real" eval result for the gating rules — just
         # bump the round counter directly without calling record_eval (which
         # would update consecutive_failures / consecutive_no_improvement
@@ -459,7 +431,7 @@ class AgentLoop:
             logger.info(f"\n[AgentLoop] Starting: {self.config.name}")
             logger.info(f"[AgentLoop] task_dir: {self.task_dir}")
             logger.info(f"[AgentLoop] max_rounds={self.max_rounds}, "
-                  f"device_id={self.device_id}, model={self.model}")
+                        f"device_id={self.device_id}, model={self.model}")
             logger.info(f"[AgentLoop] editable_files={self.config.editable_files}")
 
         await self._llm.check_connection(
@@ -568,7 +540,7 @@ class AgentLoop:
                 })
                 if self.verbose:
                     logger.info(f"[AgentLoop] Restored {len(self._buffer)} messages "
-                          f"from messages_latest.jsonl")
+                                f"from messages_latest.jsonl")
             else:
                 self._buffer.replace([{"role": "user",
                                        "content": build_initial_message(
@@ -646,7 +618,7 @@ class AgentLoop:
                 and self._counters.total_api_calls < max_turns):
             if self.verbose:
                 logger.info(f"\n[AgentLoop] Turn {self._counters.total_api_calls + 1} "
-                      f"(eval: {self._counters.eval_calls_made}/{self.max_rounds})")
+                            f"(eval: {self._counters.eval_calls_made}/{self.max_rounds})")
             self._update_heartbeat(extra=f"turn {self._counters.total_api_calls + 1}")
 
             # Context management
@@ -668,7 +640,7 @@ class AgentLoop:
                 if tokens > threshold:
                     if self.verbose:
                         logger.info(f"[AgentLoop] Auto-compact "
-                              f"({tokens} > {threshold}) …")
+                                    f"({tokens} > {threshold}) …")
                     compacted = False
                     try:
                         compacted = await self._buffer.auto_compact(
@@ -681,7 +653,7 @@ class AgentLoop:
                     except Exception as e:
                         if self.verbose:
                             logger.warning(f"[AgentLoop] Compact failed ({e}), "
-                                  f"force rebuild")
+                                           f"force rebuild")
                         self._force_rebuild()
                         compacted = True
                     if compacted:
@@ -694,7 +666,7 @@ class AgentLoop:
                         if post > int(a.context_limit * a.compact_post_check_ratio):
                             if self.verbose:
                                 logger.info(f"[AgentLoop] Still high ({post}), "
-                                      f"force rebuild")
+                                            f"force rebuild")
                             self._force_rebuild()
                         _prev_msg_count = 0
 
@@ -731,13 +703,13 @@ class AgentLoop:
                     if self._counters.compact_failures >= a.compact_max_failures:
                         if self.verbose:
                             logger.warning(f"[AgentLoop] ABORT: "
-                                  f"{a.compact_max_failures} compact failures")
+                                           f"{a.compact_max_failures} compact failures")
                         break
                     self._counters.record_compact_failure()
                     if self.verbose:
                         logger.info(f"[AgentLoop] PTL — level "
-                              f"{self._counters.compact_failures}/"
-                              f"{a.compact_max_failures}")
+                                    f"{self._counters.compact_failures}/"
+                                    f"{a.compact_max_failures}")
                     if self._counters.compact_failures == 1:
                         try:
                             compacted = await self._buffer.auto_compact(
@@ -789,7 +761,7 @@ class AgentLoop:
                 if (self._feedback.phase == "replanning"
                         and (self.max_rounds - self._counters.eval_calls_made <= 0
                              or self._counters.consecutive_no_tool_turns
-                                 > a.replanning_max_idle_turns)):
+                             > a.replanning_max_idle_turns)):
                     clean_exit = True
                     break
 
@@ -849,7 +821,7 @@ class AgentLoop:
                     >= self.config.agent.max_consecutive_failures):
                 if self.verbose:
                     logger.warning(f"[AgentLoop] ABORT: {self._counters.consecutive_failures} "
-                          f"consecutive failures")
+                                   f"consecutive failures")
                 clean_exit = True
                 break
 

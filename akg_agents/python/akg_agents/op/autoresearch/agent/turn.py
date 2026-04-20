@@ -130,7 +130,7 @@ class TurnResult:
     and the outcome dispatch tag.
     """
     outcome: str                         # "finish", "edit_fail", "read_only",
-                                         # "quick_check_fail", "eval_*"
+    # "quick_check_fail", "eval_*"
     # Diagnostics
     tool_calls: list = field(default_factory=list)
     results_log: list = field(default_factory=list)
@@ -157,7 +157,7 @@ class TurnExecutor:
         runner,
         feedback: FeedbackBuilder,
         session,  # SessionStore — for snapshots, logging, archival
-        llm,      # ConversationAdapter — for compact/diagnose
+        llm,      # AkgLLMAdapter — for compact/diagnose
         *,
         model: str,
         provider: str,
