@@ -32,6 +32,10 @@ from akg_agents.core_v2.langgraph_base.base_routers import (
     check_agent_repeat_limit,
     get_illegal_agents,
 )
+from akg_agents.core_v2.langgraph_base.replay_guard import (
+    ReplaySnapshotStore,
+    ReplayGuardError,
+)
 
 __all__ = [
     "BaseState",
@@ -42,5 +46,7 @@ __all__ = [
     "check_step_limit",
     "check_agent_repeat_limit",
     "get_illegal_agents",
+    "ReplaySnapshotStore",
+    "ReplayGuardError",
 ]
 

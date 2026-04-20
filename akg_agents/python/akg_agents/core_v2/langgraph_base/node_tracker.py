@@ -17,6 +17,7 @@
 提供节点执行追踪功能，支持：
 - 执行时间记录
 - 可选的流式消息发送
+- Replay Guard：record 模式录制节点输出快照，replay 模式校验一致性
 - 灵活的配置选项
 """
 
@@ -26,6 +27,8 @@ import time
 from typing import Any, Callable, Dict
 
 logger = logging.getLogger(__name__)
+
+_REPLAY_GUARD_STATE_KEY = "_replay_guard"
 
 
 def track_node(node_name: str, require_session: bool = False, require_task_label: bool = False):
@@ -69,6 +72,11 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
                 # 发送节点完成摘要（如果有 session）
                 if session_id and isinstance(result, dict):
                     _safe_send_result(session_id, node_name, result)
+
+                # Replay Guard: record or verify node output snapshot
+                if isinstance(result, dict):
+                    _replay_guard_check(state, node_name, result)
+
                 return result
             finally:
                 elapsed = time.time() - start
@@ -76,6 +84,21 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
         
         return wrapped
     return decorator
+
+
+def _replay_guard_check(state: Dict[str, Any], node_name: str, result: Dict[str, Any]) -> None:
+    """If a ReplaySnapshotStore is attached to state, record or verify the node output."""
+    guard = state.get(_REPLAY_GUARD_STATE_KEY)
+    if guard is None:
+        return
+    step = int(state.get("step_count") or 0)
+    try:
+        if guard.mode == "record":
+            guard.record(node_name, step, result)
+        elif guard.mode == "replay":
+            guard.verify(node_name, step, result)
+    except Exception:
+        raise
 
 
 def _safe_send_start(session_id: str, node_name: str, task_id: str = ""):
