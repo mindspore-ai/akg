@@ -92,7 +92,7 @@ void LoopNestStateCollector::collect(Operation *opToWalk) {
 // This is needed because getStoreOpCount only checks exact memref matches,
 // missing stores through subview/reshape aliases.
 static bool isSameOrAliasedMemRef(Value accessMemref, Value baseMemref) {
-  return mlir::affine::getSourceMemRef(accessMemref) == mlir::affine::getSourceMemRef(baseMemref);
+  return affine::getSourceMemRef(accessMemref) == affine::getSourceMemRef(baseMemref);
 }
 
 static bool hasAliasedStoreToMemref(Node *node, Value baseMemref) {
@@ -249,7 +249,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         auto memref = cast<affine::AffineReadOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
         // Also track the source memref if this is a subview or other aliasing operation
-        Value sourceMemref = mlir::affine::getSourceMemRef(memref);
+        Value sourceMemref = affine::getSourceMemRef(memref);
         if (sourceMemref != memref) {
           memrefAccesses[sourceMemref].insert(node.id);
         }
@@ -259,7 +259,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         auto memref = cast<affine::AffineWriteOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
         // Also track the source memref if this is a subview or other aliasing operation
-        Value sourceMemref = mlir::affine::getSourceMemRef(memref);
+        Value sourceMemref = affine::getSourceMemRef(memref);
         if (sourceMemref != memref) {
           memrefAccesses[sourceMemref].insert(node.id);
         }
@@ -287,7 +287,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       auto memref = cast<affine::AffineReadOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       // Also track the source memref if this is a subview or other aliasing operation
-      Value sourceMemref = mlir::affine::getSourceMemRef(memref);
+      Value sourceMemref = affine::getSourceMemRef(memref);
       if (sourceMemref != memref) {
         memrefAccesses[sourceMemref].insert(node.id);
       }
@@ -299,7 +299,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       auto memref = cast<affine::AffineWriteOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       // Also track the source memref if this is a subview or other aliasing operation
-      Value sourceMemref = mlir::affine::getSourceMemRef(memref);
+      Value sourceMemref = affine::getSourceMemRef(memref);
       if (sourceMemref != memref) {
         memrefAccesses[sourceMemref].insert(node.id);
       }
@@ -308,7 +308,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
                    memref::ReshapeOp, memref::ReinterpretCastOp>(op)) {
       Node node(nextNodeId++, op);
       Value result = op->getResult(0);
-      Value source = mlir::affine::getSourceMemRef(result);
+      Value source = affine::getSourceMemRef(result);
       memrefAccesses[result].insert(node.id);
       if (source != result) {
         memrefAccesses[source].insert(node.id);
@@ -718,8 +718,14 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
 IntegerSet FusionGuard::buildCondSet(MLIRContext *ctx) const {
   OpBuilder builder(ctx);
   AffineExpr d0 = builder.getAffineDimExpr(0);
-  AffineExpr condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
-                                               : builder.getAffineConstantExpr(boundValue - 1) - d0;
+  AffineExpr condExpr;
+  if (offset != 0) {
+    // Subview offset: guard becomes "primaryIV >= offset" (d0 - offset >= 0).
+    condExpr = d0 - builder.getAffineConstantExpr(offset);
+  } else {
+    condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
+                                      : builder.getAffineConstantExpr(boundValue - 1) - d0;
+  }
   return IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
 }
 
@@ -749,16 +755,28 @@ static SmallVector<int, 4> makeSkipOneDimMap(unsigned secondaryDepth, unsigned s
   return map;
 }
 
+// Compute the inverse permutation: if perm[i] = j, then inverse[j] = i.
+static SmallVector<int, 4> computeInversePermutation(ArrayRef<int> perm) {
+  SmallVector<int, 4> inverse(perm.size());
+  for (unsigned i = 0; i < perm.size(); ++i) inverse[perm[i]] = static_cast<int>(i);
+  return inverse;
+}
+
 bool SubviewFusionHelper::buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
                                                  int dstRank) {
-  // If rank is unavailable (-1), fallback to loop depth.
-  int effectiveSrcRank = (srcRank >= 0 && dstRank >= 0) ? srcRank : static_cast<int>(srcInfo.loopDepth);
-  int effectiveDstRank = (srcRank >= 0 && dstRank >= 0) ? dstRank : static_cast<int>(dstInfo.loopDepth);
-
-  if (effectiveSrcRank != effectiveDstRank) {
-    return buildExtraDimPlan(srcInfo, dstInfo, effectiveSrcRank, effectiveDstRank);
+  // Prioritize loop depth for strategy selection: loop structure determines
+  // how IVs are aligned. Memref rank is only used as a hint when depths differ.
+  if (srcInfo.loopDepth == dstInfo.loopDepth) {
+    if (buildSameRankPlan(srcInfo, dstInfo)) return true;
+    // Identity matching failed — try permuted dimension mappings.
+    return buildPermutedPlan(srcInfo, dstInfo);
   }
-  return buildSameRankPlan(srcInfo, dstInfo);
+
+  // Different depth — use rank to decide primary side; fall back to loop depth.
+  bool rankUseful = (srcRank >= 0 && dstRank >= 0 && srcRank != dstRank);
+  int effectiveSrcRank = rankUseful ? srcRank : static_cast<int>(srcInfo.loopDepth);
+  int effectiveDstRank = rankUseful ? dstRank : static_cast<int>(dstInfo.loopDepth);
+  return buildExtraDimPlan(srcInfo, dstInfo, effectiveSrcRank, effectiveDstRank);
 }
 
 bool SubviewFusionHelper::buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
@@ -835,7 +853,78 @@ bool SubviewFusionHelper::buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionL
 
   plan.srcIsPrimary = (srcUB >= dstUB);
   plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
+  plan.guard.offset = detectGuardDimSubviewOffset(static_cast<unsigned>(mismatchPos));
   return true;
+}
+
+bool SubviewFusionHelper::buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo) {
+  unsigned depth = srcInfo.loopDepth;
+
+  // Build initial sorted permutation [0, 1, ..., depth-1].
+  SmallVector<int, 4> perm;
+  for (unsigned i = 0; i < depth; ++i) perm.push_back(static_cast<int>(i));
+
+  // std::next_permutation advances from identity, so the first call skips identity
+  // (which buildSameRankPlan already tried).
+  while (std::next_permutation(perm.begin(), perm.end())) {
+    // perm[i] means: dst dim i corresponds to src dim perm[i].
+    int mismatchPos = -1;  // position in dst's loop array
+    bool valid = true;
+
+    for (unsigned i = 0; i < depth; ++i) {
+      if (loopBoundsMatch(srcInfo.loops[perm[i]], dstInfo.loops[i])) continue;
+      if (loopLBStepMatch(srcInfo.loops[perm[i]], dstInfo.loops[i])) {
+        if (mismatchPos != -1) {
+          valid = false;  // multiple UB mismatches
+          break;
+        }
+        mismatchPos = static_cast<int>(i);
+      } else {
+        valid = false;
+        break;
+      }
+    }
+
+    if (!valid) continue;
+
+    // Found a valid permutation. Build the plan.
+    plan.srcInfo = &srcInfo;
+    plan.dstInfo = &dstInfo;
+
+    if (mismatchPos == -1) {
+      // All bounds match exactly — no guard needed.
+      plan.srcIsPrimary = true;
+      plan.dimMap.assign(perm.begin(), perm.end());
+      return true;
+    }
+
+    // Exactly one UB mismatch at dst dim mismatchPos vs src dim perm[mismatchPos].
+    auto srcLoop = srcInfo.loops[perm[mismatchPos]];
+    auto dstLoop = dstInfo.loops[mismatchPos];
+    if (!srcLoop.hasConstantUpperBound() || !dstLoop.hasConstantUpperBound()) continue;
+
+    int64_t srcUB = srcLoop.getConstantUpperBound();
+    int64_t dstUB = dstLoop.getConstantUpperBound();
+
+    unsigned secondaryGuardDim;
+    if (srcUB >= dstUB) {
+      // Primary = src, secondary = dst. dimMap maps dst dim i → src dim perm[i].
+      plan.srcIsPrimary = true;
+      plan.dimMap.assign(perm.begin(), perm.end());
+      plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(perm[mismatchPos]), std::min(srcUB, dstUB)};
+      secondaryGuardDim = static_cast<unsigned>(mismatchPos);
+    } else {
+      // Primary = dst, secondary = src. dimMap maps src dim j → dst dim inversePerm[j].
+      plan.srcIsPrimary = false;
+      plan.dimMap = computeInversePermutation(perm);
+      plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
+      secondaryGuardDim = static_cast<unsigned>(perm[mismatchPos]);
+    }
+    plan.guard.offset = detectGuardDimSubviewOffset(secondaryGuardDim);
+    return true;
+  }
+
+  return false;
 }
 
 SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoopNestInfo &info) {
@@ -878,12 +967,35 @@ SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoop
   return stages;
 }
 
-void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages, IRMapping &mapper) {
+void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages) {
   auto targetLoop = plan.primaryInfo()->loops[plan.primaryInfo()->loopDepth - 1];
   Block *targetBody = targetLoop.getBody();
   // Secondary is src → insert at start (src body first); secondary is dst → insert at end (dst body last).
   bool secondaryIsSrc = !plan.srcIsPrimary;
   Block::iterator insertPt = secondaryIsSrc ? targetBody->begin() : std::prev(targetBody->end());
+
+  // Build IV mapping: secondary.loops[i].iv → primary.loops[dimMap[i]].iv
+  IRMapping mapper;
+  for (unsigned i = 0; i < plan.secondaryInfo()->loopDepth; ++i) {
+    mapper.map(plan.secondaryInfo()->loops[i].getInductionVar(),
+               plan.primaryInfo()->loops[plan.dimMap[i]].getInductionVar());
+  }
+
+  // When a subview offset is detected, the secondary loop's guarded-dim IV
+  // must be shifted: secondaryIV = primaryIV - offset.  Create an affine.apply
+  // and override the corresponding entry in the mapper.
+  if (plan.guard.offset != 0) {
+    auto primaryIV = plan.primaryInfo()->loops[plan.guard.dimPos].getInductionVar();
+    OpBuilder b(targetLoop.getBody(), std::prev(targetLoop.getBody()->end()));
+    auto shiftMap = AffineMap::get(1, 0, b.getAffineDimExpr(0) - plan.guard.offset, targetLoop->getContext());
+    auto applyOp = b.create<affine::AffineApplyOp>(targetLoop.getLoc(), shiftMap, ValueRange{primaryIV});
+    for (unsigned i = 0; i < plan.secondaryInfo()->loopDepth; ++i) {
+      if (plan.dimMap[i] == static_cast<int>(plan.guard.dimPos)) {
+        mapper.map(plan.secondaryInfo()->loops[i].getInductionVar(), applyOp.getResult());
+        break;
+      }
+    }
+  }
 
   // Build guard condition once, apply to every stage.
   Value guardIV;
@@ -913,6 +1025,45 @@ void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages,
   }
 }
 
+int64_t SubviewFusionHelper::detectGuardDimSubviewOffset(unsigned secondaryGuardDim) {
+  // Collect base memrefs written by the primary loop.
+  DenseSet<Value> primaryBases;
+  plan.primaryInfo()->loops.back().walk([&](Operation *op) {
+    auto store = dyn_cast<affine::AffineWriteOpInterface>(op);
+    if (!store) return;
+    primaryBases.insert(affine::getSourceMemRef(store.getMemRef()));
+  });
+
+  // Walk secondary loop body for load/store ops whose memref chain passes
+  // through a SubViewOp and whose base memref matches a primary write target.
+  memref::SubViewOp foundSubview;
+  plan.secondaryInfo()->loops.back().walk([&](Operation *op) {
+    if (foundSubview) return;
+    Value memref;
+    if (auto load = dyn_cast<affine::AffineReadOpInterface>(op))
+      memref = load.getMemRef();
+    else if (auto store = dyn_cast<affine::AffineWriteOpInterface>(op))
+      memref = store.getMemRef();
+    else
+      return;
+
+    bool hasSubview = false;
+    memref::SubViewOp sv;
+    Value base = affine::getSourceMemRef(memref, &hasSubview, &sv);
+    if (hasSubview && sv && primaryBases.contains(base)) foundSubview = sv;
+  });
+
+  if (!foundSubview) return 0;
+
+  // Extract static offset at the dimension corresponding to the secondary guard dim.
+  auto offsets = foundSubview.getStaticOffsets();
+  if (secondaryGuardDim >= offsets.size()) return 0;
+  int64_t offset = offsets[secondaryGuardDim];
+  if (offset == ShapedType::kDynamic || offset == 0) return 0;
+
+  return offset;
+}
+
 std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
                                                               int srcRank, int dstRank) {
   plan = {};  // reset for each fusion attempt
@@ -925,14 +1076,7 @@ std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo
     return std::nullopt;
   }
 
-  // Build IV mapping: secondary.loops[i].iv → primary.loops[dimMap[i]].iv
-  IRMapping mapper;
-  for (unsigned i = 0; i < plan.secondaryInfo()->loopDepth; ++i) {
-    mapper.map(plan.secondaryInfo()->loops[i].getInductionVar(),
-               plan.primaryInfo()->loops[plan.dimMap[i]].getInductionVar());
-  }
-
-  emitCloneStages(stages, mapper);
+  emitCloneStages(stages);
   return plan;
 }
 
@@ -948,7 +1092,7 @@ static bool isDependentLoadOrStoreOp(Operation *candidate, DenseMap<Value, bool>
     if (it != memFlags.end()) {
       return it;
     }
-    Value sourceMemref = mlir::affine::getSourceMemRef(memref);
+    Value sourceMemref = affine::getSourceMemRef(memref);
     return memFlags.find(sourceMemref);
   };
 
@@ -1100,7 +1244,7 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
                                           SmallVector<Operation *, 4> &loadAndStoreOps) {
   if (!loopOp || !depMemref) return;
 
-  Value sourceMemref = mlir::affine::getSourceMemRef(depMemref);
+  Value sourceMemref = affine::getSourceMemRef(depMemref);
 
   auto recordMemFlag = [&](Value memref, bool isStore) {
     auto updateFlag = [&](Value key) {
@@ -1113,7 +1257,7 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
     };
 
     updateFlag(memref);
-    Value src = mlir::affine::getSourceMemRef(memref);
+    Value src = affine::getSourceMemRef(memref);
     if (src != memref) {
       updateFlag(src);
     }
@@ -1123,13 +1267,13 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
     if (!isOperationValid(op)) return;
     if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
       Value memref = read.getMemRef();
-      if (mlir::affine::getSourceMemRef(memref) == sourceMemref) {
+      if (affine::getSourceMemRef(memref) == sourceMemref) {
         recordMemFlag(memref, false);
         loadAndStoreOps.push_back(op);
       }
     } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
       Value memref = write.getMemRef();
-      if (mlir::affine::getSourceMemRef(memref) == sourceMemref) {
+      if (affine::getSourceMemRef(memref) == sourceMemref) {
         recordMemFlag(memref, true);
         loadAndStoreOps.push_back(op);
       }
