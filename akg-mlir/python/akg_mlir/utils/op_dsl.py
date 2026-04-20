@@ -1162,7 +1162,7 @@ def get_op_dsl_torch_mlir():
 
         "Torch.aten.to.dtype": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.array("
-            f"{get_input(inputs[0][0])}, "
+            f"{format_py_value(get_input(inputs[0][0]))}, "
             f"dtype={TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
         ),
 
@@ -1183,7 +1183,7 @@ def get_op_dsl_torch_mlir():
             f"{get_input(inputs[0][0])} <= {format_py_value(get_input(inputs[1][0]))}"
         ),
 
-        "Torch.aten.le.Tensor": lambda inputs, output, attr: (
+        "Torch.aten.le.tensor": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = "
             f"{get_input(inputs[0][0])} <= "
             f"{get_input(inputs[1][0])}"
@@ -1234,7 +1234,7 @@ def get_op_dsl_torch_mlir():
         ),
         "Torch.vtensor.literal": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.array("
-            f"{get_input(output[0])}, dtype=np.{output[0]['data_type']})"
+            f"{format_py_value(get_input(output[0]))}, dtype=np.{output[0]['data_type']})"
         ),
         "Torch.aten.eq.scalar": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.equal("
