@@ -346,7 +346,8 @@ void AffineIteratorConversion::runOnOperation() {
   // follow the original Operation to its new (inner) position automatically.
   func.walk([&](affine::AffineForOp inner) {
     if (auto outer = dyn_cast<affine::AffineForOp>(inner->getParentOp())) {
-      if (CommonUtils::isReduceAxis(func, inner->getParentOp())) {
+      if (CommonUtils::isReduceAxis(func, inner->getParentOp()) &&
+          !CommonUtils::isReduceAxis(func, inner)) {
         affine::interchangeLoops(outer, inner);
       }
     }
