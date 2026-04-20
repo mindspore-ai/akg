@@ -34,3 +34,5 @@ enable_llm_range_inference: false  # Enable LLM range inference mode (LLM infers
 multi_case_num: 10  # Number of test cases to sample
 sampling_strategy: "mixed"  # Sampling strategy: random/boundary/mixed
 sampling_seed: 42  # Random seed for reproducibility
+
+enable_fix_code_gen: true

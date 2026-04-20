@@ -63,7 +63,8 @@ from akg_agents.core_v2.skill.skill_selector import (
     SelectionContext,
     SkillSelector,
     create_metadata_matcher,  # 从通用框架导入
-    create_category_filter   # Category 筛选器
+    create_category_filter,   # Category 筛选器
+    arch_to_hardware,         # Arch 到 Hardware 系列的映射
 )
 from akg_agents.core_v2.skill.metadata import SkillMetadata
 
@@ -145,13 +146,71 @@ class OperatorSelectionContext(SelectionContext):
 # 使用通用的 create_metadata_matcher 工厂函数创建算子特定的过滤器
 backend_filter = create_metadata_matcher("backend")
 dsl_filter = create_metadata_matcher("dsl")
-hardware_filter = create_metadata_matcher("hardware")
 framework_filter = create_metadata_matcher("framework")
 operator_type_filter = create_metadata_matcher("operator_type", "operator_patterns")
 
 # Category 过滤器（支持 include 和 exclude 模式）
 category_include_filter = create_category_filter("include")
 category_exclude_filter = create_category_filter("exclude")
+
+
+def hardware_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
+    """
+    硬件型号过滤器（支持 arch → hardware 系列自动转换）
+
+    Skill metadata 使用 hardware 系列名称（如 "Atlas A2", "Atlas A3", "Atlas A5", "300I Duo"），
+    而 context 使用具体 arch 型号（如 "ascend910b3", "ascend950pr_9572"）。
+    此过滤器自动将 arch 转换为对应的 hardware 系列名称后再匹配。
+
+    映射规则：
+    - ascend910b* → Atlas A2
+    - ascend910_93* → Atlas A3
+    - ascend950pr* / ascend950dt* → Atlas A5
+    - ascend310p* → 300I Duo
+    - CUDA/CPU arch（如 a100, v100）不转换，直接匹配
+
+    Args:
+        skill: Skill 元数据
+        context: 选择上下文（包含 hardware/arch 字段）
+
+    Returns:
+        是否匹配
+    """
+    # 从 context 获取 hardware/arch 值
+    context_value = getattr(context, "hardware", None)
+    if context_value is None:
+        context_value = context.custom_fields.get("hardware")
+
+    if not context_value:
+        return True  # 如果 context 没有指定，放行
+
+    # 获取 Skill metadata 中的 hardware 值
+    if not skill.metadata:
+        return True  # 如果 Skill 没有 metadata，默认放行
+
+    metadata_value = skill.metadata.get("hardware", "")
+    if not metadata_value:
+        return True  # 如果 Skill 没有该 metadata 字段，默认放行
+
+    # 解析逗号分隔的值列表
+    values = [v.strip() for v in metadata_value.split(",")]
+
+    # 特殊处理：如果 metadata 值包含 "all"，表示适用于所有硬件
+    if "all" in values:
+        return True
+
+    # 核心：将 arch 转换为 hardware 系列名称
+    converted_hardware = arch_to_hardware(context_value)
+
+    # 检查转换后的 hardware 是否在 Skill 的 hardware 列表中
+    if converted_hardware in values:
+        return True
+
+    # 兼容：如果转换失败（CUDA/CPU），检查原始 arch 是否在列表中
+    if context_value in values:
+        return True
+
+    return False
 
 
 def create_operator_filters() -> List[Callable]:

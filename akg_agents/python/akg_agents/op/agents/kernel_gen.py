@@ -422,7 +422,7 @@ class KernelGen(AgentBase):
         return _apply_force_skills(result)
 
     @staticmethod
-    def _sample_cases(cases: List[Any], n: int = 1) -> List[Any]:
+    def _sample_cases(cases: List[Any], n: int = 2) -> List[Any]:
         """从候选 case 中随机采样 n 个。如果候选 <= n，全部返回。"""
         import random
         if len(cases) <= n:
@@ -488,8 +488,8 @@ class KernelGen(AgentBase):
 
         if case_info:
             case_instruction = (
-                "从以下案例中选出与**当前算子强相关**的案例（至少选 2 个）。"
-                "包含错误修复案例和性能优化案例，优先选相同算子类型的，其次选相似计算模式的。"
+                "从以下案例中选出与**当前算子相关**的案例。"
+                "包含错误修复案例和性能优化案例，优先选相同算子类型的，其次选相似计算模式的，相关即可选入。"
             )
             sections.append(
                 f"## 优化/修复案例（case）\n{case_instruction}\n\n"
