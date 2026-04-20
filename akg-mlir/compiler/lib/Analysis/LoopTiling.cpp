@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <unordered_set>
 
 #include "akg/Analysis/BufferAnalysis.h"
@@ -1719,10 +1720,17 @@ static Value stripIndexLikeCasts(Value value) {
   }
 }
 
-static void tryMarkTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<mlir::scf::ForOp> lhsOrder,
-                                      ArrayRef<mlir::scf::ForOp> rhsOrder, UnitAttr transposeAttr) {
+struct TransposeOrderPairInfo {
+  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  size_t commonPrefix = 0;
+};
+
+static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder, ArrayRef<mlir::scf::ForOp> rhsOrder,
+                                            SmallVector<mlir::scf::ForOp, 4> &lhsCommonOrder,
+                                            SmallVector<mlir::scf::ForOp, 4> &rhsCommonOrder) {
   if (lhsOrder.size() < 2 || rhsOrder.size() < 2) {
-    return;
+    return false;
   }
 
   llvm::DenseSet<Operation *> rhsLoops;
@@ -1730,7 +1738,7 @@ static void tryMarkTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<
     rhsLoops.insert(loop.getOperation());
   }
 
-  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
+  lhsCommonOrder.clear();
   for (mlir::scf::ForOp loop : lhsOrder) {
     if (rhsLoops.contains(loop.getOperation())) {
       lhsCommonOrder.push_back(loop);
@@ -1742,45 +1750,131 @@ static void tryMarkTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<
     lhsLoops.insert(loop.getOperation());
   }
 
-  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  rhsCommonOrder.clear();
   for (mlir::scf::ForOp loop : rhsOrder) {
     if (lhsLoops.contains(loop.getOperation())) {
       rhsCommonOrder.push_back(loop);
     }
   }
 
-  if (lhsCommonOrder.size() < 2 || lhsCommonOrder.size() != rhsCommonOrder.size()) {
-    return;
+  return lhsCommonOrder.size() >= 2 && lhsCommonOrder.size() == rhsCommonOrder.size();
+}
+
+static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(ArrayRef<mlir::scf::ForOp> band,
+                                                                             ArrayRef<mlir::scf::ForOp> lhsOrder,
+                                                                             ArrayRef<mlir::scf::ForOp> rhsOrder,
+                                                                             bool linearBand) {
+  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  if (!intersectLoopOrdersForTranspose(lhsOrder, rhsOrder, lhsCommonOrder, rhsCommonOrder)) {
+    return std::nullopt;
   }
-  if (lhsCommonOrder.back() == rhsCommonOrder.back()) {
-    return;
+  // Tree bands keep the strict rule: the innermost index must actually participate in the permutation,
+  // otherwise downstream tree-aware tiling cannot use the transpose path safely.
+  if (!linearBand && lhsCommonOrder.back() == rhsCommonOrder.back()) {
+    return std::nullopt;
   }
 
   size_t commonPrefix = 0;
   while (commonPrefix < lhsCommonOrder.size() && lhsCommonOrder[commonPrefix] == rhsCommonOrder[commonPrefix]) {
     ++commonPrefix;
   }
+  if (commonPrefix == lhsCommonOrder.size()) {
+    return std::nullopt;
+  }
   if (!std::is_permutation(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(),
-                           rhsCommonOrder.begin() + commonPrefix, rhsCommonOrder.end())) {
-    return;
+                            rhsCommonOrder.begin() + commonPrefix, rhsCommonOrder.end())) {
+    return std::nullopt;
   }
 
-  if (std::find(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(), band.back()) ==
-        lhsCommonOrder.end()) {
-    return;
+  if (!linearBand && std::find(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(), band.back()) ==
+                       lhsCommonOrder.end()) {
+    return std::nullopt;
   }
 
+  return TransposeOrderPairInfo{std::move(lhsCommonOrder), std::move(rhsCommonOrder), commonPrefix};
+}
+
+static void clearBandBroadcastAttrsForTranspose(ArrayRef<mlir::scf::ForOp> band) {
   for (mlir::scf::ForOp loop : band) {
     loop->removeAttr(kBroadcastLoopAttr);
     loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
   }
+}
 
+// Non-tree (single-chain) band: mark every loop from the outermost permuted loop down to band.back(),
+// keeping a contiguous transpose suffix that applyBandTiling's transpose path requires.
+static void markTransposeAttrsLinearBandSuffix(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
+                                             UnitAttr transposeAttr) {
+  const size_t commonPrefix = info.commonPrefix;
+  const auto &lhsCommonOrder = info.lhsCommonOrder;
+  const auto &rhsCommonOrder = info.rhsCommonOrder;
+
+  llvm::DenseSet<Operation *> permutedLoops;
   for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
-    (*it)->setAttr(kTransposeLoopAttr, transposeAttr);
+    mlir::scf::ForOp loopOp = *it;
+    permutedLoops.insert(loopOp.getOperation());
   }
   for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
-    (*it)->setAttr(kTransposeLoopAttr, transposeAttr);
+    mlir::scf::ForOp loopOp = *it;
+    permutedLoops.insert(loopOp.getOperation());
   }
+  size_t startIdx = band.size();
+  for (size_t i = 0; i < band.size(); ++i) {
+    mlir::scf::ForOp loop = band[i];
+    if (permutedLoops.contains(loop.getOperation())) {
+      startIdx = i;
+      break;
+    }
+  }
+  for (size_t i = startIdx; i < band.size(); ++i) {
+    mlir::scf::ForOp loop = band[i];
+    if (loop->hasAttr(kReductionLoopAttr)) {
+      break;
+    }
+    loop->setAttr(kTransposeLoopAttr, transposeAttr);
+  }
+}
+
+static void markTransposeAttrsTreeCommonSuffix(const TransposeOrderPairInfo &info, UnitAttr transposeAttr) {
+  const size_t commonPrefix = info.commonPrefix;
+  const auto &lhsCommonOrder = info.lhsCommonOrder;
+  const auto &rhsCommonOrder = info.rhsCommonOrder;
+
+  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
+    mlir::scf::ForOp loopOp = *it;
+    if (loopOp->hasAttr(kReductionLoopAttr)) {
+      break;
+    }
+    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
+  }
+  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
+    mlir::scf::ForOp loopOp = *it;
+    if (loopOp->hasAttr(kReductionLoopAttr)) {
+      break;
+    }
+    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
+  }
+}
+
+static void applyTransposeLoopAttrsForOrderPair(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
+                                              UnitAttr transposeAttr, bool linearBand) {
+  clearBandBroadcastAttrsForTranspose(band);
+  if (linearBand) {
+    markTransposeAttrsLinearBandSuffix(band, info, transposeAttr);
+    return;
+  }
+  markTransposeAttrsTreeCommonSuffix(info, transposeAttr);
+}
+
+static void markTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<mlir::scf::ForOp> lhsOrder,
+                                      ArrayRef<mlir::scf::ForOp> rhsOrder, UnitAttr transposeAttr, bool linearBand) {
+  std::optional<TransposeOrderPairInfo> info =
+    buildTransposeOrderPairAnalysis(band, lhsOrder, rhsOrder, linearBand);
+  if (!info) {
+    return;
+  }
+  applyTransposeLoopAttrsForOrderPair(band, *info, transposeAttr, linearBand);
 }
 
 static void markBandTransposeLoops(func::FuncOp funcOp) {
@@ -1831,6 +1925,7 @@ static void markBandTransposeLoops(func::FuncOp funcOp) {
   }
 
   auto transposeAttr = UnitAttr::get(funcOp.getContext());
+  const bool linearBand = !plan.hasLeafBranching;
   for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
     if (band.empty()) {
       continue;
@@ -1848,7 +1943,7 @@ static void markBandTransposeLoops(func::FuncOp funcOp) {
       SmallVector<mlir::scf::ForOp, 4> lhsOrder = extractLoopOrder(memOps[i], band);
       for (size_t j = i + 1; j < memOps.size(); ++j) {
         SmallVector<mlir::scf::ForOp, 4> rhsOrder = extractLoopOrder(memOps[j], band);
-        tryMarkTransposeOrderPair(band, lhsOrder, rhsOrder, transposeAttr);
+        markTransposeOrderPair(band, lhsOrder, rhsOrder, transposeAttr, linearBand);
       }
     }
   }
