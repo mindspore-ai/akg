@@ -17,6 +17,7 @@ import os
 import subprocess
 import logging
 import re
+import math
 from typing import Optional
 from pathlib import Path
 from akg.backends.ascend import run_akg_opt, dump_ascend_meta_data
@@ -264,21 +265,32 @@ def run_torch_mlir_to_linalg_on_tensors(
 
     return output_path
 
-def format_py_value(v):
-    """Format a Python value as source code for generated NumPy reference code.
+_VAR_REF_RE = re.compile(r"^(output|input)_\d+$")
 
-    This is mainly used by the bisheng pipeline codegen. String values "inf",
-    "-inf", and "nan" are normalized to valid Python float expressions so the
-    generated code preserves special floating-point literals.
-    """
+def format_py_value(v):
+    """Format a Python value as source code for generated NumPy reference code."""
     if isinstance(v, str):
-        lv = v.lower()
-        if lv == "inf":
+        lv = v.strip().lower()
+        if lv in ("inf", "+inf"):
             return 'float("inf")'
-        if lv == "-inf":
+        if lv in ("-inf",):
             return 'float("-inf")'
         if lv == "nan":
             return 'float("nan")'
+        if _VAR_REF_RE.match(v.strip()):
+            return v.strip()
+        return repr(v)
+
+    if isinstance(v, float):
+        if math.isnan(v):
+            return 'float("nan")'
+        if math.isinf(v):
+            return 'float("inf")' if v > 0 else 'float("-inf")'
+        return repr(v)
+
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(format_py_value(x) for x in v) + "]"
+
     return repr(v)
 
 def gen_slice_tensor(dst_name, src, dim, start, end, step):
