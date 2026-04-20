@@ -21,7 +21,7 @@
 - 等等
 """
 
-from typing import TypedDict, Annotated, Optional, List
+from typing import Any, TypedDict, Annotated, Optional, List
 from operator import add
 
 
@@ -55,4 +55,7 @@ class BaseState(TypedDict, total=False):
     # === 通用结果字段 ===
     success: bool                   # 任务是否成功
     error_message: Optional[str]    # 错误信息（如果失败）
+
+    # === Replay Guard（框架内部使用）===
+    _replay_guard: Optional[Any]    # ReplaySnapshotStore instance, injected by task layer
 
