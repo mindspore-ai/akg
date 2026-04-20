@@ -57,6 +57,26 @@ def get_init_inputs():
 """
 
 
+MATMUL_LARGE_K_TASK = """\
+import torch
+import torch.nn as nn
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+    def forward(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+        return torch.matmul(A, B)
+M = 128
+N = 128
+K = 131072
+def get_inputs():
+    A = torch.randn(M, K)
+    B = torch.randn(K, N)
+    return [A, B]
+def get_init_inputs():
+    return []
+"""
+
+
 @pytest.fixture(scope="module")
 def kernel_gen():
     from akg_agents.op.agents.kernel_gen import KernelGen
@@ -144,6 +164,27 @@ async def test_force_skill_names():
         verifier_error="", dsl="triton_ascend", backend="ascend", framework="torch",
     )
     assert "triton-ascend-case-reduction-amax-medium" in [s.name for s in skills]
+
+
+@pytest.mark.level2
+@pytest.mark.use_model
+@pytest.mark.asyncio
+async def test_case_selection_matmul_large_k():
+    from akg_agents.op.agents.kernel_gen import KernelGen
+    kg = KernelGen()
+
+    await kg._select_skills_by_stage(
+        stage="initial", op_name="matmul_large_k",
+        task_desc=MATMUL_LARGE_K_TASK,
+        verifier_error="", dsl="triton_ascend", backend="ascend", framework="torch",
+    )
+
+    cache = kg._initial_selection_cache
+    assert cache is not None, "initial stage should populate _initial_selection_cache"
+    cached_case_names = [s.name for s in cache.get("case", [])]
+    logger.info(f"[matmul_large_k] LLM selected cases: {cached_case_names}")
+    assert "triton-ascend-case-matmul-large-k" in cached_case_names, \
+        f"Expected 'triton-ascend-case-matmul-large-k' in LLM-selected cases, got: {cached_case_names}"
 
 
 @pytest.mark.level2
