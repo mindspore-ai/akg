@@ -21,6 +21,7 @@
 
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/APSInt.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -383,16 +384,97 @@ static bool canComposeWideningCasts(mlir::Type elemIn, mlir::Type elemMid, mlir:
   return false;
 }
 
+/// Read mfuse.permute's I64 array attribute into `out` (Torch-style: output dim i comes from input dim perm[i]).
+static bool readPermI64(PermuteOp op, llvm::SmallVectorImpl<int64_t> &out) {
+  auto permAttr = op.getPermAttr();
+  if (!permAttr) {
+    return false;
+  }
+  out.clear();
+  for (mlir::Attribute a : permAttr.getValue()) {
+    auto ia = mlir::dyn_cast<mlir::IntegerAttr>(a);
+    if (!ia) {
+      return false;
+    }
+    out.push_back(ia.getInt());
+  }
+  return true;
+}
+
+/// True when `perm` lists each axis in [0, rank) exactly once (valid Torch-style perm).
+static bool isValidPermutation(llvm::ArrayRef<int64_t> perm, int64_t rank) {
+  if (rank < 0 || perm.size() != static_cast<size_t>(rank)) {
+    return false;
+  }
+  llvm::SmallVector<bool> seen(rank, false);
+  for (int64_t ax : perm) {
+    if (ax < 0 || ax >= rank || seen[static_cast<size_t>(ax)]) {
+      return false;
+    }
+    seen[static_cast<size_t>(ax)] = true;
+  }
+  return true;
+}
+
+static bool isIdentityPermutation(llvm::ArrayRef<int64_t> perm) {
+  for (auto [i, ax] : llvm::enumerate(perm)) {
+    if (ax != static_cast<int64_t>(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
-mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewriter) {
+namespace {
+
+/// Try to commute cast with permute: cast(permute(x)) -> permute(cast(x))
+static mlir::LogicalResult tryCommuteWithPermute(CastOp op, mlir::PatternRewriter &rewriter) {
   mlir::Value input = op.getInput();
   mlir::Value outerRes = op.getResult();
-  mlir::Operation *defOp = input.getDefiningOp();
-  if (!defOp) {
+  auto permOp = mlir::dyn_cast<PermuteOp>(input.getDefiningOp());
+  if (!permOp) {
     return mlir::failure();
   }
-  auto innerCast = mlir::dyn_cast<CastOp>(defOp);
+
+  llvm::SmallVector<int64_t, 8> permVals;
+  if (!readPermI64(permOp, permVals)) {
+    return mlir::failure();
+  }
+
+  mlir::Value x = permOp.getInput();
+  auto xTy = mlir::dyn_cast<mlir::RankedTensorType>(x.getType());
+  auto castOutTy = mlir::dyn_cast<mlir::RankedTensorType>(outerRes.getType());
+  if (!xTy || !castOutTy || xTy.getRank() != castOutTy.getRank()) {
+    return mlir::failure();
+  }
+
+  const int64_t rank = xTy.getRank();
+  if (!isValidPermutation(permVals, rank)) {
+    return mlir::failure();
+  }
+
+  mlir::Type elemOut = castOutTy.getElementType();
+  mlir::Type castOnXTy = CastOp::inferResultType(x, elemOut);
+  auto castOnXRT = mlir::dyn_cast_or_null<mlir::RankedTensorType>(castOnXTy);
+  if (!castOnXRT || castOnXRT.getRank() != rank) {
+    return mlir::failure();
+  }
+
+  mlir::Value castX = rewriter.create<CastOp>(op.getLoc(), x, elemOut).getResult();
+  rewriter.replaceOpWithNewOp<PermuteOp>(op, castOutTy, castX, permOp.getPermAttr());
+  if (permOp->use_empty()) {
+    rewriter.eraseOp(permOp);
+  }
+  return mlir::success();
+}
+
+/// Try to compose cast with inner cast: cast(cast(x)) -> cast(x)
+static mlir::LogicalResult tryComposeWithInnerCast(CastOp op, mlir::PatternRewriter &rewriter) {
+  mlir::Value input = op.getInput();
+  mlir::Value outerRes = op.getResult();
+  auto innerCast = mlir::dyn_cast<CastOp>(input.getDefiningOp());
   if (!innerCast) {
     return mlir::failure();
   }
@@ -416,7 +498,6 @@ mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewri
   }
 
   // Redundant outer: inner result tensor type already equals outer result (e.g. f32→f16→f16).
-  // Not subsumed by canComposeWideningCasts when the first step narrows.
   if (innerRes.getType() == outerRes.getType()) {
     rewriter.replaceOp(op, innerRes);
     return mlir::success();
@@ -431,6 +512,27 @@ mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewri
     }
     return mlir::success();
   }
+  return mlir::failure();
+}
+
+}  // namespace
+
+mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewriter) {
+  mlir::Value input = op.getInput();
+  if (!input.getDefiningOp()) {
+    return mlir::failure();
+  }
+
+  // Try to commute cast with permute
+  if (mlir::succeeded(tryCommuteWithPermute(op, rewriter))) {
+    return mlir::success();
+  }
+
+  // Try to compose cast with inner cast
+  if (mlir::succeeded(tryComposeWithInnerCast(op, rewriter))) {
+    return mlir::success();
+  }
+
   return mlir::failure();
 }
 
@@ -584,6 +686,71 @@ mlir::LogicalResult ReshapeOp::canonicalize(ReshapeOp op, mlir::PatternRewriter 
 
   // Create a new ReshapeOp that directly reshapes the inner ReshapeOp's input to the outer shape
   rewriter.replaceOpWithNewOp<ReshapeOp>(op, op.getResult().getType(), innerReshape.getInput());
+  return mlir::success();
+}
+
+// Canonicalize: drop identity permute; fuse permute(permute(x, inner), outer) -> permute(x, fused) or x.
+mlir::LogicalResult PermuteOp::canonicalize(PermuteOp op, mlir::PatternRewriter &rewriter) {
+  llvm::SmallVector<int64_t, 8> outerPerm;
+  if (!readPermI64(op, outerPerm)) {
+    return mlir::failure();
+  }
+
+  auto inTy = mlir::dyn_cast<mlir::RankedTensorType>(op.getInput().getType());
+  auto outTy = mlir::dyn_cast<mlir::RankedTensorType>(op.getResult().getType());
+  if (!inTy || !outTy) {
+    return mlir::failure();
+  }
+  const int64_t rank = inTy.getRank();
+  if (rank != outTy.getRank() || !isValidPermutation(outerPerm, rank)) {
+    return mlir::failure();
+  }
+
+  if (isIdentityPermutation(outerPerm)) {
+    rewriter.replaceOp(op, op.getInput());
+    return mlir::success();
+  }
+
+  auto inner = op.getInput().getDefiningOp<PermuteOp>();
+  if (!inner) {
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<int64_t, 8> innerPerm;
+  if (!readPermI64(inner, innerPerm)) {
+    return mlir::failure();
+  }
+  auto innerInTy = mlir::dyn_cast<mlir::RankedTensorType>(inner.getInput().getType());
+  auto innerOutTy = mlir::dyn_cast<mlir::RankedTensorType>(inner.getResult().getType());
+  if (!innerInTy || !innerOutTy || innerInTy.getRank() != rank || innerOutTy.getRank() != rank) {
+    return mlir::failure();
+  }
+  if (!isValidPermutation(innerPerm, rank)) {
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<int64_t, 8> fused;
+  fused.reserve(static_cast<size_t>(rank));
+  for (int64_t i = 0; i < rank; ++i) {
+    fused.push_back(innerPerm[static_cast<size_t>(outerPerm[static_cast<size_t>(i)])]);
+  }
+  if (!isValidPermutation(fused, rank)) {
+    return mlir::failure();
+  }
+
+  mlir::Value root = inner.getInput();
+  if (isIdentityPermutation(fused)) {
+    rewriter.replaceOp(op, root);
+    if (inner->use_empty()) {
+      rewriter.eraseOp(inner);
+    }
+    return mlir::success();
+  }
+
+  rewriter.replaceOpWithNewOp<PermuteOp>(op, op.getResult().getType(), root, rewriter.getI64ArrayAttr(fused));
+  if (inner->use_empty()) {
+    rewriter.eraseOp(inner);
+  }
   return mlir::success();
 }
 
