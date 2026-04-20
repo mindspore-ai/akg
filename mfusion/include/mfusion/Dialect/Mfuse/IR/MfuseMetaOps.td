@@ -895,6 +895,29 @@ def Mfuse_ReciprocalOp : Mfuse_Op<"reciprocal", [
   }];
 }
 
+def Mfuse_ReduceMeanOp : Mfuse_ReduceOp<"reduce_mean", [Pure]> {
+  let summary = "Mean operation";
+  let description = [{
+    Computes the mean of tensor elements along specified dimensions.
+    The boolean parameter controls whether to keep dimensions,
+    and the result tensor type specifies the output data type.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64ArrayAttr:$dimensions,
+    BoolAttr:$keepdim
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_ReduceSumOp : Mfuse_ReduceOp<"reduce_sum", [Pure]> {
   let summary = "Sum operation";
   let description = [{

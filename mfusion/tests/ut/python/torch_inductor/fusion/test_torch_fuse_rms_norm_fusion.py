@@ -226,13 +226,15 @@ def test_torch_fuse_rms_norm_no_fusion_wrong_power():
     assert not checker.check_text_contains(
         'torch.operator "torch.npu.npu_rms_norm"'
     ), "RMSNorm with wrong power should not be fused"
-    # Verify the original operations are preserved
+    # Verify the unfused computation remains. mean.dim may be decomposed to sum+div
+    # by the generic pipeline before this fusion test observes the IR.
     assert checker.check_text_contains(
         "torch.aten.pow.Tensor_Scalar"
     ), "pow should be preserved"
-    assert checker.check_text_contains(
-        "torch.aten.mean.dim"
-    ), "mean should be preserved"
+    assert checker.check_text_contains("torch.aten.mean.dim") or (
+        checker.check_text_contains("torch.aten.sum.dim_IntList")
+        and checker.check_text_contains("torch.aten.div.Scalar")
+    ), "mean should remain unfused, either as mean.dim or decomposed sum+div"
     assert checker.check_text_contains(
         "torch.aten.add.Scalar"
     ), "add should be preserved"
