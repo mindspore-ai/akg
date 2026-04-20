@@ -94,10 +94,22 @@ class TaskGenerator:
         logger.info(f"TaskGenerator initialized for {op_name}")
     
     async def _ensure_handwrite_initialized(self) -> None:
-        """确保 handwrite 组件已初始化"""
+        """
+        确保 handwrite 组件已初始化
+
+        注意：只有 default workflow (kernel_designer) 需要 handwrite_suggestions，
+        kernelgen_only_workflow 中的 KernelGen 不使用它（已弃用）。
+        """
         if self._handwrite_initialized:
             return
-        
+
+        # 检查 workflow 类型，kernelgen_only_workflow 不需要 handwrite
+        workflow = self.config.get("default_workflow", "")
+        if workflow == "kernelgen_only_workflow":
+            logger.info("Skipping handwrite initialization for kernelgen_only_workflow (KernelGen uses internal skill selection)")
+            self._handwrite_initialized = True
+            return
+
         try:
             self._handwrite_loader = HandwriteLoader(
                 dsl=self.dsl,
@@ -107,15 +119,15 @@ class TaskGenerator:
                 config=self.config,
             )
             await self._handwrite_loader.select_relevant_pairs()
-            
+
             self._handwrite_sampler = HandwriteSampler(
                 loader=self._handwrite_loader,
                 sample_num=self.gen_config.handwrite_sample_num,
                 decay_rate=self.gen_config.handwrite_decay_rate,
             )
-            
+
             self._handwrite_initialized = True
-            logger.info("Handwrite components initialized")
+            logger.info("Handwrite components initialized for workflow: %s", workflow)
         except Exception as e:
             logger.warning(f"Failed to initialize handwrite components: {e}")
             self._handwrite_initialized = True  # 标记为已初始化，避免重复尝试

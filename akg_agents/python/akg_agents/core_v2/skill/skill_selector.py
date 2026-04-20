@@ -34,12 +34,12 @@
         task_type="document_generation",
         custom_fields={"doc_type": "api", "language": "python"}
     )
-    
+
     # 自定义过滤器
     def doc_filter(skill, context):
         doc_type = context.custom_fields.get("doc_type")
         return skill.metadata.get("doc_types", "").split(",") if doc_type else True
-    
+
     selector = SkillSelector(custom_filters=[doc_filter])
     selected = selector.select(skills, context, llm_func)
 """
@@ -51,6 +51,68 @@ import logging
 from .metadata import SkillMetadata, CATEGORY_GROUPS
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== Arch 到 Hardware 系列的动态映射 ====================
+
+# Arch 前缀到 Hardware 系列的映射规则
+# 规则：910b → Atlas A2, 310p → 300I Duo, 910_93 → Atlas A3, 950 → Atlas A5
+ARCH_PREFIX_TO_HARDWARE = {
+    "ascend910b": "Atlas A2",      # ascend910b1, b2, b2c, b3, b4
+    "ascend910_93": "Atlas A3",    # ascend910_9362, 9372, 9381, 9382, 9391, 9392
+    "ascend950dt": "Atlas A5",     # ascend950dt_95a
+    "ascend950pr": "Atlas A5",     # ascend950pr_950z ~ 9599 (21个型号)
+    "ascend310p": "300I Duo",      # ascend310p3
+}
+
+
+def arch_to_hardware(arch: str) -> str:
+    """
+    将 arch 型号转换为 Hardware 系列名称（动态前缀匹配）
+
+    Args:
+        arch: arch 型号，如 "ascend910b3", "ascend950pr_9572"
+
+    Returns:
+        Hardware 系列名称，如 "Atlas A2", "Atlas A5", "300I Duo"
+        如果无法匹配，返回原 arch 值（CUDA/CPU arch 不需要转换）
+
+    示例：
+        arch_to_hardware("ascend910b3") -> "Atlas A2"
+        arch_to_hardware("ascend950pr_9572") -> "Atlas A5"
+        arch_to_hardware("ascend310p3") -> "300I Duo"
+        arch_to_hardware("a100") -> "a100" (无映射，返回原值)
+    """
+    for prefix, hardware in ARCH_PREFIX_TO_HARDWARE.items():
+        if arch.startswith(prefix):
+            return hardware
+    # 无法匹配（CUDA/CPU arch），返回原值
+    return arch
+
+
+def hardware_to_arch_prefix(hardware: str) -> Optional[str]:
+    """
+    将 Hardware 系列名称反向转换为 arch 前缀（用于 Skill 文档关键词匹配）
+
+    Args:
+        hardware: Hardware 系列名称，如 "Atlas A2", "Atlas A5", "300I Duo"
+
+    Returns:
+        arch 前缀，如 "ascend910b", "ascend950pr"
+        如果无法匹配，返回 None
+
+    示例：
+        hardware_to_arch_prefix("Atlas A2") -> "ascend910b"
+        hardware_to_arch_prefix("Atlas A5") -> "ascend950pr" 或 "ascend950dt"
+        hardware_to_arch_prefix("300I Duo") -> "ascend310p"
+    """
+    # 反向映射（多个 arch 前缀可能对应同一个 hardware）
+    hardware_to_prefixes = {}
+    for prefix, hw in ARCH_PREFIX_TO_HARDWARE.items():
+        if hw not in hardware_to_prefixes:
+            hardware_to_prefixes[hw] = []
+        hardware_to_prefixes[hw].append(prefix)
+    return hardware_to_prefixes.get(hardware, None)
 
 
 def _resolve_include_categories(context: "SelectionContext") -> set:
