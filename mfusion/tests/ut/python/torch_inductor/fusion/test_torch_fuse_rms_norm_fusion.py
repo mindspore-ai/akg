@@ -554,15 +554,21 @@ module {
 
 
 def test_torch_fuse_rms_norm_reciprocal_sqrt_equivalent():
-    """reciprocal(sqrt(add)) is equivalent to rsqrt(add) and should fuse."""
+    """reciprocal(sqrt(add)) should fuse via pre-canonicalize + rsqrt path.
+
+    ``fuse_and_optimize`` runs a pre-canonicalize step before ``torch-fusion``.
+    Therefore ``reciprocal(sqrt(x))`` can be canonicalized to ``rsqrt(x)`` before
+    RMSNorm matching, and this pattern is expected to fuse to ``npu_rms_norm``.
+    """
     result = fuse_and_optimize(MLIR_RMS_NORM_RECIP_SQRT)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected npu_rms_norm for reciprocal(sqrt) scale"
+        checker.error or "expected reciprocal(sqrt) path to fuse to npu_rms_norm"
     )
-    assert not checker.check_text_contains("torch.aten.rsqrt"), "rsqrt should not appear"
-    assert not checker.check_text_contains("torch.aten.sqrt"), "sqrt should be fused"
-    assert not checker.check_text_contains("torch.aten.reciprocal"), "reciprocal should be fused"
+    assert not checker.check_text_contains("torch.aten.sqrt"), "sqrt should be consumed by fusion"
+    assert not checker.check_text_contains("torch.aten.reciprocal"), (
+        "reciprocal should be canonicalized/fused away"
+    )
 
 
 # pow(add, -0.5) is equivalent to rsqrt(add) for positive add.

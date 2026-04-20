@@ -52,7 +52,6 @@ namespace {
 //
 // [3] Inverse scale (one of):
 //     - aten.rsqrt(add)
-//     - reciprocal(aten.sqrt(add))
 //     - pow.Tensor_Scalar(add, -0.5)  with constant exponent -0.5
 //     - div.Tensor(numerator, sqrt(add)): denominator is sqrt(add); numerator is
 //       ones_like(sqrt_out)  or  full_like(sqrt_out, 1)  tied to that sqrt result.
@@ -134,9 +133,8 @@ static bool isOnePointOScalar(Value v) {
 struct MatchState {
   TorchD::AtenMulTensorOp outMul;
   TorchD::AtenMulTensorOp normMul;
-  /// Exactly one inverse-scale group is non-null: rsqrt XOR (reciprocal+sqrt) XOR invPow XOR div(ones,sqrt).
+  /// Exactly one inverse-scale group is non-null: rsqrt XOR invPow XOR div(ones,sqrt).
   TorchD::AtenRsqrtOp rsqrt;
-  TorchD::AtenReciprocalOp reciprocal;
   TorchD::AtenSqrtOp sqrtForRstd;
   TorchD::AtenPowTensorScalarOp invPow;
   TorchD::AtenDivTensorOp divOneOverSqrt;
@@ -230,9 +228,6 @@ static Value getRstdScaleValue(MatchState &st) {
   if (st.rsqrt) {
     return st.rsqrt.getResult();
   }
-  if (st.reciprocal) {
-    return st.reciprocal.getResult();
-  }
   if (st.invPow) {
     return st.invPow.getResult();
   }
@@ -242,10 +237,9 @@ static Value getRstdScaleValue(MatchState &st) {
   return {};
 }
 
-/// Holds one matched inverse-scale branch (rsqrt, reciprocal∘sqrt, pow(,-0.5), or div(ones,sqrt)).
+/// Holds one matched inverse-scale branch (rsqrt, pow(,-0.5), or div(ones,sqrt)).
 struct InverseScaleCapture {
   TorchD::AtenRsqrtOp rsqrt = nullptr;
-  TorchD::AtenReciprocalOp reciprocal = nullptr;
   TorchD::AtenSqrtOp sqrtForRstd = nullptr;
   TorchD::AtenPowTensorScalarOp invPow = nullptr;
   TorchD::AtenDivTensorOp divOneOverSqrt = nullptr;
@@ -256,7 +250,6 @@ struct InverseScaleCapture {
 
 static void copyInverseScaleToMatchState(MatchState &st, const InverseScaleCapture &cap) {
   st.rsqrt = cap.rsqrt;
-  st.reciprocal = cap.reciprocal;
   st.sqrtForRstd = cap.sqrtForRstd;
   st.invPow = cap.invPow;
   st.divOneOverSqrt = cap.divOneOverSqrt;
@@ -311,21 +304,6 @@ static bool tryMatchRsqrt(Value scaleSide, Value xSide, InverseScaleCapture &cap
     return true;
   }
   return false;
-}
-
-static bool tryMatchReciprocalSqrt(Value scaleSide, Value xSide, InverseScaleCapture &cap) {
-  auto rec = scaleSide.getDefiningOp<TorchD::AtenReciprocalOp>();
-  if (!rec) {
-    return false;
-  }
-  auto sqrtOp = stripCasts(rec.getSelf()).getDefiningOp<TorchD::AtenSqrtOp>();
-  if (!sqrtOp) {
-    return false;
-  }
-  cap.reciprocal = rec;
-  cap.sqrtForRstd = sqrtOp;
-  cap.x = xSide;
-  return true;
 }
 
 static bool tryMatchPowNegHalf(Value scaleSide, Value xSide, InverseScaleCapture &cap) {
@@ -385,8 +363,8 @@ static bool tryMatchDivOnesOverSqrt(Value scaleSide, Value xSide, InverseScaleCa
 }
 
 static bool matchInverseScaleOnSides(Value scaleSide, Value xSide, InverseScaleCapture &cap) {
-  return tryMatchRsqrt(scaleSide, xSide, cap) || tryMatchReciprocalSqrt(scaleSide, xSide, cap) ||
-         tryMatchPowNegHalf(scaleSide, xSide, cap) || tryMatchDivOnesOverSqrt(scaleSide, xSide, cap);
+  return tryMatchRsqrt(scaleSide, xSide, cap) || tryMatchPowNegHalf(scaleSide, xSide, cap) ||
+         tryMatchDivOnesOverSqrt(scaleSide, xSide, cap);
 }
 
 static LogicalResult matchInverseScaleToAdd(TorchD::AtenMulTensorOp outMul, Value nABase, Value nBBase, Value nA,
@@ -394,7 +372,7 @@ static LogicalResult matchInverseScaleToAdd(TorchD::AtenMulTensorOp outMul, Valu
                                             PatternRewriter &rewriter) {
   if (!matchInverseScaleOnSides(nABase, nB, cap) && !matchInverseScaleOnSides(nBBase, nA, cap)) {
     return rewriter.notifyMatchFailure(
-        outMul, "norm mul has no rsqrt / reciprocal(sqrt) / pow(,-0.5) / div(ones,sqrt) operand");
+        outMul, "norm mul has no rsqrt / pow(,-0.5) / div(ones,sqrt) operand");
   }
   add = getAddFromInverseScaleCapture(cap);
   if (!add) {
@@ -487,7 +465,6 @@ static void eraseDecomposedChain(const MatchState &st, PatternRewriter &rewriter
   }
   eraseIfDead(st.normMul);
   eraseIfDead(st.rsqrt);
-  eraseIfDead(st.reciprocal);
   eraseIfDead(st.invPow);
   eraseIfDead(st.divOneOverSqrt);
   eraseIfDead(st.onesLikeNumerator);

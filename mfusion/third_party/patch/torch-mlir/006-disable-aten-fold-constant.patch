@@ -1,8 +1,16 @@
 diff --git a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
-index 47bd30d6..3255a8f0 100644
+index 47bd30d6..73505b6c 100644
 --- a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
 +++ b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
-@@ -10680,7 +10680,6 @@ def Torch_AtenOnesOp : Torch_Op<"aten.ones", [
+@@ -2959,6 +2959,7 @@ def Torch_AtenReciprocalOp : Torch_Op<"aten.reciprocal", [
+       printDefaultTorchOp(printer, *this, 1, 1);
+     }
+   }];
++  let hasCanonicalizer = 1;
+ }
+
+ def Torch_AtenReciprocal_Op : Torch_Op<"aten.reciprocal_", [
+@@ -10680,7 +10681,6 @@ def Torch_AtenOnesOp : Torch_Op<"aten.ones", [
        printDefaultTorchOp(printer, *this, 5, 1);
      }
    }];
@@ -10,7 +18,7 @@ index 47bd30d6..3255a8f0 100644
  }
 
  def Torch_AtenNewOnesOp : Torch_Op<"aten.new_ones", [
-@@ -10736,7 +10735,6 @@ def Torch_AtenZerosOp : Torch_Op<"aten.zeros", [
+@@ -10736,7 +10736,6 @@ def Torch_AtenZerosOp : Torch_Op<"aten.zeros", [
        printDefaultTorchOp(printer, *this, 5, 1);
      }
    }];
@@ -18,7 +26,7 @@ index 47bd30d6..3255a8f0 100644
  }
 
  def Torch_AtenNewZerosOp : Torch_Op<"aten.new_zeros", [
-@@ -13775,7 +13773,6 @@ def Torch_AtenFullOp : Torch_Op<"aten.full", [
+@@ -13775,7 +13774,6 @@ def Torch_AtenFullOp : Torch_Op<"aten.full", [
        printDefaultTorchOp(printer, *this, 6, 1);
      }
    }];
@@ -26,24 +34,40 @@ index 47bd30d6..3255a8f0 100644
  }
 
  def Torch_AtenFullLikeOp : Torch_Op<"aten.full_like", [
-@@ -18519,7 +18519,6 @@ def Torch_PrimNumToTensorScalarOp : Torch_Op<"prim.NumToTensor.Scalar", [
-     void PrimNumToTensorScalarOp::print(OpAsmPrinter &printer) {
+@@ -18524,7 +18522,6 @@ def Torch_PrimNumToTensorScalarOp : Torch_Op<"prim.NumToTensor.Scalar", [
        printDefaultTorchOp(printer, *this, 1, 1);
      }
    }];
 -  let hasFolder = 1;
  }
 
-@@ -19111,4 +19108,3 @@ def Torch_TorchvisionNmsOp : Torch_Op<"torchvision.nms", [
-     }
-   }];
- }
--
+ def Torch_PrimMinSelfIntOp : Torch_Op<"prim.min.self_int", [
 diff --git a/lib/Dialect/Torch/IR/TorchOps.cpp b/lib/Dialect/Torch/IR/TorchOps.cpp
-index 8c1e8915..1d64ce8b 100644
+index 8c1e8915..44b8d3bf 100644
 --- a/lib/Dialect/Torch/IR/TorchOps.cpp
 +++ b/lib/Dialect/Torch/IR/TorchOps.cpp
-@@ -2924,7 +2924,18 @@ void AtenMaskedFillTensorOp::getCanonicalizationPatterns(
+@@ -2920,11 +2920,39 @@ void AtenMaskedFillTensorOp::getCanonicalizationPatterns(
+ }
+
+ //===----------------------------------------------------------------------===//
++// AtenReciprocalOp
++//===----------------------------------------------------------------------===//
++
++void AtenReciprocalOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
++                                                   MLIRContext *context) {
++  patterns.add(+[](AtenReciprocalOp op, PatternRewriter &rewriter) {
++    auto sqrtOp = op.getSelf().getDefiningOp<AtenSqrtOp>();
++    if (!sqrtOp)
++      return failure();
++
++    rewriter.replaceOpWithNewOp<AtenRsqrtOp>(op, op.getType(), sqrtOp.getSelf());
++    if (sqrtOp->use_empty())
++      rewriter.eraseOp(sqrtOp);
++    return success();
++  });
++}
++
+ // AtenCloneOp
  //===----------------------------------------------------------------------===//
 
  OpFoldResult AtenCloneOp::fold(FoldAdaptor adaptor) {
@@ -63,7 +87,7 @@ index 8c1e8915..1d64ce8b 100644
    if (getSelf().getType() == getResult().getType() &&
        llvm::dyn_cast<ValueTensorType>(getSelf().getType())) {
      // self should have value semantics
-@@ -4835,130 +4846,6 @@ OpFoldResult AtenItemOp::fold(FoldAdaptor adaptor) {
+@@ -4835,130 +4863,6 @@ OpFoldResult AtenItemOp::fold(FoldAdaptor adaptor) {
    return nullptr;
  }
 
@@ -194,11 +218,10 @@ index 8c1e8915..1d64ce8b 100644
  //===----------------------------------------------------------------------===//
  // AtenCeilFloatOp
  //===----------------------------------------------------------------------===//
-@@ -5026,30 +5026,6 @@
- //===----------------------------------------------------------------------===//
+@@ -5150,29 +5054,6 @@ OpFoldResult PrimMaxIntOp::fold(FoldAdaptor adaptor) {
  // PrimNumToTensorScalarOp
  //===----------------------------------------------------------------------===//
--
+
 -OpFoldResult PrimNumToTensorScalarOp::fold(FoldAdaptor adaptor) {
 -  Attribute a = adaptor.getA();
 -  auto resultTy = dyn_cast<ValueTensorType>(getType());
