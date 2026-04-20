@@ -22,6 +22,7 @@
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/APSInt.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -86,6 +87,37 @@ mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB, bool rhsIs
 
   // Return the type with higher bit width
   return bitWidthA >= bitWidthB ? typeA : typeB;
+}
+
+mlir::LogicalResult verifyReduceDimensions(mlir::Operation *op, mlir::ArrayAttr dimensions) {
+  auto input = op->getOperand(0);
+  auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
+  if (!inputType || !inputType.hasRank()) {
+    return op->emitOpError("input must be a ranked tensor");
+  }
+
+  int64_t rank = inputType.getRank();
+  if (dimensions.empty()) {
+    if (rank == 0) {
+      return mlir::success();
+    }
+    return op->emitOpError("dimensions must not be empty");
+  }
+
+  llvm::DenseSet<int64_t> seenDims;
+  for (auto dimAttr : dimensions.getValue()) {
+    auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();
+    if (dim < 0) {
+      return op->emitOpError("dimensions must be non-negative, got ") << dim;
+    }
+    if (dim >= rank) {
+      return op->emitOpError("dimension out of range, got ") << dim << " for input rank " << rank;
+    }
+    if (!seenDims.insert(dim).second) {
+      return op->emitOpError("duplicate reduction dimensions are not supported, got ") << dim;
+    }
+  }
+  return mlir::success();
 }
 
 }  // namespace
@@ -836,6 +868,33 @@ IMPL_BINARY_OP_FUNCTION(NeOp, false)
 IMPL_BINARY_OP_FUNCTION(PowOp, false)
 IMPL_BINARY_OP_FUNCTION(RealDivOp, false)
 IMPL_BINARY_OP_FUNCTION(SubOp, false)
+
+mlir::Type ReduceMeanOp::inferResultType(mlir::Value input, mlir::ArrayAttr dimensions, mlir::BoolAttr keepdim,
+                                         mlir::Type elementType) {
+  return ReduceOpCommonInfer::inferResultType(input, dimensions, keepdim, elementType);
+}
+
+mlir::FailureOr<mlir::Type> ReduceMeanOp::inferSymbolicShapes(mlir::OpBuilder &builder,
+                                                              const mlir::OperationState &state,
+                                                              mlir::Type resultType) {
+  return ReduceOpCommonInfer::inferSymbolicShapes(builder, state, resultType);
+}
+
+mlir::LogicalResult ReduceMeanOp::verify() {
+  if (failed(verifyReduceDimensions(getOperation(), getDimensions()))) {
+    return mlir::failure();
+  }
+
+  auto resultType = mlir::dyn_cast<mlir::RankedTensorType>(getResult().getType());
+  if (!resultType || !resultType.hasRank()) {
+    return emitOpError("result must be a ranked tensor");
+  }
+
+  if (!mlir::isa<mlir::FloatType>(resultType.getElementType())) {
+    return emitOpError("result element type must be floating point");
+  }
+  return mlir::success();
+}
 
 mlir::Type ReduceSumOp::inferResultType(mlir::Value input, mlir::ArrayAttr dimensions, mlir::BoolAttr keepdim,
                                         mlir::Type elementType) {

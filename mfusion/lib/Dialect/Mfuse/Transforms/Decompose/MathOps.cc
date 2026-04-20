@@ -14,14 +14,55 @@
  * limitations under the License.
  */
 
+#include <limits>
+
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/DecomposePatterns.h"
-#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 
 namespace mlir {
 namespace mfuse {
+namespace {
+FailureOr<int64_t> getStaticReductionSize(RankedTensorType inputType, ArrayAttr dimensions) {
+  int64_t reductionSize = 1;
+  for (auto dimAttr : dimensions.getValue()) {
+    int64_t dim = cast<IntegerAttr>(dimAttr).getInt();
+    int64_t dimSize = inputType.getDimSize(dim);
+    if (dimSize == ShapedType::kDynamic || dimSize <= 0) {
+      return failure();
+    }
+    if (reductionSize > std::numeric_limits<int64_t>::max() / dimSize) {
+      return failure();
+    }
+    reductionSize *= dimSize;
+  }
+  return reductionSize;
+}
+
+FailureOr<Value> materializeScalarTensorConstant(PatternRewriter &rewriter, Location loc, Type elementType,
+                                                 int64_t value) {
+  auto scalarType = RankedTensorType::get({}, elementType);
+  Attribute elementAttr;
+  if (auto floatType = dyn_cast<FloatType>(elementType)) {
+    elementAttr = rewriter.getFloatAttr(floatType, static_cast<double>(value));
+  } else if (auto intType = dyn_cast<IntegerType>(elementType)) {
+    elementAttr = rewriter.getIntegerAttr(intType, value);
+  } else {
+    return failure();
+  }
+
+  auto denseAttr = DenseElementsAttr::get(scalarType, elementAttr);
+  auto constantOp = mfuse::ConstantOp::materialize(rewriter, denseAttr, scalarType, loc);
+  if (!constantOp) {
+    return failure();
+  }
+  return constantOp.getResult();
+}
+}  // namespace
+
 /// OpRewritePattern for decomposing GELU operations
 class GeluDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluOp> {
  public:
@@ -224,6 +265,41 @@ class SigmoidDecomposePattern : public OpRewritePattern<mfuse::AclnnSigmoidOp> {
   }
 };
 
+class ReduceMeanDecomposePattern : public OpRewritePattern<mfuse::ReduceMeanOp> {
+ public:
+  using OpRewritePattern<mfuse::ReduceMeanOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mfuse::ReduceMeanOp meanOp, PatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(meanOp.getInput().getType());
+    auto resultType = dyn_cast<RankedTensorType>(meanOp.getResult().getType());
+    if (!inputType || !resultType) {
+      return failure();
+    }
+
+    auto reductionSizeOr = getStaticReductionSize(inputType, meanOp.getDimensions());
+    if (failed(reductionSizeOr)) {
+      return rewriter.notifyMatchFailure(meanOp, "reduced dimensions must be statically known and positive");
+    }
+
+    Type resultElementType = resultType.getElementType();
+    if (!isa<FloatType>(resultElementType)) {
+      return rewriter.notifyMatchFailure(meanOp, "result element type must be floating point");
+    }
+
+    auto reduceSum =
+      rewriter.create<mfuse::ReduceSumOp>(meanOp.getLoc(), resultType, meanOp.getInput(), meanOp.getDimensions(),
+                                          meanOp.getKeepdimAttr());
+    auto divisorOr = materializeScalarTensorConstant(rewriter, meanOp.getLoc(), resultElementType, *reductionSizeOr);
+    if (failed(divisorOr)) {
+      return rewriter.notifyMatchFailure(meanOp, "failed to materialize mean divisor constant");
+    }
+
+    auto mean = rewriter.create<mfuse::DivOp>(meanOp.getLoc(), resultType, reduceSum.getResult(), *divisorOr);
+    rewriter.replaceOp(meanOp, mean.getResult());
+    return success();
+  }
+};
+
 /// Populate the given pattern set with decompose patterns.
 /// This function registers decompose patterns based on the provided op list.
 void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList) {
@@ -233,6 +309,7 @@ void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vec
   std::map<std::string, PatternFunc> patternMap = {
     {"gelu", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluDecomposePattern>(c); }},
     {"gelubackward", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluBackwardDecomposePattern>(c); }},
+    {"reducemean", [](RewritePatternSet &p, MLIRContext *c) { p.add<ReduceMeanDecomposePattern>(c); }},
     {"tanh", [](RewritePatternSet &p, MLIRContext *c) { p.add<TanhDecomposePattern>(c); }},
     {"sigmoid", [](RewritePatternSet &p, MLIRContext *c) { p.add<SigmoidDecomposePattern>(c); }}};
 

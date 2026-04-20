@@ -539,6 +539,36 @@ class ConvertMfusePermute : public mlir::OpConversionPattern<mlir::mfuse::Permut
   }
 };
 
+struct ConvertMfuseReduceMean : public mlir::OpConversionPattern<mlir::mfuse::ReduceMeanOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::ReduceMeanOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+
+    mlir::Value dimList = buildTorchIntListFromI64ArrayAttr(op.getDimensions(), op.getLoc(), rewriter);
+
+    bool keepdim = op.getKeepdim();
+    mlir::Value keepdimVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), keepdim);
+
+    mlir::Type dtypeType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType()).getElementType();
+    mlir::Value dtypeVal;
+    if (mlir::isa<mlir::NoneType, mlir::mfuse::NoneType, TorchD::NoneType>(dtypeType)) {
+      dtypeVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+    } else {
+      auto dtypeValOrFailure = buildTorchDtypeValue(dtypeType, op.getLoc(), rewriter);
+      if (mlir::failed(dtypeValOrFailure)) {
+        return rewriter.notifyMatchFailure(op, "unsupported dtype for torch scalar type");
+      }
+      dtypeVal = *dtypeValOrFailure;
+    }
+
+    rewriter.replaceOpWithNewOp<TorchD::AtenMeanDimOp>(op, resultType, input, dimList, keepdimVal, dtypeVal);
+    return mlir::success();
+  }
+};
+
 struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::ReduceSumOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -690,6 +720,7 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   patterns.add<ConvertMfuseMatmul>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseMatmulWithBias>(converter, context, kernelGenerator);
   patterns.add<ConvertMfusePermute>(converter, context);
+  patterns.add<ConvertMfuseReduceMean>(converter, context);
   patterns.add<ConvertMfuseReduceSum>(converter, context);
   patterns.add<ConvertMfuseReshape>(converter, context);
 }
