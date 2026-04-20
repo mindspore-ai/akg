@@ -515,13 +515,6 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
 }
 
 std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup) {
-  if (oldGroup->groupTemplate == OperatorTemplate::Reduction) {
-    return std::make_pair(newGroup, oldGroup);
-  }
-  if (newGroup->groupTemplate == OperatorTemplate::Reduction) {
-    return std::make_pair(oldGroup, newGroup);
-  }
-
   bool oldHasChild = false;
   bool newHasChild = false;
   for (auto prevPlan : fusionPlans) {
@@ -676,22 +669,6 @@ void FusionAnalyzer::setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &old
 
   // Update oldPlan to point to srcGroup
   updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, srcGroup->groupId, srcGroup->rootId);
-
-  // Link all source groups to destination group, but skip oldPlan which was
-  // intentionally updated to point to srcGroup in the step above.
-  // Collect plans to update first to avoid iterator invalidation
-  std::vector<std::pair<unsigned, unsigned>> plansToUpdate;
-  for (const auto &plan : fusionPlans) {
-    if (plan.fusedGroup.to == srcGroup->groupId &&
-        !(plan.fusedGroup.from == oldPlan.fusedGroup.from && plan.fusedGroup.to == oldPlan.fusedGroup.to)) {
-      plansToUpdate.emplace_back(plan.fusedGroup.from, plan.fusedGroup.to);
-    }
-  }
-
-  // Update collected plans
-  for (const auto &[fromId, oldToId] : plansToUpdate) {
-    updateFusionPlanByGroup(fromId, oldToId, dstGroup->groupId, fusePlan.fusedBand.to);
-  }
 }
 
 /*

@@ -43,10 +43,6 @@ namespace mlir {
 namespace mlir {
 namespace {
 
-// ============================================================================
-// Constants & Types
-// ============================================================================
-
 // Sentinel for AccessInfo::dimMapping: the alloc dimension has no corresponding
 // access index (e.g., a size-1 dim absorbed during collapse_shape).
 static constexpr int kDimAbsorbed = -1;
@@ -58,10 +54,6 @@ struct AccessInfo {
   // reshape (e.g., a size-1 dim merged in collapse_shape).
   SmallVector<int> dimMapping;
 };
-
-// ============================================================================
-// Index & Loop Utilities
-// ============================================================================
 
 static bool isAccessOp(Operation *op) {
   return isa<affine::AffineLoadOp, affine::AffineStoreOp, memref::LoadOp, memref::StoreOp>(op);
@@ -100,13 +92,47 @@ static Value getAccessMemRef(Operation *op) {
 }
 
 // ============================================================================
-// Dimension Mapping Through Reshape Ops
-//
-// When traversing from an alloc through reshape ops (collapse_shape /
-// expand_shape) to terminal access ops, we track how each alloc dimension
-// maps to the current memref's dimensions.  These helpers compute the new
-// mapping after passing through a reshape.
+// AllocBufferShrinkPass
 // ============================================================================
+
+struct AllocBufferShrinkPass : public AllocBufferShrinkBase<AllocBufferShrinkPass> {
+ public:
+  void runOnOperation() override;
+
+ private:
+  unsigned rank = 0;
+  SmallVector<bool> shrinkDims;
+  SmallVector<Operation *> dimLoops;
+  SmallVector<AccessInfo> accessInfos;
+  SmallVector<Operation *> viewOps;
+  DenseMap<Value, Value> replacementMap;
+  Value zeroIdx;
+
+  // Collection
+  bool computeCollapseMapping(MemRefType srcType, ArrayRef<ReassociationIndices> reassociation,
+                              ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping);
+  bool computeExpandMapping(MemRefType resultType, ArrayRef<ReassociationIndices> reassociation,
+                            ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping);
+  bool collectAccessOpsRecursive(Value memref, SmallVector<int> currentMapping);
+
+  // Analysis
+  bool processAlloc(memref::AllocOp allocOp);
+  bool allAccessMapsAreIdentity();
+  Operation *findCommonLoopForDim(unsigned d);
+  void analyzeShrinkableDims(MemRefType memrefType);
+  void validateSubviewOffsets();
+
+  // Transformation
+  Attribute updateMemSpaceForShrink(Attribute memorySpace);
+  memref::AllocOp createShrunkAlloc(memref::AllocOp allocOp, MemRefType memrefType);
+  void rebuildViewChain(memref::AllocOp oldAlloc, memref::AllocOp newAlloc);
+  void rebuildSubView(memref::SubViewOp subviewOp);
+  void rebuildCollapseShape(memref::CollapseShapeOp collapseOp);
+  void rebuildExpandShape(memref::ExpandShapeOp expandOp);
+  void rebuildMemorySpaceCast(memref::MemorySpaceCastOp castOp);
+  void rewriteAccessOps();
+  void eraseOldOps(memref::AllocOp allocOp);
+};
 
 // Compute dimension mapping through a collapse_shape.
 //
@@ -116,10 +142,10 @@ static Value getAccessMemRef(Operation *op) {
 //   - Multi-dim group, size-1 d  → absorbed (index is implicitly 0).
 //   - Multi-dim group, d is the only non-unit dim → maps to group index.
 //   - Otherwise                  → too complex, return false.
-static bool computeCollapseMapping(MemRefType srcType, ArrayRef<ReassociationIndices> reassociation, unsigned allocRank,
-                                   ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
-  newMapping.assign(allocRank, kDimAbsorbed);
-  for (unsigned d = 0; d < allocRank; d++) {
+bool AllocBufferShrinkPass::computeCollapseMapping(MemRefType srcType, ArrayRef<ReassociationIndices> reassociation,
+                                                   ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
+  newMapping.assign(rank, kDimAbsorbed);
+  for (unsigned d = 0; d < rank; d++) {
     if (currentMapping[d] == kDimAbsorbed) continue;
     int64_t srcDim = currentMapping[d];
 
@@ -156,10 +182,10 @@ static bool computeCollapseMapping(MemRefType srcType, ArrayRef<ReassociationInd
 //   - Multi-dim group, one non-unit r  → maps to that result dim.
 //   - Multi-dim group, all unit        → absorbed.
 //   - Otherwise                        → too complex, return false.
-static bool computeExpandMapping(MemRefType resultType, ArrayRef<ReassociationIndices> reassociation,
-                                 unsigned allocRank, ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
-  newMapping.assign(allocRank, kDimAbsorbed);
-  for (unsigned d = 0; d < allocRank; d++) {
+bool AllocBufferShrinkPass::computeExpandMapping(MemRefType resultType, ArrayRef<ReassociationIndices> reassociation,
+                                                 ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
+  newMapping.assign(rank, kDimAbsorbed);
+  for (unsigned d = 0; d < rank; d++) {
     if (currentMapping[d] == kDimAbsorbed) continue;
     int64_t srcDim = currentMapping[d];
     if (srcDim >= static_cast<int64_t>(reassociation.size())) return false;
@@ -184,17 +210,12 @@ static bool computeExpandMapping(MemRefType resultType, ArrayRef<ReassociationIn
   return true;
 }
 
-// ============================================================================
-// View Chain Traversal
-// ============================================================================
-
 // Recursively trace through view-like ops to collect terminal access ops
 // (with their dimension mappings) and intermediate view ops.
 //
 // Supported view ops: SubViewOp (same-rank, unit-stride), CollapseShapeOp,
 // ExpandShapeOp, MemorySpaceCastOp.  Returns false on unsupported users.
-static bool collectAccessOpsRecursive(Value memref, unsigned allocRank, SmallVector<int> currentMapping,
-                                      SmallVectorImpl<AccessInfo> &accessInfos, SmallVectorImpl<Operation *> &viewOps) {
+bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<int> currentMapping) {
   for (auto *user : memref.getUsers()) {
     if (isAccessOp(user)) {
       accessInfos.push_back({user, SmallVector<int>(currentMapping)});
@@ -207,7 +228,7 @@ static bool collectAccessOpsRecursive(Value memref, unsigned allocRank, SmallVec
     if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
       auto sourceRank = subviewOp.getSourceType().getRank();
       auto targetRank = subviewOp.getType().getRank();
-      if (sourceRank != targetRank || targetRank != allocRank) return false;
+      if (sourceRank != targetRank || targetRank != rank) return false;
       auto strides = subviewOp.getStaticStrides();
       if (!llvm::all_of(strides, [](int64_t s) { return s == 1; })) {
         return false;
@@ -216,13 +237,13 @@ static bool collectAccessOpsRecursive(Value memref, unsigned allocRank, SmallVec
       nextValue = subviewOp.getResult();
 
     } else if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(user)) {
-      if (!computeCollapseMapping(collapseOp.getSrcType(), collapseOp.getReassociationIndices(), allocRank,
-                                  currentMapping, newMapping))
+      if (!computeCollapseMapping(collapseOp.getSrcType(), collapseOp.getReassociationIndices(), currentMapping,
+                                  newMapping))
         return false;
       nextValue = collapseOp.getResult();
 
     } else if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(user)) {
-      if (!computeExpandMapping(expandOp.getResultType(), expandOp.getReassociationIndices(), allocRank, currentMapping,
+      if (!computeExpandMapping(expandOp.getResultType(), expandOp.getReassociationIndices(), currentMapping,
                                 newMapping))
         return false;
       nextValue = expandOp.getResult();
@@ -236,24 +257,20 @@ static bool collectAccessOpsRecursive(Value memref, unsigned allocRank, SmallVec
     }
 
     viewOps.push_back(user);
-    if (!collectAccessOpsRecursive(nextValue, allocRank, newMapping, accessInfos, viewOps)) return false;
+    if (!collectAccessOpsRecursive(nextValue, newMapping)) return false;
   }
   return true;
 }
 
-// ============================================================================
-// SymShapeAttr Update
-// ============================================================================
-
 // Update SymShapeAttr inside a memory-space dictionary: shrunk dimensions
 // get their symbolic name replaced with "1".
-static Attribute updateMemSpaceForShrink(Attribute memorySpace, ArrayRef<bool> shrinkDims, unsigned rank,
-                                         MLIRContext *context) {
+Attribute AllocBufferShrinkPass::updateMemSpaceForShrink(Attribute memorySpace) {
   if (!memorySpace) return memorySpace;
   auto dictAttr = dyn_cast<DictionaryAttr>(memorySpace);
   if (!dictAttr) return memorySpace;
   auto symShapeAttr = dictAttr.getAs<ArrayAttr>("SymShapeAttr");
   if (!symShapeAttr || symShapeAttr.size() != rank) return memorySpace;
+  auto *context = &getContext();
 
   SmallVector<Attribute> newSymShapes;
   for (unsigned d = 0; d < rank; d++)
@@ -269,44 +286,8 @@ static Attribute updateMemSpaceForShrink(Attribute memorySpace, ArrayRef<bool> s
   return DictionaryAttr::get(context, entries);
 }
 
-// ============================================================================
-// AllocBufferShrinkPass
-// ============================================================================
-
-struct AllocBufferShrinkPass : public AllocBufferShrinkBase<AllocBufferShrinkPass> {
- public:
-  void runOnOperation() override;
-
- private:
-  // Per-alloc state, reset at the beginning of each processAlloc() call.
-  unsigned rank = 0;
-  SmallVector<bool> shrinkDims;
-  SmallVector<Operation *> dimLoops;
-  SmallVector<AccessInfo> accessInfos;
-  SmallVector<Operation *> viewOps;
-  DenseMap<Value, Value> replacementMap;
-  Value zeroIdx;
-
-  // --- Analysis ---
-  bool processAlloc(memref::AllocOp allocOp);
-  bool allAccessMapsAreIdentity();
-  Operation *findCommonLoopForDim(unsigned d);
-  void analyzeShrinkableDims(MemRefType memrefType);
-  void validateSubviewOffsets();
-
-  // --- Transformation ---
-  memref::AllocOp createShrunkAlloc(memref::AllocOp allocOp, MemRefType memrefType);
-  void rebuildViewChain(memref::AllocOp oldAlloc, memref::AllocOp newAlloc);
-  void rebuildSubView(memref::SubViewOp subviewOp);
-  void rebuildCollapseShape(memref::CollapseShapeOp collapseOp);
-  void rebuildExpandShape(memref::ExpandShapeOp expandOp);
-  void rebuildMemorySpaceCast(memref::MemorySpaceCastOp castOp);
-  void rewriteAccessOps();
-  void eraseOldOps(memref::AllocOp allocOp);
-};
-
-// --- Analysis ---------------------------------------------------------------
-
+// Check that all affine access ops use identity maps (non-identity maps
+// would require composing the shrink with the map, which is not supported).
 bool AllocBufferShrinkPass::allAccessMapsAreIdentity() {
   for (auto &info : accessInfos) {
     if (auto loadOp = dyn_cast<affine::AffineLoadOp>(info.op)) {
@@ -349,6 +330,8 @@ Operation *AllocBufferShrinkPass::findCommonLoopForDim(unsigned d) {
   return commonLoop;
 }
 
+// For each dimension, determine whether it can be shrunk to size 1.
+// A dimension is shrinkable if all accesses index it with the same loop IV.
 void AllocBufferShrinkPass::analyzeShrinkableDims(MemRefType memrefType) {
   auto shape = memrefType.getShape();
   shrinkDims.assign(rank, false);
@@ -389,16 +372,15 @@ void AllocBufferShrinkPass::validateSubviewOffsets() {
   }
 }
 
-// --- Transformation ---------------------------------------------------------
-
+// Create a new alloc with shrunk dimensions replaced by size 1, preserving
+// alignment and updating SymShapeAttr in the memory space.
 memref::AllocOp AllocBufferShrinkPass::createShrunkAlloc(memref::AllocOp allocOp, MemRefType memrefType) {
-  auto *context = &getContext();
   auto shape = memrefType.getShape();
 
   SmallVector<int64_t> newShape;
   for (unsigned d = 0; d < rank; d++) newShape.push_back(shrinkDims[d] ? 1 : shape[d]);
 
-  auto newMemorySpace = updateMemSpaceForShrink(memrefType.getMemorySpace(), shrinkDims, rank, context);
+  auto newMemorySpace = updateMemSpaceForShrink(memrefType.getMemorySpace());
   auto newType = MemRefType::get(newShape, memrefType.getElementType(), memrefType.getLayout(), newMemorySpace);
 
   OpBuilder builder(allocOp);
@@ -407,6 +389,7 @@ memref::AllocOp AllocBufferShrinkPass::createShrunkAlloc(memref::AllocOp allocOp
   return newAlloc;
 }
 
+// Rebuild a SubViewOp: shrunk dimensions get their size clamped to 1.
 void AllocBufferShrinkPass::rebuildSubView(memref::SubViewOp subviewOp) {
   Value newSource = replacementMap.lookup(subviewOp.getSource());
   if (!newSource) return;
@@ -423,6 +406,7 @@ void AllocBufferShrinkPass::rebuildSubView(memref::SubViewOp subviewOp) {
   replacementMap[subviewOp.getResult()] = newSubview.getResult();
 }
 
+// Rebuild a CollapseShapeOp on the shrunk source, reusing reassociation indices.
 void AllocBufferShrinkPass::rebuildCollapseShape(memref::CollapseShapeOp collapseOp) {
   Value newSource = replacementMap.lookup(collapseOp.getSrc());
   if (!newSource) return;
@@ -433,6 +417,8 @@ void AllocBufferShrinkPass::rebuildCollapseShape(memref::CollapseShapeOp collaps
   replacementMap[collapseOp.getResult()] = newCollapse.getResult();
 }
 
+// Rebuild an ExpandShapeOp: if a source dim was shrunk to 1, all its result
+// dims are also set to 1.
 void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
   Value newSource = replacementMap.lookup(expandOp.getSrc());
   if (!newSource) return;
@@ -460,15 +446,15 @@ void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
   replacementMap[expandOp.getResult()] = newExpand.getResult();
 }
 
+// Rebuild a MemorySpaceCastOp, updating SymShapeAttr for shrunk dims.
 void AllocBufferShrinkPass::rebuildMemorySpaceCast(memref::MemorySpaceCastOp castOp) {
   Value newSource = replacementMap.lookup(castOp.getSource());
   if (!newSource) return;
 
-  auto *context = &getContext();
   auto newSourceType = dyn_cast<MemRefType>(newSource.getType());
   auto oldResultType = dyn_cast<MemRefType>(castOp.getResult().getType());
 
-  auto targetMemSpace = updateMemSpaceForShrink(oldResultType.getMemorySpace(), shrinkDims, rank, context);
+  auto targetMemSpace = updateMemSpaceForShrink(oldResultType.getMemorySpace());
   auto newResultType = MemRefType::get(newSourceType.getShape(), newSourceType.getElementType(),
                                        newSourceType.getLayout(), targetMemSpace);
 
@@ -477,6 +463,8 @@ void AllocBufferShrinkPass::rebuildMemorySpaceCast(memref::MemorySpaceCastOp cas
   replacementMap[castOp.getResult()] = newCast.getResult();
 }
 
+// Walk the view chain and rebuild each op on the new (shrunk) alloc,
+// populating replacementMap from old results to new results.
 void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::AllocOp newAlloc) {
   replacementMap.clear();
   replacementMap[oldAlloc.getResult()] = newAlloc.getResult();
@@ -493,6 +481,8 @@ void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::A
   }
 }
 
+// Rewrite all load/store ops: replace the memref with the shrunk version
+// and substitute zero for indices on shrunk dimensions.
 void AllocBufferShrinkPass::rewriteAccessOps() {
   for (auto &info : accessInfos) {
     Value oldMemref = getAccessMemRef(info.op);
@@ -533,6 +523,7 @@ void AllocBufferShrinkPass::rewriteAccessOps() {
   }
 }
 
+// Erase the old view chain ops (in reverse order) and the alloc if they are dead.
 void AllocBufferShrinkPass::eraseOldOps(memref::AllocOp allocOp) {
   for (auto it = viewOps.rbegin(); it != viewOps.rend(); ++it) {
     if ((*it)->use_empty()) (*it)->erase();
@@ -540,8 +531,8 @@ void AllocBufferShrinkPass::eraseOldOps(memref::AllocOp allocOp) {
   if (allocOp->use_empty()) allocOp->erase();
 }
 
-// --- Entry Points -----------------------------------------------------------
-
+// Main per-alloc entry point.  Analyzes one alloc to find shrinkable
+// dimensions, then creates a smaller alloc and rewrites all uses.
 bool AllocBufferShrinkPass::processAlloc(memref::AllocOp allocOp) {
   auto memrefType = allocOp.getType();
   rank = memrefType.getRank();
@@ -552,7 +543,7 @@ bool AllocBufferShrinkPass::processAlloc(memref::AllocOp allocOp) {
   viewOps.clear();
   SmallVector<int> identityMapping(rank);
   for (unsigned i = 0; i < rank; i++) identityMapping[i] = static_cast<int>(i);
-  if (!collectAccessOpsRecursive(allocOp.getResult(), rank, identityMapping, accessInfos, viewOps)) return false;
+  if (!collectAccessOpsRecursive(allocOp.getResult(), identityMapping)) return false;
   if (accessInfos.empty()) return false;
   if (!allAccessMapsAreIdentity()) return false;
 
