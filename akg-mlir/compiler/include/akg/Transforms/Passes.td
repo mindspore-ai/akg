@@ -72,6 +72,11 @@ def AllocBufferShrink : Pass<"alloc-buffer-shrink"> {
   let constructor = "mlir::createAllocBufferShrinkPass()";
 }
 
+def SubviewAllocElim : Pass<"subview-alloc-elim"> {
+  let summary = "Eliminate temporary alloc buffers used by subview partitions via store-load forwarding";
+  let constructor = "mlir::createSubviewAllocElimPass()";
+}
+
 def PromoteTempBuffer : Pass<"promote-temp-buffer"> {
   let summary = "Promote temp buffer to gpu's workgroup/private address";
   let constructor = "mlir::createPromoteTempBufferPass()";
