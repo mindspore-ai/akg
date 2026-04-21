@@ -24,7 +24,7 @@ from ut_utils.mlir_checker import MlirChecker
 
 # Conv2D Cast fusion: Conv2D (f16) + to.dtype (f32) -> Conv2D with f32 output.
 # Torch MLIR: convolution (f16) -> to.dtype (f32). After convert-torch-to-mfuse and mfuse-fusion,
-# the cast should be eliminated (mfuse.conv2d directly produces f32 or torch.aten.to.dtype is gone).
+# the cast should be eliminated (mfuse.aclnn.conv2d directly produces f32 or torch.aten.to.dtype is gone).
 MLIR_CONV2D_CAST = r"""
 module {
   func.func @main(%arg0: !torch.vtensor<[1,2,4,4],f16>, %arg1: !torch.vtensor<[4,2,2,2],f16>) -> !torch.vtensor<[1,4,3,3],f32> attributes {torch.assume_strict_symbolic_shapes} {
@@ -146,4 +146,6 @@ def test_conv2d_cast_fusion_with_conv_two_uses():
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.convolution"), checker.error or "convolution should exist"
     # The conv->cast branch is fused (that to.dtype is eliminated); the mul->to.dtype path remains.
-    assert checker.check_text_contains("torch.operator \"torch.npu._npu_dtype_cast\""), checker.error or "to.dtype after mul should remain"
+    assert checker.check_text_contains(
+        'torch.operator "torch.npu._npu_dtype_cast"'
+    ), checker.error or "to.dtype after mul should remain"

@@ -40,7 +40,8 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
         // Conv-related fusion passes:
         {"fuse-biasadd-conv", []() { return createFuseBiasaddConvPass(); }},
         {"fuse-conv2d-cast", []() { return createFuseConv2DCastPass(); }},
-
+        {"fuse-batch-norm", []() { return createFuseBatchNormPass(); }},
+        {"fuse-conv-batchnorm", []() { return createFuseConvBatchNormPass(); }},
         // MatMul-related fusion passes (order by dependency):
         // FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
         // FuseMatMulBiasAdd: matmul/batch_matmul+add(bias) -> matmul_with_bias;
