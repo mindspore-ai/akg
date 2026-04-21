@@ -260,15 +260,25 @@ def Mfuse_CeilOp : Mfuse_Op<"ceil", [
 }
 
 def Mfuse_Conv2DOp : Mfuse_Op<"conv2d", [Pure]> {
-  let summary = "2D convolution of input with weight.";
+  let summary = "2D convolution (NCHW); hyper-parameters match torch.aten.convolution / CANN aclnnConvolution.";
   let description = [{
     Performs 2D convolution: input (NCHW) and weight (KCHW) produce output (NKHW').
-    Used for Conv2D+Cast fusion when Conv2D output is f16 and Cast target is f32.
+    Spatial lists are two integers `[H, W]`. Defaults stride=[1,1], padding=[0,0],
+    dilation=[1,1], output_padding=[0,0], groups=1, transposed=false preserve the
+    historical narrow `mfuse.conv2d` behavior and remain the shape used by Conv+Cast fusion.
+
+    Full-parameter graphs use the same op with non-default attributes.
   }];
 
   let arguments = (ins
     AnyRankedTensor:$input,
-    AnyRankedTensor:$weight
+    AnyRankedTensor:$weight,
+    I64ArrayAttr:$stride,
+    I64ArrayAttr:$padding,
+    I64ArrayAttr:$dilation,
+    BoolAttr:$transposed,
+    I64ArrayAttr:$output_padding,
+    I64Attr:$groups
   );
 
   let results = (outs AnyRankedTensor:$result);
@@ -276,19 +286,34 @@ def Mfuse_Conv2DOp : Mfuse_Op<"conv2d", [Pure]> {
   let assemblyFormat = [{
     $input `,` $weight attr-dict `:` functional-type(operands, results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$input, "::mlir::Value":$weight), [{
+      build($_builder, $_state, resultType, input, weight, $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getBoolAttr(false), $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64IntegerAttr(1));
+    }]>
+  ];
 }
 
 def Mfuse_Conv2DWithBiasOp : Mfuse_Op<"conv2d_with_bias", [Pure]> {
-  let summary = "2D convolution of input with weight and bias.";
+  let summary = "2D convolution with bias; same hyper-parameters as mfuse.conv2d.";
   let description = [{
     Performs 2D convolution and adds bias: result = conv2d(input, weight) + broadcast(bias).
-    Bias is 1D (output channels) and broadcasts to NCHW output.
+    Bias is 1D (output channels) and broadcasts to NCHW output. Hyper-parameters match
+    `mfuse.conv2d` and `torch.aten.convolution`.
   }];
 
   let arguments = (ins
     AnyRankedTensor:$input,
     AnyRankedTensor:$weight,
-    AnyRankedTensor:$bias
+    AnyRankedTensor:$bias,
+    I64ArrayAttr:$stride,
+    I64ArrayAttr:$padding,
+    I64ArrayAttr:$dilation,
+    BoolAttr:$transposed,
+    I64ArrayAttr:$output_padding,
+    I64Attr:$groups
   );
 
   let results = (outs AnyRankedTensor:$result);
@@ -296,6 +321,14 @@ def Mfuse_Conv2DWithBiasOp : Mfuse_Op<"conv2d_with_bias", [Pure]> {
   let assemblyFormat = [{
     $input `,` $weight `,` $bias attr-dict `:` functional-type(operands, results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$input, "::mlir::Value":$weight, "::mlir::Value":$bias), [{
+      build($_builder, $_state, resultType, input, weight, bias, $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getBoolAttr(false), $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64IntegerAttr(1));
+    }]>
+  ];
 }
 
 def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure, SameOperandsAndResultElementType]> {

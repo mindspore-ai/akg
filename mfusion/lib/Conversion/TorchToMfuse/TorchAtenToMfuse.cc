@@ -137,54 +137,101 @@ constexpr int64_t kConvPaddingDefault = 0;
 constexpr int64_t kConvDilationDefault = 1;
 constexpr int64_t kConvOutputPaddingDefault = 0;
 
-/// Returns failure and notifies if listVal is not a 2-element list of constant ints [e0, e1].
-static LogicalResult checkConvParamList2(TorchD::AtenConvolutionOp op, ConversionPatternRewriter &rewriter,
-                                         Value listVal, int64_t e0, int64_t e1, StringRef failureMsg) {
+/// Returns failure and notifies if listVal is not a 2-element list of constant ints; on success
+/// writes the two values to out0/out1 (2D spatial conv lists).
+static LogicalResult extractConvParamList2(TorchD::AtenConvolutionOp op, ConversionPatternRewriter &rewriter,
+                                           Value listVal, int64_t &out0, int64_t &out1) {
   llvm::SmallVector<Value, 2> elts;
   if (!TorchD::getListConstructElements(listVal, elts) || elts.size() != mfuse::kDim2) {
-    return rewriter.notifyMatchFailure(op, failureMsg);
+    return rewriter.notifyMatchFailure(op, "conv spatial param list must be a 2-element constant int list");
   }
-  int64_t v0 = 0, v1 = 0;
-  if (!matchPattern(elts[0], TorchD::m_TorchConstantInt(&v0)) ||
-      !matchPattern(elts[1], TorchD::m_TorchConstantInt(&v1)) || v0 != e0 || v1 != e1) {
-    return rewriter.notifyMatchFailure(op, failureMsg);
+  if (!matchPattern(elts[0], TorchD::m_TorchConstantInt(&out0)) ||
+      !matchPattern(elts[1], TorchD::m_TorchConstantInt(&out1))) {
+    return rewriter.notifyMatchFailure(op, "conv spatial param list must be constant ints");
   }
   return success();
 }
 
-/// Convert torch.aten.convolution (no bias, default stride/padding/dilation)
-/// to mfuse.conv2d. Only matches when bias is None and stride=[1,1],
-/// padding=[0,0], dilation=[1,1], output_padding=[0,0], groups=1, transposed=false.
+static LogicalResult extractAtenConvolutionHyperParams(TorchD::AtenConvolutionOp op,
+                                                       ConversionPatternRewriter &rewriter, int64_t &groups,
+                                                       bool &transposed, int64_t &s0, int64_t &s1, int64_t &p0,
+                                                       int64_t &p1, int64_t &d0, int64_t &d1, int64_t &o0,
+                                                       int64_t &o1) {
+  groups = 0;
+  if (!matchPattern(op.getGroups(), TorchD::m_TorchConstantInt(&groups)) || groups < 1) {
+    return rewriter.notifyMatchFailure(op, "groups must be a constant positive int");
+  }
+  transposed = false;
+  if (!matchPattern(op.getTransposed(), TorchD::m_TorchConstantBool(&transposed))) {
+    return rewriter.notifyMatchFailure(op, "transposed must be a constant bool");
+  }
+  s0 = s1 = p0 = p1 = d0 = d1 = o0 = o1 = 0;
+  if (failed(extractConvParamList2(op, rewriter, op.getStride(), s0, s1))) {
+    return failure();
+  }
+  if (failed(extractConvParamList2(op, rewriter, op.getPadding(), p0, p1))) {
+    return failure();
+  }
+  if (failed(extractConvParamList2(op, rewriter, op.getDilation(), d0, d1))) {
+    return failure();
+  }
+  if (failed(extractConvParamList2(op, rewriter, op.getOutputPadding(), o0, o1))) {
+    return failure();
+  }
+  return success();
+}
+
+static bool isNarrowDefaultMetaConv2d(int64_t groups, bool transposed, int64_t s0, int64_t s1, int64_t p0, int64_t p1,
+                                      int64_t d0, int64_t d1, int64_t o0, int64_t o1, bool noBias) {
+  return noBias && groups == kConvGroupsDefault && !transposed && s0 == kConvStrideDefault &&
+         s1 == kConvStrideDefault &&
+         p0 == kConvPaddingDefault && p1 == kConvPaddingDefault && d0 == kConvDilationDefault &&
+         d1 == kConvDilationDefault && o0 == kConvOutputPaddingDefault && o1 == kConvOutputPaddingDefault;
+}
+
+template <typename ConvolutionAdaptor>
+static LogicalResult replaceAtenConvolutionWithAclnn(TorchD::AtenConvolutionOp op, ConvolutionAdaptor adaptor,
+                                                     ConversionPatternRewriter &rewriter, RankedTensorType resultType,
+                                                     int64_t groups, bool transposed, int64_t s0, int64_t s1,
+                                                     int64_t p0, int64_t p1, int64_t d0, int64_t d1, int64_t o0,
+                                                     int64_t o1, bool noBias) {
+  Value input = adaptor.getInput();
+  Value weight = adaptor.getWeight();
+  if (isNarrowDefaultMetaConv2d(groups, transposed, s0, s1, p0, p1, d0, d1, o0, o1, noBias)) {
+    rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DOp>(op, resultType, input, weight);
+    return success();
+  }
+  auto strideAttr = rewriter.getI64ArrayAttr({s0, s1});
+  auto paddingAttr = rewriter.getI64ArrayAttr({p0, p1});
+  auto dilationAttr = rewriter.getI64ArrayAttr({d0, d1});
+  auto outputPaddingAttr = rewriter.getI64ArrayAttr({o0, o1});
+  auto transposedAttr = rewriter.getBoolAttr(transposed);
+  auto groupsAttr = rewriter.getI64IntegerAttr(groups);
+  if (noBias) {
+    rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DOp>(op, resultType, input, weight, strideAttr, paddingAttr,
+                                                             dilationAttr, transposedAttr, outputPaddingAttr,
+                                                             groupsAttr);
+    return success();
+  }
+  Value bias = adaptor.getBias();
+  rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DWithBiasOp>(
+    op, resultType, input, weight, bias, strideAttr, paddingAttr, dilationAttr, transposedAttr, outputPaddingAttr,
+    groupsAttr);
+  return success();
+}
+
+/// Convert torch.aten.convolution to mfuse.aclnn.conv2d / mfuse.aclnn.conv2d_with_bias (rank-4, 2-element
+/// spatial lists). Narrow default hyper-parameters use the 2/3-operand builders; otherwise full
+/// attributes are set (aligned with CANN aclnnConvolution / torch.aten.convolution).
 struct ConvertAtenConvolution : public OpConversionPattern<TorchD::AtenConvolutionOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(TorchD::AtenConvolutionOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (!isa<TorchD::NoneType>(op.getBias().getType())) {
-      return rewriter.notifyMatchFailure(op, "convolution must have no bias (None)");
-    }
     int64_t groups = 0;
-    if (!matchPattern(op.getGroups(), TorchD::m_TorchConstantInt(&groups)) || groups != kConvGroupsDefault) {
-      return rewriter.notifyMatchFailure(op, "groups must be 1");
-    }
-    bool transposed = true;
-    if (!matchPattern(op.getTransposed(), TorchD::m_TorchConstantBool(&transposed)) || transposed) {
-      return rewriter.notifyMatchFailure(op, "transposed must be false");
-    }
-    if (failed(checkConvParamList2(op, rewriter, op.getStride(), kConvStrideDefault, kConvStrideDefault,
-                                   "stride must be [1, 1]"))) {
-      return failure();
-    }
-    if (failed(checkConvParamList2(op, rewriter, op.getPadding(), kConvPaddingDefault, kConvPaddingDefault,
-                                   "padding must be [0, 0]"))) {
-      return failure();
-    }
-    if (failed(checkConvParamList2(op, rewriter, op.getDilation(), kConvDilationDefault, kConvDilationDefault,
-                                   "dilation must be [1, 1]"))) {
-      return failure();
-    }
-    if (failed(checkConvParamList2(op, rewriter, op.getOutputPadding(), kConvOutputPaddingDefault,
-                                   kConvOutputPaddingDefault, "output_padding must be [0, 0]"))) {
+    bool transposed = false;
+    int64_t s0 = 0, s1 = 0, p0 = 0, p1 = 0, d0 = 0, d1 = 0, o0 = 0, o1 = 0;
+    if (failed(extractAtenConvolutionHyperParams(op, rewriter, groups, transposed, s0, s1, p0, p1, d0, d1, o0, o1))) {
       return failure();
     }
 
@@ -194,8 +241,15 @@ struct ConvertAtenConvolution : public OpConversionPattern<TorchD::AtenConvoluti
     if (!resultType) {
       return rewriter.notifyMatchFailure(op, "result type conversion failed");
     }
-    rewriter.replaceOpWithNewOp<mlir::mfuse::Conv2DOp>(op, resultType, input, weight);
-    return success();
+    auto inTy = dyn_cast<RankedTensorType>(input.getType());
+    auto wTy = dyn_cast<RankedTensorType>(weight.getType());
+    if (!inTy || inTy.getRank() != 4 || !wTy || wTy.getRank() != 4) {
+      return rewriter.notifyMatchFailure(op, "only rank-4 input and weight are supported for mfuse conv lowering");
+    }
+
+    const bool noBias = isa<TorchD::NoneType>(op.getBias().getType());
+    return replaceAtenConvolutionWithAclnn(op, adaptor, rewriter, resultType, groups, transposed, s0, s1, p0, p1, d0,
+                                           d1, o0, o1, noBias);
   }
 };
 

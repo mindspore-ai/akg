@@ -97,6 +97,105 @@ def Mfuse_AclnnBatchMatmulOp : Mfuse_Op<"aclnn.batch_matmul", [Pure]> {
   }];
 }
 
+def Mfuse_AclnnBatchNormOp : Mfuse_Op<"aclnn.batch_norm", [Pure]> {
+  let summary = "Batch normalization (maps to torch.aten.batch_norm).";
+  let description = [{
+    Operand order matches `torch.aten.batch_norm`: input, weight (gamma), bias (beta),
+    running_mean, running_var, then attributes training, momentum, epsilon, cudnn_enabled.
+    For eval, use `training = false`; `fuse-batch-norm` folds the common mfuse
+    decomposition into this op. External running_mean/running_var (args or
+    constants) require pass option `allow-external-batch-norm-stats=true`; by
+    default the pass requires E(x)/Var(x) style proofs from the input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    AnyRankedTensor:$bias,
+    AnyRankedTensor:$running_mean,
+    AnyRankedTensor:$running_var,
+    DefaultValuedAttr<BoolAttr, "false">:$training,
+    F64Attr:$momentum,
+    F64Attr:$epsilon,
+    DefaultValuedAttr<BoolAttr, "false">:$cudnn_enable
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input `,` $weight `,` $bias `,` $running_mean `,` $running_var
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_AclnnConv2DOp : Mfuse_Op<"aclnn.conv2d", [Pure]> {
+  let summary = "2D convolution (NCHW) aligned with torch.aten.convolution / CANN.";
+  let description = [{
+    Performs 2D convolution: input (NCHW) and weight (KCHW) produce output (NKHW').
+    Spatial lists are two integers `[H, W]`. Defaults stride=[1,1], padding=[0,0],
+    dilation=[1,1], output_padding=[0,0], groups=1, transposed=false.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    I64ArrayAttr:$stride,
+    I64ArrayAttr:$padding,
+    I64ArrayAttr:$dilation,
+    BoolAttr:$transposed,
+    I64ArrayAttr:$output_padding,
+    I64Attr:$groups
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input `,` $weight attr-dict `:` functional-type(operands, results)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$input, "::mlir::Value":$weight), [{
+      build($_builder, $_state, resultType, input, weight, $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getBoolAttr(false), $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64IntegerAttr(1));
+    }]>
+  ];
+}
+
+def Mfuse_AclnnConv2DWithBiasOp : Mfuse_Op<"aclnn.conv2d_with_bias", [Pure]> {
+  let summary = "2D convolution with bias; same hyper-parameters as mfuse.aclnn.conv2d.";
+  let description = [{
+    Performs 2D convolution and adds bias: result = conv2d(input, weight) + broadcast(bias).
+    Bias is 1D (output channels) and broadcasts to NCHW output.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    AnyRankedTensor:$bias,
+    I64ArrayAttr:$stride,
+    I64ArrayAttr:$padding,
+    I64ArrayAttr:$dilation,
+    BoolAttr:$transposed,
+    I64ArrayAttr:$output_padding,
+    I64Attr:$groups
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input `,` $weight `,` $bias attr-dict `:` functional-type(operands, results)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$input, "::mlir::Value":$weight, "::mlir::Value":$bias), [{
+      build($_builder, $_state, resultType, input, weight, bias, $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64ArrayAttr({1, 1}),
+            $_builder.getBoolAttr(false), $_builder.getI64ArrayAttr({0, 0}), $_builder.getI64IntegerAttr(1));
+    }]>
+  ];
+}
+
 def Mfuse_AclnnClampOp : Mfuse_Op<"aclnn.clamp", [Pure]> {
   let summary = "Element-wise clamp operation";
   let description = [{ 
