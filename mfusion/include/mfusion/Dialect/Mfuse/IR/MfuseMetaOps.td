@@ -416,6 +416,36 @@ def Mfuse_FloorOp : Mfuse_Op<"floor", [
   }];
 }
 
+def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
+  let summary = "Create a tensor filled with a scalar value.";
+  let description = [{
+    Creates a tensor of the given shape (encoded in the result type) filled
+    with the specified scalar value.
+
+    Preserves the original torch.aten.full parameters so that the op can be
+    faithfully converted back to torch dialect:
+    - fill_value: the scalar fill value
+    - dtype: optional torch ScalarType integer encoding the element type.
+    - layout: optional torch layout integer.
+    - device: optional device string (e.g. "cpu", "npu").
+    - pin_memory: optional pin_memory flag.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$fill_value,
+    OptionalAttr<I64Attr>:$dtype,
+    OptionalAttr<I64Attr>:$layout,
+    OptionalAttr<StrAttr>:$device,
+    OptionalAttr<BoolAttr>:$pin_memory
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $fill_value attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_GeOp : Mfuse_BroadcastableBinaryOp<"ge", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{
@@ -763,6 +793,23 @@ def Mfuse_NegOp : Mfuse_Op<"neg", [
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
   }];
+}
+
+def Mfuse_NumToTensorOp : Mfuse_Op<"num_to_tensor", [Pure]> {
+  let summary = "Convert a numeric value to a tensor.";
+  let description = [{
+    Converts a numeric value to a tensor with the specified shape.
+  }];
+
+  let arguments = (ins AnyRankedTensor:$value);
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $value attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
 }
 
 def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementType]> {

@@ -842,4 +842,30 @@ mlir::LogicalResult ReduceSumOp::verify() {
   }
   return mlir::success();
 }
+
+mlir::LogicalResult NumToTensorOp::verify() {
+  // Verify that the input is a numeric type or a scalar tensor of numeric type
+  auto inputType = getValue().getType();
+  bool isNumericType = false;
+  if (mlir::isa<mlir::FloatType>(inputType) || mlir::isa<mlir::IntegerType>(inputType)) {
+    isNumericType = true;
+  } else if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(inputType)) {
+    if (tensorType.getRank() == 0) {  // It's a scalar tensor
+      auto elementType = tensorType.getElementType();
+      if (mlir::isa<mlir::FloatType>(elementType) || mlir::isa<mlir::IntegerType>(elementType)) {
+        isNumericType = true;
+      }
+    }
+  }
+  if (!isNumericType) {
+    return emitOpError("input must be a numeric type or a scalar tensor of numeric type, got ") << inputType;
+  }
+  // Verify that the result is a tensor type
+  auto resultType = getResult().getType();
+  if (!mlir::isa<mlir::RankedTensorType>(resultType)) {
+    return emitOpError("result must be a ranked tensor type, got ") << resultType;
+  }
+  return mlir::success();
+}
+
 }  // namespace mlir::mfuse
