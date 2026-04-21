@@ -2076,11 +2076,10 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
         markTransposeLoopChainWithVectorAttr(forOp, builder, vectorSize);
         return;
       }
-
+      int64_t targetVectorSize = vectorSize;
       // set vector attribute to innermost loops
       if (!forOp->hasAttr(kReductionLoopAttr)) {
         if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /*skipDeleteLoops=*/false)) {
-          int64_t targetVectorSize = vectorSize;
           if (auto pointVectorSizeAttr = vectorTarget->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
             targetVectorSize = pointVectorSizeAttr.getInt();
           }
@@ -2119,8 +2118,10 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
             continue;
           }
-          auto pointVectorSizeAttr = curLoop->getAttrOfType<IntegerAttr>(kInnerLoopAttr);
-          curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(pointVectorSizeAttr.getInt()));
+          if (auto pointVectorSizeAttr = curLoop->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
+            targetVectorSize = pointVectorSizeAttr.getInt();
+          }
+          curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(targetVectorSize));
           break;
         }
       }
