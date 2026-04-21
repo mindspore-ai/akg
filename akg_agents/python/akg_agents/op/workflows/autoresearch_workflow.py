@@ -12,6 +12,7 @@ AutoresearchWorkflow — 自主迭代深度优化 workflow.
   5. 读取最优结果返回
 """
 
+import asyncio
 import copy
 import logging
 import os
@@ -129,9 +130,12 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             framework = state.get("framework", "")
             backend = state.get("backend", "")
             arch = state.get("arch", "")
-            # max_rounds: ToolExecutor path sets state["max_rounds"] via build_initial_state;
-            # LangGraphTask direct path does NOT — fall back to config["max_step"].
-            max_rounds = state.get("max_rounds") or _self.config.get("max_step", 20)
+            # Single source of truth: config["max_step"]. The state["max_rounds"]
+            # key from build_initial_state is ignored — it was a secondary copy
+            # that could diverge from the timeout budget (computed from max_step
+            # in __init__). Both ToolExecutor and LangGraphTask paths now read
+            # the same value.
+            max_rounds = _self.config.get("max_step", 20)
 
             logger.info(
                 f"[AutoresearchWorkflow] Starting: op_name={op_name}, "
@@ -489,19 +493,38 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 extra_files=extra_files,
                 max_rounds=max_rounds,
                 dsl=dsl,
+                framework=framework,
+                backend=backend,
+                arch=arch,
             )
             logger.info(f"[AutoresearchWorkflow] task_dir: {task_dir}")
             _self._autoresearch_task_dir = task_dir
 
             # ---- 6. Create LLM adapter ----
             session_id = str(state.get("session_id") or "").strip()
+            agent_model_config = workflow_config.get("agent_model_config", {})
             llm_client = create_llm_client(
-                model_level=workflow_config.get(
-                    "agent_model_config", {},
-                ).get("coder", "standard"),
+                model_level=agent_model_config.get("coder", "standard"),
                 session_id=session_id or None,
             )
-            adapter = AkgLLMAdapter(llm_client)
+            # Fast client for auto_compact / keyword generation — no thinking,
+            # low latency. Falls back to the main client if the "fast" level
+            # isn't configured (or if the caller pinned an explicit
+            # agent_model_config.fast override).
+            fast_level = agent_model_config.get("fast", "fast")
+            try:
+                fast_llm_client = create_llm_client(
+                    model_level=fast_level,
+                    session_id=session_id or None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[AutoresearchWorkflow] fast model level '%s' unavailable "
+                    "(%s); falling back to main client for compact summaries.",
+                    fast_level, exc,
+                )
+                fast_llm_client = None
+            adapter = AkgLLMAdapter(llm_client, fast_client=fast_llm_client)
 
             # ---- 7. Run AgentLoop ----
             # Suppress verbose verifier/worker INFO logs during agent loop.
@@ -518,6 +541,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 _lg.setLevel(logging.WARNING)
 
             loop_result = None
+            _agent_error = None
             try:
                 loop_result = await AgentLoop(
                     task_dir,
@@ -526,18 +550,31 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                     skip_branch_switch=True,
                     max_rounds=max_rounds,
                 ).run()
+            except asyncio.CancelledError:
+                # Workflow timeout (asyncio.wait_for cancellation).
+                # Salvage best result — this is the true timeout path.
+                logger.info("[AutoresearchWorkflow] Cancelled by workflow_timeout")
             except Exception as e:
+                # Real crash — NOT a timeout. Record the error so
+                # the result is tagged as a crash, not "timed out".
+                _agent_error = e
                 logger.error(f"[AutoresearchWorkflow] AgentLoop failed: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
             finally:
                 for _name, _lvl in _saved_levels.items():
                     logging.getLogger(_name).setLevel(_lvl)
-                # Runs on ANY exit — normal, exception, or CancelledError
-                # from workflow_timeout. Generates report and salvages the
-                # best result so progress is never silently lost.
                 if loop_result is None:
-                    loop_result = _self.finalize_on_timeout()
+                    if _agent_error is not None:
+                        # Real crash: salvage but label correctly.
+                        loop_result = _self.finalize_on_timeout()
+                        loop_result["final_status"] = (
+                            f"agent crashed: {type(_agent_error).__name__}: "
+                            f"{_agent_error}"
+                        )
+                    else:
+                        # Timeout or cancellation: normal salvage path.
+                        loop_result = _self.finalize_on_timeout()
 
             # ---- 8. Extract result ----
             best_metrics = loop_result.get("best_metrics")
@@ -575,17 +612,6 @@ class AutoresearchWorkflow(OpBaseWorkflow):
         return workflow
 
     @classmethod
-    def build_initial_state(
-        cls,
-        arguments: Dict[str, Any],
-        agent_context: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Override: add max_rounds to state."""
-        state = super().build_initial_state(arguments, agent_context)
-        state["max_rounds"] = arguments.get("max_rounds", 20)
-        return state
-
-    @classmethod
     def prepare_config(
         cls,
         workflow_resources: Dict[str, Any],
@@ -595,10 +621,23 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
         Deep-copies config to prevent nested dict leakage via
         KernelAgent's cached workflow_resources.
+
+        **max_rounds single source of truth**: if the ToolExecutor
+        path passes ``max_rounds`` in arguments, it is written into
+        ``config["max_step"]`` HERE — before ``__init__`` runs — so
+        ``workflow_timeout`` (computed in ``__init__`` from
+        ``config["max_step"]``) agrees with the round count the node
+        will use. ``build_initial_state`` no longer touches
+        ``max_rounds`` at all.
         """
         base_config = copy.deepcopy(
             workflow_resources.get("config") or {},
         )
+
+        # Propagate max_rounds → config["max_step"] BEFORE __init__.
+        max_rounds = arguments.get("max_rounds")
+        if max_rounds is not None:
+            base_config["max_step"] = int(max_rounds)
 
         dsl = arguments.get("dsl", "")
         backend = arguments.get("backend", "")
@@ -621,6 +660,14 @@ class AutoresearchWorkflow(OpBaseWorkflow):
         loop_result-compatible dict (same shape as AgentLoop.run()),
         so the normal extract-result path in the workflow node can
         handle it uniformly.
+
+        Routes all git / round-history access through a real
+        ExperimentRunner constructed in salvage mode
+        (``skip_branch_switch=True``), so the timeout path uses
+        exactly the same git owner as the live agent loop. Without
+        this the salvage path would build its own GitRepo /
+        RoundLogger and could drift from the live path's commit
+        policy, branch guard, or extra-files conventions.
         """
         task_dir = getattr(self, "_autoresearch_task_dir", None)
         if not task_dir or not os.path.exists(task_dir):
@@ -632,21 +679,43 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             flush=True,
         )
 
-        from akg_agents.op.autoresearch.framework.runner import load_task_config
-        from akg_agents.op.autoresearch.framework.logger import RoundLogger
         from akg_agents.op.autoresearch.framework.report import generate_report
+        from akg_agents.op.autoresearch.framework.runner import ExperimentRunner
 
+        # Construct a salvage-mode runner so we share the live path's
+        # GitRepo / RoundLogger ownership. skip_branch_switch=True means
+        # no branch creation, no prints, no side effects beyond the
+        # config + logger + git owner setup the live path already does.
         try:
-            config = load_task_config(task_dir)
+            runner = ExperimentRunner(task_dir, skip_branch_switch=True)
         except Exception:
             return {"best_metrics": None, "final_status": "timeout — failed to load task config"}
+
+        config = runner.config
 
         try:
             generate_report(task_dir, config)
         except Exception as e:
             logger.warning(f"[AutoresearchWorkflow] Report generation failed: {e}")
 
-        best = RoundLogger(task_dir, config).get_best()
+        # Commit whatever we have (report + best code snapshot) via the
+        # runner's git owner — same entry point as the live final commit
+        # in AgentLoop._report_and_commit, so commit policy stays in sync.
+        best = runner.logger.get_best()
+        try:
+            n_rounds = len(runner.logger.load_history())
+            msg = f"final: {config.name} — {n_rounds} eval rounds (timeout)"
+            if best:
+                bv = best["metrics"].get(config.primary_metric)
+                if bv is not None:
+                    msg += f" | best {config.primary_metric}={bv}"
+            cr = runner.git.commit(msg, task_name=config.name)
+            if cr.committed:
+                print(f"[AutoresearchWorkflow] Final commit (timeout): {cr.hash}",
+                      flush=True)
+        except Exception as e:
+            logger.warning(f"[AutoresearchWorkflow] Final commit failed: {e}")
+
         return {
             "best_metrics": dict(best["metrics"]) if best else None,
             "final_status": "timed out — best result preserved" if best else "timed out — no valid result",
@@ -698,9 +767,13 @@ async def _assemble_knowledge(
         from akg_agents.op.skill.operator_selector import (
             OperatorSkillSelector, OperatorSelectionContext,
         )
+        from akg_agents.op.skill.operator_skill_catalog import (
+            _normalize_hardware,
+        )
     except ImportError:
         SkillLoader = None
         OperatorSkillSelector = None
+        _normalize_hardware = None
 
     try:
         from akg_agents.utils.hardware_utils import get_hardware_doc
@@ -726,6 +799,7 @@ async def _assemble_knowledge(
 
     # Try skill system first
     all_skills = []
+    _raw_dsl_skills = []  # pre-filter set for docs index
     if SkillLoader and OperatorSkillSelector and project_root:
         SKILLS_DIR = project_root / "op" / "resources" / "skills"
         dsl_key = dsl.lower().replace("_", "-")
@@ -733,10 +807,12 @@ async def _assemble_knowledge(
         loader = SkillLoader()
         selector = OperatorSkillSelector()
         all_skills = loader.load_from_directory(SKILLS_DIR / dsl_key)
+        _raw_dsl_skills = list(all_skills)  # save before coarse_filter
 
         if all_skills:
             ctx = OperatorSelectionContext(
-                backend=backend, dsl=dsl, framework=framework, hardware=arch,
+                backend=backend, dsl=dsl, framework=framework,
+                hardware=_normalize_hardware(arch or ""),
             )
             all_skills = selector.coarse_filter(all_skills, ctx)
 
@@ -757,16 +833,14 @@ async def _assemble_knowledge(
                         extra_files[f"docs/{rel}"] = content
                 fallback_docs_text = f"[Using legacy docs from {docs_entry}]"
 
-    # Layer 0: fundamental + reference skills → program.md
-    core_skills = [
-        s for s in all_skills if s.category in {"fundamental", "reference"}
-    ]
-    core_text = (
-        _format_skills(core_skills) if core_skills else fallback_docs_text
-    )
-    program_md = _build_program_md(
-        dsl, framework, backend, arch, op_name, core_text,
-    )
+    # Layer 0 (fundamentals) now enters the system prompt via
+    # prompt_builder.build_system_prompt scanning task_dir/skills/.
+    # No program.md is produced; callers that passed one through the
+    # scaffolder get an empty string.
+    if fallback_docs_text:
+        logger.info(
+            "[_assemble_knowledge] %s", fallback_docs_text,
+        )
 
     # context_files (compact, enters system prompt)
     if get_hardware_doc:
@@ -774,7 +848,10 @@ async def _assemble_knowledge(
         if hw_docs:
             context_files["hardware_info.md"] = hw_docs
 
-    # Layer 1: large docs + guide/example → docs/ (not in system prompt)
+    # Layer 1: large API doc still lives in task_dir/docs/ for
+    # read_file access. Guide and example SKILL.md content is
+    # reachable via the unified task_dir/skills/<name>/ layout
+    # written below, so we no longer duplicate them under docs/.
     if dsl.lower() == "triton_ascend" and resolve_triton_ascend_api_docs:
         try:
             api_docs = await resolve_triton_ascend_api_docs(
@@ -785,73 +862,34 @@ async def _assemble_knowledge(
         except Exception as e:
             logger.warning(f"Failed to resolve triton_ascend API docs: {e}")
 
-    # Guide/example skills → agent reads via read_file
-    guide_skills = [s for s in all_skills if s.category == "guide"]
-    example_skills = [s for s in all_skills if s.category == "example"]
-    for skill in guide_skills:
-        extra_files[f"docs/guide_{skill.name}.md"] = skill.content
-    for skill in example_skills:
-        extra_files[f"docs/example_{skill.name}.md"] = skill.content
+    # Unified skills/ layout: every SKILL.md, regardless of category,
+    # is copied into task_dir/skills/<name>/SKILL.md so the agent can
+    # read_file it on demand, and so build_system_prompt can scan for
+    # fundamental-category skills at init. When the source path is
+    # known we copy the raw file to preserve the front-matter that
+    # prompt_builder parses; otherwise we rebuild a minimal header
+    # from the in-memory Skill object.
+    for skill in _raw_dsl_skills:
+        name = getattr(skill, "name", "") or ""
+        if not name:
+            continue
+        src_path = getattr(skill, "skill_path", None)
+        raw: str | None = None
+        if src_path is not None:
+            try:
+                raw = Path(src_path).read_text(encoding="utf-8")
+            except Exception:
+                raw = None
+        if raw is None:
+            category = getattr(skill, "category", "") or ""
+            description = (getattr(skill, "description", "") or "").replace('"', "'")
+            body = getattr(skill, "content", "") or ""
+            raw = (
+                f"---\nname: {name}\ncategory: {category}\n"
+                f'description: "{description}"\n---\n\n{body}\n'
+            )
+        extra_files[f"skills/{name}/SKILL.md"] = raw
 
-    # Generate index file
-    if extra_files:
-        index_lines = ["# Available DSL Documentation\n"]
-        index_lines.append(
-            "Use `read_file` to access these documents as needed.\n",
-        )
-        for path, content in extra_files.items():
-            index_lines.append(f"- `{path}` ({len(content)} chars)")
-        extra_files["docs/README.md"] = "\n".join(index_lines)
-
-    return program_md, context_files, extra_files
+    return "", context_files, extra_files
 
 
-def _format_skills(skills) -> str:
-    """Format skill objects into a single text block."""
-    parts = []
-    for s in skills:
-        parts.append(f"### {s.name}\n{s.content}")
-    return "\n\n".join(parts)
-
-
-def _build_program_md(
-    dsl: str,
-    framework: str,
-    backend: str,
-    arch: str,
-    op_name: str,
-    core_reference: str,
-) -> str:
-    """Build the program.md agent instructions."""
-    lines = [
-        f"# Optimization Task: {op_name}",
-        "",
-        f"DSL: {dsl} | Framework: {framework} | Backend: {backend} | Arch: {arch}",
-        "",
-        "## Objective",
-        "Optimize the kernel implementation for maximum performance while maintaining correctness.",
-        "The evaluation measures `latency_us` (lower is better).",
-        "",
-        "## Rules",
-        "- Edit only the editable files listed in task.yaml",
-        "- Each edit is automatically evaluated: correct + faster → KEEP, otherwise → DISCARD",
-        "- Plan your optimizations as a structured list using update_plan()",
-        "- After each plan item, submit the edit for evaluation",
-        "",
-    ]
-
-    if core_reference:
-        lines.extend([
-            "## DSL Reference",
-            core_reference,
-            "",
-        ])
-
-    lines.extend([
-        "## Available Reference Documents",
-        "The `docs/` directory contains DSL guides, examples, and API documentation.",
-        "Use `read_file` to access them when you need specific optimization techniques.",
-        "Start with `docs/README.md` for an overview.",
-    ])
-
-    return "\n".join(lines)

@@ -1,20 +1,21 @@
 """
 Autoresearch 手动评测工具 (辅助脚本, 不涉及 LLM)
 
-主入口是 agent 模式: python -m agent --task <dir>
+主入口是 agent 模式:
+    python -m akg_agents.op.autoresearch.agent --task <dir>
 
 用法:
     # 运行单轮评测
-    python manual_eval.py --task <task_dir> --desc "baseline"
+    python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --desc "baseline"
 
     # 仅评测, 不做 git 操作
-    python manual_eval.py --task <task_dir> --eval-only
+    python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --eval-only
 
     # 查看当前状态
-    python manual_eval.py --task <task_dir> --status
+    python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --status
 
     # 生成报告 (写到临时目录, 不污染当前分支)
-    python manual_eval.py --task <task_dir> --report
+    python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --report
 """
 
 import argparse
@@ -32,8 +33,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python manual_eval.py --task <task_dir> --desc "baseline"
-  python manual_eval.py --task <task_dir> --status
+  python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --desc "baseline"
+  python -m akg_agents.op.autoresearch.manual_eval --task <task_dir> --status
         """,
     )
     parser.add_argument("--task", required=True, help="任务目录路径")
@@ -81,7 +82,7 @@ def main():
 
     if args.desc is None:
         print("Error: --desc is required for running an experiment round")
-        print("Usage: python manual_eval.py --task <path> --desc 'description'")
+        print("Usage: python -m akg_agents.op.autoresearch.manual_eval --task <path> --desc 'description'")
         sys.exit(1)
 
     import asyncio

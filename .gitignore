@@ -1,3 +1,7 @@
+# Local config (contains API keys)
+.akg/settings.local.json
+.akg/settings.*.json
+
 # MindSpore
 build/
 mindspore/lib
@@ -73,3 +77,8 @@ mindspore/default_config.py
 #azy
 .claude/
 azy/
+
+# autoresearch scratch artefacts (kept under .akg/)
+.akg/reference.py
+.akg/*_kernel.py
+.akg/*_ref.py

@@ -1,7 +1,7 @@
 ---
 name: triton-ascend-optimization
-description: "Triton Ascend 性能优化通用策略汇总，包括块大小选择、Grid 1D化、核内循环、算子拆分、数值稳定性、特殊矩阵优化等。适用于需要提升已有内核性能的优化场景"
-category: fundamental
+description: "Triton Ascend 性能优化通用策略: BLOCK_SIZE 选择 (1024-2048 for elementwise, must be <65536), grid configuration (use VEC_CORE_NUM / CUBE_CORE_NUM, 2D/3D grid for matmul / conv / reduce, 1D grid + inner loop for elementwise / pointwise), 256B alignment for memory transfers, autotune block-size patterns, fp16 / fp32 precision conversion. Bind via keywords like matmul, elementwise, reduce, block_size, grid, autotune, alignment, fp16, fp32, tile, interleaved-loop, cube-core, vec-core."
+category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
@@ -19,8 +19,14 @@ structure:
 ## 优化策略 Checklist
 
 - [ ] **Grid 1D 化**: `grid=(CORE_NUM,)` + 核内交错循环 `for block_id in range(pid, total, CORE_NUM)`
+- [ ] **Grid 维度选择**:
+  - 对于计算密集型算子（矩阵乘、卷积、大块 reduce等），考虑 2D/3D grid，利用硬件调度优势
+  - 对于大量小规模计算（element-wise、pointwise等），考虑 1D grid + 核内循环，减少启动开销
 - [ ] **核内循环**: 无需 for 的场景添加额外循环，编译器自动多级流水
-- [ ] **尝试不同 BLOCK_SIZE**: 从较大 tile 开始，`ub overflow` 则缩小；配合 autotune 自动选优
+- [ ] **尝试不同 BLOCK_SIZE**: 从较大 tile 开始，`ub overflow` 则缩小；在核内循环中平衡并行度和资源占用：
+  - 尝试小切分策略，使读写能够并行进行
+  - 尝试大切分策略，提升 UB 使用率
+  - 列多组参数配置，添加 @triton.autotune
 - [ ] **算子拆分**: 复杂融合算子可拆为多 kernel 顺序执行，有时性能更优
 - [ ] **Autotune**: 列多组 tile 参数配置（不含 num_warps/num_stages）
 - [ ] **Reduction 用标量累加**: 每个核心标量累加 + 单次 atomic 写入
@@ -28,6 +34,7 @@ structure:
 - [ ] **避免 host 端 permute**: 非最后维 reduce 在 kernel 内用多维索引处理
 - [ ] **隐式广播**: 用 `a[:, None] * b` 替代 `tl.broadcast_to`，减少临时 tensor
 - [ ] **load 时直接 mask**: `tl.load(ptr, mask=m, other=0.0)` 优于先加载再 `tl.where`
+- [ ] **减少冗余精度转换**: 避免反复在 fp16/fp32 转换 即`.to(float16)`和`.to(float32)`，一次转换多次复用
 - [ ] **核心数配置**: grid 数设为核心数（VEC/CUBE），过大时启动开销反增
 - [ ] **256B 对齐**: 数据搬运以 256B 为单位，对齐可提升带宽
 
@@ -58,4 +65,3 @@ p = tl.math.exp2(scores)
 ### 精度提升
 - matmul 使用 fp32 累加器：`acc = tl.zeros([M, N], dtype=tl.float32)`
 - 最后再转回目标精度：`result = acc.to(tl.float16)`
-

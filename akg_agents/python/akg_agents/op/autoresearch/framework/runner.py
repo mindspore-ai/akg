@@ -11,17 +11,21 @@
   - agent 根据结果决定 keep/discard
   - agent 继续下一轮
 
-本 runner 提供的是评测 + 记录 + git 管理的胶水代码.
+本 runner 提供的是评测 + 记录的胶水代码. 所有 git 操作都委托给
+``framework.git_repo.GitRepo``，文件回滚委托给
+``framework.file_state.FileStateManager``，两者都是 ExperimentRunner 的
+公开属性 (``self.git`` / ``self.file_state``)，外部组件 (AgentLoop /
+TurnExecutor / SessionStore) 也通过这两个属性访问。
 """
 
 import os
-import subprocess
-import sys
 import time
 from typing import Optional
 
-from .config import CommitResult, EvalResult, RoundRecord, TaskConfig
+from .config import EvalResult, RoundRecord, TaskConfig
 from .evaluator import run_eval, run_eval_robust, is_improvement, check_constraints, validate_constraints, format_result_summary
+from .file_state import FileStateManager
+from .git_repo import GitRepo
 from .logger import RoundLogger
 
 
@@ -37,336 +41,6 @@ def load_task_config(task_dir: str) -> TaskConfig:
     if cfg.constraints != {}:
         validate_constraints(cfg.constraints)
     return cfg
-
-
-def _git_repo_root(task_dir: str) -> str:
-    """获取 git 仓库根目录, 失败时抛异常"""
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, cwd=task_dir,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Not a git repository: {task_dir}\n{result.stderr}")
-    return result.stdout.strip()
-
-
-def _git_add(repo_root: str, rel_path: str) -> bool:
-    """git add 单个文件, 返回是否成功"""
-    # Refresh git index for this path — on WSL2 with /mnt/c/ the stat cache
-    # can be stale, causing git add to skip genuinely modified files.
-    subprocess.run(
-        ["git", "diff", "--", rel_path],
-        cwd=repo_root, capture_output=True,
-    )
-    result = subprocess.run(
-        ["git", "add", rel_path],
-        cwd=repo_root, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"[git] WARNING: git add failed for {rel_path}: {result.stderr.strip()}")
-        return False
-    return True
-
-
-def git_commit(task_dir: str, message: str, files: Optional[list[str]] = None,
-               push: bool = False, task_name: Optional[str] = None,
-               expected_branch: Optional[str] = None) -> CommitResult:
-    """
-    提交当前更改, 返回 CommitResult.
-
-    三种结果:
-      - committed: hash 非空, 提交成功
-      - nothing_to_commit: 没有需要提交的内容 (正常情况, 如 baseline)
-      - error: 提交命令失败
-
-    If expected_branch is set, refuse to commit when on a different branch.
-    """
-    try:
-        repo_root = _git_repo_root(task_dir)
-
-        # Branch guard: abort if on wrong branch
-        if expected_branch:
-            current = git_current_branch(task_dir)
-            if current and current != expected_branch:
-                raise RuntimeError(
-                    f"Branch mismatch: on '{current}' but expected "
-                    f"'{expected_branch}'. Aborting to prevent commits "
-                    f"on the wrong branch."
-                )
-
-        add_failures = []
-        if files:
-            for f in files:
-                fpath = os.path.join(task_dir, f)
-                rel_path = os.path.relpath(fpath, repo_root)
-                if not _git_add(repo_root, rel_path):
-                    add_failures.append(rel_path)
-        else:
-            rel_dir = os.path.relpath(task_dir, repo_root)
-            if not _git_add(repo_root, rel_dir):
-                add_failures.append(rel_dir)
-
-        # 检查是否有 staged 内容
-        diff_result = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=repo_root, capture_output=True,
-        )
-        if diff_result.returncode == 0:
-            if add_failures:
-                # git add failed AND nothing staged → real error, not "nothing to commit".
-                err = f"git add failed for: {', '.join(add_failures)}"
-                print(f"[git] ERROR: {err}")
-                return CommitResult(error=err)
-            return CommitResult(nothing_to_commit=True)
-
-        author_name = task_name or "agent"
-        git_cmd = [
-            "git",
-            "-c", f"user.name={author_name}",
-            "-c", "user.email=agent@autoresearch",
-            "commit", "-m", message,
-        ]
-        commit_result = subprocess.run(
-            git_cmd,
-            cwd=repo_root, capture_output=True, text=True,
-        )
-        if commit_result.returncode != 0:
-            err = commit_result.stderr.strip()
-            print(f"[git] ERROR: commit failed: {err}")
-            return CommitResult(error=err)
-
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-        commit_hash = result.stdout.strip()
-
-        if push:
-            push_result = subprocess.run(
-                ["git", "push", "-u", "origin", "HEAD"],
-                cwd=repo_root, capture_output=True, text=True,
-            )
-            if push_result.returncode != 0:
-                print(f"[git] WARNING: push failed: {push_result.stderr.strip()}")
-            else:
-                print(f"[git] Pushed {commit_hash} to remote")
-
-        return CommitResult(hash=commit_hash)
-    except Exception as e:
-        print(f"[git] ERROR: git_commit exception: {e}")
-        return CommitResult(error=str(e))
-
-
-def git_current_branch(task_dir: str) -> Optional[str]:
-    """Return the current branch name, or None on error."""
-    try:
-        repo_root = _git_repo_root(task_dir)
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-        return result.stdout.strip() if result.returncode == 0 else None
-    except Exception:
-        return None
-
-
-def git_cleanup_branch(task_dir: str, exp_branch: str, original_branch: str,
-                       session_dir: str = "agent_session",
-                       heartbeat_file: str = "RUNNING"):
-    """Switch back to original branch, keep exp branch for result inspection."""
-    import shutil
-    repo_root = _git_repo_root(task_dir)
-    rel_dir = os.path.relpath(os.path.abspath(task_dir), repo_root)
-
-    # 1. Remove experiment artifacts FIRST (before checkout, to avoid dirty-tree conflicts)
-    experiment_artifacts = [
-        "agent.log", "log.jsonl", "perf_log.md",
-        "report.png", "report.md", "plan.md", heartbeat_file,
-    ]
-    for fname in experiment_artifacts:
-        fpath = os.path.join(task_dir, fname)
-        if os.path.exists(fpath):
-            try:
-                os.remove(fpath)
-            except Exception:
-                pass
-    for dname in [session_dir, "__pycache__"]:
-        dpath = os.path.join(task_dir, dname)
-        if os.path.isdir(dpath):
-            try:
-                shutil.rmtree(dpath)
-            except Exception:
-                pass
-
-    # 2. Discard any remaining uncommitted changes in task dir so checkout won't fail
-    subprocess.run(
-        ["git", "checkout", "--", rel_dir],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-
-    # 3. Switch back to original branch (exp branch preserved)
-    current = git_current_branch(task_dir)
-    if current == exp_branch:
-        result = subprocess.run(
-            ["git", "checkout", original_branch],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-        if result.returncode != 0:
-            print(f"[git] WARNING: checkout {original_branch} failed: {result.stderr.strip()}")
-            return
-        print(f"[git] Switched back to '{original_branch}' (exp branch '{exp_branch}' preserved)")
-    else:
-        print(f"[git] WARNING: not on exp branch '{exp_branch}' (on '{current}'), skipping checkout")
-
-
-def git_ensure_branch(task_dir: str, branch_name: str) -> str:
-    """确保当前在指定的实验分支上.
-
-    如果同名分支已存在 (上次实验残留), 先删除再从当前 HEAD 重建,
-    保证每次实验从干净状态开始.
-    """
-    repo_root = _git_repo_root(task_dir)
-
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    current_branch = result.stdout.strip()
-
-    # Delete stale exp branch from previous run
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", branch_name],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    branch_exists = result.returncode == 0
-
-    if branch_exists:
-        if current_branch == branch_name:
-            # On the stale branch — need to switch away first
-            # Find a branch to switch to (prefer main/master, else any other)
-            for candidate in ["main", "master"]:
-                check = subprocess.run(
-                    ["git", "rev-parse", "--verify", candidate],
-                    capture_output=True, cwd=repo_root,
-                )
-                if check.returncode == 0:
-                    subprocess.run(
-                        ["git", "checkout", candidate],
-                        capture_output=True, cwd=repo_root,
-                    )
-                    break
-        subprocess.run(
-            ["git", "branch", "-D", branch_name],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-        print(f"[git] Deleted stale branch '{branch_name}'")
-
-    # Create fresh branch from current HEAD
-    result = subprocess.run(
-        ["git", "checkout", "-b", branch_name],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Failed to create branch '{branch_name}': {result.stderr.strip()}"
-        )
-
-    print(f"[git] Created and switched to branch '{branch_name}'")
-    return branch_name
-
-
-def git_rollback_files(task_dir: str, files: list[str]):
-    """回滚指定文件到上一个 commit 的状态, 包括删除本轮新建的未跟踪文件"""
-    try:
-        repo_root = _git_repo_root(task_dir)
-
-        for f in files:
-            fpath = os.path.join(task_dir, f)
-            rel_path = os.path.relpath(fpath, repo_root)
-
-            ls_result = subprocess.run(
-                ["git", "ls-files", "--error-unmatch", rel_path],
-                cwd=repo_root, capture_output=True,
-            )
-            if ls_result.returncode != 0:
-                if os.path.exists(fpath):
-                    os.remove(fpath)
-                    print(f"[git] Removed untracked file: {rel_path}")
-                continue
-
-            result = subprocess.run(
-                ["git", "checkout", "HEAD", "--", rel_path],
-                cwd=repo_root, capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                print(f"[git] WARNING: rollback failed for {rel_path}: {result.stderr.strip()}")
-    except Exception as e:
-        print(f"[git] ERROR: git_rollback_files exception: {e}")
-
-
-def git_current_commit(task_dir: str) -> Optional[str]:
-    """返回 HEAD 的 short commit hash，失败返回 None"""
-    try:
-        repo_root = _git_repo_root(task_dir)
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
-    except Exception:
-        return None
-
-
-def git_diff(task_dir: str, base_commit: str, head: str = "HEAD",
-             paths: Optional[list[str]] = None) -> Optional[str]:
-    """返回 git diff base_commit..head 的输出"""
-    try:
-        repo_root = _git_repo_root(task_dir)
-        cmd = ["git", "diff", f"{base_commit}..{head}"]
-        if paths:
-            cmd.append("--")
-            for p in paths:
-                cmd.append(os.path.relpath(os.path.join(task_dir, p), repo_root))
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=repo_root,
-        )
-        if result.returncode == 0:
-            return result.stdout
-        return None
-    except Exception:
-        return None
-
-
-def git_dirty_files(task_dir: str, files: list[str]) -> Optional[list[str]]:
-    """Return subset of files that have uncommitted changes or are untracked."""
-    try:
-        repo_root = _git_repo_root(task_dir)
-        dirty = set()
-        for f in files:
-            fpath = os.path.join(task_dir, f)
-            rel_path = os.path.relpath(fpath, repo_root)
-
-            result = subprocess.run(
-                ["git", "diff", "HEAD", "--", rel_path],
-                capture_output=True, text=True, cwd=repo_root,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                dirty.add(f)
-                continue
-
-            if os.path.exists(fpath):
-                result = subprocess.run(
-                    ["git", "ls-files", "--others", "--exclude-standard", "--", rel_path],
-                    capture_output=True, text=True, cwd=repo_root,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    dirty.add(f)
-
-        return list(dirty)
-    except Exception:
-        return None
 
 
 class ExperimentRunner:
@@ -387,11 +61,20 @@ class ExperimentRunner:
         self._best_result: Optional[EvalResult] = None
         self.extra_commit_files: list[str] = []
 
+        # Public sub-components: GitRepo for all git ops, FileStateManager
+        # for editable-file rollback (snapshot/restore + git rollback). Both
+        # are accessible from external callers (AgentLoop, TurnExecutor,
+        # SessionStore) via self.git / self.file_state.
+        self.git = GitRepo(self.task_dir)
+        self.file_state = FileStateManager(
+            self.task_dir, self.config.editable_files, self.git,
+        )
+
         self.original_branch: Optional[str] = None
         if not skip_branch_switch:
-            self.original_branch = git_current_branch(self.task_dir)
+            self.original_branch = self.git.current_branch()
             branch = self.config.git_branch or f"exp/{self.config.name}"
-            self.branch_name = git_ensure_branch(self.task_dir, branch)
+            self.branch_name = self.git.ensure_branch(branch)
         else:
             self.branch_name = None
 
@@ -444,7 +127,7 @@ class ExperimentRunner:
             # Rollback to ensure no dirty state leaks into the next round.
             duration = time.time() - t0
             print(f"[Runner] ROUND CRASHED: {e}", flush=True)
-            git_rollback_files(self.task_dir, self.config.editable_files)
+            self.file_state.rollback_to_head()
             record = RoundRecord(
                 round_num=round_num,
                 description=description,
@@ -544,8 +227,8 @@ class ExperimentRunner:
                 primary_val = f"{primary_val:.4f}"
             commit_msg = f"R{round_num}: {description} | {self.config.primary_metric}={primary_val}"
             commit_files = list(self.config.editable_files) + self.extra_commit_files
-            cr = git_commit(
-                self.task_dir, commit_msg,
+            cr = self.git.commit(
+                commit_msg,
                 files=commit_files,
                 push=self.config.git_push,
                 task_name=self.config.name,
@@ -561,9 +244,9 @@ class ExperimentRunner:
                 accepted = False
                 record.accepted = False
                 self._best_result = prev_best
-                git_rollback_files(self.task_dir, self.config.editable_files)
+                self.file_state.rollback_to_head()
         else:
-            git_rollback_files(self.task_dir, self.config.editable_files)
+            self.file_state.rollback_to_head()
             print("[Runner] Rolled back editable files", flush=True)
 
         # 5. Log (AFTER git so commit_hash is populated)

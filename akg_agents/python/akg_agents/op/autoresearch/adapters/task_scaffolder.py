@@ -10,8 +10,10 @@ Creates a self-contained task_dir with:
   - extra_files (docs/ for read_file on-demand access)
   - .git/ (baseline commit)
 
-The generated task_dir is AKG-workflow-only: no eval_script, no adapter
-declaration. Evaluation is handled by the injected eval_fn -> KernelVerifier.
+The generated task_dir is AKG-workflow-only: no eval_script.
+Adapter fields (dsl/framework/backend/arch) are written to task.yaml
+for skill matching and hardware guardrails. Evaluation is handled by
+the injected eval_fn -> KernelVerifier.
 """
 
 import os
@@ -27,12 +29,15 @@ def scaffold_task_dir(
     op_name: str,
     task_desc: str,
     editable_files: dict[str, str],
-    program_md: str,
-    context_files: dict[str, str],
+    program_md: str = "",
+    context_files: dict[str, str] | None = None,
     extra_files: dict[str, str] | None = None,
     max_rounds: int = 20,
     eval_timeout: int = 120,
     dsl: str = "",
+    framework: str = "",
+    backend: str = "",
+    arch: str = "",
 ) -> str:
     """Create a fresh task_dir and git init. Returns task_dir path.
 
@@ -72,12 +77,22 @@ def scaffold_task_dir(
     for filename, content in editable_files.items():
         _write_file(task_dir, filename, content)
 
-    # Write program.md
-    _write_file(task_dir, "program.md", program_md)
+    # program.md is optional now — fundamentals flow through
+    # task_dir/skills/<name>/SKILL.md (Layer 0 in system prompt)
+    # instead of a single concatenated file. A non-empty program_md
+    # still lands on disk and task.yaml so legacy callers work.
+    if program_md:
+        _write_file(task_dir, "program.md", program_md)
 
     # Write context_files (listed in task.yaml, enter system prompt)
+    context_files = dict(context_files or {})
     for filename, content in context_files.items():
         _write_file(task_dir, filename, content)
+
+    # Only keep program_file in task.yaml when we actually wrote one.
+    _program_yaml_key: dict[str, str] = (
+        {"program_file": "program.md"} if program_md else {}
+    )
 
     # Write extra_files (NOT in task.yaml, agent reads via read_file)
     if extra_files:
@@ -89,6 +104,9 @@ def scaffold_task_dir(
         "name": op_name,
         "description": "autoresearch optimization",
         "dsl": dsl or None,
+        "framework": framework or None,
+        "backend": backend or None,
+        "arch": arch or None,
         "editable_files": list(editable_files.keys()),
         "eval": {
             "timeout": eval_timeout,
@@ -99,7 +117,7 @@ def scaffold_task_dir(
             "lower_is_better": True,
         },
         "agent": {
-            "program_file": "program.md",
+            **_program_yaml_key,
             "ref_file": "reference.py",
             "context_files": list(context_files.keys()),
             "max_rounds": max_rounds,

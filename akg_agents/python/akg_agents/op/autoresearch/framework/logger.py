@@ -8,10 +8,35 @@
 
 import json
 import os
+import re
 import time
 from typing import Optional
 
 from .config import EvalResult, RoundRecord, TaskConfig
+
+
+def _extract_error_reason(err: str, limit: int) -> str:
+    """Extract the meaningful error from raw stderr.
+
+    Raw eval output often starts with timestamps, PIDs, and device info
+    like '2026-04-06-18:06:19 (PID:3957939, Device:5) ERR99999 ...'.
+    We skip that noise and look for the actual exception.
+    """
+    # Try to find the last exception line (most specific)
+    # e.g. "RuntimeError: xxx" or "ValueError: xxx"
+    match = re.search(r'(\w+Error|\w+Exception):\s*.+', err)
+    if match:
+        return match.group(0)[:limit]
+    # Try ERR* code line, skip timestamp/PID prefix
+    match = re.search(r'(ERR\d+\s+.+)', err)
+    if match:
+        return match.group(1)[:limit]
+    # Fallback: skip leading timestamp/PID lines, take first non-empty
+    for line in err.splitlines():
+        line = line.strip()
+        if line and not re.match(r'^\d{4}-\d{2}-\d{2}', line) and line != 'Traceback (most recent call last):':
+            return line[:limit]
+    return err[:limit]
 
 
 def _escape_md_cell(text: str) -> str:
@@ -69,7 +94,7 @@ class RoundLogger:
             "error": record.result.error,
             "constraint_violations": record.constraint_violations,
             "metrics": record.result.metrics,
-            "raw_output": (record.result.raw_output or "")[:4096],
+            "raw_output": (record.result.raw_output or "")[:self.config.agent.log_raw_output_truncate],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         with open(self.jsonl_path, "a", encoding="utf-8") as f:
@@ -92,6 +117,16 @@ class RoundLogger:
         row = f"| R{record.round_num} | {desc} | {correct_str} | {primary_val} | {status} | {commit_str} |\n"
         with open(self.md_path, "a", encoding="utf-8") as f:
             f.write(row)
+
+        # Auto-write ranking.md for hint subagent to read on demand
+        try:
+            ranking = self.get_performance_ranking()
+            if ranking:
+                ranking_path = os.path.join(self.task_dir, "ranking.md")
+                with open(ranking_path, "w", encoding="utf-8") as f:
+                    f.write(ranking)
+        except Exception:
+            pass
 
     def load_history(self) -> list[dict]:
         """读取全部历史记录"""
@@ -132,7 +167,9 @@ class RoundLogger:
                         best = record
         return best
 
-    def get_history_summary(self, last_n: int = 10) -> str:
+    def get_history_summary(self, last_n: int | None = None) -> str:
+        if last_n is None:
+            last_n = self.config.agent.history_summary_last_n
         """生成最近 N 轮的摘要文本, 用于 agent prompt"""
         history = self.load_history()
         if not history:
@@ -164,8 +201,14 @@ class RoundLogger:
 
         return "\n".join(lines)
 
-    def get_performance_ranking(self) -> str:
-        """按主指标排序所有正确结果 + 失败记录, 供 agent 识别最优策略和避开死胡同."""
+    def get_performance_ranking(self, *, max_correct: int = 0,
+                                max_failed: int = 0) -> str:
+        """按主指标排序所有正确结果 + 失败记录, 供 agent 识别最优策略和避开死胡同.
+
+        Args:
+            max_correct: 保留 top N 条正确结果 (0 = 不限).
+            max_failed: 保留最近 N 条失败记录 (0 = 不限).
+        """
         history = self.load_history()
         if not history:
             return ""
@@ -182,6 +225,14 @@ class RoundLogger:
                 failed.append(r)
 
         lines = []
+        desc_limit = self.config.agent.ranking_description_truncate
+
+        # Reference value for speedup display
+        ref_val = None
+        if correct:
+            baseline = [r for r in correct if r["round"] == 0]
+            if baseline:
+                ref_val = baseline[0]["metrics"].get(metric)
 
         if correct:
             correct.sort(
@@ -196,28 +247,59 @@ class RoundLogger:
                 "NOTE: benchmark has variance — small differences may be noise. "
                 "Strategies close to the best are worth combining or retrying."
             )
-            for i, r in enumerate(correct, 1):
+            # Build best-at-time map to explain discards
+            lib = self.config.lower_is_better
+            best_at_time = {}  # round -> best metric value when evaluated
+            running_best = None
+            for r in history:
+                rn = r["round"]
+                m = r.get("metrics", {}).get(metric)
+                if r.get("correctness") and not r.get("constraint_violations") and m is not None:
+                    if r["accepted"]:
+                        running_best = m
+                    best_at_time[rn] = running_best
+
+            show_correct = correct[:max_correct] if max_correct else correct
+            omitted = len(correct) - len(show_correct)
+            for i, r in enumerate(show_correct, 1):
                 val = r["metrics"][metric]
-                tag = "KEEP" if r["accepted"] else "discarded"
+                speedup = ""
+                if ref_val and ref_val > 0 and val > 0:
+                    speedup = f" ({ref_val / val:.2f}x vs baseline)"
+                if r["accepted"]:
+                    tag = "KEEP"
+                else:
+                    bt = best_at_time.get(r["round"])
+                    if bt is not None:
+                        tag = f"discarded, best was {bt:.2f}"
+                    else:
+                        tag = "discarded"
                 lines.append(
-                    f"  {i}. R{r['round']}: {val:.2f} [{tag}] — {r['description'][:100]}"
+                    f"  {i}. R{r['round']}: {val:.2f}{speedup} [{tag}] — {r['description'][:desc_limit]}"
                 )
+            if omitted:
+                lines.append(f"  ... ({omitted} lower-ranked results omitted)")
 
         if failed:
+            err_limit = self.config.agent.ranking_error_truncate
+            show_failed = failed[-max_failed:] if max_failed else failed
+            omitted_f = len(failed) - len(show_failed)
             lines.append(f"\n## Failed Attempts ({len(failed)} — do NOT repeat)")
-            for r in failed:
+            if omitted_f:
+                lines.append(f"  ... ({omitted_f} older failures omitted)")
+            for r in show_failed:
                 err = r.get("error")
                 cv = r.get("constraint_violations")
                 if err:
-                    reason = err[:120]
+                    tag = _extract_error_reason(err, err_limit)
                 elif not r.get("correctness"):
-                    reason = "correctness mismatch"
+                    tag = "correctness mismatch"
                 elif cv:
-                    reason = "constraint: " + "; ".join(cv)
+                    tag = "constraint: " + "; ".join(cv)
                 else:
-                    reason = "no benchmark result"
+                    tag = "no benchmark result"
                 lines.append(
-                    f"  - R{r['round']}: {reason} — {r['description'][:100]}"
+                    f"  - R{r['round']}: {r['description'][:desc_limit]} [{tag}]"
                 )
 
         return "\n".join(lines)
