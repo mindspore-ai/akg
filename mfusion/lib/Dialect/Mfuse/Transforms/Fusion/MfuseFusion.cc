@@ -68,6 +68,7 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
         // fuse-add-rms-norm can then fold adjacent add ops with the resulting aclnn.rms_norm.
         {"fuse-addrmsnorm", []() { return createFuseAddRmsNormPass(); }},
         {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
+        {"fuse-num-to-tensor", []() { return createFuseNumToTensorPass(); }},
     };
 
     PassManager pm(&getContext());

@@ -351,3 +351,35 @@ func.func @test_aclnn_mm_trans_b(%arg0: tensor<2x4xf32>, %arg1: tensor<8x4xf32>)
   %0 = mfuse.aclnn.mm %arg0, %arg1 {trans_x2 = true} : (tensor<2x4xf32>, tensor<8x4xf32>) -> tensor<2x8xf32>
   return %0 : tensor<2x8xf32>
 }
+
+// CHECK-LABEL: func.func @test_full_with_explicit_attrs
+func.func @test_full_with_explicit_attrs() -> tensor<2x3xf32> {
+  // CHECK-DAG: %[[D0:.*]] = torch.constant.int 2
+  // CHECK-DAG: %[[D1:.*]] = torch.constant.int 3
+  // CHECK-DAG: %[[SIZE:.*]] = torch.prim.ListConstruct %[[D0]], %[[D1]]
+  // CHECK-DAG: %[[FILL:.*]] = torch.constant.float 3.500000e+00
+  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
+  // CHECK-DAG: %[[LAYOUT:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[DEVICE:.*]] = torch.constant.device "npu"
+  // CHECK-DAG: %[[PIN:.*]] = torch.constant.bool true
+  // CHECK: %[[FULL0:.*]] = torch.aten.full %[[SIZE]], %[[FILL]], %[[DTYPE]], %[[LAYOUT]], %[[DEVICE]], %[[PIN]]
+  %cst = mfuse.constant dense<3.500000e+00> : tensor<f32, {is_scalar = ""}>
+  %0 = mfuse.full %cst {device = "npu", dtype = 6 : i64, layout = 0 : i64, pin_memory = true} : (tensor<f32, {is_scalar = ""}>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL: func.func @test_full_with_inferred_dtype
+func.func @test_full_with_inferred_dtype() -> tensor<4x5xf16> {
+  // CHECK-DAG: %[[D2:.*]] = torch.constant.int 4
+  // CHECK-DAG: %[[D3:.*]] = torch.constant.int 5
+  // CHECK-DAG: %[[SIZE1:.*]] = torch.prim.ListConstruct %[[D2]], %[[D3]]
+  // CHECK-DAG: %[[FILL1:.*]] = torch.constant.float 1.250000e+00
+  // CHECK-DAG: %[[DTYPE1:.*]] = torch.constant.int 5
+  // CHECK-DAG: %[[LAYOUT_NONE:.*]] = torch.constant.none
+  // CHECK-DAG: %[[DEVICE_NONE:.*]] = torch.constant.none
+  // CHECK-DAG: %[[PIN_NONE:.*]] = torch.constant.none
+  // CHECK: %[[FULL1:.*]] = torch.aten.full %[[SIZE1]], %[[FILL1]], %[[DTYPE1]], %[[LAYOUT_NONE]], %[[DEVICE_NONE]], %[[PIN_NONE]]
+  %cst = mfuse.constant dense<1.250000e+00> : tensor<f16, {is_scalar = ""}>
+  %0 = mfuse.full %cst : (tensor<f16, {is_scalar = ""}>) -> tensor<4x5xf16>
+  return %0 : tensor<4x5xf16>
+}

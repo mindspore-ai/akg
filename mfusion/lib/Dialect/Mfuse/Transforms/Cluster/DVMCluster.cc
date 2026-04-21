@@ -121,6 +121,7 @@ class DvmSupportChecker {
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
     auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
     auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
+    auto fullOpCheck = [](Operation *op) { return fullCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
@@ -148,6 +149,7 @@ class DvmSupportChecker {
     checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
     // Should add Assign check. There is no corresponding op in aten.
     checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
+    checkFunc_["mfuse.full"] = {fullOpCheck};
     // slice op
     checkFunc_["mfuse.slice"] = {sliceSupported, inputCheckFirst};
     // Should add StridedSlice check. There is no corresponding op in aten.
@@ -205,6 +207,11 @@ class DvmSupportChecker {
   static bool intOpCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     return outputType && isFloatIntType(outputType);
+  }
+
+  static bool fullCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && (isFloatType(outputType) || outputType.isInteger(32) || outputType.isInteger(1));
   }
 
   static bool mulOpCheck(Operation *op) {
@@ -506,25 +513,19 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
   // Clusterable operations for DVM backend.
   // Currently, we only support dvm supported operations.
   return llvm::DenseSet<llvm::StringRef>({
-    "mfuse.abs",          "mfuse.add",
-    "mfuse.broadcast_to", "mfuse.cast",
-    "mfuse.exp",          "mfuse.log",
-    "mfuse.maximum",      "mfuse.minimum",
-    "mfuse.mul",          "mfuse.neg",
-    "mfuse.relu",         "mfuse.pow",
-    "mfuse.div",          "mfuse.real_div",
-    "mfuse.reciprocal",   "mfuse.rsqrt",
-    "mfuse.sqrt",         "mfuse.sub",
-    "mfuse.eq",           "mfuse.ne",
-    "mfuse.gt",           "mfuse.ge",
-    "mfuse.lt",           "mfuse.le",
-    "mfuse.logical_and",  "mfuse.logical_or",
-    "mfuse.logical_not",  "mfuse.select",
-    "mfuse.assign",       "mfuse.reduce_sum",
-    "mfuse.is_finite",    "mfuse.reshape",
-    "mfuse.floor",        "mfuse.ceil",
-    "mfuse.trunc",        "mfuse.matmul",
-    "mfuse.batch_matmul", "mfuse.grouped_matmul",
+    "mfuse.abs",         "mfuse.add",          "mfuse.broadcast_to",
+    "mfuse.cast",        "mfuse.exp",          "mfuse.log",
+    "mfuse.maximum",     "mfuse.minimum",      "mfuse.mul",
+    "mfuse.neg",         "mfuse.relu",         "mfuse.pow",
+    "mfuse.full",        "mfuse.div",          "mfuse.real_div",
+    "mfuse.reciprocal",  "mfuse.rsqrt",        "mfuse.sqrt",
+    "mfuse.sub",         "mfuse.eq",           "mfuse.ne",
+    "mfuse.gt",          "mfuse.ge",           "mfuse.lt",
+    "mfuse.le",          "mfuse.logical_and",  "mfuse.logical_or",
+    "mfuse.logical_not", "mfuse.select",       "mfuse.assign",
+    "mfuse.reduce_sum",  "mfuse.is_finite",    "mfuse.reshape",
+    "mfuse.floor",       "mfuse.ceil",         "mfuse.trunc",
+    "mfuse.matmul",      "mfuse.batch_matmul", "mfuse.grouped_matmul",
   });
 }
 
