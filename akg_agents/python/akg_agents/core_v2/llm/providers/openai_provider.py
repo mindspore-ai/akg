@@ -109,15 +109,15 @@ class LLMProvider:
             "messages": messages,
             **kwargs
         }
-        
+
         if tools:
             request_kwargs["tools"] = tools
-        
+
         # 透传 extra_body（合并调用方可能传入的 extra_body）
         if self.extra_body:
             existing = request_kwargs.get("extra_body", {})
             request_kwargs["extra_body"] = {**self.extra_body, **existing}
-        
+
         response = await self.client.chat.completions.create(**request_kwargs)
         
         # 检查响应是否有效
@@ -210,10 +210,10 @@ class LLMProvider:
             "stream": True,
             **kwargs
         }
-        
+
         if tools:
             request_kwargs["tools"] = tools
-        
+
         # 透传 extra_body
         if self.extra_body:
             existing = request_kwargs.get("extra_body", {})

@@ -10,4 +10,5 @@ You are an autonomous optimization agent for task: {task_name}
 {primary_metric} ({metric_direction})
 
 {constraints_section}
+{fundamentals_section}
 {context_files_section}

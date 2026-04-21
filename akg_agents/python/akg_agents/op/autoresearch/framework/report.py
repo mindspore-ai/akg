@@ -135,6 +135,31 @@ def _generate_plots(history: list[dict], config: TaskConfig, output_path: str):
     if vals_keep:
         ax.scatter(rounds_keep, vals_keep, c="green", s=60, zorder=5,
                    label=f"keep ({len(rounds_keep)})", edgecolors="darkgreen", linewidths=0.5)
+        # Annotate keep points with speedup vs ref (skip baseline R0).
+        # When points are too close, drop the older one to avoid overlap.
+        if ref_val is not None and ref_val > 0:
+            annotations = [
+                (r, v) for r, v in zip(rounds_keep, vals_keep)
+                if r != 0 and v > 0
+            ]
+            if annotations:
+                # Y-axis span determines minimum spacing threshold
+                all_vals = vals_keep + vals_discard
+                y_span = max(all_vals) - min(all_vals) if len(all_vals) > 1 else 1
+                min_gap = y_span * 0.06  # ~6% of visible range
+
+                # Filter from newest to oldest: keep newest, drop older if too close
+                filtered = [annotations[-1]]
+                for r, v in reversed(annotations[:-1]):
+                    if abs(v - filtered[-1][1]) >= min_gap:
+                        filtered.append((r, v))
+                filtered.reverse()
+
+                for r, v in filtered:
+                    speedup = ref_val / v
+                    ax.annotate(f"{speedup:.1f}x", (r, v),
+                                textcoords="offset points", xytext=(0, 8),
+                                fontsize=7, ha="center", color="darkgreen")
     if vals_discard:
         ax.scatter(rounds_discard, vals_discard, c="salmon", s=40, zorder=4,
                    label=f"discard ({len(rounds_discard)})", alpha=0.7,
