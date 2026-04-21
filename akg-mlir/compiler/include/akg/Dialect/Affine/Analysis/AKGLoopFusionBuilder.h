@@ -121,10 +121,15 @@ struct FusionGuard {
   unsigned dimPos = 0;
   // LB for ExtraDimEqLB, UB for SmallerUB.
   int64_t boundValue = 0;
+  // Subview offset in the guarded dimension.  When non-zero the guard becomes
+  // "primaryIV >= offset" and the secondary IV is shifted by this offset
+  // (secondaryIV = primaryIV - offset).
+  int64_t offset = 0;
 
   bool isNeeded() const { return kind != None; }
 
   // Builds an IntegerSet encoding the guard condition over a single dimension.
+  // When offset != 0, the condition becomes "d0 - offset >= 0".
   IntegerSet buildCondSet(MLIRContext *ctx) const;
 };
 
@@ -161,12 +166,22 @@ struct SubviewFusionHelper {
   // Handles same-rank case: all bounds match (trivial) or exactly one UB differs.
   bool buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
 
+  // Handles same-depth case with permuted dimensions: tries all non-identity
+  // permutations to find a mapping where bounds align (at most one UB mismatch).
+  bool buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+
   // Collects clone stages from the secondary side's loop body.
   // Perfect nest → 1 stage; imperfect nest → one stage per level from perfectDepth-1.
   llvm::SmallVector<CloneStage> collectCloneStages(const FusionLoopNestInfo &info);
 
-  // Emits all clone stages into the primary side's innermost body with IV mapping and optional guard.
-  void emitCloneStages(const llvm::SmallVector<CloneStage> &stages, IRMapping &mapper);
+  // Builds IV mapping (with optional subview-offset shift) and emits all clone
+  // stages into the primary side's innermost body with an optional guard.
+  void emitCloneStages(const llvm::SmallVector<CloneStage> &stages);
+
+  // Detects the subview static offset in the guarded dimension by walking
+  // secondary loop accesses. Returns 0 when no subview offset applies.
+  // secondaryGuardDim: the secondary loop dimension that maps to the guarded primary dimension.
+  int64_t detectGuardDimSubviewOffset(unsigned secondaryGuardDim);
 
   SubviewFusionPlan plan;
 };
