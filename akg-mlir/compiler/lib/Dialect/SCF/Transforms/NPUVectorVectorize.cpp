@@ -45,9 +45,12 @@
 
 #include <algorithm>
 #include <iterator>
-#include <numeric>
 #include <limits>
+#include <memory>
+#include <numeric>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -62,11 +65,9 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-
-#define DEBUG_TYPE "npuvector-vectorize"
 
 namespace mlir {
 namespace scf {
@@ -187,7 +188,8 @@ struct VectorizationContext {
 };
 
 static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx,
-                                      npuvector::NPUVectorType targetType = {});
+                                      npuvector::NPUVectorType targetType = {},
+                                      llvm::ArrayRef<int> resultDimToCtxAxis = {});
 static void ensureReductionYield(VectorizationContext &ctx);
 static LogicalResult vectorizeLoop(scf::ForOp scalarLoop, int64_t actualStep, Value vfValue, Value maxStepValue,
                                    VectorizationMode mode, OpBuilder &builder, Value vecAxis,
@@ -364,8 +366,9 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, Vector
       else
         dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.vectorSizes[i]));
     }
-    Value neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
-                                                                  ValueRange(maxSizes));
+    Value neutralVec =
+      ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
+                                                 ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
 
     return neutralVec;
 
@@ -497,6 +500,88 @@ static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
   return vecLoop;
 }
 
+static std::optional<int64_t> tryConstantIndex(Value indexValue) {
+  if (auto constantIndexOp = indexValue.getDefiningOp<arith::ConstantIndexOp>()) return constantIndexOp.value();
+  if (auto constantOp = indexValue.getDefiningOp<arith::ConstantOp>()) {
+    if (!indexValue.getType().isIndex()) return std::nullopt;
+    if (auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) return integerAttr.getValue().getSExtValue();
+  }
+  return std::nullopt;
+}
+
+/// Tile extent Values per result dim (transfer_read, then transpose perm).
+static bool gatherVectorDynExtents(Value vectorVal, SmallVectorImpl<Value> &outExtents) {
+  Operation *defOp = vectorVal.getDefiningOp();
+  if (!defOp) return false;
+
+  if (auto readOp = mlir::dyn_cast<npuvector::TransferReadOp>(defOp)) {
+    auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vectorVal.getType());
+    if (!nvt) return false;
+    npuvector::TransferReadOp::Adaptor readAdaptor(readOp);
+    ValueRange dynSizes = readAdaptor.getDynamicSizes();
+    if (static_cast<int64_t>(dynSizes.size()) != static_cast<int64_t>(nvt.getRank())) return false;
+    outExtents.assign(dynSizes.begin(), dynSizes.end());
+    return true;
+  }
+
+  if (auto transposeOp = mlir::dyn_cast<npuvector::TransposeOp>(defOp)) {
+    SmallVector<Value> innerExtents;
+    if (!gatherVectorDynExtents(transposeOp.getVector(), innerExtents)) return false;
+    ArrayRef<int64_t> perm = transposeOp.getPermutation();
+    auto resultNvt = mlir::dyn_cast<npuvector::NPUVectorType>(vectorVal.getType());
+    if (!resultNvt || perm.size() != static_cast<size_t>(resultNvt.getRank())) return false;
+    const unsigned rank = static_cast<unsigned>(resultNvt.getRank());
+    outExtents.resize(rank);
+    for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
+      const int64_t srcDim = perm[resultDim];
+      if (srcDim < 0 || static_cast<size_t>(srcDim) >= innerExtents.size()) return false;
+      outExtents[resultDim] = innerExtents[static_cast<unsigned>(srcDim)];
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/// Map one tile extent Value to a unique ctx vector axis index, or nullopt.
+static std::optional<unsigned> matchExtentValueToCtxAxis(Value extent, const VectorizationContext &ctx) {
+  Value mappedExt = ctx.valueMapping.lookupOrDefault(extent);
+  llvm::SmallVector<unsigned, 4> hits;
+  for (unsigned axisIdx = 0; axisIdx < ctx.vectorSizes.size(); ++axisIdx) {
+    if (ctx.vectorSizeValues[axisIdx]) {
+      Value refLen = ctx.valueMapping.lookupOrDefault(ctx.vectorSizeValues[axisIdx]);
+      if (mappedExt == refLen || extent == refLen) hits.push_back(axisIdx);
+    } else {
+      const std::optional<int64_t> extentAsConstant = tryConstantIndex(mappedExt);
+      if (extentAsConstant && static_cast<int64_t>(ctx.vectorSizes[axisIdx]) == *extentAsConstant)
+        hits.push_back(axisIdx);
+    }
+  }
+  if (hits.size() != 1) return std::nullopt;
+  return hits.front();
+}
+
+/// If IV-derived sortedDims disagrees with axes inferred from tile extents, replace sortedDims.
+static void reconcileValueDimOrderWithTileExtents(Value loadedVector, SmallVector<int> &sortedDims,
+                                                  const VectorizationContext &ctx) {
+  SmallVector<Value> perDimExtents;
+  if (!gatherVectorDynExtents(loadedVector, perDimExtents)) return;
+  if (perDimExtents.size() != sortedDims.size()) return;
+
+  SmallVector<int> fromExtents;
+  fromExtents.reserve(perDimExtents.size());
+  llvm::SmallDenseSet<unsigned> usedAxes;
+  for (Value ext : perDimExtents) {
+    std::optional<unsigned> axisOpt = matchExtentValueToCtxAxis(ext, ctx);
+    if (!axisOpt || !usedAxes.insert(*axisOpt).second) return;
+    fromExtents.push_back(static_cast<int>(*axisOpt));
+  }
+
+  if (sortedDims.size() == fromExtents.size() && std::equal(sortedDims.begin(), sortedDims.end(), fromExtents.begin()))
+    return;
+  sortedDims = std::move(fromExtents);
+}
+
 static void collectLoadIndexVectorDims(memref::LoadOp loadOp, const VectorizationContext &ctx,
                                        SmallVectorImpl<int> &indexToDim, SmallVector<int> &activeInAppearOrder) {
   indexToDim.clear();
@@ -605,6 +690,7 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
     }
     result = ctx.builder.create<npuvector::TransposeOp>(loc, result, transposePerm);
   }
+  reconcileValueDimOrderWithTileExtents(result, sortedDims, ctx);
   ctx.valueDimOrder[result] = sortedDims;
 
   return result;
@@ -670,101 +756,250 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
   ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, ValueRange(indices), Value());
 }
 
-static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
-  Location loc = op->getLoc();
-
-  SmallVector<Value, 4> vecOperands;
-  SmallVector<unsigned> scalarIndices;
+static void collectArithVecOperands(Operation *op, VectorizationContext &ctx, SmallVectorImpl<Value> &vecOperands,
+                                    SmallVectorImpl<unsigned> &scalarIndices) {
+  vecOperands.clear();
+  scalarIndices.clear();
   for (auto [i, operand] : llvm::enumerate(op->getOperands())) {
     Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
-
     if (!vecOperand || !mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
-      Value valueToBroadcast = vecOperand ? vecOperand : operand;
-      vecOperands.push_back(valueToBroadcast);
+      vecOperands.push_back(vecOperand ? vecOperand : operand);
       scalarIndices.push_back(i);
     } else {
       vecOperands.push_back(vecOperand);
     }
   }
+}
 
-  npuvector::NPUVectorType refVecType;
+static bool pickHighestRankNpuVecType(const SmallVectorImpl<Value> &vecOperands,
+                                      npuvector::NPUVectorType &outRefVecType) {
+  int64_t bestRank = -1;
   for (Value vo : vecOperands) {
-    if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vo.getType())) {
-      refVecType = nvt;
-      break;
+    auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vo.getType());
+    if (!nvt) continue;
+    int64_t r = static_cast<int64_t>(nvt.getRank());
+    if (r > bestRank) {
+      bestRank = r;
+      outRefVecType = nvt;
     }
   }
+  return bestRank >= 0;
+}
 
+static const SmallVector<int> *lookupRefDimOrderForBroadcast(VectorizationContext &ctx,
+                                                             npuvector::NPUVectorType refVecType,
+                                                             const SmallVectorImpl<Value> &vecOperands) {
+  for (Value vo : vecOperands) {
+    auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vo.getType());
+    if (!nvt) continue;
+    if (nvt.getShape() != refVecType.getShape() || nvt.getElementType() != refVecType.getElementType()) continue;
+    auto it = ctx.valueDimOrder.find(vo);
+    if (it != ctx.valueDimOrder.end() && it->second.size() == static_cast<size_t>(refVecType.getRank()))
+      return &it->second;
+  }
+  return nullptr;
+}
+
+static bool broadcastScalarSlotsToRef(SmallVectorImpl<Value> &vecOperands,
+                                      const SmallVectorImpl<unsigned> &scalarIndices, bool haveRefVec,
+                                      npuvector::NPUVectorType refVecType, llvm::ArrayRef<int> broadcastCtxAxes,
+                                      VectorizationContext &ctx) {
+  npuvector::NPUVectorType target = haveRefVec ? refVecType : npuvector::NPUVectorType{};
   for (unsigned idx : scalarIndices) {
-    Value broadcasted = vectorizeBroadcastScalar(vecOperands[idx], ctx, refVecType);
-    if (!broadcasted) return nullptr;
+    Value broadcasted = vectorizeBroadcastScalar(vecOperands[idx], ctx, target, broadcastCtxAxes);
+    if (!broadcasted) return false;
     vecOperands[idx] = broadcasted;
   }
+  return true;
+}
 
-  SmallVector<Type, 4> vecResultTypes;
-  for (Value result : op->getResults()) {
-    Type scalarType = result.getType();
-    npuvector::NPUVectorType vecType =
-      refVecType ? npuvector::NPUVectorType::get(refVecType.getShape(), scalarType) : ctx.getVectorType(scalarType);
-    vecResultTypes.push_back(vecType);
+static bool alignOperandRanksToRef(SmallVectorImpl<Value> &vecOperands, npuvector::NPUVectorType refVecType,
+                                   llvm::ArrayRef<int> broadcastCtxAxes, VectorizationContext &ctx) {
+  for (unsigned i = 0, e = vecOperands.size(); i != e; ++i) {
+    auto cur = mlir::dyn_cast<npuvector::NPUVectorType>(vecOperands[i].getType());
+    if (!cur) continue;
+    auto want = npuvector::NPUVectorType::get(refVecType.getShape(), cur.getElementType());
+    if (want == cur) continue;
+    Value aligned = vectorizeBroadcastScalar(vecOperands[i], ctx, refVecType, broadcastCtxAxes);
+    if (!aligned) return false;
+    vecOperands[i] = aligned;
   }
+  return true;
+}
 
-  bool needsRename = isa<arith::ExtFOp, arith::TruncFOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-                         arith::SIToFPOp, arith::UIToFPOp, arith::FPToSIOp, arith::FPToUIOp, arith::BitcastOp,
-                         arith::IndexCastOp, arith::IndexCastUIOp, arith::CmpIOp, arith::CmpFOp, arith::SelectOp>(op);
+static bool arithUsesRenamedNpuvectorDialect(Operation *op) {
+  return isa<arith::ExtFOp, arith::TruncFOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp,
+             arith::UIToFPOp, arith::FPToSIOp, arith::FPToUIOp, arith::BitcastOp, arith::IndexCastOp,
+             arith::IndexCastUIOp, arith::CmpIOp, arith::CmpFOp, arith::SelectOp>(op);
+}
 
-  Operation *vecOp;
-  if (needsRename) {
+static Operation *createRenamedOrSameNameVecArith(Operation *op, Location loc, SmallVectorImpl<Value> &vecOperands,
+                                                  SmallVectorImpl<Type> &vecResultTypes, VectorizationContext &ctx) {
+  if (arithUsesRenamedNpuvectorDialect(op)) {
     StringRef arithOpName = op->getName().getStringRef();
     std::string npuvectorOpName = "npuvector." + arithOpName.split('.').second.str();
     OperationName npuvectorName(npuvectorOpName, ctx.builder.getContext());
-
     OperationState state(loc, npuvectorName);
     state.addOperands(vecOperands);
     state.addTypes(vecResultTypes);
     state.addAttributes(op->getAttrs());
-
-    vecOp = ctx.builder.create(state);
-  } else {
-    vecOp = ctx.builder.create(loc, op->getName().getIdentifier(), vecOperands, vecResultTypes, op->getAttrs());
+    return ctx.builder.create(state);
   }
+  return ctx.builder.create(loc, op->getName().getIdentifier(), vecOperands, vecResultTypes, op->getAttrs());
+}
 
-  if (!vecOp || vecOp->getNumResults() == 0) {
-    return nullptr;
-  }
-
-  Value result = vecOp->getResult(0);
+static void propagateValueDimOrderToFirstOperandWithOrder(VectorizationContext &ctx, ValueRange vecOperands,
+                                                          Value result) {
   for (Value vo : vecOperands) {
     if (isa<npuvector::NPUVectorType>(vo.getType()) && ctx.valueDimOrder.count(vo)) {
       ctx.valueDimOrder[result] = ctx.valueDimOrder[vo];
       break;
     }
   }
-  return result;
 }
 
-static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx, npuvector::NPUVectorType targetType) {
-  if (mlir::isa<npuvector::NPUVectorType>(scalarVal.getType())) {
-    return scalarVal;
+static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
+  Location loc = op->getLoc();
+  SmallVector<Value, 4> vecOperands;
+  SmallVector<unsigned> scalarIndices;
+  collectArithVecOperands(op, ctx, vecOperands, scalarIndices);
+
+  npuvector::NPUVectorType refVecType;
+  const bool haveRefVec = pickHighestRankNpuVecType(vecOperands, refVecType);
+  const SmallVector<int> *refDimOrder =
+    haveRefVec ? lookupRefDimOrderForBroadcast(ctx, refVecType, vecOperands) : nullptr;
+  llvm::ArrayRef<int> broadcastCtxAxes = refDimOrder ? llvm::ArrayRef<int>(*refDimOrder) : llvm::ArrayRef<int>();
+
+  if (!broadcastScalarSlotsToRef(vecOperands, scalarIndices, haveRefVec, refVecType, broadcastCtxAxes, ctx))
+    return nullptr;
+  if (haveRefVec && !alignOperandRanksToRef(vecOperands, refVecType, broadcastCtxAxes, ctx)) return nullptr;
+
+  SmallVector<Type, 4> vecResultTypes;
+  for (Value result : op->getResults()) {
+    Type scalarType = result.getType();
+    npuvector::NPUVectorType vecType =
+      haveRefVec ? npuvector::NPUVectorType::get(refVecType.getShape(), scalarType) : ctx.getVectorType(scalarType);
+    vecResultTypes.push_back(vecType);
   }
 
-  Type scalarType = scalarVal.getType();
+  Operation *vecOp = createRenamedOrSameNameVecArith(op, loc, vecOperands, vecResultTypes, ctx);
+  if (!vecOp || vecOp->getNumResults() == 0) return nullptr;
+
+  Value vecResult = vecOp->getResult(0);
+  propagateValueDimOrderToFirstOperandWithOrder(ctx, vecOperands, vecResult);
+  return vecResult;
+}
+
+/// Fill dimension: source dim s maps to result dim where ctx axes match.
+static bool resolveBroadcastSrcToDestAxes(Value sourceVal, const VectorizationContext &ctx,
+                                          llvm::ArrayRef<int> resultDimToCtxAxis, int64_t dstRank,
+                                          SmallVectorImpl<int64_t> &outAxes) {
+  outAxes.clear();
+  auto srcNvt = mlir::dyn_cast<npuvector::NPUVectorType>(sourceVal.getType());
+  if (!srcNvt) return false;
+  const int64_t srcRank = static_cast<int64_t>(srcNvt.getRank());
+  if (srcRank <= 0 || srcRank >= dstRank) return false;
+
+  auto orderIter = ctx.valueDimOrder.find(sourceVal);
+  if (orderIter == ctx.valueDimOrder.end()) return false;
+  const SmallVector<int> &srcDimToGlobalAxis = orderIter->second;
+  if (static_cast<int64_t>(srcDimToGlobalAxis.size()) != srcRank) return false;
+
+  const unsigned ctxRank = static_cast<unsigned>(ctx.vectorSizes.size());
+  if (dstRank > static_cast<int64_t>(ctxRank)) return false;
+  const unsigned ctxOff = ctxRank - static_cast<unsigned>(dstRank);
+
+  llvm::SmallDenseSet<int64_t> usedDestDim;
+  for (int64_t srcDim = 0; srcDim < srcRank; ++srcDim) {
+    const int globalCtxAxis = srcDimToGlobalAxis[static_cast<unsigned>(srcDim)];
+    if (globalCtxAxis < 0 || static_cast<unsigned>(globalCtxAxis) >= ctxRank) return false;
+
+    int64_t destDim = -1;
+    if (!resultDimToCtxAxis.empty()) {
+      if (static_cast<size_t>(dstRank) != resultDimToCtxAxis.size()) return false;
+      for (int64_t resultDim = 0; resultDim < dstRank; ++resultDim) {
+        if (resultDimToCtxAxis[static_cast<unsigned>(resultDim)] == globalCtxAxis) {
+          destDim = resultDim;
+          break;
+        }
+      }
+    } else {
+      const unsigned axisUnsigned = static_cast<unsigned>(globalCtxAxis);
+      if (axisUnsigned < ctxOff) return false;
+      const unsigned relative = axisUnsigned - ctxOff;
+      if (relative >= static_cast<unsigned>(dstRank)) return false;
+      destDim = static_cast<int64_t>(relative);
+    }
+    if (destDim < 0) return false;
+    if (!usedDestDim.insert(destDim).second) return false;
+    outAxes.push_back(destDim);
+  }
+  return static_cast<int64_t>(outAxes.size()) == srcRank;
+}
+
+static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx, npuvector::NPUVectorType targetType,
+                                      llvm::ArrayRef<int> resultDimToCtxAxis) {
+  Type elemType;
+  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType()))
+    elemType = nvt.getElementType();
+  else
+    elemType = scalarVal.getType();
+
+  if (mlir::isa<npuvector::NPUVectorType>(scalarVal.getType())) {
+    if (targetType) {
+      auto want = npuvector::NPUVectorType::get(targetType.getShape(), elemType);
+      if (want == scalarVal.getType()) return scalarVal;
+    } else {
+      return scalarVal;
+    }
+  }
+
   Location loc = scalarVal.getLoc();
 
   npuvector::NPUVectorType vecType =
-    targetType ? npuvector::NPUVectorType::get(targetType.getShape(), scalarType) : ctx.getVectorType(scalarType);
+    targetType ? npuvector::NPUVectorType::get(targetType.getShape(), elemType) : ctx.getVectorType(elemType);
+
+  // Per-result-dim sizes: resultDimToCtxAxis[i] selects ctx axis; else suffix ctxOff+i.
+  const unsigned outRank = static_cast<unsigned>(vecType.getRank());
+  const unsigned ctxRank = static_cast<unsigned>(ctx.vectorSizes.size());
+  if (outRank > ctxRank) return Value();
+  if (!resultDimToCtxAxis.empty() && resultDimToCtxAxis.size() != outRank) return Value();
+  const unsigned ctxOff = ctxRank - outRank;
 
   SmallVector<Value> dynamicSizes;
   SmallVector<Value> maxSizes;
-  for (unsigned i = 0; i < ctx.vectorSizes.size(); ++i) {
-    maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.maxStepValues[i]));
-    if (ctx.vectorSizeValues[i])
-      dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.vectorSizeValues[i]));
+  dynamicSizes.reserve(outRank);
+  maxSizes.reserve(outRank);
+  for (unsigned i = 0; i < outRank; ++i) {
+    unsigned j;
+    if (!resultDimToCtxAxis.empty()) {
+      j = static_cast<unsigned>(resultDimToCtxAxis[i]);
+      if (j >= ctxRank) return Value();
+    } else {
+      j = ctxOff + i;
+    }
+    maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.maxStepValues[j]));
+    if (ctx.vectorSizeValues[j])
+      dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.vectorSizeValues[j]));
     else
-      dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.vectorSizes[i]));
+      dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.vectorSizes[j]));
   }
-  auto broadcast =
-    ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, scalarVal, ValueRange(dynamicSizes), ValueRange(maxSizes));
+  auto broadcast = ctx.builder.create<npuvector::BroadcastOp>(
+    loc, vecType, scalarVal, ValueRange(dynamicSizes), ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
+
+  const int64_t dstRank = static_cast<int64_t>(vecType.getRank());
+  int64_t srcRank = 0;
+  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType()))
+    srcRank = static_cast<int64_t>(nvt.getRank());
+  if (srcRank > 0 && srcRank < dstRank) {
+    SmallVector<int64_t> axes;
+    if (!resolveBroadcastSrcToDestAxes(scalarVal, ctx, resultDimToCtxAxis, dstRank, axes)) {
+      axes.clear();
+      axes.reserve(static_cast<size_t>(srcRank));
+      for (int64_t dimIdx = 0; dimIdx < srcRank; ++dimIdx) axes.push_back(dimIdx);
+    }
+    broadcast->setAttr("dimension", ctx.builder.getDenseI64ArrayAttr(axes));
+  }
 
   return broadcast.getResult();
 }
@@ -789,15 +1024,6 @@ static void cloneScalarOp(Operation &op, VectorizationContext &ctx) {
 }
 
 static LogicalResult vectorizeRegion(Region &region, VectorizationContext &ctx);
-
-static std::optional<int64_t> tryConstantIndex(Value indexValue) {
-  if (auto constantIndexOp = indexValue.getDefiningOp<arith::ConstantIndexOp>()) return constantIndexOp.value();
-  if (auto constantOp = indexValue.getDefiningOp<arith::ConstantOp>()) {
-    if (!indexValue.getType().isIndex()) return std::nullopt;
-    if (auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) return integerAttr.getValue().getSExtValue();
-  }
-  return std::nullopt;
-}
 
 enum class SignedEuclideanDivKind { FloorTowardNegInfinity, CeilTowardPosInfinity };
 
