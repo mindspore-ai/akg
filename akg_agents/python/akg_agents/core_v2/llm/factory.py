@@ -97,28 +97,16 @@ def create_llm_client(
     if model_level is None:
         model_level = settings.default_model
 
-    # 从配置中获取对应的模型配置
-    model_config = settings.models.get(model_level)
-
-    if model_config is None:
+    # 使用 resolve_model_level 获取配置（含 fallback）
+    model_config = None
+    try:
+        resolved_level, model_config = settings.resolve_model_level(model_level)
+        if resolved_level != model_level:
+            logger.info(f"Model level resolved: '{model_level}' -> '{resolved_level}'")
+            model_level = resolved_level
+    except ValueError:
         # 如果调用方显式传了连接参数，允许无配置使用
-        if base_url and api_key and model_name:
-            logger.info(f"Model level '{model_level}' not in config, using provided parameters")
-            final_base_url = base_url
-            final_api_key = api_key
-            final_model_name = model_name
-            final_temperature = temperature if temperature is not None else 0.2
-            final_max_tokens = max_tokens if max_tokens is not None else 8192
-            final_top_p = top_p if top_p is not None else 0.9
-            final_frequency_penalty = frequency_penalty
-            final_presence_penalty = presence_penalty
-            final_timeout = kwargs.pop("timeout", 300)
-            final_extra_body = kwargs.pop("extra_body", {})
-            final_provider_type = kwargs.pop("provider_type", "openai")
-            # 向后兼容：thinking_enabled=True → 默认 extra_body
-            if not final_extra_body and kwargs.pop("thinking_enabled", False):
-                final_extra_body = {"thinking": {"type": "enabled"}}
-        else:
+        if not (base_url and api_key and model_name):
             available = list(settings.models.keys()) if settings.models else []
             raise ValueError(
                 f"模型级别 '{model_level}' 未配置，无法创建 LLM 客户端。\n"
@@ -127,7 +115,10 @@ def create_llm_client(
                 f"    环境变量: export AKG_AGENTS_{model_level.upper()}_*=...\n"
                 f"    配置文件: ~/.akg/settings.json 或 .akg/settings.json 或 .akg/settings.local.json"
             )
-    else:
+        logger.info(f"Model level '{model_level}' not in config, using provided parameters")
+
+    # 确定最终配置（参数 > 配置）
+    if model_config:
         # 使用配置中的模型，但参数可以覆盖
         final_base_url = base_url or model_config.base_url
         final_api_key = api_key or model_config.api_key
@@ -142,9 +133,23 @@ def create_llm_client(
         final_timeout = kwargs.pop("timeout", model_config.timeout)
         final_extra_body = kwargs.pop("extra_body", model_config.extra_body)
         final_provider_type = kwargs.pop("provider_type", model_config.provider_type)
-        # 向后兼容：thinking_enabled=True → 默认 extra_body
-        if not final_extra_body and kwargs.pop("thinking_enabled", False):
-            final_extra_body = {"thinking": {"type": "enabled"}}
+    else:
+        # 无配置，使用显式参数
+        final_base_url = base_url
+        final_api_key = api_key
+        final_model_name = model_name
+        final_temperature = temperature if temperature is not None else 0.2
+        final_max_tokens = max_tokens if max_tokens is not None else 8192
+        final_top_p = top_p if top_p is not None else 0.9
+        final_frequency_penalty = frequency_penalty
+        final_presence_penalty = presence_penalty
+        final_timeout = kwargs.pop("timeout", 300)
+        final_extra_body = kwargs.pop("extra_body", {})
+        final_provider_type = kwargs.pop("provider_type", "openai")
+
+    # 向后兼容：thinking_enabled=True → 默认 extra_body
+    if not final_extra_body and kwargs.pop("thinking_enabled", False):
+        final_extra_body = {"thinking": {"type": "enabled"}}
 
     logger.info(
         f"Creating LLMClient: level={model_level}, model={final_model_name}, "

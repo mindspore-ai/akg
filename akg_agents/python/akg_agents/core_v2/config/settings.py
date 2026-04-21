@@ -88,6 +88,12 @@ def _detect_env_prefix(*var_names: str) -> str:
     return "AIKG"
 
 
+# ========================= 常量 =========================
+
+# Model level fallback 优先级
+MODEL_LEVEL_FALLBACK_ORDER: List[str] = ["complex", "standard", "fast"]
+
+
 # ========================= 数据类 =========================
 
 @dataclass
@@ -312,7 +318,56 @@ class AKGSettings:
     def get_embedding_source(self) -> str:
         """获取 embedding 配置的来源"""
         return self._embedding_source
-    
+
+    def resolve_model_level(self, requested_level: str) -> Tuple[str, "ModelConfig"]:
+        """
+        解析模型级别，支持 fallback 机制
+
+        Fallback 顺序：
+        1. 请求的 level
+        2. default_model 配置的 level
+        3. 按 MODEL_LEVEL_FALLBACK_ORDER 顺序依次尝试
+
+        Args:
+            requested_level: 请求的模型级别
+
+        Returns:
+            Tuple[str, ModelConfig]: (实际使用的 level, 对应配置)
+
+        Raises:
+            ValueError: 所有 fallback 都失败时
+        """
+        # 1. 尝试请求的 level
+        if requested_level in self.models:
+            return requested_level, self.models[requested_level]
+
+        # 2. 尝试 default_model
+        if self.default_model and self.default_model in self.models:
+            logger.warning(
+                f"Model level '{requested_level}' not found, "
+                f"falling back to default_model '{self.default_model}'"
+            )
+            return self.default_model, self.models[self.default_model]
+
+        # 3. 按 fallback 顺序尝试
+        for fallback_level in MODEL_LEVEL_FALLBACK_ORDER:
+            if fallback_level in self.models:
+                logger.warning(
+                    f"Model level '{requested_level}' and default '{self.default_model}' not found, "
+                    f"falling back to '{fallback_level}'"
+                )
+                return fallback_level, self.models[fallback_level]
+
+        # 4. 完全失败
+        available = list(self.models.keys()) if self.models else []
+        raise ValueError(
+            f"Model level '{requested_level}' not found and no fallback available.\n"
+            f"  Requested: '{requested_level}'\n"
+            f"  Default: '{self.default_model}'\n"
+            f"  Available: {available}\n"
+            f"  Fallback order tried: {MODEL_LEVEL_FALLBACK_ORDER}"
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于保存，不含来源追踪字段）"""
         result = {

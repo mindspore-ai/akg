@@ -17,7 +17,7 @@
 """
 
 import pytest
-from akg_agents.core_v2.config import ModelConfig, get_settings
+from akg_agents.core_v2.config import ModelConfig, get_settings, AKGSettings
 from akg_agents.core_v2.llm import create_llm_client
 
 
@@ -109,12 +109,95 @@ class TestLLMClientFactory:
         monkeypatch.setenv("AKG_AGENTS_BASE_URL", "https://api.deepseek.com/v1")
         monkeypatch.setenv("AKG_AGENTS_API_KEY", "sk-test")
         monkeypatch.setenv("AKG_AGENTS_MODEL_NAME", "deepseek-chat")
-        
+
         settings = get_settings()
-        
+
         # 应该自动设置为 standard 级别
         assert "standard" in settings.models
         assert settings.models["standard"].model_name == "deepseek-chat"
+
+
+class TestModelLevelFallback:
+    """测试模型级别 fallback 机制"""
+
+    def test_resolve_model_level_direct_match(self):
+        """测试请求级别直接存在"""
+        settings = AKGSettings()
+        settings.models["standard"] = ModelConfig(
+            base_url="http://test", api_key="key", model_name="gpt-4"
+        )
+        settings.default_model = "standard"
+
+        level, config = settings.resolve_model_level("standard")
+
+        assert level == "standard"
+        assert config.model_name == "gpt-4"
+
+    def test_resolve_model_level_fallback_to_default(self):
+        """测试请求级别不存在，fallback 到 default_model"""
+        settings = AKGSettings()
+        settings.models["standard"] = ModelConfig(
+            base_url="http://test", api_key="key", model_name="gpt-4"
+        )
+        settings.default_model = "standard"
+
+        # 请求 fast（不存在），应 fallback 到 default（standard）
+        level, config = settings.resolve_model_level("fast")
+
+        assert level == "standard"
+        assert config.model_name == "gpt-4"
+
+    def test_resolve_model_level_fallback_to_order(self):
+        """测试请求级别和 default 都不存在，按顺序 fallback"""
+        settings = AKGSettings()
+        settings.models["complex"] = ModelConfig(
+            base_url="http://test", api_key="key", model_name="gpt-4o"
+        )
+        settings.default_model = "fast"  # fast 不存在
+
+        # 请求 coder（不存在），default=fast（不存在）
+        # 应按 complex -> standard -> fast 顺序，找到 complex
+        level, config = settings.resolve_model_level("coder")
+
+        assert level == "complex"
+        assert config.model_name == "gpt-4o"
+
+    def test_resolve_model_level_no_fallback_available(self):
+        """测试所有 fallback 都失败"""
+        settings = AKGSettings()
+        settings.models = {}  # 无任何配置
+        settings.default_model = "standard"
+
+        with pytest.raises(ValueError) as exc_info:
+            settings.resolve_model_level("fast")
+
+        assert "not found and no fallback available" in str(exc_info.value)
+
+    def test_resolve_model_level_fallback_priority(self):
+        """测试 fallback 优先级：请求 -> default -> complex -> standard -> fast"""
+        settings = AKGSettings()
+        # 只配置 fast 和 complex（不配置 standard）
+        settings.models["fast"] = ModelConfig(
+            base_url="http://fast", api_key="key", model_name="fast-model"
+        )
+        settings.models["complex"] = ModelConfig(
+            base_url="http://complex", api_key="key", model_name="complex-model"
+        )
+        settings.default_model = "standard"  # standard 不存在
+
+        # 请求 coder（不存在），default=standard（不存在）
+        # 按 complex -> standard -> fast 顺序，找到 complex
+        level, config = settings.resolve_model_level("coder")
+        assert level == "complex"
+        assert config.model_name == "complex-model"
+
+        # 再测试：如果 complex 也不存在，会找到 fast
+        settings.models = {}
+        settings.models["fast"] = ModelConfig(
+            base_url="http://fast", api_key="key", model_name="fast-model"
+        )
+        level, config = settings.resolve_model_level("coder")
+        assert level == "fast"
 
 
 if __name__ == "__main__":
