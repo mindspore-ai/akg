@@ -123,6 +123,17 @@ func.func @test_reduce_sum_dtype_none(%arg0: tensor<2x2xf32>) -> tensor<2xf32> {
   return %0 : tensor<2xf32>
 }
 
+// CHECK-LABEL: func.func @test_reduce_mean
+func.func @test_reduce_mean(%arg0: tensor<2x2xf32>) -> tensor<2x1xf32> {
+  // CHECK-DAG: %[[DIM1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[DIM1]]
+  // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool true
+  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
+  // CHECK: torch.aten.mean.dim %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
+  %0 = mfuse.reduce_mean %arg0 {dimensions = [1], keepdim = true} : (tensor<2x2xf32>) -> tensor<2x1xf32>
+  return %0 : tensor<2x1xf32>
+}
+
 // CHECK-LABEL: func.func @test_cast
 func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
   // CHECK:   %[[INT5:.*]] = torch.constant.int 5

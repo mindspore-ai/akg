@@ -20,6 +20,7 @@
 #include <numeric>
 #include "llvm/Support/Debug.h"
 #include "mfusion/Analysis/Split/FusePattern.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 #define DEBUG_TYPE "split"
 
@@ -29,32 +30,8 @@ namespace split {
 namespace ascend {
 constexpr size_t kReduceFusionDepth = 10;
 constexpr size_t kBroadcastFusionDepth = 6;
-// Fuse pattern for reduction backward pass
-class FuseReduceBwd : public FusePattern {
- public:
-  FuseReduceBwd() : FusePattern("reduce_bwd", FuseDirection::BACKWARD) {}
-  ~FuseReduceBwd() = default;
-
- protected:
-  bool check(const AreaPtr &area) override { return area->isAlive() && area->pattern() == NodePattern::REDUCE; }
-  bool match(const AreaPtr &area) override {
-    // Check if operation has reduce_output_fuse attribute
-    if (!area->dom() || !area->dom()->op()) {
-      return false;
-    }
-    Operation *op = area->dom()->op();
-    if (!op->hasAttr("reduce_output_fuse")) {
-      return false;
-    }
-    // Continue with existing matching logic
-    for (const auto &[a, r] : area->usersWithRelation()) {
-      if (a->pattern() <= NodePattern::BROADCAST && r == EdgeRelation::INJECTIVE && !hasCircle(area, a)) {
-        fused_areas_.push_back(a);
-      }
-    }
-    return !fused_areas_.empty();
-  }
-};
+constexpr size_t kReduceBwdMaxAreaSize = 10;
+constexpr size_t kReduceBwdMaxAreaOutputs = 3;
 
 // Fuse pattern for slice operations
 class FuseSlice : public FusePattern {
@@ -157,6 +134,82 @@ class FuseReduceFwd : public FusePattern {
   size_t sizeLimit_;
 };
 
+// Fuse pattern for reduction backward pass
+class FuseReduceBwd : public FusePattern {
+ public:
+  FuseReduceBwd() : FusePattern("reduce_bwd", FuseDirection::BACKWARD) {}
+  ~FuseReduceBwd() = default;
+
+ protected:
+  static bool CheckReduceArea(const AreaPtr &area) {
+    if (!area || !area->isAlive() || area->pattern() != NodePattern::REDUCE || !area->dom() || !area->dom()->op()) {
+      return false;
+    }
+
+    auto reduce = mlir::dyn_cast<mlir::mfuse::ReduceSumOp>(area->dom()->op());
+    if (!reduce || !reduce.getKeepdim()) {
+      return false;
+    }
+
+    auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(reduce.getInput().getType());
+    if (!inputType || !inputType.hasRank()) {
+      return false;
+    }
+
+    auto dimensions = reduce.getDimensions();
+    if (dimensions.empty()) {
+      return false;
+    }
+
+    const int64_t rank = inputType.getRank();
+    std::vector<int64_t> dims;
+    dims.reserve(dimensions.size());
+    for (auto dimAttr : dimensions.getValue()) {
+      auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();
+      if (dim < 0 || dim >= rank) {
+        return false;
+      }
+      dims.push_back(dim);
+    }
+
+    std::sort(dims.begin(), dims.end());
+    return std::adjacent_find(dims.begin(), dims.end()) == dims.end();
+  }
+
+  bool check(const AreaPtr &area) override {
+    // Match a single-user keepdim reduce neighborhood so the reduce can sink
+    // into its post-reduce pointwise/broadcast area.
+    return area->userNum() == 1 && CheckReduceArea(area);
+  }
+
+  static bool CheckPostReduceArea(const AreaPtr &area, EdgeRelation relation) {
+    if (!area || !area->isAlive()) {
+      return false;
+    }
+    if (relation != EdgeRelation::INJECTIVE && relation != EdgeRelation::BROADCAST) {
+      return false;
+    }
+    if (area->pattern() != NodePattern::RESHAPE && area->pattern() != NodePattern::ELEMWISE &&
+        area->pattern() != NodePattern::BROADCAST) {
+      return false;
+    }
+    if (area->areaOutputs().size() > ascend::kReduceBwdMaxAreaOutputs) {
+      return false;
+    }
+    return area->size() <= ascend::kReduceBwdMaxAreaSize;
+  }
+
+  bool match(const AreaPtr &area) override {
+    for (const auto &[a, r] : area->usersWithRelation()) {
+      if (hasCircle(area, a) || !CheckPostReduceArea(a, r)) {
+        continue;
+      }
+      fused_areas_.push_back(a);
+    }
+    return fused_areas_.size() == 1;
+  }
+};
+
 // Fuse pattern for matmul operations
 class FuseMatMul : public FusePattern {
  public:
@@ -173,7 +226,7 @@ class FuseMatMul : public FusePattern {
       auto opName = op->getName().getStringRef();
       return opName == "mfuse.matmul" || opName == "mfuse.batch_matmul";
     }
-    // TODO: Check if operation is GroupedMatmul
+    // To Check if operation is GroupedMatmul.
     return false;
   }
 
@@ -318,9 +371,10 @@ void DVMSplitModel::initFusePatterns() {
   addPattern(dvm::FuseReduceFwd::createWidthMatcher(ascend::kReduceFusionDepth), true);
   addPattern(FuseElemwiseBroadcastBwd::createDepthMatcher(ascend::kBroadcastFusionDepth), true);
   addPattern(FuseElemwiseBroadcastBwd::createWidthMatcher(ascend::kBroadcastFusionDepth), true);
+  addPattern(std::make_shared<dvm::FuseReduceBwd>(), true);
   addPattern(std::make_shared<ascend::FuseElemAny>(), true);
   addPattern(std::make_shared<ascend::FuseSlice>(), true);
-  // TODO: Need enabled by config
+  // To be enabled by config in the future.
   addPattern(std::make_shared<dvm::FuseMatMul>(), true);
   addPattern(std::make_shared<dvm::FuseAllReduceFwd>(), true);
   addPattern(std::make_shared<dvm::FuseAllReduceBwd>(), true);
