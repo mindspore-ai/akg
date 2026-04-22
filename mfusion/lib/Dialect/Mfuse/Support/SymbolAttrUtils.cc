@@ -67,6 +67,36 @@ mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::ge
   return symAttr.getSymEngineExprs();
 }
 
+mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::permuteSymbolicShapeExprs(
+  mlir::Type type, llvm::ArrayRef<int64_t> perm) {
+  auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(type);
+  if (!ranked || ranked.getRank() != static_cast<int64_t>(perm.size())) {
+    return mlir::failure();
+  }
+
+  auto maybeExprs = getSymbolicShapeExprs(type);
+  if (mlir::failed(maybeExprs)) {
+    return mlir::failure();
+  }
+  auto exprs = std::move(*maybeExprs);
+
+  llvm::SmallVector<bool> seen(perm.size(), false);
+  llvm::SmallVector<SymExpr> remappedExprs;
+  remappedExprs.reserve(perm.size());
+  for (int64_t axis : perm) {
+    if (axis < 0 || axis >= ranked.getRank()) {
+      return mlir::failure();
+    }
+    if (seen[static_cast<size_t>(axis)]) {
+      return mlir::failure();
+    }
+    seen[static_cast<size_t>(axis)] = true;
+    remappedExprs.push_back(exprs[static_cast<size_t>(axis)]);
+  }
+
+  return remappedExprs;
+}
+
 mlir::Attribute SymbolAttrUtils::mergeEncoding(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
   auto encoding = type.getEncoding();
   mlir::MLIRContext *ctx = type.getContext();
