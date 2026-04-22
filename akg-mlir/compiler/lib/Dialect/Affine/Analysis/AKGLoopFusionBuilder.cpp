@@ -1474,10 +1474,15 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     return 0;
   }
 
+  auto srcGroupTemplate = mdg.getGroup(plan.fusedGroup.from)->groupTemplate;
+  auto dstGroupTemplate = mdg.getGroup(plan.fusedGroup.to)->groupTemplate;
+  bool isReduction = (srcGroupTemplate == OperatorTemplate::Reduction)
+                || (dstGroupTemplate == OperatorTemplate::Reduction);
+
   // unsigned depDepth = computeEffectiveDepDepth(dstInfo.loops, dstAccesses);
   unsigned depDepth = plan.depInfo.loopDepth;
   unsigned loopDepth = dstInfo.loopDepth;
-  if (!srcInfo.isPerfect) {
+  if (!srcInfo.isPerfect && isReduction) {
     loopDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
   }
 
