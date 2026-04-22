@@ -41,6 +41,7 @@ constexpr auto kStaticSuffix = ".o";
 constexpr auto kAiCoreStr = "AiCore";
 constexpr auto kMIXStr = "MIX";
 static thread_local aclrtContext thread_local_rt_context{nullptr};
+typedef void (*CallFunc)(uint32_t, void *, void *, void **);
 
 uint64_t kDevRegStub = 0xbadbeefULL;
 std::mutex kDevRegStubMutex;
@@ -105,6 +106,20 @@ uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin
   std::vector<char> bin = ReadDeviceBinaryFile(bin_path);
   auto func = RegisterDeviceKernel(func_name, bin.data(), bin.size());
   return func;
+}
+
+void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, std::vector<void *> args,
+                  bool is_dynamic) {
+  if (is_dynamic) {
+    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
+    kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
+  } else {
+    rtError_t ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), NULL,
+                                   (rtStream_t)stream);
+    if (ret != RT_ERROR_NONE) {
+      LOG(FATAL) << "Call rtKernelLaunch, ret[" << ret << "]";
+    }
+  }
 }
 
 namespace {
@@ -306,8 +321,8 @@ bool AscendKernelRuntime::InitDevice() {
   if (!owns_stream_) {
     auto ret = aclrtGetCurrentContext(&rt_context_);
     if (ret != ACL_SUCCESS || rt_context_ == nullptr) {
-      DLOG(WARNING) << "External stream mode: aclrtGetCurrentContext failed, ret["
-                    << GetErrorMsg(ret) << "], context will be nullptr";
+      DLOG(WARNING) << "External stream mode: aclrtGetCurrentContext failed, ret[" << GetErrorMsg(ret)
+                    << "], context will be nullptr";
       rt_context_ = nullptr;
     }
     return true;
@@ -435,24 +450,15 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
       runtimeargs.push_back(reinterpret_cast<void *>(tiling_struct_size));
       runtimeargs.push_back(reinterpret_cast<void *>(1));
     }
-
-    typedef void (*CallFunc)(uint32_t, void *, void *, void **);
-    // kernel_name is for .so, func_name is for host func name.
-    auto func_ptr = reinterpret_cast<CallFunc>(GetKernelFunc(path, kernel_name, func_name, is_dynamic));
-    func_ptr(blockdim, nullptr, stream(), runtimeargs.data());
   } else {
     for (const auto &base : input_tensors) {
       auto tensor = mlir::runtime::AsTensorDevice(base);
       runtimeargs.push_back(tensor->GetDeviceAddress());
     }
-    auto func = GetKernelFunc(path, kernel_name, func_name, is_dynamic);
-    rtError_t ret =
-      rtKernelLaunch(func, blockdim, runtimeargs.data(), runtimeargs.size() * sizeof(void *), NULL, stream());
-    if (ret != RT_ERROR_NONE) {
-      LOG(FATAL) << "Call rtKernelLaunch, ret[" << GetErrorMsg(ret) << "]";
-      return false;
-    }
   }
+
+  auto kernel_func = GetKernelFunc(path, kernel_name, func_name, is_dynamic);
+  KernelLaunch(reinterpret_cast<uint64_t>(kernel_func), blockdim, stream(), runtimeargs, is_dynamic);
 
   if (owns_stream_) {
     SyncStream();
