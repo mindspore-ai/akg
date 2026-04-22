@@ -87,6 +87,8 @@ class AscendKernelRuntime {
 };
 
 uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin_path);
+void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, std::vector<void *> args,
+                  bool is_dynamic = false);
 }  // namespace runtime
 }  // namespace mlir
 
