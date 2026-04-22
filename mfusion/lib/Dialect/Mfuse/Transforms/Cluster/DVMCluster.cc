@@ -342,7 +342,35 @@ class DvmSupportChecker {
     return checkDimensionConstraints(op);
   }
 
+  /// Check if largerShape matches smallerShape when ignoring all dimensions of size 1
+  static bool shapesDifferByMultiDimOne(const llvm::ArrayRef<int64_t> largerShape,
+                                        const llvm::ArrayRef<int64_t> smallerShape) {
+    std::vector<int64_t> filterLargerShape;
+    std::copy_if(largerShape.begin(), largerShape.end(), std::back_inserter(filterLargerShape),
+                 [](int64_t dim) { return dim != 1; });
+    std::vector<int64_t> filterSmallerShape;
+    std::copy_if(smallerShape.begin(), smallerShape.end(), std::back_inserter(filterSmallerShape),
+                 [](int64_t dim) { return dim != 1; });
+    return filterLargerShape == filterSmallerShape;
+  }
+
+  static bool squeezeLikeOpCheck(Operation *op) {
+    auto outputType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    if (!outputType || !inputType) {
+      return false;
+    }
+
+    const auto &outputShape = outputType.getShape();
+    const auto &inputShape = inputType.getShape();
+    return shapesDifferByMultiDimOne(inputShape, outputShape);
+  }
+
   static bool reshapeOpCheck(Operation *op) {
+    // Check if this is a reshape from unsqueeze/squeeze
+    if (squeezeLikeOpCheck(op)) {
+      return true;
+    }
     Value input = op->getOperand(0);
     Operation *producer = input.getDefiningOp();
     if (!producer) {

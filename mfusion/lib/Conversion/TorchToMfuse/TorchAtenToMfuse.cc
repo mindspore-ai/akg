@@ -581,6 +581,7 @@ static void populateAtenToMfuseReshapeLikeOpPatterns(TypeConverter &converter, R
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertReshapeLikeOp<TorchD::AtenReshapeOp>>(converter, context);
   patterns.add<ConvertReshapeLikeOp<TorchD::AtenSqueezeDimOp>>(converter, context);
+  patterns.add<ConvertReshapeLikeOp<TorchD::AtenSqueezeOp>>(converter, context);
   patterns.add<ConvertReshapeLikeOp<TorchD::AtenUnsqueezeOp>>(converter, context);
   patterns.add<ConvertReshapeLikeOp<TorchD::AtenViewOp>>(converter, context);
 }
