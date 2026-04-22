@@ -134,10 +134,11 @@ struct FusionAnalyzer {
   // Collects source groups for fusion with the target group.
   // Prefers store-load (producer-consumer) edges; falls back to load-load edges
   // only when no store-load edges exist for the target group.
-  void collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &warGroupIds,
-                                 std::unordered_set<unsigned> &rarGroupIds);
+  // Both output vectors are sorted by groupId in descending order before return.
+  void collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
+                                 std::vector<unsigned> &rarGroupIds);
   void dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
-                                   const std::unordered_set<unsigned> &sourceGroups);
+                                   const std::vector<unsigned> &sourceGroups);
 
   // Member Variables
   std::unordered_set<unsigned> finished;
