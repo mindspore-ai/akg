@@ -826,6 +826,9 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
     std::sort(allPredecessorIds.begin(), allPredecessorIds.end(), std::greater<int>());
 
     std::unordered_set<size_t> skipIdx;
+    // Mediators whose RAR edge to target should be promoted to WAR because the
+    // skipped predecessor they shadow contains a store (shared-producer case).
+    std::unordered_set<unsigned> warPromotedIds;
     for (size_t i = 1; i < allPredecessorIds.size(); ++i) {
       if (skipIdx.count(i)) {
         continue;
@@ -841,6 +844,20 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
         // If edge exists, iCandidateID is not a direct predecessor but an indirect one, add to skipIdx
         if (depGraph.hasEdge(iCandidateID, jCandidateID, mlir::Value())) {
           skipIdx.insert(i);
+          // Promote only when some memref on the i->target edge is stored by i
+          // and loaded by j: that is the shared-producer case where j->target
+          // looks like RAR but truly carries i's store-load flow.
+          auto *iNode = depGraph.getNode(iCandidateID);
+          auto *jNode = depGraph.getNode(jCandidateID);
+          if (iNode != nullptr && jNode != nullptr) {
+            for (const auto &memrefAndDepth : predToMemrefsAndDepth[iCandidateID]) {
+              const Value &memref = memrefAndDepth.first;
+              if (iNode->getStoreOpCount(memref) > 0 && jNode->getLoadOpCount(memref) > 0) {
+                warPromotedIds.insert(jCandidateID);
+                break;
+              }
+            }
+          }
           break;
         }
       }
@@ -856,6 +873,9 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
       auto predId = allPredecessorIds[i];
       auto *predNode = depGraph.getNode(predId);
       DepType depType = classifyDepType(predNode, targetNode);
+      if (depType == DepType::RAR && warPromotedIds.count(predId)) {
+        depType = DepType::WAR;
+      }
       const auto &memrefsAndDepths = predToMemrefsAndDepth[predId];
       std::transform(memrefsAndDepths.begin(), memrefsAndDepths.end(), std::back_inserter(directPreds),
                      [predId, depType](const auto &memrefAndDepth) {
@@ -867,8 +887,8 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
   }
 }
 
-void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &warGroupIds,
-                                               std::unordered_set<unsigned> &rarGroupIds) {
+void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
+                                               std::vector<unsigned> &rarGroupIds) {
   // Accumulate DependenceInfo per source group to pre-populate groupDependenciesCache.
   struct DepAccum {
     DependenceInfo warDepInfo;
@@ -876,6 +896,8 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
     bool haswarDep = false;
   };
   std::unordered_map<unsigned, DepAccum> depAccumMap;
+  std::unordered_set<unsigned> warGroupIdSet;
+  std::unordered_set<unsigned> rarGroupIdSet;
   for (auto targetNodeId : targetGroup->nodesId) {
     auto it = directPredecessorsCache.find(targetNodeId);
     if (it == directPredecessorsCache.end()) {
@@ -896,9 +918,9 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
       depInfo.targetNodeId = targetNodeId;
       depInfo.depType = pred.depType;
       if (isRAR) {
-        rarGroupIds.insert(sourceGroupId);
+        rarGroupIdSet.insert(sourceGroupId);
       } else {
-        warGroupIds.insert(sourceGroupId);
+        warGroupIdSet.insert(sourceGroupId);
         accum.haswarDep = true;
       }
     }
@@ -912,10 +934,17 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
       groupDependenciesCache[cacheKey] = std::move(depInfo);
     }
   }
+
+  // Emit results sorted by groupId descending so downstream loops process
+  // larger groupIds first without needing another sort pass.
+  warGroupIds.assign(warGroupIdSet.begin(), warGroupIdSet.end());
+  rarGroupIds.assign(rarGroupIdSet.begin(), rarGroupIdSet.end());
+  std::sort(warGroupIds.begin(), warGroupIds.end(), std::greater<unsigned>());
+  std::sort(rarGroupIds.begin(), rarGroupIds.end(), std::greater<unsigned>());
 }
 
 void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
-                                                 const std::unordered_set<unsigned> &sourceGroupIds) {
+                                                 const std::vector<unsigned> &sourceGroupIds) {
   if (sourceGroupIds.empty()) return;
   auto printFlags = mlir::OpPrintingFlags().skipRegions();
 
@@ -942,15 +971,15 @@ void FusionAnalyzer::plan() {
   topoSortInit();
   precomputeDirectPredecessors();
 
-  std::unordered_map<unsigned, std::unordered_set<unsigned>> rarMap;
+  std::unordered_map<unsigned, std::vector<unsigned>> rarMap;
   while (!finishPlan()) {
     auto targetGroup = getFusionTargetGroup();
     if (targetGroup == nullptr) {
       break;
     }
 
-    std::unordered_set<unsigned> warGroupIds;
-    std::unordered_set<unsigned> rarGroupIds;
+    std::vector<unsigned> warGroupIds;
+    std::vector<unsigned> rarGroupIds;
     collectFusionSourceGroups(targetGroup, warGroupIds, rarGroupIds);
     rarMap[targetGroup->groupId] = rarGroupIds;
 

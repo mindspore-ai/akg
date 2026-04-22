@@ -17,6 +17,7 @@
 #include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
 
 #include <algorithm>
+#include <iterator>
 #include <queue>
 
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
@@ -718,14 +719,15 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
 IntegerSet FusionGuard::buildCondSet(MLIRContext *ctx) const {
   OpBuilder builder(ctx);
   AffineExpr d0 = builder.getAffineDimExpr(0);
-  AffineExpr condExpr;
   if (offset != 0) {
-    // Subview offset: guard becomes "primaryIV >= offset" (d0 - offset >= 0).
-    condExpr = d0 - builder.getAffineConstantExpr(offset);
-  } else {
-    condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
-                                      : builder.getAffineConstantExpr(boundValue - 1) - d0;
+    // Subview offset: guard becomes "offset <= IV < offset + boundValue".
+    // Two constraints: (d0 - offset >= 0) AND (offset + boundValue - 1 - d0 >= 0).
+    AffineExpr lowerCond = d0 - builder.getAffineConstantExpr(offset);
+    AffineExpr upperCond = builder.getAffineConstantExpr(offset + boundValue - 1) - d0;
+    return IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {lowerCond, upperCond}, /*eqFlags=*/{false, false});
   }
+  AffineExpr condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
+                                               : builder.getAffineConstantExpr(boundValue - 1) - d0;
   return IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
 }
 
@@ -970,7 +972,36 @@ SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoop
 void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages) {
   auto targetLoop = plan.primaryInfo()->loops[plan.primaryInfo()->loopDepth - 1];
   Block *targetBody = targetLoop.getBody();
-  // Secondary is src → insert at start (src body first); secondary is dst → insert at end (dst body last).
+
+  // --- Expand primary loop UB when secondary's offset range exceeds it ---
+  if (plan.guard.kind == FusionGuard::SmallerUB && plan.guard.offset != 0) {
+    auto primaryLoop = plan.primaryInfo()->loops[plan.guard.dimPos];
+    if (primaryLoop.hasConstantUpperBound()) {
+      int64_t originalPrimaryUB = primaryLoop.getConstantUpperBound();
+      int64_t effectiveSecondaryUB = plan.guard.offset + plan.guard.boundValue;
+      if (effectiveSecondaryUB > originalPrimaryUB) {
+        primaryLoop.setConstantUpperBound(effectiveSecondaryUB);
+
+        // Wrap existing primary body ops in affine.if (IV < originalPrimaryUB).
+        auto bodyOps = targetBody->without_terminator();
+        SmallVector<Operation *, 16> opsToGuard;
+        std::transform(bodyOps.begin(), bodyOps.end(), std::back_inserter(opsToGuard),
+                       [](Operation &op) { return &op; });
+
+        if (!opsToGuard.empty()) {
+          Value guardIV = primaryLoop.getInductionVar();
+          OpBuilder gb(targetBody, targetBody->begin());
+          AffineExpr d0 = gb.getAffineDimExpr(0);
+          AffineExpr cond = gb.getAffineConstantExpr(originalPrimaryUB - 1) - d0;
+          IntegerSet cs = IntegerSet::get(1, 0, {cond}, {false});
+          auto ifOp = gb.create<affine::AffineIfOp>(targetLoop.getLoc(), cs, ValueRange{guardIV}, false);
+          for (auto *op : opsToGuard) op->moveBefore(ifOp.getThenBlock()->getTerminator());
+        }
+      }
+    }
+  }
+
+  // Secondary is src → insert at start; secondary is dst → insert at end.
   bool secondaryIsSrc = !plan.srcIsPrimary;
   Block::iterator insertPt = secondaryIsSrc ? targetBody->begin() : std::prev(targetBody->end());
 
@@ -986,7 +1017,7 @@ void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages)
   // and override the corresponding entry in the mapper.
   if (plan.guard.offset != 0) {
     auto primaryIV = plan.primaryInfo()->loops[plan.guard.dimPos].getInductionVar();
-    OpBuilder b(targetLoop.getBody(), std::prev(targetLoop.getBody()->end()));
+    OpBuilder b(targetBody, std::prev(targetBody->end()));
     auto shiftMap = AffineMap::get(1, 0, b.getAffineDimExpr(0) - plan.guard.offset, targetLoop->getContext());
     auto applyOp = b.create<affine::AffineApplyOp>(targetLoop.getLoc(), shiftMap, ValueRange{primaryIV});
     for (unsigned i = 0; i < plan.secondaryInfo()->loopDepth; ++i) {
@@ -1064,6 +1095,45 @@ int64_t SubviewFusionHelper::detectGuardDimSubviewOffset(unsigned secondaryGuard
   return offset;
 }
 
+void SubviewFusionHelper::expandPrimaryLoopForOffset() {
+  if (plan.guard.kind != FusionGuard::SmallerUB || plan.guard.offset == 0) return;
+
+  int64_t effectiveSecondaryUB = plan.guard.offset + plan.guard.boundValue;
+  auto primaryLoop = plan.primaryInfo()->loops[plan.guard.dimPos];
+  if (!primaryLoop.hasConstantUpperBound()) return;
+  int64_t originalPrimaryUB = primaryLoop.getConstantUpperBound();
+
+  if (effectiveSecondaryUB <= originalPrimaryUB) return;
+
+  // Expand the primary loop's upper bound to cover the secondary's range.
+  primaryLoop.setConstantUpperBound(effectiveSecondaryUB);
+
+  // Wrap existing ops in the innermost loop body with guard: IV < originalPrimaryUB.
+  // This prevents the primary body from executing at iterations beyond its original range.
+  auto innermostLoop = plan.primaryInfo()->loops.back();
+  Block *body = innermostLoop.getBody();
+
+  auto bodyOps = body->without_terminator();
+  SmallVector<Operation *, 16> opsToGuard;
+  std::transform(bodyOps.begin(), bodyOps.end(), std::back_inserter(opsToGuard),
+                 [](Operation &op) { return &op; });
+  if (opsToGuard.empty()) return;
+
+  Value guardIV = primaryLoop.getInductionVar();
+  OpBuilder builder(body, body->begin());
+  AffineExpr d0 = builder.getAffineDimExpr(0);
+  // Condition: originalPrimaryUB - 1 - IV >= 0, i.e. IV < originalPrimaryUB.
+  AffineExpr condExpr = builder.getAffineConstantExpr(originalPrimaryUB - 1) - d0;
+  IntegerSet condSet = IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
+
+  auto ifOp = builder.create<affine::AffineIfOp>(innermostLoop.getLoc(), condSet, ValueRange{guardIV},
+                                                 /*withElseRegion=*/false);
+  Block *thenBlock = ifOp.getThenBlock();
+  for (auto *op : opsToGuard) {
+    op->moveBefore(thenBlock->getTerminator());
+  }
+}
+
 std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
                                                               int srcRank, int dstRank) {
   plan = {};  // reset for each fusion attempt
@@ -1075,6 +1145,10 @@ std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo
   if (stages.empty()) {
     return std::nullopt;
   }
+
+  // When a subview offset makes the secondary's effective range exceed the
+  // primary loop's upper bound, expand the loop and guard the primary body.
+  expandPrimaryLoopForOffset();
 
   emitCloneStages(stages);
   return plan;

@@ -183,6 +183,10 @@ struct SubviewFusionHelper {
   // secondaryGuardDim: the secondary loop dimension that maps to the guarded primary dimension.
   int64_t detectGuardDimSubviewOffset(unsigned secondaryGuardDim);
 
+  // When offset + secondaryUB > primaryUB, expands the primary loop's upper
+  // bound and wraps its existing body in an affine.if guard to prevent OOB.
+  void expandPrimaryLoopForOffset();
+
   SubviewFusionPlan plan;
 };
 
