@@ -585,7 +585,8 @@ def NPUVector_BroadcastOp :
   NPUVector_Op<"broadcast", [Pure, AttrSizedOperandSegments]>,
     Arguments<(ins AnyType:$source,
                    Variadic<Index>:$dynamicSizes,
-                   Variadic<Index>:$maxSizes)>,
+                   Variadic<Index>:$maxSizes,
+                   DefaultValuedAttr<DenseI64ArrayAttr, "{}">:$dimension)>,
     Results<(outs NPUVectorOfAnyRank:$result)> {
 
   let summary = "Broadcast to !npuvector with optional runtime sizes and max tile.";
@@ -600,6 +601,11 @@ def NPUVector_BroadcastOp :
     when promoting rank, trailing dimensions must be compatible in the same sense as
     MLIR's `vector.broadcast` legality rules (see upstream docs).
 
+    Attribute `dimension` defaults to `{}` (empty): treat as **prefix
+    mapping** `m[i]=i` in lowering when doing rank lift. When **non-scalar** source is
+    promoted to a higher rank (`srcRank < dstRank`), set non-empty `m` to give **destination
+    dimension index** for each **source dimension** `i` (i.e. result dimension `m[i]`).
+
     Example:
     
     ```mlir
@@ -612,7 +618,9 @@ def NPUVector_BroadcastOp :
   
   let builders = [
     OpBuilder<(ins "Type":$resultType, "Value":$source, "ValueRange":$dynamicSizes), [{
-      build($_builder, $_state, resultType, source, dynamicSizes, /*maxSizes=*/ValueRange());
+      build($_builder, $_state, resultType, source, dynamicSizes,
+            /*maxSizes=*/ValueRange(),
+            /*dimension=*/$_builder.getDenseI64ArrayAttr({}));
     }]>
   ];
 }
