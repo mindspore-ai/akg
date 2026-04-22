@@ -692,15 +692,12 @@ mlir::LogicalResult ReshapeOp::canonicalize(ReshapeOp op, mlir::PatternRewriter 
 // Canonicalize reciprocal(sqrt(x)) -> rsqrt(x)
 mlir::LogicalResult ReciprocalOp::canonicalize(ReciprocalOp op, mlir::PatternRewriter &rewriter) {
   auto sqrtOp = op.getInput().getDefiningOp<SqrtOp>();
-  if (!sqrtOp) {
+  if (!sqrtOp || !sqrtOp->hasOneUse()) {
     return mlir::failure();
   }
 
   auto rsqrt = rewriter.create<RsqrtOp>(op.getLoc(), op.getResult().getType(), sqrtOp.getInput());
   rewriter.replaceOp(op, rsqrt.getResult());
-  if (sqrtOp->use_empty()) {
-    rewriter.eraseOp(sqrtOp);
-  }
   return mlir::success();
 }
 
