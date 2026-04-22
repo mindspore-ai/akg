@@ -99,10 +99,12 @@ def test_run_composite_fusion_stage_uses_composite_pipeline_when_not_verbose():
     assert runner.calls == [("builtin.module(torch-fusion,canonicalize)", "Torch Fusion")]
 
 
-def test_pipeline_runner_env_levels_control_observability(monkeypatch):
-    """Enable internal observability when either print/save level is 2."""
+def test_pipeline_runner_env_levels_control_observability(monkeypatch, tmp_path: Path):
+    """Enable internal observability at level 2 and verify one IR dump is produced then cleaned."""
     monkeypatch.setenv("MFUSION_PRINT_IR", "1")
     monkeypatch.setenv("MFUSION_SAVE_IR", "2")
+    save_dir = tmp_path / "ir_dumps"
+    monkeypatch.setenv("MFUSION_SAVE_IR_PATH", str(save_dir))
 
     module = _parse_mlir_module_from_text(_MIN_TORCH_MLIR)
     runner = PipelineRunner(module)
@@ -110,6 +112,14 @@ def test_pipeline_runner_env_levels_control_observability(monkeypatch):
     assert runner.enabled_print_ir is True
     assert runner.enabled_save_ir is True
     assert runner.enabled_verbose_internal_ir is True
+
+    dumped = list(save_dir.glob("*.mlir"))
+    assert len(dumped) == 1, "expected exactly one stage-level IR dump for this minimal case"
+    assert dumped[0].is_file()
+
+    # Cleanup dump artifacts created by this test.
+    dumped[0].unlink(missing_ok=True)
+    save_dir.rmdir()
 
 
 def test_pipeline_runner_level_one_keeps_stage_only_mode(monkeypatch):
