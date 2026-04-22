@@ -241,7 +241,7 @@ module {
   }
 
   // CHECK-LABEL: func @test_rms_norm_fusion_reciprocal_sqrt
-  // reciprocal(sqrt(add)) is mathematically rsqrt(add) for positive add.
+  // reciprocal(sqrt(add)) is no longer handled in torch-fuse-rms-norm.
   func.func @test_rms_norm_fusion_reciprocal_sqrt(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> {
     %int2 = torch.constant.int 2
     %int_neg1 = torch.constant.int -1
@@ -258,10 +258,9 @@ module {
     %norm = torch.aten.mul.Tensor %x, %scale : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
     %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
 
-    // CHECK: {{.*}}:2 = torch.operator "torch.npu.npu_rms_norm"({{[^)]*}}) : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>, !torch.float) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>)
-    // CHECK-NOT: torch.aten.sqrt
-    // CHECK-NOT: torch.aten.reciprocal
-    // CHECK-NOT: torch.aten.rsqrt
+    // CHECK: torch.aten.sqrt
+    // CHECK: torch.aten.reciprocal
+    // CHECK-NOT: torch.operator "torch.npu.npu_rms_norm"
 
     return %out : !torch.vtensor<[2,4],f32>
   }

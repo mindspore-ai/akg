@@ -888,6 +888,8 @@ def Mfuse_ReciprocalOp : Mfuse_Op<"reciprocal", [
 
   let results = (outs AnyRankedTensor:$result);
 
+  let hasCanonicalizeMethod = 1;
+
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
   }];
