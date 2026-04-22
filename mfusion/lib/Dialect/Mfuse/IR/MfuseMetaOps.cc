@@ -335,6 +335,106 @@ mlir::FailureOr<mlir::Type> BroadcastToOp::inferSymbolicShapes(mlir::OpBuilder &
   return SymbolAttrUtils::withSymbolicAttr(outType, builder, outExprs);
 }
 
+static mlir::FailureOr<llvm::SmallVector<int64_t>> getPermuteAxes(const mlir::OperationState &state, int64_t rank) {
+  auto permAttr = mlir::dyn_cast_or_null<mlir::ArrayAttr>(state.attributes.get("perm"));
+  if (!permAttr || permAttr.size() != static_cast<size_t>(rank)) {
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<int64_t> permVals;
+  permVals.reserve(permAttr.size());
+  for (mlir::Attribute attr : permAttr) {
+    auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(attr);
+    if (!intAttr) {
+      return mlir::failure();
+    }
+    permVals.push_back(intAttr.getInt());
+  }
+  return permVals;
+}
+
+static mlir::LogicalResult refinePermutedDim(llvm::ArrayRef<int64_t> inShape,
+                                             llvm::SmallVectorImpl<int64_t> &refinedShape, int64_t outIdx,
+                                             int64_t axis) {
+  int64_t inDim = inShape[axis];
+  int64_t outDim = refinedShape[outIdx];
+  bool inDynamic = mlir::ShapedType::isDynamic(inDim);
+  bool outDynamic = mlir::ShapedType::isDynamic(outDim);
+
+  if (!inDynamic && outDynamic) {
+    refinedShape[outIdx] = inDim;
+    return mlir::success();
+  }
+  if (!inDynamic && !outDynamic && inDim != outDim) {
+    return mlir::failure();
+  }
+  if (inDynamic && !outDynamic) {
+    return mlir::failure();
+  }
+  return mlir::success();
+}
+
+static mlir::FailureOr<mlir::RankedTensorType> refinePermuteResultType(mlir::RankedTensorType inType,
+                                                                       mlir::RankedTensorType outType,
+                                                                       llvm::ArrayRef<int64_t> permVals) {
+  llvm::SmallVector<int64_t> refinedShape(outType.getShape().begin(), outType.getShape().end());
+  auto inShape = inType.getShape();
+  int64_t rank = inType.getRank();
+  llvm::SmallVector<bool> seen(static_cast<size_t>(rank), false);
+  for (auto [outIdx, axis] : llvm::enumerate(permVals)) {
+    if (axis < 0 || axis >= rank || seen[static_cast<size_t>(axis)]) {
+      return mlir::failure();
+    }
+    seen[static_cast<size_t>(axis)] = true;
+
+    if (mlir::failed(refinePermutedDim(inShape, refinedShape, outIdx, axis))) {
+      return mlir::failure();
+    }
+  }
+
+  return mlir::RankedTensorType::get(refinedShape, outType.getElementType(), outType.getEncoding());
+}
+
+mlir::FailureOr<mlir::Type> PermuteOp::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state,
+                                                           mlir::Type resultType) {
+  if (state.operands.size() != 1) {
+    return mlir::failure();
+  }
+
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(state.operands.front().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(resultType);
+  if (!outType || !inType || outType.getRank() != inType.getRank()) {
+    return mlir::failure();
+  }
+
+  auto maybePermVals = getPermuteAxes(state, inType.getRank());
+  if (mlir::failed(maybePermVals)) {
+    return mlir::failure();
+  }
+  auto permVals = std::move(*maybePermVals);
+
+  auto maybeOutExprs = SymbolAttrUtils::permuteSymbolicShapeExprs(inType, permVals);
+  if (mlir::failed(maybeOutExprs)) {
+    return mlir::failure();
+  }
+
+  auto maybeOutType = refinePermuteResultType(inType, outType, permVals);
+  if (mlir::failed(maybeOutType)) {
+    return mlir::failure();
+  }
+  return SymbolAttrUtils::withSymbolicAttr(*maybeOutType, builder, *maybeOutExprs);
+}
+
+mlir::LogicalResult PermuteOp::verify() {
+  for (auto [idx, attr] : llvm::enumerate(getPermAttr().getValue())) {
+    auto axis = mlir::cast<mlir::IntegerAttr>(attr).getInt();
+    if (axis < 0) {
+      return emitOpError("perm dimensions must be non-negative, got ") << axis << " at index " << idx;
+    }
+  }
+  return mlir::success();
+}
+
 mlir::Type CastOp::inferResultType(mlir::Value input, mlir::Type elementType) {
   auto inType = llvm::dyn_cast<mlir::RankedTensorType>(input.getType());
   if (!inType) {

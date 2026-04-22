@@ -17,6 +17,7 @@
 #ifndef MFUSION_DIALECT_MFUSE_UTILS_SYMBOL_ATTR_UTILS_H
 #define MFUSION_DIALECT_MFUSE_UTILS_SYMBOL_ATTR_UTILS_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Block.h"
@@ -75,6 +76,12 @@ struct SymbolAttrUtils {
   /// - For dynamic shape, reads expressions from SymbolicShapeAttr in encoding.
   /// Returns failure when type is not ranked tensor or lacks symbolic info.
   static mlir::FailureOr<llvm::SmallVector<SymExpr>> getSymbolicShapeExprs(mlir::Type type);
+
+  /// Reorders symbolic shape expressions according to a Torch-style permutation,
+  /// where output dim i comes from input dim perm[i].
+  /// Returns failure if the input lacks symbolic info or perm is invalid.
+  static mlir::FailureOr<llvm::SmallVector<SymExpr>> permuteSymbolicShapeExprs(mlir::Type type,
+                                                                               llvm::ArrayRef<int64_t> perm);
 
   /// Merges symshapeAttr into type's encoding. Preserves any existing
   /// encoding under kBaseEncodingKey when the result would otherwise have multiple entries.
