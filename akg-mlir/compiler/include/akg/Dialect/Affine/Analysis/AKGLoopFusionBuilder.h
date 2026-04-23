@@ -54,7 +54,6 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 
   // Group type analysis
   OperatorTemplate getGroupType(const std::vector<unsigned> &nodes);
-  int getMemrefSourceOfNode(unsigned id);
 
   // Dependency analysis
   std::unordered_set<unsigned> getDependentGroups(unsigned groupId);
