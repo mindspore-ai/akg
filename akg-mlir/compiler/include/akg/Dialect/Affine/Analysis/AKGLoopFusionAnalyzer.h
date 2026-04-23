@@ -19,9 +19,11 @@
 
 #include <cstddef>
 #include <functional>
+#include <queue>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
@@ -29,15 +31,6 @@
 
 namespace mlir {
 namespace akg {
-
-struct TupleHash {
-  std::size_t operator()(const std::tuple<unsigned, unsigned, unsigned> &t) const {
-    std::size_t h1 = std::hash<unsigned>{}(std::get<0>(t));
-    std::size_t h2 = std::hash<unsigned>{}(std::get<1>(t));
-    std::size_t h3 = std::hash<unsigned>{}(std::get<2>(t));
-    return h1 ^ (h2 << 1) ^ (h3 << 2);
-  }
-};
 
 struct PairHash {
   std::size_t operator()(const std::pair<unsigned, unsigned> &p) const {
@@ -47,16 +40,40 @@ struct PairHash {
   }
 };
 
-// Intersection Point Handling
-struct BackwardIntersectionResult {
-  unsigned closestIntersectionId;
-  unsigned minOldPathLen;
-  unsigned minNewPathLen;
-  std::unordered_map<unsigned, unsigned> oldReachable;
-  std::unordered_map<unsigned, unsigned> newReachable;
+// Priority-Kahn scheduler for fusion plan edges.
+// Ordering: topological > normal-before-subview > per-node non-subview-before-subview > soft defer.
+// Soft-deferred edges are held until their prior emits; if Kahn drains with deferred edges
+// remaining, one is force-emitted to guarantee every plan edge appears exactly once.
+struct TopoScheduler {
+  TopoScheduler(std::vector<FusionPlan> &edges, unsigned numNodes,
+                const std::vector<std::pair<unsigned, unsigned>> &softDeferConstraints)
+      : edges(edges), numNodes(numNodes), softDeferConstraints(softDeferConstraints) {}
+  std::vector<FusionPlan> run();
+
+ private:
+  void buildSchedulingState();
+  bool hasReadyNodes() const { return !normalQueue.empty() || !subviewQueue.empty(); }
+  bool priorsSatisfied(size_t edgeIdx) const;
+  void commitEdge(size_t edgeIdx);
+  void tryEmit(size_t edgeIdx);
+  void releaseDeferred();
+  void processNode(unsigned node);
+
+  std::vector<FusionPlan> &edges;
+  unsigned numNodes;
+  const std::vector<std::pair<unsigned, unsigned>> &softDeferConstraints;
+  std::unordered_map<unsigned, std::vector<size_t>> adjacency;
+  std::unordered_set<unsigned> normalNodes;
+  std::vector<unsigned> inDegree;
+  std::unordered_map<size_t, std::unordered_set<size_t>> pendingPriors;
+  std::priority_queue<unsigned> normalQueue;
+  std::priority_queue<unsigned> subviewQueue;
+  std::vector<FusionPlan> result;
+  std::unordered_set<size_t> emittedEdges;
+  std::vector<size_t> pendingDeferred;
 };
 
-// Structure to store direct predecessor node ID and corresponding memref.
+// Direct predecessor node ID and corresponding memref.
 struct DirectPredecessor {
   DirectPredecessor(unsigned id, Value ref, unsigned depth = 0, DepType type = DepType::OTHER)
       : nodeId(id), memref(ref), loopDepth(depth), depType(type) {}
@@ -74,7 +91,7 @@ struct FusionAnalyzer {
   void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup);
   bool checkAndFixMultiOut(FusionPlan &fusePlan);
 
-  // Debug and print
+  // Debug
   void print(llvm::raw_ostream &os) const;
   void dump() const { print(llvm::errs()); }
 
@@ -84,44 +101,31 @@ struct FusionAnalyzer {
   std::vector<FusionPlan> fusionPlans;
 
  private:
-  // Initialization and Topological Sorting
+  // Init & Topo Sort
   void initGroups();
   void topoSortInit();
-  std::vector<FusionPlan> topoSortFusionPlans(unsigned numNodes);
   std::vector<FusionPlan> deduplicateAndClassifyEdges();
-  void emitEdgesForNode(const std::vector<FusionPlan> &edges, const std::vector<size_t> &edgeIndices,
-                        std::vector<unsigned> &inDegree, std::vector<FusionPlan> &result,
-                        const std::function<void(unsigned)> &enqueue);
   bool checkSubviewFusion(unsigned predNodeId, unsigned targetNodeId);
   GroupPtr getFusionTargetGroup();
   bool finishPlan();
 
-  // Fusion Plan Management
+  // Plan Management
   std::vector<FusionPlan>::iterator findFusionPlanByGroup(unsigned fromGroupId, unsigned toGroupId);
-  std::vector<FusionPlan>::iterator findFusionPlanByBand(unsigned fromBandId, unsigned toBandId);
   bool addFusionPlan(const FusionPlan &plan);
   bool updateFusionPlanByGroup(unsigned fromGroupId, unsigned oldToGroupId, unsigned newToGroupId,
                                unsigned newToBandId);
-  bool updateFusionPlanByBand(unsigned oldFromBandId, unsigned oldToBandId, unsigned newFromBandId,
-                              unsigned newToBandId);
-  bool removeFusionPlanByGroup(unsigned fromGroupId, unsigned toGroupId);
-  bool removeFusionPlanByBand(unsigned fromBandId, unsigned toBandId);
 
-  // Path and Reachability Analysis
+  // Reachability
   std::unordered_map<unsigned, unsigned> findReachableGroups(unsigned startGroupId);
   std::vector<unsigned> findLastNodesInPath(unsigned srcGroupId);
   bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId);
 
-  // Fusion Type and Order Determination (sets fusionType, depInfo, and loopTransform)
+  // Sets fusionType, depInfo, and loopTransform.
   void setFusionPlanOptions(FusionPlan &plan);
   bool hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGroupId);
   std::pair<GroupPtr, GroupPtr> determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup);
 
-  bool findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup, BackwardIntersectionResult &result);
-  GroupPtr handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup,
-                                            const BackwardIntersectionResult &intersection);
-  void redirectFusionPlanToTarget(unsigned intersectionId, const std::unordered_map<unsigned, unsigned> &reachable,
-                                  unsigned pathLen, GroupPtr targetGroup);
+  bool findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup, bool *isAncestry = nullptr);
   void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan, const GroupPtr srcGroup,
                              const GroupPtr dstGroup);
 
@@ -131,10 +135,8 @@ struct FusionAnalyzer {
                               const std::unordered_set<size_t> &skipIdx,
                               const std::vector<DirectPredecessor> &directPreds);
 
-  // Collects source groups for fusion with the target group.
-  // Prefers store-load (producer-consumer) edges; falls back to load-load edges
-  // only when no store-load edges exist for the target group.
-  // Both output vectors are sorted by groupId in descending order before return.
+  // Prefers store-load edges; falls back to load-load only when none exist.
+  // Output vectors are sorted by groupId descending.
   void collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
                                  std::vector<unsigned> &rarGroupIds);
   void dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
@@ -143,11 +145,14 @@ struct FusionAnalyzer {
   // Member Variables
   std::unordered_set<unsigned> finished;
   std::vector<unsigned> topoSortNodeIds;
-  std::unordered_map<std::tuple<unsigned, unsigned, unsigned>, unsigned, TupleHash> intersectionCache;
-  // Cache for direct predecessors of each node with corresponding memrefs (computed once, used many times)
+  // Direct predecessor cache: nodeId -> {predecessor, memref, depth, depType}
   std::unordered_map<unsigned, std::vector<DirectPredecessor>> directPredecessorsCache;
-  // Cache for group dependencies (groupId pair -> DependenceInfo)
+  // Group dependency cache: (srcGroupId, dstGroupId) -> DependenceInfo
   std::unordered_map<std::pair<unsigned, unsigned>, DependenceInfo, PairHash> groupDependenciesCache;
+  // Soft defer constraints from Phase 2 skipped RAR edges.
+  // Each pair (deferredFromGroupId, mustEmitFirstFromGroupId): edges from deferredFromGroupId
+  // are held until all edges from mustEmitFirstFromGroupId have emitted.
+  std::vector<std::pair<unsigned, unsigned>> softDeferConstraints;
 };
 
 }  // namespace akg
