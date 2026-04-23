@@ -97,6 +97,17 @@ static Value convertWideFPToBF16(OpBuilder &builder, Location loc, Value value) 
   return value;
 }
 
+// Decompose i8 -> i64 sign extension into steps that VCast supports (see ArithToHIVM
+// UnaryNPUVectorToHIVMCast: i8 -> f16 -> f32 -> i64).
+static Value convertI8ExtSiToI64(OpBuilder &builder, Location loc, Value v) {
+  auto f16Ty = builder.getF16Type();
+  auto f32Ty = builder.getF32Type();
+  auto i64Ty = builder.getI64Type();
+  Value f16Val = builder.create<arith::SIToFPOp>(loc, f16Ty, v);
+  Value f32Val = builder.create<arith::ExtFOp>(loc, f32Ty, f16Val);
+  return builder.create<arith::FPToSIOp>(loc, i64Ty, f32Val);
+}
+
 // Pattern to convert affine.load from bf16 memref to f32
 // Benefit = 3: Higher priority to process loads first (before arithmetic ops)
 struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp> {
@@ -174,6 +185,23 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
       return success();
     }
     return failure();
+  }
+};
+
+// i8 -> i64 extsi: VCast-legal decomposition via float (see ArithToHIVM NPUVector path).
+struct ExtSIOpPattern : public OpRewritePattern<arith::ExtSIOp> {
+  explicit ExtSIOpPattern(MLIRContext *context, PatternBenefit benefit = 3)
+      : OpRewritePattern<arith::ExtSIOp>(context, benefit) {}
+  LogicalResult matchAndRewrite(arith::ExtSIOp op, PatternRewriter &rewriter) const override {
+    Value in = op.getIn();
+    Type inTy = in.getType();
+    Type outTy = op.getResult().getType();
+    if (!inTy.isInteger(8) || !outTy.isInteger(64)) {
+      return failure();
+    }
+    Value i64Val = convertI8ExtSiToI64(rewriter, op.getLoc(), in);
+    rewriter.replaceOp(op, i64Val);
+    return success();
   }
 };
 
@@ -287,7 +315,7 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
       : RewritePattern(MatchAnyOpTypeTag{}, benefit, context), typeConverter(converter) {}
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
     if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::ExtFOp, arith::TruncFOp, arith::ConstantOp,
-            arith::BitcastOp>(op)) {
+            arith::BitcastOp, arith::ExtSIOp>(op)) {
       return failure();
     }
     FailureOr<Operation *> legalized = legalizeOp(op, op->getOperands(), typeConverter, rewriter);
@@ -320,6 +348,7 @@ class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<Legaliz
     patterns.add<AffineStoreWideFPToBF16Pattern>(context);
     patterns.add<AffineForFPToBF16Pattern>(context);
     patterns.add<ExtFOpPattern>(context);
+    patterns.add<ExtSIOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
     patterns.add<BitcastOpPattern>(context);
     patterns.add<LegalizeBF16RewritePattern>(context, typeConverter);
