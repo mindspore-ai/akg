@@ -47,7 +47,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -728,22 +727,33 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
 
   if (storeDimOrder.size() > 1) {
     SmallVector<int> valueDimOrd;
-    if (ctx.valueDimOrder.count(vectorValue)) {
-      valueDimOrd = ctx.valueDimOrder[vectorValue];
-    } else {
-      unsigned r = npuVecType.getShape().size();
-      valueDimOrd.resize(r);
-      std::iota(valueDimOrd.begin(), valueDimOrd.end(), 0);
+    const bool hadDimOrderForValue = ctx.valueDimOrder.count(vectorValue) != 0;
+    if (hadDimOrderForValue) valueDimOrd = ctx.valueDimOrder[vectorValue];
+    if (!hadDimOrderForValue || valueDimOrd.empty()) {
+      storeOp.emitError("npuvector-vectorize: multi-index store requires non-empty valueDimOrder on the "
+                        "stored vector value");
+      return;
+    }
+    if (valueDimOrd.size() != storeDimOrder.size()) {
+      storeOp.emitError("npuvector-vectorize: valueDimOrder rank mismatch for store transpose");
+      return;
     }
 
     if (storeDimOrder != valueDimOrd) {
       SmallVector<int64_t> perm(storeDimOrder.size());
-      for (unsigned i = 0; i < storeDimOrder.size(); ++i) {
+      for (unsigned rowIdx = 0; rowIdx < storeDimOrder.size(); ++rowIdx) {
+        bool matched = false;
         for (unsigned j = 0; j < valueDimOrd.size(); ++j) {
-          if (valueDimOrd[j] == storeDimOrder[i]) {
-            perm[i] = static_cast<int64_t>(j);
+          if (valueDimOrd[j] == storeDimOrder[rowIdx]) {
+            perm[rowIdx] = static_cast<int64_t>(j);
+            matched = true;
             break;
           }
+        }
+        if (!matched) {
+          storeOp.emitError(
+            "npuvector-vectorize: cannot map store axis order to valueDimOrder for transpose");
+          return;
         }
       }
       vectorValue = ctx.builder.create<npuvector::TransposeOp>(loc, vectorValue, perm);
@@ -850,11 +860,19 @@ static Operation *createRenamedOrSameNameVecArith(Operation *op, Location loc, S
 
 static void propagateValueDimOrderToFirstOperandWithOrder(VectorizationContext &ctx, ValueRange vecOperands,
                                                           Value result) {
+  auto resultNvt = mlir::dyn_cast<npuvector::NPUVectorType>(result.getType());
+  const unsigned expectRank =
+    resultNvt ? static_cast<unsigned>(resultNvt.getRank()) : 0;
   for (Value vo : vecOperands) {
-    if (isa<npuvector::NPUVectorType>(vo.getType()) && ctx.valueDimOrder.count(vo)) {
-      ctx.valueDimOrder[result] = ctx.valueDimOrder[vo];
-      break;
-    }
+    if (!mlir::isa<npuvector::NPUVectorType>(vo.getType())) continue;
+    auto ordIter = ctx.valueDimOrder.find(vo);
+    if (ordIter == ctx.valueDimOrder.end()) continue;
+    // Copy before operator[](result): inserting 'result' may rehash DenseMap and invalidate ordIter / references.
+    SmallVector<int> orderCopy = ordIter->second;
+    if (orderCopy.empty()) continue;
+    if (expectRank != 0 && orderCopy.size() != expectRank) continue;
+    ctx.valueDimOrder[result] = std::move(orderCopy);
+    break;
   }
 }
 
@@ -2450,7 +2468,7 @@ static void runNormal1DPath(scf::ForOp loop, VectorizationMode mode, OpBuilder &
     isDynamic ? computeDynamicVectorSize(loop, maxStepValue, attrBuilder, loop.getLoc()) : Value();
   int64_t actualStep = computeStaticVectorSize(loop, maxStepFromAttr);
   (void)vectorizeLoop(loop, actualStep, vectorSizeValue, maxStepValue, mode, builder, loop.getInductionVar(), Value(),
-                      std::nullopt);
+                        std::nullopt);
 }
 
 class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBase<NPUVectorVectorizePass> {
