@@ -509,7 +509,7 @@ static void preprocessLoopAttrsForTileCalculation(func::FuncOp funcOp, const Lea
   if (plan.representativeBand.empty()) {
     return;
   }
-  if (plan.hasLeafBranching) {
+  if (plan.hasLeafBranching || plan.representativeBand.size() <= 1) {
     clearAllBroadcastLoopAttrs(funcOp);
     return;
   }
