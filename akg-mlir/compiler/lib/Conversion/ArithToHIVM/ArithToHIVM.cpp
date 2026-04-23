@@ -2622,6 +2622,7 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       }
     }
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, src, resultBuf);
     rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, src, resultBuf, rewriter.getDenseI64ArrayAttr(perm));
     return resultBuf;
   }
@@ -2649,6 +2650,7 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
         }
       }
       Value newBuf = rewriter.create<memref::AllocOp>(loc, newMemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, currentBuf, newBuf);
       SmallVector<int64_t> swapPerm = buildAdjacentSwapPerm(rank, a);
       rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, currentBuf, newBuf,
                                           rewriter.getDenseI64ArrayAttr(swapPerm));
