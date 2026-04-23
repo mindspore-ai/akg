@@ -365,7 +365,7 @@ class CommonUtils {
       if (isa<IndexType>(blockArg.getType())) {
         Block *block = blockArg.getOwner();
         Operation *parentOp = block->getParentOp();
-        if (isa<affine::AffineForOp>(parentOp) || isa<scf::ParallelOp>(parentOp)) {
+        if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp>(parentOp)) {
           axes.push_back(parentOp);
           for (auto operand : parentOp->getOperands()) {
             collectRelatedAxes(operand, axes);
