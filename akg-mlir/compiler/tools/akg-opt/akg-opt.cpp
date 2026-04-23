@@ -22,6 +22,7 @@
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
+#include "akg/Dialect/HIVM/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
   registerAKGSCFPasses();
   registerAKGGPUPasses();
   registerAKGTensorPasses();
+  registerAKGHIVMPasses();
 
   DialectRegistry registry;
   registerAllDialects(registry);
