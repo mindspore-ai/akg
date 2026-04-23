@@ -812,7 +812,11 @@ def Mfuse_NumToTensorOp : Mfuse_Op<"num_to_tensor", [Pure]> {
   let hasVerifier = 1;
 }
 
-def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementType]> {
+def Mfuse_PermuteOp : Mfuse_Op<"permute", [
+    Pure,
+    SameOperandsAndResultElementType,
+    DeclareOpInterfaceMethods<Mfuse_InferSymbolicShapeInterface>
+  ]> {
   let summary = "Tensor dimension permutation operation.";
   let description = [{
     Permutes the dimensions of a tensor according to the specified order.
@@ -826,6 +830,21 @@ def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementTyp
 
   let results = (outs AnyRankedTensor:$output);
 
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins
+        "::mlir::Type":$resultType,
+        "::mlir::Value":$input,
+        "::mlir::ArrayAttr":$perm,
+        CArg<"llvm::ArrayRef<mlir::NamedAttribute>", "{}">:$attributes
+      ), [{
+        llvm::SmallVector<mlir::NamedAttribute, 4> attrs(attributes.begin(), attributes.end());
+        attrs.push_back($_builder.getNamedAttr("perm", perm));
+        ::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::PermuteOp>::build(
+            $_builder, $_state, resultType, mlir::ValueRange(input), attrs);
+      }]>
+  ];
+  let hasVerifier = 1;
   let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = [{
