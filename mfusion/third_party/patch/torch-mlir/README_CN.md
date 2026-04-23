@@ -154,15 +154,19 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 ### 006-disable-aten-fold-constant.patch
 
 **描述：**  
-禁用 `aten.ones`、`aten.zeros`、`aten.full` 、`prim.NumToTensor.Scalar` 和 `aten.clone` 的fold方法，使这几个 Op 在 canonicalization 时不再被折叠。
+禁用 `aten.ones`、`aten.zeros`、`aten.full`、`prim.NumToTensor.Scalar` 和 `aten.clone` 的 fold 方法；同时为 `aten.reciprocal` 增加 canonicalizer（`reciprocal(sqrt(x)) -> rsqrt(x)`），使该组合在 canonicalization 后保持期望形态。
 
 **问题：**  
-在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若`aten.ones`、`aten.zeros`、`aten.full`、`prim.NumToTensor.Scalar` 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠为 `torch.vtensor.literal`，导致后续 pipeline 中出现 literal，与当前处理方式不符。若`aten.clone` 启用了 `hasFolder` 并实现了 `fold()`，可能会将本来非连续转连续的处理操作优化掉，导致后续算子的输入异常。
+在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若 `aten.ones`、`aten.zeros`、`aten.full`、`prim.NumToTensor.Scalar` 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠为 `torch.vtensor.literal`，导致后续 pipeline 中出现 literal，与当前处理方式不符。若 `aten.clone` 启用了 `hasFolder` 并实现了 `fold()`，可能会将本来用于保持布局语义的 clone 操作提前折叠掉，影响后续算子输入形态。另外，`reciprocal(sqrt(x))` 需要在 Torch 侧稳定规范化为 `rsqrt(x)`，以便后续优化链路统一识别。
 
 **解决方案：**
 
-1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp`、`PrimNumToTensorScalarOp` 和 `AtenCloneOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这些 Op 声明 fold。
-2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold`、`PrimNumToTensorScalarOp::fold` 和 `AtenCloneOp::fold` 的完整实现块，与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
+1. **TableGen（.td）**：
+    - 在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp`、`PrimNumToTensorScalarOp` 和 `AtenCloneOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这些 Op 声明 fold。
+    - 为 `AtenReciprocalOp` 增加 `let hasCanonicalizer = 1;`，启用 reciprocal 的规范化模式注册。
+2. **C++ 实现（.cpp）**：
+    - 在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold`、`PrimNumToTensorScalarOp::fold` 和 `AtenCloneOp::fold` 的完整实现块，与 `.td` 中取消 `hasFolder` 保持一致，避免链接未定义符号。
+    - 新增 `AtenReciprocalOp::getCanonicalizationPatterns`，将 `reciprocal(sqrt(x))` 规范化为 `rsqrt(x)`。
 
 **修改的文件：**
 
