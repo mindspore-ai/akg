@@ -2,21 +2,20 @@
 
 // CHECK-LABEL:    func.func @Fused_Mul_Maximum_Select_Mul_Select_Assign_fusion(
 // CHECK-SAME:       %arg0: memref<1xf32>, %arg1: memref<1xi8>, %arg2: memref<1xi8>, %arg3: memref<1xf32>, %arg4: memref<1xf32>) -> memref<1xf32>
+// CHECK:              [[ZERO:%.*]] = arith.constant 0.000000e+00 : f16
 // CHECK:            scf.for {{.*}} {
 // CHECK:              [[LOAD0:%.*]] = memref.load %arg0{{.*}} : memref<1xf32>
 // CHECK:              [[MUL0:%.*]] = arith.mulf [[LOAD0]], {{.*}} : f32
 // CHECK:              [[MAX0:%.*]] = arith.maximumf [[MUL0]], {{.*}} : f32
 // CHECK:              [[COND0_I8:%.*]] = memref.load %arg1{{.*}} : memref<1xi8>
 // CHECK:              [[LOAD1:%.*]] = memref.load %arg0{{.*}} : memref<1xf32>
-// CHECK:              [[ZERO0:%.*]] = arith.constant 0.000000e+00 : f16
 // CHECK:              [[COND0_F16:%.*]] = arith.uitofp [[COND0_I8]] : i8 to f16
-// CHECK:              [[COND0_I1:%.*]] = arith.cmpf one, [[COND0_F16]], [[ZERO0]] : f16
+// CHECK:              [[COND0_I1:%.*]] = arith.cmpf one, [[COND0_F16]], [[ZERO]] : f16
 // CHECK:              [[SEL0:%.*]] = arith.select [[COND0_I1]], [[MAX0]], [[LOAD1]] : f32
 // CHECK:              [[MUL1:%.*]] = arith.mulf [[SEL0]], {{.*}} : f32
 // CHECK:              [[COND1_I8:%.*]] = memref.load %arg2{{.*}} : memref<1xi8>
-// CHECK:              [[ZERO1:%.*]] = arith.constant 0.000000e+00 : f16
 // CHECK:              [[COND1_F16:%.*]] = arith.uitofp [[COND1_I8]] : i8 to f16
-// CHECK:              [[COND1_I1:%.*]] = arith.cmpf one, [[COND1_F16]], [[ZERO1]] : f16
+// CHECK:              [[COND1_I1:%.*]] = arith.cmpf one, [[COND1_F16]], [[ZERO]] : f16
 // CHECK:              [[SEL1:%.*]] = arith.select [[COND1_I1]], [[MUL1]], [[SEL0]] : f32
 // CHECK:              memref.store [[SEL1]], %arg4{{.*}} : memref<1xf32>
 // CHECK:            } {vector = 4096 : i64}
