@@ -23,6 +23,7 @@
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
+#include "akg/Dialect/HIVM/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
@@ -125,6 +126,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
+    pm.addPass(mlir::createAlignAllocBufferPass());
     pm.addPass(mlir::createCanonicalizerPass());
   }
 }
