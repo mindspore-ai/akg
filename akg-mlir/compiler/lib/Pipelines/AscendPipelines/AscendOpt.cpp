@@ -53,6 +53,7 @@ using mlir::OpPassManager;
 namespace {
 void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelineOptions &options) {
   pm.addPass(mlir::createAKGOperatorIdentifyPass());
+  pm.addPass(mlir::createHoistTensorSlicePass());
   pm.addPass(mlir::createMindsporeMakeBroadcastablePass());
   pm.addPass(mlir::createEliminateDimensionPass());
   pm.addPass(mlir::createLegalizeTypePass());
