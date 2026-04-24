@@ -169,4 +169,10 @@ def CopyReturnedFuncArgs : Pass<"copy-returned-func-args", "func::FuncOp"> {
   ];
 }
 
+def HoistTensorSlice : Pass<"hoist-tensor-slice", "func::FuncOp"> {
+  let summary = "Move tensor.extract_slice up to process the input.";
+  let constructor = "mlir::createHoistTensorSlicePass()";
+  let dependentDialects = [];
+}
+
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES
