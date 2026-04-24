@@ -30,6 +30,7 @@ docs/
 | `Configuration.md` | settings.json 详解 |
 | `LLM.md` | LLM Provider/Client |
 | `KernelGen.md` / `KernelDesigner.md` / `KernelAgent.md` | 各算子 Agent |
+| `CodeChecker.md` | Coder 生成代码后、Verifier 运行前的静态检查器；策略在 `op/config/code_checker.yaml` |
 | `Trace.md` | 推理追踪与断点恢复 |
 | `Tools.md` | 工具注册与执行 |
 | `AKG_CLI.md` | akg_cli 命令参考 |

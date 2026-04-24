@@ -28,86 +28,54 @@ import ast
 import logging
 import os
 import py_compile
+import importlib.resources
 import importlib.util
 import tempfile
 from typing import Tuple, List, Dict, Optional
 from dataclasses import dataclass
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# DSL 合规性检测 —— 常量与辅助函数
+# Policy: single source of truth is akg_agents/op/config/code_checker.yaml.
+# Loaded once at import; missing/malformed keys surface as KeyError / TypeError
+# on first access (no redundant validation layer).
 # ---------------------------------------------------------------------------
 
-_TRITON_DECORATORS = frozenset({'jit', 'autotune', 'heuristics'})
+with importlib.resources.files("akg_agents.op.config").joinpath(
+    "code_checker.yaml"
+).open("r", encoding="utf-8") as _f:
+    _POLICY = yaml.safe_load(_f)
 
-# --- 分层黑名单 ---
-# HARD: 高级复杂 API，无论 kernel 是否调用都硬失败（不应出现在 forward() 中）
-# SOFT: 简单元素级/辅助操作，仅在 kernel 未调用时硬失败，已调用时仅警告
-#       （融合算子的 pre/post 处理可能合理使用这些）
-
-_TORCH_COMPUTE_OPS_HARD = frozenset({
-    # Matrix / linear algebra — 这些是核心计算，必须由 kernel 完成
-    'matmul', 'mm', 'bmm', 'addmm', 'addmv', 'addbmm', 'baddbmm',
-    'einsum', 'dot', 'mv', 'inner', 'outer',
-    'linear',
-    # Convolution
-    'conv1d', 'conv2d', 'conv3d',
-    'conv_transpose1d', 'conv_transpose2d', 'conv_transpose3d',
-    # Normalization — 整个 norm 语义应在 kernel 内实现
-    'layer_norm', 'batch_norm', 'group_norm', 'instance_norm',
-    # Compound activations — softmax 含 reduction + exp，属于完整子计算图
-    'softmax', 'log_softmax', 'logsumexp',
-    # Pooling
-    'max_pool1d', 'max_pool2d', 'max_pool3d',
-    'avg_pool1d', 'avg_pool2d', 'avg_pool3d',
-    'adaptive_avg_pool2d',
-    # Other complex ops
-    'embedding', 'interpolate',
-    'cumsum', 'cumprod',
-})
-
-_TORCH_COMPUTE_OPS_SOFT = frozenset({
-    # Simple activations — 融合算子可能在 kernel 外做 pre/post 激活
-    'relu', 'gelu', 'silu', 'sigmoid', 'tanh',
-    'leaky_relu', 'elu', 'hardswish', 'mish',
-    # Simple elementwise math — pre/post 处理可能合理使用
-    'exp', 'log', 'sqrt', 'rsqrt', 'pow',
-    'sin', 'cos', 'abs',
-    'clamp', 'clamp_min', 'clamp_max',
-    # Simple reductions — 可能用于 grid 计算或后处理
-    'sum', 'mean', 'prod', 'norm',
-    'amax', 'amin', 'argmax', 'argmin',
-})
-
-_TORCH_COMPUTE_OPS = _TORCH_COMPUTE_OPS_HARD | _TORCH_COMPUTE_OPS_SOFT
-
-_TORCH_CALL_PREFIXES = frozenset({'torch', 'F'})
-
-
-def _is_triton_decorator(node: ast.expr) -> bool:
-    """判断 decorator 节点是否为 @triton.jit / @triton.autotune 等"""
-    if isinstance(node, ast.Attribute):
-        return (
-            isinstance(node.value, ast.Name)
-            and node.value.id == 'triton'
-            and node.attr in _TRITON_DECORATORS
-        )
-    if isinstance(node, ast.Call):
-        return _is_triton_decorator(node.func)
-    return False
+_STRAY_TEXT_RE = re.compile(
+    "[" + "".join(
+        f"\\u{lo:04x}-\\u{hi:04x}" for lo, hi in _POLICY["stray_text"]["unicode_ranges"]
+    ) + "]{" + str(_POLICY["stray_text"]["min_run"]) + ",}"
+)
+_AUTOTUNE_RE = re.compile(
+    rf"@{re.escape(_POLICY['triton_module_name'])}\."
+    rf"{re.escape(_POLICY['autotune']['decorator_attr'])}\s*\(",
+    re.MULTILINE,
+)
+_RESTORE_VALUE_RE = re.compile(
+    rf"{re.escape(_POLICY['autotune']['required_kwarg'])}\s*="
+)
 
 
 def _find_model_new_class(tree: ast.Module) -> Optional[ast.ClassDef]:
+    target = _POLICY["kernel_class_name"]
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == 'ModelNew':
+        if isinstance(node, ast.ClassDef) and node.name == target:
             return node
     return None
 
 
 def _find_forward(cls_node: ast.ClassDef) -> Optional[ast.FunctionDef]:
+    target = _POLICY["kernel_forward_method"]
     for item in cls_node.body:
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == 'forward':
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == target:
             return item
     return None
 
@@ -133,8 +101,25 @@ class CodeChecker:
     def __init__(self, backend: str, dsl: str, config: Optional[dict] = None):
         self.backend = backend.lower() if backend else ""
         self.dsl = dsl.lower() if dsl else ""
+        # `config` 保留仅为兼容调用方签名；策略真源是 op/config/code_checker.yaml。
         self.config = config or {}
+        # 暴露为实例属性便于测试与日志；来自 _POLICY 的浅复制（frozenset）。
+        self.triton_decorators = frozenset(_POLICY["triton_decorators"])
+        self.torch_compute_ops_hard = frozenset(_POLICY["torch_compute_ops_hard"])
+        self.torch_compute_ops_soft = frozenset(_POLICY["torch_compute_ops_soft"])
+        self.torch_call_prefixes = frozenset(_POLICY["torch_call_prefixes"])
         logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}")
+
+    def _is_triton_decorator(self, node: ast.expr) -> bool:
+        if isinstance(node, ast.Attribute):
+            return (
+                isinstance(node.value, ast.Name)
+                and node.value.id == _POLICY["triton_module_name"]
+                and node.attr in self.triton_decorators
+            )
+        if isinstance(node, ast.Call):
+            return self._is_triton_decorator(node.func)
+        return False
 
     # ------------------------------------------------------------------
     # 主入口
@@ -193,7 +178,7 @@ class CodeChecker:
             errors.extend(self._check_dsl_compliance(code))
 
         # Step 6: Autotune 规范检测（仅 triton DSL，语法正确时执行）
-        if not has_syntax_err and self.dsl.startswith("triton"):
+        if not has_syntax_err and self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
             errors.extend(self._check_autotune_compliance(code))
 
         passed = len(errors) == 0
@@ -382,10 +367,9 @@ class CodeChecker:
             return False
 
     # ------------------------------------------------------------------
-    # Step 4: 中文文本混入检测
+    # Step 4: 中文文本混入检测 —— regex 来自 op/config/code_checker.yaml
+    # 的 stray_text.min_run / stray_text.unicode_ranges
     # ------------------------------------------------------------------
-
-    _CHINESE_RUN_RE = re.compile(r'[\u4e00-\u9fff]{3,}')
 
     def _check_stray_chinese(self, code: str) -> List[Dict]:
         """
@@ -410,7 +394,7 @@ class CodeChecker:
                             tokenize.DEDENT, tokenize.ENDMARKER, tokenize.ENCODING):
                 continue
 
-            match = self._CHINESE_RUN_RE.search(tok.string)
+            match = _STRAY_TEXT_RE.search(tok.string)
             if match:
                 line_num = tok.start[0]
                 chinese_text = match.group()
@@ -446,7 +430,7 @@ class CodeChecker:
            - kernel 未调用 + torch API → 硬失败（明确作弊）
            - kernel 已调用 + torch API → 仅日志警告（可能是合理辅助操作）
         """
-        if not self.dsl.startswith("triton"):
+        if not self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
             return []
 
         try:
@@ -461,7 +445,7 @@ class CodeChecker:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for dec in node.decorator_list:
-                    if _is_triton_decorator(dec):
+                    if self._is_triton_decorator(dec):
                         triton_kernels.add(node.name)
                         break
 
@@ -534,11 +518,11 @@ class CodeChecker:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 mod = node.func.value
                 method = node.func.attr
-                if isinstance(mod, ast.Name) and mod.id in _TORCH_CALL_PREFIXES:
+                if isinstance(mod, ast.Name) and mod.id in self.torch_call_prefixes:
                     label = f"{mod.id}.{method}"
-                    if method in _TORCH_COMPUTE_OPS_HARD:
+                    if method in self.torch_compute_ops_hard:
                         hard_calls.append((node.lineno, label))
-                    elif method in _TORCH_COMPUTE_OPS_SOFT:
+                    elif method in self.torch_compute_ops_soft:
                         soft_calls.append((node.lineno, label))
 
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
@@ -598,17 +582,12 @@ class CodeChecker:
     # Step 6: Autotune 规范检测
     # ------------------------------------------------------------------
 
-    _AUTOTUNE_RE = re.compile(r'@triton\.autotune\s*\(', re.MULTILINE)
-    _RESTORE_VALUE_RE = re.compile(r'restore_value\s*=')
 
     def _check_autotune_compliance(self, code: str) -> List[Dict]:
-        """
-        检查 @triton.autotune 使用是否符合规范：
-        - 必须包含 restore_value 参数
-        """
+        """检查 @triton.autotune 必须包含 restore_value 参数。"""
         errors = []
 
-        autotune_match = self._AUTOTUNE_RE.search(code)
+        autotune_match = _AUTOTUNE_RE.search(code)
         if not autotune_match:
             return errors
 
@@ -627,7 +606,7 @@ class CodeChecker:
                     break
         autotune_block = code[start:end]
 
-        if not self._RESTORE_VALUE_RE.search(autotune_block):
+        if not _RESTORE_VALUE_RE.search(autotune_block):
             errors.append({
                 "line": autotune_line,
                 "error_type": "autotune_missing_restore_value",

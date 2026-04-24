@@ -403,6 +403,40 @@ class ModelNew(torch.nn.Module):
 
 
 # ============================================================
+# YAML 策略加载
+# ============================================================
+
+@pytest.mark.level0
+def test_policy_loaded_from_yaml():
+    """CodeChecker 的关键词集合均来自 op/config/code_checker.yaml"""
+    from akg_agents.op.utils import code_checker as cc
+
+    checker = CodeChecker(backend="cuda", dsl="triton_cuda")
+    assert "matmul" in checker.torch_compute_ops_hard
+    # layer_norm 在当前策略下被降到 soft（对齐 Ascend seeds 约束）
+    assert "layer_norm" in checker.torch_compute_ops_soft
+    assert "relu" in checker.torch_compute_ops_soft
+    assert "torch" in checker.torch_call_prefixes
+    assert "jit" in checker.triton_decorators
+    # 身份字符串直接走模块级 _POLICY
+    assert cc._POLICY["kernel_class_name"] == "ModelNew"
+    assert cc._POLICY["triton_module_name"] == "triton"
+
+
+@pytest.mark.level0
+def test_config_dict_parameter_is_ignored():
+    """CodeChecker(config=...) 不再影响策略（YAML 是唯一真源）"""
+    c1 = CodeChecker(backend="cuda", dsl="triton_cuda", config=None)
+    c2 = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={"code_checker": {"torch_compute_ops_hard": ["only_this_one"]}},
+    )
+    assert c1.torch_compute_ops_hard == c2.torch_compute_ops_hard
+    assert "matmul" in c2.torch_compute_ops_hard
+
+
+# ============================================================
 # 入口
 # ============================================================
 
