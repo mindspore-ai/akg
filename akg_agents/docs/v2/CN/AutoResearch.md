@@ -122,6 +122,11 @@ Fail-closed 校验在主循环前运行，确保坏掉的环境不会耗用 eval
 Preflight 产出被校验过的 baseline code 与 baseline 指标，主循环从这里
 开始。
 
+CodeChecker 被所有生成 kernel 代码的 workflow 调用，不仅用于
+AutoResearch。流水线与 YAML 策略
+（`op/config/code_checker.yaml`）在
+[CodeChecker.md](./CodeChecker.md) 中记录。
+
 ---
 
 ## 4. 运行时

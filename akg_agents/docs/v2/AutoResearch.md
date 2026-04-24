@@ -133,6 +133,11 @@ consume the eval budget:
 Preflight output feeds the main loop a verified baseline code + baseline
 metric. The loop is allowed to start from here.
 
+CodeChecker is used by every workflow that generates kernel code, not
+only AutoResearch. Pipeline and YAML policy
+(`op/config/code_checker.yaml`) are documented in
+[CodeChecker.md](./CodeChecker.md).
+
 ---
 
 ## 4. Runtime
