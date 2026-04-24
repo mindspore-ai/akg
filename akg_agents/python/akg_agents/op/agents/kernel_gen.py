@@ -193,6 +193,7 @@ class KernelGen(AgentBase):
         self.extra_skills: List[Any] = []
         self.exclude_skill_names: List[str] = []
         self.force_skill_names: List[str] = []
+        self._sampled_case_names: set = set()
         
         context = {
             "agent_name": "kernel_gen",
@@ -289,6 +290,7 @@ class KernelGen(AgentBase):
         example_candidates: List[Any] = []
         case_fix: List[Any] = []
         case_improve: List[Any] = []
+        unknown_cat_skills: List[Any] = []
 
         for skill in all_skills:
             cat = getattr(skill, "category", "") or ""
@@ -308,6 +310,15 @@ class KernelGen(AgentBase):
                     case_fix.append(skill)
                 else:
                     case_improve.append(skill)
+            else:
+                unknown_cat_skills.append(skill)
+
+        if unknown_cat_skills:
+            logger.warning(
+                f"[KernelGen] 发现 {len(unknown_cat_skills)} 个未知 category 的 skill，"
+                f"将被忽略: {[s.name for s in unknown_cat_skills]}。"
+                f"有效 category: fundamental, reference, guide, example, fix, improvement, case"
+            )
 
         def _apply_force_skills(result: List[Any]) -> List[Any]:
             if not self.force_skill_names:
@@ -399,6 +410,9 @@ class KernelGen(AgentBase):
         elif stage == "optimize":
             extras = self._sample_cases(case_selected)
             extra_label = "LLM-selected cases (sampled)"
+        elif stage == "initial":
+            extras = self._sample_cases(case_selected)
+            extra_label = "LLM-selected cases (sampled)"
         else:
             extras = []
             extra_label = "none (initial)"
@@ -421,13 +435,40 @@ class KernelGen(AgentBase):
 
         return _apply_force_skills(result)
 
-    @staticmethod
-    def _sample_cases(cases: List[Any], n: int = 2) -> List[Any]:
-        """从候选 case 中随机采样 n 个。如果候选 <= n，全部返回。"""
+    def _sample_cases(self, cases: List[Any], n: int = 2) -> List[Any]:
+        """从候选 case 中优先采样未被选过的，全部选过后重置。
+
+        维护 self._sampled_case_names 记录已选过的 skill name，
+        每次优先从没选过的里选；全部选完后清空 set 重新开始。
+        """
         import random
+
+        if not cases:
+            return []
+
         if len(cases) <= n:
-            return list(cases)
-        return random.sample(cases, n)
+            selected = list(cases)
+        else:
+            unsampled = [s for s in cases if s.name not in self._sampled_case_names]
+            if unsampled:
+                pick_n = min(n, len(unsampled))
+                selected = random.sample(unsampled, pick_n)
+                if pick_n < n:
+                    remaining = [s for s in cases if s not in selected]
+                    fill_n = min(n - pick_n, len(remaining))
+                    selected += random.sample(remaining, fill_n)
+            else:
+                self._sampled_case_names.clear()
+                selected = random.sample(cases, n)
+
+        for s in selected:
+            self._sampled_case_names.add(s.name)
+
+        logger.info(
+            f"[KernelGen] _sample_cases: selected={[s.name for s in selected]}, "
+            f"sampled_history_size={len(self._sampled_case_names)}"
+        )
+        return selected
 
     @staticmethod
     def _infer_case_type(skill) -> str:
