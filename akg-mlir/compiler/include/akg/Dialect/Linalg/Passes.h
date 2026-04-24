@@ -29,6 +29,7 @@
 #include "akg/Dialect/Linalg/Transforms/ShapeNormalization.h"
 #include "akg/Dialect/Linalg/Transforms/MatchAndMarkReductionOps.h"
 #include "akg/Dialect/Linalg/Transforms/MemrefCopyToLoops.h"
+#include "akg/Dialect/Linalg/Transforms/HoistTensorSlice.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 
