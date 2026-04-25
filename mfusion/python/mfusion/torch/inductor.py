@@ -13,6 +13,7 @@
 # limitations under the License.
 """Mfuse fusion pipelines for Torch inductor."""
 
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,8 @@ _PASS_ENTRY_PATTERN = re.compile(
     r'\{\s*"([^"]+)"\s*,\s*\[\]\(\)\s*\{\s*return\s+create.*?\(\);\s*\}\s*\}',
     re.DOTALL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _load_internal_passes_from_cpp(
@@ -59,6 +62,18 @@ def _run_composite_fusion_stage(
 ) -> None:
     """Run torch-fusion or mfuse-fusion: one PM when quiet, per-pass when verbose IR is enabled."""
     if runner.enabled_verbose_internal_ir:
+        # In some installed environments, C++ sources are unavailable so
+        # internal pass extraction returns empty. Fall back to the composite
+        # pipeline to preserve fusion behavior under verbose level-2 mode.
+        if not internal_passes:
+            logger.warning(
+                "[mfusion] %s internal pass list is unavailable in verbose mode; "
+                "falling back to composite pipeline: %s",
+                stage_label,
+                composite_pipeline,
+            )
+            runner.run(composite_pipeline, stage_label)
+            return
         if pre_canonicalize:
             runner.run("builtin.module(canonicalize)", f"{stage_label} / pre-canonicalize")
         for name in internal_passes:
