@@ -189,7 +189,7 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     auto grad_expr = builder.buildExpr(processedGrad);
 
     // gelu_grad of dy and x is dy * y'
-    // y' = 0.5 * (1.0 + tanh(tanh_para)) + 0.5 * x * (1.0 - tanh(tanh_para) * tanh(para)) * mul_right
+    // y' = 0.5 * (1.0 + tanh(tanh_para)) + 0.5 * x * (1.0 - tanh(tanh_para) * tanh(tanh_para)) * mul_right
     // tanh_para is 'sqrt(2.0 / pi) * (x + 0.044715 * x * x * x)'
     // mul_right is 'sqrt(2.0 / pi) * (1 + 3 * 0.044715 * x * x)'
     auto x_sq = x * x;
@@ -200,11 +200,9 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     // 0.5 * (1.0 + tanh(tanh_para))
     auto left_derivative = kHalf * (tanh_para_expr + kOne);
 
-    // 0.5 * x * (1.0 - tanh(tanh_para) * tanh(para)) * mul_right
-    auto tanh_x = builder.tanh(x.getValue());
-    auto tanh_x_expr = builder.buildExpr(tanh_x);
+    // 0.5 * x * (1.0 - tanh(tanh_para) * tanh(tanh_para)) * mul_right
     auto mul_right = kBeta * (kOne + kThree * kKappa * x_sq);
-    auto right_derivative = kHalf * x * (kOne - tanh_para_expr * tanh_x_expr) * mul_right;
+    auto right_derivative = kHalf * x * (kOne - tanh_para_expr * tanh_para_expr) * mul_right;
     auto out = grad_expr * (left_derivative + right_derivative);
 
     // Convert back to original type if needed
