@@ -21,7 +21,7 @@
   - [📐 5. 设计文档](#-5-设计文档)
     - [核心框架](#核心框架)
     - [场景](#场景)
-    - [CLI](#cli)
+    - [OpenCode 集成](#opencode-集成)
     - [贡献](#贡献)
     - [其他模块（v1 文档）](#其他模块v1-文档)
 
@@ -35,6 +35,7 @@
 当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
 
 ## 🗓️ 2. 更新日志
+- 2026-04-28：CLI 模块（`akg_cli`）已废弃，停止后续演进。
 - 2026-03-31：新增 [AutoResearch](./docs/v2/CN/AutoResearch.md) 工作流 — Agent 驱动的多轮自主迭代深度优化，基于 KernelVerifier 评测，支持所有 DSL。
 - 2026-03-11：打通集成 AKG Agents 和 OpenCode 的算子优化流程（[akg-op](./docs/v2/CN/AKG-Op.md) Agent）。
 - 2026-02-26：支持 PyPTO 后端代码生成能力。
@@ -64,7 +65,7 @@ cd akg
 # 3. 安装依赖
 pip install -r akg_agents/requirements.txt
 
-# 4. 安装 AIKG
+# 4. 安装 AKG Agents
 pip install -e ./akg_agents --no-build-isolation
 
 # 5. 按需下载第三方 benchmark
@@ -111,29 +112,37 @@ cp akg_agents/examples/settings.example.json ~/.akg/settings.json
 
 ### 启动与使用
 
-以算子代码生成任务（`akg_cli op`）为例：
+AKG Agents 提供算子生成、优化、迁移能力，脚本分布在三个目录：
 
+| 目录 | 内容 |
+|------|------|
+| `examples/kernel_related/` | 生成、优化、迁移示例脚本（主要） |
+| `python/akg_agents/op/tools/` | adaptive search、evolve 运行脚本（单跑/批量） |
+| `scripts/` | AutoResearch |
+
+| 功能 | 示例脚本 |
+|------|----------|
+| 生成 | `*_single.py` — 直接生成并验证 |
+| 优化 | `*_adaptive_search*.py`（UCB策略）、`*_evolve*.py`（进化算法） |
+| 迁移 | `run_cuda_to_ascend_conversion.py`、`run_cuda_to_ascend_evolve.py` |
+
+使用示例：
 ```bash
-# Ascend 910B2
-akg_cli op --framework torch --backend ascend --arch ascend910b2 \
-  --dsl triton_ascend --devices 0,1,2,3,4,5,6,7
+# 算子生成
+python examples/kernel_related/run_torch_npu_triton_single.py
 
-# CUDA A100
-# akg_cli op --framework torch --backend cuda --arch a100 \
-#   --dsl triton_cuda --devices 0,1,2,3,4,5,6,7
+# 算子优化（自适应搜索）
+python python/akg_agents/op/tools/run_single_adaptive_search.py
 
-# CPU x86_64
-# akg_cli op --framework torch --backend cpu --arch x86_64 \
-#   --dsl cpp --devices 0
+# 算子优化（进化）
+python python/akg_agents/op/tools/run_single_evolve.py
+
+# 算子迁移（CUDA → Ascend）
+python examples/kernel_related/run_cuda_to_ascend_conversion.py
+
+# AutoResearch
+python scripts/run_autoresearch.py
 ```
-
-启动后，可以通过以下方式交互：
-
-1. **直接描述需求**：例如 "帮我生成个 relu 算子"
-2. **提供代码**：粘贴 KernelBench 风格的 PyTorch 代码，AIKG 会自动生成对应 DSL 的算子实现并验证正确性
-
-> `akg_cli` 还支持其他任务类型，完整使用说明请参考《[AKG CLI 文档](./docs/v2/CN/AKG_CLI.md)》。
-
 
 ## ▶️ 4. 教程示例
 
@@ -159,7 +168,6 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 | **AutoResearch** | | |
 | `scripts/run_autoresearch.py` | Kernel | AutoResearch 迭代优化（全后端，`--desc` / `--ref` / `--kernel`） |
 | **通用工具** | | |
-| `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent（ReAct Agent）交互式调用 |
 | `kernel_related/run_kernel_profile.py` | Kernel | 算子性能 Profiling |
 | `run_skill/` | Skill | Skill 加载、注册、层级、版本、安装、LLM 选择等示例 |
 | `build_a_simple_react_agent/` | 框架 | 基于框架构建自定义 ReAct Agent |
@@ -200,11 +208,9 @@ akg_agents/
 - **[LLM 接入](./docs/v2/CN/LLM.md)** - LLM 提供者、客户端、Embedding
 
 ### 场景
-- **[Kernel Agent](./docs/v2/CN/KernelAgent.md)** - 多后端多 DSL 算子代码生成与优化（`akg_cli op`）
-- **[AutoResearch](./docs/v2/CN/AutoResearch.md)** - Agent 驱动的多轮自主迭代深度优化工作流（ReAct 循环 + KernelVerifier 评测）
-
-### CLI
-- **[AKG CLI](./docs/v2/CN/AKG_CLI.md)** - 命令行工具使用指南
+- **生成** — 直接生成算子代码并验证正确性
+- **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）
+- **迁移** — CUDA → Ascend 算子转换
 
 ### OpenCode 集成
 - **[akg-op 使用指南](./docs/v2/CN/AKG-Op.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码集成，支持单算子优化与模型融合分析

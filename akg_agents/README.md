@@ -21,7 +21,7 @@
   - [📐 5. Design Documentation](#-5-design-documentation)
     - [Core Framework](#core-framework)
     - [Scenarios](#scenarios)
-    - [CLI](#cli)
+    - [OpenCode Integration](#opencode-integration)
     - [Contributing](#contributing)
     - [Additional Modules (v1 Documentation)](#additional-modules-v1-documentation)
 
@@ -35,6 +35,7 @@ The framework provides a complete agent infrastructure: ReAct Agent base classes
 The current production scenario is **AI kernel code generation**: leveraging LLM planning and multi-agent collaboration to automate multi-backend, multi-DSL high-performance kernel generation and optimization. Future extensions will cover kernel migration, performance tuning, code refactoring, and more AI Infra related scenarios.
 
 ## 🗓️ 2. Changelog
+- 2026-04-28: CLI module (`akg_cli`) deprecated and will no longer receive updates.
 - 2026-03-31: Added [AutoResearch](./docs/v2/AutoResearch.md) workflow — agent-driven iterative deep optimization with KernelVerifier eval, supporting all DSLs.
 - 2026-03-11：Streamline the [operator optimization](./docs/v2/AKG-Op.md) process by integrating AKG Agents and OpenCode (`akg-op` Agent).
 - 2026-02-26: Supported PyPTO backend code generation.
@@ -64,7 +65,7 @@ cd akg
 # 3. Install dependencies
 pip install -r akg_agents/requirements.txt
 
-# 4. Install AIKG
+# 4. Install AKG Agents
 pip install -e ./akg_agents --no-build-isolation
 
 # 5. Download third-party benchmarks as needed
@@ -111,28 +112,37 @@ The `br_agents` branch currently supports the following three DSLs. Other backen
 
 ### Launch & Usage
 
-Taking the kernel code generation task (`akg_cli op`) as an example:
+AKG Agents provides kernel generation, optimization, and migration capabilities through scripts in three locations:
 
+| Directory | Content |
+|-----------|---------|
+| `examples/kernel_related/` | Generation, optimization, migration examples (primary) |
+| `python/akg_agents/op/tools/` | Adaptive search, evolve runner scripts (single/batch) |
+| `scripts/` | AutoResearch |
+
+| Feature | Example Scripts |
+|---------|-----------------|
+| Generation | `*_single.py` — direct generation and verification |
+| Optimization | `*_adaptive_search*.py` (UCB), `*_evolve*.py` (evolution) |
+| Migration | `run_cuda_to_ascend_conversion.py`, `run_cuda_to_ascend_evolve.py` |
+
+Usage examples:
 ```bash
-# Ascend 910B2
-akg_cli op --framework torch --backend ascend --arch ascend910b2 \
-  --dsl triton_ascend --devices 0,1,2,3,4,5,6,7
+# Kernel generation
+python examples/kernel_related/run_torch_npu_triton_single.py
 
-# CUDA A100
-# akg_cli op --framework torch --backend cuda --arch a100 \
-#   --dsl triton_cuda --devices 0,1,2,3,4,5,6,7
+# Optimization (adaptive search)
+python python/akg_agents/op/tools/run_single_adaptive_search.py
 
-# CPU x86_64
-# akg_cli op --framework torch --backend cpu --arch x86_64 \
-#   --dsl cpp --devices 0
+# Optimization (evolution)
+python python/akg_agents/op/tools/run_single_evolve.py
+
+# Migration (CUDA → Ascend)
+python examples/kernel_related/run_cuda_to_ascend_conversion.py
+
+# AutoResearch
+python scripts/run_autoresearch.py
 ```
-
-Once launched, you can interact in the following ways:
-
-1. **Describe your requirement**: For example, "help me generate a relu kernel"
-2. **Provide code**: Paste KernelBench-style PyTorch code, and AIKG will automatically generate the corresponding DSL kernel implementation and verify correctness
-
-> `akg_cli` also supports other task types. For full usage details, see [AKG CLI Documentation](./docs/v2/AKG_CLI.md).
 
 
 ## ▶️ 4. Tutorial Examples
@@ -159,7 +169,6 @@ Once launched, you can interact in the following ways:
 | **AutoResearch** | | |
 | `scripts/run_autoresearch.py` | Kernel | AutoResearch iterative optimization (all backends, `--desc` / `--ref` / `--kernel`) |
 | **Utilities** | | |
-| `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent (ReAct Agent) interactive invocation |
 | `kernel_related/run_kernel_profile.py` | Kernel | Kernel performance profiling |
 | `run_skill/` | Skill | Skill loading, registry, hierarchy, versioning, installation, LLM selection examples |
 | `build_a_simple_react_agent/` | Framework | Build a custom ReAct Agent using the framework |
@@ -200,14 +209,12 @@ akg_agents/
 - **[LLM](./docs/v2/LLM.md)** - LLM provider, client, embedding
 
 ### Scenarios
-- **[Kernel Agent](./docs/v2/KernelAgent.md)** - Multi-backend, multi-DSL kernel code generation and optimization (`akg_cli op`)
-- **[AutoResearch](./docs/v2/AutoResearch.md)** - Agent-driven iterative deep optimization workflow (ReAct loop with KernelVerifier eval)
+- **Generation** — Direct kernel code generation and correctness verification
+- **Optimization** — Adaptive Search (UCB), Evolve (evolutionary algorithm), [AutoResearch](./docs/v2/AutoResearch.md) (agent-driven iteration)
+- **Migration** — CUDA → Ascend kernel conversion
 
 ### OpenCode Integration
 - **[akg-op User Guide](./docs/v2/AKG-Op.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code integration, supporting single-operator optimization and model fusion analysis
-
-### CLI
-- **[AKG CLI](./docs/v2/AKG_CLI.md)** - Command-line tool usage guide
 
 ### Contributing
 - **[Skill Contribution Guide](./docs/v2/SkillContributionGuide.md)** - How to contribute new Skills

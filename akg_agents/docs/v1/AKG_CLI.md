@@ -1,5 +1,7 @@
 # AKG CLI
 
+> ⚠️ **Deprecated**: The CLI module (`akg_cli`) is no longer actively maintained and will not receive future updates.
+
 AKG CLI (`akg_cli`) is the command-line interface for AI Kernel Generator. This document focuses on the two most common flows:
 
 - Start a Worker Service: `akg_cli worker --start`

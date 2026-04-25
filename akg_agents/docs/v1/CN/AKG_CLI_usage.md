@@ -1,4 +1,7 @@
 # 使用说明
+
+> ⚠️ **已废弃**：CLI 模块（`akg_cli`）已停止维护，后续不再演进。
+
 启动 AKG_CLI 后，您可以看到以下 AKG_CLI 启动界面，然后请通过以下方式使用：
 ---
 ![AKG CLI启动界面](../assets/cli_start.png)

@@ -1,5 +1,7 @@
 # AKG CLI 二次开发指南（ReAct 版）：主 Agent / 子 Agent 与 CLI（TUI/Console）交互机制
 
+> ⚠️ **已废弃**：CLI 模块（`akg_cli`）已停止维护，后续不再演进。
+
 本文面向 **二次开发者**，解释 AKG 本地交互式 CLI/TUI 的关键链路：**消息发送**、**扩展消息类型**、**自定义面板（Panel Plugin）**。
 
 > 范围说明：本文聚焦 **本地执行链路**（`LocalExecutor` 驱动），当前 CLI **仅使用 ReAct 主代理**，不再介绍旧版 MainOpAgent（start/continue）链路。

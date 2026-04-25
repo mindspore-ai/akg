@@ -1,5 +1,7 @@
 # AKG CLI
 
+> ⚠️ **已废弃**：CLI 模块（`akg_cli`）已停止维护，后续不再演进。
+
 AKG CLI（`akg_cli`）是 AI Kernel Generator 的命令行入口。本文聚焦两个最常用流程：
 
 - 启动 Worker Service：`akg_cli worker --start`

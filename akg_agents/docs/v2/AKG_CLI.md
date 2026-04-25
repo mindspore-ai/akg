@@ -2,6 +2,8 @@
 
 # AKG CLI
 
+> ⚠️ **Deprecated**: The CLI module (`akg_cli`) is no longer actively maintained and will not receive future updates.
+
 ## 1. Overview
 
 `akg_cli` is the command-line interface for AKG Agents, providing interactive access to all framework capabilities.
