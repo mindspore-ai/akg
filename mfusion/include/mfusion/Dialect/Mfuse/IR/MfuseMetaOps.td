@@ -201,6 +201,7 @@ def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [
       }]>
   ];
   let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
