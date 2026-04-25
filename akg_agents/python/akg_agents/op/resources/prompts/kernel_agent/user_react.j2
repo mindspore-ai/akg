@@ -1,0 +1,25 @@
+## 当前任务
+
+**用户需求**: {{ user_input }}
+
+**任务路径**: {{ task_base_path }}
+**当前节点**: {{ cur_path }}
+
+**执行历史** (history):
+{% if action_history %}
+{{ action_history }}
+{% else %}
+暂无历史
+{% endif %}
+
+{% if path_registry %}
+**数据路径索引**（所有可引用的 result.json，即使历史已压缩这些路径仍然有效）:
+{{ path_registry }}
+{% endif %}
+
+{% if plan_list %}
+**当前计划**:
+{{ plan_list }}
+{% endif %}
+
+请根据当前状态和执行历史，决定下一步操作。

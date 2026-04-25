@@ -1,0 +1,16 @@
+# Agent API Configuration
+# This file is gitignored — safe to store keys here.
+# CLI flags override these values.
+
+# --- ppchat OpenAI (uncomment to use) ---
+# provider: openai
+# model: gpt-5.4
+# base_url: https://code.ppchat.vip/v1
+# api_key: sk-lgvoS59URJGFiBUpWYF7PygfAym9HWrB8YdbIc2tbVnrrl6t
+# reasoning_effort: high
+
+# --- Volcengine Anthropic ---
+provider: anthropic
+model: ep-20260313094439-sdq2j
+base_url: https://ark.cn-beijing.volces.com/api/compatible
+api_key: 55e105d1-9367-4830-b17d-0a42f2ac0cf6

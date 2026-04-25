@@ -1,0 +1,55 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Hardware alias registry — maps runtime arch identifiers to the
+# product-family names used in skill metadata.
+#
+# Structure per vendor:
+#   prefixes:  list of lowercase prefixes that identify this vendor.
+#              An unknown chip matching a prefix but missing from
+#              aliases is treated as "load all families for this vendor"
+#              (no hardware filter applied).
+#   aliases:   chip-id (lowercase) → metadata hardware name.
+#
+# To add a chip, put it under the right vendor's aliases.
+# To add a vendor, append a new top-level key.
+
+ascend:
+  # Source: CANN device IDs
+  #   d802 = Atlas A2 (Ascend 910B)
+  #   d803 = Atlas A3 (Ascend 910C / ascend910_93xx)
+  #   d500 = Atlas 300I Duo (Ascend 310P, inference-only)
+  prefixes:
+    - ascend
+  aliases:
+    ascend910b1:    Atlas A2
+    ascend910b2:    Atlas A2
+    ascend910b2c:   Atlas A2
+    ascend910b3:    Atlas A2
+    ascend910b4:    Atlas A2
+    ascend910_9362: Atlas A3
+    ascend910_9372: Atlas A3
+    ascend910_9381: Atlas A3
+    ascend910_9382: Atlas A3
+    ascend910_9391: Atlas A3
+    ascend910_9392: Atlas A3
+
+nvidia:
+  # Skill metadata currently uses the same short names as runtime
+  # (a100, v100, …) so no aliases are needed yet.
+  # The prefix entry ensures unknown nvidia/sm_ ids fall back gracefully.
+  prefixes:
+    - nvidia
+    - sm_
+  aliases: {}
