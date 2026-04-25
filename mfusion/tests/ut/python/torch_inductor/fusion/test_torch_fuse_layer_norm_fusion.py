@@ -184,8 +184,8 @@ module {
     assert checker.check_no_op("torch.aten.layer_norm")
 
 
-def test_torch_fuse_layer_norm_no_fusion_mliti_dims():
-    """LayerNorm should not fuse when dims contain duplicates."""
+def test_torch_fuse_layer_norm_fusion_multi_dims():
+    """LayerNorm should fuse when multi dims are valid."""
     mlir_input = textwrap.dedent(
         """
 module {
@@ -197,7 +197,6 @@ module {
     %true = torch.constant.bool true
     %eps = torch.constant.float 9.9999999999999995E-7
     %none = torch.constant.none
-    // Wrong dims: [2, 2] contains duplicate dimensions
     %dims = torch.prim.ListConstruct %int2, %int-2 : (!torch.int, !torch.int) -> !torch.list<int>
     %result0, %result1 = torch.aten.var_mean.correction %x, %dims, %int0, %true : !torch.vtensor<[4,197,384],f32>, !torch.list<int>, !torch.int, !torch.bool -> !torch.vtensor<[1,197,384],f32>, !torch.vtensor<[1,197,384],f32>
     // Step 2: add(eps)
