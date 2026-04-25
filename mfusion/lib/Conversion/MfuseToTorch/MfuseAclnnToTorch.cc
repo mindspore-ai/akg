@@ -35,9 +35,7 @@ namespace TorchD = mlir::torch::Torch;
 
 namespace {
 
-static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) {
-  return kernelGenerator == "dvm";
-}
+static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) { return kernelGenerator == "dvm"; }
 
 // ============================================================================
 // =   Please keep the patterns in alphabetical order by operator name   =
@@ -138,21 +136,59 @@ class ConvertMfuseAclnnRmsNorm : public mlir::OpConversionPattern<mlir::mfuse::A
     mlir::Value gamma = adaptor.getGamma();
     double epsilonVal = op.getEpsilonAttr().getValueAsDouble();
     mlir::Value epsilonScalar = rewriter.create<TorchD::ConstantFloatOp>(
-        op.getLoc(),
-        mlir::FloatAttr::get(mlir::Float64Type::get(rewriter.getContext()), epsilonVal));
+      op.getLoc(), mlir::FloatAttr::get(mlir::Float64Type::get(rewriter.getContext()), epsilonVal));
     mlir::SmallVector<mlir::Type> resultTypes;
     resultTypes.reserve(op.getNumResults());
     for (unsigned i = 0; i < op.getNumResults(); ++i) {
       mlir::Type convertedType = getTypeConverter()->convertType(op.getResult(i).getType());
       if (!convertedType) {
-        return rewriter.notifyMatchFailure(
-            op, "failed to convert result type at index " + std::to_string(i));
+        return rewriter.notifyMatchFailure(op, "failed to convert result type at index " + std::to_string(i));
       }
       resultTypes.push_back(convertedType);
     }
     mlir::SmallVector<mlir::Value> operands = {x, gamma, epsilonScalar};
-    rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
-        op, resultTypes, rewriter.getStringAttr("torch.npu.npu_rms_norm"), operands, 0);
+    rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(op, resultTypes, rewriter.getStringAttr("torch.npu.npu_rms_norm"),
+                                                    operands, 0);
+    return mlir::success();
+  }
+};
+
+/// Converts mfuse.aclnn.layer_norm -> torch.aten.layer_norm, materializing epsilon as Torch scalar.
+class ConvertMfuseAclnnLayerNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnLayerNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnLayerNormOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value x = adaptor.getX();
+    mlir::Value gamma = adaptor.getGamma();
+    mlir::Value beta = adaptor.getBeta();
+    double epsilonVal = op.getEpsilonAttr().getValueAsDouble();
+
+    // Get normalized_shape as an attribute and convert it to a Torch list
+    auto normalizedShapeAttr = op.getNormalizedShape();
+    llvm::SmallVector<mlir::Value> normalizedShapeValues;
+    for (auto attr : normalizedShapeAttr.getValue()) {
+      if (auto intAttr = mlir::dyn_cast<IntegerAttr>(attr)) {
+        normalizedShapeValues.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), intAttr.getInt()));
+      }
+    }
+    auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
+    mlir::Value normalizedShapeList =
+      rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, normalizedShapeValues);
+
+    mlir::Value epsilonScalar = rewriter.create<TorchD::ConstantFloatOp>(
+      op.getLoc(), mlir::FloatAttr::get(mlir::Float64Type::get(rewriter.getContext()), epsilonVal));
+    mlir::SmallVector<mlir::Type> resultTypes;
+    // AclnnLayerNormOp has only one result
+    mlir::Type convertedType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType) {
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+    }
+    resultTypes.push_back(convertedType);
+    mlir::Value cudnnEnable = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), false);
+    mlir::SmallVector<mlir::Value> operands = {x, normalizedShapeList, gamma, beta, epsilonScalar, cudnnEnable};
+    rewriter.replaceOpWithNewOp<TorchD::AtenLayerNormOp>(op, resultTypes, operands);
     return mlir::success();
   }
 };
@@ -278,8 +314,7 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
 /// preserved as discardable attrs; otherwise swap last two dims via torch.aten.permute.
 class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnMmOp> {
  public:
-  ConvertMfuseAclnnMm(mlir::TypeConverter &converter, mlir::MLIRContext *context,
-                      llvm::StringRef kernelGenerator)
+  ConvertMfuseAclnnMm(mlir::TypeConverter &converter, mlir::MLIRContext *context, llvm::StringRef kernelGenerator)
       : OpConversionPattern(converter, context), kernelGenerator_(kernelGenerator.str()) {}
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnMmOp op, OpAdaptor adaptor,
@@ -318,7 +353,7 @@ class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnM
 
  private:
   static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
-                                                                mlir::ConversionPatternRewriter &rewriter) {
+                                                                  mlir::ConversionPatternRewriter &rewriter) {
     auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
     if (!vtt || !vtt.hasSizes()) {
       return mlir::failure();
@@ -347,6 +382,51 @@ class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnM
   std::string kernelGenerator_;
 };
 
+/// Converts mfuse.aclnn.var_mean -> torch.aten.var_mean.correction, materializing attributes as inputs.
+class ConvertMfuseAclnnVarMean : public mlir::OpConversionPattern<mlir::mfuse::AclnnVarMeanOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnVarMeanOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value self = adaptor.getSelf();
+
+    // Convert dim attribute to Torch list
+    SmallVector<Value, 4> dimValues;
+    for (auto dimAttr : op.getDim()) {
+      if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(dimAttr)) {
+        dimValues.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), intAttr.getInt()));
+      } else {
+        return rewriter.notifyMatchFailure(op, "dim attribute contains non-integer value");
+      }
+    }
+    // Create list construct op with proper type
+    auto listType = TorchD::ListType::get(rewriter.getContext(), TorchD::IntType::get(rewriter.getContext()));
+    Value dimList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, dimValues);
+    // Convert correction attribute to Torch constant
+    Value correction = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), op.getCorrection());
+    // Convert keepdim attribute to Torch constant
+    Value keepdim = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), op.getKeepdim());
+
+    // Get result types
+    mlir::SmallVector<mlir::Type> resultTypes;
+    constexpr int kNumResults = 2;
+    resultTypes.reserve(kNumResults);  // var_mean returns two results
+    for (unsigned i = 0; i < kNumResults; ++i) {
+      mlir::Type convertedType = getTypeConverter()->convertType(op.getResult(i).getType());
+      if (!convertedType) {
+        return rewriter.notifyMatchFailure(op, "failed to convert result type at index " + std::to_string(i));
+      }
+      resultTypes.push_back(convertedType);
+    }
+
+    // Create torch.aten.var_mean.correction op
+    mlir::SmallVector<mlir::Value> operands = {self, dimList, correction, keepdim};
+    rewriter.replaceOpWithNewOp<TorchD::AtenVarMeanCorrectionOp>(op, resultTypes, operands);
+    return mlir::success();
+  }
+};
+
 }  // namespace
 
 // ============================================================================
@@ -362,9 +442,11 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
+  patterns.add<ConvertMfuseAclnnLayerNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnMm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);
+  patterns.add<ConvertMfuseAclnnVarMean>(converter, context);
 }
 
 }  // namespace mlir
