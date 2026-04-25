@@ -324,6 +324,20 @@ mlir::LogicalResult BroadcastToOp::verify() {
   return mlir::success();
 }
 
+// Drop broadcast_to when input and output types are identical (no-op broadcast).
+mlir::LogicalResult BroadcastToOp::canonicalize(BroadcastToOp op, mlir::PatternRewriter &rewriter) {
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(op.getInput().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(op.getOutput().getType());
+  if (!inType || !outType) {
+    return mlir::failure();
+  }
+  if (inType != outType) {
+    return mlir::failure();
+  }
+  rewriter.replaceOp(op, op.getInput());
+  return mlir::success();
+}
+
 mlir::FailureOr<mlir::Type> BroadcastToOp::inferSymbolicShapes(mlir::OpBuilder &builder,
                                                                const mlir::OperationState &state,
                                                                mlir::Type resultType) {
@@ -811,6 +825,13 @@ mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &buil
 
 // Canonicalize reshape(reshape(a, shape1), shape2) -> reshape(a, shape2)
 mlir::LogicalResult ReshapeOp::canonicalize(ReshapeOp op, mlir::PatternRewriter &rewriter) {
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(op.getInput().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(op.getResult().getType());
+  if (inType && outType && inType == outType) {
+    rewriter.replaceOp(op, op.getInput());
+    return mlir::success();
+  }
+
   auto innerReshape = op.getInput().getDefiningOp<ReshapeOp>();
   if (!innerReshape) {
     return mlir::failure();
