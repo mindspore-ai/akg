@@ -28,6 +28,17 @@ from akg_agents.op.utils.config_utils import normalize_dsl
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )
+from akg_agents.op.verifier.data_cache import (
+    build_baseline_cache_key,
+    build_baseline_cache_payload,
+    build_reference_cache_key,
+    extract_baseline_time_us,
+    load_verifier_data_cache_config,
+    read_baseline_result_from_cache,
+    read_reference_data_from_cache,
+    write_baseline_result_to_cache,
+    write_reference_data_to_cache,
+)
 from akg_agents.core.worker.interface import WorkerInterface
 import tarfile
 import io
@@ -414,8 +425,13 @@ if __name__ == "__main__":
             # 清理临时目录
             shutil.rmtree(check_dir, ignore_errors=True)
 
-    async def generate_reference_data(self, task_desc: str, timeout: int = 120,
-                                      save_inputs: bool = False) -> Tuple[bool, str, bytes]:
+    async def generate_reference_data(
+        self,
+        task_desc: str,
+        timeout: int = 120,
+        save_inputs: bool = False,
+        device_id: Optional[int] = None,
+    ) -> Tuple[bool, str, bytes]:
         """
         在 GPU 上执行 task_desc 并生成参考数据
 
@@ -427,6 +443,7 @@ if __name__ == "__main__":
             timeout: 超时时间
             save_inputs: 是否同时保存 inputs 和 init_inputs 到参考数据中。
                          当 True 时，验证端可完全脱离源平台依赖（不需要 import framework 代码）。
+            device_id: 指定执行参考数据生成时使用的设备 ID（可选）。
 
         Returns:
             Tuple[bool, str, bytes]: (是否成功, 日志, 参考数据bytes)
@@ -447,6 +464,8 @@ if __name__ == "__main__":
 
             # 3. 生成参考数据脚本
             save_inputs_flag = "True" if save_inputs else "False"
+            backend_name = self.backend
+            target_device_id = 0 if device_id is None or device_id < 0 else int(device_id)
             gen_ref_script = f'''
 import torch
 import sys
@@ -496,12 +515,34 @@ def generate_reference():
         
         print("Successfully imported Model and helper functions.")
         
+        backend = "{backend_name}"
+        device_id = {target_device_id}
         device = "cpu"
-        if torch.cuda.is_available():
+        if backend == "cuda":
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
+            if not torch.cuda.is_available():
+                print("CUDA backend requested but CUDA is not available")
+                return False
             device = "cuda"
-        elif hasattr(torch, 'npu') and torch.npu.is_available():
+            torch.cuda.set_device(0)
+        elif backend == "ascend":
+            os.environ["DEVICE_ID"] = str(device_id)
+            try:
+                import torch_npu  # noqa: F401
+            except ImportError as e:
+                print(f"torch_npu import failed: {{e}}")
+                return False
+            if not hasattr(torch, "npu") or not torch.npu.is_available():
+                print("Ascend backend requested but torch.npu is not available")
+                return False
             device = "npu"
-        
+            torch.npu.set_device(device_id)
+        elif backend == "cpu":
+            device = "cpu"
+        else:
+            print(f"Unsupported backend for reference generation: {{backend}}")
+            return False
+
         print(f"Using device: {{device}}")
         
         torch.manual_seed(0)
@@ -927,6 +968,165 @@ if __name__ == "__main__":
                 return []
             return normalized.split("\n")
         raise TypeError(f"Unsupported code snippet type: {type(code_snippet)}")
+
+    def _get_data_cache_config(self):
+        return load_verifier_data_cache_config(self.config)
+
+    def _get_reference_cache_key(self) -> str:
+        return build_reference_cache_key(
+            op_name=self.op_name,
+            framework_code=self.framework_code,
+            framework=self.framework,
+            backend=self.backend,
+            arch=self.arch,
+            bench_type=self.bench_type,
+        )
+
+    def _get_baseline_cache_key(self, warmup_times: int, run_times: int) -> str:
+        return build_baseline_cache_key(
+            op_name=self.op_name,
+            framework_code=self.framework_code,
+            framework=self.framework,
+            backend=self.backend,
+            arch=self.arch,
+            bench_type=self.bench_type,
+            warmup_times=warmup_times,
+            run_times=run_times,
+        )
+
+    async def _prepare_cached_reference_data(self, device_id: int) -> Optional[bytes]:
+        if self.bench_type != "kernelbench":
+            return None
+
+        cache_cfg = self._get_data_cache_config()
+        if not cache_cfg.enabled or not cache_cfg.cache_reference_data:
+            return None
+
+        if self.config.get("use_reference_data") and self.config.get("reference_data"):
+            logger.info(f"[{self.op_name}] 使用调用方提供的 reference_data，跳过本地 Data Cache 查询")
+            return None
+
+        cache_key = self._get_reference_cache_key()
+        cached_reference = read_reference_data_from_cache(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=cache_key,
+        )
+        if cached_reference:
+            logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
+            return cached_reference
+
+        if not self.worker:
+            logger.info(f"[{self.op_name}] Verifier Data Cache 未命中，且当前无 worker，跳过 reference data 回填")
+            return None
+
+        logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：开始生成 reference data")
+        reference_timeout = int(self.config.get("reference_data_timeout", self.config.get("verify_timeout", 300)))
+        try:
+            success, log, reference_bytes = await self.generate_reference_data(
+                self.framework_code,
+                timeout=reference_timeout,
+                save_inputs=True,
+                device_id=device_id,
+            )
+        except Exception as exc:
+            logger.warning(f"[{self.op_name}] 生成 reference data 失败，回退到实时验证: {exc}")
+            return None
+
+        if not success or not reference_bytes:
+            logger.warning(f"[{self.op_name}] reference data 生成失败，回退到实时验证: {(log or '')[:500]}")
+            return None
+
+        write_reference_data_to_cache(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=cache_key,
+            reference_data=reference_bytes,
+            metadata={
+                "framework": self.framework,
+                "backend": self.backend,
+                "arch": self.arch,
+                "bench_type": self.bench_type,
+                "save_inputs": True,
+            },
+        )
+        logger.info(f"[{self.op_name}] reference data 已写入 Verifier Data Cache")
+        return reference_bytes
+
+    def _apply_cached_reference_data(self, reference_data: bytes) -> None:
+        if not reference_data:
+            return
+        self.config["use_reference_data"] = True
+        self.config["use_reference_inputs"] = True
+        self.config["reference_data"] = reference_data
+
+    def _get_cached_baseline_time_us(self, warmup_times: int, run_times: int) -> Optional[float]:
+        if self.bench_type != "kernelbench":
+            return None
+
+        cache_cfg = self._get_data_cache_config()
+        if not cache_cfg.enabled or not cache_cfg.cache_baseline_result:
+            return None
+
+        cache_key = self._get_baseline_cache_key(warmup_times, run_times)
+        cache_entry = read_baseline_result_from_cache(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=cache_key,
+        )
+        baseline_time_us = extract_baseline_time_us(cache_entry)
+        if baseline_time_us is not None:
+            logger.info(f"[{self.op_name}] Verifier Data Cache 命中：baseline={baseline_time_us:.2f} us")
+        return baseline_time_us
+
+    def _store_baseline_result_in_data_cache(
+        self,
+        *,
+        base_time_us: Optional[float],
+        warmup_times: int,
+        run_times: int,
+        artifacts: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if self.bench_type != "kernelbench" or base_time_us is None:
+            return
+        if base_time_us <= 0 or base_time_us >= float("inf"):
+            return
+
+        cache_cfg = self._get_data_cache_config()
+        if not cache_cfg.enabled or not cache_cfg.cache_baseline_result:
+            return
+
+        payload: Dict[str, Any]
+        raw_json = (artifacts or {}).get("base_profile_result.json")
+        if raw_json:
+            try:
+                payload = json.loads(raw_json)
+            except json.JSONDecodeError:
+                payload = build_baseline_cache_payload(
+                    base_time_us=base_time_us,
+                    warmup_times=warmup_times,
+                    run_times=run_times,
+                )
+        else:
+            payload = build_baseline_cache_payload(
+                base_time_us=base_time_us,
+                warmup_times=warmup_times,
+                run_times=run_times,
+            )
+
+        write_baseline_result_to_cache(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=self._get_baseline_cache_key(warmup_times, run_times),
+            result_data=payload,
+            metadata={
+                "framework": self.framework,
+                "backend": self.backend,
+                "arch": self.arch,
+                "bench_type": self.bench_type,
+            },
+        )
+        logger.info(f"[{self.op_name}] baseline 结果已写入 Verifier Data Cache")
 
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
@@ -1648,6 +1848,15 @@ if __name__ == "__main__":
         try:
             run_times = profile_settings.get("run_times", 50)
             warmup_times = profile_settings.get("warmup_times", 5)
+            effective_profile_settings = dict(profile_settings)
+
+            cached_baseline_time_us = None
+            has_user_override = effective_profile_settings.get("override_base_time_us") is not None
+            if not has_user_override:
+                cached_baseline_time_us = self._get_cached_baseline_time_us(warmup_times, run_times)
+                if cached_baseline_time_us is not None:
+                    effective_profile_settings["override_base_time_us"] = cached_baseline_time_us
+                    effective_profile_settings["skip_base_profile"] = True
 
             # 获取验证目录
             expanded_log_dir = os.path.expanduser(self.log_dir)
@@ -1680,9 +1889,15 @@ if __name__ == "__main__":
             # 生成profile脚本
             # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
             # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
-            # 跨后端场景（使用参考数据）或使用缓存 baseline 时，跳过 base profile
-            skip_base_profile = profile_settings.get('skip_base_profile', False)
-            skip_base = self.config.get('use_reference_data', False) or skip_base_profile
+            # 仅在显式跳过或已提供有效 baseline 结果时跳过 base profile。
+            skip_base_profile = effective_profile_settings.get('skip_base_profile', False)
+            override_base_time_us = effective_profile_settings.get('override_base_time_us')
+            has_valid_override = (
+                override_base_time_us is not None
+                and override_base_time_us > 0
+                and override_base_time_us < float('inf')
+            )
+            skip_base = skip_base_profile or has_valid_override
             self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times, skip_base=skip_base)
 
             # 打包并发送给Worker执行
@@ -1729,15 +1944,15 @@ if __name__ == "__main__":
 
             # 传递完整的 profile_settings 给 Worker
             full_settings = {
-                **profile_settings,
+                **effective_profile_settings,
                 'backend': self.backend,
                 'dsl': self.dsl,
                 'op_name': self.op_name,
                 'framework': self.framework,
                 'arch': self.arch,
                 'bench_type': self.bench_type,
-                'enable_roofline': profile_settings.get('enable_roofline', True),
-                'roofline_arch_config': profile_settings.get(
+                'enable_roofline': effective_profile_settings.get('enable_roofline', True),
+                'roofline_arch_config': effective_profile_settings.get(
                     'roofline_arch_config',
                     self.config.get('roofline_arch_config')
                 ),
@@ -1758,6 +1973,14 @@ if __name__ == "__main__":
             roofline_time = result.get('roofline_time')
             roofline_speedup = result.get('roofline_speedup', 0.0)
             roofline_result = result.get('roofline')
+
+            if not skip_base:
+                self._store_baseline_result_in_data_cache(
+                    base_time_us=base_time,
+                    warmup_times=warmup_times,
+                    run_times=run_times,
+                    artifacts=artifacts,
+                )
 
             # 处理 None 值用于日志输出
             gen_time_display = gen_time if gen_time is not None else float('inf')
@@ -2208,6 +2431,10 @@ if __name__ == "__main__":
                     if config_verify_result:
                         task_info['coder_code'] = final_code
                     return config_verify_result, config_verify_log
+
+            cached_reference_data = await self._prepare_cached_reference_data(actual_device_id)
+            if cached_reference_data:
+                self._apply_cached_reference_data(cached_reference_data)
 
             # 默认模式：直接验证完整代码
             project_gen_log = ""
