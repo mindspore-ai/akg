@@ -1,0 +1,2 @@
+{"uuid": "1", "axes": {"batch_size": 2, "seq_len": 64}, "inputs": {"x": {"type": "random"}}, "tolerance": {"max_atol": 1e-05, "max_rtol": 1e-05}}
+{"uuid": "2", "axes": {"batch_size": 4, "seq_len": 128}, "inputs": {"x": {"type": "random"}}, "tolerance": {"max_atol": 1e-05, "max_rtol": 1e-05}}
