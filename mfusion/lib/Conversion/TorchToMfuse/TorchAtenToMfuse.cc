@@ -252,9 +252,9 @@ static LogicalResult extractAtenConvolutionHyperParams(TorchD::AtenConvolutionOp
 static bool isNarrowDefaultMetaConv2d(int64_t groups, bool transposed, int64_t s0, int64_t s1, int64_t p0, int64_t p1,
                                       int64_t d0, int64_t d1, int64_t o0, int64_t o1, bool noBias) {
   return noBias && groups == kConvGroupsDefault && !transposed && s0 == kConvStrideDefault &&
-         s1 == kConvStrideDefault &&
-         p0 == kConvPaddingDefault && p1 == kConvPaddingDefault && d0 == kConvDilationDefault &&
-         d1 == kConvDilationDefault && o0 == kConvOutputPaddingDefault && o1 == kConvOutputPaddingDefault;
+         s1 == kConvStrideDefault && p0 == kConvPaddingDefault && p1 == kConvPaddingDefault &&
+         d0 == kConvDilationDefault && d1 == kConvDilationDefault && o0 == kConvOutputPaddingDefault &&
+         o1 == kConvOutputPaddingDefault;
 }
 
 template <typename ConvolutionAdaptor>
@@ -277,14 +277,14 @@ static LogicalResult replaceAtenConvolutionWithAclnn(TorchD::AtenConvolutionOp o
   auto groupsAttr = rewriter.getI64IntegerAttr(groups);
   if (noBias) {
     rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DOp>(op, resultType, input, weight, strideAttr, paddingAttr,
-                                                             dilationAttr, transposedAttr, outputPaddingAttr,
-                                                             groupsAttr);
+                                                            dilationAttr, transposedAttr, outputPaddingAttr,
+                                                            groupsAttr);
     return success();
   }
   Value bias = adaptor.getBias();
-  rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DWithBiasOp>(
-    op, resultType, input, weight, bias, strideAttr, paddingAttr, dilationAttr, transposedAttr, outputPaddingAttr,
-    groupsAttr);
+  rewriter.replaceOpWithNewOp<mlir::mfuse::AclnnConv2DWithBiasOp>(op, resultType, input, weight, bias, strideAttr,
+                                                                  paddingAttr, dilationAttr, transposedAttr,
+                                                                  outputPaddingAttr, groupsAttr);
   return success();
 }
 
@@ -382,6 +382,79 @@ struct ConvertAtenMeanDim : public OpConversionPattern<TorchD::AtenMeanDimOp> {
     auto dimsAttr = rewriter.getI64ArrayAttr(*dimsOr);
     auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
     rewriter.replaceOpWithNewOp<mfuse::ReduceMeanOp>(op, outType, self, dimsAttr, keepdimAttr);
+    return success();
+  }
+};
+
+struct ConvertAtenVarMeanCorrection : public OpConversionPattern<TorchD::AtenVarMeanCorrectionOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenVarMeanCorrectionOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+    auto inType = dyn_cast<RankedTensorType>(self.getType());
+    if (!inType || !inType.hasRank()) {
+      return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
+    }
+
+    int64_t inputRank = inType.getRank();
+    bool reduceAll = isa<TorchD::NoneType>(op.getDim().getType());
+
+    llvm::SmallVector<int64_t, 4> dims;
+    if (!reduceAll) {
+      llvm::SmallVector<Value, 4> dimValues;
+      if (!TorchD::getListConstructElements(op.getDim(), dimValues)) {
+        return rewriter.notifyMatchFailure(op, "dim must come from list construct");
+      }
+      if (dimValues.empty()) {
+        reduceAll = true;
+      } else {
+        dims.reserve(dimValues.size());
+        for (Value dimValue : dimValues) {
+          int64_t dim = 0;
+          if (!matchPattern(dimValue, TorchD::m_TorchConstantInt(&dim))) {
+            return rewriter.notifyMatchFailure(op, "dim list must be constant ints");
+          }
+          dim = TorchD::toPositiveDim(dim, inputRank);
+          if (!TorchD::isValidDim(dim, inputRank)) {
+            return rewriter.notifyMatchFailure(op, "dim out of range");
+          }
+          if (std::find(dims.begin(), dims.end(), dim) != dims.end()) {
+            return rewriter.notifyMatchFailure(op, "duplicate reduction dims are not supported");
+          }
+          dims.push_back(dim);
+        }
+        std::sort(dims.begin(), dims.end());
+      }
+    }
+
+    if (reduceAll) {
+      dims.resize(inputRank);
+      std::iota(dims.begin(), dims.end(), 0);
+    }
+
+    int64_t correction = 0;
+    if (!matchPattern(op.getCorrection(), TorchD::m_TorchConstantInt(&correction))) {
+      return rewriter.notifyMatchFailure(op, "correction must be constant int");
+    }
+
+    bool keepdimValue = false;
+    if (!matchPattern(op.getKeepdim(), TorchD::m_TorchConstantBool(&keepdimValue))) {
+      return rewriter.notifyMatchFailure(op, "keepdim must be constant bool");
+    }
+
+    auto varType = getTypeConverter()->convertType(op.getResult(0).getType());
+    auto meanType = getTypeConverter()->convertType(op.getResult(1).getType());
+    if (!varType || !meanType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+
+    auto dimsAttr = rewriter.getI64ArrayAttr(dims);
+    auto correctionAttr = rewriter.getI64IntegerAttr(correction);
+    auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
+
+    rewriter.replaceOpWithNewOp<mfuse::AclnnVarMeanOp>(op, varType, meanType, self, dimsAttr, correctionAttr,
+                                                       keepdimAttr);
     return success();
   }
 };
@@ -733,6 +806,8 @@ void populateAtenToMfuseConversionPatterns(TypeConverter &converter, RewritePatt
   populateAtenToMfuseCustomPatterns(converter, patterns);
   populateAtenToMfuseBinaryOpPatterns(converter, patterns);
   populateAtenToMfuseReshapeLikeOpPatterns(converter, patterns);
+
+  patterns.add<ConvertAtenVarMeanCorrection>(converter, patterns.getContext());
 }
 
 }  // namespace mlir

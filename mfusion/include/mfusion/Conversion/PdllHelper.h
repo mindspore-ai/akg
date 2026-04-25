@@ -110,6 +110,42 @@ struct PDLRewriteHelpers {
     // Return empty string attribute if no constant found
     return rewriter.getStringAttr("");
   }
+
+  static Attribute getI64Attr(PatternRewriter &rewriter, Value val) {
+    // Try to get int64 value from constant operation
+    if (auto intVal = getConstantIntValue(val)) {
+      return rewriter.getI64IntegerAttr(*intVal);
+    }
+
+    // Try to match other constant patterns
+    IntegerAttr intAttr;
+    if (matchPattern(val, m_Constant(&intAttr))) {
+      return rewriter.getI64IntegerAttr(intAttr.getInt());
+    }
+
+    // Return 0 if no constant found
+    return rewriter.getI64IntegerAttr(0);
+  }
+
+  static Attribute getI1Attr(PatternRewriter &rewriter, Value val) {
+    // Try to get boolean value from constant operation
+    auto *defOp = val.getDefiningOp();
+    if (defOp) {
+      // Try to get "value" attribute (common for constant operations like torch.constant.bool)
+      if (auto valueAttr = defOp->getAttrOfType<BoolAttr>("value")) {
+        return rewriter.getBoolAttr(valueAttr.getValue());
+      }
+    }
+
+    // Try to match other constant patterns
+    BoolAttr boolAttr;
+    if (matchPattern(val, m_Constant(&boolAttr))) {
+      return boolAttr;
+    }
+
+    // Return false if no constant found
+    return rewriter.getBoolAttr(false);
+  }
 };
 
 // Register PDL native rewrite functions shared by conversion patterns.
@@ -128,6 +164,8 @@ inline void registerPDLLHelperFunctions(RewritePatternSet &patterns) {
   patterns.getPDLPatterns().registerRewriteFunction("GetF64Attr", PDLRewriteHelpers::getF64Attr);
   patterns.getPDLPatterns().registerRewriteFunction("GetStrAttr", PDLRewriteHelpers::getStrAttr);
   patterns.getPDLPatterns().registerRewriteFunction("GetI64ArrayAttr", PDLRewriteHelpers::getI64ArrayAttr);
+  patterns.getPDLPatterns().registerRewriteFunction("GetI64Attr", PDLRewriteHelpers::getI64Attr);
+  patterns.getPDLPatterns().registerRewriteFunction("GetI1Attr", PDLRewriteHelpers::getI1Attr);
 }
 
 }  // namespace mlir

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseBatchNorm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseBatchNorm.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
