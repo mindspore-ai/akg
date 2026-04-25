@@ -60,9 +60,9 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-matmul-reshape-bias-add", []() { return createFuseMatmulReshapeBiasAddPass(); }},
       {"fuse-gelu", []() { return createFuseGeluPass(); }},
       // RmsNorm is fused on Torch dialect (torch-fusion) before convert-torch-to-mfuse.
-      // fuse-add-rms-norm can then fold adjacent add ops with the resulting aclnn.rms_norm.
-      {"fuse-add-rms-norm", []() { return createFuseAddRmsNormPass(); }},
-      {"fuse-layer-norm", []() { return createFuseLayerNormPass(); }},
+      // fuse-addrmsnorm can then fold adjacent add ops with the resulting aclnn.rms_norm.
+      {"fuse-addrmsnorm", []() { return createFuseAddRmsNormPass(); }},
+      {"fuse-layernorm", []() { return createFuseLayerNormPass(); }},
       {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
       {"fuse-num-to-tensor", []() { return createFuseNumToTensorPass(); }},
     };
