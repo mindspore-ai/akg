@@ -1988,7 +1988,12 @@ static ShapeNormalState::SubviewAxisTargetExpandRecord SrcNeedsExpand(Operation 
   }
 
   if (state.axisSizes[oldResultAxis] % product != 0 || offset % product != 0) {
-    state.isSupported = false;
+    std::string oldInputAxis = state.getValueSymbolicShape(subviewOp.getSource())[axisIndex];
+    rec.FinalOffsets.push_back(offset);
+    rec.FinalSizes.push_back(size);
+    rec.FinalStrides.push_back(stride);
+    rec.inputFinalAxes.push_back(oldInputAxis);
+    rec.outputFinalAxes.push_back(oldResultAxis);
     return rec;
   }
 
@@ -2042,7 +2047,12 @@ static ShapeNormalState::SubviewAxisTargetExpandRecord resultNeedsExpand(Operati
   }
 
   if (state.axisSizes[oldInputAxis] % product != 0 || offset % product != 0) {
-    state.isSupported = false;
+    std::string oldResultAxis = state.getValueSymbolicShape(subviewOp.getResult())[axisIndex];
+    rec.FinalOffsets.push_back(offset);
+    rec.FinalSizes.push_back(size);
+    rec.FinalStrides.push_back(stride);
+    rec.inputFinalAxes.push_back(oldInputAxis);
+    rec.outputFinalAxes.push_back(oldResultAxis);
     return rec;
   }
 
