@@ -9,6 +9,7 @@
 ```
 verifier/
 ├── kernel_verifier.py         # KernelVerifier — 验证入口，组合三类适配器
+├── data_cache.py              # Verifier Data Cache — reference data / baseline 持久缓存
 ├── sol_verifier.py            # SOL-ExecBench 格式验证的专用生成器
 ├── profiler.py                # NPU/CUDA 性能采集
 ├── profiler_utils.py          # profile 脚本执行、msprof/nsys 解析
@@ -52,6 +53,15 @@ verifier/
 ### KernelVerifier 核心逻辑
 
 `KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例，然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
+
+### Verifier Data Cache
+
+- 仅作用于 `KernelBench` 风格验证链路
+- reference data cache：复用 `generate_reference_data(save_inputs=True)` 产出的 `.pt`
+- baseline cache：复用 `base_profile_result.json` / `avg_time_us`
+- 默认关闭；开启后在 `~/.akg/verifier_data_cache/` 下持久化
+- 命中 reference data 时，验证脚本改为直接复用 inputs / outputs，不再重复执行 framework baseline
+- 命中 baseline cache 时，profile 直接注入 `override_base_time_us` 并跳过 base profile 脚本
 
 ### Roofline 集成
 

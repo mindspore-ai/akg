@@ -29,6 +29,11 @@ profile_settings:
   run_times: 50
   warmup_times: 5
 verify_timeout: 120                # 验证超时（秒）
+data_cache:
+  enabled: false                   # Verifier Data Cache 开关（默认关闭）
+  cache_dir: ~/.akg/verifier_data_cache
+  cache_reference_data: true       # 缓存 inputs/init_inputs/outputs
+  cache_baseline_result: true      # 缓存 baseline profile 结果
 ```
 
 ### `load_config()` 逻辑

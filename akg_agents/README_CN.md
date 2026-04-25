@@ -153,6 +153,7 @@ python scripts/run_autoresearch.py
 |------|------|------|
 | **NPU** | | |
 | `kernel_related/run_torch_npu_triton_single.py` | Kernel | 单算子生成（Torch + Triton Ascend） |
+| `kernel_related/run_torch_npu_triton_single_with_cache.py` | Kernel | 单算子验证 + Data Cache 复用示例（Torch + Triton Ascend） |
 | `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB 自适应搜索（Torch + Triton Ascend） |
 | `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | 进化算法算子优化（Torch + Triton Ascend） |
 | `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA 到 Ascend 算子转换 |
@@ -211,6 +212,7 @@ akg_agents/
 - **生成** — 直接生成算子代码并验证正确性
 - **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）、[Dynamic Tune](./docs/v2/CN/DynamicTune.md)（Triton Ascend 动态 shape 离线调优）
 - **迁移** — CUDA → Ascend 算子转换
+- **[Verifier Data Cache](./docs/v2/CN/VerifierDataCache.md)** - Verifier 侧 reference data / baseline 结果本地缓存设计
 
 ### OpenCode 集成
 - **[akg-op 使用指南](./docs/v2/CN/AKG-Op.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码集成，支持单算子优化与模型融合分析

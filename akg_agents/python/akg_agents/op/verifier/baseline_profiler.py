@@ -27,6 +27,15 @@ import tarfile
 import logging
 from typing import Optional, Dict, Any
 
+from akg_agents.op.verifier.data_cache import (
+    build_baseline_cache_key,
+    build_baseline_cache_payload,
+    extract_baseline_time_us,
+    load_verifier_data_cache_config,
+    read_baseline_result_from_cache,
+    write_baseline_result_to_cache,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,11 +103,34 @@ async def _profile_kernelbench_baseline(
     """KernelBench 模式的 baseline profiling（原有逻辑）"""
     acquired_device = None
     worker = None
+    cache_cfg = load_verifier_data_cache_config(config)
+    cache_key = None
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.core.worker.manager import get_worker_manager
         from akg_agents.core.worker.local_worker import LocalWorker
         from akg_agents.core.worker.remote_worker import RemoteWorker
+
+        if cache_cfg.enabled and cache_cfg.cache_baseline_result:
+            cache_key = build_baseline_cache_key(
+                op_name=op_name,
+                framework_code=task_desc,
+                framework=framework,
+                backend=backend,
+                arch=arch,
+                bench_type="kernelbench",
+                warmup_times=warmup_times,
+                run_times=run_times,
+            )
+            cached_entry = read_baseline_result_from_cache(
+                cache_cfg,
+                op_name=op_name,
+                cache_key=cache_key,
+            )
+            cached_time_us = extract_baseline_time_us(cached_entry)
+            if cached_time_us is not None:
+                logger.info(f"[{op_name}] ✅ 命中本地 baseline cache: {cached_time_us:.2f}us")
+                return cached_time_us
 
         logger.info(f"[{op_name}] 🚀 开始预先 profile baseline（只测一次）...")
 
@@ -143,6 +175,24 @@ async def _profile_kernelbench_baseline(
             if baseline_time_us and baseline_time_us > 0 and baseline_time_us < float('inf'):
                 logger.info(f"[{op_name}] ✅ Baseline profile 完成: {baseline_time_us:.2f}us")
                 _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times, device_id)
+                if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
+                    write_baseline_result_to_cache(
+                        cache_cfg,
+                        op_name=op_name,
+                        cache_key=cache_key,
+                        result_data=build_baseline_cache_payload(
+                            base_time_us=baseline_time_us,
+                            warmup_times=warmup_times,
+                            run_times=run_times,
+                            method="profile_single_task",
+                        ),
+                        metadata={
+                            "framework": framework,
+                            "backend": backend,
+                            "arch": arch,
+                            "bench_type": "kernelbench",
+                        },
+                    )
                 return baseline_time_us
             else:
                 logger.warning(f"[{op_name}] Baseline profile 结果无效: {baseline_time_us}")
