@@ -13,9 +13,9 @@
 #   data_partition, parallelism, pipeline, fusion, memory, scheduling
 #
 # 使用方式:
-#   方式1（自动加载）: 将文件放入 custom_prompts/ 目录，程序启动时自动加载
+#   方式1（自动加载）: 将文件放入 core/meta_prompt/custom_prompts/ 目录，程序启动时自动加载
 #   方式2（手动加载）: manager.load_from_file("path/to/your_file.yaml")
-#   方式3（指定目录）: 在 yaml 配置文件中指定 custom_meta_prompts_dir: "your/dir"，MetaPromptManager 会优先从该目录加载
+#   方式3（指定目录）: 在 yaml 配置文件中指定 custom_meta_prompts_dir: "your/dir"（绝对路径），MetaPromptManager 会优先从该目录加载
 #
 # =============================================================================
 
