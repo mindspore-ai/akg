@@ -487,7 +487,7 @@ class Coder(AgentBase):
         from akg_agents.core.meta_prompt.manager import MetaPromptManager
 
         # 关键：必须使用当前任务的 arch/dsl 初始化，避免默认配置造成策略失真。
-        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl)
+        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl, custom_meta_prompts_dir=self.config.get("custom_meta_prompts_dir", None))
 
         lines: List[str] = [
             "## 术语解释 (Strategy Glossary)",

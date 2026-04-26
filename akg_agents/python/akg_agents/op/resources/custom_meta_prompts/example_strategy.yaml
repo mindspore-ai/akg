@@ -1,0 +1,56 @@
+# =============================================================================
+# 自定义元提示示例文件
+# =============================================================================
+# 将此文件放在 custom_prompts/ 目录下，MetaPromptManager 会在初始化时自动加载。
+#
+# 文件格式要求:
+#   - 顶层必须包含 "meta_prompts" 键，值为列表
+#   - 每个元素为一个 MetaPrompt 定义（字段含义参见 MetaPrompt dataclass）
+#   - 必填字段: id, category
+#   - 仅支持 .yaml / .yml 格式
+#
+# 可用的 category 值:
+#   data_partition, parallelism, pipeline, fusion, memory, scheduling
+#
+# 使用方式:
+#   方式1（自动加载）: 将文件放入 custom_prompts/ 目录，程序启动时自动加载
+#   方式2（手动加载）: manager.load_from_file("path/to/your_file.yaml")
+#   方式3（指定目录）: 在 yaml 配置文件中指定 custom_meta_prompts_dir: "your/dir"，MetaPromptManager 会优先从该目录加载
+#
+# =============================================================================
+
+meta_prompts:
+  # # --- 示例: 自定义数据重排策略 ---
+  # - id: strat_custom_data_reorder
+  #   category: memory
+  #   description: "自定义数据重排策略 (Data Reordering)"
+  #   architectural_intent: "通过在计算前对输入数据进行重排，优化后续访存模式..."
+  #   implementation_logic: |
+  #     - 在 kernel 启动前或 kernel 内部对数据进行重排
+  #     - 将非连续访问模式转化为连续访问
+  #     - 权衡重排开销与后续访存收益
+  #   semantic_logic: |
+  #     - 目标: 以一次性重排开销换取后续多次连续访问的收益
+  #     - 保持重排前后数据语义一致
+  #   realization_by_mode:
+  #     declarative: |
+  #       - 通过布局标注声明期望的数据排列
+  #       - 由编译器决定是否/何时执行重排
+  #     explicit: |
+  #       - 显式实现数据重排 kernel 或内联重排代码
+  #       - 显式管理重排缓冲区的分配和回收
+  #   forbidden_patterns_by_mode:
+  #     declarative:
+  #       - "禁止在声明式重排后仍以非连续方式访问"
+  #     explicit:
+  #       - "禁止重排后遗漏边界元素导致数据不完整"
+  #   implementation_type: Hybrid
+  #   tags: ["mem_bound", "general", "data_layout"]
+  #   incompatible_with: []
+  #   parameter_space:
+  #     - name: REORDER_BLOCK
+  #       description: "重排分块大小"
+  #       constraints: "2的幂次，>= 32"
+  #       min_candidates: 3
+  #       max_candidates: 4
+  #   priority: 20
