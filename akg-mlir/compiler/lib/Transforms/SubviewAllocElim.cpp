@@ -829,6 +829,11 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
     stores.push_back(affineStore);
   }
 
+  // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
+  Value templateVal = stores[0].getValueToStore();
+  auto storeDiffersFromTemplate = [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; };
+  if (llvm::any_of(stores, storeDiffersFromTemplate)) return false;
+
   // Use the first store as source template (all stores write the same computation).
   SourceInfo srcInfo = traceStoreSource(stores[0]);
   if (!srcInfo.sourceLoad && srcInfo.computeOps.empty()) return false;
