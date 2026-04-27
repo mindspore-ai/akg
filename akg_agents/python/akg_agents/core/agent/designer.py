@@ -261,7 +261,7 @@ class Designer(AgentBase):
                 logger.info(f"[Task {task_id}] 检测到hint，启用Hint模式")
 
         ### 元提示搜索器###
-        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl)
+        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl, custom_meta_prompts_dir=self.config.get("custom_meta_prompts_dir", None))
         searcher = MetaPromptSearcher(manager, arch=self.arch)
         op_features = None
         if self.meta is not None:

@@ -1,8 +1,14 @@
 import logging
 import math
+import os
 import re
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
+try:
+    import yaml
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +60,36 @@ class MetaPrompt:
     
 
 class MetaPromptManager:
-    def __init__(self, arch: Optional[str] = None, dsl: Optional[str] = "triton"):
+    def __init__(self, arch: Optional[str] = None, dsl: Optional[str] = "triton",
+                 custom_meta_prompts_dir: Optional[str] = None):
         self.prompts: Dict[str, MetaPrompt] = {}
         self.arch = arch
         self.dsl = dsl
         self.realization_mode = self._resolve_realization_mode()
         self._initialize_curated_space()
 
+        ## 加载用户自定义的 Meta Prompts（如果提供）
+        self._load_custom_meta_prompts(custom_meta_prompts_dir)
+
+    def _load_custom_meta_prompts(self, custom_dir: Optional[str] = None):
+        """加载外部自定义元提示。
+
+        优先使用显式传入的目录路径；若未指定，则尝试从默认位置
+        ``{manager 所在目录}/custom_prompts/`` 加载。
+        """
+        if custom_dir:
+            loaded = self.load_from_dir(custom_dir)
+            if loaded > 0:
+                logger.info("从自定义目录 %s 加载了 %d 个外部元提示", custom_dir, loaded)
+            return
+
+        # 尝试从默认位置加载
+        default_dir = os.path.join(os.path.dirname(__file__), "custom_prompts")
+        if os.path.isdir(default_dir):
+            loaded = self.load_from_dir(default_dir)
+            if loaded > 0:
+                logger.info("从默认目录 %s 加载了 %d 个外部元提示", default_dir, loaded)
+          
     def _resolve_realization_mode(self) -> str:
         """解析当前后端实现模式。
 
@@ -759,6 +788,113 @@ class MetaPromptManager:
 
         return "\n\n".join(res)
 
+    @staticmethod
+    def _parse_prompt_dict(d: Dict[str, Any]) -> MetaPrompt:
+        """将一个字典解析为 MetaPrompt 实例。
+
+        字典结构与 MetaPrompt dataclass 字段一一对应，
+        parameter_space 字段应为 ParameterSpace 字典列表。
+        """
+        param_dicts = d.pop("parameter_space", [])
+        params = []
+        for pd in param_dicts:
+            params.append(ParameterSpace(
+                name=pd["name"],
+                description=pd.get("description", ""),
+                typical_values=pd.get("typical_values", []),
+                constraints=pd.get("constraints", ""),
+                min_candidates=pd.get("min_candidates", 2),
+                max_candidates=pd.get("max_candidates", 8),
+            ))
+        return MetaPrompt(
+            id=d["id"],
+            category=d["category"],
+            description=d.get("description", ""),
+            architectural_intent=d.get("architectural_intent", ""),
+            implementation_logic=d.get("implementation_logic", ""),
+            semantic_logic=d.get("semantic_logic", ""),
+            realization_by_mode=d.get("realization_by_mode", {}),
+            forbidden_patterns_by_mode=d.get("forbidden_patterns_by_mode", {}),
+            implementation_type=d.get("implementation_type", "Hybrid"),
+            incompatible_with=d.get("incompatible_with", []),
+            tags=d.get("tags", []),
+            parameter_space=params,
+            priority=d.get("priority", 10),
+        )
+
+    def load_from_file(self, filepath: str) -> int:
+        """从单个 YAML 文件加载元提示定义。
+
+        文件顶层结构:
+            meta_prompts:
+              - id: strat_xxx
+                category: ...
+                ...
+
+        Returns:
+            成功加载的元提示数量。
+        """
+        filepath = str(filepath)
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext not in (".yaml", ".yml"):
+            raise ValueError(f"不支持的文件格式: {ext}，仅支持 .yaml/.yml")
+        if not _HAS_YAML:
+            raise ImportError(
+                "需要安装 PyYAML 以加载 .yaml 文件: pip install pyyaml"
+            )
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        if not isinstance(data, dict) or "meta_prompts" not in data:
+            logger.warning(
+                "文件 %s 缺少顶层 'meta_prompts' 键，跳过加载。"
+                "期望格式: {'meta_prompts': [{id: ..., category: ..., ...}]}",
+                filepath,
+            )
+            return 0
+
+        prompts_list = data.get("meta_prompts")
+        if prompts_list is None:
+            prompts_list = []
+        if not isinstance(prompts_list, list):
+            raise ValueError(f"'meta_prompts' 应为列表，实际为 {type(prompts_list)}")
+
+        count = 0
+        for item in prompts_list:
+            if not isinstance(item, dict) or "id" not in item or "category" not in item:
+                logger.warning("跳过无效元提示条目（缺少 id 或 category）: %s", item)
+                continue
+            prompt = self._parse_prompt_dict(dict(item))  # 浅拷贝避免修改原数据
+            self.add_prompt(prompt)
+            count += 1
+            logger.info("从 %s 加载元提示: %s", filepath, prompt.id)
+
+        return count
+
+    def load_from_dir(self, dirpath: str) -> int:
+        """从目录中批量加载所有 .yaml/.yml 元提示文件。
+
+        Returns:
+            总共成功加载的元提示数量。
+        """
+        dirpath = str(dirpath)
+        if not os.path.isdir(dirpath):
+            logger.debug("元提示目录不存在，跳过加载: %s", dirpath)
+            return 0
+
+        total = 0
+        for fname in sorted(os.listdir(dirpath)):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in (".yaml", ".yml"):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            try:
+                loaded = self.load_from_file(fpath)
+                total += loaded
+                logger.info("从 %s 加载了 %d 个元提示", fpath, loaded)
+            except Exception as e:
+                logger.warning("加载元提示文件失败 %s: %s", fpath, e)
+        return total
 
 
 class MetaPromptSearcher:
