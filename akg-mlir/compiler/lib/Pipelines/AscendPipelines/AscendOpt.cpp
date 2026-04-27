@@ -23,12 +23,18 @@
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
-#include "akg/Dialect/HIVM/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "bishengir/Dialect/Annotation/Transforms/Passes.h"
+#include "bishengir/Dialect/HIVM/Transforms/Passes.h"
+#include "bishengir/Dialect/HACC/Transforms/Passes.h"
+#include "bishengir/Dialect/SCF/Transforms/Passes.h"
+#include "bishengir/Dialect/Scope/Transforms/Passes.h"
+#include "bishengir/Conversion/ArithToAffine/ArithToAffine.h"
+#include "bishengir/Conversion/HIVMToStandard/HIVMToStandard.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -51,6 +57,131 @@
 using mlir::OpPassManager;
 
 namespace {
+
+void canonicalizationPipeline(OpPassManager &pm) {
+  pm.addPass(mlir::createArithToAffineConversionPass());
+  pm.nest<func::FuncOp>().addPass(mlir::scf::createCanonicalizeIterArgPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createSCFForLoopCanonicalizationPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMOptSinglePointPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  // pm.nest<func::FuncOp>().addPass(memref::createDeadStoreEliminationPass());
+}
+
+void createHIVMPipeline(OpPassManager &pm, const mlir::AscendOptPipelineOptions &options) {
+  pm.addPass(mlir::hivm::createInferFuncCoreTypePass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createInitEntryKernelPass());
+
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createLiftZeroRankPass());
+  pm.nest<func::FuncOp>().addPass(mlir::scf::createMapForToForallPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMMapForallToBlocksPass());
+  // Op decompose, need mark buffer size for newly allocated buffer.
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMDecomposeOpPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createSyncBlockHoistingPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createBindSyncBlockLockArgPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createInsertInferSyncBlockLockNumAndInitFuncPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createSyncBlockLockLoweringPass());
+  // Convert non-contiguous reshape to hivm.copy
+  // Call this before infer mem scope. Otherwise, there might be UB allocs in AIC function.
+  pm.addPass(mlir::hivm::createNonContiguousReshapeToCopyPass());
+  pm.addPass(mlir::hivm::createInferHIVMMemScopePass());
+  // Decompose copy_ub_to_ub after inferHIVMMemScope
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMDecomposeOpPass());
+  HIVMAggregatedDecomposeOpOptions decomposeOption;
+  // Currently no Ops decompose in this phase
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::BEFORE_HIVM_STRIDE_ALIGNMENT;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+
+  // Transform uncontinuous access to deinterleave op
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMRecognizeDeinterleaveOpPass());
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_RECOGNIZE_DEINTERLEAVE;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_RECOGNIZE_BROADCAST;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+
+  // align alloc size for special hivm op
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createAlignAllocSizePass());
+  if (options.enableAutoStorageAlign) {
+    pm.nest<func::FuncOp>().addPass(mlir::hivm::createMarkStrideAlignPass());
+  }
+  // pm.nest<func::FuncOp>().addPass(mlir::memref::createFoldAllocReshapePass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createEnableStrideAlignPass());
+
+  // Decompose {vconcat} after stride alignment
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_HIVM_STRIDE_ALIGNMENT;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+
+  // convert copyOp to nd2nzOp
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createInferHIVMDataLayoutPass());
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_INFER_HIVM_DATA_LAYOUT;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createAutoInferBufferSizePass());
+  pm.addPass(mlir::createArithToAffineConversionPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createConstantizeBufferSizePass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createSetBufferSizePass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createFlattenOpsPass());
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_HIVM_FLATTEN_OPS;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createReduceRankSubviewPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createLiftLowestStridePass());
+  decomposeOption.decomposePhase = bishengir::DecomposePhase::AFTER_LIFT_LOWEST_STRIDE;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMAggregatedDecomposeOpPass(decomposeOption));
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createAllocExtraBufferPass());
+  // Infer memory scope for newly allocated extra buffer
+  pm.addPass(mlir::hivm::createInferHIVMMemScopePass());
+  canonicalizationPipeline(pm);
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createInlineLoadCopyPass());
+
+  MarkMultiBufferOptions multiBufferOptions;
+  multiBufferOptions.enableAuto = options.enableAutoMultiBuffer;
+  // Limit auto multi buffer only work for local buffer at this stage
+  multiBufferOptions.limitAutoMultiBufferOnlyForLocalBuffer = true;
+  multiBufferOptions.limitAutoMultiBufferOfLocalBuffer = MultiBufferStrategy::CUBE_NO_L0C;
+  multiBufferOptions.limitMixAutoMultiBufferBuffer = MultiBufferStrategy::ONLY_CUBE;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createMarkMultiBufferPass(multiBufferOptions));
+  PlanMemoryOptions planMemoryOption;
+  planMemoryOption.enableMemoryDisplay = options.enableMemoryDisplay;
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createPlanMemoryPass(planMemoryOption));
+
+  // Lower hivm ops to loops
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMLowerToLoopsPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createHIVMDecomposeOpPass());
+  // Normal sync (inject-sync, graph-sync-solver) passes.
+  bool enableHIVMUnitFlagSync = false;
+  bool enableHIVMAssumeAliveLoops = false;
+  if (options.enableGraphSyncSolver && !options.enableInjectBarrierAllSync && !options.enableAutoInjectSync) {
+    GraphSyncSolverOptions gssOptions;
+    gssOptions.enableUnitFlag = enableHIVMUnitFlagSync;
+    pm.nest<func::FuncOp>().addPass(mlir::hivm::createGraphSyncSolverPass(gssOptions));
+  } else if (options.enableAutoInjectSync) {
+    InjectSyncOptions syncOptions;
+    syncOptions.enableUnitFlag = enableHIVMUnitFlagSync;
+    syncOptions.assumeAliveLoops = enableHIVMAssumeAliveLoops;
+    if (options.enableInjectBarrierAllSync) {
+      syncOptions.syncMode = mlir::hivm::SyncMode::BARRIERALL;
+    }
+    pm.nest<func::FuncOp>().addPass(mlir::hivm::createInjectSyncPass(syncOptions));
+  }
+  // pm.addPass(mlir::createMemrefExtLoweringPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createAddFFTSToSyncBlockSetOpPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createEnableMultiBufferPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createLiftLowestStridePass());
+  // Optimizations that relies on scope should be done after this point. Inline
+  // all `scope.scope` ops.
+  pm.addPass(mlir::scope::createInlineScopePass(InlineScopeOptions{/*forceInline=*/true}));
+  pm.addPass(mlir::hivm::createEnableHIVMCCompatiblePrintPass());
+  pm.addPass(mlir::annotation::createAnnotationLoweringPass());
+  // pm.nest<func::FuncOp>().addPass(mlir::hivm::createInsertInitAndFinishForDebugPass());
+  pm.nest<func::FuncOp>().addPass(mlir::hivm::createMarkDisableLoadPass());
+  pm.addPass(mlir::hivm::createMarkSyncBlockLockWithSubblockPass());
+  pm.addPass(mlir::hivm::createInsertFreeLockVarBeforeReturnPass());
+  pm.addPass(mlir::createConvertHIVMToStandardPass());
+}
+
 void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelineOptions &options) {
   pm.addPass(mlir::createAKGOperatorIdentifyPass());
   pm.addPass(mlir::createHoistTensorSlicePass());
@@ -127,9 +258,13 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
-    pm.addPass(mlir::createAlignAllocBufferPass());
     pm.addPass(mlir::createCanonicalizerPass());
   }
+
+  pm.addPass(mlir::hacc::createAppendDeviceSpecPass());
+
+  // hivm optimize pipeline
+  createHIVMPipeline(pm, options);
 }
 }  // namespace
 

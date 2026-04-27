@@ -485,22 +485,22 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
       auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr, hivm::TypeFnAttr{});
     }
 
     rewriter.replaceOp(op, resBuf);
@@ -587,35 +587,35 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
       auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) && elemType.isInteger(64)) {
       auto midF16MemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midF16Buf = rewriter.create<memref::AllocOp>(loc, midF16MemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, midF16Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midF16Buf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midF16Buf, roundingAttr, hivm::TypeFnAttr{});
       auto midF32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value midF32Buf = rewriter.create<memref::AllocOp>(loc, midF32MemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, midF32Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF16Buf, midF32Buf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF16Buf, midF32Buf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF32Buf, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) && srcElemType.isInteger(8) &&
                elemType.isF32()) {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr, hivm::TypeFnAttr{});
     }
 
     rewriter.replaceOp(op, resBuf);
@@ -1444,7 +1444,7 @@ struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
     }
     propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::CEIL);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr);
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
     return success();
   }
@@ -1474,7 +1474,7 @@ struct MathFloorToHIVM : public OpConversionPattern<math::FloorOp> {
     }
     propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::FLOOR);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr);
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
     return success();
   }
@@ -2537,9 +2537,9 @@ static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, 
     FailureOr<Value> expanded =
       expandMemRefRankWithBroadcastMapping(rewriter, loc, outVbrcSrc, srcMemTy, elemType, mVec, dstRank);
     if (failed(expanded))
-      return rewriter.notifyMatchFailure(
-        op, "npuvector.broadcast: rank extension (expand_shape) failed, "
-             "check dimension (injective, in range, consistent rank)");
+      return rewriter.notifyMatchFailure(op,
+                                         "npuvector.broadcast: rank extension (expand_shape) failed, "
+                                         "check dimension (injective, in range, consistent rank)");
     outVbrcSrc = *expanded;
     auto expandedTy = cast<MemRefType>(outVbrcSrc.getType());
     SmallVector<int64_t> brcDims;
