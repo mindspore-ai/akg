@@ -621,21 +621,12 @@ static void eraseDeadOps(func::FuncOp func) {
   eraseDeadOpsOfType<memref::AllocOp>(func);
 }
 
-static void rebuildAllReturns(const SmallVectorImpl<func::ReturnOp> &returns, unsigned origNumResults,
-                              ArrayRef<bool> needOut, ArrayRef<Value> resultToOutArg) {
+// Rebuild all return ops as no-operand returns since the function no longer
+// has any results.
+static void rebuildAllReturns(const SmallVectorImpl<func::ReturnOp> &returns) {
   for (auto ret : returns) {
-    SmallVector<Value, 4> newRetOperands;
-    newRetOperands.reserve(origNumResults);
-    auto oldOps = ret.getOperands();
-    for (unsigned i = 0; i < origNumResults; ++i) {
-      if (needOut[i]) {
-        newRetOperands.push_back(resultToOutArg[i]);
-      } else {
-        newRetOperands.push_back(oldOps[i]);
-      }
-    }
     OpBuilder builder(ret);
-    builder.create<func::ReturnOp>(ret.getLoc(), newRetOperands);
+    builder.create<func::ReturnOp>(ret.getLoc());
     ret.erase();
   }
 }
@@ -688,7 +679,7 @@ static LogicalResult rewriteReturnsAndAllocToUseOutParams(func::FuncOp func, uns
 
   if (failed(handleAllReturns(func, origNumResults, resultToOutArg, origReturnValues))) return failure();
 
-  rebuildAllReturns(returns, origNumResults, needOut, resultToOutArg);
+  rebuildAllReturns(returns);
   eraseDeadOps(func);
 
   return success();
@@ -715,7 +706,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     newInputs.append(origInputs.begin(), origInputs.end());
     newInputs.append(origResults.begin(), origResults.end());
 
-    auto newFuncTy = FunctionType::get(ctx, newInputs, origResults);
+    // Function no longer returns anything.
+    auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
     func.setFunctionType(newFuncTy);
 
     setHaccIOArgAttrs(func, origNumInputs, origNumResults, builder);
@@ -753,7 +745,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     }
   }
 
-  auto newFuncTy = FunctionType::get(ctx, newInputs, origResults);
+  // Function no longer returns anything.
+  auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
   func.setFunctionType(newFuncTy);
 
   Block &entry = func.front();
