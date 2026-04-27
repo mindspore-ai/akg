@@ -41,6 +41,22 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
 
   Option<std::string> jsonFileName{*this, "json-file-name", llvm::cl::desc("mindspore json file name"),
                                    llvm::cl::init("")};
+  Option<bool> enableAutoMultiBuffer{*this, "enable-auto-multi-buffer", llvm::cl::desc("Enable auto multi buffer"),
+                                     llvm::cl::init(true)};
+
+  Option<bool> enableGraphSyncSolver{*this, "enable-graph-sync-solver",
+                                     llvm::cl::desc("Use hivm graph-sync-solver instead of inject-sync"),
+                                     llvm::cl::init(false)};
+
+  Option<bool> enableInjectBarrierAllSync{
+    *this, "enable-barrier-all", llvm::cl::desc("Enable barrier all mode for HIVM inject sync"), llvm::cl::init(false)};
+  Option<bool> enableAutoInjectSync{*this, "enable-auto-inject-sync",
+                                    llvm::cl::desc("Enable auto inject sync for HIVM"), llvm::cl::init(true)};
+  Option<bool> enableAutoStorageAlign{*this, "enable-auto--align", llvm::cl::desc("Enable auto align for HIVM"),
+                                      llvm::cl::init(true)};
+
+  Option<bool> enableMemoryDisplay{*this, "enable-memory--display",
+                                   llvm::cl::desc("Enable ascend memory display tools."), llvm::cl::init(false)};
 };
 
 void createAscendOptPipeline(OpPassManager &pm, const AscendOptPipelineOptions &options);

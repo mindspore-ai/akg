@@ -1,5 +1,5 @@
 set(AscendNPU-IR_URL "https://gitcode.com/Ascend/AscendNPU-IR.git")
-set(AscendNPU-IR_TAG "e4633e70f812b7c483768fdcc850c6077a3727e1")
+set(AscendNPU-IR_TAG "v1.1.0-post2")
 set(AscendNPU-IR_MD5 "e4633e70f812b7c483768fdcc850c6077a3727e1") #not used
 
 set(ascendnpu_ir_options
@@ -10,20 +10,32 @@ set(ascendnpu_ir_options
     -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
 )
 
+set(BiShengIRLibs
+    BiShengIRAnnotationDialect
+    BiShengIRAnnotationTransforms
+    BiShengIRDialectUtils
+    BiShengIRHACCDialect
+    BiShengIRHFusionDialect
+    BiShengIRHIVMDialect
+    BiShengIRHIVMTransforms
+    BiShengIRHIVMUtils
+    BiShengIRHACCUtils
+    BiShengIRMathExtDialect
+    BiShengIRMemRefDialect
+    BiShengIRSymbolDialect
+    BiShengIRTensorDialect
+    BiShengIRMemRefExtDialect
+    BiShengIRHACCTransforms
+    BiShengIRSCFTransforms
+    BiShengIRScopeDialect
+    BiShengIRSCFUtils
+    BiShengIRScopeTransforms
+    BiShengIRArithToAffine
+    BiShengIRHIVMToStandard)
+
 akg_add_pkg(ascendnpu-ir
             VER ${AscendNPU-IR_TAG}
-            LIBS
-              BiShengIRAnnotationDialect
-              BiShengIRDialectUtils
-              BiShengIRHACCDialect
-              BiShengIRHFusionDialect
-              BiShengIRHIVMDialect
-              BiShengIRHIVMUtils
-              BiShengIRMathExtDialect
-              BiShengIRMemRefDialect
-              BiShengIRSymbolDialect
-              BiShengIRTensorDialect
-              BiShengIRMemRefExtDialect
+            LIBS ${BiShengIRLibs}
             GIT_REPOSITORY ${AscendNPU-IR_URL}
             GIT_TAG ${AscendNPU-IR_TAG}
             MD5 ${AscendNPU-IR_MD5}
@@ -33,14 +45,6 @@ akg_add_pkg(ascendnpu-ir
 set(BISHENGIR_BUILD_STANDALONE_IR_ONLY ON)
 include_directories(${ascendnpu-ir_INC})
 
-add_library(BiShengIRAnnotationDialect ALIAS ascendnpu-ir::BiShengIRAnnotationDialect)
-add_library(BiShengIRDialectUtils ALIAS ascendnpu-ir::BiShengIRDialectUtils)
-add_library(BiShengIRHACCDialect ALIAS ascendnpu-ir::BiShengIRHACCDialect)
-add_library(BiShengIRHFusionDialect ALIAS ascendnpu-ir::BiShengIRHFusionDialect)
-add_library(BiShengIRHIVMDialect ALIAS ascendnpu-ir::BiShengIRHIVMDialect)
-add_library(BiShengIRHIVMUtils ALIAS ascendnpu-ir::BiShengIRHIVMUtils)
-add_library(BiShengIRMathExtDialect ALIAS ascendnpu-ir::BiShengIRMathExtDialect)
-add_library(BiShengIRMemRefDialect ALIAS ascendnpu-ir::BiShengIRMemRefDialect)
-add_library(BiShengIRSymbolDialect ALIAS ascendnpu-ir::BiShengIRSymbolDialect)
-add_library(BiShengIRTensorDialect ALIAS ascendnpu-ir::BiShengIRTensorDialect)
-add_library(BiShengIRMemRefExtDialect ALIAS ascendnpu-ir::BiShengIRMemRefExtDialect)
+foreach(libs IN LISTS BiShengIRLibs)
+  add_library(${libs} ALIAS ascendnpu-ir::${libs})
+endforeach()
