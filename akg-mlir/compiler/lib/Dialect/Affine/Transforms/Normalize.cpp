@@ -621,6 +621,27 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
   }
 };
 
+// rsqrt(x) = 1 / sqrt(x)
+struct NormalizeRSqrtOp : public OpRewritePattern<math::RsqrtOp> {
+  using OpRewritePattern<math::RsqrtOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::RsqrtOp op, PatternRewriter &rewriter) const override {
+    Value input = op.getOperand();
+    auto inTy = getElementTypeOrSelf(input.getType());
+    auto fTy = dyn_cast<FloatType>(inTy);
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+
+    Location loc = op.getLoc();
+
+    Value sqrtVal = rewriter.create<math::SqrtOp>(loc, input);
+    Value one = buildFloatConst(rewriter, loc, fTy, 1.0);
+    Value res = rewriter.create<arith::DivFOp>(loc, one, sqrtVal);
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 }  // namespace
 
 void populateNormalizeMathPatterns(RewritePatternSet &patterns) {
@@ -628,6 +649,7 @@ void populateNormalizeMathPatterns(RewritePatternSet &patterns) {
   patterns.add<NormalizeSinOp>(patterns.getContext());
   patterns.add<NormalizeCosOp>(patterns.getContext());
   patterns.add<NormalizeTanhOp>(patterns.getContext());
+  patterns.add<NormalizeRSqrtOp>(patterns.getContext());
 }
 
 namespace {
