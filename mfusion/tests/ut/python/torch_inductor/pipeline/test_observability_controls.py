@@ -99,6 +99,21 @@ def test_run_composite_fusion_stage_uses_composite_pipeline_when_not_verbose():
     assert runner.calls == [("builtin.module(torch-fusion,canonicalize)", "Torch Fusion")]
 
 
+def test_run_composite_fusion_stage_fallbacks_to_composite_when_verbose_passes_missing():
+    """When verbose mode is enabled but internal pass list is empty, keep composite behavior."""
+    runner = _FakeRunner(verbose=True)
+    inductor_mod._run_composite_fusion_stage(
+        runner=runner,
+        stage_label="Torch Fusion",
+        composite_pipeline="builtin.module(canonicalize,torch-fusion,canonicalize)",
+        internal_passes=(),
+        pre_canonicalize=True,
+    )
+    assert runner.calls == [
+        ("builtin.module(canonicalize,torch-fusion,canonicalize)", "Torch Fusion")
+    ]
+
+
 def test_pipeline_runner_env_levels_control_observability(monkeypatch, tmp_path: Path):
     """Enable internal observability at level 2 and verify one IR dump is produced then cleaned."""
     monkeypatch.setenv("MFUSION_PRINT_IR", "1")
