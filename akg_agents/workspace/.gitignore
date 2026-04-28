@@ -1,0 +1,10 @@
+# 运行产物
+logs/
+output/
+*.log
+__pycache__/
+*.pyc
+
+# 临时文件
+*.tmp
+*.bak

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "allow",
+      "vllm-ascend-post-process": "deny",
+      "vllm-mindspore-post-process": "deny",
+      "vllm-ascend-operator-fusion": "deny",
+      "sparse-quantization": "deny"
+    }
+  }
+}

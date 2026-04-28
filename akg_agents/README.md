@@ -1,0 +1,228 @@
+[中文版](./README_CN.md)
+
+<div align="center">
+
+# AKG Agents
+
+</div>
+
+<details>
+<summary><b>📋 Table of Contents</b></summary>
+
+- [AKG Agents](#akg-agents)
+  - [📘 1. Project Overview](#-1-project-overview)
+  - [🗓️ 2. Changelog](#️-2-changelog)
+  - [🛠️ 3. Quick Start](#️-3-quick-start)
+    - [Installation](#installation)
+    - [Configure LLM](#configure-llm)
+    - [Backend Dependencies](#backend-dependencies)
+    - [Launch \& Usage](#launch--usage)
+  - [▶️ 4. Tutorial Examples](#️-4-tutorial-examples)
+  - [📐 5. Design Documentation](#-5-design-documentation)
+    - [Core Framework](#core-framework)
+    - [Scenarios](#scenarios)
+    - [OpenCode Integration](#opencode-integration)
+    - [Contributing](#contributing)
+    - [Additional Modules (v1 Documentation)](#additional-modules-v1-documentation)
+
+</details>
+
+## 📘 1. Project Overview
+**AKG Agents** is an LLM-powered multi-agent collaboration framework for AI Infra and high-performance computing, aimed at boosting the development and optimization efficiency of high-performance code through intelligent agent collaboration.
+
+The framework provides a complete agent infrastructure: ReAct Agent base classes, extensible **Skill / Tools / SubAgent** mechanisms, LangGraph workflow orchestration, tree-based Trace system, and a unified configuration and registry. Developers can rapidly build, compose, and deploy intelligent agents tailored to diverse tasks.
+
+The current production scenario is **AI kernel code generation**: leveraging LLM planning and multi-agent collaboration to automate multi-backend, multi-DSL high-performance kernel generation and optimization. Future extensions will cover kernel migration, performance tuning, code refactoring, and more AI Infra related scenarios.
+
+## 🗓️ 2. Changelog
+- 2026-04-28: CLI module (`akg_cli`) deprecated and will no longer receive updates.
+- 2026-03-31: Added [AutoResearch](./docs/v2/AutoResearch.md) workflow — agent-driven iterative deep optimization with KernelVerifier eval, supporting all DSLs.
+- 2026-03-11：Streamline the [operator optimization](./docs/v2/AKG-Op.md) process by integrating AKG Agents and OpenCode (`akg-op` Agent).
+- 2026-02-26: Supported PyPTO backend code generation.
+- 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`. 
+- 2026-02-10: Core framework refactored (v2). Decoupled general-purpose Agent capabilities from kernel-specific logic to build a reusable multi-agent collaboration framework. See [Architecture](./docs/v2/Architecture.md), [Agent System](./docs/v2/AgentSystem.md), [Skill System](./docs/v2/SkillSystem.md), [Workflow](./docs/v2/Workflow.md), [Trace System](./docs/v2/Trace.md), [Configuration](./docs/v2/Configuration.md).
+- 2025-12-01: Introduced LangGraph for task orchestration. New `LangGraphTask` replaces original `Task Orchestration` scheme. See [Workflow Documentation](./docs/v2/Workflow.md).
+- 2025-11-25: Supported service architecture, including `client-server-worker` separation architecture. See [Service Architecture Documentation](./docs/v1/ServerArchitecture.md).
+- 2025-10-14: Supported TileLang_CUDA backend code generation. See [Benchmark Results](./docs/v1/DSLBenchmarkResults202509.md).
+- 2025-09-26: Supported CUDA C and CPP backend code generation. See [Benchmark Results](./docs/v1/DSLBenchmarkResults202509.md).
+- 2025-09-14: Updated KernelBench Level1 kernel generation success rate. See [Benchmark Results](./docs/v1/BenchmarkResults202509.md).
+- 2025-08-12: Supported "Doc-Driven Integration" (now replaced by [Skill System](./docs/v2/SkillSystem.md)).
+- 2025-06-27: Initial AIKG release with code generation support for Triton and SWFT backends.
+
+
+## 🛠️ 3. Quick Start
+
+### Installation
+```bash
+# 1. Environment setup (optional, recommended Python 3.10/3.11/3.12)
+conda create -n akg_agents python=3.11
+conda activate akg_agents
+
+# 2. Clone the repository
+git clone https://gitcode.com/mindspore/akg.git -b br_agents
+cd akg
+
+# 3. Install dependencies
+pip install -r akg_agents/requirements.txt
+
+# 4. Install AKG Agents
+pip install -e ./akg_agents --no-build-isolation
+
+# 5. Download third-party benchmarks as needed
+bash akg_agents/download.sh --with_all_benchmarks
+```
+
+### Configure LLM
+
+Copy the example config to `~/.akg/settings.json` and fill in your API Key and model info:
+
+```bash
+mkdir -p ~/.akg
+cp akg_agents/examples/settings.example.json ~/.akg/settings.json
+```
+
+A minimal configuration only requires one model (auto-applies to all levels):
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "YOUR_API_KEY",
+      "model_name": "deepseek-chat"
+    }
+  },
+  "default_model": "standard"
+}
+```
+
+**Advanced Configuration**:
+> - For integrating locally deployed models, see [Local Model Deployment Guide](./docs/v2/LocalModelDeployment.md)
+> - For per-level model configuration (`complex` / `standard` / `fast`), thinking/reasoning parameters for different providers, Embedding/RAG setup, or environment variable usage, see [Configuration Documentation](./docs/v2/Configuration.md), the basic example [`settings.example.json`](./examples/settings.example.json), and the multi-provider example [`settings.example.more.json`](./examples/settings.example.more.json)
+
+### Backend Dependencies
+
+The `br_agents` branch currently supports the following three DSLs. Other backends are pending adaptation:
+
+| Platform | Backend (DSL) | Reference Link |
+|----------|---------------|----------------|
+| Huawei Atlas A2 Training Series | Triton | https://gitee.com/ascend/triton-ascend |
+| NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
+| CPU (x86_64) | C++ | GCC / Clang |
+
+### Launch & Usage
+
+AKG Agents provides kernel generation, optimization, and migration capabilities through scripts in three locations:
+
+| Directory | Content |
+|-----------|---------|
+| `examples/kernel_related/` | Generation, optimization, migration examples (primary) |
+| `python/akg_agents/op/tools/` | Adaptive search, evolve runner scripts (single/batch) |
+| `scripts/` | AutoResearch |
+
+| Feature | Example Scripts |
+|---------|-----------------|
+| Generation | `*_single.py` — direct generation and verification |
+| Optimization | `*_adaptive_search*.py` (UCB), `*_evolve*.py` (evolution) |
+| Migration | `run_cuda_to_ascend_conversion.py`, `run_cuda_to_ascend_evolve.py` |
+
+Usage examples:
+```bash
+# Kernel generation
+python examples/kernel_related/run_torch_npu_triton_single.py
+
+# Optimization (adaptive search)
+python python/akg_agents/op/tools/run_single_adaptive_search.py
+
+# Optimization (evolution)
+python python/akg_agents/op/tools/run_single_evolve.py
+
+# Migration (CUDA → Ascend)
+python examples/kernel_related/run_cuda_to_ascend_conversion.py
+
+# AutoResearch
+python scripts/run_autoresearch.py
+```
+
+
+## ▶️ 4. Tutorial Examples
+
+<details open>
+<summary><b>examples/ directory</b></summary>
+
+| Example | Category | Description |
+|---------|----------|-------------|
+| **NPU** | | |
+| `kernel_related/run_torch_npu_triton_single.py` | Kernel | Single kernel generation (Torch + Triton Ascend) |
+| `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB adaptive search (Torch + Triton Ascend) |
+| `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | Evolutionary kernel optimization (Torch + Triton Ascend) |
+| `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA to Ascend kernel conversion |
+| `kernel_related/run_cuda_to_ascend_evolve.py` | Kernel | CUDA to Ascend evolutionary optimization |
+| **GPU** | | |
+| `kernel_related/gpu/run_triton_to_torch_single.py` | Kernel | Single kernel generation (Torch + Triton CUDA) |
+| `kernel_related/gpu/run_torch_evolve_triton.py` | Kernel | Evolutionary kernel optimization (Torch + Triton CUDA) |
+| `kernel_related/gpu/run_cudac_to_torch_single.py` | Kernel | Single kernel generation (Torch + CUDA C) |
+| **CPU** | | |
+| `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | Single kernel generation (Torch + CPP) |
+| `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | Evolutionary kernel optimization (Torch + CPP) |
+| `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB adaptive search (Torch + CPP) |
+| **AutoResearch** | | |
+| `scripts/run_autoresearch.py` | Kernel | AutoResearch iterative optimization (all backends, `--desc` / `--ref` / `--kernel`) |
+| **Utilities** | | |
+| `kernel_related/run_kernel_profile.py` | Kernel | Kernel performance profiling |
+| `run_skill/` | Skill | Skill loading, registry, hierarchy, versioning, installation, LLM selection examples |
+| `build_a_simple_react_agent/` | Framework | Build a custom ReAct Agent using the framework |
+| `build_a_simple_workflow/` | Framework | Build a custom LangGraph-based Workflow |
+| `settings.example.json` | Config | Basic `settings.json` configuration template |
+| `settings.example.more.json` | Config | Multi-provider examples (OpenAI, DeepSeek, Claude, Qwen, Kimi, Doubao, etc.) |
+
+</details>
+
+
+## 🧭 Usage Mode vs Development Mode
+
+```
+akg_agents/
+├── workspace/          ← Usage: open a Code Agent here to use operator optimization
+│   ├── .opencode/      　 skills / agents definitions, auto-loaded
+│   └── AGENTS.md
+└── ...                 ← Development: open here to develop the framework itself
+    ├── AGENTS.md
+    └── python/akg_agents/
+```
+
+- **Usage mode** (`workspace/`): For operator optimization users. Open OpenCode / Claude Code / Cursor and the built-in Agents and Skills handle env setup, kernel generation, fusion analysis, etc.
+- **Development mode** (`akg_agents/`): For framework developers. Develop the akg_agents codebase guided by `AGENTS.md` and per-directory `SPEC.md` files.
+
+## 📐 5. Design Documentation
+
+> Start with [Architecture](./docs/v2/Architecture.md) for an overview, then read [Workflow](./docs/v2/Workflow.md) and [Skill System](./docs/v2/SkillSystem.md) to understand the core mechanisms.
+
+### Core Framework
+- **[Architecture](./docs/v2/Architecture.md)** - Overall architecture and module overview
+- **[Agent System](./docs/v2/AgentSystem.md)** - Agent base classes, ReAct Agent, registry
+- **[Skill System](./docs/v2/SkillSystem.md)** - Skill management and dynamic knowledge injection
+- **[Tools](./docs/v2/Tools.md)** - Tool execution framework, built-in tools, domain tools
+- **[Workflow](./docs/v2/Workflow.md)** - LangGraph-based workflow orchestration
+- **[Trace System](./docs/v2/Trace.md)** - Tree-based inference tracing (multi-fork, checkpoint resume)
+- **[Configuration](./docs/v2/Configuration.md)** - Unified configuration management (settings.json / env vars)
+- **[LLM](./docs/v2/LLM.md)** - LLM provider, client, embedding
+
+### Scenarios
+- **Generation** — Direct kernel code generation and correctness verification
+- **Optimization** — Adaptive Search (UCB), Evolve (evolutionary algorithm), [AutoResearch](./docs/v2/AutoResearch.md) (agent-driven iteration)
+- **Migration** — CUDA → Ascend kernel conversion
+
+### OpenCode Integration
+- **[akg-op User Guide](./docs/v2/AKG-Op.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code integration, supporting single-operator optimization and model fusion analysis
+
+### Contributing
+- **[Skill Contribution Guide](./docs/v2/SkillContributionGuide.md)** - How to contribute new Skills
+
+### Additional Modules (v1 Documentation)
+- **[Database](./docs/v1/Database.md)** - Database module
+- **[RAG](./docs/v1/RAG.md)** - Vector retrieval-augmented generation
+- **[RAG Usage Guide](./docs/v1/RAG_Usage.md)** - RAG configuration and usage tutorial
+- **[Server Architecture](./docs/v1/ServerArchitecture.md)** - Service architecture (Client-Server-Worker)
+- **[TaskPool](./docs/v1/TaskPool.md)** - Task pool management
+- **[DevicePool](./docs/v1/DevicePool.md)** - Device pool management
