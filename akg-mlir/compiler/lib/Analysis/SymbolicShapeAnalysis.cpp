@@ -32,6 +32,10 @@ SymEngine::Expression SymbolicShapeAnalysis::getSymbolicExprFromStr(const std::s
 }
 
 bool SymbolicShapeAnalysis::hasSymbolicShape(Type type) const {
+  void *impl = type.getImpl();
+  if (impl == nullptr) {
+    return false;
+  }
   if (!isa<RankedTensorType, MemRefType>(type)) {
     return false;
   }
