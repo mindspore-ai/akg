@@ -75,7 +75,7 @@ class ModelNew(ms.nn.Cell):
     def __init__(self, in_features, out_features):
         super().__init__()
         # 固定随机种子，确保与原始Model的权重一致
-        ms.set_seed(0)
+        ms.manual_seed(0)
         # 创建Linear层并提取weight和bias
         linear = ms.mint.nn.Linear(in_features, out_features)
         self.weight = Parameter(linear.weight.clone(), name="weight")

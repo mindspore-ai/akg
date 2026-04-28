@@ -32,10 +32,10 @@ dim = 1
 
 
 def get_inputs():
-    ms.set_seed(42)
+    ms.manual_seed(42)
     return [
-        ms.ops.randn(batch_size, *input_shape).astype(ms.float32),
-        (ms.ops.randint(0, 2, (batch_size, 1)).float() * 2 - 1).astype(ms.float32)
+        ms.mint.randn(batch_size, *input_shape).astype(ms.float32),
+        (ms.mint.randint(0, 2, (batch_size, 1)).float() * 2 - 1).astype(ms.float32)
     ]
 
 

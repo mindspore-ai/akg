@@ -36,7 +36,7 @@ padding = (1, 2) # Asymmetric padding
 dilation = (2, 1) # Asymmetric dilation
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, in_channels, height, width)
+    x = ms.mint.randn(batch_size, in_channels, height, width)
     return [x]
 
 def get_init_inputs():

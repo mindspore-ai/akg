@@ -117,7 +117,7 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
     
     def set_seed(self, backend: Optional[str] = None) -> None:
         """Set random seed."""
-        ms.set_seed(0)
+        ms.manual_seed(0)
     
     def move_model_to_device(self, model: Any, device: Any) -> Any:
         """Move model to device (MindSpore doesn't need explicit move)."""
@@ -282,10 +282,10 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
     
     def get_set_seed_code(self, backend: str) -> str:
         """Get set seed code for MindSpore.
-        
+
         Note: Returns code without indentation, template will handle indentation.
         """
-        return """ms.set_seed(0)
+        return """ms.manual_seed(0)
 """
     
     def get_compare_code(self) -> str:

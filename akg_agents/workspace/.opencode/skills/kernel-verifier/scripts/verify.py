@@ -173,7 +173,7 @@ def set_seed(framework, backend, seed=0):
             torch.cuda.manual_seed(seed)
     elif framework == "mindspore":
         import mindspore as ms
-        ms.set_seed(seed)
+        ms.manual_seed(seed)
 
 
 def verify_implementations(op_name, dsl, backend, framework, device_id, verify_dir):

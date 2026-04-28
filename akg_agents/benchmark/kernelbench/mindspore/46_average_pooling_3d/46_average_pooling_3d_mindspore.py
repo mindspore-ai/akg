@@ -41,7 +41,7 @@ padding = 1
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, channels, depth, height, width, dtype=ms.float32)
+    x = ms.mint.randn(batch_size, channels, depth, height, width, dtype=ms.float32)
     return [x]
 
 
