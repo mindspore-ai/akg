@@ -69,6 +69,12 @@ bool isLoopMemoryParallelAKG(AffineForOp forOp);
 Value getSourceMemRef(Value memrefVal, bool *hasSubView = nullptr,
                       memref::SubViewOp *firstSubView = nullptr);
 
+// True if two affine.for ops have identical iteration range (lb / ub / step). Compares
+// constant bounds by value first to handle lb/ub maps that differ in envelope but resolve
+// to the same constant range; falls back to map equality when at least one side is
+// non-constant.
+bool loopBoundsMatch(AffineForOp a, AffineForOp b);
+
 /// Encapsulates a memref load or store access information.
 struct AKGMemRefAccess {
   Value memref;
