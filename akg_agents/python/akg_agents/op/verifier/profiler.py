@@ -16,9 +16,12 @@
 NPU Profiler 模块。
 
 提供 NPU 性能分析功能，支持：
-- 精确的执行时间测量
-- L2 cache 清除（可选）
-- 自动过滤无关的 warning 输出
+• 精确的执行时间测量
+
+• L2 cache 清除（可选）
+
+• 自动过滤无关的 warning 输出
+
 """
 
 import os
@@ -28,8 +31,6 @@ import re
 import shutil
 import time
 from typing import Callable, Tuple, Optional, Literal
-import torch
-import torch_npu
 import pandas as pd
 
 # 导入 L2 cache 清除相关功能
@@ -140,7 +141,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
                       dsl: DslType = "other",
                       filter_restore_copy: bool = False) -> Tuple[float, str]:
     """
-    NPU profiler 核心函数。
+    NPU profiler 核心函数（PyTorch 版）。
     
     Args:
         fn: 要 profile 的函数
@@ -149,12 +150,17 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
         prof_dir_name: profile 结果目录名
         clear_l2_cache_flag: 是否在每次迭代前清除 L2 cache
         dsl: DSL 类型，决定 L2 cache 清除方式
-             - "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
-             - 其他: 使用 tensor.zero_()（fallback，有误判风险）
+             ▪ "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
+
+             ▪ 其他: 使用 tensor.zero_()（fallback，有误判风险）
+
     
     Returns:
         Tuple[float, str]: (执行时间(微秒), profile结果目录路径)
     """
+    import torch
+    import torch_npu
+
     fn()
     torch.npu.synchronize()
 
@@ -164,8 +170,6 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
         l2_cache=False,
         data_simplification=False
     )
-    # 将 warmup 步数放入 skip_first，保持预热效果但避免 warmup_trace 的副作用
-    # fn() 依然会在所有 skip_first 步骤中执行，确保充分预热
     skip_first = 1 + warmup
     wait = 0
     warmup_prof = 0
@@ -179,9 +183,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
     else:
         profile_path = os.path.join(os.getcwd(), f"profile_results_{timestamp}")
 
-    # 预初始化 L2 cache buffer（如果需要清除）
     if clear_l2_cache_flag:
-        # 预热 L2 cache 清除操作
         clear_l2_cache(dsl)
 
     with torch_npu.profiler.profile(
@@ -206,14 +208,94 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
             torch.npu.synchronize()
 
     exec_time = collect_time(profile_path, active, clear_l2_cache_flag=clear_l2_cache_flag,
-                             dsl=dsl, filter_restore_copy=filter_restore_copy)
+                             dsl=dsl, framework="torch", filter_restore_copy=filter_restore_copy)
+    return exec_time, profile_path
+
+
+def profiler_npu_mindspore_core(fn: Callable, warmup: int = 25, active: int = 100,
+                                prof_dir_name: Optional[str] = None,
+                                clear_l2_cache_flag: bool = False,
+                                dsl: DslType = "other",
+                                filter_restore_copy: bool = False) -> Tuple[float, str]:
+    """
+    NPU profiler 核心函数（MindSpore 版）。
+
+    与 PyTorch 版的关键差异：
+    1. 枚举类名: AicoreMetrics (非 AiCMetrics)
+    2. schedule 参数必须使用关键字传参
+    3. data_simplification 默认值为 True，需显式设为 False
+    4. profile() 不支持 with_flops / with_modules 参数
+    5. 同步接口: ms.runtime.synchronize() (非 torch.npu.synchronize())
+
+    Args:
+        fn: 要 profile 的函数
+        warmup: warmup 次数
+        active: 有效测量次数
+        prof_dir_name: profile 结果目录名
+        clear_l2_cache_flag: 是否在每次迭代前清除 L2 cache
+        dsl: DSL 类型（MindSpore 版统一使用 zero_() 清除 L2 cache）
+        filter_restore_copy: 是否过滤 restore_copy 操作
+
+    Returns:
+        Tuple[float, str]: (执行时间(微秒), profile结果目录路径)
+    """
+    import mindspore as ms
+    from mindspore.profiler import (ProfilerActivity, ProfilerLevel, AicoreMetrics,
+                                     _ExperimentalConfig, schedule, profile,
+                                     tensorboard_trace_handler)
+
+    fn()
+    ms.runtime.synchronize()
+
+    experimental_config = _ExperimentalConfig(
+        aic_metrics=AicoreMetrics.PipeUtilization,
+        profiler_level=ProfilerLevel.Level0,
+        l2_cache=False,
+        data_simplification=False
+    )
+    skip_first = 1 + warmup
+    wait = 0
+    warmup_prof = 0
+    repeat = 1
+    total = skip_first + (wait + warmup_prof + active) * repeat
+
+    timestamp = int(time.time() * 1000)
+
+    if prof_dir_name is not None:
+        profile_path = os.path.join(os.getcwd(), f"{prof_dir_name}_{timestamp}")
+    else:
+        profile_path = os.path.join(os.getcwd(), f"profile_results_{timestamp}")
+
+    if clear_l2_cache_flag:
+        clear_l2_cache(dsl, framework="mindspore")
+
+    with profile(
+        activities=[ProfilerActivity.NPU],
+        schedule=schedule(wait=wait, warmup=warmup_prof, active=active,
+                          repeat=repeat, skip_first=skip_first),
+        on_trace_ready=tensorboard_trace_handler(profile_path),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+        experimental_config=experimental_config,
+    ) as prof:
+        for _ in range(total):
+            if clear_l2_cache_flag:
+                clear_l2_cache(dsl, framework="mindspore")
+            fn()
+            prof.step()
+            ms.runtime.synchronize()
+
+    exec_time = collect_time(profile_path, active, clear_l2_cache_flag=clear_l2_cache_flag,
+                             dsl=dsl, framework="mindspore", filter_restore_copy=filter_restore_copy)
     return exec_time, profile_path
 
 
 def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None,
                  keep_res: bool = False, suppress_warnings: bool = True,
                  clear_l2_cache: bool = False, dsl: DslType = "other",
-                 filter_restore_copy: bool = False) -> float:
+                 filter_restore_copy: bool = False,
+                 framework: str = "torch") -> float:
     """
     NPU profiler 主函数。
 
@@ -226,37 +308,39 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
         suppress_warnings: 是否抑制 WARNING/INFO 输出
         clear_l2_cache: 是否在每次迭代前清除 L2 cache
         dsl: DSL 类型，决定 L2 cache 清除方式
-             - "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
-             - 其他: 使用 tensor.zero_()（fallback，有误判风险）
+             ▪ "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
+
+             ▪ 其他: 使用 tensor.zero_()（fallback，有误判风险）
+
+        filter_restore_copy: 是否过滤 restore_copy 操作
+        framework: 框架类型 ("torch" 或 "mindspore")，决定使用哪套 profiler 接口
     
     Returns:
         float: 平均执行时间（微秒）
     """
-    # 清空之前的警告消息
     clear_l2_cache_warnings()
+    
+    core_fn = profiler_npu_mindspore_core if framework == "mindspore" else profiler_npu_core
     
     if suppress_warnings:
         with suppress_output():
-            exec_time, profile_path = profiler_npu_core(
+            exec_time, profile_path = core_fn(
                 fn, warmup, active, prof_dir_name, 
                 clear_l2_cache_flag=clear_l2_cache, dsl=dsl,
                 filter_restore_copy=filter_restore_copy,
             )
     else:
-        exec_time, profile_path = profiler_npu_core(
+        exec_time, profile_path = core_fn(
             fn, warmup, active, prof_dir_name,
             clear_l2_cache_flag=clear_l2_cache, dsl=dsl,
             filter_restore_copy=filter_restore_copy,
         )
     
-    # profiler 结束后输出收集的 L2 cache 警告消息（绕过 suppress_output）
     warnings_list = get_l2_cache_warnings()
     if warnings_list:
         for warning_msg in warnings_list:
-            # 使用 sys.__stderr__ 绕过任何 stderr 重定向
             print(f"[WARN] {warning_msg}", file=sys.__stderr__)
 
-    # 清理结果文件
     if not keep_res and os.path.exists(profile_path):
         shutil.rmtree(profile_path)
 
@@ -264,17 +348,21 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
 
 
 def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
-                 dsl: DslType = "other", filter_restore_copy: bool = False) -> float:
+                 dsl: DslType = "other", framework: str = "torch",
+                 filter_restore_copy: bool = False) -> float:
     """
     从 profiling 结果中收集时间信息。
+
+    - torch: 读 op_statistic.csv，按 Count % active == 0 过滤，求 Total Time(us) / active
+    - mindspore (Level0): 读 kernel_details.csv，按 Step ID 取后 active 步，求 Duration(us) / steps
 
     Args:
         base_dir: profiling 结果目录
         active: 有效测量次数
         clear_l2_cache_flag: 是否启用了 L2 cache 清除
-        dsl: DSL 类型，决定如何过滤 L2 cache 清除操作
-             - "triton_ascend": 过滤名为 "AKG_l2cache_clear" 的 kernel
-             - 其他: 过滤 "ZerosLike" 类型的操作
+        dsl: DSL 类型
+        framework: 框架类型 ("torch" 或 "mindspore")
+        filter_restore_copy: 是否过滤 restore_copy 操作
 
     Returns:
         float: 平均执行时间(微秒)，失败时返回 float('inf')
@@ -283,9 +371,11 @@ def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
         print(f"Base directory not found: {base_dir}")
         return float('inf')
 
+    target_csv = 'kernel_details.csv' if framework == 'mindspore' else 'op_statistic.csv'
+
     for root, _, files in os.walk(base_dir):
         for file in files:
-            if file != 'op_statistic.csv':
+            if file != target_csv:
                 continue
 
             target_file = os.path.join(root, file)
@@ -295,58 +385,59 @@ def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
                 print(f"Failed to read {target_file}: {e}")
                 continue
 
-            # 检查必需的列
-            required_columns = ['Count', 'Total Time(us)']
-            if not all(col in df.columns for col in required_columns):
-                print(f"Missing required columns in {target_file}. Found: {list(df.columns)}")
-                continue
+            if clear_l2_cache_flag or filter_restore_copy:
+                df = _filter_l2_cache_clear_ops(df, dsl, framework=framework,
+                                                filter_restore_copy=filter_restore_copy)
 
-            # 过滤有效操作
             try:
-                if clear_l2_cache_flag or filter_restore_copy:
-                    df = _filter_l2_cache_clear_ops(df, dsl,
-                                                    filter_restore_copy=filter_restore_copy)
-                
-                valid_ops = df[df['Count'] % active == 0].copy()
+                if framework == 'mindspore':
+                    if 'Duration(us)' not in df.columns:
+                        print(f"Missing 'Duration(us)' in {target_file}. Found: {list(df.columns)}")
+                        continue
+                    if 'Step ID' in df.columns:
+                        all_steps = sorted(df['Step ID'].dropna().unique())
+                        active_steps = all_steps[-active:] if len(all_steps) > active else all_steps
+                        df = df[df['Step ID'].isin(active_steps)]
+                    if df.empty:
+                        print(f"No valid rows in {target_file}")
+                        continue
+                    num_steps = len(df['Step ID'].unique()) if 'Step ID' in df.columns else active
+                    return df['Duration(us)'].sum() / num_steps
 
-                if valid_ops.empty:
-                    print(f"No valid ops found in {target_file}")
-                    continue
-
-                total_time_sum = valid_ops['Total Time(us)'].sum()
-                if pd.isna(total_time_sum) or total_time_sum <= 0:
-                    print(f"Invalid timing data in {target_file}")
-                    continue
-
-                average_time = total_time_sum / active
-                return average_time
+                else:
+                    required_columns = ['Count', 'Total Time(us)']
+                    if not all(col in df.columns for col in required_columns):
+                        print(f"Missing required columns in {target_file}. Found: {list(df.columns)}")
+                        continue
+                    valid_ops = df[df['Count'] % active == 0]
+                    if valid_ops.empty:
+                        print(f"No valid ops found in {target_file}")
+                        continue
+                    total_time = valid_ops['Total Time(us)'].sum()
+                    if pd.isna(total_time) or total_time <= 0:
+                        print(f"Invalid timing data in {target_file}")
+                        continue
+                    return total_time / active
 
             except (KeyError, ValueError, ZeroDivisionError) as e:
                 print(f"Error processing timing data in {target_file}: {e}")
                 continue
 
-    print(f"No valid timing data found in {base_dir}")
+    print(f"No valid timing data ({target_csv}) found in {base_dir}")
     return float('inf')
 
 
 def _filter_l2_cache_clear_ops(df: pd.DataFrame, dsl: DslType,
+                                framework: str = "torch",
                                 filter_restore_copy: bool = False) -> pd.DataFrame:
     """
     从 profiling 结果中过滤掉 AKG 框架内部操作。
 
+    同时支持 op_statistic.csv（torch）和 kernel_details.csv（mindspore）的列名。
+
     过滤内容：
-      - L2 cache 清除 kernel（AKG_l2cache_clear / ZerosLike）
-      - restore_value 的 copy kernel（filter_restore_copy=True 时，
-        按 kernel 名字 AKG_restore_copy 精确过滤，与 l2_cache_clear 同一模式）
-
-    Args:
-        df: profiling 数据 DataFrame
-        dsl: DSL 类型
-        filter_restore_copy: 是否过滤 restore_value 产生的 copy 操作。
-             仅在 autotune benchmark 阶段开启，最终 profiling 不开。
-
-    Returns:
-        pd.DataFrame: 过滤后的 DataFrame
+    - L2 cache 清除 kernel（AKG_l2cache_clear / ZerosLike）
+    - restore_value 的 copy kernel（filter_restore_copy=True 时）
     """
     if dsl == "triton_ascend":
         col = None
@@ -362,21 +453,14 @@ def _filter_l2_cache_clear_ops(df: pd.DataFrame, dsl: DslType,
             if filter_restore_copy:
                 keep &= ~df[col].str.contains(
                     AKG_RESTORE_COPY_KERNEL_NAME, case=False, na=False, regex=False)
-            filtered_df = df[keep]
-        else:
-            filtered_df = df
-    else:
-        if 'OP Type' in df.columns:
-            filter_cond = ~df['OP Type'].str.contains(
-                r'^ZerosLike$', case=False, na=False, regex=True
-            )
-            filtered_df = df[filter_cond]
-        elif 'Type' in df.columns:
-            filter_cond = ~df['Type'].str.contains(
-                r'^ZerosLike$', case=False, na=False, regex=True
-            )
-            filtered_df = df[filter_cond]
-        else:
-            filtered_df = df
+            if framework == "mindspore":
+                keep &= ~df[col].str.contains(
+                    r'ZerosLike', case=False, na=False, regex=False)
+            return df[keep]
+        return df
 
-    return filtered_df
+    if 'OP Type' in df.columns:
+        return df[~df['OP Type'].str.contains(r'^ZerosLike$', case=False, na=False, regex=True)]
+    if 'Type' in df.columns:
+        return df[~df['Type'].str.contains(r'^ZerosLike$', case=False, na=False, regex=True)]
+    return df

@@ -60,7 +60,8 @@ except ImportError:
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
                       device_id: Optional[int] = None,
-                      clear_l2_cache: bool = True) -> str:
+                      clear_l2_cache: bool = True,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark TileLang NPUIR implementation.
         
         Args:
@@ -75,8 +76,10 @@ except ImportError:
             framework_adapter: 框架适配器（可选）
             device_id: 设备ID（可选）
             clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
+            framework: 框架类型 ("torch" 或 "mindspore")
         """
         if backend == "ascend":
+            framework_arg = f', framework="{framework}"' if framework == "mindspore" else ""
             # 使用 profiler_npu 进行性能测试，支持 L2 cache 清除
             code = f"""        # dsl：tilelang_npuir
         try:
@@ -89,8 +92,6 @@ except ImportError:
             return {framework_model}(*{inputs})
         
         if patch_imported:
-            # 使用 L2 cache 清除（fallback 方式，使用 zero_()）
-            # 注意：tilelang_npuir 没有专用的清除方式，可能有误判风险
             execution_time_us = profiler_npu(
                 tilelang_benchmark_fn,
                 warmup={warmup},
@@ -99,7 +100,7 @@ except ImportError:
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
-                dsl="other"
+                dsl="other"{framework_arg}
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"

@@ -115,7 +115,8 @@ class DSLAdapter(ABC):
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
+                      device_id: Optional[int] = None,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark implementation function.
         
         Args:
@@ -129,14 +130,18 @@ class DSLAdapter(ABC):
             framework_model: Framework model variable name (for swft)
             framework_adapter: Framework adapter (for generating code)
             device_id: Device ID (for swft)
+            framework: Framework type ("torch" or "mindspore")
             
         Returns:
             str: Code string for benchmarking
         """
         pass
     
-    def get_special_setup_code(self) -> str:
+    def get_special_setup_code(self, framework: str = "torch") -> str:
         """Return special setup code (e.g., tilelang cache clear).
+        
+        Args:
+            framework: Framework type ("torch" or "mindspore")
         
         Returns:
             str: Setup code as string (empty if not needed)

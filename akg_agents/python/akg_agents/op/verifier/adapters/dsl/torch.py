@@ -98,7 +98,8 @@ class DSLAdapterTorch(DSLAdapter):
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
+                      device_id: Optional[int] = None,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark PyTorch implementation.
         
         使用已经实例化好的 impl_model 进行性能测试。
