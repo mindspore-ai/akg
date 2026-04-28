@@ -687,6 +687,184 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
   return mergeSliceStateIntoUnion(tmpSliceState, sliceUnionCst);
 }
 
+// Public per the declaration in akg/Dialect/Affine/Analysis/AffineAnalysis.h.
+bool loopBoundsMatch(AffineForOp a, AffineForOp b) {
+  if (a.getStep() != b.getStep()) return false;
+  if (a.hasConstantLowerBound() && b.hasConstantLowerBound()) {
+    if (a.getConstantLowerBound() != b.getConstantLowerBound()) return false;
+  } else if (a.getLowerBoundMap() != b.getLowerBoundMap()) {
+    return false;
+  }
+  if (a.hasConstantUpperBound() && b.hasConstantUpperBound()) {
+    if (a.getConstantUpperBound() != b.getConstantUpperBound()) return false;
+  } else if (a.getUpperBoundMap() != b.getUpperBoundMap()) {
+    return false;
+  }
+  return true;
+}
+
+// True if the slice's lb/ub at level i are constant single-result maps that exactly cover the
+// loop's natural constant iteration range — i.e. the level is unconstrained by data dependence
+// and is eligible for structural single-point alignment.
+static bool sliceLevelIsFullLoopRange(const ComputationSliceState &slice, unsigned i, AffineForOp loop) {
+  AffineMap lbMap = slice.lbs[i];
+  AffineMap ubMap = slice.ubs[i];
+  if (!lbMap || !ubMap || lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) return false;
+  if (!loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) return false;
+  auto lbConst = dyn_cast<AffineConstantExpr>(lbMap.getResult(0));
+  auto ubConst = dyn_cast<AffineConstantExpr>(ubMap.getResult(0));
+  if (!lbConst || !ubConst) return false;
+  return lbConst.getValue() == loop.getConstantLowerBound() && ubConst.getValue() == loop.getConstantUpperBound();
+}
+
+// Locate v in the dim portion of ops; insert at the dim/symbol boundary if absent. Updates
+// numDims when an insert occurs. Returns v's dim index.
+static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &numDims, Value v) {
+  for (unsigned k = 0; k < numDims && k < ops.size(); ++k) {
+    if (ops[k] == v) return k;
+  }
+  size_t insertPos = std::min<size_t>(numDims, ops.size());
+  ops.insert(ops.begin() + insertPos, v);
+  unsigned idx = numDims;
+  numDims += 1;
+  return idx;
+}
+
+// Force outer slice levels into a single-point against the partner-side IV when both sides
+// have matching structural bounds. Without this, dependence-based slicing leaves outer
+// non-coupled levels at full range, causing fuseLoops to replicate the cloned body across
+// that dim. Bound rewrites: lbs[i] -> d_i, ubs[i] -> d_i + step. surroundingLoops are the
+// receiving-side nest; the ivs-side loop is reached via getForInductionVarOwner.
+static void alignSliceWithPartnerLoops(ComputationSliceState &slice, unsigned loopDepth, unsigned numSliceLoopIVs,
+                                       ArrayRef<AffineForOp> surroundingLoops) {
+  for (unsigned i = 0; i < loopDepth && i < numSliceLoopIVs && i < surroundingLoops.size(); ++i) {
+    AffineForOp recvLoop = surroundingLoops[i];
+    AffineForOp ivsLoop = getForInductionVarOwner(slice.ivs[i]);
+    if (!ivsLoop) continue;
+    if (!loopBoundsMatch(ivsLoop, recvLoop)) continue;
+    if (!sliceLevelIsFullLoopRange(slice, i, ivsLoop)) continue;
+
+    AffineMap lbMap = slice.lbs[i];
+    AffineMap ubMap = slice.ubs[i];
+    Value partnerIV = recvLoop.getInductionVar();
+    unsigned lbNumDims = lbMap.getNumDims();
+    unsigned lbNumSyms = lbMap.getNumSymbols();
+    unsigned ubNumDims = ubMap.getNumDims();
+    unsigned ubNumSyms = ubMap.getNumSymbols();
+    unsigned lbDimIdx = findOrInsertDimOperand(slice.lbOperands[i], lbNumDims, partnerIV);
+    unsigned ubDimIdx = findOrInsertDimOperand(slice.ubOperands[i], ubNumDims, partnerIV);
+    int64_t step = ivsLoop.getStepAsInt();
+    MLIRContext *ctx = partnerIV.getContext();
+    slice.lbs[i] = AffineMap::get(lbNumDims, lbNumSyms, getAffineDimExpr(lbDimIdx, ctx));
+    slice.ubs[i] = AffineMap::get(ubNumDims, ubNumSyms, getAffineDimExpr(ubDimIdx, ctx) + step);
+  }
+}
+
+// True if any slice level has more than one iteration (full-range or non-1 trip count).
+// Used to decide whether the cloned body is purely sequential (anchor-based insertPoint)
+// or carries leftover inner fors (fall back to block begin / end-1).
+static bool sliceHasInnerFor(const ComputationSliceState &slice, unsigned numSliceLoopIVs) {
+  for (unsigned i = 0; i < numSliceLoopIVs; ++i) {
+    AffineMap lb = slice.lbs[i];
+    AffineMap ub = slice.ubs[i];
+    if (!lb || !ub || lb.getNumResults() != 1 || ub.getNumResults() != 1) return true;
+    AffineExpr diff = ub.getResult(0) - lb.getResult(0);
+    auto cst = dyn_cast<AffineConstantExpr>(diff);
+    if (!cst || cst.getValue() != 1) return true;
+  }
+  return false;
+}
+
+// Add to candidates any op in targetBlock whose memref accesses conflict with the cloned
+// for-op's reads/writes (RAW where dst reads cloned-writes; WAR/WAW where dst writes a
+// memref cloned reads or writes). dependentOpPairs only carries the primary fusion mediator,
+// so non-mediator memref conflicts also constrain the safe insertion zone.
+static void addMemrefConflictCandidates(ArrayRef<Operation *> clonedOps, Block *targetBlock,
+                                        ArrayRef<AffineForOp> surroundingLoops, DenseSet<Operation *> &candidates) {
+  if (clonedOps.empty()) return;
+  Block *parentBlock = surroundingLoops[0]->getBlock();
+  Operation *clonedRoot = parentBlock->findAncestorOpInBlock(*clonedOps[0]);
+  if (!clonedRoot) return;
+
+  DenseSet<Value> clonedWrites, clonedReads;
+  clonedRoot->walk([&](Operation *nested) {
+    if (auto w = dyn_cast<AffineWriteOpInterface>(nested)) clonedWrites.insert(getSourceMemRef(w.getMemRef()));
+    if (auto r = dyn_cast<AffineReadOpInterface>(nested)) clonedReads.insert(getSourceMemRef(r.getMemRef()));
+  });
+  auto opConflicts = [&](Operation &op) {
+    bool hit = false;
+    op.walk([&](Operation *nested) {
+      if (auto r = dyn_cast<AffineReadOpInterface>(nested)) {
+        if (clonedWrites.count(getSourceMemRef(r.getMemRef()))) {
+          hit = true;
+          return WalkResult::interrupt();
+        }
+      } else if (auto w = dyn_cast<AffineWriteOpInterface>(nested)) {
+        Value mem = getSourceMemRef(w.getMemRef());
+        if (clonedWrites.count(mem) || clonedReads.count(mem)) {
+          hit = true;
+          return WalkResult::interrupt();
+        }
+      }
+      return WalkResult::advance();
+    });
+    return hit;
+  };
+  for (Operation &op : *targetBlock) {
+    if (opConflicts(op)) candidates.insert(&op);
+  }
+}
+
+// Expand candidates along SSA forward (uses) and backward (defs) edges, mapping users/defs
+// back to their top-level ancestor in targetBlock. Keeps tightly coupled computations
+// (e.g. co-used loads feeding a single arith op) contiguous around the insertion point.
+static void expandCandidatesViaSSA(Block *targetBlock, DenseSet<Operation *> &candidates) {
+  SmallVector<Operation *, 8> worklist(candidates.begin(), candidates.end());
+  auto visit = [&](Operation *neighbor) {
+    if (!neighbor) return;
+    Operation *top = targetBlock->findAncestorOpInBlock(*neighbor);
+    if (top && candidates.insert(top).second) worklist.push_back(top);
+  };
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    op->walk([&](Operation *nested) {
+      for (Value res : nested->getResults()) {
+        for (Operation *user : res.getUsers()) visit(user);
+      }
+      for (Value operand : nested->getOperands()) visit(operand.getDefiningOp());
+    });
+  }
+}
+
+// Pick the anchor iterator inside targetBlock for inserting the cloned slice when the cloned
+// body is purely sequential. Combines: dependentOpPairs (primary fusion mediator), memref-
+// conflict candidates from the cloned for-op's full body, and SSA-edge cluster expansion.
+// Returns fallbackPoint when no candidate is found.
+static Block::iterator chooseInsertPoint(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+                                         const std::vector<std::pair<Operation *, Operation *>> &dependentOpPairs,
+                                         Block *targetBlock, ArrayRef<AffineForOp> surroundingLoops,
+                                         bool isBackwardSlice, Block::iterator fallbackPoint) {
+  DenseSet<Operation *> candidates;
+  auto addCandidate = [&](Operation *op) {
+    if (!op) return;
+    if (Operation *top = targetBlock->findAncestorOpInBlock(*op)) candidates.insert(top);
+  };
+  for (const auto &dep : dependentOpPairs) addCandidate(isBackwardSlice ? dep.second : dep.first);
+  addMemrefConflictCandidates(isBackwardSlice ? opsA : opsB, targetBlock, surroundingLoops, candidates);
+  expandCandidatesViaSSA(targetBlock, candidates);
+
+  Operation *anchor = nullptr;
+  for (Operation *cand : candidates) {
+    if (!anchor) {
+      anchor = cand;
+      continue;
+    }
+    bool replace = isBackwardSlice ? cand->isBeforeInBlock(anchor) : anchor->isBeforeInBlock(cand);
+    if (replace) anchor = cand;
+  }
+  return anchor ? (isBackwardSlice ? anchor->getIterator() : std::next(anchor->getIterator())) : fallbackPoint;
+}
+
 SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
                                             unsigned numCommonLoops, bool isBackwardSlice,
                                             ComputationSliceState *sliceUnion) {
@@ -742,14 +920,30 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   sliceUnion->ivs.clear();
   sliceUnionCst.getValues(0, numSliceLoopIVs, &sliceUnion->ivs);
 
-  // Set loop nest insertion point to block start at 'loopDepth'.
-  sliceUnion->insertPoint = isBackwardSlice ? surroundingLoops[loopDepth - 1].getBody()->begin()
-                                            : std::prev(surroundingLoops[loopDepth - 1].getBody()->end());
-
   // Give each bound its own copy of 'sliceBoundOperands' for subsequent
   // canonicalization.
   sliceUnion->lbOperands.resize(numSliceLoopIVs, sliceBoundOperands);
   sliceUnion->ubOperands.resize(numSliceLoopIVs, sliceBoundOperands);
+
+  // Outer-level structural alignment runs before insertPoint selection so
+  // sliceHasInnerFor sees the post-alignment lbs/ubs.
+  alignSliceWithPartnerLoops(*sliceUnion, loopDepth, numSliceLoopIVs, surroundingLoops);
+
+  // Choose insertPoint based on whether the cloned dst body keeps inner fors.
+  // - All slice levels are 1-iter: cloned body is sequential ops only, anchor
+  //   the insert point on the dependent op so the new consumer/producer stays
+  //   close to the existing one (helps memref scalar promotion).
+  // - Otherwise the cloned body carries leftover inner fors; fall back to
+  //   start/end of the surrounding body so the new fors don't get stranded
+  //   parallel to siblings in the middle of flat producer/consumer chains.
+  Block *targetBlock = surroundingLoops[loopDepth - 1].getBody();
+  auto fallbackPoint = isBackwardSlice ? targetBlock->begin() : std::prev(targetBlock->end());
+  if (sliceHasInnerFor(*sliceUnion, numSliceLoopIVs)) {
+    sliceUnion->insertPoint = fallbackPoint;
+  } else {
+    sliceUnion->insertPoint =
+      chooseInsertPoint(opsA, opsB, dependentOpPairs, targetBlock, surroundingLoops, isBackwardSlice, fallbackPoint);
+  }
 
   // Check if the slice computed is valid. Return success only if it is verified
   // that the slice is valid, otherwise return appropriate failure status.
