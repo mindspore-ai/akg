@@ -1,0 +1,182 @@
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# CodeChecker static-analysis policy. This file is the sole source of
+# truth for every keyword / identifier the checker relies on — the
+# Python module `akg_agents.op.utils.code_checker` has zero fallback
+# defaults. Missing / malformed keys are a hard error at load time
+# (prevents silent divergence between this file and the rules).
+#
+# Loaded once per process via importlib.resources from inside the
+# installed `akg_agents.op.config` package, so this YAML ships as
+# package_data (see setup.py `**/*.yaml`).
+
+# ---------------------------------------------------------------------------
+# Triton-kernel decorator whitelist. Attribute names under the Triton
+# module namespace (see `triton_module_name` below) that mark a function
+# as a kernel. Used both to collect kernel definitions and, combined
+# with `autotune.decorator_attr`, to generate the autotune regex.
+# ---------------------------------------------------------------------------
+triton_decorators:
+  - jit
+  - autotune
+  - heuristics
+
+# ---------------------------------------------------------------------------
+# Top-level names treated as "torch namespaces" when scanning forward()
+# for forbidden `.method(...)` calls. `torch` covers plain
+# `torch.matmul(...)`; `F` covers the common
+# `import torch.nn.functional as F` alias.
+# ---------------------------------------------------------------------------
+torch_call_prefixes:
+  - torch
+  - F
+
+# ---------------------------------------------------------------------------
+# Hard blacklist — forbidden in ModelNew.forward() even when a Triton
+# kernel is launched. Reserve for ops where leaving them to torch is
+# equivalent to not optimizing at all (matmul / conv / einsum / softmax /
+# embedding).
+# ---------------------------------------------------------------------------
+torch_compute_ops_hard:
+  # Matrix / linear algebra
+  - matmul
+  - mm
+  - bmm
+  - addmm
+  - addmv
+  - addbmm
+  - baddbmm
+  - einsum
+  - dot
+  - mv
+  - inner
+  - outer
+  - linear
+  # Convolution
+  - conv1d
+  - conv2d
+  - conv3d
+  - conv_transpose1d
+  - conv_transpose2d
+  - conv_transpose3d
+  # Compound activations (reduction + exp)
+  - softmax
+  - log_softmax
+  - logsumexp
+  # Other complex ops
+  - embedding
+
+# ---------------------------------------------------------------------------
+# Soft blacklist — forbidden in forward() only when no Triton kernel is
+# launched. Once a kernel is present these may legitimately appear as
+# pre/post processing in fused ops; verify catches perf regressions.
+# ---------------------------------------------------------------------------
+torch_compute_ops_soft:
+  # Simple activations
+  - relu
+  - gelu
+  - silu
+  - sigmoid
+  - tanh
+  - leaky_relu
+  - elu
+  - hardswish
+  - mish
+  # Simple elementwise math
+  - exp
+  - log
+  - sqrt
+  - rsqrt
+  - pow
+  - sin
+  - cos
+  - abs
+  - clamp
+  - clamp_min
+  - clamp_max
+  # Simple reductions
+  - sum
+  - mean
+  - prod
+  - norm
+  - amax
+  - amin
+  - argmax
+  - argmin
+  # Pool / norm / interpolate / cumsum — HARD until 2026-04, moved here to
+  # unblock Ascend seeds that can't express the full op as a single
+  # 256-B-aligned Triton schedule (e.g. strided width reduction).
+  - layer_norm
+  - batch_norm
+  - group_norm
+  - instance_norm
+  - max_pool1d
+  - max_pool2d
+  - max_pool3d
+  - avg_pool1d
+  - avg_pool2d
+  - avg_pool3d
+  - adaptive_avg_pool2d
+  - interpolate
+  - cumsum
+  - cumprod
+
+# ---------------------------------------------------------------------------
+# Framework-identifier literals. The checker searches for these exact
+# spellings in the AST; change a value only when the project convention
+# itself changes (e.g. you rename the kernel class from `ModelNew`).
+# ---------------------------------------------------------------------------
+
+# Class that must exist in every generated kernel module.
+kernel_class_name: ModelNew
+
+# Method on the kernel class that holds the forward computation. The DSL
+# compliance scan (hard/soft torch ops, `@` matmul operator) runs over
+# this method's body only.
+kernel_forward_method: forward
+
+# Top-level module name treated as the Triton namespace. Decorators like
+# `@<triton_module_name>.jit` (combined with `triton_decorators`) mark
+# kernel functions.
+triton_module_name: triton
+
+# DSL-prefix gate: the compliance + autotune checks only run when
+# `self.dsl` startswith this string. Keeps the checker silent for
+# non-Triton DSLs (torch-only baselines, cpp, tilelang, etc.).
+dsl_compliance_prefix: triton
+
+# ---------------------------------------------------------------------------
+# Stray-text detector (Step 4). Flags runs of >= `min_run` consecutive
+# characters whose code point falls in any range in `unicode_ranges`,
+# observed in code tokens (not inside comments/strings). Defaults match
+# CJK Unified Ideographs — add kana/hangul ranges here if LLMs start
+# leaking those too.
+# ---------------------------------------------------------------------------
+stray_text:
+  min_run: 3
+  unicode_ranges:
+    # CJK Unified Ideographs
+    - [0x4e00, 0x9fff]
+
+# ---------------------------------------------------------------------------
+# @triton.autotune enforcement (Step 6). `decorator_attr` is the
+# attribute name off `<triton_module_name>` that triggers the check.
+# `required_kwarg` is the keyword the decorator call must contain; when
+# absent, autotune re-runs the kernel per config and output buffers
+# pollute across configs, breaking verify.
+# ---------------------------------------------------------------------------
+autotune:
+  decorator_attr: autotune
+  required_kwarg: restore_value
