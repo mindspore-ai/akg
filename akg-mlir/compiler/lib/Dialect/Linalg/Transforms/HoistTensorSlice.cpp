@@ -75,7 +75,15 @@ static bool isFuncLeaf(Value v, func::FuncOp func) {
     return ba.getOwner() == &func.getBody().front();
   }
   if (Operation *op = v.getDefiningOp()) {
-    return op->hasTrait<OpTrait::ConstantLike>();
+    if (op->hasTrait<OpTrait::ConstantLike>()) {
+      return true;
+    }
+    if (auto expandOp = dyn_cast<tensor::ExpandShapeOp>(op)) {
+      return isFuncLeaf(expandOp.getSrc(), func);
+    }
+    if (auto collapseOp = dyn_cast<tensor::CollapseShapeOp>(op)) {
+      return isFuncLeaf(collapseOp.getSrc(), func);
+    }
   }
   return false;
 }
