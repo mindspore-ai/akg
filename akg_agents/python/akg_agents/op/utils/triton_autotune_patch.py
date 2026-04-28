@@ -14,8 +14,20 @@
 
 import os
 
-# 全局变量存储配置信息
 _collected_config_timings = {}
+_current_framework = "torch"
+
+
+def set_framework(framework: str):
+    """设置当前框架类型，影响 akg_restore_copy / benchmarker 的行为。"""
+    global _current_framework
+    _current_framework = framework
+    if framework == "mindspore":
+        os.environ["TRITON_BACKEND"] = "mindspore"
+
+
+def get_framework() -> str:
+    return _current_framework
 
 # ============================================================================
 # AKG_restore_copy Triton kernel
@@ -56,6 +68,9 @@ if _TRITON_AVAILABLE:
 
 
 def _get_vec_core_num():
+    if get_framework() == "mindspore":
+        import mindspore as ms
+        return ms.runtime.get_device_limit(0).get("vector_core_num", 40)
     try:
         import torch_npu
         return torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
@@ -63,8 +78,8 @@ def _get_vec_core_num():
         return 40
 
 
-def akg_restore_copy(dst, src):
-    """用 AKG_restore_copy kernel 执行 tensor copy，替代 tensor.copy_()。"""
+def akg_restore_copy_torch(dst, src):
+    """用 AKG_restore_copy kernel 执行 tensor copy（PyTorch 版）。"""
     import torch
     n = dst.numel()
     dst_flat = dst.view(-1)
@@ -75,6 +90,28 @@ def akg_restore_copy(dst, src):
     AKG_restore_copy[grid](dst_flat, src_flat, n,
                            BLOCK_SIZE=BLOCK_SIZE, CORE_NUM=core_num)
     torch.npu.synchronize()
+
+
+def akg_restore_copy_mindspore(dst, src):
+    """用 AKG_restore_copy kernel 执行 tensor copy（MindSpore 版）。"""
+    import mindspore as ms
+    n = dst.numel()
+    dst_flat = dst.view(-1)
+    src_flat = src.view(-1)
+    core_num = _get_vec_core_num()
+    BLOCK_SIZE = 1024
+    grid = (core_num,)
+    AKG_restore_copy[grid](dst_flat, src_flat, n,
+                           BLOCK_SIZE=BLOCK_SIZE, CORE_NUM=core_num)
+    ms.runtime.synchronize()
+
+
+def akg_restore_copy(dst, src):
+    """用 AKG_restore_copy kernel 执行 tensor copy，替代 tensor.copy_()。"""
+    if get_framework() == "mindspore":
+        akg_restore_copy_mindspore(dst, src)
+    else:
+        akg_restore_copy_torch(dst, src)
 
 
 def _restore_saved_tensors(saved, args):
@@ -344,6 +381,7 @@ def patch_driver_benchmarker():
                         clear_l2_cache=True,
                         dsl="triton_ascend",
                         filter_restore_copy=(_restore_info is not None),
+                        framework=get_framework(),
                     )
                     return [time_us] * 3
 

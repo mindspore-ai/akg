@@ -24,20 +24,25 @@ class DSLAdapterTritonAscend(DSLAdapter):
     
     def get_import_statements(self, framework: str) -> str:
         """Return Triton Ascend import statements."""
-        code = """try:
+        code = ""
+        if framework == "mindspore":
+            code += """import os
+os.environ["TRITON_BACKEND"] = "mindspore"
+try:
+    from akg_agents.op.utils.triton_autotune_patch import set_framework
+    set_framework("mindspore")
+except ImportError:
+    pass
+"""
+        code += """try:
     from akg_agents.op.utils.triton_autotune_patch import apply_triton_patches
     apply_triton_patches()
 except ImportError:
     pass
 """
-        if framework == "mindspore":
-            code += "import triton\nimport triton.language as tl\n"
-        elif framework == "torch":
-            code += "import triton\nimport triton.language as tl\n"
-        elif framework == "numpy":
-            code += "import numpy as np\nimport triton\nimport triton.language as tl\n"
-        else:
-            code += "import triton\nimport triton.language as tl\n"
+        if framework == "numpy":
+            code += "import numpy as np\n"
+        code += "import triton\nimport triton.language as tl\n"
         return code
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
@@ -91,7 +96,8 @@ except ImportError:
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
                       device_id: Optional[int] = None,
-                      clear_l2_cache: bool = True) -> str:
+                      clear_l2_cache: bool = True,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark Triton Ascend implementation.
         
         使用已经实例化好的 impl_model 进行性能测试。
@@ -108,8 +114,20 @@ except ImportError:
             framework_adapter: 框架适配器（可选）
             device_id: 设备ID（可选）
             clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
+            framework: 框架类型 ("torch" 或 "mindspore")
         """
-        code = f"""        try:
+        framework_arg = f', framework="{framework}"' if framework == "mindspore" else ""
+        set_framework_code = ""
+        if framework == "mindspore":
+            set_framework_code = """        import os
+        os.environ["TRITON_BACKEND"] = "mindspore"
+        try:
+            from akg_agents.op.utils.triton_autotune_patch import set_framework
+            set_framework("mindspore")
+        except ImportError:
+            pass
+"""
+        code = f"""{set_framework_code}        try:
             from akg_agents.op.verifier.profiler import profiler_npu
             from akg_agents.op.utils.triton_autotune_patch import get_collected_config_timings, clear_collected_config_timings
             # 清除之前的配置信息
@@ -156,7 +174,7 @@ except ImportError:
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
-                dsl="triton_ascend"
+                dsl="triton_ascend"{framework_arg}
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"
@@ -173,13 +191,24 @@ except ImportError:
 """
         return code
     
-    def get_special_setup_code(self) -> str:
+    def get_special_setup_code(self, framework: str = "torch") -> str:
         """Return special setup code for triton_ascend."""
-        return """try:
+        code = ""
+        if framework == "mindspore":
+            code += """import os
+os.environ["TRITON_BACKEND"] = "mindspore"
+try:
+    from akg_agents.op.utils.triton_autotune_patch import set_framework
+    set_framework("mindspore")
+except ImportError:
+    pass
+"""
+        code += """try:
     from akg_agents.op.utils.triton_autotune_patch import apply_triton_patches
     apply_triton_patches()
 except ImportError:
     pass
 """
+        return code
 
 

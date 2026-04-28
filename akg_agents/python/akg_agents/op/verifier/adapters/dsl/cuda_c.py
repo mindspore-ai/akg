@@ -82,6 +82,7 @@ class DSLAdapterCudaC(DSLAdapter):
         framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
         device_id: Optional[int] = None,
+        framework: str = "torch",
     ) -> str:
         """Return code string to benchmark CUDA C implementation."""
         sync_code = "torch.cuda.synchronize()" if backend == "cuda" else ""
