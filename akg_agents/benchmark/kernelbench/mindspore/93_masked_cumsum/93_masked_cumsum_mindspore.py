@@ -33,8 +33,8 @@ dim = 1
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, *input_shape)
-    mask = ms.ops.randint(0, 2, x.shape).bool()
+    x = ms.mint.randn(batch_size, *input_shape)
+    mask = ms.mint.randint(0, 2, x.shape).bool()
     return [x, mask]
 
 

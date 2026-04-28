@@ -38,7 +38,7 @@ dim = 16384
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, dim, dtype=ms.float16)
+    x = ms.mint.randn(batch_size, dim, dtype=ms.float16)
     return [x]
 
 

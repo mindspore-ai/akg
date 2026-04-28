@@ -31,7 +31,7 @@ N = 4096
 
 
 def get_inputs():
-    A = ms.ops.randn(M, N, dtype=ms.float16)
+    A = ms.mint.randn(M, N, dtype=ms.float16)
     s = 3.14
     return [A, s]
 

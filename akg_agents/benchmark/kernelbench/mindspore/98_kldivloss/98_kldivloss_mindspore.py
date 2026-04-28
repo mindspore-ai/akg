@@ -32,8 +32,8 @@ dim = 1
 
 
 def get_inputs():
-    return [ms.ops.randn(batch_size, *input_shape).softmax(axis=-1),
-            ms.ops.randn(batch_size, *input_shape).softmax(axis=-1)]
+    return [ms.mint.randn(batch_size, *input_shape).softmax(axis=-1),
+            ms.mint.randn(batch_size, *input_shape).softmax(axis=-1)]
 
 
 def get_init_inputs():

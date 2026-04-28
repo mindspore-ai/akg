@@ -24,10 +24,7 @@ class DSLAdapterTritonAscend(DSLAdapter):
     
     def get_import_statements(self, framework: str) -> str:
         """Return Triton Ascend import statements."""
-        code = ""
-        if framework == "mindspore":
-            code += "import torch\n"
-        code += """try:
+        code = """try:
     from akg_agents.op.utils.triton_autotune_patch import apply_triton_patches
     apply_triton_patches()
 except ImportError:

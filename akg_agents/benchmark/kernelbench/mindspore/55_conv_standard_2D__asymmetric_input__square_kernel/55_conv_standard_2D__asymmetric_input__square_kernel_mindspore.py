@@ -33,7 +33,7 @@ width = 256
 height = 128  # Asymmetric input
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, in_channels, height, width)
+    x = ms.mint.randn(batch_size, in_channels, height, width)
     return [x]
 
 def get_init_inputs():
