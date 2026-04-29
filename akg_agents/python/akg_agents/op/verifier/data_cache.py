@@ -17,11 +17,15 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
+import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +33,9 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VERIFIER_CACHE_DIR = "~/.akg/verifier_data_cache"
+DEFAULT_VERIFIER_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".akg", "verifier_data_cache")
+DEFAULT_CACHE_LOCK_TIMEOUT_SECONDS = 600
+DEFAULT_CACHE_LOCK_STALE_SECONDS = 3600
 
 
 @dataclass
@@ -62,6 +68,12 @@ def _get_env_override(key: str) -> str:
     return (os.getenv(primary) or os.getenv(compat) or "").strip()
 
 
+def _normalize_cache_dir(cache_dir: Any) -> str:
+    raw = str(cache_dir or DEFAULT_VERIFIER_CACHE_DIR).strip() or DEFAULT_VERIFIER_CACHE_DIR
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    return str(Path(expanded))
+
+
 def load_verifier_data_cache_config(config: Optional[Dict[str, Any]] = None) -> VerifierDataCacheConfig:
     raw = dict((config or {}).get("data_cache") or {})
 
@@ -75,6 +87,7 @@ def load_verifier_data_cache_config(config: Optional[Dict[str, Any]] = None) -> 
     cache_dir = str(raw.get("cache_dir") or DEFAULT_VERIFIER_CACHE_DIR)
     if env_cache_dir:
         cache_dir = env_cache_dir
+    cache_dir = _normalize_cache_dir(cache_dir)
 
     cache_reference_data = _parse_bool(raw.get("cache_reference_data"), True)
     cache_baseline_result = _parse_bool(raw.get("cache_baseline_result"), True)
@@ -161,13 +174,21 @@ def build_baseline_cache_key(
     return _build_hash(payload)
 
 
+def _cache_root(cfg: VerifierDataCacheConfig) -> Path:
+    return Path(_normalize_cache_dir(cfg.cache_dir))
+
+
+def _cache_stem(op_name: str, cache_key: str) -> str:
+    return f"{_sanitize_name(op_name)}_{cache_key}"
+
+
 def _reference_cache_paths(
     cfg: VerifierDataCacheConfig,
     op_name: str,
     cache_key: str,
 ) -> tuple[Path, Path]:
-    base_dir = Path(cfg.cache_dir).expanduser() / "reference"
-    stem = f"{_sanitize_name(op_name)}_{cache_key}"
+    base_dir = _cache_root(cfg) / "reference"
+    stem = _cache_stem(op_name, cache_key)
     return base_dir / f"{stem}.pt", base_dir / f"{stem}.json"
 
 
@@ -176,17 +197,125 @@ def _baseline_cache_path(
     op_name: str,
     cache_key: str,
 ) -> Path:
-    base_dir = Path(cfg.cache_dir).expanduser() / "baseline"
-    stem = f"{_sanitize_name(op_name)}_{cache_key}"
+    base_dir = _cache_root(cfg) / "baseline"
+    stem = _cache_stem(op_name, cache_key)
     return base_dir / f"{stem}.json"
+
+
+def _cache_lock_dir(
+    cfg: VerifierDataCacheConfig,
+    *,
+    namespace: str,
+    op_name: str,
+    cache_key: str,
+) -> Path:
+    safe_namespace = _sanitize_name(namespace)
+    return _cache_root(cfg) / ".locks" / f"{safe_namespace}_{_cache_stem(op_name, cache_key)}.lock"
+
+
+def _is_stale_lock(lock_dir: Path, stale_after_seconds: float) -> bool:
+    if stale_after_seconds <= 0:
+        return True
+    try:
+        return (time.time() - lock_dir.stat().st_mtime) > stale_after_seconds
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def _try_acquire_cache_lock(lock_dir: Path) -> bool:
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_dir.mkdir()
+    except FileExistsError:
+        return False
+    owner_payload = {
+        "pid": os.getpid(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        (lock_dir / "owner.json").write_text(json.dumps(owner_payload), encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def _release_cache_lock(lock_dir: Path) -> None:
+    try:
+        shutil.rmtree(lock_dir)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(f"Failed to release verifier data cache lock {lock_dir}: {exc}")
+
+
+@asynccontextmanager
+async def verifier_data_cache_lock(
+    cfg: VerifierDataCacheConfig,
+    *,
+    namespace: str,
+    op_name: str,
+    cache_key: str,
+    timeout_seconds: float = DEFAULT_CACHE_LOCK_TIMEOUT_SECONDS,
+    stale_after_seconds: float = DEFAULT_CACHE_LOCK_STALE_SECONDS,
+):
+    """Serialize cache mutations for one cache entry across processes."""
+    lock_dir = _cache_lock_dir(cfg, namespace=namespace, op_name=op_name, cache_key=cache_key)
+    start = time.monotonic()
+    acquired = False
+    try:
+        while True:
+            if _try_acquire_cache_lock(lock_dir):
+                acquired = True
+                break
+            if _is_stale_lock(lock_dir, stale_after_seconds):
+                _release_cache_lock(lock_dir)
+                continue
+            if timeout_seconds <= 0 or (time.monotonic() - start) >= timeout_seconds:
+                raise TimeoutError(f"Timed out waiting for verifier data cache lock: {lock_dir}")
+            await asyncio.sleep(0.2)
+
+        yield
+    finally:
+        if acquired:
+            _release_cache_lock(lock_dir)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        dir_fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        logger.debug(f"Failed to open verifier cache directory for fsync {path}: {exc}")
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError as exc:
+        logger.debug(f"Failed to fsync verifier cache directory {path}: {exc}")
+    finally:
+        os.close(dir_fd)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
-        tmp.write(data)
-        tmp_path = Path(tmp.name)
-    tmp_path.replace(path)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)
+        _fsync_directory(path.parent)
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
