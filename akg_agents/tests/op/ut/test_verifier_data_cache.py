@@ -415,3 +415,23 @@ async def test_run_skips_reference_cache_for_dynamic_shape(tmp_path):
 
     loaded = await verifier._prepare_cached_reference_data(device_id=0)
     assert loaded is None
+
+
+@pytest.mark.asyncio
+async def test_managed_reference_data_is_cleared_when_cache_key_changes(tmp_path):
+    verifier = _make_verifier(tmp_path, worker=None, task_id="task-a")
+    cached_reference = _make_reference_payload_bytes()
+
+    verifier._apply_cached_reference_data(cached_reference)
+    assert verifier.config["use_reference_data"] is True
+    assert verifier.config["reference_data"] == cached_reference
+    assert verifier.config["_data_cache_reference_key"] == verifier._get_reference_cache_key()
+
+    verifier.task_id = "task-b"
+    loaded = await verifier._prepare_cached_reference_data(device_id=0)
+
+    assert loaded is None
+    assert "reference_data" not in verifier.config
+    assert "use_reference_data" not in verifier.config
+    assert "use_reference_inputs" not in verifier.config
+    assert "_data_cache_reference_key" not in verifier.config
