@@ -66,3 +66,38 @@ The default cache directory is expanded by code to `~/.akg/verifier_data_cache`.
 See:
 
 `examples/kernel_related/run_torch_npu_triton_single_with_cache.py`
+
+The demo uses a dedicated cache directory (`~/.akg/verifier_data_cache_demo`) and clears it at startup so the two runs have deterministic behavior:
+
+1. run 1: miss reference/baseline cache, generate reference data, run base + generation profile, then populate cache
+2. run 2: hit reference/baseline cache, reuse cached inputs/outputs, and skip base profile
+
+Expected log markers:
+
+- `Verifier Data Cache 未命中：reference data`
+- `reference data 已写入 Verifier Data Cache`
+- `Verifier Data Cache 命中：reference data`
+- `Verifier Data Cache 命中：baseline=... us`
+- `跳过 base profile`
+
+## Acceptance
+
+Run the focused verifier cache tests:
+
+```bash
+pytest -q akg_agents/tests/op/ut/test_verifier_data_cache.py
+```
+
+Run the Triton Ascend end-to-end cache demo on an Ascend environment with `torch_npu` and Triton Ascend installed:
+
+```bash
+python akg_agents/examples/kernel_related/run_torch_npu_triton_single_with_cache.py
+```
+
+Run a whitespace sanity check before submitting:
+
+```bash
+git diff --check
+```
+
+The demo is intentionally small (`relu`) so review can focus on the Verifier Adapter data path rather than LLM generation quality. It still exercises the actual `KernelVerifier.run()` and `KernelVerifier.run_profile()` paths for `dsl=triton_ascend`, `backend=ascend`.

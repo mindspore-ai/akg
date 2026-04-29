@@ -175,4 +175,36 @@ data_cache:
 2. 第一次运行：生成并写入 reference/baseline cache
 3. 第二次运行：直接命中本地 cache
 
+示例使用独立缓存目录 `~/.akg/verifier_data_cache_demo`，并在启动时清理该目录，保证每次演示都能稳定看到“第一次填充、第二次复用”的行为。
+
+预期日志关键字：
+
+- `Verifier Data Cache 未命中：reference data`
+- `reference data 已写入 Verifier Data Cache`
+- `Verifier Data Cache 命中：reference data`
+- `Verifier Data Cache 命中：baseline=... us`
+- `跳过 base profile`
+
 适合做任务验收和流程演示。
+
+## 9. 验收建议
+
+运行 Verifier Data Cache 定向单测：
+
+```bash
+pytest -q akg_agents/tests/op/ut/test_verifier_data_cache.py
+```
+
+在安装了 `torch_npu` 与 Triton Ascend 的 Ascend 环境运行端到端示例：
+
+```bash
+python akg_agents/examples/kernel_related/run_torch_npu_triton_single_with_cache.py
+```
+
+提交前运行空白字符检查：
+
+```bash
+git diff --check
+```
+
+该示例刻意使用较小的 `relu` case，目的是验证 Verifier Adapter 的数据路径，而不是验证 LLM 生成质量。它会实际经过 `dsl=triton_ascend`、`backend=ascend` 下的 `KernelVerifier.run()` 与 `KernelVerifier.run_profile()` 流程。
