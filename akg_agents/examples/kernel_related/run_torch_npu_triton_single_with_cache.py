@@ -31,6 +31,7 @@ DEVICE_ID = 0
 FRAMEWORK = "torch"
 DSL = "triton_ascend"
 OP_NAME = "relu"
+TASK_ID = "cache_demo"
 
 
 def _repo_root() -> Path:
@@ -105,14 +106,14 @@ async def main():
         raise RuntimeError(f"No available worker for backend={BACKEND}, arch={ARCH}")
 
     print("=== Run 1: populate verifier data cache ===")
-    first = await _run_once("cache_demo_first", framework_code, kernel_code, worker)
+    first = await _run_once(TASK_ID, framework_code, kernel_code, worker)
     print(
         f"Run 1 profile: base={first['base_time']:.2f} us, "
         f"gen={first['gen_time']:.2f} us, speedup={first['speedup']:.4f}x"
     )
 
     print("\n=== Run 2: reuse local verifier data cache ===")
-    second = await _run_once("cache_demo_second", framework_code, kernel_code, worker)
+    second = await _run_once(TASK_ID, framework_code, kernel_code, worker)
     print(
         f"Run 2 profile: base={second['base_time']:.2f} us, "
         f"gen={second['gen_time']:.2f} us, speedup={second['speedup']:.4f}x"

@@ -86,6 +86,7 @@ reference data key：
 - `backend`
 - `arch`
 - `bench_type`
+- `task_id`
 - `framework_code` 的 AST 归一化结果
 
 baseline key：
@@ -98,6 +99,7 @@ baseline key：
 这样可以避免：
 
 - 不同 task_desc 相互污染
+- 不同 task_id 相互污染
 - 不同后端/架构相互污染
 - 不同 profile 参数误复用 baseline
 
@@ -131,9 +133,16 @@ baseline key：
 ```yaml
 data_cache:
   enabled: true
-  cache_dir: "~/.akg/verifier_data_cache"
   cache_reference_data: true
   cache_baseline_result: true
+```
+
+默认缓存目录由代码统一展开为 `~/.akg/verifier_data_cache`。如需改到其他目录，可显式配置：
+
+```yaml
+data_cache:
+  enabled: true
+  cache_dir: "/path/to/verifier_data_cache"
 ```
 
 也支持环境变量：
