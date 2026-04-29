@@ -115,11 +115,13 @@ def build_reference_cache_key(
     backend: str,
     arch: str,
     bench_type: str,
+    task_id: str = "",
 ) -> str:
     payload = {
         "type": "reference_data",
-        "version": 1,
+        "version": 2,
         "op_name": op_name,
+        "task_id": task_id,
         "framework": framework,
         "backend": backend,
         "arch": arch,
@@ -140,11 +142,13 @@ def build_baseline_cache_key(
     warmup_times: int,
     run_times: int,
     dsl: str = "",
+    task_id: str = "",
 ) -> str:
     payload = {
         "type": "baseline_profile",
-        "version": 1,
+        "version": 2,
         "op_name": op_name,
+        "task_id": task_id,
         "framework": framework,
         "dsl": dsl,
         "backend": backend,
