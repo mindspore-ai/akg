@@ -23,6 +23,8 @@ The implementation reuses the existing `generate_reference_data(save_inputs=True
 
 On a cache hit, verification uses `use_reference_data + use_reference_inputs`, so the verifier can skip rerunning the framework baseline path.
 
+Cached `.pt` files are validated before reuse. If the payload is unreadable or misses reusable `inputs/outputs`, the verifier removes the stale entry and regenerates reference data.
+
 ### Baseline result
 
 The implementation persists the normalized content of `base_profile_result.json`, mainly `avg_time_us`.
@@ -43,6 +45,8 @@ On a cache hit, `run_profile()` injects:
 ## Scope
 
 Current scope is `KernelBench` only. `SOL-ExecBench` already ships stable reference files, so the immediate pain point is the KernelBench verifier path.
+
+Reference data cache currently covers static-shape verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache still keys by framework code, backend, arch, DSL, and profile parameters.
 
 ## Demo
 

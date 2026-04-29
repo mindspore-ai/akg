@@ -61,7 +61,10 @@ verifier/
 - baseline cache：复用 `base_profile_result.json` / `avg_time_us`
 - 默认关闭；开启后在 `~/.akg/verifier_data_cache/` 下持久化
 - 命中 reference data 时，验证脚本改为直接复用 inputs / outputs，不再重复执行 framework baseline
+- reference data cache 仅覆盖静态 shape；动态 shape 自动跳过，避免误复用单组输入
+- reference data 命中后会校验 `.pt` payload，损坏或缺少可复用字段时删除旧缓存并重新生成
 - 命中 baseline cache 时，profile 直接注入 `override_base_time_us` 并跳过 base profile 脚本
+- baseline cache key 必须包含 DSL，避免同一 framework/backend/arch 下不同计时路径相互污染
 
 ### Roofline 集成
 

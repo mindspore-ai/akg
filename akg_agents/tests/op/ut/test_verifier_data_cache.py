@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
+import torch
 
 from akg_agents.op.verifier.data_cache import (
     VerifierDataCacheConfig,
@@ -61,6 +63,22 @@ class ModelNew:
     def __call__(self, x):
         return x
 """
+
+
+def _make_reference_payload_bytes() -> bytes:
+    buffer = io.BytesIO()
+    torch.save(
+        {
+            "op_name": "relu",
+            "seed": 0,
+            "save_inputs": True,
+            "inputs": [torch.tensor([1.0])],
+            "init_inputs": [],
+            "outputs": [torch.tensor([1.0])],
+        },
+        buffer,
+    )
+    return buffer.getvalue()
 
 
 class DummyProfileWorker:
@@ -116,7 +134,7 @@ def test_reference_cache_roundtrip(tmp_path):
         bench_type="kernelbench",
     )
 
-    reference_bytes = b"cached-reference-payload"
+    reference_bytes = _make_reference_payload_bytes()
     write_reference_data_to_cache(
         cfg,
         op_name="relu",
@@ -140,6 +158,7 @@ def test_baseline_cache_roundtrip(tmp_path):
         bench_type="kernelbench",
         warmup_times=5,
         run_times=50,
+        dsl="triton_ascend",
     )
 
     write_baseline_result_to_cache(
@@ -155,12 +174,29 @@ def test_baseline_cache_roundtrip(tmp_path):
     assert payload["method"] == "unit_test"
 
 
+def test_baseline_cache_key_includes_dsl():
+    common_kwargs = {
+        "op_name": "relu",
+        "framework_code": FRAMEWORK_CODE,
+        "framework": "torch",
+        "backend": "ascend",
+        "arch": "ascend910b4",
+        "bench_type": "kernelbench",
+        "warmup_times": 5,
+        "run_times": 50,
+    }
+
+    triton_key = build_baseline_cache_key(**common_kwargs, dsl="triton_ascend")
+    torch_key = build_baseline_cache_key(**common_kwargs, dsl="torch")
+    assert triton_key != torch_key
+
+
 @pytest.mark.asyncio
 async def test_run_uses_cached_reference_data(monkeypatch, tmp_path):
     verifier = _make_verifier(tmp_path, worker=object())
     cfg = verifier._get_data_cache_config()
     cache_key = verifier._get_reference_cache_key()
-    cached_reference = b"cached-pt-content"
+    cached_reference = _make_reference_payload_bytes()
     write_reference_data_to_cache(
         cfg,
         op_name=verifier.op_name,
@@ -238,3 +274,37 @@ async def test_run_profile_uses_cached_baseline(monkeypatch, tmp_path):
     assert worker.profile_settings["override_base_time_us"] == 17.5
     assert worker.profile_settings["skip_base_profile"] is True
     assert result["base_time"] == 17.5
+
+
+@pytest.mark.asyncio
+async def test_run_regenerates_corrupted_reference_cache(monkeypatch, tmp_path):
+    verifier = _make_verifier(tmp_path, worker=object())
+    cfg = verifier._get_data_cache_config()
+    cache_key = verifier._get_reference_cache_key()
+    write_reference_data_to_cache(
+        cfg,
+        op_name=verifier.op_name,
+        cache_key=cache_key,
+        reference_data=b"not-a-valid-torch-save",
+        metadata={"save_inputs": True},
+    )
+
+    regenerated_reference = _make_reference_payload_bytes()
+
+    async def fake_generate_reference_data(task_desc, timeout=120, save_inputs=False, device_id=None):
+        return True, "regenerated", regenerated_reference
+
+    monkeypatch.setattr(verifier, "generate_reference_data", fake_generate_reference_data)
+
+    loaded = await verifier._prepare_cached_reference_data(device_id=0)
+    assert loaded == regenerated_reference
+    assert read_reference_data_from_cache(cfg, op_name=verifier.op_name, cache_key=cache_key) == regenerated_reference
+
+
+@pytest.mark.asyncio
+async def test_run_skips_reference_cache_for_dynamic_shape(tmp_path):
+    verifier = _make_verifier(tmp_path, worker=object())
+    verifier.framework_code += "\n\ndef get_inputs_dyn_list():\n    return []\n"
+
+    loaded = await verifier._prepare_cached_reference_data(device_id=0)
+    assert loaded is None
