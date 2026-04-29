@@ -952,7 +952,15 @@ if __name__ == "__main__":
         declared = (self.framework_factory_names or {}).get("is_dynamic_shape")
         if isinstance(declared, bool):
             return declared
-        return "get_inputs_dyn_list" in self.framework_code
+        code = self.framework_code or ""
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return "get_inputs_dyn_list" in code
+        return any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "get_inputs_dyn_list"
+            for node in tree.body
+        )
 
     @staticmethod
     def _prepare_code_lines(code_snippet: Any) -> List[str]:
@@ -982,6 +990,7 @@ if __name__ == "__main__":
             backend=self.backend,
             arch=self.arch,
             bench_type=self.bench_type,
+            task_id=self.task_id,
         )
 
     def _get_baseline_cache_key(self, warmup_times: int, run_times: int) -> str:
@@ -995,19 +1004,34 @@ if __name__ == "__main__":
             warmup_times=warmup_times,
             run_times=run_times,
             dsl=self.dsl,
+            task_id=self.task_id,
         )
+
+    def _load_cached_torch_reference_payload(self, reference_data: bytes) -> Optional[Any]:
+        try:
+            import torch
+
+            return torch.load(io.BytesIO(reference_data), map_location="cpu", weights_only=True)
+        except TypeError as exc:
+            if "weights_only" in str(exc):
+                logger.warning(
+                    f"[{self.op_name}] 当前 PyTorch 不支持 weights_only=True，"
+                    "禁用该 reference data cache 以避免不安全反序列化"
+                )
+            else:
+                logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+            return None
+        except Exception as exc:
+            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+            return None
 
     def _is_valid_cached_reference_data(self, reference_data: bytes) -> bool:
         if not reference_data:
             return False
         if self.framework != "torch":
             return True
-        try:
-            import torch
-
-            payload = torch.load(io.BytesIO(reference_data), map_location="cpu")
-        except Exception as exc:
-            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+        payload = self._load_cached_torch_reference_payload(reference_data)
+        if payload is None:
             return False
 
         if not isinstance(payload, dict):
@@ -1087,6 +1111,7 @@ if __name__ == "__main__":
             reference_data=reference_bytes,
             metadata={
                 "framework": self.framework,
+                "task_id": self.task_id,
                 "backend": self.backend,
                 "arch": self.arch,
                 "bench_type": self.bench_type,
@@ -1171,6 +1196,7 @@ if __name__ == "__main__":
             result_data=payload,
             metadata={
                 "framework": self.framework,
+                "task_id": self.task_id,
                 "dsl": self.dsl,
                 "backend": self.backend,
                 "arch": self.arch,

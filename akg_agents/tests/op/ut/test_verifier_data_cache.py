@@ -98,6 +98,10 @@ class DummyProfileWorker:
         }
 
 
+class DummyReferenceWorker:
+    pass
+
+
 def _make_config(tmp_path: Path) -> dict:
     return {
         "log_dir": str(tmp_path / "logs"),
@@ -108,11 +112,11 @@ def _make_config(tmp_path: Path) -> dict:
     }
 
 
-def _make_verifier(tmp_path: Path, worker=None) -> KernelVerifier:
+def _make_verifier(tmp_path: Path, worker=None, task_id: str = "ut") -> KernelVerifier:
     return KernelVerifier(
         op_name="relu",
         framework_code=FRAMEWORK_CODE,
-        task_id="ut",
+        task_id=task_id,
         framework="torch",
         dsl="triton_ascend",
         backend="ascend",
@@ -191,9 +195,56 @@ def test_baseline_cache_key_includes_dsl():
     assert triton_key != torch_key
 
 
+def test_reference_cache_key_includes_task_id():
+    common_kwargs = {
+        "op_name": "relu",
+        "framework_code": FRAMEWORK_CODE,
+        "framework": "torch",
+        "backend": "ascend",
+        "arch": "ascend910b4",
+        "bench_type": "kernelbench",
+    }
+
+    task_a_key = build_reference_cache_key(**common_kwargs, task_id="task-a")
+    task_b_key = build_reference_cache_key(**common_kwargs, task_id="task-b")
+    assert task_a_key != task_b_key
+
+
+def test_verifier_cache_keys_include_task_id(tmp_path):
+    verifier_a = _make_verifier(tmp_path, task_id="task-a")
+    verifier_b = _make_verifier(tmp_path, task_id="task-b")
+
+    assert verifier_a._get_reference_cache_key() != verifier_b._get_reference_cache_key()
+    assert verifier_a._get_baseline_cache_key(5, 50) != verifier_b._get_baseline_cache_key(5, 50)
+
+
+def test_detect_dynamic_shape_requires_function_definition(tmp_path):
+    verifier = _make_verifier(tmp_path)
+    verifier.framework_code += "\n# get_inputs_dyn_list mentioned in a comment should not enable dynamic shape\n"
+    assert verifier._detect_dynamic_shape() is False
+
+    verifier.framework_code += "\n\ndef get_inputs_dyn_list():\n    return []\n"
+    assert verifier._detect_dynamic_shape() is True
+
+
+def test_cached_reference_data_loads_with_weights_only(monkeypatch, tmp_path):
+    verifier = _make_verifier(tmp_path)
+    captured = {}
+
+    def fake_torch_load(file_obj, **kwargs):
+        captured.update(kwargs)
+        return {"save_inputs": True, "inputs": [], "outputs": []}
+
+    monkeypatch.setattr(torch, "load", fake_torch_load)
+
+    assert verifier._is_valid_cached_reference_data(b"payload") is True
+    assert captured["map_location"] == "cpu"
+    assert captured["weights_only"] is True
+
+
 @pytest.mark.asyncio
 async def test_run_uses_cached_reference_data(monkeypatch, tmp_path):
-    verifier = _make_verifier(tmp_path, worker=object())
+    verifier = _make_verifier(tmp_path, worker=DummyReferenceWorker())
     cfg = verifier._get_data_cache_config()
     cache_key = verifier._get_reference_cache_key()
     cached_reference = _make_reference_payload_bytes()
@@ -278,7 +329,7 @@ async def test_run_profile_uses_cached_baseline(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_regenerates_corrupted_reference_cache(monkeypatch, tmp_path):
-    verifier = _make_verifier(tmp_path, worker=object())
+    verifier = _make_verifier(tmp_path, worker=DummyReferenceWorker())
     cfg = verifier._get_data_cache_config()
     cache_key = verifier._get_reference_cache_key()
     write_reference_data_to_cache(
@@ -303,7 +354,7 @@ async def test_run_regenerates_corrupted_reference_cache(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_skips_reference_cache_for_dynamic_shape(tmp_path):
-    verifier = _make_verifier(tmp_path, worker=object())
+    verifier = _make_verifier(tmp_path, worker=DummyReferenceWorker())
     verifier.framework_code += "\n\ndef get_inputs_dyn_list():\n    return []\n"
 
     loaded = await verifier._prepare_cached_reference_data(device_id=0)
