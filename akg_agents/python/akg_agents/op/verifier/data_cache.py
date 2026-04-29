@@ -139,12 +139,14 @@ def build_baseline_cache_key(
     bench_type: str,
     warmup_times: int,
     run_times: int,
+    dsl: str = "",
 ) -> str:
     payload = {
         "type": "baseline_profile",
         "version": 1,
         "op_name": op_name,
         "framework": framework,
+        "dsl": dsl,
         "backend": backend,
         "arch": arch,
         "bench_type": bench_type,
@@ -237,6 +239,20 @@ def write_reference_data_to_cache(
         return None
 
 
+def delete_reference_data_from_cache(
+    cfg: VerifierDataCacheConfig,
+    *,
+    op_name: str,
+    cache_key: str,
+) -> None:
+    data_path, meta_path = _reference_cache_paths(cfg, op_name, cache_key)
+    for path in (data_path, meta_path):
+        try:
+            path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(f"Failed to delete verifier reference cache {path}: {exc}")
+
+
 def read_baseline_result_from_cache(
     cfg: VerifierDataCacheConfig,
     *,
@@ -252,6 +268,10 @@ def read_baseline_result_from_cache(
         return json.loads(result_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning(f"Failed to read verifier baseline cache {result_path}: {exc}")
+        try:
+            result_path.unlink(missing_ok=True)
+        except Exception as delete_exc:
+            logger.warning(f"Failed to delete corrupted verifier baseline cache {result_path}: {delete_exc}")
         return None
 
 
@@ -281,6 +301,19 @@ def write_baseline_result_to_cache(
     except Exception as exc:
         logger.warning(f"Failed to write verifier baseline cache {result_path}: {exc}")
         return None
+
+
+def delete_baseline_result_from_cache(
+    cfg: VerifierDataCacheConfig,
+    *,
+    op_name: str,
+    cache_key: str,
+) -> None:
+    result_path = _baseline_cache_path(cfg, op_name, cache_key)
+    try:
+        result_path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning(f"Failed to delete verifier baseline cache {result_path}: {exc}")
 
 
 def extract_baseline_time_us(result_data: Optional[Dict[str, Any]]) -> Optional[float]:

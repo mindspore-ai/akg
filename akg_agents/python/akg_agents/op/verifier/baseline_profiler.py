@@ -30,6 +30,7 @@ from typing import Optional, Dict, Any
 from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
+    delete_baseline_result_from_cache,
     extract_baseline_time_us,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
@@ -121,6 +122,7 @@ async def _profile_kernelbench_baseline(
                 bench_type="kernelbench",
                 warmup_times=warmup_times,
                 run_times=run_times,
+                dsl=dsl,
             )
             cached_entry = read_baseline_result_from_cache(
                 cache_cfg,
@@ -131,6 +133,13 @@ async def _profile_kernelbench_baseline(
             if cached_time_us is not None:
                 logger.info(f"[{op_name}] ✅ 命中本地 baseline cache: {cached_time_us:.2f}us")
                 return cached_time_us
+            if cached_entry:
+                logger.warning(f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量")
+                delete_baseline_result_from_cache(
+                    cache_cfg,
+                    op_name=op_name,
+                    cache_key=cache_key,
+                )
 
         logger.info(f"[{op_name}] 🚀 开始预先 profile baseline（只测一次）...")
 
@@ -188,6 +197,7 @@ async def _profile_kernelbench_baseline(
                         ),
                         metadata={
                             "framework": framework,
+                            "dsl": dsl,
                             "backend": backend,
                             "arch": arch,
                             "bench_type": "kernelbench",

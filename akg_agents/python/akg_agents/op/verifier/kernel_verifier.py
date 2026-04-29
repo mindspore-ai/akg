@@ -32,6 +32,8 @@ from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
     build_reference_cache_key,
+    delete_baseline_result_from_cache,
+    delete_reference_data_from_cache,
     extract_baseline_time_us,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
@@ -992,10 +994,39 @@ if __name__ == "__main__":
             bench_type=self.bench_type,
             warmup_times=warmup_times,
             run_times=run_times,
+            dsl=self.dsl,
         )
+
+    def _is_valid_cached_reference_data(self, reference_data: bytes) -> bool:
+        if not reference_data:
+            return False
+        if self.framework != "torch":
+            return True
+        try:
+            import torch
+
+            payload = torch.load(io.BytesIO(reference_data), map_location="cpu")
+        except Exception as exc:
+            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+            return False
+
+        if not isinstance(payload, dict):
+            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 格式无效，准备重新生成")
+            return False
+        if "outputs" not in payload:
+            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 缺少 outputs，准备重新生成")
+            return False
+        if not payload.get("save_inputs") or payload.get("inputs") is None:
+            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 缺少可复用 inputs，准备重新生成")
+            return False
+        return True
 
     async def _prepare_cached_reference_data(self, device_id: int) -> Optional[bytes]:
         if self.bench_type != "kernelbench":
+            return None
+
+        if self._detect_dynamic_shape():
+            logger.info(f"[{self.op_name}] 检测到动态 shape，跳过 reference data cache")
             return None
 
         cache_cfg = self._get_data_cache_config()
@@ -1013,14 +1044,26 @@ if __name__ == "__main__":
             cache_key=cache_key,
         )
         if cached_reference:
-            logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
-            return cached_reference
+            if not self._is_valid_cached_reference_data(cached_reference):
+                delete_reference_data_from_cache(
+                    cache_cfg,
+                    op_name=self.op_name,
+                    cache_key=cache_key,
+                )
+            else:
+                logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
+                return cached_reference
+
+        if cached_reference:
+            logger.info(f"[{self.op_name}] Verifier Data Cache reference data 已失效，重新生成")
+        else:
+            logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：reference data")
 
         if not self.worker:
-            logger.info(f"[{self.op_name}] Verifier Data Cache 未命中，且当前无 worker，跳过 reference data 回填")
+            logger.info(f"[{self.op_name}] 当前无 worker，跳过 reference data 回填")
             return None
 
-        logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：开始生成 reference data")
+        logger.info(f"[{self.op_name}] 开始生成 reference data")
         reference_timeout = int(self.config.get("reference_data_timeout", self.config.get("verify_timeout", 300)))
         try:
             success, log, reference_bytes = await self.generate_reference_data(
@@ -1077,6 +1120,13 @@ if __name__ == "__main__":
         baseline_time_us = extract_baseline_time_us(cache_entry)
         if baseline_time_us is not None:
             logger.info(f"[{self.op_name}] Verifier Data Cache 命中：baseline={baseline_time_us:.2f} us")
+        elif cache_entry:
+            logger.warning(f"[{self.op_name}] Verifier Data Cache baseline 结果无效，删除旧缓存")
+            delete_baseline_result_from_cache(
+                cache_cfg,
+                op_name=self.op_name,
+                cache_key=cache_key,
+            )
         return baseline_time_us
 
     def _store_baseline_result_in_data_cache(
@@ -1121,6 +1171,7 @@ if __name__ == "__main__":
             result_data=payload,
             metadata={
                 "framework": self.framework,
+                "dsl": self.dsl,
                 "backend": self.backend,
                 "arch": self.arch,
                 "bench_type": self.bench_type,

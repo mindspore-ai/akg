@@ -91,6 +91,7 @@ reference data key：
 baseline key：
 
 - 上述字段
+- `dsl`
 - `warmup_times`
 - `run_times`
 
@@ -107,8 +108,11 @@ baseline key：
 1. 读取 `data_cache.enabled`
 2. 先查 reference cache
 3. 命中：将缓存内容注入 `use_reference_data/use_reference_inputs/reference_data`
-4. 未命中：调用 `generate_reference_data(save_inputs=True)` 生成并落盘
-5. 继续走现有 `gen_verify_project -> run_verify`
+4. 命中后会先校验 `.pt` 内容，损坏或缺少 `inputs/outputs` 时删除旧缓存并重新生成
+5. 未命中：调用 `generate_reference_data(save_inputs=True)` 生成并落盘
+6. 继续走现有 `gen_verify_project -> run_verify`
+
+动态 shape（`get_inputs_dyn_list`）当前不走 reference data cache，避免错误复用单组静态输入；baseline cache 仍按 profile 参数和代码 key 生效。
 
 ### 5.2 profile
 
@@ -145,6 +149,8 @@ data_cache:
 - 本次痛点主要是 `task_desc -> inputs/outputs` 和 framework baseline profile
 
 后续如果需要扩到 `SOL`，可以只复用 baseline cache，不必引入 reference data cache。
+
+当前 reference data cache 只覆盖静态 shape 验证。动态 shape 场景会自动跳过 reference data cache，继续走实时输入生成与验证流程。
 
 ## 8. Triton Ascend 示例
 
