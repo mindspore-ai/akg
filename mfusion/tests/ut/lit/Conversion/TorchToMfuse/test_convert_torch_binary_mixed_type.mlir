@@ -36,6 +36,17 @@ func.func @main_div(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vtensor<[2,4
   return %0 : !torch.vtensor<[2,4],f32>
 }
 
+// CHECK-LABEL: func.func @main_div_rank0_float
+// CHECK: %[[RHS_IN:.*]] = builtin.unrealized_conversion_cast %arg1 : !torch.vtensor<[],f64> to tensor<f64>
+// CHECK: %[[LHS:.*]] = builtin.unrealized_conversion_cast %arg0 : !torch.vtensor<[80,204,204],f32> to tensor<80x204x204xf32>
+// CHECK: %[[RHS:.*]] = mfuse.cast %[[RHS_IN]] : (tensor<f64>) -> tensor<f32>
+// CHECK: mfuse.div %[[LHS]], %[[RHS]] : (tensor<80x204x204xf32>, tensor<f32>) -> tensor<80x204x204xf32>
+// CHECK-NOT: torch.aten.div.Tensor
+func.func @main_div_rank0_float(%arg0: !torch.vtensor<[80,204,204],f32>, %arg1: !torch.vtensor<[],f64>) -> !torch.vtensor<[80,204,204],f32> attributes {torch.assume_strict_symbolic_shapes} {
+  %0 = torch.aten.div.Tensor %arg0, %arg1 : !torch.vtensor<[80,204,204],f32>, !torch.vtensor<[],f64> -> !torch.vtensor<[80,204,204],f32>
+  return %0 : !torch.vtensor<[80,204,204],f32>
+}
+
 // CHECK-LABEL: func.func @main_maximum
 // CHECK: mfuse.maximum
 // CHECK-NOT: torch.aten.maximum

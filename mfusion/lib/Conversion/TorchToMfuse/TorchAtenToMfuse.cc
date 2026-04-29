@@ -35,6 +35,133 @@ namespace mlir {
 namespace TorchD = mlir::torch::Torch;
 
 namespace {
+
+using TorchScalarType = torch::torch_upstream::ScalarType;
+
+static int64_t toTorchScalarTypeInt(TorchScalarType scalarType) { return static_cast<int64_t>(scalarType); }
+
+static FailureOr<int64_t> getTorchFloatScalarTypeInt(Type type) {
+  if (isa<Float32Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Float);
+  }
+  if (isa<Float64Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Double);
+  }
+  if (type.isBF16()) {
+    return toTorchScalarTypeInt(TorchScalarType::BFloat16);
+  }
+  if (type.isF16()) {
+    return toTorchScalarTypeInt(TorchScalarType::Half);
+  }
+  return failure();
+}
+
+static FailureOr<int64_t> getTorchIntegerScalarTypeInt(Type type) {
+  if (type.isSignlessInteger(1)) {
+    return toTorchScalarTypeInt(TorchScalarType::Bool);
+  }
+  if (type.isSignedInteger(64)) {
+    return toTorchScalarTypeInt(TorchScalarType::Long);
+  }
+  if (type.isSignedInteger(32)) {
+    return toTorchScalarTypeInt(TorchScalarType::Int);
+  }
+  if (type.isSignedInteger(16)) {
+    return toTorchScalarTypeInt(TorchScalarType::Short);
+  }
+  if (type.isUnsignedInteger(8)) {
+    return toTorchScalarTypeInt(TorchScalarType::Byte);
+  }
+  if (type.isSignedInteger(8)) {
+    return toTorchScalarTypeInt(TorchScalarType::Char);
+  }
+  return failure();
+}
+
+static FailureOr<int64_t> getTorchQuantizedScalarTypeInt(Type type) {
+  if (isa<TorchD::QUInt8Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::QUInt8);
+  }
+  if (isa<TorchD::QInt8Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::QInt8);
+  }
+  if (isa<TorchD::QInt16Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::QInt16);
+  }
+  if (isa<TorchD::QInt32Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::QInt32);
+  }
+  return failure();
+}
+
+static FailureOr<int64_t> getTorchComplexScalarTypeInt(ComplexType complexType) {
+  Type elementType = complexType.getElementType();
+  if (elementType.isF16()) {
+    return toTorchScalarTypeInt(TorchScalarType::ComplexHalf);
+  }
+  if (elementType.isF32()) {
+    return toTorchScalarTypeInt(TorchScalarType::ComplexFloat);
+  }
+  if (elementType.isF64()) {
+    return toTorchScalarTypeInt(TorchScalarType::ComplexDouble);
+  }
+  return failure();
+}
+
+static FailureOr<int64_t> getTorchFloat8ScalarTypeInt(Type type) {
+  if (isa<Float8E5M2Type>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Float8_e5m2);
+  }
+  if (isa<Float8E4M3FNType>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Float8_e4m3fn);
+  }
+  if (isa<Float8E5M2FNUZType>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Float8_e5m2fnuz);
+  }
+  if (isa<Float8E4M3FNUZType>(type)) {
+    return toTorchScalarTypeInt(TorchScalarType::Float8_e4m3fnuz);
+  }
+  return failure();
+}
+
+}  // namespace
+
+FailureOr<int64_t> getTorchScalarTypeInt(Type type) {
+  auto scalarTypeInt = getTorchFloatScalarTypeInt(type);
+  if (succeeded(scalarTypeInt)) {
+    return *scalarTypeInt;
+  }
+
+  scalarTypeInt = getTorchIntegerScalarTypeInt(type);
+  if (succeeded(scalarTypeInt)) {
+    return *scalarTypeInt;
+  }
+
+  scalarTypeInt = getTorchQuantizedScalarTypeInt(type);
+  if (succeeded(scalarTypeInt)) {
+    return *scalarTypeInt;
+  }
+
+  if (auto complexType = dyn_cast<ComplexType>(type)) {
+    return getTorchComplexScalarTypeInt(complexType);
+  }
+
+  scalarTypeInt = getTorchFloat8ScalarTypeInt(type);
+  if (succeeded(scalarTypeInt)) {
+    return *scalarTypeInt;
+  }
+  return failure();
+}
+
+namespace {
+static Value castToElementTypeIfNeeded(Value value, Type elementType, Location loc, PatternRewriter &rewriter) {
+  auto rankedType = dyn_cast<RankedTensorType>(value.getType());
+  if (!rankedType || rankedType.getElementType() == elementType) {
+    return value;
+  }
+  return rewriter.create<mfuse::CastOp>(loc, value, elementType);
+}
+
 // Check that `listVal` is a list construct of constant ints and
 // collect the integer values into `out`.
 bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
@@ -144,6 +271,17 @@ struct ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
     Type resType = this->getTypeConverter()->convertType(op.getType());
     if (!resType) {
       return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    // Only arithmetic/value-producing binary mfuse ops registered below use this path
+    // (div, maximum, minimum, mul, pow). Comparison/logical ops keep operand promotion in the mfuse builder.
+    if (TargetOp::template hasTrait<OpTrait::SameOperandsAndResultElementType>()) {
+      auto rankedResType = dyn_cast<RankedTensorType>(resType);
+      if (!rankedResType) {
+        return rewriter.notifyMatchFailure(op, "result must be a ranked tensor");
+      }
+      Type resultElementType = rankedResType.getElementType();
+      lhs = castToElementTypeIfNeeded(lhs, resultElementType, op.getLoc(), rewriter);
+      rhs = castToElementTypeIfNeeded(rhs, resultElementType, op.getLoc(), rewriter);
     }
     auto targetOp = rewriter.create<TargetOp>(op.getLoc(), resType, lhs, rhs);
     rewriter.replaceOp(op, targetOp.getResult());
@@ -552,6 +690,44 @@ struct ConvertAtenFull : public OpConversionPattern<TorchD::AtenFullOp> {
   }
 };
 
+/// Convert splat torch.vtensor.literal -> mfuse.full.
+///
+/// The Python FX exporter used by torch_npu mfusion does not consume
+/// torch.vtensor.literal. Keep the pipeline output on the same aten.full path
+/// used by tensor constructors instead of leaking literals back to FX export.
+struct ConvertValueTensorLiteral : public OpConversionPattern<TorchD::ValueTensorLiteralOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::ValueTensorLiteralOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValueAttr());
+    if (!denseAttr || !denseAttr.isSplat()) {
+      return rewriter.notifyMatchFailure(op, "only splat vtensor literals are supported");
+    }
+
+    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+    if (!outType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+
+    auto fillType = RankedTensorType::get({}, outType.getElementType());
+    auto fillAttr = DenseElementsAttr::get(fillType, denseAttr.getSplatValue<mlir::Attribute>());
+    auto fillValue = rewriter.create<mfuse::ConstantOp>(op.getLoc(), fillType, fillAttr);
+
+    auto dtypeIntOrFailure = getTorchScalarTypeInt(outType.getElementType());
+    if (failed(dtypeIntOrFailure)) {
+      return rewriter.notifyMatchFailure(op, "unsupported dtype for splat vtensor literal");
+    }
+    auto dtypeAttr = rewriter.getI64IntegerAttr(*dtypeIntOrFailure);
+    IntegerAttr layoutAttr;
+    StringAttr deviceAttr;
+    BoolAttr pinMemoryAttr;
+    rewriter.replaceOpWithNewOp<mfuse::FullOp>(op, outType, fillValue, dtypeAttr, layoutAttr, deviceAttr,
+                                               pinMemoryAttr);
+    return success();
+  }
+};
+
 struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimIntListOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -760,6 +936,7 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   // aten.permute -> mfuse.permute so fuse-batch-matmul can fold swap-last-two-dims + matmul into trans_x*.
   // (transpose.int is handled by ConvertAtenTransposeInt; graphs that use permute need this too.)
   patterns.add<ConvertAtenPermute>(converter, context);
+  patterns.add<ConvertValueTensorLiteral>(converter, context);
 }
 
 // Populate reshape-like Aten ops to Mfuse conversion patterns

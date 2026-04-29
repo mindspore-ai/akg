@@ -86,8 +86,8 @@ module {
 }
 """
 
-# Conv2D (f16) output has two uses: conv -> cast (f32) and conv -> mul. Fusion still applies to
-# the cast branch (no single-use requirement); Conv is not erased.
+# Conv2D (f16) output has two uses: conv -> cast (f32) and conv -> mul.
+# FuseConv2DCast requires a single-use Conv2D result, so this case keeps the casts.
 MLIR_CONV2D_CAST_TWO_USES = r"""
 module {
   func.func @main(%arg0: !torch.vtensor<[1,2,4,4],f16>, %arg1: !torch.vtensor<[4,2,2,2],f16>) -> (!torch.vtensor<[1,4,3,3],f32>, !torch.vtensor<[1,4,3,3],f32>) attributes {torch.assume_strict_symbolic_shapes} {
@@ -141,11 +141,11 @@ def test_conv2d_cast_no_fusion_cast_target_not_f32():
 
 
 def test_conv2d_cast_fusion_with_conv_two_uses():
-    """Fusion applies even when Conv2D output has multiple uses; only the Cast is replaced."""
+    """Conv2D cast fusion does not apply when Conv2D output has multiple uses."""
     result = fuse_and_optimize(MLIR_CONV2D_CAST_TWO_USES)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.convolution"), checker.error or "convolution should exist"
-    # The conv->cast branch is fused (that to.dtype is eliminated); the mul->to.dtype path remains.
-    assert checker.check_text_contains(
-        'torch.operator "torch.npu._npu_dtype_cast"'
-    ), checker.error or "to.dtype after mul should remain"
+    # Mfuse cast is converted back through torch.prims.convert_element_type.
+    assert checker.check_has_op("torch.prims.convert_element_type"), (
+        checker.error or "cast after mul should remain"
+    )

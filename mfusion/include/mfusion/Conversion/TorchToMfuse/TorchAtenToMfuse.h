@@ -17,10 +17,16 @@
 #ifndef MFUSION_CONVERSION_TORCHTOMFUSE_TORCHATENTOMFUSE_H
 #define MFUSION_CONVERSION_TORCHTOMFUSE_TORCHATENTOMFUSE_H
 
+#include <cstdint>
+
+#include "mlir/IR/Types.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
+
+FailureOr<int64_t> getTorchScalarTypeInt(Type type);
 
 // Populate Aten ops to Mfuse conversion patterns
 void populateAtenToMfuseConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns);
