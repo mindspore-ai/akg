@@ -16,6 +16,8 @@
 
 #include "mfusion/Conversion/MfuseToTorch/MfuseAclnnToTorch.h"
 
+#include <algorithm>
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -36,6 +38,40 @@ namespace TorchD = mlir::torch::Torch;
 namespace {
 
 static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) { return kernelGenerator == "dvm"; }
+
+static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
+                                                                mlir::ConversionPatternRewriter &rewriter) {
+  auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
+  if (!vtt || !vtt.hasSizes()) {
+    return mlir::failure();
+  }
+  auto sizes = vtt.getSizes();
+  int64_t rank = static_cast<int64_t>(sizes.size());
+  if (rank < 2) {
+    return mlir::failure();
+  }
+  llvm::SmallVector<int64_t> newSizes(sizes.begin(), sizes.end());
+  std::swap(newSizes[rank - 2], newSizes[rank - 1]);
+  mlir::Type permResultType = vtt.getWithSizesAndDtype(newSizes, vtt.getOptionalDtype());
+  llvm::SmallVector<mlir::Value> permDims;
+  permDims.reserve(static_cast<size_t>(rank));
+  for (int64_t i = 0; i < rank - 2; ++i) {
+    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(i)));
+  }
+  permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 1)));
+  permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 2)));
+  mlir::MLIRContext *ctx = rewriter.getContext();
+  auto listType = TorchD::ListType::get(ctx, TorchD::IntType::get(ctx));
+  mlir::Value permList = rewriter.create<TorchD::PrimListConstructOp>(loc, listType, permDims);
+  return rewriter.create<TorchD::AtenPermuteOp>(loc, permResultType, v, permList).getResult();
+}
+
+static bool areRank3ValueTensors(mlir::Value lhs, mlir::Value rhs) {
+  auto lhsType = mlir::dyn_cast<TorchD::ValueTensorType>(lhs.getType());
+  auto rhsType = mlir::dyn_cast<TorchD::ValueTensorType>(rhs.getType());
+  return lhsType && rhsType && lhsType.hasSizes() && rhsType.hasSizes() && lhsType.getSizes().size() == 3 &&
+         rhsType.getSizes().size() == 3;
+}
 
 // ============================================================================
 // =   Please keep the patterns in alphabetical order by operator name   =
@@ -99,28 +135,67 @@ class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse
   }
 };
 
+/// Converts mfuse.aclnn.batch_matmul -> torch.aten.bmm/matmul, materializing transpose flags as permutes.
+class ConvertMfuseAclnnBatchMatmul : public mlir::OpConversionPattern<mlir::mfuse::AclnnBatchMatmulOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnBatchMatmulOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value self = adaptor.getSelf();
+    mlir::Value mat2 = adaptor.getMat2();
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+
+    mlir::Location loc = op.getLoc();
+    bool useBmm = areRank3ValueTensors(self, mat2);
+    if (op.getTransX1()) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, self, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      self = *permOr;
+    }
+    if (op.getTransX2()) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, mat2, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      mat2 = *permOr;
+    }
+
+    if (useBmm) {
+      rewriter.replaceOpWithNewOp<TorchD::AtenBmmOp>(op, resultType, self, mat2);
+    } else {
+      rewriter.replaceOpWithNewOp<TorchD::AtenMatmulOp>(op, resultType, self, mat2);
+    }
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.aclnn.batch_norm -> torch.aten.batch_norm (same operand order as Torch-MLIR).
 class ConvertMfuseAclnnBatchNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnBatchNormOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnBatchNormOp op, OpAdaptor adaptor,
-                                        mlir::ConversionPatternRewriter &rewriter) const override {
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Type resultType = getTypeConverter()->convertType(op.getOutput().getType());
     if (!resultType) {
       return rewriter.notifyMatchFailure(op, "failed to convert aclnn.batch_norm output type");
     }
     mlir::Location loc = op.getLoc();
-    mlir::Value training =
-      rewriter.create<TorchD::ConstantBoolOp>(loc, op.getTraining());
-    mlir::Value momentum = rewriter.create<TorchD::ConstantFloatOp>(
-      loc, rewriter.getF64FloatAttr(op.getMomentumAttr().getValueAsDouble()));
+    mlir::Value training = rewriter.create<TorchD::ConstantBoolOp>(loc, op.getTraining());
+    mlir::Value momentum =
+      rewriter.create<TorchD::ConstantFloatOp>(loc, rewriter.getF64FloatAttr(op.getMomentumAttr().getValueAsDouble()));
     mlir::Value eps =
       rewriter.create<TorchD::ConstantFloatOp>(loc, rewriter.getF64FloatAttr(op.getEpsilonAttr().getValueAsDouble()));
     mlir::Value cudnn = rewriter.create<TorchD::ConstantBoolOp>(loc, op.getCudnnEnable());
-    rewriter.replaceOpWithNewOp<TorchD::AtenBatchNormOp>(
-      op, resultType, adaptor.getInput(), adaptor.getWeight(), adaptor.getBias(), adaptor.getRunningMean(),
-      adaptor.getRunningVar(), training, momentum, eps, cudnn);
+    rewriter.replaceOpWithNewOp<TorchD::AtenBatchNormOp>(op, resultType, adaptor.getInput(), adaptor.getWeight(),
+                                                         adaptor.getBias(), adaptor.getRunningMean(),
+                                                         adaptor.getRunningVar(), training, momentum, eps, cudnn);
     return mlir::success();
   }
 };
@@ -352,33 +427,6 @@ class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnM
   }
 
  private:
-  static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
-                                                                  mlir::ConversionPatternRewriter &rewriter) {
-    auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
-    if (!vtt || !vtt.hasSizes()) {
-      return mlir::failure();
-    }
-    auto sizes = vtt.getSizes();
-    int64_t rank = static_cast<int64_t>(sizes.size());
-    if (rank < 2) {
-      return mlir::failure();
-    }
-    llvm::SmallVector<int64_t> newSizes(sizes.begin(), sizes.end());
-    std::swap(newSizes[rank - 2], newSizes[rank - 1]);
-    mlir::Type permResultType = vtt.getWithSizesAndDtype(newSizes, vtt.getOptionalDtype());
-    llvm::SmallVector<mlir::Value> permDims;
-    permDims.reserve(static_cast<size_t>(rank));
-    for (int64_t i = 0; i < rank - 2; ++i) {
-      permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(i)));
-    }
-    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 1)));
-    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 2)));
-    mlir::MLIRContext *ctx = rewriter.getContext();
-    auto listType = TorchD::ListType::get(ctx, TorchD::IntType::get(ctx));
-    mlir::Value permList = rewriter.create<TorchD::PrimListConstructOp>(loc, listType, permDims);
-    return rewriter.create<TorchD::AtenPermuteOp>(loc, permResultType, v, permList).getResult();
-  }
-
   std::string kernelGenerator_;
 };
 
@@ -438,6 +486,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
+  patterns.add<ConvertMfuseAclnnBatchMatmul>(converter, context);
   patterns.add<ConvertMfuseAclnnBatchNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
