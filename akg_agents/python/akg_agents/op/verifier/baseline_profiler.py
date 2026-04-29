@@ -123,6 +123,7 @@ async def _profile_kernelbench_baseline(
                 warmup_times=warmup_times,
                 run_times=run_times,
                 dsl=dsl,
+                task_id="baseline_profile",
             )
             cached_entry = read_baseline_result_from_cache(
                 cache_cfg,

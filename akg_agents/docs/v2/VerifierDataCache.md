@@ -48,6 +48,19 @@ Current scope is `KernelBench` only. `SOL-ExecBench` already ships stable refere
 
 Reference data cache currently covers static-shape verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache still keys by framework code, backend, arch, DSL, and profile parameters.
 
+Cache keys include `task_id` to avoid accidental reuse across independent tasks. Reusing data for a demo or repeated validation requires the same `task_id`.
+
+Configuration:
+
+```yaml
+data_cache:
+  enabled: true
+  cache_reference_data: true
+  cache_baseline_result: true
+```
+
+The default cache directory is expanded by code to `~/.akg/verifier_data_cache`. Set `data_cache.cache_dir` or `AKG_AGENTS_VERIFY_DATA_CACHE_DIR` to override it.
+
 ## Demo
 
 See:

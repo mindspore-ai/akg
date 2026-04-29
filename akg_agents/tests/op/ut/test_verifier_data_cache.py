@@ -224,6 +224,14 @@ def test_verifier_cache_keys_include_task_id(tmp_path):
     assert verifier_a._get_baseline_cache_key(5, 50) != verifier_b._get_baseline_cache_key(5, 50)
 
 
+def test_verifier_cache_keys_reuse_same_task_id(tmp_path):
+    verifier_a = _make_verifier(tmp_path, task_id="cache-demo")
+    verifier_b = _make_verifier(tmp_path, task_id="cache-demo")
+
+    assert verifier_a._get_reference_cache_key() == verifier_b._get_reference_cache_key()
+    assert verifier_a._get_baseline_cache_key(5, 50) == verifier_b._get_baseline_cache_key(5, 50)
+
+
 def test_detect_dynamic_shape_requires_function_definition(tmp_path):
     verifier = _make_verifier(tmp_path)
     verifier.framework_code += "\n# get_inputs_dyn_list mentioned in a comment should not enable dynamic shape\n"
