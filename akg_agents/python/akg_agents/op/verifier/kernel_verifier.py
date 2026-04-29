@@ -1052,23 +1052,46 @@ if __name__ == "__main__":
             return False
         return True
 
+    def _clear_managed_reference_data(self, reason: str = "") -> None:
+        if not self.config.get("_data_cache_reference_key"):
+            return
+        self.config.pop("reference_data", None)
+        self.config.pop("use_reference_data", None)
+        self.config.pop("use_reference_inputs", None)
+        self.config.pop("_data_cache_reference_key", None)
+        if reason:
+            logger.info(f"[{self.op_name}] 清理本地 Data Cache 注入的 reference data: {reason}")
+
     async def _prepare_cached_reference_data(self, device_id: int) -> Optional[bytes]:
         if self.bench_type != "kernelbench":
+            self._clear_managed_reference_data("当前 bench_type 不支持 reference data cache")
             return None
 
         if self._detect_dynamic_shape():
+            self._clear_managed_reference_data("动态 shape 不复用静态 reference data")
             logger.info(f"[{self.op_name}] 检测到动态 shape，跳过 reference data cache")
             return None
 
         cache_cfg = self._get_data_cache_config()
+        cache_key = self._get_reference_cache_key()
+
+        if self.config.get("use_reference_data") and self.config.get("reference_data"):
+            managed_key = self.config.get("_data_cache_reference_key")
+            if managed_key:
+                if not cache_cfg.enabled or not cache_cfg.cache_reference_data:
+                    self._clear_managed_reference_data("data_cache 已关闭")
+                elif managed_key == cache_key:
+                    logger.info(f"[{self.op_name}] 复用当前 verifier 已注入的 reference data")
+                    return None
+                else:
+                    self._clear_managed_reference_data("cache key 已变化")
+            else:
+                logger.info(f"[{self.op_name}] 使用调用方提供的 reference_data，跳过本地 Data Cache 查询")
+                return None
+
         if not cache_cfg.enabled or not cache_cfg.cache_reference_data:
             return None
 
-        if self.config.get("use_reference_data") and self.config.get("reference_data"):
-            logger.info(f"[{self.op_name}] 使用调用方提供的 reference_data，跳过本地 Data Cache 查询")
-            return None
-
-        cache_key = self._get_reference_cache_key()
         try:
             async with verifier_data_cache_lock(
                 cache_cfg,
@@ -1144,12 +1167,13 @@ if __name__ == "__main__":
             )
             return None
 
-    def _apply_cached_reference_data(self, reference_data: bytes) -> None:
+    def _apply_cached_reference_data(self, reference_data: bytes, cache_key: Optional[str] = None) -> None:
         if not reference_data:
             return
         self.config["use_reference_data"] = True
         self.config["use_reference_inputs"] = True
         self.config["reference_data"] = reference_data
+        self.config["_data_cache_reference_key"] = cache_key or self._get_reference_cache_key()
 
     def _get_cached_baseline_time_us(self, warmup_times: int, run_times: int) -> Optional[float]:
         if self.bench_type != "kernelbench":

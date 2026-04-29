@@ -154,6 +154,7 @@ python scripts/run_autoresearch.py
 |---------|----------|-------------|
 | **NPU** | | |
 | `kernel_related/run_torch_npu_triton_single.py` | Kernel | Single kernel generation (Torch + Triton Ascend) |
+| `kernel_related/run_torch_npu_triton_single_with_cache.py` | Kernel | Single kernel verification + Data Cache reuse demo (Torch + Triton Ascend) |
 | `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB adaptive search (Torch + Triton Ascend) |
 | `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | Evolutionary kernel optimization (Torch + Triton Ascend) |
 | `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA to Ascend kernel conversion |
@@ -212,6 +213,7 @@ akg_agents/
 - **Generation** — Direct kernel code generation and correctness verification
 - **Optimization** — Adaptive Search (UCB), Evolve (evolutionary algorithm), [AutoResearch](./docs/v2/AutoResearch.md) (agent-driven iteration)
 - **Migration** — CUDA → Ascend kernel conversion
+- **[Verifier Data Cache](./docs/v2/VerifierDataCache.md)** - Verifier-side local cache for reference data and baseline profile results
 
 ### OpenCode Integration
 - **[akg-op User Guide](./docs/v2/AKG-Op.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code integration, supporting single-operator optimization and model fusion analysis

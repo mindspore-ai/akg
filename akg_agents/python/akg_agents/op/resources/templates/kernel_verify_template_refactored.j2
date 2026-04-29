@@ -105,7 +105,10 @@ def verify_implementations():
     if use_reference_data and reference_file and os.path.exists(reference_file):
         print(f"[INFO] 使用参考数据模式: {reference_file}")
         {% if framework == "torch" %}
-        reference_data = torch.load(reference_file, map_location='cpu')
+        try:
+            reference_data = torch.load(reference_file, map_location='cpu', weights_only=True)
+        except TypeError:
+            reference_data = torch.load(reference_file, map_location='cpu')
         reference_outputs = reference_data.get('outputs', [])
         print(f"[INFO] 参考数据种子: {reference_data.get('seed', 'unknown')}")
         print(f"[INFO] 参考输出数量: {len(reference_outputs)}")
@@ -357,4 +360,3 @@ def verify_implementations():
 
 if __name__ == "__main__":
     verify_implementations()
-

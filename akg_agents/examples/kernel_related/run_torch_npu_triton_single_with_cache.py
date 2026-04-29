@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import textwrap
 from pathlib import Path
 
@@ -32,6 +33,7 @@ FRAMEWORK = "torch"
 DSL = "triton_ascend"
 OP_NAME = "relu"
 TASK_ID = "cache_demo"
+CACHE_DIR = Path("~/.akg/verifier_data_cache_demo").expanduser()
 
 
 def _repo_root() -> Path:
@@ -54,7 +56,7 @@ def _build_config() -> dict:
     config = load_config(DSL, backend=BACKEND)
     config["data_cache"] = {
         "enabled": True,
-        "cache_dir": "~/.akg/verifier_data_cache",
+        "cache_dir": str(CACHE_DIR),
         "cache_reference_data": True,
         "cache_baseline_result": True,
     }
@@ -97,6 +99,9 @@ async def _run_once(task_id: str, framework_code: str, kernel_code: str, worker)
 
 
 async def main():
+    if CACHE_DIR.exists():
+        shutil.rmtree(CACHE_DIR)
+
     framework_code = _load_framework_code()
     kernel_code = _load_kernel_code()
 
@@ -119,7 +124,7 @@ async def main():
         f"gen={second['gen_time']:.2f} us, speedup={second['speedup']:.4f}x"
     )
 
-    print("\nCache directory: ~/.akg/verifier_data_cache")
+    print(f"\nCache directory: {CACHE_DIR}")
     print("Expected behavior:")
     print("- Run 1 populates reference data cache and baseline cache")
     print("- Run 2 reuses cached reference data and skips base profile")

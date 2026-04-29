@@ -161,6 +161,8 @@ data_cache:
 
 当前 reference data cache 只覆盖静态 shape 验证。动态 shape 场景会自动跳过 reference data cache，继续走实时输入生成与验证流程。
 
+缓存 key 包含 `task_id`，用于避免不同独立任务之间误复用。做 demo 或重复回归时，如果希望复用同一份缓存，需要保持 `task_id` 一致。
+
 ## 8. Triton Ascend 示例
 
 仓库已提供一个不依赖 LLM 的 demo：
