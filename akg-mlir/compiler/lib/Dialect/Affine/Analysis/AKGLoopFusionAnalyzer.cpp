@@ -356,59 +356,58 @@ std::vector<unsigned> FusionAnalyzer::findLastNodesInPath(unsigned srcGroupId) {
   return lastNodes;
 }
 
-// Finds all terminal nodes (nodes with no outgoing edges) in paths starting from srcGroupId in fusePlans,
-// then creates a fusion plan from each terminal node to dstGroupId (if the plan doesn't exist).
-//
-// Example:
-// Assume fusePlans contains the following edges:
-//   - 33 -> 38
-//   - 38 -> 42
-// If srcGroupId=33, dstGroupId=60, then:
-//   - Found terminal nodes: [42]
-//   - Created new plan: 42 -> 60
-//
-// Return value:
-// - true: Found real paths and successfully connected (terminal node is not srcGroupId itself)
-// - false: No real paths found (only srcGroupId itself, no other nodes)
-bool FusionAnalyzer::connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId) {
-  // Find all last nodes in paths starting from srcGroupId
-  std::vector<unsigned> lastNodes = findLastNodesInPath(srcGroupId);
+// Bridges two branches: the side with the smaller min-last-node id is wrapped
+// inside the other (bridge edge: min-last → opposite anchor).
+// Returns true if a real downstream path existed on either side.
+// dstSideWon: true ⇒ dst wrapped inside src (bridge: min-last-of-dst → srcGroupId);
+//             false ⇒ src wrapped inside dst (bridge: min-last-of-src → dstGroupId).
+bool FusionAnalyzer::connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId, bool *dstSideWon) {
+  auto lastNodesSrc = findLastNodesInPath(srcGroupId);
+  auto lastNodesDst = findLastNodesInPath(dstGroupId);
 
-  // Check if real paths were found (lastNodes contains nodes other than srcGroupId)
-  bool hasRealPaths =
-    std::any_of(lastNodes.begin(), lastNodes.end(), [srcGroupId](unsigned nodeId) { return nodeId != srcGroupId; });
+  bool hasRealSrc =
+    std::any_of(lastNodesSrc.begin(), lastNodesSrc.end(), [srcGroupId](unsigned id) { return id != srcGroupId; });
+  bool hasRealDst =
+    std::any_of(lastNodesDst.begin(), lastNodesDst.end(), [dstGroupId](unsigned id) { return id != dstGroupId; });
+  bool hasRealPaths = hasRealSrc || hasRealDst;
 
-  if (lastNodes.empty()) {
-    // If no paths exist, connect srcGroupId directly to dstGroupId
-    lastNodes.push_back(srcGroupId);
+  if (lastNodesSrc.empty()) lastNodesSrc.push_back(srcGroupId);
+  if (lastNodesDst.empty()) lastNodesDst.push_back(dstGroupId);
+
+  unsigned minLastSrc = *std::min_element(lastNodesSrc.begin(), lastNodesSrc.end());
+  unsigned minLastDst = *std::min_element(lastNodesDst.begin(), lastNodesDst.end());
+
+  unsigned bridgeFromId;
+  unsigned bridgeToId;
+  bool dstWon;
+  if (minLastDst < minLastSrc) {
+    bridgeFromId = minLastDst;
+    bridgeToId = srcGroupId;
+    dstWon = true;
+  } else {
+    bridgeFromId = minLastSrc;
+    bridgeToId = dstGroupId;
+    dstWon = false;
   }
+  if (dstSideWon) *dstSideWon = dstWon;
 
-  // For each last node, create a fusion plan to dstGroupId if it doesn't exist
-  for (unsigned lastNodeId : lastNodes) {
-    // Skip if lastNodeId is the same as dstGroupId
-    if (lastNodeId == dstGroupId) {
-      continue;
-    }
-
-    // Create new fusion plan if it doesn't exist
-    auto lastNodeGroup = depGraph.getGroup(lastNodeId);
-    auto dstGroup = depGraph.getGroup(dstGroupId);
-
-    if (lastNodeGroup != nullptr && dstGroup != nullptr) {
-      FusionPlan newPlan;
-      newPlan.fusedGroup = FuseEdge(lastNodeId, dstGroupId);
-      newPlan.fusedBand = FuseEdge(lastNodeGroup->rootId, dstGroup->rootId);
+  if (bridgeFromId != bridgeToId) {
+    auto bridgeFromGroup = depGraph.getGroup(bridgeFromId);
+    auto bridgeToGroup = depGraph.getGroup(bridgeToId);
+    if (bridgeFromGroup != nullptr && bridgeToGroup != nullptr) {
+      FusionPlan bridge;
+      bridge.fusedGroup = FuseEdge(bridgeFromId, bridgeToId);
+      bridge.fusedBand = FuseEdge(bridgeFromGroup->rootId, bridgeToGroup->rootId);
       auto oldCacheKey = std::make_pair(srcGroupId, dstGroupId);
-      auto newCacheKey = std::make_pair(lastNodeId, dstGroupId);
+      auto newCacheKey = std::make_pair(bridgeFromId, bridgeToId);
       if (groupDependenciesCache.find(oldCacheKey) != groupDependenciesCache.end() &&
           groupDependenciesCache.find(newCacheKey) == groupDependenciesCache.end()) {
         groupDependenciesCache[newCacheKey] = groupDependenciesCache[oldCacheKey];
       }
-      addFusionPlan(newPlan);
+      addFusionPlan(bridge);
     }
   }
 
-  // Return true if real paths were found (not just srcGroupId itself)
   return hasRealPaths;
 }
 
@@ -495,20 +494,6 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
   for (auto depGroupId : toDepGroups) {
     if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
       updateDepInfoFromCache(depGroupId, toGroupId);
-      plan.fusionType = "H";
-      return;
-    }
-  }
-
-  auto fromDepGroups = depGraph.getDependentGroups(fromGroupId);
-  if (fromDepGroups.count(toGroupId)) {
-    plan.fusionType = "H";
-    return;
-  }
-
-  for (auto depGroupId : fromDepGroups) {
-    if (hasEdgeInFusionPlans(depGroupId, toGroupId)) {
-      updateDepInfoFromCache(depGroupId, fromGroupId);
       plan.fusionType = "H";
       return;
     }
@@ -636,10 +621,14 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
         groupDependenciesCache[newCacheKey] = groupDependenciesCache[oldCacheKey];
       }
 
-      // Connect all last nodes in paths from srcGroup to dstGroup
-      bool pathsConnected = connectLastNodesToTarget(srcGroup->groupId, dstGroup->groupId);
+      // Bridge: smaller min-last-node side is wrapped inside the other.
+      // dstSideWon=true ⇒ dst wrapped inside src, redirect oldPlan's `to` to dstGroup; otherwise stays on srcGroup.
+      bool dstSideWon = false;
+      bool pathsConnected = connectLastNodesToTarget(srcGroup->groupId, dstGroup->groupId, &dstSideWon);
       if (pathsConnected) {
-        updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, srcGroup->groupId, srcGroup->rootId);
+        unsigned newToId = dstSideWon ? dstGroup->groupId : srcGroup->groupId;
+        unsigned newToBandId = dstSideWon ? dstGroup->rootId : srcGroup->rootId;
+        updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, newToId, newToBandId);
         return false;
       }
 
@@ -798,7 +787,7 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
       }
       unsigned sourceGroupId = sourceGroup->groupId;
       auto &accum = depAccumMap[sourceGroupId];
-      bool isRAR = (pred.depType == DepType::RAR);
+      bool isRAR = (pred.depType == DepType::RAR || pred.depType == DepType::RAW);
       auto &depInfo = isRAR ? accum.rarDepInfo : accum.warDepInfo;
       depInfo.loopDepth = std::min(depInfo.loopDepth, pred.loopDepth);
       depInfo.memref = pred.memref;
@@ -885,29 +874,38 @@ void FusionAnalyzer::plan() {
     }
   }
 
-  // Phase 2: Process RAR (load-load) edges.
-  // Two outcomes per (source, target) pair:
-  //   (a) No backward intersection: add the RAR edge normally via applyAndFuse.
-  //   (b) Backward intersection: skip the edge (preserve topology for alloc elimination),
-  //       add softDefer(sourceGroup, targetGroup) so writer side emits after reader side.
-  for (const auto &[targetGroupId, rarGroupIds] : rarMap) {
+  // Phase 2: Process RAR edges in deterministic order: target ascending, source descending.
+  // (1) No backward intersection → applyAndFuse;
+  // (2) backward intersection → skip edge + softDefer(source, target).
+  std::vector<unsigned> sortedRarTargets;
+  sortedRarTargets.reserve(rarMap.size());
+  for (const auto &[targetGroupId, _] : rarMap) {
+    sortedRarTargets.push_back(targetGroupId);
+  }
+  std::sort(sortedRarTargets.begin(), sortedRarTargets.end());
+
+  for (unsigned targetGroupId : sortedRarTargets) {
     auto targetGroup = depGraph.getGroup(targetGroupId);
     if (targetGroup == nullptr) {
       continue;
     }
 
+    const auto &rarGroupIds = rarMap[targetGroupId];
     for (unsigned sourceGroupId : rarGroupIds) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
       if (sourceGroup == nullptr) {
         continue;
       }
 
-      if (findBackwardIntersection(sourceGroup, targetGroup)) {
+      bool isAncestry = false;
+      if (findBackwardIntersection(sourceGroup, targetGroup, &isAncestry)) {
         // deferred = writer side (sourceGroup), mustFirst = reader side (targetGroup).
         softDeferConstraints.emplace_back(sourceGroup->groupId, targetGroup->groupId);
         continue;
       }
-      applyAndFuse(targetGroup, sourceGroup);
+      if (!isAncestry) {
+        applyAndFuse(targetGroup, sourceGroup);
+      }
     }
   }
 

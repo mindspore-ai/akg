@@ -118,7 +118,7 @@ struct FusionAnalyzer {
   // Reachability
   std::unordered_map<unsigned, unsigned> findReachableGroups(unsigned startGroupId);
   std::vector<unsigned> findLastNodesInPath(unsigned srcGroupId);
-  bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId);
+  bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId, bool *dstSideWon = nullptr);
 
   // Sets fusionType, depInfo, and loopTransform.
   void setFusionPlanOptions(FusionPlan &plan);
