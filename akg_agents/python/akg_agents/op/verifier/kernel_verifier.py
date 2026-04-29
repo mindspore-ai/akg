@@ -38,6 +38,7 @@ from akg_agents.op.verifier.data_cache import (
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
     read_reference_data_from_cache,
+    verifier_data_cache_lock,
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
 )
@@ -1019,10 +1020,14 @@ if __name__ == "__main__":
                     "禁用该 reference data cache 以避免不安全反序列化"
                 )
             else:
-                logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+                logger.warning(
+                    f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}"
+                )
             return None
         except Exception as exc:
-            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}")
+            logger.warning(
+                f"[{self.op_name}] Verifier Data Cache reference data 无法解析，准备重新生成: {exc}"
+            )
             return None
 
     def _is_valid_cached_reference_data(self, reference_data: bytes) -> bool:
@@ -1041,7 +1046,9 @@ if __name__ == "__main__":
             logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 缺少 outputs，准备重新生成")
             return False
         if not payload.get("save_inputs") or payload.get("inputs") is None:
-            logger.warning(f"[{self.op_name}] Verifier Data Cache reference data 缺少可复用 inputs，准备重新生成")
+            logger.warning(
+                f"[{self.op_name}] Verifier Data Cache reference data 缺少可复用 inputs，准备重新生成"
+            )
             return False
         return True
 
@@ -1062,64 +1069,80 @@ if __name__ == "__main__":
             return None
 
         cache_key = self._get_reference_cache_key()
-        cached_reference = read_reference_data_from_cache(
-            cache_cfg,
-            op_name=self.op_name,
-            cache_key=cache_key,
-        )
-        if cached_reference:
-            if not self._is_valid_cached_reference_data(cached_reference):
-                delete_reference_data_from_cache(
+        try:
+            async with verifier_data_cache_lock(
+                cache_cfg,
+                namespace="reference",
+                op_name=self.op_name,
+                cache_key=cache_key,
+            ):
+                cached_reference = read_reference_data_from_cache(
                     cache_cfg,
                     op_name=self.op_name,
                     cache_key=cache_key,
                 )
-            else:
-                logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
-                return cached_reference
+                if cached_reference:
+                    if not self._is_valid_cached_reference_data(cached_reference):
+                        delete_reference_data_from_cache(
+                            cache_cfg,
+                            op_name=self.op_name,
+                            cache_key=cache_key,
+                        )
+                    else:
+                        logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
+                        return cached_reference
 
-        if cached_reference:
-            logger.info(f"[{self.op_name}] Verifier Data Cache reference data 已失效，重新生成")
-        else:
-            logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：reference data")
+                if cached_reference:
+                    logger.info(f"[{self.op_name}] Verifier Data Cache reference data 已失效，重新生成")
+                else:
+                    logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：reference data")
 
-        if not self.worker:
-            logger.info(f"[{self.op_name}] 当前无 worker，跳过 reference data 回填")
-            return None
+                if not self.worker:
+                    logger.info(f"[{self.op_name}] 当前无 worker，跳过 reference data 回填")
+                    return None
 
-        logger.info(f"[{self.op_name}] 开始生成 reference data")
-        reference_timeout = int(self.config.get("reference_data_timeout", self.config.get("verify_timeout", 300)))
-        try:
-            success, log, reference_bytes = await self.generate_reference_data(
-                self.framework_code,
-                timeout=reference_timeout,
-                save_inputs=True,
-                device_id=device_id,
+                logger.info(f"[{self.op_name}] 开始生成 reference data")
+                reference_timeout = int(
+                    self.config.get("reference_data_timeout", self.config.get("verify_timeout", 300))
+                )
+                try:
+                    success, log, reference_bytes = await self.generate_reference_data(
+                        self.framework_code,
+                        timeout=reference_timeout,
+                        save_inputs=True,
+                        device_id=device_id,
+                    )
+                except Exception as exc:
+                    logger.warning(f"[{self.op_name}] 生成 reference data 失败，回退到实时验证: {exc}")
+                    return None
+
+                if not success or not reference_bytes:
+                    logger.warning(
+                        f"[{self.op_name}] reference data 生成失败，回退到实时验证: {(log or '')[:500]}"
+                    )
+                    return None
+
+                write_reference_data_to_cache(
+                    cache_cfg,
+                    op_name=self.op_name,
+                    cache_key=cache_key,
+                    reference_data=reference_bytes,
+                    metadata={
+                        "framework": self.framework,
+                        "task_id": self.task_id,
+                        "backend": self.backend,
+                        "arch": self.arch,
+                        "bench_type": self.bench_type,
+                        "save_inputs": True,
+                    },
+                )
+                logger.info(f"[{self.op_name}] reference data 已写入 Verifier Data Cache")
+                return reference_bytes
+        except TimeoutError as exc:
+            logger.warning(
+                f"[{self.op_name}] 获取 Verifier Data Cache reference lock 超时，回退到实时验证: {exc}"
             )
-        except Exception as exc:
-            logger.warning(f"[{self.op_name}] 生成 reference data 失败，回退到实时验证: {exc}")
             return None
-
-        if not success or not reference_bytes:
-            logger.warning(f"[{self.op_name}] reference data 生成失败，回退到实时验证: {(log or '')[:500]}")
-            return None
-
-        write_reference_data_to_cache(
-            cache_cfg,
-            op_name=self.op_name,
-            cache_key=cache_key,
-            reference_data=reference_bytes,
-            metadata={
-                "framework": self.framework,
-                "task_id": self.task_id,
-                "backend": self.backend,
-                "arch": self.arch,
-                "bench_type": self.bench_type,
-                "save_inputs": True,
-            },
-        )
-        logger.info(f"[{self.op_name}] reference data 已写入 Verifier Data Cache")
-        return reference_bytes
 
     def _apply_cached_reference_data(self, reference_data: bytes) -> None:
         if not reference_data:

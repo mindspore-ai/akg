@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_reference_cache_key,
     extract_baseline_time_us,
+    load_verifier_data_cache_config,
     read_baseline_result_from_cache,
     read_reference_data_from_cache,
     write_baseline_result_to_cache,
@@ -99,7 +101,11 @@ class DummyProfileWorker:
 
 
 class DummyReferenceWorker:
-    pass
+    async def generate_reference(self, package_data, task_id, op_name, timeout):
+        raise AssertionError("generate_reference should be stubbed by the test")
+
+    async def verify(self, package_data, task_id, op_name, timeout):
+        return True, "ok", {}
 
 
 def _make_config(tmp_path: Path) -> dict:
@@ -242,6 +248,22 @@ def test_cached_reference_data_loads_with_weights_only(monkeypatch, tmp_path):
     assert captured["weights_only"] is True
 
 
+def test_cache_dir_is_expanded_from_config(monkeypatch, tmp_path):
+    home_dir = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    cfg = load_verifier_data_cache_config(
+        {
+            "data_cache": {
+                "enabled": True,
+                "cache_dir": "~/akg_cache",
+            }
+        }
+    )
+
+    assert cfg.cache_dir == str(home_dir / "akg_cache")
+
+
 @pytest.mark.asyncio
 async def test_run_uses_cached_reference_data(monkeypatch, tmp_path):
     verifier = _make_verifier(tmp_path, worker=DummyReferenceWorker())
@@ -350,6 +372,32 @@ async def test_run_regenerates_corrupted_reference_cache(monkeypatch, tmp_path):
     loaded = await verifier._prepare_cached_reference_data(device_id=0)
     assert loaded == regenerated_reference
     assert read_reference_data_from_cache(cfg, op_name=verifier.op_name, cache_key=cache_key) == regenerated_reference
+
+
+@pytest.mark.asyncio
+async def test_run_serializes_concurrent_reference_cache_generation(monkeypatch, tmp_path):
+    verifier_a = _make_verifier(tmp_path, worker=DummyReferenceWorker(), task_id="shared")
+    verifier_b = _make_verifier(tmp_path, worker=DummyReferenceWorker(), task_id="shared")
+    regenerated_reference = _make_reference_payload_bytes()
+    generate_calls = 0
+
+    async def fake_generate_reference_data(task_desc, timeout=120, save_inputs=False, device_id=None):
+        nonlocal generate_calls
+        generate_calls += 1
+        await asyncio.sleep(0.05)
+        return True, "regenerated", regenerated_reference
+
+    monkeypatch.setattr(verifier_a, "generate_reference_data", fake_generate_reference_data)
+    monkeypatch.setattr(verifier_b, "generate_reference_data", fake_generate_reference_data)
+
+    loaded_a, loaded_b = await asyncio.gather(
+        verifier_a._prepare_cached_reference_data(device_id=0),
+        verifier_b._prepare_cached_reference_data(device_id=0),
+    )
+
+    assert loaded_a == regenerated_reference
+    assert loaded_b == regenerated_reference
+    assert generate_calls == 1
 
 
 @pytest.mark.asyncio
