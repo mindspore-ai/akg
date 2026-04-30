@@ -1090,7 +1090,9 @@ if __name__ == "__main__":
                 else:
                     self._clear_managed_reference_data("cache key 已变化")
             else:
-                logger.info(f"[{self.op_name}] 使用调用方提供的 reference_data，跳过本地 Data Cache 查询")
+                logger.info(
+                    f"[{self.op_name}] 使用调用方提供的 reference_data，跳过本地 Data Cache 查询"
+                )
                 return None
 
         if not cache_cfg.enabled or not cache_cfg.cache_reference_data:
@@ -1281,7 +1283,10 @@ if __name__ == "__main__":
                 try:
                     with open(reference_file_abs, 'wb') as f:
                         f.write(reference_data_bytes)
-                    logger.info(f"[{self.op_name}] 参考数据已写入: {reference_file_abs} ({len(reference_data_bytes)} bytes)")
+                    logger.info(
+                        f"[{self.op_name}] 参考数据已写入: "
+                        f"{reference_file_abs} ({len(reference_data_bytes)} bytes)"
+                    )
                     # 传给模板的是相对路径（只有文件名），脚本执行时从 cwd 查找
                     reference_file = reference_file_name
                 except Exception as e:
