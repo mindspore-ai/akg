@@ -2,12 +2,11 @@
 
 ## Overview
 
-akg-op is the operator optimization Agent in the AKG Agents + OpenCode integration. It generates high-performance operator code and supports two modes:
+akg-op is the operator optimization Agent in the AKG Agents + OpenCode integration. It generates high-performance operator code.
 
 | Mode | Trigger | Typical Scenario |
 |------|---------|-----------------|
 | **Single Operator** | Specify a concrete operator or provide source code | "Generate a relu kernel", "Optimize the layernorm in this file" |
-| **Fusion** | Request model-level fusion analysis | "Analyze Qwen2 for operator fusion opportunities" |
 
 ---
 
@@ -24,28 +23,13 @@ akg-op is the operator optimization Agent in the AKG Agents + OpenCode integrati
           │  & Param Confirm     │  🛑 Confirm framework/backend/arch/dsl
           └─────────┬───────────┘
                     ▼
-        ┌───────────────────────┐
-        │  Fusion analysis       │
-        │  needed?               │
-        └───┬───────────────┬───┘
-            │ Yes           │ No
-            ▼               │
-   ┌────────────────┐       │
-   │  Phase 1       │       │
-   │  Fusion        │       │
-   │  Analysis      │       │
-   │  🛑 User picks │       │
-   │  opportunities │       │
-   └───────┬────────┘       │
-           │                │
-           ▼                ▼
   ┌─────────────────────────────┐
-  │  Phase 2  Build Task Desc    │  Extract operator logic from code
+  │  Phase 1  Build Task Desc    │  Extract operator logic from code
   │  Auto-validate + 🛑 Confirm  │  → {op_name}.py (KernelBench format)
   └─────────────┬───────────────┘
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 3  Generate Operator  │  Pick a workflow to run
+  │  Phase 2  Generate Operator  │  Pick a workflow to run
   │  🛑 User picks workflow      │  (kernelgen / adaptive_search / evolve)
   └─────────────┬───────────────┘
                 │
@@ -55,19 +39,19 @@ akg-op is the operator optimization Agent in the AKG Agents + OpenCode integrati
                 │ No
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 4  Confirm Result     │  🛑 Show generated_code.py
+  │  Phase 3  Confirm Result     │  🛑 Show generated_code.py
   │                              │  Accept / Regenerate
-  │  Regenerate → Back to Ph. 3  │
+  │  Regenerate → Back to Ph. 2  │
   └─────────────┬───────────────┘
                 │ Accept
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 5  Code Integration   │  Copy generated code to work dir
+  │  Phase 4  Code Integration   │  Copy generated code to work dir
   │  (if source code provided)   │  Backup + import replacement
   └─────────────┬───────────────┘
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 6  Output Report      │  report.md
+  │  Phase 5  Output Report      │  report.md
   │  Config, results, changes    │
   └─────────────────────────────┘
 ```
@@ -79,14 +63,14 @@ akg-op is the operator optimization Agent in the AKG Agents + OpenCode integrati
 ### Example 1: Single Operator — Generate Only
 
 ```
-User> Generate a relu kernel, input shape (128, 4096), fp32, on A100 with Triton
+User> Generate a relu kernel, input shape (128, 4096), fp32, on Ascend 910B2C with Triton
 
-Phase 0: Check env (cache hit, skip install) → Confirm params: framework=torch, backend=cuda, arch=a100, dsl=triton_cuda
-Phase 2: Generate relu.py (KernelBench format) → Validate → User confirms
-Phase 3: User picks kernelgen → Run → Success
-Phase 4: Show code → User accepts
-Phase 5: Copy relu_generated.py to work dir
-Phase 6: Output report
+Phase 0: Check env (cache hit, skip install) → Confirm params: framework=torch, backend=ascend, arch=ascend910b2c, dsl=triton_ascend
+Phase 1: Generate relu.py (KernelBench format) → Validate → User confirms
+Phase 2: User picks kernelgen → Run → Success
+Phase 3: Show code → User accepts
+Phase 4: Copy relu_generated.py to work dir
+Phase 5: Output report
 ```
 
 ### Example 2: Single Operator — Optimize Existing Code
@@ -95,27 +79,11 @@ Phase 6: Output report
 User> Optimize the layernorm in /path/to/model.py using Triton
 
 Phase 0: Check env (cache hit) → Confirm params
-Phase 2: Extract layernorm from model.py → Generate layernorm.py → Validate → User confirms
-Phase 3: User picks adaptive_search → Run (silent mode, ~15 min) → Success
-Phase 4: Show code → User accepts
-Phase 5: Backup model.py → Add "from layernorm_generated import ModelNew" → Save integrated file
-Phase 6: Output report with file change records
-```
-
-### Example 3: Fusion Mode (First Use, No Env Cache)
-
-```
-User> Analyze Qwen2 model for operator fusion opportunities and realize
-
-Phase 0: Check env (no cache → detect akg_cli → collect hardware/framework/DSL → write cache)
-         → Confirm params: framework=torch, backend=ascend, arch=ascend910b4, dsl=triton_ascend
-Phase 1: Analyze Qwen2 forward → Found 3 fusion opportunities → User selects 2
-  For each selected opportunity:
-    Phase 2: Build fused operator task description → Validate → User confirms
-    Phase 3: Generate fused operator
-    Phase 4: Show code → Accept
-    Phase 5: Backup → Integrate into model code
-Phase 6: Output summary report
+Phase 1: Extract layernorm from model.py → Generate layernorm.py → Validate → User confirms
+Phase 2: User picks adaptive_search → Run (silent mode, ~15 min) → Success
+Phase 3: Show code → User accepts
+Phase 4: Backup model.py → Add "from layernorm_generated import ModelNew" → Save integrated file
+Phase 5: Output report with file change records
 ```
 
 ---
@@ -151,10 +119,9 @@ If unsatisfied with the result, choose a different workflow to regenerate. Previ
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| `akg-op` | Agent | Main orchestrator: mode detection, phase sequencing, user interaction |
+| `akg-op` | Agent | Main orchestrator: phase sequencing, user interaction |
 | `akg-env-setup` | Skill | Environment check, hardware/framework/DSL detection, dependency install |
 | `op-task-extractor` | Skill | Build KernelBench format task file from code or natural language |
-| `vllm-ascend-operator-fusion` | Skill | Model fusion analysis |
 | `kernelgen` | SubAgent | Iterative code generation + verification workflow |
 | `kernel-generator` | Skill | DSL-aware kernel code generation (used by kernelgen) |
 | `kernel-verifier` | Skill | Multi-framework, multi-backend correctness verification (used by kernelgen) |
