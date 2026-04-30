@@ -176,39 +176,75 @@ def NPUVector_ReductionOp :
                Optional<AnyType>:$acc,
                DefaultValuedAttr<
                  Arith_FastMathAttr,
-                 "::mlir::arith::FastMathFlags::none">:$fastmath)>,
+                 "::mlir::arith::FastMathFlags::none">:$fastmath,
+               OptionalAttr<DenseI64ArrayAttr>:$reduction_dims)>,
     Results<(outs AnyType:$dest)> {
-  let summary = "Fold an n-D NPU/vector tile to a scalar; supports dynamic rank sizes.";
+  let summary = "Reduce specified dims of an NPU/vector tile; defaults to all dims (scalar).";
   let description = [{
-    **Full-tensor reduction** of a `vector` or `!npuvector` to a scalar using the same
-    `CombiningKind` enumeration as `vector.reduction`; an optional fused accumulator
-    operand is allowed.
+    Reduction of a `vector` or `!npuvector` using the same `CombiningKind` enumeration
+    as `vector.reduction`; an optional fused accumulator operand is allowed.
 
-    Unlike the upstream `vector.reduction` docs (often phrased around 1-D), this op is
-    defined for **multi-dimensional tiles**, including dynamic `?` extents, for NPU
-    reduction lowering.
+    When `reduction_dims` is absent or empty, **all** dimensions are folded and the result
+    is a scalar (backward-compatible with the previous full-reduction semantics).
+
+    When `reduction_dims` lists a subset of dimensions, only those axes are collapsed and
+    the result is a lower-rank `!npuvector` retaining the non-reduced dimensions.
 
     Example:
 
     ```mlir
+    // Full reduction (default):
     %1 = npuvector.reduction <add>, %0 : !npuvector<?xf32> into f32
-    %2 = npuvector.reduction <xor>, %v : !npuvector<?xi32> into i32
+
+    // Partial reduction — fold only dim 1:
+    %2 = npuvector.reduction <add>, %v {reduction_dims = [1]}
+           : !npuvector<?x?xf32> into !npuvector<?xf32>
     ```
   }];
   let extraClassDeclaration = [{
     NPUVectorType getSourceVectorType() {
       return ::llvm::cast<NPUVectorType>(getVector().getType());
     }
+    bool isPartialReduction() {
+      auto dims = getReductionDims();
+      if (!dims) return false;
+      auto srcType = getSourceVectorType();
+      return static_cast<int64_t>(dims->size()) < srcType.getRank();
+    }
   }];
   let builders = [
-    // Builder that infers the type of `dest`.
+    // Full reduction to scalar with accumulator.
     OpBuilder<(ins "::mlir::vector::CombiningKind":$kind, "Value":$vector, "Value":$acc,
                     CArg<"::mlir::arith::FastMathFlags",
-                         "::mlir::arith::FastMathFlags::none">:$fastMathFlags)>,
-    // Builder that infers the type of `dest` and has no accumulator.
+                         "::mlir::arith::FastMathFlags::none">:$fastMathFlags), [{
+      auto elemType = ::llvm::cast<ShapedType>(vector.getType()).getElementType();
+      build($_builder, $_state, elemType, kind, vector, acc,
+            /*reductionDims=*/nullptr, fastMathFlags);
+    }]>,
+    // Full reduction to scalar, no accumulator.
     OpBuilder<(ins "::mlir::vector::CombiningKind":$kind, "Value":$vector,
                     CArg<"::mlir::arith::FastMathFlags",
-                         "::mlir::arith::FastMathFlags::none">:$fastMathFlags)>,
+                         "::mlir::arith::FastMathFlags::none">:$fastMathFlags), [{
+      auto elemType = ::llvm::cast<ShapedType>(vector.getType()).getElementType();
+      build($_builder, $_state, elemType, kind, vector, /*acc=*/Value(),
+            /*reductionDims=*/nullptr, fastMathFlags);
+    }]>,
+    // Partial reduction with explicit result type and reduction_dims.
+    OpBuilder<(ins "Type":$destType, "::mlir::vector::CombiningKind":$kind,
+                    "Value":$vector, "Value":$acc,
+                    "::mlir::DenseI64ArrayAttr":$reductionDims,
+                    CArg<"::mlir::arith::FastMathFlags",
+                         "::mlir::arith::FastMathFlags::none">:$fastMathFlags), [{
+      $_state.addTypes(destType);
+      $_state.addAttribute("kind",
+        ::mlir::vector::CombiningKindAttr::get($_builder.getContext(), kind));
+      $_state.addOperands(vector);
+      if (acc) $_state.addOperands(acc);
+      if (reductionDims)
+        $_state.addAttribute("reduction_dims", reductionDims);
+      $_state.addAttribute("fastmath",
+        ::mlir::arith::FastMathFlagsAttr::get($_builder.getContext(), fastMathFlags));
+    }]>,
   ];
   let assemblyFormat = "$kind `,` $vector (`,` $acc^)? (`fastmath` `` $fastmath^)?"
                        " attr-dict `:` type($vector) `into` type($dest)";
