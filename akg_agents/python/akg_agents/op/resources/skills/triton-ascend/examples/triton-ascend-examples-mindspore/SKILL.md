@@ -18,9 +18,10 @@ metadata:
 |------|---------|-----------|
 | **基类** | `torch.nn.Module` | `mindspore.nn.Cell` |
 | **前向函数** | `forward` | `construct` |
-| **张量创建** | `torch.empty` | `mindspore.ops.zeros` 或 numpy |
-| **设备** | `device='cuda'/'npu'` | 自动管理或 `context.set_context` |
+| **张量创建** | `torch.empty` | `mindspore.mint.empty` / `mindspore.mint.empty_like` |
+| **设备** | `device='cuda'/'npu'` | `mindspore.set_device("Ascend", 0)` / `mindspore.set_device("CPU")` |
 | **数据类型** | `torch.float16` | `mindspore.float16` |
+| **获取核心数** | `torch_npu.npu.npu_config.get_device_limit(0)` | `mindspore.runtime.get_device_limit(0)` |
 
 ## 示例列表
 
@@ -49,9 +50,7 @@ class ModelNew(nn.Cell):
         super().__init__()
     
     def construct(self, a, b):
-        # 注意：使用 numpy 创建输出张量
-        import numpy as np
-        c = ms.Tensor(np.empty_like(a.asnumpy()), dtype=a.dtype)
+        c = ms.mint.empty_like(a)
         
         n_elements = a.size
         grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
@@ -72,8 +71,7 @@ class ModelNew(nn.Cell):
         assert C == C2, f"矩阵维度不匹配: {C} != {C2}"
         
         # MindSpore 张量创建
-        import numpy as np
-        output = ms.Tensor(np.empty((B, D), dtype=np.float32))
+        output = ms.mint.empty((B, D), dtype=ms.float32)
         
         matmul_kernel[1, 1, 1](output, x0, x1, 1, B, C, D)
         return output
@@ -95,8 +93,7 @@ class ModelNew(nn.Cell):
     
     def construct(self, x):
         M, N = x.shape
-        import numpy as np
-        output = ms.Tensor(np.empty_like(x.asnumpy()), dtype=x.dtype)
+        output = ms.mint.empty_like(x)
         
         grid = (M,)
         layernorm_kernel[grid](
@@ -114,8 +111,7 @@ class ModelNew(nn.Cell):
     
     def construct(self, x):
         n_rows, n_cols = x.shape
-        import numpy as np
-        output = ms.Tensor(np.empty_like(x.asnumpy()), dtype=x.dtype)
+        output = ms.mint.empty_like(x)
         
         BLOCK_SIZE = triton.next_power_of_2(n_cols)
         grid = (n_rows,)
@@ -131,14 +127,12 @@ class ModelNew(nn.Cell):
         super().__init__()
     
     def construct(self, x):
-        import numpy as np
-        
         # 第一个 kernel
-        intermediate = ms.Tensor(np.empty_like(x.asnumpy()), dtype=x.dtype)
+        intermediate = ms.mint.empty_like(x)
         kernel1[grid](x, intermediate, ...)
         
         # 第二个 kernel
-        output = ms.Tensor(np.empty_like(x.asnumpy()), dtype=x.dtype)
+        output = ms.mint.empty_like(x)
         kernel2[grid](intermediate, output, ...)
         
         return output

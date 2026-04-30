@@ -302,7 +302,68 @@ class KernelVerifier:
             self._write_framework_aux_files(check_dir)
 
             # 3. 生成验证脚本 verify_{op_name}.py
-            verify_script_content = f"""
+            if self.framework == "mindspore":
+                verify_script_content = f"""
+import mindspore as ms
+import sys
+import os
+
+sys.path.append(os.getcwd())
+os.environ['DEVICE_ID'] = str({device_id})
+
+def run_check():
+    print("Starting reference check...")
+    try:
+        try:
+            from reference import Model, get_inputs, get_init_inputs
+        except ImportError as e:
+            print(f"Import failed: {{e}}")
+            return False
+
+        print("Successfully imported Model and helper functions.")
+
+        ms.set_context(device_target="Ascend", device_id={device_id})
+        print(f"Using device: Ascend:{device_id}")
+
+        try:
+            init_inputs = get_init_inputs()
+            model = Model(*init_inputs)
+        except Exception as e:
+            print(f"Model instantiation failed: {{e}}")
+            return False
+
+        try:
+            inputs = get_inputs()
+        except Exception as e:
+            print(f"get_inputs failed: {{e}}")
+            return False
+
+        try:
+            output = model(*inputs)
+            print("Forward pass successful.")
+        except Exception as e:
+            print(f"Forward pass failed: {{e}}")
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"Unexpected error: {{e}}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = run_check()
+    if success:
+        print("REFERENCE_CHECK_SUCCESS")
+        sys.exit(0)
+    else:
+        print("REFERENCE_CHECK_FAILED")
+        sys.exit(1)
+"""
+            else:
+                verify_script_content = f"""
 import torch
 import sys
 import os

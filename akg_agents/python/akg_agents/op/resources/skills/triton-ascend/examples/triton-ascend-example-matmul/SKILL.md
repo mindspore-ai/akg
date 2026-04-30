@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   operator_type: "matmul"
+  framework: torch
 ---
 
 # 矩阵乘法 — Triton Ascend 实现示例

@@ -39,8 +39,8 @@ N = 4096
 
 
 def get_inputs():
-    A = ms.mint.randn(N, dtype=ms.float16)
-    B = ms.mint.randn(N, M, dtype=ms.float16)
+    A = ms.mint.randn(N, dtype=ms.float32)
+    B = ms.mint.randn(N, M, dtype=ms.float32)
     return [A, B]
 
 

@@ -129,7 +129,7 @@ except ImportError:
 """
         return code
     
-    def get_special_setup_code(self) -> str:
+    def get_special_setup_code(self, framework: str = "torch") -> str:
         """Return special setup code for tilelang_npuir."""
         return """import tilelang
 tilelang.cache.clear_cache()

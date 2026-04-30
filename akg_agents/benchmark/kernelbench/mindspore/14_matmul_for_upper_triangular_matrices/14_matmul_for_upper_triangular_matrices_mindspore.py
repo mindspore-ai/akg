@@ -31,8 +31,8 @@ N = 4096
 
 def get_inputs():
     
-    A = ms.ops.triu(ms.mint.randn(N, N, dtype=ms.float16))
-    B = ms.ops.triu(ms.mint.randn(N, N, dtype=ms.float16))
+    A = ms.ops.triu(ms.mint.randn(N, N, dtype=ms.float32))
+    B = ms.ops.triu(ms.mint.randn(N, N, dtype=ms.float32))
     return [A, B]
 
 
