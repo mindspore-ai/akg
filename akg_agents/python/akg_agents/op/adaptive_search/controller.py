@@ -136,6 +136,11 @@ class AdaptiveSearchController:
             handwrite_decay_rate=self.search_config.handwrite_decay_rate
         )
         self.bench_type = config.get("bench_type", "kernelbench")
+        from akg_agents.op.verifier.data_cache import set_verifier_data_cache_key_id
+        set_verifier_data_cache_key_id(
+            config,
+            f"{op_name}:{framework}:{dsl}:{backend}:{arch}:{self.bench_type}",
+        )
         self.generator = TaskGenerator(
             op_name=op_name,
             task_desc=task_desc,

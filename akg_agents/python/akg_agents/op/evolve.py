@@ -87,6 +87,13 @@ async def evolve(
     Returns:
         进化结果字典
     """
+    from akg_agents.op.verifier.data_cache import set_verifier_data_cache_key_id
+    bench_type = config.get("bench_type", "kernelbench")
+    set_verifier_data_cache_key_id(
+        config,
+        f"{op_name}:{framework}:{dsl}:{backend}:{arch}:{bench_type}",
+    )
+
     # ========== 1. 创建运行时配置 ==========
     runtime_config = create_runtime_config(locals())
 
@@ -322,4 +329,3 @@ async def evolve(
     logger.info(f"Results stored in: {runtime_config.storage_dir}")
 
     return evolution_result
-

@@ -35,6 +35,7 @@ from akg_agents.op.verifier.data_cache import (
     delete_baseline_result_from_cache,
     delete_reference_data_from_cache,
     extract_baseline_time_us,
+    get_verifier_data_cache_key_id,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
     read_reference_data_from_cache,
@@ -983,6 +984,9 @@ if __name__ == "__main__":
     def _get_data_cache_config(self):
         return load_verifier_data_cache_config(self.config)
 
+    def _get_data_cache_key_id(self) -> str:
+        return get_verifier_data_cache_key_id(self.config, self.task_id)
+
     def _get_reference_cache_key(self) -> str:
         return build_reference_cache_key(
             op_name=self.op_name,
@@ -991,7 +995,7 @@ if __name__ == "__main__":
             backend=self.backend,
             arch=self.arch,
             bench_type=self.bench_type,
-            task_id=self.task_id,
+            task_id=self._get_data_cache_key_id(),
         )
 
     def _get_baseline_cache_key(self, warmup_times: int, run_times: int) -> str:
@@ -1005,7 +1009,7 @@ if __name__ == "__main__":
             warmup_times=warmup_times,
             run_times=run_times,
             dsl=self.dsl,
-            task_id=self.task_id,
+            task_id=self._get_data_cache_key_id(),
         )
 
     def _load_cached_torch_reference_payload(self, reference_data: bytes) -> Optional[Any]:
@@ -1153,6 +1157,7 @@ if __name__ == "__main__":
                     metadata={
                         "framework": self.framework,
                         "task_id": self.task_id,
+                        "cache_key_id": self._get_data_cache_key_id(),
                         "backend": self.backend,
                         "arch": self.arch,
                         "bench_type": self.bench_type,
@@ -1244,6 +1249,7 @@ if __name__ == "__main__":
             metadata={
                 "framework": self.framework,
                 "task_id": self.task_id,
+                "cache_key_id": self._get_data_cache_key_id(),
                 "dsl": self.dsl,
                 "backend": self.backend,
                 "arch": self.arch,

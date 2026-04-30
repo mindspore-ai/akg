@@ -64,7 +64,8 @@ verifier/
 - reference data cache 仅覆盖静态 shape；动态 shape 自动跳过，避免误复用单组输入
 - reference data 命中后会校验 `.pt` payload，损坏或缺少可复用字段时删除旧缓存并重新生成
 - 命中 baseline cache 时，profile 直接注入 `override_base_time_us` 并跳过 base profile 脚本
-- cache key 必须包含 `task_id`；baseline cache key 还必须包含 DSL，避免同一 framework/backend/arch 下不同计时路径相互污染
+- cache key 默认包含 `task_id`；配置了 `data_cache.cache_key_id` 时使用该稳定身份，以支持同一工作流内多个 verifier task 复用 cache
+- baseline cache key 还必须包含 DSL，避免同一 framework/backend/arch 下不同计时路径相互污染
 
 ### Roofline 集成
 
