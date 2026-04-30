@@ -34,14 +34,27 @@ triton_decorators:
   - heuristics
 
 # ---------------------------------------------------------------------------
-# Top-level names treated as "torch namespaces" when scanning forward()
-# for forbidden `.method(...)` calls. `torch` covers plain
-# `torch.matmul(...)`; `F` covers the common
-# `import torch.nn.functional as F` alias.
+# Namespaces treated as "torch namespaces" when scanning forward() for
+# forbidden `.method(...)` calls. Entries may be either local aliases
+# (`F`, `nn.functional`) or full dotted namespaces
+# (`torch.nn.functional`, `torch.linalg`). The checker resolves the full
+# AST call chain, so `torch.nn.functional.conv2d(...)` is matched by the
+# same op policy as `F.conv2d(...)`.
 # ---------------------------------------------------------------------------
 torch_call_prefixes:
   - torch
+  - torch.nn.functional
+  - torch.functional
+  - nn.functional
   - F
+  - torch.linalg
+  - linalg
+  - torch.fft
+  - fft
+  - torch.special
+  - special
+  - torch.sparse
+  - sparse
 
 # ---------------------------------------------------------------------------
 # Hard blacklist — forbidden in ModelNew.forward() even when a Triton
@@ -64,6 +77,27 @@ torch_compute_ops_hard:
   - inner
   - outer
   - linear
+  - bilinear
+  - multi_dot
+  - vecdot
+  - cross
+  - tensorinv
+  - tensorsolve
+  - svd
+  - svdvals
+  - qr
+  - lu
+  - lu_factor
+  - eig
+  - eigvals
+  - eigh
+  - eigvalsh
+  - solve
+  - solve_triangular
+  - lu_solve
+  - lstsq
+  - inv
+  - pinv
   # Convolution
   - conv1d
   - conv2d
@@ -77,6 +111,28 @@ torch_compute_ops_hard:
   - logsumexp
   # Other complex ops
   - embedding
+  - embedding_bag
+  - scaled_dot_product_attention
+  - multi_head_attention_forward
+  # Spectral transforms
+  - fft
+  - ifft
+  - fft2
+  - ifft2
+  - fftn
+  - ifftn
+  - rfft
+  - irfft
+  - rfft2
+  - irfft2
+  - rfftn
+  - irfftn
+  - hfft
+  - ihfft
+  - hfft2
+  - ihfft2
+  - hfftn
+  - ihfftn
 
 # ---------------------------------------------------------------------------
 # Soft blacklist — forbidden in forward() only when no Triton kernel is
@@ -111,6 +167,8 @@ torch_compute_ops_soft:
   - mean
   - prod
   - norm
+  - vector_norm
+  - matrix_norm
   - amax
   - amin
   - argmax

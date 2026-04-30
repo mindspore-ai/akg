@@ -281,6 +281,70 @@ class ModelNew(torch.nn.Module):
 
 @pytest.mark.level0
 @pytest.mark.asyncio
+async def test_dotted_torch_nn_functional_hard_api_rejected(checker):
+    """torch.nn.functional.conv2d should be rejected like F.conv2d."""
+    code = '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def k(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=offs < n), mask=offs < n)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x, w):
+        tmp = torch.empty_like(x)
+        k[(1,)](x, tmp, x.numel(), BLOCK=1024)
+        return torch.nn.functional.conv2d(tmp, w)
+'''
+    passed, _, errors = await checker.check(code)
+    assert passed is False
+    assert any(
+        e["error_type"] == "torch_api_instead_of_kernel"
+        and "torch.nn.functional.conv2d" in e["detail"]
+        for e in errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_dotted_torch_linalg_hard_api_rejected(checker):
+    """torch.linalg.matmul should be rejected through the dotted namespace path."""
+    code = '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def k(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=offs < n), mask=offs < n)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x, w):
+        tmp = torch.empty_like(x)
+        k[(1,)](x, tmp, x.numel(), BLOCK=1024)
+        return torch.linalg.matmul(tmp, w)
+'''
+    passed, _, errors = await checker.check(code)
+    assert passed is False
+    assert any(
+        e["error_type"] == "torch_api_instead_of_kernel"
+        and "torch.linalg.matmul" in e["detail"]
+        for e in errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
 async def test_kernel_not_called_with_torch_api(checker):
     """kernel 定义了但没调用，且 forward 用 torch API"""
     code = '''\
@@ -417,6 +481,10 @@ def test_policy_loaded_from_yaml():
     assert "layer_norm" in checker.torch_compute_ops_soft
     assert "relu" in checker.torch_compute_ops_soft
     assert "torch" in checker.torch_call_prefixes
+    assert "torch.nn.functional" in checker.torch_call_prefixes
+    assert "nn.functional" in checker.torch_call_prefixes
+    assert "torch.linalg" in checker.torch_call_prefixes
+    assert "scaled_dot_product_attention" in checker.torch_compute_ops_hard
     assert "jit" in checker.triton_decorators
     # 身份字符串直接走模块级 _POLICY
     assert cc._POLICY["kernel_class_name"] == "ModelNew"

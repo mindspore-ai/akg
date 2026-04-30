@@ -53,7 +53,7 @@
 | Key | 类型 | 含义 |
 |---|---|---|
 | `triton_decorators` | list[str] | `<triton_module_name>` 命名空间下视作 kernel 装饰器的属性名 |
-| `torch_call_prefixes` | list[str] | `forward()` 中被扫描的顶层调用前缀 |
+| `torch_call_prefixes` | list[str] | `forward()` 中被扫描的本地别名或 dotted torch namespace |
 | `torch_compute_ops_hard` | list[str] | 无论 kernel 是否启动都拒绝出现在 `forward()` 中的方法名 |
 | `torch_compute_ops_soft` | list[str] | 仅在 kernel 未启动时拒绝出现在 `forward()` 中的方法名 |
 | `kernel_class_name` | str | 第 5 步 AST walker 搜索的类名 |
@@ -79,6 +79,9 @@ YAML 在模块 import 时通过
   将这些算子用作 kernel 前处理的 Ascend seeds。
 - 从两个列表中同时删除某算子以无条件接受。
 - 向任一列表追加新的方法名。
+- 向 `torch_call_prefixes` 追加本地别名或 dotted namespace，例如
+  `F`、`torch.nn.functional`、`nn.functional`、`torch.linalg`、
+  `torch.fft`、`torch.special`、`torch.sparse`。
 - kernel 模块命名约定变更时，修改 `kernel_class_name` /
   `kernel_forward_method`。
 - 向 `stray_text.unicode_ranges` 追加其他文字区间（平假名
