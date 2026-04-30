@@ -29,11 +29,14 @@ from akg_agents.op.verifier.data_cache import (
     VerifierDataCacheConfig,
     build_baseline_cache_key,
     build_reference_cache_key,
+    build_workflow_data_cache_key_id,
     extract_baseline_time_us,
+    get_verifier_data_cache_key_id,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
     read_reference_data_from_cache,
     set_verifier_data_cache_key_id,
+    set_workflow_data_cache_key_id,
     verifier_data_cache_lock,
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
@@ -338,6 +341,52 @@ def test_cache_dir_is_expanded_from_config(monkeypatch, tmp_path):
     )
 
     assert cfg.cache_dir == str(home_dir / "akg_cache")
+
+
+def test_data_cache_config_handles_non_dict_section():
+    cfg = load_verifier_data_cache_config({"data_cache": "invalid"})
+
+    assert cfg.enabled is False
+    assert get_verifier_data_cache_key_id({"data_cache": "invalid"}, "fallback") == "fallback"
+
+    config = {"data_cache": "invalid"}
+    set_verifier_data_cache_key_id(config, "stable-key")
+    assert config["data_cache"] == {"cache_key_id": "stable-key"}
+
+
+def test_workflow_data_cache_key_id_helper_preserves_user_value():
+    expected_key_id = build_workflow_data_cache_key_id(
+        op_name="relu",
+        framework="torch",
+        dsl="triton_ascend",
+        backend="ascend",
+        arch="ascend910b4",
+        bench_type="kernelbench",
+    )
+    config = {"data_cache": {"cache_key_id": "user-key"}}
+
+    set_workflow_data_cache_key_id(
+        config,
+        op_name="relu",
+        framework="torch",
+        dsl="triton_ascend",
+        backend="ascend",
+        arch="ascend910b4",
+        bench_type="kernelbench",
+    )
+    assert config["data_cache"]["cache_key_id"] == "user-key"
+
+    set_workflow_data_cache_key_id(
+        config,
+        op_name="relu",
+        framework="torch",
+        dsl="triton_ascend",
+        backend="ascend",
+        arch="ascend910b4",
+        bench_type="kernelbench",
+        overwrite=True,
+    )
+    assert config["data_cache"]["cache_key_id"] == expected_key_id
 
 
 @pytest.mark.asyncio

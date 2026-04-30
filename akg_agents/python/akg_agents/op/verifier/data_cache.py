@@ -46,6 +46,15 @@ class VerifierDataCacheConfig:
     cache_baseline_result: bool = True
 
 
+def _get_data_cache_options(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(config, dict):
+        return {}
+    raw = config.get("data_cache") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
 def _parse_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -75,7 +84,7 @@ def _normalize_cache_dir(cache_dir: Any) -> str:
 
 
 def load_verifier_data_cache_config(config: Optional[Dict[str, Any]] = None) -> VerifierDataCacheConfig:
-    raw = dict((config or {}).get("data_cache") or {})
+    raw = dict(_get_data_cache_options(config))
 
     env_enabled = _get_env_override("VERIFY_DATA_CACHE")
     env_cache_dir = _get_env_override("VERIFY_DATA_CACHE_DIR")
@@ -101,7 +110,7 @@ def load_verifier_data_cache_config(config: Optional[Dict[str, Any]] = None) -> 
 
 
 def get_verifier_data_cache_key_id(config: Optional[Dict[str, Any]], default_task_id: str = "") -> str:
-    raw = dict((config or {}).get("data_cache") or {})
+    raw = _get_data_cache_options(config)
     cache_key_id = str(raw.get("cache_key_id") or "").strip()
     if cache_key_id:
         return cache_key_id
@@ -114,7 +123,7 @@ def set_verifier_data_cache_key_id(
     *,
     overwrite: bool = False,
 ) -> None:
-    if config is None:
+    if not isinstance(config, dict):
         return
     raw = config.get("data_cache")
     if not isinstance(raw, dict):
@@ -122,6 +131,46 @@ def set_verifier_data_cache_key_id(
         config["data_cache"] = raw
     if overwrite or not str(raw.get("cache_key_id") or "").strip():
         raw["cache_key_id"] = str(cache_key_id or "").strip()
+
+
+def build_workflow_data_cache_key_id(
+    *,
+    op_name: str,
+    framework: str,
+    dsl: str,
+    backend: str,
+    arch: str,
+    bench_type: str,
+) -> str:
+    return ":".join(
+        str(component or "").strip()
+        for component in (op_name, framework, dsl, backend, arch, bench_type)
+    )
+
+
+def set_workflow_data_cache_key_id(
+    config: Optional[Dict[str, Any]],
+    *,
+    op_name: str,
+    framework: str,
+    dsl: str,
+    backend: str,
+    arch: str,
+    bench_type: str,
+    overwrite: bool = False,
+) -> None:
+    set_verifier_data_cache_key_id(
+        config,
+        build_workflow_data_cache_key_id(
+            op_name=op_name,
+            framework=framework,
+            dsl=dsl,
+            backend=backend,
+            arch=arch,
+            bench_type=bench_type,
+        ),
+        overwrite=overwrite,
+    )
 
 
 def _sanitize_name(name: str) -> str:

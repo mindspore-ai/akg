@@ -19,6 +19,7 @@ from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.core_v2.config.settings import get_akg_env_var
+from akg_agents.op.verifier.data_cache import set_workflow_data_cache_key_id
 
 # 导入处理器和配置
 from akg_agents.op.utils.evolve.evolution_processors import (
@@ -87,11 +88,15 @@ async def evolve(
     Returns:
         进化结果字典
     """
-    from akg_agents.op.verifier.data_cache import set_verifier_data_cache_key_id
     bench_type = config.get("bench_type", "kernelbench")
-    set_verifier_data_cache_key_id(
+    set_workflow_data_cache_key_id(
         config,
-        f"{op_name}:{framework}:{dsl}:{backend}:{arch}:{bench_type}",
+        op_name=op_name,
+        framework=framework,
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        bench_type=bench_type,
     )
 
     # ========== 1. 创建运行时配置 ==========
