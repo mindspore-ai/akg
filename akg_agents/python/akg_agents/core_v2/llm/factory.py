@@ -147,9 +147,13 @@ def create_llm_client(
         final_extra_body = kwargs.pop("extra_body", {})
         final_provider_type = kwargs.pop("provider_type", "openai")
 
-    # 向后兼容：thinking_enabled=True → 默认 extra_body
-    if not final_extra_body and kwargs.pop("thinking_enabled", False):
-        final_extra_body = {"thinking": {"type": "enabled"}}
+    # 向后兼容：thinking_enabled → 默认 extra_body
+    if not final_extra_body and "thinking_enabled" in kwargs:
+        thinking_val = kwargs.pop("thinking_enabled")
+        if thinking_val:
+            final_extra_body = {"thinking": {"type": "enabled"}}
+        else:
+            final_extra_body = {"thinking": {"type": "disabled"}}
 
     logger.info(
         f"Creating LLMClient: level={model_level}, model={final_model_name}, "
