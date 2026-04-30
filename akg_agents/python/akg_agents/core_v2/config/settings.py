@@ -155,7 +155,10 @@ class ModelConfig:
     
     @property
     def thinking_enabled(self) -> bool:
-        """向后兼容属性：检查 extra_body 中是否包含 thinking 相关配置"""
+        """向后兼容属性：检查 extra_body 中是否包含 thinking enabled 配置"""
+        thinking = self.extra_body.get("thinking", {})
+        if isinstance(thinking, dict):
+            return thinking.get("type") == "enabled"
         return bool(self.extra_body)
     
     @classmethod
@@ -164,14 +167,17 @@ class ModelConfig:
         解析 extra_body 配置，支持新旧格式（向后兼容）
         
         新格式（推荐）: "extra_body": {"thinking": {"type": "enabled"}}
-        旧格式（兼容）: "thinking_enabled": true  → 转为 {"thinking": {"type": "enabled"}}
+        旧格式（兼容）: "thinking_enabled": true/false  → 转为 {"thinking": {"type": "enabled"/"disabled"}}
         """
         # 新格式优先：直接使用 extra_body
         if "extra_body" in data:
             return data["extra_body"]
-        # 旧格式向后兼容：thinking_enabled: true
-        if data.get("thinking_enabled"):
-            return {"thinking": {"type": "enabled"}}
+        # 旧格式向后兼容：thinking_enabled: true/false
+        if "thinking_enabled" in data:
+            if data["thinking_enabled"]:
+                return {"thinking": {"type": "enabled"}}
+            else:
+                return {"thinking": {"type": "disabled"}}
         return {}
     
     @classmethod
@@ -217,13 +223,14 @@ class ModelConfig:
             )
     
     @classmethod
-    def from_env(cls, prefix: str = "", thinking_enabled: bool = False) -> "ModelConfig":
+    def from_env(cls, prefix: str = "", thinking_enabled: Optional[bool] = None) -> "ModelConfig":
         """
         从环境变量构建 ModelConfig
         
         Args:
             prefix: 环境变量前缀，如 "" (单模型) 或 "COMPLEX_" (多模型)
             thinking_enabled: 是否启用 thinking 模式（环境变量兼容，生成默认 extra_body）
+                None=未设置（不传 extra_body），True=启用，False=显式禁用
         """
         env_temp = get_akg_env_var(f"{prefix}TEMPERATURE")
         env_max_tokens = get_akg_env_var(f"{prefix}MAX_TOKENS")
@@ -231,8 +238,10 @@ class ModelConfig:
         
         # 环境变量模式下，thinking_enabled 生成默认的 extra_body
         extra_body: Dict[str, Any] = {}
-        if thinking_enabled:
+        if thinking_enabled is True:
             extra_body = {"thinking": {"type": "enabled"}}
+        elif thinking_enabled is False:
+            extra_body = {"thinking": {"type": "disabled"}}
         
         return cls(
             base_url=get_akg_env_var(f"{prefix}BASE_URL", "https://api.openai.com/v1"),
@@ -522,10 +531,10 @@ def _get_config_layers() -> List[Tuple[str, Optional[Path], bool]]:
     ]
 
 
-def _parse_thinking_enabled(env_value: Optional[str]) -> bool:
-    """解析 thinking 环境变量"""
+def _parse_thinking_enabled(env_value: Optional[str]) -> Optional[bool]:
+    """解析 thinking 环境变量，返回三态值：None=未设置, True=启用, False=禁用"""
     if not env_value:
-        return False
+        return None
     return env_value.lower() in ("enabled", "true", "1", "yes", "on")
 
 
