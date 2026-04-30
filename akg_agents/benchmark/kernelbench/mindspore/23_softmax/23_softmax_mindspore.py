@@ -23,7 +23,7 @@ class Model(nn.Cell):
 
     def construct(self, x: ms.Tensor) -> ms.Tensor:
         
-        return torch.softmax(x, dim=1)
+        return ms.ops.softmax(x, axis=1)
 
 
 batch_size = 16
@@ -31,7 +31,7 @@ dim = 16384
 
 
 def get_inputs():
-    x = ms.mint.randn(batch_size, dim, dtype=ms.float16)
+    x = ms.mint.randn(batch_size, dim, dtype=ms.float32)
     return [x]
 
 

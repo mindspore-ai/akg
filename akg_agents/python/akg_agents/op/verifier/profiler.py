@@ -184,7 +184,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
         profile_path = os.path.join(os.getcwd(), f"profile_results_{timestamp}")
 
     if clear_l2_cache_flag:
-        clear_l2_cache(dsl)
+        clear_l2_cache(dsl, framework="torch")
 
     with torch_npu.profiler.profile(
         activities=[
@@ -202,7 +202,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
     ) as prof:
         for _ in range(total):
             if clear_l2_cache_flag:
-                clear_l2_cache(dsl)
+                clear_l2_cache(dsl, framework="torch")
             fn()
             prof.step()
             torch.npu.synchronize()

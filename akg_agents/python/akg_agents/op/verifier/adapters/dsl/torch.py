@@ -136,6 +136,6 @@ class DSLAdapterTorch(DSLAdapter):
 """
         return code
     
-    def get_special_setup_code(self) -> str:
+    def get_special_setup_code(self, framework: str = "torch") -> str:
         """Return special setup code (not needed for PyTorch)."""
         return ""
