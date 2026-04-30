@@ -2,12 +2,11 @@
 
 ## 概述
 
-akg-op 是 AKG_Agents 与 OpenCode 集成后的算子优化 Agent，用于生成高性能算子代码。支持两种模式：
+akg-op 是 AKG_Agents 与 OpenCode 集成后的算子优化 Agent，用于生成高性能算子代码。
 
 | 模式 | 触发方式 | 典型场景 |
 |------|---------|---------|
 | **单算子** | 指定具体算子或提供代码 | "帮我生成一个 relu 算子"、"优化这段 layernorm 代码" |
-| **融合** | 要求分析模型融合机会 | "分析 Qwen2 的算子融合机会并生成融合算子" |
 
 ---
 
@@ -24,26 +23,13 @@ akg-op 是 AKG_Agents 与 OpenCode 集成后的算子优化 Agent，用于生成
           │  & 参数确认          │  🛑 确认 framework/backend/arch/dsl
           └─────────┬───────────┘
                     ▼
-        ┌───────────────────────┐
-        │  是否需要融合分析？     │
-        └───┬───────────────┬───┘
-            │ 是            │ 否
-            ▼               │
-   ┌────────────────┐       │
-   │  Phase 1       │       │
-   │  融合分析       │       │
-   │  🛑 用户选择    │       │
-   │  融合机会       │       │
-   └───────┬────────┘       │
-           │                │
-           ▼                ▼
   ┌─────────────────────────────┐
-  │  Phase 2  构建任务描述        │  从代码提取算子逻辑
+  │  Phase 1  构建任务描述        │  从代码提取算子逻辑
   │  自动验证 + 🛑 用户确认       │  → {op_name}.py
   └─────────────┬───────────────┘
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 3  生成算子            │  选择 workflow 运行
+  │  Phase 2  生成算子            │  选择 workflow 运行
   │  🛑 用户选择 workflow         │  (kernelgen / adaptive_search / evolve)
   └─────────────┬───────────────┘
                 │
@@ -53,19 +39,19 @@ akg-op 是 AKG_Agents 与 OpenCode 集成后的算子优化 Agent，用于生成
                 │ 否
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 4  确认结果            │  🛑 展示 generated_code.py
+  │  Phase 3  确认结果            │  🛑 展示 generated_code.py
   │                              │  接受 / 重新生成
-  │  重新生成 → 回到 Phase 3      │
+  │  重新生成 → 回到 Phase 2      │
   └─────────────┬───────────────┘
                 │ 接受
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 5  代码集成            │  复制生成代码到工作目录
+  │  Phase 4  代码集成            │  复制生成代码到工作目录
   │  （如提供了原始代码）          │  备份 + import 替换
   └─────────────┬───────────────┘
                 ▼
   ┌─────────────────────────────┐
-  │  Phase 6  输出报告            │  report.md
+  │  Phase 5  输出报告            │  report.md
   │  展示配置、结果、文件变更     │
   └─────────────────────────────┘
 ```
@@ -77,14 +63,14 @@ akg-op 是 AKG_Agents 与 OpenCode 集成后的算子优化 Agent，用于生成
 ### 示例 1：单算子 — 仅生成
 
 ```
-用户> 帮我生成一个 relu 算子，输入 shape (128, 4096)，fp32，在 A100 上用 triton
+用户> 帮我生成一个 relu 算子，输入 shape (128, 4096)，fp32，在 Ascend 910B2C 上用 triton
 
-Phase 0: 检查环境（缓存命中，跳过安装）→ 用户确认参数 framework=torch, backend=cuda, arch=a100, dsl=triton_cuda
-Phase 2: 生成 relu.py → 验证 → 用户确认
-Phase 3: 用户选择 kernelgen → 运行 → 生成成功
-Phase 4: 展示代码 → 用户接受
-Phase 5: 复制 relu_generated.py 到工作目录
-Phase 6: 输出报告
+Phase 0: 检查环境（缓存命中，跳过安装）→ 用户确认参数 framework=torch, backend=ascend, arch=ascend910b2c, dsl=triton_ascend
+Phase 1: 生成 relu.py → 验证 → 用户确认
+Phase 2: 用户选择 kernelgen → 运行 → 生成成功
+Phase 3: 展示代码 → 用户接受
+Phase 4: 复制 relu_generated.py 到工作目录
+Phase 5: 输出报告
 ```
 
 ### 示例 2：单算子 — 优化已有代码
@@ -93,27 +79,11 @@ Phase 6: 输出报告
 用户> 帮我优化 /path/to/model.py 中的 layernorm，用 Triton
 
 Phase 0: 检查环境（缓存命中）→ 用户确认参数
-Phase 2: 从 model.py 提取 layernorm → 生成 layernorm.py → 验证 → 用户确认
-Phase 3: 用户选择 adaptive_search → 后台静默运行（约 15 分钟）→ 生成成功
-Phase 4: 展示代码 → 用户接受
-Phase 5: 备份 model.py → 添加 from layernorm_generated import ModelNew → 保存集成文件
-Phase 6: 输出报告，含文件变更记录
-```
-
-### 示例 3：融合模式（首次使用，无环境缓存）
-
-```
-用户> 分析 Qwen2 模型的算子融合机会并实现
-
-Phase 0: 检查环境（无缓存 → 检测/安装 akg_agents → 采集硬件/Framework/DSL → 写入缓存）
-         → 用户确认参数 framework=torch, backend=ascend, arch=ascend910b4, dsl=triton_ascend
-Phase 1: 分析 Qwen2 forward → 发现 3 个融合机会 → 用户选择其中 2 个
-  对每个选中的融合机会：
-    Phase 2: 构建融合算子任务描述 → 验证 → 用户确认
-    Phase 3: 生成融合算子
-    Phase 4: 展示代码 → 接受
-    Phase 5: 备份 → 集成到模型代码
-Phase 6: 输出汇总报告
+Phase 1: 从 model.py 提取 layernorm → 生成 layernorm.py → 验证 → 用户确认
+Phase 2: 用户选择 adaptive_search → 后台静默运行（约 15 分钟）→ 生成成功
+Phase 3: 展示代码 → 用户接受
+Phase 4: 备份 model.py → 添加 from layernorm_generated import ModelNew → 保存集成文件
+Phase 5: 输出报告，含文件变更记录
 ```
 
 ---
@@ -149,10 +119,9 @@ Phase 6: 输出汇总报告
 
 | 组件 | 类型 | 说明 |
 |------|------|------|
-| `akg-op` | Agent | 主编排器：模式判定、阶段调度、用户交互 |
+| `akg-op` | Agent | 主编排器：阶段调度、用户交互 |
 | `akg-env-setup` | Skill | 环境检查、硬件/Framework/DSL 采集、依赖安装 |
 | `op-task-extractor` | Skill | 从代码或自然语言构建任务文件 |
-| `vllm-ascend-operator-fusion` | Skill | 模型融合分析 |
 | `kernelgen` | SubAgent | 迭代式代码生成+验证工作流 |
 | `kernel-generator` | Skill | DSL 感知的算子代码生成（被 kernelgen 调用） |
 | `kernel-verifier` | Skill | 多框架、多后端正确性验证（被 kernelgen 调用） |
