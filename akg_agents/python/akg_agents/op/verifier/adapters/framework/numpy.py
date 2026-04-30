@@ -27,12 +27,25 @@ class FrameworkAdapterNumpy(FrameworkAdapter):
         """Return NumPy import statements."""
         return "import numpy as np\n"
     
-    def get_framework_import(self, op_name: str, is_dynamic_shape: bool) -> str:
-        """Return framework model and input function imports."""
-        if is_dynamic_shape:
-            return f"from {op_name}_numpy import Model as FrameworkModel, get_init_inputs, get_inputs_dyn_list\n"
-        else:
+    def get_framework_import(
+        self,
+        op_name: str,
+        is_dynamic_shape: bool,
+        inputs_factory_name: Optional[str] = None,
+    ) -> str:
+        akg_inputs_name = "get_inputs_dyn_list" if is_dynamic_shape else "get_inputs"
+
+        if inputs_factory_name is None or inputs_factory_name == akg_inputs_name:
+            if is_dynamic_shape:
+                return f"from {op_name}_numpy import Model as FrameworkModel, get_init_inputs, get_inputs_dyn_list\n"
             return f"from {op_name}_numpy import Model as FrameworkModel, get_init_inputs, get_inputs\n"
+
+        return (
+            f"from {op_name}_numpy import "
+            f"Model as FrameworkModel, "
+            f"get_init_inputs, "
+            f"{inputs_factory_name} as {akg_inputs_name}\n"
+        )
     
     def setup_device(self, backend: str, arch: str, device_id: int) -> Any:
         """Setup device (NumPy doesn't need device)."""
