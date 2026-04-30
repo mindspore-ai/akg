@@ -56,7 +56,7 @@ key raises `KeyError` or `re.error` at module import.
 | Key | Type | Meaning |
 |---|---|---|
 | `triton_decorators` | list[str] | attribute names under `<triton_module_name>` recognized as kernel decorators |
-| `torch_call_prefixes` | list[str] | top-level names whose `.method(...)` calls are scanned in `forward()` |
+| `torch_call_prefixes` | list[str] | local aliases or dotted torch namespaces whose `.method(...)` calls are scanned in `forward()` |
 | `torch_compute_ops_hard` | list[str] | methods rejected in `forward()` regardless of whether a kernel is launched |
 | `torch_compute_ops_soft` | list[str] | methods rejected in `forward()` only when no kernel is launched |
 | `kernel_class_name` | str | class name the AST walker searches for in stage 5 |
@@ -83,6 +83,9 @@ All rule changes are YAML edits; no Python changes required.
   kernel pre-processing are accepted.
 - Remove an op from both lists to accept it unconditionally.
 - Append method names to either list.
+- Append local aliases or dotted namespaces to `torch_call_prefixes`;
+  examples include `F`, `torch.nn.functional`, `nn.functional`,
+  `torch.linalg`, `torch.fft`, `torch.special`, and `torch.sparse`.
 - Update `kernel_class_name` / `kernel_forward_method` when the kernel
   module convention changes.
 - Extend `stray_text.unicode_ranges` with additional script ranges

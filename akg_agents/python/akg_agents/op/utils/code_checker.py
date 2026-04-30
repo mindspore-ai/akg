@@ -80,6 +80,16 @@ def _find_forward(cls_node: ast.ClassDef) -> Optional[ast.FunctionDef]:
     return None
 
 
+def _dotted_name(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        if base:
+            return f"{base}.{node.attr}"
+    return None
+
+
 @dataclass
 class CheckError:
     """检查错误信息"""
@@ -108,6 +118,9 @@ class CodeChecker:
         self.torch_compute_ops_hard = frozenset(_POLICY["torch_compute_ops_hard"])
         self.torch_compute_ops_soft = frozenset(_POLICY["torch_compute_ops_soft"])
         self.torch_call_prefixes = frozenset(_POLICY["torch_call_prefixes"])
+        self._torch_call_prefixes_ordered = tuple(
+            sorted(self.torch_call_prefixes, key=len, reverse=True)
+        )
         logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}")
 
     def _is_triton_decorator(self, node: ast.expr) -> bool:
@@ -120,6 +133,12 @@ class CodeChecker:
         if isinstance(node, ast.Call):
             return self._is_triton_decorator(node.func)
         return False
+
+    def _match_torch_call_prefix(self, call_name: str) -> Optional[str]:
+        for prefix in self._torch_call_prefixes_ordered:
+            if call_name.startswith(f"{prefix}."):
+                return prefix
+        return None
 
     # ------------------------------------------------------------------
     # 主入口
@@ -516,14 +535,14 @@ class CodeChecker:
 
         for node in ast.walk(forward_node):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                mod = node.func.value
+                call_name = _dotted_name(node.func)
+                if not call_name or not self._match_torch_call_prefix(call_name):
+                    continue
                 method = node.func.attr
-                if isinstance(mod, ast.Name) and mod.id in self.torch_call_prefixes:
-                    label = f"{mod.id}.{method}"
-                    if method in self.torch_compute_ops_hard:
-                        hard_calls.append((node.lineno, label))
-                    elif method in self.torch_compute_ops_soft:
-                        soft_calls.append((node.lineno, label))
+                if method in self.torch_compute_ops_hard:
+                    hard_calls.append((node.lineno, call_name))
+                elif method in self.torch_compute_ops_soft:
+                    soft_calls.append((node.lineno, call_name))
 
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
                 hard_calls.append((node.lineno, "@ (matmul operator)"))
