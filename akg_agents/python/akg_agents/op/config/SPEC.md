@@ -34,6 +34,7 @@ data_cache:
   cache_dir: ~/.akg/verifier_data_cache  # 可选；不配置时默认使用该路径
   cache_reference_data: true       # 缓存 inputs/init_inputs/outputs
   cache_baseline_result: true      # 缓存 baseline profile 结果
+  cache_key_id: ""                 # 可选；同一工作流内多个 verifier task_id 共享 cache 时设置
 ```
 
 ### `load_config()` 逻辑

@@ -25,6 +25,7 @@ import json
 import shutil
 import tarfile
 import logging
+from contextlib import AsyncExitStack
 from typing import Optional, Dict, Any
 
 from akg_agents.op.verifier.data_cache import (
@@ -32,8 +33,10 @@ from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_payload,
     delete_baseline_result_from_cache,
     extract_baseline_time_us,
+    get_verifier_data_cache_key_id,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
+    verifier_data_cache_lock,
     write_baseline_result_to_cache,
 )
 
@@ -113,6 +116,7 @@ async def _profile_kernelbench_baseline(
         from akg_agents.core.worker.remote_worker import RemoteWorker
 
         if cache_cfg.enabled and cache_cfg.cache_baseline_result:
+            cache_key_id = get_verifier_data_cache_key_id(config, "baseline_profile")
             cache_key = build_baseline_cache_key(
                 op_name=op_name,
                 framework_code=task_desc,
@@ -123,7 +127,7 @@ async def _profile_kernelbench_baseline(
                 warmup_times=warmup_times,
                 run_times=run_times,
                 dsl=dsl,
-                task_id="baseline_profile",
+                task_id=cache_key_id,
             )
             cached_entry = read_baseline_result_from_cache(
                 cache_cfg,
@@ -144,75 +148,105 @@ async def _profile_kernelbench_baseline(
 
         logger.info(f"[{op_name}] 🚀 开始预先 profile baseline（只测一次）...")
 
-        worker = await get_worker_manager().select(backend=backend, arch=arch)
-        if not worker:
-            logger.warning(f"[{op_name}] 无法获取 worker，跳过预先 profile baseline")
-            return None
-
-        # 从 device_pool acquire 设备（与 run_profile/run 流程一致）
-        device_id = 0
-        if isinstance(worker, LocalWorker) and worker.device_pool:
-            acquired_device = await worker.device_pool.acquire_device()
-            device_id = acquired_device
-            logger.info(f"[{op_name}] Acquired device {device_id} from pool for baseline profile")
-        elif isinstance(worker, RemoteWorker):
-            acquired_device = await worker.acquire_device(task_id="baseline_profile")
-            device_id = acquired_device
-            logger.info(f"[{op_name}] Acquired remote device {device_id} for baseline profile")
-
-        verifier = KernelVerifier(
-            op_name=op_name,
-            framework_code=task_desc,
-            task_id="baseline_profile",
-            framework=framework,
-            dsl=dsl,
-            backend=backend,
-            arch=arch,
-            config=config,
-            worker=worker
-        )
-
-        result = await verifier.profile_single_task(
-            task_desc=task_desc,
-            warmup_times=warmup_times,
-            run_times=run_times,
-            timeout=timeout,
-            device_id=device_id
-        )
-
-        if result.get('success', False):
-            baseline_time_us = result.get('time_us')
-            if baseline_time_us and baseline_time_us > 0 and baseline_time_us < float('inf'):
-                logger.info(f"[{op_name}] ✅ Baseline profile 完成: {baseline_time_us:.2f}us")
-                _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times, device_id)
-                if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
-                    write_baseline_result_to_cache(
+        async with AsyncExitStack() as stack:
+            if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
+                await stack.enter_async_context(
+                    verifier_data_cache_lock(
+                        cache_cfg,
+                        namespace="baseline",
+                        op_name=op_name,
+                        cache_key=cache_key,
+                    )
+                )
+                cached_entry = read_baseline_result_from_cache(
+                    cache_cfg,
+                    op_name=op_name,
+                    cache_key=cache_key,
+                )
+                cached_time_us = extract_baseline_time_us(cached_entry)
+                if cached_time_us is not None:
+                    logger.info(f"[{op_name}] ✅ 等待期间命中本地 baseline cache: {cached_time_us:.2f}us")
+                    return cached_time_us
+                if cached_entry:
+                    logger.warning(f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量")
+                    delete_baseline_result_from_cache(
                         cache_cfg,
                         op_name=op_name,
                         cache_key=cache_key,
-                        result_data=build_baseline_cache_payload(
-                            base_time_us=baseline_time_us,
-                            warmup_times=warmup_times,
-                            run_times=run_times,
-                            method="profile_single_task",
-                        ),
-                        metadata={
-                            "framework": framework,
-                            "dsl": dsl,
-                            "backend": backend,
-                            "arch": arch,
-                            "bench_type": "kernelbench",
-                        },
                     )
-                return baseline_time_us
+
+            worker = await get_worker_manager().select(backend=backend, arch=arch)
+            if not worker:
+                logger.warning(f"[{op_name}] 无法获取 worker，跳过预先 profile baseline")
+                return None
+
+            # 从 device_pool acquire 设备（与 run_profile/run 流程一致）
+            device_id = 0
+            if isinstance(worker, LocalWorker) and worker.device_pool:
+                acquired_device = await worker.device_pool.acquire_device()
+                device_id = acquired_device
+                logger.info(f"[{op_name}] Acquired device {device_id} from pool for baseline profile")
+            elif isinstance(worker, RemoteWorker):
+                acquired_device = await worker.acquire_device(task_id="baseline_profile")
+                device_id = acquired_device
+                logger.info(f"[{op_name}] Acquired remote device {device_id} for baseline profile")
+
+            verifier = KernelVerifier(
+                op_name=op_name,
+                framework_code=task_desc,
+                task_id="baseline_profile",
+                framework=framework,
+                dsl=dsl,
+                backend=backend,
+                arch=arch,
+                config=config,
+                worker=worker
+            )
+
+            result = await verifier.profile_single_task(
+                task_desc=task_desc,
+                warmup_times=warmup_times,
+                run_times=run_times,
+                timeout=timeout,
+                device_id=device_id
+            )
+
+            if result.get('success', False):
+                baseline_time_us = result.get('time_us')
+                if baseline_time_us and baseline_time_us > 0 and baseline_time_us < float('inf'):
+                    logger.info(f"[{op_name}] ✅ Baseline profile 完成: {baseline_time_us:.2f}us")
+                    _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times, device_id)
+                    if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
+                        write_baseline_result_to_cache(
+                            cache_cfg,
+                            op_name=op_name,
+                            cache_key=cache_key,
+                            result_data=build_baseline_cache_payload(
+                                base_time_us=baseline_time_us,
+                                warmup_times=warmup_times,
+                                run_times=run_times,
+                                method="profile_single_task",
+                            ),
+                            metadata={
+                                "framework": framework,
+                                "dsl": dsl,
+                                "cache_key_id": cache_key_id,
+                                "backend": backend,
+                                "arch": arch,
+                                "bench_type": "kernelbench",
+                            },
+                        )
+                    return baseline_time_us
+                else:
+                    logger.warning(f"[{op_name}] Baseline profile 结果无效: {baseline_time_us}")
             else:
-                logger.warning(f"[{op_name}] Baseline profile 结果无效: {baseline_time_us}")
-        else:
-            error_log = result.get('log', 'Unknown error')
-            logger.warning(f"[{op_name}] Baseline profile 失败: {error_log}")
+                error_log = result.get('log', 'Unknown error')
+                logger.warning(f"[{op_name}] Baseline profile 失败: {error_log}")
 
+            return None
+    except TimeoutError as e:
+        logger.warning(f"[{op_name}] 等待 baseline cache lock 超时，跳过预先 profile baseline: {e}")
         return None
-
     except Exception as e:
         logger.warning(f"[{op_name}] 预先 profile baseline 失败: {e}")
         return None
@@ -229,7 +263,6 @@ async def _profile_kernelbench_baseline(
                     logger.info(f"[{op_name}] Released remote device {acquired_device} after baseline profile")
             except Exception as e:
                 logger.warning(f"[{op_name}] Failed to release device {acquired_device}: {e}")
-
 
 async def _profile_sol_baseline(
     op_name: str,

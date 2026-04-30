@@ -34,6 +34,8 @@ On a cache hit, `run_profile()` injects:
 - `override_base_time_us`
 - `skip_base_profile=True`
 
+The baseline pre-profile path used by `evolve` and `adaptive_search` also reads and writes the same cache. Concurrent warmups for the same baseline are serialized with a cache lock, and waiters re-check the cache before measuring.
+
 ## Cache layout
 
 ```text
@@ -48,7 +50,7 @@ Current scope is `KernelBench` only. `SOL-ExecBench` already ships stable refere
 
 Reference data cache currently covers static-shape verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache still keys by framework code, backend, arch, DSL, and profile parameters.
 
-Cache keys include `task_id` to avoid accidental reuse across independent tasks. Reusing data for a demo or repeated validation requires the same `task_id`.
+Cache keys include `task_id` by default to avoid accidental reuse across independent tasks. Set `data_cache.cache_key_id` when a workflow needs multiple verifier task ids to share the same cached reference data and baseline. `adaptive_search`, `evolve`, and `AutoResearch` set a stable `cache_key_id` automatically for one operator workflow. Reusing data for a demo or repeated validation requires the same `task_id` or the same `cache_key_id`.
 
 Configuration:
 
@@ -57,6 +59,8 @@ data_cache:
   enabled: true
   cache_reference_data: true
   cache_baseline_result: true
+  # optional stable identity for sharing cache across verifier task ids
+  cache_key_id: "relu:torch:triton_ascend:ascend:ascend910b4:kernelbench"
 ```
 
 The default cache directory is expanded by code to `~/.akg/verifier_data_cache`. Set `data_cache.cache_dir` or `AKG_AGENTS_VERIFY_DATA_CACHE_DIR` to override it.
@@ -67,7 +71,13 @@ See:
 
 `examples/kernel_related/run_torch_npu_triton_single_with_cache.py`
 
-The demo uses a dedicated cache directory (`~/.akg/verifier_data_cache_demo`) and clears it at startup so the two runs have deterministic behavior:
+The demo uses a dedicated cache directory (`~/.akg/verifier_data_cache_demo`) and keeps existing cache entries by default, so it can show reuse across separate invocations. Use `--clear-cache` when you want a deterministic cold-cache first run:
+
+```bash
+python akg_agents/examples/kernel_related/run_torch_npu_triton_single_with_cache.py --clear-cache
+```
+
+With an empty cache:
 
 1. run 1: miss reference/baseline cache, generate reference data, run base + generation profile, then populate cache
 2. run 2: hit reference/baseline cache, reuse cached inputs/outputs, and skip base profile
@@ -92,6 +102,12 @@ Run the Triton Ascend end-to-end cache demo on an Ascend environment with `torch
 
 ```bash
 python akg_agents/examples/kernel_related/run_torch_npu_triton_single_with_cache.py
+```
+
+For a deterministic cold-cache demonstration:
+
+```bash
+python akg_agents/examples/kernel_related/run_torch_npu_triton_single_with_cache.py --clear-cache
 ```
 
 Run a whitespace sanity check before submitting:

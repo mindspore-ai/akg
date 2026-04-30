@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import tarfile
 from pathlib import Path
 
 import pytest
 import torch
 
+from akg_agents.core.worker.remote_worker import RemoteWorker
 from akg_agents.op.verifier.data_cache import (
     VerifierDataCacheConfig,
     build_baseline_cache_key,
@@ -31,9 +33,12 @@ from akg_agents.op.verifier.data_cache import (
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
     read_reference_data_from_cache,
+    set_verifier_data_cache_key_id,
+    verifier_data_cache_lock,
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
 )
+from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 
 
@@ -106,6 +111,36 @@ class DummyReferenceWorker:
 
     async def verify(self, package_data, task_id, op_name, timeout):
         return True, "ok", {}
+
+
+class SimulatedRemoteWorker(RemoteWorker):
+    def __init__(self, reference_bytes: bytes):
+        super().__init__("http://unit-test-worker")
+        self.reference_bytes = reference_bytes
+        self.generate_reference_calls = 0
+        self.verify_calls = 0
+        self.acquired_devices = []
+        self.released_devices = []
+
+    async def acquire_device(self, task_id: str = "unknown", timeout: float = None) -> int:
+        self.acquired_devices.append(task_id)
+        return 3
+
+    async def release_device(self, device_id: int, task_id: str = "unknown"):
+        self.released_devices.append((device_id, task_id))
+
+    async def generate_reference(self, package_data, task_id, op_name, timeout):
+        self.generate_reference_calls += 1
+        assert isinstance(package_data, (bytes, bytearray))
+        return True, "remote generated", self.reference_bytes
+
+    async def verify(self, package_data, task_id, op_name, timeout):
+        self.verify_calls += 1
+        assert isinstance(package_data, (bytes, bytearray))
+        with tarfile.open(fileobj=io.BytesIO(package_data), mode="r") as tar_file:
+            names = set(tar_file.getnames())
+        assert "relu_reference.pt" in names
+        return True, "remote ok", {}
 
 
 def _make_config(tmp_path: Path) -> dict:
@@ -227,6 +262,39 @@ def test_verifier_cache_keys_include_task_id(tmp_path):
 def test_verifier_cache_keys_reuse_same_task_id(tmp_path):
     verifier_a = _make_verifier(tmp_path, task_id="cache-demo")
     verifier_b = _make_verifier(tmp_path, task_id="cache-demo")
+
+    assert verifier_a._get_reference_cache_key() == verifier_b._get_reference_cache_key()
+    assert verifier_a._get_baseline_cache_key(5, 50) == verifier_b._get_baseline_cache_key(5, 50)
+
+
+def test_cache_key_id_allows_cross_task_reuse(tmp_path):
+    config_a = _make_config(tmp_path)
+    config_b = _make_config(tmp_path)
+    set_verifier_data_cache_key_id(config_a, "stable-op-task")
+    set_verifier_data_cache_key_id(config_b, "stable-op-task")
+
+    verifier_a = KernelVerifier(
+        op_name="relu",
+        framework_code=FRAMEWORK_CODE,
+        task_id="task-a",
+        framework="torch",
+        dsl="triton_ascend",
+        backend="ascend",
+        arch="ascend910b4",
+        impl_func_name="ModelNew",
+        config=config_a,
+    )
+    verifier_b = KernelVerifier(
+        op_name="relu",
+        framework_code=FRAMEWORK_CODE,
+        task_id="task-b",
+        framework="torch",
+        dsl="triton_ascend",
+        backend="ascend",
+        arch="ascend910b4",
+        impl_func_name="ModelNew",
+        config=config_b,
+    )
 
     assert verifier_a._get_reference_cache_key() == verifier_b._get_reference_cache_key()
     assert verifier_a._get_baseline_cache_key(5, 50) == verifier_b._get_baseline_cache_key(5, 50)
@@ -355,6 +423,77 @@ async def test_run_profile_uses_cached_baseline(monkeypatch, tmp_path):
     assert worker.profile_settings["override_base_time_us"] == 17.5
     assert worker.profile_settings["skip_base_profile"] is True
     assert result["base_time"] == 17.5
+
+
+@pytest.mark.asyncio
+async def test_baseline_preprofile_rereads_cache_after_lock(tmp_path):
+    config = _make_config(tmp_path)
+    cfg = load_verifier_data_cache_config(config)
+    cache_key = build_baseline_cache_key(
+        op_name="relu",
+        framework_code=FRAMEWORK_CODE,
+        framework="torch",
+        backend="ascend",
+        arch="ascend910b4",
+        bench_type="kernelbench",
+        warmup_times=3,
+        run_times=7,
+        dsl="triton_ascend",
+        task_id="baseline_profile",
+    )
+
+    async with verifier_data_cache_lock(
+        cfg,
+        namespace="baseline",
+        op_name="relu",
+        cache_key=cache_key,
+    ):
+        task = asyncio.create_task(
+            profile_baseline_once(
+                "relu",
+                FRAMEWORK_CODE,
+                "triton_ascend",
+                "torch",
+                "ascend",
+                "ascend910b4",
+                config,
+                warmup_times=3,
+                run_times=7,
+            )
+        )
+        await asyncio.sleep(0.05)
+        write_baseline_result_to_cache(
+            cfg,
+            op_name="relu",
+            cache_key=cache_key,
+            result_data={"avg_time_us": 23.0, "method": "locked_test"},
+        )
+
+    assert await task == 23.0
+
+
+@pytest.mark.asyncio
+async def test_remote_worker_reference_cache_roundtrip(tmp_path):
+    reference_bytes = _make_reference_payload_bytes()
+    worker_a = SimulatedRemoteWorker(reference_bytes)
+    verifier_a = _make_verifier(tmp_path, worker=worker_a, task_id="remote-cache")
+
+    success, log = await verifier_a.run({"coder_code": IMPL_CODE}, device_id=-1)
+    assert success is True
+    assert log == "remote ok"
+    assert worker_a.generate_reference_calls == 1
+    assert worker_a.verify_calls == 1
+    assert worker_a.acquired_devices == ["remote-cache"]
+    assert worker_a.released_devices == [(3, "remote-cache")]
+
+    worker_b = SimulatedRemoteWorker(b"should-not-be-used")
+    verifier_b = _make_verifier(tmp_path, worker=worker_b, task_id="remote-cache")
+
+    success, log = await verifier_b.run({"coder_code": IMPL_CODE}, device_id=-1)
+    assert success is True
+    assert log == "remote ok"
+    assert worker_b.generate_reference_calls == 0
+    assert worker_b.verify_calls == 1
 
 
 @pytest.mark.asyncio

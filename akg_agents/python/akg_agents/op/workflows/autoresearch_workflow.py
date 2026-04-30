@@ -163,6 +163,12 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             )
 
             workflow_config = _self.config
+            from akg_agents.op.verifier.data_cache import set_verifier_data_cache_key_id
+            bench_type = workflow_config.get("bench_type", state.get("bench_type", "kernelbench"))
+            set_verifier_data_cache_key_id(
+                workflow_config,
+                f"{op_name}:{framework}:{dsl}:{backend}:{arch}:{bench_type}",
+            )
             verifier = KernelVerifier(
                 op_name=op_name,
                 task_id=task_id,
@@ -892,5 +898,4 @@ async def _assemble_knowledge(
         extra_files[f"skills/{name}/SKILL.md"] = raw
 
     return "", context_files, extra_files
-
 

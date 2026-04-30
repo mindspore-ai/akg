@@ -100,6 +100,30 @@ def load_verifier_data_cache_config(config: Optional[Dict[str, Any]] = None) -> 
     )
 
 
+def get_verifier_data_cache_key_id(config: Optional[Dict[str, Any]], default_task_id: str = "") -> str:
+    raw = dict((config or {}).get("data_cache") or {})
+    cache_key_id = str(raw.get("cache_key_id") or "").strip()
+    if cache_key_id:
+        return cache_key_id
+    return str(default_task_id or "").strip()
+
+
+def set_verifier_data_cache_key_id(
+    config: Optional[Dict[str, Any]],
+    cache_key_id: str,
+    *,
+    overwrite: bool = False,
+) -> None:
+    if config is None:
+        return
+    raw = config.get("data_cache")
+    if not isinstance(raw, dict):
+        raw = {}
+        config["data_cache"] = raw
+    if overwrite or not str(raw.get("cache_key_id") or "").strip():
+        raw["cache_key_id"] = str(cache_key_id or "").strip()
+
+
 def _sanitize_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name).strip("_") or "entry"
 
