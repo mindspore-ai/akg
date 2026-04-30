@@ -8,6 +8,7 @@ WITH_KERNELBENCH=false
 WITH_MULTIKERNELBENCH=false
 WITH_EVOKERNEL=false
 WITH_SOLAR=false
+WITH_ASCENDOPGENAGENT=false
 WITH_ALL_BENCHMARKS=false
 for arg in "$@"; do
   if [ "$arg" = "--with_local_model" ]; then
@@ -22,6 +23,8 @@ for arg in "$@"; do
     WITH_EVOKERNEL=true
   elif [ "$arg" = "--with_solar" ]; then
     WITH_SOLAR=true
+  elif [ "$arg" = "--with_ascendopgenagent" ]; then
+    WITH_ASCENDOPGENAGENT=true
   elif [ "$arg" = "--with_all_benchmarks" ]; then
     WITH_ALL_BENCHMARKS=true
   fi
@@ -39,6 +42,7 @@ KERNELBENCH_DIR="${THIRDPARTY_DIR}/KernelBench"
 MULTIKERNELBENCH_DIR="${THIRDPARTY_DIR}/MultiKernelBench"
 EVOKERNEL_DIR="${THIRDPARTY_DIR}/EvoKernel"
 SOLAR_DIR="${SOLAR_DIR:-${THIRDPARTY_DIR}/SOLAR}"
+ASCENDOPGENAGENT_DIR="${THIRDPARTY_DIR}/AscendOpGenAgent"
 
 KERNELBENCH_REPO_URL="https://github.com/ScalingIntelligence/KernelBench.git"
 # 优先以历史 .gitmodules 中记录的 commit 为准。
@@ -49,6 +53,8 @@ EVOKERNEL_REPO_URL="https://huggingface.co/datasets/noahli/EvoKernel"
 EVOKERNEL_COMMIT="af61b2a307d6d9f8d313893f2c87414c51a97863"
 SOLAR_REPO_URL="${SOLAR_REPO_URL:-https://github.com/NVlabs/SOLAR.git}"
 SOLAR_REF="${SOLAR_REF:-}"
+ASCENDOPGENAGENT_REPO_URL="https://github.com/Just-it/AscendOpGenAgent.git"
+ASCENDOPGENAGENT_COMMIT="f24df03f2e79c7debcf0f72cec49d71bc6289955"
 
 function check_python_and_deps() {
   if ! command -v python3 &> /dev/null; then
@@ -225,6 +231,25 @@ function download_evokernel() {
   clone_and_checkout_repo "EvoKernel" "${EVOKERNEL_REPO_URL}" "${EVOKERNEL_DIR}" "${EVOKERNEL_COMMIT}" "true"
 }
 
+function download_ascendopgenagent() {
+  check_git
+  clone_and_checkout_repo \
+    "AscendOpGenAgent" \
+    "${ASCENDOPGENAGENT_REPO_URL}" \
+    "${ASCENDOPGENAGENT_DIR}" \
+    "${ASCENDOPGENAGENT_COMMIT}"
+
+  local npukb_dir="${ASCENDOPGENAGENT_DIR}/benchmarks/NPUKernelBench"
+  if [ -d "${npukb_dir}" ]; then
+    local level_count
+    level_count="$(find "${npukb_dir}" -maxdepth 1 -mindepth 1 -type d -name 'level*' | wc -l)"
+    echo "AscendOpGenAgent 就位：${ASCENDOPGENAGENT_DIR}"
+    echo "NPUKernelBench 数据集：${npukb_dir}（${level_count} 个 level）"
+  else
+    echo "警告：${npukb_dir} 缺失，AKG 的 NPUKernelBench 接入将无法找到数据集。"
+  fi
+}
+
 function download_and_install_solar() {
   check_git
 
@@ -268,6 +293,7 @@ if $WITH_ALL_BENCHMARKS; then
   WITH_KERNELBENCH=true
   WITH_MULTIKERNELBENCH=true
   WITH_EVOKERNEL=true
+  WITH_ASCENDOPGENAGENT=true
 fi
 
 if $WITH_LOCAL_MODEL; then
@@ -295,4 +321,8 @@ fi
 if $WITH_SOLAR; then
   check_python_and_deps
   download_and_install_solar
+fi
+
+if $WITH_ASCENDOPGENAGENT; then
+  download_ascendopgenagent
 fi

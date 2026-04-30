@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 
 
@@ -314,6 +315,132 @@ def get_akg_kernels_bench_op_name(category="all", subcategory="all", framework="
                                     matched_files.append(operation_name)
 
     return matched_files if matched_files else None
+
+
+def _get_npukernelbench_dir():
+    """返回 NPUKernelBench 顶层目录（thirdparty/AscendOpGenAgent/benchmarks/NPUKernelBench）"""
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)  # tests/op/
+    tests_path = os.path.dirname(commom_path)  # tests/
+    akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
+    return os.path.join(
+        akg_agents_path, 'thirdparty', 'AscendOpGenAgent',
+        'benchmarks', 'NPUKernelBench',
+    )
+
+
+
+def _convert_npukernelbench_to_akg_format(
+    py_code: str, json_path: str, op_name: str,
+):
+    """把 NPUKernelBench 的 (.py, .json) 包装成 AKG 接入三元组。
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        jsonl_content = f.read()
+
+    # 完整性校验：保证 JSONL 每行都是合法的 JSON（与原脚本行为一致）。
+    for idx, line in enumerate(jsonl_content.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSONL at line {idx} of {json_path}: {e}",
+            ) from e
+
+    task_desc = py_code  # 与上游字节相等，零改动
+
+    aux_files = {f"{op_name}.json": jsonl_content}
+    factory_names = {
+        "inputs_factory": "get_input_groups",
+        "is_dynamic_shape": True,
+    }
+
+    return task_desc, aux_files, factory_names
+
+
+def get_npukernelbench_op_name(task_index_list=None, level="level1"):
+    """获取 NPUKernelBench 指定 level 下的算子名称列表。
+
+    Args:
+        task_index_list: 任务序号列表（如 [1, 3, 19]），若为 None 则返回全部算子
+        level: "level1" / "level2" / "level3" / "level4"
+
+    Returns:
+        list[str] | None: 匹配的算子文件名（不含 .py 后缀），例如 ``"1_GELU"``
+    """
+    base_dir = _get_npukernelbench_dir()
+    level_dir = os.path.join(base_dir, level)
+
+    if not os.path.exists(base_dir):
+        _raise_download_error("NPUKernelBench 目录", base_dir)
+    if not os.path.exists(level_dir):
+        _raise_download_error(f"NPUKernelBench {level} 目录", level_dir)
+
+    # 所有 .py 文件名都形如 ``{index}_{Name}.py``
+    py_files = [f for f in os.listdir(level_dir) if f.endswith(".py")]
+
+    if task_index_list is None:
+        # 按 index 升序返回全部
+        def _idx(fn):
+            try:
+                return int(fn.split("_", 1)[0])
+            except (ValueError, IndexError):
+                return float("inf")
+        matched = sorted((f[:-3] for f in py_files), key=_idx)
+        return matched if matched else None
+
+    # 按给定序号顺序匹配，保持输入顺序
+    matched_files = []
+    for task_index in task_index_list:
+        prefix = f"{task_index}_"
+        for file in py_files:
+            if file.startswith(prefix):
+                matched_files.append(file[:-3])
+                break
+    return matched_files if matched_files else None
+
+
+def get_npukernelbench_task_desc(op_name, level="level1"):
+    """获取 NPUKernelBench 任务描述（接入 AKG 动态 shape 流程，零改动源脚本）。
+
+    * 把 ``task_desc`` 写成 framework 代码文件；
+    * 把 ``aux_files`` 写到与 framework 代码相同的目录（让 ``open(...)``
+      能读到）；
+    * 把 ``factory_names`` 透传给 framework adapter，让生成的 import 用
+      ``as`` 别名把 ``get_input_groups`` 映射到 AKG 期望的
+      ``get_inputs_dyn_list``——源脚本无需任何注入。
+
+    Args:
+        op_name: 不含扩展名的算子文件名，例如 ``"1_GELU"``。
+        level: NPUKernelBench 层级目录，例如 ``"level1"``。
+
+    Returns:
+        ``(task_desc, aux_files, factory_names)``：
+
+        * ``task_desc`` (str)：**与上游 .py 字节相等**，可直接作为
+          ``LangGraphTask.task_desc``。
+        * ``aux_files`` (Dict[str, str])：``{"<op_name>.json": <jsonl_content>}``。
+        * ``factory_names`` (Dict[str, Any]):
+              {"inputs_factory": "get_input_groups", "is_dynamic_shape": True}
+    """
+    base_dir = _get_npukernelbench_dir()
+    py_path = os.path.join(base_dir, level, op_name + ".py")
+    json_path = os.path.join(base_dir, level, op_name + ".json")
+
+    if not os.path.exists(py_path):
+        _raise_download_error(f"NPUKernelBench 任务文件 {level}/{op_name}.py", py_path)
+    if not os.path.exists(json_path):
+        _raise_download_error(
+            f"NPUKernelBench 输入集 {level}/{op_name}.json", json_path,
+        )
+
+    with open(py_path, "r", encoding="utf-8") as f:
+        py_code = f.read()
+
+    return _convert_npukernelbench_to_akg_format(py_code, json_path, op_name)
 
 
 def add_op_prefix(op_name, benchmark="KernelBench"):
