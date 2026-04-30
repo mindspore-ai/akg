@@ -286,7 +286,7 @@ class LangGraphTask(BaseLangGraphTask):
                 backend=self.backend,
                 arch=self.arch,
                 config=self.config,
-                bench_type=self.bench_type
+                bench_type=self.bench_type,
             )
         except Exception as e:
             logger.warning(f"Failed to initialize Verifier: {e}")

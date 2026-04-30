@@ -148,6 +148,21 @@ class KernelVerifier:
             self.log_dir = config.get("log_dir")
         else:
             raise ValueError("config is required for KernelVerifier")
+
+        aux_files = self.config.get("framework_aux_files") or {}
+        factory_names = self.config.get("framework_factory_names") or {}
+        if not isinstance(aux_files, dict):
+            raise TypeError(
+                "config['framework_aux_files'] 必须是 Dict[str, str]，"
+                f"实际是 {type(aux_files).__name__}",
+            )
+        if not isinstance(factory_names, dict):
+            raise TypeError(
+                "config['framework_factory_names'] 必须是 Dict[str, Any]，"
+                f"实际是 {type(factory_names).__name__}",
+            )
+        self.framework_aux_files: Dict[str, str] = aux_files
+        self.framework_factory_names: Dict[str, Any] = factory_names
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             # 对于 triton_cuda 和 triton_ascend，统一使用 ModelNew 类格式
             self.impl_func_name = impl_func_name or "ModelNew"
@@ -181,6 +196,36 @@ class KernelVerifier:
 
         # 保存Worker实例（可以在运行时动态设置）
         self.worker = worker
+
+    def _write_framework_aux_files(self, target_dir: str) -> None:
+        """把 self.framework_aux_files 写到 framework 代码所在目录。
+        """
+        if not self.framework_aux_files:
+            return
+        for rel_name, content in self.framework_aux_files.items():
+            if (
+                os.path.isabs(rel_name)
+                or rel_name.startswith("..")
+                or ".." in rel_name.split(os.sep)
+                or ".." in rel_name.split("/")
+            ):
+                logger.warning(
+                    f"[{self.op_name}] 跳过非法 sidecar 路径: {rel_name!r}"
+                )
+                continue
+            aux_path = os.path.join(target_dir, rel_name)
+            os.makedirs(os.path.dirname(aux_path) or target_dir, exist_ok=True)
+            try:
+                with open(aux_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                logger.debug(
+                    f"[{self.op_name}] sidecar 文件已写入: {aux_path}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{self.op_name}] sidecar 文件写入失败: {aux_path}, 错误: {e}"
+                )
+                raise
 
     def check_task_desc_static(self, code: str) -> Tuple[bool, str]:
         """
@@ -253,6 +298,8 @@ class KernelVerifier:
             ref_file = os.path.join(check_dir, "reference.py")
             with open(ref_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
+            # 同步写入json文件。
+            self._write_framework_aux_files(check_dir)
 
             # 3. 生成验证脚本 verify_{op_name}.py
             verify_script_content = f"""
@@ -395,6 +442,8 @@ if __name__ == "__main__":
             ref_file = os.path.join(ref_dir, "reference.py")
             with open(ref_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
+            # 同步 json 文件
+            self._write_framework_aux_files(ref_dir)
 
             # 3. 生成参考数据脚本
             save_inputs_flag = "True" if save_inputs else "False"
@@ -594,10 +643,13 @@ if __name__ == "__main__":
         os.makedirs(profile_dir, exist_ok=True)
 
         try:
-            # 2. 写入 task_desc 到 framework_model.py（供模板导入）
-            framework_file = os.path.join(profile_dir, "framework_model.py")
+            framework_file = os.path.join(
+                profile_dir, f"{self.op_name}_{self.framework}.py"
+            )
             with open(framework_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
+            # 同步 json文件
+            self._write_framework_aux_files(profile_dir)
 
             # 3. 使用模板生成性能测试脚本
             script_file = os.path.join(profile_dir, f"profile_single_{self.op_name}.py")
@@ -657,7 +709,17 @@ if __name__ == "__main__":
         # 使用adapter生成代码片段
         try:
             framework_imports = framework_adapter.get_import_statements()
-            # 注意：不使用 framework_adapter.get_framework_import()，因为模板从固定的 framework_model.py 导入
+
+            # ``get_inputs`` / ``get_inputs_dyn_list`` 时，会自动使用 ``import ... as ...``
+            framework_model_import = framework_adapter.get_framework_import(
+                self.op_name,
+                is_dynamic_shape,
+                inputs_factory_name=(self.framework_factory_names or {}).get("inputs_factory"),
+            )
+            logger.debug(
+                f"[{self.op_name}] Framework model import 生成成功 "
+                f"(长度: {len(framework_model_import)})"
+            )
 
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
@@ -690,8 +752,8 @@ if __name__ == "__main__":
                 is_dynamic_shape=is_dynamic_shape,
                 warmup_times=warmup_times,
                 run_times=run_times,
-                # Adapter生成的代码（注意：Model导入由模板固定从framework_model.py获取）
                 framework_imports=self._prepare_code_lines(framework_imports),
+                framework_model_import=self._prepare_code_lines(framework_model_import),
                 device_setup_code=self._prepare_code_lines(device_setup_code),
                 process_input_code=self._prepare_code_lines(process_input_code),
                 set_seed_code=self._prepare_code_lines(set_seed_code),
@@ -839,12 +901,14 @@ if __name__ == "__main__":
             raise Exception(f"AscendC项目生成失败: {e}")
 
     def _detect_dynamic_shape(self) -> bool:
-        """
-        检测框架代码是否包含动态shape函数
+        """检测框架代码是否走动态 shape 
 
         Returns:
-            bool: True if contains get_inputs_dyn_list, False otherwise
+            bool: True if dynamic-shape semantics apply, False otherwise.
         """
+        declared = (self.framework_factory_names or {}).get("is_dynamic_shape")
+        if isinstance(declared, bool):
+            return declared
         return "get_inputs_dyn_list" in self.framework_code
 
     @staticmethod
@@ -910,6 +974,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"[{self.op_name}] 框架实现文件创建失败: {framework_file}, 错误: {e}")
             raise
+        self._write_framework_aux_files(verify_dir)
 
         # 创建具体实现文件
         if "ascendc" in self.dsl:
@@ -971,7 +1036,11 @@ if __name__ == "__main__":
             framework_imports = framework_adapter.get_import_statements()
             logger.debug(f"[{self.op_name}] Framework imports生成成功 (长度: {len(framework_imports)})")
 
-            framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
+            framework_model_import = framework_adapter.get_framework_import(
+                self.op_name,
+                is_dynamic_shape,
+                inputs_factory_name=self.framework_factory_names.get("inputs_factory"),
+            )
             logger.debug(f"[{self.op_name}] Framework model import生成成功 (长度: {len(framework_model_import)})")
 
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
@@ -1237,7 +1306,11 @@ if __name__ == "__main__":
         logger.debug(f"[{self.op_name}] 开始生成性能测试代码片段...")
         try:
             framework_imports = framework_adapter.get_import_statements()
-            framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
+            framework_model_import = framework_adapter.get_framework_import(
+                self.op_name,
+                is_dynamic_shape,
+                inputs_factory_name=self.framework_factory_names.get("inputs_factory"),
+            )
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
             if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
                 dsl_imports += dsl_adapter.get_runtime_env_override_code(

@@ -391,9 +391,13 @@ def _save_baseline_profile_scripts(verifier, op_name: str, task_desc: str,
         )
         os.makedirs(baseline_dir, exist_ok=True)
 
-        framework_file = os.path.join(baseline_dir, "framework_model.py")
+        framework_file = os.path.join(
+            baseline_dir, f"{op_name}_{verifier.framework}.py"
+        )
         with open(framework_file, "w", encoding="utf-8") as f:
             f.write(task_desc)
+
+        verifier._write_framework_aux_files(baseline_dir)
 
         script_file = os.path.join(baseline_dir, f"profile_baseline_{op_name}.py")
         verifier.gen_profile_single_task_file(script_file, device_id=device_id,

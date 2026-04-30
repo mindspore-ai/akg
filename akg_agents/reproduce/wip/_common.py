@@ -207,7 +207,29 @@ async def run_benchmark(
     task_pool = TaskPool(max_concurrency=max_concurrency)
     t0 = time.time()
 
-    for i, (op_display, task_desc) in enumerate(ops):
+    for i, op_entry in enumerate(ops):
+        factory_names: Dict[str, Any] = {}
+        if len(op_entry) == 2:
+            op_display, task_desc = op_entry
+            aux_files: Dict[str, str] = {}
+        elif len(op_entry) == 3:
+            op_display, task_desc, aux_files = op_entry
+            aux_files = aux_files or {}
+        elif len(op_entry) == 4:
+            op_display, task_desc, aux_files, factory_names = op_entry
+            aux_files = aux_files or {}
+            factory_names = factory_names or {}
+        else:
+            raise ValueError(
+                f"ops[{i}] 长度只能是 2/3/4，得到 {len(op_entry)}"
+            )
+
+        task_config = dict(config)
+        if aux_files:
+            task_config["framework_aux_files"] = aux_files
+        if factory_names:
+            task_config["framework_factory_names"] = factory_names
+
         for k in range(pass_n):
             task_id = f"{i}" if pass_n == 1 else f"{i}_k{k}"
             task = AIKGTask(
@@ -215,7 +237,7 @@ async def run_benchmark(
                 task_desc=task_desc,
                 task_id=task_id,
                 backend=backend, arch=arch, dsl=dsl,
-                config=config, framework=framework,
+                config=task_config, framework=framework,
                 workflow=workflow,
                 task_type=task_type,
             )
