@@ -36,6 +36,7 @@ from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.evolve import evolve
 from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
+from akg_agents.op.utils.npukb_utils import load_npukb_metadata_if_any
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.environment_check import check_env_for_task
 from .result_collector import RealtimeResultCollector
@@ -78,6 +79,8 @@ class RunnerConfig:
         self.op_name = "relu_op"
         self.task_desc = "Path/to/your/tasks/relu_task.py"
         self._sol_problem_dir = None
+        self._npukb_aux_files = None
+        self._npukb_factory_names = None
 
     @classmethod
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> 'RunnerConfig':
@@ -149,6 +152,16 @@ class RunnerConfig:
                         config.op_name = explicit_op_name or task_op_name or config.op_name
                         config.task_desc = task_desc.strip()
                         config._sol_problem_dir = resolved_sol_dir
+
+                        npukb_meta = load_npukb_metadata_if_any(resolved_task_path)
+                        if npukb_meta is not None:
+                            npukb_aux_files, npukb_factory_names = npukb_meta
+                            config._npukb_aux_files = npukb_aux_files
+                            config._npukb_factory_names = npukb_factory_names
+                            print(
+                                f"NPUKernelBench 模式（yaml 入口）：sidecar="
+                                f"{list(npukb_aux_files.keys())}",
+                            )
 
             return config
         except Exception as e:
@@ -390,7 +403,13 @@ async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_c
     # 为各个 agent 设置默认模型级别（如果未配置则使用 default）
     for agent_name in ["designer", "coder", "conductor", "verifier", "selector", "op_task_builder"]:
         mc.setdefault(agent_name, mc["default"])
-    
+
+    npukb_aux_files = getattr(evolve_config, '_npukb_aux_files', None)
+    npukb_factory_names = getattr(evolve_config, '_npukb_factory_names', None)
+    if npukb_aux_files and npukb_factory_names:
+        config["framework_aux_files"] = npukb_aux_files
+        config["framework_factory_names"] = npukb_factory_names
+
     # 判断是否为远程模式（通过环境变量，支持 AKG_AGENTS_* 和 AIKG_*）
     is_remote = get_akg_env_var("WORKER_URL") is not None
     check_env_for_task(evolve_config.framework, evolve_config.backend, evolve_config.dsl, config, is_remote=is_remote)

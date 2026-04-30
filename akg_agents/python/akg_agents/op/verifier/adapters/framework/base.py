@@ -36,13 +36,19 @@ class FrameworkAdapter(ABC):
         pass
     
     @abstractmethod
-    def get_framework_import(self, op_name: str, is_dynamic_shape: bool) -> str:
+    def get_framework_import(
+        self,
+        op_name: str,
+        is_dynamic_shape: bool,
+        inputs_factory_name: Optional[str] = None,
+    ) -> str:
         """Return import statement for framework model and input functions.
-        
+
         Args:
             op_name: Operator name
             is_dynamic_shape: Whether dynamic shape is used
-            
+            inputs_factory_name: 外部脚本里输入函数名字。
+
         Returns:
             str: Import statement (e.g., "from {op_name}_torch import Model as FrameworkModel, get_inputs\n")
         """

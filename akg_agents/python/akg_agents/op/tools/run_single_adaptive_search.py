@@ -26,7 +26,7 @@ import asyncio
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 # 添加项目根目录到sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,6 +36,9 @@ from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
+from akg_agents.op.utils.npukb_utils import (
+    is_npukb_task_file, load_npukb_task, load_npukb_metadata_if_any,
+)
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.utils.common_utils import load_yaml
 
@@ -76,6 +79,8 @@ class AdaptiveSearchRunnerConfig:
     # 配置文件路径
     config_path: Optional[str] = None
     _sol_problem_dir: Optional[str] = field(default=None, init=False, repr=False)
+    _npukb_aux_files: Optional[Dict[str, str]] = field(default=None, init=False, repr=False)
+    _npukb_factory_names: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
     
     @classmethod
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> "AdaptiveSearchRunnerConfig":
@@ -107,6 +112,16 @@ class AdaptiveSearchRunnerConfig:
                     instance.op_name = explicit_op_name or task_op_name or instance.op_name
                     instance.task_desc = task_desc
                     instance._sol_problem_dir = resolved_sol_dir
+
+                    npukb_meta = load_npukb_metadata_if_any(resolved_task_path)
+                    if npukb_meta is not None:
+                        npukb_aux_files, npukb_factory_names = npukb_meta
+                        instance._npukb_aux_files = npukb_aux_files
+                        instance._npukb_factory_names = npukb_factory_names
+                        print(
+                            f"NPUKernelBench 模式（yaml 入口）：sidecar="
+                            f"{list(npukb_aux_files.keys())}",
+                        )
         
         # 环境配置
         env_config = config_dict.get("environment", {})
@@ -335,9 +350,14 @@ def parse_batch_runner_mode(args):
         op_name = sol_op_name
         config._sol_problem_dir = sol_problem_dir
         print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    elif is_npukb_task_file(task_file):
+        _npukb_stem, task_desc, npukb_aux_files, npukb_factory_names = load_npukb_task(task_file)
+        config._npukb_aux_files = npukb_aux_files
+        config._npukb_factory_names = npukb_factory_names
+        print(f"NPUKernelBench 模式: 任务文件={task_file}")
     else:
         task_desc = load_task_description(task_file)
-    
+
     print(f"任务: {op_name}")
     print(f"任务文件: {task_file}")
     print(f"设备: {config.device_list}")
@@ -392,6 +412,12 @@ async def run_wrapper(op_name: str, task_desc: str, config: AdaptiveSearchRunner
     if sol_problem_dir:
         loaded_config["bench_type"] = "sol"
         loaded_config["sol_problem_dir"] = sol_problem_dir
+
+    npukb_aux_files = getattr(config, '_npukb_aux_files', None)
+    npukb_factory_names = getattr(config, '_npukb_factory_names', None)
+    if npukb_aux_files and npukb_factory_names:
+        loaded_config["framework_aux_files"] = npukb_aux_files
+        loaded_config["framework_factory_names"] = npukb_factory_names
     
     # 运行自适应搜索
     print("\n开始自适应搜索...")

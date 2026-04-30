@@ -42,6 +42,7 @@ from akg_agents.core.worker.manager import register_worker
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.utils.sol_utils import load_sol_task
+from akg_agents.op.utils.npukb_utils import is_npukb_task_file, load_npukb_task
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.op.evolve import evolve
@@ -158,6 +159,11 @@ def parse_batch_runner_mode(args):
         op_name = sol_op_name
         config._sol_problem_dir = sol_problem_dir
         print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    elif is_npukb_task_file(task_file):
+        _npukb_stem, task_desc, npukb_aux_files, npukb_factory_names = load_npukb_task(task_file)
+        config._npukb_aux_files = npukb_aux_files
+        config._npukb_factory_names = npukb_factory_names
+        print(f"NPUKernelBench 模式: 任务文件={task_file}")
     else:
         # 读取任务描述文件
         task_desc = load_task_description(task_file)
