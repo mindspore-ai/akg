@@ -2700,6 +2700,11 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
       return failure();
     }
 
+    if (op.getSource().getType() == resultType) {
+      rewriter.replaceOp(op, source);
+      return success();
+    }
+
     Type elemType = npuVecType.getElementType();
     if (elemType.isIndex()) {
       elemType = rewriter.getI64Type();
