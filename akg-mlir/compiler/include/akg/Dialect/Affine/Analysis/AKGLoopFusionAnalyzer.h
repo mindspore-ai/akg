@@ -129,6 +129,13 @@ struct FusionAnalyzer {
   void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan, const GroupPtr srcGroup,
                              const GroupPtr dstGroup);
 
+  unsigned outgoingTarget(unsigned id);
+  std::pair<unsigned, unsigned> findBridgePoint(unsigned sourceId, unsigned targetId);
+  void propagateDeletedDep(unsigned existingTo, unsigned targetId, DependenceInfo &deletedDep);
+  bool isConflictingPair(const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b);
+  void bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge);
+  void resolveConflictingDefers(std::vector<std::pair<unsigned, unsigned>> &candidates);
+
   // Precomputation
   void precomputeDirectPredecessors();
   void dumpDirectPredecessors(unsigned nodeId, const std::vector<unsigned> &allPredecessorIds,
@@ -147,7 +154,8 @@ struct FusionAnalyzer {
   std::vector<unsigned> topoSortNodeIds;
   // Direct predecessor cache: nodeId -> {predecessor, memref, depth, depType}
   std::unordered_map<unsigned, std::vector<DirectPredecessor>> directPredecessorsCache;
-  // Group dependency cache: (srcGroupId, dstGroupId) -> DependenceInfo
+  // Group dependency cache: (srcGroupId, dstGroupId) -> the most-restrictive DependenceInfo
+  // (smallest loopDepth wins on update). Updates merge by comparing loopDepth.
   std::unordered_map<std::pair<unsigned, unsigned>, DependenceInfo, PairHash> groupDependenciesCache;
   // Soft defer constraints from Phase 2 skipped RAR edges.
   // Each pair (deferredFromGroupId, mustEmitFirstFromGroupId): edges from deferredFromGroupId
