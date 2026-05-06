@@ -43,11 +43,16 @@ enum class DepType { RAW, WAR, WAW, RAR, OTHER };
 
 inline const char *depTypeToString(DepType type) {
   switch (type) {
-    case DepType::RAW: return "RAW";
-    case DepType::WAR: return "WAR";
-    case DepType::WAW: return "WAW";
-    case DepType::RAR: return "RAR";
-    case DepType::OTHER: return "OTHER";
+    case DepType::RAW:
+      return "RAW";
+    case DepType::WAR:
+      return "WAR";
+    case DepType::WAW:
+      return "WAW";
+    case DepType::RAR:
+      return "RAR";
+    case DepType::OTHER:
+      return "OTHER";
   }
   return "UNKNOWN";
 }
@@ -88,6 +93,7 @@ struct DependenceInfo {
   DepType depType{DepType::OTHER};
   Value memref;
   unsigned loopDepth{UINT_MAX};
+  bool isInputMemref{false};
 };
 
 struct FusionPlan {
