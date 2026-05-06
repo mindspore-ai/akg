@@ -2034,19 +2034,6 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
   }
 };
 
-static bool transferReadBroadcastCanFoldToScalar(npuvector::TransferReadOp op) {
-  for (Operation *user : op.getResult().getUsers()) {
-    if (isSupportedBroadcastScalarFoldUser(user, op.getResult())) {
-      continue;
-    }
-    if (isa<annotation::MarkOp>(user)) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
 static int64_t computeNPUVectorMarkBufferBytes(npuvector::NPUVectorType ty, Type elemType,
                                                ArrayRef<int64_t> maxPerDynamicDim) {
   int64_t n = 1;
@@ -2172,16 +2159,6 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
                                                             ConversionPatternRewriter &rewriter) {
   Location loc = op.getLoc();
 
-  if (!adaptor.getIndices().empty()) {
-    return failure();
-  }
-
-  if (transferReadBroadcastCanFoldToScalar(op)) {
-    Value scalar = rewriter.create<memref::LoadOp>(loc, source, ValueRange{});
-    rewriter.replaceOp(op, scalar);
-    return success();
-  }
-
   Type elemType = npuVecType.getElementType();
   auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
@@ -2295,9 +2272,6 @@ static LogicalResult rewriteNPUVectorTransferWriteRank0(npuvector::TransferWrite
                                                         Value dataToWrite, Value dest, MemRefType dataMemRefType,
                                                         MemRefType destMemRefType,
                                                         ConversionPatternRewriter &rewriter) {
-  if (!adaptor.getIndices().empty()) {
-    return rewriter.notifyMatchFailure(op, "rank-0 destination expects empty indices");
-  }
   int64_t dataRank = dataMemRefType.getRank();
   if (dataRank == 0) {
     rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, dest);
