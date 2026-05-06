@@ -71,7 +71,24 @@ class CopyReturnedFuncArgs : public impl::CopyReturnedFuncArgsBase<CopyReturnedF
       for (Value v : ret.getOperands()) {
         auto isBlockArgument = isa<BlockArgument>(v);
         auto it = std::find(newOperands.begin(), newOperands.end(), v);
-        if (it != newOperands.end() || isBlockArgument) {
+
+        bool fromInsertSliceWithArgSource = false;
+        if (auto insertSlice = v.getDefiningOp<tensor::InsertSliceOp>()) {
+          Value src = insertSlice.getSource();
+          if (isa<BlockArgument>(src))
+            fromInsertSliceWithArgSource = true;
+        }
+
+        bool fromExtractSliceWithArgSource = false;
+        if (auto extractSlice = v.getDefiningOp<tensor::ExtractSliceOp>()) {
+          Value src = extractSlice.getSource();
+          if (isa<BlockArgument>(src))
+            fromExtractSliceWithArgSource = true;
+        }
+
+        if (it != newOperands.end() || isBlockArgument ||
+            fromInsertSliceWithArgSource ||
+            fromExtractSliceWithArgSource) {
           Value copy = createCopyForReturnedArg(b, ret.getLoc(), v);
           newOperands.push_back(copy);
           changed = true;
