@@ -1346,3 +1346,72 @@ func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>
   } {vector=128}
   return
 }
+
+// ============================================================================
+// Phase 2 (VF=1 sweep): no tagged loops — scalar memref.load chain only
+// ============================================================================
+
+// CHECK-LABEL: func.func @test_vf1_sweep_no_tagged_loops
+// CHECK: npuvector.transfer_read {{.*}} : memref<f32>, !npuvector<1xf32>
+// CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
+// CHECK: npuvector.transfer_write {{.*}} : !npuvector<1xf32>, memref<f32>
+func.func @test_vf1_sweep_no_tagged_loops(%in: memref<f32>, %out: memref<f32>) {
+  %x = memref.load %in[] : memref<f32>
+  %c2 = arith.constant 2.000000e+00 : f32
+  %m = arith.mulf %x, %c2 : f32
+  memref.store %m, %out[] : memref<f32>
+  return
+}
+
+// -----
+
+// Phase 1 inlines vector=1; 0-d load stays scalar until Phase 2 promotes to !npuvector<1xf32>.
+// CHECK-LABEL: func.func @test_vf1_sweep_after_vector1_collapse
+// CHECK: memref.collapse_shape
+// CHECK: npuvector.transfer_read {{.*}} : memref<f32>, !npuvector<1xf32>
+// CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
+// CHECK: npuvector.transfer_write {{.*}} : !npuvector<1xf32>, memref<f32>
+func.func @test_vf1_sweep_after_vector1_collapse(%a: memref<1xf32>, %b: memref<1xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  scf.for %i = %c0 to %c1 step %c1 {
+    %ca = memref.collapse_shape %a [] : memref<1xf32> into memref<f32>
+    %cb = memref.collapse_shape %b [] : memref<1xf32> into memref<f32>
+    %x = memref.load %ca[] : memref<f32>
+    %y = arith.mulf %x, %x : f32
+    memref.store %y, %cb[] : memref<f32>
+  } {vector = 1 : i64}
+  return
+}
+
+// -----
+
+// Phase 1: single tagged elementwise loop (vector=4). Phase 2: scalar memref.load chains outside
+// that loop (bias prologue + tail) promote to !npuvector<1xf32> (batch-norm style).
+// CHECK-LABEL: func.func @test_vf1_scalar_before_after_tagged_elementwise
+// CHECK: npuvector.transfer_read {{.*}} : memref<4xf32>, !npuvector<1xf32>
+// CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
+// CHECK: npuvector.transfer_read {{.*}} : memref<4xf32>, !npuvector<4xf32>
+// CHECK: npuvector.transfer_write {{.*}} : !npuvector<4xf32>, memref<4xf32>
+// CHECK: npuvector.transfer_read {{.*}} : memref<4xf32>, !npuvector<1xf32>
+// CHECK: arith.addf {{.*}} : !npuvector<1xf32>
+// CHECK: npuvector.transfer_write {{.*}} : !npuvector<1xf32>, memref<4xf32>
+func.func @test_vf1_scalar_before_after_tagged_elementwise(
+    %bias: memref<4xf32>,
+    %in: memref<4xf32>,
+    %out: memref<4xf32>) {
+  %c0 = arith.constant 0 : index
+  %c4 = arith.constant 4 : index
+  %c1 = arith.constant 1 : index
+  %pre = memref.load %bias[%c0] : memref<4xf32>
+  %preScaled = arith.mulf %pre, %pre : f32
+  scf.for %i = %c0 to %c4 step %c1 {
+    %v = memref.load %in[%i] : memref<4xf32>
+    %x = arith.mulf %v, %preScaled : f32
+    memref.store %x, %out[%i] : memref<4xf32>
+  } {vector = 4 : i64}
+  %post = memref.load %out[%c0] : memref<4xf32>
+  %postAcc = arith.addf %post, %preScaled : f32
+  memref.store %postAcc, %bias[%c0] : memref<4xf32>
+  return
+}
