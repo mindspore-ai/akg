@@ -124,8 +124,9 @@ struct LoopVectorizationCtx {
   IRMapping valueMapping;
   DenseMap<Value, SmallVector<int>> valueDimOrder;
 
-  std::optional<arith::AtomicRMWKind> reductionKind;
-  Value origInit;
+  /// Per `iter_arg` / loop result for ReductionX/Y (order matches `scalarLoop` init args).
+  SmallVector<arith::AtomicRMWKind> reductionKinds;
+  SmallVector<Value> origInits;
 
   Value vectorizationAxis;
   std::optional<unsigned> vectorAxisVectorDim;
@@ -145,8 +146,6 @@ struct LoopVectorizationCtx {
         allVectorSizes(std::move(vecSizes)),
         allVectorSizeValues(std::move(vecSizeVals)),
         allMaxStepValues(std::move(maxVals)),
-        reductionKind(std::nullopt),
-        origInit(nullptr),
         vectorizationAxis(vecAxis) {}
 
   LoopVectorizationCtx(OpBuilder &b, int64_t actualStepVal, Value vfVal, Value maxVal, VectorizationMode m,
@@ -158,8 +157,6 @@ struct LoopVectorizationCtx {
         allVectorSizes({actualStepVal}),
         allVectorSizeValues({vfVal}),
         allMaxStepValues({maxVal}),
-        reductionKind(std::nullopt),
-        origInit(nullptr),
         vectorizationAxis(vecAxis) {}
 
   int64_t getRank() const { return allVectorSizes.size(); }
@@ -518,22 +515,20 @@ static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   SmallVector<Value> neutralVecs;
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
     if (!ctx.scalarLoop.getInitArgs().empty()) {
-      if (ctx.mode == VectorizationMode::ReductionX && ctx.scalarLoop.getNumRegionIterArgs() > 1) {
-        return nullptr;
-      }
-
+      ctx.reductionKinds.clear();
+      ctx.origInits.clear();
       for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
         auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
         if (!kind) return nullptr;
+
+        ctx.reductionKinds.push_back(*kind);
+        ctx.origInits.push_back(ctx.scalarLoop.getInitArgs()[idx]);
 
         Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
         Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
         if (!neutralVec) return nullptr;
         neutralVecs.push_back(neutralVec);
       }
-
-      ctx.reductionKind = detectReductionKindForOperand(ctx.scalarLoop, 0);
-      ctx.origInit = ctx.scalarLoop.getInitArgs()[0];
     }
   }
 
@@ -2496,7 +2491,14 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
         loc, typeInfo.vecType, mappedMemRef, ValueRange(tailIndices), padding, Value(),
         ValueRange(typeInfo.dynamicSizes), ValueRange(tailMaxSizes));
 
-      tailCtx.valueMapping.map(loadOp.getResult(), tailRead.getResult());
+      Value tailVecRes = tailRead.getResult();
+      auto tailReadNvt = mlir::cast<npuvector::NPUVectorType>(tailVecRes.getType());
+      const unsigned tailVecRank = static_cast<unsigned>(tailReadNvt.getRank());
+      SmallVector<int> tailAxisOrder(tailVecRank);
+      for (unsigned axisNum = 0; axisNum < tailVecRank; ++axisNum) tailAxisOrder[axisNum] = static_cast<int>(axisNum);
+      reconcileValueDimOrderWithTileExtents(tailVecRes, tailAxisOrder, tailCtx);
+      tailCtx.valueDimOrder[tailVecRes] = std::move(tailAxisOrder);
+      tailCtx.valueMapping.map(loadOp.getResult(), tailVecRes);
       continue;
     }
 
@@ -2519,14 +2521,16 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
   }
 }
 
-static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx &ctx) {
+static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx &ctx, unsigned resultIdx) {
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
-  Value scalarYieldValue = scalarYield.getOperand(0);
+  if (resultIdx >= scalarYield.getNumOperands()) return Value();
+  Value scalarYieldValue = scalarYield.getOperand(resultIdx);
 
   if (auto defOp = scalarYieldValue.getDefiningOp()) {
     if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp>(defOp)) {
+      Value iterArg = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
       for (Value operand : defOp->getOperands()) {
-        if (operand != ctx.scalarLoop.getRegionIterArgs()[0]) {
+        if (operand != iterArg) {
           Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
           if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
             return mappedValue;
@@ -2540,7 +2544,7 @@ static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationC
 }
 
 static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value vecLoopUb, Value tailSize, Type elemType,
-                              vector::CombiningKind combiningKind) {
+                              vector::CombiningKind combiningKind, arith::AtomicRMWKind laneKind, unsigned resultIdx) {
   Location loc = ctx.vecLoop.getLoc();
 
   int64_t tailActualStep;
@@ -2559,7 +2563,7 @@ static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value ve
   for (const auto &kv : ctx.valueDimOrder) tailCtx.valueDimOrder[kv.first] = kv.second;
   vectorizeTailOps(tailCtx, ctx, vecLoopUb, tailSize);
 
-  Value valueToReduce = findValueToReduce(tailCtx, ctx);
+  Value valueToReduce = findValueToReduce(tailCtx, ctx, resultIdx);
   if (!valueToReduce) {
     llvm_unreachable("Failed to find value to reduce in tail block");
   }
@@ -2568,7 +2572,7 @@ static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value ve
                                                                         arith::FastMathFlags::none);
   Value tailReduced = tailReductionOp.getDest();
 
-  return combineReductionResults(tailCtx.builder, loc, reduced, tailReduced, *ctx.reductionKind);
+  return combineReductionResults(tailCtx.builder, loc, reduced, tailReduced, laneKind);
 }
 
 /// True if any ancestor `scf.for` (walking from `loop`'s parent) carries a vectorization attr.
@@ -2680,16 +2684,17 @@ static void vectorizeOpsForMultiDimTailCtx(scf::ForOp scalarLoop, LoopVectorizat
 }
 
 static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, LoopVectorizationCtx &tailCtx,
-                                      Value mainReduced, vector::CombiningKind combKind) {
+                                      Value mainReduced, vector::CombiningKind combKind, unsigned resultIdx,
+                                      arith::AtomicRMWKind laneKind) {
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
-  Value scalarYieldVal = scalarYield.getOperand(0);
+  Value scalarYieldVal = scalarYield.getOperand(resultIdx);
   Operation *defOp = scalarYieldVal.getDefiningOp();
   if (!defOp || !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp>(defOp))
     return mainReduced;
 
-  Value iterArg0 = ctx.scalarLoop.getRegionIterArgs()[0];
+  Value iterArgN = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
   for (Value operand : defOp->getOperands()) {
-    if (operand == iterArg0) continue;
+    if (operand == iterArgN) continue;
     Value mapped = tailCtx.valueMapping.lookupOrNull(operand);
     if (!mapped || !mlir::isa<npuvector::NPUVectorType>(mapped.getType())) continue;
 
@@ -2701,7 +2706,7 @@ static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, L
       arith::FastMathFlags::none);
     Value tailReduced = tailRedOp.getDest();
 
-    switch (*ctx.reductionKind) {
+    switch (laneKind) {
     case arith::AtomicRMWKind::addf:
       return ctx.builder.create<arith::AddFOp>(loc, mainReduced, tailReduced);
     case arith::AtomicRMWKind::mulf:
@@ -2719,7 +2724,8 @@ static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, L
 
 static Value processMultiDimTailBlock(LoopVectorizationCtx &ctx, LoopVectorizationCtx &parentCtx, Value mainReduced,
                                       Value vecLoopUb, Value tailSize, unsigned reductionDim,
-                                      vector::CombiningKind combKind) {
+                                      vector::CombiningKind combKind, unsigned resultIdx,
+                                      arith::AtomicRMWKind laneKind) {
   Location loc = ctx.scalarLoop.getLoc();
   unsigned ancestorRank = ctx.allVectorSizes.size() - 1;
 
@@ -2755,7 +2761,7 @@ static Value processMultiDimTailBlock(LoopVectorizationCtx &ctx, LoopVectorizati
   memref::LoadOp tailLoadOp = nullptr;
   vectorizeOpsForMultiDimTailCtx(ctx.scalarLoop, tailCtx, tailLoadOp);
 
-  return mergeMainReducedWithTail(loc, ctx, tailCtx, mainReduced, combKind);
+  return mergeMainReducedWithTail(loc, ctx, tailCtx, mainReduced, combKind, resultIdx, laneKind);
 }
 
 static LogicalResult inlineVectorize(LoopVectorizationCtx &ctx) {
@@ -2796,7 +2802,8 @@ static LogicalResult inlineVectorize(LoopVectorizationCtx &ctx) {
 
 static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Value reduced, Value vecLoopUb,
                                      Type elemType, bool isMultiDim, unsigned reductionDim,
-                                     vector::CombiningKind combKind) {
+                                     vector::CombiningKind combKind, unsigned resultIdx,
+                                     arith::AtomicRMWKind laneKind) {
   Value originalUb = ctx.scalarLoop.getUpperBound();
   Value finalResult = reduced;
   LoopVectorizationCtx &parentOrSelf = ctx.parent ? *ctx.parent : ctx;
@@ -2809,9 +2816,10 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
     int64_t remainder = tripCount % reductionStep;
     if (remainder != 0) {
       Value tailSize = ctx.builder.create<arith::ConstantIndexOp>(loc, remainder);
-      finalResult =
-        isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, tailSize, reductionDim, combKind)
-                   : processTailBlock(ctx, reduced, vecLoopUb, tailSize, elemType, combKind);
+      finalResult = isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, tailSize,
+                                                          reductionDim, combKind, resultIdx, laneKind)
+                               : processTailBlock(ctx, reduced, vecLoopUb, tailSize, elemType, combKind, laneKind,
+                                                  resultIdx);
     }
     return finalResult;
   }
@@ -2831,8 +2839,9 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
     OpBuilder::InsertionGuard guard(ctx.builder);
     ctx.builder.setInsertionPointToStart(ifOp.thenBlock());
     Value tailResult =
-      isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, remainder, reductionDim, combKind)
-                 : processTailBlock(ctx, reduced, vecLoopUb, remainder, elemType, combKind);
+      isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, remainder, reductionDim, combKind,
+                                            resultIdx, laneKind)
+                 : processTailBlock(ctx, reduced, vecLoopUb, remainder, elemType, combKind, laneKind, resultIdx);
     ctx.builder.create<scf::YieldOp>(loc, tailResult);
   }
   {
@@ -2844,8 +2853,11 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
 }
 
 static void mergeReductionXOriginalInit(Location loc, LoopVectorizationCtx &ctx, bool isMultiDim, unsigned totalRank,
-                                        Value &finalResult) {
-  if (isNeutralElement(*ctx.reductionKind, ctx.origInit, ctx.builder)) return;
+                                        Value &finalResult, unsigned laneIdx) {
+  if (laneIdx >= ctx.reductionKinds.size() || laneIdx >= ctx.origInits.size()) return;
+  arith::AtomicRMWKind laneKind = ctx.reductionKinds[laneIdx];
+  Value laneOrig = ctx.origInits[laneIdx];
+  if (isNeutralElement(laneKind, laneOrig, ctx.builder)) return;
   if (isMultiDim) {
     unsigned ancestorRank = totalRank - 1;
     if (ancestorRank > 0) {
@@ -2858,36 +2870,38 @@ static void mergeReductionXOriginalInit(Location loc, LoopVectorizationCtx &ctx,
       ancCtx.parent = &ctx;
       for (const auto &kv : ctx.valueMapping.getValueMap()) ancCtx.valueMapping.map(kv.first, kv.second);
       for (const auto &kv : ctx.valueDimOrder) ancCtx.valueDimOrder[kv.first] = kv.second;
-      Value initBroadcast = vectorizeBroadcastScalar(ctx.origInit, ancCtx);
+      Value initBroadcast = vectorizeBroadcastScalar(laneOrig, ancCtx);
       if (initBroadcast)
-        finalResult = combineReductionResults(ctx.builder, loc, finalResult, initBroadcast, *ctx.reductionKind);
+        finalResult = combineReductionResults(ctx.builder, loc, finalResult, initBroadcast, laneKind);
     } else {
-      finalResult = combineReductionResults(ctx.builder, loc, finalResult, ctx.origInit, *ctx.reductionKind);
+      finalResult = combineReductionResults(ctx.builder, loc, finalResult, laneOrig, laneKind);
     }
   } else {
-    finalResult = combineReductionResults(ctx.builder, loc, finalResult, ctx.origInit, *ctx.reductionKind);
+    finalResult = combineReductionResults(ctx.builder, loc, finalResult, laneOrig, laneKind);
   }
 }
 
-static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, Value finalResult, bool isMultiDim) {
+static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, ArrayRef<Value> finalResults) {
   if (ctx.parent) {
-    Value scalarResult = ctx.scalarLoop.getResult(0);
-    ctx.parent->valueMapping.map(scalarResult, finalResult);
-    if (isMultiDim) {
-      if (mlir::isa<npuvector::NPUVectorType>(finalResult.getType())) {
-        SmallVector<int> parentDimOrder;
-        for (auto &[loop, localDim] : ctx.allLoopToVectorDim) {
-          if (loop == ctx.scalarLoop.getOperation()) continue;
-          auto pit = ctx.parent->allLoopToVectorDim.find(loop);
-          if (pit != ctx.parent->allLoopToVectorDim.end()) parentDimOrder.push_back(static_cast<int>(pit->second));
+    for (auto [scalarResult, finalResult] : llvm::zip(ctx.scalarLoop.getResults(), finalResults)) {
+      ctx.parent->valueMapping.map(scalarResult, finalResult);
+      if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(finalResult.getType())) {
+        if (nvt.getRank() > 1) {
+          SmallVector<int> parentDimOrder;
+          for (auto &[loop, localDim] : ctx.allLoopToVectorDim) {
+            if (loop == ctx.scalarLoop.getOperation()) continue;
+            auto pit = ctx.parent->allLoopToVectorDim.find(loop);
+            if (pit != ctx.parent->allLoopToVectorDim.end()) parentDimOrder.push_back(static_cast<int>(pit->second));
+          }
+          llvm::sort(parentDimOrder);
+          ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
         }
-        llvm::sort(parentDimOrder);
-        ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
       }
     }
   } else {
-    Value scalarResult = ctx.scalarLoop.getResult(0);
-    if (!scalarResult.use_empty()) scalarResult.replaceAllUsesWith(finalResult);
+    for (auto [scalarResult, finalResult] : llvm::zip(ctx.scalarLoop.getResults(), finalResults)) {
+      if (!scalarResult.use_empty()) scalarResult.replaceAllUsesWith(finalResult);
+    }
     ctx.scalarLoop.erase();
   }
 }
@@ -2903,45 +2917,62 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
 
   Location loc = ctx.vecLoop.getLoc();
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
-  Value scalarYieldVal = scalarYield.getOperand(0);
-  Value vecYieldVal = ctx.valueMapping.lookupOrNull(scalarYieldVal);
-  if (!vecYieldVal) return failure();
+  const unsigned numResults = scalarYield.getNumOperands();
+  if (numResults == 0 || numResults != ctx.vecLoop.getNumResults() ||
+      numResults != ctx.reductionKinds.size())
+    return failure();
+
+  SmallVector<Value> vecYieldVals;
+  vecYieldVals.reserve(numResults);
+  for (unsigned idx = 0; idx < numResults; ++idx) {
+    Value mapped = ctx.valueMapping.lookupOrNull(scalarYield.getOperand(idx));
+    if (!mapped) return failure();
+    vecYieldVals.push_back(mapped);
+  }
 
   Block *body = ctx.vecLoop.getBody();
   if (!body->empty() && isa<scf::YieldOp>(body->back())) body->back().erase();
   ctx.builder.setInsertionPointToEnd(body);
-  ctx.builder.create<scf::YieldOp>(loc, vecYieldVal);
+  ctx.builder.create<scf::YieldOp>(loc, vecYieldVals);
   ctx.builder.setInsertionPointAfter(ctx.vecLoop);
 
-  vector::CombiningKind combKind = convertToCombiningKind(*ctx.reductionKind);
-  Value vectorAcc = ctx.vecLoop.getResult(0);
-  auto fullVecType = mlir::cast<npuvector::NPUVectorType>(vectorAcc.getType());
-  Type elemType = fullVecType.getElementType();
-  const unsigned totalRank = fullVecType.getRank();
+  SmallVector<Value> finalResults;
+  finalResults.reserve(numResults);
 
-  const bool isMultiDim = totalRank > 1;
-  const unsigned reductionDim = totalRank - 1;
+  for (unsigned idx = 0; idx < numResults; ++idx) {
+    arith::AtomicRMWKind laneKind = ctx.reductionKinds[idx];
+    vector::CombiningKind combKind = convertToCombiningKind(laneKind);
+    Value vectorAcc = ctx.vecLoop.getResult(idx);
+    auto fullVecType = mlir::cast<npuvector::NPUVectorType>(vectorAcc.getType());
+    Type elemType = fullVecType.getElementType();
+    const unsigned totalRank = fullVecType.getRank();
 
-  Value reduced;
-  if (isMultiDim) {
-    auto reducedVecType = buildPartialReductionType(fullVecType, reductionDim);
-    auto reductionOp = ctx.builder.create<npuvector::ReductionOp>(
-      loc, reducedVecType, combKind, vectorAcc, Value(),
-      ctx.builder.getDenseI64ArrayAttr({static_cast<int64_t>(reductionDim)}), arith::FastMathFlags::none);
-    reduced = reductionOp.getDest();
-  } else {
-    auto reductionOp =
-      ctx.builder.create<npuvector::ReductionOp>(loc, combKind, vectorAcc, Value(), arith::FastMathFlags::none);
-    reduced = reductionOp.getDest();
+    const bool isMultiDim = totalRank > 1;
+    const unsigned reductionDim = totalRank - 1;
+
+    Value reduced;
+    if (isMultiDim) {
+      auto reducedVecType = buildPartialReductionType(fullVecType, reductionDim);
+      auto reductionOp = ctx.builder.create<npuvector::ReductionOp>(
+        loc, reducedVecType, combKind, vectorAcc, Value(),
+        ctx.builder.getDenseI64ArrayAttr({static_cast<int64_t>(reductionDim)}), arith::FastMathFlags::none);
+      reduced = reductionOp.getDest();
+    } else {
+      auto reductionOp =
+        ctx.builder.create<npuvector::ReductionOp>(loc, combKind, vectorAcc, Value(), arith::FastMathFlags::none);
+      reduced = reductionOp.getDest();
+    }
+
+    Value vecLoopUb = ctx.vecLoop.getUpperBound();
+    Value finalResult =
+      applyReductionXTripTail(loc, ctx, reduced, vecLoopUb, elemType, isMultiDim, reductionDim, combKind, idx,
+                              laneKind);
+
+    mergeReductionXOriginalInit(loc, ctx, isMultiDim, totalRank, finalResult, idx);
+    finalResults.push_back(finalResult);
   }
 
-  Value vecLoopUb = ctx.vecLoop.getUpperBound();
-  Value finalResult =
-    applyReductionXTripTail(loc, ctx, reduced, vecLoopUb, elemType, isMultiDim, reductionDim, combKind);
-
-  mergeReductionXOriginalInit(loc, ctx, isMultiDim, totalRank, finalResult);
-
-  finalizeReductionXOutputs(ctx, finalResult, isMultiDim);
+  finalizeReductionXOutputs(ctx, finalResults);
 
   return success();
 }
