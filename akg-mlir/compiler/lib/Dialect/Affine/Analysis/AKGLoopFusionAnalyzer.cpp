@@ -655,6 +655,184 @@ void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sou
   }
 }
 
+// Two candidates conflict when they share the same downstream intersection —
+// both want to "park" at the same convergence point with opposite emit orders.
+// Different intersections → independent, no conflict.
+bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
+  auto [aSrc, aTgt] = a;
+  auto [bSrc, bTgt] = b;
+  if (aSrc == bSrc || aTgt == bTgt) return false;
+
+  auto firstConvergence = [this](unsigned x, unsigned y) -> unsigned {
+    auto reachX = findReachableGroups(x);
+    auto reachY = findReachableGroups(y);
+    unsigned best = UINT_MAX;
+    unsigned bestSum = UINT_MAX;
+    for (const auto &[gid, lenX] : reachX) {
+      auto it = reachY.find(gid);
+      if (it == reachY.end()) continue;
+      unsigned sum = lenX + it->second;
+      if (sum < bestSum) {
+        bestSum = sum;
+        best = gid;
+      }
+    }
+    return best;
+  };
+
+  unsigned ca = firstConvergence(aSrc, aTgt);
+  unsigned cb = firstConvergence(bSrc, bTgt);
+  return ca != UINT_MAX && ca == cb;
+}
+
+unsigned FusionAnalyzer::outgoingTarget(unsigned id) {
+  auto it =
+    std::find_if(fusionPlans.begin(), fusionPlans.end(), [id](const FusionPlan &p) { return p.fusedGroup.from == id; });
+  return (it == fusionPlans.end()) ? UINT_MAX : it->fusedGroup.to;
+}
+
+std::pair<unsigned, unsigned> FusionAnalyzer::findBridgePoint(unsigned sourceId, unsigned targetId) {
+  unsigned cur = sourceId;
+  std::unordered_set<unsigned> seen{cur};
+  while (true) {
+    unsigned next = outgoingTarget(cur);
+    if (next == UINT_MAX || next == targetId || !seen.insert(next).second) {
+      return {UINT_MAX, UINT_MAX};
+    }
+    if (next > targetId) return {cur, next};
+    cur = next;
+  }
+}
+
+void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId, DependenceInfo &deletedDep) {
+  if (deletedDep.predNodeId == UINT_MAX) return;
+
+  auto firstReachable = [&](unsigned start, const std::unordered_map<unsigned, unsigned> &reach) {
+    unsigned cur = start;
+    std::unordered_set<unsigned> seen;
+    while (cur != UINT_MAX && seen.insert(cur).second) {
+      if (reach.count(cur)) return cur;
+      cur = outgoingTarget(cur);
+    }
+    return UINT_MAX;
+  };
+  auto findChainPredecessor = [&](unsigned start, unsigned end) {
+    unsigned cur = start;
+    std::unordered_set<unsigned> seen{cur};
+    while (true) {
+      unsigned next = outgoingTarget(cur);
+      if (next == UINT_MAX) return UINT_MAX;
+      if (next == end) return cur;
+      if (!seen.insert(next).second) return UINT_MAX;
+      cur = next;
+    }
+  };
+
+  auto targetReach = findReachableGroups(targetId);
+  unsigned convergenceId = firstReachable(existingTo, targetReach);
+  if (convergenceId == UINT_MAX) return;
+
+  unsigned recipientFrom = findChainPredecessor(targetId, convergenceId);
+  if (recipientFrom == UINT_MAX) return;
+
+  auto recipientKey = std::make_pair(recipientFrom, convergenceId);
+  auto it = groupDependenciesCache.find(recipientKey);
+  if (it == groupDependenciesCache.end() || deletedDep.loopDepth < it->second.loopDepth) {
+    groupDependenciesCache[recipientKey] = std::move(deletedDep);
+  }
+}
+
+// Chain-rewrite an RAR backward-intersection candidate (source, target):
+// walk source's chain, find first edge X→Y where Y > target, redirect X→Y to X→target.
+// Propagate deleted X→Y dep info to the recipient edge at the convergence point,
+// and inherit (source, target) RAR cache for the new bridge edge.
+//
+// Example (13,16) : source chain 13→14→26→27→28, target chain 16→25→28.
+//   (1) bridgeFromId=14, existingTo=26 (26>16)
+//   (2) snapshot cache[(14,26)] as deletedDep, remove edge 14→26
+//   (3) convergence Z=28 (first node in 26's chain reachable from 16),
+//       recipient 25→28, overwrite cache[(25,28)] if deletedDep.loopDepth is smaller
+//   (4) inherit cache[(13,16)] → cache[(14,16)]
+//   (5) add bridge FusionPlan 14→16
+void FusionAnalyzer::bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge) {
+  auto [sourceId, targetId] = hEdge;
+  auto sourceGrp = depGraph.getGroup(sourceId);
+  auto targetGrp = depGraph.getGroup(targetId);
+  if (sourceGrp == nullptr || targetGrp == nullptr) return;
+
+  // (1) Find bridge point: first edge X→Y along source's chain where Y > target.
+  //     (13,16): 13→14 (14<16, continue) → 14→26 (26>16, bridge!) → bridgeFromId=14, existingTo=26
+  auto [bridgeFromId, existingTo] = findBridgePoint(sourceId, targetId);
+  if (bridgeFromId == UINT_MAX) return;
+  auto bridgeFromGrp = depGraph.getGroup(bridgeFromId);
+  if (bridgeFromGrp == nullptr) return;
+
+  // (2) Snapshot X→Y's cached dep info, then remove the edge.
+  //     (13,16): deletedDep = cache[(14,26)], remove edge 14→26
+  DependenceInfo deletedDep;
+  if (auto it = groupDependenciesCache.find(std::make_pair(bridgeFromId, existingTo));
+      it != groupDependenciesCache.end()) {
+    deletedDep = it->second;
+  }
+  fusionPlans.erase(std::remove_if(fusionPlans.begin(), fusionPlans.end(),
+                                   [&](const FusionPlan &p) {
+                                     return p.fusedGroup.from == bridgeFromId && p.fusedGroup.to == existingTo;
+                                   }),
+                    fusionPlans.end());
+
+  // (3) Propagate deletedDep to the recipient edge at convergence Z.
+  //     (13,16): overwrite cache[(25,28)] if deletedDep.loopDepth is smaller
+  propagateDeletedDep(existingTo, targetId, deletedDep);
+
+  // (4) Inherit (source, target) RAR cache for the new bridge edge if not already present.
+  //     (13,16): cache[(13,16)] → cache[(14,16)]
+  auto bridgeCacheKey = std::make_pair(bridgeFromId, targetId);
+  if (auto srcIt = groupDependenciesCache.find(std::make_pair(sourceId, targetId));
+      srcIt != groupDependenciesCache.end() &&
+      groupDependenciesCache.find(bridgeCacheKey) == groupDependenciesCache.end()) {
+    groupDependenciesCache[bridgeCacheKey] = srcIt->second;
+  }
+
+  // (5) Add the bridge FusionPlan bridgeFromId → target.
+  //     (13,16): add FusionPlan 14→16
+  FusionPlan bridge;
+  bridge.fusedGroup = FuseEdge(bridgeFromId, targetId);
+  bridge.fusedBand = FuseEdge(bridgeFromGrp->rootId, targetGrp->rootId);
+  bridgeFromGrp->fusedGroupId.emplace_back(targetId);
+  addFusionPlan(bridge);
+}
+
+// Resolve conflicting RAR backward-intersection candidates: repeatedly find a
+// conflicting pair, rewrite the one with larger source groupId as an H fusion edge,
+// and re-scan (each rewrite mutates fusionPlans, which may dissolve/expose conflicts).
+// Survivors → softDeferConstraints.
+void FusionAnalyzer::resolveConflictingDefers(std::vector<std::pair<unsigned, unsigned>> &candidates) {
+  std::vector<bool> rewritten(candidates.size(), false);
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (size_t i = 0; i < candidates.size() && !changed; ++i) {
+      if (rewritten[i]) continue;
+      for (size_t j = i + 1; j < candidates.size(); ++j) {
+        if (rewritten[j]) continue;
+        if (!isConflictingPair(candidates[i], candidates[j])) continue;
+        size_t pickIdx = (candidates[i].first > candidates[j].first) ? i : j;
+        bridgeChainToTarget(candidates[pickIdx]);
+        rewritten[pickIdx] = true;
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (!rewritten[i]) {
+      softDeferConstraints.emplace_back(candidates[i].first, candidates[i].second);
+    }
+  }
+}
+
 void FusionAnalyzer::dumpDirectPredecessors(unsigned nodeId, const std::vector<unsigned> &allPredecessorIds,
                                             const std::unordered_set<size_t> &skipIdx,
                                             const std::vector<DirectPredecessor> &directPreds) {
@@ -766,13 +944,9 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
 
 void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
                                                std::vector<unsigned> &rarGroupIds) {
-  // Accumulate DependenceInfo per source group to pre-populate groupDependenciesCache.
-  struct DepAccum {
-    DependenceInfo warDepInfo;
-    DependenceInfo rarDepInfo;
-    bool haswarDep = false;
-  };
-  std::unordered_map<unsigned, DepAccum> depAccumMap;
+  // Accumulate one DependenceInfo per source group; on each new pred, replace the entry
+  // when its loopDepth is smaller (most-restrictive constraint wins).
+  std::unordered_map<unsigned, DependenceInfo> depAccumMap;
   std::unordered_set<unsigned> warGroupIdSet;
   std::unordered_set<unsigned> rarGroupIdSet;
   for (auto targetNodeId : targetGroup->nodesId) {
@@ -786,29 +960,32 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
         continue;
       }
       unsigned sourceGroupId = sourceGroup->groupId;
-      auto &accum = depAccumMap[sourceGroupId];
       bool isRAR = (pred.depType == DepType::RAR || pred.depType == DepType::RAW);
-      auto &depInfo = isRAR ? accum.rarDepInfo : accum.warDepInfo;
-      depInfo.loopDepth = std::min(depInfo.loopDepth, pred.loopDepth);
-      depInfo.memref = pred.memref;
-      depInfo.predNodeId = pred.nodeId;
-      depInfo.targetNodeId = targetNodeId;
-      depInfo.depType = pred.depType;
+      DependenceInfo entry;
+      entry.loopDepth = pred.loopDepth;
+      entry.memref = pred.memref;
+      entry.predNodeId = pred.nodeId;
+      entry.targetNodeId = targetNodeId;
+      entry.depType = pred.depType;
+      entry.isInputMemref = !pred.memref.getDefiningOp<memref::AllocOp>();
+      auto &accum = depAccumMap[sourceGroupId];
+      if (accum.predNodeId == UINT_MAX || entry.loopDepth < accum.loopDepth) {
+        accum = std::move(entry);
+      }
       if (isRAR) {
         rarGroupIdSet.insert(sourceGroupId);
       } else {
         warGroupIdSet.insert(sourceGroupId);
-        accum.haswarDep = true;
       }
     }
   }
 
-  // Pre-populate groupDependenciesCache
+  // Pre-populate groupDependenciesCache: smaller loopDepth wins on conflict.
   for (auto &[sourceGroupId, accum] : depAccumMap) {
     auto cacheKey = std::make_pair(sourceGroupId, targetGroup->groupId);
-    if (groupDependenciesCache.find(cacheKey) == groupDependenciesCache.end()) {
-      DependenceInfo depInfo = accum.haswarDep ? std::move(accum.warDepInfo) : std::move(accum.rarDepInfo);
-      groupDependenciesCache[cacheKey] = std::move(depInfo);
+    auto it = groupDependenciesCache.find(cacheKey);
+    if (it == groupDependenciesCache.end() || accum.loopDepth < it->second.loopDepth) {
+      groupDependenciesCache[cacheKey] = std::move(accum);
     }
   }
 
@@ -876,7 +1053,7 @@ void FusionAnalyzer::plan() {
 
   // Phase 2: Process RAR edges in deterministic order: target ascending, source descending.
   // (1) No backward intersection → applyAndFuse;
-  // (2) backward intersection → skip edge + softDefer(source, target).
+  // (2) backward intersection → collect as defer candidate; resolved in a second pass.
   std::vector<unsigned> sortedRarTargets;
   sortedRarTargets.reserve(rarMap.size());
   for (const auto &[targetGroupId, _] : rarMap) {
@@ -884,6 +1061,7 @@ void FusionAnalyzer::plan() {
   }
   std::sort(sortedRarTargets.begin(), sortedRarTargets.end());
 
+  std::vector<std::pair<unsigned, unsigned>> deferCandidates;
   for (unsigned targetGroupId : sortedRarTargets) {
     auto targetGroup = depGraph.getGroup(targetGroupId);
     if (targetGroup == nullptr) {
@@ -899,8 +1077,13 @@ void FusionAnalyzer::plan() {
 
       bool isAncestry = false;
       if (findBackwardIntersection(sourceGroup, targetGroup, &isAncestry)) {
-        // deferred = writer side (sourceGroup), mustFirst = reader side (targetGroup).
-        softDeferConstraints.emplace_back(sourceGroup->groupId, targetGroup->groupId);
+        // Skip RAR pairs whose shared memref is a function input — no upstream writer
+        // fusion could consume away, so no ordering needs to be expressed.
+        auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroup->groupId, targetGroup->groupId));
+        if (cacheIt != groupDependenciesCache.end() && cacheIt->second.isInputMemref) {
+          continue;
+        }
+        deferCandidates.emplace_back(sourceGroup->groupId, targetGroup->groupId);
         continue;
       }
       if (!isAncestry) {
@@ -908,6 +1091,10 @@ void FusionAnalyzer::plan() {
       }
     }
   }
+
+  // Phase 3: identify conflicting defer pairs and rewrite.
+  // Non-conflicting candidates fall through to softDeferConstraints.
+  resolveConflictingDefers(deferCandidates);
 
   std::vector<FusionPlan> edges = deduplicateAndClassifyEdges();
   fusionPlans = TopoScheduler(edges, depGraph.nodes.size(), softDeferConstraints).run();
