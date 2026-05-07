@@ -167,7 +167,7 @@ data_cache:
 
 ## 7. 当前范围
 
-当前实现只覆盖 `KernelBench` 验证链路。原因：
+当前 Verifier Data Cache 只覆盖 `KernelBench` 验证链路；这不影响 `SOL-ExecBench` 主验证/性能路径，SOL 输入格式由 `KernelVerifier` 的 SOL adapter 单独归一化为 `definition.json` / `workload.jsonl` / `reference.py`。Data Cache 暂不缓存 SOL 数据，原因：
 
 - `SOL` 已经自带 `reference.py` 和 `workload.jsonl`
 - 本次痛点主要是 `task_desc -> inputs/outputs` 和 framework baseline profile

@@ -95,6 +95,10 @@ class OpToolExecutor(ToolExecutor):
             "verifier_error": arguments.get("verifier_error", ""),
             "conductor_suggestion": arguments.get("conductor_suggestion", ""),
             "cur_path": arguments.get("cur_path", ""),
+            "bench_type": arguments.get(
+                "bench_type",
+                self.agent_context.get("bench_type", "kernelbench"),
+            ),
             "result": {},
             "should_continue": True,
             "current_step": "",
@@ -104,4 +108,13 @@ class OpToolExecutor(ToolExecutor):
         session_id = self.agent_context.get("session_id", "")
         if session_id:
             state["session_id"] = session_id
+        for key in (
+            "sol_problem_dir",
+            "sol_problem_json",
+            "sol_problem_data",
+            "sol_task_code",
+        ):
+            value = arguments.get(key) or self.agent_context.get(key)
+            if value:
+                state[key] = value
         return state

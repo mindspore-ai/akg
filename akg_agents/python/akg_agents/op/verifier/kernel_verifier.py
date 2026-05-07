@@ -163,6 +163,8 @@ class KernelVerifier:
             self.log_dir = config.get("log_dir")
         else:
             raise ValueError("config is required for KernelVerifier")
+        self.config["bench_type"] = bench_type
+        self.config.setdefault("_langgraph_debug_task_id", task_id)
 
         aux_files = self.config.get("framework_aux_files") or {}
         factory_names = self.config.get("framework_factory_names") or {}

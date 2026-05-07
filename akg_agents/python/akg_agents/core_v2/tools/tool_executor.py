@@ -504,6 +504,8 @@ class ToolExecutor:
             workflow_info = self.workflow_registry[tool_name]
             workflow_class = workflow_info["workflow_class"]
             workflow_name = workflow_info["workflow_name"]
+            workflow_arguments = dict(arguments)
+            workflow_arguments.setdefault("workflow", workflow_name)
             
             logger.info(f"[ToolExecutor] 开始执行 workflow: {workflow_name}")
             
@@ -516,19 +518,46 @@ class ToolExecutor:
                 raise ValueError("Workflow 需要 agents 资源，但未提供")
             
             if hasattr(workflow_class, 'ensure_resources'):
-                await workflow_class.ensure_resources(workflow_resources, arguments)
+                await workflow_class.ensure_resources(workflow_resources, workflow_arguments)
             if hasattr(workflow_class, 'prepare_config'):
-                workflow_class.prepare_config(workflow_resources, arguments)
+                workflow_class.prepare_config(workflow_resources, workflow_arguments)
             
             workflow = workflow_class(**workflow_resources)
             app = workflow.compile()
             
             if hasattr(workflow_class, 'build_initial_state'):
-                initial_state = workflow_class.build_initial_state(arguments, self.agent_context)
+                initial_state = workflow_class.build_initial_state(
+                    workflow_arguments,
+                    self.agent_context,
+                )
             else:
-                initial_state = self._build_workflow_state(arguments)
+                initial_state = self._build_workflow_state(workflow_arguments)
             
-            final_state = await app.ainvoke(initial_state)
+            max_iter = initial_state.get("max_iterations", 20)
+            recursion_limit = max(25, max_iter * 3 + 5)
+            from akg_agents.core_v2.langgraph_base.checkpointing import (
+                build_invoke_config,
+                debug_enabled,
+                debug_resume_requested,
+                get_existing_debug_state,
+            )
+            workflow_config = workflow_resources.get("config", {})
+            invoke_config = build_invoke_config(workflow_config, recursion_limit)
+            graph_input = initial_state
+            if debug_enabled(workflow_config) and debug_resume_requested(workflow_config):
+                saved_state = await get_existing_debug_state(app, invoke_config)
+                if not saved_state:
+                    raise RuntimeError(
+                        "debug.resume=True but no LangGraph checkpoint exists "
+                        "for the configured thread_id"
+                    )
+                graph_input = None
+                logger.info(
+                    f"[ToolExecutor] Workflow {workflow_name} resumes from "
+                    "LangGraph checkpoint"
+                )
+
+            final_state = await app.ainvoke(graph_input, config=invoke_config)
             result = workflow.format_result(final_state)
             
             logger.info(f"[ToolExecutor] Workflow {workflow_name} 完成: {result.get('status')}")

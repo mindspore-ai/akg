@@ -504,6 +504,14 @@ class NodeFactory:
             new_dsl = state.get('dsl', getattr(verifier_instance, 'dsl', ''))
             new_backend = state.get('backend', verifier_instance.backend)
             verifier_instance.dsl = normalize_dsl(new_dsl, new_backend)
+            verifier_instance.backend = new_backend
+            verifier_instance.arch = state.get('arch', verifier_instance.arch)
+            verifier_instance.bench_type = state.get(
+                'bench_type',
+                config.get('bench_type', getattr(verifier_instance, 'bench_type', 'kernelbench'))
+            )
+            if hasattr(verifier_instance, 'config') and isinstance(verifier_instance.config, dict):
+                verifier_instance.config['bench_type'] = verifier_instance.bench_type
 
             # 同步 config 中的 log_dir 到 verifier 实例
             # prepare_config 可能已将 log_dir 重定向到 cur_path/logs，

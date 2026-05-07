@@ -14,6 +14,7 @@ Key components:
 - **Router utilities** — Step limit and agent repeat limit checks
 - **WorkflowRegistry** — Workflow registration and discovery
 - **WorkflowVisualizer** — Mermaid diagram generation
+- **Debug Save/Resume** — LangGraph checkpoint-based state persistence
 
 ## 2. BaseState
 
@@ -163,7 +164,13 @@ def my_router(state):
     # Route to next agent...
 ```
 
-## 6. WorkflowRegistry
+## 6. Debug Save/Resume
+
+Workflow debug checkpointing is available through the `debug` config block. When enabled, workflows compile with a file-backed LangGraph checkpointer and invoke with `configurable.thread_id`. Resume uses the same thread id and calls `ainvoke(None, config=...)` after verifying saved state exists.
+
+See [Debug Save/Resume](./DebugSaveResume.md) for the detailed design, configuration, and acceptance test.
+
+## 7. WorkflowRegistry
 
 `WorkflowRegistry` manages workflow classes with scope support.
 
@@ -191,7 +198,7 @@ class KernelWorkflow(BaseWorkflow):
 | `WorkflowRegistry.is_registered(name, scope)` | Check if a workflow is registered (in a given scope). |
 | `WorkflowRegistry.clear()` | Remove all registered workflows. |
 
-## 7. WorkflowVisualizer
+## 8. WorkflowVisualizer
 
 Generate Mermaid diagrams from compiled workflows:
 
@@ -202,7 +209,7 @@ mermaid_str = workflow.visualize()
 print(mermaid_str)
 ```
 
-## 8. Node Tracking
+## 9. Node Tracking
 
 The `track_node` utility helps track node execution within workflows:
 
