@@ -252,6 +252,7 @@ class KernelGen(AgentBase):
         backend: str,
         stage: str,
         verifier_error: str = "",
+        arch: str = "",
     ) -> List[Any]:
         """分层分阶段 Skill 选择。
 
@@ -267,14 +268,14 @@ class KernelGen(AgentBase):
         Debug 阶段：复用缓存 always + guide + example + 全部 fix case
         Optimize 阶段：复用缓存 always + guide + example + 从 LLM 选中的 case 中随机采样 1 个
 
-        Pre-filter: backend coarse filter via OperatorSkillSelector.
+        Pre-filter: backend + hardware coarse filter via OperatorSkillSelector.
         self.exclude_skill_names / self.force_skill_names 用于 AB test 控制。
         """
         all_skills = self._load_skills_by_dsl(dsl)
         if not all_skills:
             return []
 
-        context = OperatorSelectionContext(backend=backend)
+        context = OperatorSelectionContext(backend=backend, arch=arch)
         all_skills = self.skill_selector.coarse_filter(all_skills, context)
 
         if self.exclude_skill_names:
@@ -774,6 +775,7 @@ class KernelGen(AgentBase):
                     op_name=op_name, task_desc=task_desc,
                     dsl=dsl, framework=framework, backend=backend,
                     stage=stage, verifier_error=verifier_error,
+                    arch=arch,
                 )
             
             # 1.5 追加额外注入的 skills（跳过筛选，直接并入）

@@ -83,7 +83,9 @@ class OperatorSelectionContext(SelectionContext):
         operator_type: 算子类型（如："softmax", "layernorm", "reduce"）
         dsl: DSL 类型（如："triton", "cuda", "opencl"）
         backend: 后端（如："cuda", "ascend", "rocm"）
-        hardware: 硬件型号（如："ascend910b4", "a100"）
+        arch: 运行时硬件架构 ID（如："ascend910b4", "ascend950pr_9589", "a100"）。
+              hardware_filter 会在内部通过 arch_to_hardware(arch) 转换为系列名做匹配。
+        hardware: 硬件系列名（如 "Atlas A2", "Atlas A5"）。若同时给出，优先使用 hardware。
         
         继承自 SelectionContext 的 Category 筛选字段：
         include_categories: Category 白名单
@@ -92,12 +94,20 @@ class OperatorSelectionContext(SelectionContext):
         exclude_category_groups: 分组黑名单
     
     示例：
-        # 基本用法
+        # 推荐用法：传入 arch，由 hardware_filter 内部自动转换
         context = OperatorSelectionContext(
             operator_type="softmax",
-            dsl="triton",
-            backend="cuda",
-            hardware="a100"
+            dsl="triton_ascend",
+            backend="ascend",
+            arch="ascend910b4",
+        )
+
+        # 也可以直接传 hardware 系列名（优先级高于 arch）
+        context = OperatorSelectionContext(
+            operator_type="softmax",
+            dsl="triton_ascend",
+            backend="ascend",
+            hardware="Atlas A2",
         )
         
         # 使用 Category 筛选：只要 guide 和 example 的 Skill
@@ -137,7 +147,8 @@ class OperatorSelectionContext(SelectionContext):
     operator_type: Optional[str] = None      # 算子类型
     dsl: Optional[str] = None                # DSL类型（triton, cuda等）
     backend: Optional[str] = None            # 后端（cuda, ascend等）
-    hardware: Optional[str] = None           # 硬件型号（npu910b, a100等）
+    arch: Optional[str] = None               # 硬件架构（ascend910b4, a100 等）
+    hardware: Optional[str] = None           # 硬件系列名（Atlas A2, a100 等，可选）
     framework: Optional[str] = None          # 框架（torch, mindspore等）
 
 
@@ -156,61 +167,62 @@ category_exclude_filter = create_category_filter("exclude")
 
 def hardware_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
     """
-    硬件型号过滤器（支持 arch → hardware 系列自动转换）
+    硬件型号过滤器（优先使用 hardware，回退到 arch 并自动转换）
 
-    Skill metadata 使用 hardware 系列名称（如 "Atlas A2", "Atlas A3", "Atlas A5", "300I Duo"），
-    而 context 使用具体 arch 型号（如 "ascend910b3", "ascend950pr_9572"）。
-    此过滤器自动将 arch 转换为对应的 hardware 系列名称后再匹配。
+    Skill metadata 使用 hardware 系列名称（如 "Atlas A2", "Atlas A3", "Atlas A5",
+    "300I Duo"）。调用方通常只传入 ``context.arch``（如 "ascend910b4"），
+    过滤器在内部通过 ``arch_to_hardware`` 转换为系列名再匹配。
 
-    映射规则：
-    - ascend910b* → Atlas A2
-    - ascend910_93* → Atlas A3
+    如果 ``context.hardware`` 已经设置（系列名），则优先使用它直接匹配，
+    跳过转换。
+
+    取值优先级：
+        1. ``context.hardware``（已转换好的系列名，如 "Atlas A2"）
+        2. ``context.arch``（运行时 arch，内部自动转换）
+        3. ``context.custom_fields["hardware"]`` / ``["arch"]``
+
+    映射规则（仅在 arch 路径生效）：
+    - ascend910b*      → Atlas A2
+    - ascend910_93*    → Atlas A3
     - ascend950pr* / ascend950dt* → Atlas A5
-    - ascend310p* → 300I Duo
-    - CUDA/CPU arch（如 a100, v100）不转换，直接匹配
 
     Args:
         skill: Skill 元数据
-        context: 选择上下文（包含 hardware/arch 字段）
+        context: 选择上下文（包含 hardware 或 arch 字段）
 
     Returns:
         是否匹配
     """
-    # 从 context 获取 hardware/arch 值
-    context_value = getattr(context, "hardware", None)
-    if context_value is None:
-        context_value = context.custom_fields.get("hardware")
+    hardware_value = getattr(context, "hardware", None)
+    if hardware_value is None:
+        hardware_value = context.custom_fields.get("hardware")
 
-    if not context_value:
-        return True  # 如果 context 没有指定，放行
+    arch_value = getattr(context, "arch", None)
+    if arch_value is None:
+        arch_value = context.custom_fields.get("arch")
 
-    # 获取 Skill metadata 中的 hardware 值
+    if not hardware_value and not arch_value:
+        return True
+
     if not skill.metadata:
-        return True  # 如果 Skill 没有 metadata，默认放行
-
+        return True
     metadata_value = skill.metadata.get("hardware", "")
     if not metadata_value:
-        return True  # 如果 Skill 没有该 metadata 字段，默认放行
+        return True
 
-    # 解析逗号分隔的值列表
     values = [v.strip() for v in metadata_value.split(",")]
 
-    # 特殊处理：如果 metadata 值包含 "all"，表示适用于所有硬件
     if "all" in values:
         return True
 
-    # 核心：将 arch 转换为 hardware 系列名称
-    converted_hardware = arch_to_hardware(context_value)
+    candidates: List[str] = []
+    if hardware_value:
+        candidates.append(hardware_value)
+    if arch_value:
+        candidates.append(arch_value)
+        candidates.append(arch_to_hardware(arch_value))
 
-    # 检查转换后的 hardware 是否在 Skill 的 hardware 列表中
-    if converted_hardware in values:
-        return True
-
-    # 兼容：如果转换失败（CUDA/CPU），检查原始 arch 是否在列表中
-    if context_value in values:
-        return True
-
-    return False
+    return any(c in values for c in candidates if c)
 
 
 def create_operator_filters() -> List[Callable]:

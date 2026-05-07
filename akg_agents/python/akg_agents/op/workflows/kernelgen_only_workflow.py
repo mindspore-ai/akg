@@ -160,9 +160,10 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             code_checker = CodeChecker(
                 backend=self.backend or "",
                 dsl=dsl,
+                arch=self.arch or "",
                 config=self.config
             )
-            logger.info(f"CodeChecker enabled: backend={self.backend}, dsl={code_checker.dsl}")
+            logger.info(f"CodeChecker enabled: backend={self.backend}, dsl={code_checker.dsl}, arch={code_checker.arch}")
         
         # 创建 KernelConductor 实例（基于 Skill 系统）
         kernel_conductor = self.agents.get('kernel_conductor')
