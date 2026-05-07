@@ -51,9 +51,80 @@ void Rebuilder::rebuild() {
   fuseOp_.erase();
 }
 
+SmallVector<size_t> Rebuilder::computeProcessingOrder() {
+  const auto &plan = splitSchemer_->getSplitPlan();
+  size_t numGroups = plan.size();
+  if (numGroups == 0) {
+    return {};
+  }
+
+  llvm::DenseMap<Value, size_t> valueToGroupIdx;
+  for (size_t i = 0; i < numGroups; ++i) {
+    for (Operation *op : plan[i]) {
+      for (Value result : op->getResults()) {
+        valueToGroupIdx[result] = i;
+      }
+    }
+  }
+
+  llvm::SmallVector<llvm::SmallVector<size_t>> dependencies(numGroups);
+  for (size_t i = 0; i < numGroups; ++i) {
+    llvm::DenseSet<Operation *> groupOpSet(plan[i].begin(), plan[i].end());
+    for (Operation *op : plan[i]) {
+      for (Value operand : op->getOperands()) {
+        auto it = valueToGroupIdx.find(operand);
+        if (it != valueToGroupIdx.end() && it->second != i) {
+          dependencies[i].push_back(it->second);
+        }
+      }
+    }
+  }
+
+  llvm::SmallVector<size_t> indegree(numGroups, 0);
+  for (size_t i = 0; i < numGroups; ++i) {
+    for (size_t dep : dependencies[i]) {
+      indegree[dep]++;
+    }
+  }
+
+  llvm::SmallVector<size_t> queue;
+  for (size_t i = 0; i < numGroups; ++i) {
+    if (indegree[i] == 0) {
+      queue.push_back(i);
+    }
+  }
+
+  llvm::SmallVector<size_t> topoOrder;
+  while (!queue.empty()) {
+    size_t curr = queue.front();
+    queue.erase(queue.begin());
+    topoOrder.push_back(curr);
+    for (size_t dep : dependencies[curr]) {
+      indegree[dep]--;
+      if (indegree[dep] == 0) {
+        queue.push_back(dep);
+      }
+    }
+  }
+
+  if (topoOrder.size() != numGroups) {
+    MLOG(WARNING) << "Cycle detected in split plan, falling back to original order";
+    topoOrder.clear();
+    for (size_t i = 0; i < numGroups; ++i) {
+      topoOrder.push_back(i);
+    }
+  }
+
+  std::reverse(topoOrder.begin(), topoOrder.end());
+  return topoOrder;
+}
+
 void Rebuilder::createFusedOps() {
   const auto &plan = splitSchemer_->getSplitPlan();
-  for (size_t i = 0; i < plan.size(); ++i) {
+  SmallVector<size_t> order = computeProcessingOrder();
+
+  for (size_t orderIdx = 0; orderIdx < order.size(); ++orderIdx) {
+    size_t i = order[orderIdx];
     const auto &groupOps = plan[i];
     if (groupOps.empty() ||
         (groupOps.size() == 1 && (isa<mfuse::YieldOp>(groupOps.front()) || isa<mfuse::ConstantOp>(groupOps.front())))) {

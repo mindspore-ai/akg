@@ -41,6 +41,7 @@ class Rebuilder {
   void rebuild();
 
  private:
+  SmallVector<size_t> computeProcessingOrder();
   void createFusedOps();
   void connectToMainGraph();
   void createFusedOpForGroup(const SmallVector<Operation *> &groupOps, const llvm::SetVector<Value> &groupInputs,
