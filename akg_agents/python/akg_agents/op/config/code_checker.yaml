@@ -238,3 +238,23 @@ stray_text:
 autotune:
   decorator_attr: autotune
   required_kwarg: restore_value
+
+
+a5_compliance:
+  arch_prefix: ascend950
+  dsl: triton_ascend
+  aliases:
+    al: al
+    bl: bl
+  only_apis:
+    - fixpipe
+    - copy
+    - scope
+    - sync_block_set
+    - sync_block_wait
+    - sub_vec_id
+  bl_apis:
+    - alloc
+    - to_buffer
+    - to_tensor
+    - subview
