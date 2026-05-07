@@ -18,6 +18,7 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -118,6 +119,7 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
 };
 
 void StoreLoadElimPass::runOnOperation() {
+  DominanceInfo &domInfo = getAnalysis<DominanceInfo>();
   SmallVector<Operation *> toElimStores;
   SmallVector<Operation *> toElimLoads;
   getOperation()->walk([&](Operation *op) {
@@ -131,6 +133,9 @@ void StoreLoadElimPass::runOnOperation() {
       size_t eraseSize = 0;
       for (auto loadOp : elimLoads) {
         Value storeValue = CommonUtils::getStoreValue(op);
+        if (!domInfo.properlyDominates(storeValue, loadOp)) {
+          continue;
+        }
         Value loadResult = getLoadResult(loadOp);
         loadResult.replaceAllUsesWith(storeValue);
         if (loadOp->use_empty()) {
