@@ -46,7 +46,7 @@ The baseline pre-profile path used by `evolve` and `adaptive_search` also reads 
 
 ## Scope
 
-Current scope is `KernelBench` only. `SOL-ExecBench` already ships stable reference files, so the immediate pain point is the KernelBench verifier path.
+Verifier Data Cache currently covers the `KernelBench` verifier path only. This does not affect the main `SOL-ExecBench` verification/profile path: SOL inputs are normalized separately by the verifier SOL adapter into `definition.json`, `workload.jsonl`, and `reference.py`. SOL data is not cached by Verifier Data Cache because SOL already ships stable reference files, so the immediate pain point is the KernelBench verifier path.
 
 Reference data cache currently covers static-shape verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache still keys by framework code, backend, arch, DSL, and profile parameters.
 

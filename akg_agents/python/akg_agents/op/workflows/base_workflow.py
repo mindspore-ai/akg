@@ -78,6 +78,13 @@ _DSL_DOCS_DIR_MAP: Dict[str, Dict[str, str]] = {
     },
 }
 
+SOL_CONFIG_KEYS = (
+    "sol_problem_dir",
+    "sol_problem_json",
+    "sol_problem_data",
+    "sol_task_code",
+)
+
 
 class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
     """算子工作流基类
@@ -245,6 +252,17 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         config = workflow_resources["config"]
 
         cur_path = arguments.get("cur_path")
+        task_id = arguments.get("task_id", "0")
+        workflow_name = arguments.get("workflow") or config.get("default_workflow", "workflow")
+        config.setdefault("_langgraph_debug_task_id", task_id)
+        config.setdefault("_langgraph_debug_workflow", workflow_name)
+        config.setdefault("_langgraph_debug_thread_id", f"{task_id}:{workflow_name}")
+        if arguments.get("bench_type"):
+            config["bench_type"] = arguments.get("bench_type")
+        for key in SOL_CONFIG_KEYS:
+            if arguments.get(key):
+                config[key] = arguments.get(key)
+
         if cur_path:
             log_dir = str(Path(cur_path) / "logs")
             config["log_dir"] = log_dir
@@ -276,7 +294,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         Returns:
             KernelGenState 初始状态字典
         """
-        return {
+        state = {
             # 算子基础信息
             "op_name": arguments.get("op_name", ""),
             "task_desc": arguments.get("task_desc", ""),
@@ -289,6 +307,10 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "previous_code": arguments.get("previous_code", ""),
             "cur_path": arguments.get("cur_path", ""),
             "task_type": arguments.get("task_type", "precision_only"),
+            "bench_type": arguments.get(
+                "bench_type",
+                agent_context.get("bench_type", "kernelbench"),
+            ),
             # 流程控制
             "iteration": 0,
             "step_count": 0,
@@ -309,3 +331,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             # 会话信息
             "session_id": agent_context.get("session_id", ""),
         }
+        for key in SOL_CONFIG_KEYS:
+            value = arguments.get(key) or agent_context.get(key)
+            if value:
+                state[key] = value
+        return state

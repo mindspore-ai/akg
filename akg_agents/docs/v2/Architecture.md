@@ -56,7 +56,7 @@ The framework provides a complete agent infrastructure: extensible **Skill / Too
 | **Agents** | Agent base classes (`AgentBase`, `ReActAgent`), agent registry and discovery mechanism. See [Agent System](./AgentSystem.md). |
 | **Skills** | Skill management system: metadata, loading, registry, hierarchy, LLM-driven selection, version management. See [Skill System](./SkillSystem.md). |
 | **Tools** | Tool execution framework: built-in tools (file I/O, shell), domain tools (kernel verification, profiling), argument resolver. See [Tools](./Tools.md). |
-| **Workflows** | LangGraph-based workflow orchestration: `BaseWorkflow`, `BaseLangGraphTask`, routers, visualization. See [Workflow](./Workflow.md). |
+| **Workflows** | LangGraph-based workflow orchestration: `BaseWorkflow`, `BaseLangGraphTask`, routers, visualization, and debug checkpointing. See [Workflow](./Workflow.md) and [Debug Save/Resume](./DebugSaveResume.md). |
 | **Trace** | Tree-based inference tracing system: multi-fork, state persistence, checkpoint resume. See [Trace System](./Trace.md). |
 | **LLM** | LLM access layer: OpenAI-compatible provider, client with token counting and streaming, embedding models. See [LLM](./LLM.md). |
 | **Configuration** | Unified configuration management: `settings.json`, environment variables, multi-level priority. See [Configuration](./Configuration.md). |

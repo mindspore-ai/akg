@@ -283,15 +283,11 @@ async def _profile_sol_baseline(
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.op.verifier.sol_verifier import PROF_SOL_BASE_TEMPLATE_PATH
+        from akg_agents.op.verifier.sol_format import ensure_sol_problem_dir
         from akg_agents.op.verifier.adapters.factory import get_framework_adapter, get_backend_adapter
         from akg_agents.core.worker.manager import get_worker_manager
         from akg_agents import get_project_root
         from jinja2 import Template
-
-        sol_problem_dir = config.get("sol_problem_dir")
-        if not sol_problem_dir or not os.path.exists(sol_problem_dir):
-            logger.warning(f"[{op_name}] sol_problem_dir 不存在，跳过 SOL baseline profile")
-            return None
 
         logger.info(f"[{op_name}] 🚀 开始预先 SOL baseline profile（只测一次）...")
 
@@ -320,6 +316,12 @@ async def _profile_sol_baseline(
             f"{op_name}_profile_single_baseline_profile"
         )
         os.makedirs(profile_dir, exist_ok=True)
+        sol_problem_dir = ensure_sol_problem_dir(
+            config=config,
+            work_dir=profile_dir,
+            op_name=op_name,
+            task_desc=config.get("task_desc", ""),
+        )
 
         # 1. 拷贝 SOL 核心文件
         for file_name in ["definition.json", "workload.jsonl", "reference.py"]:
@@ -333,6 +335,10 @@ async def _profile_sol_baseline(
             get_project_root(), "op", "resources", "utils", "sol_correctness.py"
         )
         shutil.copy2(sol_correctness_src, os.path.join(profile_dir, "sol_correctness.py"))
+        sol_fallback_src = os.path.join(
+            get_project_root(), "op", "resources", "utils", "sol_runtime_fallback.py"
+        )
+        shutil.copy2(sol_fallback_src, os.path.join(profile_dir, "sol_runtime_fallback.py"))
 
         # 3. 渲染 SOL base 模板
         framework_adapter = get_framework_adapter(framework)
