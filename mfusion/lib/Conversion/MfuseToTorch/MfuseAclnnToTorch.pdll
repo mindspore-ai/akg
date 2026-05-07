@@ -2,11 +2,6 @@
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
-Pattern ConvertMfuseAclnnBatchMatmul {
-  let root = op<mfuse.aclnn.batch_matmul>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.bmm>(convertValues(operands)) -> (convertType(result));
-}
-
 Pattern ConvertMfuseAclnnMatmul {
    let root = op<mfuse.aclnn.matmul>(operands: ValueRange) -> (result: Type);
    replace root with op<torch.aten.matmul>(convertValues(operands)) -> (convertType(result));

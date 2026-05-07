@@ -59,6 +59,15 @@ module {
 }
 """
 
+MLIR_VTENSOR_LITERAL = r"""
+module {
+  func.func @main() -> !torch.vtensor<[1], si64> {
+    %0 = torch.vtensor.literal(dense<2> : tensor<1xsi64>) : !torch.vtensor<[1],si64>
+    return %0 : !torch.vtensor<[1],si64>
+  }
+}
+"""
+
 
 def test_aten_full_not_folded():
     """Verify aten full is preserved after fuse_and_optimize (not folded to vtensor.literal)."""
@@ -81,4 +90,12 @@ def test_aten_zeros_not_folded():
     result = fuse_and_optimize(MLIR_ATEN_ZEROS)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.zeros", count=1), checker.error
+    assert checker.check_no_op("torch.vtensor.literal"), checker.error
+
+
+def test_vtensor_literal_rewritten_to_full():
+    """Verify pre-existing splat vtensor literals are exported as aten.full."""
+    result = fuse_and_optimize(MLIR_VTENSOR_LITERAL)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.full", count=1), checker.error
     assert checker.check_no_op("torch.vtensor.literal"), checker.error

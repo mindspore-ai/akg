@@ -1,5 +1,60 @@
 // RUN: mfusion-opt %s --convert-mfuse-to-torch | FileCheck %s
 
+// CHECK-LABEL: func.func @test_aclnn_batch_matmul_trans_x1
+func.func @test_aclnn_batch_matmul_trans_x1(%arg0: tensor<80x64x204xf32>, %arg1: tensor<80x64x128xf32>) -> tensor<80x204x128xf32> {
+  // CHECK-DAG: %[[BM1_C0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[BM1_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[BM1_C2:.*]] = torch.constant.int 2
+  // CHECK: %[[BM1_PERM:.*]] = torch.prim.ListConstruct %[[BM1_C0]], %[[BM1_C2]], %[[BM1_C1]]
+  // CHECK: %[[BM1_LHS:.*]] = torch.aten.permute %arg0, %[[BM1_PERM]]
+  // CHECK: torch.aten.bmm %[[BM1_LHS]], %arg1
+  %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x1 = true} : (tensor<80x64x204xf32>, tensor<80x64x128xf32>) -> tensor<80x204x128xf32>
+  return %0 : tensor<80x204x128xf32>
+}
+
+// CHECK-LABEL: func.func @test_aclnn_batch_matmul_trans_x2
+func.func @test_aclnn_batch_matmul_trans_x2(%arg0: tensor<80x204x64xf32>, %arg1: tensor<80x204x64xf32>) -> tensor<80x204x204xf32> {
+  // CHECK-DAG: %[[BM_C0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[BM_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[BM_C2:.*]] = torch.constant.int 2
+  // CHECK: %[[BM_PERM:.*]] = torch.prim.ListConstruct %[[BM_C0]], %[[BM_C2]], %[[BM_C1]]
+  // CHECK: %[[BM_RHS:.*]] = torch.aten.permute %arg1, %[[BM_PERM]]
+  // CHECK: torch.aten.bmm %arg0, %[[BM_RHS]]
+  %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x2 = true} : (tensor<80x204x64xf32>, tensor<80x204x64xf32>) -> tensor<80x204x204xf32>
+  return %0 : tensor<80x204x204xf32>
+}
+
+// CHECK-LABEL: func.func @test_aclnn_batch_matmul_trans_both
+func.func @test_aclnn_batch_matmul_trans_both(%arg0: tensor<80x64x204xf32>, %arg1: tensor<80x128x64xf32>) -> tensor<80x204x128xf32> {
+  // CHECK-DAG: %[[BMB_C0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[BMB_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[BMB_C2:.*]] = torch.constant.int 2
+  // CHECK: %[[BMB_LHS_PERM:.*]] = torch.prim.ListConstruct %[[BMB_C0]], %[[BMB_C2]], %[[BMB_C1]]
+  // CHECK: %[[BMB_LHS:.*]] = torch.aten.permute %arg0, %[[BMB_LHS_PERM]]
+  // CHECK-DAG: %[[BMB_RHS_C0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[BMB_RHS_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[BMB_RHS_C2:.*]] = torch.constant.int 2
+  // CHECK: %[[BMB_RHS_PERM:.*]] = torch.prim.ListConstruct %[[BMB_RHS_C0]], %[[BMB_RHS_C2]], %[[BMB_RHS_C1]]
+  // CHECK: %[[BMB_RHS:.*]] = torch.aten.permute %arg1, %[[BMB_RHS_PERM]]
+  // CHECK: torch.aten.bmm %[[BMB_LHS]], %[[BMB_RHS]]
+  %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x1 = true, trans_x2 = true} : (tensor<80x64x204xf32>, tensor<80x128x64xf32>) -> tensor<80x204x128xf32>
+  return %0 : tensor<80x204x128xf32>
+}
+
+// CHECK-LABEL: func.func @test_aclnn_batch_matmul_rank4_trans_x2
+func.func @test_aclnn_batch_matmul_rank4_trans_x2(%arg0: tensor<2x3x4x5xf32>, %arg1: tensor<2x3x6x5xf32>) -> tensor<2x3x4x6xf32> {
+  // CHECK-DAG: %[[BM4_C0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[BM4_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[BM4_C2:.*]] = torch.constant.int 2
+  // CHECK-DAG: %[[BM4_C3:.*]] = torch.constant.int 3
+  // CHECK: %[[BM4_PERM:.*]] = torch.prim.ListConstruct %[[BM4_C0]], %[[BM4_C1]], %[[BM4_C3]], %[[BM4_C2]]
+  // CHECK: %[[BM4_RHS:.*]] = torch.aten.permute %arg1, %[[BM4_PERM]]
+  // CHECK-NOT: torch.aten.bmm
+  // CHECK: torch.aten.matmul %arg0, %[[BM4_RHS]]
+  %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x2 = true} : (tensor<2x3x4x5xf32>, tensor<2x3x6x5xf32>) -> tensor<2x3x4x6xf32>
+  return %0 : tensor<2x3x4x6xf32>
+}
+
 // CHECK-LABEL: func.func @test_div
 func.func @test_div(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32> {
   // CHECK: torch.aten.div.Tensor
@@ -137,7 +192,7 @@ func.func @test_reduce_mean(%arg0: tensor<2x2xf32>) -> tensor<2x1xf32> {
 // CHECK-LABEL: func.func @test_cast
 func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
   // CHECK:   %[[INT5:.*]] = torch.constant.int 5
-  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT5]]) : (!torch.vtensor<[2,2],f32>, !torch.int) -> !torch.vtensor<[2,2],f16>
+  // CHECK:   %[[RESULT:.*]] = torch.prims.convert_element_type %{{.*}}, %[[INT5]] : !torch.vtensor<[2,2],f32>, !torch.int -> !torch.vtensor<[2,2],f16>
   // CHECK:   return %[[RESULT]] : !torch.vtensor<[2,2],f16>
   %0 = mfuse.cast %arg0 : (tensor<2x2xf32>) -> tensor<2x2xf16>
   return %0 : tensor<2x2xf16>
@@ -146,10 +201,37 @@ func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
 // CHECK-LABEL: func.func @test_cast_i32_to_f64
 func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xsi32>) -> tensor<2x2xf64> {
   // CHECK:   %[[INT7:.*]] = torch.constant.int 7
-  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT7]]) : (!torch.vtensor<[2,2],si32>, !torch.int) -> !torch.vtensor<[2,2],f64>
+  // CHECK:   %[[RESULT:.*]] = torch.prims.convert_element_type %{{.*}}, %[[INT7]] : !torch.vtensor<[2,2],si32>, !torch.int -> !torch.vtensor<[2,2],f64>
   // CHECK:   return %[[RESULT]] : !torch.vtensor<[2,2],f64>
   %0 = mfuse.cast %arg0 : (tensor<2x2xsi32>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
+}
+
+// CHECK-LABEL: func.func @test_cast_rank0_f64_to_f32
+func.func @test_cast_rank0_f64_to_f32(%arg0: tensor<f64>) -> tensor<f32> {
+  // CHECK:   %[[INT6:.*]] = torch.constant.int 6
+  // CHECK:   %[[RESULT:.*]] = torch.prims.convert_element_type %{{.*}}, %[[INT6]] : !torch.vtensor<[],f64>, !torch.int -> !torch.vtensor<[],f32>
+  // CHECK:   return %[[RESULT]] : !torch.vtensor<[],f32>
+  %0 = mfuse.cast %arg0 : (tensor<f64>) -> tensor<f32>
+  return %0 : tensor<f32>
+}
+
+// CHECK-LABEL: func.func @test_cast_scalar_marker_f64_to_f32
+func.func @test_cast_scalar_marker_f64_to_f32(%arg0: tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}> {
+  // CHECK-NOT: torch.prims.convert_element_type
+  // CHECK:   %[[RESULT:.*]] = torch.aten.Float.Scalar %arg0 : !torch.float -> !torch.float
+  // CHECK:   return %[[RESULT]] : !torch.float
+  %0 = mfuse.cast %arg0 : (tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}>
+  return %0 : tensor<f32, {is_scalar = ""}>
+}
+
+// CHECK-LABEL: func.func @test_cast_scalar_marker_f32_to_i64
+func.func @test_cast_scalar_marker_f32_to_i64(%arg0: tensor<f32, {is_scalar = ""}>) -> tensor<i64, {is_scalar = ""}> {
+  // CHECK-NOT: torch.prims.convert_element_type
+  // CHECK:   %[[RESULT:.*]] = torch.aten.Int.Scalar %arg0 : !torch.float -> !torch.int
+  // CHECK:   return %[[RESULT]] : !torch.int
+  %0 = mfuse.cast %arg0 : (tensor<f32, {is_scalar = ""}>) -> tensor<i64, {is_scalar = ""}>
+  return %0 : tensor<i64, {is_scalar = ""}>
 }
 
 // CHECK-LABEL: func.func @test_permute_general

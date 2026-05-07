@@ -24,10 +24,11 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/BaseCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
-#include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 #include "mfusion/Support/Logging.h"
 
 namespace mlir {
@@ -69,6 +70,38 @@ bool isComplexDataType(Operation *op) {
     }
   }
   return false;
+}
+
+bool isRankZeroTensor(Type type) {
+  auto tensorType = dyn_cast<RankedTensorType>(type);
+  return tensorType && tensorType.getRank() == 0;
+}
+
+bool isSafeRankZeroProducer(Operation *op) {
+  if (op == nullptr) {
+    return false;
+  }
+  if (isa<ConstantOp>(op)) {
+    return true;
+  }
+  if (isa<FullOp, CastOp>(op)) {
+    return !llvm::any_of(op->getOperands(), [](Value operand) {
+      if (!isRankZeroTensor(operand.getType())) {
+        return false;
+      }
+      return !isSafeRankZeroProducer(operand.getDefiningOp());
+    });
+  }
+  return false;
+}
+
+bool hasUnsupportedRankZeroTensorOperand(Operation *op) {
+  return llvm::any_of(op->getOperands(), [](Value operand) {
+    if (!isRankZeroTensor(operand.getType())) {
+      return false;
+    }
+    return !isSafeRankZeroProducer(operand.getDefiningOp());
+  });
 }
 
 /// DvmSupportChecker - Singleton class for checking DVM operator support.
@@ -583,6 +616,11 @@ bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList,
 
   if (hasZeroShape(op)) {
     MLOG(DEBUG) << "Op has zero shape: " << opName;
+    return false;
+  }
+
+  if (hasUnsupportedRankZeroTensorOperand(op)) {
+    MLOG(DEBUG) << "Op has unsafe rank-zero tensor operand: " << opName;
     return false;
   }
 
