@@ -190,6 +190,15 @@ struct ConvertTorchToMfusePass
     target.addLegalOp<mlir::UnrealizedConversionCastOp>();
     target.addLegalOp<TorchD::BindSymbolicShapeOp>();
     target.addLegalOp<TorchD::SymbolicIntOp>();
+    target.addDynamicallyLegalOp<TorchD::ValueTensorLiteralOp>([](TorchD::ValueTensorLiteralOp op) {
+      auto denseAttr = mlir::dyn_cast<mlir::DenseElementsAttr>(op.getValueAttr());
+      if (!denseAttr || !denseAttr.isSplat()) {
+        return true;
+      }
+      auto tensorType = mlir::cast<TorchD::ValueTensorType>(op.getType());
+      mlir::Type dtype = tensorType.getOptionalDtype();
+      return !dtype || mlir::failed(mlir::getTorchScalarTypeInt(dtype));
+    });
     if (mlir::failed(mlir::applyPartialConversion(module, target, patterns_))) {
       signalPassFailure();
     }
