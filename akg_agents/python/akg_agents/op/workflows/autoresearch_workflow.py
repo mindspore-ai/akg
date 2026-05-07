@@ -268,7 +268,8 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
                         from akg_agents.op.utils.code_checker import CodeChecker
                         checker = CodeChecker(
-                            backend=backend, dsl=dsl, config=_self.config,
+                            backend=backend, dsl=dsl, arch=arch,
+                            config=_self.config,
                         )
 
                         max_seed_retries = workflow_config.get(
