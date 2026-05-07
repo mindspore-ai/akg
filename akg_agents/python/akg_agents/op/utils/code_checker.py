@@ -63,6 +63,13 @@ _RESTORE_VALUE_RE = re.compile(
     rf"{re.escape(_POLICY['autotune']['required_kwarg'])}\s*="
 )
 
+_A5_ARCH_PREFIX: str = _POLICY["a5_compliance"]["arch_prefix"]
+_A5_DSL: str = _POLICY["a5_compliance"]["dsl"]
+_A5_AL_ALIAS: str = _POLICY["a5_compliance"]["aliases"]["al"]
+_A5_BL_ALIAS: str = _POLICY["a5_compliance"]["aliases"]["bl"]
+_A5_ONLY_APIS: frozenset = frozenset(_POLICY["a5_compliance"]["only_apis"])
+_BL_APIS: frozenset = frozenset(_POLICY["a5_compliance"]["bl_apis"])
+
 
 def _find_model_new_class(tree: ast.Module) -> Optional[ast.ClassDef]:
     target = _POLICY["kernel_class_name"]
@@ -108,9 +115,10 @@ class CodeChecker:
     不调用 LLM，零额外成本。
     """
 
-    def __init__(self, backend: str, dsl: str, config: Optional[dict] = None):
+    def __init__(self, backend: str, dsl: str, arch: str = "", config: Optional[dict] = None):
         self.backend = backend.lower() if backend else ""
         self.dsl = dsl.lower() if dsl else ""
+        self.arch = arch.lower() if arch else ""
         # `config` 保留仅为兼容调用方签名；策略真源是 op/config/code_checker.yaml。
         self.config = config or {}
         # 暴露为实例属性便于测试与日志；来自 _POLICY 的浅复制（frozenset）。
@@ -121,7 +129,7 @@ class CodeChecker:
         self._torch_call_prefixes_ordered = tuple(
             sorted(self.torch_call_prefixes, key=len, reverse=True)
         )
-        logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}")
+        logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}, arch={self.arch}")
 
     def _is_triton_decorator(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Attribute):
@@ -199,6 +207,10 @@ class CodeChecker:
         # Step 6: Autotune 规范检测（仅 triton DSL，语法正确时执行）
         if not has_syntax_err and self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
             errors.extend(self._check_autotune_compliance(code))
+
+        # Step 7: A5 API 合规性检测（仅 Ascend950 系列 arch + triton_ascend DSL，语法正确时执行）
+        if not has_syntax_err and self.arch.startswith(_A5_ARCH_PREFIX) and self.dsl == _A5_DSL:
+            errors.extend(self._check_a5_api_compliance(code))
 
         passed = len(errors) == 0
         code_lines = code.split('\n')
@@ -648,6 +660,166 @@ class CodeChecker:
             logger.warning(
                 f"CodeChecker: @triton.autotune at line {autotune_line} missing restore_value"
             )
+
+        return errors
+
+    # ------------------------------------------------------------------
+    # Step 7: A5 (Ascend950) API 合规性检测并使能亲和编程
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _kernel_uses_tl_dot(kernel: ast.AST) -> bool:
+        """Return True if the kernel body contains any `tl.dot(...)` call.
+
+        """
+        for node in ast.walk(kernel):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            # `tl.dot(...)`
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "dot"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "tl"
+            ):
+                return True
+            # `triton.language.dot(...)`
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "dot"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "language"
+                and isinstance(func.value.value, ast.Name)
+                and func.value.value.id == "triton"
+            ):
+                return True
+        return False
+
+    def _check_a5_api_compliance(self, code: str) -> List[Dict]:
+        """
+        检测 Ascend950 (A5) 硬件上 triton_ascend 代码是否真正调用了
+        Cube/Vector 协同编程的亲和接口。
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        triton_kernels: List[ast.FunctionDef] = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in node.decorator_list:
+                    if self._is_triton_decorator(dec):
+                        triton_kernels.append(node)
+                        break
+
+        if not triton_kernels:
+            return []
+
+        cube_required = any(
+            self._kernel_uses_tl_dot(k) for k in triton_kernels
+        )
+        if not cube_required:
+            logger.info(
+                f"CodeChecker A5: arch={self.arch}, dsl={self.dsl} — no tl.dot "
+                "found in any kernel; treating as pure-vector op and skipping "
+                "Cube/Vector affinity API checks."
+            )
+            return []
+
+        has_al_scope = False
+        has_fixpipe = False
+        has_bl_alloc = False
+
+        for kernel in triton_kernels:
+            for node in ast.walk(kernel):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+
+                # 直接命名空间调用：al.<method>(...) / bl.<method>(...)
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                    prefix = func.value.id
+                    method = func.attr
+                    if prefix == _A5_AL_ALIAS:
+                        if method == "scope":
+                            has_al_scope = True
+                        elif method == "fixpipe":
+                            has_fixpipe = True
+                    elif prefix == _A5_BL_ALIAS:
+                        if method == "alloc":
+                            has_bl_alloc = True
+
+                # 链式调用：al.<x>.<method>(...) —— 例如
+                # `al.something.scope(...)`。受 `only_apis` 白名单约束，
+                # 避免和无关的 `al.foo.bar()` 混淆。
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Attribute):
+                    inner = func.value
+                    if (isinstance(inner.value, ast.Name)
+                            and inner.value.id == _A5_AL_ALIAS
+                            and func.attr in _A5_ONLY_APIS):
+                        if func.attr == "scope":
+                            has_al_scope = True
+                        elif func.attr == "fixpipe":
+                            has_fixpipe = True
+
+        errors: List[Dict] = []
+
+        # al.scope 检测
+        if not has_al_scope:
+            errors.append({
+                "line": 0,
+                "error_type": "a5_missing_scope",
+                "detail": (
+                    f"目标架构为 {self.arch}（A5 硬件），但 kernel 中未使用 al.scope(core_mode=...) "
+                    "划分 Cube/Vector 执行域。A5 的 Cube 和 Vector 核需要通过 al.scope 分别编排。"
+                ),
+                "suggestion": (
+                    "请在 kernel 中使能亲和编程写法实现kernel内的Cube和Vector计算，可以使用 al.scope 划分计算域，例如：\n"
+                    "  with al.scope(core_mode=\"cube\"):\n"
+                    "      acc = tl.dot(a, b)\n"
+                    "      al.fixpipe(acc, dst_buf, ...)\n"
+                    "  with al.scope(core_mode=\"vector\"):\n"
+                    "      c = bl.to_tensor(buf)\n"
+                    "      tl.store(out_ptr, c)"
+                ),
+                "code_snippet": ""
+            })
+
+        # al.fixpipe 检测：只有进入 al.scope 后 fixpipe 才有意义
+        if has_al_scope and not has_fixpipe:
+            errors.append({
+                "line": 0,
+                "error_type": "a5_missing_fixpipe",
+                "detail": (
+                    f"目标架构为 {self.arch}（A5 硬件），kernel 使用了 al.scope 但未调用 al.fixpipe。"
+                    "A5 Cube 域计算完成后通常需要通过 fixpipe 将 L0C 数据搬运到 UB/L1。"
+                ),
+                "suggestion": (
+                    "如果使能了亲和编程写法，请在 Cube scope 内的 tl.dot 之后添加 al.fixpipe 调用，将结果搬运到UB，例如：\n"
+                    "  al.fixpipe(acc, bl.to_buffer(c_ub, al.ascend_address_space.UB),\n"
+                    "             al.FixpipeDMAMode.NZ2ND, al.FixpipeDualDstMode.ROW_SPLIT)"
+                ),
+                "code_snippet": ""
+            })
+
+        # bl.alloc 检测
+        if not has_bl_alloc:
+            errors.append({
+                "line": 0,
+                "error_type": "a5_missing_bl_alloc",
+                "detail": (
+                    f"目标架构为 {self.arch}（A5 硬件），但 kernel 中未使用 bl.alloc 分配片上 buffer。"
+                    "A5 Cube/Vector 协同需要在 UB 或 L1 上分配 buffer 作为数据交换区域。"
+                ),
+                "suggestion": (
+                    "如果使能了亲和编程写法，在 kernel 中申请使用 buffer的时候请使用 bl.alloc 分配 buffer，可以在UB、L1、L0C、L0A、L0B上分配，例如：\n"
+                    "  c_ub = bl.alloc(tl.float32, (BLOCK_M, BLOCK_N), al.ascend_address_space.UB)\n"
+                    "  c_l1 = bl.alloc(tl.float32, (BLOCK_M, BLOCK_N), al.ascend_address_space.L1)"
+                ),
+                "code_snippet": ""
+            })
 
         return errors
 

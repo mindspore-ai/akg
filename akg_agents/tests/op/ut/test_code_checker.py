@@ -32,6 +32,10 @@ def checker_no_dsl():
     return CodeChecker(backend="cuda", dsl="torch")
 
 
+@pytest.fixture
+def checker_a5():
+    return CodeChecker(backend="ascend", dsl="triton_ascend", arch="ascend950pr_9589")
+
 # ============================================================
 # 语法错误
 # ============================================================
@@ -503,6 +507,145 @@ def test_config_dict_parameter_is_ignored():
     assert c1.torch_compute_ops_hard == c2.torch_compute_ops_hard
     assert "matmul" in c2.torch_compute_ops_hard
 
+# A5 API 合规性检测
+# ============================================================
+
+A5_COMPLIANT_KERNEL = '''\
+import torch
+import triton
+import triton.language as tl
+import triton.language.extra.cann.extension as al
+import triton.extension.buffer.language as bl
+
+@triton.jit
+def gemm_kernel(
+    A_ptr, B_ptr, C_ptr,
+    M, N, K,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    c_ub = bl.alloc(tl.float32, (BLOCK_M // 2, BLOCK_N), al.ascend_address_space.UB)
+
+    with al.scope(core_mode="cube"):
+        a = tl.load(A_ptr)
+        b = tl.load(B_ptr)
+        acc = tl.dot(a, b)
+        al.fixpipe(acc, bl.to_buffer(c_ub, al.ascend_address_space.UB),
+                   al.FixpipeDMAMode.NZ2ND, al.FixpipeDualDstMode.ROW_SPLIT)
+        al.sync_block_set("cube", "vector", 0, al.PIPE.PIPE_FIX, al.PIPE.PIPE_V)
+
+    with al.scope(core_mode="vector"):
+        al.sync_block_wait("cube", "vector", 0, al.PIPE.PIPE_FIX, al.PIPE.PIPE_V)
+        c = bl.to_tensor(c_ub)
+        tl.store(C_ptr, c)
+'''
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_a5_compliant_kernel_emits_no_a5_errors(checker_a5):
+    """合规的 A5 kernel：al/bl import + al.scope + al.fixpipe + bl.alloc 齐备时
+    不应该触发任何 a5_* 错误
+    """
+    passed, _, errors = await checker_a5.check(A5_COMPLIANT_KERNEL)
+    a5_errors = [e for e in errors if e["error_type"].startswith("a5_")]
+    assert a5_errors == [], (
+        f"A5_COMPLIANT_KERNEL 不应触发任何 a5_* 错误，但触发了：{a5_errors}"
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_a5_no_affinity_apis_blocks_vanilla_triton(checker_a5):
+    code = '''\
+import torch
+import triton
+import triton.language as tl
+import triton.language.extra.cann.extension as al
+import triton.extension.buffer.language as bl
+
+
+@triton.jit
+def attention_kernel(
+    q_ptr, k_ptr, v_ptr, out_ptr,
+    B: tl.constexpr, H: tl.constexpr,
+    L: tl.constexpr, S: tl.constexpr, D: tl.constexpr,
+    scale: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs_l = tl.arange(0, L)
+    offs_d = tl.arange(0, D)
+    q = tl.load(q_ptr + offs_l[:, None] + offs_d[None, :])
+    k = tl.load(k_ptr + offs_l[:, None] + offs_d[None, :])
+    v = tl.load(v_ptr + offs_l[:, None] + offs_d[None, :])
+    qk = tl.dot(q.to(tl.float16), tl.trans(k.to(tl.float16))) * scale
+    p = tl.exp(qk - tl.max(qk, axis=1)[:, None])
+    p = p / tl.sum(p, axis=1)[:, None]
+    pv = tl.dot(p.to(tl.float16), v.to(tl.float16))
+    tl.store(out_ptr + offs_l[:, None] + offs_d[None, :], pv.to(tl.float16))
+
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q, k, v):
+        out = torch.empty_like(q)
+        B, H, L, D = q.shape
+        S = k.shape[2]
+        scale = 1.0 / (D ** 0.5)
+        attention_kernel[(B * H,)](q, k, v, out, B, H, L, S, D, scale)
+        return out
+'''
+    passed, _, errors = await checker_a5.check(code)
+    a5_errors = [e for e in errors if e["error_type"].startswith("a5_")]
+    a5_types = {e["error_type"] for e in a5_errors}
+
+    # 必须被打回
+    assert passed is False, (
+        "A5 上没有任何亲和接口的伪 triton kernel 必须被拦截，但 passed=True"
+    )
+
+    assert "a5_missing_scope" in a5_types, (
+        f"应触发 a5_missing_scope，实际 a5 错误: {sorted(a5_types)}"
+    )
+    assert "a5_missing_bl_alloc" in a5_types, (
+        f"应触发 a5_missing_bl_alloc，实际 a5 错误: {sorted(a5_types)}"
+    )
+    assert "a5_missing_fixpipe" not in a5_types, (
+        "没有进入 al.scope 时 fixpipe 检测不应该被触发"
+    )
+
+    assert "a5_missing_al_import" not in a5_types
+    assert "a5_missing_bl_import" not in a5_types
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_a5_check_skipped_for_non_a5_arch(checker):
+    """非 A5 架构（如 cuda）不应触发 A5 检测"""
+    code = '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=offs < n), mask=offs < n)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        out = torch.empty_like(x)
+        kernel[(1,)](x, out, x.numel(), BLOCK=1024)
+        return out
+'''
+    passed, _, errors = await checker.check(code)
+    a5_errors = [e for e in errors if e["error_type"].startswith("a5_")]
+    assert len(a5_errors) == 0
 
 # ============================================================
 # 入口
