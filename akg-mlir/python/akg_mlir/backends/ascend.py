@@ -25,7 +25,7 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg import akgAscendLaunch
+from akg.akgAscendLaunch import akg_ascend_run
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
 
@@ -332,7 +332,7 @@ def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, output
     return result
 
 
-def launch(
+def benckmark_launch(
     output_so_dir,
     kernel_name,
     device_id,
@@ -352,7 +352,7 @@ def launch(
         data_list, kernel_name, output_indexes or [], is_dyn_shape, output_so_dir
     )
 
-    akgAscendLaunch.akg_ascend_run(
+    akg_ascend_run(
         output_so_dir,
         kernel_name,
         device_id,
