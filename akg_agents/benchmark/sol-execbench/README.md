@@ -78,6 +78,23 @@ verifier = KernelVerifier(
 
 通过 KernelAgent workflow 工具调用时，同样需要传 `bench_type="sol"`，并传入 `sol_problem_dir`、`sol_problem_json` 或 `sol_task_code` 之一。workflow 会把这些字段透传到 `KernelVerifier`。
 
+### 2.2 Verifier Data Cache
+
+SOL-ExecBench 已自带 `definition.json`、`workload.jsonl` 和 `reference.py`，因此 Verifier Data Cache 不缓存 SOL reference data。SOL 路径只复用 baseline profile 结果：开启 `data_cache.cache_baseline_result` 后，Verifier 会用归一化后的三文件内容、framework/dsl/backend/arch 和 profile 参数生成 cache key。
+
+命中 baseline cache 时，profile 流程会注入 `override_base_time_us` 并设置 `skip_base_profile=True`，跳过 `reference.run` 的 base profile；未命中时按原流程测量并写入 baseline cache。
+
+```python
+config = {
+    "log_dir": "./logs",
+    "sol_problem_dir": sol_problem_dir,
+    "data_cache": {
+        "enabled": True,
+        "cache_baseline_result": True,
+    },
+}
+```
+
 ## 3. 批量运行工具
 
 我们提供了一个批量运行工具 `reproduce/wip/run_sol_bench_batch.py`，可以用来批量验证某个目录下的所有 SOL cases。

@@ -167,14 +167,15 @@ data_cache:
 
 ## 7. 当前范围
 
-当前 Verifier Data Cache 只覆盖 `KernelBench` 验证链路；这不影响 `SOL-ExecBench` 主验证/性能路径，SOL 输入格式由 `KernelVerifier` 的 SOL adapter 单独归一化为 `definition.json` / `workload.jsonl` / `reference.py`。Data Cache 暂不缓存 SOL 数据，原因：
+当前 Verifier Data Cache 覆盖 `KernelBench` 的 reference data 和 baseline profile 路径。对于 `SOL-ExecBench`，本次只接入 baseline profile cache，不缓存 reference data，原因：
 
-- `SOL` 已经自带 `reference.py` 和 `workload.jsonl`
-- 本次痛点主要是 `task_desc -> inputs/outputs` 和 framework baseline profile
+- `SOL` 已经自带稳定的 `definition.json` / `workload.jsonl` / `reference.py`
+- 重复开销主要集中在 reference baseline profile
+- 复用 SOL reference data 容易绕开 benchmark 自身的输入/容差描述，不作为当前适配范围
 
-`SOL-ExecBench` 目前还没有接入 Verifier Data Cache。后续如果需要扩到 `SOL`，建议优先只复用 baseline cache，不必引入 reference data cache。原因是 SOL 的输入与参考输出由 `definition.json` / `workload.jsonl` / `reference.py` 固定描述，重复开销主要集中在 reference baseline profile。
+`SOL-ExecBench` baseline cache 的 key 会包含 bench type、framework/backend/arch/DSL、profile 参数，以及归一化后的 `definition.json` / `workload.jsonl` / `reference.py` 内容。命中后会给 profile 流程注入 `override_base_time_us` 并设置 `skip_base_profile=True`，从而跳过 SOL base profile；cache miss 时正常测量并写入 baseline cache。
 
-当前 reference data cache 只覆盖静态 shape 验证。动态 shape 场景会自动跳过 reference data cache，继续走实时输入生成与验证流程。
+当前 reference data cache 只覆盖 KernelBench 静态 shape 验证。动态 shape 场景会自动跳过 reference data cache，继续走实时输入生成与验证流程。
 
 默认 cache key 包含 `task_id`，用于避免不同独立任务之间误复用。`adaptive_search`、`evolve` 和 `AutoResearch` 会自动设置稳定的 `data_cache.cache_key_id`，让同一算子的多个候选实现复用同一份 reference data / baseline cache。做 demo 或重复回归时，也可以保持 `task_id` 一致，或显式设置相同的 `cache_key_id`。
 

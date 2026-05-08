@@ -56,7 +56,7 @@ AKG Agents 是一个面向 **AI Infra 与高性能计算**场景的 LLM 多 Agen
 | **Agents** | Agent 基类（`AgentBase`、`ReActAgent`）、Agent 注册与发现机制。详见 [Agent 体系](./AgentSystem.md)。 |
 | **Skills** | Skill 管理系统：元数据、加载、注册、层级关系、LLM 驱动选择、版本管理。详见 [Skill 系统](./SkillSystem.md)。 |
 | **Tools** | 工具执行框架：内置工具（文件读写、Shell）、领域工具（算子验证、性能分析）、参数解析器。详见 [Tools 体系](./Tools.md)。 |
-| **Workflows** | 基于 LangGraph 的工作流编排：`BaseWorkflow`、`BaseLangGraphTask`、路由器、可视化和 debug checkpoint。详见 [工作流](./Workflow.md) 与 [Debug Save/Resume](./DebugSaveResume.md)。 |
+| **Workflows** | 基于 LangGraph 的工作流编排：`BaseWorkflow`、`BaseLangGraphTask`、路由器、可视化。详见 [工作流](./Workflow.md)。 |
 | **Trace** | 树状推理追踪系统：多分叉、状态持久化、断点续跑。详见 [Trace 系统](./Trace.md)。 |
 | **LLM** | LLM 接入层：OpenAI 兼容 Provider、带 Token 计数和流式输出的 Client、Embedding 模型。详见 [LLM 接入](./LLM.md)。 |
 | **配置系统** | 统一配置管理：`settings.json`、环境变量、多层级优先级。详见 [配置系统](./Configuration.md)。 |

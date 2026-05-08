@@ -14,7 +14,6 @@
 - **路由工具** — 步数限制和 Agent 重复限制检查
 - **WorkflowRegistry** — 工作流注册与发现
 - **WorkflowVisualizer** — Mermaid 图表生成
-- **Debug Save/Resume** — 基于 LangGraph checkpoint 的状态持久化
 
 ## 2. BaseState
 
@@ -164,13 +163,7 @@ def my_router(state):
     # 路由到下一个 Agent...
 ```
 
-## 6. Debug Save/Resume
-
-工作流 debug checkpoint 通过 `debug` 配置块开启。开启后，workflow 会使用文件持久化的 LangGraph checkpointer 编译，并在执行时注入 `configurable.thread_id`。Resume 使用同一个 thread id，确认已有 state 后调用 `ainvoke(None, config=...)` 从 checkpoint 继续。
-
-详细设计、配置和验收方式见 [Debug Save/Resume](./DebugSaveResume.md)。
-
-## 7. WorkflowRegistry
+## 6. WorkflowRegistry
 
 `WorkflowRegistry` 管理工作流类，支持 scope。
 
@@ -198,7 +191,7 @@ class KernelWorkflow(BaseWorkflow):
 | `WorkflowRegistry.is_registered(name, scope)` | 检查工作流是否已注册（在指定 scope 中）。 |
 | `WorkflowRegistry.clear()` | 移除所有已注册工作流。 |
 
-## 8. WorkflowVisualizer
+## 7. WorkflowVisualizer
 
 从编译后的工作流生成 Mermaid 图表：
 
@@ -209,7 +202,7 @@ mermaid_str = workflow.visualize()
 print(mermaid_str)
 ```
 
-## 9. 节点追踪
+## 8. 节点追踪
 
 `track_node` 工具用于在工作流中追踪节点执行：
 

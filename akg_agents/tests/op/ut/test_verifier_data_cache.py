@@ -43,6 +43,7 @@ from akg_agents.op.verifier.data_cache import (
 )
 from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
+from akg_agents.op.verifier.sol_format import build_sol_problem_cache_identity
 
 
 FRAMEWORK_CODE = """
@@ -73,6 +74,24 @@ class ModelNew:
     def __call__(self, x):
         return x
 """
+
+SOL_RECORD = {
+    "name": "000_relu",
+    "description": "ReLU raw SOL row",
+    "axes": {"n": {"type": "var"}},
+    "inputs": {"x": {"shape": ["n"], "dtype": "float32"}},
+    "outputs": {"out": {"shape": ["n"], "dtype": "float32"}},
+    "custom_inputs_entrypoint": None,
+    "reference": "import torch\n\ndef run(x):\n    return torch.relu(x)\n",
+    "workloads": [
+        {
+            "uuid": "case-1",
+            "axes": {"n": 128},
+            "inputs": {"x": {"type": "random"}},
+            "tolerance": {"max_atol": 1e-5, "max_rtol": 1e-5},
+        }
+    ],
+}
 
 
 def _make_reference_payload_bytes() -> bytes:
@@ -171,6 +190,33 @@ def _make_verifier(tmp_path: Path, worker=None, task_id: str = "ut") -> KernelVe
     )
 
 
+def _make_sol_config(tmp_path: Path, sol_record: dict = None) -> dict:
+    config = _make_config(tmp_path)
+    config.update(
+        {
+            "bench_type": "sol",
+            "sol_problem_data": sol_record or SOL_RECORD,
+        }
+    )
+    return config
+
+
+def _make_sol_verifier(tmp_path: Path, worker=None, task_id: str = "ut", sol_record: dict = None) -> KernelVerifier:
+    return KernelVerifier(
+        op_name="relu",
+        framework_code="",
+        task_id=task_id,
+        framework="torch",
+        dsl="triton_cuda",
+        backend="cuda",
+        arch="a100",
+        impl_func_name="ModelNew",
+        config=_make_sol_config(tmp_path, sol_record),
+        worker=worker,
+        bench_type="sol",
+    )
+
+
 def test_reference_cache_roundtrip(tmp_path):
     cfg = VerifierDataCacheConfig(enabled=True, cache_dir=str(tmp_path / "cache"))
     cache_key = build_reference_cache_key(
@@ -237,6 +283,23 @@ def test_baseline_cache_key_includes_dsl():
     triton_key = build_baseline_cache_key(**common_kwargs, dsl="triton_ascend")
     torch_key = build_baseline_cache_key(**common_kwargs, dsl="torch")
     assert triton_key != torch_key
+
+
+def test_sol_baseline_cache_key_includes_problem_content(tmp_path):
+    record_b = dict(SOL_RECORD)
+    record_b["workloads"] = [
+        {
+            "uuid": "case-2",
+            "axes": {"n": 256},
+            "inputs": {"x": {"type": "random"}},
+            "tolerance": {"max_atol": 1e-5, "max_rtol": 1e-5},
+        }
+    ]
+
+    verifier_a = _make_sol_verifier(tmp_path, task_id="same-task", sol_record=SOL_RECORD)
+    verifier_b = _make_sol_verifier(tmp_path, task_id="same-task", sol_record=record_b)
+
+    assert verifier_a._get_baseline_cache_key(5, 50) != verifier_b._get_baseline_cache_key(5, 50)
 
 
 def test_reference_cache_key_includes_task_id():
@@ -475,6 +538,54 @@ async def test_run_profile_uses_cached_baseline(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_profile_uses_cached_sol_baseline(monkeypatch, tmp_path):
+    worker = DummyProfileWorker()
+    verifier = _make_sol_verifier(tmp_path, worker=worker)
+    cfg = verifier._get_data_cache_config()
+    cache_key = verifier._get_baseline_cache_key(5, 50)
+    assert cache_key
+    write_baseline_result_to_cache(
+        cfg,
+        op_name=verifier.op_name,
+        cache_key=cache_key,
+        result_data={"avg_time_us": 19.5, "method": "cached_sol"},
+    )
+
+    verify_dir = (
+        Path(verifier.log_dir).expanduser()
+        / verifier.op_name
+        / f"Iteration{verifier.task_id}_Step00_verify"
+    )
+    verify_dir.mkdir(parents=True, exist_ok=True)
+    (verify_dir / "definition.json").write_text("{}", encoding="utf-8")
+    (verify_dir / f"{verifier.op_name}_{verifier.dsl}_impl.py").write_text(
+        IMPL_CODE,
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    def fake_gen_profile_project(verify_dir, device_id=0, warmup_times=5, run_times=50, skip_base=False):
+        captured["skip_base"] = skip_base
+
+    monkeypatch.setattr(verifier, "gen_profile_project", fake_gen_profile_project)
+    monkeypatch.setattr(verifier, "_pack_directory", lambda verify_dir: b"pkg")
+
+    result = await verifier.run_profile(
+        {"coder_code": IMPL_CODE},
+        current_step=0,
+        device_id=0,
+        profile_settings={"warmup_times": 5, "run_times": 50},
+    )
+
+    assert captured["skip_base"] is True
+    assert worker.profile_settings is not None
+    assert worker.profile_settings["override_base_time_us"] == 19.5
+    assert worker.profile_settings["skip_base_profile"] is True
+    assert result["base_time"] == 19.5
+
+
+@pytest.mark.asyncio
 async def test_baseline_preprofile_rereads_cache_after_lock(tmp_path):
     config = _make_config(tmp_path)
     cfg = load_verifier_data_cache_config(config)
@@ -519,6 +630,54 @@ async def test_baseline_preprofile_rereads_cache_after_lock(tmp_path):
         )
 
     assert await task == 23.0
+
+
+@pytest.mark.asyncio
+async def test_sol_baseline_preprofile_rereads_cache_after_lock(tmp_path):
+    config = _make_sol_config(tmp_path)
+    cfg = load_verifier_data_cache_config(config)
+    sol_identity = build_sol_problem_cache_identity(config=config)
+    cache_key = build_baseline_cache_key(
+        op_name="relu",
+        framework_code=sol_identity,
+        framework="torch",
+        backend="cuda",
+        arch="a100",
+        bench_type="sol",
+        warmup_times=3,
+        run_times=7,
+        dsl="triton_cuda",
+        task_id="baseline_profile",
+    )
+
+    async with verifier_data_cache_lock(
+        cfg,
+        namespace="baseline",
+        op_name="relu",
+        cache_key=cache_key,
+    ):
+        task = asyncio.create_task(
+            profile_baseline_once(
+                "relu",
+                "",
+                "triton_cuda",
+                "torch",
+                "cuda",
+                "a100",
+                config,
+                warmup_times=3,
+                run_times=7,
+            )
+        )
+        await asyncio.sleep(0.05)
+        write_baseline_result_to_cache(
+            cfg,
+            op_name="relu",
+            cache_key=cache_key,
+            result_data={"avg_time_us": 31.0, "method": "locked_sol_test"},
+        )
+
+    assert await task == 31.0
 
 
 @pytest.mark.asyncio

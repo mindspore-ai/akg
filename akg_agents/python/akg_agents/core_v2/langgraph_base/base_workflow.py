@@ -79,17 +79,6 @@ class BaseWorkflow(ABC, Generic[StateType]):
             编译后的 LangGraph 应用，可直接调用 ainvoke()
         """
         graph = self.build_graph()
-        from akg_agents.core_v2.langgraph_base.checkpointing import (
-            build_debug_checkpointer,
-            debug_enabled,
-        )
-        if debug_enabled(self.config):
-            checkpointer = build_debug_checkpointer(self.config)
-            logger.info(
-                "[LangGraphDebug] compile workflow with file-backed "
-                "checkpointer"
-            )
-            return graph.compile(checkpointer=checkpointer, debug=True)
         return graph.compile()
     
     def visualize(self) -> str:

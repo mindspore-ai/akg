@@ -164,7 +164,6 @@ class KernelVerifier:
         else:
             raise ValueError("config is required for KernelVerifier")
         self.config["bench_type"] = bench_type
-        self.config.setdefault("_langgraph_debug_task_id", task_id)
 
         aux_files = self.config.get("framework_aux_files") or {}
         factory_names = self.config.get("framework_factory_names") or {}
@@ -1000,10 +999,29 @@ if __name__ == "__main__":
             task_id=self._get_data_cache_key_id(),
         )
 
-    def _get_baseline_cache_key(self, warmup_times: int, run_times: int) -> str:
+    def _get_baseline_cache_source(self) -> Optional[str]:
+        if self.bench_type != "sol":
+            return self.framework_code
+        try:
+            from akg_agents.op.verifier.sol_format import build_sol_problem_cache_identity
+
+            return build_sol_problem_cache_identity(
+                config=self.config,
+                task_desc=self.config.get("task_desc", "") or self.framework_code,
+            )
+        except Exception as exc:
+            logger.info(
+                f"[{self.op_name}] SOL baseline cache key 构建失败，跳过 baseline cache: {exc}"
+            )
+            return None
+
+    def _get_baseline_cache_key(self, warmup_times: int, run_times: int) -> Optional[str]:
+        cache_source = self._get_baseline_cache_source()
+        if cache_source is None:
+            return None
         return build_baseline_cache_key(
             op_name=self.op_name,
-            framework_code=self.framework_code,
+            framework_code=cache_source,
             framework=self.framework,
             backend=self.backend,
             arch=self.arch,
@@ -1185,7 +1203,7 @@ if __name__ == "__main__":
         self.config["_data_cache_reference_key"] = cache_key or self._get_reference_cache_key()
 
     def _get_cached_baseline_time_us(self, warmup_times: int, run_times: int) -> Optional[float]:
-        if self.bench_type != "kernelbench":
+        if self.bench_type not in {"kernelbench", "sol"}:
             return None
 
         cache_cfg = self._get_data_cache_config()
@@ -1193,6 +1211,8 @@ if __name__ == "__main__":
             return None
 
         cache_key = self._get_baseline_cache_key(warmup_times, run_times)
+        if not cache_key:
+            return None
         cache_entry = read_baseline_result_from_cache(
             cache_cfg,
             op_name=self.op_name,
@@ -1218,13 +1238,16 @@ if __name__ == "__main__":
         run_times: int,
         artifacts: Optional[Dict[str, str]] = None,
     ) -> None:
-        if self.bench_type != "kernelbench" or base_time_us is None:
+        if self.bench_type not in {"kernelbench", "sol"} or base_time_us is None:
             return
         if base_time_us <= 0 or base_time_us >= float("inf"):
             return
 
         cache_cfg = self._get_data_cache_config()
         if not cache_cfg.enabled or not cache_cfg.cache_baseline_result:
+            return
+        cache_key = self._get_baseline_cache_key(warmup_times, run_times)
+        if not cache_key:
             return
 
         payload: Dict[str, Any]
@@ -1248,7 +1271,7 @@ if __name__ == "__main__":
         write_baseline_result_to_cache(
             cache_cfg,
             op_name=self.op_name,
-            cache_key=self._get_baseline_cache_key(warmup_times, run_times),
+            cache_key=cache_key,
             result_data=payload,
             metadata={
                 "framework": self.framework,

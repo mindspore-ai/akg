@@ -146,7 +146,6 @@ class LangGraphTask(BaseLangGraphTask):
         self.bench_type = bench_type
         self.previous_code = previous_code or ""
         config["bench_type"] = bench_type
-        config.setdefault("_langgraph_debug_task_id", task_id)
 
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
@@ -186,8 +185,6 @@ class LangGraphTask(BaseLangGraphTask):
         else:
             self.workflow_name = config.get("default_workflow", "default_workflow")
             logger.info(f"[{op_name}] Using workflow from config: {self.workflow_name}")
-        self.config["_langgraph_debug_workflow"] = self.workflow_name
-        self.config.setdefault("_langgraph_debug_thread_id", f"{self.task_id}:{self.workflow_name}")
         
         # 初始化 WorkflowLogger
         log_dir = config.get("log_dir", "")
@@ -379,8 +376,7 @@ class LangGraphTask(BaseLangGraphTask):
         self.config["cache_session_hash"] = cache_session_hash
 
         # Replay Guard: attach node-level snapshot store for record/replay
-        from akg_agents.core_v2.langgraph_base.checkpointing import debug_enabled
-        if cache_mode in ("record", "replay") and not debug_enabled(self.config):
+        if cache_mode in ("record", "replay"):
             try:
                 from akg_agents.core_v2.langgraph_base.replay_guard import ReplaySnapshotStore
                 from akg_agents.core_v2.llm.cache.cache_config import load_cache_config
@@ -444,34 +440,14 @@ class LangGraphTask(BaseLangGraphTask):
             initial_state = self._prepare_initial_state(init_task_info)
             max_iter = initial_state.get("max_iterations", 20)
             recursion_limit = max(25, max_iter * 3 + 5)
-            from akg_agents.core_v2.langgraph_base.checkpointing import (
-                build_invoke_config,
-                debug_enabled,
-                debug_resume_requested,
-                get_existing_debug_state,
-            )
-            invoke_config = build_invoke_config(self.config, recursion_limit)
-            graph_input = initial_state
-            if debug_enabled(self.config) and debug_resume_requested(self.config):
-                saved_state = await get_existing_debug_state(self.app, invoke_config)
-                if not saved_state:
-                    raise RuntimeError(
-                        "debug.resume=True but no LangGraph checkpoint exists "
-                        "for the configured thread_id"
-                    )
-                graph_input = None
-                logger.info(
-                    f"Task {self.task_id}, op_name: {self.op_name}, "
-                    "resuming from LangGraph checkpoint"
-                )
             
             logger.info(f"Task {self.task_id}, op_name: {self.op_name}")
             
             # 执行图
             final_state = await asyncio.wait_for(
                 self.app.ainvoke(
-                    graph_input,
-                    config=invoke_config
+                    initial_state,
+                    config={"recursion_limit": recursion_limit}
                 ),
                 timeout=self.config.get("workflow_timeout", 1800)
             )

@@ -252,11 +252,6 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         config = workflow_resources["config"]
 
         cur_path = arguments.get("cur_path")
-        task_id = arguments.get("task_id", "0")
-        workflow_name = arguments.get("workflow") or config.get("default_workflow", "workflow")
-        config.setdefault("_langgraph_debug_task_id", task_id)
-        config.setdefault("_langgraph_debug_workflow", workflow_name)
-        config.setdefault("_langgraph_debug_thread_id", f"{task_id}:{workflow_name}")
         if arguments.get("bench_type"):
             config["bench_type"] = arguments.get("bench_type")
         for key in SOL_CONFIG_KEYS:

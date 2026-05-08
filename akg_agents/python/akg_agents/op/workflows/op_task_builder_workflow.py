@@ -49,12 +49,6 @@ class OpTaskBuilderWorkflow:
             trace: Trace实例（可选）
         """
         self.config = config
-        self.config.setdefault("_langgraph_debug_task_id", "op_task_builder")
-        self.config.setdefault("_langgraph_debug_workflow", "op_task_builder_workflow")
-        self.config.setdefault(
-            "_langgraph_debug_thread_id",
-            "op_task_builder:op_task_builder_workflow",
-        )
         self.trace = trace
         self.max_iterations = config.get("op_task_builder_max_iterations", 5)
         self.max_check_retries = config.get("op_task_builder_max_check_retries", 3)
@@ -127,13 +121,6 @@ class OpTaskBuilderWorkflow:
             Compiled application
         """
         graph = self.build_graph()
-        from akg_agents.core_v2.langgraph_base.checkpointing import (
-            build_debug_checkpointer,
-            debug_enabled,
-        )
-        if debug_enabled(self.config):
-            checkpointer = build_debug_checkpointer(self.config)
-            return graph.compile(checkpointer=checkpointer, debug=True)
         return graph.compile()
     
     def visualize(self) -> str:
@@ -257,27 +244,7 @@ class OpTaskBuilderWorkflow:
         
         # 编译并运行workflow
         app = self.compile()
-        from akg_agents.core_v2.langgraph_base.checkpointing import (
-            build_invoke_config,
-            debug_enabled,
-            debug_resume_requested,
-            get_existing_debug_state,
-        )
-        max_iter = state.get("max_iterations", self.max_iterations)
-        invoke_config = build_invoke_config(
-            self.config,
-            recursion_limit=max(25, max_iter * 3 + 5),
-        )
-        graph_input = state
-        if debug_enabled(self.config) and debug_resume_requested(self.config):
-            saved_state = await get_existing_debug_state(app, invoke_config)
-            if not saved_state:
-                raise RuntimeError(
-                    "debug.resume=True but no LangGraph checkpoint exists "
-                    "for the configured thread_id"
-                )
-            graph_input = None
-        result = await app.ainvoke(graph_input, config=invoke_config)
+        result = await app.ainvoke(state)
         
         return result
     
