@@ -41,54 +41,6 @@
 namespace TorchD = mlir::torch::Torch;
 
 namespace {
-
-// Implementation of getHigherPrecisionType
-mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB, bool rhsIsScalar = false) {
-  // Helper function to get bit width of a type
-  auto getBitWidth = [](mlir::Type type) -> int {
-    if (auto floatType = mlir::dyn_cast<mlir::FloatType>(type)) {
-      return floatType.getWidth();
-    }
-
-    if (auto integerType = mlir::dyn_cast<mlir::IntegerType>(type)) {
-      return integerType.getWidth();
-    }
-    return 0;
-  };
-
-  bool isFloatA = mlir::isa<mlir::FloatType>(typeA);
-  bool isFloatB = mlir::isa<mlir::FloatType>(typeB);
-
-  if (rhsIsScalar) {
-    if (isFloatB) {
-      if (!isFloatA) {
-        // Int64 + float64(scalar) ==> float32
-        return getHigherPrecisionType(typeA, mlir::FloatType::getF32(typeB.getContext()));
-      } else {
-        // Float16 + float64(scalar) ==> float16
-        return typeA;
-      }
-    } else {
-      return typeA;
-    }
-  }
-
-  // If one is float and the other is integer, prefer float
-  if (isFloatA && !isFloatB) {
-    return typeA;
-  }
-  if (!isFloatA && isFloatB) {
-    return typeB;
-  }
-
-  // If both are same type, compare bit widths
-  int bitWidthA = getBitWidth(typeA);
-  int bitWidthB = getBitWidth(typeB);
-
-  // Return the type with higher bit width
-  return bitWidthA >= bitWidthB ? typeA : typeB;
-}
-
 mlir::LogicalResult verifyReduceDimensions(mlir::Operation *op, mlir::ArrayAttr dimensions) {
   auto input = op->getOperand(0);
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
@@ -166,108 +118,109 @@ static std::optional<mlir::Value> foldUnrealizedConversionCast(mlir::OpBuilder &
   return newCast.getResult(0);
 }
 
-// Helper function to fold constant cast operations
-// Returns a new DenseElementsAttr with converted values, or std::nullopt on failure
-static std::optional<mlir::DenseElementsAttr> foldConstantCast(mlir::DenseElementsAttr dense, mlir::Type srcType,
-                                                               mlir::Type dstType, mlir::RankedTensorType resultType) {
-  // Type categories
-  bool srcIsInt = mlir::isa<mlir::IntegerType>(srcType);
-  bool dstIsInt = mlir::isa<mlir::IntegerType>(dstType);
-  bool srcIsFloat = mlir::isa<mlir::FloatType>(srcType);
-  bool dstIsFloat = mlir::isa<mlir::FloatType>(dstType);
+// Helper function to convert value to target element type
+template <typename T>
+static mlir::DenseElementsAttr convertToElementType(T value, mlir::RankedTensorType resultType) {
+  auto elementType = resultType.getElementType();
+  if (mlir::isa<mlir::FloatType>(elementType)) {
+    if (elementType.isF64()) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<double>(value));
+    } else if (elementType.isF32()) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<float>(value));
+    } else if (elementType.isF16() || elementType.isBF16()) {
+      llvm::APFloat apValue(static_cast<double>(value));
+      bool lostInfo;
+      apValue.convert(elementType.isF16() ? llvm::APFloat::IEEEhalf() : llvm::APFloat::BFloat(),
+                      llvm::APFloat::rmNearestTiesToEven, &lostInfo);
+      uint16_t bits = static_cast<uint16_t>(apValue.bitcastToAPInt().getZExtValue());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<uint16_t>(bits));
+    }
+  } else if (elementType.isInteger()) {
+    if (elementType.isInteger(64)) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<int64_t>(value));
+    } else if (elementType.isInteger(32)) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<int32_t>(value));
+    } else if (elementType.isInteger(16)) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<int16_t>(value));
+    } else if (elementType.isInteger(8)) {
+      return mlir::DenseElementsAttr::get(resultType, static_cast<int8_t>(value));
+    }
+  }
+  llvm::report_fatal_error("Unsupported element type in convertToElementType");
+}
 
-  // Integer -> Integer: adjust width
-  if (srcIsInt && dstIsInt) {
-    auto srcIntTy = mlir::cast<mlir::IntegerType>(srcType);
-    auto dstIntTy = mlir::cast<mlir::IntegerType>(dstType);
-    auto convertInt = [&](const llvm::APInt &val) -> llvm::APInt {
-      if (dstIntTy.getWidth() > srcIntTy.getWidth()) {
-        return srcIntTy.isSigned() ? val.sext(dstIntTy.getWidth()) : val.zext(dstIntTy.getWidth());
-      } else if (dstIntTy.getWidth() < srcIntTy.getWidth()) {
-        return val.trunc(dstIntTy.getWidth());
+// Helper function to create DenseElementsAttr from converted array values
+template <typename SrcT>
+static mlir::DenseElementsAttr createDenseAttrFromArray(mlir::RankedTensorType resultType,
+                                                        llvm::SmallVector<SrcT> &converted) {
+  auto dstElemType = resultType.getElementType();
+  if (mlir::isa<mlir::FloatType>(dstElemType)) {
+    auto floatType = mlir::cast<mlir::FloatType>(dstElemType);
+    if (floatType.isF64()) {
+      llvm::SmallVector<double> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<double>(dstVals));
+    } else if (floatType.isF32()) {
+      llvm::SmallVector<float> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<float>(dstVals));
+    } else if (floatType.isF16() || floatType.isBF16()) {
+      llvm::SmallVector<uint16_t> dstVals;
+      dstVals.reserve(converted.size());
+      for (double val : converted) {
+        llvm::APFloat apVal(val);
+        bool lostInfo;
+        apVal.convert(floatType.isF16() ? llvm::APFloat::IEEEhalf() : llvm::APFloat::BFloat(),
+                      llvm::APFloat::rmNearestTiesToEven, &lostInfo);
+        dstVals.push_back(static_cast<uint16_t>(apVal.bitcastToAPInt().getZExtValue()));
       }
-      return val;
-    };
-    if (dense.isSplat()) {
-      return std::optional<mlir::DenseElementsAttr>(
-        mlir::DenseElementsAttr::get(resultType, convertInt(dense.getSplatValue<llvm::APInt>())));
-    } else {
-      llvm::SmallVector<llvm::APInt> vals;
-      vals.reserve(dense.getNumElements());
-      auto intVals = dense.getValues<llvm::APInt>();
-      std::transform(intVals.begin(), intVals.end(), vals.begin(), convertInt);
-      return std::optional<mlir::DenseElementsAttr>(mlir::DenseElementsAttr::get(resultType, vals));
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<uint16_t>(dstVals));
+    }
+  } else if (dstElemType.isInteger()) {
+    if (dstElemType.isInteger(64)) {
+      llvm::SmallVector<int64_t> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<int64_t>(dstVals));
+    } else if (dstElemType.isInteger(32)) {
+      llvm::SmallVector<int32_t> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<int32_t>(dstVals));
+    } else if (dstElemType.isInteger(16)) {
+      llvm::SmallVector<int16_t> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<int16_t>(dstVals));
+    } else if (dstElemType.isInteger(8)) {
+      llvm::SmallVector<int8_t> dstVals(converted.begin(), converted.end());
+      return mlir::DenseElementsAttr::get(resultType, llvm::ArrayRef<int8_t>(dstVals));
     }
   }
+  llvm::report_fatal_error("Unsupported element type in createDenseAttrFromArray");
+}
 
-  // Float -> Float: convert precision
-  if (srcIsFloat && dstIsFloat) {
-    auto dstFloatTy = mlir::cast<mlir::FloatType>(dstType);
-    const llvm::fltSemantics &dstSemantics = dstFloatTy.getFloatSemantics();
-    auto convertFloat = [&](const llvm::APFloat &val) -> llvm::APFloat {
-      llvm::APFloat result(val);
-      bool losesInfo = false;
-      result.convert(dstSemantics, llvm::APFloat::rmNearestTiesToEven, &losesInfo);
-      return result;
-    };
-    if (dense.isSplat()) {
-      return std::optional<mlir::DenseElementsAttr>(
-        mlir::DenseElementsAttr::get(resultType, convertFloat(dense.getSplatValue<llvm::APFloat>())));
-    } else {
-      llvm::SmallVector<llvm::APFloat> vals;
-      vals.reserve(dense.getNumElements());
+// Helper function to fold constant cast operations
+static std::optional<mlir::DenseElementsAttr> foldConstantCast(mlir::DenseElementsAttr dense,
+                                                               mlir::RankedTensorType resultType) {
+  auto elementType = dense.getElementType();
+  if (dense.isSplat()) {
+    if (mlir::isa<mlir::FloatType>(elementType)) {
+      auto floatVal = dense.getSplatValue<llvm::APFloat>();
+      return convertToElementType(floatVal.convertToDouble(), resultType);
+    } else if (elementType.isInteger()) {
+      auto intVal = dense.getSplatValue<llvm::APInt>();
+      return convertToElementType(intVal.getSExtValue(), resultType);
+    }
+  } else {
+    if (mlir::isa<mlir::FloatType>(elementType)) {
       auto floatVals = dense.getValues<llvm::APFloat>();
-      std::transform(floatVals.begin(), floatVals.end(), vals.begin(), convertFloat);
-      return std::optional<mlir::DenseElementsAttr>(mlir::DenseElementsAttr::get(resultType, vals));
-    }
-  }
-
-  // Integer -> Float
-  if (srcIsInt && dstIsFloat) {
-    auto dstFloatTy = mlir::cast<mlir::FloatType>(dstType);
-    const llvm::fltSemantics &dstSemantics = dstFloatTy.getFloatSemantics();
-    auto convertIntToFloat = [&](const llvm::APInt &val) -> llvm::APFloat {
-      llvm::APFloat result = llvm::APFloat::getZero(dstSemantics);
-      result.convertFromAPInt(val, /*isSigned=*/true, llvm::APFloat::rmNearestTiesToEven);
-      return result;
-    };
-    if (dense.isSplat()) {
-      return std::optional<mlir::DenseElementsAttr>(
-        mlir::DenseElementsAttr::get(resultType, convertIntToFloat(dense.getSplatValue<llvm::APInt>())));
-    } else {
-      llvm::SmallVector<llvm::APFloat> vals;
-      vals.reserve(dense.getNumElements());
+      llvm::SmallVector<double> converted;
+      converted.reserve(dense.getNumElements());
+      std::transform(floatVals.begin(), floatVals.end(), std::back_inserter(converted),
+                     [](auto v) { return v.convertToDouble(); });
+      return createDenseAttrFromArray<double>(resultType, converted);
+    } else if (elementType.isInteger()) {
       auto intVals = dense.getValues<llvm::APInt>();
-      std::transform(intVals.begin(), intVals.end(), vals.begin(), convertIntToFloat);
-      return std::optional<mlir::DenseElementsAttr>(mlir::DenseElementsAttr::get(resultType, vals));
+      llvm::SmallVector<int64_t> converted;
+      converted.reserve(dense.getNumElements());
+      std::transform(intVals.begin(), intVals.end(), std::back_inserter(converted),
+                     [](auto v) { return v.getSExtValue(); });
+      return createDenseAttrFromArray<int64_t>(resultType, converted);
     }
   }
-
-  // Float -> Integer
-  if (srcIsFloat && dstIsInt) {
-    auto dstIntTy = mlir::cast<mlir::IntegerType>(dstType);
-    auto convertFloatToInt = [&](const llvm::APFloat &val) -> llvm::APInt {
-      llvm::APSInt result(dstIntTy.getWidth(), !dstIntTy.isSigned());
-      bool isExact = false;
-      val.convertToInteger(result, llvm::APFloat::rmNearestTiesToEven, &isExact);
-      return result;
-    };
-
-    if (dense.isSplat()) {
-      return std::optional<mlir::DenseElementsAttr>(
-        mlir::DenseElementsAttr::get(resultType, convertFloatToInt(dense.getSplatValue<llvm::APFloat>())));
-    } else {
-      llvm::SmallVector<llvm::APInt> vals;
-      vals.reserve(dense.getNumElements());
-      auto floatVals = dense.getValues<llvm::APFloat>();
-      std::transform(floatVals.begin(), floatVals.end(), vals.begin(), convertFloatToInt);
-      return std::optional<mlir::DenseElementsAttr>(mlir::DenseElementsAttr::get(resultType, vals));
-    }
-  }
-
-  // For other type conversions, try reshape
-  auto reshaped = dense.reshape(resultType);
-  if (reshaped) return std::optional<mlir::DenseElementsAttr>(reshaped);
   return std::nullopt;
 }
 
@@ -693,11 +646,8 @@ mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
     auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
     if (!dense) return {};
 
-    auto srcType = dense.getElementType();
-    auto dstType = resultType.getElementType();
-
     // Use the helper function to fold constant cast
-    auto newDenseOpt = foldConstantCast(dense, srcType, dstType, resultType);
+    auto newDenseOpt = foldConstantCast(dense, resultType);
     if (!newDenseOpt) return {};
 
     mlir::OpBuilder b(getOperation());
@@ -919,44 +869,6 @@ mlir::LogicalResult PermuteOp::canonicalize(PermuteOp op, mlir::PatternRewriter 
   return mlir::success();
 }
 
-// Implementation of promoteBinaryOperands template function
-template <typename ConcreteOp>
-std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
-                                                          mlir::Value rhs) {
-  auto type0 = lhs.getType();
-  auto type1 = rhs.getType();
-  auto elemType0 = mlir::getElementTypeOrSelf(type0);
-  auto elemType1 = mlir::getElementTypeOrSelf(type1);
-
-  // If element types already match, return original inputs
-  if (elemType0 == elemType1) {
-    return {lhs, rhs};
-  }
-
-  bool rhsIsScalar = false;
-  if (auto rhsEnc = mlir::dyn_cast<mlir::RankedTensorType>(type1).getEncoding()) {
-    if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(rhsEnc)) {
-      rhsIsScalar = dictAttr.contains(mlir::mfuse::kScalarMarkerAttr);
-    }
-  }
-
-  // Determine the target high-precision element type
-  mlir::Type higherElemType = getHigherPrecisionType(elemType0, elemType1, rhsIsScalar);
-
-  mlir::Value newLhs = lhs;
-  mlir::Value newRhs = rhs;
-  // Insert CastOp for LHS if needed
-  if (elemType0 != higherElemType) {
-    newLhs = builder.create<mfuse::CastOp>(loc, lhs, higherElemType);
-  }
-  // Insert CastOp for RHS if needed
-  if (elemType1 != higherElemType) {
-    newRhs = builder.create<mfuse::CastOp>(loc, rhs, higherElemType);
-  }
-
-  return {newLhs, newRhs};
-}
-
 // Macro to implement functions for Mfuse_BroadcastableBinaryOp
 #define IMPL_BINARY_OP_FUNCTION(OpName, IsComparisonOp)                                                                \
   mlir::FailureOr<mlir::Type> OpName::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state, \
@@ -966,9 +878,7 @@ std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &build
   }                                                                                                                    \
   mlir::Type OpName::inferResultType(mlir::Value lhs, mlir::Value rhs) {                                               \
     return BinaryOpCommonInfer::inferResultType(lhs, rhs, IsComparisonOp);                                             \
-  }                                                                                                                    \
-  template std::pair<mlir::Value, mlir::Value> mlir::mfuse::promoteBinaryOperands<OpName>(                             \
-    mlir::OpBuilder &, mlir::Location, mlir::Value, mlir::Value);
+  }
 
 IMPL_BINARY_OP_FUNCTION(AddOp, false)
 IMPL_BINARY_OP_FUNCTION(DivOp, false)

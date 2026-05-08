@@ -30,49 +30,6 @@ namespace mlir {
 namespace mfuse {
 
 namespace {
-/// Helper function to convert AnyScalar to RankedTensorType (0D tensor)
-static Value convertAnyScalarToRankedTensor(PatternRewriter &rewriter, Location loc, Value scalar) {
-  Type scalarType = scalar.getType();
-  // If already a RankedTensorType, return as is
-  if (isa<RankedTensorType>(scalarType)) {
-    return scalar;
-  }
-  // For other scalar types (FloatType, IntegerType, IndexType), create a 0D tensor
-  Type elementType = scalarType;
-  return rewriter.create<mlir::mfuse::CastOp>(loc, scalar, elementType);
-}
-
-template <typename T>
-static Value convertToElementTypeConstant(T value, Type elementType, PatternRewriter &rewriter, Location loc) {
-  auto scalarType = RankedTensorType::get({}, elementType);
-  DenseElementsAttr denseAttr;
-  if (elementType.isF32()) {
-    denseAttr = DenseElementsAttr::get(scalarType, static_cast<float>(value));
-  } else if (elementType.isF64()) {
-    denseAttr = DenseElementsAttr::get(scalarType, static_cast<double>(value));
-  } else if (elementType.isInteger()) {
-    denseAttr = DenseElementsAttr::get(scalarType, static_cast<int64_t>(value));
-  } else {
-    llvm::report_fatal_error(llvm::formatv("Invalid convertToElementType: {0}", elementType));
-  }
-  return rewriter.create<mfuse::ConstantOp>(loc, scalarType, denseAttr);
-}
-
-/// Helper function to create alphaValue from DenseElementsAttr
-static Value createAlphaValueFromConstant(PatternRewriter &rewriter, Location loc, DenseElementsAttr denseAttr,
-                                          Type targetType) {
-  auto elementType = denseAttr.getElementType();
-  if (isa<FloatType>(elementType)) {
-    auto floatVal = denseAttr.getSplatValue<APFloat>();
-    return convertToElementTypeConstant(floatVal.convertToDouble(), targetType, rewriter, loc);
-  } else if (elementType.isInteger()) {
-    auto intVal = denseAttr.getSplatValue<APInt>();
-    return convertToElementTypeConstant(intVal.getSExtValue(), targetType, rewriter, loc);
-  } else {
-    llvm::report_fatal_error(llvm::formatv("Invalid createAlphaValueFromConstant: {0}", elementType));
-  }
-}
-
 static bool isSupportFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
 
 /// Check if output type is float/int type
@@ -90,7 +47,6 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
   Value x = op.getX();
   Value y = op.getY();
   Value alpha = op.getAlpha();
-  Location loc = op.getLoc();
   Type resultType = op.getResult().getType();
   auto resultElementType = mlir::cast<RankedTensorType>(resultType).getElementType();
   // Determine if the operation is an add or sub
@@ -112,21 +68,7 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
     return nullptr;
   }
 
-  // Check if alpha is a constant
-  auto constantOp = alpha.getDefiningOp<mlir::mfuse::ConstantOp>();
-  Value mulResult;
-
-  if (constantOp) {
-    // If alpha is a constant, extract its value
-    auto denseTensor = mlir::dyn_cast<DenseElementsAttr>(constantOp.getValue());
-    Value alphaValue = createAlphaValueFromConstant(rewriter, loc, denseTensor, resultElementType);
-    mulResult = builder.mul(y, alphaValue);
-  } else {
-    // If alpha is dynamic, convert it to RankedTensorType (0D tensor)
-    Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
-    mulResult = builder.mul(y, alphaTensor);
-  }
-
+  Value mulResult = builder.mul(y, alpha);
   // Perform the final add or sub operation
   return isAdd ? builder.add(x, mulResult) : builder.sub(x, mulResult);
 }

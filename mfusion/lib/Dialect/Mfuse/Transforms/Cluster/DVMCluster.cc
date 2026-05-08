@@ -479,6 +479,21 @@ class DvmSupportChecker {
     return true;
   }
 
+  static bool hasScalarMarker(mlir::Type type) {
+    auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type);
+    if (!rankedType) {
+      return false;
+    }
+
+    mlir::Attribute encoding = rankedType.getEncoding();
+    if (!encoding) {
+      return false;
+    }
+
+    auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
+    return dictAttr && dictAttr.contains(mlir::mfuse::kScalarMarkerAttr);
+  }
+
   /// Check input types
   static bool inputCheck(Operation *op, const std::vector<size_t> &inputsToCheck) {
     Type outputType = getElementType(op->getResult(0).getType());
@@ -499,6 +514,9 @@ class DvmSupportChecker {
       }
       Value operand = op->getOperand(idx);
       Type operandType = operand.getType();
+      if (hasScalarMarker(operandType)) {
+        continue;
+      }
       // Skip tensor type check for non-tensor inputs
       if (!isa<TensorType>(operandType)) {
         continue;
@@ -533,8 +551,12 @@ class DvmSupportChecker {
       if (idx >= op->getNumOperands()) {
         continue;
       }
-      Type inputType = getElementType(op->getOperand(idx).getType());
-      if (!typeCheck(inputType)) {
+      auto inputType = op->getOperand(idx).getType();
+      if (hasScalarMarker(inputType)) {
+        continue;
+      }
+      Type inputElemType = getElementType(inputType);
+      if (!typeCheck(inputElemType)) {
         return false;
       }
     }
