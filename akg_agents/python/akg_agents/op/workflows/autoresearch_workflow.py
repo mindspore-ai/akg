@@ -25,7 +25,6 @@ from langgraph.graph import StateGraph, END
 from akg_agents.op.workflows.base_workflow import OpBaseWorkflow, _DSL_DOCS_DIR_MAP
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.core_v2.workflows.registry import register_workflow
-from akg_agents.op.verifier.data_cache import set_workflow_data_cache_key_id
 
 logger = logging.getLogger(__name__)
 
@@ -164,16 +163,6 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             )
 
             workflow_config = _self.config
-            bench_type = workflow_config.get("bench_type", state.get("bench_type", "kernelbench"))
-            set_workflow_data_cache_key_id(
-                workflow_config,
-                op_name=op_name,
-                framework=framework,
-                dsl=dsl,
-                backend=backend,
-                arch=arch,
-                bench_type=bench_type,
-            )
             verifier = KernelVerifier(
                 op_name=op_name,
                 task_id=task_id,
@@ -903,3 +892,5 @@ async def _assemble_knowledge(
         extra_files[f"skills/{name}/SKILL.md"] = raw
 
     return "", context_files, extra_files
+
+
