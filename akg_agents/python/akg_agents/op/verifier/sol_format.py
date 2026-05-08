@@ -53,44 +53,85 @@ def ensure_sol_problem_dir(
     - ``task_desc`` using either JSON or markdown sections.
     """
     candidate = str(config.get("sol_problem_dir") or "").strip()
-    if candidate:
-        path = Path(candidate).expanduser()
-        if _has_required_files(path):
-            return str(path)
-        if path.is_file():
-            payload = path.read_text(encoding="utf-8")
-            return _materialize_payload(payload, work_dir, op_name)
-
-    for key in ("sol_problem_json", "sol_problem_data", "sol_task_code"):
-        payload = config.get(key)
-        if payload:
-            return _materialize_payload(payload, work_dir, op_name)
-
-    if task_desc and task_desc.strip():
-        try:
-            return _materialize_payload(task_desc, work_dir, op_name)
-        except ValueError:
-            pass
-
-    detail = (
-        "SOL input must be either a directory containing "
-        "definition.json/workload.jsonl/reference.py, a JSON payload with "
-        "those file names, or a raw SOL-ExecBench record with reference and "
-        "workloads fields."
-    )
-    if candidate:
-        raise FileNotFoundError(
-            f"Invalid sol_problem_dir: {candidate}. {detail}"
+    path = Path(candidate).expanduser() if candidate else None
+    if path and _has_required_files(path):
+        return str(path)
+    try:
+        return _materialize_files(
+            _resolve_sol_problem_files(config=config, task_desc=task_desc),
+            work_dir,
+            op_name,
         )
-    raise ValueError(f"sol_problem_dir is missing. {detail}")
+    except ValueError as exc:
+        detail = (
+            "SOL input must be either a directory containing "
+            "definition.json/workload.jsonl/reference.py, a JSON payload with "
+            "those file names, or a raw SOL-ExecBench record with reference and "
+            "workloads fields."
+        )
+        if candidate:
+            raise FileNotFoundError(
+                f"Invalid sol_problem_dir: {candidate}. {detail}"
+            ) from exc
+        raise ValueError(f"sol_problem_dir is missing. {detail}") from exc
+
+
+def build_sol_problem_cache_identity(
+    *,
+    config: Mapping[str, Any],
+    task_desc: str = "",
+) -> str:
+    """Return stable SOL problem content used by Verifier Data Cache keys."""
+    files = _resolve_sol_problem_files(config=config, task_desc=task_desc)
+    normalized_files = {
+        "definition.json": _normalize_json_text(files["definition.json"]).strip(),
+        "workload.jsonl": _normalize_workload_jsonl(files["workload.jsonl"]).strip(),
+        "reference.py": str(files["reference.py"]).rstrip(),
+    }
+    return json.dumps(
+        normalized_files,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _has_required_files(path: Path) -> bool:
     return path.is_dir() and all((path / name).is_file() for name in SOL_REQUIRED_FILES)
 
 
+def _resolve_sol_problem_files(
+    *,
+    config: Mapping[str, Any],
+    task_desc: str = "",
+) -> Dict[str, Any]:
+    candidate = str(config.get("sol_problem_dir") or "").strip()
+    if candidate:
+        path = Path(candidate).expanduser()
+        if _has_required_files(path):
+            return {
+                file_name: (path / file_name).read_text(encoding="utf-8")
+                for file_name in SOL_REQUIRED_FILES
+            }
+        if path.is_file():
+            return _payload_to_files(path.read_text(encoding="utf-8"))
+
+    for key in ("sol_problem_json", "sol_problem_data", "sol_task_code"):
+        payload = config.get(key)
+        if payload:
+            return _payload_to_files(payload)
+
+    if task_desc and task_desc.strip():
+        return _payload_to_files(task_desc)
+
+    raise ValueError("SOL problem input is missing")
+
+
 def _materialize_payload(payload: Any, work_dir: str, op_name: str) -> str:
-    files = _payload_to_files(payload)
+    return _materialize_files(_payload_to_files(payload), work_dir, op_name)
+
+
+def _materialize_files(files: Mapping[str, Any], work_dir: str, op_name: str) -> str:
     digest = hashlib.sha256(
         json.dumps(files, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
@@ -234,4 +275,3 @@ def _normalize_workload_jsonl(value: Any) -> str:
 def _safe_name(name: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "sol")
     return safe.strip("._") or "sol"
-

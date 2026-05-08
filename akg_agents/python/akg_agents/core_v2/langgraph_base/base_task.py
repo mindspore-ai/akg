@@ -110,28 +110,10 @@ class BaseLangGraphTask(ABC):
             
             logger.info(f"Task {self.task_id} starting...")
             
-            from akg_agents.core_v2.langgraph_base.checkpointing import (
-                build_invoke_config,
-                debug_enabled,
-                debug_resume_requested,
-                get_existing_debug_state,
-            )
-            invoke_config = build_invoke_config(self.config, recursion_limit)
-            graph_input = initial_state
-            if debug_enabled(self.config) and debug_resume_requested(self.config):
-                saved_state = await get_existing_debug_state(self.app, invoke_config)
-                if not saved_state:
-                    raise RuntimeError(
-                        "debug.resume=True but no LangGraph checkpoint exists "
-                        "for the configured thread_id"
-                    )
-                graph_input = None
-                logger.info(f"Task {self.task_id} resuming from LangGraph checkpoint")
-
             # 执行工作流
             final_state = await self.app.ainvoke(
-                graph_input,
-                config=invoke_config
+                initial_state,
+                config={"recursion_limit": recursion_limit}
             )
             
             # 判断成功

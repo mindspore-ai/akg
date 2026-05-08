@@ -46,9 +46,9 @@ The baseline pre-profile path used by `evolve` and `adaptive_search` also reads 
 
 ## Scope
 
-Verifier Data Cache currently covers the `KernelBench` verifier path only. This does not affect the main `SOL-ExecBench` verification/profile path: SOL inputs are normalized separately by the verifier SOL adapter into `definition.json`, `workload.jsonl`, and `reference.py`. SOL data is not cached by Verifier Data Cache because SOL already ships stable reference files, so the immediate pain point is the KernelBench verifier path.
+Verifier Data Cache covers the `KernelBench` reference data and baseline profile paths. For `SOL-ExecBench`, the cache intentionally only covers baseline profile results: SOL cases already ship stable `definition.json`, `workload.jsonl`, and `reference.py`, so caching reference data would duplicate the benchmark source of truth.
 
-Reference data cache currently covers static-shape verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache still keys by framework code, backend, arch, DSL, and profile parameters.
+Reference data cache currently covers static-shape KernelBench verification. Dynamic-shape tasks (`get_inputs_dyn_list`) skip reference data cache and continue using live input generation. Baseline cache keys include benchmark type, framework/backend/arch/DSL, profile parameters, and a stable benchmark identity. For SOL this identity is derived from the normalized contents of `definition.json`, `workload.jsonl`, and `reference.py`.
 
 Cache keys include `task_id` by default to avoid accidental reuse across independent tasks. Set `data_cache.cache_key_id` when a workflow needs multiple verifier task ids to share the same cached reference data and baseline. `adaptive_search`, `evolve`, and `AutoResearch` set a stable `cache_key_id` automatically for one operator workflow. Reusing data for a demo or repeated validation requires the same `task_id` or the same `cache_key_id`.
 
