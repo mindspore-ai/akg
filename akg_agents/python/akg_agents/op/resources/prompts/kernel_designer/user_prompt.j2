@@ -1,9 +1,10 @@
 {# KernelDesigner Agent 的用户 Prompt 模板 #}
+{# 内容按前缀缓存命中率排列：极高重复 → 高重复 → 中等重复 → 低重复 #}
 
 {# ========== 核心：Sketch DSL 规范指南 ========== #}
 你是一个专业的算子草图生成专家，需要将算子任务转换为通用的算子草图。
 
----
+{# ==================== 极高重复（同 DSL+backend+arch 完全相同）==================== #}
 
 ## 相关技能和知识
 
@@ -12,6 +13,62 @@
 {% else %}
 暂无相关 Skill。
 {% endif %}
+
+{% if hardware_docs %}
+---
+
+## 目标硬件信息
+
+**架构**: {{ arch_name or '通用' }}
+
+{{ hardware_docs }}
+{% endif %}
+
+---
+
+## 设计指令
+
+请根据以上信息设计算法草图（sketch）。
+
+**设计要求**:
+- **必须使用上方 sketch_guide 定义的 sketch DSL 格式**（`sketch op_name { symbols; tensors; ... }`）
+- 标注关键的优化策略和并行化机会（使用 `@llm_hint` 注解）
+- 考虑目标硬件的特性和限制
+- 如果任务描述中包含特定的优化提示，优先采纳
+- 结合 Skill 中的知识和经验优化设计
+
+---
+
+## 输出格式要求
+
+{% if enable_hint_mode and has_hint %}
+**Hint 模式已启用**
+
+任务描述中包含 hint 标记（如 `@hint:`, `@range_hint` 等），指定了算子需要支持的参数范围。
+
+### 任务要求
+
+1. **提取 hint 信息**：从 task_desc 中识别所有 hint 标记，生成参数空间配置
+2. **设计支持参数范围的草图**：草图必须支持 hint 指定的所有参数值
+
+### 输出格式（JSON）
+
+请按照以下 JSON 格式输出：
+
+```json
+{
+    "code": "草图代码（必须包含'设计适用范围'注释，说明支持的参数范围，BLOCK_SIZE等配置考虑了hint范围）",
+    "space_config": "参数空间配置（完整的Python代码，按上述模板，用于后续生成多case测试）",
+    "reasoning": "设计思路（说明如何根据hint范围选择BLOCK_SIZE和边界处理策略）"
+}
+```
+
+仅返回JSON，不要包含任何解释或额外内容。
+{% else %}
+请直接输出算法草图。不要使用 JSON 格式，不要使用代码块包裹，直接输出 `sketch op_name { ... }` 格式的内容。
+{% endif %}
+
+{# ==================== 低重复（每次不同）==================== #}
 
 ---
 
@@ -67,17 +124,6 @@
 
 {% endif %}
 
-{% if hardware_docs %}
-## 目标硬件信息
-
-**架构**: {{ arch_name or '通用' }}
-
-{{ hardware_docs }}
-
----
-
-{% endif %}
-
 ## 执行历史和上下文
 
 {% if history_actions %}
@@ -105,48 +151,4 @@
 
 {% endif %}
 {% endfor %}
-{% endif %}
-
----
-
-## 设计指令
-
-请根据以上信息设计算法草图（sketch）。
-
-**设计要求**:
-- **必须使用上方 sketch_guide 定义的 sketch DSL 格式**（`sketch op_name { symbols; tensors; ... }`）
-- 标注关键的优化策略和并行化机会（使用 `@llm_hint` 注解）
-- 考虑目标硬件的特性和限制
-- 如果任务描述中包含特定的优化提示，优先采纳
-- 结合 Skill 中的知识和经验优化设计
-
----
-
-## 输出格式要求
-
-{% if enable_hint_mode and has_hint %}
-**Hint 模式已启用**
-
-任务描述中包含 hint 标记（如 `@hint:`, `@range_hint` 等），指定了算子需要支持的参数范围。
-
-### 任务要求
-
-1. **提取 hint 信息**：从 task_desc 中识别所有 hint 标记，生成参数空间配置
-2. **设计支持参数范围的草图**：草图必须支持 hint 指定的所有参数值
-
-### 输出格式（JSON）
-
-请按照以下 JSON 格式输出：
-
-```json
-{
-    "code": "草图代码（必须包含'设计适用范围'注释，说明支持的参数范围，BLOCK_SIZE等配置考虑了hint范围）",
-    "space_config": "参数空间配置（完整的Python代码，按上述模板，用于后续生成多case测试）",
-    "reasoning": "设计思路（说明如何根据hint范围选择BLOCK_SIZE和边界处理策略）"
-}
-```
-
-仅返回JSON，不要包含任何解释或额外内容。
-{% else %}
-请直接输出算法草图。不要使用 JSON 格式，不要使用代码块包裹，直接输出 `sketch op_name { ... }` 格式的内容。
 {% endif %}
