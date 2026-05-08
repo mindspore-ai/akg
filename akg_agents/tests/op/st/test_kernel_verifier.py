@@ -963,3 +963,50 @@ async def test_profile_generation_only_cpp(op_name):
         f"Speedup 计算错误: expected={expected_speedup:.2f}, actual={actual_speedup:.2f}"
     
     print(f"✅ Generation-only profile 测试通过: base_time={base_time:.2f}us (cached), gen_time={gen_time:.2f}us, speedup={actual_speedup:.2f}x")
+
+
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.tilelang
+@pytest.mark.ascend
+@pytest.mark.ascend910b4
+@pytest.mark.parametrize("op_name", ["relu"])
+@pytest.mark.asyncio
+async def test_kernel_verifier_tilelang_ascend_ascend910b4_torch(op_name):
+    framework = "torch"
+    dsl = "tilelang_ascend"
+    backend = "ascend"
+    arch = "ascend910b4"
+    config = load_config(dsl, backend=backend)
+
+    op_task_file = f"./tests/op/resources/{op_name}_op/{op_name}_{framework}.py"
+    with open(op_task_file, "r", encoding="utf-8") as f:
+        op_task_str = textwrap.dedent(f.read())
+
+    kernel_path = f"./tests/op/resources/{op_name}_op/{op_name}_{dsl}_{framework}.py"
+    with open(kernel_path, "r", encoding="utf-8") as f:
+        kernel_code = f.read()
+
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}")
+
+    impl_func_name = "ModelNew"
+    verifier = KernelVerifier(
+        op_name=op_name,
+        framework_code=op_task_str,
+        framework=framework,
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        impl_func_name=impl_func_name,
+        config=config,
+        worker=worker
+    )
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+    result, error_log = await verifier.run(task_info, device_id=device_id)
+    assert result, f"验证失败: {error_log}"

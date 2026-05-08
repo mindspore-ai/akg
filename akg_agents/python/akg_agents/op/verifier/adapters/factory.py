@@ -71,6 +71,9 @@ def get_dsl_adapter(dsl: str):
     elif dsl_lower == "tilelang_npuir":
         from .dsl.tilelang_npuir import DSLAdapterTilelangNpuir
         return DSLAdapterTilelangNpuir()
+    elif dsl_lower == "tilelang_ascend":
+        from .dsl.tilelang_ascend import DSLAdapterTilelangAscend
+        return DSLAdapterTilelangAscend()
     elif dsl_lower == "tilelang_cuda":
         from .dsl.tilelang_cuda import DSLAdapterTilelangCuda
         return DSLAdapterTilelangCuda()

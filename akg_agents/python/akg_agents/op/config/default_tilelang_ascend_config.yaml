@@ -1,0 +1,15 @@
+log_dir: "~/akg_agents_logs"
+default_workflow: "default_workflow"
+max_step: 20
+
+docs_dir:
+  designer: "op/resources/docs/sketch_docs"
+  coder: "op/resources/docs/tilelang_ascend_docs"
+
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+verify_timeout: 600
+
+enable_multi_case_verification: false
