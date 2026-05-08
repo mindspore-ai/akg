@@ -1,0 +1,10 @@
+{
+  "op_name": "txa_mhc_stream_weighted_sum",
+  "shape_expr": "(int(original_streams.shape[0]),)",
+  "config_param_names": ["CHUNK_SEQ"],
+  "autotune": {
+    "key": ["seq_len"],
+    "sweep_param": "CHUNK_SEQ",
+    "candidates": [1024, 2048, 4096]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "op_name": "txa_matmul",
+  "shape_expr": "(int(A.shape[0]), int(B.shape[1]), int(A.shape[1]))",
+  "config_param_names": ["BLOCK_M", "BLOCK_N", "BLOCK_K"],
+  "autotune": {
+    "key": ["M", "N", "K"],
+    "configs": [
+      {"BLOCK_M": 16,  "BLOCK_N": 64,  "BLOCK_K": 256},
+      {"BLOCK_M": 16,  "BLOCK_N": 256, "BLOCK_K": 256},
+      {"BLOCK_M": 64,  "BLOCK_N": 128, "BLOCK_K": 256},
+      {"BLOCK_M": 256, "BLOCK_N": 64,  "BLOCK_K": 256},
+      {"BLOCK_M": 256, "BLOCK_N": 256, "BLOCK_K": 256}
+    ]
+  }
+}

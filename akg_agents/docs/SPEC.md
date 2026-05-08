@@ -31,6 +31,7 @@ docs/
 | `LLM.md` | LLM Provider/Client |
 | `KernelGen.md` / `KernelDesigner.md` / `KernelAgent.md` | 各算子 Agent |
 | `CodeChecker.md` | Coder 生成代码后、Verifier 运行前的静态检查器；策略在 `op/config/code_checker.yaml` |
+| `CN/DynamicTune.md` | Triton Ascend 动态 shape 离线调优、manifest 部署与 selector 运行时选择 |
 | `Trace.md` | 推理追踪与断点恢复 |
 | `Tools.md` | 工具注册与执行 |
 | `AKG_CLI.md` | akg_cli 命令参考 |

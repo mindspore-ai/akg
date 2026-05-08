@@ -1,0 +1,14 @@
+{
+  "op_name": "txa_relu",
+  "shape_expr": "(int(X.shape[0]),)",
+  "config_param_names": ["BLOCK_M"],
+  "autotune": {
+    "key": ["M"],
+    "configs": [
+      {"BLOCK_M": 128},
+      {"BLOCK_M": 256},
+      {"BLOCK_M": 512},
+      {"BLOCK_M": 1024}
+    ]
+  }
+}
