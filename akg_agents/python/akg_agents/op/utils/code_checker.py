@@ -65,6 +65,9 @@ _RESTORE_VALUE_RE = re.compile(
 
 _A5_ARCH_PREFIX: str = _POLICY["a5_compliance"]["arch_prefix"]
 _A5_DSL: str = _POLICY["a5_compliance"]["dsl"]
+_A5_ENABLE_AFFINITY_CHECK: bool = bool(
+    _POLICY["a5_compliance"]["enable_triton_ascend_affinity_check"]
+)
 _A5_AL_ALIAS: str = _POLICY["a5_compliance"]["aliases"]["al"]
 _A5_BL_ALIAS: str = _POLICY["a5_compliance"]["aliases"]["bl"]
 _A5_ONLY_APIS: frozenset = frozenset(_POLICY["a5_compliance"]["only_apis"])
@@ -208,9 +211,30 @@ class CodeChecker:
         if not has_syntax_err and self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
             errors.extend(self._check_autotune_compliance(code))
 
-        # Step 7: A5 API 合规性检测（仅 Ascend950 系列 arch + triton_ascend DSL，语法正确时执行）
-        if not has_syntax_err and self.arch.startswith(_A5_ARCH_PREFIX) and self.dsl == _A5_DSL:
+        # Step 7: A5 API 合规性检测
+        # 触发条件（全部满足）：
+        #   1. 语法/编译均通过；
+        #   2. arch.startswith(_A5_ARCH_PREFIX) 且 dsl == _A5_DSL —— 即在 A5 + triton_ascend 路径上；
+        #   3. yaml 中 a5_compliance.enable_triton_ascend_affinity_check 为 True。
+        if (
+            not has_syntax_err
+            and self.arch.startswith(_A5_ARCH_PREFIX)
+            and self.dsl == _A5_DSL
+            and _A5_ENABLE_AFFINITY_CHECK
+        ):
             errors.extend(self._check_a5_api_compliance(code))
+        elif (
+            not has_syntax_err
+            and self.arch.startswith(_A5_ARCH_PREFIX)
+            and self.dsl == _A5_DSL
+            and not _A5_ENABLE_AFFINITY_CHECK
+        ):
+            logger.info(
+                f"CodeChecker A5: arch={self.arch}, dsl={self.dsl} — affinity "
+                "enforcement disabled via "
+                "a5_compliance.enable_triton_ascend_affinity_check=false; "
+                "skipping Step 7."
+            )
 
         passed = len(errors) == 0
         code_lines = code.split('\n')
