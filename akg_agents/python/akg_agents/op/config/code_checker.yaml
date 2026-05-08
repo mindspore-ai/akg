@@ -241,6 +241,18 @@ autotune:
 
 
 a5_compliance:
+  # Atlas A5 - triton_ascend 可以使能亲和写法实现Cube和Vector的融合
+  # al.scope
+  # al.fixpipe 走fixpipe搬运数据
+  # bl.alloc 分配buffer
+  # bl.to_buffer buffer转tensor
+  # bl.to_tensor tensor转buffer
+  # bl.subview 对buffer做切片
+  # bl.sub_vec_id 获取当前AI Core的子vector核编号
+  # bl.sync_block_set 发出跨核同步事件
+  # bl.sync_block_wait 等待跨核同步事件
+  # 亲和写法开关，默认关闭
+  enable_triton_ascend_affinity_check: false
   arch_prefix: ascend950
   dsl: triton_ascend
   aliases:
