@@ -630,10 +630,15 @@ class KernelGen(AgentBase):
         layer, sublayer = self.CATEGORY_LAYER.get(cat, (9, 9))
         return (layer, sublayer, getattr(skill, "name", ""))
 
-    def _assemble_skill_contents(self, selected_skills: List[Any]) -> str:
-        """按 CATEGORY_LAYER 排序，分区组装 skill 内容。"""
+    def _assemble_skill_contents(self, selected_skills: List[Any]) -> Dict[str, str]:
+        """按 CATEGORY_LAYER 排序，分区组装 skill 内容，返回分层字典。
+
+        返回 {"fundamentals": ..., "guides_examples": ..., "cases": ...}，
+        供模板按重复率分层排列以最大化前缀缓存命中。
+        """
+        empty = {"fundamentals": "", "guides_examples": "", "cases": ""}
         if not selected_skills:
-            return ""
+            return empty
 
         sorted_skills = sorted(selected_skills, key=self._sort_key)
 
@@ -647,25 +652,33 @@ class KernelGen(AgentBase):
         improvements = [s for s in sorted_skills if _cat(s) == "improvement"]
         cases = [s for s in sorted_skills if _cat(s) == "case"]
 
-        sections = []
+        fundamentals_content = ""
         if fundamentals:
             content = "\n\n---\n\n".join(s.content for s in fundamentals)
-            sections.append(f"### 基础知识与规范\n\n{content}")
+            fundamentals_content = f"### 基础知识与规范\n\n{content}"
+
+        guides_examples_parts = []
         if guides:
             content = "\n\n---\n\n".join(s.content for s in guides)
-            sections.append(f"### 算子优化指南\n\n{content}")
+            guides_examples_parts.append(f"### 算子优化指南\n\n{content}")
         if examples:
             content = "\n\n---\n\n".join(s.content for s in examples)
-            sections.append(f"### 代码示例参考\n\n{content}")
+            guides_examples_parts.append(f"### 代码示例参考\n\n{content}")
+
+        cases_content = ""
         all_fix_improve = fixes + improvements + cases
         if all_fix_improve:
             content = "\n\n---\n\n".join(s.content for s in all_fix_improve)
-            sections.append(f"### 优化/修复案例\n\n{content}")
+            cases_content = f"### 优化/修复案例\n\n{content}"
 
         order_desc = [f"{s.name}[{getattr(s, 'category', '?')}]" for s in sorted_skills]
         logger.info(f"Skill assembly order: {order_desc}")
 
-        return "\n\n---\n\n".join(sections)
+        return {
+            "fundamentals": fundamentals_content,
+            "guides_examples": "\n\n---\n\n".join(guides_examples_parts),
+            "cases": cases_content,
+        }
 
     async def _load_aggregated_api_docs(self, dsl: str, backend: str = "", arch: str = "") -> str:
         """按需加载 Triton Ascend API 文档。"""
@@ -787,8 +800,8 @@ class KernelGen(AgentBase):
                     selected_skills = selected_skills + appended
                     logger.info(f"[KernelGen] 追加 {len(appended)} 个 extra_skills: {[s.name for s in appended]}")
 
-            # 2. 按 category → name 排序并拼接 skill 内容
-            skill_contents = self._assemble_skill_contents(selected_skills)
+            # 2. 按 category → name 排序并拼接 skill 内容（分层返回）
+            skill_sections = self._assemble_skill_contents(selected_skills)
             
             # 3. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
@@ -814,7 +827,9 @@ class KernelGen(AgentBase):
                 verifier_error=error_for_prompt,
                 conductor_suggestion=conductor_suggestion,
                 code_check_errors=code_check_errors,
-                skill_contents=skill_contents,
+                skill_fundamentals=skill_sections["fundamentals"],
+                skill_guides_examples=skill_sections["guides_examples"],
+                skill_cases=skill_sections["cases"],
                 aggregated_api_docs=aggregated_api_docs,
                 op_name=op_name,
                 func_name=func_name,
@@ -831,17 +846,8 @@ class KernelGen(AgentBase):
                 bench_type=bench_type,
             )
             
-            # 5. 组合完整 prompt，末尾追加输出格式硬约束
-            output_instruction = (
-                "\n\n## 输出格式（必须严格遵守）\n\n"
-                "请直接输出纯 Python 代码。你的输出会被直接保存为 .py 文件并执行，因此：\n"
-                "- 不要使用 ```python``` 代码块包裹\n"
-                "- 不要使用 JSON 格式\n"
-                "- 不要输出任何非代码内容（不要有解释文字、不要有 markdown 标记）\n"
-                "- 相关的思考分析，请以 Python 注释的方式写在代码中\n"
-                "- 确保代码完整可执行，包含所有 import 语句和 class 定义\n"
-            )
-            full_prompt = f"{system_prompt}\n\n{user_prompt}{output_instruction}"
+            # 5. 组合完整 prompt（output_instruction 已移入模板，按重复率排列在前部）
+            full_prompt = f"{system_prompt}\n\n{user_prompt}"
             logger.info(f"[KernelGen] prompt size: {len(full_prompt)} chars")
 
             # 6. 创建 Jinja2 模板包装（用于 run_llm）
