@@ -37,7 +37,12 @@ cmake-build-debug
 # Editor
 .vscode
 .idea/
+.cursor/
 .claude/
+
+# Local orchestrator state
+.orchestrator/
+orchestrator.launcher.json
 
 # Cquery
 .cquery_cached_index/

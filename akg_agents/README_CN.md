@@ -209,7 +209,7 @@ akg_agents/
 
 ### 场景
 - **生成** — 直接生成算子代码并验证正确性
-- **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）
+- **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）、[Dynamic Tune](./docs/v2/CN/DynamicTune.md)（Triton Ascend 动态 shape 离线调优）
 - **迁移** — CUDA → Ascend 算子转换
 
 ### OpenCode 集成
