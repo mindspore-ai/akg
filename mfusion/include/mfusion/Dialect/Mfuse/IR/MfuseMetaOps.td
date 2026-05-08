@@ -31,15 +31,13 @@ class Mfuse_BroadcastableBinaryOp<string mnemonic, list<Trait> traits = []>
   let builders = [
     // Explicit type builder (kept for callers that already compute resultType)
     OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$lhs, "::mlir::Value":$rhs),
-      "auto promoted = ::mlir::mfuse::promoteBinaryOperands<::mlir::mfuse::" # autoClassName # ">($_builder, $_state.location, lhs, rhs);\n" #
-      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {lhs, rhs}, {});"
     >,
 
     // New Builder: infer base RankedTensorType first, then delegate to SymbolicBuilderHelper.
     OpBuilder<(ins "::mlir::Value":$lhs, "::mlir::Value":$rhs),
-      "auto promoted = ::mlir::mfuse::promoteBinaryOperands<::mlir::mfuse::" # autoClassName # ">($_builder, $_state.location, lhs, rhs);\n"
-      "::mlir::Type resultType = " # autoClassName # "::inferResultType(std::get<0>(promoted), std::get<1>(promoted));\n"
-      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
+      "::mlir::Type resultType = " # autoClassName # "::inferResultType(lhs, rhs);\n"
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {lhs, rhs}, {});"
     >
   ];
 
@@ -123,7 +121,7 @@ def Mfuse_AbsOp : Mfuse_Op<"abs", [
   }];
 }
 
-def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative, SameOperandsAndResultElementType]> {
+def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative]> {
   let summary = "Element-wise addition of two tensors.";
   let description = [{
     Computes element-wise sum of two tensors: result = x + y.
@@ -332,7 +330,7 @@ def Mfuse_Conv2DWithBiasOp : Mfuse_Op<"conv2d_with_bias", [Pure]> {
   ];
 }
 
-def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure, SameOperandsAndResultElementType]> {
+def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure]> {
   let summary = "Element-wise division of two tensors.";
   let description = [{
     Computes element-wise division of two tensors: result = self / other.
@@ -354,7 +352,7 @@ def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure, SameOperandsAndResul
   }];
 }
 
-def Mfuse_EqOp : Mfuse_BroadcastableBinaryOp<"eq", [Pure, SameOperandsElementType]> {
+def Mfuse_EqOp : Mfuse_BroadcastableBinaryOp<"eq", [Pure]> {
   let summary = "Element-wise equality comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is equal to the element in other.
@@ -447,7 +445,7 @@ def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
   }];
 }
 
-def Mfuse_GeOp : Mfuse_BroadcastableBinaryOp<"ge", [Pure, SameOperandsElementType]> {
+def Mfuse_GeOp : Mfuse_BroadcastableBinaryOp<"ge", [Pure]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is greater than or equal to the element in other.
@@ -498,7 +496,7 @@ def Mfuse_GroupedMatmulOp : Mfuse_Op<"grouped_matmul", [Pure]> {
   }];
 }
 
-def Mfuse_GtOp : Mfuse_BroadcastableBinaryOp<"gt", [Pure, SameOperandsElementType]> {
+def Mfuse_GtOp : Mfuse_BroadcastableBinaryOp<"gt", [Pure]> {
   let summary = "Element-wise greater-than comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is greater than the element in other.
@@ -535,7 +533,7 @@ def Mfuse_IsFiniteOp : Mfuse_Op<"is_finite", [Pure]> {
   }];
 }
 
-def Mfuse_LeOp : Mfuse_BroadcastableBinaryOp<"le", [Pure, SameOperandsElementType]> {
+def Mfuse_LeOp : Mfuse_BroadcastableBinaryOp<"le", [Pure]> {
   let summary = "Element-wise less-than-or-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is less than or equal to the element in other.
@@ -576,7 +574,7 @@ def Mfuse_LogOp : Mfuse_Op<"log", [
   }];
 }
 
-def Mfuse_LogicalAndOp : Mfuse_BroadcastableBinaryOp<"logical_and", [Pure, Commutative, SameOperandsElementType]> {
+def Mfuse_LogicalAndOp : Mfuse_BroadcastableBinaryOp<"logical_and", [Pure, Commutative]> {
   let summary = "Element-wise logical AND operation.";
   let description = [{
     Computes the element-wise logical AND of two tensors.
@@ -617,7 +615,7 @@ def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [
   }];
 }
 
-def Mfuse_LogicalOrOp : Mfuse_BroadcastableBinaryOp<"logical_or", [Pure, Commutative, SameOperandsElementType]> {
+def Mfuse_LogicalOrOp : Mfuse_BroadcastableBinaryOp<"logical_or", [Pure, Commutative]> {
   let summary = "Element-wise logical OR operation.";
   let description = [{
     Computes the element-wise logical OR of two tensors.
@@ -636,7 +634,7 @@ def Mfuse_LogicalOrOp : Mfuse_BroadcastableBinaryOp<"logical_or", [Pure, Commuta
   }];
 }
 
-def Mfuse_LtOp : Mfuse_BroadcastableBinaryOp<"lt", [Pure, SameOperandsElementType]> {
+def Mfuse_LtOp : Mfuse_BroadcastableBinaryOp<"lt", [Pure]> {
   let summary = "Element-wise less-than comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is less than the element in other.
@@ -699,7 +697,7 @@ def Mfuse_MatmulWithBiasOp : Mfuse_Op<"matmul_with_bias", [Pure]> {
   }];
 }
 
-def Mfuse_MaximumOp : Mfuse_BroadcastableBinaryOp<"maximum", [Pure, Commutative, SameOperandsAndResultElementType]> {
+def Mfuse_MaximumOp : Mfuse_BroadcastableBinaryOp<"maximum", [Pure, Commutative]> {
   let summary = "Element-wise maximum of two tensors.";
   let description = [{
     Computes the element-wise maximum of two tensors.
@@ -718,7 +716,7 @@ def Mfuse_MaximumOp : Mfuse_BroadcastableBinaryOp<"maximum", [Pure, Commutative,
   }];
 }
 
-def Mfuse_MinimumOp : Mfuse_BroadcastableBinaryOp<"minimum", [Pure, Commutative, SameOperandsAndResultElementType]> {
+def Mfuse_MinimumOp : Mfuse_BroadcastableBinaryOp<"minimum", [Pure, Commutative]> {
   let summary = "Element-wise minimum of two tensors.";
   let description = [{
     Computes the element-wise minimum of two tensors.
@@ -737,7 +735,7 @@ def Mfuse_MinimumOp : Mfuse_BroadcastableBinaryOp<"minimum", [Pure, Commutative,
   }];
 }
 
-def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative, SameOperandsAndResultElementType]> {
+def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative]> {
   let summary = "Element-wise multiplication of two tensors.";
   let description = [{
     Computes element-wise product of two tensors: result = lhs * rhs.
@@ -756,7 +754,7 @@ def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative, SameOpe
   }];
 }
 
-def Mfuse_NeOp : Mfuse_BroadcastableBinaryOp<"ne", [Pure, SameOperandsElementType]> {
+def Mfuse_NeOp : Mfuse_BroadcastableBinaryOp<"ne", [Pure]> {
   let summary = "Element-wise not-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is not equal to the element in other.
@@ -853,7 +851,7 @@ def Mfuse_PermuteOp : Mfuse_Op<"permute", [
   }];
 }
 
-def Mfuse_PowOp : Mfuse_BroadcastableBinaryOp<"pow", [Pure, SameOperandsAndResultElementType]> {
+def Mfuse_PowOp : Mfuse_BroadcastableBinaryOp<"pow", [Pure]> {
   let summary = "Element-wise power operation.";
   let description = [{
     Raises each element of the base tensor to the power of the exponent.
@@ -872,7 +870,7 @@ def Mfuse_PowOp : Mfuse_BroadcastableBinaryOp<"pow", [Pure, SameOperandsAndResul
   }];
 }
 
-def Mfuse_RealDivOp : Mfuse_BroadcastableBinaryOp<"real_div", [Pure, SameOperandsAndResultElementType]> {
+def Mfuse_RealDivOp : Mfuse_BroadcastableBinaryOp<"real_div", [Pure]> {
   let summary = "Element-wise real division of two tensors.";
   let description = [{
     Computes element-wise real division of two tensors: result = x / y.
@@ -1116,7 +1114,7 @@ def Mfuse_SqrtOp : Mfuse_Op<"sqrt", [
   }];
 }
 
-def Mfuse_SubOp : Mfuse_BroadcastableBinaryOp<"sub", [Pure, SameOperandsAndResultElementType]> {
+def Mfuse_SubOp : Mfuse_BroadcastableBinaryOp<"sub", [Pure]> {
   let summary = "Element-wise subtraction of two tensors.";
   let description = [{
     Computes element-wise difference of two tensors: result = x - y.

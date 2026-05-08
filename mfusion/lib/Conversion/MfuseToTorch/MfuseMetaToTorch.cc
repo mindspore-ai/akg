@@ -116,60 +116,6 @@ mlir::FailureOr<mlir::Value> buildTorchDtypeValue(mlir::Type dtypeType, mlir::Lo
   return rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(*maybeDtypeInt)).getResult();
 }
 
-static bool hasScalarMarker(mlir::Type type) {
-  auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type);
-  if (!rankedType) {
-    return false;
-  }
-
-  mlir::Attribute encoding = rankedType.getEncoding();
-  if (!encoding) {
-    return false;
-  }
-
-  auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
-  return dictAttr && dictAttr.contains(mlir::mfuse::kScalarMarkerAttr);
-}
-
-static mlir::FailureOr<mlir::Value> buildTorchScalarCast(mlir::Location loc, mlir::Value input, mlir::Type resultType,
-                                                         mlir::ConversionPatternRewriter &rewriter) {
-  mlir::Type inputType = input.getType();
-
-  if (mlir::isa<TorchD::FloatType>(resultType)) {
-    mlir::Value scalarInput = input;
-    if (mlir::isa<TorchD::BoolType>(inputType)) {
-      scalarInput =
-        rewriter.create<TorchD::AtenIntBoolOp>(loc, TorchD::IntType::get(rewriter.getContext()), input).getResult();
-    } else if (!mlir::isa<TorchD::FloatType, TorchD::IntType>(inputType)) {
-      return mlir::failure();
-    }
-    return rewriter.create<TorchD::AtenFloatScalarOp>(loc, resultType, scalarInput).getResult();
-  }
-
-  if (mlir::isa<TorchD::IntType>(resultType)) {
-    if (mlir::isa<TorchD::BoolType>(inputType)) {
-      return rewriter.create<TorchD::AtenIntBoolOp>(loc, resultType, input).getResult();
-    }
-    if (!mlir::isa<TorchD::FloatType, TorchD::IntType>(inputType)) {
-      return mlir::failure();
-    }
-    return rewriter.create<TorchD::AtenIntScalarOp>(loc, resultType, input).getResult();
-  }
-
-  if (mlir::isa<TorchD::BoolType>(resultType)) {
-    if (inputType == resultType) {
-      return input;
-    }
-    if (mlir::isa<TorchD::FloatType>(inputType)) {
-      return rewriter.create<TorchD::AtenBoolFloatOp>(loc, resultType, input).getResult();
-    }
-    if (mlir::isa<TorchD::IntType>(inputType)) {
-      return rewriter.create<TorchD::AtenBoolIntOp>(loc, resultType, input).getResult();
-    }
-  }
-
-  return mlir::failure();
-}
 
 mlir::Value buildTorchIntListFromI64ArrayAttr(mlir::ArrayAttr attr, mlir::Location loc,
                                               mlir::ConversionPatternRewriter &rewriter) {
@@ -532,18 +478,6 @@ struct ConvertMfuseCast : public mlir::OpConversionPattern<mlir::mfuse::CastOp> 
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value input = adaptor.getInput();
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
-    if (!resultType) {
-      return rewriter.notifyMatchFailure(op, "failed to convert result type");
-    }
-
-    if (hasScalarMarker(op.getInput().getType()) || hasScalarMarker(op.getResult().getType())) {
-      auto scalarCastOrFailure = buildTorchScalarCast(op.getLoc(), input, resultType, rewriter);
-      if (mlir::failed(scalarCastOrFailure)) {
-        return rewriter.notifyMatchFailure(op, "unsupported scalar marker cast");
-      }
-      rewriter.replaceOp(op, *scalarCastOrFailure);
-      return mlir::success();
-    }
 
     mlir::Type dtypeType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType()).getElementType();
     auto dtypeValOrFailure = buildTorchDtypeValue(dtypeType, op.getLoc(), rewriter);

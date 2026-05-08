@@ -128,7 +128,7 @@ def test_decompose_pipeline_with_add_scalar2():
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_no_op("torch.operator"), checker.error
     assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
-    assert checker.check_text_contains("torch.constant.float 2.0"), checker.error
+    assert checker.check_text_contains("torch.constant.int 2"), checker.error
 
 
 def test_decompose_pipeline_with_add_rmsnorm():
