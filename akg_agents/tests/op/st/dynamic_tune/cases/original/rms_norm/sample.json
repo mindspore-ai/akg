@@ -1,0 +1,18 @@
+{
+  "op_name": "txa_rms_norm",
+  "shape_expr": "(int(X.shape[0]), int(X.shape[1]))",
+  "config_param_names": ["BLOCK_M", "BLOCK_K"],
+  "autotune": {
+    "key": ["M", "K"],
+    "configs": [
+      {"BLOCK_M": 1, "BLOCK_K": 1024},
+      {"BLOCK_M": 1, "BLOCK_K": 2048},
+      {"BLOCK_M": 4, "BLOCK_K": 1024},
+      {"BLOCK_M": 8, "BLOCK_K": 2048},
+      {"BLOCK_M": 16, "BLOCK_K": 1024},
+      {"BLOCK_M": 32, "BLOCK_K": 1024},
+      {"BLOCK_M": 32, "BLOCK_K": 2048},
+      {"BLOCK_M": 64, "BLOCK_K": 1024}
+    ]
+  }
+}

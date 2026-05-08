@@ -183,11 +183,11 @@ class SingleKernelTester:
             backend = self.config.get('backend', 'cuda')
             
             # 使用kernel名称作为op_name的一部分
-            verifier_op_name = f"{op_name}_{self.kernel_name}"
+            full_op_name = f"{op_name}_{self.kernel_name}"
             
             # 创建GeneralizationKernelVerifier实例
             verifier = GeneralizationKernelVerifier(
-                op_name=verifier_op_name,
+                op_name=full_op_name,
                 framework_code=self.framework_code,
                 task_id=f"test_{self.kernel_name}",
                 framework=framework,
@@ -222,7 +222,7 @@ class SingleKernelTester:
             # 复制结果JSON到输出目录
             from akg_agents.utils import DEFAULT_LOG_DIR
             expanded_log_dir = os.path.expanduser(self.config.get('log_dir', DEFAULT_LOG_DIR))
-            verify_dir_actual = os.path.join(expanded_log_dir, verifier_op_name, f"Itest_{self.kernel_name}_Step00_verify")
+            verify_dir_actual = os.path.join(expanded_log_dir, full_op_name, f"Itest_{self.kernel_name}_Step00_verify")
             results_json = os.path.join(verify_dir_actual, "verification_results.json")
             if os.path.exists(results_json):
                 shutil.copy(

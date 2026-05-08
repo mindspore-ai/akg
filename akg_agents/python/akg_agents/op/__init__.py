@@ -21,6 +21,7 @@ op/ - 算子场景专用层
 - op/workflows/: 算子工作流定义
 - op/evolve.py: 进化式算子生成
 - op/adaptive_search/: 自适应搜索框架
+- op/dynamic_tune/: Triton-Ascend 动态 shape autotune 框架
 - op/utils/: 算子专用工具
 - op/tools/: 算子专用工具函数
 - op/resources/: 算子专用资源文件
@@ -33,6 +34,7 @@ op/ - 算子场景专用层
 #   from akg_agents.op.evolve import evolve
 #   from akg_agents.op.config import ConfigValidator, load_config
 #   from akg_agents.op.adaptive_search import adaptive_search
+#   from akg_agents.op.dynamic_tune import tune_configs, Config
 
 __all__ = []
 
