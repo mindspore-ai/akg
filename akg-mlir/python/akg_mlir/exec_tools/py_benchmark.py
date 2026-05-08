@@ -28,7 +28,8 @@ from bfloat16 import bfloat16
 
 from akg import AkgMlirDriver
 from akg import akgProfileMgr
-from akg.backends.ascend import launch, ascend_compile, get_block_dim_from_mlir
+from akg.backends.ascend import ascend_compile, get_block_dim_from_mlir
+from akg.backends.ascend import benckmark_launch as launch
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
