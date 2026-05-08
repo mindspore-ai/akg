@@ -24,7 +24,7 @@
 
 typedef uint64_t (*TilingFunc)(void *);
 typedef uint64_t (*GetTilingSizeFunc)();
-typedef void (*TorchRunFunc)(std::string const &, std::function<int()> const &);
+typedef void (*TorchRunFunc)(char const *, std::function<int ()>);
 constexpr auto kTilingMemSize = 1024;
 constexpr auto kTilingSizeFuncName = "_get_tiling_struct_size_function";
 constexpr auto kTilingFuncName = "_tiling_function";
@@ -373,14 +373,12 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
       mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
       return;
     }
-    std::string so_path = torch_path + "/lib/libtorch_npu.so";
-    std::string func_name =
-      "_ZN6at_npu6native9OpCommand10RunOpApiV2ERKNSt7__cxx1112basic_stringIcSt11char_"
-      "traitsIcESaIcEEERKSt8functionIFivEEb";
+    std::string so_path = torch_path + "/_inductor/ascend_npu_ir/ascend_npu_ir/lib/libcpp_common.so";
+    std::string func_name = "_Z14opcommand_callPKcSt8functionIFivEE";
     void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
     CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
     torch_run_func = dlsym(handle, func_name.c_str());
-    CHECK(torch_run_func != nullptr) << "dlsym failed, symbol: at_npu::native::OpCommand::RunOpApiV2, error:"
+    CHECK(torch_run_func != nullptr) << "dlsym failed, symbol: opcommand_call, error:"
                                      << dlerror();
   }
 
@@ -388,7 +386,7 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
     mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
     return 0;
   };
-  reinterpret_cast<TorchRunFunc>(torch_run_func)(kernel_name, launch_call);
+  reinterpret_cast<TorchRunFunc>(torch_run_func)(kernel_name.c_str(), launch_call);
 }
 
 // PYBIND interface
