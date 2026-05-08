@@ -146,3 +146,4 @@ class BaseLangGraphTask(ABC):
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
+

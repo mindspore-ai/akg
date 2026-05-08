@@ -93,3 +93,4 @@ class BaseWorkflow(ABC, Generic[StateType]):
         except Exception as e:
             logger.warning(f"Failed to generate visualization: {e}")
             return "# Error generating diagram"
+

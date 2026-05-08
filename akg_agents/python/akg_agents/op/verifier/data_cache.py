@@ -275,6 +275,53 @@ def _baseline_cache_path(
     return base_dir / f"{stem}.json"
 
 
+def get_reference_cache_file_path(
+    cfg: VerifierDataCacheConfig,
+    *,
+    op_name: str,
+    cache_key: str,
+) -> str:
+    data_path, _ = _reference_cache_paths(cfg, op_name, cache_key)
+    return str(data_path)
+
+
+def get_baseline_cache_file_path(
+    cfg: VerifierDataCacheConfig,
+    *,
+    op_name: str,
+    cache_key: str,
+) -> str:
+    return str(_baseline_cache_path(cfg, op_name, cache_key))
+
+
+def build_sol_problem_cache_identity(sol_problem_dir: str) -> str:
+    """Build a stable cache identity from the default SOL case directory."""
+    problem_path = Path(os.path.expandvars(os.path.expanduser(str(sol_problem_dir or ""))))
+    if not problem_path.is_dir():
+        raise FileNotFoundError(f"SOL problem directory not found: {problem_path}")
+
+    definition_path = problem_path / "definition.json"
+    workload_path = problem_path / "workload.jsonl"
+    reference_path = problem_path / "reference.py"
+    for path in (definition_path, workload_path, reference_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing required SOL file: {path}")
+
+    definition = json.loads(definition_path.read_text(encoding="utf-8"))
+    workloads = [
+        json.loads(line)
+        for line in workload_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    reference_code = reference_path.read_text(encoding="utf-8")
+    payload = {
+        "definition": definition,
+        "workloads": workloads,
+        "reference_code": _normalize_framework_code(reference_code),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _cache_lock_dir(
     cfg: VerifierDataCacheConfig,
     *,

@@ -34,11 +34,8 @@ for _attr_name, _fallback in _OPTIONAL_DTYPES.items():
         setattr(torch, _attr_name, _fallback)
 # ---------------------------------------------------
 
-try:
-    from sol_execbench.core.bench.io import gen_inputs
-    from sol_execbench.core.data import Definition, Workload
-except ModuleNotFoundError:
-    from sol_runtime_fallback import Definition, Workload, gen_inputs
+from sol_execbench.core.bench.io import gen_inputs
+from sol_execbench.core.data import Definition, Workload
 import reference
 ref_run = reference.run
 

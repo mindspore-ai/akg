@@ -6,7 +6,6 @@ from akg_agents import get_project_root
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )
-from akg_agents.op.verifier.sol_format import ensure_sol_problem_dir
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +20,9 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
     """生成 SOL-ExecBench 验证项目文件到指定目录"""
     logger.info(f"[{verifier.op_name}] 开始生成 SOL-ExecBench 验证项目，目录: {verify_dir}, device_id={device_id}")
     
-    sol_problem_dir = ensure_sol_problem_dir(
-        config=verifier.config,
-        work_dir=verify_dir,
-        op_name=verifier.op_name,
-        task_desc=verifier.framework_code,
-    )
+    sol_problem_dir = verifier.config.get("sol_problem_dir")
+    if not sol_problem_dir or not os.path.exists(sol_problem_dir):
+        raise ValueError(f"sol_problem_dir is missing or does not exist: {sol_problem_dir}")
         
     # 1. 拷贝 SOL 核心文件
     for file_name in ["definition.json", "workload.jsonl", "reference.py"]:
@@ -42,12 +38,6 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
     if not os.path.exists(sol_correctness_src):
         raise FileNotFoundError(f"Missing sol_correctness.py: {sol_correctness_src}")
     shutil.copy2(sol_correctness_src, sol_correctness_dst)
-
-    sol_fallback_src = os.path.join(get_project_root(), "op", "resources", "utils", "sol_runtime_fallback.py")
-    sol_fallback_dst = os.path.join(verify_dir, "sol_runtime_fallback.py")
-    if not os.path.exists(sol_fallback_src):
-        raise FileNotFoundError(f"Missing sol_runtime_fallback.py: {sol_fallback_src}")
-    shutil.copy2(sol_fallback_src, sol_fallback_dst)
 
     # 3. 创建具体实现文件
     if "ascendc" in verifier.dsl:
@@ -189,12 +179,9 @@ def generate_sol_profile_project(verifier, verify_dir: str, device_id: int = 0,
         f"目录: {verify_dir}, device_id={device_id}"
     )
 
-    sol_problem_dir = ensure_sol_problem_dir(
-        config=verifier.config,
-        work_dir=verify_dir,
-        op_name=verifier.op_name,
-        task_desc=verifier.framework_code,
-    )
+    sol_problem_dir = verifier.config.get("sol_problem_dir")
+    if not sol_problem_dir or not os.path.exists(sol_problem_dir):
+        raise ValueError(f"sol_problem_dir is missing or does not exist: {sol_problem_dir}")
 
     # 确保 SOL 数据文件存在（gen_verify_project 通常已经拷贝过）
     for file_name in ["definition.json", "workload.jsonl", "reference.py"]:
@@ -212,12 +199,6 @@ def generate_sol_profile_project(verifier, verify_dir: str, device_id: int = 0,
             get_project_root(), "op", "resources", "utils", "sol_correctness.py"
         )
         shutil.copy2(sol_correctness_src, sol_correctness_dst)
-    sol_fallback_dst = os.path.join(verify_dir, "sol_runtime_fallback.py")
-    if not os.path.exists(sol_fallback_dst):
-        sol_fallback_src = os.path.join(
-            get_project_root(), "op", "resources", "utils", "sol_runtime_fallback.py"
-        )
-        shutil.copy2(sol_fallback_src, sol_fallback_dst)
 
     common_vars = _get_sol_common_template_vars(verifier, device_id)
 

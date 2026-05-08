@@ -5,7 +5,7 @@
 当用户要求使用 SOL 格式时，你需要生成符合 SOL 格式的三个文件内容（合并在一个 JSON 字段或按特殊格式输出，视具体实现而定，通常包含 `definition.json`、`workload.jsonl` 和 `reference.py`）。
 - `definition.json`：定义输入输出的名称、形状和数据类型。
 - `workload.jsonl`：定义具体的动态 shape 参数和容差。
-- `reference.py`：必须包含 `run(...)` 函数，参数顺序与 `definition.json` 的 `inputs` 字段声明顺序一致；验证器会按 `run(*inputs_list)` 调用。
+- `reference.py`：必须包含 `run(**inputs)` 函数。
 {% else %}
 ## KernelBench格式要求
 确保导入必要依赖，如：
@@ -94,7 +94,7 @@ import torch.nn as nn
 {
     "op_name": "算子名称（英文小写，如：relu, matmul, layernorm, softmax）",
     "status": "状态（ready/need_clarification/unsupported之一）",
-    "task_code": "生成的任务代码（KernelBench格式为Python代码；SOL格式为包含definition.json/workload.jsonl/reference.py内容的JSON字符串，或等价的原始SOL记录JSON；仅当status为ready时需要提供完整代码）",
+    "task_code": "生成的任务代码（KernelBench格式为Python代码，SOL格式为包含definition.json/workload.jsonl/reference.py内容的JSON字符串，仅当status为ready时需要提供完整代码）",
     "description": "给用户的消息（如果status为need_clarification，说明需要什么信息；如果status为unsupported，说明原因）",
     "reasoning": "你的分析推理过程"
 }

@@ -142,7 +142,6 @@ class KernelAgent(ReActAgent):
             "framework": self.framework,
             "backend": self.backend,
             "arch": self.arch,
-            "bench_type": self.config.get("bench_type", "kernelbench"),
             "model_level": self.model_level or "standard",
             "skills_dir": str(Path(get_project_root()) / "op" / "resources" / "skills" / "kernel-agent"),
             "get_workflow_resources": lambda: self._get_workflow_resources()
@@ -151,14 +150,6 @@ class KernelAgent(ReActAgent):
         session_id = self.context.get("session_id", "")
         if session_id:
             ctx["session_id"] = session_id
-        for key in (
-            "sol_problem_dir",
-            "sol_problem_json",
-            "sol_problem_data",
-            "sol_task_code",
-        ):
-            if self.config.get(key):
-                ctx[key] = self.config[key]
         return ctx
     
     def _load_available_tools(self) -> List[Dict]:
@@ -479,8 +470,7 @@ class KernelAgent(ReActAgent):
                     dsl=self.dsl,
                     backend=self.backend,
                     arch=self.arch,
-                    config=workflow_config,  # 使用完整 config
-                    bench_type=workflow_config.get("bench_type", "kernelbench"),
+                    config=workflow_config   # 使用完整 config
                 )
                 
                 agents = {

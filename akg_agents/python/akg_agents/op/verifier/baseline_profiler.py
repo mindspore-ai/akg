@@ -31,8 +31,10 @@ from typing import Optional, Dict, Any
 from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
+    build_sol_problem_cache_identity,
     delete_baseline_result_from_cache,
     extract_baseline_time_us,
+    get_baseline_cache_file_path,
     get_verifier_data_cache_key_id,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
@@ -82,7 +84,7 @@ async def profile_baseline_once(
 
     if bench_type == "sol":
         return await _profile_sol_baseline(
-            op_name, task_desc, dsl, framework, backend, arch, config,
+            op_name, dsl, framework, backend, arch, config,
             warmup_times, run_times, timeout
         )
     else:
@@ -109,6 +111,7 @@ async def _profile_kernelbench_baseline(
     worker = None
     cache_cfg = load_verifier_data_cache_config(config)
     cache_key = None
+    cache_file = None
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.core.worker.manager import get_worker_manager
@@ -129,6 +132,11 @@ async def _profile_kernelbench_baseline(
                 dsl=dsl,
                 task_id=cache_key_id,
             )
+            cache_file = get_baseline_cache_file_path(
+                cache_cfg,
+                op_name=op_name,
+                cache_key=cache_key,
+            )
             cached_entry = read_baseline_result_from_cache(
                 cache_cfg,
                 op_name=op_name,
@@ -136,10 +144,16 @@ async def _profile_kernelbench_baseline(
             )
             cached_time_us = extract_baseline_time_us(cached_entry)
             if cached_time_us is not None:
-                logger.info(f"[{op_name}] ✅ 命中本地 baseline cache: {cached_time_us:.2f}us")
+                logger.info(
+                    f"[{op_name}] ✅ 命中本地 baseline cache: {cached_time_us:.2f}us, "
+                    f"cache_file={cache_file}, cache_key={cache_key}"
+                )
                 return cached_time_us
             if cached_entry:
-                logger.warning(f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量")
+                logger.warning(
+                    f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量: "
+                    f"cache_file={cache_file}, cache_key={cache_key}"
+                )
                 delete_baseline_result_from_cache(
                     cache_cfg,
                     op_name=op_name,
@@ -165,10 +179,16 @@ async def _profile_kernelbench_baseline(
                 )
                 cached_time_us = extract_baseline_time_us(cached_entry)
                 if cached_time_us is not None:
-                    logger.info(f"[{op_name}] ✅ 等待期间命中本地 baseline cache: {cached_time_us:.2f}us")
+                    logger.info(
+                        f"[{op_name}] ✅ 等待期间命中本地 baseline cache: {cached_time_us:.2f}us, "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     return cached_time_us
                 if cached_entry:
-                    logger.warning(f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量")
+                    logger.warning(
+                        f"[{op_name}] baseline cache 内容无效，删除旧缓存并重新测量: "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     delete_baseline_result_from_cache(
                         cache_cfg,
                         op_name=op_name,
@@ -217,7 +237,7 @@ async def _profile_kernelbench_baseline(
                     logger.info(f"[{op_name}] ✅ Baseline profile 完成: {baseline_time_us:.2f}us")
                     _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times, device_id)
                     if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
-                        write_baseline_result_to_cache(
+                        written_path = write_baseline_result_to_cache(
                             cache_cfg,
                             op_name=op_name,
                             cache_key=cache_key,
@@ -236,6 +256,12 @@ async def _profile_kernelbench_baseline(
                                 "bench_type": "kernelbench",
                             },
                         )
+                        if written_path:
+                            logger.info(
+                                f"[{op_name}] baseline 结果已写入本地 cache: "
+                                f"cache_file={written_path}, cache_key={cache_key}, "
+                                f"cache_dir={cache_cfg.cache_dir}"
+                            )
                     return baseline_time_us
                 else:
                     logger.warning(f"[{op_name}] Baseline profile 结果无效: {baseline_time_us}")
@@ -266,7 +292,6 @@ async def _profile_kernelbench_baseline(
 
 async def _profile_sol_baseline(
     op_name: str,
-    task_desc: str,
     dsl: str,
     framework: str,
     backend: str,
@@ -283,14 +308,11 @@ async def _profile_sol_baseline(
     """
     cache_cfg = load_verifier_data_cache_config(config)
     cache_key = None
+    cache_file = None
     cache_key_id = get_verifier_data_cache_key_id(config, "baseline_profile")
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.op.verifier.sol_verifier import PROF_SOL_BASE_TEMPLATE_PATH
-        from akg_agents.op.verifier.sol_format import (
-            build_sol_problem_cache_identity,
-            ensure_sol_problem_dir,
-        )
         from akg_agents.op.verifier.adapters.factory import get_framework_adapter, get_backend_adapter
         from akg_agents.core.worker.manager import get_worker_manager
         from akg_agents import get_project_root
@@ -298,10 +320,10 @@ async def _profile_sol_baseline(
 
         if cache_cfg.enabled and cache_cfg.cache_baseline_result:
             try:
-                sol_cache_identity = build_sol_problem_cache_identity(
-                    config=config,
-                    task_desc=task_desc or config.get("task_desc", ""),
-                )
+                sol_problem_dir_for_cache = config.get("sol_problem_dir")
+                if not sol_problem_dir_for_cache:
+                    raise ValueError("config['sol_problem_dir'] is required for SOL baseline cache")
+                sol_cache_identity = build_sol_problem_cache_identity(sol_problem_dir_for_cache)
                 cache_key = build_baseline_cache_key(
                     op_name=op_name,
                     framework_code=sol_cache_identity,
@@ -314,6 +336,11 @@ async def _profile_sol_baseline(
                     dsl=dsl,
                     task_id=cache_key_id,
                 )
+                cache_file = get_baseline_cache_file_path(
+                    cache_cfg,
+                    op_name=op_name,
+                    cache_key=cache_key,
+                )
                 cached_entry = read_baseline_result_from_cache(
                     cache_cfg,
                     op_name=op_name,
@@ -321,10 +348,16 @@ async def _profile_sol_baseline(
                 )
                 cached_time_us = extract_baseline_time_us(cached_entry)
                 if cached_time_us is not None:
-                    logger.info(f"[{op_name}] ✅ 命中本地 SOL baseline cache: {cached_time_us:.2f}us")
+                    logger.info(
+                        f"[{op_name}] ✅ 命中本地 SOL baseline cache: {cached_time_us:.2f}us, "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     return cached_time_us
                 if cached_entry:
-                    logger.warning(f"[{op_name}] SOL baseline cache 内容无效，删除旧缓存并重新测量")
+                    logger.warning(
+                        f"[{op_name}] SOL baseline cache 内容无效，删除旧缓存并重新测量: "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     delete_baseline_result_from_cache(
                         cache_cfg,
                         op_name=op_name,
@@ -352,10 +385,16 @@ async def _profile_sol_baseline(
                 )
                 cached_time_us = extract_baseline_time_us(cached_entry)
                 if cached_time_us is not None:
-                    logger.info(f"[{op_name}] ✅ 等待期间命中本地 SOL baseline cache: {cached_time_us:.2f}us")
+                    logger.info(
+                        f"[{op_name}] ✅ 等待期间命中本地 SOL baseline cache: {cached_time_us:.2f}us, "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     return cached_time_us
                 if cached_entry:
-                    logger.warning(f"[{op_name}] SOL baseline cache 内容无效，删除旧缓存并重新测量")
+                    logger.warning(
+                        f"[{op_name}] SOL baseline cache 内容无效，删除旧缓存并重新测量: "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                     delete_baseline_result_from_cache(
                         cache_cfg,
                         op_name=op_name,
@@ -387,12 +426,14 @@ async def _profile_sol_baseline(
                 f"{op_name}_profile_single_baseline_profile"
             )
             os.makedirs(profile_dir, exist_ok=True)
-            sol_problem_dir = ensure_sol_problem_dir(
-                config=config,
-                work_dir=profile_dir,
-                op_name=op_name,
-                task_desc=task_desc or config.get("task_desc", ""),
-            )
+            sol_problem_dir = config.get("sol_problem_dir")
+            if not sol_problem_dir:
+                logger.warning(f"[{op_name}] config['sol_problem_dir'] 未配置，跳过预先 SOL baseline profile")
+                return None
+            sol_problem_dir = os.path.expandvars(os.path.expanduser(str(sol_problem_dir)))
+            if not os.path.isdir(sol_problem_dir):
+                logger.warning(f"[{op_name}] SOL case 目录不存在，跳过预先 SOL baseline profile: {sol_problem_dir}")
+                return None
 
             # 1. 拷贝 SOL 核心文件
             for file_name in ["definition.json", "workload.jsonl", "reference.py"]:
@@ -406,10 +447,6 @@ async def _profile_sol_baseline(
                 get_project_root(), "op", "resources", "utils", "sol_correctness.py"
             )
             shutil.copy2(sol_correctness_src, os.path.join(profile_dir, "sol_correctness.py"))
-            sol_fallback_src = os.path.join(
-                get_project_root(), "op", "resources", "utils", "sol_runtime_fallback.py"
-            )
-            shutil.copy2(sol_fallback_src, os.path.join(profile_dir, "sol_runtime_fallback.py"))
 
             # 3. 渲染 SOL base 模板
             framework_adapter = get_framework_adapter(framework)
@@ -489,7 +526,7 @@ if os.path.exists("base_profile_result.json"):
                         workload_times_us, warmup_times, run_times, backend
                     )
                     if cache_cfg.enabled and cache_cfg.cache_baseline_result and cache_key:
-                        write_baseline_result_to_cache(
+                        written_path = write_baseline_result_to_cache(
                             cache_cfg,
                             op_name=op_name,
                             cache_key=cache_key,
@@ -512,6 +549,12 @@ if os.path.exists("base_profile_result.json"):
                                 "bench_type": "sol",
                             },
                         )
+                        if written_path:
+                            logger.info(
+                                f"[{op_name}] SOL baseline 结果已写入本地 cache: "
+                                f"cache_file={written_path}, cache_key={cache_key}, "
+                                f"cache_dir={cache_cfg.cache_dir}"
+                            )
 
                     logger.info(f"[{op_name}] SOL Baseline profile 脚本及结果已保存到: {profile_dir}")
                     return baseline_time_us

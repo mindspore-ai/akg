@@ -16,7 +16,7 @@ bash download.sh --with_sol_execbench
 
 ## 2. 在代码中使用
 
-在初始化 `KernelVerifier` 时，设置 `bench_type="sol"`。最直接的方式是在 `config` 中提供 `sol_problem_dir`，指向具体的 case 目录：
+在初始化 `KernelVerifier` 时，设置 `bench_type="sol"`，并在 `config` 中提供 `sol_problem_dir` 指向具体的 case 目录：
 
 ```python
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
@@ -43,56 +43,6 @@ verifier = KernelVerifier(
 # 传入生成的代码（包含 ModelNew 类）
 task_info = {"coder_code": "..."}
 passed, log = await verifier.run(task_info)
-```
-
-### 2.1 支持的 SOL 输入格式
-
-Verifier 会统一归一化为 `definition.json`、`workload.jsonl`、`reference.py` 三个文件。目前支持：
-
-- `sol_problem_dir`：已展开的 SOL case 目录
-- `sol_problem_json`：包含三个文件内容的 JSON 字符串，或字段包含 `reference` 和 `workloads` 的原始 SOL-ExecBench record JSON 字符串
-- `sol_task_code`：OpTaskBuilder 生成的 SOL JSON 或 Markdown 三文件内容
-- `task_desc`：当 `bench_type="sol"` 时，也可以直接传上述 JSON/Markdown 内容
-
-验证脚本会优先使用官方 `sol_execbench` runtime；如果环境未安装该包，会回退到仓库内置的轻量 `sol_runtime_fallback.py`。fallback 覆盖常见 tensor 输入生成路径，足够运行 ReLU 等基础 mock/ST case；完整 SOL 数据集的复杂 `custom_inputs_entrypoint` 仍建议安装官方 runtime。
-
-示例：
-
-```python
-config = {
-    "log_dir": "./logs",
-    "sol_problem_json": raw_sol_record_json,
-}
-
-verifier = KernelVerifier(
-    op_name="relu",
-    framework_code="",  # SOL 文件已由 sol_problem_json 提供
-    framework="torch",
-    dsl="triton_cuda",
-    backend="cuda",
-    arch="a100",
-    config=config,
-    bench_type="sol",
-)
-```
-
-通过 KernelAgent workflow 工具调用时，同样需要传 `bench_type="sol"`，并传入 `sol_problem_dir`、`sol_problem_json` 或 `sol_task_code` 之一。workflow 会把这些字段透传到 `KernelVerifier`。
-
-### 2.2 Verifier Data Cache
-
-SOL-ExecBench 已自带 `definition.json`、`workload.jsonl` 和 `reference.py`，因此 Verifier Data Cache 不缓存 SOL reference data。SOL 路径只复用 baseline profile 结果：开启 `data_cache.cache_baseline_result` 后，Verifier 会用归一化后的三文件内容、framework/dsl/backend/arch 和 profile 参数生成 cache key。
-
-命中 baseline cache 时，profile 流程会注入 `override_base_time_us` 并设置 `skip_base_profile=True`，跳过 `reference.run` 的 base profile；未命中时按原流程测量并写入 baseline cache。
-
-```python
-config = {
-    "log_dir": "./logs",
-    "sol_problem_dir": sol_problem_dir,
-    "data_cache": {
-        "enabled": True,
-        "cache_baseline_result": True,
-    },
-}
 ```
 
 ## 3. 批量运行工具

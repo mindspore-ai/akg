@@ -145,7 +145,6 @@ class LangGraphTask(BaseLangGraphTask):
         self.user_requirements = user_requirements or config.get("user_requirements", "")
         self.bench_type = bench_type
         self.previous_code = previous_code or ""
-        config["bench_type"] = bench_type
 
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
@@ -483,3 +482,4 @@ class LangGraphTask(BaseLangGraphTask):
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
+
