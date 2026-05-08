@@ -18,11 +18,16 @@
 
 #include <algorithm>
 #include <climits>
+#include <map>
 #include <numeric>
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/MathExtras.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 
 namespace mlir {
 namespace autotiling {
@@ -825,65 +830,618 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
   return tileSizePerBlock;
 }
 
-static bool isNoSplitAxis(const AxisPtr &axis, bool isReduceOp) {
-  if (!axis || !axis->loop) {
-    return false;
-  }
-  auto loopOp = axis->getLoopOperation();
-  if (!loopOp) {
-    return false;
-  }
-  return (isReduceOp && loopOp->hasAttr(kReductionLoopAttr)) ||
-         loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr);
+namespace {
+// ---------- Parallel / UB capacity ----------
+// Fallback hardware values used only when NpuModelGraph has no arch info.
+// Real values are sourced from NpuInfo::getInstance(arch) -> NpuModelGraph::{coreNum, ubSize}
+// via NpuModelGraph::InitResource().
+constexpr unsigned kNpuTargetBlocks = 48;
+constexpr int64_t kNpuFallbackUbSizeInBytes = 192 * 1024;
+constexpr unsigned kNpuMinInnerTileSize = 512;
+constexpr int64_t kDefaultTypeBits = 32;
+constexpr int64_t kBitsPerByte = 8;
+constexpr int64_t kUbAlignBytes = 32;
+constexpr int64_t kUbAlignBits = kUbAlignBytes * kBitsPerByte;
+// Vectorized elementwise lowering can materialize extra UB-local temporaries that
+// are not fully reflected by pre-tiling buffer analysis. Keep half UB as reserve.
+constexpr int64_t kNpuPointTileUbReserveFactor = 2;
+
+// ---------- Reduction regime thresholds ----------
+constexpr int64_t kTinyReductionTargetBlocks = 64;
+constexpr int64_t kHugeReductionTargetBlocksDelta = 6;
+constexpr int64_t kTinyReductionRowsPerBlock = 8;
+constexpr int64_t kHugeReductionRowsPerBlock = 2048;
+constexpr int64_t kTinyReductionPointRows = 5;
+constexpr int64_t kHeavyReductionPointRows = 4;
+constexpr int64_t kLightReductionPointRows = 6;
+constexpr int64_t kReductionComplexityThreshold = 7;
+
+// ---------- Suffix preserve point-tile rows ----------
+constexpr int64_t kSuffixPreservePointRows = 2;
+
+struct NpuBandContext {
+  size_t bandIdx{0};
+  SmallVector<AxisPtr, 4> axes;
+  SmallVector<int64_t, 4> extents;
+  GraphTemplate graphTemplate{GraphTemplate::DEFAULT};
+  int64_t rawUbElems{1};
+  int64_t ubCapacityElems{1};
+  int64_t targetBlocks{kNpuTargetBlocks};
+  int64_t mathComplexityScore{0};
+  int64_t distinctLoadTensorCount{0};
+  int64_t smallestTypeBits{kDefaultTypeBits};
+  bool hasDynamicAxis{false};
+  bool hasReduction{false};
+  bool lastAxisIsReduction{false};
+};
+
+struct BandTilePlan {
+  SmallVector<unsigned, 4> outerTiles;
+  SmallVector<unsigned, 4> innerTiles;
+};
+
+static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes,
+                                    unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
+                                    bool isFullTileAxis = false);
+
+// ===================== Axis predicates =====================
+inline bool isReductionAxis(const AxisPtr &axis) {
+  return axis && axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kReduction) > 0;
 }
 
-static bool isTransposeAxis(const AxisPtr &axis) {
-  if (!axis || !axis->loop) {
-    return false;
-  }
-  if (auto loopOp = axis->getLoopOperation()) {
-    return loopOp->hasAttr(kTransposeLoopAttr);
-  }
-  return false;
+inline bool isDynamicAxis(const AxisPtr &axis) {
+  return axis && axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kDynamic) > 0;
 }
 
-static unsigned getLargestFactorLE(int64_t value, int64_t limit) {
-  if (value <= 1 || limit <= 1) {
-    return 1;
+inline bool isNoSplitAxis(const AxisPtr &axis) {
+  return isReductionAxis(axis);
+}
+
+inline bool isTransposeAxis(const AxisPtr &axis) {
+  if (!axis || !axis->loop) return false;
+  Operation *loopOp = axis->getLoopOperation();
+  return loopOp && loopOp->hasAttr(kTransposeLoopAttr);
+}
+
+// ===================== Numeric helpers =====================
+inline int64_t ceilDivInt64(int64_t lhs, int64_t rhs) { return (rhs <= 0) ? lhs : (lhs + rhs - 1) / rhs; }
+
+inline int64_t multiplyAndCap(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0) return 0;
+  return (lhs > LLONG_MAX / rhs) ? LLONG_MAX : lhs * rhs;
+}
+
+inline unsigned saturateToTileValue(int64_t value) {
+  return static_cast<unsigned>(std::clamp<int64_t>(value, 1, UINT_MAX));
+}
+
+inline int64_t getLargestFactorNotExceeding(int64_t extent, int64_t limit) {
+  return StrategyHelper::getLargestDivisor(std::max<int64_t>(limit, 1), std::max<int64_t>(extent, 1));
+}
+
+// ===================== Op helpers =====================
+Value getSourceMemRefValue(Value value) {
+  while (value) {
+    Operation *defOp = value.getDefiningOp();
+    if (!defOp) break;
+    if (auto op = dyn_cast<ViewLikeOpInterface>(defOp)) {
+      value = op.getViewSource();
+      continue;
+    }
+    if (auto op = dyn_cast<memref::CastOp>(defOp)) {
+      value = op.getSource();
+      continue;
+    }
+    if (auto op = dyn_cast<memref::MemorySpaceCastOp>(defOp)) {
+      value = op.getSource();
+      continue;
+    }
+    break;
   }
-  for (int64_t factor = std::min(value, limit); factor >= 1; --factor) {
-    if (value % factor == 0) {
-      return static_cast<unsigned>(factor);
+  return value;
+}
+
+// Complexity score contributed by a single node (for identifying heavy-math bands).
+int64_t getNodeMathComplexity(const NodePtr &node) {
+  if (!node) return 0;
+  if (node->opType == "HeavyElem") return 3;
+  if (node->opType == "Reduce") return 1;
+  Operation *op = node->op();
+  if (!op) return 0;
+  llvm::StringRef name = op->getName().getStringRef();
+  if (name.contains("pow") || name.contains("rsqrt") || name.contains("exp") || name.contains("log") ||
+      name.contains("tanh"))
+    return 3;
+  if (name.contains("sqrt") || name.contains("div")) return 2;
+  return 0;
+}
+
+// Aligned UB element capacity derived from graph config.
+struct UbCapacity {
+  int64_t rawUbElems{1};
+  int64_t ubCapacityElems{1};
+  int64_t smallestTypeBits{kDefaultTypeBits};
+};
+
+UbCapacity computeUbCapacity(const NpuModelGraphPtr &npuGraph) {
+  UbCapacity c;
+  if (!npuGraph) return c;
+  int64_t ubBytes =
+    (npuGraph->ubSize > 0) ? npuGraph->ubSize : kNpuFallbackUbSizeInBytes;
+  c.smallestTypeBits = static_cast<int64_t>(npuGraph->smallestTypeBits);
+  int64_t maxBufferCnt = npuGraph->maxBufferCnt;
+  auto alignElems = [&](int64_t elems) {
+    int64_t bits = std::max<int64_t>(elems, 1) * c.smallestTypeBits;
+    return std::max<int64_t>((bits / kUbAlignBits) * kUbAlignBits / c.smallestTypeBits, 1);
+  };
+  int64_t rawElems = ubBytes * kBitsPerByte / c.smallestTypeBits;
+  c.rawUbElems = alignElems(rawElems);
+  c.ubCapacityElems = alignElems(rawElems / maxBufferCnt);
+  return c;
+}
+
+inline int64_t ubCapacityForPointTile(const NpuBandContext &ctx) {
+  return std::max<int64_t>(ctx.ubCapacityElems / kNpuPointTileUbReserveFactor, 1);
+}
+
+// ===================== Context building =====================
+std::map<size_t, SmallVector<AxisPtr, 4>> groupAxesByBand(const SmallVector<AxisPtr> &axes) {
+  std::map<size_t, SmallVector<AxisPtr, 4>> grouped;
+  for (const auto &axis : axes) {
+    if (axis) grouped[axis->bandIdx].push_back(axis);
+  }
+  for (auto &[_, bandAxes] : grouped) {
+    std::sort(bandAxes.begin(), bandAxes.end(),
+              [](const AxisPtr &lhs, const AxisPtr &rhs) { return lhs->axisIdx < rhs->axisIdx; });
+  }
+  return grouped;
+}
+
+struct BandNodeFacts {
+  int64_t mathComplexityScore{0};
+  int64_t distinctLoadTensorCount{0};
+};
+
+BandNodeFacts collectBandNodeFacts(const NpuModelGraphPtr &npuGraph, size_t bandIdx) {
+  BandNodeFacts facts;
+  if (!npuGraph) return facts;
+
+  llvm::SmallPtrSet<void *, 8> loadTensors;
+  for (const auto &node : npuGraph->nodes()) {
+    if (!node || node->loopNest_.empty() || !node->loopNest_.front() || node->loopNest_.front()->bandIdx != bandIdx) {
+      continue;
+    }
+    facts.mathComplexityScore = std::min<int64_t>(facts.mathComplexityScore + getNodeMathComplexity(node), 64);
+    Operation *op = node->op();
+    if (auto loadOp = dyn_cast_or_null<memref::LoadOp>(op)) {
+      loadTensors.insert(getSourceMemRefValue(loadOp.getMemRef()).getAsOpaquePointer());
     }
   }
-  return 1;
+  facts.distinctLoadTensorCount = static_cast<int64_t>(loadTensors.size());
+  return facts;
 }
 
-static void applyExactAxisTiling(const AxisPtr &axis, unsigned outerTile, unsigned innerTile, size_t &maxLevelToTile) {
-  if (!axis) {
+// Build a per-band context in a single pass over band axes plus one aggregated node scan.
+NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t bandIdx,
+                                   const SmallVector<AxisPtr, 4> &bandAxes) {
+  NpuBandContext ctx;
+  ctx.bandIdx = bandIdx;
+  ctx.axes = bandAxes;
+  if (!npuGraph) return ctx;
+
+  ctx.graphTemplate = npuGraph->graphTemplate;
+  ctx.targetBlocks =
+    (npuGraph->coreNum > 0) ? static_cast<int64_t>(npuGraph->coreNum) : static_cast<int64_t>(kNpuTargetBlocks);
+  UbCapacity ub = computeUbCapacity(npuGraph);
+  ctx.rawUbElems = ub.rawUbElems;
+  ctx.ubCapacityElems = ub.ubCapacityElems;
+  ctx.smallestTypeBits = ub.smallestTypeBits;
+
+  for (const auto &axis : bandAxes) {
+    ctx.extents.push_back((axis && axis->range.second > 0) ? axis->range.second : 1);
+    ctx.hasDynamicAxis |= isDynamicAxis(axis);
+    ctx.hasReduction |= isReductionAxis(axis);
+  }
+  ctx.lastAxisIsReduction = !bandAxes.empty() && isReductionAxis(bandAxes.back());
+  BandNodeFacts nodeFacts = collectBandNodeFacts(npuGraph, bandIdx);
+  ctx.mathComplexityScore = nodeFacts.mathComplexityScore;
+  ctx.distinctLoadTensorCount = nodeFacts.distinctLoadTensorCount;
+  return ctx;
+}
+
+// ===================== Geometry helpers =====================
+int64_t getSliceProduct(ArrayRef<int64_t> extents, size_t from, size_t to) {
+  int64_t p = 1;
+  for (size_t i = from; i < to && i < extents.size(); ++i) {
+    p = multiplyAndCap(p, std::max<int64_t>(extents[i], 1));
+  }
+  return p;
+}
+
+inline bool isSmallSemanticAxis(const NpuBandContext &ctx, int64_t extent) {
+  constexpr int64_t kMinSmallSemanticAxisLimit = 8;
+  constexpr int64_t kSmallSemanticTargetBlockDivisor = 3;
+  return extent > 1 &&
+         extent <= std::max<int64_t>(kMinSmallSemanticAxisLimit, ctx.targetBlocks / kSmallSemanticTargetBlockDivisor);
+}
+
+size_t computeReductionSuffixStart(const NpuBandContext &ctx) {
+  size_t suffixStart = ctx.axes.size() - 1;
+  int64_t suffixElems = ctx.extents.back();
+  while (suffixStart > 0) {
+    int64_t candidate = ctx.extents[suffixStart - 1];
+    if (!isSmallSemanticAxis(ctx, candidate)) break;
+    if (suffixElems > ubCapacityForPointTile(ctx) / candidate) break;
+    --suffixStart;
+    suffixElems = multiplyAndCap(suffixElems, candidate);
+  }
+  return suffixStart;
+}
+
+// Largest broadcast suffix satisfying: rank is small, suffix fits UB per point,
+// innermost axis is wide, and suffix contains a small-semantic axis before it.
+size_t computeBroadcastSuffixStart(const NpuBandContext &ctx) {
+  constexpr size_t kMinStructuredSuffixRank = 2;
+  constexpr size_t kMaxStructuredSuffixRank = 3;
+  constexpr int64_t kMinWideInnermostExtent = 32;
+  constexpr int64_t kWideInnermostTargetBlockDivisor = 2;
+  if (ctx.axes.size() <= kMinStructuredSuffixRank) return ctx.axes.size() - 1;
+
+  int64_t wideThresh =
+    std::max<int64_t>(kMinWideInnermostExtent, ctx.targetBlocks / kWideInnermostTargetBlockDivisor);
+  int64_t innerExtent = ctx.extents.back();
+  int64_t ubPerPoint = ubCapacityForPointTile(ctx) / kSuffixPreservePointRows;
+
+  size_t bestStart = ctx.axes.size() - 1;
+  for (size_t start = ctx.axes.size() - 1; start > 0; --start) {
+    size_t candidateStart = start - 1;
+    size_t suffixRank = ctx.axes.size() - candidateStart;
+    if (suffixRank < kMinStructuredSuffixRank || suffixRank > kMaxStructuredSuffixRank) continue;
+    int64_t suffixElems = getSliceProduct(ctx.extents, candidateStart, ctx.extents.size());
+    if (suffixElems > ubPerPoint) break;
+    if (innerExtent < wideThresh) continue;
+    bool hasSmall = false;
+    for (size_t i = candidateStart; i + 1 < ctx.extents.size(); ++i) {
+      if (isSmallSemanticAxis(ctx, ctx.extents[i])) {
+        hasSmall = true;
+        break;
+      }
+    }
+    if (!hasSmall) continue;
+    bestStart = candidateStart;
+  }
+  return bestStart;
+}
+
+// ===================== Tile computation =====================
+int64_t chooseBiasedTileSizeForTileCount(int64_t extent, int64_t tileCount) {
+  constexpr int64_t kTileSizeBiasNumerator = 2;
+  constexpr int64_t kTileSizeBiasDenominator = 3;
+  constexpr int64_t kTwoTileCount = 2;
+  if (extent <= 1 || tileCount <= 1) return extent;
+  int64_t low = ceilDivInt64(extent, tileCount);
+  int64_t high =
+    (tileCount == kTwoTileCount) ? (extent - 1) : (ceilDivInt64(extent, tileCount - 1) - 1);
+  high = std::max<int64_t>(high, low);
+  return std::clamp(low + (high - low) * kTileSizeBiasNumerator / kTileSizeBiasDenominator, int64_t{1}, extent);
+}
+
+int64_t chooseTileSizeForTargetBlocks(int64_t extent, int64_t targetBlocks) {
+  return ceilDivInt64(extent, targetBlocks);
+}
+
+SmallVector<unsigned, 4> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents, int64_t targetBlocks) {
+  constexpr int64_t kMaxSmallPrefixTileCount = 2;
+  SmallVector<unsigned, 4> outerTiles;
+  outerTiles.reserve(prefixExtents.size());
+  int64_t producedTiles = 1;
+  for (size_t i = 0; i < prefixExtents.size(); ++i) {
+    int64_t extent = prefixExtents[i];
+    if (extent == 1) {
+      outerTiles.push_back(1);
+      continue;
+    }
+    int64_t remaining = ceilDivInt64(targetBlocks, producedTiles);
+    int64_t desired = std::min<int64_t>(extent, remaining);
+    if (i > 0 && extent <= targetBlocks && desired > kMaxSmallPrefixTileCount) {
+      desired = kMaxSmallPrefixTileCount;
+    }
+    int64_t tile = chooseBiasedTileSizeForTileCount(extent, desired);
+    outerTiles.push_back(saturateToTileValue(tile));
+    producedTiles = multiplyAndCap(producedTiles, ceilDivInt64(extent, tile));
+  }
+  return outerTiles;
+}
+
+// ===================== Plan construction =====================
+void initWholeBandPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  plan.outerTiles.clear();
+  plan.innerTiles.clear();
+  plan.outerTiles.reserve(ctx.extents.size());
+  plan.innerTiles.reserve(ctx.extents.size());
+  for (int64_t extent : ctx.extents) {
+    unsigned tile = saturateToTileValue(extent);
+    plan.outerTiles.push_back(tile);
+    plan.innerTiles.push_back(tile);
+  }
+}
+
+void setFirstAxisTilePreservingRest(const NpuBandContext &ctx, int64_t firstAxisTile, BandTilePlan &plan) {
+  initWholeBandPlan(ctx, plan);
+  unsigned tile = saturateToTileValue(firstAxisTile);
+  plan.outerTiles.front() = tile;
+  plan.innerTiles.front() = tile;
+}
+
+// Fill `plan` with prefix outer tiles and limit innermost inner-tile by UB capacity.
+// - prefixOuter: tile sizes for axes [0 .. prefixOuter.size())
+// - suffixStart: first suffix axis index (== prefixOuter.size() by convention)
+// - requestedPointRows: requested number of suffix "rows" co-resident in UB.
+//   This function first clamps it by UB capacity, then propagates to tile[0]/inner[0]
+//   and to the innermost inner-tile.
+void fillPrefixSuffixTiles(const NpuBandContext &ctx, ArrayRef<unsigned> prefixOuter, size_t suffixStart,
+                           int64_t requestedPointRows, BandTilePlan &plan) {
+  int64_t suffixElems = getSliceProduct(ctx.extents, suffixStart, ctx.extents.size());
+  int64_t ubRows = ubCapacityForPointTile(ctx) / suffixElems;
+  int64_t pointRows = std::max<int64_t>(std::min(requestedPointRows, std::max<int64_t>(ubRows, 1)), 1);
+
+  for (size_t i = 0; i < prefixOuter.size(); ++i) {
+    plan.outerTiles[i] = prefixOuter[i];
+    plan.innerTiles[i] = prefixOuter[i];
+  }
+  plan.innerTiles.front() =
+    saturateToTileValue(std::min<int64_t>(pointRows, static_cast<int64_t>(prefixOuter.front())));
+  size_t innermost = ctx.extents.size() - 1;
+  int64_t preservedMid = getSliceProduct(ctx.extents, suffixStart, innermost);
+  int64_t denom = multiplyAndCap(pointRows, preservedMid);
+  int64_t maxInner = ubCapacityForPointTile(ctx) / denom;
+  int64_t innerExtent = ctx.extents[innermost];
+  plan.innerTiles[innermost] = saturateToTileValue(std::min(innerExtent, std::max<int64_t>(maxInner, 1)));
+}
+
+// ===================== Reduction regime =====================
+enum class ReductionRowRegime { Tiny, Normal, Huge };
+
+struct ReductionRegimeInfo {
+  ReductionRowRegime regime{ReductionRowRegime::Normal};
+  int64_t targetBlocks{kNpuTargetBlocks};
+  int64_t pointRows{kLightReductionPointRows};
+};
+
+ReductionRegimeInfo computeReductionRegime(const NpuBandContext &ctx, size_t suffixStart) {
+  ReductionRegimeInfo info;
+  int64_t prefixRows = getSliceProduct(ctx.extents, 0, suffixStart);
+  int64_t rowsPerBlock = ceilDivInt64(prefixRows, ctx.targetBlocks);
+  if (rowsPerBlock <= kTinyReductionRowsPerBlock)
+    info.regime = ReductionRowRegime::Tiny;
+  else if (rowsPerBlock >= kHugeReductionRowsPerBlock)
+    info.regime = ReductionRowRegime::Huge;
+
+  if (info.regime == ReductionRowRegime::Tiny)
+    info.targetBlocks = kTinyReductionTargetBlocks;
+  else if (info.regime == ReductionRowRegime::Huge)
+    info.targetBlocks = std::max<int64_t>(ctx.targetBlocks - kHugeReductionTargetBlocksDelta, 1);
+  else
+    info.targetBlocks = ctx.targetBlocks;
+
+  if (suffixStart < ctx.axes.size() - 1)
+    info.pointRows = kSuffixPreservePointRows;
+  else if (info.regime == ReductionRowRegime::Tiny)
+    info.pointRows = kTinyReductionPointRows;
+  else if (info.regime == ReductionRowRegime::Huge)
+    info.pointRows = kLightReductionPointRows;
+  else
+    info.pointRows =
+      (ctx.mathComplexityScore >= kReductionComplexityThreshold) ? kHeavyReductionPointRows : kLightReductionPointRows;
+  return info;
+}
+
+int64_t getBroadcastSuffixPointRows(const NpuBandContext &ctx, size_t suffixStart) {
+  constexpr int64_t kBroadcastSuffixPointRows = 3;
+  constexpr int64_t kBroadcastCloneInnerBlocksFactor = 5;
+  constexpr int64_t kBroadcastCloneUbDivisor = 4;
+  int64_t suffixElems = getSliceProduct(ctx.extents, suffixStart, ctx.extents.size());
+  bool broadcastCloneLike =
+    ctx.extents.back() >= ctx.targetBlocks * kBroadcastCloneInnerBlocksFactor &&
+    suffixElems >= std::max<int64_t>(ubCapacityForPointTile(ctx) / kBroadcastCloneUbDivisor, 1);
+  return broadcastCloneLike ? kBroadcastSuffixPointRows : kSuffixPreservePointRows;
+}
+
+int64_t estimatePureElemLiveBufferFactor(const NpuBandContext &ctx) {
+  constexpr int64_t kPureElemWidenTargetBits = 32;
+  int64_t inputCount = std::max<int64_t>(ctx.distinctLoadTensorCount, 1);
+  int64_t widenFactor =
+    std::max<int64_t>(ceilDivInt64(kPureElemWidenTargetBits, std::max<int64_t>(ctx.smallestTypeBits, 1)), 1);
+  return inputCount + (inputCount + 1) * widenFactor;
+}
+
+int64_t getPureElemTileBudget(const NpuBandContext &ctx) {
+  constexpr int64_t kPureElemUbBudgetNumerator = 95;
+  constexpr int64_t kPureElemUbBudgetDenominator = 100;
+  int64_t liveFactor = estimatePureElemLiveBufferFactor(ctx);
+  int64_t usableUb = ctx.ubCapacityElems * kPureElemUbBudgetNumerator / kPureElemUbBudgetDenominator;
+  return std::max<int64_t>(usableUb / liveFactor, 1);
+}
+
+size_t computePureElemSuffixStart(const NpuBandContext &ctx, int64_t tileBudget) {
+  if (ctx.axes.size() <= 1) return 0;
+  size_t suffixStart = ctx.axes.size() - 1;
+  int64_t suffixElems = ctx.extents.back();
+  while (suffixStart > 1) {
+    int64_t candidate = ctx.extents[suffixStart - 1];
+    if (suffixElems > tileBudget / candidate) break;
+    --suffixStart;
+    suffixElems = multiplyAndCap(suffixElems, candidate);
+  }
+  return suffixStart;
+}
+
+void buildPureElemPlan(const NpuBandContext &ctx, size_t suffixStart, int64_t tileBudget, BandTilePlan &plan) {
+  initWholeBandPlan(ctx, plan);
+  if (ctx.axes.size() == 1) {
+    int64_t extent = ctx.extents.front();
+    int64_t parallelBlocks = std::min<int64_t>(ctx.targetBlocks, ceilDivInt64(extent, tileBudget));
+    int64_t outerTile = chooseTileSizeForTargetBlocks(extent, parallelBlocks);
+    plan.outerTiles.front() = saturateToTileValue(outerTile);
+    plan.innerTiles.front() = saturateToTileValue(std::min<int64_t>(outerTile, tileBudget));
     return;
   }
 
-  if (axis->configs[kTileCfg].size() > 2) {
-    axis->configs[kTileCfg].resize(2);
+  int64_t suffixElems = getSliceProduct(ctx.extents, suffixStart, ctx.extents.size());
+  int64_t prefixRows = getSliceProduct(ctx.extents, 0, suffixStart);
+  int64_t pointRowsCap = std::max<int64_t>(tileBudget / suffixElems, 1);
+  int64_t parallelBlocks = std::min<int64_t>(ctx.targetBlocks, ceilDivInt64(prefixRows, pointRowsCap));
+  SmallVector<unsigned, 4> prefixOuterTiles = assignPrefixOuterTiles(
+    ArrayRef<int64_t>(ctx.extents).take_front(suffixStart), parallelBlocks);
+
+  int64_t preservedPrefixInner = 1;
+  for (size_t i = 0; i < prefixOuterTiles.size(); ++i) {
+    plan.outerTiles[i] = prefixOuterTiles[i];
+    plan.innerTiles[i] = prefixOuterTiles[i];
+    if (i > 0) preservedPrefixInner = multiplyAndCap(preservedPrefixInner, prefixOuterTiles[i]);
   }
-  while (axis->configs[kTileCfg].size() < 2) {
-    axis->doExtraTile();
-  }
-  for (int level = 0; level < 2; ++level) {
-    auto tileConfig = axis->tryGetConfig(level, kTileCfg);
-    if (!tileConfig) {
-      continue;
-    }
-    tileConfig->constraints.clear();
-    tileConfig->value = level == 0 ? static_cast<int>(outerTile) : static_cast<int>(innerTile);
-    axis->tryAddConstraint(level, Constraint({tileConfig->value}), kTileCfg);
-  }
-  maxLevelToTile = std::max(maxLevelToTile, static_cast<size_t>(2));
+
+  int64_t firstInner = std::max<int64_t>(tileBudget / suffixElems, 1);
+  firstInner = std::max<int64_t>(firstInner / preservedPrefixInner, 1);
+  plan.innerTiles.front() = saturateToTileValue(std::min<int64_t>(firstInner, prefixOuterTiles.front()));
 }
 
-static void configureDynamicAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
-  // Ensure we have at least 2 levels for dynamic axes.
+bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.hasDynamicAxis || !ctx.hasReduction || !ctx.lastAxisIsReduction || ctx.axes.size() < 2 ||
+      ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP) {
+    return false;
+  }
+
+  size_t suffixStart = computeReductionSuffixStart(ctx);
+  if (suffixStart == 0) return false;
+
+  initWholeBandPlan(ctx, plan);
+  ArrayRef<int64_t> prefixExtents(ctx.extents);
+  ReductionRegimeInfo info = computeReductionRegime(ctx, suffixStart);
+  SmallVector<unsigned, 4> prefixOuterTiles =
+    assignPrefixOuterTiles(prefixExtents.take_front(suffixStart), info.targetBlocks);
+  fillPrefixSuffixTiles(ctx, prefixOuterTiles, suffixStart, info.pointRows, plan);
+  return true;
+}
+
+bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.size() < 2) {
+    return false;
+  }
+
+  int64_t innermostTransposeIdx = -1;
+  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 1; i >= 0; --i) {
+    if (isTransposeAxis(ctx.axes[static_cast<size_t>(i)])) {
+      innermostTransposeIdx = i;
+      break;
+    }
+  }
+  if (innermostTransposeIdx < 0) {
+    return false;
+  }
+
+  constexpr int64_t kTransposeTileProductLimit = 8192;
+  setFirstAxisTilePreservingRest(ctx, chooseTileSizeForTargetBlocks(ctx.extents.front(), ctx.targetBlocks), plan);
+
+  if (static_cast<size_t>(innermostTransposeIdx) == ctx.axes.size() - 1) {
+    int64_t remainingProduct = kTransposeTileProductLimit;
+    for (int64_t i = innermostTransposeIdx; i >= 0; --i) {
+      if (!isTransposeAxis(ctx.axes[static_cast<size_t>(i)])) {
+        break;
+      }
+      int64_t extent = ctx.extents[static_cast<size_t>(i)];
+      unsigned tile = saturateToTileValue(getLargestFactorNotExceeding(extent, remainingProduct));
+      plan.outerTiles[static_cast<size_t>(i)] = tile;
+      plan.innerTiles[static_cast<size_t>(i)] = tile;
+      remainingProduct = remainingProduct / tile;
+    }
+  } else {
+    int64_t preservedSuffixElems = 1;
+    for (size_t i = static_cast<size_t>(innermostTransposeIdx + 1); i < ctx.extents.size(); ++i) {
+      preservedSuffixElems = multiplyAndCap(preservedSuffixElems, ctx.extents[i]);
+    }
+    int64_t maxTransposeTile = std::max<int64_t>(kTransposeTileProductLimit / preservedSuffixElems, 1);
+    plan.outerTiles[static_cast<size_t>(innermostTransposeIdx)] = saturateToTileValue(getLargestFactorNotExceeding(
+      ctx.extents[static_cast<size_t>(innermostTransposeIdx)], maxTransposeTile));
+  }
+  return true;
+}
+
+bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.graphTemplate != GraphTemplate::BROADCAST_OP ||
+      ctx.axes.size() < 2) {
+    return false;
+  }
+
+  size_t suffixStart = computeBroadcastSuffixStart(ctx);
+  if (suffixStart == 0 || suffixStart >= ctx.axes.size() - 1) return false;
+
+  initWholeBandPlan(ctx, plan);
+  ArrayRef<int64_t> prefixExtents(ctx.extents);
+  SmallVector<unsigned, 4> prefixOuterTiles =
+    assignPrefixOuterTiles(prefixExtents.take_front(suffixStart), ctx.targetBlocks);
+  fillPrefixSuffixTiles(ctx, prefixOuterTiles, suffixStart, getBroadcastSuffixPointRows(ctx, suffixStart), plan);
+
+  constexpr int64_t kBroadcastTileProductLimit = 8192;
+  int64_t remainingProduct = kBroadcastTileProductLimit;
+  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 1; i >= 0; --i) {
+    size_t idx = static_cast<size_t>(i);
+    Operation *loopOp = ctx.axes[idx] ? ctx.axes[idx]->getLoopOperation() : nullptr;
+    if (!loopOp || (!loopOp->hasAttr(kBroadcastLoopAttr) && !loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr))) {
+      break;
+    }
+    int64_t extent = ctx.extents[idx];
+    unsigned tile = saturateToTileValue(getLargestFactorNotExceeding(extent, remainingProduct));
+    plan.outerTiles[idx] = tile;
+    plan.innerTiles[idx] = tile;
+    remainingProduct = remainingProduct / tile;
+  }
+  return true;
+}
+
+bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.empty() || ctx.graphTemplate != GraphTemplate::PURE_ELEM) {
+    return false;
+  }
+
+  int64_t tileBudget = getPureElemTileBudget(ctx);
+  int64_t alignElems = std::max<int64_t>(kUbAlignBits / ctx.smallestTypeBits, 1);
+  if (tileBudget >= alignElems) tileBudget = (tileBudget / alignElems) * alignElems;
+  size_t suffixStart = computePureElemSuffixStart(ctx, tileBudget);
+  buildPureElemPlan(ctx, suffixStart, tileBudget, plan);
+  return true;
+}
+
+void applyBandTilePlan(const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan, size_t &maxLevelToTile) {
+  constexpr size_t kTileLevels = 2;
+  for (size_t i = 0; i < bandAxes.size(); ++i) {
+    const auto &axis = bandAxes[i];
+    while (axis->configs[kTileCfg].size() < kTileLevels) {
+      axis->doExtraTile();
+    }
+    if (axis->configs[kTileCfg].size() > kTileLevels) {
+      axis->configs[kTileCfg].resize(kTileLevels);
+    }
+
+    for (size_t level = 0; level < kTileLevels; ++level) {
+      auto tileConfig = axis->tryGetConfig(static_cast<int>(level), kTileCfg);
+      if (tileConfig == nullptr) {
+        continue;
+      }
+      tileConfig->constraints.clear();
+      unsigned tileValue = (level == 0) ? plan.outerTiles[i] : plan.innerTiles[i];
+      if (isNoSplitAxis(axis) && axis->hasConstantBounds()) {
+        int64_t fullExtent = axis->getConstantUpperBound() - axis->getConstantLowerBound();
+        tileValue = saturateToTileValue(std::max<int64_t>(fullExtent, 1));
+      }
+      tileConfig->value = static_cast<int>(tileValue);
+      axis->tryAddConstraint(static_cast<int>(level), Constraint({static_cast<int>(tileValue)}));
+    }
+  }
+  maxLevelToTile = std::max(maxLevelToTile, kTileLevels);
+}
+
+void applyDynamicFallbackAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
   for (size_t i = axis->configs[kTileCfg].size(); i < 2; ++i) {
     axis->doExtraTile();
   }
@@ -905,47 +1463,33 @@ static void configureDynamicAxisTiling(const AxisPtr axis, bool isFullTileAxis) 
 
   if (tileConfig0 != nullptr) {
     unsigned value = UINT_MAX;
-    tileConfig0->value = value;  // Special marker for dynamic axis
+    tileConfig0->value = value;
     axis->tryAddConstraint(0, Constraint({value}));
   }
 
-  constexpr unsigned MIN_TILE_SIZE = 512;
   if (tileConfig1 != nullptr) {
-    tileConfig1->value = static_cast<int>(MIN_TILE_SIZE);
-    axis->tryAddConstraint(1, Constraint({static_cast<int>(MIN_TILE_SIZE)}));
+    tileConfig1->value = static_cast<int>(kNpuMinInnerTileSize);
+    axis->tryAddConstraint(1, Constraint({static_cast<int>(kNpuMinInnerTileSize)}));
   }
 }
 
-// Helper function to process tiling for a single axis (unified algorithm for both static and dynamic axes)
-// For dynamic axes, calculate tile sizes based on 40 blocks (including tail block)
-static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes, unsigned innerTileSize,
-                              unsigned blockNumber, size_t &maxLevelToTile, bool isFullTileAxis = false) {
-  if (axis == nullptr) {
-    return;
-  }
-
-  // Check if axis has constant bounds (specifically check upper bound for dynamic detection)
+static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes,
+                                    unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
+                                    bool isFullTileAxis) {
   bool hasStaticBounds = axis->hasConstantBounds();
-  // Check upper bound specifically to detect dynamic axis
   bool hasDynamicUpperBound = !axis->hasConstantUpperBound();
 
-  // For dynamic axes (detected by dynamic upper bound), use special tiling strategy:
-  // First level: -1 (will be converted to UINT_MAX in unsigned storage, indicates dynamic calculation)
-  // Second level: default minimum tile size (512)
   if (hasDynamicUpperBound || !hasStaticBounds) {
-    configureDynamicAxisTiling(axis, isFullTileAxis);
+    applyDynamicFallbackAxisTiling(axis, isFullTileAxis);
     maxLevelToTile = std::max(maxLevelToTile, static_cast<size_t>(2));
     return;
   }
 
-  // Static bounds case
   int64_t lowerBound = axis->getConstantLowerBound();
   int64_t upperBound = axis->getConstantUpperBound();
   int64_t extent = upperBound - lowerBound;
 
-  // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
-  // For static reduce axes, use extent-sized tiles to keep no-split behavior explicit in metadata.
   if (isFullTileAxis) {
     unsigned fullTile = 1;
     if (extent > 0) {
@@ -959,7 +1503,6 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
 
   SmallVector<unsigned, 4> usedTileSizes;
   int64_t currentSize = extent;
-
   for (size_t i = 0; i < currentTileSizes.size(); ++i) {
     int64_t tileSize = static_cast<int64_t>(currentTileSizes[i]);
     int64_t minRequired = (i == currentTileSizes.size() - 1) ? tileSize * 2 : tileSize;
@@ -973,8 +1516,6 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
 
   size_t numLevels = usedTileSizes.size();
   size_t currentTileLevel = axis->configs[kTileCfg].size();
-
-  // clean extra levels
   if (currentTileLevel > numLevels) {
     auto &cfgs = axis->configs[kTileCfg];
     cfgs.resize(numLevels);
@@ -987,8 +1528,6 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   }
 
   maxLevelToTile = std::max(maxLevelToTile, numLevels);
-
-  // Set tile sizes for each level (only up to numLevels)
   for (size_t level = 0; level < numLevels; ++level) {
     auto tileConfig = axis->tryGetConfig(static_cast<int>(level), kTileCfg);
     if (tileConfig != nullptr) {
@@ -997,52 +1536,7 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
     }
   }
 }
-
-static void applyBandTiling(const SmallVector<AxisPtr, 4> &bandAxes, const SmallVector<unsigned, 4> &tileSizes,
-                            unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile, bool isReduceOp) {
-  int transposeStart = -1;
-  for (size_t i = 0; i < bandAxes.size(); ++i) {
-    if (isTransposeAxis(bandAxes[i])) {
-      transposeStart = static_cast<int>(i);
-      break;
-    }
-  }
-
-  SmallVector<unsigned, 4> transposeTiles;
-  bool canUseTransposeTiling = transposeStart >= 0;
-  for (size_t i = static_cast<size_t>(std::max(transposeStart, 0));
-       canUseTransposeTiling && i < bandAxes.size(); ++i) {
-    canUseTransposeTiling =
-      bandAxes[i]->hasConstantBounds() && isTransposeAxis(bandAxes[i]) && !isNoSplitAxis(bandAxes[i], isReduceOp);
-  }
-
-  if (canUseTransposeTiling) {
-    size_t transposeStartIdx = static_cast<size_t>(transposeStart);
-    transposeTiles.assign(bandAxes.size() - transposeStartIdx, 1);
-    int64_t remainingVectorSize = kVectorMaxSize;
-    for (size_t i = bandAxes.size(); i-- > transposeStartIdx;) {
-      int64_t extentValue =
-        std::max<int64_t>(bandAxes[i]->getConstantUpperBound() - bandAxes[i]->getConstantLowerBound(), 1);
-      unsigned tile = getLargestFactorLE(extentValue, remainingVectorSize);
-      transposeTiles[i - transposeStartIdx] = tile;
-      if (remainingVectorSize > 1) {
-        remainingVectorSize = std::max<int64_t>(remainingVectorSize / std::max<int64_t>(tile, 1), 1);
-      }
-    }
-  }
-
-  for (size_t i = 0; i < bandAxes.size(); ++i) {
-    const auto &axis = bandAxes[i];
-    if (canUseTransposeTiling && static_cast<int>(i) >= transposeStart) {
-      unsigned tile = transposeTiles[i - static_cast<size_t>(transposeStart)];
-      applyExactAxisTiling(axis, tile, tile, maxLevelToTile);
-      continue;
-    }
-
-    bool axisIsNoSplit = isNoSplitAxis(axis, isReduceOp);
-    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsNoSplit);
-  }
-}
+}  // namespace
 
 SmallVector<AxisPtr> NpuDefaultTileStrategy::collectAxes(const NpuModelGraphPtr npuGraph) {
   SmallVector<AxisPtr> axes;
@@ -1054,29 +1548,26 @@ SmallVector<AxisPtr> NpuDefaultTileStrategy::collectAxes(const NpuModelGraphPtr 
   return axes;
 }
 
-std::unordered_map<size_t, unsigned> NpuDefaultTileStrategy::buildBandRankMap(const SmallVector<AxisPtr> &axes) {
-  std::unordered_map<size_t, unsigned> bandRankMap;
-  for (const auto &axis : axes) {
-    auto currentDepth = static_cast<unsigned>(axis->axisIdx + 1);
-    auto it = bandRankMap.find(axis->bandIdx);
-    if (it == bandRankMap.end() || currentDepth > it->second) {
-      bandRankMap[axis->bandIdx] = currentDepth;
-    }
-  }
-  return bandRankMap;
-}
-
 SmallVector<unsigned, 4> NpuDefaultTileStrategy::parseTileSizesConfig(const NpuModelGraphPtr npuGraph) {
   SmallVector<unsigned, 4> tileSizes;
-  auto tileSizesIt = npuGraph->globalConfigs.find("npu.multiTileSizes");
-  if (tileSizesIt != npuGraph->globalConfigs.end()) {
-    auto arrayAttr = dyn_cast<ArrayAttr>(tileSizesIt->second);
+  auto appendTileSizes = [&tileSizes](Attribute attr) {
+    auto arrayAttr = dyn_cast_or_null<ArrayAttr>(attr);
     if (arrayAttr) {
       for (auto attr : arrayAttr) {
         if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
           tileSizes.push_back(static_cast<unsigned>(intAttr.getInt()));
         }
       }
+    }
+  };
+
+  if (npuGraph->funcOp && npuGraph->funcOp->hasAttr("npu.multiTileSizes")) {
+    appendTileSizes(npuGraph->funcOp->getAttr("npu.multiTileSizes"));
+  }
+  if (tileSizes.empty()) {
+    auto tileSizesIt = npuGraph->globalConfigs.find("npu.multiTileSizes");
+    if (tileSizesIt != npuGraph->globalConfigs.end()) {
+      appendTileSizes(tileSizesIt->second);
     }
   }
 
@@ -1090,38 +1581,36 @@ SmallVector<unsigned, 4> NpuDefaultTileStrategy::parseTileSizesConfig(const NpuM
 }
 
 void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, const SmallVector<AxisPtr> &axes,
-                                               const std::unordered_map<size_t, unsigned> &bandRankMap,
-                                               const SmallVector<unsigned, 4> &tileSizes, bool isReduceOp) {
+                                               const SmallVector<unsigned, 4> &tileSizes) {
   size_t maxLevelToTile = 1;
-  constexpr unsigned innerTileSize = 512;
-  constexpr unsigned blockNumber = 40;
+  constexpr unsigned innerTileSize = kNpuMinInnerTileSize;
+  const unsigned blockNumber =
+    (npuGraph && npuGraph->coreNum > 0) ? static_cast<unsigned>(npuGraph->coreNum) : kNpuTargetBlocks;
 
   if (!tileSizes.empty()) {
     for (const auto &axis : axes) {
-      auto rankIt = bandRankMap.find(axis->bandIdx);
-      if (rankIt == bandRankMap.end()) {
-        continue;
-      }
-
-      bool axisIsNoSplit = isNoSplitAxis(axis, isReduceOp);
-      processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsNoSplit);
+      bool axisIsFullTile = isNoSplitAxis(axis);
+      applyFallbackAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsFullTile);
     }
     npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
     return;
   }
 
-  std::unordered_map<size_t, SmallVector<AxisPtr, 4>> axesByBand;
-  std::for_each(axes.begin(), axes.end(), [&](const AxisPtr &axis) {
-    axesByBand[axis->bandIdx].push_back(axis);
-  });
+  for (const auto &[bandIdx, bandAxes] : groupAxesByBand(axes)) {
+    NpuBandContext bandCtx = buildNpuBandContext(npuGraph, bandIdx, bandAxes);
+    BandTilePlan bandPlan;
+    bool matched = tryBuildReductionSuffixPlan(bandCtx, bandPlan) || tryBuildTransposePlan(bandCtx, bandPlan) ||
+                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) || tryBuildElementwisePlan(bandCtx, bandPlan);
 
-  for (auto &[bandIdx, bandAxes] : axesByBand) {
-    if (bandRankMap.find(bandIdx) == bandRankMap.end()) {
+    if (matched) {
+      applyBandTilePlan(bandAxes, bandPlan, maxLevelToTile);
       continue;
     }
-    std::sort(bandAxes.begin(), bandAxes.end(),
-              [](const AxisPtr &lhs, const AxisPtr &rhs) { return lhs->axisIdx < rhs->axisIdx; });
-    applyBandTiling(bandAxes, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceOp);
+
+    for (const auto &axis : bandAxes) {
+      bool axisIsFullTile = isNoSplitAxis(axis);
+      applyFallbackAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, axisIsFullTile);
+    }
   }
 
   npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
@@ -1132,17 +1621,10 @@ void NpuDefaultTileStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
     return;
   }
 
-  bool isReduceOp = false;
-  if (npuGraph->funcOp) {
-    auto opType = CommonUtils::getOperatorType(npuGraph->funcOp);
-    isReduceOp = (opType == OperatorTemplate::Reduction);
-  }
-
   SmallVector<AxisPtr> axes = collectAxes(npuGraph);
-  std::unordered_map<size_t, unsigned> bandRankMap = buildBandRankMap(axes);
   SmallVector<unsigned, 4> tileSizes = parseTileSizesConfig(npuGraph);
 
-  applyTilingToAxes(npuGraph, axes, bandRankMap, tileSizes, isReduceOp);
+  applyTilingToAxes(npuGraph, axes, tileSizes);
 
   if (npuGraph->funcOp && npuGraph->funcOp->hasAttr("npu.multiTileSizes")) {
     (void)npuGraph->funcOp->removeAttr("npu.multiTileSizes");
