@@ -83,7 +83,7 @@ class DefaultWorkflowV2(OpBaseWorkflow):
             },
             "task_desc": {
                 "type": "string",
-                "description": "任务描述。KernelBench 时为完整框架代码（含 class Model）；SOL 时可为 SOL JSON/简述，并配合 sol_problem_* 输入"
+                "description": "任务描述（框架代码），必须包含框架实现的完整代码，包括 class Model(nn.Module) 定义"
             },
             "dsl": {
                 "type": "string",
@@ -100,27 +100,6 @@ class DefaultWorkflowV2(OpBaseWorkflow):
             "arch": {
                 "type": "string",
                 "description": "架构，如 'a100'（NVIDIA A100）, 'x86_64'（Intel/AMD CPU）, 'ascend910b4'（Ascend 910B）"
-            },
-            "bench_type": {
-                "type": "string",
-                "enum": ["kernelbench", "sol"],
-                "description": "Benchmark 类型。默认 'kernelbench'；使用 SOL-ExecBench 输入时设为 'sol'",
-                "default": "kernelbench"
-            },
-            "sol_problem_dir": {
-                "type": "string",
-                "description": "SOL-ExecBench case 目录，需包含 definition.json、workload.jsonl、reference.py；bench_type='sol' 时可选",
-                "default": ""
-            },
-            "sol_problem_json": {
-                "type": "string",
-                "description": "SOL-ExecBench 三文件 JSON 或原始 SOL record JSON 字符串；bench_type='sol' 时可选",
-                "default": ""
-            },
-            "sol_task_code": {
-                "type": "string",
-                "description": "OpTaskBuilder 生成的 SOL JSON/Markdown 任务内容；bench_type='sol' 时可选",
-                "default": ""
             },
             "task_id": {
                 "type": "string",

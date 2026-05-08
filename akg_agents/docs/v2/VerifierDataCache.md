@@ -44,6 +44,8 @@ The baseline pre-profile path used by `evolve` and `adaptive_search` also reads 
 └── baseline/
 ```
 
+Cache hit and write logs include the `cache_file` and `cache_key` used by the verifier, so a stale entry can be located and removed directly.
+
 ## Scope
 
 Verifier Data Cache covers the `KernelBench` reference data and baseline profile paths. For `SOL-ExecBench`, the cache intentionally only covers baseline profile results: SOL cases already ship stable `definition.json`, `workload.jsonl`, and `reference.py`, so caching reference data would duplicate the benchmark source of truth.

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from akg_agents.op.verifier.data_cache import (
     VerifierDataCacheConfig,
     build_baseline_cache_key,
     build_reference_cache_key,
+    build_sol_problem_cache_identity,
     build_workflow_data_cache_key_id,
     extract_baseline_time_us,
     get_verifier_data_cache_key_id,
@@ -43,7 +45,6 @@ from akg_agents.op.verifier.data_cache import (
 )
 from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
-from akg_agents.op.verifier.sol_format import build_sol_problem_cache_identity
 
 
 FRAMEWORK_CODE = """
@@ -75,23 +76,15 @@ class ModelNew:
         return x
 """
 
-SOL_RECORD = {
+SOL_DEFINITION = {
     "name": "000_relu",
-    "description": "ReLU raw SOL row",
+    "description": "ReLU SOL case",
     "axes": {"n": {"type": "var"}},
     "inputs": {"x": {"shape": ["n"], "dtype": "float32"}},
     "outputs": {"out": {"shape": ["n"], "dtype": "float32"}},
-    "custom_inputs_entrypoint": None,
-    "reference": "import torch\n\ndef run(x):\n    return torch.relu(x)\n",
-    "workloads": [
-        {
-            "uuid": "case-1",
-            "axes": {"n": 128},
-            "inputs": {"x": {"type": "random"}},
-            "tolerance": {"max_atol": 1e-5, "max_rtol": 1e-5},
-        }
-    ],
 }
+
+SOL_REFERENCE = "import torch\n\n\ndef run(x):\n    return torch.relu(x)\n"
 
 
 def _make_reference_payload_bytes() -> bytes:
@@ -175,6 +168,33 @@ def _make_config(tmp_path: Path) -> dict:
     }
 
 
+def _write_sol_problem_dir(
+    tmp_path: Path,
+    *,
+    case_name: str = "sol_case",
+    workload_uuid: str = "case-1",
+    n: int = 128,
+) -> Path:
+    case_dir = tmp_path / case_name
+    case_dir.mkdir(parents=True, exist_ok=True)
+    workload = {
+        "uuid": workload_uuid,
+        "axes": {"n": n},
+        "inputs": {"x": {"type": "random"}},
+        "tolerance": {"max_atol": 1e-5, "max_rtol": 1e-5},
+    }
+    (case_dir / "definition.json").write_text(
+        json.dumps(SOL_DEFINITION, sort_keys=True),
+        encoding="utf-8",
+    )
+    (case_dir / "workload.jsonl").write_text(
+        json.dumps(workload, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (case_dir / "reference.py").write_text(SOL_REFERENCE, encoding="utf-8")
+    return case_dir
+
+
 def _make_verifier(tmp_path: Path, worker=None, task_id: str = "ut") -> KernelVerifier:
     return KernelVerifier(
         op_name="relu",
@@ -190,18 +210,25 @@ def _make_verifier(tmp_path: Path, worker=None, task_id: str = "ut") -> KernelVe
     )
 
 
-def _make_sol_config(tmp_path: Path, sol_record: dict = None) -> dict:
+def _make_sol_config(tmp_path: Path, sol_problem_dir: Path = None) -> dict:
     config = _make_config(tmp_path)
+    if sol_problem_dir is None:
+        sol_problem_dir = _write_sol_problem_dir(tmp_path)
     config.update(
         {
             "bench_type": "sol",
-            "sol_problem_data": sol_record or SOL_RECORD,
+            "sol_problem_dir": str(sol_problem_dir),
         }
     )
     return config
 
 
-def _make_sol_verifier(tmp_path: Path, worker=None, task_id: str = "ut", sol_record: dict = None) -> KernelVerifier:
+def _make_sol_verifier(
+    tmp_path: Path,
+    worker=None,
+    task_id: str = "ut",
+    sol_problem_dir: Path = None,
+) -> KernelVerifier:
     return KernelVerifier(
         op_name="relu",
         framework_code="",
@@ -211,7 +238,7 @@ def _make_sol_verifier(tmp_path: Path, worker=None, task_id: str = "ut", sol_rec
         backend="cuda",
         arch="a100",
         impl_func_name="ModelNew",
-        config=_make_sol_config(tmp_path, sol_record),
+        config=_make_sol_config(tmp_path, sol_problem_dir),
         worker=worker,
         bench_type="sol",
     )
@@ -286,18 +313,11 @@ def test_baseline_cache_key_includes_dsl():
 
 
 def test_sol_baseline_cache_key_includes_problem_content(tmp_path):
-    record_b = dict(SOL_RECORD)
-    record_b["workloads"] = [
-        {
-            "uuid": "case-2",
-            "axes": {"n": 256},
-            "inputs": {"x": {"type": "random"}},
-            "tolerance": {"max_atol": 1e-5, "max_rtol": 1e-5},
-        }
-    ]
+    case_a = _write_sol_problem_dir(tmp_path, case_name="sol_case_a", workload_uuid="case-1", n=128)
+    case_b = _write_sol_problem_dir(tmp_path, case_name="sol_case_b", workload_uuid="case-2", n=256)
 
-    verifier_a = _make_sol_verifier(tmp_path, task_id="same-task", sol_record=SOL_RECORD)
-    verifier_b = _make_sol_verifier(tmp_path, task_id="same-task", sol_record=record_b)
+    verifier_a = _make_sol_verifier(tmp_path, task_id="same-task", sol_problem_dir=case_a)
+    verifier_b = _make_sol_verifier(tmp_path, task_id="same-task", sol_problem_dir=case_b)
 
     assert verifier_a._get_baseline_cache_key(5, 50) != verifier_b._get_baseline_cache_key(5, 50)
 
@@ -634,9 +654,10 @@ async def test_baseline_preprofile_rereads_cache_after_lock(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sol_baseline_preprofile_rereads_cache_after_lock(tmp_path):
-    config = _make_sol_config(tmp_path)
+    sol_problem_dir = _write_sol_problem_dir(tmp_path)
+    config = _make_sol_config(tmp_path, sol_problem_dir)
     cfg = load_verifier_data_cache_config(config)
-    sol_identity = build_sol_problem_cache_identity(config=config)
+    sol_identity = build_sol_problem_cache_identity(str(sol_problem_dir))
     cache_key = build_baseline_cache_key(
         op_name="relu",
         framework_code=sol_identity,

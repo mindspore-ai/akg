@@ -80,7 +80,7 @@ class AdaptiveSearchWorkflow(OpBaseWorkflow):
             },
             "task_desc": {
                 "type": "string",
-                "description": "任务描述。KernelBench 时为框架代码；SOL 时可为 SOL JSON/简述，并配合 sol_problem_* 输入"
+                "description": "任务描述（框架代码）"
             },
             "dsl": {
                 "type": "string",
@@ -97,27 +97,6 @@ class AdaptiveSearchWorkflow(OpBaseWorkflow):
             "arch": {
                 "type": "string",
                 "description": "架构，如 'a100', 'ascend910b4'"
-            },
-            "bench_type": {
-                "type": "string",
-                "enum": ["kernelbench", "sol"],
-                "description": "Benchmark 类型。默认 'kernelbench'；使用 SOL-ExecBench 输入时设为 'sol'",
-                "default": "kernelbench"
-            },
-            "sol_problem_dir": {
-                "type": "string",
-                "description": "SOL-ExecBench case 目录，需包含 definition.json、workload.jsonl、reference.py；bench_type='sol' 时可选",
-                "default": ""
-            },
-            "sol_problem_json": {
-                "type": "string",
-                "description": "SOL-ExecBench 三文件 JSON 或原始 SOL record JSON 字符串；bench_type='sol' 时可选",
-                "default": ""
-            },
-            "sol_task_code": {
-                "type": "string",
-                "description": "OpTaskBuilder 生成的 SOL JSON/Markdown 任务内容；bench_type='sol' 时可选",
-                "default": ""
             },
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend", "arch"]
@@ -144,8 +123,6 @@ class AdaptiveSearchWorkflow(OpBaseWorkflow):
             framework = state.get("framework", "")
             backend = state.get("backend", "")
             arch = state.get("arch", "")
-            bench_type = state.get("bench_type", _self.config.get("bench_type", "kernelbench"))
-            _self.config["bench_type"] = bench_type
             
             # 从 config 读取搜索参数（prepare_config 已通过 _SEARCH_DEFAULTS 设置好默认值）
             defaults = type(_self)._SEARCH_DEFAULTS

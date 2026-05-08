@@ -77,6 +77,8 @@ baseline cache 直接保存 `base_profile_result.json` 的核心信息：
 - `reference/*.json` 保存元信息
 - `baseline/*.json` 保存 baseline 结果
 
+cache 命中和写入日志会带上本次使用的 `cache_file` 和 `cache_key`，方便直接定位、排查或清理对应缓存文件。
+
 ### 4.4 cache key
 
 reference data key：

@@ -32,9 +32,12 @@ from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
     build_reference_cache_key,
+    build_sol_problem_cache_identity,
     delete_baseline_result_from_cache,
     delete_reference_data_from_cache,
     extract_baseline_time_us,
+    get_baseline_cache_file_path,
+    get_reference_cache_file_path,
     get_verifier_data_cache_key_id,
     load_verifier_data_cache_config,
     read_baseline_result_from_cache,
@@ -1003,12 +1006,13 @@ if __name__ == "__main__":
         if self.bench_type != "sol":
             return self.framework_code
         try:
-            from akg_agents.op.verifier.sol_format import build_sol_problem_cache_identity
-
-            return build_sol_problem_cache_identity(
-                config=self.config,
-                task_desc=self.config.get("task_desc", "") or self.framework_code,
-            )
+            sol_problem_dir = self.config.get("sol_problem_dir")
+            if not sol_problem_dir:
+                logger.info(
+                    f"[{self.op_name}] config['sol_problem_dir'] 未配置，跳过 SOL baseline cache"
+                )
+                return None
+            return build_sol_problem_cache_identity(sol_problem_dir)
         except Exception as exc:
             logger.info(
                 f"[{self.op_name}] SOL baseline cache key 构建失败，跳过 baseline cache: {exc}"
@@ -1098,6 +1102,11 @@ if __name__ == "__main__":
 
         cache_cfg = self._get_data_cache_config()
         cache_key = self._get_reference_cache_key()
+        cache_file = get_reference_cache_file_path(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=cache_key,
+        )
 
         if self.config.get("use_reference_data") and self.config.get("reference_data"):
             managed_key = self.config.get("_data_cache_reference_key")
@@ -1138,13 +1147,22 @@ if __name__ == "__main__":
                             cache_key=cache_key,
                         )
                     else:
-                        logger.info(f"[{self.op_name}] Verifier Data Cache 命中：reference data")
+                        logger.info(
+                            f"[{self.op_name}] Verifier Data Cache 命中：reference data, "
+                            f"cache_file={cache_file}, cache_key={cache_key}"
+                        )
                         return cached_reference
 
                 if cached_reference:
-                    logger.info(f"[{self.op_name}] Verifier Data Cache reference data 已失效，重新生成")
+                    logger.info(
+                        f"[{self.op_name}] Verifier Data Cache reference data 已失效，重新生成: "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
                 else:
-                    logger.info(f"[{self.op_name}] Verifier Data Cache 未命中：reference data")
+                    logger.info(
+                        f"[{self.op_name}] Verifier Data Cache 未命中：reference data, "
+                        f"cache_file={cache_file}, cache_key={cache_key}"
+                    )
 
                 if not self.worker:
                     logger.info(f"[{self.op_name}] 当前无 worker，跳过 reference data 回填")
@@ -1171,7 +1189,7 @@ if __name__ == "__main__":
                     )
                     return None
 
-                write_reference_data_to_cache(
+                written_path = write_reference_data_to_cache(
                     cache_cfg,
                     op_name=self.op_name,
                     cache_key=cache_key,
@@ -1186,7 +1204,12 @@ if __name__ == "__main__":
                         "save_inputs": True,
                     },
                 )
-                logger.info(f"[{self.op_name}] reference data 已写入 Verifier Data Cache")
+                if written_path:
+                    logger.info(
+                        f"[{self.op_name}] reference data 已写入 Verifier Data Cache: "
+                        f"cache_file={written_path}, cache_key={cache_key}, "
+                        f"cache_dir={cache_cfg.cache_dir}"
+                    )
                 return reference_bytes
         except TimeoutError as exc:
             logger.warning(
@@ -1213,6 +1236,11 @@ if __name__ == "__main__":
         cache_key = self._get_baseline_cache_key(warmup_times, run_times)
         if not cache_key:
             return None
+        cache_file = get_baseline_cache_file_path(
+            cache_cfg,
+            op_name=self.op_name,
+            cache_key=cache_key,
+        )
         cache_entry = read_baseline_result_from_cache(
             cache_cfg,
             op_name=self.op_name,
@@ -1220,9 +1248,15 @@ if __name__ == "__main__":
         )
         baseline_time_us = extract_baseline_time_us(cache_entry)
         if baseline_time_us is not None:
-            logger.info(f"[{self.op_name}] Verifier Data Cache 命中：baseline={baseline_time_us:.2f} us")
+            logger.info(
+                f"[{self.op_name}] Verifier Data Cache 命中：baseline={baseline_time_us:.2f} us, "
+                f"cache_file={cache_file}, cache_key={cache_key}"
+            )
         elif cache_entry:
-            logger.warning(f"[{self.op_name}] Verifier Data Cache baseline 结果无效，删除旧缓存")
+            logger.warning(
+                f"[{self.op_name}] Verifier Data Cache baseline 结果无效，删除旧缓存: "
+                f"cache_file={cache_file}, cache_key={cache_key}"
+            )
             delete_baseline_result_from_cache(
                 cache_cfg,
                 op_name=self.op_name,
@@ -1268,7 +1302,7 @@ if __name__ == "__main__":
                 run_times=run_times,
             )
 
-        write_baseline_result_to_cache(
+        written_path = write_baseline_result_to_cache(
             cache_cfg,
             op_name=self.op_name,
             cache_key=cache_key,
@@ -1283,7 +1317,12 @@ if __name__ == "__main__":
                 "bench_type": self.bench_type,
             },
         )
-        logger.info(f"[{self.op_name}] baseline 结果已写入 Verifier Data Cache")
+        if written_path:
+            logger.info(
+                f"[{self.op_name}] baseline 结果已写入 Verifier Data Cache: "
+                f"cache_file={written_path}, cache_key={cache_key}, "
+                f"cache_dir={cache_cfg.cache_dir}"
+            )
 
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""

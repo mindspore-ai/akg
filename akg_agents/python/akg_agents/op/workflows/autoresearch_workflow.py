@@ -77,7 +77,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             },
             "task_desc": {
                 "type": "string",
-                "description": "任务描述。KernelBench 时为 Model/get_inputs 框架代码；SOL 时可为 SOL JSON/简述，并配合 sol_problem_* 输入",
+                "description": "框架代码（Model/get_inputs）",
             },
             "previous_code": {
                 "type": "string",
@@ -102,27 +102,6 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             "arch": {
                 "type": "string",
                 "description": "架构，如 'a100', 'ascend910b4'",
-            },
-            "bench_type": {
-                "type": "string",
-                "enum": ["kernelbench", "sol"],
-                "description": "Benchmark 类型。默认 'kernelbench'；使用 SOL-ExecBench 输入时设为 'sol'",
-                "default": "kernelbench",
-            },
-            "sol_problem_dir": {
-                "type": "string",
-                "description": "SOL-ExecBench case 目录，需包含 definition.json、workload.jsonl、reference.py；bench_type='sol' 时可选",
-                "default": "",
-            },
-            "sol_problem_json": {
-                "type": "string",
-                "description": "SOL-ExecBench 三文件 JSON 或原始 SOL record JSON 字符串；bench_type='sol' 时可选",
-                "default": "",
-            },
-            "sol_task_code": {
-                "type": "string",
-                "description": "OpTaskBuilder 生成的 SOL JSON/Markdown 任务内容；bench_type='sol' 时可选",
-                "default": "",
             },
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend", "arch"],
@@ -205,7 +184,6 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 arch=arch,
                 config=workflow_config,
                 worker=None,
-                bench_type=bench_type,
             )
 
             # ---- 2. Preflight: validate reference + resolve seed ----
@@ -240,40 +218,28 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 }
 
             try:
-                # b) Validate reference. SOL uses definition/workload/reference
-                # files, so KernelBench task_desc checks are intentionally
-                # skipped and replaced by SOL materialization validation.
-                if bench_type == "sol":
-                    from akg_agents.op.verifier.sol_format import ensure_sol_problem_dir
-                    ensure_sol_problem_dir(
-                        config=workflow_config,
-                        work_dir=os.path.expanduser(workflow_config.get("log_dir", "/tmp")),
-                        op_name=op_name,
-                        task_desc=task_desc,
-                    )
-                    logger.info("[AutoresearchWorkflow] SOL problem files validated OK")
-                else:
-                    ref_ok, ref_err = verifier.check_task_desc_static(task_desc)
-                    if not ref_ok:
-                        return {
-                            "verifier_result": False,
-                            "verifier_error": f"Reference static check failed: {ref_err}",
-                        }
+                # b) Validate reference
+                ref_ok, ref_err = verifier.check_task_desc_static(task_desc)
+                if not ref_ok:
+                    return {
+                        "verifier_result": False,
+                        "verifier_error": f"Reference static check failed: {ref_err}",
+                    }
 
-                    verifier.worker = _pf_worker
-                    ref_ok, ref_err = await verifier.check_task_desc_runtime(
-                        task_desc, timeout=300)
-                    verifier.worker = None
-                    if not ref_ok:
-                        return {
-                            "verifier_result": False,
-                            "verifier_error": (
-                                f"Reference runtime check failed: {ref_err}. "
-                                f"The torch reference (task_desc) must execute "
-                                f"successfully before optimization can start."
-                            ),
-                        }
-                    logger.info("[AutoresearchWorkflow] Reference validated OK")
+                verifier.worker = _pf_worker
+                ref_ok, ref_err = await verifier.check_task_desc_runtime(
+                    task_desc, timeout=300)
+                verifier.worker = None
+                if not ref_ok:
+                    return {
+                        "verifier_result": False,
+                        "verifier_error": (
+                            f"Reference runtime check failed: {ref_err}. "
+                            f"The torch reference (task_desc) must execute "
+                            f"successfully before optimization can start."
+                        ),
+                    }
+                logger.info("[AutoresearchWorkflow] Reference validated OK")
 
                 # Runtime verify helper for seed candidates.
                 async def _verify_seed(code: str) -> tuple[bool, str, str]:
@@ -335,7 +301,6 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                                     arch=arch,
                                     previous_code=state.get("previous_code", ""),
                                     code_check_errors=code_check_errors,
-                                    bench_type=bench_type,
                                     model_level=_self.config.get(
                                         "agent_model_config", {},
                                     ).get("coder", "standard"),
