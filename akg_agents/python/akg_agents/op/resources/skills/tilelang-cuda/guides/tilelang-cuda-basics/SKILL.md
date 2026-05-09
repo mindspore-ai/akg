@@ -174,7 +174,70 @@ def matmul(M, N, K, block_M, block_N, block_K):
 - **软件流水线**：`T.Pipelined` 重叠内存加载和计算
 - **内置矩阵乘法**：`T.gemm` 利用 Tensor Core 加速
 
-### 4.3 矩阵向量乘法（GEMV）
+### 4.3 逐元素操作（Shared Memory + Fragment 模式）
+
+```python
+@tilelang.jit(out_idx=[-1])
+def elementwise_add(M, N, block_M, block_N, in_dtype, out_dtype, threads):
+    @T.prim_func
+    def elem_add(A: T.Tensor((M, N), in_dtype),
+                 B: T.Tensor((M, N), in_dtype),
+                 C: T.Tensor((M, N), out_dtype)):
+
+        with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=threads) as (bx, by):
+            A_shared = T.alloc_shared((block_M, block_N), in_dtype)
+            B_shared = T.alloc_shared((block_M, block_N), in_dtype)
+            C_local = T.alloc_fragment((block_M, block_N), out_dtype)
+            C_shared = T.alloc_shared((block_M, block_N), out_dtype)
+
+            T.copy(A[by * block_M, bx * block_N], A_shared)
+            T.copy(B[by * block_M, bx * block_N], B_shared)
+            for local_y, local_x in T.Parallel(block_M, block_N):
+                C_local[local_y, local_x] = A_shared[local_y, local_x] + B_shared[local_y, local_x]
+            T.copy(C_local, C_shared)
+            T.copy(C_shared, C[by * block_M, bx * block_N])
+
+    return elem_add
+```
+
+**关键概念**：
+- **标准数据流**: GM → Shared → Fragment → 计算 → Fragment → Shared → GM
+- **ReLU 模式**: 在 fragment 中 `T.max(x, 0)`，不是 `T.relu`
+- **tilelang 中没有 `T.tile.relu`**，CUDA 后端使用 `T.max(value, 0)` 表达 ReLU
+
+### 4.4 动态 Shape
+
+```python
+@tilelang.jit(out_idx=[-1])
+def relu_dynamic(block_M, block_N):
+    M = T.dynamic("m")
+    N = T.dynamic("n")
+
+    @T.prim_func
+    def main(X: T.Tensor((M, N), "float32"),
+             Y: T.Tensor((M, N), "float32")):
+
+        with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=128) as (bx, by):
+            X_shared = T.alloc_shared((block_M, block_N), "float32")
+            Y_local = T.alloc_fragment((block_M, block_N), "float32")
+            Y_shared = T.alloc_shared((block_M, block_N), "float32")
+
+            T.copy(X[by * block_M, bx * block_N], X_shared)
+            T.copy(X_shared, Y_local)
+            for i, j in T.Parallel(block_M, block_N):
+                Y_local[i, j] = T.max(Y_local[i, j], 0)
+            T.copy(Y_local, Y_shared)
+            T.copy(Y_shared, Y[by * block_M, bx * block_N])
+
+    return main
+
+# 同一编译内核可复用于不同 shape：
+# kernel = relu_dynamic(128, 256)
+# y1 = kernel(torch.randn(1024, 2048, device="cuda"))
+# y2 = kernel(torch.randn(512, 128, device="cuda"))
+```
+
+### 4.5 矩阵向量乘法（GEMV）
 
 ```python
 @tilelang.jit(out_idx=[-1])
@@ -307,3 +370,55 @@ def atomic_reduction(N, K, BLOCK_N, reduce_threads):
 5. **⚠️ 同步使用错误**：条件分支中的同步会导致死锁
 6. **⚠️ 线程索引获取错误**：使用 `T.get_thread_binding()` 而非 `T.Parallel()`
 7. **⚠️ out_idx 使用错误**：额外传输出张量导致参数数量不匹配
+8. **⚠️ ReLU 写法错误**：CUDA 使用 `T.max(x, 0)`，不是 `T.tile.relu`（那是 Ascend 后端）
+
+## 7. 编译与 Profiling
+
+### 7.1 编译 API
+
+```python
+# 方式一：@tilelang.jit 装饰器（推荐）
+@tilelang.jit(out_idx=[-1], target="cuda")
+def my_kernel(M, N, ...):
+    @T.prim_func
+    def main(...): ...
+    return main
+
+kernel = my_kernel(1024, 1024, ...)
+output = kernel(input_tensor)
+
+# 方式二：tilelang.compile 函数
+func = my_kernel(1024, 1024, ...)
+kernel = tilelang.compile(func, out_idx=[-1], target="cuda")
+output = kernel(input_tensor)
+```
+
+- **target**: `"cuda"` | `"cuda -arch=sm_80"` | `"cuda -arch=sm_90"` | `"hip"` | `"cpu"` | `"auto"`
+- **out_idx**: 指定输出张量的索引，`-1` 表示最后一个参数
+- **不指定 target 时**：从输入张量的设备自动推断
+
+### 7.2 Profiling / Benchmark
+
+```python
+from tilelang.profiler import do_bench
+
+kernel = my_kernel(1024, 1024, ...)
+x = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+
+# 基本用法
+latency = do_bench(lambda: kernel(x), backend="event")
+
+# 指定 warmup/repeat 时间和返回模式
+latency = do_bench(
+    lambda: kernel(x),
+    warmup=25,       # warmup 目标时间(ms)
+    rep=100,         # 评测目标时间(ms)
+    backend="event", # "event" | "cupti" | "cudagraph"
+    return_mode="min" # "mean" | "median" | "min" | "max"
+)
+```
+
+- **do_bench 自动管理**：L2 cache flush (256MB)、warmup 迭代数计算、CUDA Event 高精度计时
+- **backend="event"**: 默认，使用 CUDA Event 计时
+- **backend="cupti"**: 使用 CUPTI profiler，更精确但需要 CUPTI
+- **backend="cudagraph"**: 使用 CUDA graph replay，最小化 host overhead

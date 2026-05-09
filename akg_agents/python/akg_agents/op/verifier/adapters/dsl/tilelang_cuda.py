@@ -21,18 +21,18 @@ from .base import DSLAdapter
 
 class DSLAdapterTilelangCuda(DSLAdapter):
     """Adapter for TileLang CUDA DSL."""
-    
+
     def get_import_statements(self, framework: str) -> str:
         """Return TileLang CUDA import statements."""
         code = "import tilelang\nimport tilelang.language as T\n"
         if framework == "torch":
             code = "import torch\n" + code
         return code
-    
+
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation ModelNew import."""
         return f"from {op_name}_tilelang_cuda_impl import ModelNew\n"
-    
+
     def create_impl_module(
         self,
         framework: str,
@@ -45,45 +45,69 @@ class DSLAdapterTilelangCuda(DSLAdapter):
         if framework == "torch":
             code += f"impl_model = impl_model.to({device_var})\n"
         return code
-    
+
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
-                  framework_adapter: Any, op_name: str, 
-                  data_dir: Optional[str] = None, 
+                  framework_adapter: Any, op_name: str,
+                  data_dir: Optional[str] = None,
                   framework_output: Optional[str] = None) -> str:
         """Return code string to call TileLang CUDA implementation function."""
         return f"impl_output = impl_model(*{inputs})\n"
-    
+
     def needs_binary_io(self) -> bool:
         """TileLang CUDA doesn't need binary I/O."""
         return False
-    
+
     def needs_compilation(self) -> bool:
         """TileLang CUDA doesn't need compilation."""
         return False
-    
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
-                      warmup: int, runs: int, backend: str, op_name: str,
-                      case_idx: int = 0, framework_model: Optional[str] = None,
-                      framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None,
-                      framework: str = "torch") -> str:
-        """Return code string to benchmark TileLang CUDA implementation."""
-        # Similar to cuda_c, use traditional timing
-        sync_code = "torch.cuda.synchronize()" if backend == "cuda" else ""
-        code = f"""        # dsl：tilelang_cuda
-        import time
-        def tilelang_cuda_benchmark_fn():
+
+    def benchmark_impl(self, impl_func_name: str, inputs: str,
+                       warmup: int, runs: int, backend: str, op_name: str,
+                       case_idx: int = 0, framework_model: Optional[str] = None,
+                       framework_adapter: Optional[Any] = None,
+                       device_id: Optional[int] = None,
+                       framework: str = "torch") -> str:
+        """Return code string to benchmark TileLang CUDA implementation.
+
+        Uses tilelang.profiler.do_bench (CUDA event backend) with L2 cache flush.
+        """
+        code = f"""
+        import torch
+        torch.cuda.synchronize()
+
+        def tilelang_benchmark_fn():
             return impl_model(*{inputs})
+
+        # 先执行一次确保编译完成
+        tilelang_benchmark_fn()
+        torch.cuda.synchronize()
+
+        # L2 cache 清除 buffer（256MB，对齐 tilelang.profiler.do_bench）
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
+
+        # 使用 torch.cuda.Event 高精度计时
+        start_event = [torch.cuda.Event(enable_timing=True) for _ in range({runs})]
+        end_event = [torch.cuda.Event(enable_timing=True) for _ in range({runs})]
+
+        # warmup
         for _ in range({warmup}):
-            _ = tilelang_cuda_benchmark_fn()
-            {sync_code}
-        start_time = time.time()
-        for _ in range({runs}):
-            _ = tilelang_cuda_benchmark_fn()
-            {sync_code}
-        end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / max({runs}, 1)
-        method = "cuda_loop_timer"
+            cache.zero_()
+            tilelang_benchmark_fn()
+        torch.cuda.synchronize()
+
+        # timing
+        for i in range({runs}):
+            cache.zero_()
+            start_event[i].record()
+            tilelang_benchmark_fn()
+            end_event[i].record()
+
+        torch.cuda.synchronize()
+        times = torch.tensor(
+            [s.elapsed_time(e) for s, e in zip(start_event, end_event)],
+            dtype=torch.float,
+        )
+        execution_time_ms = torch.min(times).item()
+        method = "tilelang_event_timing"
 """
         return code
-
