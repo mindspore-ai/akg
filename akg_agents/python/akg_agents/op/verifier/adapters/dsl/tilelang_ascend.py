@@ -65,47 +65,54 @@ except ImportError:
                       framework_adapter: Optional[Any] = None,
                       device_id: Optional[int] = None,
                       clear_l2_cache: bool = True) -> str:
-        if backend == "ascend":
-            code = f"""
-        import time
+        """Return code string to benchmark TileLang Ascend implementation.
+
+        对齐 tilelang.profiler.do_bench 的实现：
+        - 使用 torch.npu.Event 高精度计时
+        - 支持 L2 cache 清除（256MB buffer + zero_）
+        - 自动 warmup 和多次测量取最小值
+        """
+        code = f"""
         import torch
 
         def tilelang_benchmark_fn():
             return impl_model(*{inputs})
+
+        # 先执行一次确保编译完成
+        tilelang_benchmark_fn()
+        torch.npu.synchronize()
+
+        # L2 cache 清除 buffer（对齐 tilelang.profiler.do_bench）
+        cache = None
+        if {clear_l2_cache}:
+            cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="npu")
+
+        # 使用 torch.npu.Event 高精度计时
+        start_event = [torch.npu.Event(enable_timing=True) for _ in range({runs})]
+        end_event = [torch.npu.Event(enable_timing=True) for _ in range({runs})]
 
         # warmup
         for _ in range({warmup}):
-            _ = tilelang_benchmark_fn()
-            torch.npu.synchronize()
+            if cache is not None:
+                cache.zero_()
+            tilelang_benchmark_fn()
+        torch.npu.synchronize()
 
         # timing
-        start_time = time.time()
-        for _ in range({runs}):
-            _ = tilelang_benchmark_fn()
-            torch.npu.synchronize()
-        end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / {runs}
-        method = "traditional_timing"
-"""
-        else:
-            code = f"""
-        import time
-        import torch
+        for i in range({runs}):
+            if cache is not None:
+                cache.zero_()
+            start_event[i].record()
+            tilelang_benchmark_fn()
+            end_event[i].record()
 
-        def tilelang_benchmark_fn():
-            return impl_model(*{inputs})
-
-        for _ in range({warmup}):
-            _ = tilelang_benchmark_fn()
-            torch.npu.synchronize()
-
-        start_time = time.time()
-        for _ in range({runs}):
-            _ = tilelang_benchmark_fn()
-            torch.npu.synchronize()
-        end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / {runs}
-        method = "traditional_timing"
+        torch.npu.synchronize()
+        times = torch.tensor(
+            [s.elapsed_time(e) for s, e in zip(start_event, end_event)],
+            dtype=torch.float,
+        )
+        execution_time_ms = torch.min(times).item()
+        method = "tilelang_event_timing"
 """
         return code
 

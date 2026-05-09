@@ -76,6 +76,20 @@ class ModelNew(torch.nn.Module):
     def forward(self, ...):
         # 调用kernel函数
         return {{ op_name }}_kernel(...)
+{% elif "tilelang_cuda" in dsl or "tilelang_ascend" in dsl %}
+import tilelang
+import tilelang.language as T
+import torch
+import torch.nn as nn
+
+class ModelNew(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # 具体实现参考对应 skill
+
+    def forward(self, x):
+        # 具体实现参考对应 skill
+        return kernel(x)
 {% elif dsl == "cpp" %}
 import torch
 import torch.nn as nn
