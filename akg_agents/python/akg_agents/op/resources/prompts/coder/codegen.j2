@@ -447,6 +447,20 @@ class ModelNew(torch.nn.Module):
     def forward(self, ...):
         # 调用kernel函数
         return {{ op_name }}_kernel(...)
+{% elif "tilelang_cuda" in dsl or "tilelang_ascend" in dsl %}
+import tilelang
+import tilelang.language as T
+import torch
+import torch.nn as nn
+
+class ModelNew(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # 参数提取逻辑参考 skill 中的 tilelang-ascend-basics 和 tilelang-ascend-example-relu
+    
+    def forward(self, x):
+        # kernel 调用逻辑参考 skill 中的示例
+        return kernel(x)
 {% elif dsl == "cpp" %}
 import torch
 import torch.nn as nn
@@ -638,7 +652,7 @@ def construct(self, input_tensor, ...):
 ```
 {% endif %}
 
-{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl or "tilelang_cuda" in dsl or "tilelang_ascend" in dsl %}
 6. 卷积类算子生成注意事项：
 请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证ModelNew的卷积核权重与当前任务代码的卷积核权重一致，需要在ModelNew的`__init__`中通过固定随机种子构建参数：
 ```python

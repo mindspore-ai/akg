@@ -1,15 +1,30 @@
+# Log configuration
 log_dir: "~/akg_agents_logs"
+
+# Workflow configuration
 default_workflow: "default_workflow"
 max_step: 20
 
+# Documentation directory configuration
 docs_dir:
   designer: "op/resources/docs/sketch_docs"
   coder: "op/resources/docs/tilelang_ascend_docs"
+  sketch: "op/resources/docs/sketch_docs"
 
+# Performance analysis configuration
 profile_settings:
   run_times: 50
   warmup_times: 5
 
+# Verification configuration
 verify_timeout: 600
 
+# Multi-case testing configuration
 enable_multi_case_verification: false
+enable_hint_mode: false
+enable_llm_range_inference: false
+
+# Hint mode sampling configuration
+multi_case_num: 10
+sampling_strategy: "mixed"
+sampling_seed: 42
