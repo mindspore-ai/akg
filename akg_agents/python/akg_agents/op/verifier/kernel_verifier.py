@@ -188,7 +188,7 @@ class KernelVerifier:
         elif self.dsl == "torch":
             # 对于 torch DSL (Kernel → PyTorch 转换，支持 Triton/CUDA C 等)，统一使用 ModelNew 类格式
             self.impl_func_name = impl_func_name or "ModelNew"
-        elif self.dsl == "tilelang_ascend":
+        elif self.dsl == "tilelang_ascend" or self.dsl == "tilelang_cuda":
             self.impl_func_name = impl_func_name or "ModelNew"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"

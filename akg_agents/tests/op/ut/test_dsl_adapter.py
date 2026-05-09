@@ -238,9 +238,10 @@ class TestDSLAdapterTilelangCuda:
     def test_benchmark_impl(self):
         adapter = get_dsl_adapter("tilelang_cuda")
         code = adapter.benchmark_impl("test_func", "inputs", 5, 50, "cuda", "test_op")
-        assert "tilelang_cuda_benchmark_fn" in code
+        assert "tilelang_benchmark_fn" in code
         assert "impl_model(*inputs)" in code
         assert "torch.cuda.synchronize()" in code
+        assert "torch.cuda.Event" in code
 
 
 class TestDSLAdapterFactory:
