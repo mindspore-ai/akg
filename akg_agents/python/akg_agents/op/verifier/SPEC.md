@@ -9,6 +9,7 @@
 ```
 verifier/
 ├── kernel_verifier.py         # KernelVerifier — 验证入口，组合三类适配器
+├── data_cache.py              # Verifier Data Cache — reference data / baseline 持久缓存
 ├── sol_verifier.py            # SOL-ExecBench 格式验证的专用生成器
 ├── profiler.py                # NPU/CUDA 性能采集
 ├── profiler_utils.py          # profile 脚本执行、msprof/nsys 解析
@@ -52,6 +53,19 @@ verifier/
 ### KernelVerifier 核心逻辑
 
 `KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例，然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
+
+### Verifier Data Cache
+
+- 仅作用于 `KernelBench` 风格验证链路
+- reference data cache：复用 `generate_reference_data(save_inputs=True)` 产出的 `.pt`
+- baseline cache：复用 `base_profile_result.json` / `avg_time_us`
+- 默认关闭；开启后在 `~/.akg/verifier_data_cache/` 下持久化
+- 命中 reference data 时，验证脚本改为直接复用 inputs / outputs，不再重复执行 framework baseline
+- reference data cache 仅覆盖静态 shape；动态 shape 自动跳过，避免误复用单组输入
+- reference data 命中后会校验 `.pt` payload，损坏或缺少可复用字段时删除旧缓存并重新生成
+- 命中 baseline cache 时，profile 直接注入 `override_base_time_us` 并跳过 base profile 脚本
+- cache key 默认包含 `task_id`；配置了 `data_cache.cache_key_id` 时使用该稳定身份，以支持同一工作流内多个 verifier task 复用 cache
+- baseline cache key 还必须包含 DSL，避免同一 framework/backend/arch 下不同计时路径相互污染
 
 ### Roofline 集成
 
