@@ -21,7 +21,7 @@ class Model(nn.Cell):
     
     def __init__(self):
         super().__init__()
-        ms.set_seed(0)  # 添加随机种子
+        ms.manual_seed(0)  # 添加随机种子
 
     def construct(self, x: ms.Tensor) -> ms.Tensor:
         """前向计算"""
@@ -35,7 +35,7 @@ dim = 16384
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, dim, dtype=ms.float16)
+    x = ms.mint.randn(batch_size, dim, dtype=ms.float32)
     return [x]
 
 

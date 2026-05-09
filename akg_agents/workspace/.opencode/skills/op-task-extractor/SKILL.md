@@ -3,7 +3,7 @@ name: op-task-extractor
 description: >
   从用户提供的代码或自然语言描述，构建标准化的单文件自包含任务代码。
 argument-hint: >
-  需要提供：1) 用户代码文件路径或自然语言描述；2) 可选：shape/dtype 信息来源文件路径
+  需要提供：1) 用户代码文件路径或自然语言描述；2) 可选：shape/dtype 信息来源文件路径；3) 可选：框架配置，默认值为 torch
 ---
 
 ## What I do
@@ -44,9 +44,10 @@ Step 5  用户确认
 
 ### Step 3: 构建 {op_name}.py
 
-按末尾「输出格式」生成文件，用 PyTorch/Python 实现：
+按末尾「输出格式」生成文件，根据 `framework` 配置用对应的框架实现：
 
-- 将算子逻辑包装到 `Model.forward()` 中
+通用规则：
+- 将算子逻辑包装到 `Model` 的前向方法中
 - 如有初始化状态（权重、参数），放入 `Model.__init__()`
 - 将所有自定义依赖内联到文件中
 - 根据 shape/dtype 信息构建 `get_inputs()` 和 `get_init_inputs()`
@@ -94,28 +95,7 @@ python <本skill绝对路径>/scripts/validate_kernelbench_task.py \
 
 ## 输出格式
 
-最终文件必须是**单一自包含 Python 文件**，包含以下 4 个部分：
+按 `framework` 选择对应文件格式示例：
 
-```python
-# 1. Imports 区（只允许标准库和 PyTorch 相关包）
-import torch
-import torch.nn as nn
-
-# 2. Model 类
-class Model(nn.Module):
-    def __init__(self, <init_params>):
-        super(Model, self).__init__()
-
-    def forward(self, <forward_inputs>) -> torch.Tensor:
-        return output
-
-# 3. get_inputs()：返回 forward() 的输入参数列表
-def get_inputs():
-    input1 = torch.randn(batch_size, dim)
-    input2 = torch.randn(batch_size, dim)
-    return [input1, input2]
-
-# 4. get_init_inputs()：返回 __init__() 的初始化参数列表
-def get_init_inputs():
-    return [dim_value]
-```
+- **torch**：PyTorch 版本：`@references/torch-task-example.md`
+- **mindspore**：MindSpore 版本：`@references/mindspore-task-example.md`

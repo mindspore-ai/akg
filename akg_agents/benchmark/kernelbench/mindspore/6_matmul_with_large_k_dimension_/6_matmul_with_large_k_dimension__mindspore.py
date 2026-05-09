@@ -32,8 +32,8 @@ K = 131072
 
 
 def get_inputs():
-    A = ms.ops.randn(M, K, dtype=ms.float16)
-    B = ms.ops.randn(K, N, dtype=ms.float16)
+    A = ms.mint.randn(M, K, dtype=ms.float32)
+    B = ms.mint.randn(K, N, dtype=ms.float32)
     return [A, B]
 
 

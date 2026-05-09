@@ -31,9 +31,9 @@ N = 4096
 
 def get_inputs():
     
-    A = ms.ops.randn(N, N, dtype=ms.float16)
+    A = ms.mint.randn(N, N, dtype=ms.float32)
     A = (A + A.T) / 2  # Ensure symmetry
-    B = ms.ops.randn(N, N, dtype=ms.float16)
+    B = ms.mint.randn(N, N, dtype=ms.float32)
     B = (B + B.T) / 2  # Ensure symmetry
     return [A, B]
 

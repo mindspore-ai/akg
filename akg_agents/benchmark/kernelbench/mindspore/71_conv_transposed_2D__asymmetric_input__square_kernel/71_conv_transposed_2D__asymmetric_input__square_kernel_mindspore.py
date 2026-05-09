@@ -33,7 +33,7 @@ height_in = 128
 width_in = 256
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, in_channels, height_in, width_in)
+    x = ms.mint.randn(batch_size, in_channels, height_in, width_in)
     return [x]
 
 def get_init_inputs():

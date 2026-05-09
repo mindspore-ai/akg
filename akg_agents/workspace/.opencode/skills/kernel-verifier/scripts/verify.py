@@ -152,9 +152,9 @@ def setup_device(framework, backend, device_id):
     elif framework == "mindspore":
         import mindspore as ms
         if backend == "ascend":
-            ms.set_context(device_target="Ascend", device_id=max(device_id, 0))
+            ms.set_device("Ascend", max(device_id, 0))
         elif backend == "cpu":
-            ms.set_context(device_target="CPU")
+            ms.set_device("CPU")
         else:
             raise ValueError(f"mindspore 不支持 backend: {backend}")
         return None
@@ -173,7 +173,7 @@ def set_seed(framework, backend, seed=0):
             torch.cuda.manual_seed(seed)
     elif framework == "mindspore":
         import mindspore as ms
-        ms.set_seed(seed)
+        ms.manual_seed(seed)
 
 
 def verify_implementations(op_name, dsl, backend, framework, device_id, verify_dir):

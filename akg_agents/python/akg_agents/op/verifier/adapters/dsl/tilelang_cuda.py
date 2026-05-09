@@ -65,7 +65,8 @@ class DSLAdapterTilelangCuda(DSLAdapter):
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
+                      device_id: Optional[int] = None,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark TileLang CUDA implementation."""
         # Similar to cuda_c, use traditional timing
         sync_code = "torch.cuda.synchronize()" if backend == "cuda" else ""

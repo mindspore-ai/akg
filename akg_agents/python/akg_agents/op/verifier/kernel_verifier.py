@@ -321,7 +321,68 @@ class KernelVerifier:
             self._write_framework_aux_files(check_dir)
 
             # 3. 生成验证脚本 verify_{op_name}.py
-            verify_script_content = f"""
+            if self.framework == "mindspore":
+                verify_script_content = f"""
+import mindspore as ms
+import sys
+import os
+
+sys.path.append(os.getcwd())
+os.environ['DEVICE_ID'] = str({device_id})
+
+def run_check():
+    print("Starting reference check...")
+    try:
+        try:
+            from reference import Model, get_inputs, get_init_inputs
+        except ImportError as e:
+            print(f"Import failed: {{e}}")
+            return False
+
+        print("Successfully imported Model and helper functions.")
+
+        ms.set_context(device_target="Ascend", device_id={device_id})
+        print(f"Using device: Ascend:{device_id}")
+
+        try:
+            init_inputs = get_init_inputs()
+            model = Model(*init_inputs)
+        except Exception as e:
+            print(f"Model instantiation failed: {{e}}")
+            return False
+
+        try:
+            inputs = get_inputs()
+        except Exception as e:
+            print(f"get_inputs failed: {{e}}")
+            return False
+
+        try:
+            output = model(*inputs)
+            print("Forward pass successful.")
+        except Exception as e:
+            print(f"Forward pass failed: {{e}}")
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"Unexpected error: {{e}}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = run_check()
+    if success:
+        print("REFERENCE_CHECK_SUCCESS")
+        sys.exit(0)
+    else:
+        print("REFERENCE_CHECK_FAILED")
+        sys.exit(1)
+"""
+            else:
+                verify_script_content = f"""
 import torch
 import sys
 import os
@@ -1453,7 +1514,7 @@ if __name__ == "__main__":
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             logger.debug(f"[{self.op_name}] DSL impl import生成成功 (长度: {len(dsl_impl_import)})")
 
-            special_setup_code = dsl_adapter.get_special_setup_code()
+            special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
             logger.debug(f"[{self.op_name}] Special setup code生成成功 (长度: {len(special_setup_code)})")
 
             # 生成设备设置代码
@@ -1717,7 +1778,7 @@ if __name__ == "__main__":
                     pypto_runtime_debug_mode=1,
                 )
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
-            special_setup_code = dsl_adapter.get_special_setup_code()
+            special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
 
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
@@ -1760,7 +1821,8 @@ if __name__ == "__main__":
                     self.backend, self.op_name, case_idx=0,
                     framework_model="framework_model" if needs_binary_io else None,
                     framework_adapter=framework_adapter if needs_binary_io else None,
-                    device_id=device_id if needs_binary_io else None
+                    device_id=device_id if needs_binary_io else None,
+                    framework=self.framework
                 )
                 logger.debug(f"[{self.op_name}] Generation benchmark代码生成成功 (长度: {len(benchmark_code)})")
         except Exception as e:
@@ -1850,9 +1912,19 @@ if __name__ == "__main__":
             return code
         elif "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.backend == "ascend":
-                # 确定 DSL 类型用于 L2 cache 清除
                 dsl_type = "triton_ascend" if "triton_ascend" in self.dsl else "other"
-                code = f"""        # 导入profiler以支持性能测试
+                framework_arg = f', framework="{self.framework}"' if self.framework == "mindspore" else ""
+                set_framework_code = ""
+                if self.framework == "mindspore":
+                    set_framework_code = """        import os
+        os.environ["TRITON_BACKEND"] = "mindspore"
+        try:
+            from akg_agents.op.utils.triton_autotune_patch import set_framework
+            set_framework("mindspore")
+        except ImportError:
+            pass
+"""
+                code = f"""{set_framework_code}        # 导入profiler以支持性能测试
         try:
             from akg_agents.op.verifier.profiler import profiler_npu
             patch_imported = True
@@ -1875,7 +1947,7 @@ if __name__ == "__main__":
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
-                dsl="{dsl_type}"
+                dsl="{dsl_type}"{framework_arg}
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"
@@ -1925,7 +1997,18 @@ if __name__ == "__main__":
             )
             # 对于其他 DSL（非 triton），如果是 ascend 后端也支持 L2 cache 清除
             if self.backend == "ascend":
-                code = f"""        # 非triton实现，使用 profiler_npu 计时
+                framework_arg = f', framework="{self.framework}"' if self.framework == "mindspore" else ""
+                set_framework_code = ""
+                if self.framework == "mindspore":
+                    set_framework_code = """        import os
+        os.environ["TRITON_BACKEND"] = "mindspore"
+        try:
+            from akg_agents.op.utils.triton_autotune_patch import set_framework
+            set_framework("mindspore")
+        except ImportError:
+            pass
+"""
+                code = f"""{set_framework_code}        # 非triton实现，使用 profiler_npu 计时
         try:
             from akg_agents.op.verifier.profiler import profiler_npu
             patch_imported = True
@@ -1936,7 +2019,6 @@ if __name__ == "__main__":
             return framework_model(*inputs)
         
         if patch_imported:
-            # 使用 L2 cache 清除（fallback 方式，使用 zero_()）
             execution_time_us = profiler_npu(
                 base_benchmark_fn,
                 warmup={warmup},
@@ -1945,7 +2027,7 @@ if __name__ == "__main__":
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
-                dsl="other"
+                dsl="other"{framework_arg}
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"

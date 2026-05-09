@@ -30,8 +30,8 @@ M = 4096
 
 
 def get_inputs():
-    A = ms.ops.randn(M, M, dtype=ms.float16)
-    B = ms.ops.randn(M, M, dtype=ms.float16)
+    A = ms.mint.randn(M, M, dtype=ms.float32)
+    B = ms.mint.randn(M, M, dtype=ms.float32)
     A = ms.ops.tril(A)
     B = ms.ops.tril(B)
     return [A, B]

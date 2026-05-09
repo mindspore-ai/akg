@@ -33,8 +33,8 @@ L = 768
 
 
 def get_inputs():
-    A = ms.ops.randn(N, M, K, dtype=ms.float16)
-    B = ms.ops.randn(K, L, dtype=ms.float16)
+    A = ms.mint.randn(N, M, K, dtype=ms.float32)
+    B = ms.mint.randn(K, L, dtype=ms.float32)
     return [A, B]
 
 

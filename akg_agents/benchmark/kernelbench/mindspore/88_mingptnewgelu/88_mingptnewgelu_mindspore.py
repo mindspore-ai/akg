@@ -31,7 +31,7 @@ dim = 2000
 
 
 def get_inputs():
-    return [ms.ops.randn(batch_size, dim)]
+    return [ms.mint.randn(batch_size, dim)]
 
 
 def get_init_inputs():

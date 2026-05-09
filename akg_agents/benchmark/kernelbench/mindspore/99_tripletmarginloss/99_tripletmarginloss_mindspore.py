@@ -33,9 +33,9 @@ input_shape = (4096,)
 dim = 1
 
 def get_inputs():
-    return [ops.randn(batch_size, *input_shape), 
-            ops.randn(batch_size, *input_shape), 
-            ops.randn(batch_size, *input_shape)]
+    return [ms.mint.randn(batch_size, *input_shape), 
+            ms.mint.randn(batch_size, *input_shape), 
+            ms.mint.randn(batch_size, *input_shape)]
 
 def get_init_inputs():
     return [1.0]

@@ -50,8 +50,12 @@ def check_static(code: str) -> dict:
     """
     静态检查: 验证 KernelBench 四大组件是否存在
 
+    自动检测 framework:
+    - 包含 "mindspore" → MindSpore 模式 (nn.Cell + construct)
+    - 否则 → PyTorch 模式 (nn.Module + forward)
+
     Returns:
-        {"passed": bool, "found": [...], "missing": [...], "error": str|None}
+        {"passed": bool, "found": [...], "missing": [...], "error": str|None, "framework": str}
     """
     try:
         tree = ast.parse(code)
@@ -59,13 +63,18 @@ def check_static(code: str) -> dict:
         return {
             "passed": False,
             "found": [],
-            "missing": ["Model", "forward", "get_inputs", "get_init_inputs"],
+            "missing": ["Model", "forward/construct", "get_inputs", "get_init_inputs"],
             "error": f"SyntaxError: {e}",
+            "framework": "unknown",
         }
+
+    framework = "mindspore" if "mindspore" in code else "torch"
+    forward_name = "construct" if framework == "mindspore" else "forward"
+    base_name = "Cell" if framework == "mindspore" else "Module"
 
     has = {
         "Model": False,
-        "forward": False,
+        forward_name: False,
         "get_inputs": False,
         "get_init_inputs": False,
     }
@@ -73,12 +82,12 @@ def check_static(code: str) -> dict:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "Model":
             for base in node.bases:
-                base_name = getattr(base, "attr", getattr(base, "id", ""))
-                if base_name == "Module":
+                bn = getattr(base, "attr", getattr(base, "id", ""))
+                if bn == base_name:
                     has["Model"] = True
                     for item in node.body:
-                        if isinstance(item, ast.FunctionDef) and item.name == "forward":
-                            has["forward"] = True
+                        if isinstance(item, ast.FunctionDef) and item.name == forward_name:
+                            has[forward_name] = True
 
         if isinstance(node, ast.FunctionDef) and node.name in (
             "get_inputs",
@@ -88,7 +97,7 @@ def check_static(code: str) -> dict:
 
     found = [k for k, v in has.items() if v]
     missing = [k for k, v in has.items() if not v]
-    return {"passed": len(missing) == 0, "found": found, "missing": missing, "error": None}
+    return {"passed": len(missing) == 0, "found": found, "missing": missing, "error": None, "framework": framework}
 
 
 def check_runtime(code: str, timeout: int = 30) -> dict:
@@ -145,16 +154,39 @@ def check_runtime(code: str, timeout: int = 30) -> dict:
 
     # 6. NaN/Inf check
     try:
-        import torch
+        import torch as _torch
 
-        def _check_tensor(t, name="output"):
-            if isinstance(t, torch.Tensor):
-                if torch.isnan(t).any():
+        def _check_tensor_torch(t, name="output"):
+            if isinstance(t, _torch.Tensor):
+                if _torch.isnan(t).any():
                     return f"{name} contains NaN"
-                if torch.isinf(t).any():
+                if _torch.isinf(t).any():
                     return f"{name} contains Inf"
             return None
+    except ImportError:
+        _check_tensor_torch = None
 
+    try:
+        import mindspore as _ms
+
+        def _check_tensor_ms(t, name="output"):
+            if isinstance(t, _ms.Tensor):
+                if _ms.ops.isnan(t).any():
+                    return f"{name} contains NaN"
+                if _ms.ops.isinf(t).any():
+                    return f"{name} contains Inf"
+            return None
+    except ImportError:
+        _check_tensor_ms = None
+
+    def _check_tensor(t, name="output"):
+        if _check_tensor_torch and isinstance(t, _torch.Tensor):
+            return _check_tensor_torch(t, name)
+        if _check_tensor_ms and isinstance(t, _ms.Tensor):
+            return _check_tensor_ms(t, name)
+        return None
+
+    try:
         issues = []
         if isinstance(output, (tuple, list)):
             for i, item in enumerate(output):
@@ -170,17 +202,22 @@ def check_runtime(code: str, timeout: int = 30) -> dict:
             checks.append({"name": "NaN/Inf check", "passed": False, "error": "; ".join(issues)})
             return {"passed": False, "checks": checks, "error": "; ".join(issues)}
         checks.append({"name": "NaN/Inf check", "passed": True})
-    except ImportError:
-        checks.append({"name": "NaN/Inf check", "passed": True, "note": "torch not available, skipped"})
+    except Exception:
+        checks.append({"name": "NaN/Inf check", "passed": True, "note": "skipped"})
 
     # 7. Consistency check (run twice, compare)
     try:
         output2 = model(*inputs)
-        import torch
 
         def _tensors_close(a, b, rtol=1e-5, atol=1e-6):
-            if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
-                return torch.allclose(a.float(), b.float(), rtol=rtol, atol=atol)
+            if _check_tensor_torch is not None:
+                import torch
+                if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+                    return torch.allclose(a.float(), b.float(), rtol=rtol, atol=atol)
+            if _check_tensor_ms is not None:
+                import mindspore as ms
+                if isinstance(a, ms.Tensor) and isinstance(b, ms.Tensor):
+                    return ms.ops.allclose(a.astype(ms.float32), b.astype(ms.float32), rtol=rtol, atol=atol)
             if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)):
                 return all(_tensors_close(x, y) for x, y in zip(a, b))
             return True

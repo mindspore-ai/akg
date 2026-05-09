@@ -23,8 +23,20 @@ L2 Cache 清除模块。
 """
 
 from typing import Literal, List
-import torch
-import torch_npu
+
+# 延迟导入 torch/torch_npu，避免在 mindspore 环境下触发 aclInit 冲突
+_torch = None
+_torch_npu = None
+
+
+def _ensure_torch():
+    global _torch, _torch_npu
+    if _torch is None:
+        import torch
+        import torch_npu
+        _torch = torch
+        _torch_npu = torch_npu
+    return _torch, _torch_npu
 
 # 尝试导入 triton（可能未安装）
 try:
@@ -87,8 +99,8 @@ def _get_l2_cache_size(device_id: int = 0) -> int:
         return _l2_cache_size_detected
     
     try:
+        _, torch_npu = _ensure_torch()
         device_props = torch_npu.npu.get_device_properties(device_id)
-        # L2_cache_size 单位是字节
         l2_size = getattr(device_props, 'L2_cache_size', None)
         if l2_size is not None and l2_size > 0:
             _l2_cache_size_detected = l2_size
@@ -96,7 +108,6 @@ def _get_l2_cache_size(device_id: int = 0) -> int:
     except Exception:
         pass
     
-    # 回退到默认值
     _l2_cache_size_detected = L2_CACHE_SIZE_DEFAULT
     return _l2_cache_size_detected
 
@@ -126,9 +137,9 @@ def _get_vec_core_num(device_id: int = 0) -> int:
         return _vec_core_num
     
     try:
+        _, torch_npu = _ensure_torch()
         _vec_core_num = torch_npu.npu.npu_config.get_device_limit(device_id).get("vector_core_num", 40)
     except Exception:
-        # Ascend 910B4 默认: 20个AI Core × 2个VEC/Core = 40
         _vec_core_num = 40
     
     return _vec_core_num
@@ -181,7 +192,7 @@ _l2_cache_buffer = None
 
 def _get_l2_cache_buffer(device_id: int = 0):
     """
-    获取用于清除 L2 cache 的 buffer。
+    获取用于清除 L2 cache 的 buffer（PyTorch 版）。
     使用惰性初始化，避免重复分配内存。
     
     Args:
@@ -193,8 +204,8 @@ def _get_l2_cache_buffer(device_id: int = 0):
     global _l2_cache_buffer
     
     if _l2_cache_buffer is None:
+        torch, _ = _ensure_torch()
         l2_size = _get_l2_cache_size(device_id)
-        # l2_size / 4 bytes = int32 元素个数
         n_elements = l2_size // 4
         _l2_cache_buffer = torch.empty(n_elements, dtype=torch.int32, device='npu')
     
@@ -220,21 +231,16 @@ def clear_l2_cache_triton():
     if not _TRITON_AVAILABLE:
         raise RuntimeError("Triton not available for L2 cache clearing")
     
+    torch, _ = _ensure_torch()
     buffer = _get_l2_cache_buffer()
     n_elements = buffer.numel()
     
-    # 获取 VEC 核心数作为 grid 大小，参考 triton-ascend 编写规范
     core_num = _get_vec_core_num()
     
-    # 使用大 BLOCK_SIZE 提升性能
-    # 32768 个 int32 = 128KB，符合 UB 大小限制
-    # 对于 192MB = 48M 元素，只需要 ~1465 个块，每核心处理约 37 个块
     BLOCK_SIZE = 32768
     
-    # grid 设置为核心数，使用交错循环处理
     grid = (core_num,)
     
-    # 调用 kernel
     AKG_l2cache_clear[grid](buffer, n_elements, BLOCK_SIZE=BLOCK_SIZE, CORE_NUM=core_num)
     torch.npu.synchronize()
 
@@ -246,36 +252,80 @@ def clear_l2_cache_zero():
     警告：此方式会在 profiler 中记录为 "ZerosLike" 类型，
     如果用户代码中也使用了 zeros_like/zero_()，可能导致误过滤。
     """
+    torch, _ = _ensure_torch()
     buffer = _get_l2_cache_buffer()
     buffer.zero_()
     torch.npu.synchronize()
 
 
-def clear_l2_cache(dsl: DslType = "other"):
+# ============================================================================
+# MindSpore 版 L2 Cache Buffer 管理
+# ============================================================================
+
+_l2_cache_buffer_ms = None
+
+
+def _get_l2_cache_buffer_ms():
+    """
+    获取用于清除 L2 cache 的 buffer（MindSpore 版）。
+    使用惰性初始化，避免重复分配内存。
+    
+    MindSpore 的 AscendDeviceProperties 不提供 L2_cache_size，
+    因此使用默认值 L2_CACHE_SIZE_DEFAULT。
+    
+    Returns:
+        mindspore.Tensor: 足以覆盖 L2 cache 大小的 int32 tensor
+    """
+    global _l2_cache_buffer_ms
+    
+    if _l2_cache_buffer_ms is None:
+        import mindspore as ms
+        n_elements = L2_CACHE_SIZE_DEFAULT // 4
+        _l2_cache_buffer_ms = ms.ops.zeros((n_elements,), dtype=ms.int32)
+    
+    return _l2_cache_buffer_ms
+
+
+def clear_l2_cache_zero_ms():
+    """
+    使用 MindSpore tensor.zero_() 清除 L2 cache。
+    
+    警告：此方式会在 profiler 中记录为 "ZerosLike" 类型，
+    如果用户代码中也使用了 zeros_like/zero_()，可能导致误过滤。
+    """
+    import mindspore as ms
+    buffer = _get_l2_cache_buffer_ms()
+    buffer.zero_()
+    ms.runtime.synchronize()
+
+
+def clear_l2_cache(dsl: DslType = "other", framework: str = "torch"):
     """
     清除 L2 cache 的统一入口函数。
     
     Args:
         dsl: DSL 类型，决定使用哪种清除方式
-             - "triton_ascend": 使用专用 triton kernel（推荐）
+             - "triton_ascend": 使用专用 triton kernel（推荐，仅 torch 框架支持）
              - 其他: 使用 tensor.zero_()（fallback）
+        framework: 框架类型 ("torch" 或 "mindspore")，决定使用哪套 tensor 接口
     
     Returns:
         None
     """
+    if framework == "mindspore":
+        clear_l2_cache_zero_ms()
+        return
+
     if dsl == "triton_ascend":
         try:
             clear_l2_cache_triton()
         except Exception as e:
-            # triton kernel 失败，fallback 到 zero_()
             _add_l2_cache_warning(
                 f"[L2 Cache] Triton kernel call failed ({e}), falling back to zero_() method. "
                 "Results may have false positive filtering risk."
             )
             clear_l2_cache_zero()
     else:
-        # 非 triton_ascend DSL，使用 zero_() 方式
-        # 每个 DSL 只警告一次
         if not hasattr(clear_l2_cache, '_warned_for_dsl'):
             clear_l2_cache._warned_for_dsl = set()
         
