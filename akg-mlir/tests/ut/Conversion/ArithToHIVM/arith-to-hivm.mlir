@@ -2222,6 +2222,22 @@ func.func @dynamic_npuvector_transfer_read_write(%in: memref<?xf32>, %out: memre
 
 // -----
 
+func.func @static_npuvector_transfer_read_keeps_static_size(%in: memref<1xf32>, %out: memref<1xf32>) {
+  // CHECK-LABEL: func.func @static_npuvector_transfer_read_keeps_static_size
+  // CHECK-SAME: (%[[IN:.*]]: memref<1xf32>, %[[OUT:.*]]: memref<1xf32>)
+  // CHECK: %[[SV_IN:.*]] = memref.subview %[[IN]][0] [1] [1] : memref<1xf32> to memref<1xf32, strided<[1]>>
+  // CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<1xf32>
+  // CHECK: hivm.hir.load ins(%[[SV_IN]] : memref<1xf32, strided<[1]>>) outs(%[[ALLOC]] : memref<1xf32>)
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0][%c1][%c1], %padding : memref<1xf32>, !npuvector<1xf32>
+  npuvector.transfer_write %vec, %out[%c0] : !npuvector<1xf32>, memref<1xf32>
+  return
+}
+
+// -----
+
 func.func @simple_broadcast_static(%arg0: f32, %out: memref<1024xf32>) {
   // CHECK-LABEL: func.func @simple_broadcast_static
   // CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<1024xf32>
