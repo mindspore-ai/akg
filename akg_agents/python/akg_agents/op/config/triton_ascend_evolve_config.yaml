@@ -21,6 +21,12 @@ profile_settings:
   run_times: 50
   warmup_times: 5
 
+# Verifier Data Cache configuration (disabled by default)
+data_cache:
+  enabled: false
+  cache_reference_data: true
+  cache_baseline_result: true
+
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 verify_per_config: false  # Enable per-config verification for autotune (also controllable via AKG_VERIFY_PER_CONFIG=1)

@@ -30,6 +30,7 @@ from akg_agents.op.adaptive_search.task_pool import AsyncTaskPool
 from akg_agents.op.adaptive_search.ucb_selector import UCBParentSelector
 from akg_agents.op.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
 from akg_agents.op.sketch import Sketch
+from akg_agents.op.verifier.data_cache import set_workflow_data_cache_key_id
 from akg_agents.cli.runtime.message_sender import send_message
 from akg_agents.cli.messages import PanelDataMessage
 
@@ -136,6 +137,15 @@ class AdaptiveSearchController:
             handwrite_decay_rate=self.search_config.handwrite_decay_rate
         )
         self.bench_type = config.get("bench_type", "kernelbench")
+        set_workflow_data_cache_key_id(
+            config,
+            op_name=op_name,
+            framework=framework,
+            dsl=dsl,
+            backend=backend,
+            arch=arch,
+            bench_type=self.bench_type,
+        )
         self.generator = TaskGenerator(
             op_name=op_name,
             task_desc=task_desc,
