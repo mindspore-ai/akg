@@ -110,6 +110,52 @@ module {
     return %0 : tensor<1x32x1x1xf32>
   }
 
+  // A terminal reshape user alone should not be fused by reduce_bwd.
+  // CHECK-LABEL: func.func @test_reduce_bwd_terminal_reshape_user
+  // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4xf32>
+  // CHECK: %[[FUSED0:.*]] = mfuse.fused %[[ARG0]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<2x4xf32>) -> tensor<2x1xf32>
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>):
+  // CHECK: %[[ABS:.*]] = mfuse.abs %[[IN0]] : (tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: %[[REDUCE:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
+  // CHECK: mfuse.yield %[[REDUCE]] : tensor<2x1xf32>
+  // CHECK: %[[RESHAPE:.*]] = mfuse.reshape %[[FUSED0]] : (tensor<2x1xf32>) -> tensor<2xf32>
+  // CHECK: return %[[RESHAPE]] : tensor<2xf32>
+  func.func @test_reduce_bwd_terminal_reshape_user(%arg0: tensor<2x4xf32>) -> tensor<2xf32> {
+    %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<2x4xf32>) -> tensor<2xf32> {
+    ^bb0(%arg1: tensor<2x4xf32>):
+      %1 = mfuse.abs %arg1 : (tensor<2x4xf32>) -> tensor<2x4xf32>
+      %2 = mfuse.reduce_sum %1 {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
+      %3 = mfuse.reshape %2 : (tensor<2x1xf32>) -> tensor<2xf32>
+      mfuse.yield %3 : tensor<2xf32>
+    }
+    return %0 : tensor<2xf32>
+  }
+
+  // Reshape followed by more post-reduce computation should still fuse.
+  // CHECK-LABEL: func.func @test_reduce_bwd_reshape_with_post_op
+  // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4xf32>
+  // CHECK: %[[FUSED:.*]] = mfuse.fused %[[ARG0]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<2x4xf32>) -> tensor<2xf32>
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>):
+  // CHECK: %[[ABS:.*]] = mfuse.abs %[[IN0]] : (tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: %[[REDUCE:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
+  // CHECK: %[[RESHAPE:.*]] = mfuse.reshape %[[REDUCE]] : (tensor<2x1xf32>) -> tensor<2xf32>
+  // CHECK: %[[SQRT:.*]] = mfuse.sqrt %[[RESHAPE]] : (tensor<2xf32>) -> tensor<2xf32>
+  // CHECK: mfuse.yield %[[SQRT]] : tensor<2xf32>
+  // CHECK: return %[[FUSED]] : tensor<2xf32>
+  func.func @test_reduce_bwd_reshape_with_post_op(%arg0: tensor<2x4xf32>) -> tensor<2xf32> {
+    %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<2x4xf32>) -> tensor<2xf32> {
+    ^bb0(%arg1: tensor<2x4xf32>):
+      %1 = mfuse.abs %arg1 : (tensor<2x4xf32>) -> tensor<2x4xf32>
+      %2 = mfuse.reduce_sum %1 {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
+      %3 = mfuse.reshape %2 : (tensor<2x1xf32>) -> tensor<2xf32>
+      %4 = mfuse.sqrt %3 : (tensor<2xf32>) -> tensor<2xf32>
+      mfuse.yield %4 : tensor<2xf32>
+    }
+    return %0 : tensor<2xf32>
+  }
+
   // keepdim=false reductions are not spec-friendly and must stay split.
   // CHECK-LABEL: func.func @test_reduce_bwd_keepdim_false
   // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4xf32>
