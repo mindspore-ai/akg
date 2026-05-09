@@ -659,7 +659,9 @@ class NodeFactory:
                         elif cat == "case" and kernel_gen_instance._infer_case_type(s) == "fix":
                             conductor_skills.append(s)
                     if conductor_skills:
-                        skill_contents_for_conductor = kernel_gen_instance._assemble_skill_contents(conductor_skills)
+                        conductor_sections = kernel_gen_instance._assemble_skill_contents(conductor_skills)
+                        parts = [conductor_sections["fundamentals"], conductor_sections["guides_examples"], conductor_sections["cases"]]
+                        skill_contents_for_conductor = "\n\n---\n\n".join(p for p in parts if p)
                         logger.info(
                             f"[KernelConductor] 复用 KernelGen skill 缓存 (fundamental+guide+fix): "
                             f"{len(conductor_skills)} skills, {len(skill_contents_for_conductor)} chars"

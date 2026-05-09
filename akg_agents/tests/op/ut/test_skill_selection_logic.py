@@ -137,7 +137,8 @@ class TestAssembleSkillContents:
         content: str = "content"
 
     def test_empty_list(self, kg):
-        assert kg._assemble_skill_contents([]) == ""
+        result = kg._assemble_skill_contents([])
+        assert result == {"fundamentals": "", "guides_examples": "", "cases": ""}
 
     def test_section_order(self, kg):
         skills = [
@@ -147,8 +148,10 @@ class TestAssembleSkillContents:
             self.FakeSkill(name="e", category="example", content="e"),
         ]
         result = kg._assemble_skill_contents(skills)
-        assert result.find("基础知识与规范") < result.find("算子优化指南") < \
-               result.find("代码示例参考") < result.find("优化/修复案例")
+        assert "基础知识与规范" in result["fundamentals"]
+        assert "算子优化指南" in result["guides_examples"]
+        assert "代码示例参考" in result["guides_examples"]
+        assert "优化/修复案例" in result["cases"]
 
     def test_fix_and_improvement_in_case_section(self, kg):
         skills = [
@@ -157,9 +160,9 @@ class TestAssembleSkillContents:
             self.FakeSkill(name="f", category="fundamental", content="f"),
         ]
         result = kg._assemble_skill_contents(skills)
-        assert "优化/修复案例" in result
-        assert "fix-content" in result
-        assert "imp-content" in result
+        assert "优化/修复案例" in result["cases"]
+        assert "fix-content" in result["cases"]
+        assert "imp-content" in result["cases"]
 
 
 # ========== 6. Stage → category 注入逻辑 ==========
