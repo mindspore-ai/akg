@@ -38,6 +38,63 @@ namespace mfuse {
 namespace {
 constexpr int64_t kMaxDimSize = UINT16_MAX - UINT8_MAX;
 constexpr int64_t kMinDimSize = 512;
+constexpr int64_t kReduceSumNonReduceAxisSizeLimit = 100000;
+
+bool isProductOfTwoPrimes(int64_t value) {
+  if (value < 4) {
+    return false;
+  }
+
+  size_t primeFactorNum = 0;
+  while (value % 2 == 0) {
+    value /= 2;
+    ++primeFactorNum;
+    if (primeFactorNum > 2) {
+      return false;
+    }
+  }
+  for (int64_t factor = 3; factor <= value / factor; factor += 2) {
+    while (value % factor == 0) {
+      value /= factor;
+      ++primeFactorNum;
+      if (primeFactorNum > 2) {
+        return false;
+      }
+    }
+  }
+  if (value > 1) {
+    ++primeFactorNum;
+  }
+  return primeFactorNum == 2;
+}
+
+bool hasLargeSemiprimeNonReduceAxis(ReduceSumOp op) {
+  auto inputType = dyn_cast<RankedTensorType>(op.getInput().getType());
+  if (!inputType || !inputType.hasStaticShape()) {
+    return false;
+  }
+
+  const int64_t rank = inputType.getRank();
+  std::vector<bool> reduceDims(rank, false);
+  for (auto dimAttr : op.getDimensions().getValue()) {
+    auto dim = cast<IntegerAttr>(dimAttr).getValue().getSExtValue();
+    if (dim < 0 || dim >= rank) {
+      return false;
+    }
+    reduceDims[dim] = true;
+  }
+
+  for (int64_t i = 0; i < rank; ++i) {
+    if (reduceDims[i]) {
+      continue;
+    }
+    int64_t dimSize = inputType.getDimSize(i);
+    if (dimSize > kReduceSumNonReduceAxisSizeLimit && isProductOfTwoPrimes(dimSize)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /// Get element type from a value or type
 Type getElementType(Type type) {
@@ -212,7 +269,20 @@ class DvmSupportChecker {
 
   static bool reduceSumCheck(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
-    return outputType && isFloatType(outputType);
+    if (!outputType || !isFloatType(outputType)) {
+      return false;
+    }
+
+    auto reduce = dyn_cast<ReduceSumOp>(op);
+    if (!reduce) {
+      return false;
+    }
+    // Temporary workaround for a DVM limitation. Remove this guard once DVM supports these shapes.
+    if (hasLargeSemiprimeNonReduceAxis(reduce)) {
+      MLOG(DEBUG) << "ReduceSum has unsupported large semiprime non-reduce axis";
+      return false;
+    }
+    return true;
   }
 
   static bool compareCheckFunc(Operation *op) {

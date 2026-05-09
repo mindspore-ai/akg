@@ -199,9 +199,16 @@ class FuseReduceBwd : public FusePattern {
     return area->size() <= ascend::kReduceBwdMaxAreaSize;
   }
 
+  // Check if the area is a terminal single reshape area. If this area is fused, an extra copy would be inserted by DVM.
+  static bool IsTerminalSingleReshapeArea(const AreaPtr &area) {
+    static constexpr llvm::StringLiteral kReshapeOpName = "mfuse.reshape";
+    return area && area->size() == 1 && area->userNum() == 0 && area->dom() && area->dom()->op() &&
+           area->dom()->op()->getName().getStringRef() == kReshapeOpName;
+  }
+
   bool match(const AreaPtr &area) override {
     for (const auto &[a, r] : area->usersWithRelation()) {
-      if (hasCircle(area, a) || !CheckPostReduceArea(a, r)) {
+      if (IsTerminalSingleReshapeArea(a) || hasCircle(area, a) || !CheckPostReduceArea(a, r)) {
         continue;
       }
       fused_areas_.push_back(a);
