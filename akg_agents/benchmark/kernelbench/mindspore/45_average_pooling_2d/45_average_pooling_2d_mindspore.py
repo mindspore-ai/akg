@@ -37,7 +37,7 @@ kernel_size = 3
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, channels, height, width, dtype=ms.float32)
+    x = ms.mint.randn(batch_size, channels, height, width, dtype=ms.float32)
     return [x]
 
 

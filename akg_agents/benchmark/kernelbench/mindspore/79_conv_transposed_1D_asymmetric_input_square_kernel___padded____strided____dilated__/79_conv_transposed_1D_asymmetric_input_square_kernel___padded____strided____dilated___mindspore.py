@@ -35,7 +35,7 @@ padding = 1
 dilation = 2
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, in_channels, length)
+    x = ms.mint.randn(batch_size, in_channels, length)
     return [x]
 
 def get_init_inputs():

@@ -32,7 +32,7 @@ dim = 1
 
 
 def get_inputs():
-    return [ms.ops.randn(batch_size, *input_shape), ms.ops.randint(0, num_classes, (batch_size,))]
+    return [ms.mint.randn(batch_size, *input_shape), ms.mint.randint(0, num_classes, (batch_size,))]
 
 
 def get_init_inputs():

@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   operator_type: "reduce"
+  framework: torch
 ---
 
 # Softmax — Triton Ascend 实现示例

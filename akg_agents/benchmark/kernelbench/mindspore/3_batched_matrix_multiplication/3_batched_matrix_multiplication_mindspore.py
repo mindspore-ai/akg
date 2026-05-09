@@ -33,8 +33,8 @@ n = 512
 
 
 def get_inputs():
-    A = ms.ops.randn(batch_size, m, k, dtype=ms.float16)
-    B = ms.ops.randn(batch_size, k, n, dtype=ms.float16)
+    A = ms.mint.randn(batch_size, m, k, dtype=ms.float32)
+    B = ms.mint.randn(batch_size, k, n, dtype=ms.float32)
     return [A, B]
 
 

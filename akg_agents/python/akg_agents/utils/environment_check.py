@@ -15,8 +15,53 @@
 import importlib
 import subprocess
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_version(version_str):
+    parts = []
+    for part in version_str.split('.'):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
+def _check_triton_ascend_mindspore_compat(issues):
+    try:
+        import mindspore as ms
+        ms_version = _parse_version(ms.__version__)
+        min_version = (2, 9, 0)
+        if ms_version < min_version:
+            issues.append(f"❌ mindspore 版本 {ms.__version__} < 2.9.0，triton_ascend + mindspore 需要 >= 2.9.0")
+    except Exception:
+        issues.append("❌ 无法获取 mindspore 版本")
+
+    try:
+        import triton
+        triton_pkg_dir = os.path.dirname(triton.__file__)
+        found_mindspore_ref = False
+        for root, _dirs, files in os.walk(triton_pkg_dir):
+            for fname in files:
+                if not fname.endswith(('.py')):
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, 'rb') as f:
+                        if b'mindspore' in f.read():
+                            found_mindspore_ref = True
+                            break
+                except (OSError, PermissionError):
+                    continue
+            if found_mindspore_ref:
+                break
+        if not found_mindspore_ref:
+            issues.append("❌ triton-ascend 包未包含 mindspore 支持，请安装支持 mindspore 的 triton-ascend 版本")
+    except Exception:
+        issues.append("⚠️ 无法检查 triton-ascend 的 mindspore 兼容性")
 
 
 def check_env(framework=None, backend=None, dsl=None, config_path=None, config=None, is_remote=False):
@@ -93,7 +138,11 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
         except ImportError:
             issues.append("❌ 缺少 pypto")
 
-    # 4. 检查硬件
+    # 4. 检查 triton_ascend + mindspore 兼容性
+    if framework == 'mindspore' and dsl == 'triton_ascend':
+        _check_triton_ascend_mindspore_compat(issues)
+
+    # 5. 检查硬件
     if backend == 'cuda':
         try:
             result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=30, shell=True)

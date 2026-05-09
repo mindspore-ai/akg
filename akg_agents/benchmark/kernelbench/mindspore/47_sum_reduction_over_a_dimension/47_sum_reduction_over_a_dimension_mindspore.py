@@ -35,7 +35,7 @@ reduce_dim = 1
 
 
 def get_inputs():
-    x = ms.ops.randn(batch_size, dim1, dim2)
+    x = ms.mint.randn(batch_size, dim1, dim2)
     return [x]
 
 

@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   operator_type: "elementwise"
+  framework: torch
 ---
 
 # ReLU — Triton Ascend 实现示例
