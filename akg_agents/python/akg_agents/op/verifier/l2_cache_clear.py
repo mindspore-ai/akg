@@ -116,33 +116,36 @@ def _get_l2_cache_size(device_id: int = 0) -> int:
 # 获取核心数
 # ============================================================================
 
-_vec_core_num = None
+_core_nums_cache = None
 
 
-def _get_vec_core_num(device_id: int = 0) -> int:
+def _get_core_nums(vec_default=40, cube_default=20):
     """
-    获取 NPU 的 VEC 核心数。
-    
-    根据 triton-ascend 编写规范，向量计算类算子使用 VEC 核心数。
-    
-    Args:
-        device_id: NPU 设备 ID
-        
+    获取 NPU 核心数（VEC + CUBE）。
+
+    通过 triton runtime API 获取，结果缓存避免重复调用。
+
     Returns:
-        int: VEC 核心数
+        tuple[int, int]: (vec_core_num, cube_core_num)
     """
-    global _vec_core_num
-    
-    if _vec_core_num is not None:
-        return _vec_core_num
-    
+    global _core_nums_cache
+
+    if _core_nums_cache is not None:
+        return _core_nums_cache
+
+    vec, cube = vec_default, cube_default
     try:
-        _, torch_npu = _ensure_torch()
-        _vec_core_num = torch_npu.npu.npu_config.get_device_limit(device_id).get("vector_core_num", 40)
+        import torch
+        import triton
+        device = torch.npu.current_device()
+        properties = triton.runtime.driver.active.utils.get_device_properties(device)
+        vec = properties.get("num_vectorcore", vec_default)
+        cube = properties.get("num_aicore", cube_default)
     except Exception:
-        _vec_core_num = 40
-    
-    return _vec_core_num
+        pass
+
+    _core_nums_cache = (vec, cube)
+    return _core_nums_cache
 
 
 # ============================================================================
@@ -235,7 +238,7 @@ def clear_l2_cache_triton():
     buffer = _get_l2_cache_buffer()
     n_elements = buffer.numel()
     
-    core_num = _get_vec_core_num()
+    core_num, _ = _get_core_nums()
     
     BLOCK_SIZE = 32768
     

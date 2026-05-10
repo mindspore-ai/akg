@@ -67,15 +67,24 @@ if _TRITON_AVAILABLE:
             tl.store(dst_ptr + offsets, data, mask=mask)
 
 
-def _get_vec_core_num():
+def _get_core_nums(vec_default=40, cube_default=20):
     if get_framework() == "mindspore":
         import mindspore as ms
-        return ms.runtime.get_device_limit(0).get("vector_core_num", 40)
+        limits = ms.runtime.get_device_limit(0)
+        vec = limits.get("vector_core_num", vec_default)
+        cube = limits.get("cube_core_num", cube_default)
+        return (vec, cube)
+    vec, cube = vec_default, cube_default
     try:
-        import torch_npu
-        return torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        import torch
+        import triton
+        device = torch.npu.current_device()
+        properties = triton.runtime.driver.active.utils.get_device_properties(device)
+        vec = properties.get("num_vectorcore", vec_default)
+        cube = properties.get("num_aicore", cube_default)
     except Exception:
-        return 40
+        pass
+    return (vec, cube)
 
 
 def akg_restore_copy_torch(dst, src):
@@ -84,7 +93,7 @@ def akg_restore_copy_torch(dst, src):
     n = dst.numel()
     dst_flat = dst.view(-1)
     src_flat = src.view(-1)
-    core_num = _get_vec_core_num()
+    core_num, _ = _get_core_nums()
     BLOCK_SIZE = 1024
     grid = (core_num,)
     AKG_restore_copy[grid](dst_flat, src_flat, n,
@@ -98,7 +107,7 @@ def akg_restore_copy_mindspore(dst, src):
     n = dst.numel()
     dst_flat = dst.view(-1)
     src_flat = src.view(-1)
-    core_num = _get_vec_core_num()
+    core_num, _ = _get_core_nums()
     BLOCK_SIZE = 1024
     grid = (core_num,)
     AKG_restore_copy[grid](dst_flat, src_flat, n,
