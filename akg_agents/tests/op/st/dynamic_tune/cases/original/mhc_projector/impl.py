@@ -98,9 +98,11 @@ def post_process_kernel(
 
 def _resolve_vec_core_num():
     try:
-        import torch_npu  # type: ignore
-        value = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
-        return int(value)
+        import torch
+        import triton
+        device = torch.npu.current_device()
+        properties = triton.runtime.driver.active.utils.get_device_properties(device)
+        return int(properties.get("num_vectorcore", 40))
     except Exception:
         return 40
 
