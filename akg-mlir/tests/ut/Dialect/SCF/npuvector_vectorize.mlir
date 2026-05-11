@@ -1599,3 +1599,27 @@ func.func @test_vf1_scalar_before_after_tagged_elementwise(
   memref.store %postAcc, %bias[%c0] : memref<4xf32>
   return
 }
+
+// -----
+
+// Phase 2 must also mop up a remaining scalar store when there is no scalar memref.load
+// left to seed the VF=1 chain.
+// CHECK-LABEL: func.func @test_vf1_store_seed_after_reduction
+// CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %{{.*}} : !npuvector<64xf32> into f32
+// CHECK: %[[BCAST:.*]] = npuvector.broadcast %[[SUM]][%{{.*}}] [%{{.*}}] : f32 to !npuvector<1xf32>
+// CHECK: npuvector.transfer_write %[[BCAST]], %{{.*}}[%{{.*}}] : !npuvector<1xf32>, memref<128xf32>
+func.func @test_vf1_store_seed_after_reduction(%input: memref<64xf32>, %output: memref<128xf32>, %idx: index) {
+  %c0 = arith.constant 0 : index
+  %c64 = arith.constant 64 : index
+  %c1 = arith.constant 1 : index
+  %init = arith.constant 0.000000e+00 : f32
+
+  %sum = scf.for %i = %c0 to %c64 step %c1 iter_args(%acc = %init) -> f32 {
+    %value = memref.load %input[%i] : memref<64xf32>
+    %next = arith.addf %acc, %value {reduction_axes = [0 : index], reduction_type = "x"} : f32
+    scf.yield %next : f32
+  } {reduction_x = 64 : i64}
+
+  memref.store %sum, %output[%idx] : memref<128xf32>
+  return
+}
