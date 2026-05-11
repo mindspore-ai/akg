@@ -39,7 +39,11 @@ class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
         try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+            import torch
+            import triton
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.VEC_CORE_NUM = properties.get("num_vectorcore", 40)
         except:
             self.VEC_CORE_NUM = 40
 

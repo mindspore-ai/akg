@@ -21,7 +21,7 @@ metadata:
 | **张量创建** | `torch.empty` | `mindspore.mint.empty` / `mindspore.mint.empty_like` |
 | **设备** | `device='cuda'/'npu'` | `mindspore.set_device("Ascend", 0)` / `mindspore.set_device("CPU")` |
 | **数据类型** | `torch.float16` | `mindspore.float16` |
-| **获取核心数** | `torch_npu.npu.npu_config.get_device_limit(0)` | `mindspore.runtime.get_device_limit(0)` |
+| **获取核心数** | `triton.runtime.driver.active.utils.get_device_properties` | `mindspore.runtime.get_device_limit(0)` |
 
 ## 示例列表
 

@@ -46,14 +46,17 @@ def kernel(
 **必须在 `__init__` 中获取**，禁止在 forward 中调用（触发设备同步）。
 
 ```python
-import torch_npu
+import torch
+import triton
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
         try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
-            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.VEC_CORE_NUM = properties.get("num_vectorcore", 40)
+            self.CUBE_CORE_NUM = properties.get("num_aicore", 20)
         except:
             self.VEC_CORE_NUM = 40
             self.CUBE_CORE_NUM = 20
