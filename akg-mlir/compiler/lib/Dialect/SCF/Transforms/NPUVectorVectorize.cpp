@@ -3040,8 +3040,7 @@ static void processLoop(LoopVectorizationCtx &ctx) {
   }
 }
 
-static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, memref::LoadOp seedLoad) {
-  Location loc = seedLoad.getLoc();
+static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, Location loc) {
   Value maxStepConst = builder.create<arith::ConstantIndexOp>(loc, 1);
   LoopVectorizationCtx ctx(builder, /*actualStep*/ 1, /*vfVal*/ nullptr, maxStepConst, VectorizationMode::Elementwise,
                            scf::ForOp(), nullptr);
@@ -3115,7 +3114,7 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
 
 
   OpBuilder builder(rootLoad);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, rootLoad);
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, rootLoad.getLoc());
 
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
@@ -3166,6 +3165,18 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
   return Vf1ChainPromotionResult::Promoted;
 }
 
+static Vf1ChainPromotionResult tryPromoteVF1Store(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
+  if (storeOp.getIndices().empty()) return Vf1ChainPromotionResult::Skipped;
+
+  OpBuilder::InsertionGuard guard(ctx.builder);
+  ctx.builder.setInsertionPoint(storeOp);
+  Value storeValue = storeOp.getValue();
+  vectorizeStore(storeOp, ctx);
+  ctx.valueMapping.erase(storeValue);
+  storeOp.erase();
+  return Vf1ChainPromotionResult::Promoted;
+}
+
 static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp) {
   constexpr unsigned kMaxRounds = 64;
   for (unsigned round = 0; round < kMaxRounds; ++round) {
@@ -3179,6 +3190,23 @@ static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp) {
       if (outcome == Vf1ChainPromotionResult::Promoted) changed = true;
     }
     if (!changed) break;
+  }
+  return success();
+}
+
+static LogicalResult runMemRefStoreVF1Sweep(func::FuncOp funcOp) {
+  SmallVector<memref::StoreOp> stores;
+  funcOp.walk([&](memref::StoreOp storeOp) {
+    if (!storeOp.getIndices().empty()) stores.push_back(storeOp);
+  });
+  if (stores.empty()) return success();
+
+  OpBuilder builder(funcOp.getContext());
+  builder.setInsertionPointToStart(&funcOp.getBody().front());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, funcOp.getLoc());
+  for (memref::StoreOp storeOp : stores) {
+    Vf1ChainPromotionResult outcome = tryPromoteVF1Store(storeOp, ctx);
+    if (outcome == Vf1ChainPromotionResult::FatalError) return failure();
   }
   return success();
 }
@@ -3257,7 +3285,7 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
       runVectorization(loop, mode, builder, maxStepFromAttr, isDynamic);
     }
 
-    if (failed(runMemRefLoadVF1Sweep(funcOp))) signalPassFailure();
+    if (failed(runMemRefLoadVF1Sweep(funcOp)) || failed(runMemRefStoreVF1Sweep(funcOp))) signalPassFailure();
   }
 };
 
