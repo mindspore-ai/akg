@@ -378,15 +378,24 @@ memref::AllocOp AllocBufferShrinkPass::createShrunkAlloc(memref::AllocOp allocOp
   auto shape = memrefType.getShape();
 
   SmallVector<int64_t> newShape;
-  for (unsigned d = 0; d < rank; d++) newShape.push_back(shrinkDims[d] ? 1 : shape[d]);
+  SmallVector<Value> newDynamicSizes;
+  ValueRange oldDynamicSizes = allocOp.getDynamicSizes();
+  unsigned oldDynamicIdx = 0;
+  for (unsigned d = 0; d < rank; d++) {
+    Value oldDynamicSize;
+    bool oldIsDynamic = ShapedType::isDynamic(shape[d]);
+    if (oldIsDynamic) oldDynamicSize = oldDynamicSizes[oldDynamicIdx++];
+
+    newShape.push_back(shrinkDims[d] ? 1 : shape[d]);
+    if (oldIsDynamic && !shrinkDims[d]) newDynamicSizes.push_back(oldDynamicSize);
+  }
 
   auto newMemorySpace = updateMemSpaceForShrink(memrefType.getMemorySpace());
   auto newType = MemRefType::get(newShape, memrefType.getElementType(), memrefType.getLayout(), newMemorySpace);
 
   OpBuilder builder(allocOp);
-  auto newAlloc = builder.create<memref::AllocOp>(allocOp.getLoc(), newType);
-  if (auto alignAttr = allocOp.getAlignmentAttr()) newAlloc->setAttr("alignment", alignAttr);
-  return newAlloc;
+  return builder.create<memref::AllocOp>(allocOp.getLoc(), newType, newDynamicSizes, allocOp.getSymbolOperands(),
+                                         allocOp.getAlignmentAttr());
 }
 
 // Rebuild a SubViewOp: shrunk dimensions get their size clamped to 1.
