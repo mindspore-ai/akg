@@ -195,7 +195,6 @@ class VectorizationStrategy : public TilingStrategy {
   void AddNpuConstraint(NpuModelGraphPtr npuGraph) override;
 
  private:
-  SmallVector<int64_t> getDimSizes(const SmallVector<AxisPtr> &axes);
   void applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum, int pos);
 
   // Helper functions for applyVectorizationTiling
