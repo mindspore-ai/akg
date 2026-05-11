@@ -885,8 +885,6 @@ class NodeFactory:
         """
         async def fix_code_gen_node(state: KernelGenState) -> dict:
             from akg_agents.core_v2.agents import AgentBase
-            from akg_agents.core_v2.skill import SkillLoader
-            from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
             from akg_agents.op.utils.diff_utils import (
                 DiffApplier, parse_modifications, truncate_error_log,
             )
@@ -924,50 +922,12 @@ class NodeFactory:
                 agent_base = AgentBase(context=context, config=config)
                 prompt_template = agent_base.load_template("fix_code_gen/edit.j2")
 
-                skill_contents_for_fix = ""
-                dsl = state.get('dsl', '')
-                if dsl:
-                    try:
-                        from akg_agents import get_project_root
-                        from pathlib import Path
-                        dsl_key = dsl_to_dir_key(dsl)
-                        skills_dir = Path(get_project_root()) / "op" / "resources" / "skills"
-                        dsl_dir = skills_dir / dsl_key
-                        if dsl_dir.exists():
-                            loader = SkillLoader()
-                            all_skills = loader.load_from_directory(dsl_dir)
-                            fix_skills = []
-                            for s in all_skills:
-                                cat = getattr(s, "category", "") or ""
-                                if cat == "fix":
-                                    fix_skills.append(s)
-                                elif cat == "case":
-                                    meta = getattr(s, "metadata", {}) or {}
-                                    ct = meta.get("case_type", "")
-                                    src = meta.get("source", "")
-                                    if ct == "fix" or src == "error_fix":
-                                        fix_skills.append(s)
-                            if fix_skills:
-                                skill_contents_for_fix = "\n\n---\n\n".join(
-                                    s.content for s in fix_skills
-                                )
-                                logger.info(
-                                    f"[FixCodeGen] 加载 fix skills: "
-                                    f"{len(fix_skills)} skills, {len(skill_contents_for_fix)} chars, "
-                                    f"names={[getattr(s, 'name', '?') for s in fix_skills]}"
-                                )
-                    except Exception as e:
-                        logger.warning(f"[FixCodeGen] 加载 fix skills 失败: {e}")
-
-                if not skill_contents_for_fix:
-                    skill_contents_for_fix = state.get('expert_suggestion', '') or ''
-
                 error_log = truncate_error_log(
                     state.get('verifier_error', ''), max_len=5000,
                 )
                 input_data = {
-                    'dsl': dsl,
-                    'skill_contents': skill_contents_for_fix,
+                    'dsl': state.get('dsl', ''),
+                    'expert_suggestion': state.get('expert_suggestion', ''),
                     'op_name': op_name,
                     'framework': state.get('framework', ''),
                     'task_desc': state.get('task_desc', ''),
@@ -1036,13 +996,12 @@ class NodeFactory:
                     "fix_code_gen_message": " | ".join(message_parts),
                     "agent_history": ["fix_code_gen"],
                     "step_count": state.get("step_count", 0) + 1,
-                    # 清除旧的检查状态，确保 FixCodeGen 生成的代码会被重新检查
-                    "code_check_passed": None,
-                    "code_check_errors": None,
-                    "code_check_details": None,
                 }
                 if result.success:
                     updates["coder_code"] = result.modified_code
+                    updates["code_check_passed"] = None
+                    updates["code_check_errors"] = None
+                    updates["code_check_details"] = None
 
                 return updates
 
@@ -1055,10 +1014,6 @@ class NodeFactory:
                     "fix_code_gen_message": f"FixCodeGen 异常: {e}",
                     "agent_history": ["fix_code_gen"],
                     "step_count": state.get("step_count", 0) + 1,
-                    # 清除旧的检查状态
-                    "code_check_passed": None,
-                    "code_check_errors": None,
-                    "code_check_details": None,
                 }
 
         return track_node("fix_code_gen")(fix_code_gen_node)

@@ -221,9 +221,20 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                 code_checker_edges,
             )
 
-            # FixCodeGen 后的边：先经过 CodeChecker 再到 Verifier
+            # FixCodeGen 后的路由：apply 成功 → code_checker，失败 → coder
             if enable_fix_code_gen:
-                workflow.add_edge("fix_code_gen", "code_checker")
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="coder",
+                    next_agent="code_checker",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "code_checker": "code_checker",
+                        "coder": "coder",
+                    },
+                )
         else:
             # 不启用 CodeChecker，直接 coder -> verifier（带 codegen 路由）
             codegen_router = RouterFactory.create_codegen_router(
@@ -238,9 +249,20 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                     "conductor": "conductor"
                 }
             )
-            # FixCodeGen 后直接连到 Verifier
+            # FixCodeGen 后的路由：apply 成功 → verifier，失败 → coder
             if enable_fix_code_gen:
-                workflow.add_edge("fix_code_gen", "verifier")
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="coder",
+                    next_agent="verifier",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "verifier": "verifier",
+                        "coder": "coder",
+                    },
+                )
                 logger.info("FixCodeGen -> Verifier flow enabled (CodeChecker disabled)")
             logger.info("CodeChecker disabled, using direct coder -> verifier flow")
         

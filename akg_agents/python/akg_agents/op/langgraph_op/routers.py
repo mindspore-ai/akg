@@ -355,7 +355,37 @@ class RouterFactory:
             return next_agent
 
         return route_after_codegen
-    
+
+    @staticmethod
+    def create_fix_code_gen_router(code_gen_agent: str = "kernel_gen",
+                                   next_agent: str = "code_checker"):
+        """FixCodeGen 后的路由
+
+        apply 成功 → code_checker（或 verifier）
+        apply 失败 → code_gen_agent 重新生成
+
+        Args:
+            code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+            next_agent: apply 成功时的下一节点（"code_checker" 或 "verifier"）
+        """
+        async def route_after_fix_code_gen(state: KernelGenState) -> str:
+            task_id = state.get('task_id', '0')
+            success = state.get("fix_code_gen_success")
+
+            if success:
+                logger.info(
+                    f"[Task {task_id}] FixCodeGen apply 成功，路由至 {next_agent}"
+                )
+                return next_agent
+
+            logger.info(
+                f"[Task {task_id}] FixCodeGen apply 失败，"
+                f"路由至 {code_gen_agent} 重新生成"
+            )
+            return code_gen_agent
+
+        return route_after_fix_code_gen
+
     @staticmethod
     def create_smart_router(config, conductor_template, model_config):
         """智能路由器（用于 ConnectAll workflow）"""

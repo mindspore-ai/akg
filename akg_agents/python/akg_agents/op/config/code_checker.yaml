@@ -215,6 +215,17 @@ triton_module_name: triton
 # non-Triton DSLs (torch-only baselines, cpp, tilelang, etc.).
 dsl_compliance_prefix: triton
 
+# DSLs whose generated code is Python and can be checked by this
+# checker. DSLs not listed here (e.g. cpp, cuda_c, ascendc) produce
+# non-Python code — running ast.parse / py_compile on them would always
+# fail and cause an infinite retry loop.
+python_dsls:
+  - torch
+  - triton_cuda
+  - triton_ascend
+  - tilelang_cuda
+  - pypto
+
 # ---------------------------------------------------------------------------
 # Stray-text detector (Step 4). Flags runs of >= `min_run` consecutive
 # characters whose code point falls in any range in `unicode_ranges`,
