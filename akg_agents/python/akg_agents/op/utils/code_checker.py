@@ -188,6 +188,12 @@ class CodeChecker:
             }
             return False, self._format_errors([empty_err]), [empty_err]
 
+        if self.dsl and self.dsl not in _POLICY.get("python_dsls", []):
+            logger.info(
+                f"CodeChecker: DSL '{self.dsl}' is not Python-based, skipping checks"
+            )
+            return True, "", []
+
         # Step 1: Python 语法检查（ast.parse）
         errors = self._check_python_syntax(code)
 
