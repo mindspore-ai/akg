@@ -149,6 +149,13 @@ struct FusionAnalyzer {
   void dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
                                    const std::vector<unsigned> &sourceGroups);
 
+  // Plan phases
+  void processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &rarMap);
+  bool hasSubviewRarDep(unsigned targetGroupId,
+                        const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap) const;
+  void processRarEdges(const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap,
+                       std::vector<std::pair<unsigned, unsigned>> &deferCandidates);
+
   // Member Variables
   std::unordered_set<unsigned> finished;
   std::vector<unsigned> topoSortNodeIds;

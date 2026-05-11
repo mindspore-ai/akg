@@ -1538,8 +1538,7 @@ static Block::iterator computeStageInsertPoint(affine::AffineForOp dstLevel, aff
 // src spine child in src program order). Default: right after dst spine child. Walk forward
 // and stop at the FIRST conflicting dst op so RAW/WAW/WAR with dst's own post-spine ops are
 // honored — the conflict op (or earlier) gets ahead of cloned src.
-static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel,
-                                                   affine::AffineForOp dstSpineChild,
+static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel, affine::AffineForOp dstSpineChild,
                                                    ArrayRef<Operation *> srcStages) {
   Block *dstBody = dstLevel.getBody();
   Block::iterator afterChild = std::next(Block::iterator(dstSpineChild));
@@ -1788,7 +1787,7 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   }
 
   // Try subview fusion first.
-  if (plan.isSubviewFusion) {
+  if (plan.depInfo.memrefKind == MemrefKind::Subview) {
     int srcRank = getRankFromAccesses(accessInfo.srcAccesses);
     int dstRank = getRankFromAccesses(accessInfo.dstAccesses);
     if (auto fusionPlan = subviewHelper.tryFuse(srcInfo, dstInfo, srcRank, dstRank)) {

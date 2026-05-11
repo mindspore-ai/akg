@@ -31,16 +31,30 @@
 namespace mlir {
 namespace akg {
 
+// Loop transformation types for fusion planning.
 enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
+inline const char *loopTransformToString(LoopTransform type) {
+  switch (type) {
+    case LoopTransform::Merge:
+      return "Merge";
+    case LoopTransform::Replicate:
+      return "Replicate";
+    case LoopTransform::ReplicateIf:
+      return "ReplicateIf";
+    case LoopTransform::Permute:
+      return "Permute";
+    case LoopTransform::StripMine:
+      return "StripMine";
+    case LoopTransform::Collapse:
+      return "Collapse";
+    case LoopTransform::BackTracking:
+      return "BackTracking";
+  }
+  return "UNKNOWN";
+}
 
 // Dependency type between two memory access operations.
-// RAW: Read-After-Write (producer-consumer, store -> load on same memref)
-// WAR: Write-After-Read (anti-dependence, load -> store on same memref)
-// WAW: Write-After-Write (output dependence, store -> store on same memref)
-// RAR: Read-After-Read (load -> load on same memref, no true data dependence)
-// OTHER: Unclassified or non-memory dependency
 enum class DepType { RAW, WAR, WAW, RAR, OTHER };
-
 inline const char *depTypeToString(DepType type) {
   switch (type) {
     case DepType::RAW:
@@ -53,6 +67,20 @@ inline const char *depTypeToString(DepType type) {
       return "RAR";
     case DepType::OTHER:
       return "OTHER";
+  }
+  return "UNKNOWN";
+}
+
+// Memory reference kind classification.
+enum class MemrefKind { Normal, Input, Subview };
+inline const char *memrefKindToString(MemrefKind kind) {
+  switch (kind) {
+    case MemrefKind::Normal:
+      return "Normal";
+    case MemrefKind::Input:
+      return "Input";
+    case MemrefKind::Subview:
+      return "Subview";
   }
   return "UNKNOWN";
 }
@@ -93,7 +121,7 @@ struct DependenceInfo {
   DepType depType{DepType::OTHER};
   Value memref;
   unsigned loopDepth{UINT_MAX};
-  bool isInputMemref{false};
+  MemrefKind memrefKind{MemrefKind::Normal};
 };
 
 struct FusionPlan {
@@ -103,7 +131,6 @@ struct FusionPlan {
   DependenceInfo depInfo;
   std::string fusionType{"H"};
   LoopTransform loopTransform{LoopTransform::Merge};
-  bool isSubviewFusion{false};
 };
 
 }  // namespace akg
