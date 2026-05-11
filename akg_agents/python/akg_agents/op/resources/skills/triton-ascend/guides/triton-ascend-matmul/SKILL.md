@@ -122,7 +122,11 @@ class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
         try:
-            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+            import torch
+            import triton
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.CUBE_CORE_NUM = properties.get("num_aicore", 20)
         except:
             self.CUBE_CORE_NUM = 20
 

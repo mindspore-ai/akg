@@ -303,9 +303,13 @@ class ModelNew(torch.nn.Module):
         super().__init__()
         # 在初始化阶段获取核心数，向量计算类算子使用VEC核心数
         try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 48)
+            import torch
+            import triton
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.VEC_CORE_NUM = properties.get("num_vectorcore", 40)
         except:
-            self.VEC_CORE_NUM = 48  # Ascend 910B2 默认: 24个AI Core × 2个VEC/Core = 48
+            self.VEC_CORE_NUM = 40
 
     def forward(self, input_tensor):
         M, N = input_tensor.shape
@@ -337,16 +341,18 @@ class ModelNew(torch.nn.Module):
         super().__init__()
         # 在__init__中获取核心数，只执行一次，避免forward中的同步开销
         try:
-            # 向量计算类算子使用VEC核心数
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
-            # 矩阵计算类算子使用CUBE核心数
-            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+            import torch
+            import triton
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.VEC_CORE_NUM = properties.get("num_vectorcore", 40)
+            self.CUBE_CORE_NUM = properties.get("num_aicore", 20)
         except:
-            self.VEC_CORE_NUM = 40   # Ascend 910B4 默认: 20个AI Core × 2个VEC/Core = 40
-            self.CUBE_CORE_NUM = 20  # Ascend 910B4 默认: 20个AI Core × 1个CUBE/Core = 20
+            self.VEC_CORE_NUM = 40
+            self.CUBE_CORE_NUM = 20
 ```
 
-**注意**：`torch_npu`的import和`get_device_limit`调用会触发设备同步，因此**禁止在forward中调用**，必须放在`__init__`初始化阶段。
+**注意**：获取核心数的调用会触发设备同步，因此**禁止在forward中调用**，必须放在`__init__`初始化阶段。
 
 **核心模式**：`for i in range(pid, total_items, core_num)` 是经典的并行工作分配模式。
 
@@ -396,10 +402,15 @@ class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
         # 在__init__中获取核心数
+        self.VEC_CORE_NUM = 40
         try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
-        except:
-            self.VEC_CORE_NUM = 40
+            import torch
+            import triton
+            device = torch.npu.current_device()
+            properties = triton.runtime.driver.active.utils.get_device_properties(device)
+            self.VEC_CORE_NUM = properties.get("num_vectorcore", 40)
+        except Exception:
+            pass
 
     def forward(self, input_tensor):
         n_elements = input_tensor.numel()
