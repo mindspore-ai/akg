@@ -2102,15 +2102,15 @@ static LogicalResult buildTransferReadSizesAndStrides(int64_t memRefRank, int64_
   const bool perAxis = static_cast<int64_t>(dynamicSizes.size()) == vecRank;
   size_t compressedIdx = 0;
   for (int64_t i = 0; i < vecRank; ++i) {
-    if (perAxis) {
-      sizes.push_back(dynamicSizes[static_cast<unsigned>(i)]);
-    } else {
-      if (npuVecType.isDynamicDim(i)) {
+    if (npuVecType.isDynamicDim(i)) {
+      if (perAxis) {
+        sizes.push_back(dynamicSizes[static_cast<unsigned>(i)]);
+      } else {
         if (compressedIdx >= dynamicSizes.size()) return failure();
         sizes.push_back(dynamicSizes[compressedIdx++]);
-      } else {
-        sizes.push_back(rewriter.getIndexAttr(npuVecType.getDimSize(i)));
       }
+    } else {
+      sizes.push_back(rewriter.getIndexAttr(npuVecType.getDimSize(i)));
     }
     strides.push_back(rewriter.getIndexAttr(1));
   }
