@@ -655,9 +655,8 @@ void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sou
   }
 }
 
-// Two candidates conflict when they share the same downstream intersection —
-// both want to "park" at the same convergence point with opposite emit orders.
-// Different intersections → independent, no conflict.
+// Conflict iff the two pairs share a convergence and their sources enter it
+// via different branches (opposite emit orders → cycle).
 bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
   auto [aSrc, aTgt] = a;
   auto [bSrc, bTgt] = b;
@@ -682,7 +681,24 @@ bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, c
 
   unsigned ca = firstConvergence(aSrc, aTgt);
   unsigned cb = firstConvergence(bSrc, bTgt);
-  return ca != UINT_MAX && ca == cb;
+  if (ca == UINT_MAX || ca != cb) return false;
+
+  // Walk g's linear fusion chain to find the immediate predecessor of conv,
+  // i.e., the branch of conv that g enters through.
+  auto sideOf = [this](unsigned g, unsigned conv) -> unsigned {
+    unsigned cur = g;
+    std::unordered_set<unsigned> seen{cur};
+    while (true) {
+      unsigned next = outgoingTarget(cur);
+      if (next == conv) return cur;
+      if (next == UINT_MAX || !seen.insert(next).second) return UINT_MAX;
+      cur = next;
+    }
+  };
+
+  unsigned sideA = sideOf(aSrc, ca);
+  unsigned sideB = sideOf(bSrc, ca);
+  return sideA != UINT_MAX && sideB != UINT_MAX && sideA != sideB;
 }
 
 unsigned FusionAnalyzer::outgoingTarget(unsigned id) {
