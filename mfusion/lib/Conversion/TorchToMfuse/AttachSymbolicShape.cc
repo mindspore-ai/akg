@@ -35,20 +35,115 @@
 namespace {
 namespace TorchD = mlir::torch::Torch;
 
-bool attachToCastResults(mlir::Operation *castOp, mlir::mfuse::SymbolicShapeAttr attr, unsigned exprCount) {
-  bool updated = false;
+mlir::Attribute dropSymbolicShapeEncoding(mlir::RankedTensorType type) {
+  auto encoding = type.getEncoding();
+  if (!encoding) {
+    return {};
+  }
+  if (mlir::mfuse::SymbolAttrUtils::isSymbolicShapeEncoding(encoding)) {
+    return {};
+  }
+
+  auto dict = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
+  if (!dict) {
+    return encoding;
+  }
+
+  mlir::MLIRContext *ctx = type.getContext();
+  auto symKey = mlir::StringAttr::get(ctx, mlir::mfuse::SymbolAttrUtils::kSymShapeKey);
+  auto baseKey = mlir::StringAttr::get(ctx, mlir::mfuse::SymbolAttrUtils::kBaseEncodingKey);
+  llvm::SmallVector<mlir::NamedAttribute> entries;
+  entries.reserve(dict.getValue().size());
+  for (const auto &entry : dict.getValue()) {
+    if (entry.getName() != symKey) {
+      entries.push_back(entry);
+    }
+  }
+
+  if (entries.empty()) {
+    return {};
+  }
+  if (entries.size() == 1 && entries.front().getName() == baseKey) {
+    return entries.front().getValue();
+  }
+  return mlir::DictionaryAttr::get(ctx, entries);
+}
+
+bool setValueType(mlir::Value value, mlir::RankedTensorType newType) {
+  if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
+    if (result.getType() != newType) {
+      result.setType(newType);
+    }
+    return true;
+  }
+  if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(value)) {
+    if (arg.getType() != newType) {
+      arg.setType(newType);
+    }
+    return true;
+  }
+  return false;
+}
+
+mlir::FailureOr<mlir::RankedTensorType> canonicalizeTypeWithSymbolicExprs(
+  mlir::Operation *diagOp, mlir::RankedTensorType ranked, llvm::ArrayRef<mlir::mfuse::SymbolAttrUtils::SymExpr> exprs,
+  mlir::OpBuilder &builder, mfusion::SymEngineAnalysis &analysis) {
+  if (ranked.getRank() != static_cast<int64_t>(exprs.size())) {
+    diagOp->emitError("bind_symbolic_shape result rank does not match ranked tensor type rank");
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<int64_t> newShape(ranked.getShape().begin(), ranked.getShape().end());
+  bool hasDynamicExpr = false;
+  for (int64_t i = 0; i < ranked.getRank(); ++i) {
+    auto maybeInt = analysis.tryExtractInt64(exprs[static_cast<size_t>(i)]);
+    if (mlir::succeeded(maybeInt)) {
+      if (!mlir::ShapedType::isDynamic(newShape[static_cast<size_t>(i)]) &&
+          newShape[static_cast<size_t>(i)] != *maybeInt) {
+        diagOp->emitError() << "static tensor dimension " << i << " is " << newShape[static_cast<size_t>(i)]
+                            << " but bind_symbolic_shape expression is " << *maybeInt;
+        return mlir::failure();
+      }
+      newShape[static_cast<size_t>(i)] = *maybeInt;
+      continue;
+    }
+
+    if (!mlir::ShapedType::isDynamic(newShape[static_cast<size_t>(i)])) {
+      diagOp->emitError() << "static tensor dimension " << i << " is " << newShape[static_cast<size_t>(i)]
+                          << " but bind_symbolic_shape expression is non-constant: "
+                          << exprs[static_cast<size_t>(i)]->__str__();
+      return mlir::failure();
+    }
+    hasDynamicExpr = true;
+  }
+
+  auto baseEncoding = hasDynamicExpr ? ranked.getEncoding() : dropSymbolicShapeEncoding(ranked);
+  auto baseType = mlir::RankedTensorType::get(newShape, ranked.getElementType(), baseEncoding);
+  if (!hasDynamicExpr) {
+    return baseType;
+  }
+  return mlir::mfuse::SymbolAttrUtils::withSymbolicAttr(
+    baseType, mlir::mfuse::SymbolAttrUtils::createSymbolicShapeAttr(builder, exprs));
+}
+
+mlir::LogicalResult attachToCastResults(mlir::Operation *diagOp, mlir::Operation *castOp,
+                                        llvm::ArrayRef<mlir::mfuse::SymbolAttrUtils::SymExpr> exprs,
+                                        mlir::OpBuilder &builder, mfusion::SymEngineAnalysis &analysis) {
   for (mlir::Value result : castOp->getResults()) {
     auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(result.getType());
     if (!ranked) {
       continue;
     }
-    if (ranked.getRank() != static_cast<int64_t>(exprCount)) {
+    if (ranked.getRank() != static_cast<int64_t>(exprs.size())) {
       continue;
     }
-    result.setType(mlir::mfuse::SymbolAttrUtils::withSymbolicAttr(ranked, attr));
-    updated = true;
+    auto canonicalType = canonicalizeTypeWithSymbolicExprs(diagOp, ranked, exprs, builder, analysis);
+    if (mlir::failed(canonicalType)) {
+      return mlir::failure();
+    }
+    result.setType(*canonicalType);
   }
-  return updated;
+  return mlir::success();
 }
 
 struct ConvertTorchSymbolToMfusePass
@@ -122,6 +217,7 @@ struct ConvertTorchSymbolToMfusePass
                                                  mfusion::SymEngineAnalysis &analysis) {
     llvm::SmallVector<TorchD::BindSymbolicShapeOp> bindOps;
     module.walk([&](TorchD::BindSymbolicShapeOp op) { bindOps.push_back(op); });
+    mlir::OpBuilder builder(ctx);
 
     // Resolver for Torch dialect symbolic integers.
     mfusion::SymEngineAnalysis::SymbolNameResolver torchResolver = [](mlir::Value v) -> mlir::FailureOr<std::string> {
@@ -140,19 +236,15 @@ struct ConvertTorchSymbolToMfusePass
         return mlir::failure();
       }
 
-      llvm::SmallVector<mlir::Attribute> exprAttrs(exprs->size());
-      std::transform(exprs->begin(), exprs->end(), exprAttrs.begin(),
-                     [ctx](const auto &expr) { return mlir::StringAttr::get(ctx, expr->__str__()); });
-      auto shapeAttr = mlir::mfuse::SymbolicShapeAttr::get(ctx, mlir::ArrayAttr::get(ctx, exprAttrs));
-      unsigned exprCount = static_cast<unsigned>(exprs->size());
-
       // Case 1: Torch tensor used by casts to RankedTensorType.
       for (mlir::Operation *user : bindOp.getOperand().getUsers()) {
         auto castOp = llvm::dyn_cast<mlir::UnrealizedConversionCastOp>(user);
         if (!castOp) {
           continue;
         }
-        attachToCastResults(castOp, shapeAttr, exprCount);
+        if (mlir::failed(attachToCastResults(bindOp, castOp, *exprs, builder, analysis))) {
+          return mlir::failure();
+        }
       }
 
       // Case 2: Mfuse op result cast to Torch tensor, then bound by bind_symbolic_shape.
@@ -162,10 +254,14 @@ struct ConvertTorchSymbolToMfusePass
       if (auto castOp = bindOp.getOperand().getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
         for (mlir::Value input : castOp.getInputs()) {
           auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
-          if (!ranked || ranked.getRank() != static_cast<int64_t>(exprCount)) {
+          if (!ranked || ranked.getRank() != static_cast<int64_t>(exprs->size())) {
             continue;
           }
-          if (mlir::mfuse::SymbolAttrUtils::attachToValue(input, shapeAttr)) {
+          auto canonicalType = canonicalizeTypeWithSymbolicExprs(bindOp, ranked, *exprs, builder, analysis);
+          if (mlir::failed(canonicalType)) {
+            return mlir::failure();
+          }
+          if (setValueType(input, *canonicalType)) {
             remove_op = true;
           }
         }
