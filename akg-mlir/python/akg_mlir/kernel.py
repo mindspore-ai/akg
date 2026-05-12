@@ -106,14 +106,6 @@ class Kernel:
     def run(self, *args, **kwargs):
         """ launch .so file by akg_ascend_backend. """
 
-        if self.dynamic:
-            args_new = ()
-            for arg in args:
-                if not torch.is_tensor(arg):
-                    args_new = args_new + (arg, )
-                    continue
-                args_new = args_new + (arg, arg, 0) + arg.size() + arg.stride()
-            args = args_new
         try:
             self.launcher(*args, **kwargs)
             logging.debug("success launch kernel: %s", {self.kernel_name})
