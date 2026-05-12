@@ -154,14 +154,6 @@ FailureOr<int64_t> getTorchScalarTypeInt(Type type) {
 }
 
 namespace {
-static Value castToElementTypeIfNeeded(Value value, Type elementType, Location loc, PatternRewriter &rewriter) {
-  auto rankedType = dyn_cast<RankedTensorType>(value.getType());
-  if (!rankedType || rankedType.getElementType() == elementType) {
-    return value;
-  }
-  return rewriter.create<mfuse::CastOp>(loc, value, elementType);
-}
-
 // Check that `listVal` is a list construct of constant ints and
 // collect the integer values into `out`.
 bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
@@ -271,17 +263,6 @@ struct ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
     Type resType = this->getTypeConverter()->convertType(op.getType());
     if (!resType) {
       return rewriter.notifyMatchFailure(op, "result type conversion failed");
-    }
-    // Only arithmetic/value-producing binary mfuse ops registered below use this path
-    // (div, maximum, minimum, mul, pow). Comparison/logical ops keep operand promotion in the mfuse builder.
-    if (TargetOp::template hasTrait<OpTrait::SameOperandsAndResultElementType>()) {
-      auto rankedResType = dyn_cast<RankedTensorType>(resType);
-      if (!rankedResType) {
-        return rewriter.notifyMatchFailure(op, "result must be a ranked tensor");
-      }
-      Type resultElementType = rankedResType.getElementType();
-      lhs = castToElementTypeIfNeeded(lhs, resultElementType, op.getLoc(), rewriter);
-      rhs = castToElementTypeIfNeeded(rhs, resultElementType, op.getLoc(), rewriter);
     }
     auto targetOp = rewriter.create<TargetOp>(op.getLoc(), resType, lhs, rhs);
     rewriter.replaceOp(op, targetOp.getResult());

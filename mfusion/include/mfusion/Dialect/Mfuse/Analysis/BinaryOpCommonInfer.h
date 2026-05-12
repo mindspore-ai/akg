@@ -27,10 +27,154 @@
 #include "mlir/IR/Value.h"
 
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.h"
 #include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
 
 namespace mlir {
 namespace mfuse {
+
+enum class TypePromotePriority : int {
+  BOOL = 0,
+  INT8 = 1,
+  UINT8 = 2,
+  INT16 = 3,
+  UINT16 = 4,
+  INT32 = 5,
+  UINT32 = 6,
+  INT64 = 7,
+  UINT64 = 8,
+  BFLOAT16 = 9,
+  FLOAT16 = 10,
+  FLOAT32 = 11,
+  FLOAT64 = 12,
+  COMPLEX64 = 13,
+  COMPLEX128 = 14,
+};
+
+inline int getTypePromotePriority(mlir::Type type) {
+  if (auto intType = mlir::dyn_cast<mlir::IntegerType>(type)) {
+    int w = intType.getWidth();
+    if (w == 1) return static_cast<int>(TypePromotePriority::BOOL);
+    if (intType.isUnsigned()) {
+      if (w == 8) return static_cast<int>(TypePromotePriority::UINT8);
+      if (w <= 16) return static_cast<int>(TypePromotePriority::UINT16);
+      if (w <= 32) return static_cast<int>(TypePromotePriority::UINT32);
+      return static_cast<int>(TypePromotePriority::UINT64);
+    } else {
+      if (w == 8) return static_cast<int>(TypePromotePriority::INT8);
+      if (w <= 16) return static_cast<int>(TypePromotePriority::INT16);
+      if (w <= 32) return static_cast<int>(TypePromotePriority::INT32);
+      return static_cast<int>(TypePromotePriority::INT64);
+    }
+  }
+  if (auto floatType = mlir::dyn_cast<mlir::FloatType>(type)) {
+    if (floatType.isBF16()) return static_cast<int>(TypePromotePriority::BFLOAT16);
+    if (floatType.isF16()) return static_cast<int>(TypePromotePriority::FLOAT16);
+    if (floatType.isF32()) return static_cast<int>(TypePromotePriority::FLOAT32);
+    if (floatType.isF64()) return static_cast<int>(TypePromotePriority::FLOAT64);
+  }
+  if (auto complexType = mlir::dyn_cast<mlir::ComplexType>(type)) {
+    if (auto floatType = mlir::dyn_cast<mlir::FloatType>(complexType.getElementType())) {
+      return floatType.isF64() ? static_cast<int>(TypePromotePriority::COMPLEX128)
+                               : static_cast<int>(TypePromotePriority::COMPLEX64);
+    }
+    return static_cast<int>(TypePromotePriority::COMPLEX64);
+  }
+  llvm::report_fatal_error("Unsupported type");
+}
+
+inline mlir::Type inferIntegerResultType(mlir::Type lhs, mlir::Type rhs) {
+  auto lhsInt = mlir::cast<mlir::IntegerType>(lhs), rhsInt = mlir::cast<mlir::IntegerType>(rhs);
+  auto lhsW = lhsInt.getWidth(), rhsW = rhsInt.getWidth();
+  if (lhsW == 1) return rhs;
+  if (rhsW == 1) return lhs;
+  int w = std::max(lhsW, rhsW);
+  bool lu = lhsInt.isUnsigned(), ru = rhsInt.isUnsigned();
+  if (lu && ru) {
+    if (lhsW == rhsW) {
+      return mlir::IntegerType::get(lhs.getContext(), w, mlir::IntegerType::Unsigned);
+    }
+    llvm::report_fatal_error("Unsupported integer type for different width unsigned integers");
+  }
+  if ((lu && lhsW >= 16) || (ru && rhsW >= 16)) {
+    llvm::report_fatal_error("Unsupported integer type for uint16, uint32, uint64 types");
+  }
+  w = std::max(w, 16);
+  return mlir::IntegerType::get(lhs.getContext(), w, mlir::IntegerType::Signed);
+}
+
+inline mlir::Type inferFloatResultType(mlir::Type type, int resultPriority) {
+  if (resultPriority >= static_cast<int>(TypePromotePriority::FLOAT64))
+    return mlir::FloatType::getF64(type.getContext());
+  if (resultPriority >= static_cast<int>(TypePromotePriority::FLOAT32))
+    return mlir::FloatType::getF32(type.getContext());
+  if (resultPriority >= static_cast<int>(TypePromotePriority::FLOAT16))
+    return mlir::FloatType::getF16(type.getContext());
+  return mlir::FloatType::getBF16(type.getContext());
+}
+
+inline bool isScalarType(mlir::Type type) {
+  auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type);
+  if (!rankedType) return false;
+  auto encoding = rankedType.getEncoding();
+  if (!encoding) return false;
+  auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
+  return dictAttr && dictAttr.contains(kScalarMarkerAttr);
+}
+
+inline mlir::Type inferScalarType(mlir::Type scalarType, mlir::Type lhsType) {
+  if (auto lhsFloat = mlir::dyn_cast<mlir::FloatType>(lhsType)) {
+    return lhsType;
+  } else if (auto lhsInt = mlir::dyn_cast<mlir::IntegerType>(lhsType)) {
+    if (auto scalarInt = mlir::dyn_cast<mlir::IntegerType>(scalarType)) {
+      return lhsType;
+    }
+    return mlir::FloatType::getF32(lhsType.getContext());
+  } else {
+    return scalarType;
+  }
+}
+
+inline mlir::Type inferBinaryOpResultType(mlir::Type lhs, mlir::Type rhs) {
+  int lhsPriority = getTypePromotePriority(lhs);
+  int rhsPriority = getTypePromotePriority(rhs);
+  if (lhsPriority == rhsPriority) return lhs;
+
+  int resultPriority = std::max(lhsPriority, rhsPriority);
+  bool lhsIsInt = lhsPriority <= static_cast<int>(TypePromotePriority::UINT64);
+  bool rhsIsInt = rhsPriority <= static_cast<int>(TypePromotePriority::UINT64);
+  bool lhsIsFloat = lhsPriority >= static_cast<int>(TypePromotePriority::BFLOAT16) &&
+                    lhsPriority <= static_cast<int>(TypePromotePriority::FLOAT64);
+  bool rhsIsFloat = rhsPriority >= static_cast<int>(TypePromotePriority::BFLOAT16) &&
+                    rhsPriority <= static_cast<int>(TypePromotePriority::FLOAT64);
+
+  if (lhsIsInt && rhsIsInt) return inferIntegerResultType(lhs, rhs);
+  if ((lhsIsFloat && rhsIsFloat) || (lhsIsFloat && rhsIsInt) || (lhsIsInt && rhsIsFloat))
+    return inferFloatResultType(lhs, resultPriority);
+
+  bool lhsIsComplex = lhsPriority >= static_cast<int>(TypePromotePriority::COMPLEX64);
+  bool rhsIsComplex = rhsPriority >= static_cast<int>(TypePromotePriority::COMPLEX64);
+  if (lhsIsComplex || rhsIsComplex) {
+    return mlir::ComplexType::get(resultPriority >= static_cast<int>(TypePromotePriority::COMPLEX128)
+                                    ? mlir::FloatType::getF64(lhs.getContext())
+                                    : mlir::FloatType::getF32(lhs.getContext()));
+  }
+  return lhs;
+}
+
+inline mlir::Type inferResultElementType(mlir::Value lhs, mlir::Value rhs) {
+  auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
+  auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
+  if (!lhsType || !rhsType) return lhs.getType();
+
+  auto lhsElemType = lhsType.getElementType();
+  auto rhsElemType = rhsType.getElementType();
+
+  if (isScalarType(rhsType)) {
+    rhsElemType = inferScalarType(rhsElemType, lhsElemType);
+  }
+  return inferBinaryOpResultType(lhsElemType, rhsElemType);
+}
 
 /// Common type/shape inference for broadcastable binary ops (NumPy-style broadcasting).
 class BinaryOpCommonInfer {
@@ -116,7 +260,7 @@ class BinaryOpCommonInfer {
     if (isCompareOp) {
       elementType = mlir::IntegerType::get(lhs.getContext(), 1);
     } else {
-      elementType = lhsType.getElementType();
+      elementType = inferResultElementType(lhs, rhs);
     }
 
     std::vector<int64_t> lhsShapeVec(lhsType.getShape().begin(), lhsType.getShape().end());

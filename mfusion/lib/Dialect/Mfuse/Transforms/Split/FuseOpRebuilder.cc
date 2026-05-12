@@ -69,7 +69,6 @@ SmallVector<size_t> Rebuilder::computeProcessingOrder() {
 
   llvm::SmallVector<llvm::SmallVector<size_t>> dependencies(numGroups);
   for (size_t i = 0; i < numGroups; ++i) {
-    llvm::DenseSet<Operation *> groupOpSet(plan[i].begin(), plan[i].end());
     for (Operation *op : plan[i]) {
       for (Value operand : op->getOperands()) {
         auto it = valueToGroupIdx.find(operand);
@@ -113,6 +112,7 @@ SmallVector<size_t> Rebuilder::computeProcessingOrder() {
     for (size_t i = 0; i < numGroups; ++i) {
       topoOrder.push_back(i);
     }
+    return topoOrder;
   }
 
   std::reverse(topoOrder.begin(), topoOrder.end());

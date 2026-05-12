@@ -58,19 +58,6 @@ void populateMfuseToTorchTypeConversions(mlir::TypeConverter &converter) {
     if (encoding) {
       auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
       if (dictAttr && dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
-        // Check the value of is_scalar attribute
-        auto scalarAttr = dictAttr.get(mlir::mfuse::kScalarMarkerAttr);
-        if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(scalarAttr)) {
-          std::string typeStr = strAttr.getValue().str();
-          // Convert based on the original torch type in is_scalar
-          if (typeStr == "!torch.int") {
-            return TorchD::IntType::get(type.getContext());
-          } else if (typeStr == "!torch.float") {
-            return TorchD::FloatType::get(type.getContext());
-          } else if (typeStr == "!torch.bool") {
-            return TorchD::BoolType::get(type.getContext());
-          }
-        }
         // Fall back to original logic if is_scalar is not a string or doesn't match known torch types
         auto elementType = type.getElementType();
         if (mlir::isa<mlir::FloatType>(elementType)) {

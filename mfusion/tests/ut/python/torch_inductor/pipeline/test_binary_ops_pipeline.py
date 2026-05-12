@@ -148,7 +148,7 @@ def test_decompose_pipeline_with_mul_scalar2():
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_no_op("torch.operator"), checker.error
     assert checker.check_has_op("torch.aten.mul.Scalar"), checker.error
-    assert checker.check_text_contains("torch.constant.float 2.0"), checker.error
+    assert checker.check_text_contains("torch.constant.int 2"), checker.error
 
 
 def test_binary_ops_pipeline_with_div_tensor():
