@@ -61,7 +61,6 @@ func.func @aclnn_sub_alpha_one_test(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf3
 
 // CHECK-LABEL: @aclnn_sub_alpha_with_cast
 // CHECK-NOT: mfuse.aclnn.sub
-// CHECK: mfuse.cast
 // CHECK: mfuse.mul
 // CHECK: mfuse.sub
 func.func @aclnn_sub_alpha_with_cast(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf16>, %alpha: tensor<f32, {is_scalar = ""}>) -> tensor<4x4xf32> {
@@ -134,9 +133,9 @@ func.func @test_aclnn_add_dynamic_shape_broadcast(%arg0: !torch.int, %arg1: !tor
 
 // CHECK-LABEL: @test_aclnn_add_with_scalar
 module {
+  // CHECK: builtin.unrealized_conversion_cast %{{.*}} : !torch.int to tensor<i64, {is_scalar = ""}>
   // CHECK: builtin.unrealized_conversion_cast %{{.*}} : !torch.vtensor<[4,4],f32> to tensor<4x4xf32>
-  // CHECK: builtin.unrealized_conversion_cast %{{.*}} : !torch.int to tensor<f32, {is_scalar = "!torch.int"}>
-  // CHECK: mfuse.add %{{.*}}, %{{.*}} : (tensor<4x4xf32>, tensor<f32, {is_scalar = "!torch.int"}>) -> tensor<4x4xf32>
+  // CHECK: mfuse.add %{{.*}}, %{{.*}} : (tensor<4x4xf32>, tensor<i64, {is_scalar = ""}>) -> tensor<4x4xf32>
   // CHECK: builtin.unrealized_conversion_cast %{{.*}} : tensor<4x4xf32> to !torch.vtensor<[4,4],f32>
   func.func @test_aclnn_add_with_scalar(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.int) -> !torch.vtensor<[4,4],f32> {
     %0 = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>

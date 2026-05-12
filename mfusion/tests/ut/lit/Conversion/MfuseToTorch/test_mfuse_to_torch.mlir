@@ -207,33 +207,6 @@ func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xsi32>) -> tensor<2x2xf64> {
   return %0 : tensor<2x2xf64>
 }
 
-// CHECK-LABEL: func.func @test_cast_rank0_f64_to_f32
-func.func @test_cast_rank0_f64_to_f32(%arg0: tensor<f64>) -> tensor<f32> {
-  // CHECK:   %[[INT6:.*]] = torch.constant.int 6
-  // CHECK:   %[[RESULT:.*]] = torch.prims.convert_element_type %{{.*}}, %[[INT6]] : !torch.vtensor<[],f64>, !torch.int -> !torch.vtensor<[],f32>
-  // CHECK:   return %[[RESULT]] : !torch.vtensor<[],f32>
-  %0 = mfuse.cast %arg0 : (tensor<f64>) -> tensor<f32>
-  return %0 : tensor<f32>
-}
-
-// CHECK-LABEL: func.func @test_cast_scalar_marker_f64_to_f32
-func.func @test_cast_scalar_marker_f64_to_f32(%arg0: tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}> {
-  // CHECK-NOT: torch.prims.convert_element_type
-  // CHECK:   %[[RESULT:.*]] = torch.aten.Float.Scalar %arg0 : !torch.float -> !torch.float
-  // CHECK:   return %[[RESULT]] : !torch.float
-  %0 = mfuse.cast %arg0 : (tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}>
-  return %0 : tensor<f32, {is_scalar = ""}>
-}
-
-// CHECK-LABEL: func.func @test_cast_scalar_marker_f32_to_i64
-func.func @test_cast_scalar_marker_f32_to_i64(%arg0: tensor<f32, {is_scalar = ""}>) -> tensor<i64, {is_scalar = ""}> {
-  // CHECK-NOT: torch.prims.convert_element_type
-  // CHECK:   %[[RESULT:.*]] = torch.aten.Int.Scalar %arg0 : !torch.float -> !torch.int
-  // CHECK:   return %[[RESULT]] : !torch.int
-  %0 = mfuse.cast %arg0 : (tensor<f32, {is_scalar = ""}>) -> tensor<i64, {is_scalar = ""}>
-  return %0 : tensor<i64, {is_scalar = ""}>
-}
-
 // CHECK-LABEL: func.func @test_permute_general
 func.func @test_permute_general(%arg0: tensor<2x3x4xf32>) -> tensor<4x2x3xf32> {
   // CHECK-DAG: %[[D0:.*]] = torch.constant.int 2

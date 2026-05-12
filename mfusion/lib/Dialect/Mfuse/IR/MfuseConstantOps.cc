@@ -23,48 +23,30 @@ namespace mfuse {
 
 /// Helper function to add scalar marker attribute to rank-0 tensors if missing
 static Type addScalarMarkerToType(Type type, MLIRContext *ctx) {
-  if (auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type)) {
-    // Only add scalar marker for rank-0 tensors
-    if (rankedType.getRank() == 0) {
-      auto encoding = rankedType.getEncoding();
-      bool hasScalarMarker = false;
-
-      // Check if encoding already has scalar marker
-      if (encoding) {
-        if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding)) {
-          hasScalarMarker = dictAttr.contains(mlir::mfuse::kScalarMarkerAttr);
-        }
-      }
-
-      if (hasScalarMarker) {
+  auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type);
+  if (!rankedType || rankedType.getRank() != 0) {
+    return type;
+  }
+  // Only add scalar marker for rank-0 tensors
+  mlir::SmallVector<mlir::NamedAttribute> attrs;
+  // Check if encoding already has scalar marker
+  if (auto encoding = rankedType.getEncoding()) {
+    if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding)) {
+      if (dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
         return type;
       }
-
-      // If no scalar marker, add it
-      // Create scalar marker attribute
-      auto scalarMarkerAttr = mlir::NamedAttribute(mlir::StringAttr::get(ctx, mlir::mfuse::kScalarMarkerAttr),
-                                                   mlir::StringAttr::get(ctx, ""));
-
-      // Create new encoding with scalar marker
-      mlir::SmallVector<mlir::NamedAttribute> attrs;
-      if (encoding) {
-        if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding)) {
-          // Keep existing attributes
-          attrs.append(dictAttr.begin(), dictAttr.end());
-        }
-      }
-      // Add scalar marker attribute
-      attrs.emplace_back(scalarMarkerAttr);
-
-      // Create new encoding dictionary
-      auto newEncoding = mlir::DictionaryAttr::get(ctx, attrs);
-
-      // Create new type with updated encoding
-      return mlir::RankedTensorType::get(rankedType.getShape(), rankedType.getElementType(), newEncoding);
+      // Keep existing attributes
+      attrs.append(dictAttr.begin(), dictAttr.end());
     }
   }
-  // Return original type if no changes needed
-  return type;
+  auto scalarMarkerAttr =
+    mlir::NamedAttribute(mlir::StringAttr::get(ctx, mlir::mfuse::kScalarMarkerAttr), mlir::StringAttr::get(ctx, ""));
+  attrs.emplace_back(scalarMarkerAttr);
+  // Create new encoding dictionary
+  auto newEncoding = mlir::DictionaryAttr::get(ctx, attrs);
+
+  // Create new type with updated encoding
+  return mlir::RankedTensorType::get(rankedType.getShape(), rankedType.getElementType(), newEncoding);
 }
 
 //===----------------------------------------------------------------------===//
