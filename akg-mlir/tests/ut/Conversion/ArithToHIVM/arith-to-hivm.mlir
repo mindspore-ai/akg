@@ -2927,3 +2927,28 @@ func.func @test_npuvector_transfer_write_zero_output(%arg0: memref<1xi32>, %arg1
   }
   return
 }
+
+// -----
+
+func.func @test_transfer_write_alloc_root_rewrites_later_broadcast_use(%arg0: memref<1xf32>, %arg1: memref<1xf32>, %out: memref<1xf32>) {
+  // CHECK-LABEL: func.func @test_transfer_write_alloc_root_rewrites_later_broadcast_use
+  // CHECK: %[[SCRATCH:.*]] = memref.alloc() : memref<1xf32>
+  // CHECK: %[[SCRATCH_VIEW:.*]] = memref.subview %[[SCRATCH]][0] [1] [1] : memref<1xf32> to memref<1xf32, {{.*}}>
+  // CHECK: hivm.hir.vmul
+  // CHECK-SAME: outs(%[[SCRATCH_VIEW]] : memref<1xf32, {{.*}}>)
+  // CHECK-NOT: hivm.hir.vbrc
+  // CHECK: hivm.hir.vmul ins(%[[SCRATCH_VIEW]], {{.*}} : memref<1xf32, {{.*}}>, memref<1xf32>)
+  // CHECK: hivm.hir.store
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %scratch = memref.alloc() : memref<1xf32>
+  %lhs = npuvector.transfer_read %arg0[%c0] [%c1] [%c1], %pad : memref<1xf32>, !npuvector<1xf32>
+  %rhs = npuvector.transfer_read %arg1[%c0] [%c1] [%c1], %pad : memref<1xf32>, !npuvector<1xf32>
+  %mul = arith.mulf %lhs, %rhs : !npuvector<1xf32>
+  npuvector.transfer_write %mul, %scratch[%c0] : !npuvector<1xf32>, memref<1xf32>
+  %bcast = npuvector.broadcast %mul[%c1] [%c1] : !npuvector<1xf32> to !npuvector<1xf32>
+  %outv = arith.mulf %bcast, %lhs : !npuvector<1xf32>
+  npuvector.transfer_write %outv, %out[%c0] : !npuvector<1xf32>, memref<1xf32>
+  return
+}
