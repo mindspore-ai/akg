@@ -442,13 +442,12 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
     }
 
     if (tiling_struct_size > 0) {
+      runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));
       auto tensor = mlir::runtime::AsTensorDevice(input_tensors[input_size]);
-      runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(reinterpret_cast<void *>(offset));
-      runtimeargs.push_back(reinterpret_cast<void *>(tiling_struct_size));
-      runtimeargs.push_back(reinterpret_cast<void *>(1));
+      for (int i = 0; i < tiling_struct_size; i++) {
+        DLOG(INFO) << "tiling data[" << i << "]: " << (((int64_t*)tensor->GetHostAddress())[i]);
+        runtimeargs.push_back(reinterpret_cast<void *>(((int64_t*)tensor->GetHostAddress())[i]));
+      }
     }
   } else {
     for (const auto &base : input_tensors) {
