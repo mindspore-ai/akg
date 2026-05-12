@@ -129,6 +129,7 @@ llvm::MapVector<Value, SmallVector<std::pair<Operation *, size_t>>> collectKeepB
       if (idx >= op->getNumOperands()) {
         op->emitError("keepBF16 index ") << idx << " out of bounds for operation with " << op->getNumOperands()
                                          << " operands";
+        continue;
       }
       Value input = op->getOperand(idx);
       if (input) {
@@ -216,29 +217,17 @@ void processOpsInOrder(MLIRContext *ctx, const SmallVector<Operation *> &opsInOr
     }
 
     bool canKeepBF16 = canKeepBF16Op(op);
-    bool needUpdate = false;
-
     if (canKeepBF16) {
-      needUpdate = llvm::any_of(op->getOperands(), [&](Value operand) {
+      bool needUpdate = llvm::any_of(op->getOperands(), [&](Value operand) {
         return isBF16Tensor(operand.getType()) && keepBF16Nodes.count(operand);
       });
-    } else {
-      needUpdate = true;
-      auto *newOp = convertOpToF32(op, ctx);
-      handleConvertedResults(op, newOp, keepBF16Nodes, ctx);
-      op->erase();
-      continue;
-    }
-
-    if (!needUpdate) {
-      continue;
-    }
-
-    for (auto result : op->getResults()) {
-      if (isBF16Tensor(result.getType())) {
-        result.setType(getF32Type(result.getType(), ctx));
+      if (!needUpdate) {
+        continue;
       }
     }
+
+    auto *newOp = convertOpToF32(op, ctx);
+    handleConvertedResults(op, newOp, keepBF16Nodes, ctx);
   }
 }
 

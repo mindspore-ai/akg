@@ -106,9 +106,9 @@ bool CheckDataInputsHaveExpectedType(Operation *op, const SmallVector<int> &data
 // (preserves shape, changes element type)
 void UpdateResultElementType(Operation *op, Type newElementType) {
   llvm::for_each(op->getResults(), [&](auto result) {
-    auto resultType = mlir::dyn_cast<ShapedType>(result.getType());
+    auto resultType = mlir::dyn_cast<RankedTensorType>(result.getType());
     if (resultType) {
-      result.setType(RankedTensorType::get(resultType.getShape(), newElementType));
+      result.setType(RankedTensorType::get(resultType.getShape(), newElementType, resultType.getEncoding()));
     }
   });
 }
@@ -216,7 +216,9 @@ struct ReorderCastAfterTypeInsensitiveOp : public OpRewritePattern<mfuse::CastOp
       auto origInput = inputOp->getOperand(idx);
       auto origShapedType = mlir::dyn_cast<ShapedType>(origInput.getType());
       // Create new type with same shape as origInput but element type from cast output
-      auto targetType = RankedTensorType::get(origShapedType.getShape(), castOutputElementType);
+      auto origRankedType = mlir::dyn_cast<RankedTensorType>(origShapedType);
+      Attribute encoding = origRankedType ? origRankedType.getEncoding() : Attribute();
+      auto targetType = RankedTensorType::get(origShapedType.getShape(), castOutputElementType, encoding);
       auto newCastOp = rewriter.create<mfuse::CastOp>(castOp.getLoc(), targetType, origInput);
       newDataInputs.push_back(newCastOp.getResult());
     }

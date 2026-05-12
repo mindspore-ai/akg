@@ -52,7 +52,8 @@ struct RaiseReduceSumPrecision : public OpRewritePattern<mfuse::ReduceSumOp> {
     Float32Type f32Type = Float32Type::get(ctx);
 
     // Create input type with f32 element type
-    RankedTensorType f32InputType = RankedTensorType::get(inputTensorType.getShape(), f32Type);
+    RankedTensorType f32InputType =
+      RankedTensorType::get(inputTensorType.getShape(), f32Type, inputTensorType.getEncoding());
 
     // Compute output shape: reduce dimensions based on keepdim
     SmallVector<int64_t> outputShape(inputTensorType.getShape().begin(), inputTensorType.getShape().end());
@@ -76,7 +77,7 @@ struct RaiseReduceSumPrecision : public OpRewritePattern<mfuse::ReduceSumOp> {
       }
     }
 
-    RankedTensorType f32OutputType = RankedTensorType::get(outputShape, f32Type);
+    RankedTensorType f32OutputType = RankedTensorType::get(outputShape, f32Type, inputTensorType.getEncoding());
 
     // Create Cast from float16 to float32
     auto castToF32 = rewriter.create<mfuse::CastOp>(reduceOp.getLoc(), f32InputType, reduceOp.getInput());
@@ -106,11 +107,11 @@ struct RaiseReduceSumPrecision : public OpRewritePattern<mfuse::ReduceSumOp> {
 
 struct RaiseReductionPrecisionPass : public impl::RaiseReductionPrecisionPassBase<RaiseReductionPrecisionPass> {
   void runOnOperation() override {
-    getOperation().walk([](func::FuncOp func) {
+    getOperation().walk([this](func::FuncOp func) {
       RewritePatternSet patterns(func.getContext());
       patterns.add<RaiseReduceSumPrecision>(func.getContext());
       if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
-        func.emitError("RaiseReductionPrecisionPass failed");
+        signalPassFailure();
       }
     });
   }
