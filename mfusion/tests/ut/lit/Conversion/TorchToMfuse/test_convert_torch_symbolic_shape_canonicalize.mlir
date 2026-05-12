@@ -75,4 +75,55 @@ module {
     torch.bind_symbolic_shape %0, [%s0], affine_map<()[s0] -> (1, s0, 37)> : !torch.vtensor<[1,?,37],f32>
     return %0 : !torch.vtensor<[1,?,37],f32>
   }
+
+  // CHECK-LABEL: func.func @called_constant_input
+  // CHECK-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // CHECK-SAME: -> !torch.vtensor<[1,?],f32>
+  // CHECK-NOT: torch.bind_symbolic_shape
+  // CHECK: return %arg0 : !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-LABEL: func.func @called_constant_input
+  // ROUNDTRIP-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-SAME: -> !torch.vtensor<[1,?],f32>
+  func.func @called_constant_input(%arg0: !torch.vtensor<[1,?],f32>)
+      -> !torch.vtensor<[1,?],f32> attributes {torch.assume_strict_symbolic_shapes} {
+    torch.bind_symbolic_shape %arg0, [], affine_map<() -> (1, 6)> : !torch.vtensor<[1,?],f32>
+    return %arg0 : !torch.vtensor<[1,?],f32>
+  }
+
+  // CHECK-LABEL: func.func @caller_keeps_callee_signature
+  // CHECK-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // CHECK-SAME: -> !torch.vtensor<[1,?],f32>
+  // CHECK: func.call @called_constant_input
+  // CHECK-SAME: (!torch.vtensor<[1,?],f32>) -> !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-LABEL: func.func @caller_keeps_callee_signature
+  // ROUNDTRIP-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-SAME: -> !torch.vtensor<[1,?],f32>
+  func.func @caller_keeps_callee_signature(%arg0: !torch.vtensor<[1,?],f32>)
+      -> !torch.vtensor<[1,?],f32> attributes {torch.assume_strict_symbolic_shapes} {
+    %0 = func.call @called_constant_input(%arg0) : (!torch.vtensor<[1,?],f32>) -> !torch.vtensor<[1,?],f32>
+    return %0 : !torch.vtensor<[1,?],f32>
+  }
+
+  // CHECK-LABEL: func.func @multi_return_keeps_signature
+  // CHECK-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // CHECK-SAME: %arg1: !torch.vtensor<[1,?],f32>
+  // CHECK-SAME: -> !torch.vtensor<[1,?],f32>
+  // CHECK-NOT: torch.bind_symbolic_shape
+  // CHECK: return %arg0 : !torch.vtensor<[1,?],f32>
+  // CHECK: return %arg1 : !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-LABEL: func.func @multi_return_keeps_signature
+  // ROUNDTRIP-SAME: %arg0: !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-SAME: %arg1: !torch.vtensor<[1,?],f32>
+  // ROUNDTRIP-SAME: -> !torch.vtensor<[1,?],f32>
+  func.func @multi_return_keeps_signature(%arg0: !torch.vtensor<[1,?],f32>,
+                                          %arg1: !torch.vtensor<[1,?],f32>,
+                                          %cond: i1) -> !torch.vtensor<[1,?],f32>
+      attributes {torch.assume_strict_symbolic_shapes} {
+    torch.bind_symbolic_shape %arg0, [], affine_map<() -> (1, 6)> : !torch.vtensor<[1,?],f32>
+    cf.cond_br %cond, ^then, ^else
+  ^then:
+    return %arg0 : !torch.vtensor<[1,?],f32>
+  ^else:
+    return %arg1 : !torch.vtensor<[1,?],f32>
+  }
 }

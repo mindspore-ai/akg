@@ -89,6 +89,53 @@ bool setRankedTensorValueType(mlir::Value value, mlir::RankedTensorType newType)
   return false;
 }
 
+bool hasFuncCallers(mlir::func::FuncOp func) {
+  auto module = func->getParentOfType<mlir::ModuleOp>();
+  if (!module) {
+    return false;
+  }
+
+  bool hasCaller = false;
+  module.walk([&](mlir::func::CallOp callOp) {
+    if (callOp.getCallee() == func.getSymName()) {
+      hasCaller = true;
+    }
+  });
+  return hasCaller;
+}
+
+unsigned countReturnOps(mlir::func::FuncOp func) {
+  unsigned count = 0;
+  func.walk([&](mlir::func::ReturnOp) { ++count; });
+  return count;
+}
+
+bool canRefineFunctionSignature(mlir::func::FuncOp func) {
+  return func && !func.isExternal() && !hasFuncCallers(func) && countReturnOps(func) == 1;
+}
+
+mlir::func::FuncOp getEntryFunctionForArgument(mlir::BlockArgument arg) {
+  auto func = mlir::dyn_cast_or_null<mlir::func::FuncOp>(arg.getOwner()->getParentOp());
+  if (!func || func.getBody().empty() || arg.getOwner() != &func.getBody().front()) {
+    return {};
+  }
+  return func;
+}
+
+bool hasIneligibleReturnUser(mlir::Value value) {
+  for (mlir::Operation *user : value.getUsers()) {
+    auto returnOp = mlir::dyn_cast<mlir::func::ReturnOp>(user);
+    if (!returnOp) {
+      continue;
+    }
+    auto func = returnOp->getParentOfType<mlir::func::FuncOp>();
+    if (!canRefineFunctionSignature(func)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Keep the entry block argument type and the func.func input type in sync when
 // a bound function input is refined.
 //
@@ -105,31 +152,37 @@ bool setRankedTensorValueType(mlir::Value value, mlir::RankedTensorType newType)
 // If the printed function signature stays at !torch.vtensor<[1,?],...> while
 // the argument uses !torch.vtensor<[1,6],...>, later mfuse-to-torch roundtrip can
 // leave a type-changing unrealized_conversion_cast at the function boundary.
-void updateFunctionArgumentType(mlir::BlockArgument arg, mlir::Type newType) {
-  auto func = mlir::dyn_cast_or_null<mlir::func::FuncOp>(arg.getOwner()->getParentOp());
-  if (!func || func.getBody().empty() || arg.getOwner() != &func.getBody().front()) {
-    return;
+bool updateFunctionArgumentType(mlir::BlockArgument arg, mlir::Type newType) {
+  auto func = getEntryFunctionForArgument(arg);
+  if (!canRefineFunctionSignature(func)) {
+    return false;
   }
 
   auto funcType = func.getFunctionType();
   llvm::SmallVector<mlir::Type> inputs(funcType.getInputs().begin(), funcType.getInputs().end());
   inputs[static_cast<size_t>(arg.getArgNumber())] = newType;
   func.setFunctionType(mlir::FunctionType::get(func.getContext(), inputs, funcType.getResults()));
+  return true;
 }
 
-// Generic value type setter for Torch values. Unlike the RankedTensorType
-// overload above, this also updates func.func signatures for entry arguments.
+// Generic value type setter for Torch values. For eligible function entry
+// arguments, this also updates the printed func.func signature.
 bool setTorchValueType(mlir::Value value, mlir::Type newType) {
   if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
     if (result.getType() != newType) {
+      if (hasIneligibleReturnUser(result)) {
+        return false;
+      }
       result.setType(newType);
     }
     return true;
   }
   if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(value)) {
     if (arg.getType() != newType) {
+      if (getEntryFunctionForArgument(arg) && !updateFunctionArgumentType(arg, newType)) {
+        return false;
+      }
       arg.setType(newType);
-      updateFunctionArgumentType(arg, newType);
     }
     return true;
   }
@@ -321,12 +374,23 @@ bool isRefinedTorchTensorType(mlir::Type oldType, mlir::Type newType) {
 //
 // Only monotonic refinements from '?' to a concrete size are accepted here.
 void refineFunctionResultTypes(mlir::func::FuncOp func) {
-  if (func.isExternal()) {
+  if (func.isExternal() || hasFuncCallers(func)) {
     return;
   }
   llvm::SmallVector<mlir::func::ReturnOp> returnOps;
   func.walk([&](mlir::func::ReturnOp returnOp) { returnOps.push_back(returnOp); });
   if (returnOps.size() != 1) {
+    // A function can have multiple return terminators through control flow:
+    //
+    //   cf.cond_br %cond, ^then, ^else
+    // ^then:
+    //   return %a : !torch.vtensor<[1,1,6,37],f32>
+    // ^else:
+    //   return %b : !torch.vtensor<[1,1,?,37],f32>
+    //
+    // Refining the function result from only one return could make the other
+    // return invalid. Keep the signature unchanged unless there is exactly one
+    // return terminator.
     return;
   }
 
