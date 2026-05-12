@@ -31,9 +31,8 @@ constexpr auto kTilingFuncName = "_tiling_function";
 
 class TilingMemory {
  public:
-  TilingMemory() : tiling_host(nullptr, aclrtFreeHost), tiling_dev(nullptr, aclrtFree) {}
-  std::unique_ptr<void, decltype(&aclrtFreeHost)> tiling_host;
-  std::unique_ptr<void, decltype(&aclrtFree)> tiling_dev;
+  TilingMemory() = default;
+  std::unique_ptr<int64_t[]> tiling_host;
   static TilingMemory *GetInstance();
 
  private:
@@ -46,23 +45,7 @@ TilingMemory *TilingMemory::GetInstance() {
   static std::once_flag tiling_mem_once;
   std::call_once(tiling_mem_once, []() {
     tiling_memory_singleton_.reset(new TilingMemory());
-    void *tiling_host = nullptr;
-    void *tiling_dev = nullptr;
-    // malloc host memory for host arg_tiling
-    aclError err = aclrtMallocHost((void **)&tiling_host, kTilingMemSize);
-    if (err != ACL_ERROR_NONE) {
-      printf("Failed to malloc arg_tiling_host, err: %d \n", err);
-      LOG(FATAL) << "Failed to malloc tiling host memory, err: [" << err << "]";
-      return;
-    }
-    // malloc device memory for device arg_tiling
-    err = aclrtMalloc((void **)&tiling_dev, kTilingMemSize, ACL_MEM_MALLOC_HUGE_FIRST);
-    if (err != ACL_ERROR_NONE) {
-      LOG(FATAL) << "Failed to malloc tiling device memory, err: [" << err << "]";
-      return;
-    }
-    tiling_memory_singleton_.get()->tiling_host.reset(tiling_host);
-    tiling_memory_singleton_.get()->tiling_dev.reset(tiling_dev);
+    tiling_memory_singleton_.get()->tiling_host.reset(new int64_t[kTilingMemSize]);
   });
   return tiling_memory_singleton_.get();
 }
@@ -204,7 +187,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
 
-  int64_t tiling_key, tiling_struct_size = 0;
+  int64_t tiling_key, tiling_size = 0;
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
@@ -216,7 +199,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
     void *tiling_size_func = dlsym(handle, tiling_size_func_name.c_str());
     CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
-    auto tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
+    tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
 
     if (tiling_size > 0) {
       int64_t offset = 0;
@@ -262,7 +245,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       runtimeargs.push_back(reinterpret_cast<void *>(1));
       tiling_func_ptr((void *)(runtimeargs.data()));
       for (uint64_t i = 0; i < tiling_size; i++) {
-        DLOG(INFO) << "tiling data[" << i << "]: " << ((int64_t *)TilingMemory::GetInstance()->tiling_host.get())[i];
+        DLOG(INFO) << "tiling data[" << i << "]: " << (TilingMemory::GetInstance()->tiling_host.get())[i];
       }
       input.push_back(std::make_shared<mlir::runtime::TensorDevice>(TilingMemory::GetInstance()->tiling_host.get(),
                                                                     nullptr, tiling_size * sizeof(int64_t), false));
@@ -274,7 +257,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   auto *kernel_runtime =
     mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
-  kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
+  kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
     py::tuple tup = processed_args[iter->first].cast<py::tuple>();
@@ -340,15 +323,12 @@ std::vector<void *> InitKernelArgs(const py::args &args, uint64_t tiling_func = 
     runtimeargs.push_back(reinterpret_cast<void *>(1));
     auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);
     tiling_func_ptr((void *)(runtimeargs.data()));
+    runtimeargs.resize(runtimeargs.size() - 6);
+    runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));
     for (uint64_t i = 0; i < tiling_size; i++) {
-      DLOG(INFO) << "tiling data[" << i << "]: " << ((int64_t *)TilingMemory::GetInstance()->tiling_host.get())[i];
+      DLOG(INFO) << "tiling data[" << i << "]: " << (TilingMemory::GetInstance()->tiling_host.get())[i];
+      runtimeargs.push_back(reinterpret_cast<void *>((TilingMemory::GetInstance()->tiling_host.get())[i]));
     }
-    // copy host arg_tiling to device arg_tiling, and also replace corresponding place in args
-    aclrtMemcpy(TilingMemory::GetInstance()->tiling_dev.get(), tiling_size * sizeof(int64_t),
-                TilingMemory::GetInstance()->tiling_host.get(), tiling_size * sizeof(int64_t),
-                ACL_MEMCPY_HOST_TO_DEVICE);
-    runtimeargs[runtimeargs.size() - 5] = TilingMemory::GetInstance()->tiling_dev.get();
-    runtimeargs[runtimeargs.size() - 4] = TilingMemory::GetInstance()->tiling_dev.get();
   }
   return runtimeargs;
 }
@@ -366,7 +346,7 @@ void Launch(uint64_t kernel_func, uint64_t block_num, uint64_t stream, bool is_d
 
 void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kernel_func, uint64_t tiling_func,
                  uint64_t tiling_size, uint64_t block_num, uint64_t stream, bool is_dynamic, const py::args &args) {
-  auto runtimeargs = InitKernelArgs(args);
+  auto runtimeargs = InitKernelArgs(args, tiling_func, tiling_size);
   static void *torch_run_func = nullptr;
   if (torch_run_func == nullptr) {
     if (torch_path.empty()) {
