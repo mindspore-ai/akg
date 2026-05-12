@@ -16,6 +16,7 @@
 
 #include <algorithm>
 
+#include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -25,6 +26,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchDialect.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
+#include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mfusion/Conversion/Passes.h"
@@ -69,7 +71,9 @@ mlir::Attribute dropSymbolicShapeEncoding(mlir::RankedTensorType type) {
   return mlir::DictionaryAttr::get(ctx, entries);
 }
 
-bool setValueType(mlir::Value value, mlir::RankedTensorType newType) {
+// Set a builtin/Mfuse tensor value to an already canonicalized type, e.g.
+// tensor<1x?xf32, #mfuse.symshape<["1", "6"]>> becomes tensor<1x6xf32>.
+bool setRankedTensorValueType(mlir::Value value, mlir::RankedTensorType newType) {
   if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
     if (result.getType() != newType) {
       result.setType(newType);
@@ -85,6 +89,70 @@ bool setValueType(mlir::Value value, mlir::RankedTensorType newType) {
   return false;
 }
 
+// Keep the entry block argument type and the func.func input type in sync when
+// a bound function input is refined.
+//
+// Before:
+//   func.func @main(%arg0: !torch.vtensor<[1,?],si64>) {
+//     torch.bind_symbolic_shape %arg0, [], affine_map<() -> (1, 6)>
+//   }
+//
+// After:
+//   func.func @main(%arg0: !torch.vtensor<[1,6],si64>) {
+//     ...
+//   }
+//
+// If the printed function signature stays at !torch.vtensor<[1,?],...> while
+// the argument uses !torch.vtensor<[1,6],...>, later mfuse-to-torch roundtrip can
+// leave a type-changing unrealized_conversion_cast at the function boundary.
+void updateFunctionArgumentType(mlir::BlockArgument arg, mlir::Type newType) {
+  auto func = mlir::dyn_cast_or_null<mlir::func::FuncOp>(arg.getOwner()->getParentOp());
+  if (!func || func.getBody().empty() || arg.getOwner() != &func.getBody().front()) {
+    return;
+  }
+
+  auto funcType = func.getFunctionType();
+  llvm::SmallVector<mlir::Type> inputs(funcType.getInputs().begin(), funcType.getInputs().end());
+  inputs[static_cast<size_t>(arg.getArgNumber())] = newType;
+  func.setFunctionType(mlir::FunctionType::get(func.getContext(), inputs, funcType.getResults()));
+}
+
+// Generic value type setter for Torch values. Unlike the RankedTensorType
+// overload above, this also updates func.func signatures for entry arguments.
+bool setTorchValueType(mlir::Value value, mlir::Type newType) {
+  if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
+    if (result.getType() != newType) {
+      result.setType(newType);
+    }
+    return true;
+  }
+  if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(value)) {
+    if (arg.getType() != newType) {
+      arg.setType(newType);
+      updateFunctionArgumentType(arg, newType);
+    }
+    return true;
+  }
+  return false;
+}
+
+// Canonicalize a builtin RankedTensorType according to the symbolic shape exprs
+// already resolved from torch.bind_symbolic_shape.
+//
+// Torch dialect can legally express a "pseudo dynamic" shape as:
+//
+//   !torch.vtensor<[1,1,?,37],i1>
+//   torch.bind_symbolic_shape ..., affine_map<() -> (1, 1, 6, 37)>
+//
+// Mfuse IR is stricter: a dynamic dimension may not be paired with a constant
+// symbolic expression. At the Torch-to-Mfuse boundary this must become:
+//
+//   tensor<1x1x6x37xi1>
+//
+// Real dynamic dimensions are preserved with an encoding:
+//
+//   affine_map<()[s0] -> (1, s0, 37)>
+//     -> tensor<1x?x37xf32, #mfuse.symshape<["1", "s0", "37"]>>
 mlir::FailureOr<mlir::RankedTensorType> canonicalizeTypeWithSymbolicExprs(
   mlir::Operation *diagOp, mlir::RankedTensorType ranked, llvm::ArrayRef<mlir::mfuse::SymbolAttrUtils::SymExpr> exprs,
   mlir::OpBuilder &builder, mfusion::SymEngineAnalysis &analysis) {
@@ -124,6 +192,161 @@ mlir::FailureOr<mlir::RankedTensorType> canonicalizeTypeWithSymbolicExprs(
   }
   return mlir::mfuse::SymbolAttrUtils::withSymbolicAttr(
     baseType, mlir::mfuse::SymbolAttrUtils::createSymbolicShapeAttr(builder, exprs));
+}
+
+// Mirror the same canonicalization onto Torch ValueTensorType. Torch types do
+// not carry mfuse.symshape encodings, so only constant bind expressions refine
+// '?' to a static size. Non-constant symbols remain '?' in Torch IR.
+//
+// This is needed for roundtrip cleanup. If only the Mfuse cast result is
+// refined, the final pipeline can produce:
+//
+//   !torch.vtensor<[1,1,?,37],i1>
+//     -> tensor<1x1x6x37xi1>
+//     -> !torch.vtensor<[1,1,6,37],i1>
+//
+// The source and target Torch tensor types differ, so
+// reconcile-unrealized-casts cannot erase the cast chain. Refining the bound
+// Torch SSA value to !torch.vtensor<[1,1,6,37],i1> keeps both sides consistent.
+mlir::FailureOr<TorchD::ValueTensorType> canonicalizeTorchTypeWithSymbolicExprs(
+  mlir::Operation *diagOp, TorchD::ValueTensorType type, llvm::ArrayRef<mlir::mfuse::SymbolAttrUtils::SymExpr> exprs,
+  mfusion::SymEngineAnalysis &analysis) {
+  if (!type.hasSizes()) {
+    return mlir::failure();
+  }
+  auto sizes = type.getSizes();
+  if (static_cast<int64_t>(sizes.size()) != static_cast<int64_t>(exprs.size())) {
+    diagOp->emitError("bind_symbolic_shape result rank does not match torch tensor type rank");
+    return mlir::failure();
+  }
+
+  llvm::SmallVector<int64_t> newSizes(sizes.begin(), sizes.end());
+  for (auto [index, expr] : llvm::enumerate(exprs)) {
+    auto maybeInt = analysis.tryExtractInt64(expr);
+    int64_t currentSize = newSizes[index];
+    if (mlir::succeeded(maybeInt)) {
+      if (currentSize != TorchD::kUnknownSize && currentSize != *maybeInt) {
+        diagOp->emitError() << "static tensor dimension " << index << " is " << currentSize
+                            << " but bind_symbolic_shape expression is " << *maybeInt;
+        return mlir::failure();
+      }
+      newSizes[index] = *maybeInt;
+      continue;
+    }
+
+    if (currentSize != TorchD::kUnknownSize) {
+      diagOp->emitError() << "static tensor dimension " << index << " is " << currentSize
+                          << " but bind_symbolic_shape expression is non-constant: " << expr->__str__();
+      return mlir::failure();
+    }
+  }
+
+  auto newType = mlir::dyn_cast<TorchD::ValueTensorType>(
+    type.getWithSizesAndDtype(llvm::ArrayRef<int64_t>(newSizes), type.getOptionalDtype()));
+  if (!newType) {
+    diagOp->emitError("failed to build canonical torch tensor type from bind_symbolic_shape");
+    return mlir::failure();
+  }
+  return newType;
+}
+
+// Canonicalize the Torch value declared by this bind op when the bind
+// expression resolves a '?' dimension to a constant:
+//
+//   before:
+//     %arg15: !torch.vtensor<[1,1,?,37],i1>
+//     torch.bind_symbolic_shape %arg15, [],
+//       affine_map<() -> (1, 1, 6, 37)>
+//
+//   after:
+//     %arg15: !torch.vtensor<[1,1,6,37],i1>
+//
+// True dynamic bindings remain dynamic:
+//
+//   %s1 = torch.symbolic_int "s1" {min_val = 2, max_val = ...}
+//   torch.bind_symbolic_shape %arg3, [%s1],
+//     affine_map<()[s0] -> (s0)> : !torch.vtensor<[?],si64>
+//
+//   after:
+//     %arg3: !torch.vtensor<[?],si64>
+mlir::LogicalResult canonicalizeTorchValueWithSymbolicExprs(mlir::Operation *diagOp, mlir::Value value,
+                                                            llvm::ArrayRef<mlir::mfuse::SymbolAttrUtils::SymExpr> exprs,
+                                                            mfusion::SymEngineAnalysis &analysis) {
+  auto tensorType = mlir::dyn_cast<TorchD::ValueTensorType>(value.getType());
+  if (!tensorType || !tensorType.hasSizes()) {
+    return mlir::success();
+  }
+  auto canonicalType = canonicalizeTorchTypeWithSymbolicExprs(diagOp, tensorType, exprs, analysis);
+  if (mlir::failed(canonicalType)) {
+    return mlir::failure();
+  }
+  (void)setTorchValueType(value, *canonicalType);
+  return mlir::success();
+}
+
+// Returns true if newType only refines unknown Torch tensor dimensions in
+// oldType to concrete sizes, with rank and dtype unchanged.
+bool isRefinedTorchTensorType(mlir::Type oldType, mlir::Type newType) {
+  auto oldTensorType = mlir::dyn_cast<TorchD::ValueTensorType>(oldType);
+  auto newTensorType = mlir::dyn_cast<TorchD::ValueTensorType>(newType);
+  if (!oldTensorType || !newTensorType || !oldTensorType.hasSizes() || !newTensorType.hasSizes()) {
+    return false;
+  }
+  if (oldTensorType.getOptionalDtype() != newTensorType.getOptionalDtype()) {
+    return false;
+  }
+  auto oldSizes = oldTensorType.getSizes();
+  auto newSizes = newTensorType.getSizes();
+  if (oldSizes.size() != newSizes.size()) {
+    return false;
+  }
+  for (auto [oldSize, newSize] : llvm::zip(oldSizes, newSizes)) {
+    if (oldSize != newSize && oldSize != TorchD::kUnknownSize) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Function result types are not tied to a distinct SSA value. If the single
+// return operand was refined from a pseudo dynamic Torch tensor, refine the
+// function result as well:
+//
+//   func.func @main(...) -> !torch.vtensor<[1,1,?,37],f32>
+//   return %0 : !torch.vtensor<[1,1,6,37],f32>
+//
+// becomes:
+//
+//   func.func @main(...) -> !torch.vtensor<[1,1,6,37],f32>
+//
+// Only monotonic refinements from '?' to a concrete size are accepted here.
+void refineFunctionResultTypes(mlir::func::FuncOp func) {
+  if (func.isExternal()) {
+    return;
+  }
+  llvm::SmallVector<mlir::func::ReturnOp> returnOps;
+  func.walk([&](mlir::func::ReturnOp returnOp) { returnOps.push_back(returnOp); });
+  if (returnOps.size() != 1) {
+    return;
+  }
+
+  auto funcType = func.getFunctionType();
+  auto returnOp = returnOps.front();
+  if (returnOp.getNumOperands() != funcType.getNumResults()) {
+    return;
+  }
+
+  llvm::SmallVector<mlir::Type> results(funcType.getResults().begin(), funcType.getResults().end());
+  bool updated = false;
+  for (auto [index, operand] : llvm::enumerate(returnOp.getOperands())) {
+    if (isRefinedTorchTensorType(results[index], operand.getType())) {
+      results[index] = operand.getType();
+      updated = true;
+    }
+  }
+  if (updated) {
+    func.setFunctionType(mlir::FunctionType::get(func.getContext(), funcType.getInputs(), results));
+  }
 }
 
 mlir::LogicalResult attachToCastResults(mlir::Operation *diagOp, mlir::Operation *castOp,
@@ -236,6 +459,11 @@ struct ConvertTorchSymbolToMfusePass
         return mlir::failure();
       }
 
+      // Keep the bound Torch value type consistent with its bind_symbolic_shape fact.
+      if (mlir::failed(canonicalizeTorchValueWithSymbolicExprs(bindOp, bindOp.getOperand(), *exprs, analysis))) {
+        return mlir::failure();
+      }
+
       // Case 1: Torch tensor used by casts to RankedTensorType.
       for (mlir::Operation *user : bindOp.getOperand().getUsers()) {
         auto castOp = llvm::dyn_cast<mlir::UnrealizedConversionCastOp>(user);
@@ -261,7 +489,7 @@ struct ConvertTorchSymbolToMfusePass
           if (mlir::failed(canonicalType)) {
             return mlir::failure();
           }
-          if (setValueType(input, *canonicalType)) {
+          if (setRankedTensorValueType(input, *canonicalType)) {
             remove_op = true;
           }
         }
@@ -275,6 +503,7 @@ struct ConvertTorchSymbolToMfusePass
     for (mlir::Operation *op : eraseOps) {
       op->erase();
     }
+    module.walk([&](mlir::func::FuncOp func) { refineFunctionResultTypes(func); });
     return mlir::success();
   }
 };
