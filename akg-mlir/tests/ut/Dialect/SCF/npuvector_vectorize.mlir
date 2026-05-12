@@ -4,12 +4,35 @@
 // 1. 1-D Elementwise static and dynamic
 // ============================================================================
 
+// CHECK-LABEL: func.func @test_skip_host_func
+// CHECK-NOT: npuvector.transfer_read
+// CHECK: scf.for
+// CHECK: memref.load
+// CHECK: memref.store
+// CHECK-NOT: npuvector.transfer_write
+// CHECK: return
+func.func @test_skip_host_func(
+    %X: memref<1024xf32>,
+    %Y: memref<1024xf32>) attributes {hacc.function_kind = #hacc.function_kind<HOST>} {
+  %c0 = arith.constant 0 : index
+  %c1024 = arith.constant 1024 : index
+  %c1 = arith.constant 1 : index
+
+  scf.for %i = %c0 to %c1024 step %c1 {
+    %x = memref.load %X[%i] : memref<1024xf32>
+    memref.store %x, %Y[%i] : memref<1024xf32>
+  } {vector=1024}
+  return
+}
+
+// -----
+
 // CHECK-LABEL: func.func @test_elementwise_static
 func.func @test_elementwise_static(
     %X: memref<1024xf32>,
     %Y: memref<1024xf32>,
     %Z: memref<1024xf32>,
-    %alpha: f32) {
+    %alpha: f32) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
@@ -40,7 +63,7 @@ func.func @test_elementwise_dynamic(
     %input: memref<?xf32>,
     %output: memref<?xf32>,
     %scale: f32,
-    %bias: f32) {
+    %bias: f32) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %N = memref.dim %input, %c0 : memref<?xf32>
@@ -73,7 +96,7 @@ func.func @test_elementwise_dynamic(
 // ============================================================================
 
 // CHECK-LABEL: func.func @test_reduction_static
-func.func @test_reduction_static(%input: memref<1024xf32>, %output: memref<f32>) {
+func.func @test_reduction_static(%input: memref<1024xf32>, %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
@@ -102,7 +125,7 @@ func.func @test_reduction_static(%input: memref<1024xf32>, %output: memref<f32>)
 // -----
 
 // CHECK-LABEL: func.func @test_reduction_dynamic
-func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) {
+func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %N = memref.dim %input, %c0 : memref<?xf32>
@@ -158,7 +181,7 @@ func.func @test_reduction_x_two_results(
     %input: memref<1024xf32>,
     %mask: memref<1024xf32>,
     %out_sum: memref<f32>,
-    %out_sq: memref<f32>) {
+    %out_sq: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
@@ -204,7 +227,7 @@ func.func @test_reduction_x_two_results_static_tail(
     %input: memref<300xf32>,
     %mask: memref<300xf32>,
     %out_sum: memref<f32>,
-    %out_sq: memref<f32>) {
+    %out_sq: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c300 = arith.constant 300 : index
   %c1 = arith.constant 1 : index
@@ -261,7 +284,7 @@ func.func @test_reduction_x_two_results_dynamic_tail(
     %input: memref<?xf32>,
     %mask: memref<?xf32>,
     %out_sum: memref<f32>,
-    %out_sq: memref<f32>) {
+    %out_sq: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %N = memref.dim %input, %c0 : memref<?xf32>
@@ -341,7 +364,7 @@ func.func @test_reduction_x_two_results_dynamic_tail(
 // ============================================================================
 
 // CHECK-LABEL: func.func @test_reduction_static_with_tail
-func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: memref<f32>) {
+func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c300 = arith.constant 300 : index
   %c1 = arith.constant 1 : index
@@ -385,7 +408,7 @@ func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: mem
 // CHECK-LABEL: func.func @test_reduction_y_no_iter_args
 func.func @test_reduction_y_no_iter_args(
     %acc: memref<64xf32>,
-    %input: memref<32x64xf32>) {
+    %input: memref<32x64xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -415,7 +438,7 @@ func.func @test_reduction_y_no_iter_args(
 // CHECK-LABEL: func.func @test_broadcast_inner_unit_attr
 func.func @test_broadcast_inner_unit_attr(
     %out: memref<32x64xf32>,
-    %input: memref<32x64xf32>) {
+    %input: memref<32x64xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -438,7 +461,7 @@ func.func @test_broadcast_inner_unit_attr(
 func.func @test_reduction_y_no_iter_args_dynamic(
     %acc: memref<?xf32>,
     %input: memref<?x?xf32>,
-    %M: index, %N: index) {
+    %M: index, %N: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
@@ -465,7 +488,7 @@ func.func @test_reduction_y_no_iter_args_dynamic(
 // CHECK-LABEL: func.func @test_reduction_y_with_iter_args
 func.func @test_reduction_y_with_iter_args(
     %input: memref<32x64xf32>,
-    %output: memref<64xf32>) {
+    %output: memref<64xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -496,7 +519,7 @@ func.func @test_reduction_y_with_iter_args(
 func.func @test_reduction_y_with_iter_args_dynamic(
     %input: memref<?x?xf32>,
     %output: memref<?xf32>,
-    %M: index, %N: index) {
+    %M: index, %N: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %init = arith.constant 0.0 : f32
@@ -530,7 +553,7 @@ func.func @test_reduction_y_with_iter_args_dynamic(
 
 // CHECK-LABEL: func.func @test_multidim_elementwise_static
 func.func @test_multidim_elementwise_static(
-    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %c: memref<32x64xf32>) {
+    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %c: memref<32x64xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -556,7 +579,7 @@ func.func @test_multidim_elementwise_static(
 
 // CHECK-LABEL: func.func @test_multidim_elementwise_transpose_load
 func.func @test_multidim_elementwise_transpose_load(
-    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %c: memref<32x64xf32>) {
+    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %c: memref<32x64xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -584,7 +607,7 @@ func.func @test_multidim_elementwise_transpose_load(
 // CHECK-LABEL: func.func @test_multidim_elementwise_dynamic
 func.func @test_multidim_elementwise_dynamic(
     %a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>,
-    %M: index, %N: index) {
+    %M: index, %N: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
@@ -620,7 +643,7 @@ func.func @test_multidim_elementwise_dynamic(
 
 // CHECK-LABEL: func.func @test_multidim_transpose_store_only
 func.func @test_multidim_transpose_store_only(
-    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %out: memref<64x32xf32>) {
+    %a: memref<32x64xf32>, %b: memref<32x64xf32>, %out: memref<64x32xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -651,7 +674,7 @@ func.func @test_multidim_transpose_store_only(
 // CHECK-LABEL: func.func @test_multidim_transpose_static
 func.func @test_multidim_transpose_static(
     %a: memref<32x64xf32>, %b: memref<32x64xf32>, %c: memref<32x64xf32>,
-    %a1: memref<64x32xf32>, %b1: memref<64x32xf32>, %d: memref<64x32xf32>) {
+    %a1: memref<64x32xf32>, %b1: memref<64x32xf32>, %d: memref<64x32xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -692,7 +715,7 @@ func.func @test_multidim_transpose_static(
 
 // CHECK-LABEL: func.func @test_three_layer_outer_inner_tag
 func.func @test_three_layer_outer_inner_tag(
-    %a: memref<8x16x32xf32>, %out: memref<8x16x32xf32>) {
+    %a: memref<8x16x32xf32>, %out: memref<8x16x32xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c8 = arith.constant 8 : index
   %c16 = arith.constant 16 : index
@@ -721,7 +744,7 @@ func.func @test_three_layer_outer_inner_tag(
 
 // CHECK-LABEL: func.func @test_multidim_transpose_with_scf_if
 func.func @test_multidim_transpose_with_scf_if(
-    %a: memref<32x64xf32>, %out: memref<64x32xf32>, %threshold: index) {
+    %a: memref<32x64xf32>, %out: memref<64x32xf32>, %threshold: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c64 = arith.constant 64 : index
@@ -751,7 +774,7 @@ func.func @test_multidim_transpose_with_scf_if(
 
 // CHECK-LABEL: func.func @test_multidim_transpose_dynamic
 func.func @test_multidim_transpose_dynamic(
-    %a: memref<?x?xf32>, %out: memref<?x?xf32>, %M: index, %N: index) {
+    %a: memref<?x?xf32>, %out: memref<?x?xf32>, %M: index, %N: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
@@ -779,7 +802,7 @@ func.func @test_multidim_transpose_dynamic(
 
 // CHECK-LABEL: func.func @test_multidim_transpose_dynamic_with_scf_if
 func.func @test_multidim_transpose_dynamic_with_scf_if(
-    %a: memref<?x?xf32>, %out: memref<?x?xf32>, %M: index, %N: index, %thresh: index) {
+    %a: memref<?x?xf32>, %out: memref<?x?xf32>, %M: index, %N: index, %thresh: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c2 = arith.constant 2.0 : f32
@@ -825,7 +848,7 @@ func.func @test_multidim_transpose_dynamic_with_scf_if(
 
 // CHECK-LABEL: func.func @test_transpose_affine_bounds_2d
 func.func @test_transpose_affine_bounds_2d(
-    %a: memref<32x64xf32>, %out: memref<64x32xf32>) {
+    %a: memref<32x64xf32>, %out: memref<64x32xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c32 = arith.constant 32 : index
@@ -869,7 +892,7 @@ func.func @test_transpose_affine_bounds_2d(
 
 // CHECK-LABEL: func.func @test_transpose_affine_bounds_3d
 func.func @test_transpose_affine_bounds_3d(
-    %a: memref<8x16x32xf32>, %out: memref<32x16x8xf32>) {
+    %a: memref<8x16x32xf32>, %out: memref<32x16x8xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c8 = arith.constant 8 : index
@@ -925,7 +948,7 @@ func.func @test_transpose_affine_bounds_3d(
 
 // CHECK-LABEL: func.func @test_transpose_affine_bounds_4d
 func.func @test_transpose_affine_bounds_4d(
-    %src: memref<4x8x16x32xf32>, %dst: memref<4x16x32x8xf32>) {
+    %src: memref<4x8x16x32xf32>, %dst: memref<4x16x32x8xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c4 = arith.constant 4 : index
@@ -987,7 +1010,7 @@ func.func @test_transpose_affine_bounds_4d(
 
 // CHECK-LABEL: func.func @test_transpose_mixed_static_affine_inner
 func.func @test_transpose_mixed_static_affine_inner(
-    %a: memref<16x32xf32>, %out: memref<32x16xf32>, %tile: index) {
+    %a: memref<16x32xf32>, %out: memref<32x16xf32>, %tile: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c16 = arith.constant 16 : index
@@ -1021,7 +1044,7 @@ func.func @test_transpose_mixed_static_affine_inner(
 // Type Conversion: Float Extension
 
 // CHECK-LABEL: func.func @test_extf_static
-func.func @test_extf_static(%input: memref<128xbf16>, %output: memref<128xf32>) {
+func.func @test_extf_static(%input: memref<128xbf16>, %output: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1044,7 +1067,7 @@ func.func @test_extf_static(%input: memref<128xbf16>, %output: memref<128xf32>) 
 // Type Conversion: Float Truncation
 
 // CHECK-LABEL: func.func @test_truncf_static
-func.func @test_truncf_static(%input: memref<128xf32>, %output: memref<128xbf16>) {
+func.func @test_truncf_static(%input: memref<128xf32>, %output: memref<128xbf16>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1067,7 +1090,7 @@ func.func @test_truncf_static(%input: memref<128xf32>, %output: memref<128xbf16>
 // Type Conversion: Integer Extension (Signed)
 
 // CHECK-LABEL: func.func @test_extsi_static
-func.func @test_extsi_static(%input: memref<128xi8>, %output: memref<128xi32>) {
+func.func @test_extsi_static(%input: memref<128xi8>, %output: memref<128xi32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1090,7 +1113,7 @@ func.func @test_extsi_static(%input: memref<128xi8>, %output: memref<128xi32>) {
 // Type Conversion: Integer Extension (Unsigned)
 
 // CHECK-LABEL: func.func @test_extui_static
-func.func @test_extui_static(%input: memref<128xi8>, %output: memref<128xi32>) {
+func.func @test_extui_static(%input: memref<128xi8>, %output: memref<128xi32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1113,7 +1136,7 @@ func.func @test_extui_static(%input: memref<128xi8>, %output: memref<128xi32>) {
 // Type Conversion: Integer Truncation
 
 // CHECK-LABEL: func.func @test_trunci_static
-func.func @test_trunci_static(%input: memref<128xi32>, %output: memref<128xi8>) {
+func.func @test_trunci_static(%input: memref<128xi32>, %output: memref<128xi8>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1136,7 +1159,7 @@ func.func @test_trunci_static(%input: memref<128xi32>, %output: memref<128xi8>) 
 // Type Conversion: Integer to Float (Signed)
 
 // CHECK-LABEL: func.func @test_sitofp_static
-func.func @test_sitofp_static(%input: memref<128xi32>, %output: memref<128xf32>) {
+func.func @test_sitofp_static(%input: memref<128xi32>, %output: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1159,7 +1182,7 @@ func.func @test_sitofp_static(%input: memref<128xi32>, %output: memref<128xf32>)
 // Type Conversion: Integer to Float (Unsigned)
 
 // CHECK-LABEL: func.func @test_uitofp_static
-func.func @test_uitofp_static(%input: memref<128xi32>, %output: memref<128xf32>) {
+func.func @test_uitofp_static(%input: memref<128xi32>, %output: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1182,7 +1205,7 @@ func.func @test_uitofp_static(%input: memref<128xi32>, %output: memref<128xf32>)
 // Type Conversion: Float to Integer (Signed)
 
 // CHECK-LABEL: func.func @test_fptosi_static
-func.func @test_fptosi_static(%input: memref<128xf32>, %output: memref<128xi32>) {
+func.func @test_fptosi_static(%input: memref<128xf32>, %output: memref<128xi32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1205,7 +1228,7 @@ func.func @test_fptosi_static(%input: memref<128xf32>, %output: memref<128xi32>)
 // Type Conversion: Float to Integer (Unsigned)
 
 // CHECK-LABEL: func.func @test_fptoui_static
-func.func @test_fptoui_static(%input: memref<128xf32>, %output: memref<128xi32>) {
+func.func @test_fptoui_static(%input: memref<128xf32>, %output: memref<128xi32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1228,7 +1251,7 @@ func.func @test_fptoui_static(%input: memref<128xf32>, %output: memref<128xi32>)
 // Type Conversion: Bitcast
 
 // CHECK-LABEL: func.func @test_bitcast_static
-func.func @test_bitcast_static(%input: memref<128xbf16>, %output: memref<128xi16>) {
+func.func @test_bitcast_static(%input: memref<128xbf16>, %output: memref<128xi16>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1251,7 +1274,7 @@ func.func @test_bitcast_static(%input: memref<128xbf16>, %output: memref<128xi16
 // Type Conversion: Mixed Operations
 
 // CHECK-LABEL: func.func @test_mixed_type_conversion
-func.func @test_mixed_type_conversion(%input: memref<128xbf16>, %output: memref<128xbf16>) {
+func.func @test_mixed_type_conversion(%input: memref<128xbf16>, %output: memref<128xbf16>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1280,7 +1303,7 @@ func.func @test_mixed_type_conversion(%input: memref<128xbf16>, %output: memref<
 // Type Conversion: Dynamic Shape
 
 // CHECK-LABEL: func.func @test_extf_dynamic
-func.func @test_extf_dynamic(%input: memref<?xbf16>, %output: memref<?xf32>) {
+func.func @test_extf_dynamic(%input: memref<?xbf16>, %output: memref<?xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %N = memref.dim %input, %c0 : memref<?xbf16>
@@ -1307,7 +1330,7 @@ func.func @test_extf_dynamic(%input: memref<?xbf16>, %output: memref<?xf32>) {
 // CmpIOp
 
 // CHECK-LABEL: func.func @test_cmpi_static
-func.func @test_cmpi_static(%input: memref<128xi32>, %output: memref<128xi1>) {
+func.func @test_cmpi_static(%input: memref<128xi32>, %output: memref<128xi1>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1332,7 +1355,7 @@ func.func @test_cmpi_static(%input: memref<128xi32>, %output: memref<128xi1>) {
 // CmpFOp
 
 // CHECK-LABEL: func.func @test_cmpf_static
-func.func @test_cmpf_static(%input: memref<128xf32>, %output: memref<128xi1>) {
+func.func @test_cmpf_static(%input: memref<128xf32>, %output: memref<128xi1>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1361,7 +1384,7 @@ func.func @test_select_static(
     %cond: memref<128xi1>,
     %input_a: memref<128xf32>,
     %input_b: memref<128xf32>,
-    %output: memref<128xf32>) {
+    %output: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1391,7 +1414,7 @@ func.func @test_select_static(
 func.func @test_scf_if_with_store(
     %input: memref<128xf32>,
     %output: memref<128xf32>,
-    %threshold: index) {
+    %threshold: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1428,7 +1451,7 @@ func.func @test_scf_if_with_store(
 #map_if_iv_id = affine_map<(d0) -> (d0)>
 
 // CHECK-LABEL: func.func @test_scf_if_iv_affine_upper_bound
-func.func @test_scf_if_iv_affine_upper_bound(%m: memref<128xf32>, %out: memref<128xf32>) {
+func.func @test_scf_if_iv_affine_upper_bound(%m: memref<128xf32>, %out: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
@@ -1454,7 +1477,7 @@ func.func @test_scf_if_iv_affine_upper_bound(%m: memref<128xf32>, %out: memref<1
 // -----
 
 // CHECK-LABEL: func.func @test_scf_if_iv_affine_sle
-func.func @test_scf_if_iv_affine_sle(%m: memref<128xf32>, %out: memref<128xf32>) {
+func.func @test_scf_if_iv_affine_sle(%m: memref<128xf32>, %out: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c117 = arith.constant 117 : index
   %c128 = arith.constant 128 : index
@@ -1489,7 +1512,7 @@ func.func @test_scf_if_iv_affine_sle(%m: memref<128xf32>, %out: memref<128xf32>)
 // CHECK: npuvector.transfer_read
 // CHECK: npuvector.transfer_write
 // CHECK-NOT: scf.for
-func.func @test_scf_if_iv_nonzero_lb(%m: memref<256xf32>, %out: memref<256xf32>) {
+func.func @test_scf_if_iv_nonzero_lb(%m: memref<256xf32>, %out: memref<256xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c160 = arith.constant 160 : index
@@ -1515,7 +1538,7 @@ func.func @test_scf_if_iv_nonzero_lb(%m: memref<256xf32>, %out: memref<256xf32>)
 // CHECK: npuvector.transfer_read
 // CHECK: npuvector.transfer_write
 // CHECK-NOT: scf.for
-func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>) {
+func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c100 = arith.constant 100 : index
   %c128 = arith.constant 128 : index
@@ -1539,7 +1562,7 @@ func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>
 // CHECK: npuvector.transfer_read {{.*}} : memref<f32>, !npuvector<1xf32>
 // CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
 // CHECK: npuvector.transfer_write {{.*}} : !npuvector<1xf32>, memref<f32>
-func.func @test_vf1_sweep_no_tagged_loops(%in: memref<f32>, %out: memref<f32>) {
+func.func @test_vf1_sweep_no_tagged_loops(%in: memref<f32>, %out: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %x = memref.load %in[] : memref<f32>
   %c2 = arith.constant 2.000000e+00 : f32
   %m = arith.mulf %x, %c2 : f32
@@ -1555,7 +1578,7 @@ func.func @test_vf1_sweep_no_tagged_loops(%in: memref<f32>, %out: memref<f32>) {
 // CHECK: npuvector.transfer_read {{.*}} : memref<f32>, !npuvector<1xf32>
 // CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
 // CHECK: npuvector.transfer_write {{.*}} : !npuvector<1xf32>, memref<f32>
-func.func @test_vf1_sweep_after_vector1_collapse(%a: memref<1xf32>, %b: memref<1xf32>) {
+func.func @test_vf1_sweep_after_vector1_collapse(%a: memref<1xf32>, %b: memref<1xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   scf.for %i = %c0 to %c1 step %c1 {
@@ -1583,7 +1606,7 @@ func.func @test_vf1_sweep_after_vector1_collapse(%a: memref<1xf32>, %b: memref<1
 func.func @test_vf1_scalar_before_after_tagged_elementwise(
     %bias: memref<4xf32>,
     %in: memref<4xf32>,
-    %out: memref<4xf32>) {
+    %out: memref<4xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c4 = arith.constant 4 : index
   %c1 = arith.constant 1 : index
@@ -1608,7 +1631,7 @@ func.func @test_vf1_scalar_before_after_tagged_elementwise(
 // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %{{.*}} : !npuvector<64xf32> into f32
 // CHECK: %[[BCAST:.*]] = npuvector.broadcast %[[SUM]][%{{.*}}] [%{{.*}}] : f32 to !npuvector<1xf32>
 // CHECK: npuvector.transfer_write %[[BCAST]], %{{.*}}[%{{.*}}] : !npuvector<1xf32>, memref<128xf32>
-func.func @test_vf1_store_seed_after_reduction(%input: memref<64xf32>, %output: memref<128xf32>, %idx: index) {
+func.func @test_vf1_store_seed_after_reduction(%input: memref<64xf32>, %output: memref<128xf32>, %idx: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
   %c0 = arith.constant 0 : index
   %c64 = arith.constant 64 : index
   %c1 = arith.constant 1 : index
