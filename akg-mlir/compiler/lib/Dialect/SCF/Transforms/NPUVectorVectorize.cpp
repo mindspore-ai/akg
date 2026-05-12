@@ -64,6 +64,7 @@
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
+#include "bishengir/Dialect/HACC/Utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -3252,6 +3253,8 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
 
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
+    if (!hacc::utils::isDevice(funcOp)) return;
+
     OpBuilder builder(&getContext());
 
     SmallVector<scf::ForOp> allCandidateLoops;
