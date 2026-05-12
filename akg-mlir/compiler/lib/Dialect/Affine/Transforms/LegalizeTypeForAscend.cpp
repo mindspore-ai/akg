@@ -310,12 +310,61 @@ FailureOr<Operation *> legalizeOp(Operation *op, ValueRange operands, const Type
   return rewriter.create(newOp);
 }
 
+struct AffineIfAlignResultTypesWithYieldPattern : public OpRewritePattern<affine::AffineIfOp> {
+  explicit AffineIfAlignResultTypesWithYieldPattern(MLIRContext *context, PatternBenefit benefit = 0)
+      : OpRewritePattern<affine::AffineIfOp>(context, benefit) {}
+
+  LogicalResult matchAndRewrite(affine::AffineIfOp ifOp, PatternRewriter &rewriter) const override {
+    (void)rewriter;
+    if (ifOp.getNumResults() == 0) {
+      return failure();
+    }
+    auto thenYield = dyn_cast<affine::AffineYieldOp>(ifOp.getThenRegion().front().getTerminator());
+    if (!thenYield) {
+      return failure();
+    }
+    SmallVector<Type> yieldTypes(thenYield.getOperandTypes());
+    if (yieldTypes.size() != ifOp.getNumResults()) {
+      return failure();
+    }
+    if (!ifOp.getElseRegion().empty()) {
+      auto elseYield = dyn_cast<affine::AffineYieldOp>(ifOp.getElseRegion().front().getTerminator());
+      if (!elseYield) {
+        return failure();
+      }
+      SmallVector<Type> elseTypes(elseYield.getOperandTypes());
+      if (elseTypes != yieldTypes) {
+        return failure();
+      }
+    }
+
+    bool mismatch = false;
+    for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
+      if (ifOp.getResult(i).getType() != yieldTypes[i]) {
+        mismatch = true;
+        break;
+      }
+    }
+    if (!mismatch) {
+      return failure();
+    }
+
+    for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
+      ifOp.getResult(i).setType(yieldTypes[i]);
+    }
+    return success();
+  }
+};
+
 struct LegalizeBF16RewritePattern final : RewritePattern {
   explicit LegalizeBF16RewritePattern(MLIRContext *context, const TypeConverter &converter, PatternBenefit benefit = 1)
       : RewritePattern(MatchAnyOpTypeTag{}, benefit, context), typeConverter(converter) {}
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
     if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::ExtFOp, arith::TruncFOp, arith::ConstantOp,
             arith::BitcastOp, arith::ExtSIOp>(op)) {
+      return failure();
+    }
+    if (op->getNumRegions() != 0) {
       return failure();
     }
     FailureOr<Operation *> legalized = legalizeOp(op, op->getOperands(), typeConverter, rewriter);
@@ -352,6 +401,7 @@ class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<Legaliz
     patterns.add<TruncFOpPattern>(context);
     patterns.add<BitcastOpPattern>(context);
     patterns.add<LegalizeBF16RewritePattern>(context, typeConverter);
+    patterns.add<AffineIfAlignResultTypesWithYieldPattern>(context);
 
     GreedyRewriteConfig config;
     config.useTopDownTraversal = true;
