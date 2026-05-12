@@ -2828,7 +2828,7 @@ struct NPUVectorIndexCastToHIVM : public OpConversionPattern<npuvector::IndexCas
 }  // namespace
 
 /// Second-phase rewrite: strip scf.for iter_args/results after partial conversion; replace
-/// iter_args with inits; empty yield; remap for results to yielded memref or init[i].
+/// iter_args with inits; empty yield; remap for results to yielded memref.
 /// Runs as greedy patterns after applyPartialConversion (not inside conversion pattern set).
 struct ScfForStripRedundantCarriedValues : public OpRewritePattern<scf::ForOp> {
   using OpRewritePattern<scf::ForOp>::OpRewritePattern;
@@ -2852,11 +2852,10 @@ struct ScfForStripRedundantCarriedValues : public OpRewritePattern<scf::ForOp> {
     resultReplacements.reserve(n);
     for (unsigned i = 0; i < n; ++i) {
       Value yielded = yieldOp.getOperand(i);
-      if (isa<MemRefType>(yielded.getType())) {
-        resultReplacements.push_back(yielded);
-      } else {
-        resultReplacements.push_back(forOp.getInitArgs()[i]);
+      if (!isa<MemRefType>(yielded.getType())) {
+        return failure();
       }
+      resultReplacements.push_back(yielded);
     }
 
     Location loc = forOp.getLoc();
