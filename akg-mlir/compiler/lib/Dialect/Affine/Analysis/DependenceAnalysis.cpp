@@ -102,19 +102,53 @@ bool MemRefDependenceGraph::hasEdge(unsigned srcId, unsigned dstId, Value value)
   return hasOutEdge && hasInEdge;
 }
 
-// Adds an edge from node 'srcId' to node 'dstId' for 'value'.
+// Adds an edge from node 'srcId' to node 'dstId' for 'value'. The graph keeps at most one
+// edge per (srcId, dstId) pair: createInitNode registers each load/store under both its
+// direct memref and getSourceMemRef(memref), so a single logical dependence can otherwise
+// produce multiple edges with different view-aliased values. When that happens, prefer the
+// subview-chain memref so downstream consumers see a stable, view-aware classification.
 void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth) {
-  if (!hasEdge(srcId, dstId, value)) {
-    Edge edge;
-    edge.id = dstId;
-    edge.value = value;
-    edge.loopDepth = loopDepth;
-    outEdges[srcId].push_back(edge);
-    edge.id = srcId;
-    inEdges[dstId].push_back(edge);
-    if (isa<MemRefType>(value.getType())) {
-      memrefEdgeCount[value]++;
+  if (hasEdge(srcId, dstId, value)) return;
+
+  auto findEdge = [](SmallVector<Edge, 2> &edges, unsigned otherId) {
+    return std::find_if(edges.begin(), edges.end(), [otherId](const Edge &e) { return e.id == otherId; });
+  };
+  auto &dstIn = inEdges[dstId];
+  auto inIt = findEdge(dstIn, srcId);
+  if (inIt != dstIn.end()) {
+    bool newIsSubview = false;
+    bool oldIsSubview = false;
+    if (value) (void)affine::getSourceMemRef(value, &newIsSubview);
+    if (inIt->value) (void)affine::getSourceMemRef(inIt->value, &oldIsSubview);
+    if (newIsSubview && !oldIsSubview) {
+      Value oldValue = inIt->value;
+      auto &srcOut = outEdges[srcId];
+      auto outIt = findEdge(srcOut, dstId);
+      inIt->value = value;
+      inIt->loopDepth = loopDepth;
+      if (outIt != srcOut.end()) {
+        outIt->value = value;
+        outIt->loopDepth = loopDepth;
+      }
+      if (oldValue && isa<MemRefType>(oldValue.getType()) && memrefEdgeCount[oldValue] > 0) {
+        memrefEdgeCount[oldValue]--;
+      }
+      if (value && isa<MemRefType>(value.getType())) {
+        memrefEdgeCount[value]++;
+      }
     }
+    return;
+  }
+
+  Edge edge;
+  edge.id = dstId;
+  edge.value = value;
+  edge.loopDepth = loopDepth;
+  outEdges[srcId].push_back(edge);
+  edge.id = srcId;
+  inEdges[dstId].push_back(edge);
+  if (value && isa<MemRefType>(value.getType())) {
+    memrefEdgeCount[value]++;
   }
 }
 
