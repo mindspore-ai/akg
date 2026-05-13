@@ -3,20 +3,20 @@
 set(MFUSION_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
 
 configure_lit_site_cfg(${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
-                       ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
-                       MAIN_CONFIG
-                       ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py)
+  ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
+  MAIN_CONFIG
+  ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py)
 
 set(MFUSION_TEST_DEPENDS
-    mfusion-opt
-    FileCheck
-    count
-    not
-    )
+  mfusion-opt
+  FileCheck
+  count
+  not
+  )
 
 add_lit_testsuite(check-mfusion
-                  "Running the mfusion regression tests"
-                  ${CMAKE_CURRENT_BINARY_DIR}/ut/lit
-                  DEPENDS
-                  ${MFUSION_TEST_DEPENDS})
+  "Running the mfusion regression tests"
+  ${CMAKE_CURRENT_BINARY_DIR}/ut/lit
+  DEPENDS
+  ${MFUSION_TEST_DEPENDS})
 set_target_properties(check-mfusion PROPERTIES FOLDER "Tests")

@@ -70,5 +70,4 @@ PYBIND11_MODULE(_mfusion, m) {
           return mlirIntegerAttrGetValueInt(indexAttr);
         },
         "Get the device index");
-
 }
