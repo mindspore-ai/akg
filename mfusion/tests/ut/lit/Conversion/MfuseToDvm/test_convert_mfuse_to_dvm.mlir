@@ -251,6 +251,18 @@ module {
     return %0 : tensor<2xi32>
   }
 
+  // CHECK-LABEL: func @main_cast_bool_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[CAST:.*]] = dvm.cast %[[LOADA]] type Bool : tensor<2xf32> -> tensor<2xi1>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[CAST]] : tensor<2xi1> -> tensor<2xi1>
+  // CHECK: return %[[STORE]] : tensor<2xi1>
+  // CHECK-NOT: mfuse.cast
+  func.func @main_cast_bool_fused(%a: tensor<2xf32>) -> tensor<2xi1> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.cast %a : (tensor<2xf32>) -> tensor<2xi1>
+    return %0 : tensor<2xi1>
+  }
+
   // CHECK-LABEL: func @main_broadcast_to_fused
   // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
   // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
