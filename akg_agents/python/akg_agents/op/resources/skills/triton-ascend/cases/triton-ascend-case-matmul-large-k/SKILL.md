@@ -1,7 +1,7 @@
 ---
 name: triton-ascend-case-matmul-large-k
 description: "矩阵乘法矩阵乘法 A[M, K] @ B[K, N] = C[M, N]中，大K维度矩阵乘法(K>>M,N)优化：针对M/N较小但K极大(如M=N=256,K=131072)的场景，Split-K切分K维度并行化、Workspace+Reduce替代全局同步，实现显著性能提升"
-category: case
+category: deprecated
 version: "1.0.0"
 metadata:
   backend: ascend
