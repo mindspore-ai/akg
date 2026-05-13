@@ -738,6 +738,8 @@ static void populateMfusePartBinaryOpToTorchTensorScalarPatterns(TypeConverter &
                ConvertBinaryOpPattern<mfuse::GtOp, TorchD::AtenGtTensorOp, TorchD::AtenGtScalarOp>,
                ConvertBinaryOpPattern<mfuse::LeOp, TorchD::AtenLeTensorOp, TorchD::AtenLeScalarOp>,
                ConvertBinaryOpPattern<mfuse::LtOp, TorchD::AtenLtTensorOp, TorchD::AtenLtScalarOp>,
+               ConvertBinaryOpPattern<mfuse::MaximumOp, TorchD::AtenMaximumOp, TorchD::AtenClampMinOp>,
+               ConvertBinaryOpPattern<mfuse::MinimumOp, TorchD::AtenMinimumOp, TorchD::AtenClampMaxOp>,
                ConvertBinaryOpPattern<mfuse::MulOp, TorchD::AtenMulTensorOp, TorchD::AtenMulScalarOp>,
                ConvertBinaryOpPattern<mfuse::NeOp, TorchD::AtenNeTensorOp, TorchD::AtenNeScalarOp>,
                ConvertBinaryOpPattern<mfuse::PowOp, TorchD::AtenPowTensorTensorOp, TorchD::AtenPowTensorScalarOp>>(
