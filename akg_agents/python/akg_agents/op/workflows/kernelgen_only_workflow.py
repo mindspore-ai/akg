@@ -32,17 +32,19 @@ logger = logging.getLogger(__name__)
 @register_workflow(scopes=["op"])
 class KernelGenOnlyWorkflow(OpBaseWorkflow):
     """KernelGen Only Workflow：基于 Skill 系统的内核代码生成工作流
-    
+
     优化后的流程（带 CodeChecker + FixCodeGen）：
-    
+
         kernel_gen -> code_checker -> (通过) -> verifier -> (失败) -> conductor -+-> kernel_gen
                           |                                                      |
-                          +-----> (未通过，回到 kernel_gen) -----+                +-> fix_code_gen -> verifier
-                                                                                 
+                          +-----> (未通过) -----+                                +-> fix_code_gen -> code_checker -> verifier
+                                                |
+                                                +-> kernel_gen (无 fix_code_gen 时)
+
     Conductor 判断逻辑：
     - 局部/小范围错误（如缺少 import、变量名拼写等）→ fix_code_gen（增量修复，使用 fast model）
     - 全局/架构性错误（如算法逻辑重大缺陷）→ kernel_gen（完整重新生成）
-    
+
     特点：
     - 使用 KernelGen agent（基于 Skill 系统）直接生成代码
     - 跳过 Designer 阶段，直接生成内核代码
@@ -58,11 +60,12 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
 
 完整流程：
 1. KernelGen: 基于 Skill 系统动态选择知识，生成代码
-2. Verifier: 验证正确性和性能
-3. Conductor: 分析失败原因并决定修复策略（如果验证失败）
+2. CodeChecker: 静态代码检查
+3. Verifier: 验证正确性和性能
+4. Conductor: 分析失败原因并决定修复策略（如果验证失败）
    - 局部错误 → FixCodeGen: 增量修复（search/replace，使用 fast model）
    - 全局错误 → KernelGen: 完整重新生成
-4. 循环迭代直到成功或达到最大次数
+5. 循环迭代直到成功或达到最大次数
 
 适用场景：
 - 需求明确，无需额外设计阶段
@@ -206,7 +209,6 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 self.trace, self.config
             )
             workflow.add_node("fix_code_gen", fix_code_gen_node)
-            workflow.add_edge("fix_code_gen", "verifier")
             logger.info("FixCodeGen enabled: conductor can route to fix_code_gen")
         
         if enable_code_checker and code_checker:
@@ -217,7 +219,7 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 self.config
             )
             workflow.add_node("code_checker", code_checker_node)
-            
+
             # 代码生成后的路由（处理 max_tokens 截断等异常）
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="code_checker",
@@ -231,26 +233,41 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                     "conductor": "conductor"
                 }
             )
-            
+
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
                 code_gen_agent="kernel_gen",
                 enable_fix_code_gen=enable_fix_code_gen,
             )
-            
+
             code_checker_edges = {
                 "verifier": "verifier",       # 检查通过 → Verifier
                 "kernel_gen": "kernel_gen",    # 检查失败（无 fix_code_gen）→ KernelGen 重写
             }
             if enable_fix_code_gen:
                 code_checker_edges["fix_code_gen"] = "fix_code_gen"
-            
+
             workflow.add_conditional_edges(
                 "code_checker",
                 code_checker_router,
                 code_checker_edges,
             )
+
+            # FixCodeGen 后的路由：apply 成功 → code_checker，失败 → kernel_gen
+            if enable_fix_code_gen:
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="kernel_gen",
+                    next_agent="code_checker",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "code_checker": "code_checker",
+                        "kernel_gen": "kernel_gen",
+                    },
+                )
         else:
             # 不启用 CodeChecker，直接 kernel_gen -> verifier（带 codegen 路由）
             codegen_router = RouterFactory.create_codegen_router(
@@ -265,6 +282,21 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                     "conductor": "conductor"
                 }
             )
+            # FixCodeGen 后的路由：apply 成功 → verifier，失败 → kernel_gen
+            if enable_fix_code_gen:
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="kernel_gen",
+                    next_agent="verifier",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "verifier": "verifier",
+                        "kernel_gen": "kernel_gen",
+                    },
+                )
+                logger.info("FixCodeGen -> Verifier flow enabled (CodeChecker disabled)")
             logger.info("CodeChecker disabled, using direct kernel_gen -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
