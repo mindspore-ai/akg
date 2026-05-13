@@ -935,7 +935,11 @@ static void populateAtenToMfuseReshapeLikeOpPatterns(TypeConverter &converter, R
 // Add and sub are converted via PDLL to mfuse.aclnn.add / mfuse.aclnn.sub.
 static void populateAtenToMfuseBinaryOpPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
-  patterns.add<ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
+  patterns.add<ConvertBinaryOpPattern<TorchD::AtenClampMaxOp, mfuse::MinimumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenClampMaxTensorOp, mfuse::MinimumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenClampMinOp, mfuse::MaximumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenClampMinTensorOp, mfuse::MaximumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
                ConvertBinaryOpPattern<TorchD::AtenDivScalarOp, mfuse::DivOp>,
                ConvertBinaryOpPattern<TorchD::AtenEqTensorOp, mfuse::EqOp>,
                ConvertBinaryOpPattern<TorchD::AtenEqScalarOp, mfuse::EqOp>,
