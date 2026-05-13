@@ -24,15 +24,35 @@
 using namespace mlir;
 using namespace mlir::dvm;
 
-// Verify that dvm.constant only supports scalar tensor (rank=0)
+static bool isSupportedDvmScalarConstantType(Type type) {
+  return type.isF32() || type.isF16() || type.isBF16() || type.isInteger(32);
+}
+
+// Verify that dvm.constant matches the scalar types supported by dvm.h scalar
+// APIs: float, int32_t, Float16 and BFloat16. double, int64_t and bool are
+// not supported.
 LogicalResult ConstantOp::verify() {
   auto resultType = getResult().getType();
+  auto valueType = getValueAttr().getType();
+  if (valueType != resultType) {
+    return emitError("dvm.constant value attribute type must match result type, got ")
+           << valueType << " vs " << resultType;
+  }
+
   auto rankedType = llvm::dyn_cast<RankedTensorType>(resultType);
   if (!rankedType) {
-    return failure();
+    return emitError("dvm.constant result must be a ranked tensor type");
   }
   if (rankedType.getRank() != 0) {
     return emitError("dvm.constant only supports scalar tensor (rank=0), got rank ") << rankedType.getRank();
+  }
+  auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(getValueAttr());
+  if (!denseAttr || denseAttr.getNumElements() != 1) {
+    return emitError("dvm.constant value must be a single-element DenseElementsAttr");
+  }
+  auto elementType = rankedType.getElementType();
+  if (!isSupportedDvmScalarConstantType(elementType)) {
+    return emitError("dvm.constant unsupported element type: ") << elementType;
   }
   return success();
 }

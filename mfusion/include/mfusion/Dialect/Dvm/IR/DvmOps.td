@@ -308,11 +308,13 @@ def Dvm_ConstantOp : Dvm_Op<"constant", [Pure, ConstantLike]> {
     code generation, if an operand comes from a dvm.constant, the constant
     value can be inlined directly instead of creating a separate load operation.
 
-    Example: `dvm.constant dense<9.7> : tensor<1xf32>`
+    Example: `dvm.constant dense<9.7> : tensor<f32>`
     Python: `k.add(arg0, 9.7)` instead of loading a constant tensor first.
 
-    Note: Only scalar constants (shape=[], i.e., tensor<xf32>) are supported.
-    The result type must be explicitly specified in the MLIR.
+    Note: Only scalar constants (shape=[], e.g. tensor<f32>) are supported.
+    Element types are restricted to the scalar types supported by the current
+    DVM runtime scalar APIs: f32, i32, f16 and bf16. f64, i64 and i1 are
+    rejected before DVM serialization/runtime.
   }];
 
   let arguments = (ins TypedAttrInterface:$value);

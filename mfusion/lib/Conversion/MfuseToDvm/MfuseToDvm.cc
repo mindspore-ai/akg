@@ -28,6 +28,9 @@
 #include "mfusion/Dialect/Dvm/IR/Dvm.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
+#include <cmath>
+#include <limits>
+
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTMFUSETODVM
 #include "mfusion/Conversion/Passes.h.inc"
@@ -83,6 +86,73 @@ static bool isDvmOutlinedFunc(func::FuncOp func) {
 static bool isDvmOutlinedOp(Operation *op) {
   auto func = op->getParentOfType<func::FuncOp>();
   return func && isDvmOutlinedFunc(func);
+}
+
+struct NormalizedDvmScalarConstant {
+  RankedTensorType type;
+  DenseElementsAttr value;
+};
+
+static bool hasScalarMarker(RankedTensorType type) {
+  auto dictAttr = llvm::dyn_cast_or_null<DictionaryAttr>(type.getEncoding());
+  return dictAttr && dictAttr.contains(mfuse::kScalarMarkerAttr);
+}
+
+static DenseElementsAttr reshapeWithoutEncoding(DenseElementsAttr denseAttr, Type elementType) {
+  auto oldType = denseAttr.getType();
+  auto newDenseType = RankedTensorType::get(oldType.getShape(), elementType);
+  return denseAttr.reshape(newDenseType);
+}
+
+static FailureOr<NormalizedDvmScalarConstant> normalizeScalarConstantForDvm(mfuse::ConstantOp op,
+                                                                            RankedTensorType rankedType) {
+  auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(op.getValue());
+  if (!denseAttr) {
+    return op->emitError("DVM scalar constant must be a DenseElementsAttr");
+  }
+
+  auto denseType = llvm::dyn_cast<RankedTensorType>(denseAttr.getType());
+  if (!denseType || denseType.getRank() != 0 || denseAttr.getNumElements() != 1) {
+    return op->emitError("DVM scalar constant must be a rank-0 tensor with one element");
+  }
+
+  auto elementType = rankedType.getElementType();
+  auto scalarShape = rankedType.getShape();
+
+  // DVM scalar constants are lowered to runtime scalar APIs such as
+  // Kernel::Broadcast(T, ...), then consumed by Binary/Full-like kernels. The
+  // checked runtime header supports float, int32_t, Float16 and BFloat16
+  // scalars there; double, int64_t and bool scalar constants are not supported.
+  if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32)) {
+    auto newType = RankedTensorType::get(scalarShape, elementType);
+    return NormalizedDvmScalarConstant{newType, reshapeWithoutEncoding(denseAttr, elementType)};
+  }
+
+  if (elementType.isF64()) {
+    double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
+    constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
+    if (!std::isfinite(value) || value < -kMaxFloat || value > kMaxFloat) {
+      return op->emitError(
+        "cannot convert f64 scalar constant to f32 for DVM: value is not finite or is out of range");
+    }
+    auto f32Type = Float32Type::get(op.getContext());
+    auto newType = RankedTensorType::get(scalarShape, f32Type);
+    auto newValue = DenseElementsAttr::get(newType, static_cast<float>(value));
+    return NormalizedDvmScalarConstant{newType, newValue};
+  }
+
+  if (elementType.isInteger(64)) {
+    int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
+    if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max()) {
+      return op->emitError("cannot convert i64 scalar constant to i32 for DVM: value is out of range");
+    }
+    auto i32Type = IntegerType::get(op.getContext(), 32);
+    auto newType = RankedTensorType::get(scalarShape, i32Type);
+    auto newValue = DenseElementsAttr::get(newType, static_cast<int32_t>(value));
+    return NormalizedDvmScalarConstant{newType, newValue};
+  }
+
+  return op->emitError("unsupported DVM scalar constant element type: ") << elementType;
 }
 
 struct ConvertMulOp : public OpConversionPattern<mfuse::MulOp> {
@@ -417,44 +487,16 @@ struct ConvertConstantOp : public OpConversionPattern<mfuse::ConstantOp> {
       return failure();
     }
 
-    // Check if the tensor has is_scalar encoding
-    auto encoding = rankedType.getEncoding();
-    bool isScalar = false;
-    if (auto dictAttr = llvm::dyn_cast<DictionaryAttr>(encoding)) {
-      if (auto isScalarAttr = dictAttr.get(mfuse::kScalarMarkerAttr)) {
-        isScalar = true;
-      }
-    }
-
-    if (!isScalar) {
+    if (!hasScalarMarker(rankedType)) {
       return op->emitError(
         "non-scalar constant is not supported in DVM conversion, "
         "only scalar constants (is_scalar=true) are supported");
     }
 
-    // Get the value attribute from mfuse::ConstantOp
-    auto valueAttr = op.getValue();
+    auto normalized = normalizeScalarConstantForDvm(op, rankedType);
+    if (failed(normalized)) return failure();
 
-    // Create a new tensor type without encoding for dvm.constant
-    auto elementType = rankedType.getElementType();
-    auto scalarShape = rankedType.getShape();
-    // For scalar constants, the shape is empty (e.g., tensor<f32>)
-    // We need to preserve the shape for non-scalar broadcast
-    auto newTensorType = RankedTensorType::get(scalarShape, elementType);
-
-    // Create clean dense attribute without encoding
-    Attribute cleanValueAttr;
-    if (auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(valueAttr)) {
-      // Create new dense attribute with same values but without encoding
-      auto oldType = denseAttr.getType();
-      auto newDenseType = RankedTensorType::get(oldType.getShape(), oldType.getElementType());
-      cleanValueAttr = denseAttr.reshape(newDenseType);
-    } else {
-      cleanValueAttr = valueAttr;
-    }
-
-    // Create dvm::ConstantOp with clean dense attribute
-    auto constOp = rewriter.create<dvm::ConstantOp>(op.getLoc(), newTensorType, cleanValueAttr);
+    auto constOp = rewriter.create<dvm::ConstantOp>(op.getLoc(), normalized->type, normalized->value);
 
     // Replace all uses of mfuse::ConstantOp result with dvm::ConstantOp result
     rewriter.replaceAllUsesWith(op.getResult(), constOp.getResult());
