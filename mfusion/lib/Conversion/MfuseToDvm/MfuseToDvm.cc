@@ -220,7 +220,13 @@ struct ConvertCastOp : public OpConversionPattern<mfuse::CastOp> {
       dtype = dvm::DType::Float32;
     } else if (mlir::isa<IntegerType>(elementType)) {
       auto width = mlir::cast<IntegerType>(elementType).getWidth();
-      dtype = (width == 32) ? dvm::DType::Int32 : dvm::DType::Int64;
+      if (width == 1) {
+        dtype = dvm::DType::Bool;
+      } else if (width == 32) {
+        dtype = dvm::DType::Int32;
+      } else {
+        dtype = dvm::DType::Int64;
+      }
     } else {
       return failure();
     }
@@ -592,6 +598,12 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
       [](mlir::mfuse::MatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
     target.addDynamicallyLegalOp<mlir::mfuse::MatmulWithBiasOp>(
       [](mlir::mfuse::MatmulWithBiasOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+    // mfuse.grouped_matmul uses tensor-list operands/results, while
+    // dvm.grouped_matmul takes single ranked tensors. Keep it illegal inside a
+    // DVM outlined function until the list-to-tensor bridge semantics are
+    // defined.
+    // TODO: Enable conversion for a verified subset after unpacking
+    // MfuseTensorList/MfuseOptionalTensorList operands safely.
     target.addDynamicallyLegalOp<mlir::mfuse::GroupedMatmulOp>(
       [](mlir::mfuse::GroupedMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
     target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
@@ -651,7 +663,10 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     patterns.add<ConvertMatmulOp>(ctx);
     patterns.add<ConvertBatchMatmulOp>(ctx);
     patterns.add<ConvertMatmulWithBiasOp>(ctx);
-    patterns.add<ConvertGroupedMatmulOp>(ctx);
+    // ConvertGroupedMatmulOp is intentionally not registered. See the dynamic
+    // legality note above: converting list-typed mfuse.grouped_matmul operands
+    // directly to dvm.grouped_matmul would create invalid DVM IR.
+    //patterns.add<ConvertGroupedMatmulOp>(ctx);
     patterns.add<ConvertConstantOp>(ctx);
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
