@@ -27,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
+#include <algorithm>
 #include <optional>
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -659,11 +660,15 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
                                                 std::vector<std::pair<Operation *, Operation *>> &dependentOpPairs) {
   AKGMemRefAccess dstAccess(j);
   if (srcAccess.memref != dstAccess.memref) return success();
-  // Check if 'loopDepth' exceeds nesting depth of src/dst ops.
-  if ((!isBackwardSlice && loopDepth > getNestingDepth(i)) || (isBackwardSlice && loopDepth > getNestingDepth(j))) {
-    LLVM_DEBUG(llvm::dbgs() << "Invalid loop depth\n");
-    return failure();
-  }
+
+  // Upstream getComputationSliceState asserts loopDepth ≤ nesting depth of opsA in
+  // forward mode and ≤ nesting depth of opsB in backward mode (the "depSource" side
+  // it projects against). When the producer write lives shallower than the requested
+  // fusion depth, clamp per pair rather than failing — the slice IVs end up at the
+  // natural depth, and computeSliceUnionAKG lifts the rest via sibling matching
+  // (slice-IV extension in backward, receiver extension in forward).
+  unsigned naturalDepth = isBackwardSlice ? getNestingDepth(j) : getNestingDepth(i);
+  unsigned effLoopDepth = std::min(loopDepth, naturalDepth);
 
   bool readReadAccesses = isa<AffineReadOpInterface>(srcAccess.opInst) && isa<AffineReadOpInterface>(dstAccess.opInst);
   FlatAffineValueConstraints dependenceConstraints;
@@ -682,7 +687,7 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
 
   // Compute slice bounds for 'srcAccess' and 'dstAccess'.
   ComputationSliceState tmpSliceState;
-  mlir::affine::getComputationSliceState(i, j, &dependenceConstraints, loopDepth, isBackwardSlice, &tmpSliceState);
+  mlir::affine::getComputationSliceState(i, j, &dependenceConstraints, effLoopDepth, isBackwardSlice, &tmpSliceState);
 
   return mergeSliceStateIntoUnion(tmpSliceState, sliceUnionCst);
 }
@@ -730,6 +735,98 @@ static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &num
   return idx;
 }
 
+// Undo dependence-driven slice tightening that comes from an inner affine.if gating
+// the source op. getOpIndexSet folds every enclosing AffineIfOp's set into the source
+// access domain, so when the producer store is wrapped in e.g. `affine.if (-d0 >= 0)(%arg8)`
+// the slice IV for %arg8 gets pinned to a single point. That is correct for the specific
+// dependence pair, but fuseLoops clones only the slice and erases the producer nest —
+// so any sibling work in that loop body OUTSIDE the gating if (e.g. an unconditional load/
+// store on a separate memref) is silently dropped at the non-pinned iterations.
+//
+// For each slice level whose IV is constrained by a gating AffineIfOp on src's parent
+// chain, this checks the enclosing producer loop's body for ops that (a) are not on src's
+// path and (b) are not nested under any of those gating ifs. If such "outside-the-gating"
+// work exists, the slice level is reset to the loop's full constant domain so the cloned
+// body preserves all original producer iterations.
+static void collectGatingIfsAndIVs(Operation *src, SmallPtrSet<Operation *, 4> &gatingIfs, DenseSet<Value> &gatedIVs) {
+  for (Operation *p = src->getParentOp(); p; p = p->getParentOp()) {
+    auto ifOp = dyn_cast<AffineIfOp>(p);
+    if (!ifOp) continue;
+    gatingIfs.insert(p);
+    for (Value operand : ifOp->getOperands()) {
+      if (getForInductionVarOwner(operand)) gatedIVs.insert(operand);
+    }
+  }
+}
+
+static bool sliceLevelAlreadyAtFullRange(const ComputationSliceState &slice, unsigned k, int64_t loopLb,
+                                         int64_t loopUb) {
+  AffineMap lbMap = slice.lbs[k];
+  AffineMap ubMap = slice.ubs[k];
+  if (!lbMap || !ubMap || lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) return false;
+  auto lbC = dyn_cast<AffineConstantExpr>(lbMap.getResult(0));
+  auto ubC = dyn_cast<AffineConstantExpr>(ubMap.getResult(0));
+  return lbC && ubC && lbC.getValue() == loopLb && ubC.getValue() == loopUb;
+}
+
+static bool buildPathToLoop(Operation *src, AffineForOp loop, SmallPtrSet<Operation *, 8> &onPath) {
+  for (Operation *p = src; p; p = p->getParentOp()) {
+    onPath.insert(p);
+    if (p == loop.getOperation()) return true;
+  }
+  return false;
+}
+
+static bool loopBodyHasWorkOutsideGating(Operation *loopOp, const SmallPtrSet<Operation *, 8> &onPath,
+                                         const SmallPtrSet<Operation *, 4> &gatingIfs) {
+  bool hasOutsideWork = false;
+  loopOp->walk([&](Operation *op) {
+    if (op == loopOp) return WalkResult::advance();
+    if (onPath.contains(op)) return WalkResult::advance();
+    if (op->hasTrait<OpTrait::IsTerminator>()) return WalkResult::advance();
+    for (Operation *gif : gatingIfs) {
+      if (gif->isAncestor(op)) return WalkResult::advance();
+    }
+    hasOutsideWork = true;
+    return WalkResult::interrupt();
+  });
+  return hasOutsideWork;
+}
+
+static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsigned numSliceLoopIVs,
+                                              ArrayRef<Operation *> opsA) {
+  if (opsA.empty()) return;
+  Operation *src = opsA.front();
+
+  SmallPtrSet<Operation *, 4> gatingIfs;
+  DenseSet<Value> gatedIVs;
+  collectGatingIfsAndIVs(src, gatingIfs, gatedIVs);
+  if (gatingIfs.empty() || gatedIVs.empty()) return;
+
+  for (unsigned k = 0; k < numSliceLoopIVs; ++k) {
+    if (!gatedIVs.contains(slice.ivs[k])) continue;
+
+    AffineForOp loop = getForInductionVarOwner(slice.ivs[k]);
+    if (!loop || !loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) continue;
+
+    int64_t loopLb = loop.getConstantLowerBound();
+    int64_t loopUb = loop.getConstantUpperBound();
+
+    if (sliceLevelAlreadyAtFullRange(slice, k, loopLb, loopUb)) continue;
+
+    SmallPtrSet<Operation *, 8> onPath;
+    if (!buildPathToLoop(src, loop, onPath)) continue;
+
+    if (!loopBodyHasWorkOutsideGating(loop.getOperation(), onPath, gatingIfs)) continue;
+
+    MLIRContext *ctx = loop->getContext();
+    slice.lbs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(loopLb, ctx));
+    slice.ubs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(loopUb, ctx));
+    slice.lbOperands[k].clear();
+    slice.ubOperands[k].clear();
+  }
+}
+
 // Force outer slice levels into a single-point against the partner-side IV when both sides
 // have matching structural bounds. Without this, dependence-based slicing leaves outer
 // non-coupled levels at full range, causing fuseLoops to replicate the cloned body across
@@ -758,6 +855,165 @@ static void alignSliceWithPartnerLoops(ComputationSliceState &slice, unsigned lo
     slice.lbs[i] = AffineMap::get(lbNumDims, lbNumSyms, getAffineDimExpr(lbDimIdx, ctx));
     slice.ubs[i] = AffineMap::get(ubNumDims, ubNumSyms, getAffineDimExpr(ubDimIdx, ctx) + step);
   }
+}
+
+static void collectForbiddenWriteSinks(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+                                       DenseSet<Value> &forbiddenWriteSinks) {
+  for (Operation *op : opsA) {
+    if (auto w = dyn_cast<AffineWriteOpInterface>(op)) forbiddenWriteSinks.insert(getSourceMemRef(w.getMemRef()));
+  }
+  for (Operation *op : opsB) {
+    if (auto r = dyn_cast<AffineReadOpInterface>(op)) forbiddenWriteSinks.insert(getSourceMemRef(r.getMemRef()));
+  }
+}
+
+static bool candidateWritesForbidden(AffineForOp forOp, const DenseSet<Value> &forbiddenWriteSinks) {
+  bool hit = false;
+  forOp.getOperation()->walk([&](Operation *nested) {
+    auto w = dyn_cast<AffineWriteOpInterface>(nested);
+    if (!w) return WalkResult::advance();
+    if (forbiddenWriteSinks.count(getSourceMemRef(w.getMemRef()))) {
+      hit = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hit;
+}
+
+static AffineForOp findMatchingSiblingLoop(Block::iterator searchStart, Block *searchBlock,
+                                           ArrayRef<AffineForOp> partnerLoops, unsigned d,
+                                           const DenseSet<Value> &forbiddenWriteSinks) {
+  for (auto it = searchStart; it != searchBlock->end(); ++it) {
+    if (it->hasTrait<OpTrait::IsTerminator>()) break;
+    auto forOp = dyn_cast<AffineForOp>(*it);
+    if (!forOp) continue;
+    if (!loopBoundsMatch(forOp, partnerLoops[d])) continue;
+    if (candidateWritesForbidden(forOp, forbiddenWriteSinks)) continue;
+    return forOp;
+  }
+  return AffineForOp();
+}
+
+// Find a chain of opsA-side sibling for-loops whose bounds successively match
+// partnerLoops[startDepth..loopDepth-1]. Walks the body of opsA's common parent
+// after the last opsA op, descending into each matched sibling's body to look for
+// the next level. Skips candidates whose body writes into a memref that opsA
+// writes (mediator state) or opsB reads (consumer-visible state) — those would
+// corrupt fused semantics.
+//
+// Returns the chain on success, empty vector on failure. Shared by both
+// slice-IV extension (backward) and receiver extension (forward).
+static SmallVector<AffineForOp, 4> findOpsASiblingChain(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+                                                        ArrayRef<AffineForOp> partnerLoops, unsigned startDepth,
+                                                        unsigned loopDepth) {
+  SmallVector<AffineForOp, 4> extLoops;
+  if (startDepth >= loopDepth) return extLoops;
+  if (loopDepth > partnerLoops.size()) return extLoops;
+  if (opsA.empty()) return extLoops;
+
+  Operation *commonParent = opsA.front()->getParentOp();
+  for (Operation *op : opsA.drop_front()) {
+    if (op->getParentOp() != commonParent) return extLoops;
+  }
+  auto parentLoop = dyn_cast_or_null<AffineForOp>(commonParent);
+  if (!parentLoop) return extLoops;
+
+  Operation *afterOp = opsA.front();
+  for (Operation *op : opsA.drop_front()) {
+    if (afterOp->isBeforeInBlock(op)) afterOp = op;
+  }
+
+  DenseSet<Value> forbiddenWriteSinks;
+  collectForbiddenWriteSinks(opsA, opsB, forbiddenWriteSinks);
+
+  Block *searchBlock = parentLoop.getBody();
+  Block::iterator searchStart = std::next(Block::iterator(afterOp));
+  for (unsigned d = startDepth; d < loopDepth; ++d) {
+    AffineForOp matched = findMatchingSiblingLoop(searchStart, searchBlock, partnerLoops, d, forbiddenWriteSinks);
+    if (!matched) return extLoops;
+    extLoops.push_back(matched);
+    searchBlock = matched.getBody();
+    searchStart = searchBlock->begin();
+  }
+  return extLoops;
+}
+
+// Backward-mode lift: when slice IVs (from opsA side) are shallower than the
+// requested fusion depth, append IVs from matched opsA siblings with single-point
+// bounds coupled to partnerLoops[d] (the receiver side, deep). Pre-spine ops
+// replicate at the outer level — same execution count they had in src — instead
+// of being smeared across the receiver's inner range.
+static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+                                           ComputationSliceState &slice, unsigned currentNumIVs, unsigned loopDepth,
+                                           ArrayRef<AffineForOp> partnerLoops) {
+  if (currentNumIVs >= loopDepth) return false;
+  if (opsA.empty()) return false;
+
+  // Continuity: existing slice IVs must end at opsA's common parent so the new
+  // sibling IVs splice on without a gap. This also filters out the forward-slice
+  // case where slice.ivs are opsB-side IVs (covered by the receiver-extension path).
+  Operation *commonParent = opsA.front()->getParentOp();
+  auto parentLoop = dyn_cast_or_null<AffineForOp>(commonParent);
+  if (!parentLoop) return false;
+  if (currentNumIVs > 0) {
+    AffineForOp lastIVLoop = getForInductionVarOwner(slice.ivs[currentNumIVs - 1]);
+    if (lastIVLoop != parentLoop) return false;
+  }
+
+  auto extLoops = findOpsASiblingChain(opsA, opsB, partnerLoops, currentNumIVs, loopDepth);
+  if (extLoops.empty()) return false;
+
+  // opsA is non-const Operation*, and Operation::getContext() is const-callable, so this
+  // avoids the const-cast trap of going through ArrayRef<AffineForOp>::operator[] (which
+  // returns const T& and would discard qualifiers on OpState::getContext()).
+  MLIRContext *ctx = opsA.front()->getContext();
+  AffineExpr d0 = getAffineDimExpr(0, ctx);
+  for (unsigned d = currentNumIVs; d < loopDepth; ++d) {
+    AffineForOp srcLoop = extLoops[d - currentNumIVs];
+    AffineForOp partnerLoop = partnerLoops[d];
+    int64_t step = srcLoop.getStepAsInt();
+
+    slice.ivs.push_back(srcLoop.getInductionVar());
+    slice.lbs.push_back(AffineMap::get(/*dimCount=*/1, /*symCount=*/0, d0));
+    slice.ubs.push_back(AffineMap::get(/*dimCount=*/1, /*symCount=*/0, d0 + step));
+    SmallVector<Value, 4> operands{partnerLoop.getInductionVar()};
+    slice.lbOperands.push_back(operands);
+    slice.ubOperands.push_back(operands);
+  }
+  return true;
+}
+
+// Forward-mode lift: when the receiver (loops surrounding opsA) is shallower than
+// the requested fusion depth, extend it with matched opsA-side siblings. In forward
+// mode the slice IVs already come from opsB at full depth, so what's missing is
+// the receiver chain — without these matched siblings, target-block selection
+// would index past the end of the receiver nest. partnerLoops are the deep opsB
+// loops the siblings match against.
+//
+// Subsequent alignSliceWithPartnerLoops couples slice.ivs[d] (opsB IV) with the
+// appended sibling's IV at single-point bounds — yielding the same merge-point
+// shape as the backward-mode extension produces, just from the other direction.
+static bool extendReceiverWithSiblingForLoops(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+                                              SmallVectorImpl<AffineForOp> &receiverLoops,
+                                              ArrayRef<AffineForOp> partnerLoops, unsigned currentDepth,
+                                              unsigned loopDepth) {
+  if (currentDepth >= loopDepth) return false;
+  if (opsA.empty()) return false;
+
+  // The receiver chain must end at opsA's common parent so the matched siblings
+  // attach right where opsA's nest ends. Without this anchor we'd be guessing at
+  // which subtree the appended for-loops belong to.
+  Operation *commonParent = opsA.front()->getParentOp();
+  auto parentLoop = dyn_cast_or_null<AffineForOp>(commonParent);
+  if (!parentLoop) return false;
+  if (currentDepth > 0 && receiverLoops[currentDepth - 1] != parentLoop) return false;
+
+  auto extLoops = findOpsASiblingChain(opsA, opsB, partnerLoops, currentDepth, loopDepth);
+  if (extLoops.empty()) return false;
+
+  std::copy(extLoops.begin(), extLoops.end(), std::back_inserter(receiverLoops));
+  return true;
 }
 
 // True if any slice level has more than one iteration (full-range or non-1 trip count).
@@ -885,18 +1141,39 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   // Empty union.
   if (sliceUnionCst.getNumDimAndSymbolVars() == 0) return SliceComputationResult::GenericFailure;
 
-  // Gather loops surrounding ops from loop nest where slice will be inserted.
+  // surroundingLoops = receiver nest where the cloned slice will be inserted.
+  //   backward: dep.second (opsB side); forward: dep.first (opsA side).
+  // partnerLoops = the opposite (always opsB, i.e. consumer-side) nest used as the
+  //   deep reference for sibling-based depth lifts. In backward this matches the
+  //   receiver; in forward (shallow opsA) it provides the deep loops the receiver
+  //   needs to grow toward.
   SmallVector<Operation *, 4> ops;
   ops.reserve(dependentOpPairs.size());
-
   std::transform(dependentOpPairs.begin(), dependentOpPairs.end(), std::back_inserter(ops),
                  [isBackwardSlice](const auto &dep) { return isBackwardSlice ? dep.second : dep.first; });
 
+  SmallVector<Operation *, 4> partnerOps;
+  partnerOps.reserve(dependentOpPairs.size());
+  std::transform(dependentOpPairs.begin(), dependentOpPairs.end(), std::back_inserter(partnerOps),
+                 [](const auto &dep) { return dep.second; });
+
   SmallVector<AffineForOp, 4> surroundingLoops;
   unsigned innermostCommonLoopDepth = getInnermostCommonLoopDepth(ops, &surroundingLoops);
+  SmallVector<AffineForOp, 4> partnerLoops;
+  unsigned partnerCommonLoopDepth = getInnermostCommonLoopDepth(partnerOps, &partnerLoops);
   if (loopDepth > innermostCommonLoopDepth) {
-    LLVM_DEBUG(llvm::dbgs() << "Exceeds max loop depth\n");
-    return SliceComputationResult::GenericFailure;
+    // Receiver is shallower than the requested fusion depth. Backward mode handles
+    // this via slice-IV extension further down (slice IVs grow from opsA's parent
+    // body; the receiver was already deep enough by virtue of being opsB). Forward
+    // mode is the inverse: slice IVs are already deep (opsB-sized), but the
+    // receiver needs matched opsA-side siblings to host the deeper levels.
+    bool extended = !isBackwardSlice && loopDepth <= partnerCommonLoopDepth &&
+                    extendReceiverWithSiblingForLoops(opsA, opsB, surroundingLoops, partnerLoops,
+                                                      innermostCommonLoopDepth, loopDepth);
+    if (!extended) {
+      LLVM_DEBUG(llvm::dbgs() << "Exceeds max loop depth\n");
+      return SliceComputationResult::GenericFailure;
+    }
   }
 
   // Store 'numSliceLoopIVs' before converting dst loop IVs to dims.
@@ -925,9 +1202,31 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   sliceUnion->lbOperands.resize(numSliceLoopIVs, sliceBoundOperands);
   sliceUnion->ubOperands.resize(numSliceLoopIVs, sliceBoundOperands);
 
+  // Producer levels gated by an inner affine.if get pinned to a single iteration in
+  // the dependence-driven slice. If the gated loop has work outside that if (siblings of
+  // the gating chain), preserve those iterations by expanding back to the loop's full
+  // constant domain — fuseLoops would otherwise drop them when erasing the producer nest.
+  expandSliceBoundsForInnerIfGating(*sliceUnion, numSliceLoopIVs, opsA);
+
   // Outer-level structural alignment runs before insertPoint selection so
   // sliceHasInnerFor sees the post-alignment lbs/ubs.
   alignSliceWithPartnerLoops(*sliceUnion, loopDepth, numSliceLoopIVs, surroundingLoops);
+
+  // When the src access lives shallower than the requested fusion depth, try to extend
+  // the slice with src sibling for-loops that align with dst's deeper levels. This is
+  // what unblocks ProducerConsumer fusion where the producer write is at depth K but the
+  // consumer body sits at depth K+N: the matched src sibling becomes the merge point and
+  // pre-spine ops (the write and its siblings) replicate at the outer dst level — same
+  // execution count they had in src — instead of being smeared across dst's inner range.
+  //
+  // Match against partnerLoops (always opsB-side, deep). In backward partnerLoops ==
+  // surroundingLoops; in forward (shallow opsA) the function exits via the IV-continuity
+  // check anyway — the depth lift in that direction is handled above by
+  // extendReceiverWithSiblingForLoops.
+  if (numSliceLoopIVs < loopDepth &&
+      extendSliceWithSrcSiblingLoops(opsA, opsB, *sliceUnion, numSliceLoopIVs, loopDepth, partnerLoops)) {
+    numSliceLoopIVs = loopDepth;
+  }
 
   // Choose insertPoint based on whether the cloned dst body keeps inner fors.
   // - All slice levels are 1-iter: cloned body is sequential ops only, anchor
