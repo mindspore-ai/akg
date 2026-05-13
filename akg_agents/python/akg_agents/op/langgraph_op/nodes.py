@@ -999,6 +999,9 @@ class NodeFactory:
                 }
                 if result.success:
                     updates["coder_code"] = result.modified_code
+                    updates["code_check_passed"] = None
+                    updates["code_check_errors"] = None
+                    updates["code_check_details"] = None
 
                 return updates
 

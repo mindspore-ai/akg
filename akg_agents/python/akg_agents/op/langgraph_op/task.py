@@ -182,7 +182,7 @@ class LangGraphTask(BaseLangGraphTask):
             self.workflow_name = workflow
             logger.debug(f"[{op_name}] Using workflow from parameter: {self.workflow_name}")
         else:
-            self.workflow_name = config.get("default_workflow", "default_workflow")
+            self.workflow_name = config.get("default_workflow", "kernelgen_only_workflow")
             logger.info(f"[{op_name}] Using workflow from config: {self.workflow_name}")
         
         # 初始化 WorkflowLogger

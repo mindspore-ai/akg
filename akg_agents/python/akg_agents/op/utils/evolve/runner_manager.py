@@ -77,7 +77,28 @@ class RunnerConfig:
 
         # 任务配置
         self.op_name = "relu_op"
-        self.task_desc = "Path/to/your/tasks/relu_task.py"
+        self.task_desc = """
+import torch
+import torch.nn as nn
+import torch_npu
+
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.relu(x)
+
+batch_size = 16
+dim = 16384
+
+def get_inputs():
+    x = torch.rand(batch_size, dim, device='npu')
+    return [x]
+
+def get_init_inputs():
+    return []
+"""
         self._sol_problem_dir = None
         self._npukb_aux_files = None
         self._npukb_factory_names = None

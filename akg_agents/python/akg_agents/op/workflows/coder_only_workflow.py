@@ -29,13 +29,15 @@ logger = logging.getLogger(__name__)
 @register_workflow(scopes=["op"])
 class CoderOnlyWorkflow(OpBaseWorkflow):
     """Coder Only Workflow：跳过设计阶段，直接生成代码
-    
+
     优化后的流程（带 CodeChecker + FixCodeGen）：
-    
+
         coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -+-> coder
                       |                                                     |
-                      +-----> (未通过，回到 coder) -----+                    +-> fix_code_gen -> verifier
-    
+                      +-----> (未通过) -----+                                +-> fix_code_gen -> code_checker -> verifier
+                                            |
+                                            +-> coder (无 fix_code_gen 时)
+
     Conductor 判断逻辑：
     - 局部/小范围错误（如缺少 import、变量名拼写等）→ fix_code_gen（增量修复，使用 fast model）
     - 全局/架构性错误（如算法逻辑重大缺陷）→ coder（完整重新生成）
@@ -175,7 +177,6 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                 self.trace, self.config
             )
             workflow.add_node("fix_code_gen", fix_code_gen_node)
-            workflow.add_edge("fix_code_gen", "verifier")
             logger.info("FixCodeGen enabled: conductor can route to fix_code_gen")
         
         if enable_code_checker and code_checker:
@@ -186,7 +187,7 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                 self.config
             )
             workflow.add_node("code_checker", code_checker_node)
-            
+
             # 代码生成后的路由（处理 max_tokens 截断等异常）
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="code_checker",
@@ -200,25 +201,40 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                     "conductor": "conductor"
                 }
             )
-            
+
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
                 enable_fix_code_gen=enable_fix_code_gen,
             )
-            
+
             code_checker_edges = {
                 "verifier": "verifier",  # 检查通过 → Verifier
                 "coder": "coder",        # 检查失败（无 fix_code_gen）→ Coder 重写
             }
             if enable_fix_code_gen:
                 code_checker_edges["fix_code_gen"] = "fix_code_gen"
-            
+
             workflow.add_conditional_edges(
                 "code_checker",
                 code_checker_router,
                 code_checker_edges,
             )
+
+            # FixCodeGen 后的路由：apply 成功 → code_checker，失败 → coder
+            if enable_fix_code_gen:
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="coder",
+                    next_agent="code_checker",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "code_checker": "code_checker",
+                        "coder": "coder",
+                    },
+                )
         else:
             # 不启用 CodeChecker，直接 coder -> verifier（带 codegen 路由）
             codegen_router = RouterFactory.create_codegen_router(
@@ -233,6 +249,21 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                     "conductor": "conductor"
                 }
             )
+            # FixCodeGen 后的路由：apply 成功 → verifier，失败 → coder
+            if enable_fix_code_gen:
+                fix_code_gen_router = RouterFactory.create_fix_code_gen_router(
+                    code_gen_agent="coder",
+                    next_agent="verifier",
+                )
+                workflow.add_conditional_edges(
+                    "fix_code_gen",
+                    fix_code_gen_router,
+                    {
+                        "verifier": "verifier",
+                        "coder": "coder",
+                    },
+                )
+                logger.info("FixCodeGen -> Verifier flow enabled (CodeChecker disabled)")
             logger.info("CodeChecker disabled, using direct coder -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
