@@ -39,6 +39,6 @@ static constexpr llvm::StringRef kIsDynamic = "mfusion.is_dynamic";
 /// Value type: StringAttr
 static constexpr llvm::StringRef kCopiedSubgraph = "mfusion.copied_subgraph";
 
-} // namespace mfusion_attrs
+}  // namespace mfusion_attrs
 
-#endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_OUTLINING_FUSIONATTRIBUTES_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_OUTLINING_FUSIONATTRIBUTES_H

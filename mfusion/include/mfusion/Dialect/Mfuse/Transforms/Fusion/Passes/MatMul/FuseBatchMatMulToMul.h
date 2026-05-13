@@ -29,7 +29,7 @@ namespace mfuse {
 /// Create a pass to fuse BatchMatMul/MatMul with k=1 to Mul.
 std::unique_ptr<Pass> createFuseBatchMatMulToMulPass();
 
-} // namespace mfuse
-} // namespace mlir
+}  // namespace mfuse
+}  // namespace mlir
 
-#endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSEBATCHMATMULTOMUL_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSEBATCHMATMULTOMUL_H

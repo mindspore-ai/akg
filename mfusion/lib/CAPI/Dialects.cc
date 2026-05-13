@@ -24,7 +24,9 @@
 #include "mlir/CAPI/Wrap.h"
 #include "mlir-c/BuiltinAttributes.h"
 
+// cppcheck-suppress unknownMacro
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Mfuse, mfuse, mlir::mfuse::MfuseDialect)
+// cppcheck-suppress unknownMacro
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Dvm, dvm, mlir::dvm::DvmDialect)
 
 bool mlirAttributeIsAMfuseDeviceAttr(MlirAttribute attr) { return llvm::isa<mlir::mfuse::DeviceAttr>(unwrap(attr)); }

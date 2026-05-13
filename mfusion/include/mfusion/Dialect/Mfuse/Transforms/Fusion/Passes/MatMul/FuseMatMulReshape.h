@@ -27,7 +27,7 @@ namespace mfuse {
 /// Creates a pass that fuses MatMul/MatMulv2 with N=1 to add Reshape to second input.
 std::unique_ptr<mlir::Pass> createFuseMatMulReshapePass();
 
-} // namespace mfuse
-} // namespace mlir
+}  // namespace mfuse
+}  // namespace mlir
 
-#endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSEMATMULRESHAPE_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSEMATMULRESHAPE_H

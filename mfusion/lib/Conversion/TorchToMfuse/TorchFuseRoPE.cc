@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <optional>
+
 #include "mfusion/Conversion/Passes.h"
 
 #include "mlir/IR/BuiltinOps.h"
@@ -68,78 +70,107 @@ static bool isLastDimIndex(Value v, int64_t dim) {
   return dim == -1 || dim == (rank - 1);
 }
 
+struct RotateHalfCatOperands {
+  Value negVal;
+  Value leftVal;
+};
+
+struct RotateHalfSlices {
+  Value base;
+  TorchD::AtenSliceTensorOp left;
+  TorchD::AtenSliceTensorOp right;
+};
+
+static std::optional<RotateHalfCatOperands> matchRotateHalfCatOperands(Value v) {
+  auto catOp = v.getDefiningOp<TorchD::AtenCatOp>();
+  if (!catOp) {
+    return std::nullopt;
+  }
+  auto catDim = getConstInt(catOp.getDim());
+  if (!catDim || *catDim != -1) {
+    return std::nullopt;
+  }
+
+  auto listOp = catOp.getTensors().getDefiningOp<TorchD::PrimListConstructOp>();
+  if (!listOp || listOp->getNumOperands() != 2) {
+    return std::nullopt;
+  }
+
+  return RotateHalfCatOperands{listOp->getOperand(0), listOp->getOperand(1)};
+}
+
+static std::optional<RotateHalfSlices> matchRotateHalfSlices(const RotateHalfCatOperands &operands) {
+  auto negOp = operands.negVal.getDefiningOp<TorchD::AtenNegOp>();
+  if (!negOp) {
+    return std::nullopt;
+  }
+
+  Value rightVal = negOp.getSelf();
+  auto sliceRight = rightVal.getDefiningOp<TorchD::AtenSliceTensorOp>();
+  auto sliceLeft = operands.leftVal.getDefiningOp<TorchD::AtenSliceTensorOp>();
+  if (!sliceRight || !sliceLeft) {
+    return std::nullopt;
+  }
+  Value xRightBase = sliceRight.getSelf();
+  Value xLeftBase = sliceLeft.getSelf();
+  if (xRightBase != xLeftBase) {
+    return std::nullopt;
+  }
+
+  return RotateHalfSlices{xLeftBase, sliceLeft, sliceRight};
+}
+
+static bool isLastDimSlice(Value base, TorchD::AtenSliceTensorOp sliceOp) {
+  auto dim = getConstInt(sliceOp.getDim());
+  return dim && isLastDimIndex(base, *dim);
+}
+
+static bool hasUnitStep(TorchD::AtenSliceTensorOp sliceOp) {
+  auto step = getConstInt(sliceOp.getStep());
+  return step && *step == 1;
+}
+
+static bool hasConstRange(TorchD::AtenSliceTensorOp sliceOp, int64_t expectedStart, int64_t expectedEnd) {
+  auto start = getConstInt(sliceOp.getStart());
+  auto end = getConstInt(sliceOp.getEnd());
+  return start && end && *start == expectedStart && *end == expectedEnd;
+}
+
+static bool hasRotateHalfSliceParams(const RotateHalfSlices &slices) {
+  if (!isLastDimSlice(slices.base, slices.left) || !isLastDimSlice(slices.base, slices.right)) {
+    return false;
+  }
+  if (!hasUnitStep(slices.left) || !hasUnitStep(slices.right)) {
+    return false;
+  }
+
+  auto lastDim = getKnownLastDim(slices.base);
+  if (!lastDim || (*lastDim % 2) != 0) {
+    return false;
+  }
+
+  int64_t half = *lastDim / 2;
+  // Use the canonical torch constant for max end.
+  constexpr int64_t kEndMax = 9223372036854775807LL;
+  return hasConstRange(slices.left, 0, half) && hasConstRange(slices.right, half, kEndMax);
+}
+
 // Match rotate_half(x) in the common cat/list form:
 //   x_left  = slice(x, 0:D/2)
 //   x_right = slice(x, D/2:...)
 //   rot = cat([neg(x_right), x_left], dim=-1)
 static Value matchRotateHalfCat(Value v) {
-  auto catOp = v.getDefiningOp<TorchD::AtenCatOp>();
-  if (!catOp) {
-    return Value();
-  }
-  auto catDim = getConstInt(catOp.getDim());
-  if (!catDim || *catDim != -1) {
+  auto operands = matchRotateHalfCatOperands(v);
+  if (!operands) {
     return Value();
   }
 
-  auto listOp = catOp.getTensors().getDefiningOp<TorchD::PrimListConstructOp>();
-  if (!listOp || listOp->getNumOperands() != 2) {
+  auto slices = matchRotateHalfSlices(*operands);
+  if (!slices || !hasRotateHalfSliceParams(*slices)) {
     return Value();
   }
 
-  Value negVal = listOp->getOperand(0);
-  Value leftVal = listOp->getOperand(1);
-
-  auto negOp = negVal.getDefiningOp<TorchD::AtenNegOp>();
-  if (!negOp) {
-    return Value();
-  }
-
-  Value rightVal = negOp.getSelf();
-  auto sliceRight = rightVal.getDefiningOp<TorchD::AtenSliceTensorOp>();
-  auto sliceLeft = leftVal.getDefiningOp<TorchD::AtenSliceTensorOp>();
-  if (!sliceRight || !sliceLeft) {
-    return Value();
-  }
-  Value xRightBase = sliceRight.getSelf();
-  Value xLeftBase = sliceLeft.getSelf();
-  if (xRightBase != xLeftBase) {
-    return Value();
-  }
-
-  auto dimL = getConstInt(sliceLeft.getDim());
-  auto dimR = getConstInt(sliceRight.getDim());
-  if (!dimL || !dimR || !isLastDimIndex(xLeftBase, *dimL) || !isLastDimIndex(xRightBase, *dimR)) {
-    return Value();
-  }
-
-  auto stepL = getConstInt(sliceLeft.getStep());
-  auto stepR = getConstInt(sliceRight.getStep());
-  if (!stepL || !stepR || *stepL != 1 || *stepR != 1) {
-    return Value();
-  }
-
-  auto lastDim = getKnownLastDim(xLeftBase);
-  if (!lastDim || (*lastDim % 2) != 0) {
-    return Value();
-  }
-
-  int64_t half = *lastDim / 2;
-  auto startL = getConstInt(sliceLeft.getStart());
-  auto endL = getConstInt(sliceLeft.getEnd());
-  auto startR = getConstInt(sliceRight.getStart());
-  auto endR = getConstInt(sliceRight.getEnd());
-  if (!startL || !endL || !startR || !endR) {
-    return Value();
-  }
-
-  // Use the canonical torch constant for max end.
-  constexpr int64_t kEndMax = 9223372036854775807LL;
-  if (!(*startL == 0 && *endL == half && *startR == half && *endR == kEndMax)) {
-    return Value();
-  }
-
-  return xLeftBase;
+  return slices->base;
 }
 
 struct RoPEMatchState {
@@ -220,8 +251,8 @@ class TorchFuseRoPEPattern : public OpRewritePattern<TorchD::AtenAddTensorOp> {
     }
 
     rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
-        op, op.getResult().getType(), rewriter.getStringAttr("torch.npu.npu_rotary_mul"),
-        SmallVector<Value>{state.x, state.cos, state.sin}, /*numResults=*/0);
+      op, op.getResult().getType(), rewriter.getStringAttr("torch.npu.npu_rotary_mul"),
+      SmallVector<Value>{state.x, state.cos, state.sin}, /*numResults=*/0);
     return success();
   }
 };

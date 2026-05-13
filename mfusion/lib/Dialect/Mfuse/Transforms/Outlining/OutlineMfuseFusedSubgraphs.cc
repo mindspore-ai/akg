@@ -15,7 +15,9 @@
  */
 
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/OutlineMfuseFusedSubgraphs.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
+
+#include <algorithm>
+#include <iterator>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -26,6 +28,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 
 namespace mlir {
@@ -64,9 +67,9 @@ static func::FuncOp createOutlinedFunc(ModuleOp module, func::FuncOp parentFunc,
     if (auto yieldOp = dyn_cast<mfuse::YieldOp>(&op)) {
       SmallVector<Value> returnValues;
       returnValues.reserve(yieldOp.getNumOperands());
-      for (Value operand : yieldOp.getOperands()) {
-        returnValues.push_back(mapper.lookup(operand));
-      }
+      auto operands = yieldOp.getOperands();
+      std::transform(operands.begin(), operands.end(), std::back_inserter(returnValues),
+                     [&](Value operand) { return mapper.lookup(operand); });
       funcBuilder.create<func::ReturnOp>(yieldOp.getLoc(), returnValues);
       createdReturn = true;
       continue;
