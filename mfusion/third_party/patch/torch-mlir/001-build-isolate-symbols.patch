@@ -1,0 +1,14 @@
+diff --git a/python/CMakeLists.txt b/python/CMakeLists.txt
+index 4fbd8561..6ee97a05 100644
+--- a/python/CMakeLists.txt
++++ b/python/CMakeLists.txt
+@@ -115,6 +115,9 @@ add_mlir_python_common_capi_library(TorchMLIRAggregateCAPI
+   DECLARED_SOURCES ${_source_components}
+ )
+ 
++# Add symbol isolation to avoid conflicts with other MLIR Python bindings
++target_link_options(TorchMLIRAggregateCAPI PRIVATE $<$<PLATFORM_ID:Linux>:LINKER:--exclude-libs,ALL>)
++
+ add_mlir_python_modules(TorchMLIRPythonModules
+   ROOT_PREFIX "${TORCH_MLIR_PYTHON_PACKAGES_DIR}/torch_mlir/torch_mlir"
+   INSTALL_PREFIX "python_packages/torch_mlir/torch_mlir"
