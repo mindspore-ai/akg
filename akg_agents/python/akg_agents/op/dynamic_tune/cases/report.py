@@ -210,32 +210,29 @@ def _render_markdown_report(
                 )
             lines.append("")
 
-        # ---------------- per-config geomean speedup ---------------- #
-        per_cfg_speedup = matrix_block.get("per_config_geomean_speedup") or []
+        # ---------------- per-config geomean latency ---------------- #
         per_cfg_us = matrix_block.get("per_config_geomean_us") or []
         best_overall = matrix_block.get("best_config_overall")
-        if cfg_labels and per_cfg_speedup:
-            lines.append("### 每个 config 的 geomean speedup")
+        selector_block = matrix_block.get("selector") or {}
+        selector_geomean = selector_block.get("selector_geomean_us")
+        if cfg_labels and per_cfg_us:
+            lines.append("### 每个 config 的 geomean 延迟")
             lines.append("")
-            lines.append(
-                "归一化方式: 每个 shape 上 best_config = 1.000 (regret-free), 然后跨 shape 几何平均; 越接近 1 越好。"
-            )
-            lines.append("")
-            lines.append("| config | geomean speedup | geomean μs |")
-            lines.append("|--------|-----------------|------------|")
+            lines.append("| config | geomean μs |")
+            lines.append("|--------|------------|")
             for idx, label in enumerate(cfg_labels):
-                speedup = per_cfg_speedup[idx] if idx < len(per_cfg_speedup) else None
                 mean_us = per_cfg_us[idx] if idx < len(per_cfg_us) else None
-                marker = " ⭐ best" if label == best_overall else ""
-                speedup_cell = (
-                    f"**{speedup:.3f}**{marker}"
-                    if isinstance(speedup, (int, float)) and label == best_overall
-                    else (f"{speedup:.3f}" if isinstance(speedup, (int, float)) else "n/a")
-                )
+                marker = " ⭐ best_fixed" if label == best_overall else ""
                 lines.append(
-                    f"| {_md_escape(label)} | {speedup_cell} | {_fmt_us(mean_us).strip()} |"
+                    f"| {_md_escape(label)} | {_fmt_us(mean_us).strip()}{marker} |"
                 )
             lines.append("")
+            if selector_geomean is not None:
+                best_fixed_us = min(per_cfg_us)
+                tune_effect = best_fixed_us / selector_geomean if selector_geomean > 0 else 0
+                lines.append(f"- **selector geomean**: {_fmt_us(selector_geomean).strip()}")
+                lines.append(f"- **tune_effect** (best_fixed / selector): {tune_effect:.4f} (>1 = per-shape tuning beats fixed)")
+                lines.append("")
 
     # ---------------- selector decisions ---------------- #
     per_shape_decisions = selector_block.get("per_shape") or []

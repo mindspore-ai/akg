@@ -70,7 +70,7 @@ class ModelNew(nn.Module):
         BLOCK_M = config.param("BLOCK_M")
         BLOCK_N = config.param("BLOCK_N")
         BLOCK_K = config.param("BLOCK_K")
-        C = torch.empty(M, N, dtype=torch.float32, device=A.device)
+        C = torch.empty(M, N, dtype=A.dtype, device=A.device)
         matmul_kernel[(ASCEND_CUBE_CORE_NUM,)](
             A,
             B,
