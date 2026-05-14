@@ -141,6 +141,11 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     )
 
     runner.run(
+        pipeline="builtin.module(mfuse-reorder-ops,mfuse-raise-reduction-precision,canonicalize)",
+        stage="Mfuse Type and Precision Optimization",
+    )
+
+    runner.run(
         pipeline=f"builtin.module(func.func(split{{kernel-generator={kernel_generator}}}),canonicalize)",
         stage="Mfuse Split",
     )
