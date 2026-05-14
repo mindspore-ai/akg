@@ -38,9 +38,6 @@ def summarize_matrix(matrix: Any) -> dict[str, Any]:
     latencies = np.asarray(matrix.latencies_us, dtype=np.float64)
     n_shapes, n_configs = latencies.shape
     per_shape_best = latencies.min(axis=1, keepdims=True)
-    speedup_matrix = per_shape_best / latencies
-    log_speedup = np.log(np.clip(speedup_matrix, 1e-12, None))
-    per_config_geomean = np.exp(log_speedup.mean(axis=0))
     per_config_geomean_latency = np.exp(np.log(latencies).mean(axis=0))
 
     config_labels = [config_label(cfg) for cfg in matrix.configs]
@@ -50,13 +47,12 @@ def summarize_matrix(matrix: Any) -> dict[str, Any]:
         "shapes": [list(s) for s in shape_labels],
         "configs": config_labels,
         "latencies_us": latencies.tolist(),
-        "per_config_geomean_speedup": per_config_geomean.tolist(),
         "per_config_geomean_us": per_config_geomean_latency.tolist(),
         "per_shape_best_us": per_shape_best.flatten().tolist(),
         "per_shape_best_config": [
             config_labels[i] for i in latencies.argmin(axis=1).tolist()
         ],
-        "best_config_overall": config_labels[int(np.argmax(per_config_geomean))],
+        "best_config_overall": config_labels[int(np.argmin(per_config_geomean_latency))],
         "path_used": getattr(matrix, "path_used", "?"),
         "n_shapes": int(n_shapes),
         "n_configs": int(n_configs),
@@ -130,11 +126,14 @@ def summarize_selector(manifest: Any, matrix: Any) -> dict[str, Any]:
         if regret_ratios
         else None
     )
+    sel_latencies = [item["latency_us"] for item in per_shape if item.get("latency_us") is not None]
+    selector_geomean_us = float(np.exp(np.log(np.asarray(sel_latencies)).mean())) if sel_latencies else None
     return {
         "kind": manifest.selector.kind,
         "per_shape": per_shape,
         "decision_counts": decision_counts,
         "geomean_regret_ratio": geomean_regret,
+        "selector_geomean_us": selector_geomean_us,
     }
 
 
@@ -202,7 +201,6 @@ def print_matrix_table(
     latencies: list[list[float]] = summary["latencies_us"]
     per_shape_best: list[float] = summary["per_shape_best_us"]
     per_shape_best_cfg: list[str] = summary["per_shape_best_config"]
-    per_config_geomean_speedup: list[float] = summary["per_config_geomean_speedup"]
     per_config_geomean_us: list[float] = summary["per_config_geomean_us"]
     path_used = summary.get("path_used", "?")
 
@@ -236,17 +234,29 @@ def print_matrix_table(
         )
         print(line)
 
+    best_fixed_idx = min(range(len(per_config_geomean_us)), key=lambda i: per_config_geomean_us[i])
+    best_fixed_label = config_labels[best_fixed_idx]
+    best_fixed_geomean_us = per_config_geomean_us[best_fixed_idx]
+
     print(
-        f"[autotune] per-config geomean speedup case={case_name} "
-        "(best on each shape = 1.000, 越接近 1 越好):"
+        f"[autotune] per-config geomean latency case={case_name} "
+        f"(us, lower is better):"
     )
     for cfg_idx, label in enumerate(config_labels):
-        speedup = per_config_geomean_speedup[cfg_idx]
         mean_us = per_config_geomean_us[cfg_idx]
-        marker = "  <-- best" if label == summary["best_config_overall"] else ""
+        marker = "  <-- best_fixed" if cfg_idx == best_fixed_idx else ""
+        print(f"  cfg#{cfg_idx} {label}: geomean_us={mean_us:.2f}{marker}")
+
+    selector_summary = summary.get("selector") or {}
+    selector_geomean = selector_summary.get("selector_geomean_us")
+    if selector_geomean is not None and selector_geomean > 0:
+        tune_effect = best_fixed_geomean_us / selector_geomean
         print(
-            f"  cfg#{cfg_idx} {label}: speedup={speedup:.3f} "
-            f"geomean_us={mean_us:.2f}{marker}"
+            f"[autotune] key metrics case={case_name}:\n"
+            f"  best_fixed={best_fixed_label} geomean_us={best_fixed_geomean_us:.2f}\n"
+            f"  selector  geomean_us={selector_geomean:.2f}\n"
+            f"  tune_effect (best_fixed / selector) = {tune_effect:.4f}  "
+            f"(>1 means per-shape tuning beats fixed config)"
         )
 
 
