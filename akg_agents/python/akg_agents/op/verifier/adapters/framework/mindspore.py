@@ -87,15 +87,15 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
         return tensor.flatten() if hasattr(tensor, 'flatten') else tensor
     
     def get_limit(self, dtype: Any) -> float:
-        """Get precision limit for dtype."""
-        if dtype == ms.float16:
-            return 0.004
+        """Get precision rtol for dtype (backward compatibility)."""
+        if dtype == ms.float32:
+            return 1.22e-4
+        elif dtype == ms.float16:
+            return 9.77e-4
         elif dtype == ms.bfloat16:
-            return 0.03
-        elif dtype == ms.int8:
-            return 0.01
+            return 7.81e-3
         else:
-            return 0.004
+            return 1.22e-4
     
     def save_tensor(self, tensor: Any, bin_path: str) -> None:
         """Save MindSpore tensor to binary file."""
@@ -289,133 +289,131 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
 """
     
     def get_compare_code(self) -> str:
-        """Get compare function code using pure MindSpore operations."""
-        return '''def get_limit(data_type):
-    """Get precision limit for data type"""
-    if data_type == ms.float16:
-        return 0.004
-    elif data_type == ms.bfloat16:
-        return 0.03
-    elif data_type == ms.int8:
-        return 0.01
-    else:
-        return 0.004
+        """Get compare function code using layered tolerance (hard-coded, no config)."""
+        return '''def _get_tolerance(data_type):
+    """Hard-coded tolerance table aligned with CANN / NPUKernelBench.
 
-def compare(fw_out, impl_out, limit, data_type):
-    """Compare framework output and implementation output using MindSpore"""
-    import mindspore.ops as ops
-    
-    # Flatten tensors
+    Returns (rtol, atol, outlier_rtol, outlier_atol, outlier_ratio).
+    - strict_tol  = atol       + rtol       * |ref|
+    - relaxed_tol = outlier_atol + outlier_rtol * |ref|
+    - outlier_atol = 10 * atol  (aligned with PyTorch MatMul FP32 atol=1e-4)
+    - outlier_rtol = 10 * rtol  (aligned with CANN MARE threshold = 10 * MERE threshold)
+    """
+    if data_type == ms.float32:
+        return (1.22e-4, 1e-5, 1.22e-3, 1e-4, 0.001)
+    elif data_type == ms.float16:
+        return (9.77e-4, 1e-3, 9.77e-3, 1e-2, 0.005)
+    elif data_type == ms.bfloat16:
+        return (7.81e-3, 1e-2, 7.81e-2, 1e-1, 0.01)
+    else:
+        return (1.22e-4, 1e-5, 1.22e-3, 1e-4, 0.001)
+
+def compare(fw_out, impl_out, data_type):
+    """Compare framework output and implementation output using layered tolerance."""
     fw_flat = fw_out.flatten()
     impl_flat = impl_out.flatten()
     if isinstance(impl_flat, ms.Tensor):
         pass
     else:
         impl_flat = ms.Tensor(impl_flat, dtype=fw_flat.dtype)
-    
+
     size = fw_flat.size
-    
-    # 1. 检查形状一致性
+
     if fw_flat.shape != impl_flat.shape:
         raise AssertionError(f"验证失败，输出形状不一致: framework={fw_flat.shape}, impl={impl_flat.shape}")
-    
-    # 转换为numpy进行NaN和Inf检查（MindSpore的isnan/isinf支持有限）
+
     fw_np = fw_flat.asnumpy()
     impl_np = impl_flat.asnumpy()
-    
-    # 2. 检查NaN值 - 只有当两边NaN位置都匹配时才允许
+
     fw_nan_mask = np.isnan(fw_np)
     impl_nan_mask = np.isnan(impl_np)
-    
-    # 检查NaN位置是否匹配
     if not np.array_equal(fw_nan_mask, impl_nan_mask):
         fw_nan_count = np.sum(fw_nan_mask)
         impl_nan_count = np.sum(impl_nan_mask)
         raise AssertionError(f"验证失败，NaN位置不匹配: Framework={fw_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
-    
-    # 如果有NaN，打印信息但继续验证
     if np.sum(fw_nan_mask) > 0:
         nan_count = np.sum(fw_nan_mask)
         print(f"检测到NaN值: {nan_count}/{size} (位置一致，继续验证)")
-    
-    # 3. 检查Inf值 - 只有当两边Inf位置和符号都匹配时才允许
+
     fw_inf_mask = np.isinf(fw_np)
     impl_inf_mask = np.isinf(impl_np)
-    
-    # 检查Inf位置是否匹配
     if not np.array_equal(fw_inf_mask, impl_inf_mask):
         fw_inf_count = np.sum(fw_inf_mask)
         impl_inf_count = np.sum(impl_inf_mask)
         raise AssertionError(f"验证失败，Inf位置不匹配: Framework={fw_inf_count}/{size}, Implementation={impl_inf_count}/{size}")
-    
-    # 检查Inf符号是否匹配
     if np.sum(fw_inf_mask) > 0:
         inf_sign_match = np.array_equal(
-            np.sign(fw_np[fw_inf_mask]), 
+            np.sign(fw_np[fw_inf_mask]),
             np.sign(impl_np[impl_inf_mask])
         )
         if not inf_sign_match:
             raise AssertionError(f"验证失败，Inf符号不匹配")
-    
-    # 4. 对有限值进行精度比较
+
     finite_mask = np.isfinite(fw_np) & np.isfinite(impl_np)
     finite_count = np.sum(finite_mask)
-    
     if finite_count == 0:
         print(f"警告: 所有值都是Inf，跳过精度检查")
         return
-    
-    # 提取有限值
+
     fw_finite = fw_np[finite_mask]
     impl_finite = impl_np[finite_mask]
-    
-    # 检查是否为布尔类型
+
     if fw_finite.dtype == bool or impl_finite.dtype == bool:
         if not np.array_equal(fw_finite, impl_finite):
             raise AssertionError(f"验证失败，布尔值不匹配: dtype={data_type}")
         return
-    
-    # 统一数据类型
+
     if impl_finite.dtype != fw_finite.dtype:
         impl_finite = impl_finite.astype(fw_finite.dtype)
-    
-    # 计算相对误差
+
+    rtol, atol, outlier_rtol, outlier_atol, outlier_ratio = _get_tolerance(data_type)
+
     abs_diff = np.abs(fw_finite - impl_finite)
     abs_ref = np.abs(fw_finite)
-    eps = 1e-8
-    relative_error = np.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
-    
-    # 统计错误
-    err_cnt = np.sum(relative_error > limit).astype(np.int32)
-    limit_cnt = int(finite_count * limit)
-    
-    if err_cnt > limit_cnt:
-        max_error = np.max(relative_error)
-        mean_error = np.mean(relative_error)
-        
-        # 找出不一致的位置
-        mismatch_mask = relative_error > limit
-        mismatch_indices = np.where(mismatch_mask)[0]
-        # 最多打印10个不一致的位置
-        num_to_show = min(10, len(mismatch_indices))
+    strict_tol = atol + rtol * abs_ref
+    relaxed_tol = outlier_atol + outlier_rtol * abs_ref
 
-        error_msg = f"验证失败，输出不一致(误差数/最大容忍误差数): err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\\n"
-        error_msg += f"最大相对误差: {max_error:.6e}, 平均相对误差: {mean_error:.6e}\\n"
-        error_msg += f"前 {num_to_show} 个不一致的值:\\n"
+    strict_pass = abs_diff <= strict_tol
+    relaxed_pass = abs_diff <= relaxed_tol
+
+    hard_fail = int(np.sum(~relaxed_pass))
+    outlier = int(np.sum((~strict_pass) & relaxed_pass))
+    total = fw_finite.size
+    cap = int(total * outlier_ratio)
+
+    mere = float(np.mean(abs_diff / (abs_ref + atol)))
+    mare = float(np.max(abs_diff / (abs_ref + atol)))
+    print(f"[precision] dtype={data_type} total={total} strict={int(np.sum(strict_pass))} outlier={outlier}/{cap} hard={hard_fail} mere={mere:.6e} mare={mare:.6e}")
+
+    if hard_fail > 0:
+        hf_mask = ~relaxed_pass
+        hf_indices = np.where(hf_mask)[0]
+        num_to_show = min(5, len(hf_indices))
+        error_msg = f"验证失败，存在 {hard_fail} 个元素超过放宽阈值(hard_fail)\\n"
+        error_msg += f"rtol={rtol:.6e} atol={atol:.6e} outlier_rtol={outlier_rtol:.6e} outlier_atol={outlier_atol:.6e} outlier_ratio={outlier_ratio}\\n"
+        error_msg += f"mere={mere:.6e} mare={mare:.6e}\\n"
         for i in range(num_to_show):
-            idx = mismatch_indices[i]
-            error_msg += f"  位置[{idx}]: framework={fw_np[idx]:.6e}, "
-            error_msg += f"impl={impl_np[idx]:.6e}, "
-            error_msg += f"相对误差={relative_error[idx]:.6e}\\n"
-        
+            idx = hf_indices[i]
+            error_msg += f"  位置[{idx}]: ref={fw_finite[idx]:.6e} impl={impl_finite[idx]:.6e} abs_diff={abs_diff[idx]:.6e} relaxed_tol={relaxed_tol[idx]:.6e}\\n"
+        raise AssertionError(error_msg)
+
+    if outlier > cap:
+        ol_mask = (~strict_pass) & relaxed_pass
+        ol_indices = np.where(ol_mask)[0]
+        num_to_show = min(5, len(ol_indices))
+        error_msg = f"验证失败，超限元素比例超过允许值: outlier={outlier} / cap={cap}\\n"
+        error_msg += f"rtol={rtol:.6e} atol={atol:.6e} outlier_rtol={outlier_rtol:.6e} outlier_atol={outlier_atol:.6e} outlier_ratio={outlier_ratio}\\n"
+        error_msg += f"mere={mere:.6e} mare={mare:.6e}\\n"
+        for i in range(num_to_show):
+            idx = ol_indices[i]
+            error_msg += f"  位置[{idx}]: ref={fw_finite[idx]:.6e} impl={impl_finite[idx]:.6e} abs_diff={abs_diff[idx]:.6e} strict_tol={strict_tol[idx]:.6e} relaxed_tol={relaxed_tol[idx]:.6e}\\n"
         raise AssertionError(error_msg)
 
 '''
-    
+
     def get_compare_outputs_code(self) -> str:
         """Get code for comparing framework output and impl output."""
         return '''            data_type = framework_output[i].dtype
-            limit = get_limit(data_type)
-            compare(fw_out, impl_out, limit, data_type)
+            compare(fw_out, impl_out, data_type)
 '''
 
