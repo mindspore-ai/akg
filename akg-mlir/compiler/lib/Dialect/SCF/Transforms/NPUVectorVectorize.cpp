@@ -2217,6 +2217,16 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
     return success();
   }
 
+  if (!ctx.vf1FuncLevelNoAnchor) {
+    bool hasVectorDim = llvm::any_of(storeOp.getIndices(), [&](Value idx) {
+      return ctx.getVectorDimForIV(idx) >= 0;
+    });
+    if (!hasVectorDim) {
+      cloneScalarOp(*storeOp.getOperation(), ctx);
+      return success();
+    }
+  }
+
   vectorizeStore(storeOp, ctx);
   return success();
 }
