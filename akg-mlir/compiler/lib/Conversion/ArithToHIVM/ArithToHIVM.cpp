@@ -2369,9 +2369,8 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
   Value slicedDest = rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, offsets, sizes, strides);
 
   rewriter.replaceAllUsesWith(actualBuf, slicedDest);
+  rewriter.replaceOp(allocDef, slicedDest);
   rewriter.eraseOp(op);
-
-  if (allocDef->use_empty()) rewriter.eraseOp(allocDef);
   return success();
 }
 
