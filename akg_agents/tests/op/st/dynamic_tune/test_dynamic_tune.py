@@ -48,7 +48,7 @@ CASE_NAMES = tuple(
     path.name for path in sorted(ORIGINAL_CASES_ROOT.iterdir()) if (path / "sample.json").is_file()
 )
 # Default op-st: level0 + torch/triton/ascend/arch (see other op/st tests). Heavy cases use level2 only.
-ST_RUN_DEFAULT_CASE_NAMES = ("matmul", "relu", "rms_norm")
+ST_RUN_DEFAULT_CASE_NAMES = ("relu", "rms_norm")
 _OTHER_RUN_CASE_NAMES = tuple(n for n in CASE_NAMES if n not in ST_RUN_DEFAULT_CASE_NAMES)
 assert set(ST_RUN_DEFAULT_CASE_NAMES) <= set(CASE_NAMES), (
     f"ST_RUN_DEFAULT_CASE_NAMES must ⊆ CASE_NAMES; missing "
