@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch  # type: ignore
+import torch_npu  # type: ignore
 import torch.nn as nn  # type: ignore
 
 DEFAULT_DTYPE = torch.float32
@@ -9,10 +10,12 @@ HIDDEN = 4096
 
 
 class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(HIDDEN, dtype=DEFAULT_DTYPE))
+
     def forward(self, X):
-        K = int(X.shape[-1])
-        rstd = 1.0 / torch.sqrt(X.float().pow(2).sum(dim=-1, keepdim=True) / K + DEFAULT_EPS)
-        return (X.float() * rstd).to(X.dtype)
+        return torch_npu.npu_rms_norm(X, self.weight, epsilon=DEFAULT_EPS)[0]
 
 
 def get_init_inputs():
