@@ -238,6 +238,52 @@ def Dvm_BinaryOp : Dvm_Op<"binary", [Pure]> {
   let assemblyFormat = [{
     $op_type $lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)
   }];
+
+  let hasVerifier = 1;
+}
+
+def Dvm_BinaryScalarOp : Dvm_Op<"binary_scalar", [Pure]> {
+  let summary = "Generic binary operation with one scalar operand";
+  let description = [{
+    Represents a binary operation in DVM where one operand is a tensor and the
+    other is an inline scalar attribute.
+
+    The custom assembly format preserves the logical lhs/rhs order:
+
+      dvm.binary_scalar Pow %x, 2 : tensor<4xf32>, i32 -> tensor<4xf32>
+      dvm.binary_scalar Sub 0.0, %x : f32, tensor<4xf32> -> tensor<4xf32>
+
+    Internally, the op stores only the tensor SSA operand plus the scalar
+    attribute. The scalar_on_lhs attribute records which textual side the
+    scalar occupied.
+  }];
+
+  let arguments = (ins
+    Dvm_BinaryOpType:$op_type,
+    AnyRankedTensor:$input,
+    TypedAttrInterface:$scalar,
+    BoolAttr:$scalar_on_lhs
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType,
+                   "::mlir::dvm::BinaryOpTypeAttr":$opType,
+                   "::mlir::Value":$input,
+                   "::mlir::Attribute":$scalar,
+                   "bool":$scalarOnLhs), [{
+      $_state.addAttribute("op_type", opType);
+      $_state.addOperands(input);
+      $_state.addAttribute("scalar", scalar);
+      $_state.addAttribute("scalar_on_lhs", $_builder.getBoolAttr(scalarOnLhs));
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -331,12 +377,12 @@ def Dvm_ConstantOp : Dvm_Op<"constant", [Pure, ConstantLike]> {
   ];
 
   let extraClassDeclaration = [{
-    ::mlir::LogicalResult verify();
-
     ::mlir::OpFoldResult fold(FoldAdaptor adaptor) {
       return getValueAttr();
     }
   }];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
