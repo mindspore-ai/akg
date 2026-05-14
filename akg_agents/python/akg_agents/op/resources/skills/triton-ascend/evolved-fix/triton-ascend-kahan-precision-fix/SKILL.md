@@ -17,12 +17,6 @@ metadata:
 - matmul / reduction kernel 在大 K 维度（K ≥ 4096）下验证 hard_fail > 0
 - mere 正常（< 1e-4）但 mare 偏大（> 1e-2），说明少数点误差极大
 
-## 根因
-
-Ascend Cube 引擎原生只支持 FP16/BF16 矩阵乘，FP32 输入走"拆高低 16 位做 4 次 FP16 Cube 再合并"的仿真路径。`torch_npu.matmul` 内部使用该仿真，累加精度高。Triton 的 `acc += tl.dot(a, b)` 是简单顺序累加，K 次后误差 O(K × eps)，与 torch_npu 的仿真路径不一致，导致 NPU 对 NPU 对比出现 hard_fail。
-
-**不是 `tl.dot` 乘法精度问题**（NPU 侧两者都用同一个 Cube 引擎），而是**累加路径不同**。
-
 ## 修复：Kahan 补偿求和
 
 ```python
