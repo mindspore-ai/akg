@@ -86,10 +86,10 @@ class TestFrameworkAdapterTorch:
         """Test precision limit calculation."""
         adapter = get_framework_adapter("torch")
         import torch
-        assert adapter.get_limit(torch.float16) == 0.004
-        assert adapter.get_limit(torch.bfloat16) == 0.03
-        assert adapter.get_limit(torch.int8) == 0.01
-        assert adapter.get_limit(torch.float32) == 0.02
+        assert adapter.get_limit(torch.float16) == 9.77e-4
+        assert adapter.get_limit(torch.bfloat16) == 7.81e-3
+        assert adapter.get_limit(torch.int8) == 1.22e-4
+        assert adapter.get_limit(torch.float32) == 1.22e-4
     
     def test_get_tensor_type(self):
         """Test tensor type."""
