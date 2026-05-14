@@ -54,7 +54,7 @@ class ModelNew(nn.Module):
         BLOCK_M = 64
         BLOCK_N = 128
         BLOCK_K = 256
-        C = torch.empty(M, N, dtype=torch.float32, device=A.device)
+        C = torch.empty(M, N, dtype=A.dtype, device=A.device)
         matmul_kernel[(ASCEND_CUBE_CORE_NUM,)](
             A, B, C,
             M, N, K,
