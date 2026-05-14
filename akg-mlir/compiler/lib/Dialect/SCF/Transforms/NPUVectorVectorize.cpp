@@ -84,6 +84,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir {
 namespace scf {
@@ -370,6 +371,30 @@ static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
   return {false, isDynamic};
 }
 
+/// True when `defOp` is a binary op whose lhs/rhs references the reduction carry (`iter_arg`).
+static bool binaryReductionUsesIterArg(Operation *defOp, Value iterArg) {
+  return defOp && defOp->getNumOperands() >= 2 &&
+         (defOp->getOperand(0) == iterArg || defOp->getOperand(1) == iterArg);
+}
+
+/// Maps yield-defining binary arith op to `AtomicRMWKind` when it uses `iterArg` as one combine input.
+static std::optional<arith::AtomicRMWKind> matchYieldDefToReductionKind(Operation *defOp, Value iterArg) {
+  if (!binaryReductionUsesIterArg(defOp, iterArg)) return std::nullopt;
+
+  return llvm::TypeSwitch<Operation *, std::optional<arith::AtomicRMWKind>>(defOp)
+    .Case([](arith::AddFOp) { return arith::AtomicRMWKind::addf; })
+    .Case([](arith::MulFOp) { return arith::AtomicRMWKind::mulf; })
+    .Case([](arith::MaximumFOp) { return arith::AtomicRMWKind::maximumf; })
+    .Case([](arith::MinimumFOp) { return arith::AtomicRMWKind::minimumf; })
+    .Case([](arith::AddIOp) { return arith::AtomicRMWKind::addi; })
+    .Case([](arith::MulIOp) { return arith::AtomicRMWKind::muli; })
+    .Case([](arith::MaxSIOp) { return arith::AtomicRMWKind::maxs; })
+    .Case([](arith::MinSIOp) { return arith::AtomicRMWKind::mins; })
+    .Case([](arith::MaxUIOp) { return arith::AtomicRMWKind::maxu; })
+    .Case([](arith::MinUIOp) { return arith::AtomicRMWKind::minu; })
+    .Default([](Operation *) -> std::optional<arith::AtomicRMWKind> { return std::nullopt; });
+}
+
 static std::optional<arith::AtomicRMWKind> detectReductionKindForOperand(scf::ForOp loop, unsigned resultIndex) {
   if (loop.getInitArgs().empty()) {
     return std::nullopt;
@@ -382,38 +407,11 @@ static std::optional<arith::AtomicRMWKind> detectReductionKindForOperand(scf::Fo
 
   Value yieldValue = yieldOp.getOperand(resultIndex);
   Operation *defOp = yieldValue.getDefiningOp();
-
   if (!defOp) {
     return std::nullopt;
   }
 
-  Value iterArg = loop.getRegionIterArgs()[resultIndex];
-
-  if (auto addOp = dyn_cast<arith::AddFOp>(defOp)) {
-    if (addOp.getLhs() == iterArg || addOp.getRhs() == iterArg) {
-      return arith::AtomicRMWKind::addf;
-    }
-  }
-
-  if (auto mulOp = dyn_cast<arith::MulFOp>(defOp)) {
-    if (mulOp.getLhs() == iterArg || mulOp.getRhs() == iterArg) {
-      return arith::AtomicRMWKind::mulf;
-    }
-  }
-
-  if (auto maxOp = dyn_cast<arith::MaximumFOp>(defOp)) {
-    if (maxOp.getLhs() == iterArg || maxOp.getRhs() == iterArg) {
-      return arith::AtomicRMWKind::maximumf;
-    }
-  }
-
-  if (auto minOp = dyn_cast<arith::MinimumFOp>(defOp)) {
-    if (minOp.getLhs() == iterArg || minOp.getRhs() == iterArg) {
-      return arith::AtomicRMWKind::minimumf;
-    }
-  }
-
-  return std::nullopt;
+  return matchYieldDefToReductionKind(defOp, loop.getRegionIterArgs()[resultIndex]);
 }
 
 static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVectorizationCtx &ctx, Location loc) {
@@ -2408,6 +2406,18 @@ static Value combineReductionResults(OpBuilder &builder, Location loc, Value lhs
       return builder.create<arith::MaximumFOp>(loc, lhs, rhs);
     case arith::AtomicRMWKind::minimumf:
       return builder.create<arith::MinimumFOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::addi:
+      return builder.create<arith::AddIOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::muli:
+      return builder.create<arith::MulIOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::maxs:
+      return builder.create<arith::MaxSIOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::mins:
+      return builder.create<arith::MinSIOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::maxu:
+      return builder.create<arith::MaxUIOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::minu:
+      return builder.create<arith::MinUIOp>(loc, lhs, rhs);
     default:
       return lhs;
   }
@@ -2538,7 +2548,8 @@ static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationC
   Value scalarYieldValue = scalarYield.getOperand(resultIdx);
 
   if (auto defOp = scalarYieldValue.getDefiningOp()) {
-    if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp>(defOp)) {
+    if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
+           arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp)) {
       Value iterArg = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
       for (Value operand : defOp->getOperands()) {
         if (operand != iterArg) {
@@ -2700,7 +2711,8 @@ static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, L
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
   Value scalarYieldVal = scalarYield.getOperand(resultIdx);
   Operation *defOp = scalarYieldVal.getDefiningOp();
-  if (!defOp || !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp>(defOp))
+  if (!defOp || !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
+                     arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp))
     return mainReduced;
 
   Value iterArgN = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
@@ -2726,6 +2738,18 @@ static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, L
       return ctx.builder.create<arith::MaximumFOp>(loc, mainReduced, tailReduced);
     case arith::AtomicRMWKind::minimumf:
       return ctx.builder.create<arith::MinimumFOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::addi:
+      return ctx.builder.create<arith::AddIOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::muli:
+      return ctx.builder.create<arith::MulIOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::maxs:
+      return ctx.builder.create<arith::MaxSIOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::mins:
+      return ctx.builder.create<arith::MinSIOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::maxu:
+      return ctx.builder.create<arith::MaxUIOp>(loc, mainReduced, tailReduced);
+    case arith::AtomicRMWKind::minu:
+      return ctx.builder.create<arith::MinUIOp>(loc, mainReduced, tailReduced);
     default:
       return mainReduced;
     }
