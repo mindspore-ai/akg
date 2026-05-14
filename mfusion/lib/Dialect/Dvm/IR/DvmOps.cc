@@ -15,8 +15,9 @@
  */
 
 #include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
-#include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/OpImplementation.h"
+#include <optional>
 
 #define GET_OP_CLASSES
 #include "mfusion/Dialect/Dvm/IR/Dvm.cpp.inc"
@@ -26,6 +27,170 @@ using namespace mlir::dvm;
 
 static bool isSupportedDvmScalarConstantType(Type type) {
   return type.isF32() || type.isF16() || type.isBF16() || type.isInteger(32);
+}
+
+static bool isSupportedDvmScalarAttrType(Type type) { return isSupportedDvmScalarConstantType(type); }
+
+static ParseResult parseBinaryOpType(OpAsmParser &parser, OperationState &result) {
+  StringRef opTypeName;
+  if (parser.parseKeyword(&opTypeName)) {
+    return failure();
+  }
+  auto opType = symbolizeBinaryOpType(opTypeName);
+  if (!opType) {
+    return parser.emitError(parser.getNameLoc(), "unknown dvm binary op type: ") << opTypeName;
+  }
+  result.addAttribute("op_type", BinaryOpTypeAttr::get(parser.getContext(), *opType));
+  return success();
+}
+
+struct ParsedScalarLiteral {
+  std::optional<APInt> intValue;
+  std::optional<APFloat> floatValue;
+};
+
+static ParseResult parseScalarLiteral(OpAsmParser &parser, ParsedScalarLiteral &literal) {
+  APInt intValue;
+  OptionalParseResult intParseResult = parser.parseOptionalInteger(intValue);
+  if (intParseResult.has_value()) {
+    if (failed(intParseResult.value())) {
+      return failure();
+    }
+    literal.intValue = intValue;
+    return success();
+  }
+
+  APFloat floatValue(APFloat::IEEEdouble());
+  if (parser.parseFloat(APFloat::IEEEdouble(), floatValue)) {
+    return failure();
+  }
+  literal.floatValue = floatValue;
+  return success();
+}
+
+static FailureOr<TypedAttr> buildScalarAttrFromLiteral(OpAsmParser &parser, const ParsedScalarLiteral &literal,
+                                                       Type type) {
+  if (auto intType = dyn_cast<IntegerType>(type)) {
+    if (!literal.intValue) {
+      return parser.emitError(parser.getNameLoc(), "dvm.binary_scalar integer scalar requires an integer literal");
+    }
+    APInt value = literal.intValue->sextOrTrunc(intType.getWidth());
+    return cast<TypedAttr>(IntegerAttr::get(intType, value));
+  }
+
+  auto floatType = dyn_cast<FloatType>(type);
+  if (!floatType) {
+    return parser.emitError(parser.getNameLoc(), "dvm.binary_scalar unsupported scalar type: ") << type;
+  }
+  if (!literal.floatValue) {
+    return parser.emitError(parser.getNameLoc(), "dvm.binary_scalar floating scalar requires a float literal");
+  }
+
+  APFloat value = *literal.floatValue;
+  bool losesInfo = false;
+  value.convert(floatType.getFloatSemantics(), APFloat::rmNearestTiesToEven, &losesInfo);
+  return cast<TypedAttr>(FloatAttr::get(floatType, value));
+}
+
+static Type getElementType(Type type) {
+  if (auto shapedType = dyn_cast<ShapedType>(type)) {
+    return shapedType.getElementType();
+  }
+  return {};
+}
+
+LogicalResult BinaryOp::verify() {
+  auto lhsElementType = getElementType(getLhs().getType());
+  auto rhsElementType = getElementType(getRhs().getType());
+  if (lhsElementType && rhsElementType && lhsElementType != rhsElementType) {
+    return emitError("dvm.binary operands must have the same element type, got ")
+           << lhsElementType << " vs " << rhsElementType;
+  }
+  return success();
+}
+
+LogicalResult BinaryScalarOp::verify() {
+  auto scalarType = getScalarAttr().getType();
+  if (!isSupportedDvmScalarAttrType(scalarType)) {
+    return emitError("dvm.binary_scalar unsupported scalar type: ")
+           << scalarType << "; supported types are f32, f16, bf16, i32";
+  }
+  return success();
+}
+
+ParseResult BinaryScalarOp::parse(OpAsmParser &parser, OperationState &result) {
+  if (parseBinaryOpType(parser, result)) {
+    return failure();
+  }
+
+  OpAsmParser::UnresolvedOperand inputOperand;
+  ParsedScalarLiteral scalarLiteral;
+  bool scalarOnLhs = false;
+
+  OptionalParseResult inputParseResult = parser.parseOptionalOperand(inputOperand);
+  if (inputParseResult.has_value()) {
+    if (failed(inputParseResult.value())) {
+      return failure();
+    }
+    scalarOnLhs = false;
+    if (parser.parseComma() || parseScalarLiteral(parser, scalarLiteral)) {
+      return failure();
+    }
+  } else {
+    scalarOnLhs = true;
+    if (parseScalarLiteral(parser, scalarLiteral) || parser.parseComma() || parser.parseOperand(inputOperand)) {
+      return failure();
+    }
+  }
+
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+
+  Type firstType;
+  Type secondType;
+  Type resultType;
+  if (parser.parseColon() || parser.parseType(firstType) || parser.parseComma() || parser.parseType(secondType) ||
+      parser.parseArrow() || parser.parseType(resultType)) {
+    return failure();
+  }
+
+  Type inputType = scalarOnLhs ? secondType : firstType;
+  Type scalarType = scalarOnLhs ? firstType : secondType;
+  if (!isa<RankedTensorType>(inputType)) {
+    return parser.emitError(parser.getNameLoc(), "dvm.binary_scalar tensor operand must have ranked tensor type");
+  }
+
+  auto typedScalarAttr = buildScalarAttrFromLiteral(parser, scalarLiteral, scalarType);
+  if (failed(typedScalarAttr)) {
+    return failure();
+  }
+
+  result.addAttribute("scalar", *typedScalarAttr);
+  result.addAttribute("scalar_on_lhs", BoolAttr::get(parser.getContext(), scalarOnLhs));
+  if (parser.resolveOperand(inputOperand, inputType, result.operands)) {
+    return failure();
+  }
+  result.addTypes(resultType);
+  return success();
+}
+
+void BinaryScalarOp::print(OpAsmPrinter &printer) {
+  printer << " " << stringifyBinaryOpType(getOpType()) << " ";
+  auto scalarType = getScalarAttr().getType();
+  auto inputType = getInput().getType();
+  if (getScalarOnLhs()) {
+    printer.printAttributeWithoutType(getScalarAttr());
+    printer << ", " << getInput();
+    printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"op_type", "scalar", "scalar_on_lhs"});
+    printer << " : " << scalarType << ", " << inputType << " -> " << getResult().getType();
+    return;
+  }
+
+  printer << getInput() << ", ";
+  printer.printAttributeWithoutType(getScalarAttr());
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"op_type", "scalar", "scalar_on_lhs"});
+  printer << " : " << inputType << ", " << scalarType << " -> " << getResult().getType();
 }
 
 // Verify that dvm.constant matches the scalar types supported by dvm.h scalar

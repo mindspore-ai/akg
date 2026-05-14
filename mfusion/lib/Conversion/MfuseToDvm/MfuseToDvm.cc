@@ -41,23 +41,6 @@ namespace {
 // Macros for generating conversion patterns
 //===----------------------------------------------------------------------===//
 
-// Macro for binary operations: MfuseOp -> dvm::BinaryOp
-// Uses getOperands() to handle different operand names (x/y vs lhs/rhs)
-#define CONVERT_BINARY_OP(MfuseOp, DvmOpType)                                                                   \
-  struct Convert##MfuseOp : public OpConversionPattern<mfuse::MfuseOp> {                                        \
-    using OpConversionPattern::OpConversionPattern;                                                             \
-    LogicalResult matchAndRewrite(mfuse::MfuseOp op, OpAdaptor adaptor,                                         \
-                                  ConversionPatternRewriter &rewriter) const override {                         \
-      if (!isDvmOutlinedOp(op.getOperation())) {                                                                \
-        return failure();                                                                                       \
-      }                                                                                                         \
-      auto operands = adaptor.getOperands();                                                                    \
-      auto attr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::DvmOpType);                       \
-      rewriter.replaceOpWithNewOp<dvm::BinaryOp>(op, op.getResult().getType(), attr, operands[0], operands[1]); \
-      return success();                                                                                         \
-    }                                                                                                           \
-  };
-
 // Macro for unary operations: MfuseOp -> dvm::UnaryOp
 // Uses getOperands() to handle different operand names
 #define CONVERT_UNARY_OP(MfuseOp, DvmOpType)                                                      \
@@ -88,24 +71,41 @@ static bool isDvmOutlinedOp(Operation *op) {
   return func && isDvmOutlinedFunc(func);
 }
 
-struct NormalizedDvmScalarConstant {
-  RankedTensorType type;
-  DenseElementsAttr value;
-};
-
 static bool hasScalarMarker(RankedTensorType type) {
   auto dictAttr = llvm::dyn_cast_or_null<DictionaryAttr>(type.getEncoding());
   return dictAttr && dictAttr.contains(mfuse::kScalarMarkerAttr);
 }
 
-static DenseElementsAttr reshapeWithoutEncoding(DenseElementsAttr denseAttr, Type elementType) {
-  auto oldType = denseAttr.getType();
-  auto newDenseType = RankedTensorType::get(oldType.getShape(), elementType);
-  return denseAttr.reshape(newDenseType);
+static TypedAttr getZeroScalarAttr(Type elementType, OpBuilder &builder) {
+  if (mlir::isa<FloatType>(elementType)) {
+    return cast<TypedAttr>(builder.getFloatAttr(elementType, 0.0));
+  }
+  if (auto intType = mlir::dyn_cast<IntegerType>(elementType); intType && intType.getWidth() == 32) {
+    return cast<TypedAttr>(builder.getIntegerAttr(elementType, 0));
+  }
+  return {};
 }
 
-static FailureOr<NormalizedDvmScalarConstant> normalizeScalarConstantForDvm(mfuse::ConstantOp op,
-                                                                            RankedTensorType rankedType) {
+static FailureOr<TypedAttr> extractTypedScalarAttr(DenseElementsAttr denseAttr, Type elementType, Location loc) {
+  if (denseAttr.getElementType() != elementType) {
+    return emitError(loc, "DVM scalar constant value element type ")
+           << denseAttr.getElementType() << " does not match result element type " << elementType;
+  }
+
+  if (auto intType = dyn_cast<IntegerType>(elementType)) {
+    auto value = (*denseAttr.getValues<APInt>().begin());
+    return cast<TypedAttr>(IntegerAttr::get(intType, value));
+  }
+
+  if (auto floatType = dyn_cast<FloatType>(elementType)) {
+    APFloat value = (*denseAttr.getValues<APFloat>().begin());
+    return cast<TypedAttr>(FloatAttr::get(floatType, value));
+  }
+
+  return emitError(loc, "unsupported DVM scalar constant element type: ") << elementType;
+}
+
+static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, RankedTensorType rankedType) {
   auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(op.getValue());
   if (!denseAttr) {
     return op->emitError("DVM scalar constant must be a DenseElementsAttr");
@@ -117,28 +117,23 @@ static FailureOr<NormalizedDvmScalarConstant> normalizeScalarConstantForDvm(mfus
   }
 
   auto elementType = rankedType.getElementType();
-  auto scalarShape = rankedType.getShape();
 
-  // DVM scalar constants are lowered to runtime scalar APIs such as
-  // Kernel::Broadcast(T, ...), then consumed by Binary/Full-like kernels. The
-  // checked runtime header supports float, int32_t, Float16 and BFloat16
-  // scalars there; double, int64_t and bool scalar constants are not supported.
+  // DVM binary scalar APIs support float, int32_t, Float16 and BFloat16.
+  // double, int64_t and bool constants are not supported directly.
   if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32)) {
-    auto newType = RankedTensorType::get(scalarShape, elementType);
-    return NormalizedDvmScalarConstant{newType, reshapeWithoutEncoding(denseAttr, elementType)};
+    auto scalarAttr = extractTypedScalarAttr(denseAttr, elementType, op.getLoc());
+    if (failed(scalarAttr)) return failure();
+    return *scalarAttr;
   }
 
   if (elementType.isF64()) {
     double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
     if (!std::isfinite(value) || value < -kMaxFloat || value > kMaxFloat) {
-      return op->emitError(
-        "cannot convert f64 scalar constant to f32 for DVM: value is not finite or is out of range");
+      return op->emitError("cannot convert f64 scalar constant to f32 for DVM: value is not finite or is out of range");
     }
     auto f32Type = Float32Type::get(op.getContext());
-    auto newType = RankedTensorType::get(scalarShape, f32Type);
-    auto newValue = DenseElementsAttr::get(newType, static_cast<float>(value));
-    return NormalizedDvmScalarConstant{newType, newValue};
+    return cast<TypedAttr>(FloatAttr::get(f32Type, static_cast<float>(value)));
   }
 
   if (elementType.isInteger(64)) {
@@ -147,29 +142,75 @@ static FailureOr<NormalizedDvmScalarConstant> normalizeScalarConstantForDvm(mfus
       return op->emitError("cannot convert i64 scalar constant to i32 for DVM: value is out of range");
     }
     auto i32Type = IntegerType::get(op.getContext(), 32);
-    auto newType = RankedTensorType::get(scalarShape, i32Type);
-    auto newValue = DenseElementsAttr::get(newType, static_cast<int32_t>(value));
-    return NormalizedDvmScalarConstant{newType, newValue};
+    return cast<TypedAttr>(IntegerAttr::get(i32Type, static_cast<int32_t>(value)));
   }
 
   return op->emitError("unsupported DVM scalar constant element type: ") << elementType;
 }
 
-struct ConvertMulOp : public OpConversionPattern<mfuse::MulOp> {
-  using OpConversionPattern::OpConversionPattern;
+static mfuse::ConstantOp getScalarConstant(Value value) {
+  auto constantOp = value.getDefiningOp<mfuse::ConstantOp>();
+  if (!constantOp) {
+    return nullptr;
+  }
+  auto rankedType = dyn_cast<RankedTensorType>(constantOp.getResult().getType());
+  if (!rankedType || !hasScalarMarker(rankedType)) {
+    return nullptr;
+  }
+  return constantOp;
+}
 
-  LogicalResult matchAndRewrite(mfuse::MulOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (!isDvmOutlinedOp(op.getOperation())) {
-      return failure();
+static LogicalResult convertBinaryOp(Operation *op, ValueRange originalOperands, ValueRange adaptorOperands,
+                                     Type resultType, dvm::BinaryOpType dvmOpType,
+                                     ConversionPatternRewriter &rewriter) {
+  if (!isDvmOutlinedOp(op)) {
+    return failure();
+  }
+
+  if (originalOperands.size() != 2 || adaptorOperands.size() != 2) {
+    return op->emitError("DVM binary conversion expects exactly two operands");
+  }
+
+  auto lhsScalar = getScalarConstant(originalOperands[0]);
+  auto rhsScalar = getScalarConstant(originalOperands[1]);
+  auto attr = dvm::BinaryOpTypeAttr::get(op->getContext(), dvmOpType);
+
+  if (lhsScalar && rhsScalar) {
+    return op->emitError("DVM binary scalar conversion does not support scalar-scalar operands");
+  }
+
+  if (lhsScalar || rhsScalar) {
+    auto scalarOp = lhsScalar ? lhsScalar : rhsScalar;
+    auto rankedType = cast<RankedTensorType>(scalarOp.getResult().getType());
+    auto normalized = normalizeScalarConstantForDvm(scalarOp, rankedType);
+    if (failed(normalized)) return failure();
+
+    bool scalarOnLhs = static_cast<bool>(lhsScalar);
+    Value tensorOperand = lhsScalar ? adaptorOperands[1] : adaptorOperands[0];
+    rewriter.replaceOpWithNewOp<dvm::BinaryScalarOp>(op, resultType, attr, tensorOperand, *normalized, scalarOnLhs);
+    if (scalarOp.getResult().use_empty()) {
+      rewriter.eraseOp(scalarOp);
     }
-    auto attr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::Mul);
-    rewriter.replaceOpWithNewOp<dvm::BinaryOp>(op, op.getResult().getType(), attr, adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
-};
+
+  rewriter.replaceOpWithNewOp<dvm::BinaryOp>(op, resultType, attr, adaptorOperands[0], adaptorOperands[1]);
+  return success();
+}
+
+// Macro for binary operations: MfuseOp -> dvm::BinaryOp or dvm::BinaryScalarOp.
+#define CONVERT_BINARY_OP(MfuseOp, DvmOpType)                                                                       \
+  struct Convert##MfuseOp : public OpConversionPattern<mfuse::MfuseOp> {                                            \
+    using OpConversionPattern::OpConversionPattern;                                                                 \
+    LogicalResult matchAndRewrite(mfuse::MfuseOp op, OpAdaptor adaptor,                                             \
+                                  ConversionPatternRewriter &rewriter) const override {                             \
+      return convertBinaryOp(op.getOperation(), op->getOperands(), adaptor.getOperands(), op.getResult().getType(), \
+                             dvm::BinaryOpType::DvmOpType, rewriter);                                               \
+    }                                                                                                               \
+  };
 
 // Binary operations generated by macro
+CONVERT_BINARY_OP(MulOp, Mul)
 CONVERT_BINARY_OP(AddOp, Add)
 CONVERT_BINARY_OP(SubOp, Sub)
 CONVERT_BINARY_OP(DivOp, Div)
@@ -214,27 +255,14 @@ struct ConvertNegOp : public OpConversionPattern<mfuse::NegOp> {
     auto elementType = inputType.getElementType();
     auto resultType = op.getResult().getType();
 
-    // Create constant 0 tensor
-    Attribute constantAttr;
-    if (mlir::isa<FloatType>(elementType)) {
-      constantAttr = rewriter.getFloatAttr(elementType, 0.0);
-    } else if (mlir::isa<IntegerType>(elementType)) {
-      constantAttr = rewriter.getIntegerAttr(elementType, 0);
-    } else {
-      return failure();
+    auto zeroAttr = getZeroScalarAttr(elementType, rewriter);
+    if (!zeroAttr) {
+      return op->emitError("unsupported DVM scalar zero element type: ") << elementType;
     }
 
-    // Create dense elements attribute with 0 value (scalar shape)
-    std::vector<int64_t> scalarShape;
-    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(scalarShape, elementType), constantAttr);
-
-    // Create dvm.constant for the 0 scalar
-    auto constantOp =
-      rewriter.create<dvm::ConstantOp>(op.getLoc(), RankedTensorType::get(scalarShape, elementType), denseAttr);
-
-    // Create dvm.binary Sub: 0 - x
     auto subAttr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::Sub);
-    rewriter.replaceOpWithNewOp<dvm::BinaryOp>(op, resultType, subAttr, constantOp.getResult(), input);
+    rewriter.replaceOpWithNewOp<dvm::BinaryScalarOp>(op, resultType, subAttr, input, zeroAttr,
+                                                     /*scalarOnLhs=*/true);
     return success();
   }
 };
@@ -367,26 +395,14 @@ struct ConvertReluOp : public OpConversionPattern<mfuse::ReluOp> {
     auto elementType = inputType.getElementType();
     auto resultType = op.getResult().getType();
 
-    // Create constant 0 tensor
-    Attribute constantAttr;
-    if (mlir::isa<FloatType>(elementType)) {
-      constantAttr = rewriter.getFloatAttr(elementType, 0.0);
-    } else if (mlir::isa<IntegerType>(elementType)) {
-      constantAttr = rewriter.getIntegerAttr(elementType, 0);
-    } else {
-      return failure();
+    auto zeroAttr = getZeroScalarAttr(elementType, rewriter);
+    if (!zeroAttr) {
+      return op->emitError("unsupported DVM scalar zero element type: ") << elementType;
     }
 
-    // Create dense elements attribute with 0 value (scalar shape)
-    std::vector<int64_t> scalarShape;
-    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(scalarShape, elementType), constantAttr);
-
-    auto constantOp =
-      rewriter.create<dvm::ConstantOp>(op.getLoc(), RankedTensorType::get(scalarShape, elementType), denseAttr);
-
-    // Create dvm.binary Maximum: max(x, 0)
     auto maxAttr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::Maximum);
-    rewriter.replaceOpWithNewOp<dvm::BinaryOp>(op, resultType, maxAttr, input, constantOp.getResult());
+    rewriter.replaceOpWithNewOp<dvm::BinaryScalarOp>(op, resultType, maxAttr, input, zeroAttr,
+                                                     /*scalarOnLhs=*/false);
     return success();
   }
 };
@@ -470,43 +486,6 @@ struct ConvertGroupedMatmulOp : public OpConversionPattern<mfuse::GroupedMatmulO
   }
 };
 
-// Convert mfuse::ConstantOp (scalar only) to dvm::ConstantOp
-// Only supports scalar constants (is_scalar=true). Non-scalar constants are not supported.
-struct ConvertConstantOp : public OpConversionPattern<mfuse::ConstantOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(mfuse::ConstantOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (!isDvmOutlinedOp(op.getOperation())) {
-      return failure();
-    }
-    // Check if this is a scalar constant by examining the tensor encoding
-    auto resultType = op.getResult().getType();
-    auto rankedType = llvm::dyn_cast<RankedTensorType>(resultType);
-    if (!rankedType) {
-      return failure();
-    }
-
-    if (!hasScalarMarker(rankedType)) {
-      return op->emitError(
-        "non-scalar constant is not supported in DVM conversion, "
-        "only scalar constants (is_scalar=true) are supported");
-    }
-
-    auto normalized = normalizeScalarConstantForDvm(op, rankedType);
-    if (failed(normalized)) return failure();
-
-    auto constOp = rewriter.create<dvm::ConstantOp>(op.getLoc(), normalized->type, normalized->value);
-
-    // Replace all uses of mfuse::ConstantOp result with dvm::ConstantOp result
-    rewriter.replaceAllUsesWith(op.getResult(), constOp.getResult());
-
-    // Erase the original mfuse::ConstantOp
-    rewriter.eraseOp(op.getOperation());
-    return success();
-  }
-};
-
 static void insertLoadStoreOps(ModuleOp module) {
   for (auto func : module.getOps<func::FuncOp>()) {
     if (func.isExternal()) continue;
@@ -534,6 +513,46 @@ static void insertLoadStoreOps(ModuleOp module) {
       }
     });
   }
+}
+
+static LogicalResult cleanupAndVerifyScalarConstants(ModuleOp module) {
+  SmallVector<mfuse::ConstantOp> constantsToErase;
+
+  for (auto func : module.getOps<func::FuncOp>()) {
+    if (func.isExternal() || !isDvmOutlinedFunc(func)) {
+      continue;
+    }
+
+    auto walkResult = func.walk([&](mfuse::ConstantOp op) {
+      auto rankedType = dyn_cast<RankedTensorType>(op.getResult().getType());
+      if (!rankedType || !hasScalarMarker(rankedType)) {
+        op.emitError("non-scalar constant is not supported in DVM conversion, "
+                     "only scalar constants (is_scalar=true) are supported");
+        return WalkResult::interrupt();
+      }
+
+      if (!op.getResult().use_empty()) {
+        Operation *user = *op.getResult().user_begin();
+        user->emitError()
+          << user->getName()
+          << " does not support scalar constants yet; add scalar lowering support instead of using a rank-0 tensor "
+             "constant";
+        return WalkResult::interrupt();
+      }
+
+      constantsToErase.push_back(op);
+      return WalkResult::advance();
+    });
+
+    if (walkResult.wasInterrupted()) {
+      return failure();
+    }
+  }
+
+  for (mfuse::ConstantOp op : constantsToErase) {
+    op.erase();
+  }
+  return success();
 }
 
 }  // namespace
@@ -651,9 +670,10 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
       [](mlir::mfuse::BatchMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
 
-    // Constant op - convert to arith.constant for inlining
-    target.addDynamicallyLegalOp<mlir::mfuse::ConstantOp>(
-      [](mlir::mfuse::ConstantOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+    // Do not mark mfuse.constant dynamically illegal here. Scalar constants are
+    // allowed to remain as temporary producers during conversion so binary
+    // patterns can inline them into dvm.binary_scalar. A post-conversion cleanup
+    // verifies that no mfuse.constant escapes into final DVM IR.
 
     // Operations not supported by DVM - mark as illegal in dvm outlined functions
     // target.addIllegalOp<mlir::mfuse::Conv2DOp>();
@@ -708,11 +728,16 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     // ConvertGroupedMatmulOp is intentionally not registered. See the dynamic
     // legality note above: converting list-typed mfuse.grouped_matmul operands
     // directly to dvm.grouped_matmul would create invalid DVM IR.
-    //patterns.add<ConvertGroupedMatmulOp>(ctx);
-    patterns.add<ConvertConstantOp>(ctx);
+    // patterns.add<ConvertGroupedMatmulOp>(ctx);
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
       signalPassFailure();
+      return;
+    }
+
+    if (failed(cleanupAndVerifyScalarConstants(module))) {
+      signalPassFailure();
+      return;
     }
   }
 };
