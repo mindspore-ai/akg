@@ -15,6 +15,20 @@ func.func @test_full_f32_can_cluster(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> 
   return %1 : tensor<4x4xf32>
 }
 
+// CHECK-LABEL: func.func @test_full_bool_can_cluster
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"}
+// CHECK: ^bb0(%[[ARG2:.*]]: tensor<4x4xf32>, %[[ARG3:.*]]: tensor<4x4xf32>):
+// CHECK: %[[CST:.*]] = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
+// CHECK: %[[FULL:.*]] = mfuse.full %[[CST]] : (tensor<i1, {is_scalar = ""}>) -> tensor<4x4xi1>
+// CHECK: %[[SELECT:.*]] = mfuse.select %[[FULL]], %[[ARG2]], %[[ARG3]] : (tensor<4x4xi1>, tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[SELECT]] : tensor<4x4xf32>
+func.func @test_full_bool_can_cluster(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %cst = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
+  %0 = mfuse.full %cst : (tensor<i1, {is_scalar = ""}>) -> tensor<4x4xi1>
+  %1 = mfuse.select %0, %arg0, %arg1 : (tensor<4x4xi1>, tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  return %1 : tensor<4x4xf32>
+}
+
 // CHECK-LABEL: func.func @test_full_i64_cannot_cluster
 // CHECK-NOT: mfuse.fused
 // CHECK: %[[CST:.*]] = mfuse.constant dense<7.000000e+00> : tensor<f64, {is_scalar = ""}>

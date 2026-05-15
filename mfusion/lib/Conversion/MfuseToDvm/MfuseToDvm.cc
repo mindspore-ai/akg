@@ -156,9 +156,9 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp 
 
 static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, RankedTensorType rankedType) {
   // DVM binary scalar APIs support float, int32_t, Float16 and BFloat16.
-  // double and int64_t are normalized to f32/i32 when safe; bool is not
-  // supported by the binary scalar ABI.
-  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/false, "DVM");
+  // double, int64_t and bool are normalized to f32/i32 when safe before
+  // entering the DVM scalar ABI.
+  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/true, "DVM");
 }
 
 static FailureOr<dvm::DType> getDvmBroadcastDType(Type elementType, Location loc) {
