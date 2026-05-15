@@ -1,3 +1,7 @@
+# Local config (contains API keys)
+.akg/settings.local.json
+.akg/settings.*.json
+
 # MindSpore
 build/
 mindspore/lib
@@ -33,6 +37,7 @@ cmake-build-debug
 # Editor
 .vscode
 .idea/
+.claude/
 
 # Cquery
 .cquery_cached_index/
@@ -51,6 +56,7 @@ cscope.*
 # Python files
 *__pycache__*
 .pytest_cache
+*.egg-info
 
 # Mac files
 *.DS_Store
@@ -68,3 +74,12 @@ test_temp_summary_event_file/
 .clangd
 mindspore/version.py
 mindspore/default_config.py
+
+#azy
+.claude/
+azy/
+
+# autoresearch scratch artefacts (kept under .akg/)
+.akg/reference.py
+.akg/*_kernel.py
+.akg/*_ref.py
