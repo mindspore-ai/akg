@@ -9,8 +9,8 @@ module {
 // CHECK: %[[ADD:.*]] = mfuse.add %[[ARG1]], %[[FULL]] : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
 // CHECK: mfuse.yield %[[ADD]] : tensor<4x4xf32>
 func.func @test_full_f32_can_cluster(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
-  %cst = mfuse.constant dense<1.0> : tensor<f32, {is_scalar = ""}>
-  %0 = mfuse.full %cst : (tensor<f32, {is_scalar = ""}>) -> tensor<4x4xf32>
+  %cst = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.full %cst : (tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
   %1 = mfuse.add %arg0, %0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
   return %1 : tensor<4x4xf32>
 }

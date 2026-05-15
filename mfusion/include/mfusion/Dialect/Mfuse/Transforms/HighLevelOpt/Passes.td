@@ -50,4 +50,15 @@ def RaiseReductionPrecisionPass : Pass<"mfuse-raise-reduction-precision", "::mli
   let constructor = "mlir::mfuse::createRaiseReductionPrecisionPass()";
 }
 
+
+def PromoteBinaryOpsPass : Pass<"mfuse-promote-binary-ops", "::mlir::ModuleOp"> {
+  let summary = "Promote binary operations to ensure consistent input types";
+  let description = [{
+    This pass ensures that binary operations have consistent input types:
+    - For arithmetic operations (Add, Sub, Mul, Div, etc.), inputs are promoted to match the result type
+    - For comparison operations (Eq, Ne, Gt, Ge, Lt, Le, etc.), inputs are promoted to the same type
+  }];
+  let constructor = "mlir::mfuse::createPromoteBinaryOpsPass()";
+}
+
 #endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_HIGH_LEVEL_OPT_PASSES_TD
