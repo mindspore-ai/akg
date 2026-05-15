@@ -20,7 +20,7 @@ module {
 
 // CHECK-LABEL: func.func @gap_head
 // CHECK-NOT: torch.aten.mean.dim
-// CHECK-DAG: torch.constant.float 4.900000e+01
+// CHECK-DAG: torch.constant.int 49
 // CHECK-DAG: torch.prims.convert_element_type
 // CHECK-DAG: torch.aten.sum.dim_IntList
 // CHECK-DAG: torch.aten.div.Scalar

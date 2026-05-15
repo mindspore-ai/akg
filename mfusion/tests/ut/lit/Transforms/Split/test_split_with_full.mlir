@@ -13,8 +13,8 @@ module {
 func.func @test_split_with_full(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4x4xf32>) -> tensor<4x4xf32> {
   ^bb0(%arg1: tensor<4x4xf32>):
-    %cst = mfuse.constant dense<1.0> : tensor<f32, {is_scalar = ""}>
-    %1 = mfuse.full %cst : (tensor<f32, {is_scalar = ""}>) -> tensor<4x4xf32>
+    %cst = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+    %1 = mfuse.full %cst : (tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
     %2 = mfuse.add %arg1, %1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
     mfuse.yield %2 : tensor<4x4xf32>
   }
