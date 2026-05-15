@@ -239,15 +239,16 @@ logical output dtype 由 `type` attribute 表达，来自 result tensor element 
 conversion 会做 DVM ABI 归一化：
 
 - `f32`、`f16`、`bf16`、`i32`：直接提取为同类型 `TypedAttr`。
-- `i1`：仅在 broadcast scalar 路径允许，转换成 `i32` 的 `0/1`（和 dvm 开源项目中 `dvm/include/dvm_py.h::Full` 的实现对齐）。
+- `i1`：转换成 `i32` 的 `0/1`。这和 DVM Python API (dvm_py.h) 中 Python bool 通过 int 路径进入 C++ scalar ABI 的行为一致。
 - `f64`：仅当值有限且可表示为 `f32` 时，转换成 `f32`。
 - `i64`：仅当值位于 `i32` 范围内时，转换成 `i32`。
 - 其它类型：报错。
 
-这部分逻辑和 binary scalar normalization 共享底层 helper，但有一个关键差异：
+这部分逻辑和 binary scalar normalization 共享底层 helper。共享规则是：
 
-- `dvm.binary_scalar` 不支持 bool scalar。
-- `dvm.broadcast_scalar` 支持 bool fill value，并按 `dvm_py.h::Full` 的行为转换成 `i32 0/1`。
+- `dvm.binary_scalar` 和 `dvm.broadcast_scalar` 都不直接接受 `i1` scalar attribute。
+- mfuse-to-dvm 可以接受上游 `i1` scalar constant，但必须先转换成 `i32 0/1`，再作为 DVM scalar op 支持的 scalar attr 使用。
+- `dvm.broadcast_scalar` 额外支持 bool result dtype。float 或 int scalar constant 仍按自身 scalar 类型归一化，再由 `type Bool` 指定输出 dtype。
 
 共享 helper 可以避免 f64/i64 降级逻辑在不同 scalar consumer 之间分叉，同时保留各自 ABI 的差异。
 
@@ -337,7 +338,7 @@ scalar constant 应进入 op-specific scalar attribute，而不是退化成 rank
 
 - `dvm.binary_scalar` 需要保留 scalar 在 lhs/rhs 中的逻辑顺序。
 - `dvm.broadcast_scalar` 没有 lhs/rhs 顺序问题，但需要同时表达 shape 和 logical output dtype。
-- `dvm.binary_scalar` 不支持 bool scalar。
-- `dvm.broadcast_scalar` 支持 bool fill value，并归一化为 `i32 0/1`。
+- 两者的 scalar attribute 都不直接支持 `i1`；上游 `i1` scalar constant 会在 mfuse-to-dvm 中先归一化为 `i32 0/1`。
+- `dvm.broadcast_scalar` 支持 bool result dtype，并允许 `f32`、`f16`、`bf16`、`i32` scalar value 与 `type Bool` 组合。
 
 后续如果继续扩展 DVM scalar consumer，应优先复用这两个设计经验：显式 scalar op、scalar attr 内联、logical dtype 分离、conversion 末尾清理残留 scalar constant。
