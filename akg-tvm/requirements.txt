@@ -1,6 +1,0 @@
-numpy >= 1.17.0
-scipy >= 1.5.4
-decorator >= 4.4.0
-pytest >= 5.4.3
-xgboost >= 0.9     # for auto-tuning
-pandas >= 1.0.2    # for st test

@@ -1,0 +1,227 @@
+[English Version](./README.md)
+
+<div align="center">
+
+# AKG Agents
+
+</div>
+
+<details>
+<summary><b>📋 目录</b></summary>
+
+- [AKG Agents](#akg-agents)
+  - [📘 1. 项目简介](#-1-项目简介)
+  - [🗓️ 2. 更新日志](#️-2-更新日志)
+  - [🛠️ 3. 快速上手](#️-3-快速上手)
+    - [安装](#安装)
+    - [配置 LLM](#配置-llm)
+    - [后端依赖](#后端依赖)
+    - [启动与使用](#启动与使用)
+  - [▶️ 4. 教程示例](#️-4-教程示例)
+  - [📐 5. 设计文档](#-5-设计文档)
+    - [核心框架](#核心框架)
+    - [场景](#场景)
+    - [OpenCode 集成](#opencode-集成)
+    - [贡献](#贡献)
+    - [其他模块（v1 文档）](#其他模块v1-文档)
+
+</details>
+
+## 📘 1. 项目简介
+**AKG Agents** 是一个面向 AI Infra 与高性能计算场景的 LLM 多 Agent 协作框架，致力于通过智能 Agent 协同提升高性能代码的开发与优化效率。
+
+框架提供完整的 Agent 基础设施：包括 ReAct Agent 基类、可扩展的 **Skill / Tools / SubAgent** 机制、LangGraph 工作流编排、树状 Trace 追踪系统，以及统一的配置与注册体系。开发者可以基于这些能力快速构建、组合和部署面向不同任务的智能 Agent。
+
+当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
+
+## 🗓️ 2. 更新日志
+- 2026-04-28：CLI 模块（`akg_cli`）已废弃，停止后续演进。
+- 2026-03-31：新增 [AutoResearch](./docs/v2/CN/AutoResearch.md) 工作流 — Agent 驱动的多轮自主迭代深度优化，基于 KernelVerifier 评测，支持所有 DSL。
+- 2026-03-11：打通集成 AKG Agents 和 OpenCode 的算子优化流程（[akg-op](./docs/v2/CN/AKG-Op.md) Agent）。
+- 2026-02-26：支持 PyPTO 后端代码生成能力。
+- 2026-02-15：AKG Agents 文档整改。老文档归档至 `docs/v1/`，重构后的新文档统一至 `docs/v2/`。
+- 2026-02-10：核心框架重构（v2）。将通用 Agent 能力与算子场景解耦，构建可复用的多 Agent 协作框架。详见 [框架架构](./docs/v2/CN/Architecture.md)、[Agent 体系](./docs/v2/CN/AgentSystem.md)、[Skill 系统](./docs/v2/CN/SkillSystem.md)、[工作流](./docs/v2/CN/Workflow.md)、[Trace 系统](./docs/v2/CN/Trace.md)、[配置系统](./docs/v2/CN/Configuration.md)。
+- 2025-12-01：引入 LangGraph 重构任务调度系统，新增 `LangGraphTask` 替代原 `Task 任务编排` 方案。详见《[Workflow 文档](./docs/v2/CN/Workflow.md)》。
+- 2025-11-25：支持服务化架构，支持`client-server-worker`分离架构，详见《[服务化架构文档](./docs/v1/CN/ServerArchitecture.md)》。
+- 2025-10-14：支持 TileLang_CUDA 后端代码生成能力。详见《[基准测试结果](./docs/v1/CN/DSLBenchmarkResults202509.md)》。
+- 2025-09-26：支持 CUDA C 与 CPP 后端代码生成能力。详见《[基准测试结果](./docs/v1/CN/DSLBenchmarkResults202509.md)》。
+- 2025-09-14：KernelBench Level1 算子生成成功率更新，详见《[基准测试结果](./docs/v1/CN/BenchmarkResults202509.md)》。
+- 2025-08-12：支持"文档驱动式接入"功能（已被 [Skill System](./docs/v2/CN/SkillSystem.md) 替代）。
+- 2025-06-27：AIKG 初始版本，支持 Triton 与 SWFT 后端代码生成能力。
+
+
+## 🛠️ 3. 快速上手
+
+### 安装
+```bash
+# 1. 环境设置（可选，推荐 Python 3.10/3.11/3.12）
+conda create -n akg_agents python=3.11
+conda activate akg_agents
+
+# 2. 克隆仓库
+git clone https://gitcode.com/mindspore/akg.git -b br_agents
+cd akg
+
+# 3. 安装依赖
+pip install -r akg_agents/requirements.txt
+
+# 4. 安装 AKG Agents
+pip install -e ./akg_agents --no-build-isolation
+
+# 5. 按需下载第三方 benchmark
+bash akg_agents/download.sh --with_all_benchmarks
+```
+
+### 配置 LLM
+
+将示例配置复制到 `~/.akg/settings.json`，填入你的 API Key 和模型信息：
+
+```bash
+mkdir -p ~/.akg
+cp akg_agents/examples/settings.example.json ~/.akg/settings.json
+```
+
+最简配置只需填写一个模型（自动应用到所有等级）：
+
+```json
+{
+  "models": {
+    "standard": {
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "YOUR_API_KEY",
+      "model_name": "deepseek-chat"
+    }
+  },
+  "default_model": "standard"
+}
+```
+
+**进阶配置**：
+> - 如需接入本地部署的大模型，请参考 [本地模型部署指南](./docs/v2/CN/LocalModelDeployment.md)
+> - 如需按等级（`complex` / `standard` / `fast`）分别配置不同模型、配置不同 provider 的 thinking/reasoning 参数、配置 Embedding/RAG、或使用环境变量，请参考 [配置系统文档](./docs/v2/CN/Configuration.md)、基础示例 [`settings.example.json`](./examples/settings.example.json) 和多 provider 示例 [`settings.example.more.json`](./examples/settings.example.more.json)
+
+### 后端依赖
+
+当前 `br_agents` 分支支持以下三种 DSL，其他后端待适配：
+
+| 平台 | 后端 (DSL) | 参考链接 |
+|------|------------|----------|
+| 华为 Atlas A2 训练系列产品 | Triton | https://gitee.com/ascend/triton-ascend |
+| NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
+| CPU (x86_64) | C++ | GCC / Clang |
+
+### 启动与使用
+
+AKG Agents 提供算子生成、优化、迁移能力，脚本分布在三个目录：
+
+| 目录 | 内容 |
+|------|------|
+| `examples/kernel_related/` | 生成、优化、迁移示例脚本（主要） |
+| `python/akg_agents/op/tools/` | adaptive search、evolve 运行脚本（单跑/批量） |
+| `scripts/` | AutoResearch |
+
+| 功能 | 示例脚本 |
+|------|----------|
+| 生成 | `*_single.py` — 直接生成并验证 |
+| 优化 | `*_adaptive_search*.py`（UCB策略）、`*_evolve*.py`（进化算法） |
+| 迁移 | `run_cuda_to_ascend_conversion.py`、`run_cuda_to_ascend_evolve.py` |
+
+使用示例：
+```bash
+# 算子生成
+python examples/kernel_related/run_torch_npu_triton_single.py
+
+# 算子优化（自适应搜索）
+python python/akg_agents/op/tools/run_single_adaptive_search.py
+
+# 算子优化（进化）
+python python/akg_agents/op/tools/run_single_evolve.py
+
+# 算子迁移（CUDA → Ascend）
+python examples/kernel_related/run_cuda_to_ascend_conversion.py
+
+# AutoResearch
+python scripts/run_autoresearch.py
+```
+
+## ▶️ 4. 教程示例
+
+<details open>
+<summary><b>examples/ 目录</b></summary>
+
+| 示例 | 类别 | 说明 |
+|------|------|------|
+| **NPU** | | |
+| `kernel_related/run_torch_npu_triton_single.py` | Kernel | 单算子生成（Torch + Triton Ascend） |
+| `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB 自适应搜索（Torch + Triton Ascend） |
+| `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | 进化算法算子优化（Torch + Triton Ascend） |
+| `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA 到 Ascend 算子转换 |
+| `kernel_related/run_cuda_to_ascend_evolve.py` | Kernel | CUDA 到 Ascend 进化优化 |
+| **GPU** | | |
+| `kernel_related/gpu/run_triton_to_torch_single.py` | Kernel | 单算子生成（Torch + Triton CUDA） |
+| `kernel_related/gpu/run_torch_evolve_triton.py` | Kernel | 进化算法算子优化（Torch + Triton CUDA） |
+| `kernel_related/gpu/run_cudac_to_torch_single.py` | Kernel | 单算子生成（Torch + CUDA C） |
+| **CPU** | | |
+| `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | 单算子生成（Torch + CPP） |
+| `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | 进化算法算子优化（Torch + CPP） |
+| `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB 自适应搜索（Torch + CPP） |
+| **AutoResearch** | | |
+| `scripts/run_autoresearch.py` | Kernel | AutoResearch 迭代优化（全后端，`--desc` / `--ref` / `--kernel`） |
+| **通用工具** | | |
+| `kernel_related/run_kernel_profile.py` | Kernel | 算子性能 Profiling |
+| `run_skill/` | Skill | Skill 加载、注册、层级、版本、安装、LLM 选择等示例 |
+| `build_a_simple_react_agent/` | 框架 | 基于框架构建自定义 ReAct Agent |
+| `build_a_simple_workflow/` | 框架 | 基于 LangGraph 构建自定义 Workflow |
+| `settings.example.json` | 配置 | `settings.json` 基础配置模板 |
+| `settings.example.more.json` | 配置 | 多 provider 配置示例（OpenAI、DeepSeek、Claude、通义千问、Kimi、豆包等） |
+
+</details>
+
+
+## 🧭 使用态 vs 开发态
+
+```
+akg_agents/
+├── workspace/          ← 使用态：在此目录打开 Code Agent，即可使用算子优化能力
+│   ├── .opencode/      　 skills / agents 定义，自动加载
+│   └── AGENTS.md
+└── ...                 ← 开发态：在 akg_agents/ 目录打开，开发框架代码本身
+    ├── AGENTS.md
+    └── python/akg_agents/
+```
+
+- **使用态**（`workspace/`）：面向算子优化用户。打开 OpenCode / Claude Code / Cursor，环境检查、算子生成、融合分析等由内置 Agent 和 Skill 自动编排。
+- **开发态**（`akg_agents/`）：面向框架开发者。基于 `AGENTS.md` 和各目录 `SPEC.md` 开发 akg_agents 代码本身。
+
+## 📐 5. 设计文档
+
+> 建议先阅读《[框架架构](./docs/v2/CN/Architecture.md)》了解整体架构，再阅读《[Workflow 文档](./docs/v2/CN/Workflow.md)》和《[Skill 系统](./docs/v2/CN/SkillSystem.md)》了解核心机制。
+
+### 核心框架
+- **[框架架构](./docs/v2/CN/Architecture.md)** - 整体架构、模块概览
+- **[Agent 体系](./docs/v2/CN/AgentSystem.md)** - Agent 基类、ReAct Agent、注册机制
+- **[Skill 系统](./docs/v2/CN/SkillSystem.md)** - 技能管理与动态知识注入
+- **[Tools 体系](./docs/v2/CN/Tools.md)** - 工具执行框架、内置工具、领域工具
+- **[工作流](./docs/v2/CN/Workflow.md)** - 基于 LangGraph 的工作流编排
+- **[Trace 系统](./docs/v2/CN/Trace.md)** - 树状推理追踪系统（多分叉、断点续跑）
+- **[配置系统](./docs/v2/CN/Configuration.md)** - 统一配置管理（settings.json / 环境变量）
+- **[LLM 接入](./docs/v2/CN/LLM.md)** - LLM 提供者、客户端、Embedding
+
+### 场景
+- **生成** — 直接生成算子代码并验证正确性
+- **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）
+- **迁移** — CUDA → Ascend 算子转换
+
+### OpenCode 集成
+- **[akg-op 使用指南](./docs/v2/CN/AKG-Op.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码集成，支持单算子优化与模型融合分析
+
+### 贡献
+- **[Skill 贡献指南](./docs/v2/CN/SkillContributionGuide.md)** - 如何贡献新的 Skill
+
+### 其他模块（v1 文档）
+- **[Database](./docs/v1/CN/Database.md)** - 数据库模块
+- **[RAG](./docs/v1/CN/RAG.md)** - 向量检索增强生成
+- **[RAG 使用指南](./docs/v1/CN/RAG_Usage.md)** - RAG 配置与使用教程
+- **[Server Architecture](./docs/v1/CN/ServerArchitecture.md)** - 服务化架构（Client-Server-Worker）
+- **[TaskPool](./docs/v1/CN/TaskPool.md)** - 任务池管理
+- **[DevicePool](./docs/v1/CN/DevicePool.md)** - 设备池管理

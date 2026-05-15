@@ -1,0 +1,133 @@
+# AKG Agents
+
+你是专用于 AKG Agents 的开发 Code Agent。请基于本文档（AGENTS.md）以及各目录下分级的 SPEC.md 规格文档来开发 AKG Agents 框架。
+
+AKG Agents 是基于 LLM 的多 Agent 协作框架，面向 AI Infra 和高性能计算。当前核心场景为多后端、多 DSL 内核代码生成，后续将扩展图优化等更上层编译能力。
+
+> **使用态**（以 KernelAgent 做算子生成/优化）请到 `workspace/` 目录打开 code agent。
+> 本文件面向**开发态**——开发 akg_agents 代码本身。
+
+---
+
+## 开发前必读
+
+**开始开发前，建议阅读目标目录及其上级目录的 SPEC.md**，以快速了解每个目录的关键结构与代码开发要求。SPEC.md 描述了该目录"做什么、不做什么、怎么做"。
+
+**涉及关键性修改时，需同步更新对应层级的 SPEC.md**：
+- 新增/删除模块 → 更新该目录的 SPEC.md 中的目录结构和子目录索引
+- 新增/变更对外接口或基类 → 更新 SPEC.md 中的开发约定
+- 涉及跨目录的架构调整 → 更新本文档（AGENTS.md）的目录索引和全局规范
+
+---
+
+## 快速开始
+
+```bash
+pip install -r requirements.txt && pip install -e ./ --no-build-isolation
+source env.sh          # 与 -e 安装二选一
+
+# 验证安装
+python -c "import akg_agents; print('akg_agents installed')"
+
+./run_test.sh -t ut    # 单元测试（不需要 LLM/GPU）
+```
+
+---
+
+## 目录索引
+
+### 核心源码（python/akg_agents/）
+
+| 目录 | 职责 | 规范 |
+|------|------|------|
+| `core_v2/` | v2 核心框架（Agent、Workflow、Skill、Tool、LLM、Config） | [SPEC.md](python/akg_agents/core_v2/SPEC.md) |
+| `op/` | 算子/内核生成场景层 | [SPEC.md](python/akg_agents/op/SPEC.md) |
+| `cli/` | akg_cli 命令行入口（Typer）— **已废弃，停止演进** | [SPEC.md](python/akg_agents/cli/SPEC.md) |
+| `core/` | 旧版核心（迁移中，不要新增代码） | [SPEC.md](python/akg_agents/core/SPEC.md) |
+| `utils/` | 跨模块共享工具 | [SPEC.md](python/akg_agents/utils/SPEC.md) |
+
+其余子包：`database/`（数据库/向量库）、`server/` + `client/` + `worker/`（远程服务）、`config/`（全局配置入口）、`resources/`（prompts/skills/docs/templates）、`tool/`（code agent 工具定义）。
+
+### 仓库根目录
+
+| 目录 | 职责 | 规范 |
+|------|------|------|
+| `tests/` | 测试 | [SPEC.md](tests/SPEC.md) |
+| `docs/` | 设计文档 | [SPEC.md](docs/SPEC.md) |
+| `examples/` | 使用示例 | [SPEC.md](examples/SPEC.md) |
+| `tools/` | 辅助批跑/检查工具 | [SPEC.md](tools/SPEC.md) |
+| `benchmark/` | 评测集 | [SPEC.md](benchmark/SPEC.md) |
+| `reproduce/` | 复现脚本 | [SPEC.md](reproduce/SPEC.md) |
+| `workspace/` | 使用态工作空间（KernelAgent） | [README.md](workspace/README.md) |
+
+其余目录：`akg-cli/`（npm CLI 客户端包）、`scripts/`（构建/发布辅助脚本）、`thirdparty/`（KernelBench 等第三方 benchmark 下载目录）。
+
+---
+
+## Skill 跨工具兼容
+
+Skill 定义统一存放在 `.opencode/skills/` 下，通过逐个软链接让 Claude Code 和 Cursor 发现：
+
+```
+.opencode/skills/{name}/SKILL.md                        ← 唯一数据源
+.claude/skills/{name} → ../../.opencode/skills/{name}   ← Claude Code
+.cursor/skills/{name} → ../../.opencode/skills/{name}   ← Cursor
+```
+
+`workspace/` 下布局一致。**新增 skill 后运行同步脚本**：
+
+```bash
+./scripts/sync_skills.sh        # 同步 akg_agents/ + workspace/
+./scripts/sync_skills.sh workspace  # 只同步 workspace/
+```
+
+---
+
+## 全局代码规范
+
+### License 头
+
+所有 `.py` 文件必须包含 Apache 2.0 License 头：
+
+```python
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# ...
+```
+
+### 包结构
+
+- Python >= 3.10
+- 源码在 `python/` 目录下（`package_dir={"": "python"}`）
+- 新目录必须放 `__init__.py`
+- 资源文件（`.j2`、`.md`、`.yaml`、`.json`）通过 `setup.py` 的 `package_data` 打包
+
+### 环境
+
+- `env.sh` 只做一件事：`export PYTHONPATH=$(pwd)/python:$PYTHONPATH`
+- 每次新 shell 都需要 `source env.sh`
+- 版本号在 `version.txt`
+
+---
+
+## 参数有效值
+
+所有传给 akg_agents API / akg_cli 的参数必须使用以下规范值：
+
+| 参数 | 有效值 |
+|------|--------|
+| `framework` | `torch`, `mindspore` |
+| `backend` | `cuda`, `ascend`, `cpu` |
+| `dsl` | `triton_cuda`, `triton_ascend`, `cpp`, `cuda_c`, `tilelang_cuda`, `ascendc`, `pypto` |
+| `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend910_9362`, `ascend910_9372`, `ascend910_9381`, `ascend910_9382`, `ascend910_9391`, `ascend910_9392`, `ascend950dt_95a`, `ascend950pr_950z`~`ascend950pr_9599` (21个型号), `ascend310p3`；cpu: `x86_64`, `aarch64` |
+
+---
+
+## 环境检查 Skill
+
+| Skill | 用途 | 加载场景 |
+|-------|------|---------|
+| `akg-env-setup` | 环境检查 + 采集 + 缓存；FULL_SETUP 模式额外含当次任务的参数确认和运行时依赖安装 | 安装请求（基础模式）；op-optimizer Phase 1（FULL_SETUP 模式） |
+| `akg-pr` | 基于当前分支与目标分支的 diff 生成 PR 描述文件（.md + .json），校验后可 API 提交。产物写入 `.tmp/pr/` | 用户输入 `/akg-pr` |
+| `akg-issue` | 生成 Issue 描述文件（Bug Report / RFC / Task），校验后可 API 提交，支持描述模式和 diff 自动生成模式。产物写入 `.tmp/issue/` | 用户输入 `/akg-issue` |

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/dev/assets/oh-my-opencode.schema.json",
+  "agents": {
+    "sisyphus": {
+      "prompt_append": "file://./.opencode/sisyphus-delegation.md"
+    }
+  }
+}

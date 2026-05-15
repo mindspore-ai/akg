@@ -1,0 +1,35 @@
+{
+    "name": "000_mock_relu",
+    "description": "A simple ReLU operation for testing SOL-ExecBench integration.",
+    "axes": {
+        "batch_size": {
+            "type": "var",
+            "description": "Batch size"
+        },
+        "seq_len": {
+            "type": "var",
+            "description": "Sequence length"
+        },
+        "hidden_size": {
+            "type": "const",
+            "value": 128,
+            "description": "Hidden dimension size"
+        }
+    },
+    "custom_inputs_entrypoint": null,
+    "inputs": {
+        "x": {
+            "shape": ["batch_size", "seq_len", "hidden_size"],
+            "dtype": "float32",
+            "description": "Input tensor"
+        }
+    },
+    "outputs": {
+        "out": {
+            "shape": ["batch_size", "seq_len", "hidden_size"],
+            "dtype": "float32",
+            "description": "Output tensor"
+        }
+    },
+    "reference": "import torch\n\n@torch.no_grad()\ndef run(x: torch.Tensor) -> torch.Tensor:\n    return torch.nn.functional.relu(x)\n"
+}
