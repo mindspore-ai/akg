@@ -428,6 +428,47 @@ def Dvm_BroadcastOp : Dvm_Op<"broadcast", [Pure]> {
   let assemblyFormat = "$input `shape` $shape attr-dict `:` type($input) `->` type($result)";
 }
 
+def Dvm_BroadcastScalarOp : Dvm_Op<"broadcast_scalar", [Pure]> {
+  let summary = "Broadcast scalar operation";
+  let description = [{
+    Broadcasts an inline scalar attribute to a new shape.
+    Maps directly to `dvm::Kernel::Broadcast(value, shape, dtype)`.
+
+    The scalar attribute stores the C++ scalar value to pass to the templated
+    runtime API. The `type` attribute stores the logical DVM result dtype. For
+    bool results, the scalar is represented as an i32 value 0/1 and `type` is
+    Bool, matching dvm_py.h Full behavior.
+
+    Example:
+      dvm.broadcast_scalar 1.000000e+00 shape [4, 4] type Float32 : f32 -> tensor<4x4xf32>
+      dvm.broadcast_scalar 1 shape [4, 4] type Bool : i32 -> tensor<4x4xi1>
+  }];
+
+  let arguments = (ins
+    TypedAttrInterface:$scalar,
+    I64ArrayAttr:$shape,
+    Dvm_DType:$type
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType,
+                   "::mlir::Attribute":$scalar,
+                   "::mlir::ArrayAttr":$shape,
+                   "::mlir::dvm::DTypeAttr":$type), [{
+      $_state.addAttribute("scalar", scalar);
+      $_state.addAttribute("shape", shape);
+      $_state.addAttribute("type", type);
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Reshape Operation
 // Maps to: dvm::Kernel::Reshape(NDObject* input, ShapeRef* shape)

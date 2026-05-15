@@ -105,32 +105,37 @@ static FailureOr<TypedAttr> extractTypedScalarAttr(DenseElementsAttr denseAttr, 
   return emitError(loc, "unsupported DVM scalar constant element type: ") << elementType;
 }
 
-static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, RankedTensorType rankedType) {
+static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp op, RankedTensorType rankedType,
+                                                              bool allowBool, StringRef errorContext) {
   auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(op.getValue());
   if (!denseAttr) {
-    return op->emitError("DVM scalar constant must be a DenseElementsAttr");
+    return op->emitError() << errorContext << " scalar constant must be a DenseElementsAttr";
   }
 
   auto denseType = llvm::dyn_cast<RankedTensorType>(denseAttr.getType());
   if (!denseType || denseType.getRank() != 0 || denseAttr.getNumElements() != 1) {
-    return op->emitError("DVM scalar constant must be a rank-0 tensor with one element");
+    return op->emitError() << errorContext << " scalar constant must be a rank-0 tensor with one element";
   }
 
   auto elementType = rankedType.getElementType();
-
-  // DVM binary scalar APIs support float, int32_t, Float16 and BFloat16.
-  // double, int64_t and bool constants are not supported directly.
   if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32)) {
     auto scalarAttr = extractTypedScalarAttr(denseAttr, elementType, op.getLoc());
     if (failed(scalarAttr)) return failure();
     return *scalarAttr;
   }
 
+  if (allowBool && elementType.isInteger(1)) {
+    bool value = (*denseAttr.getValues<APInt>().begin()).getBoolValue();
+    auto i32Type = IntegerType::get(op.getContext(), 32);
+    return cast<TypedAttr>(IntegerAttr::get(i32Type, value ? 1 : 0));
+  }
+
   if (elementType.isF64()) {
     double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
     if (!std::isfinite(value) || value < -kMaxFloat || value > kMaxFloat) {
-      return op->emitError("cannot convert f64 scalar constant to f32 for DVM: value is not finite or is out of range");
+      return op->emitError() << "cannot convert f64 scalar constant to f32 for " << errorContext
+                             << ": value is not finite or is out of range";
     }
     auto f32Type = Float32Type::get(op.getContext());
     return cast<TypedAttr>(FloatAttr::get(f32Type, static_cast<float>(value)));
@@ -139,13 +144,47 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, 
   if (elementType.isInteger(64)) {
     int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
     if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max()) {
-      return op->emitError("cannot convert i64 scalar constant to i32 for DVM: value is out of range");
+      return op->emitError() << "cannot convert i64 scalar constant to i32 for " << errorContext
+                             << ": value is out of range";
     }
     auto i32Type = IntegerType::get(op.getContext(), 32);
     return cast<TypedAttr>(IntegerAttr::get(i32Type, static_cast<int32_t>(value)));
   }
 
-  return op->emitError("unsupported DVM scalar constant element type: ") << elementType;
+  return op->emitError() << "unsupported " << errorContext << " scalar constant element type: " << elementType;
+}
+
+static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, RankedTensorType rankedType) {
+  // DVM binary scalar APIs support float, int32_t, Float16 and BFloat16.
+  // double and int64_t are normalized to f32/i32 when safe; bool is not
+  // supported by the binary scalar ABI.
+  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/false, "DVM");
+}
+
+static FailureOr<dvm::DType> getDvmBroadcastDType(Type elementType, Location loc) {
+  if (elementType.isInteger(1)) {
+    return dvm::DType::Bool;
+  }
+  if (elementType.isF16()) {
+    return dvm::DType::Float16;
+  }
+  if (elementType.isBF16()) {
+    return dvm::DType::BFloat16;
+  }
+  if (elementType.isF32()) {
+    return dvm::DType::Float32;
+  }
+  if (elementType.isInteger(32)) {
+    return dvm::DType::Int32;
+  }
+  if (elementType.isInteger(64)) {
+    return dvm::DType::Int64;
+  }
+  return emitError(loc, "unsupported DVM broadcast_scalar result element type: ") << elementType;
+}
+
+static FailureOr<TypedAttr> normalizeScalarConstantForDvmBroadcast(mfuse::ConstantOp op, RankedTensorType rankedType) {
+  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/true, "DVM broadcast");
 }
 
 static mfuse::ConstantOp getScalarConstant(Value value) {
@@ -349,6 +388,45 @@ struct ConvertBroadcastToOp : public OpConversionPattern<mfuse::BroadcastToOp> {
   }
 };
 
+struct ConvertFullOp : public OpConversionPattern<mfuse::FullOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(mfuse::FullOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (!isDvmOutlinedOp(op.getOperation())) {
+      return failure();
+    }
+
+    auto resultType = llvm::cast<RankedTensorType>(op.getResult().getType());
+    auto shape = rewriter.getI64ArrayAttr(resultType.getShape());
+
+    if (auto scalarOp = getScalarConstant(op.getFillValue())) {
+      auto scalarType = cast<RankedTensorType>(scalarOp.getResult().getType());
+      auto normalized = normalizeScalarConstantForDvmBroadcast(scalarOp, scalarType);
+      if (failed(normalized)) return failure();
+
+      auto dtype = getDvmBroadcastDType(resultType.getElementType(), op.getLoc());
+      if (failed(dtype)) return failure();
+
+      auto dtypeAttr = dvm::DTypeAttr::get(getContext(), *dtype);
+      rewriter.replaceOpWithNewOp<dvm::BroadcastScalarOp>(op, op.getResult().getType(), *normalized, shape, dtypeAttr);
+      if (scalarOp.getResult().use_empty()) {
+        rewriter.eraseOp(scalarOp);
+      }
+      return success();
+    }
+
+    if (op.getFillValue().getDefiningOp<mfuse::ConstantOp>()) {
+      return op->emitError(
+        "DVM full conversion requires a scalar mfuse.constant fill value; "
+        "non-scalar mfuse.constant cannot be lowered to dvm.broadcast_scalar");
+    }
+
+    rewriter.replaceOpWithNewOp<dvm::BroadcastOp>(op, op.getResult().getType(), adaptor.getFillValue(), shape);
+    return success();
+  }
+};
+
 struct ConvertReshapeOp : public OpConversionPattern<mfuse::ReshapeOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -526,8 +604,9 @@ static LogicalResult cleanupAndVerifyScalarConstants(ModuleOp module) {
     auto walkResult = func.walk([&](mfuse::ConstantOp op) {
       auto rankedType = dyn_cast<RankedTensorType>(op.getResult().getType());
       if (!rankedType || !hasScalarMarker(rankedType)) {
-        op.emitError("non-scalar constant is not supported in DVM conversion, "
-                     "only scalar constants (is_scalar=true) are supported");
+        op.emitError(
+          "non-scalar constant is not supported in DVM conversion, "
+          "only scalar constants (is_scalar=true) are supported");
         return WalkResult::interrupt();
       }
 
@@ -647,6 +726,8 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
       [](mlir::mfuse::CastOp op) { return !isDvmOutlinedOp(op.getOperation()); });
     target.addDynamicallyLegalOp<mlir::mfuse::BroadcastToOp>(
       [](mlir::mfuse::BroadcastToOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+    target.addDynamicallyLegalOp<mlir::mfuse::FullOp>(
+      [](mlir::mfuse::FullOp op) { return !isDvmOutlinedOp(op.getOperation()); });
     target.addDynamicallyLegalOp<mlir::mfuse::ReshapeOp>(
       [](mlir::mfuse::ReshapeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
     target.addDynamicallyLegalOp<mlir::mfuse::ReduceSumOp>(
@@ -718,6 +799,7 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     patterns.add<ConvertSelectOp>(ctx);
     patterns.add<ConvertCastOp>(ctx);
     patterns.add<ConvertBroadcastToOp>(ctx);
+    patterns.add<ConvertFullOp>(ctx);
     patterns.add<ConvertReshapeOp>(ctx);
     patterns.add<ConvertReduceSumOp>(ctx);
     patterns.add<ConvertReluOp>(ctx);

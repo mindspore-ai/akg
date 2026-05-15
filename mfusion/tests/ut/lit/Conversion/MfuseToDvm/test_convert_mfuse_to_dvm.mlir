@@ -323,6 +323,54 @@ module {
     return %0 : tensor<4x2xf32>
   }
 
+  // CHECK-LABEL: func @main_full_f32_fused
+  // CHECK: %[[FULL:.*]] = dvm.broadcast_scalar 1.000000e+00 shape [4, 2] type Float32 : f32 -> tensor<4x2xf32>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[FULL]] : tensor<4x2xf32> -> tensor<4x2xf32>
+  // CHECK: return %[[STORE]] : tensor<4x2xf32>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.full
+  func.func @main_full_f32_fused() -> tensor<4x2xf32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %cst = mfuse.constant dense<1.0> : tensor<f32, {is_scalar = ""}>
+    %0 = mfuse.full %cst : (tensor<f32, {is_scalar = ""}>) -> tensor<4x2xf32>
+    return %0 : tensor<4x2xf32>
+  }
+
+  // CHECK-LABEL: func @main_full_bool_fused
+  // CHECK: %[[FULL:.*]] = dvm.broadcast_scalar 1 shape [2] type Bool : i32 -> tensor<2xi1>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[FULL]] : tensor<2xi1> -> tensor<2xi1>
+  // CHECK: return %[[STORE]] : tensor<2xi1>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.full
+  func.func @main_full_bool_fused() -> tensor<2xi1> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %cst = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
+    %0 = mfuse.full %cst : (tensor<i1, {is_scalar = ""}>) -> tensor<2xi1>
+    return %0 : tensor<2xi1>
+  }
+
+  // CHECK-LABEL: func @main_full_i64_scalar_fused
+  // CHECK: %[[FULL:.*]] = dvm.broadcast_scalar 7 shape [4] type Int64 : i32 -> tensor<4xi64>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[FULL]] : tensor<4xi64> -> tensor<4xi64>
+  // CHECK: return %[[STORE]] : tensor<4xi64>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.full
+  func.func @main_full_i64_scalar_fused() -> tensor<4xi64> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %cst = mfuse.constant dense<7> : tensor<i64, {is_scalar = ""}>
+    %0 = mfuse.full %cst : (tensor<i64, {is_scalar = ""}>) -> tensor<4xi64>
+    return %0 : tensor<4xi64>
+  }
+
+  // CHECK-LABEL: func @main_full_external_rank0_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<f32>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<f32> -> tensor<f32>
+  // CHECK: %[[BCAST:.*]] = dvm.broadcast %[[LOADA]] shape [4] : tensor<f32> -> tensor<4xf32>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[BCAST]] : tensor<4xf32> -> tensor<4xf32>
+  // CHECK: return %[[STORE]] : tensor<4xf32>
+  // CHECK-NOT: mfuse.full
+  func.func @main_full_external_rank0_fused(%a: tensor<f32>) -> tensor<4xf32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.full %a : (tensor<f32>) -> tensor<4xf32>
+    return %0 : tensor<4xf32>
+  }
+
   // CHECK-LABEL: func @main_reshape_fused
   // CHECK-SAME: (%[[A:.*]]: tensor<4x2xf32>)
   // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<4x2xf32> -> tensor<4x2xf32>
