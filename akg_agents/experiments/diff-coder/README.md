@@ -1,6 +1,6 @@
 # diff-coder：对照组实验矩阵（`akg_agents/experiments/diff-coder`）
 
-完整对照实验报告（体例参考实习任务文档、含复现步骤与基于 `summary.tsv` 的聚合结果）：**`EXPERIMENT_REPORT.md`**。
+对照实验报告（实验说明摘要、观察、结论与建议；**复现与代码见 GitCode 分支**，数值基于 `summary.tsv` 聚合）：**`EXPERIMENT_REPORT.md`**。
 
 在 **`akg_now`** 中，本目录用于：
 
