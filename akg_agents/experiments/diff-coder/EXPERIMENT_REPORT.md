@@ -1,167 +1,56 @@
 # KernelBench × diff 修复（Diff-Coder）对照实验报告
 
-> **定位说明**：本报告对应仓库内 **`akg_agents/experiments/diff-coder`** 矩阵实验（KernelBench + **Triton CUDA** + 首轮错误注入 + **diff 修复 A/B**），与「Triton-Ascend + 166 算子 + 智能选模」类实习报告 **场景不同**：后者偏 **能力边界扫全库 + 路由策略**；本报告偏 **同一 Agent 链路下「diff 修复开/关」对耗时与 LLM 调用的影响**，为后续是否合入主流程提供数据参考。
+> **场景**：在 **KernelBench + Triton CUDA** 上，对首轮 **受控失败**（`syntax` / `import` / `name` / `runtime` / `type`）对比 **`AIKG_TARGETED_REPAIR` 开（diff 修复开）与关** 的墙钟与 LLM 耗时。与「Ascend 全库能力边界 / 选模」类报告互补：本报告回答 **修复策略 A/B 的工程取舍**，不评测路由或 NPU 全量。
 
 ---
 
-## 一、实验目的与问题陈述
+## 实验说明（摘要）
 
-### 1.1 背景
+- **对比维度**：同一 profile 下 `targeted_on`（diff 开，`AIKG_TARGETED_REPAIR=1`）与 `targeted_off`（diff 关，`=0`）。  
+- **矩阵**：3 个 benchmark 标签（`mm` / `conv2d` / `batchnorm`）× 5 种 `fail_mode` × 2 种修复开关 × 每格 **3** 次重复；聚合时取各目录 `summary.tsv` 中 **`attempt=final` 且 `counted_for_avg=1`** 的行，共 **90** 条。  
+- **通过率**：本批样本上 pytest **均为 100%**；含义是「在注入失败的前提下仍能跑通当前测试」，**不能**外推为无注入时的真实生成成功率。  
+- **边界**：不覆盖 Triton-Ascend / 166 或 249 全库；不评测 `model_selector`。  
+- **已知标签问题**：profile 中 `batchnorm` 与测试内 KernelBench **题号**可能不一致；表中 `batchnorm` 行应理解为 **配置标签**，名实对齐需改测试或 profile（见代码侧说明）。
 
-端到端 Coder 在复杂算子上失败后，往往触发 **整段重写**，带来额外 **LLM 调用与验证轮次**。工程上引入 **diff 修复** 思路：在失败日志约束下做 **局部补丁式 / 增量式修改**，期望在部分场景降低总耗时或总 token。（实现侧仍以环境变量 **`AIKG_TARGETED_REPAIR`** 表征该路径开关；profile 中 `repair_variants` 的 `targeted_on` / `targeted_off` 即 **diff 开 / diff 关**。）
-
-### 1.2 本实验要回答的问题
-
-1. 在 **受控的首轮失败**（`syntax` / `import` / `name` / `runtime` / `type`）下，`AIKG_TARGETED_REPAIR=1` 与 `=0` 相比，**墙钟时间、LLM 总耗时、首轮 vs 修复段耗时** 如何变化？  
-2. 不同 **KernelBench 用例**（本 profile：`mm` / `conv2d` / `batchnorm`）与不同 **失败类型** 上，收益是否一致？  
-3. 在 **当前实现与模型组合** 下，是否存在 **「简单 case 开 diff 修复反而更亏」** 的现象？
-
-### 1.3 非目标（明确边界）
-
-- 本实验 **不** 覆盖 Triton-Ascend / CANN / NPU 全量 249 或 166 扫库。  
-- 本实验 **不** 评测 `model_selector` / 路由策略；仅提供 **可复现矩阵 + 计时字段**，供后续接入。  
-- 本报告中的 **通过率** 在下列本地聚合样本上为 **pytest 最终轮 `pass_pct`（本数据均为 100%）**；不代表「无注入、无修复」下的真实生成成功率。
+**实现、profile、矩阵驱动与复现命令**不在本报告展开，见下方 GitCode 分支中的 `akg_agents/experiments/diff-coder/`。
 
 ---
 
-## 二、实验框架与流水线
+## 代码与复现（GitCode）
 
-### 2.1 执行拓扑
+请在浏览器中打开（若分支名有调整，将 URL 中的分支名替换为你的实际分支即可）：
 
-| 层级 | 内容 |
-|------|------|
-| 驱动 | `run_matrix.py` + profile `profiles/kernelbench_triton_cuda_repair_ab.json` |
-| 被测树 | 单树 `akg_agents`（`workspace_root` 指向含 `akg_agents/` 的仓库根） |
-| 容器 | profile 默认 Docker（可 `--no-docker` 烟测） |
-| Benchmark 脚本 | `scripts/benchmark_local_kernelbench_repeat.sh` |
-| Pytest 入口 | 见 profile `benchmarks[].test_target`（`mm`/`batchnorm` 与 `conv2d` 用例不同） |
-| 工作流 | `coder_only_workflow`（由测试侧 `LangGraphTask` 指定） |
+- **仓库**：<https://gitcode.com/zhangyize-2026/akg_3797>  
+- **建议入口（含本实验目录）**：<https://gitcode.com/zhangyize-2026/akg_3797/-/tree/br_agents/akg_agents/experiments/diff-coder>  
 
-### 2.2 验证与计时
-
-| 观测项 | 来源 |
-|--------|------|
-| 每轮 pytest 是否通过 | `summary.tsv` 中 `pytest_rc`、`pass_pct` |
-| 墙钟 / 本地耗时 / LLM 耗时 | `wall_seconds`、`local_sum_s`、`llm_sum_s`、`llm_first_sum_s`、`llm_repair_sum_s`、`task_total_sum_s` |
-| 细粒度 LLM 调用 | `AIKG_BENCHMARK_LOCAL_TIMING_JSONL` 指向的 `timing_*_attempt*.jsonl`（若需更细可二次分析） |
-
-### 2.3 首轮错误注入（与主链路对齐）
-
-| 环境变量 | 含义 |
-|----------|------|
-| `AIKG_FORCE_FIRST_FAIL` | profile `force_first_fail: true` 时置 `1`：首轮在 Coder 成功后 **注入一条可控错误**，稳定走「失败 → 修复」 |
-| `AIKG_FORCE_FAIL_MODE` | 取 `syntax` / `import` / `name` / `runtime` / `type` 之一，与 `nodes.py` 中 `_inject_forced_first_fail` 一致 |
-
-### 2.4 diff 修复 A/B
-
-| 维度 | `targeted_on`（**diff 开**） | `targeted_off`（**diff 关**） |
-|------|-----------------|----------------|
-| 环境 | `AIKG_TARGETED_REPAIR=1` | `AIKG_TARGETED_REPAIR=0` |
-| 含义 | 走 **diff / 补丁式** 修复路径（详见 `core/agent/coder.py` 等） | 更偏 **全量重写式** 修复路径 |
-| 其它 | 与 `repair_variants` 中 `extra_env` 一致；可与 `AIKG_TARGETED_REPAIR_ATTEMPTS` 等组合 | 同左 |
-
-**结论前置（逻辑）**：矩阵对 **每一种 `fail_mode` × 每一种 benchmark × diff 开/关** 各跑 **`repeats` 轮**（本 profile 为 3），因此 **不是「所有错误都只走 diff 修复」**；而是 **同一错误类型下对比 diff 开与关**。
+该目录下包含 `run_matrix.py`、`profiles/kernelbench_triton_cuda_repair_ab.json` 等；原始 `summary.tsv` 聚合路径与本地 `out/` 约定亦以该分支为准。
 
 ---
 
-## 三、硬件与软件环境（本实验实际使用）
+## 观察（基于本机矩阵 `summary.tsv` 聚合）
 
-> 以下以 **本仓库 profile 默认值 + 本地一次完整矩阵** 为准；若你更换镜像 / GPU / 模型，请在复现时更新本节。
+### 总体（90 条 final 样本）
 
-| 组件 | 规格 / 版本 |
-|------|-------------|
-| GPU | NVIDIA（pytest 标记 `cuda` / `a100`，物理机可为 A800 等 Ampere 系） |
-| Python | `python3`（脚本与容器内一致） |
-| 框架 | PyTorch + Triton CUDA（KernelBench level1 / level2 用例） |
-| LLM | profile 中 `AKG_AGENTS_MODEL_NAME` / `AIKG_MODEL_NAME`（例如 `deepseek-v4-flash`；以实际 `api_env_exports` 为准） |
-| API | DeepSeek 兼容接口；密钥来自仓库根 `.deepseek_api_env`（勿提交） |
+| 分组 | 样本数 | 平均墙钟 `wall_s` | 平均 `llm_sum_s` | 平均 `llm_first_s` | 平均 `llm_repair_s` | `pass_pct` |
+|------|--------|-------------------|------------------|--------------------|---------------------|------------|
+| diff 开（`targeted_on`） | 45 | **39.23** | **18.67** | 8.13 | 10.54 | 100% |
+| diff 关（`targeted_off`） | 45 | **72.02** | **39.90** | 8.00 | 31.90 | 100% |
 
----
+在本批数据上，diff **开**相对 **关**：平均墙钟约 **−45%**，平均 LLM 总耗时约 **−53%**；主要因 **`conv2d`** 子矩阵在 diff 关时 **`llm_repair` 很高**，拉高整体均值。
 
-## 四、数据集与用例配置
+> 上述结论限定在 **「首轮强制失败 + 本 profile」** 的实验设定下，**不可**直接写成「生产环境无注入时 diff 一定更快」。
 
-### 4.1 Profile 中的 benchmark id
+### 按 benchmark（各 30 条 final）
 
-| `benchmarks[].id` | 说明 | `test_target`（摘要） |
-|-------------------|------|------------------------|
-| `mm` | 矩阵/算子烟测用例 | `test_bench_triton_cuda.py::test_bench_triton_cuda`（level1，**题号以测试代码内 `get_kernelbench_op_name([...])` 为准**） |
-| `conv2d` | 更重用例 | `::test_bench_triton_cuda_level_2` |
-| `batchnorm` | 命名 id；**须与测试内 KernelBench 序号一致**（若测试仍为 `[19]` 则实为 ReLU 等，**非** `33_BatchNorm`） |
+| Benchmark | 平均 `wall_s` | 平均 `llm_sum_s` | 平均 `llm_repair_s` |
+|-----------|---------------|------------------|---------------------|
+| `mm` | 31.19 | 12.33 | 6.74 |
+| `batchnorm` | 31.99 | 13.49 | 7.34 |
+| `conv2d` | **103.70** | **62.03** | **49.58** |
 
-**已知限制**：若需「名实一致」的 BatchNorm，应同步调整 `tests/op/bench/test_bench_triton_cuda.py` 中序号或增加 per-benchmark `test_target_by_tree`；否则报告中的 `batchnorm` 行应理解为 **「profile 标签」** 而非一定对应 `33_BatchNorm.py`。
+### 同一 `(benchmark, fail_mode)` 下：diff 开相对 diff 关的变化率
 
-### 4.2 失败类型（`fail_modes`）
-
-`syntax` / `import` / `name` / `runtime` / `type` —— 与 `nodes.py` 注入 map 一一对应。
-
-### 4.3 矩阵规模（本报告数据来源）
-
-- **diff 修复维度**：2（`targeted_on` / `targeted_off`，即 diff 开 / diff 关）  
-- **Benchmark**：3  
-- **Fail mode**：5  
-- **Repeats**：3（profile `repeats`）  
-
-合计 **2×3×5 = 30** 个输出目录；每个目录 `summary.tsv` 取 **`attempt=final` 且 `counted_for_avg=1`** 共 **90** 条样本行，用于下文聚合。
-
----
-
-## 五、复现步骤（给评审 / 后续自己）
-
-```bash
-# 0) API（勿提交密钥）
-# 在 workspace_root 根目录配置 .deepseek_api_env，并在 profile 中正确填写 env_file 绝对路径
-
-# 1) 进入实验目录
-cd <repo>/akg_agents/experiments/diff-coder
-
-# 2) 干跑（检查 docker / export 块）
-python3 run_matrix.py run --profile profiles/kernelbench_triton_cuda_repair_ab.json --dry-run
-
-# 3) 全矩阵（示例：无 Docker 烟测可改 --no-docker；生产多为 Docker）
-python3 run_matrix.py run --profile profiles/kernelbench_triton_cuda_repair_ab.json --continue-on-error
-
-# 4) 汇总（glob 按本机 out_dir_prefix 修改）
-python3 run_matrix.py summarize --glob '<repo>/akg/out/diffcoder/kernelbench_triton_cuda_repair_ab_*'
-```
-
-**说明**：`out/` 默认在 `<workspace_root>/akg/out/diffcoder`；若 Docker 以 root 写产物，宿主机后续 `git rebase` 可能遇权限问题；无 sudo 时可 **新目录 clone** 做历史改写（见仓库内讨论记录）。
-
----
-
-## 六、实验结果（基于本机 `summary.tsv` 聚合）
-
-### 6.1 总体：diff 修复开 vs 关（90 条 final 样本）
-
-| 分组 | 样本数 | 平均墙钟 `wall_s` | 平均 `llm_sum_s` | 平均 `llm_first_sum_s` | 平均 `llm_repair_sum_s` | 平均 `pass_pct` |
-|------|--------|-------------------|------------------|--------------------------|-------------------------|-----------------|
-| `targeted_on`（diff 开） | 45 | **39.23** | **18.67** | 8.13 | 10.54 | 100% |
-| `targeted_off`（diff 关） | 45 | **72.02** | **39.90** | 8.00 | 31.90 | 100% |
-
-**解读（本数据集）**：在 **首轮强制失败 + 本 profile 三用例** 组合下，`targeted_on`（diff 开）相对 `targeted_off`（diff 关）**平均墙钟约 −45%**、**平均 LLM 总耗时约 −53%**。主要贡献来自 **`conv2d` 子矩阵**（见 6.3）：diff 关时 `llm_repair` 极高，拉高整体均值。
-
-> 注意：此处为 **「注入失败后的修复实验」** 下的耗时对比，**不能直接外推**为「生产无注入时 diff 修复一定更快」。
-
-### 6.2 按 benchmark（各 30 条 final）
-
-| Benchmark | 平均 `wall_s` | 平均 `llm_sum_s` | 平均 `llm_first_s` | 平均 `llm_repair_s` |
-|-----------|---------------|------------------|--------------------|------------------------|
-| `mm` | 31.19 | 12.33 | 5.59 | 6.74 |
-| `batchnorm` | 31.99 | 13.49 | 6.15 | 7.34 |
-| `conv2d` | **103.70** | **62.03** | 12.45 | **49.58** |
-
-### 6.3 按 `fail_mode`（各 18 条 final）
-
-| fail_mode | 平均 `wall_s` | 平均 `llm_sum_s` |
-|-----------|---------------|------------------|
-| `import` | 52.02 | 25.07 |
-| `runtime` | 52.41 | 29.36 |
-| `syntax` | 55.78 | 28.87 |
-| `type` | 55.76 | 29.38 |
-| `name` | **62.15** | **33.72** |
-
-### 6.4 细粒度：同一 `(benchmark, fail_mode)` 下 diff 开 vs diff 关（各 3 轮均值）
-
-下表为 **diff 开（`targeted_on`）相对 diff 关（`targeted_off`）的墙钟变化率**（负表示 diff 开更快）与 **LLM 总耗时变化率**。
+（**Δ wall % / Δ llm %**：负表示 diff **开**更快、LLM 更少。）
 
 | bench | fail_mode | Δ wall % | Δ llm % |
 |-------|-----------|----------|---------|
@@ -181,75 +70,133 @@ python3 run_matrix.py summarize --glob '<repo>/akg/out/diffcoder/kernelbench_tri
 | mm | syntax | +11.0% | +34.2% |
 | mm | type | +9.2% | +24.4% |
 
-**观察**：
-
-1. **`conv2d` + 多数 fail_mode**：diff 开（`targeted_on`）**显著优于** diff 关（墙钟与 LLM 双降），与「复杂用例上 diff / 局部修改更划算」的直觉一致。  
-2. **`mm` + 部分 fail_mode**（如 `syntax` / `type` / `name`）：diff 开 **更慢**，符合「简单或单次可收敛场景，diff 修复有额外提示与多轮结构开销」的判断。  
-3. **`batchnorm` + name`**：diff 开明显慢于 diff 关，需结合 **该 id 实际对应 KernelBench 题面** 再解读（见 4.1）。
+**要点**：`conv2d` 上 diff 开在多数 `fail_mode` 下 **明显占优**；`mm` 上部分模式 diff 开 **更慢**；`batchnorm` + `name` 为 **反例**，需结合该标签对应的真实题号解读。
 
 ---
 
-## 七、结论与对主流程合入的建议
+## 结论
 
-### 7.1 结论（本实验范围内）
-
-1. **diff 修复不是免费午餐**：在 **mm 等相对轻** 的子矩阵上，部分 `fail_mode` 下 **diff 开比 diff 关更慢**，说明 **策略需按用例/失败类型分流**，不宜默认全局开启 diff。  
-2. **在 conv2d（level2）子矩阵上收益很大**：与本 profile 下 **更高验证/修复成本** 一致，diff 开（`targeted_on`）在墙钟与 LLM 上均 **大幅下降**。  
-3. **聚合层面**：本批 90 个 final 样本上 **diff 开整体优于 diff 关**，但主要由 **conv2d 子集拉高 diff 关时成本** 驱动；写论文/写 MR 时应 **分层汇报**，避免只报总平均掩盖「简单 case 开 diff 反而吃亏」。
-
-### 7.2 与「166 算子 Ascend 能力边界」类报告的关系
-
-| 维度 | 166 / 249 Ascend 报告（示例） | 本报告 |
-|------|------------------------------|--------|
-| 目标 | 模型能力边界、选模 ROI | **修复策略 A/B、计时与可观测性** |
-| 后端 | Triton-Ascend + NPU | **Triton CUDA + GPU pytest** |
-| 数据规模 | 全库 / 多模型 | **小矩阵、强控制变量** |
-| 产出 | 路由表 / 复杂度阈值 | **`summary.tsv` / timing jsonl + 复现命令** |
-
-二者 **互补**：本报告支持「**何时开 diff 修复**」的工程决策；Ascend 全库报告支持「**选哪个模型**」。
-
-### 7.3 主流程合入建议（供后续 owner）
-
-1. **先合入工具链**（矩阵、计时、profile、文档）与 **可选特性开关**，默认行为与线上对齐。  
-2. **路由/选模** 建议等具备 **Ascend 或生产等价负载** 的分层数据后再合。  
-3. **profile 与测试题号** 做一次对齐审计（`batchnorm` id）。  
-4. **Docker 产物权限** 写入运维说明，避免本地 `rebase` 被 root 文件阻塞。
+1. **diff 修复不是全局免费**：轻量子矩阵（如 `mm`）上，部分失败类型下 **开 diff 比关更慢**，存在提示与轮次结构开销。  
+2. **重子矩阵（本数据中的 `conv2d`）收益大**：diff 关在修复段 LLM 成本显著更高，与「复杂用例上局部补丁更划算」的直觉一致。  
+3. **总平均「开优于关」主要由 `conv2d` 驱动**；对外汇报应 **分层**（按 benchmark / fail_mode），避免只报总平均掩盖简单 case 的劣势。
 
 ---
 
-## 八、附录：聚合脚本（可自行重跑）
+## 推荐修改方案（对主流程 / 后续 owner）
 
-将 `<OUT_GLOB>` 换成你的 `out_dir_prefix`：
+以下按 **合入拆分 → 默认与开关 → 分流与实现线索 → 配置与可观测性 → 回归与质量 → 工程运维 → 对外沟通 → 后续扩展** 组织，便于拆任务与评审对照。
 
-```python
-import csv, glob, re
-from pathlib import Path
-from statistics import mean
+**路径约定（下文「涉及文件」均以仓库根下含 `akg_agents/` 的 clone 为准）**
 
-pat = re.compile(
-    r"kernelbench_triton_cuda_repair_ab_akg_agents_(targeted_on|targeted_off)_(mm|conv2d|batchnorm)_(syntax|import|name|runtime|type)$"
-)
-rows = []
-for p in sorted(glob.glob(str(Path("<OUT_GLOB>") / "*/summary.tsv"))):
-    m = pat.match(Path(p).parent.name)
-    if not m:
-        continue
-    repair, bench, mode = m.groups()
-    with open(p, newline="", encoding="utf-8") as f:
-        for r in csv.DictReader(f, delimiter="\t"):
-            if r.get("attempt") == "final" and r.get("counted_for_avg") == "1":
-                rows.append((repair, bench, mode, float(r["wall_seconds"]), float(r["llm_sum_s"])))
-print("n=", len(rows))
-```
+| 前缀 | 含义 |
+|------|------|
+| `experiments/diff-coder/...` | 即 `akg_agents/experiments/diff-coder/...` |
+| `python/akg_agents/...` | 即 `akg_agents/python/akg_agents/...`（Python 包根） |
+| `tests/op/...` | 即 `akg_agents/tests/op/...`（pytest 常从 `akg_agents/` 目录跑） |
+
+若你当前分支尚未包含矩阵目录或某文件，以 **GitCode 上含本实验的分支**（如 `br_agents`）为准；本地可用 `git grep -n <关键词>` 核对实际路径。
+
+### 1. 合入拆分（建议两阶段 MR）
+
+| 阶段 | 建议内容 | 目的 | 主要涉及文件 / 目录（典型） |
+|------|----------|------|------------------------------|
+| **A（低风险、可先行）** | 矩阵、profile、`summary.tsv`/timing、文档 | 可复现、**不改**线上默认修复路径 | `experiments/diff-coder/run_matrix.py`；`experiments/diff-coder/profiles/*.json`（如 `kernelbench_triton_cuda_repair_ab.json`）；若有 `profiles/profile.schema.json` 一并维护；`experiments/diff-coder/README.md`、`DEEPSEEK_API_SETUP.md`、本 `EXPERIMENT_REPORT.md`；bench 入口常为 `akg_agents/scripts/benchmark_local_kernelbench_repeat.sh`（由 profile `benchmarks[].script` 引用） |
+| **B（需评审 + 灰度）** | 默认是否开 diff、路由/启发式、与选模联动 | 行为变更 | `python/akg_agents/core/agent/coder.py`（diff/全量修复路径）；`python/akg_agents/op/langgraph_op/nodes.py`、`routers.py`、`task.py`（节点与路由）；`python/akg_agents/op/workflows/coder_only_workflow.py`；默认环境/模型可读 `python/akg_agents/core_v2/config/settings.py`、`python/akg_agents/core_v2/llm/factory.py`；选模相关以仓库内 `git grep model_selector` 命中文件为准 |
+
+**原则**：阶段 A 合入后，任何人应能用同一 profile 在本地/CI 跑出 **与本文同口径** 的聚合；阶段 B 再讨论「默认开/关」与分流规则。
+
+### 2. 默认行为与兼容性
+
+- **`AIKG_TARGETED_REPAIR`**：在未完成阶段 B 前，**保持与当前线上一致**（通常为关或现有默认）；不在 profile 里「悄悄改成 1」作为默认。  
+- **显式开关**：若未来增加「按 benchmark 自动切换」，建议仍保留 **环境变量 / profile 覆盖** 作为逃生口，便于对照与排障。  
+- **与选模解耦**：`model_selector`、Ascend 166/249 扫库类变更 **不依赖** 本实验结论即可独立合入；本实验文档中写明 **不评测选模**，避免评审时范围蔓延。
+
+**涉及文件**：默认 env 常在 **`experiments/diff-coder/profiles/*.json`** 的 `repair_variants[].extra_env` / `extra_env`；若代码内有硬编码默认，搜 **`AIKG_TARGETED_REPAIR`**（`git grep -n AIKG_TARGETED_REPAIR python/akg_agents`）并改对应 `.py`；选模独立 MR 则只改其自身模块（`git grep model_selector` 列出文件）。
+
+### 3. 分流策略（结合本报告数据的落地建议）
+
+在尚无线上全量分布前，可用 **静态规则 + 可观测信号** 组合，后续再数据驱动迭代。
+
+**3.1 静态启发式（与上表一致）**
+
+- **优先倾向「diff 开」**：`test_target` 指向 **level2 / 高成本** 路径时（本数据中 **`conv2d` 全部 `fail_mode`** diff 开均占优），可作为默认候选。  
+- **优先倾向「diff 关」或缩短 repair**：**`mm` + `syntax` / `type` / `name`**（本数据中 diff 开墙钟与 LLM 均变差）；可先关 diff 或 **降低 `AIKG_TARGETED_REPAIR_ATTEMPTS`**，观察是否仍满足通过率。  
+- **`batchnorm` + `name`**：本数据为反例，但 **标签可能与真实题面不一致**；在 **§6 审计完成前**，不建议单独为「batchnorm」写死全局规则，避免误伤真实 BatchNorm 题。
+
+**涉及文件**：分流规则若写在配置层 → **`experiments/diff-coder/profiles/*.json`**（按 `benchmarks[].id` / `repair_variants` 拆 profile 或多 profile）；若写在代码层 → **`python/akg_agents/op/langgraph_op/routers.py`** 或 **`nodes.py`** 中在进入 Coder/Fix 前设置 `os.environ` / `task` 字段；repair 轮次 → profile `extra_env` 中的 **`AIKG_TARGETED_REPAIR_ATTEMPTS`**（或代码中读取该变量的位置，以 `git grep` 为准）。
+
+**3.2 动态信号（实现侧可预留钩子）**
+
+- 首轮失败后若 **`llm_repair_sum_s` 相对 `llm_first_sum_s` 占比** 持续高于某阈值（需在你们环境标定），可 **下一轮切到 diff 开**；反之轻量 case 可维持关。  
+- 若后续接入 **token 计数**，用 **repair 段 token / 总 token** 替代「仅 wall 时间」做分流，更接近成本。
+
+**涉及文件**：读 **`summary.tsv` / timing** 的逻辑若在矩阵侧 → `run_matrix.py` 或 `summarize` 子命令所在模块；若在 Agent 运行时动态切 → **`python/akg_agents/op/langgraph_op/task.py`**（`LangGraphTask` 一轮结束后的决策）、**`nodes.py`**（Fix/Coder 节点之间）；token 累计 → 通常在 **`python/akg_agents/core_v2/agents/base.py`** 的 `run_llm` / 包装层，以 `git grep run_llm` 调用栈为准。
+
+**3.3 与产品沟通的最小表述**
+
+- 「**复杂 / level2 类** 更可能从 diff 开受益；**简单 smoke + 部分语法/类型类错误** 可能 diff 开更慢，需要分流或关。」
+
+**涉及文件**：可仅更新 **`EXPERIMENT_REPORT.md` / `README.md`** 的对外摘要，无需改代码。
+
+### 4. 配置与可观测性（避免「不可比」）
+
+- **Profile 即契约**：在 `profiles/kernelbench_triton_cuda_repair_ab.json`（或等价文件）中 **写全** 本实验依赖项：`repair_variants`、`fail_modes`、`repeats`、`benchmarks[].test_target`、`env_file`、Docker 镜像名、`AIKG_FORCE_*`、`AIKG_TARGETED_REPAIR*`、bench 超时、`AIKG_BENCHMARK_LOCAL_TIMING_JSONL` 等；MR 描述中附 **「与某次报告对齐的 profile 提交 hash」**。  
+- **文档交叉引用**：在 `README.md` 或 `DEEPSEEK_API_SETUP.md` 中说明 **`AKG_AGENTS_MODEL_NAME` 与 `AIKG_MODEL_NAME` 的覆盖关系**（避免计费/日志模型名与 profile 不一致）。  
+- **聚合口径写死**：对外说明 **只统计 `attempt=final` 且 `counted_for_avg=1`**；若 `summary.tsv` 列名变更，需同步更新本报告与聚合脚本。
+
+**涉及文件**：**`experiments/diff-coder/profiles/*.json`**（主契约）；**`README.md`、`DEEPSEEK_API_SETUP.md`**；写出 `summary.tsv` / `timing_*.jsonl` 列名的代码 → 一般在 **bench 脚本** `akg_agents/scripts/benchmark_local_kernelbench_repeat.sh` 及其调用的 **pytest / task** 路径（`git grep summary.tsv` 或 `counted_for_avg` 定位）；计时上下文 README 常指向 **`python/akg_agents/utils/llm_timing_context.py`**（若路径变更以 `git grep llm_timing` 为准）+ **`python/akg_agents/core_v2/agents/base.py`**（`run_llm`）+ **`python/akg_agents/op/langgraph_op/task.py`**（汇总写 jsonl）；**`run_matrix.py` 内 `summarize`** 若含聚合脚本需同步列名。
+
+### 5. 回归与质量门禁
+
+- **最小子集**：至少保留 **`conv2d × 1～2 个 fail_mode` + `mm × syntax`** 作为每次发布前或 nightly 的 **smoke 矩阵**（覆盖「大赚」与「小亏」两类）。  
+- **阈值建议**：对 `wall_seconds`、`llm_sum_s`、`llm_repair_sum_s` 设 **相对基线 ±X%** 或绝对上限（X 由你们历史方差定）；超阈 **阻断发布或仅告警**，二选一写入发布 checklist。  
+- **通过率**：本实验 `pass_pct` 在注入条件下为 100%；若作为门禁，应 **单独定义「成功」**（例如 final pass + 无超时），并在注释中说明 **与无注入生产成功率不同**）。
+
+**涉及文件**：CI 流水线 → 仓库 **`.github/workflows/*.yml`**、**`.gitcode/pipelines/*.yml`** 或你们实际使用的 Jenkinsfile（`git grep run_matrix` 定位）；smoke 可 **新增/裁剪 profile** → `experiments/diff-coder/profiles/*.json`；阈值脚本可放在 **`experiments/diff-coder/`** 下小工具或 `akg_agents/scripts/`，与 MR 一并说明入口命令。
+
+### 6. 标签与题面审计（可开独立 issue）
+
+1. 打开 `profiles/...` 中每个 `benchmarks[].id` 与对应 **`test_target`**。  
+2. 在 `tests/op/bench/test_bench_triton_cuda.py`（或实际路径）中核对 **`get_kernelbench_op_name([...])` 或 level2 列表** 与 **算子名**。  
+3. 对 **`batchnorm`**：要么改题号与 `33_BatchNorm` 一致，要么将 profile id 改为 **`relu_smoke`** 等 **名实一致** 的名称，并在看板中替换旧标签。  
+4. 审计结果写入 **一行表格**（id / 测试文件 / KernelBench 题号 / 备注）放在 `README.md` 或 `EXPERIMENT_REPORT` 附录链接，避免口头约定。
+
+**涉及文件**：**`experiments/diff-coder/profiles/*.json`**（`benchmarks[].id` / `test_target`）；**`tests/op/bench/test_bench_triton_cuda.py`**（KernelBench 题号与 marker）；审计表落 **`README.md`** 或本报告新增小节。
+
+### 7. `out/`、Docker 与本地开发体验
+
+- **默认输出路径**：矩阵 slug 形如 `out/diffcoder/...`；在文档中说明 **与 `workspace_root` 的关系**，避免贡献者找不到 `summary.tsv`。  
+- **root 写卷**：若容器以 root 写 bind mount，宿主机 `git clean` / `rebase` 可能 **Permission denied**；推荐在文档中写明 **任选其一**：(a) 容器内指定非 root user；(b) 跑完后对输出目录 `sudo chown`；(c) 将 `out` 指到 **仓库外** 专用目录并在 `.gitignore` 已忽略。  
+- **CI**：若 CI 内跑矩阵，**产物目录** 应落在 workspace 子路径且 **job 结束清理**，避免磁盘涨满。
+
+**涉及文件**：profile 里 **`out_dir_prefix` / `workspace_root`** → **`experiments/diff-coder/profiles/*.json`**；Docker 镜像名 → 同上 profile；**仓库根 `.gitignore`**（确保 `out/` 或自定义产物目录被忽略）；运维说明 → **`README.md`** 或 **`docs/`** 下贡献指南（若项目有 `CONTRIBUTING.md` 可链过去）；CI job 的 `rm -rf` / volume → **`.github/workflows/*`、`.gitcode/*` 或 Jenkinsfile**。
+
+### 8. 对外汇报与 MR 描述模板（可直接复用）
+
+- **必须呈现**：按 **benchmark** 分组的表；若篇幅允许，附 **本报告 §「同一 (benchmark, fail_mode) Δ%」** 表或链接。  
+- **禁止单独使用**：仅一句「平均墙钟降 45%」而无 **分层** 与 **实验条件**（注入失败、CUDA KernelBench、模型名）。  
+- **MR 检查项**：是否说明 **profile 版本 / 模型 / repeats**；是否声明 **不覆盖 Ascend 全库**。
+
+**涉及文件**：仅 **MR 描述 + 本 `EXPERIMENT_REPORT.md`**（可选在 `README.md` 加一句「对外汇报见报告 §8」）；无强制代码路径。
+
+### 9. 后续扩展（非阻塞本 MR）
+
+- **Triton-Ascend / NPU**：在等价注入与计时字段就绪后，**平行跑一小矩阵**，验证 CUDA 上结论是否迁移；再决定是否与 `model_selector` 联合优化。  
+- **线上分流**：积累 **真实 fail_mode 分布** 与 **repair 占比** 后，用数据替换 §3.1 的静态规则，并保留 profile 级 A/B 开关做金丝雀。
+
+**涉及文件**：Ascend 侧通常 **新增 profile**（`experiments/diff-coder/profiles/` 或 `akg_agents/.../op/config/*.yaml`）+ **对应 pytest / bench 脚本**；与 `model_selector` 联动 → 以 **`git grep model_selector`** 命中模块为准，再复制一版矩阵 `repair_variants` 做金丝雀。
 
 ---
 
-## 九、修订记录
+## 修订记录
 
 | 日期 | 说明 |
 |------|------|
-| 2026-05-14 | 首版：结构对齐实习报告体例；数值来自 `<workspace>/akg/out/diffcoder` 一次矩阵跑出的 `summary.tsv` 聚合 |
-| 2026-05-14 | 术语统一：报告内以「diff 修复」表述开关维度；技术标识 `targeted_on`/`targeted_off`、`AIKG_TARGETED_REPAIR` 仍与代码一致 |
+| 2026-05-14 | 首版：完整体例与复现、附录脚本 |
+| 2026-05-14 | 精简版：实验说明摘要 + GitCode 链接 + 观察/结论/建议；数值与首版同一批 `summary.tsv` 聚合 |
+| 2026-05-14 | 扩充「推荐修改方案」：合入顺序、分流启发式、回归基线、`out/` 权限与汇报口径 |
+| 2026-05-14 | 「推荐修改方案」细化：分阶段 MR、分流信号、配置契约、回归门禁、审计 checklist、运维与汇报模板、后续扩展 |
+| 2026-05-14 | 「推荐修改方案」各条补充 **涉及文件/目录** 与路径约定；对分支差异处注明 `git grep` 核对 |
 
 ---
 
