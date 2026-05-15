@@ -347,6 +347,18 @@ module {
     return %0 : tensor<2xi1>
   }
 
+  // CHECK-LABEL: func @main_full_bool_from_f64_fused
+  // CHECK: %[[FULL:.*]] = dvm.broadcast_scalar 5.000000e-01 shape [2] type Bool : f32 -> tensor<2xi1>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[FULL]] : tensor<2xi1> -> tensor<2xi1>
+  // CHECK: return %[[STORE]] : tensor<2xi1>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.full
+  func.func @main_full_bool_from_f64_fused() -> tensor<2xi1> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %cst = mfuse.constant dense<5.000000e-01> : tensor<f64, {is_scalar = ""}>
+    %0 = mfuse.full %cst : (tensor<f64, {is_scalar = ""}>) -> tensor<2xi1>
+    return %0 : tensor<2xi1>
+  }
+
   // CHECK-LABEL: func @main_full_i64_scalar_fused
   // CHECK: %[[FULL:.*]] = dvm.broadcast_scalar 7 shape [4] type Int64 : i32 -> tensor<4xi64>
   // CHECK: %[[STORE:.*]] = dvm.store %[[FULL]] : tensor<4xi64> -> tensor<4xi64>

@@ -222,9 +222,15 @@ logical output dtype 由 `type` attribute 表达，来自 result tensor element 
 ```mlir
 %0 = dvm.broadcast_scalar 1 shape [2] type Bool
   : i32 -> tensor<2xi1>
+
+%1 = dvm.broadcast_scalar 5.000000e-01 shape [2] type Bool
+  : f32 -> tensor<2xi1>
 ```
 
-bool fill value 被归一化成 `i32` scalar value `0/1`，logical output dtype 是 `Bool`。
+这两种形式都符合 DVM runtime 的接口模型。第一个例子对应 bool 或 int scalar value，第二个例子对应 float scalar value；logical output dtype 都由 `type Bool` 决定。
+
+当 DVM runtime 收到 `Broadcast(float_value, shape, kBool)` 时，会先按 `kFloat16` 生成 scalar broadcast，再 cast 到 bool（参考 dvm 开源项目中的 dvm/src/dvm.cc）。
+因此，`type Bool` 并不要求 scalar attr 必须是 `i32`。只有当输入 scalar constant 本身是 `i1` 时，mfuse-to-dvm 才会把它归一化成 `i32` 的 `0/1`，因为 DVM scalar Broadcast API 没有 bool 模板参数。
 
 ## Scalar 归一化
 
@@ -233,7 +239,7 @@ bool fill value 被归一化成 `i32` scalar value `0/1`，logical output dtype 
 conversion 会做 DVM ABI 归一化：
 
 - `f32`、`f16`、`bf16`、`i32`：直接提取为同类型 `TypedAttr`。
-- `i1`：仅在 broadcast scalar 路径允许，转换成 `i32` 的 `0/1`。
+- `i1`：仅在 broadcast scalar 路径允许，转换成 `i32` 的 `0/1`（和 dvm 开源项目中 `dvm/include/dvm_py.h::Full` 的实现对齐）。
 - `f64`：仅当值有限且可表示为 `f32` 时，转换成 `f32`。
 - `i64`：仅当值位于 `i32` 范围内时，转换成 `i32`。
 - 其它类型：报错。
@@ -251,7 +257,6 @@ conversion 会做 DVM ABI 归一化：
 
 - scalar attribute type 必须属于支持集合：`f32`、`f16`、`bf16`、`i32`。
 - `type` attribute 必须和 result tensor element type 匹配。
-- Bool result 必须使用 `i32` scalar value。
 - `shape` attribute 必须和 result tensor shape 一致。
 
 其中 `shape` 校验是必要的，因为 `dvm.broadcast_scalar` 没有 tensor operand 可以从中推导 broadcast 结果，`shape` 和 result type 是同一语义的两种表达。如果两者不一致，IR 本身就是矛盾的。

@@ -238,10 +238,6 @@ LogicalResult BroadcastScalarOp::verify() {
            << resultType.getElementType() << " does not match dtype " << stringifyDType(dtype);
   }
 
-  if (dtype == DType::Bool && !scalarType.isInteger(32)) {
-    return emitError("dvm.broadcast_scalar Bool result requires an i32 scalar value, got ") << scalarType;
-  }
-
   auto shape = getShape();
   if (static_cast<int64_t>(shape.size()) != resultType.getRank()) {
     return emitError("dvm.broadcast_scalar shape rank must match result rank, got ")
