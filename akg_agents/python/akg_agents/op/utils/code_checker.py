@@ -73,6 +73,13 @@ _A5_BL_ALIAS: str = _POLICY["a5_compliance"]["aliases"]["bl"]
 _A5_ONLY_APIS: frozenset = frozenset(_POLICY["a5_compliance"]["only_apis"])
 _BL_APIS: frozenset = frozenset(_POLICY["a5_compliance"]["bl_apis"])
 
+# TileLang compliance constants
+_DSL_COMPLIANCE_PREFIXES: tuple = tuple(_POLICY["dsl_compliance_prefixes"])
+_TL_MODULE_NAME: str = _POLICY["tilelang_compliance"]["module_name"]
+_TL_DECORATORS: frozenset = frozenset(_POLICY["tilelang_compliance"]["decorators"])
+_TL_PRIM_FUNC_ATTR: str = _POLICY["tilelang_compliance"]["prim_func_attr"]
+_TL_NAMESPACE: str = _POLICY["tilelang_compliance"]["tl_namespace"]
+
 
 def _find_model_new_class(tree: ast.Module) -> Optional[ast.ClassDef]:
     target = _POLICY["kernel_class_name"]
@@ -133,43 +140,178 @@ class CodeChecker:
         self._torch_call_prefixes_ordered = tuple(
             sorted(self.torch_call_prefixes, key=len, reverse=True)
         )
-        # PyPTO anti-cheat literals (decorator namespace/attr + dsl name).
-        _pypto = _POLICY["pypto_compliance"]
-        self._pypto_dsl = _pypto["dsl"]
-        self._pypto_decorator_module = _pypto["decorator_module"]
-        self._pypto_decorator_attr = _pypto["decorator_attr"]
         logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}, arch={self.arch}")
 
-    def _is_triton_decorator(self, node: ast.expr) -> bool:
+    @staticmethod
+    def _collect_import_aliases(tree: ast.Module) -> Dict[str, str]:
+        """Build a map of local-name → dotted-module-name from import statements.
+
+        Handles:
+          `from tilelang import jit`              → {"jit": "tilelang.jit"}
+          `from tilelang import jit as j`         → {"j": "tilelang.jit"}
+          `from triton import jit, autotune`       → {"jit": "triton.jit", "autotune": "triton.autotune"}
+          `import tilelang as tl`                  → {"tl": "tilelang"}
+          `import tilelang`                        → {"tilelang": "tilelang"}
+
+        Only collects aliases that resolve to the Triton or TileLang module
+        namespace — avoids false positives from unrelated `@jit` decorators.
+        """
+        _TARGET_MODULES = frozenset({_POLICY["triton_module_name"], _TL_MODULE_NAME})
+        alias_map: Dict[str, str] = {}
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split('.')[0] in _TARGET_MODULES:
+                        local_name = alias.asname if alias.asname else alias.name
+                        alias_map[local_name] = alias.name
+
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.module.split('.')[0] in _TARGET_MODULES:
+                    for alias in node.names:
+                        local_name = alias.asname if alias.asname else alias.name
+                        dotted = f"{node.module}.{alias.name}"
+                        alias_map[local_name] = dotted
+
+        return alias_map
+
+    def _is_triton_decorator(self, node: ast.expr, import_aliases: Optional[Dict[str, str]] = None) -> bool:
+        """Check if an AST node is a triton kernel decorator.
+
+        Recognizes three forms:
+          1. @triton.jit           — dotted attribute
+          2. @jit                  — bare name (when `from triton import jit` exists)
+          3. @triton.jit(...)      — called decorator (unwraps to check inner func)
+
+        `import_aliases` maps local bare names to their full dotted path
+        (e.g. {"jit": "triton.jit"}).  Built by _collect_import_aliases().
+        """
+        if import_aliases is None:
+            import_aliases = {}
+        # Called decorator: @triton.jit(...) or @jit(...) → unwrap to func
+        if isinstance(node, ast.Call):
+            return self._is_triton_decorator(node.func, import_aliases)
+        # Dotted form: @triton.jit
         if isinstance(node, ast.Attribute):
             return (
                 isinstance(node.value, ast.Name)
                 and node.value.id == _POLICY["triton_module_name"]
                 and node.attr in self.triton_decorators
             )
-        if isinstance(node, ast.Call):
-            return self._is_triton_decorator(node.func)
+        # Bare form: @jit — only matches if `jit` resolves to `triton.jit`
+        if isinstance(node, ast.Name):
+            resolved = import_aliases.get(node.id, "")
+            parts = resolved.rsplit(".", 1)
+            if len(parts) == 2 and parts[0] == _POLICY["triton_module_name"] and parts[1] in self.triton_decorators:
+                return True
         return False
+
+    def _is_tilelang_decorator(self, node: ast.expr, import_aliases: Optional[Dict[str, str]] = None) -> bool:
+        """Check if an AST node is a tilelang kernel decorator.
+
+        Recognizes three forms:
+          1. @tilelang.jit          — dotted attribute
+          2. @jit                   — bare name (when `from tilelang import jit` exists)
+          3. @tilelang.jit(...)     — called decorator (unwraps to check inner func)
+
+        `import_aliases` maps local bare names to their full dotted path
+        (e.g. {"jit": "tilelang.jit"}).  Built by _collect_import_aliases().
+        """
+        if import_aliases is None:
+            import_aliases = {}
+        # Called decorator: @tilelang.jit(...) or @jit(...) → unwrap to func
+        if isinstance(node, ast.Call):
+            return self._is_tilelang_decorator(node.func, import_aliases)
+        # Dotted form: @tilelang.jit
+        if isinstance(node, ast.Attribute):
+            return (
+                isinstance(node.value, ast.Name)
+                and node.value.id == _TL_MODULE_NAME
+                and node.attr in _TL_DECORATORS
+            )
+        # Bare form: @jit — only matches if `jit` resolves to `tilelang.jit`
+        if isinstance(node, ast.Name):
+            resolved = import_aliases.get(node.id, "")
+            parts = resolved.rsplit(".", 1)
+            if len(parts) == 2 and parts[0] == _TL_MODULE_NAME and parts[1] in _TL_DECORATORS:
+                return True
+        return False
+
+    def _is_prim_func_decorator(self, node: ast.expr) -> bool:
+        """Check if an AST node is a @T.prim_func decorator.
+
+        Accepts both `@T.prim_func` (bare) and `@T.prim_func(...)` (called).
+        Also handles aliased imports like `import tilelang.language as TL`
+        where the alias matches _TL_NAMESPACE.
+        """
+        if isinstance(node, ast.Attribute):
+            return (
+                isinstance(node.value, ast.Name)
+                and node.value.id == _TL_NAMESPACE
+                and node.attr == _TL_PRIM_FUNC_ATTR
+            )
+        if isinstance(node, ast.Call):
+            return self._is_prim_func_decorator(node.func)
+        return False
+
+    def _find_tilelang_kernel_calls(self, tree: ast.Module, kernel_names: set) -> set:
+        """Find tilelang kernel invocations in the AST.
+
+        TileLang kernel calls appear in two common patterns:
+
+        1. Direct call after factory construction:
+           kernel = kernel_func(params)       # factory returns compiled kernel
+           kernel(inputs, outputs)            # call the compiled kernel
+
+           Or inlined:
+           kernel_func(params)(inputs, outputs)
+
+        2. Explicit compile step:
+           compiled = tilelang.compile(func, target=...)
+           compiled(inputs, outputs)
+
+        We detect:
+        - Direct calls to any name in kernel_names (pattern 1)
+        - Calls to names assigned from tilelang.compile(...) (pattern 2)
+        """
+        launched: set = set()
+
+        # Pattern 2: collect names assigned from `tilelang.compile(...)` calls
+        compile_result_names: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        # RHS is `tilelang.compile(...)`
+                        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
+                            func = node.value.func
+                            if (
+                                isinstance(func.value, ast.Name)
+                                and func.value.id == _TL_MODULE_NAME
+                                and func.attr == "compile"
+                            ):
+                                compile_result_names.add(target.id)
+
+        # Pattern 1 + 2: walk all Call nodes and check if callee is a kernel
+        # name or a compile-result name
+        all_callable_names = kernel_names | compile_result_names
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in all_callable_names:
+                    if node.func.id in kernel_names:
+                        launched.add(node.func.id)
+                    elif node.func.id in compile_result_names:
+                        # A compiled kernel was called — mark all as launched
+                        # since we can't easily determine which one.
+                        launched.update(kernel_names)
+
+        return launched
 
     def _match_torch_call_prefix(self, call_name: str) -> Optional[str]:
         for prefix in self._torch_call_prefixes_ordered:
             if call_name.startswith(f"{prefix}."):
                 return prefix
         return None
-
-    def _is_pypto_kernel_decorator(self, node: ast.expr) -> bool:
-        """True for ``@pypto.jit`` / ``@pypto.frontend.jit`` (with or without
-        call arguments). Matched by decorator-namespace root + trailing attr,
-        so any ``pypto.*.jit`` spelling is covered."""
-        target = node.func if isinstance(node, ast.Call) else node
-        name = _dotted_name(target)
-        if not name:
-            return False
-        parts = name.split(".")
-        return (
-            parts[0] == self._pypto_decorator_module
-            and parts[-1] == self._pypto_decorator_attr
-        )
 
     # ------------------------------------------------------------------
     # 主入口
@@ -235,7 +377,7 @@ class CodeChecker:
             errors.extend(self._check_dsl_compliance(code))
 
         # Step 6: Autotune 规范检测（仅 triton DSL，语法正确时执行）
-        if not has_syntax_err and self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
+        if not has_syntax_err and self.dsl.startswith("triton"):
             errors.extend(self._check_autotune_compliance(code))
 
         # Step 7: A5 API 合规性检测
@@ -502,38 +644,140 @@ class CodeChecker:
         return errors
 
     # ------------------------------------------------------------------
-    # Step 5: DSL 合规性检测（反作弊）
+    # Step 5: DSL 合规性检测（反作弊）—— triton / tilelang 统一入口
     # ------------------------------------------------------------------
+
+    # DSL-specific metadata used by _check_dsl_compliance.
+    # Each entry keys off the compliance-prefix; the rest of the method
+    # is shared logic that only varies in these text / error_type templates.
+    _DSL_META = {
+        "triton": {
+            "kernel_decor_check": "_is_triton_decorator",
+            "no_kernel_type": "no_triton_kernel",
+            "no_kernel_detail": (
+                "DSL 指定为 {dsl}，但代码中未找到任何 @triton.jit 装饰的 kernel 函数。"
+                "代码可能使用了 torch 高层 API 替代 triton kernel 实现。"
+            ),
+            "no_kernel_suggestion": (
+                "请确保代码中包含至少一个 @triton.jit 装饰的 kernel 函数，"
+                "并在 ModelNew.forward() 中通过 kernel[grid](...) 语法调用它。"
+            ),
+            "not_called_type": "triton_kernel_not_called",
+            "not_called_detail": (
+                "定义了 triton kernel 函数 {kernel_list}，"
+                "但代码中未找到任何 kernel[grid](...) 形式的调用。"
+                "kernel 函数可能只是装饰性的，实际计算未使用 triton。"
+            ),
+            "not_called_suggestion": (
+                "请在 ModelNew.forward() 或其辅助方法中，"
+                "通过 kernel_name[grid_size](...) 语法启动 triton kernel。"
+            ),
+            "hard_type": "torch_api_instead_of_kernel",
+            "hard_detail": (
+                "forward() 中使用了 {count} 个不允许的 torch 高层计算 API: "
+                "{calls}。"
+                "这些操作（矩阵乘法、卷积、归一化、池化等）必须完全在 triton kernel 内实现。"
+            ),
+            "hard_suggestion": (
+                "请将这些核心计算操作移入 triton kernel 中实现，"
+                "forward() 仅负责准备输入、启动 kernel 和返回输出。"
+            ),
+            "soft_no_kernel_type": "torch_api_without_kernel",
+            "soft_no_kernel_detail": (
+                "forward() 中使用了 {count} 个 torch 计算 API: {calls}。"
+                "同时 triton kernel 未被调用，代码很可能用 torch API 替代了 kernel 实现。"
+            ),
+            "soft_no_kernel_suggestion": (
+                "请将核心计算逻辑用 triton kernel 实现。"
+                "这些简单操作（exp/relu/sum 等）如果只是 kernel 的前后处理可以保留，"
+                "但前提是必须有 kernel 承担主要计算。"
+            ),
+            "soft_with_kernel_log": (
+                "CodeChecker DSL compliance: forward() 调用了 triton kernel，"
+                "同时包含 {count} 处 torch 辅助计算 API: {calls}。"
+                "（融合算子可能合理，仅记录警告）"
+            ),
+        },
+        "tilelang": {
+            "kernel_decor_check": "_is_tilelang_decorator",
+            "no_kernel_type": "no_tilelang_kernel",
+            "no_kernel_detail": (
+                "DSL 指定为 {dsl}，但代码中未找到任何 @tilelang.jit 装饰的 "
+                "kernel 函数。代码可能使用了 torch 高层 API 替代 tilelang kernel "
+                "实现（torch 退化）。"
+            ),
+            "no_kernel_suggestion": (
+                "请确保代码中包含至少一个 @tilelang.jit 装饰的 kernel 函数，"
+                "并在 ModelNew.forward() 中调用编译后的 kernel 执行计算。"
+            ),
+            "not_called_type": "tilelang_kernel_not_called",
+            "not_called_detail": (
+                "定义了 tilelang kernel 函数 {kernel_list}，"
+                "但代码中未找到任何 kernel 调用。"
+                "kernel 函数可能只是装饰性的，实际计算未使用 tilelang（torch 退化）。"
+            ),
+            "not_called_suggestion": (
+                "请在 ModelNew.forward() 中调用编译后的 tilelang kernel 执行计算，"
+                "例如：\n"
+                "  kernel = my_kernel(M, N, K)\n"
+                "  kernel(A, B, C)\n"
+                "或使用 tilelang.compile 编译后调用：\n"
+                "  compiled = tilelang.compile(func, target='npuir')\n"
+                "  compiled(A, B, C)"
+            ),
+            "hard_type": "torch_api_instead_of_tilelang_kernel",
+            "hard_detail": (
+                "forward() 中使用了 {count} 个不允许的 torch 高层计算 API: "
+                "{calls}。"
+                "这些操作（矩阵乘法、卷积、归一化、池化等）必须完全在 tilelang kernel "
+                "内实现，使用 torch 实现即为退化。"
+            ),
+            "hard_suggestion": (
+                "请将这些核心计算操作移入 tilelang kernel 中实现，"
+                "forward() 仅负责准备输入、启动 kernel 和返回输出。"
+            ),
+            "soft_no_kernel_type": "torch_api_without_tilelang_kernel",
+            "soft_no_kernel_detail": (
+                "forward() 中使用了 {count} 个 torch 计算 API: {calls}。"
+                "同时 tilelang kernel 未被调用，代码很可能用 torch API 替代了 "
+                "kernel 实现（torch 退化）。"
+            ),
+            "soft_no_kernel_suggestion": (
+                "请将核心计算逻辑用 tilelang kernel 实现。"
+                "这些简单操作（exp/relu/sum 等）如果只是 kernel 的前后处理可以保留，"
+                "但前提是必须有 kernel 承担主要计算。"
+            ),
+            "soft_with_kernel_log": (
+                "CodeChecker TileLang DSL compliance: forward() 调用了 tilelang kernel，"
+                "同时包含 {count} 处 torch 辅助计算 API: {calls}。"
+                "（融合算子可能合理，仅记录警告）"
+            ),
+        },
+    }
 
     def _check_dsl_compliance(self, code: str) -> List[Dict]:
         """
-        DSL 反作弊检测入口（纯 AST 静态分析），按 DSL 家族分派：
+        检测生成代码是否真正使用了指定的 DSL 实现（纯 AST 静态分析）。
 
-        - triton 系列（triton_cuda / triton_ascend）→ _check_triton_compliance
-        - pypto                                       → _check_pypto_compliance
-        - 其他（torch 基线 / cpp / tilelang 等）       → 不检查，返回 []
+        对 triton 和 tilelang 系列 DSL 统一生效，检查三类问题：
 
-        作为唯一对外入口，workspace_autoresearch 的 quick_check 与 akg 内置
-        autoresearch 的 _qc_dsl_compliance 都经此进入，无需各自感知 DSL 家族。
-        """
-        if self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
-            return self._check_triton_compliance(code)
-        if self.dsl == self._pypto_dsl:
-            return self._check_pypto_compliance(code)
-        return []
-
-    def _check_triton_compliance(self, code: str) -> List[Dict]:
-        """
-        检测 triton 代码是否真正使用了 triton kernel（纯 AST 静态分析）。
-
-        检查三类问题：
-
-        A. 没有定义任何 @triton.jit kernel            → 硬失败
-        B. 定义了 kernel 但没有通过 kernel[grid](...) 调用 → 硬失败
+        A. 没有定义任何 DSL kernel                    → 硬失败
+        B. 定义了 kernel 但没有调用                     → 硬失败
         C. forward() 中使用了 torch 高层计算 API          → 结合 B 判断
-           - kernel 未调用 + torch API → 硬失败（明确作弊）
+           - kernel 未调用 + torch API → 硬失败（明确作弊 / 退化）
            - kernel 已调用 + torch API → 仅日志警告（可能是合理辅助操作）
         """
+        # Determine which DSL family we're checking
+        dsl_family = None
+        for prefix in _DSL_COMPLIANCE_PREFIXES:
+            if self.dsl.startswith(prefix):
+                dsl_family = prefix
+                break
+        if dsl_family is None:
+            return []
+
+        meta = self._DSL_META[dsl_family]
+
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -541,67 +785,60 @@ class CodeChecker:
 
         errors: List[Dict] = []
 
-        # --- A. 收集所有 @triton.jit 装饰的 kernel 函数名 ---
-        triton_kernels: set = set()
+        # Collect import aliases so we can recognise bare-name decorators
+        # like `@jit` (from `from tilelang import jit`).
+        import_aliases = self._collect_import_aliases(tree)
+
+        # --- A. 收集 kernel 函数（使用 DSL-specific 装饰器检测方法）---
+        decor_check_method = getattr(self, meta["kernel_decor_check"])
+        kernel_names: set = set()
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for dec in node.decorator_list:
-                    if self._is_triton_decorator(dec):
-                        triton_kernels.add(node.name)
+                    if decor_check_method(dec, import_aliases):
+                        kernel_names.add(node.name)
                         break
 
-        if not triton_kernels:
+        if not kernel_names:
             errors.append({
                 "line": 0,
-                "error_type": "no_triton_kernel",
-                "detail": (
-                    f"DSL 指定为 {self.dsl}，但代码中未找到任何 @triton.jit 装饰的 kernel 函数。"
-                    f"代码可能使用了 torch 高层 API 替代 triton kernel 实现。"
-                ),
-                "suggestion": (
-                    "请确保代码中包含至少一个 @triton.jit 装饰的 kernel 函数，"
-                    "并在 ModelNew.forward() 中通过 kernel[grid](...) 语法调用它。"
-                ),
+                "error_type": meta["no_kernel_type"],
+                "detail": meta["no_kernel_detail"].format(dsl=self.dsl),
+                "suggestion": meta["no_kernel_suggestion"],
                 "code_snippet": "",
                 "fix_strategy": "rewrite"
             })
             return errors
 
-        # --- B. 检查 kernel 是否在代码中被实际启动 (kernel[grid](...) 语法) ---
-        #
-        # 在 AST 中，kernel[grid](args) 解析为：
-        #   Call(func=Subscript(value=Name(id='kernel_name'), slice=...))
-        #
-        # 扫描整个文件而非仅 ModelNew，以覆盖 helper 函数中的调用。
-        launched_kernels: set = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
-                value = node.func.value
-                if isinstance(value, ast.Name) and value.id in triton_kernels:
-                    launched_kernels.add(value.id)
+        # --- B. 检查 kernel 是否在代码中被实际调用（DSL-specific 调用模式）---
+        if dsl_family == "triton":
+            # Triton: kernel[grid](...) → Call(func=Subscript(value=Name))
+            launched_kernels: set = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
+                    value = node.func.value
+                    if isinstance(value, ast.Name) and value.id in kernel_names:
+                        launched_kernels.add(value.id)
+        else:
+            # TileLang: kernel(inputs) or compiled(inputs) after tilelang.compile
+            launched_kernels = self._find_tilelang_kernel_calls(tree, kernel_names)
 
         kernels_not_launched = not launched_kernels
 
         if kernels_not_launched:
             errors.append({
                 "line": 0,
-                "error_type": "triton_kernel_not_called",
-                "detail": (
-                    f"定义了 triton kernel 函数 {sorted(triton_kernels)}，"
-                    f"但代码中未找到任何 kernel[grid](...) 形式的调用。"
-                    f"kernel 函数可能只是装饰性的，实际计算未使用 triton。"
+                "error_type": meta["not_called_type"],
+                "detail": meta["not_called_detail"].format(
+                    kernel_list=sorted(kernel_names)
                 ),
-                "suggestion": (
-                    "请在 ModelNew.forward() 或其辅助方法中，"
-                    "通过 kernel_name[grid_size](...) 语法启动 triton kernel。"
-                ),
+                "suggestion": meta["not_called_suggestion"],
                 "code_snippet": "",
                 "fix_strategy": "rewrite"
             })
 
         # --- C. 检查 forward() 中的 torch 高层计算 API 调用 ---
-        #
-        # 分两层处理：
+        # 分两层处理（triton / tilelang 共用同一套 torch API 分类）：
         #   HARD 类（matmul/einsum/conv/norm/softmax/pooling 等）:
         #       无论 kernel 是否已调用都硬失败 —— 这些必须由 kernel 实现。
         #   SOFT 类（exp/sin/relu/sum 等简单元素级/辅助操作）:
@@ -641,16 +878,11 @@ class CodeChecker:
         if hard_calls:
             errors.append({
                 "line": hard_calls[0][0],
-                "error_type": "torch_api_instead_of_kernel",
-                "detail": (
-                    f"forward() 中使用了 {len(hard_calls)} 个不允许的 torch 高层计算 API: "
-                    f"{_fmt_calls(hard_calls)}。"
-                    f"这些操作（矩阵乘法、卷积、归一化、池化等）必须完全在 DSL kernel 内实现。"
+                "error_type": meta["hard_type"],
+                "detail": meta["hard_detail"].format(
+                    count=len(hard_calls), calls=_fmt_calls(hard_calls)
                 ),
-                "suggestion": (
-                    "请将这些核心计算操作移入 triton kernel 中实现，"
-                    "forward() 仅负责准备输入、启动 kernel 和返回输出。"
-                ),
+                "suggestion": meta["hard_suggestion"],
                 "code_snippet": "",
                 "fix_strategy": "rewrite"
             })
@@ -660,141 +892,20 @@ class CodeChecker:
             if kernels_not_launched:
                 errors.append({
                     "line": soft_calls[0][0],
-                    "error_type": "torch_api_without_kernel",
-                    "detail": (
-                        f"forward() 中使用了 {len(soft_calls)} 个 torch 计算 API: "
-                        f"{_fmt_calls(soft_calls)}。"
-                        f"同时 triton kernel 未被调用，代码很可能用 torch API 替代了 kernel 实现。"
+                    "error_type": meta["soft_no_kernel_type"],
+                    "detail": meta["soft_no_kernel_detail"].format(
+                        count=len(soft_calls), calls=_fmt_calls(soft_calls)
                     ),
-                    "suggestion": (
-                        "请将核心计算逻辑用 triton kernel 实现。"
-                        "这些简单操作（exp/relu/sum 等）如果只是 kernel 的前后处理可以保留，"
-                        "但前提是必须有 kernel 承担主要计算。"
-                    ),
+                    "suggestion": meta["soft_no_kernel_suggestion"],
                     "code_snippet": "",
                     "fix_strategy": "rewrite"
                 })
             else:
                 logger.warning(
-                    f"CodeChecker DSL compliance: forward() 调用了 triton kernel，"
-                    f"同时包含 {len(soft_calls)} 处 torch 辅助计算 API: "
-                    f"{_fmt_calls(soft_calls)}。（融合算子可能合理，仅记录警告）"
+                    meta["soft_with_kernel_log"].format(
+                        count=len(soft_calls), calls=_fmt_calls(soft_calls)
+                    )
                 )
-
-        return errors
-
-    # ------------------------------------------------------------------
-    # Step 5 (pypto 分支): PyPTO 反作弊检测
-    # ------------------------------------------------------------------
-
-    def _check_pypto_compliance(self, code: str) -> List[Dict]:
-        """
-        PyPTO 反作弊检测（纯 AST 静态分析，规则刻意宽松，避免误伤）。
-
-        PyPTO kernel 用 @pypto.frontend.jit / @pypto.jit 装饰，调用方式是普通
-        函数调用 kernel(...)（常由工厂函数构造后返回再调用），不同于 triton 的
-        kernel[grid](...)。因此只拦截两类“明确作弊”信号：
-
-        A. 整个文件没有任何 @pypto(...).jit 装饰的 kernel → 硬失败（纯 torch 兜底）
-        B. 定义了 kernel 但 kernel 名与其工厂名都从未被调用 → 硬失败
-           （kernel 只是摆设，真正计算落回 torch，如 forward 直接 torch.cummin）
-        C. forward() 中使用了 torch 高层硬算子（matmul/conv/softmax 等）→ 硬失败
-
-        soft 类 torch 调用（exp/relu/sum 等）不做拦截，避免误伤前后处理。
-        """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return []
-
-        # --- A. 收集 @pypto(...).jit kernel，以及包裹 kernel 定义的工厂函数名 ---
-        # kernel_bearing 既含 kernel 自身名，也含其外层工厂名：任一被调用即视为使用。
-        kernel_bearing: set = set()
-        for outer in ast.walk(tree):
-            if not isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for inner in ast.walk(outer):
-                if not isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if any(self._is_pypto_kernel_decorator(d) for d in inner.decorator_list):
-                    kernel_bearing.add(outer.name)
-                    break
-
-        if not kernel_bearing:
-            return [{
-                "line": 0,
-                "error_type": "no_pypto_kernel",
-                "detail": (
-                    f"DSL 指定为 {self.dsl}，但代码中未找到任何 @pypto.frontend.jit "
-                    "（或 @pypto.jit）装饰的 kernel，疑似直接用 torch 实现替代了 pypto。"
-                ),
-                "suggestion": (
-                    "请用 @pypto.frontend.jit 定义 kernel，在 kernel 内通过 pypto.* "
-                    "算子完成核心计算，并在 ModelNew.forward() 中调用该 kernel。"
-                ),
-                "code_snippet": "",
-                "fix_strategy": "rewrite",
-            }]
-
-        # --- B. kernel / 工厂是否被实际调用（普通函数名调用，全文件范围，规则宽松）---
-        called_names: set = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                called_names.add(node.func.id)
-
-        errors: List[Dict] = []
-        if not (kernel_bearing & called_names):
-            errors.append({
-                "line": 0,
-                "error_type": "pypto_kernel_not_called",
-                "detail": (
-                    f"定义了 pypto kernel（或其工厂）{sorted(kernel_bearing)}，"
-                    "但全文件未找到任何对它们的调用，kernel 可能只是摆设，"
-                    "实际计算落回了 torch。"
-                ),
-                "suggestion": (
-                    "请在 ModelNew.forward() 中实际调用 pypto kernel（或构造它的工厂函数），"
-                    "由 kernel 承担核心计算，而不是用 torch 算子直接出结果。"
-                ),
-                "code_snippet": "",
-                "fix_strategy": "rewrite",
-            })
-
-        # --- C. forward() 中的 torch 高层硬算子（复用与 triton 相同的硬名单）---
-        model_cls = _find_model_new_class(tree)
-        forward_node = _find_forward(model_cls) if model_cls is not None else None
-        if forward_node is None:
-            return errors
-
-        hard_calls: List[tuple] = []
-        for node in ast.walk(forward_node):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                call_name = _dotted_name(node.func)
-                if (call_name
-                        and self._match_torch_call_prefix(call_name)
-                        and node.func.attr in self.torch_compute_ops_hard):
-                    hard_calls.append((node.lineno, call_name))
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
-                hard_calls.append((node.lineno, "@ (matmul operator)"))
-
-        if hard_calls:
-            summary = ", ".join(f"{name}(第{line}行)" for line, name in hard_calls[:5])
-            if len(hard_calls) > 5:
-                summary += f" 等（共 {len(hard_calls)} 处）"
-            errors.append({
-                "line": hard_calls[0][0],
-                "error_type": "torch_api_instead_of_kernel",
-                "detail": (
-                    f"forward() 中使用了 {len(hard_calls)} 个不允许的 torch 高层算子: "
-                    f"{summary}。矩阵乘法/卷积/归一化等核心计算必须在 pypto kernel 内实现。"
-                ),
-                "suggestion": (
-                    "请将这些核心计算移入 @pypto.frontend.jit kernel，"
-                    "forward() 仅负责准备输入、调用 kernel 和整理输出。"
-                ),
-                "code_snippet": "",
-                "fix_strategy": "rewrite",
-            })
 
         return errors
 
@@ -896,11 +1007,13 @@ class CodeChecker:
         except SyntaxError:
             return []
 
+        import_aliases = self._collect_import_aliases(tree)
+
         triton_kernels: List[ast.FunctionDef] = []
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for dec in node.decorator_list:
-                    if self._is_triton_decorator(dec):
+                    if self._is_triton_decorator(dec, import_aliases):
                         triton_kernels.append(node)
                         break
 

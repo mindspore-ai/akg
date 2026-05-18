@@ -64,7 +64,8 @@ except ImportError:
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
                       device_id: Optional[int] = None,
-                      clear_l2_cache: bool = True) -> str:
+                      clear_l2_cache: bool = True,
+                      framework: str = "torch") -> str:
         """Return code string to benchmark TileLang Ascend implementation.
 
         对齐 tilelang.profiler.do_bench 的实现：
@@ -72,7 +73,8 @@ except ImportError:
         - 支持 L2 cache 清除（256MB buffer + zero_）
         - 自动 warmup 和多次测量取最小值
         """
-        code = f"""
+        if framework == "torch":
+            code = f"""
         import torch
 
         def tilelang_benchmark_fn():
@@ -111,12 +113,17 @@ except ImportError:
             [s.elapsed_time(e) for s, e in zip(start_event, end_event)],
             dtype=torch.float,
         )
-        execution_time_ms = torch.min(times).item()
+        execution_time_ms = torch.mean(times).item()
         method = "tilelang_event_timing"
 """
+        else:
+            raise ValueError(
+                f"TileLang Ascend currently only supports framework='torch', "
+                f"got framework='{framework}'"
+            )
         return code
 
-    def get_special_setup_code(self) -> str:
+    def get_special_setup_code(self, framework: str = "torch") -> str:
         return """import tilelang
 tilelang.cache.clear_cache()
 try:

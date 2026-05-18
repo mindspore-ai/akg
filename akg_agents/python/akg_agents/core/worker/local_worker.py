@@ -30,6 +30,22 @@ from akg_agents.op.verifier.roofline_utils import (
 logger = logging.getLogger(__name__)
 
 
+# 信号编号到名称的映射
+_SIGNAL_NAMES = {
+    1: "SIGHUP",   # Hangup
+    2: "SIGINT",   # Interrupt
+    3: "SIGQUIT",  # Quit
+    6: "SIGABRT",  # Abort
+    9: "SIGKILL",  # Kill
+    11: "SIGSEGV", # Segmentation fault
+    13: "SIGPIPE", # Broken pipe
+    15: "SIGTERM", # Termination
+}
+
+def _get_signal_name(signum: int) -> str:
+    """将信号编号转换为可读名称"""
+    return _SIGNAL_NAMES.get(signum, f"SIG({signum})")
+
 def collect_json_artifacts(directory: str) -> Dict[str, str]:
     """
     收集目录中所有 JSON/JSONL 文件的原始内容。
@@ -133,6 +149,16 @@ class LocalWorker(WorkerInterface):
                     
                     output_log = stdout.decode(errors='replace') + "\n" + stderr.decode(errors='replace')
                     success = (returncode == 0)
+
+                    # 当 returncode 为负数时，表示进程被信号终止
+                    # subprocess pipes 无法捕获 "Segmentation fault" 等 shell 消息
+                    # 需要自己生成有意义的错误信息
+                    if returncode < 0 and not output_log.strip():
+                        signal_name = _get_signal_name(-returncode)
+                        output_log = (
+                            f"Process terminated by signal {-returncode} ({signal_name}).\n"
+                            f"No output captured (process died before writing to stdout/stderr).\n"
+                        )
                     
                     # 收集执行过程中生成的 JSON 文件
                     artifacts = collect_json_artifacts(extract_dir)
@@ -219,8 +245,8 @@ class LocalWorker(WorkerInterface):
                 
                 # 4. Execute profiling based on backend/dsl
                 try:
-                    if "pypto" in dsl or "triton_cuda" in dsl or "triton_ascend" in dsl or backend == "cpu":
-                        # PyPTO/Triton/CPU: run profile scripts directly (in sync context)
+                    if "tilelang" in dsl or "pypto" in dsl or "triton_cuda" in dsl or "triton_ascend" in dsl or backend == "cpu":
+                        # TileLang/PyPTO/Triton/CPU: run profile scripts directly (in sync context)
                         loop = asyncio.get_running_loop()
                         base_time, gen_time = await loop.run_in_executor(
                             None,

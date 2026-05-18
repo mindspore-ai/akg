@@ -165,7 +165,7 @@ async def main():
                         help="Operator name (auto-derived from --desc if omitted)")
     parser.add_argument("--dsl", type=str, default=None,
                         choices=["triton_ascend", "triton_cuda", "torch",
-                                 "cuda_c", "cpp", "ascendc", "tilelang_cuda"])
+                                 "cuda_c", "cpp", "ascendc", "tilelang_cuda", "tilelang_ascend"])
     parser.add_argument("--backend", type=str, default=None,
                         choices=["ascend", "cuda", "cpu"])
     parser.add_argument("--arch", type=str, default=None)

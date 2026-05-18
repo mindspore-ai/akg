@@ -2,13 +2,12 @@
 log_dir: "~/akg_agents_logs"
 
 # Workflow configuration
-default_workflow: "default_workflow"
+default_workflow: "kernelgen_only_workflow"
 max_step: 20
 
 # Documentation directory configuration
 docs_dir:
-  designer: "op/resources/docs/tilelang_cuda_docs"
-  coder: "op/resources/docs/tilelang_cuda_docs"
+  kernelgen: ""
 
 # Performance analysis configuration
 profile_settings:
@@ -27,3 +26,5 @@ enable_llm_range_inference: false
 multi_case_num: 10
 sampling_strategy: "mixed"
 sampling_seed: 42
+
+enable_fix_code_gen: true

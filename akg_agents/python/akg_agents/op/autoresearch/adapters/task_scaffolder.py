@@ -33,7 +33,7 @@ def scaffold_task_dir(
     context_files: dict[str, str] | None = None,
     extra_files: dict[str, str] | None = None,
     max_rounds: int = 20,
-    eval_timeout: int = 120,
+    eval_timeout: int = 300,
     dsl: str = "",
     framework: str = "",
     backend: str = "",

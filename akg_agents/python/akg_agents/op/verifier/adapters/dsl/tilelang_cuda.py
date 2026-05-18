@@ -71,7 +71,8 @@ class DSLAdapterTilelangCuda(DSLAdapter):
 
         Uses tilelang.profiler.do_bench (CUDA event backend) with L2 cache flush.
         """
-        code = f"""
+        if framework == "torch":
+            code = f"""
         import torch
         torch.cuda.synchronize()
 
@@ -107,7 +108,12 @@ class DSLAdapterTilelangCuda(DSLAdapter):
             [s.elapsed_time(e) for s, e in zip(start_event, end_event)],
             dtype=torch.float,
         )
-        execution_time_ms = torch.min(times).item()
+        execution_time_ms = torch.mean(times).item()
         method = "tilelang_event_timing"
 """
+        else:
+            raise ValueError(
+                f"TileLang CUDA currently only supports framework='torch', "
+                f"got framework='{framework}'"
+            )
         return code
