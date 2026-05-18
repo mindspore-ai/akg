@@ -424,6 +424,31 @@ class CommonUtils {
     return ValueRange();
   }
 
+  // Extract affine access with symbols demoted to dims so that
+  // `MemRefAccess::operator==` can recognize aliasing accesses like
+  // `memref[%i, symbol(%j) + c]` vs `memref[%i, %j + c]`.
+  static void getDimOnlyAccess(Operation *op, AffineMap &map, SmallVectorImpl<Value> &operands) {
+    if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+      map = load.getAffineMap();
+      llvm::append_range(operands, load.getMapOperands());
+    } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+      map = store.getAffineMap();
+      llvm::append_range(operands, store.getMapOperands());
+    } else {
+      return;
+    }
+    unsigned numDims = map.getNumDims();
+    unsigned numSyms = map.getNumSymbols();
+    if (numSyms == 0) return;
+    SmallVector<AffineExpr> symReplacements;
+    symReplacements.reserve(numSyms);
+    for (unsigned i = 0; i < numSyms; ++i) {
+      symReplacements.push_back(getAffineDimExpr(numDims + i, map.getContext()));
+    }
+    map = map.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
+                                    /*numResultDims=*/numDims + numSyms, /*numResultSyms=*/0);
+  }
+
   static Value getStoreMemref(Operation *storeOp) {
     if (!storeOp) {
       return Value();
