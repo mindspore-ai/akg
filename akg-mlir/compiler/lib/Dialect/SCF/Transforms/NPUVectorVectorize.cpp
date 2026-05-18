@@ -267,6 +267,7 @@ static Value vectorizeBroadcastScalar(Value scalarVal, LoopVectorizationCtx &ctx
 static void ensureReductionYield(LoopVectorizationCtx &ctx);
 static LogicalResult vectorizeOneOp(Operation &op, LoopVectorizationCtx &ctx);
 static void processLoop(LoopVectorizationCtx &ctx);
+static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSsaValue);
 
 static bool hasVectorizationAttr(Operation *op) {
   return op->hasAttr(kVectorAttr) || op->hasAttr(kBroadcastLoopAttr) || op->hasAttr(kReductionXLoopAttr) ||
@@ -650,12 +651,126 @@ static void reconcileValueDimOrderWithTileExtents(Value loadedVector, SmallVecto
   sortedDims = std::move(fromExtents);
 }
 
+static void collectVectorAxes(const LoopVectorizationCtx &ctx, SmallVectorImpl<std::pair<Value, int>> &axes) {
+  axes.clear();
+  DenseSet<Value> seen;
+  for (auto &[op, dim] : ctx.allLoopToVectorDim) {
+    auto forOp = dyn_cast<scf::ForOp>(op);
+    if (!forOp || !seen.insert(forOp.getInductionVar()).second) continue;
+    axes.push_back({forOp.getInductionVar(), static_cast<int>(dim)});
+  }
+  if (ctx.vectorizationAxis && ctx.vectorAxisVectorDim && seen.insert(ctx.vectorizationAxis).second)
+    axes.push_back({ctx.vectorizationAxis, static_cast<int>(*ctx.vectorAxisVectorDim)});
+  llvm::sort(axes, [](const auto &lhs, const auto &rhs) { return lhs.second < rhs.second; });
+}
+
+static bool affineExprCoeffForIndex(AffineExpr expr, ArrayRef<int64_t> operandCoeffs, unsigned numDims,
+                                    int64_t &coeff) {
+  coeff = 0;
+  if (isa<AffineConstantExpr>(expr)) return true;
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+    unsigned pos = dimExpr.getPosition();
+    if (pos >= operandCoeffs.size()) return false;
+    coeff = operandCoeffs[pos];
+    return true;
+  }
+  if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr)) {
+    unsigned pos = numDims + symbolExpr.getPosition();
+    if (pos >= operandCoeffs.size()) return false;
+    coeff = operandCoeffs[pos];
+    return true;
+  }
+
+  auto binaryExpr = dyn_cast<AffineBinaryOpExpr>(expr);
+  if (!binaryExpr) return false;
+
+  int64_t lhsCoeff = 0;
+  int64_t rhsCoeff = 0;
+  if (!affineExprCoeffForIndex(binaryExpr.getLHS(), operandCoeffs, numDims, lhsCoeff) ||
+      !affineExprCoeffForIndex(binaryExpr.getRHS(), operandCoeffs, numDims, rhsCoeff))
+    return false;
+
+  switch (binaryExpr.getKind()) {
+    case AffineExprKind::Add:
+      coeff = lhsCoeff + rhsCoeff;
+      return true;
+    case AffineExprKind::Mul:
+      return lhsCoeff == 0 && rhsCoeff == 0;
+    case AffineExprKind::Mod:
+    case AffineExprKind::FloorDiv:
+    case AffineExprKind::CeilDiv:
+      return lhsCoeff == 0 && rhsCoeff == 0;
+    default:
+      return false;
+  }
+}
+
+static bool indexCoeffForVectorAxis(Value index, Value vectorAxis, int64_t &coeff) {
+  coeff = 0;
+  if (index == vectorAxis) {
+    coeff = 1;
+    return true;
+  }
+
+  Operation *definingOp = index.getDefiningOp();
+  if (!definingOp) return true;
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(definingOp)) {
+    int64_t lhsCoeff = 0;
+    int64_t rhsCoeff = 0;
+    if (!indexCoeffForVectorAxis(addOp.getLhs(), vectorAxis, lhsCoeff) ||
+        !indexCoeffForVectorAxis(addOp.getRhs(), vectorAxis, rhsCoeff))
+      return false;
+    coeff = lhsCoeff + rhsCoeff;
+    return true;
+  }
+  if (auto subOp = dyn_cast<arith::SubIOp>(definingOp)) {
+    int64_t lhsCoeff = 0;
+    int64_t rhsCoeff = 0;
+    if (!indexCoeffForVectorAxis(subOp.getLhs(), vectorAxis, lhsCoeff) ||
+        !indexCoeffForVectorAxis(subOp.getRhs(), vectorAxis, rhsCoeff))
+      return false;
+    coeff = lhsCoeff - rhsCoeff;
+    return true;
+  }
+  if (auto affineApplyOp = dyn_cast<affine::AffineApplyOp>(definingOp)) {
+    SmallVector<int64_t> operandCoeffs;
+    operandCoeffs.reserve(affineApplyOp.getMapOperands().size());
+    for (Value operand : affineApplyOp.getMapOperands()) {
+      int64_t operandCoeff = 0;
+      if (!indexCoeffForVectorAxis(operand, vectorAxis, operandCoeff)) return false;
+      operandCoeffs.push_back(operandCoeff);
+    }
+    return affineExprCoeffForIndex(affineApplyOp.getAffineMap().getResult(0), operandCoeffs,
+                                   affineApplyOp.getAffineMap().getNumDims(), coeff);
+  }
+
+  return !definitionGraphContainsValue(index, vectorAxis);
+}
+
+static int getVectorDimForIndex(Value index, const LoopVectorizationCtx &ctx) {
+  int directDim = ctx.getVectorDimForIV(index);
+  if (directDim >= 0) return directDim;
+
+  SmallVector<std::pair<Value, int>> axes;
+  collectVectorAxes(ctx, axes);
+  int matchedDim = -1;
+  for (auto [axis, dim] : axes) {
+    int64_t coeff = 0;
+    if (!indexCoeffForVectorAxis(index, axis, coeff)) return -1;
+    if (coeff == 0) continue;
+    if (coeff != 1 || matchedDim >= 0) return -1;
+    matchedDim = dim;
+  }
+  return matchedDim;
+}
+
 static void collectLoadIndexVectorDims(memref::LoadOp loadOp, const LoopVectorizationCtx &ctx,
                                        SmallVectorImpl<int> &indexToDim, SmallVector<int> &activeInAppearOrder) {
   indexToDim.clear();
   activeInAppearOrder.clear();
   for (Value idx : loadOp.getIndices()) {
-    int dim = ctx.getVectorDimForIV(idx);
+    int dim = getVectorDimForIndex(idx, ctx);
     indexToDim.push_back(dim);
     if (dim >= 0) activeInAppearOrder.push_back(dim);
   }
@@ -667,7 +782,7 @@ static bool loadIndicesAreLoopInvariant(memref::LoadOp loadOp, LoopVectorization
   Value vecAxis = ctx.getVectorizationAxis();
   Value mappedVecAxis = ctx.valueMapping.lookupOrDefault(vecAxis);
   for (Value idx : loadOp.getIndices()) {
-    if (ctx.getVectorDimForIV(idx) >= 0) return false;
+    if (getVectorDimForIndex(idx, ctx) >= 0) return false;
     if (idx == vecAxis || idx == mappedVecAxis) return false;
     if (idx.getParentBlock() == ctx.scalarLoop.getBody()) return false;
   }
@@ -960,7 +1075,7 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
 
   SmallVector<int> storeDimOrder;
   for (Value idx : storeOp.getIndices()) {
-    int dim = ctx.getVectorDimForIV(idx);
+    int dim = getVectorDimForIndex(idx, ctx);
     if (dim >= 0) storeDimOrder.push_back(dim);
   }
 
@@ -2218,9 +2333,8 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
   }
 
   if (!ctx.vf1FuncLevelNoAnchor) {
-    bool hasVectorDim = llvm::any_of(storeOp.getIndices(), [&](Value idx) {
-      return ctx.getVectorDimForIV(idx) >= 0;
-    });
+    bool hasVectorDim =
+      llvm::any_of(storeOp.getIndices(), [&](Value idx) { return getVectorDimForIndex(idx, ctx) >= 0; });
     if (!hasVectorDim) {
       cloneScalarOp(*storeOp.getOperation(), ctx);
       return success();
