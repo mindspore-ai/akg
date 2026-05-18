@@ -93,8 +93,8 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
     if (isa<affine::AffineStoreOp, affine::AffineLoadOp>(op1) &&
         isa<affine::AffineStoreOp, affine::AffineLoadOp>(op2)) {
       AffineMap map1, map2;
-      CommonUtils::getDimOnlyAccess(op1, map1, vals1);
-      CommonUtils::getDimOnlyAccess(op2, map2, vals2);
+      CommonUtils::getUnifiedAffineAccess(op1, map1, vals1);
+      CommonUtils::getUnifiedAffineAccess(op2, map2, vals2);
       if (!map1 || !map2 || map1 != map2) return false;
     } else if (isa<memref::StoreOp, memref::LoadOp>(op1) && isa<memref::StoreOp, memref::LoadOp>(op2)) {
       llvm::append_range(vals1, CommonUtils::getStoreLoadIndices(op1));
