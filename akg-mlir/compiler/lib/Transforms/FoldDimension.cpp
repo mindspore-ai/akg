@@ -30,9 +30,7 @@ namespace mlir {
 #define GEN_PASS_DEF_FOLDDIMENSION
 #define GEN_PASS_DECL_FOLDDIMENSION
 #include "akg/Transforms/Passes.h.inc"
-}  // namespace mlir
 
-using namespace mlir;
 
 #define DEBUG_TYPE "fold-dimension"
 
@@ -180,12 +178,12 @@ void foldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, con
   // (2,3,4) * (2,3,1) = (2,3,4)
   auto inputRank = shape0.size();
   opFoldableInfo.reserve(inputRank);
-  auto prevStatus = 0;
   auto curStatus = 0;
   auto foldedIndex = 0;
   constexpr auto kUnknownStatus = 3;
   // when the broadcast status changes, the folding status should change
   for (size_t i = 0; i < inputRank; i++) {
+    auto prevStatus = kUnknownStatus;
     auto bothStaticShapes = (!ShapedType::isDynamic(shape0[i]) && !ShapedType::isDynamic(shape1[i]));
     if (bothStaticShapes) {
       if (shape0[i] < shape1[i]) {
@@ -198,8 +196,6 @@ void foldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, con
     } else {
       if ((*symbolShape0)[i] == (*symbolShape1)[i]) {
         prevStatus = kNoBroadcast;
-      } else {
-        prevStatus = kUnknownStatus;
       }
     }
     if ((i > 0) && (curStatus != prevStatus || prevStatus == kUnknownStatus)) {
@@ -309,10 +305,9 @@ void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
 
   opFoldableInfo.reserve(inputRank);
   auto prevStatus = 0;
-  auto curStatus = 0;
   auto foldedIndex = 0;
   for (size_t i = 0; i < inputRank; i++) {
-    curStatus = int(inputShape[i] == resShape[i]);
+    auto curStatus = int(inputShape[i] == resShape[i]);
     if (i > 0 && prevStatus != curStatus) {
       foldedIndex++;
     }
@@ -342,20 +337,18 @@ void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
     (void)axes.emplace_back(axis_int_attr.getInt());
   }
 
-  // current foldable status: axes are seperated by reduction axes
+  // current foldable status: axes are separated by reduction axes
   auto foldedIndex = 0;
   size_t axesIndex = 0;
-  auto prevStatus = 0;
   auto curStatus = 0;
   // 0 = non-reduce, 1 = reduce
   // when the status changes, the folding status should change
   opFoldableInfo.reserve(inputTy.getShape().size());
   for (auto i = 0; i < inputRank; i++) {
+    auto prevStatus = 0;
     if (axesIndex < axes.size() && i == axes[axesIndex]) {
       prevStatus = 1;
       axesIndex++;
-    } else {
-      prevStatus = 0;
     }
     if (i > 0 && curStatus != prevStatus) {
       foldedIndex++;
@@ -560,7 +553,7 @@ void foldDimensionAnalyser::getFoldedType(const ShapedType inputTy, const llvm::
                                           llvm::SmallVector<int64_t> *flattenedShape,
                                           llvm::SmallVector<int64_t> *normalizedShapeAfter) const {
   auto shape = inputTy.getShape();
-  int64_t currentDim;
+  int64_t currentDim = -1;
   auto inputRank = shape.size();
   for (size_t i = 0; i < inputRank; i++) {
     if (i == 0) {
@@ -838,6 +831,7 @@ struct FoldDimension : public impl::FoldDimensionBase<FoldDimension> {
   }
 };
 }  // namespace
+}  // namespace mlir
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createFoldDimensionPass() {
   return std::make_unique<FoldDimension>();

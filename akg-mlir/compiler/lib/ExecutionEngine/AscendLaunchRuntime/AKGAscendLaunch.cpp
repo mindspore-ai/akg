@@ -187,7 +187,8 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
 
-  int64_t tiling_key, tiling_size = 0;
+  int64_t tiling_key;
+  uint64_t tiling_size = 0;
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
