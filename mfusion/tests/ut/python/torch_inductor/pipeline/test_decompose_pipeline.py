@@ -1,0 +1,191 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Test decompose pipeline with different operations."""
+
+import textwrap
+from ut_utils.mlir_checker import MlirChecker
+from mfusion.torch.inductor import fuse_and_optimize
+
+def test_decompose_pipeline_with_tanh():
+    """Test decompose pipeline with tanh operation."""
+    # Torch dialect MLIR string with tanh operation
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_tanh(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+            %0 = torch.aten.tanh %arg0 : !torch.vtensor<[4,4],f32> -> !torch.vtensor<[4,4],f32>
+            return %0 : !torch.vtensor<[4,4],f32>
+          }
+        }
+    """)
+
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.tanh"), checker.error
+
+
+def test_decompose_pipeline_with_tanh_dynamic_shape():
+    """Test symbolic shape inference through tanh decompose arithmetic chain."""
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_tanh_dynamic(%arg0: !torch.int, %arg1: !torch.vtensor<[2,?],f32>) -> !torch.vtensor<[2,?],f32> attributes {torch.assume_strict_symbolic_shapes} {
+            %0 = torch.symbolic_int "s0" {min_val = 2, max_val = 9223372036854775807} : !torch.int
+            torch.bind_symbolic_shape %arg1, [%0], affine_map<()[s0] -> (2, s0)> : !torch.vtensor<[2,?],f32>
+            %1 = torch.aten.tanh %arg1 : !torch.vtensor<[2,?],f32> -> !torch.vtensor<[2,?],f32>
+            torch.bind_symbolic_shape %1, [%0], affine_map<()[s0] -> (2, s0)> : !torch.vtensor<[2,?],f32>
+            return %1 : !torch.vtensor<[2,?],f32>
+          }
+        }
+    """)
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.tanh"), checker.error
+
+
+def test_decompose_pipeline_with_add():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>, %alpha: !torch.float) -> !torch.vtensor<[4,4],f32> {
+          %0 = torch.aten.add.Tensor %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.vtensor<[1],f32>, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.add.Tensor"), checker.error
+
+
+def test_decompose_pipeline_with_add_2():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>) -> !torch.vtensor<[4,4],f32> {
+          %alpha = torch.constant.float 1.0
+          %0 = torch.aten.add.Tensor %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.vtensor<[1],f32>, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.add.Tensor"), checker.error
+    assert checker.check_no_op("torch.aten.mul.Tensor"), checker.error
+
+
+def test_decompose_pipeline_with_add_scalar():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.int) -> !torch.vtensor<[4,4],f32> {
+          %alpha = torch.constant.float 1.0
+          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.int, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.operator"), checker.error
+    assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
+    assert checker.check_text_not_contains("builtin.unrealized_conversion_cast"), checker.error
+
+
+def test_decompose_pipeline_with_add_scalar2():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+          %arg1 = torch.constant.int 2
+          %alpha = torch.constant.float 1.0
+          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.int, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.operator"), checker.error
+    assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
+    assert checker.check_text_contains("torch.constant.int 2"), checker.error
+
+
+def test_decompose_pipeline_with_add_rmsnorm():
+    """Test decompose pipeline with add and rmsnorm operations for fusion."""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add_rms_norm(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[4,4],f32>, %arg2: !torch.vtensor<[4],f32>) -> (!torch.vtensor<[4,4],f32>, !torch.vtensor<[4,1],f32>) {
+          %alpha = torch.constant.float 1.0
+          %eps = torch.constant.float 1.0e-5
+          %dim = torch.constant.int 4
+          %0 = torch.aten.add.Tensor %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.vtensor<[4,4],f32>, !torch.float -> !torch.vtensor<[4,4],f32>
+          %1:2 = torch.operator "torch.npu.npu_rms_norm"(%0, %arg2, %eps) : (!torch.vtensor<[4,4],f32>, !torch.vtensor<[4],f32>, !torch.float) -> (!torch.vtensor<[4,4],f32>, !torch.vtensor<[4,1],f32>)
+          return %1#0, %1#1 : !torch.vtensor<[4,4],f32>, !torch.vtensor<[4,1],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_text_contains("torch.operator \"torch.npu.npu_add_rms_norm\""), checker.error
+
+
+def test_decompose_pipeline_with_gelu():
+    """Test decompose pipeline with gelu operation."""
+    # Torch dialect MLIR string with gelu operation
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_gelu(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+            %approx = torch.constant.str "none"
+            %0 = torch.aten.gelu %arg0, %approx : !torch.vtensor<[4,4],f32>, !torch.str -> !torch.vtensor<[4,4],f32>
+            return %0 : !torch.vtensor<[4,4],f32>
+          }
+        }
+    """)
+
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.gelu"), checker.error
+    assert checker.check_no_op("arith.constant"), checker.error
+
+
+def test_decompose_pipeline_with_sigmoid():
+    """Test decompose pipeline with sigmoid operation."""
+    # Torch dialect MLIR string with sigmoid operation
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_sigmoid(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+            %0 = torch.aten.sigmoid %arg0 : !torch.vtensor<[4,4],f32> -> !torch.vtensor<[4,4],f32>
+            return %0 : !torch.vtensor<[4,4],f32>
+          }
+        }
+    """)
+
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.sigmoid"), checker.error
+    assert checker.check_no_op("arith.constant"), checker.error
