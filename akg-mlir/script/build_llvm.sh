@@ -14,7 +14,7 @@
 # limitations under the License.
 
 CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
-AKG_DIR="${CUR_DIR}/../../"
+AKG_DIR="${CUR_DIR}/.."
 
 usage()
 {
@@ -42,17 +42,11 @@ mk_new_dir()
 }
 
 
-if [ ! -n "$1" ]; then
-    echo "Must input parameter!"
-    usage
-    exit 1
-fi
-
 # Parse arguments
 THREAD_NUM=32
 SIMD_SET=off
 CMAKE_ARGS=""
-PATH_TO_SOURCE_LLVM=${AKG_DIR}/third-party/llvm-project/
+PATH_TO_SOURCE_LLVM=${AKG_DIR}/third-party/llvm-project
 _BUILD_TYPE="Release"
 BACKEND_ENV="CPU"
 
@@ -105,10 +99,6 @@ do
 done
 echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 
-# Create directories
-mkdir -pv "${BUILD_DIR}"
-
-
 third_party_patch() {
   echo "Start patching to llvm."
   local FILE=${AKG_DIR}/third-party/llvm_patch_7cbf1a2591520c2491aa35339f227775f4d3adf6.patch
@@ -153,21 +143,21 @@ build_llvm() {
     cmake ../llvm \
     ${LLVM_CMAKE_ARGS} \
     -DPython3_FIND_STRATEGY=LOCATION \
-    -DLLVM_BUILD_EXAMPLES=ON \
+    -DLLVM_BUILD_EXAMPLES=OFF \
     -DLLVM_ENABLE_PROJECTS="llvm;mlir;clang;openmp" \
     -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
     -DLLVM_OPTIMIZED_TABLEGEN=ON \
     -DLLVM_ENABLE_OCAMLDOC=OFF \
     -DLLVM_ENABLE_BINDINGS=OFF \
-    -DLLVM_INSTALL_UTILS=ON \
+    -DLLVM_INSTALL_UTILS=OFF \
     -DCMAKE_BUILD_TYPE=${_BUILD_TYPE} \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DLLVM_ENABLE_RTTI=ON \
-    -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
+    -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
     -DCMAKE_INSTALL_PREFIX=${LLVM_OUTPUT_PATH}
 
-    cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} 
-    cmake --build . --target install 
+    cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
+    cmake --build . --target install
     echo "Success to build llvm project!"
 }
 

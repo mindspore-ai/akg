@@ -36,11 +36,15 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
 
   Option<std::string> target{*this, "process", llvm::cl::desc("the backend info"), llvm::cl::init("ascend")};
 
-  Option<std::string> arch{*this, "arch", llvm::cl::desc("the ascend architecture, e.g. '910A' or '910B'"),
-                           llvm::cl::init("910B")};
+  Option<std::string> arch{*this, "arch",
+                           llvm::cl::desc("the ascend architecture, e.g. 'Ascend910B1' or 'Ascend910_9581'"),
+                           llvm::cl::init("Ascend910B1")};
 
   Option<std::string> jsonFileName{*this, "json-file-name", llvm::cl::desc("mindspore json file name"),
                                    llvm::cl::init("")};
+  Option<bool> enableHIVMCompile{*this, "enable-hivm-compile", llvm::cl::desc("Enable HIMV compile pipeline"),
+                                 llvm::cl::init(false)};
+
   Option<bool> enableAutoMultiBuffer{*this, "enable-auto-multi-buffer", llvm::cl::desc("Enable auto multi buffer"),
                                      llvm::cl::init(true)};
 
@@ -52,10 +56,10 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
     *this, "enable-barrier-all", llvm::cl::desc("Enable barrier all mode for HIVM inject sync"), llvm::cl::init(false)};
   Option<bool> enableAutoInjectSync{*this, "enable-auto-inject-sync",
                                     llvm::cl::desc("Enable auto inject sync for HIVM"), llvm::cl::init(true)};
-  Option<bool> enableAutoStorageAlign{*this, "enable-auto--align", llvm::cl::desc("Enable auto align for HIVM"),
+  Option<bool> enableAutoStorageAlign{*this, "enable-auto-align", llvm::cl::desc("Enable auto align for HIVM"),
                                       llvm::cl::init(true)};
 
-  Option<bool> enableMemoryDisplay{*this, "enable-memory--display",
+  Option<bool> enableMemoryDisplay{*this, "enable-memory-display",
                                    llvm::cl::desc("Enable ascend memory display tools."), llvm::cl::init(false)};
 };
 
