@@ -46,6 +46,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -2320,6 +2321,50 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(Value dataToWrite, 
   return success();
 }
 
+static LogicalResult materializeSubviewIndicesBefore(SmallVectorImpl<OpFoldResult> &offsets,
+                                                     SmallVectorImpl<OpFoldResult> &sizes,
+                                                     SmallVectorImpl<OpFoldResult> &strides, Operation *insertPt,
+                                                     ConversionPatternRewriter &rewriter) {
+  IRMapping mapping;
+  auto materializeValue = [&](auto &&self, Value value) -> FailureOr<Value> {
+    if (Value mapped = mapping.lookupOrNull(value)) return mapped;
+
+    Operation *defOp = value.getDefiningOp();
+    if (!defOp || defOp->getBlock() != insertPt->getBlock() || defOp->isBeforeInBlock(insertPt)) {
+      return value;
+    }
+
+    if (defOp->getNumRegions() != 0 || !isMemoryEffectFree(defOp)) {
+      return failure();
+    }
+
+    for (Value operand : defOp->getOperands()) {
+      FailureOr<Value> remapped = self(self, operand);
+      if (failed(remapped)) return failure();
+      mapping.map(operand, *remapped);
+    }
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(insertPt);
+    rewriter.clone(*defOp, mapping);
+    return mapping.lookup(value);
+  };
+
+  auto materializeRange = [&](SmallVectorImpl<OpFoldResult> &foldResults) -> LogicalResult {
+    for (OpFoldResult &foldResult : foldResults) {
+      Value value = foldResult.dyn_cast<Value>();
+      if (!value) continue;
+      FailureOr<Value> remapped = materializeValue(materializeValue, value);
+      if (failed(remapped)) return failure();
+      foldResult = *remapped;
+    }
+    return success();
+  };
+
+  return failure(failed(materializeRange(offsets)) || failed(materializeRange(sizes)) ||
+                 failed(materializeRange(strides)));
+}
+
 /// Unified optimized lowering when transfer_write dest traces to memref.alloc/alloca.
 /// Traces dataToWrite through scf.for results to find the actual buffer (alloc),
 /// then inserts a subview of dest before that buffer's earliest use and RAUW-replaces it.
@@ -2365,8 +2410,17 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
     if (user == op.getOperation()) continue;
     if (user->getBlock() == block && user->isBeforeInBlock(insertPt)) insertPt = user;
   }
+
+  SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
+  SmallVector<OpFoldResult> subviewSizes(sizes.begin(), sizes.end());
+  SmallVector<OpFoldResult> subviewStrides(strides.begin(), strides.end());
+  if (failed(materializeSubviewIndicesBefore(subviewOffsets, subviewSizes, subviewStrides, insertPt, rewriter))) {
+    return rewriter.notifyMatchFailure(op, "failed to materialize subview indices before alloc-root rewrite");
+  }
+
   rewriter.setInsertionPoint(insertPt);
-  Value slicedDest = rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, offsets, sizes, strides);
+  Value slicedDest =
+    rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, subviewOffsets, subviewSizes, subviewStrides);
 
   rewriter.replaceAllUsesWith(actualBuf, slicedDest);
   rewriter.replaceOp(allocDef, slicedDest);
