@@ -617,6 +617,513 @@ class ModelNew(torch.nn.Module):
     )
 
 
+# TileLang DSL 合规性检测
+# ============================================================
+
+TILELANG_COMPLIANT_SOFTMAX = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def softmax_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+        shape: T.int32,
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            x_ub = T.alloc_ub([1, N], dtype)
+            max_ub = T.alloc_ub([1, 1], dtype)
+            sum_ub = T.alloc_ub([1, 1], dtype)
+            with T.Scope("Vector"):
+                T.copy(X[row_id, 0], x_ub[0, 0], [1, N])
+                T.npuir_reduce(x_ub, max_ub, dims=[1], reduce_mode="max")
+                T.npuir_sub(x_ub, max_ub, x_ub)
+                T.npuir_exp(x_ub, x_ub)
+                T.npuir_reduce(x_ub, sum_ub, dims=[1], reduce_mode="sum")
+                T.npuir_div(x_ub, sum_ub, x_ub)
+                T.copy(x_ub[0, 0], Y[row_id, 0], [1, N])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        M, N = x.shape
+        Y = torch.zeros_like(x)
+        func = softmax_kernel(M, N, "float32")
+        compiled = tilelang.compile(func, target="npuir")
+        compiled(x, Y, M)
+        return Y
+'''
+
+TILELANG_COMPLIANT_MATMUL_CUDA = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def matmul_kernel(M, N, K, block_M, block_N, block_K):
+    @T.prim_func
+    def main(
+        A: T.Tensor((M, K), "float32"),
+        B: T.Tensor((K, N), "float32"),
+        C: T.Tensor((M, N), "float32")):
+        with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=128) as (bx, by):
+            A_shared = T.alloc_shared((block_M, block_K), "float32")
+            B_shared = T.alloc_shared((block_K, block_N), "float32")
+            C_local = T.alloc_fragment((block_M, block_N), "float")
+            T.clear(C_local)
+            for ko in T.Pipelined(T.ceildiv(K, block_K), num_stages=3):
+                T.copy(A[by * block_M, ko * block_K], A_shared)
+                T.copy(B[ko * block_K, bx * block_N], B_shared)
+                T.gemm(A_shared, B_shared, C_local)
+            T.copy(C_local, C[by * block_M, bx * block_N])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, A, B):
+        M, K = A.shape
+        K2, N = B.shape
+        block_M, block_N, block_K = 128, 128, 32
+        C = torch.zeros([M, N], dtype=torch.float32, device=A.device)
+        kernel = matmul_kernel(M, N, K, block_M, block_N, block_K)
+        kernel(A, B, C)
+        return C
+'''
+
+TILELANG_TORCH_DEGRADATION = '''\
+import torch
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, y):
+        return torch.matmul(x, y)
+'''
+
+TILELANG_KERNEL_NOT_CALLED = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def unused_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            T.copy(X[row_id], Y[row_id])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.softmax(x, dim=-1)
+'''
+
+TILELANG_KERNEL_CALLED_WITH_HARD_TORCH = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def helper_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            T.copy(X[row_id], Y[row_id])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, w):
+        tmp = torch.empty_like(x)
+        func = helper_kernel(x.shape[0], x.shape[1], "float32")
+        compiled = tilelang.compile(func, target="npuir")
+        compiled(x, tmp, x.shape[0])
+        return torch.matmul(tmp, w)
+'''
+
+TILELANG_KERNEL_CALLED_WITH_SOFT_TORCH = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def relu_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            T.copy(X[row_id], Y[row_id])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        out = torch.empty_like(x)
+        func = relu_kernel(x.shape[0], x.shape[1], "float32")
+        compiled = tilelang.compile(func, target="npuir")
+        compiled(x, out, x.shape[0])
+        return torch.relu(out) + torch.exp(out)
+'''
+
+TILELANG_KERNEL_NOT_CALLED_SOFT_TORCH_ONLY = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def unused_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            T.copy(X[row_id], Y[row_id])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.relu(x)
+'''
+
+TILELANG_DIRECT_CALL_PATTERN = '''\
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit
+def add_kernel(M, N):
+    @T.prim_func
+    def main(
+        A: T.Tensor((M, N), "float32"),
+        B: T.Tensor((M, N), "float32"),
+        C: T.Tensor((M, N), "float32"),
+    ):
+        with T.Kernel(T.ceildiv(N, 128), T.ceildiv(M, 128), threads=128) as (bx, by):
+            T.copy(A[by * 128, bx * 128], C[by * 128, bx * 128])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, A, B):
+        M, N = A.shape
+        C = torch.empty_like(A)
+        kernel = add_kernel(M, N)
+        kernel(A, B, C)
+        return C
+'''
+
+
+@pytest.fixture
+def checker_tilelang_ascend():
+    return CodeChecker(backend="ascend", dsl="tilelang_ascend", arch="ascend910b4")
+
+
+@pytest.fixture
+def checker_tilelang_cuda():
+    return CodeChecker(backend="cuda", dsl="tilelang_cuda", arch="a100")
+
+
+@pytest.mark.level0
+def test_tilelang_dsl_compliant_ascend_passes(checker_tilelang_ascend):
+    """合规的 tilelang_ascend softmax 代码不应触发 DSL 错误"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_COMPLIANT_SOFTMAX)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_tilelang_dsl_compliant_cuda_passes(checker_tilelang_cuda):
+    """合规的 tilelang_cuda matmul 代码不应触发 DSL 错误"""
+    passed, _, errors = checker_tilelang_cuda.check(TILELANG_COMPLIANT_MATMUL_CUDA)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_no_tilelang_kernel(checker_tilelang_ascend):
+    """dsl=tilelang_ascend 但无 kernel — torch退化"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_TORCH_DEGRADATION)
+    assert passed is False
+    assert any(e["error_type"] == "no_tilelang_kernel" for e in errors)
+
+
+@pytest.mark.level0
+def test_tilelang_kernel_not_called(checker_tilelang_ascend):
+    """定义了 tilelang kernel 但没调用 + 用 torch.softmax — 硬失败"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_KERNEL_NOT_CALLED)
+    assert passed is False
+    error_types = {e["error_type"] for e in errors}
+    assert "tilelang_kernel_not_called" in error_types
+    # softmax is a hard torch op
+    assert "torch_api_instead_of_tilelang_kernel" in error_types
+
+
+@pytest.mark.level0
+def test_tilelang_hard_torch_api_rejected(checker_tilelang_ascend):
+    """kernel 调用了但 forward 用 torch.matmul — 硬失败"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_KERNEL_CALLED_WITH_HARD_TORCH)
+    assert passed is False
+    assert any(e["error_type"] == "torch_api_instead_of_tilelang_kernel" for e in errors)
+
+
+@pytest.mark.level0
+def test_tilelang_soft_torch_api_with_kernel_warning(checker_tilelang_ascend):
+    """kernel 调用了但 forward 有 torch.relu/torch.exp — 仅警告，不应硬失败"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_KERNEL_CALLED_WITH_SOFT_TORCH)
+    # soft torch API with kernel called = only warning, not hard failure
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_tilelang_soft_torch_api_without_kernel_rejected(checker_tilelang_ascend):
+    """kernel 定义了但没调用 + forward 用 torch.relu — 硬失败"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_KERNEL_NOT_CALLED_SOFT_TORCH_ONLY)
+    assert passed is False
+    error_types = {e["error_type"] for e in errors}
+    assert "tilelang_kernel_not_called" in error_types
+    assert "torch_api_without_tilelang_kernel" in error_types
+
+
+@pytest.mark.level0
+def test_tilelang_direct_call_pattern_passes(checker_tilelang_cuda):
+    """直接调用 kernel = kernel_func(params)(inputs) 模式 — 应通过"""
+    passed, _, errors = checker_tilelang_cuda.check(TILELANG_DIRECT_CALL_PATTERN)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_tilelang_yaml_policy_loaded():
+    """TileLang compliance keys are loaded from YAML"""
+    from akg_agents.op.utils import code_checker as cc
+    assert cc._TL_MODULE_NAME == "tilelang"
+    assert "jit" in cc._TL_DECORATORS
+    assert cc._TL_PRIM_FUNC_ATTR == "prim_func"
+    assert cc._TL_NAMESPACE == "T"
+    assert "triton" in cc._DSL_COMPLIANCE_PREFIXES
+    assert "tilelang" in cc._DSL_COMPLIANCE_PREFIXES
+
+
+@pytest.mark.level0
+def test_tilelang_check_skipped_for_torch(checker_no_dsl):
+    """dsl='torch' 跳过 tilelang DSL 检测"""
+    code = '''\
+import torch
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x, y):
+        return torch.matmul(x, y)
+'''
+    passed, _, errors = checker_no_dsl.check(code)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+# Import alias (bare-name decorator) detection
+# ============================================================
+
+TILELANG_BARE_JIT = '''\
+import torch
+from tilelang import jit
+import tilelang.language as T
+
+@jit
+def softmax_kernel(M, N, dtype="float32"):
+    @T.prim_func
+    def main(
+        X: T.Tensor((M, N), dtype),
+        Y: T.Tensor((M, N), dtype),
+        shape: T.int32,
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            x_ub = T.alloc_ub([1, N], dtype)
+            with T.Scope("Vector"):
+                T.copy(X[row_id, 0], x_ub[0, 0], [1, N])
+                T.copy(x_ub[0, 0], Y[row_id, 0], [1, N])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        M, N = x.shape
+        Y = torch.zeros_like(x)
+        func = softmax_kernel(M, N, "float32")
+        compiled = tilelang.compile(func, target="npuir")
+        compiled(x, Y, M)
+        return Y
+'''
+
+TILELANG_BARE_JIT_ALIAS = '''\
+import torch
+from tilelang import jit as tl_jit
+import tilelang.language as T
+
+@tl_jit
+def add_kernel(M, N):
+    @T.prim_func
+    def main(
+        A: T.Tensor((M, N), "float32"),
+        B: T.Tensor((M, N), "float32"),
+        C: T.Tensor((M, N), "float32"),
+    ):
+        with T.Kernel(M, is_npu=True) as (row_id, _):
+            T.copy(A[row_id], C[row_id])
+    return main
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, A, B):
+        M, N = A.shape
+        C = torch.empty_like(A)
+        kernel = add_kernel(M, N)
+        kernel(A, B, C)
+        return C
+'''
+
+TRITON_BARE_JIT = '''\
+import torch
+from triton import jit
+import triton.language as tl
+
+@jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x, y):
+        out = torch.empty_like(x)
+        n = x.numel()
+        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]),)
+        add_kernel[grid](x, y, out, n, BLOCK_SIZE=1024)
+        return out
+'''
+
+TRITON_BARE_JIT_ALIAS = '''\
+import torch
+from triton import jit as triton_jit
+import triton.language as tl
+
+@triton_jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x, y):
+        out = torch.empty_like(x)
+        n = x.numel()
+        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]),)
+        add_kernel[grid](x, y, out, n, BLOCK_SIZE=1024)
+        return out
+'''
+
+TILELANG_FALSE_BARE_JIT = '''\
+import torch
+# @jit here is NOT from tilelang — it's from some other module
+from some_other_lib import jit
+
+@jit
+def my_func(x):
+    return x
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        return torch.matmul(x, x)
+'''
+
+
+@pytest.mark.level0
+def test_tilelang_bare_jit_detected(checker_tilelang_ascend):
+    """from tilelang import jit; @jit — bare-name 形式应被识别为合法 kernel"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_BARE_JIT)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_tilelang_bare_jit_alias_detected(checker_tilelang_cuda):
+    """from tilelang import jit as tl_jit; @tl_jit — aliased bare-name 应被识别"""
+    passed, _, errors = checker_tilelang_cuda.check(TILELANG_BARE_JIT_ALIAS)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_tilelang", "tilelang_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_triton_bare_jit_detected(checker):
+    """from triton import jit; @jit — bare-name 形式应被识别"""
+    passed, _, errors = checker.check(TRITON_BARE_JIT)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_triton", "triton_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_triton_bare_jit_alias_detected(checker):
+    """from triton import jit as triton_jit; @triton_jit — aliased bare-name 应被识别"""
+    passed, _, errors = checker.check(TRITON_BARE_JIT_ALIAS)
+    dsl_errors = [e for e in errors if e["error_type"].startswith(("no_triton", "triton_kernel", "torch_api"))]
+    assert len(dsl_errors) == 0
+
+
+@pytest.mark.level0
+def test_false_bare_jit_not_detected(checker_tilelang_ascend):
+    """from some_other_lib import jit; @jit — 不是 tilelang 的 @jit 不应被误识别"""
+    passed, _, errors = checker_tilelang_ascend.check(TILELANG_FALSE_BARE_JIT)
+    assert passed is False
+    assert any(e["error_type"] == "no_tilelang_kernel" for e in errors)
+
+
 # ============================================================
 # 入口
 # ============================================================
