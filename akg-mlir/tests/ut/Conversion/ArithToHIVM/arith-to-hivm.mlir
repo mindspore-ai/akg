@@ -94,6 +94,26 @@ func.func @test_vadd_npuvector_scalar_dynamic(%arg0 : memref<?xf32>, %arg1 : mem
 
 // -----
 
+// CHECK-LABEL: func.func @test_transfer_write_alloc_root_offset_after_truncf
+// CHECK-SAME: %{{.*}}: memref<?xf32>, %[[BASE:.*]]: index, %[[SIZE:.*]]: index
+func.func @test_transfer_write_alloc_root_offset_after_truncf(%arg0: memref<?xf32>, %arg1: index, %arg2: index) {
+  // CHECK: %[[DST:.*]] = memref.alloc(%[[SIZE]]) : memref<1x?xbf16>
+  // CHECK: %[[ADD:.*]] = arith.addi %[[BASE]], %[[SIZE]] : index
+  // CHECK-NEXT: %[[SV:.*]] = memref.subview %[[DST]][0, %[[ADD]]] [1, %[[SIZE]]] [1, 1]
+  // CHECK-NEXT: hivm.hir.vcast {{.*}} outs(%[[SV]]
+  %c0 = arith.constant 0 : index
+  %c4096 = arith.constant 4096 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %dst = memref.alloc(%arg2) : memref<1x?xbf16>
+  %v0 = npuvector.transfer_read %arg0[%c0][%arg2][%c4096], %pad : memref<?xf32>, !npuvector<?xf32>
+  %trunc = npuvector.truncf %v0 : !npuvector<?xf32> to !npuvector<?xbf16>
+  %offset = arith.addi %arg1, %arg2 : index
+  npuvector.transfer_write %trunc, %dst[%c0, %offset] : !npuvector<?xbf16>, memref<1x?xbf16>
+  return
+}
+
+// -----
+
 // CHECK-LABEL: func.func @test_transfer_read_mixed_arg_and_alloc
 func.func @test_transfer_read_mixed_arg_and_alloc(%arg0 : memref<128xf32>, %arg1 : memref<128xf32>) {
   // CHECK: %[[A:.*]] = memref.alloc() : memref<128xf32>
