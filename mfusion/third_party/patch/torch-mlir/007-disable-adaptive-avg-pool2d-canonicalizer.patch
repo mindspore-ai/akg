@@ -1,0 +1,36 @@
+diff --git a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+--- a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
++++ b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+@@ -8417,7 +8417,6 @@ def Torch_Aten_AdaptiveAvgPool2dOp : Torch_Op<"aten._adaptive_avg_pool2d", [
+       printDefaultTorchOp(printer, *this, 2, 1);
+     }
+   }];
+-  let hasCanonicalizer = 1;
+ }
+ 
+ def Torch_Aten_AdaptiveAvgPool2dBackwardOp : Torch_Op<"aten._adaptive_avg_pool2d_backward", [
+diff --git a/lib/Dialect/Torch/IR/TorchOps.cpp b/lib/Dialect/Torch/IR/TorchOps.cpp
+--- a/lib/Dialect/Torch/IR/TorchOps.cpp
++++ b/lib/Dialect/Torch/IR/TorchOps.cpp
+@@ -5477,20 +5477,6 @@ void AtenMaxPool3dWithIndicesOp::getCanonicalizationPatterns(
+     RewritePatternSet &patterns, MLIRContext *context) {
+   patterns.add<SimplifyMaxPoolWithIndices<AtenMaxPool3dWithIndicesOp>>(context);
+-}
+-
+-//===----------------------------------------------------------------------===//
+-// Aten_AdaptiveAvgPool2dOp
+-//===----------------------------------------------------------------------===//
+-
+-void Aten_AdaptiveAvgPool2dOp::getCanonicalizationPatterns(
+-    RewritePatternSet &patterns, MLIRContext *context) {
+-  patterns.add(+[](Aten_AdaptiveAvgPool2dOp op, PatternRewriter &rewriter) {
+-    rewriter.replaceOpWithNewOp<AtenAdaptiveAvgPool2dOp>(
+-        op, op.getType(), op.getSelf(), op.getOutputSize());
+-
+-    return success();
+-  });
+ }
+ 
+ //===----------------------------------------------------------------------===//
+ // AtenLinalgCrossOp
+ //===----------------------------------------------------------------------===//

@@ -1,0 +1,31 @@
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
+#include "mfusion/Dialect/Mfuse/IR/MfuseOps.td"
+#include "mfusion/Dialect/Mfuse/IR/MfuseConstantOps.td"
+
+// Native helper to extract float attribute from value.
+Rewrite GetF64Attr(val: Value) -> Attr;
+
+// Native helper to extract string attribute from value.
+Rewrite GetStrAttr(val: Value) -> Attr;
+
+// Native helper to extract int64 array attribute from Torch list value.
+Rewrite GetI64ArrayAttr(val: Value) -> Attr;
+
+// Native helper to extract int64 attribute from value.
+Rewrite GetI64Attr(val: Value) -> Attr;
+
+// Native helper to extract i1 (boolean) attribute from value.
+Rewrite GetI1Attr(val: Value) -> Attr;
+
+// Native helpers to extract fixed indices from ValueRange.
+Rewrite Get0(inputs: ValueRange) -> Value;
+Rewrite Get1(inputs: ValueRange) -> Value;
+Rewrite Get2(inputs: ValueRange) -> Value;
+Rewrite Get3(inputs: ValueRange) -> Value;
+Rewrite Get4(inputs: ValueRange) -> Value;
+Rewrite Get5(inputs: ValueRange) -> Value;
+Rewrite Get6(inputs: ValueRange) -> Value;
+Rewrite Get7(inputs: ValueRange) -> Value;
+Rewrite Get8(inputs: ValueRange) -> Value;
+Rewrite Get9(inputs: ValueRange) -> Value;
+Rewrite Get10(inputs: ValueRange) -> Value;
