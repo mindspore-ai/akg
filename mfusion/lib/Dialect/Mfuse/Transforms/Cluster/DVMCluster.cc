@@ -157,9 +157,7 @@ bool isFiniteScalarConstant(DenseElementsAttr denseAttr) {
 
 // Keep DVM clusters aligned with the runtime scalar API surface in dvm.h.
 // f64/i64 scalar constants are allowed only when convert-mfuse-to-dvm can
-// safely normalize them to f32/i32. i1 scalar constants are allowed because
-// convert-mfuse-to-dvm normalizes them to i32 0/1 before creating DVM scalar
-// ops.
+// safely normalize them to f32/i32; bool scalar constants are not supported.
 bool isDvmSupportedScalarConstant(ConstantOp op) {
   auto rankedType = dyn_cast<RankedTensorType>(op.getResult().getType());
   if (!rankedType || rankedType.getRank() != 0 || !hasScalarMarker(rankedType)) {
@@ -172,8 +170,7 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
   }
 
   Type elementType = rankedType.getElementType();
-  if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32) ||
-      elementType.isInteger(1)) {
+  if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32)) {
     return true;
   }
   if (elementType.isF64()) {
@@ -362,10 +359,6 @@ class DvmSupportChecker {
     Type condType = getElementType(op->getOperand(0).getType());
     if (!condType || (!condType.isInteger(1) && !condType.isSignlessInteger(1))) {
       MLOG(DEBUG) << "Select op condition not bool";
-      return false;
-    }
-    if (hasScalarMarker(op->getOperand(0).getType())) {
-      MLOG(DEBUG) << "Select op scalar condition is not supported by DVM lowering";
       return false;
     }
     Type outputType = getElementType(op->getResult(0).getType());

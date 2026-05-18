@@ -39,28 +39,8 @@ func.func @test_no_cluster_with_tensor_constant(%arg0: tensor<4x4xf32>) -> tenso
   return %2 : tensor<4x4xf32>
 }
 
-// Test clustering with bool scalar constant consumed by binary ops
-// CHECK-LABEL: func @test_cluster_with_bool_binary_constant
-// CHECK-SAME: %arg0: tensor<4x4xf32>
-// CHECK-SAME: %arg1: tensor<4x4xf32>
-// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1
-// CHECK-SAME: {fusion_type = "dvm"}
-// CHECK: ^bb0(%[[ARG2:.*]]: tensor<4x4xf32>, %[[ARG3:.*]]: tensor<4x4xf32>):
-// CHECK: %[[CONST:.*]] = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
-// CHECK: %[[ADD:.*]] = mfuse.add %[[ARG2]], %[[CONST]]
-// CHECK-SAME: : (tensor<4x4xf32>, tensor<i1, {is_scalar = ""}>) -> tensor<4x4xf32>
-// CHECK: %[[MUL:.*]] = mfuse.mul %[[ADD]], %[[ARG3]]
-// CHECK: mfuse.yield %[[MUL]]
-// CHECK: return %[[FUSED]]
-func.func @test_cluster_with_bool_binary_constant(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
-  %0 = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
-  %1 = mfuse.add %arg0, %0 : (tensor<4x4xf32>, tensor<i1, {is_scalar = ""}>) -> tensor<4x4xf32>
-  %2 = mfuse.mul %1, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
-  return %2 : tensor<4x4xf32>
-}
-
-// Test clustering with bool scalar constant as select condition
-// NOTE: Scalar select conditions are not yet lowered to DVM, so this remains outside the cluster.
+// Test clustering with bool constant
+// NOTE: Bool type constants are NOT fused into the cluster
 // CHECK-LABEL: func @test_no_cluster_with_bool_constant
 // CHECK-SAME: %arg0: tensor<4x4xf32>
 // CHECK: %[[CONST:.*]] = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
