@@ -41,7 +41,7 @@ NDObject *Broadcast(T val, IntArrayRef *shape, DataType type);
 - `BFloat16`
 - `ScalarRef *`
 
-同时，`dvm_py.h` 中的 `Full` 方法提供了非常有价值的参考：
+同时，`dvm_py.h` 中的 `Full` 方法也体现了同一个接口分层：
 
 ```cpp
 if (py::isinstance<py::bool_>(scalar)) {
@@ -55,10 +55,10 @@ if (py::isinstance<py::bool_>(scalar)) {
 }
 ```
 
-这里有两个关键点：
+这里的关键点是：
 
 - scalar value 的 C++ 类型和输出 tensor 的 logical dtype 是两个维度。
-- bool fill value 在 Python binding 中通过 `int` 路径传给 DVM Broadcast，logical dtype 仍由 `dtype` 参数决定。
+- logical dtype 可以是 bool tensor，但传给 DVM Broadcast 的 scalar value 仍需要落在 C++ scalar ABI 支持的类型集合内。
 
 因此，DVM MLIR 也应该把 scalar value 和 logical output dtype 分开表达。
 
@@ -106,7 +106,7 @@ dvm.broadcast %input shape [4, 4]
 
 1. 为 `mfuse.full` 的 scalar constant fill value 提供显式 DVM lowering。
 2. 使用 DVM runtime 的 scalar broadcast API，而不是 rank-0 tensor fallback。
-3. 支持 `dvm_py.h::Full` 中已经存在的 bool fill value 处理方式。
+3. 支持 bool result dtype，同时要求 filled value 使用 DVM scalar ABI 支持的数值类型。
 4. 保留非 constant fill value 的 tensor broadcast 路径。
 5. 继续维护“mfuse scalar constant 不逃逸成 rank-0 tensor operand”的规则。
 
@@ -227,10 +227,23 @@ logical output dtype 由 `type` attribute 表达，来自 result tensor element 
   : f32 -> tensor<2xi1>
 ```
 
-这两种形式都符合 DVM runtime 的接口模型。第一个例子对应 bool 或 int scalar value，第二个例子对应 float scalar value；logical output dtype 都由 `type Bool` 决定。
+这两种形式都符合 DVM runtime 的接口模型。scalar attr 分别是 `i32` 和 `f32`，result dtype 都是 `Bool`。这说明 scalar value 类型和 result dtype 可以不同。
 
 当 DVM runtime 收到 `Broadcast(float_value, shape, kBool)` 时，会先按 `kFloat16` 生成 scalar broadcast，再 cast 到 bool（参考 dvm 开源项目中的 dvm/src/dvm.cc）。
-因此，`type Bool` 并不要求 scalar attr 必须是 `i32`。只有当输入 scalar constant 本身是 `i1` 时，mfuse-to-dvm 才会把它归一化成 `i32` 的 `0/1`，因为 DVM scalar Broadcast API 没有 bool 模板参数。
+因此，`type Bool` 并不要求 scalar attr 必须是 `i32`。
+
+## Bool filled value 约束
+
+`dvm.broadcast_scalar` 支持 result type 是 bool tensor，例如 `tensor<2xi1>`。但这不表示它支持 `i1` (bool) 类型的 filled value。
+
+需要明确区分两个概念：
+
+- filled value 是传给 DVM scalar Broadcast API 的 scalar 参数；它不支持 `i1` (bool) 类型。
+- result type 是 broadcast 生成的 tensor 类型；它可以是 bool tensor。
+
+目前上游正常 Torch pipeline 不应该产生 `mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>` 这种 scalar filled value。以 `torch.full(..., True, dtype=...)` 为例，torch-mlir 会先插入 `torch.aten.Int.bool`，把 bool fill value 转成 `!torch.int`；torch-to-mfuse 因此看到的是 int scalar，并生成类似 `mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>` 的常量。
+
+如果后续上游确实要引入 `i1` (bool) scalar constant，并把它传给 `dvm.binary_scalar` 或 `dvm.broadcast_scalar`，那么应在进入 DVM op 之前显式转换成 `i32 0/1`，而不是让 DVM op 直接接收 `i1` filled value。
 
 ## Scalar 归一化
 
@@ -239,7 +252,7 @@ logical output dtype 由 `type` attribute 表达，来自 result tensor element 
 conversion 会做 DVM ABI 归一化：
 
 - `f32`、`f16`、`bf16`、`i32`：直接提取为同类型 `TypedAttr`。
-- `i1`：仅在 broadcast scalar 路径允许，转换成 `i32` 的 `0/1`（和 dvm 开源项目中 `dvm/include/dvm_py.h::Full` 的实现对齐）。
+- `i1`：不支持。若上游引入这种 scalar constant，需要先转换成 `i32 0/1`，再传给 DVM scalar op。
 - `f64`：仅当值有限且可表示为 `f32` 时，转换成 `f32`。
 - `i64`：仅当值位于 `i32` 范围内时，转换成 `i32`。
 - 其它类型：报错。
@@ -247,7 +260,8 @@ conversion 会做 DVM ABI 归一化：
 这部分逻辑和 binary scalar normalization 共享底层 helper，但有一个关键差异：
 
 - `dvm.binary_scalar` 不支持 bool scalar。
-- `dvm.broadcast_scalar` 支持 bool fill value，并按 `dvm_py.h::Full` 的行为转换成 `i32 0/1`。
+- `dvm.broadcast_scalar` 支持 Bool result dtype，但 filled value 仍必须是 DVM scalar ABI 支持的数值类型，不接受 `i1` scalar constant。
+- 当 filled value 是 `i64` 或 `f64` 时，conversion 仍按 ABI 规则安全归一化成 `i32` 或 `f32`，并可以和 `type Bool` 组合生成 bool tensor result。
 
 共享 helper 可以避免 f64/i64 降级逻辑在不同 scalar consumer 之间分叉，同时保留各自 ABI 的差异。
 
@@ -338,6 +352,6 @@ scalar constant 应进入 op-specific scalar attribute，而不是退化成 rank
 - `dvm.binary_scalar` 需要保留 scalar 在 lhs/rhs 中的逻辑顺序。
 - `dvm.broadcast_scalar` 没有 lhs/rhs 顺序问题，但需要同时表达 shape 和 logical output dtype。
 - `dvm.binary_scalar` 不支持 bool scalar。
-- `dvm.broadcast_scalar` 支持 bool fill value，并归一化为 `i32 0/1`。
+- `dvm.broadcast_scalar` 支持 Bool result dtype，但不支持 `i1` bool filled value；filled value 必须先以 `i32/f32/f16/bf16` 等受支持 scalar ABI 类型表达。
 
 后续如果继续扩展 DVM scalar consumer，应优先复用这两个设计经验：显式 scalar op、scalar attr 内联、logical dtype 分离、conversion 末尾清理残留 scalar constant。
