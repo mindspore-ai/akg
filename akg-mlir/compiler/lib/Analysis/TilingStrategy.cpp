@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -2533,7 +2533,7 @@ void applyDynamicFallbackAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
   }
 
   if (tileConfig0 != nullptr) {
-    unsigned value = UINT_MAX;
+    int value = static_cast<int>(UINT_MAX);
     tileConfig0->value = value;
     axis->tryAddConstraint(0, Constraint({value}));
   }
