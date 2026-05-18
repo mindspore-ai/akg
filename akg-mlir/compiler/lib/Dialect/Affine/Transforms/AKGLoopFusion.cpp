@@ -463,7 +463,7 @@ void AKGLoopFusion::runOnLoopFusion() {
   OperatorTemplate curOpTemplate = OperatorTemplate::Default;
   for (Region &region : funcOp->getRegions()) {
     for (Block &block : region.getBlocks()) {
-      OperatorTemplate opTemplate;
+      OperatorTemplate opTemplate = OperatorTemplate::Default;
       runOnBlock(&block, opTemplate);
       if (opTemplate > curOpTemplate) {
         curOpTemplate = opTemplate;
