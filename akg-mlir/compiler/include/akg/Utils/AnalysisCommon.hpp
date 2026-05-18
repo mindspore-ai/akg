@@ -424,29 +424,45 @@ class CommonUtils {
     return ValueRange();
   }
 
-  // Extract affine access with symbols demoted to dims so that
-  // `MemRefAccess::operator==` can recognize aliasing accesses like
-  // `memref[%i, symbol(%j) + c]` vs `memref[%i, %j + c]`.
-  static void getDimOnlyAccess(Operation *op, AffineMap &map, SmallVectorImpl<Value> &operands) {
+  // Normalize an affine access into a canonical `(map, operands)` pair for
+  // structural equality comparison. Handles: (1) dim/sym placement, (2)
+  // intermediate affine.apply inlining, (3) expression simplification.
+  // Output has `numSymbols == 0` (symbols demoted to dims). Result is for
+  // analysis only, not legal as affine op input.
+  static void getUnifiedAffineAccess(Operation *op, AffineMap &map, SmallVectorImpl<Value> &operands) {
+    operands.clear();
     if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
       map = load.getAffineMap();
       llvm::append_range(operands, load.getMapOperands());
     } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
       map = store.getAffineMap();
       llvm::append_range(operands, store.getMapOperands());
+    } else if (auto apply = dyn_cast<affine::AffineApplyOp>(op)) {
+      map = apply.getAffineMap();
+      llvm::append_range(operands, op->getOperands());
     } else {
       return;
     }
+
+    // Inline intermediate affine.apply ops.
+    affine::fullyComposeAffineMapAndOperands(&map, &operands);
+
+    // Demote symbols to dims.
     unsigned numDims = map.getNumDims();
     unsigned numSyms = map.getNumSymbols();
-    if (numSyms == 0) return;
-    SmallVector<AffineExpr> symReplacements;
-    symReplacements.reserve(numSyms);
-    for (unsigned i = 0; i < numSyms; ++i) {
-      symReplacements.push_back(getAffineDimExpr(numDims + i, map.getContext()));
+    if (numSyms > 0) {
+      SmallVector<AffineExpr> symReplacements;
+      symReplacements.reserve(numSyms);
+      for (unsigned i = 0; i < numSyms; ++i) {
+        symReplacements.push_back(getAffineDimExpr(numDims + i, map.getContext()));
+      }
+      map = map.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
+                                      /*numResultDims=*/numDims + numSyms, /*numResultSyms=*/0);
     }
-    map = map.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
-                                    /*numResultDims=*/numDims + numSyms, /*numResultSyms=*/0);
+
+    // Simplify and canonicalize.
+    map = simplifyAffineMap(map);
+    affine::canonicalizeMapAndOperands(&map, &operands);
   }
 
   static Value getStoreMemref(Operation *storeOp) {

@@ -26,6 +26,7 @@
 #include "akg/Dialect/Affine/Transforms/AKGLoopParallelize.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopUnroll.h"
+#include "akg/Dialect/Affine/Transforms/LoopSliceSplit.h"
 #include "akg/Dialect/Affine/Transforms/AffineDataCopyGeneration.h"
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfExtract.h"
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfRestore.h"
