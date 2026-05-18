@@ -106,7 +106,7 @@ static FailureOr<TypedAttr> extractTypedScalarAttr(DenseElementsAttr denseAttr, 
 }
 
 static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp op, RankedTensorType rankedType,
-                                                              bool allowBool, StringRef errorContext) {
+                                                              StringRef errorContext) {
   auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(op.getValue());
   if (!denseAttr) {
     return op->emitError() << errorContext << " scalar constant must be a DenseElementsAttr";
@@ -122,12 +122,6 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp 
     auto scalarAttr = extractTypedScalarAttr(denseAttr, elementType, op.getLoc());
     if (failed(scalarAttr)) return failure();
     return *scalarAttr;
-  }
-
-  if (allowBool && elementType.isInteger(1)) {
-    bool value = (*denseAttr.getValues<APInt>().begin()).getBoolValue();
-    auto i32Type = IntegerType::get(op.getContext(), 32);
-    return cast<TypedAttr>(IntegerAttr::get(i32Type, value ? 1 : 0));
   }
 
   if (elementType.isF64()) {
@@ -158,7 +152,7 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvm(mfuse::ConstantOp op, 
   // DVM binary scalar APIs support float, int32_t, Float16 and BFloat16.
   // double and int64_t are normalized to f32/i32 when safe; bool is not
   // supported by the binary scalar ABI.
-  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/false, "DVM");
+  return normalizeScalarConstantForDvmImpl(op, rankedType, "DVM");
 }
 
 static FailureOr<dvm::DType> getDvmBroadcastDType(Type elementType, Location loc) {
@@ -184,7 +178,7 @@ static FailureOr<dvm::DType> getDvmBroadcastDType(Type elementType, Location loc
 }
 
 static FailureOr<TypedAttr> normalizeScalarConstantForDvmBroadcast(mfuse::ConstantOp op, RankedTensorType rankedType) {
-  return normalizeScalarConstantForDvmImpl(op, rankedType, /*allowBool=*/true, "DVM broadcast");
+  return normalizeScalarConstantForDvmImpl(op, rankedType, "DVM broadcast");
 }
 
 static mfuse::ConstantOp getScalarConstant(Value value) {

@@ -438,6 +438,7 @@ def Dvm_BroadcastScalarOp : Dvm_Op<"broadcast_scalar", [Pure]> {
     runtime API. The `type` attribute stores the logical DVM result dtype. For
     bool results, `type` is Bool while the scalar may still use any supported
     scalar value type, matching `dvm::Kernel::Broadcast(value, shape, dtype)`.
+    i1/bool scalar attributes are not supported by the DVM scalar ABI.
 
     Example:
       dvm.broadcast_scalar 1.000000e+00 shape [4, 4] type Float32 : f32 -> tensor<4x4xf32>

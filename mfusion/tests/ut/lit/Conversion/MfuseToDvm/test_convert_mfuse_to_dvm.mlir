@@ -342,8 +342,8 @@ module {
   // CHECK-NOT: mfuse.constant
   // CHECK-NOT: mfuse.full
   func.func @main_full_bool_fused() -> tensor<2xi1> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
-    %cst = mfuse.constant dense<true> : tensor<i1, {is_scalar = ""}>
-    %0 = mfuse.full %cst : (tensor<i1, {is_scalar = ""}>) -> tensor<2xi1>
+    %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
+    %0 = mfuse.full %cst : (tensor<i64, {is_scalar = ""}>) -> tensor<2xi1>
     return %0 : tensor<2xi1>
   }
 
