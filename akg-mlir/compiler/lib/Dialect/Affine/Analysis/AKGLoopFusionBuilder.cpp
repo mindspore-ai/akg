@@ -1372,50 +1372,63 @@ static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loop
   return true;
 }
 
-// Helper function to perform loop fusion at a specific depth
-// This function handles the common logic of cloning operations from source to destination loops
-static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
-                              SmallVector<affine::AffineForOp, 4> dstLoops, unsigned bestDstLoopDepth) {
-  // Create IRMapping to map source loop IVs to destination loop IVs
+// Collect aligned axis chains: src takes the FIRST for-child at each level,
+// dst takes the LAST. Stops when either side has no for-child.
+static void collectAlignedAxisChains(affine::AffineForOp srcRoot, affine::AffineForOp dstRoot,
+                                     SmallVector<affine::AffineForOp, 4> &srcChain,
+                                     SmallVector<affine::AffineForOp, 4> &dstChain) {
+  srcChain.clear();
+  dstChain.clear();
+  affine::AffineForOp s = srcRoot;
+  affine::AffineForOp d = dstRoot;
+  while (s && d) {
+    srcChain.push_back(s);
+    dstChain.push_back(d);
+
+    affine::AffineForOp srcNext;
+    for (auto &op : *s.getBody()) {
+      if (auto f = dyn_cast<affine::AffineForOp>(op)) {
+        srcNext = f;
+        break;
+      }
+    }
+    affine::AffineForOp dstNext;
+    for (auto &op : *d.getBody()) {
+      if (auto f = dyn_cast<affine::AffineForOp>(op)) dstNext = f;
+    }
+    s = srcNext;
+    d = dstNext;
+  }
+}
+
+// Clone src body ops (excluding yield and next-axis child) into dst at each
+// aligned level, placing src ops before dst ops.
+static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcChain,
+                              SmallVector<affine::AffineForOp, 4> dstChain, unsigned bestDstLoopDepth) {
   IRMapping mapper;
-  for (unsigned i = 0; i < bestDstLoopDepth && i < srcLoops.size() && i < dstLoops.size(); ++i) {
-    mapper.map(srcLoops[i].getInductionVar(), dstLoops[i].getInductionVar());
+  for (unsigned i = 0; i < bestDstLoopDepth && i < srcChain.size() && i < dstChain.size(); ++i) {
+    mapper.map(srcChain[i].getInductionVar(), dstChain[i].getInductionVar());
   }
 
-  // Recursively clone operations from source loop body to destination loop body
-  // This function handles nested loops by merging their operations
-  std::function<void(affine::AffineForOp, affine::AffineForOp)> cloneLoopBody = [&](affine::AffineForOp srcLoop,
-                                                                                    affine::AffineForOp dstLoop) {
-    // Map the induction variables
-    mapper.map(srcLoop.getInductionVar(), dstLoop.getInductionVar());
+  for (unsigned i = 0; i < bestDstLoopDepth; ++i) {
+    affine::AffineForOp srcLoop = srcChain[i];
+    affine::AffineForOp dstLoop = dstChain[i];
+    Operation *srcAxisChildOp = (i + 1 < bestDstLoopDepth) ? srcChain[i + 1].getOperation() : nullptr;
 
-    // This ensures srcLoops operations are placed before dstLoops operations
     Block::iterator insertPoint = dstLoop.getBody()->begin();
-    // Find first non-terminator operation (skip terminator if it exists)
+
     while (insertPoint != dstLoop.getBody()->end() && isa<affine::AffineYieldOp>(*insertPoint)) {
       ++insertPoint;
     }
     OpBuilder builder(dstLoop.getBody(), insertPoint);
 
-    // Clone all operations from source loop body to destination loop body
     for (Operation &op : srcLoop.getBody()->getOperations()) {
-      // Skip the terminator (affine.yield)
-      if (isa<affine::AffineYieldOp>(op)) {
-        continue;
-      }
+      if (isa<affine::AffineYieldOp>(op)) continue;
+      if (srcAxisChildOp && &op == srcAxisChildOp) continue;
 
       builder.clone(op, mapper);
     }
-  };
-
-  // Get the destination loop at fusion depth
-  affine::AffineForOp targetLoop = dstLoops[bestDstLoopDepth - 1];
-
-  // Get the corresponding source loop
-  affine::AffineForOp sourceLoop = srcLoops[bestDstLoopDepth - 1];
-
-  // Clone operations from source loop body to destination loop body
-  cloneLoopBody(sourceLoop, targetLoop);
+  }
 }
 
 // Effective dep depth for ProducerConsumer fusion:
@@ -1738,12 +1751,13 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
 
 void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
                                   FusionLoopNestInfo &dstInfo, const FusionPlan &plan) {
-  auto &srcLoops = srcInfo.loops;
-  auto &dstLoops = dstInfo.loops;
-  affine::AffineForOp srcAffineForOp = srcInfo.root;
+  // Fusion depth = deepest common prefix of aligned axis chains with matching bounds.
+  SmallVector<affine::AffineForOp, 4> srcChain;
+  SmallVector<affine::AffineForOp, 4> dstChain;
+  collectAlignedAxisChains(srcInfo.root, dstInfo.root, srcChain, dstChain);
 
-  auto depth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
-  while (depth != 0 && !checkLoopBoundsMatch(srcLoops, dstLoops, depth)) {
+  auto depth = std::min(srcChain.size(), dstChain.size());
+  while (depth != 0 && !checkLoopBoundsMatch(srcChain, dstChain, depth)) {
     depth--;
   }
 
@@ -1751,8 +1765,8 @@ void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, Fusi
     llvm::errs() << "srcLoops and dstLoops have no same loop bounds\n";
     return;
   }
-  performLoopFusion(srcLoops, dstLoops, depth);
-  srcAffineForOp.erase();
+  performLoopFusion(srcChain, dstChain, depth);
+  srcInfo.root.erase();
   auto srcGroup = mdg.getGroup(srcGroupId);
   auto dstGroup = mdg.getGroup(dstGroupId);
   if (!srcGroup || !dstGroup) {
@@ -1781,7 +1795,8 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
 
   // Collect accesses once in true src/dst order, shared by subview and regular fusion paths.
   FusionAccessInfo accessInfo;
-  if (!collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo)) {
+  if (plan.fusionType == "I" ||
+      !collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo)) {
     doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, plan);
     return;
   }

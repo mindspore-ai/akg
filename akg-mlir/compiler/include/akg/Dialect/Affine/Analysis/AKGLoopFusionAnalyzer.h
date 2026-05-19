@@ -92,8 +92,8 @@ struct FusionAnalyzer {
   bool checkAndFixMultiOut(FusionPlan &fusePlan);
 
   // Debug
-  void print(llvm::raw_ostream &os) const;
-  void dump() const { print(llvm::errs()); }
+  void print(llvm::raw_ostream &os, bool detail = true) const;
+  void dump(bool detail = true) const { print(llvm::errs(), detail); }
 
   MemRefDependenceGraphForFusion &depGraph;
   func::FuncOp funcOp{nullptr};
@@ -145,16 +145,15 @@ struct FusionAnalyzer {
   // Prefers store-load edges; falls back to load-load only when none exist.
   // Output vectors are sorted by groupId descending.
   void collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
-                                 std::vector<unsigned> &rarGroupIds);
+                                 std::vector<unsigned> &nonWarGroupIds);
   void dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
                                    const std::vector<unsigned> &sourceGroups);
 
-  // Plan phases
-  void processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &rarMap);
+  void processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap);
   bool hasSubviewRarDep(unsigned targetGroupId,
-                        const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap) const;
-  void processRarEdges(const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap,
-                       std::vector<std::pair<unsigned, unsigned>> &deferCandidates);
+                        const std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap) const;
+  void processNonWarEdges(const std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap,
+                          std::vector<std::pair<unsigned, unsigned>> &deferCandidates);
 
   // Member Variables
   std::unordered_set<unsigned> finished;
