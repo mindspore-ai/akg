@@ -194,6 +194,7 @@ std::vector<FusionPlan> TopoScheduler::run() {
       unsigned node = q.top();
       q.pop();
       processNode(node);
+      releaseDeferred();
     }
     releaseDeferred();
     if (hasReadyNodes()) continue;
@@ -935,7 +936,10 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
         auto jCandidateID = allPredecessorIds[j];
         // Check if there exists an edge from iCandidateID to jCandidateID
         // If edge exists, iCandidateID is not a direct predecessor but an indirect one, add to skipIdx
-        if (depGraph.hasEdge(iCandidateID, jCandidateID, mlir::Value())) {
+        auto *iNode = depGraph.getNode(iCandidateID);
+        auto *jNode = depGraph.getNode(jCandidateID);
+        if (depGraph.hasEdge(iCandidateID, jCandidateID, mlir::Value()) &&
+            classifyDepType(iNode, jNode) == DepType::WAR) {
           skipIdx.insert(i);
           break;
         }
@@ -964,12 +968,12 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
 }
 
 void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std::vector<unsigned> &warGroupIds,
-                                               std::vector<unsigned> &rarGroupIds) {
+                                               std::vector<unsigned> &nonWarGroupIds) {
   // Accumulate one DependenceInfo per source group; on each new pred, replace the entry
   // when its loopDepth is smaller (most-restrictive constraint wins).
   std::unordered_map<unsigned, DependenceInfo> depAccumMap;
   std::unordered_set<unsigned> warGroupIdSet;
-  std::unordered_set<unsigned> rarGroupIdSet;
+  std::unordered_set<unsigned> nonWarGroupIdSet;
   for (auto targetNodeId : targetGroup->nodesId) {
     auto it = directPredecessorsCache.find(targetNodeId);
     if (it == directPredecessorsCache.end()) {
@@ -981,7 +985,7 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
         continue;
       }
       unsigned sourceGroupId = sourceGroup->groupId;
-      bool isRAR = (pred.depType == DepType::RAR || pred.depType == DepType::RAW);
+      bool isNotWAR = (pred.depType != DepType::WAR);
       DependenceInfo entry;
       entry.loopDepth = pred.loopDepth;
       entry.memref = pred.memref;
@@ -1001,8 +1005,8 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
       if (accum.predNodeId == UINT_MAX || entry.loopDepth < accum.loopDepth) {
         accum = std::move(entry);
       }
-      if (isRAR) {
-        rarGroupIdSet.insert(sourceGroupId);
+      if (isNotWAR) {
+        nonWarGroupIdSet.insert(sourceGroupId);
       } else {
         warGroupIdSet.insert(sourceGroupId);
       }
@@ -1021,9 +1025,9 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
   // Emit results sorted by groupId descending so downstream loops process
   // larger groupIds first without needing another sort pass.
   warGroupIds.assign(warGroupIdSet.begin(), warGroupIdSet.end());
-  rarGroupIds.assign(rarGroupIdSet.begin(), rarGroupIdSet.end());
+  nonWarGroupIds.assign(nonWarGroupIdSet.begin(), nonWarGroupIdSet.end());
   std::sort(warGroupIds.begin(), warGroupIds.end(), std::greater<unsigned>());
-  std::sort(rarGroupIds.begin(), rarGroupIds.end(), std::greater<unsigned>());
+  std::sort(nonWarGroupIds.begin(), nonWarGroupIds.end(), std::greater<unsigned>());
 }
 
 void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
@@ -1049,15 +1053,15 @@ void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, co
   }
 }
 
-void FusionAnalyzer::processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &rarMap) {
+void FusionAnalyzer::processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap) {
   while (!finishPlan()) {
     auto targetGroup = getFusionTargetGroup();
     if (targetGroup == nullptr) break;
 
     std::vector<unsigned> warGroupIds;
-    std::vector<unsigned> rarGroupIds;
-    collectFusionSourceGroups(targetGroup, warGroupIds, rarGroupIds);
-    rarMap[targetGroup->groupId] = rarGroupIds;
+    std::vector<unsigned> nonWarGroupIds;
+    collectFusionSourceGroups(targetGroup, warGroupIds, nonWarGroupIds);
+    nonWarMap[targetGroup->groupId] = nonWarGroupIds;
 
     for (unsigned sourceGroupId : warGroupIds) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
@@ -1069,47 +1073,52 @@ void FusionAnalyzer::processWarEdges(std::unordered_map<unsigned, std::vector<un
 }
 
 bool FusionAnalyzer::hasSubviewRarDep(unsigned targetGroupId,
-                                      const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap) const {
-  auto rarIt = rarMap.find(targetGroupId);
-  if (rarIt == rarMap.end()) return false;
-  for (unsigned sourceGroupId : rarIt->second) {
+                                      const std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap) const {
+  auto it = nonWarMap.find(targetGroupId);
+  if (it == nonWarMap.end()) return false;
+  for (unsigned sourceGroupId : it->second) {
     auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroupId, targetGroupId));
     if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Subview) return true;
   }
   return false;
 }
 
-void FusionAnalyzer::processRarEdges(const std::unordered_map<unsigned, std::vector<unsigned>> &rarMap,
-                                     std::vector<std::pair<unsigned, unsigned>> &deferCandidates) {
-  std::vector<unsigned> sortedRarTargets;
-  sortedRarTargets.reserve(rarMap.size());
-  for (const auto &[targetGroupId, _] : rarMap) sortedRarTargets.push_back(targetGroupId);
+void FusionAnalyzer::processNonWarEdges(const std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap,
+                                        std::vector<std::pair<unsigned, unsigned>> &deferCandidates) {
+  std::vector<std::pair<unsigned, unsigned>> sortedRarEdges;
+  for (const auto &[targetGroupId, sourceIds] : nonWarMap) {
+    std::transform(sourceIds.begin(), sourceIds.end(), std::back_inserter(sortedRarEdges),
+                   [targetGroupId](unsigned sourceGroupId) { return std::make_pair(sourceGroupId, targetGroupId); });
+  }
 
-  std::sort(sortedRarTargets.begin(), sortedRarTargets.end(), [&](unsigned a, unsigned b) {
-    bool aSubview = hasSubviewRarDep(a, rarMap);
-    bool bSubview = hasSubviewRarDep(b, rarMap);
-    if (aSubview != bSubview) return !aSubview;
-    return a < b;
-  });
+  auto isSubviewEdge = [&](unsigned source, unsigned target) {
+    auto it = groupDependenciesCache.find(std::make_pair(source, target));
+    return it != groupDependenciesCache.end() && it->second.memrefKind == MemrefKind::Subview;
+  };
 
-  for (unsigned targetGroupId : sortedRarTargets) {
+  std::sort(sortedRarEdges.begin(), sortedRarEdges.end(),
+            [&](const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
+              bool aSubview = isSubviewEdge(a.first, a.second);
+              bool bSubview = isSubviewEdge(b.first, b.second);
+              if (aSubview != bSubview) return !aSubview;
+              if (a.second != b.second) return a.second < b.second;
+              return a.first < b.first;
+            });
+
+  for (const auto &[sourceGroupId, targetGroupId] : sortedRarEdges) {
     auto targetGroup = depGraph.getGroup(targetGroupId);
     if (!targetGroup) continue;
+    auto sourceGroup = depGraph.getGroup(sourceGroupId);
+    if (!sourceGroup) continue;
 
-    const auto &rarGroupIds = rarMap.at(targetGroupId);
-    for (unsigned sourceGroupId : rarGroupIds) {
-      auto sourceGroup = depGraph.getGroup(sourceGroupId);
-      if (!sourceGroup) continue;
-
-      bool isAncestry = false;
-      if (findBackwardIntersection(sourceGroup, targetGroup, &isAncestry)) {
-        auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroup->groupId, targetGroup->groupId));
-        if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Input) continue;
-        deferCandidates.emplace_back(sourceGroup->groupId, targetGroup->groupId);
-        continue;
-      }
-      if (!isAncestry) applyAndFuse(targetGroup, sourceGroup);
+    bool isAncestry = false;
+    if (findBackwardIntersection(sourceGroup, targetGroup, &isAncestry)) {
+      auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroupId, targetGroupId));
+      if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Input) continue;
+      deferCandidates.emplace_back(sourceGroupId, targetGroupId);
+      continue;
     }
+    if (!isAncestry) applyAndFuse(targetGroup, sourceGroup);
   }
 }
 
@@ -1119,12 +1128,11 @@ void FusionAnalyzer::plan() {
   precomputeDirectPredecessors();
 
   // Phase 1: Process store-load (producer-consumer) edges only.
-  std::unordered_map<unsigned, std::vector<unsigned>> rarMap;
-  processWarEdges(rarMap);
+  std::unordered_map<unsigned, std::vector<unsigned>> nonWarMap;
+  processWarEdges(nonWarMap);
 
-  // Phase 2: Process RAR edges in deterministic order.
   std::vector<std::pair<unsigned, unsigned>> deferCandidates;
-  processRarEdges(rarMap, deferCandidates);
+  processNonWarEdges(nonWarMap, deferCandidates);
 
   // Phase 3: Identify conflicting defer pairs and rewrite.
   resolveConflictingDefers(deferCandidates);
@@ -1133,16 +1141,20 @@ void FusionAnalyzer::plan() {
   fusionPlans = TopoScheduler(edges, depGraph.nodes.size(), softDeferConstraints).run();
 }
 
-void FusionAnalyzer::print(llvm::raw_ostream &os) const {
+void FusionAnalyzer::print(llvm::raw_ostream &os, bool detail) const {
   os << "\n===== FusionPlans =====\n";
   for (const auto &plan : fusionPlans) {
     os << "FusionPlan: Group [" << plan.fusedGroup.from << " -> " << plan.fusedGroup.to << "], "
-       << "Band [" << plan.fusedBand.from << " -> " << plan.fusedBand.to << "], "
-       << "FusionType: " << plan.fusionType << ", "
-       << "LoopTransform: " << loopTransformToString(plan.loopTransform) << ", "
-       << "LoopDepth: " << plan.depInfo.loopDepth << ", "
-       << "MemrefKind: " << memrefKindToString(plan.depInfo.memrefKind) << ", "
-       << "FusionNodeRecord: (" << plan.depInfo.predNodeId << " -> " << plan.depInfo.targetNodeId << ")\n";
+       << "Band [" << plan.fusedBand.from << " -> " << plan.fusedBand.to << "]";
+    if (detail) {
+      os << ", "
+         << "FusionType: " << plan.fusionType << ", "
+         << "LoopTransform: " << loopTransformToString(plan.loopTransform) << ", "
+         << "LoopDepth: " << plan.depInfo.loopDepth << ", "
+         << "MemrefKind: " << memrefKindToString(plan.depInfo.memrefKind) << ", "
+         << "FusionNodeRecord: (" << plan.depInfo.predNodeId << " -> " << plan.depInfo.targetNodeId << ")";
+    }
+    os << "\n";
   }
 }
 
