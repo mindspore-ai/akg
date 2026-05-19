@@ -387,7 +387,7 @@ void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
     auto actualSrcGroupId = plan.fusedGroup.from;
     auto actualDstGroupId = plan.fusedGroup.to;
     if (srcFor && dstFor) {
-      if (plan.fusionType == "V" || plan.fusionType == "H") {
+      if (plan.fusionType == "V" || plan.fusionType == "H" || plan.fusionType == "I") {
         codegenerator.doFuse(actualSrcGroupId, actualDstGroupId, srcFor, dstFor, plan);
       } else {
         llvm::outs() << "Warning: Could not find valid operations for fusion plan: node " << plan.fusedBand.from
