@@ -9,6 +9,7 @@ metadata:
   hardware: "Atlas A5"
   note: "A5(Ascend950) Cube/Vector 亲和接口 MatMul + Vector 后处理融合"
   operator_type: "matmul"
+  requires_affinity: true
 ---
 
 # MatMul + Vector 协同编程优化指南

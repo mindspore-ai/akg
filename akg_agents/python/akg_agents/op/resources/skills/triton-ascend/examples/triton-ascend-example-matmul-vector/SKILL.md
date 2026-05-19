@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A5"
   operator_type: "matmul"
+  requires_affinity: true
 ---
 
 # A5 MatMul + Vector 协同编程 — 完整代码示例
