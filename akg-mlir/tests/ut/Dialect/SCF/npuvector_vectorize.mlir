@@ -1558,6 +1558,48 @@ func.func @test_scf_if_iv_nonzero_rhs(%m: memref<128xf32>, %out: memref<128xf32>
 // Phase 2 (VF=1 sweep): no tagged loops — scalar memref.load chain only
 // ============================================================================
 
+// -----
+
+#map_vector_axis_minus_base = affine_map<(d0, d1) -> (d0 - d1)>
+
+// CHECK-LABEL: func.func @test_vector_axis_affine_derived_store
+// CHECK: %[[IDX:.*]] = affine.apply
+// CHECK: npuvector.transfer_read
+// CHECK: npuvector.transfer_write %{{.*}}, %{{.*}}[%[[IDX]]]
+// CHECK-NOT: memref.store
+// CHECK-NOT: scf.for
+func.func @test_vector_axis_affine_derived_store(%input: memref<128xf32>, %tmp: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c16 = arith.constant 16 : index
+  %c80 = arith.constant 80 : index
+  %c1 = arith.constant 1 : index
+  scf.for %i = %c16 to %c80 step %c1 {
+    %idx = affine.apply #map_vector_axis_minus_base(%i, %c16)
+    %value = memref.load %input[%i] : memref<128xf32>
+    memref.store %value, %tmp[%idx] : memref<128xf32>
+  } {vector = 64 : i64}
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_vector_axis_affine_derived_load
+// CHECK: %[[IDX:.*]] = affine.apply
+// CHECK: %[[READ:.*]] = npuvector.transfer_read %{{.*}}[%[[IDX]]]
+// CHECK: npuvector.transfer_write %[[READ]], %{{.*}}[%{{.*}}]
+// CHECK-NOT: memref.load
+// CHECK-NOT: scf.for
+func.func @test_vector_axis_affine_derived_load(%tmp: memref<128xf32>, %output: memref<128xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c16 = arith.constant 16 : index
+  %c80 = arith.constant 80 : index
+  %c1 = arith.constant 1 : index
+  scf.for %i = %c16 to %c80 step %c1 {
+    %idx = affine.apply #map_vector_axis_minus_base(%i, %c16)
+    %value = memref.load %tmp[%idx] : memref<128xf32>
+    memref.store %value, %output[%i] : memref<128xf32>
+  } {vector = 64 : i64}
+  return
+}
+
 // CHECK-LABEL: func.func @test_vf1_sweep_no_tagged_loops
 // CHECK: npuvector.transfer_read {{.*}} : memref<f32>, !npuvector<1xf32>
 // CHECK: arith.mulf {{.*}} : !npuvector<1xf32>
