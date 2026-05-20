@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "mfusion/Conversion/Passes.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
+#include <cmath>
+#include <limits>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -25,11 +25,10 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mfusion/Conversion/Passes.h"
 #include "mfusion/Dialect/Dvm/IR/Dvm.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
-
-#include <cmath>
-#include <limits>
+#include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTMFUSETODVM
@@ -628,6 +627,110 @@ static LogicalResult cleanupAndVerifyScalarConstants(ModuleOp module) {
   return success();
 }
 
+static void addDvmLegalDialects(ConversionTarget &target) {
+  target.addLegalDialect<mlir::dvm::DvmDialect>();
+  target.addLegalDialect<mlir::func::FuncDialect>();
+  target.addLegalDialect<mlir::arith::ArithDialect>();
+  target.addLegalDialect<mlir::tensor::TensorDialect>();
+  target.addLegalDialect<mlir::mfuse::MfuseDialect>();
+}
+
+static void addDynamicallyLegalMfuseOps(ConversionTarget &target) {
+  target.addDynamicallyLegalOp<mlir::mfuse::MulOp>(
+    [](mlir::mfuse::MulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::AddOp>(
+    [](mlir::mfuse::AddOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::SubOp>(
+    [](mlir::mfuse::SubOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::DivOp>(
+    [](mlir::mfuse::DivOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::PowOp>(
+    [](mlir::mfuse::PowOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::MaximumOp>(
+    [](mlir::mfuse::MaximumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::MinimumOp>(
+    [](mlir::mfuse::MinimumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::EqOp>(
+    [](mlir::mfuse::EqOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::NeOp>(
+    [](mlir::mfuse::NeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::GtOp>(
+    [](mlir::mfuse::GtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::GeOp>(
+    [](mlir::mfuse::GeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LtOp>(
+    [](mlir::mfuse::LtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LeOp>(
+    [](mlir::mfuse::LeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LogicalAndOp>(
+    [](mlir::mfuse::LogicalAndOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LogicalOrOp>(
+    [](mlir::mfuse::LogicalOrOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::AbsOp>(
+    [](mlir::mfuse::AbsOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::CeilOp>(
+    [](mlir::mfuse::CeilOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::FloorOp>(
+    [](mlir::mfuse::FloorOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::TruncOp>(
+    [](mlir::mfuse::TruncOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::ExpOp>(
+    [](mlir::mfuse::ExpOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LogOp>(
+    [](mlir::mfuse::LogOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::ReciprocalOp>(
+    [](mlir::mfuse::ReciprocalOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::SqrtOp>(
+    [](mlir::mfuse::SqrtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::IsFiniteOp>(
+    [](mlir::mfuse::IsFiniteOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::LogicalNotOp>(
+    [](mlir::mfuse::LogicalNotOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::NegOp>(
+    [](mlir::mfuse::NegOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::RsqrtOp>(
+    [](mlir::mfuse::RsqrtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::SelectOp>(
+    [](mlir::mfuse::SelectOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::CastOp>(
+    [](mlir::mfuse::CastOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::BroadcastToOp>(
+    [](mlir::mfuse::BroadcastToOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::FullOp>(
+    [](mlir::mfuse::FullOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::ReshapeOp>(
+    [](mlir::mfuse::ReshapeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::ReduceSumOp>(
+    [](mlir::mfuse::ReduceSumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::ReluOp>(
+    [](mlir::mfuse::ReluOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::RealDivOp>(
+    [](mlir::mfuse::RealDivOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::MatmulOp>(
+    [](mlir::mfuse::MatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::MatmulWithBiasOp>(
+    [](mlir::mfuse::MatmulWithBiasOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  // mfuse.grouped_matmul uses tensor-list operands/results, while
+  // dvm.grouped_matmul takes single ranked tensors. Keep it illegal inside a
+  // DVM outlined function until the list-to-tensor bridge semantics are
+  // defined and the operands can be unpacked safely.
+  target.addDynamicallyLegalOp<mlir::mfuse::GroupedMatmulOp>(
+    [](mlir::mfuse::GroupedMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+  target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
+    [](mlir::mfuse::BatchMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+}
+
+static void addDvmConversionPatterns(RewritePatternSet &patterns, MLIRContext *ctx) {
+  patterns.add<ConvertMulOp, ConvertAddOp, ConvertSubOp, ConvertDivOp, ConvertPowOp, ConvertMaximumOp,
+               ConvertMinimumOp, ConvertEqOp, ConvertNeOp, ConvertGtOp, ConvertGeOp, ConvertLtOp, ConvertLeOp,
+               ConvertLogicalAndOp, ConvertLogicalOrOp>(ctx);
+  patterns.add<ConvertAbsOp, ConvertCeilOp, ConvertFloorOp, ConvertTruncOp, ConvertExpOp, ConvertLogOp,
+               ConvertReciprocalOp, ConvertSqrtOp, ConvertIsFiniteOp, ConvertLogicalNotOp>(ctx);
+  patterns.add<ConvertNegOp, ConvertRsqrtOp, ConvertSelectOp, ConvertCastOp, ConvertBroadcastToOp, ConvertFullOp,
+               ConvertReshapeOp, ConvertReduceSumOp, ConvertReluOp, ConvertRealDivOp, ConvertMatmulOp,
+               ConvertBatchMatmulOp, ConvertMatmulWithBiasOp>(ctx);
+}
+
 }  // namespace
 
 struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, OperationPass<ModuleOp>> {
@@ -649,101 +752,8 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     insertLoadStoreOps(module);
 
     ConversionTarget target(*ctx);
-    target.addLegalDialect<mlir::dvm::DvmDialect>();
-    target.addLegalDialect<mlir::func::FuncDialect>();
-    target.addLegalDialect<mlir::arith::ArithDialect>();
-    target.addLegalDialect<mlir::tensor::TensorDialect>();
-    target.addLegalDialect<mlir::mfuse::MfuseDialect>();
-
-    // Binary operations
-    target.addDynamicallyLegalOp<mlir::mfuse::MulOp>(
-      [](mlir::mfuse::MulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::AddOp>(
-      [](mlir::mfuse::AddOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::SubOp>(
-      [](mlir::mfuse::SubOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::DivOp>(
-      [](mlir::mfuse::DivOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::PowOp>(
-      [](mlir::mfuse::PowOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::MaximumOp>(
-      [](mlir::mfuse::MaximumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::MinimumOp>(
-      [](mlir::mfuse::MinimumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::EqOp>(
-      [](mlir::mfuse::EqOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::NeOp>(
-      [](mlir::mfuse::NeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::GtOp>(
-      [](mlir::mfuse::GtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::GeOp>(
-      [](mlir::mfuse::GeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LtOp>(
-      [](mlir::mfuse::LtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LeOp>(
-      [](mlir::mfuse::LeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LogicalAndOp>(
-      [](mlir::mfuse::LogicalAndOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LogicalOrOp>(
-      [](mlir::mfuse::LogicalOrOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-
-    // Unary operations
-    target.addDynamicallyLegalOp<mlir::mfuse::AbsOp>(
-      [](mlir::mfuse::AbsOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::CeilOp>(
-      [](mlir::mfuse::CeilOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::FloorOp>(
-      [](mlir::mfuse::FloorOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::TruncOp>(
-      [](mlir::mfuse::TruncOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::ExpOp>(
-      [](mlir::mfuse::ExpOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LogOp>(
-      [](mlir::mfuse::LogOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::ReciprocalOp>(
-      [](mlir::mfuse::ReciprocalOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::SqrtOp>(
-      [](mlir::mfuse::SqrtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::IsFiniteOp>(
-      [](mlir::mfuse::IsFiniteOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::LogicalNotOp>(
-      [](mlir::mfuse::LogicalNotOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-
-    // Special operations
-    target.addDynamicallyLegalOp<mlir::mfuse::NegOp>(
-      [](mlir::mfuse::NegOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::RsqrtOp>(
-      [](mlir::mfuse::RsqrtOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::SelectOp>(
-      [](mlir::mfuse::SelectOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::CastOp>(
-      [](mlir::mfuse::CastOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::BroadcastToOp>(
-      [](mlir::mfuse::BroadcastToOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::FullOp>(
-      [](mlir::mfuse::FullOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::ReshapeOp>(
-      [](mlir::mfuse::ReshapeOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::ReduceSumOp>(
-      [](mlir::mfuse::ReduceSumOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::ReluOp>(
-      [](mlir::mfuse::ReluOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::RealDivOp>(
-      [](mlir::mfuse::RealDivOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::MatmulOp>(
-      [](mlir::mfuse::MatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::MatmulWithBiasOp>(
-      [](mlir::mfuse::MatmulWithBiasOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    // mfuse.grouped_matmul uses tensor-list operands/results, while
-    // dvm.grouped_matmul takes single ranked tensors. Keep it illegal inside a
-    // DVM outlined function until the list-to-tensor bridge semantics are
-    // defined.
-    // TODO: Enable conversion for a verified subset after unpacking
-    // MfuseTensorList/MfuseOptionalTensorList operands safely.
-    target.addDynamicallyLegalOp<mlir::mfuse::GroupedMatmulOp>(
-      [](mlir::mfuse::GroupedMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-    target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
-      [](mlir::mfuse::BatchMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+    addDvmLegalDialects(target);
+    addDynamicallyLegalMfuseOps(target);
 
     // Do not mark mfuse.constant dynamically illegal here. Scalar constants are
     // allowed to remain as temporary producers during conversion so binary
@@ -757,53 +767,9 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     // target.addIllegalOp<mlir::mfuse::SliceOp>();
 
     RewritePatternSet patterns(ctx);
-
-    // Binary operations
-    patterns.add<ConvertMulOp>(ctx);
-    patterns.add<ConvertAddOp>(ctx);
-    patterns.add<ConvertSubOp>(ctx);
-    patterns.add<ConvertDivOp>(ctx);
-    patterns.add<ConvertPowOp>(ctx);
-    patterns.add<ConvertMaximumOp>(ctx);
-    patterns.add<ConvertMinimumOp>(ctx);
-    patterns.add<ConvertEqOp>(ctx);
-    patterns.add<ConvertNeOp>(ctx);
-    patterns.add<ConvertGtOp>(ctx);
-    patterns.add<ConvertGeOp>(ctx);
-    patterns.add<ConvertLtOp>(ctx);
-    patterns.add<ConvertLeOp>(ctx);
-    patterns.add<ConvertLogicalAndOp>(ctx);
-    patterns.add<ConvertLogicalOrOp>(ctx);
-
-    // Unary operations
-    patterns.add<ConvertAbsOp>(ctx);
-    patterns.add<ConvertCeilOp>(ctx);
-    patterns.add<ConvertFloorOp>(ctx);
-    patterns.add<ConvertTruncOp>(ctx);
-    patterns.add<ConvertExpOp>(ctx);
-    patterns.add<ConvertLogOp>(ctx);
-    patterns.add<ConvertReciprocalOp>(ctx);
-    patterns.add<ConvertSqrtOp>(ctx);
-    patterns.add<ConvertIsFiniteOp>(ctx);
-    patterns.add<ConvertLogicalNotOp>(ctx);
-
-    // Special operations
-    patterns.add<ConvertNegOp>(ctx);
-    patterns.add<ConvertRsqrtOp>(ctx);
-    patterns.add<ConvertSelectOp>(ctx);
-    patterns.add<ConvertCastOp>(ctx);
-    patterns.add<ConvertBroadcastToOp>(ctx);
-    patterns.add<ConvertFullOp>(ctx);
-    patterns.add<ConvertReshapeOp>(ctx);
-    patterns.add<ConvertReduceSumOp>(ctx);
-    patterns.add<ConvertReluOp>(ctx);
-    patterns.add<ConvertRealDivOp>(ctx);
-    patterns.add<ConvertMatmulOp>(ctx);
-    patterns.add<ConvertBatchMatmulOp>(ctx);
-    patterns.add<ConvertMatmulWithBiasOp>(ctx);
-    // ConvertGroupedMatmulOp is intentionally not registered. See the dynamic
-    // legality note above: converting list-typed mfuse.grouped_matmul operands
-    // directly to dvm.grouped_matmul would create invalid DVM IR.
+    addDvmConversionPatterns(patterns, ctx);
+    // ConvertGroupedMatmulOp is intentionally not registered because
+    // list-typed mfuse.grouped_matmul operands would create invalid DVM IR.
     // patterns.add<ConvertGroupedMatmulOp>(ctx);
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
