@@ -308,22 +308,105 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
     else:
         return (1.22e-4, 1e-5, 1.22e-3, 1e-4, 0.001)
 
+def _merge_consecutive(values):
+    """Merge sorted integer list into consecutive ranges.
+
+    [0,1,2,5,6,7,10] -> [(0,3), (5,8), (10,11)]
+    """
+    if not values:
+        return []
+    ranges = []
+    start = values[0]
+    end = values[0]
+    for v in values[1:]:
+        if v == end + 1:
+            end = v
+        else:
+            ranges.append((start, end + 1))
+            start = v
+            end = v
+    ranges.append((start, end + 1))
+    return ranges
+
+def _format_dim(values, dim_size):
+    """Format per-dimension error distribution with auto-merge."""
+    ranges = _merge_consecutive(values)
+    total_error = len(values)
+    coverage = total_error / dim_size * 100
+
+    if len(ranges) == 1:
+        lo, hi = ranges[0]
+        if hi - lo == dim_size:
+            return f"[:]" + f"  ({total_error}/{dim_size} = {coverage:.1f}%)"
+        return f"[{lo}:{hi}]" + f"  ({total_error}/{dim_size} = {coverage:.1f}%)"
+
+    if len(ranges) <= 5:
+        parts = [f"[{lo}:{hi}]" for lo, hi in ranges]
+        return ", ".join(parts) + f"  ({total_error}/{dim_size} = {coverage:.1f}%)"
+
+    first3 = [f"[{lo}:{hi}]" for lo, hi in ranges[:3]]
+    return ", ".join(first3) + f", ... ({len(ranges)} ranges, {total_error}/{dim_size} = {coverage:.1f}%)"
+
+def _format_error_locations(error_mask, shape):
+    """Format per-dimension error distribution without materializing all coords."""
+    if len(shape) == 0:
+        return "Error location: scalar output"
+
+    lines = ["Error location per dimension ([start:end]=error index range, count/size=coverage):"]
+    non_singleton_dims = []
+    full_coverage_dims = []
+    singleton_dims = []
+
+    for d, dim_size in enumerate(shape):
+        if dim_size == 1:
+            singleton_dims.append(d)
+            continue
+
+        reduce_axes = tuple(i for i in range(len(shape)) if i != d)
+        dim_mask = np.any(error_mask, axis=reduce_axes) if reduce_axes else error_mask
+        unique_vals = np.where(dim_mask)[0].tolist()
+        non_singleton_dims.append(d)
+        if len(unique_vals) == dim_size:
+            full_coverage_dims.append(d)
+        lines.append(f"  dim{d}: {_format_dim(unique_vals, dim_size)}")
+
+    if not non_singleton_dims:
+        lines.append("  note: 所有输出维度都是单例维，请主要参考下面的样例值。")
+    elif len(non_singleton_dims) == 1:
+        lines.append("  note: 只有一个非单例输出维度，逐维分布相对样例索引的额外信息较少。")
+    elif len(full_coverage_dims) == len(non_singleton_dims):
+        lines.append("  note: 错误覆盖所有非单例维度，优先检查全局公式、累加、dtype、store 或 buffer 覆盖，而不是只修局部边界 mask。")
+
+    if singleton_dims:
+        lines.append(f"  note: 单例维度 {singleton_dims} 已省略，因为它们提供的定位信息较少。")
+
+    return "\\n".join(lines)
+
+def _coord_from_flat(flat_idx, shape):
+    """Convert a flattened index to an ND coordinate tuple."""
+    idx = int(flat_idx)
+    coord = []
+    for dim_size in reversed(shape):
+        coord.append(idx % dim_size)
+        idx //= dim_size
+    return tuple(reversed(coord))
+
+def _format_coord(coord):
+    if len(coord) == 0:
+        return "[scalar]"
+    if len(coord) == 1:
+        return f"[{coord[0]}]"
+    return str(list(coord))
+
 def compare(fw_out, impl_out, data_type):
     """Compare framework output and implementation output using layered tolerance."""
-    fw_flat = fw_out.flatten()
-    impl_flat = impl_out.flatten()
-    if isinstance(impl_flat, ms.Tensor):
-        pass
-    else:
-        impl_flat = ms.Tensor(impl_flat, dtype=fw_flat.dtype)
+    fw_np = fw_out.asnumpy()
+    impl_np = impl_out.asnumpy() if isinstance(impl_out, ms.Tensor) else np.asarray(impl_out, dtype=fw_np.dtype)
 
-    size = fw_flat.size
+    size = fw_np.size
 
-    if fw_flat.shape != impl_flat.shape:
-        raise AssertionError(f"验证失败，输出形状不一致: framework={fw_flat.shape}, impl={impl_flat.shape}")
-
-    fw_np = fw_flat.asnumpy()
-    impl_np = impl_flat.asnumpy()
+    if fw_np.shape != impl_np.shape:
+        raise AssertionError(f"验证失败，输出形状不一致: framework={fw_np.shape}, impl={impl_np.shape}")
 
     fw_nan_mask = np.isnan(fw_np)
     impl_nan_mask = np.isnan(impl_np)
@@ -386,27 +469,38 @@ def compare(fw_out, impl_out, data_type):
     print(f"[precision] dtype={data_type} total={total} strict={int(np.sum(strict_pass))} outlier={outlier}/{cap} hard={hard_fail} mere={mere:.6e} mare={mare:.6e}")
 
     if hard_fail > 0:
-        hf_mask = ~relaxed_pass
-        hf_indices = np.where(hf_mask)[0]
-        num_to_show = min(5, len(hf_indices))
+        hard_fail_mask = np.zeros(fw_np.shape, dtype=bool)
+        hard_fail_mask[finite_mask] = ~relaxed_pass
+        sample_flat_indices = np.where(hard_fail_mask.reshape(-1))[0][:5]
         error_msg = f"验证失败，存在 {hard_fail} 个元素超过放宽阈值(hard_fail)\\n"
         error_msg += f"rtol={rtol:.6e} atol={atol:.6e} outlier_rtol={outlier_rtol:.6e} outlier_atol={outlier_atol:.6e} outlier_ratio={outlier_ratio}\\n"
         error_msg += f"mere={mere:.6e} mare={mare:.6e}\\n"
-        for i in range(num_to_show):
-            idx = hf_indices[i]
-            error_msg += f"  位置[{idx}]: ref={fw_finite[idx]:.6e} impl={impl_finite[idx]:.6e} abs_diff={abs_diff[idx]:.6e} relaxed_tol={relaxed_tol[idx]:.6e}\\n"
+        error_msg += _format_error_locations(hard_fail_mask, fw_np.shape) + "\\n"
+        for flat_idx in sample_flat_indices.tolist():
+            coord = _coord_from_flat(flat_idx, fw_np.shape)
+            ref_value = np.float32(fw_np[coord])
+            impl_value = np.float32(impl_np[coord])
+            sample_abs_diff = float(np.abs(ref_value - impl_value))
+            sample_relaxed_tol = float(outlier_atol + outlier_rtol * np.abs(ref_value))
+            error_msg += f"  位置{_format_coord(coord)}: ref={ref_value:.6e} impl={impl_value:.6e} abs_diff={sample_abs_diff:.6e} relaxed_tol={sample_relaxed_tol:.6e}\\n"
         raise AssertionError(error_msg)
 
     if outlier > cap:
-        ol_mask = (~strict_pass) & relaxed_pass
-        ol_indices = np.where(ol_mask)[0]
-        num_to_show = min(5, len(ol_indices))
+        outlier_mask = np.zeros(fw_np.shape, dtype=bool)
+        outlier_mask[finite_mask] = (~strict_pass) & relaxed_pass
+        sample_flat_indices = np.where(outlier_mask.reshape(-1))[0][:5]
         error_msg = f"验证失败，超限元素比例超过允许值: outlier={outlier} / cap={cap}\\n"
         error_msg += f"rtol={rtol:.6e} atol={atol:.6e} outlier_rtol={outlier_rtol:.6e} outlier_atol={outlier_atol:.6e} outlier_ratio={outlier_ratio}\\n"
         error_msg += f"mere={mere:.6e} mare={mare:.6e}\\n"
-        for i in range(num_to_show):
-            idx = ol_indices[i]
-            error_msg += f"  位置[{idx}]: ref={fw_finite[idx]:.6e} impl={impl_finite[idx]:.6e} abs_diff={abs_diff[idx]:.6e} strict_tol={strict_tol[idx]:.6e} relaxed_tol={relaxed_tol[idx]:.6e}\\n"
+        error_msg += _format_error_locations(outlier_mask, fw_np.shape) + "\\n"
+        for flat_idx in sample_flat_indices.tolist():
+            coord = _coord_from_flat(flat_idx, fw_np.shape)
+            ref_value = np.float32(fw_np[coord])
+            impl_value = np.float32(impl_np[coord])
+            sample_abs_diff = float(np.abs(ref_value - impl_value))
+            sample_strict_tol = float(atol + rtol * np.abs(ref_value))
+            sample_relaxed_tol = float(outlier_atol + outlier_rtol * np.abs(ref_value))
+            error_msg += f"  位置{_format_coord(coord)}: ref={ref_value:.6e} impl={impl_value:.6e} abs_diff={sample_abs_diff:.6e} strict_tol={sample_strict_tol:.6e} relaxed_tol={sample_relaxed_tol:.6e}\\n"
         raise AssertionError(error_msg)
 
 '''
@@ -416,4 +510,3 @@ def compare(fw_out, impl_out, data_type):
         return '''            data_type = framework_output[i].dtype
             compare(fw_out, impl_out, data_type)
 '''
-
