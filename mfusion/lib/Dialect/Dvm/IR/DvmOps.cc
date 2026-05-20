@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
+#include <optional>
+
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
-#include <optional>
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
 
 #define GET_OP_CLASSES
 #include "mfusion/Dialect/Dvm/IR/Dvm.cpp.inc"
 
-using namespace mlir;
-using namespace mlir::dvm;
+namespace mlir {
+namespace dvm {
 
 static bool isSupportedDvmScalarConstantType(Type type) {
   return type.isF32() || type.isF16() || type.isBF16() || type.isInteger(32);
@@ -81,6 +82,37 @@ static ParseResult parseScalarLiteral(OpAsmParser &parser, ParsedScalarLiteral &
   return success();
 }
 
+static ParseResult parseScalarOnLhs(OpAsmParser &parser, OpAsmParser::UnresolvedOperand &inputOperand,
+                                    ParsedScalarLiteral &scalarLiteral) {
+  if (parseScalarLiteral(parser, scalarLiteral) || parser.parseComma() || parser.parseOperand(inputOperand)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult parseInputThenScalar(OpAsmParser &parser, ParseResult inputParseResult,
+                                        ParsedScalarLiteral &scalarLiteral) {
+  if (failed(inputParseResult)) {
+    return failure();
+  }
+  if (parser.parseComma() || parseScalarLiteral(parser, scalarLiteral)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult parseBinaryScalarOperands(OpAsmParser &parser, OpAsmParser::UnresolvedOperand &inputOperand,
+                                             ParsedScalarLiteral &scalarLiteral, bool &scalarOnLhs) {
+  OptionalParseResult inputParseResult = parser.parseOptionalOperand(inputOperand);
+  if (!inputParseResult.has_value()) {
+    scalarOnLhs = true;
+    return parseScalarOnLhs(parser, inputOperand, scalarLiteral);
+  }
+
+  scalarOnLhs = false;
+  return parseInputThenScalar(parser, inputParseResult.value(), scalarLiteral);
+}
+
 static FailureOr<TypedAttr> buildScalarAttrFromLiteral(OpAsmParser &parser, const ParsedScalarLiteral &literal,
                                                        Type type, StringRef opName) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
@@ -130,6 +162,20 @@ static bool isDTypeCompatibleWithElementType(DType dtype, Type elementType) {
   return false;
 }
 
+static ParseResult parseBinaryScalarTypes(OpAsmParser &parser, bool scalarOnLhs, Type &inputType, Type &scalarType,
+                                          Type &resultType) {
+  Type firstType;
+  Type secondType;
+  if (parser.parseColon() || parser.parseType(firstType) || parser.parseComma() || parser.parseType(secondType) ||
+      parser.parseArrow() || parser.parseType(resultType)) {
+    return failure();
+  }
+
+  inputType = scalarOnLhs ? secondType : firstType;
+  scalarType = scalarOnLhs ? firstType : secondType;
+  return success();
+}
+
 LogicalResult BinaryOp::verify() {
   auto lhsElementType = getElementType(getLhs().getType());
   auto rhsElementType = getElementType(getRhs().getType());
@@ -158,36 +204,21 @@ ParseResult BinaryScalarOp::parse(OpAsmParser &parser, OperationState &result) {
   ParsedScalarLiteral scalarLiteral;
   bool scalarOnLhs = false;
 
-  OptionalParseResult inputParseResult = parser.parseOptionalOperand(inputOperand);
-  if (inputParseResult.has_value()) {
-    if (failed(inputParseResult.value())) {
-      return failure();
-    }
-    scalarOnLhs = false;
-    if (parser.parseComma() || parseScalarLiteral(parser, scalarLiteral)) {
-      return failure();
-    }
-  } else {
-    scalarOnLhs = true;
-    if (parseScalarLiteral(parser, scalarLiteral) || parser.parseComma() || parser.parseOperand(inputOperand)) {
-      return failure();
-    }
+  if (parseBinaryScalarOperands(parser, inputOperand, scalarLiteral, scalarOnLhs)) {
+    return failure();
   }
 
   if (parser.parseOptionalAttrDict(result.attributes)) {
     return failure();
   }
 
-  Type firstType;
-  Type secondType;
+  Type inputType;
+  Type scalarType;
   Type resultType;
-  if (parser.parseColon() || parser.parseType(firstType) || parser.parseComma() || parser.parseType(secondType) ||
-      parser.parseArrow() || parser.parseType(resultType)) {
+  if (parseBinaryScalarTypes(parser, scalarOnLhs, inputType, scalarType, resultType)) {
     return failure();
   }
 
-  Type inputType = scalarOnLhs ? secondType : firstType;
-  Type scalarType = scalarOnLhs ? firstType : secondType;
   if (!isa<RankedTensorType>(inputType)) {
     return parser.emitError(parser.getNameLoc(), "dvm.binary_scalar tensor operand must have ranked tensor type");
   }
@@ -361,3 +392,6 @@ void ConstantOp::print(OpAsmPrinter &printer) {
   printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
   printer << " : " << getResult().getType();
 }
+
+}  // namespace dvm
+}  // namespace mlir

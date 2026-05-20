@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <iterator>
 
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -56,11 +57,8 @@ mlir::Attribute dropSymbolicShapeEncoding(mlir::RankedTensorType type) {
   auto baseKey = mlir::StringAttr::get(ctx, mlir::mfuse::SymbolAttrUtils::kBaseEncodingKey);
   llvm::SmallVector<mlir::NamedAttribute> entries;
   entries.reserve(dict.getValue().size());
-  for (const auto &entry : dict.getValue()) {
-    if (entry.getName() != symKey) {
-      entries.push_back(entry);
-    }
-  }
+  std::copy_if(dict.getValue().begin(), dict.getValue().end(), std::back_inserter(entries),
+               [symKey](const mlir::NamedAttribute &entry) { return entry.getName() != symKey; });
 
   if (entries.empty()) {
     return {};
@@ -114,8 +112,8 @@ bool canRefineFunctionSignature(mlir::func::FuncOp func) {
   // Conservative first version: only refine standalone single-return function
   // signatures. If a function has func.call users, every call site's
   // operand/result types must be updated together with the callee signature.
-  // TODO: Support called functions by propagating signature refinements to all
-  // func.call users.
+  // TODO(mfusion): Support called functions by propagating signature
+  // refinements to all func.call users.
   return func && !func.isExternal() && !hasFuncCallers(func) && countReturnOps(func) == 1;
 }
 
@@ -396,8 +394,8 @@ void refineFunctionResultTypes(mlir::func::FuncOp func) {
     // Refining the function result from only one return could make the other
     // return invalid. Keep the signature unchanged unless there is exactly one
     // return terminator.
-    // TODO: Support this after checking that all return operands allow the
-    // same monotonic result type refinement.
+    // TODO(mfusion): Support this after checking that all return operands
+    // allow the same monotonic result type refinement.
     return;
   }
 
