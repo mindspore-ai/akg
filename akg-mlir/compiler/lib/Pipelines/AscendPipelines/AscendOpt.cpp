@@ -264,7 +264,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   pm.addPass(mlir::hacc::createAppendDeviceSpecPass());
 
   // hivm optimize pipeline
-  createHIVMPipeline(pm, options);
+  if (options.enableHIVMCompile) {
+    createHIVMPipeline(pm, options);
+  }
 }
 }  // namespace
 
