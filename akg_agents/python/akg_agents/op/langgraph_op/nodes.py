@@ -688,7 +688,7 @@ class NodeFactory:
                 )
 
                 trace_instance.write_record("kernel_conductor_decision", [
-                    ('result', f"decision={decision}, suggestion={suggestion[:200]}"),
+                    ('result', f"decision={decision}, suggestion={suggestion}"),
                     ('prompt', prompt),
                     ('reasoning', reasoning),
                 ], subdirectory="conductor")
