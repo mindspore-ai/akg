@@ -32,18 +32,7 @@ def LoopSliceSplit : Pass<"loop-slice-split", "func::FuncOp"> {
   let summary = "Split affine.for by producer slice boundaries and shrink WAW-overwritten ranges";
   let description = [{
     Pre-fusion shape regularization for affine.for nests with constant bounds
-    and unit step. Performs, in order:
-      (A) WAW shrink: when a store's write region is fully overwritten on a
-          prefix or suffix by a later store, with no intervening reader,
-          shrinks the earlier loop's induction range to drop the dead part.
-      (B) Consumer slice split: when a loop reads a memref whose "latest
-          writer" partitions the accessed slice into multiple sub-ranges,
-          clones the loop into one copy per sub-range.
-      (C) Producer mirror split: propagates the slice boundaries from (B)
-          back to producer loops whose write region crosses them.
-      (D) Normalize: any sub-loop ending up with a non-zero constant lower
-          bound is shifted to start at 0, with the bound's value folded into
-          the affine.load/affine.store maps.
+    and unit step.
   }];
   let constructor = "mlir::createLoopSliceSplitPass()";
 }
