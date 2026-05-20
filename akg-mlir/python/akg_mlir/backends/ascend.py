@@ -217,10 +217,11 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
     compile_cmd = [
         "bishengir-compile",
         input_file,
-        "-enable-hivm-compile=false",
+        "-enable-hivm-compile=true",
         "-enable-bin-relocation=false",
         f"-block-dim={block_dim}",
         "-enable-auto-multi-buffer=true",
+        "-disable-auto-cv-work-space-manage",
         "-o",
         output_so_path
     ]
