@@ -34,6 +34,7 @@
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
+#include "mfusion/Support/Logging.h"
 
 namespace {
 namespace TorchD = mlir::torch::Torch;
@@ -171,9 +172,15 @@ bool updateFunctionArgumentType(mlir::BlockArgument arg, mlir::Type newType) {
 // Generic value type setter for Torch values. For eligible function entry
 // arguments, this also updates the printed func.func signature.
 bool setTorchValueType(mlir::Value value, mlir::Type newType) {
+  if (!value) {
+    MLOG(DEBUG) << "Skip Torch value type update: value is null, new type=" << newType;
+    return false;
+  }
   if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
     if (result.getType() != newType) {
       if (hasIneligibleReturnUser(result)) {
+        MLOG(DEBUG) << "Skip Torch value type update for op result with ineligible return user, old type="
+                    << result.getType() << ", new type=" << newType;
         return false;
       }
       result.setType(newType);
@@ -182,13 +189,19 @@ bool setTorchValueType(mlir::Value value, mlir::Type newType) {
   }
   if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(value)) {
     if (arg.getType() != newType) {
-      if (getEntryFunctionForArgument(arg) && !updateFunctionArgumentType(arg, newType)) {
-        return false;
+      if (auto func = getEntryFunctionForArgument(arg)) {
+        if (!updateFunctionArgumentType(arg, newType)) {
+          MLOG(DEBUG) << "Skip Torch value type update for function argument in function '" << func.getSymName()
+                      << "', old type=" << arg.getType() << ", new type=" << newType;
+          return false;
+        }
       }
       arg.setType(newType);
     }
     return true;
   }
+  MLOG(DEBUG) << "Skip Torch value type update: value is neither an op result nor a block argument, type="
+              << value.getType() << ", new type=" << newType;
   return false;
 }
 
@@ -336,6 +349,8 @@ mlir::LogicalResult canonicalizeTorchValueWithSymbolicExprs(mlir::Operation *dia
   if (mlir::failed(canonicalType)) {
     return mlir::failure();
   }
+  // Torch value type refinement is best-effort: some function signatures are
+  // intentionally left unchanged when they cannot be updated safely.
   (void)setTorchValueType(value, *canonicalType);
   return mlir::success();
 }
