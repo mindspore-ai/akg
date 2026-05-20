@@ -1,0 +1,40 @@
+/**
+ * Copyright 2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef MFUSION_DIALECT_MFUSE_IR_MFUSETRAITS_H
+#define MFUSION_DIALECT_MFUSE_IR_MFUSETRAITS_H
+
+#include "mlir/IR/OpDefinition.h"
+
+namespace mlir::mfuse {
+
+namespace detail {
+/// Verifies symbolic-shape consistency: if any operand of `op` carries a
+/// symbolic-shape encoding, every non-static ranked-tensor result must too.
+mlir::LogicalResult verifySymbolicShapeTrait(mlir::Operation *op);
+}  // namespace detail
+
+/// NativeOpTrait that enforces symbolic-shape propagation across all Mfuse ops.
+/// Injected automatically through the Mfuse_Op TableGen base class.
+template <typename ConcreteType>
+class VerifySymbolicShapeTrait : public mlir::OpTrait::TraitBase<ConcreteType, VerifySymbolicShapeTrait> {
+ public:
+  static mlir::LogicalResult verifyTrait(mlir::Operation *op) { return detail::verifySymbolicShapeTrait(op); }
+};
+
+}  // namespace mlir::mfuse
+
+#endif  // MFUSION_DIALECT_MFUSE_IR_MFUSETRAITS_H
