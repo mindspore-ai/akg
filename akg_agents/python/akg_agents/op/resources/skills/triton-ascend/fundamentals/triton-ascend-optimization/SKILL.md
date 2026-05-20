@@ -7,11 +7,6 @@ metadata:
   backend: ascend
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
-structure:
-  child_skills:
-    - triton-ascend-memory
-    - triton-ascend-grid-config
-    - triton-ascend-debugging
 ---
 
 # Triton Ascend 性能优化指南

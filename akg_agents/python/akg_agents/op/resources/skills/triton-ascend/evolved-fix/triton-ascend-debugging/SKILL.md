@@ -1,26 +1,31 @@
 ---
 name: triton-ascend-debugging
-description: "Triton Ascend 调试排查清单和常见错误速查表，包括编译错误、运行时错误、精度问题和性能问题的诊断方法。适用于内核代码生成、出现错误需要定位原因、或需要验证代码正确性的调试场景"
-category: fundamental
+description: "Triton Ascend 失败后的调试定位清单和常见错误速查表。仅在验证、编译或运行失败后使用，用于帮助 Conductor 解释报错、定位根因并给出修复建议。生成期硬约束请参考 api-rules、hardware-constraints、memory、grid-config 和对应 guide。"
+category: fix
 version: "1.0.0"
 metadata:
+  case_type: fix
   backend: ascend
   dsl: triton_ascend
-  hardware: "Atlas A2, Atlas A3"
+  hardware: "Atlas A2, Atlas A3, Atlas A5"
 ---
 
-# 调试与排查清单
+# Triton Ascend 调试与排查清单
+
+> 本 skill 只用于失败后的诊断和修复建议，不作为初始生成约束注入 KernelGen。
+> 如果结论属于“生成时必须遵守”的规则，应落回 fundamental 或对应 guide。
 
 ## 完整调试清单
 
 ### 内存访问问题
-- [ ] 所有 load/store 是否都有 mask 或 boundary_check？
-- [ ] stride 参数设置是否正确？
-- [ ] 数组索引是否越界？
+- [ ] tail block 的 `tl.load` / `tl.store` 是否都有 `mask` 或 `boundary_check`？
+- [ ] 若 verifier 的错误位置集中在最后一维末尾，优先怀疑 tail mask / boundary_check 漏写。
+- [ ] stride 参数是否和 wrapper 中传入的 `tensor.stride()` 一致？
+- [ ] 若 kernel 使用一维 `ptr + offsets`，输入是否先 `.contiguous()`？
 
 ### 控制流检查
 - [ ] 是否误用了 return/break/continue？
-- [ ] 复杂条件是否用 mask 组合实现？
+- [ ] 复杂条件是否导致 `tl.where` / mask 组合过深？
 - [ ] `tl.constexpr` 是否只在内核参数中使用？
 
 ### Grid 与 Block 配置检查
@@ -35,29 +40,13 @@ metadata:
 ### 切片与索引检查
 - [ ] 是否避免了Python风格的直接切片（如`b[0]`、`b[i:j]`）？
 - [ ] 是否对`tl.arange`生成的张量误用了`tl.get_element`？
+- [ ] 是否对 `tl.sum` / `tl.max` 这类 reduction scalar 结果做了 `[0]` 索引？
 - [ ] 切片操作是否使用了正确的API（`tl.get_element`、`tl.extract_slice`等）？
 
 ### 性能优化检查
 - [ ] 内存访问是否连续（避免跨步访问）？
 - [ ] 是否充分利用了块内并行？
 - [ ] 复杂算子是否考虑拆分为多个简单kernel？
-
-## 禁止使用的语法（Ascend 后端）
-
-| 禁止写法 | 替代方案 |
-|---------|---------|
-| `return` / `break` / `continue` | 使用 mask 控制流程 |
-| lambda 表达式 | 内联函数或 tl.where |
-| 链式布尔运算 `a and b` | 分步计算 mask：`m1 = ...; m2 = ...; m = m1 & m2` |
-| 张量直接索引 `tensor[i]` | `tl.load(ptr + offset)` / `tl.store(ptr + offset, val)` |
-| Python 切片 `b[0]` / `b[i:j]` | `tl.get_element` / `tl.extract_slice` / `tl.insert_slice` |
-| 对 `tl.arange` 结果用 `get_element` | 直接计算索引值 |
-| `while` 循环 | `for i in range(MAX): if i < n:` |
-| `range()` 混用运行时变量和 constexpr | 全 constexpr 的 `range(0, N, BLOCK_K)` + 循环体内运行时 if |
-| `tl.float16(scalar)` | `scalar.to(tl.float16)` |
-| `tl.constexpr` 在 host 侧使用 | 仅在 kernel 参数中使用 |
-| if-else 中负偏移 | `tl.maximum(offset, 0)` |
-| 复杂 `tl.where` 用于内存偏移 | 拆分为 if-else 静态分支 |
 
 ## 常见错误速查表
 
@@ -83,3 +72,12 @@ metadata:
 | tl.where偏移计算 | 编译失败（Ascend后端） | 在内存偏移中使用tl.where | 改用if-else静态分支处理 |
 | 性能低下 | 运行缓慢 | 内存访问不连续、切分不合理 | 优化内存布局、调整BLOCK_SIZE、使用block_ptr |
 | 运行时range边界崩溃 | bishengIR crash | range()的start/stop混用运行时变量和constexpr | 改用全constexpr的range(0, N, BLOCK_K)，循环体内用运行时if跳过 |
+
+### 验证失败定位
+
+| 错误位置分布 | 优先怀疑 | 修复方向 |
+|-------------|---------|---------|
+| 只集中在最后一维尾部，例如 `dim2: [16:17]` | tail mask / `boundary_check` 漏写 | 检查最后一维 load/store mask，block_ptr 加 `boundary_check=(0, 1)` |
+| 某一整行或整列错误 | 行列 offset、stride、转置或 `sub_vec_id` 偏移错误 | 复核多维 index 分解和 block_ptr `shape/strides/offsets/order` |
+| 所有 tile 都像最后一个 tile | A5 亲和单 buffer 被覆盖 | cube 每个 tile fixpipe 后 wait vector 释放，vector 读完后 set buffer-free |
+| 误差随 K 增大明显变大 | fp16 长链累加精度损失 | fp32 accumulator；必要时参考 Kahan precision fix |
