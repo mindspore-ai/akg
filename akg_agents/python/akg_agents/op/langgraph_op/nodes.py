@@ -652,19 +652,24 @@ class NodeFactory:
                 cache = getattr(kernel_gen_instance, '_initial_selection_cache', None)
                 if cache:
                     conductor_skills = cache.get("always", []) + cache.get("guide", [])
+                    cached_fix_skills = list(cache.get("fix", []))
+                    cached_fix_names = {getattr(s, "name", "") for s in cached_fix_skills}
                     for s in cache.get("case", []):
                         cat = getattr(s, "category", "") or ""
-                        if cat == "fix":
-                            conductor_skills.append(s)
-                        elif cat == "case" and kernel_gen_instance._infer_case_type(s) == "fix":
-                            conductor_skills.append(s)
+                        name = getattr(s, "name", "")
+                        if cat == "fix" and name not in cached_fix_names:
+                            cached_fix_skills.append(s)
+                            cached_fix_names.add(name)
+                    conductor_skills += cached_fix_skills
                     if conductor_skills:
                         conductor_sections = kernel_gen_instance._assemble_skill_contents(conductor_skills)
                         parts = [conductor_sections["fundamentals"], conductor_sections["guides_examples"], conductor_sections["cases"]]
                         skill_contents_for_conductor = "\n\n---\n\n".join(p for p in parts if p)
                         logger.info(
-                            f"[KernelConductor] 复用 KernelGen skill 缓存 (fundamental+guide+fix): "
-                            f"{len(conductor_skills)} skills, {len(skill_contents_for_conductor)} chars"
+                            f"[KernelConductor] 复用 KernelGen skill 缓存 "
+                            f"(fundamental+guide+all_fix): {len(conductor_skills)} skills "
+                            f"(fix={len(cached_fix_skills)}), "
+                            f"{len(skill_contents_for_conductor)} chars"
                         )
 
             try:

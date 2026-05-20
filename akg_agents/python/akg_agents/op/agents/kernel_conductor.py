@@ -17,8 +17,8 @@ KernelConductor Agent - 基于 Skill 系统的错误分析与修复建议 Agent
 
 负责：
 - 分析 Verifier 报错信息，判断错误类型
-- 复用 KernelGen 已选择的 skill（fundamental + guide + example + fix），
-  作为错误分析的知识背景
+- 复用 KernelGen 缓存的基础/指南知识，并全量注入 fix skill，
+  作为错误诊断与修复建议的知识背景
 - 决策下一步应交给代码生成 Agent 还是终止
 """
 
@@ -41,10 +41,11 @@ logger = logging.getLogger(__name__)
 class KernelConductor(AgentBase):
     """基于 Skill 系统的 Conductor Agent
 
-    优先复用 KernelGen 已选择的 skill（通过 node 层传入 skill_contents），
-    这样 conductor 能看到完整的上下文（fundamental + guide + example + fix）。
+    优先复用 node 层传入的 skill_contents。该内容应包含 KernelGen
+    缓存的基础/指南知识，以及全量 fix skill。
 
-    如果没有外部传入的 skill_contents（兜底），则自行加载 fundamental 类 skill。
+    如果没有外部传入的 skill_contents（兜底），则自行加载
+    fundamental/reference + fix skill。
     """
 
     TOOL_NAME = "call_kernel_conductor"
@@ -82,8 +83,8 @@ class KernelConductor(AgentBase):
         self.system_prompt_template = self.load_template("kernel_conductor/system_prompt.j2")
         self.user_prompt_template = self.load_template("kernel_conductor/user_prompt.j2")
 
-    def _load_fundamental_skills_fallback(self, dsl: str) -> str:
-        """兜底：自行加载 fundamental/reference skill 并拼接为文本"""
+    def _load_conductor_skills_fallback(self, dsl: str) -> str:
+        """兜底：自行加载 fundamental/reference + all fix skill 并拼接为文本"""
         dsl_key = dsl_to_dir_key(dsl)
         cache_key = f"conductor_{dsl_key}"
         if cache_key in self._skills_cache:
@@ -98,11 +99,14 @@ class KernelConductor(AgentBase):
                 all_skills = self._loader.load_from_directory(dsl_dir)
                 skills = [
                     s for s in all_skills
-                    if (getattr(s, "category", "") or "") in self.FALLBACK_SKILL_CATEGORIES
+                    if (
+                        (getattr(s, "category", "") or "") in self.FALLBACK_SKILL_CATEGORIES
+                        or (getattr(s, "category", "") or "") == "fix"
+                    )
                 ]
                 self._skills_cache[cache_key] = skills
                 logger.info(
-                    f"[KernelConductor] Fallback: loaded {len(skills)} fundamental skills "
+                    f"[KernelConductor] Fallback: loaded {len(skills)} conductor skills "
                     f"from {dsl_dir} (total scanned: {len(all_skills)})"
                 )
             except Exception as e:
@@ -132,8 +136,10 @@ class KernelConductor(AgentBase):
         """执行错误分析并给出修复建议
 
         Args:
-            skill_contents: 由 node 层从 KernelGen 缓存中获取并拼接好的 skill 文本。
-                            如果为空，conductor 自行加载 fundamental skill 作为兜底。
+            skill_contents: 由 node 层拼接好的 skill 文本，通常包含
+                            fundamental/reference/guide + all fix skills。
+                            如果为空，conductor 自行加载
+                            fundamental/reference + all fix skills 作为兜底。
 
         Returns:
             (decision, suggestion, formatted_prompt, reasoning)
@@ -145,8 +151,8 @@ class KernelConductor(AgentBase):
             history_attempts = []
 
         if not skill_contents:
-            logger.info("[KernelConductor] 未收到外部 skill_contents，使用 fallback 加载 fundamental")
-            skill_contents = self._load_fundamental_skills_fallback(dsl)
+            logger.info("[KernelConductor] 未收到外部 skill_contents，使用 fallback 加载 conductor skills")
+            skill_contents = self._load_conductor_skills_fallback(dsl)
 
         conductor_parser = ParserFactory.get_conductor_parser()
         format_instructions = conductor_parser.get_format_instructions()

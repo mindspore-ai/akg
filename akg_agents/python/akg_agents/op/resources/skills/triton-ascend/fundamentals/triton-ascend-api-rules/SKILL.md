@@ -6,7 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton_ascend
-  hardware: "Atlas A2, Atlas A3"
+  hardware: "Atlas A2, Atlas A3, Atlas A5"
 ---
 
 # Triton Ascend API Hard Rules (MUST follow)
@@ -21,9 +21,11 @@ on Ascend. They apply to every kernel in this DSL — no exceptions.
 - 链式布尔运算 → 分步计算 mask
 - 张量直接索引 → tl.load / tl.store
 - if-else 中负偏移 → tl.maximum(offset, 0)
-- Ascend: 复杂 tl.where → if-else
-- Ascend: while 循环 → for 替代
-- Ascend: range() 的 start/stop 混用运行时变量和 constexpr → 用全 constexpr 的 range + 循环体内运行时 if 跳过
+- 复杂 tl.where → if-else
+- 禁止用 `tl.where(cond, ptr_a, ptr_b)` 选择指针、地址或内存偏移 → 拆成静态 if/else 分支，或分别构造 mask 后 load/store
+- 禁止用 while 循环 → for 替代
+- 禁止 range() 的 start/stop 混用运行时变量和 constexpr → 用全 constexpr 的 range + 循环体内运行时 if 跳过
+- reduction scalar 结果不可 `[0]` 索引，例如 `result = tl.sum(x, axis=0)` 后直接使用 `result`
 
 ## While 循环替代（Ascend）
 
@@ -47,6 +49,7 @@ def kernel(ptr, n_iters, TILE: tl.constexpr, MAX_ITERS: tl.constexpr):
 - 切片: `tl.extract_slice(tensor, offsets, sizes, strides)`
 - 插入: `tl.insert_slice(full, sub, offsets, sizes, strides)`
 - 禁止对 tl.arange 张量用 get_element
+- 禁止对 reduction 返回的 scalar 再做 `[0]`，例如 `tl.sum(...)[0]`
 
 ## 其他限制
 
@@ -54,3 +57,4 @@ def kernel(ptr, n_iters, TILE: tl.constexpr, MAX_ITERS: tl.constexpr):
 - 输出张量用 torch.empty / empty_like（避免 zeros/ones 初始化开销）
 - 标量转换仅 `scalar.to(type)`，禁止 `tl.float16(scalar)`
 - BLOCK_SIZE 必须小于 65536
+- `tl.dot` 累加时显式使用 fp32 accumulator：`acc = tl.zeros((BM, BN), dtype=tl.float32)`，再 `tl.dot(a, b, acc)`

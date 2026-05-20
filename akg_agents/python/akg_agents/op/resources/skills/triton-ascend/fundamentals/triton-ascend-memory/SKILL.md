@@ -52,6 +52,14 @@ class ModelNew(torch.nn.Module):
 
 一维访问比 stride 计算效率更高，推荐优先使用。
 
+如果 host 侧没有把非连续输入转为 `.contiguous()`，kernel 不能假设一维`ptr + offsets` 与逻辑元素顺序一致；此时必须显式传入并使用 stride，或先在 host 侧物化连续张量。
+
+常见安全写法：
+
+- elementwise / reduce 如果使用 `x.numel()` + 一维 offsets，host 侧先对输入做 `.contiguous()`。
+- matmul / transpose / broadcast / 非最后维 reduce 如果不物化连续张量，必须把 `stride()` 传给 kernel，并按逻辑维度计算 offset。
+- 输出如果按一维连续写入，优先用 `torch.empty_like()` 或 `torch.empty(..., device=x.device, dtype=x.dtype)` 创建连续输出。
+
 ## 对齐要求
 - Ascend 256B 对齐: element-wise / reduce 算子
 - Ascend 512B 对齐: MatMul 切分

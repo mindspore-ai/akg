@@ -60,7 +60,33 @@ offsets = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
 mask = offsets < n_elements
 data = tl.load(ptr + offsets, mask=mask, other=0.0)
 result = tl.where(condition, true_val, false_val)
+tl.store(out_ptr + offsets, result, mask=mask)
 ```
+
+硬规则：
+
+- 任何可能越过 shape 边界的 `tl.load` 必须带 `mask` 或 block_ptr `boundary_check`。
+- 任何 tail block 的 `tl.store` 必须带 `mask` 或 block_ptr `boundary_check`，否则最后一个不满 block 会写坏输出。
+- 2D/3D block_ptr 场景优先用 `boundary_check=(0, 1)`；普通指针场景用显式 mask。
+
+## 多维索引与并发写
+
+多维任务可以展平成一维 task，但必须显式写出每一维的分解公式，并用原始 shape / stride 还原全局 offset。不要在代码里留下含义不清的中间索引。
+
+```python
+task = tl.program_id(0)
+b = task // (M * N)
+rem = task - b * M * N
+m = rem // N
+n = rem - m * N
+offset = b * stride_b + m * stride_m + n * stride_n
+```
+
+硬规则：
+
+- 每个 program 默认只能写自己唯一负责的输出区域。
+- 多个 program 可能写同一输出地址时，必须使用 `tl.atomic_add` / `tl.atomic_max` 等原子操作，或改写调度让写唯一。
+- 展平多维任务时，先写清楚 `task -> dim0/dim1/...` 的公式，再计算 pointer offset；不要把不同维度混在一个不可读表达式里。
 
 ## Autotune 用法（仅限静态 shape）
 

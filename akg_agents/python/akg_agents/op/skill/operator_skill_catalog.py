@@ -294,10 +294,10 @@ class OperatorSkillCatalog:
     def classify_case_type(skill) -> str:
         """Classify a case skill as ``'fix'`` or ``'improvement'``.
 
-        Mirrors ``kernel_gen.KernelGen._infer_case_type`` — copied here
-        so autoresearch and any future caller share one implementation
-        without dragging in kernel_gen's codegen-related ``__init__``
-        overhead. Priority order:
+        Legacy helper for autoresearch and historical ``category='case'``
+        skills that carry fix/improvement hints. KernelGen now treats
+        ``category='case'`` as non-fix generation examples and relies on
+        explicit ``category='fix'`` for repair knowledge. Priority order:
 
           1. ``metadata.case_type`` (explicit, if 'fix' or 'improvement')
           2. ``metadata.source == 'error_fix'`` → 'fix'
