@@ -58,7 +58,7 @@ class _FakeSkill:
 
 
 class TestClassifyCaseType:
-    """Mirrors kernel_gen._infer_case_type's priority order:
+    """Legacy catalog classification priority:
     metadata.case_type > metadata.source > skill_path > default."""
 
     def test_explicit_metadata_case_type_fix(self):
