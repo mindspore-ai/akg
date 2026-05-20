@@ -1372,8 +1372,7 @@ static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loop
   return true;
 }
 
-// Collect aligned axis chains: src takes the FIRST for-child at each level,
-// dst takes the LAST. Stops when either side has no for-child.
+// Collect aligned axis chains: pair src's last for-child with dst's first for-child at each level for deeper merging.
 static void collectAlignedAxisChains(affine::AffineForOp srcRoot, affine::AffineForOp dstRoot,
                                      SmallVector<affine::AffineForOp, 4> &srcChain,
                                      SmallVector<affine::AffineForOp, 4> &dstChain) {
@@ -1387,14 +1386,14 @@ static void collectAlignedAxisChains(affine::AffineForOp srcRoot, affine::Affine
 
     affine::AffineForOp srcNext;
     for (auto &op : *s.getBody()) {
-      if (auto f = dyn_cast<affine::AffineForOp>(op)) {
-        srcNext = f;
-        break;
-      }
+      if (auto f = dyn_cast<affine::AffineForOp>(op)) srcNext = f;
     }
     affine::AffineForOp dstNext;
     for (auto &op : *d.getBody()) {
-      if (auto f = dyn_cast<affine::AffineForOp>(op)) dstNext = f;
+      if (auto f = dyn_cast<affine::AffineForOp>(op)) {
+        dstNext = f;
+        break;
+      }
     }
     s = srcNext;
     d = dstNext;
