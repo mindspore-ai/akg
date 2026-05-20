@@ -18,13 +18,14 @@ Skill 选择与 Evolution 逻辑 UT — 不依赖 LLM，纯逻辑验证
 覆盖：
 1. dsl_to_dir_key 转换
 2. KernelGen 实例属性、PARAMETERS_SCHEMA、run() 签名
-3. _infer_case_type metadata 推断（兼容旧 case category）
+3. Skill category 现状约定
 4. _parse_unified_selection JSON 解析
 5. _assemble_skill_contents 排序与组装（含 fix/improvement category）
-6. Stage → category 注入逻辑（含 fix/improvement 识别，源码检查）
-7. nodes.py / evolution_processors 接口清理验证
-8. evolved_skill_loader 已删除
-9. AB test build_evolve_config A/B 模式
+6. Stage → category 注入逻辑（fix 保留给 Conductor，源码检查）
+7. Conductor fix skill 注入逻辑
+8. nodes.py / evolution_processors 接口清理验证
+9. evolved_skill_loader 已删除
+10. AB test build_evolve_config A/B 模式
 """
 
 import inspect
@@ -91,24 +92,17 @@ class TestKernelGenInterface:
         assert "handwrite_suggestions" in params
 
 
-# ========== 3. _infer_case_type (兼容旧 category='case' 的 skill) ==========
+# ========== 3. Skill category 现状约定 ==========
 
-class TestInferCaseType:
-    @dataclass
-    class FakeSkill:
-        metadata: dict = field(default_factory=dict)
+class TestSkillCategoryConvention:
+    def test_kernel_gen_no_legacy_case_type_inference(self, kg):
+        assert not hasattr(kg, "_infer_case_type")
 
-    def test_metadata_case_type_fix(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(metadata={"case_type": "fix"})) == "fix"
+    def test_case_category_is_treated_as_non_fix_case(self):
+        from akg_agents.op.agents.kernel_gen import KernelGen
 
-    def test_metadata_source_error_fix(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(metadata={"source": "error_fix"})) == "fix"
-
-    def test_metadata_case_type_improvement(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(metadata={"case_type": "improvement"})) == "improvement"
-
-    def test_default_improvement(self, kg):
-        assert kg._infer_case_type(self.FakeSkill()) == "improvement"
+        source = inspect.getsource(KernelGen._select_skills_by_stage)
+        assert 'elif cat == "case":\n                case_improve.append(skill)' in source
 
 
 # ========== 4. _parse_unified_selection ==========
@@ -171,8 +165,8 @@ class TestStageCategories:
     """验证 _select_skills_by_stage 中各 stage 的 category 注入逻辑。
 
     实际逻辑内嵌在方法体中（非类属性），通过源码检查确认：
-    - initial: extras = []（不注入 fix/improvement）
-    - debug:   extras = case_fix（fix category 全部注入）
+    - initial: 只采样 improvement/case，不注入 fix
+    - debug:   不注入 fix，fix category 全部保留给 Conductor
     - optimize: extras = _sample_cases(...)（improvement 参与采样）
     - 分类时识别 fix / improvement / case 三种 category
     """
@@ -182,21 +176,50 @@ class TestStageCategories:
         from akg_agents.op.agents.kernel_gen import KernelGen
         self.source = inspect.getsource(KernelGen._select_skills_by_stage)
 
-    def test_initial_no_case(self):
-        assert 'extras = []\n' in self.source
-        assert '"none (initial)"' in self.source
+    def test_initial_uses_non_fix_cases(self):
+        assert 'all_case_candidates = case_improve' in self.source
+        assert 'LLM-selected cases (sampled)' in self.source
         assert 'always_skills' in self.source
 
-    def test_debug_and_optimize_have_case(self):
-        assert 'extras = case_fix' in self.source or "extras = [s for s in case_fix" in self.source
+    def test_debug_does_not_inject_fix(self):
+        assert 'fix skills reserved for Conductor' in self.source
+        assert 'extras = case_fix' not in self.source
+
+    def test_optimize_samples_cases(self):
         assert '_sample_cases' in self.source
 
     def test_recognizes_fix_and_improvement_categories(self):
         assert 'cat == "fix"' in self.source
         assert 'cat == "improvement"' in self.source
+        assert '"fix": case_fix' in self.source
 
 
-# ========== 7. 接口清理验证 ==========
+# ========== 7. Conductor fix skill 注入逻辑 ==========
+
+class TestConductorFixSkillInjection:
+    @dataclass
+    class FakeSkill:
+        name: str = ""
+        category: str = ""
+        metadata: dict = field(default_factory=dict)
+        skill_path: str = ""
+
+    def test_conductor_fallback_loads_fix_skills(self):
+        from akg_agents.op.agents.kernel_conductor import KernelConductor
+
+        source = inspect.getsource(KernelConductor._load_conductor_skills_fallback)
+        assert 'category", "") or "") == "fix"' in source
+        assert "FALLBACK_SKILL_CATEGORIES" in source
+
+    def test_conductor_node_uses_cached_fix_bucket(self):
+        from akg_agents.op.langgraph_op.nodes import NodeFactory
+
+        source = inspect.getsource(NodeFactory.create_kernel_conductor_node)
+        assert 'cache.get("fix", [])' in source
+        assert "fundamental+guide+all_fix" in source
+
+
+# ========== 8. 接口清理验证 ==========
 
 class TestInterfaceCleanup:
     def test_kernel_gen_node_no_handwrite(self):
@@ -211,7 +234,7 @@ class TestInterfaceCleanup:
         assert "evolved_skill_loader" not in source
 
 
-# ========== 8. evolved_skill_loader 已删除 ==========
+# ========== 9. evolved_skill_loader 已删除 ==========
 
 class TestEvolvedLoaderDeleted:
     def test_file_not_exists(self, project_root):
@@ -220,7 +243,7 @@ class TestEvolvedLoaderDeleted:
         assert not path.exists()
 
 
-# ========== 9. AB test build_evolve_config ==========
+# ========== 10. AB test build_evolve_config ==========
 
 class TestBuildEvolveConfig:
     @pytest.fixture(autouse=True)
