@@ -37,6 +37,11 @@ p_l1 = bl.alloc(tl.float16, (BLOCK_N // 16, BLOCK_M // 16, 16, 16), al.ascend_ad
 
 **地址空间选项**: `al.ascend_address_space.UB` / `al.ascend_address_space.L1` / `al.ascend_address_space.L0C` / `al.ascend_address_space.L0A` / `al.ascend_address_space.L0B`
 
+**硬规则**: `shape` 的每一维都必须是编译期常量。不要把 runtime
+tensor（例如未标注 `tl.constexpr` 的 `n_routed_experts`）直接放进 shape。
+需要动态维度时，引入 `BLOCK_*: tl.constexpr` 作为 buffer shape，再用 mask
+处理真实边界。
+
 ### 2.2 `bl.to_tensor(buffer)` — buffer 转 tensor（供 Vector 计算）
 
 ```python
@@ -219,3 +224,4 @@ al.copy(bl.to_buffer(p_nz, al.ascend_address_space.UB), p_l1_sub)
 6. **set/wait 必须严格配对且计数平衡**，Ping-Pong 下需要 prefree + postwait 补齐首尾
 7. **`al.compile_hint(tensor, name)` 标记跨迭代存活的变量**（如 alpha/alpha_pong）
 8. **`al.copy_from_ub_to_l1` 已废弃**，请统一使用 `al.copy`
+9. **`bl.alloc` / `bl.subview` / `bl.to_tensor(target_shape=...)` 的 shape 参数必须是 constexpr**

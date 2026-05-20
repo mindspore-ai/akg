@@ -78,10 +78,6 @@ a = tl.where(tri_mask & bounds_mask, a, 0.0)
 a = a * tri_mask.to(tl.float16) * bounds_mask.to(tl.float16)
 ```
 
-### 2.3 其他编译器限制
-
-详见 debugging 文档中的「禁止使用的语法」完整列表。
-
 ## 3. Strided memory access 的性能代价
 
 Ascend 硬件对非连续内存访问有显著性能惩罚。当 kernel 的核心路径包含 stride > 1 的内存访问模式（如 pooling 的滑窗、dilated convolution 的间隔采样），Triton 生成的代码需要逐元素或小块 gather，而 CANN 原生算子可能使用硬件数据搬运单元（MTE）的专用模式，性能差距可达数十倍。

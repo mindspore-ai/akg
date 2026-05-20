@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-error-fix
-description: triton-ascend 常见错误修复：UB/CBUF溢出、BiShengIR编译失败、语法限制违反、数值正确性、多维索引分解错误、张量连续性
+description: triton-ascend 验证、编译或运行失败后的常见错误修复：UB/CBUF溢出、BiShengIR编译失败、语法限制违反、数值正确性、多维索引分解错误、张量连续性
 category: fix
 version: "1.0.0"
 metadata:
@@ -98,17 +98,15 @@ result = tl.dot(a_fp16, b_fp16)
 result = tl.dot(a_fp16, b_fp16, acc=tl.zeros([M, N], dtype=tl.float32))
 ```
 
-### 3d. 禁止语法速查
+### 3d. 失败后定位速查
 
-| 禁止 | 替代 |
-|------|------|
-| `continue` / `break` / `return` | `if-else` 包裹 |
-| `while` 循环 | `for` + `if` |
-| `lambda` | 命名函数 |
-| `a and b` / `a or b`（tensor） | `a & b` / `a \| b` |
-| Python 切片 `tensor[1:3]` | `tl.arange` + mask |
-| `tl.where(cond, ptr_a, ptr_b)` | if/else 静态分支 |
-| `result[0]` 索引 constexpr | 直接使用标量 result |
+| 报错/现象 | 常见根因 | 修改方向 |
+|----------|----------|----------|
+| `unsupported AST node type: Continue` | `continue` / `break` / `return` | 改成 `if-else` 包裹有效分支 |
+| while 相关编译失败 | Ascend 后端不支持动态 while | 改成静态上限 `for` + 循环体内 `if` |
+| `unsupported tensor index` | Python 切片或 reduction scalar `[0]` | 用 `tl.extract_slice` / 直接使用 scalar |
+| `hivm.hir.vsel` | `tl.where` 选择复杂 mask、指针或 offset | 拆分静态分支，或将 mask 转 dtype 后乘数据 |
+| `cast incompatible` | 隐式 dtype/shape 推导失败 | 显式 accumulator dtype 和 `.to(dtype)` |
 
 ## 4. 数值正确性问题
 
