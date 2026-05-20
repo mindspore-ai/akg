@@ -7,6 +7,7 @@ metadata:
   case_type: fix
   backend: ascend
   dsl: triton_ascend
+  hardware: "Atlas A2, Atlas A3, Atlas A5"
 ---
 
 ## 1. UB / CBUF 溢出

@@ -216,7 +216,10 @@ class KernelGen(AgentBase):
         # 使用算子专用的 OperatorSkillSelector
         self.skill_selector = OperatorSkillSelector()
         # 缓存 initial 阶段的 skill 选择结果，供 debug/optimize 阶段复用
-        # 结构: {"always": [...], "guide": [...], "example": [...], "case": [...]}
+        # 结构: {"always": [...], "guide": [...], "example": [...],
+        #        "case": [...], "fix": [...]}
+        # fix skills are diagnostic knowledge for KernelConductor only; KernelGen
+        # should not inject them into code generation prompts by default.
         self._initial_selection_cache: Optional[Dict[str, List[Any]]] = None
     
     def _load_skills_by_dsl(self, dsl: str) -> list:
@@ -264,8 +267,8 @@ class KernelGen(AgentBase):
             - 按 guide 的 operator_type 自动匹配 example
             - 缓存选择结果 {"always", "guide", "example", "case"}
 
-        Initial 阶段：注入 always + guide + example（不含 case）
-        Debug 阶段：复用缓存 always + guide + example + 全部 fix case
+        Initial 阶段：注入 always + guide + example + 采样的 improvement/case
+        Debug 阶段：复用缓存 always + guide + example（fix skills 仅供 Conductor）
         Optimize 阶段：复用缓存 always + guide + example + 从 LLM 选中的 case 中随机采样 1 个
 
         Pre-filter: backend + hardware coarse filter via OperatorSkillSelector.
@@ -306,11 +309,7 @@ class KernelGen(AgentBase):
             elif cat == "improvement":
                 case_improve.append(skill)
             elif cat == "case":
-                ct = self._infer_case_type(skill)
-                if ct == "fix":
-                    case_fix.append(skill)
-                else:
-                    case_improve.append(skill)
+                case_improve.append(skill)
             else:
                 unknown_cat_skills.append(skill)
 
@@ -341,12 +340,12 @@ class KernelGen(AgentBase):
             base_names = {s.name for s in base}
 
             if stage == "debug":
-                extras = [s for s in case_fix if s.name not in base_names]
+                extras = []
                 logger.info(
                     f"[KernelGen] stage=debug 复用缓存 "
                     f"(always={len(cache['always'])}, guide={len(cache['guide'])}, "
                     f"example={len(cache['example'])}), "
-                    f"追加 {len(extras)} fix skills"
+                    f"不注入 fix skills（{len(cache.get('fix', []))} 个保留给 Conductor）"
                 )
             else:
                 cached_cases = [s for s in cache["case"] if s.name not in base_names]
@@ -362,7 +361,10 @@ class KernelGen(AgentBase):
             return _apply_force_skills(result)
 
         # ── initial：调用 LLM 一次性筛选 guide + case ──
-        all_case_candidates = case_fix + case_improve
+        # fix skills describe how to diagnose and repair failures. They are
+        # reserved for KernelConductor so KernelGen does not overfit to generic
+        # repair recipes while producing code.
+        all_case_candidates = case_improve
 
         guide_selected, case_selected = await self._llm_select_guides_and_cases(
             guide_candidates=guide_candidates,
@@ -396,18 +398,20 @@ class KernelGen(AgentBase):
             "guide": guide_selected,
             "example": example_selected,
             "case": case_selected,
+            "fix": case_fix,
         }
         logger.info(
             f"[KernelGen] 缓存选择结果: "
             f"always={len(always_skills)}, guide={len(guide_selected)}, "
-            f"example={len(example_selected)}, case={len(case_selected)}"
+            f"example={len(example_selected)}, case={len(case_selected)}, "
+            f"fix_for_conductor={len(case_fix)}"
         )
 
         # 根据实际 stage 决定注入内容
         base = always_skills + guide_selected + example_selected
         if stage == "debug":
-            extras = case_fix
-            extra_label = "all fix"
+            extras = []
+            extra_label = "none (fix skills reserved for Conductor)"
         elif stage == "optimize":
             extras = self._sample_cases(case_selected)
             extra_label = "LLM-selected cases (sampled)"
@@ -471,22 +475,6 @@ class KernelGen(AgentBase):
         )
         return selected
 
-    @staticmethod
-    def _infer_case_type(skill) -> str:
-        """推断 category='case' 的 skill 属于 fix 还是 improvement。
-
-        仅用于兼容旧 skill（category='case' 但无独立 fix/improvement category）。
-        新 evolved skill 应直接使用 category='fix' 或 'improvement'。
-        """
-        meta = getattr(skill, "metadata", {}) or {}
-        ct = meta.get("case_type", "")
-        if ct in ("fix", "improvement"):
-            return ct
-        source = meta.get("source", "")
-        if source == "error_fix":
-            return "fix"
-        return "improvement"
-
     async def _llm_select_guides_and_cases(
         self,
         guide_candidates: List[Any],
@@ -531,7 +519,8 @@ class KernelGen(AgentBase):
         if case_info:
             case_instruction = (
                 "从以下案例中选出与**当前算子相关**的案例。"
-                "包含错误修复案例和性能优化案例，优先选相同算子类型的，其次选相似计算模式的，相关即可选入。"
+                "这些候选只包含可直接用于生成/优化的非 fix 案例；"
+                "优先选相同算子类型的，其次选相似计算模式的，相关即可选入。"
             )
             sections.append(
                 f"## 优化/修复案例（case）\n{case_instruction}\n\n"
