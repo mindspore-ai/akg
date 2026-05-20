@@ -94,6 +94,26 @@ func.func @test_vadd_npuvector_scalar_dynamic(%arg0 : memref<?xf32>, %arg1 : mem
 
 // -----
 
+func.func @test_vdiv_npuvector_scalar_dynamic(%arg0 : memref<?xf32>, %arg1 : memref<?xf32>) {
+  // CHECK-LABEL: func.func @test_vdiv_npuvector_scalar_dynamic
+  // CHECK: %[[CST8:.*]] = arith.constant 8.000000e+00 : f32
+  // CHECK: %[[UB0:.*]] = memref.alloc(%{{.*}}) : memref<?xf32>
+  // CHECK: hivm.hir.load
+  // CHECK-NOT: hivm.hir.vbrc
+  // CHECK: %[[UB_OUT:.*]] = memref.alloc(%{{.*}}) : memref<?xf32>
+  // CHECK: hivm.hir.vdiv ins(%[[UB0]], %[[CST8]] : memref<?xf32>, f32) outs(%[[UB_OUT]] : memref<?xf32>)
+  %c0 = arith.constant 0 : index
+  %c4096 = arith.constant 4096 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %dim = memref.dim %arg0, %c0 : memref<?xf32>
+  %v0 = npuvector.transfer_read %arg0[%c0][%dim][%c4096], %pad : memref<?xf32>, !npuvector<?xf32>
+  %b = arith.constant 8.000000e+00 : f32
+  %v1 = npuvector.broadcast %b[%dim] [%c4096] : f32 to !npuvector<?xf32>
+  %0 = arith.divf %v0, %v1 : !npuvector<?xf32>
+  npuvector.transfer_write %0, %arg1[%c0] : !npuvector<?xf32>, memref<?xf32>
+  return
+}
+
 // CHECK-LABEL: func.func @test_transfer_write_alloc_root_offset_after_truncf
 // CHECK-SAME: %{{.*}}: memref<?xf32>, %[[BASE:.*]]: index, %[[SIZE:.*]]: index
 func.func @test_transfer_write_alloc_root_offset_after_truncf(%arg0: memref<?xf32>, %arg1: index, %arg2: index) {

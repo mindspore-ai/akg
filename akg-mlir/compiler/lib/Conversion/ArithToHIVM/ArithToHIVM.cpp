@@ -32,6 +32,7 @@
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "bishengir/Dialect/Annotation/IR/Annotation.h"
+#include "bishengir/Dialect/HACC/Utils/Utils.h"
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -90,21 +91,31 @@ static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
   }
 }
 
+static bool isScalarType(Type type) { return isa<IntegerType, FloatType, IndexType>(type); }
+
+static bool requiresVectorRhsForHIVMLowering(Operation *user) {
+  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp>(
+    user);
+}
+
 static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastResult) {
-  // For commutative binary ops, allow folding when the broadcast feeds either operand.
-  if (isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp,
-          arith::MinUIOp, arith::MinNumFOp, arith::MinimumFOp, arith::MaxNumFOp, arith::MaximumFOp>(user)) {
-    return user->getNumOperands() > 1 &&
-           (user->getOperand(0) == broadcastResult || user->getOperand(1) == broadcastResult);
+  if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumOperands() != 2) {
+    return false;
   }
 
-  // For non-commutative ops, only fold when the broadcast is the right-hand operand.
-  if (isa<arith::SubFOp, arith::SubIOp, arith::RemSIOp, arith::RemUIOp, arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp>(
-        user)) {
-    return user->getNumOperands() > 1 && user->getOperand(1) == broadcastResult;
+  if (requiresVectorRhsForHIVMLowering(user)) {
+    return false;
   }
 
-  return false;
+  bool isLhs = user->getOperand(0) == broadcastResult;
+  bool isRhs = user->getOperand(1) == broadcastResult;
+  if (!isLhs && !isRhs) {
+    return false;
+  }
+
+  // The binary lowering path accepts a scalar RHS. A scalar LHS can only be
+  // folded when the source op is commutative and can be swapped before lowering.
+  return isRhs || user->hasTrait<OpTrait::IsCommutative>();
 }
 
 static std::optional<std::pair<ArrayRef<int64_t>, Type>> getShapeAndElemType(Type type) {
@@ -385,7 +396,7 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     if (!isa<MemRefType>(lhsMemRef.getType())) {
       // Swap operands for commutative ops if the left-hand side is a scalar and the right-hand side is a memref.
       if constexpr (isCommutative()) {
-        bool lhsIsScalar = isa<IntegerType, FloatType, IndexType>(lhsMemRef.getType());
+        bool lhsIsScalar = isScalarType(lhsMemRef.getType());
         if (lhsIsScalar && rhsIsMemRef) {
           std::swap(lhsMemRef, rhsMemRef);
           rhsIsMemRef = isa<MemRefType>(rhsMemRef.getType());
@@ -397,7 +408,7 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
       }
     }
 
-    bool rhsIsScalar = isa<IntegerType, FloatType, IndexType>(rhsMemRef.getType());
+    bool rhsIsScalar = isScalarType(rhsMemRef.getType());
     if (!rhsIsMemRef && !rhsIsScalar) {
       return failure();
     }
@@ -1000,7 +1011,7 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
 
     if (!isa<MemRefType>(lhs.getType())) {
       if constexpr (isCommutative()) {
-        bool lhsIsScalar = isa<IntegerType, FloatType, IndexType>(lhs.getType());
+        bool lhsIsScalar = isScalarType(lhs.getType());
         if (lhsIsScalar && rhsIsMemRef) {
           std::swap(lhs, rhs);
           rhsIsMemRef = isa<MemRefType>(rhs.getType());
@@ -1012,7 +1023,7 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
       }
     }
 
-    bool rhsIsScalar = isa<IntegerType, FloatType, IndexType>(rhs.getType());
+    bool rhsIsScalar = isScalarType(rhs.getType());
     if (!rhsIsMemRef && !rhsIsScalar) {
       return failure();
     }
@@ -3041,12 +3052,17 @@ static bool isLegalSCFYieldOp(scf::YieldOp op) {
 struct ArithToHIVMConversionPass : public impl::ConvertArithToHIVMBase<ArithToHIVMConversionPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<hivm::HIVMDialect, tensor::TensorDialect, memref::MemRefDialect, vector::VectorDialect,
-                    arith::ArithDialect, math::MathDialect, scf::SCFDialect, annotation::AnnotationDialect>();
+                    arith::ArithDialect, math::MathDialect, scf::SCFDialect, annotation::AnnotationDialect,
+                    hacc::HACCDialect>();
   }
   void runOnOperation() override;
 };
 
 void ArithToHIVMConversionPass::runOnOperation() {
+  if (hacc::utils::isHost(getOperation())) {
+    return;
+  }
+
   ConversionTarget target(getContext());
   // HIVM and Tensor are legal
   target.addLegalDialect<hivm::HIVMDialect, tensor::TensorDialect, memref::MemRefDialect, scf::SCFDialect,

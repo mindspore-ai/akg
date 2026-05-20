@@ -19,4 +19,6 @@ add_mlir_conversion_library(MLIRArithToHIVM
   MLIRLinalgDialect
   MLIRRewrite
   MLIRPass
+  BiShengIRHACCDialect
+  BiShengIRHACCUtils
 )
