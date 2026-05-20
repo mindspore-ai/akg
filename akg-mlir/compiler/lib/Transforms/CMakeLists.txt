@@ -20,8 +20,10 @@ add_mlir_dialect_library(AKGTransformsPasses
   MLIRAffineAnalysis
   MLIRAffineDialect
   MLIRMemRefDialect
+  MLIRMemRefTransforms
   MLIRSideEffectInterfaces
   MLIRSupport
+  MLIRTransformUtils
   MLIRCPUDialect
 
   nlohmann_json::nlohmann_json

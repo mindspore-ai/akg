@@ -77,6 +77,18 @@ def SubviewAllocElim : Pass<"subview-alloc-elim"> {
   let constructor = "mlir::createSubviewAllocElimPass()";
 }
 
+def FoldMemRefSubViewOnly : Pass<"fold-memref-subview-only", "func::FuncOp"> {
+  let summary = "Fold memref.subview into its consumer load/store ops only";
+  let description = [{
+    A subview-restricted variant of upstream `fold-memref-alias-ops`. It
+    reuses `memref::populateFoldMemRefAliasOpPatterns` verbatim, but feeds
+    the greedy driver only operations that touch a `memref.subview`
+    (the subview itself and its direct users). The expand_shape and
+    collapse_shape folders in the same pattern set therefore never match.
+  }];
+  let constructor = "mlir::createFoldMemRefSubViewOnlyPass()";
+}
+
 def PromoteTempBuffer : Pass<"promote-temp-buffer"> {
   let summary = "Promote temp buffer to gpu's workgroup/private address";
   let constructor = "mlir::createPromoteTempBufferPass()";
