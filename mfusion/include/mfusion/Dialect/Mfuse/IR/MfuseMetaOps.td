@@ -593,11 +593,7 @@ def Mfuse_LogicalAndOp : Mfuse_BroadcastableBinaryOp<"logical_and", [Pure, Commu
   }];
 }
 
-def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [
-    Pure,
-    SameOperandsAndResultType,
-    DeclareOpInterfaceMethods<InferTypeOpInterface>
-  ]> {
+def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [Pure]> {
   let summary = "Element-wise logical NOT operation.";
   let description = [{
     Computes the element-wise logical NOT of a tensor.
