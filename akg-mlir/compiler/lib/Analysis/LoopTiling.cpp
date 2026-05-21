@@ -82,7 +82,6 @@ static constexpr const char *kDeleteLoopAttr = "delete";
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
 static constexpr const char *kParallelAxisAttr = "parallel__axis";
 static constexpr int64_t kDefaultNpuCoreNum = 48;
-static constexpr int64_t kMinNonLastParallelWork = 20;
 
 // Main tiling functions
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
@@ -631,17 +630,16 @@ static int markParallelAxis(func::FuncOp funcOp, ArrayRef<mlir::scf::ForOp> band
     if (loop) loop->removeAttr(kParallelAxisAttr);
   }
   SmallVector<int64_t, 6> axisWorks(band.size(), 0);
-  bool preferNonLast = false;
   for (unsigned dim = 0; dim < band.size(); ++dim) {
+    if (band.size() > 1 && dim + 1 == band.size()) continue;
     int64_t parallelWork = 0;
     if (!isParallelCandidate(band[dim], tileSizesInt[dim], parallelWork)) {
       continue;
     }
     axisWorks[dim] = parallelWork;
-    preferNonLast |= (dim + 1 < band.size() && parallelWork >= kMinNonLastParallelWork);
   }
   for (unsigned dim = 0; dim < band.size(); ++dim) {
-    if (axisWorks[dim] <= 0 || (preferNonLast && dim + 1 == band.size())) {
+    if (axisWorks[dim] <= 0) {
       continue;
     }
     int64_t parallelWork = axisWorks[dim];
