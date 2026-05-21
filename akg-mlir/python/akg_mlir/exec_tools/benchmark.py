@@ -1,4 +1,4 @@
-# Copyright 2023-2025 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,15 +26,11 @@ import distutils
 import numpy as np
 from bfloat16 import bfloat16
 
-from akg import AkgMlirDriver
-from akg import akgProfileMgr
-from akg.backends.ascend import ascend_compile
-from akg.backends.ascend import benckmark_launch as launch
+from akg import MlirDriver
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
-from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
-from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
+from ..utils.dynamic_utils import get_device_shape
 from ..utils.result_analysis import get_compare_tolerance
-from ..utils.torch_mlir_utils import find_first_func_name, get_named_op_str, ascend_compile_with_hfusion, run_mlir_ascend_pipeline, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
+from ..utils.torch_mlir_utils import find_first_func_name, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
 
@@ -170,33 +166,6 @@ def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=compare_tolerance, atol=compare_tolerance)
 
 
-def create_executable(kernel_name,
-                      input_for_mod,
-                      output_indexes,
-                      is_dyn_shape):
-    """Generate executable files"""
-    cur_path = _get_kernel_meta_dir()
-    tmp_file_path = _get_tmp_dir()
-    tmp_file_name = os.path.join(
-        tmp_file_path, "gen_func_" + kernel_name + ".so")
-    fake_output_indices = []
-    gen_cuda_runtime_code(kernel_name,
-                          input_for_mod,
-                          output_indexes,
-                          is_dyn_shape,
-                          fake_output_indices,
-                          path=cur_path)
-    try:
-        _compile_lib(kernel_name, file_path=tmp_file_path)
-    except Exception as e:
-        raise RuntimeError("Compile cuda runtime lib fail") from e
-    try:
-        lib = ctypes.cdll.LoadLibrary(tmp_file_name)
-    except Exception as e:
-        raise RuntimeError("Load cuda runtime lib fail") from e
-    return lib
-
-
 def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     """Helper function to compare result"""
     output = list(input_for_mod[i] for i in output_indexes)
@@ -255,80 +224,6 @@ def _auto_get_target(desc):
     return target
 
 
-def _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                    output_indexes, desc, profiling_trails, expect):
-    """run kernel for gpu"""
-    if is_dyn_shape:
-        dump_shape_arg_list(input_for_mod, kernel_name, str(
-            pathlib.Path(__file__).absolute().parent))
-
-    akg_mlir_driver.run_gpu()
-    input_for_mod_ctypes = _transform_data_to_ctypes(
-        input_for_mod,
-        kernel_name,
-        is_dyn_shape,
-        "gpu")
-    if profiling_trails == 0:
-        # Run executable
-        lib = create_executable(kernel_name, input_for_mod, output_indexes,
-                                is_dyn_shape)
-        lib.cuda_runtime_exec(*input_for_mod_ctypes)
-        compare_results(kernel_name, desc, input_for_mod, output_indexes,
-                        expect)
-    else:
-        # Profiling
-        prof_params = ProfilingParams(number=10,
-                                      repeat=profiling_trails,
-                                      min_repeat_ms=0)
-        prof_params_ctypes = _transform_data_to_ctypes(
-            prof_params.get_data(),
-            kernel_name,
-            is_dyn_shape,
-            "gpu",
-            is_profile_params=True
-        )
-        lib = create_executable(kernel_name, input_for_mod, output_indexes,
-                                is_dyn_shape)
-        lib.cuda_runtime_profiling(*input_for_mod_ctypes,
-                                   *prof_params_ctypes)
-
-
-def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                    output_indexes, desc, profiling_trails, expect, replace_dso):
-    """run kernel for cpu"""
-    akg_mlir_driver.run_cpu()
-    # Run executable and profiling
-    if replace_dso:
-        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + "_custom.so")
-        if os.path.exists(dso_path):
-            logging.info(
-                "Try to use the customized dso file : %s", dso_path)
-        else:
-            raise ValueError(
-                "Failed to find the customized dso file : " + dso_path)
-    else:
-        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + ".so")
-    cur = ctypes.cdll.LoadLibrary(dso_path)
-    input_for_mod_ctypes = _transform_data_to_ctypes(
-        input_for_mod, kernel_name, is_dyn_shape, "cpu")
-    # Profiling
-    if profiling_trails > 0:
-        func = getattr(cur, "main")
-        np_timers_ns = np.array([0], dtype=np.int64)
-        input_for_mod_ctypes.append(
-            np_timers_ns.ctypes.data_as(
-                ctypes.POINTER(ctypes.c_longlong)))
-        func(*input_for_mod_ctypes)
-        print(kernel_name, ": Running ", profiling_trails,
-              " times, the average execution time is ",
-              np_timers_ns / 1000000 / profiling_trails, " ms.")
-    else:
-        func = getattr(cur, kernel_name)
-        # Run executable and compare results
-        func(*input_for_mod_ctypes)
-        compare_results(kernel_name, desc, input_for_mod,
-                        output_indexes, expect)
-
 def profiling_analyse(arch):
     public_path = os.getenv('PROFILING_DIR')
     if public_path is None:
@@ -339,114 +234,6 @@ def profiling_analyse(arch):
     task_duration = cann_file_parser.generate_op_summary_data()
     return task_duration
 
-def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                       output_indexes, desc, profiling_trails, expect, replace_dso):
-    """run kernel for npu"""
-    akg_mlir_driver.run_ascend()
-    # Run executable and profiling
-    if replace_dso:
-        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + "_custom.so")
-        if os.path.exists(dso_path):
-            logging.info(
-                "Try to use the customized dso file : %s", dso_path)
-        else:
-            raise ValueError(
-                "Failed to find the customized dso file : " + dso_path)
-    else:
-        dso_path = os.path.join(_get_kernel_meta_dir(), "lib" + kernel_name + ".so")
-
-    # All preprocessing (bf16, output_indexes, device_shape) done inside launch()
-    device_id = int(os.environ.get("DEVICE_ID", 0))
-    dso_path = _get_kernel_meta_dir()
-    if profiling_trails == 0:
-        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod,
-               use_mem_pool=True, output_indexes=output_indexes)
-        for idx, d in enumerate(expect):
-            expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
-        compare_results(kernel_name, desc, input_for_mod,
-            output_indexes, expect)
-    else:
-        akgProfileMgr.ascend_start_profiling(device_id)
-        for _ in range(5):
-            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod,
-                   use_mem_pool=True, output_indexes=output_indexes)
-        akgProfileMgr.ascend_stop_profiling()
-        # analysis
-        cycle = profiling_analyse(None)
-        logging.info('=====Task Duration(us)==============================')
-        if cycle != PROF_ERROR_CODE:
-            logging.info(cycle)
-        else:
-            logging.error("OOPS, can't correctly Task Duration!")
-        logging.info('=====Task Duration(us)==============================')
-        for idx, d in enumerate(expect):
-            expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
-        compare_results(kernel_name, desc, input_for_mod,
-            output_indexes, expect)
-        print(kernel_name + " Task Duration(us) : " + str(cycle))
-
-def _run_ascend_kernel_for_torch_mlir(
-    *,
-    mode: str,
-    file_path=None,
-    linalg_file_path=None,
-    mlir_text=None,
-    json_text=None,
-    kernel_name=None,
-    backend=None,
-    static_desc=None,
-    dump_dir=None,
-):
-    """run kernel for npu"""
-    if mode not in ("bisheng", "akg"):
-        raise ValueError(f"mode must be 'bisheng' or 'akg', got: {mode}")
-    if dump_dir is None:
-        raise ValueError("dump_dir is required")
-    if json_text is None or kernel_name is None:
-        raise ValueError("json_text and kernel_name are required")
-    is_dyn_shape = static_desc is not None
-    input_for_mod, expect, output_indexes = gen_json_data(
-        static_desc if is_dyn_shape else json_text,
-        with_compute=True,
-    )
-    so_path = dump_dir / f"{kernel_name}.so"
-    if mode == "bisheng":
-        if file_path is None:
-            raise ValueError("file_path is required for bisheng mode")
-        get_named_op_str(file_path, f"{kernel_name}", False, str(dump_dir))
-        named_op_mlir = dump_dir / f"{kernel_name}_named_op.mlir"
-        ascend_compile_with_hfusion(named_op_mlir, so_path)
-    elif mode == "akg":
-        if linalg_file_path is None:
-            raise ValueError("linalg_file_path is required for akg mode")
-        output_path = dump_dir / f"{kernel_name}_out_akg.mlir"
-        dump_log_path = dump_dir / f"{kernel_name}.log"
-        run_mlir_ascend_pipeline(
-            linalg_file_path,
-            output_path,
-            None,
-            is_dyn_shape,
-            True,
-            None,
-            True,
-            str(dump_log_path),
-        )
-        ascend_compile(output_path, so_path)
-        print("[INFO] bishengir-compile success")
-    device_id = int(os.environ.get("DEVICE_ID", 0))
-    launch(
-        str(dump_dir),
-        kernel_name,
-        device_id,
-        is_dyn_shape,
-        *input_for_mod,
-        use_mem_pool=True,
-        output_indexes=output_indexes,
-    )
-    print("[INFO] kernel launch success")
-    for idx, d in enumerate(expect):
-        expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
-    compare_results(kernel_name, json_text, input_for_mod, output_indexes, expect)
 
 def run_a_kernel(desc,
                  file_path,
@@ -468,29 +255,26 @@ def run_a_kernel(desc,
     # Generate data
     input_for_mod, expect, output_indexes = gen_json_data(
         static_desc if is_dyn_shape else desc, with_compute=True)
-    # Init AkgMlirDriver
-    akg_mlir_driver = AkgMlirDriver(input_file=file_path,
-                                    output_dir=_get_kernel_meta_dir(),
-                                    llvm_tools_dir=os.getenv("LLVM_HOME", ""),
-                                    dynamic_shape=is_dyn_shape,
-                                    dump_ir=dump_ir,
-                                    mlir_timing=mlir_timing,
-                                    repo_path=repo_path,
-                                    profiling_trails=profiling_trails,
-                                    runtime_provider="MLIR",
-                                    enable_loop_fusion=enable_loop_fusion)
+    # Init MlirDriver
+    mlir_driver = MlirDriver(kernel_name=kernel_name,
+                             input_file=file_path,
+                             output_dir=_get_kernel_meta_dir(),
+                             llvm_tools_dir=os.getenv("LLVM_HOME", ""),
+                             dynamic_shape=is_dyn_shape,
+                             dump_ir=dump_ir,
+                             mlir_timing=mlir_timing,
+                             repo_path=repo_path,
+                             profiling_trails=profiling_trails,
+                             runtime_provider="MLIR",
+                             enable_loop_fusion=enable_loop_fusion)
 
-    if backend == "gpu":
-        _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                        output_indexes, desc, profiling_trails, expect)
-    elif backend == "cpu":
-        _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                        output_indexes, desc, profiling_trails, expect, replace_dso)
-    elif backend == "ascend":
-        _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                        output_indexes, desc, profiling_trails, expect, replace_dso)
-    else:
-        raise TypeError("only support gpu, cpu, ascend backend currently")
+    mlir_driver.compile()
+    mlir_driver.run(input_for_mod, output_indexes)
+
+    for idx, d in enumerate(expect):
+        expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+    compare_results(kernel_name, desc, input_for_mod, output_indexes, expect)
+
     if clear_tmp:
         _clear_tmp_dirs(kernel_name)
 
@@ -536,17 +320,38 @@ def _get_input_dtype(desc):
 
 def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
     """run single info."""
-    with open(file_path, "r", encoding='utf-8') as f:
+    dump_dir = pathlib.Path(_get_kernel_meta_dir())
+    info_file = pathlib.Path(file_path)
+    input_file = file_path
+
+    input_file = pathlib.Path(file_path)
+    if info_file.suffix == ".mlir":
+        run_torch_mlir_to_json(compile_args.torch_mlir_opt, info_file)
+        mlir = input_file.read_text(encoding='utf-8')
+        kernel_name = find_first_func_name(mlir)
+        if not kernel_name:
+            raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
+        info_file = pathlib.Path.cwd() / f"{kernel_name}_.json"
+        if not info_file.exists():
+            raise RuntimeError(f"Cannot find torch-to-json output: {info_file}")
+
+        if compile_args.akg_fusion:
+            input_file = dump_dir / f"{kernel_name}_linalg.mlir"
+            run_torch_mlir_to_linalg_on_tensors(compile_args.torch_mlir_opt, file_path, input_file)
+        else:
+            input_file = dump_dir / f"{kernel_name}_hfusion.mlir"
+            get_name_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
+
+    with open(info_file, "r", encoding='utf-8') as f:
         desc = f.read()
         kernel_name = _get_kernel_name(desc)
         input_shape, is_dyn_shape = _get_input_shape(desc)
         static_desc = None
         if is_dyn_shape:
-            static_shape_path = file_path.replace(".info", "_static.info")
-            if not os.path.exists(static_shape_path):
+            static_info_path = info_file.with_name(info_file.stem + "_static" + info_file.suffix)
+            if static_info_path.exists():
                 raise ValueError("Dynamic shape info must come with static shape info.")
-            with open(static_shape_path, "r", encoding='utf-8') as s_f:
-                static_desc = s_f.read()
+            static_desc = static_info_path.read_text('utf-8')
         if compile_args.profiling:
             print("profiling ", kernel_name)
             compute = _get_compute(desc)
@@ -556,7 +361,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
         try:
             print("Start running " + kernel_name)
             run_a_kernel(desc,
-                         file_path,
+                         str(input_file),
                          backend=compile_args.backend,
                          profiling_trails=compile_args.prof_trails,
                          static_desc=static_desc,
@@ -576,48 +381,6 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
             run_res[run_idx] = True
         return True
 
-def _run_torch_ir_single_file(file_path, compile_args, mode: str):
-    """
-    Unified runner for torch-ir single file.
-    """
-    if mode not in ("bisheng", "akg"):
-        raise ValueError(f"mode must be 'bisheng' or 'akg', got: {mode}")
-    run_torch_mlir_to_json(compile_args.torch_mlir_opt, file_path)
-    desc = file_path.read_text(encoding="utf-8")
-    kernel_name = find_first_func_name(desc)
-    if not kernel_name:
-        raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
-    json_file_path = pathlib.Path.cwd() / f"{kernel_name}_.json"
-    if not json_file_path.exists():
-        raise RuntimeError(f"Cannot find torch-to-json output: {json_file_path}")
-    json_text = json_file_path.read_text(encoding="utf-8")
-    _, is_dyn_shape = _get_input_shape(json_text)
-    static_desc = None
-    if is_dyn_shape:
-        static_shape_path = file_path.with_name(file_path.stem + "_static.json")
-        if not static_shape_path.exists():
-            raise ValueError("Dynamic shape info must come with static shape info.")
-        static_desc = static_shape_path.read_text(encoding="utf-8")
-    dump_dir = file_path.parent / "torch_dump"
-    dump_dir.mkdir(parents=True, exist_ok=True)
-    linalg_file_path = None
-    if mode == "akg":
-        linalg_file_path = run_torch_mlir_to_linalg_on_tensors(
-            compile_args.torch_mlir_opt,
-            file_path,
-            dump_dir / f"{kernel_name}_out_linalg.mlir",
-        )
-    _run_ascend_kernel_for_torch_mlir(
-        mode=mode,
-        file_path=file_path,
-        linalg_file_path=linalg_file_path,
-        mlir_text=desc,
-        json_text=json_text,
-        kernel_name=kernel_name,
-        backend=compile_args.backend,
-        static_desc=static_desc,
-        dump_dir=dump_dir,
-    )
 
 class TestUtils:
     """Class for getting cycle and core num."""
@@ -670,26 +433,16 @@ def main(args=None):
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
-    parser.add_argument("--bisheng",
-                        action="store_true",
-                        help="Use torch mlir ir precision verification pipeline")
-    parser.add_argument("--akg",
-                        action="store_true",
-                        help="Use torch mlir ir precision verification pipeline")
     parser.add_argument("--torch-mlir-opt",
                         type=str,
                         default="torch-mlir-opt",
                         help="Path to torch-mlir-opt binary")
     args = parser.parse_args()
-    if args.akg:
-        return _run_torch_ir_single_file(pathlib.Path(args.file), args, mode="akg")
-    if args.bisheng:
-        return _run_torch_ir_single_file(pathlib.Path(args.file), args, mode="bisheng")
     _create_dirs()
     if args.dir:
         files = [
             f for f in os.listdir(args.dir)
-            if f.endswith(".info") and not f.endswith("_static.info")
+            if not f.endswith("_static.json") and not f.endswith("_static.info")
         ]
         process_state = multiprocessing.Manager().list(
             [None for _ in range(len(files))]) if args.ci_test else None
