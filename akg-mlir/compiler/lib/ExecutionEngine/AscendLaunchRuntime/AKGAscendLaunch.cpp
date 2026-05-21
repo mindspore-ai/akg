@@ -354,7 +354,7 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
       mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
       return;
     }
-    std::string so_path = torch_path + "/_inductor/ascend_npu_ir/ascend_npu_ir/lib/libcpp_common.so";
+    std::string so_path = torch_path + "/lib/libtorch_npu.so";
     std::string func_name = "_Z14opcommand_callPKcSt8functionIFivEE";
     void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
     CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
