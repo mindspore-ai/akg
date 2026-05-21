@@ -2262,6 +2262,23 @@ func.func @dynamic_npuvector_transfer_read_write(%in: memref<?xf32>, %out: memre
 
 // -----
 
+func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max(%in: memref<1024x1024x12xf32>, %out: memref<1024x1024x12xf32>) {
+  // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max
+  // CHECK: %[[ALLOC:.*]] = memref.alloc(%{{.*}}, %{{.*}}) : memref<?x?x12xf32>
+  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 28672 : index} : memref<?x?x12xf32>
+  %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
+  %c12 = arith.constant 12 : index
+  %c16 = arith.constant 16 : index
+  %c56 = arith.constant 56 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0, %c0, %c0][%c8, %c56, %c12][%c8, %c56, %c16], %padding : memref<1024x1024x12xf32>, !npuvector<?x?x12xf32>
+  npuvector.transfer_write %vec, %out[%c0, %c0, %c0] : !npuvector<?x?x12xf32>, memref<1024x1024x12xf32>
+  return
+}
+
+// -----
+
 func.func @static_npuvector_transfer_read_keeps_static_size(%in: memref<1xf32>, %out: memref<1xf32>) {
   // CHECK-LABEL: func.func @static_npuvector_transfer_read_keeps_static_size
   // CHECK-SAME: (%[[IN:.*]]: memref<1xf32>, %[[OUT:.*]]: memref<1xf32>)
@@ -2305,6 +2322,23 @@ func.func @simple_broadcast_dynamic(%mem: memref<?xf32>, %out: memref<?xf32>) {
   %dim = memref.dim %mem, %c0 : memref<?xf32>
   %0 = npuvector.broadcast %cst_0[%dim] [%c4096] : f32 to !npuvector<?xf32>
   npuvector.transfer_write %0, %out[%c0] : !npuvector<?xf32>, memref<?xf32>
+  return
+}
+
+// -----
+
+func.func @dynamic_npuvector_broadcast_static_dim_uses_rank_max(%out: memref<12x1024x1024xf32>) {
+  // CHECK-LABEL: func.func @dynamic_npuvector_broadcast_static_dim_uses_rank_max
+  // CHECK: %[[ALLOC:.*]] = memref.alloc(%{{.*}}, %{{.*}}) : memref<12x?x?xf32>
+  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 28672 : index} : memref<12x?x?xf32>
+  %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
+  %c12 = arith.constant 12 : index
+  %c16 = arith.constant 16 : index
+  %c56 = arith.constant 56 : index
+  %cst = arith.constant 1.0 : f32
+  %vec = npuvector.broadcast %cst[%c12, %c8, %c56] [%c16, %c8, %c56] : f32 to !npuvector<12x?x?xf32>
+  npuvector.transfer_write %vec, %out[%c0, %c0, %c0] : !npuvector<12x?x?xf32>, memref<12x1024x1024xf32>
   return
 }
 

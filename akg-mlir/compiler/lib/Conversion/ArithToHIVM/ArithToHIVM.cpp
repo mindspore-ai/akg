@@ -2064,22 +2064,20 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
 };
 
 static int64_t computeNPUVectorMarkBufferBytes(npuvector::NPUVectorType ty, Type elemType,
-                                               ArrayRef<int64_t> maxPerDynamicDim) {
+                                               ArrayRef<int64_t> maxPerRankDim) {
   int64_t n = 1;
-  size_t di = 0;
-  for (int64_t d : ty.getShape()) {
-    if (ShapedType::isDynamic(d)) {
-      if (di >= maxPerDynamicDim.size()) return 0;
-      n *= maxPerDynamicDim[di++];
-    } else {
-      n *= d;
-    }
+  if (maxPerRankDim.size() != static_cast<size_t>(ty.getRank())) return 0;
+  for (int64_t i = 0; i < ty.getRank(); ++i) {
+    n *= maxPerRankDim[static_cast<size_t>(i)];
   }
   return n * (static_cast<int64_t>(elemType.getIntOrFloatBitWidth()) / 8);
 }
 
-/// Constant max SSA values → one i64 per `?` for buffer marking (accepts per-rank or legacy).
+/// Returns one folded upper bound per result rank. Rank-wide maxSizes are kept
+/// as-is so static result dims can still use a larger allocated upper bound.
 static FailureOr<SmallVector<int64_t>> foldMaxValsForNpuMark(npuvector::NPUVectorType npuTy, ValueRange maxSizes) {
+  if (maxSizes.size() != static_cast<size_t>(npuTy.getRank())) return failure();
+
   SmallVector<int64_t> raw;
   for (Value v : maxSizes) {
     auto cop = v.getDefiningOp<arith::ConstantOp>();
@@ -2088,29 +2086,20 @@ static FailureOr<SmallVector<int64_t>> foldMaxValsForNpuMark(npuvector::NPUVecto
     if (!ia) return failure();
     raw.push_back(ia.getInt());
   }
-  unsigned numDyn = npuTy.getNumDynamicDims();
-  if (raw.size() == static_cast<size_t>(npuTy.getRank())) {
-    SmallVector<int64_t> perDyn;
-    for (int64_t i = 0; i < npuTy.getRank(); ++i) {
-      if (npuTy.isDynamicDim(i)) perDyn.push_back(raw[static_cast<size_t>(i)]);
-    }
-    if (perDyn.size() != numDyn) return failure();
-    return perDyn;
-  }
-  if (raw.size() == 1 && numDyn > 1) raw.assign(numDyn, raw[0]);
-  if (raw.size() != numDyn) return failure();
   return raw;
 }
 
 static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferReadOp op, Value buf, Type elemType,
                                                            npuvector::NPUVectorType npuVecType,
                                                            ConversionPatternRewriter &rewriter) {
-  if (!npuVecType.hasDynamicShape() || op.getMaxSizes().empty()) {
+  if (!npuVecType.hasDynamicShape()) {
     return success();
   }
 
   auto folded = foldMaxValsForNpuMark(npuVecType, op.getMaxSizes());
-  if (failed(folded)) return failure();
+  if (failed(folded)) {
+    return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
+  }
 
   auto markOp = rewriter.create<annotation::MarkOp>(op.getLoc(), buf);
   markOp->setAttr(kBufferSizeInByteAttr,
@@ -2673,9 +2662,11 @@ static LogicalResult allocBroadcastBuffer(npuvector::BroadcastOp op, Location lo
     }
   }
   outBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-  if (npuVecType.hasDynamicShape() && !op.getMaxSizes().empty()) {
+  if (npuVecType.hasDynamicShape()) {
     auto folded = foldMaxValsForNpuMark(npuVecType, op.getMaxSizes());
-    if (failed(folded)) return failure();
+    if (failed(folded)) {
+      return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
+    }
     auto markOp = rewriter.create<annotation::MarkOp>(loc, outBuf);
     markOp->setAttr(kBufferSizeInByteAttr,
                     rewriter.getIndexAttr(computeNPUVectorMarkBufferBytes(npuVecType, elemType, *folded)));
