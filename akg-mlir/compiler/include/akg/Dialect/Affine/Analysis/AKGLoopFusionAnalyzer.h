@@ -118,16 +118,14 @@ struct FusionAnalyzer {
   // Reachability
   std::unordered_map<unsigned, unsigned> findReachableGroups(unsigned startGroupId);
   std::vector<unsigned> findLastNodesInPath(unsigned srcGroupId);
-  bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId, bool *dstSideWon = nullptr);
+  void stitchChainsByGroupId(unsigned srcGroupId, unsigned dstGroupId, std::pair<unsigned, unsigned> origCacheKey,
+                             bool *dstSideWon = nullptr);
 
   // Sets fusionType, depInfo, and loopTransform.
   void setFusionPlanOptions(FusionPlan &plan);
   bool hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGroupId);
-  std::pair<GroupPtr, GroupPtr> determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup);
 
   bool findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup, bool *isAncestry = nullptr);
-  void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan, const GroupPtr srcGroup,
-                             const GroupPtr dstGroup);
 
   unsigned outgoingTarget(unsigned id);
   std::pair<unsigned, unsigned> findBridgePoint(unsigned sourceId, unsigned targetId);

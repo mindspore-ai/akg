@@ -254,6 +254,19 @@ static bool accessTouches(const AccessInfo &a, Value memref, ArrayRef<Interval> 
   return true;
 }
 
+// Conservative fallback for loops whose access analysis failed: returns true
+// iff any op inside `root` uses `memref` as an operand. Lets producer/consumer
+// scans skip unanalyzable loops that don't reference the memref of interest.
+bool loopHasAccessTo(affine::AffineForOp root, Value memref) {
+  WalkResult res = root.walk([&](Operation *op) -> WalkResult {
+    if (llvm::is_contained(op->getOperands(), memref)) {
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return res.wasInterrupted();
+}
+
 static affine::AffineForOp getNestedAt(affine::AffineForOp root, int axis) {
   affine::AffineForOp cur = root;
   for (int a = 0; a < axis; ++a) {
@@ -830,7 +843,10 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
   bool isWawDeadRegionBlocked(size_t i, size_t j, Value memref, ArrayRef<Interval> dead) const {
     for (size_t k = i + 1; k < j; ++k) {
       if (!loops[k].ok) {
-        return true;
+        if (loopHasAccessTo(loops[k].root, memref)) {
+          return true;
+        }
+        continue;
       }
       if (std::any_of(loops[k].loads.begin(), loops[k].loads.end(),
                       [&](const AccessInfo &x) { return accessTouches(x, memref, dead, loops[k].nest); })) {
@@ -921,7 +937,10 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
     anyUse = false;
     for (size_t j = i + 1; j < loops.size(); ++j) {
       if (!loops[j].ok) {
-        return std::nullopt;
+        if (loopHasAccessTo(loops[j].root, st.memref)) {
+          return std::nullopt;
+        }
+        continue;
       }
       if (std::any_of(loops[j].stores.begin(), loops[j].stores.end(),
                       [&](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
@@ -994,7 +1013,10 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
     StrideScan sc;
     for (size_t j = i + 1; j < loops.size(); ++j) {
       if (!loops[j].ok) {
-        return std::nullopt;
+        if (loopHasAccessTo(loops[j].root, st.memref)) {
+          return std::nullopt;
+        }
+        continue;
       }
       if (std::any_of(loops[j].stores.begin(), loops[j].stores.end(),
                       [&](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
