@@ -1,44 +1,34 @@
-From 434582d0b3f80a21e68b6dcad6beb7d415302875 Mon Sep 17 00:00:00 2001
-From: liuchao <liuchao195@huawei.com>
-Date: Sun, 7 Dec 2025 18:45:35 +0800
-Subject: [PATCH 1/1] adapter akg
-
----
- CMakeLists.txt                                |  9 +-
- bishengir/include/bishengir/CMakeLists.txt    | 10 +--
- .../Dialect/Annotation/CMakeLists.txt         |  2 +-
- .../include/bishengir/Dialect/CMakeLists.txt  |  8 +-
- .../bishengir/Dialect/HACC/CMakeLists.txt     |  2 +-
- .../bishengir/Dialect/HFusion/CMakeLists.txt  |  4 +-
- .../bishengir/Dialect/HIVM/CMakeLists.txt     |  4 +-
- .../bishengir/Dialect/MemRef/CMakeLists.txt   |  2 +-
- .../Dialect/MemRef/IR/ExpandShapeUtils.h      | 89 +++++++++++++++++++
- .../bishengir/Dialect/Symbol/CMakeLists.txt   |  2 +-
- .../lib/Dialect/Annotation/CMakeLists.txt     |  2 +-
- bishengir/lib/Dialect/HACC/CMakeLists.txt     |  4 +-
- bishengir/lib/Dialect/HFusion/CMakeLists.txt  | 10 +--
- bishengir/lib/Dialect/HIVM/CMakeLists.txt     |  8 +-
- bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp |  4 +-
- bishengir/lib/Dialect/HIVM/Utils/Utils.cpp    |  6 +-
- bishengir/lib/Dialect/MemRef/CMakeLists.txt   |  2 +-
- .../lib/Dialect/MemRef/IR/MemRefImpl.cpp      |  4 +-
- bishengir/lib/Dialect/Symbol/CMakeLists.txt   |  4 +-
- bishengir/lib/Dialect/Tensor/CMakeLists.txt   |  4 +-
- 20 files changed, 134 insertions(+), 46 deletions(-)
- create mode 100644 bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
-
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 2bbad54..e6bfa37 100644
+index 728dea91..9ebb1709 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -1,5 +1,5 @@
+@@ -1,7 +1,11 @@
  # BiShengIR Project.
 -cmake_minimum_required(VERSION 3.28.0)
 +cmake_minimum_required(VERSION 3.14.0)
  project(bishengir)
  
++set(CMAKE_CXX_STANDARD 17)
++find_package(MLIR REQUIRED CONFIG)
++include_directories(${MLIR_INCLUDE_DIRS})
++
  # bishengir-target-spec-tblgen related target has ninja version requirement
-@@ -123,11 +123,6 @@ if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
+ if(CMAKE_GENERATOR MATCHES "Ninja")
+   execute_process(COMMAND ${CMAKE_MAKE_PROGRAM} --version
+@@ -87,12 +91,6 @@ find_program(
+ # Setup variables and includes
+ # -------------------------------------------------------------------------------
+ 
+-set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir)
+-set(MLIR_MAIN_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include)
+-set(MLIR_CMAKE_DIR ${MLIR_MAIN_SRC_DIR}/cmake/modules)
+-set(MLIR_INCLUDE_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
+-set(MLIR_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+-
+ set(BISHENGIR_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/bishengir)
+ set(BISHENGIR_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+ set(BISHENGIR_MAIN_INCLUDE_DIR ${BISHENGIR_SRC_DIR}/include)
+@@ -153,11 +151,6 @@ if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
    include_directories(${TORCH_MLIR_INCLUDE_DIRS})
  endif()
  
@@ -50,348 +40,942 @@ index 2bbad54..e6bfa37 100644
  if(BISHENGIR_BUILD_EXAMPLES)
    set(ASCEND_HOME_PATH $ENV{ASCEND_HOME_PATH}
          CACHE STRING "Ascend CANN install path")
-@@ -173,6 +168,7 @@ if (BISHENGIR_BUILD_STANDALONE_IR_ONLY)
-   add_subdirectory(bishengir/include/bishengir/Interfaces)
-   set(STANDALONE_IR_BUILD_DIALECT
-   Annotation
-+  HACC
-   HFusion
-   HIVM
-   MemRef
-@@ -188,6 +184,7 @@ if (BISHENGIR_BUILD_STANDALONE_IR_ONLY)
+@@ -180,13 +173,13 @@ add_llvm_install_targets(install-bishengir-publish-products
+ # Check format for BISHENGIR_VERSION
+ foreach(part MAJOR MINOR PATCHLEVEL)
+   if(NOT BISHENGIR_VERSION_${part} MATCHES "^[0-9]+$")
+-    message(FATAL_ERROR 
++    message(FATAL_ERROR
+       "BISHENGIR_VERSION_${part} is invalid: '${BISHENGIR_VERSION_${part}}'. "
+       "This part must contain only digits.")
+   endif()
+ endforeach()
+ if(NOT "${BISHENGIR_VERSION_SUFFIX}" MATCHES "^[a-zA-Z0-9-]*$")
+-  message(FATAL_ERROR 
++  message(FATAL_ERROR
+     "BISHENGIR_VERSION_SUFFIX is invalid: '${BISHENGIR_VERSION_SUFFIX}'. "
+     "Suffix must only contain alphanumeric characters or hyphens.")
+ endif()
+@@ -220,11 +213,21 @@ if (BISHENGIR_BUILD_STANDALONE_IR_ONLY)
+   endforeach()
+   # TODO: Math and Utils should be added in STANDALONE_IR_BUILD_DIALECT
    add_subdirectory(bishengir/include/bishengir/Dialect/MathExt)
++  add_subdirectory(bishengir/include/bishengir/Dialect/SCF)
++  add_subdirectory(bishengir/include/bishengir/Conversion)
+   add_subdirectory(bishengir/lib/Dialect/HIVM/Utils)
+   add_subdirectory(bishengir/lib/Dialect/HACC/Transforms)
+   add_subdirectory(bishengir/lib/Dialect/HACC/Utils)
    add_subdirectory(bishengir/lib/Dialect/Math)
    add_subdirectory(bishengir/lib/Dialect/Utils)
-+  add_subdirectory(bishengir/lib/Dialect/HIVM/Utils)
++  add_subdirectory(bishengir/lib/Dialect/SCF)
++  add_subdirectory(bishengir/lib/Dialect/HIVM/Transforms)
++  add_subdirectory(bishengir/lib/Dialect/HIVM/Analysis)
++  add_subdirectory(bishengir/lib/Dialect/Scope/Transforms)
++  add_subdirectory(bishengir/lib/Dialect/Annotation/Transforms)
++  add_subdirectory(bishengir/lib/Dialect/Analysis)
++  add_subdirectory(bishengir/lib/Conversion/HIVMToStandard)
++  add_subdirectory(bishengir/lib/Conversion/ArithToAffine)
  else()
    add_subdirectory(bishengir/include/bishengir)
    add_subdirectory(bishengir/lib)
-diff --git a/bishengir/include/bishengir/CMakeLists.txt b/bishengir/include/bishengir/CMakeLists.txt
-index 8d16a4a..0ed288c 100644
---- a/bishengir/include/bishengir/CMakeLists.txt
-+++ b/bishengir/include/bishengir/CMakeLists.txt
-@@ -1,6 +1,6 @@
--add_subdirectory(Conversion)
-+#add_subdirectory(Conversion)
- add_subdirectory(Dialect)
--add_subdirectory(ExecutionEngine)
--add_subdirectory(Interfaces)
--add_subdirectory(Tools)
--add_subdirectory(Transforms)
-+#add_subdirectory(ExecutionEngine)
-+#add_subdirectory(Interfaces)
-+#add_subdirectory(Tools)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt b/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
-index 9f57627..218c20c 100644
---- a/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
-@@ -1,2 +1,2 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/CMakeLists.txt b/bishengir/include/bishengir/Dialect/CMakeLists.txt
-index 83e1673..6b436fe 100644
---- a/bishengir/include/bishengir/Dialect/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/CMakeLists.txt
-@@ -3,12 +3,12 @@ add_subdirectory(HACC)
- add_subdirectory(HFusion)
- add_subdirectory(HIVM)
- add_subdirectory(MathExt)
--add_subdirectory(MemRef)
-+#add_subdirectory(MemRef)
- add_subdirectory(MemRefExt)
--add_subdirectory(SCF)
-+#add_subdirectory(SCF)
- add_subdirectory(Symbol)
--add_subdirectory(Tensor)
-+#add_subdirectory(Tensor)
- 
- if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
--  add_subdirectory(Torch)
-+  #add_subdirectory(Torch)
- endif()
-diff --git a/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
-index c76ed85..fbd0621 100644
---- a/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
-@@ -1,3 +1,3 @@
- add_subdirectory(IR)
- add_subdirectory(Targets)
--add_subdirectory(Transforms)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
-index 660deb2..29ac6ff 100644
---- a/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
-@@ -1,3 +1,3 @@
- add_subdirectory(IR)
--add_subdirectory(TransformOps)
--add_subdirectory(Transforms)
-+#add_subdirectory(TransformOps)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
-index 3593635..ad02aa3 100644
---- a/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
-@@ -1,4 +1,4 @@
- add_subdirectory(Interfaces)
- add_subdirectory(IR)
--add_subdirectory(TransformOps)
--add_subdirectory(Transforms)
-+#add_subdirectory(TransformOps)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt b/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
-index 5c919f7..e31af32 100644
---- a/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
-@@ -1 +1 @@
--add_subdirectory(Transforms)
-\ No newline at end of file
-+add_subdirectory(Transforms)
-diff --git a/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h b/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
-new file mode 100644
-index 0000000..00a7272
---- /dev/null
-+++ b/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
-@@ -0,0 +1,89 @@
-+//===- ExpandShapeUtils.h - Helpers related to expand shape ops -*- C++ -*-===//
-+//
-+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-+// See https://llvm.org/LICENSE.txt for license information.
-+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-+//
-+//===----------------------------------------------------------------------===//
-+//
-+// This header file defines utilities and common canonicalization patterns for
-+// expand shape operations.
-+//
-+//===----------------------------------------------------------------------===//
-+
-+#include "mlir/Dialect/MemRef/IR/MemRef.h"
-+#include "mlir/Dialect/Tensor/IR/Tensor.h"
-+
-+namespace mlir {
-+
-+template <typename ExpandShapeOpTy, typename CastOpTy>
-+struct FoldConstantDimOfOutputShape : public OpRewritePattern<ExpandShapeOpTy> {
-+  using OpRewritePattern<ExpandShapeOpTy>::OpRewritePattern;
-+
-+  LogicalResult matchAndRewrite(ExpandShapeOpTy expandOp,
-+                                PatternRewriter &rewriter) const final {
-+    // no constant to fold
-+    ValueRange dynamicShapes = expandOp.getOutputShape();
-+    if (dynamicShapes.empty()) {
-+      return failure();
-+    }
-+
-+    // fold constant dynamic output shape values into static shape values
-+    ArrayRef<int64_t> staticShapes = expandOp.getStaticOutputShape();
-+    SmallVector<OpFoldResult> ofrs =
-+        getMixedValues(staticShapes, dynamicShapes, rewriter);
-+    LogicalResult fold = foldDynamicIndexList(ofrs);
-+    if (failed(fold)) {
-+      return failure();
-+    }
-+    SmallVector<Value> foldedDynamicShape;
-+    SmallVector<int64_t> foldedStaticShapes;
-+    dispatchIndexOpFoldResults(ofrs, foldedDynamicShape, foldedStaticShapes);
-+
-+    // clarify the reassociation type for overload resolution
-+    SmallVector<ReassociationIndices> reassociation =
-+        expandOp.getReassociationIndices();
-+    auto resultType = expandOp.getResultType();
-+    auto foldedResultType = resultType.clone(foldedStaticShapes);
-+    auto srcType = expandOp.getSrcType();
-+
-+    // infer the src shape based on the folded result shape
-+    ShapedType foldedSrcType;
-+    if constexpr (std::is_same_v<ExpandShapeOpTy, tensor::ExpandShapeOp>) {
-+      RankedTensorType tensorTy = cast<RankedTensorType>(foldedResultType);
-+      foldedSrcType =
-+          tensor::CollapseShapeOp::inferCollapsedType(tensorTy, reassociation);
-+    } else if constexpr (std::is_same_v<ExpandShapeOpTy,
-+                                        memref::ExpandShapeOp>) {
-+      MemRefType memrefTy = cast<MemRefType>(foldedResultType);
-+      foldedSrcType = memref::CollapseShapeOp::computeCollapsedType(
-+          memrefTy, reassociation);
-+    } else {
-+      // only support ExpandShapeOp for tensor and memref
-+      return failure();
-+    }
-+
-+    // if src shape is changed, insert cast between src and op for compatibility
-+    Value castFromSource = expandOp.getSrc();
-+    if (srcType != foldedSrcType) {
-+      castFromSource = rewriter.create<CastOpTy>(
-+          expandOp.getSrc().getLoc(), foldedSrcType, expandOp.getSrc());
-+    }
-+
-+    // create new op with folded result shapes and (maybe new) source
-+    auto newOp =
-+        rewriter.create<ExpandShapeOpTy>(expandOp.getLoc(), foldedResultType,
-+                                         castFromSource, reassociation, ofrs);
-+    // if resultType of new op is changed, insert cast between new op and all
-+    // uses of origin op for compatibility
-+    Value castToResult = newOp.getResult();
-+    if (castToResult.getType() != expandOp.getType()) {
-+      castToResult = rewriter.create<CastOpTy>(expandOp.getLoc(),
-+                                               expandOp.getType(), newOp);
-+    }
-+    rewriter.replaceOp(expandOp, castToResult);
-+    return success();
-+  }
-+};
-+
-+} // namespace mlir
-diff --git a/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt b/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
-index 3b88171..218c20c 100644
---- a/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
-+++ b/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
-@@ -1,2 +1,2 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
-\ No newline at end of file
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/lib/Dialect/Annotation/CMakeLists.txt b/bishengir/lib/Dialect/Annotation/CMakeLists.txt
-index 9f57627..218c20c 100644
---- a/bishengir/lib/Dialect/Annotation/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/Annotation/CMakeLists.txt
-@@ -1,2 +1,2 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/lib/Dialect/HACC/CMakeLists.txt b/bishengir/lib/Dialect/HACC/CMakeLists.txt
-index 31167e6..fa8bb0d 100644
---- a/bishengir/lib/Dialect/HACC/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/HACC/CMakeLists.txt
-@@ -1,3 +1,3 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
--add_subdirectory(Utils)
-+#add_subdirectory(Transforms)
-+#add_subdirectory(Utils)
-diff --git a/bishengir/lib/Dialect/HFusion/CMakeLists.txt b/bishengir/lib/Dialect/HFusion/CMakeLists.txt
-index 680d074..a26e20a 100644
---- a/bishengir/lib/Dialect/HFusion/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/HFusion/CMakeLists.txt
-@@ -1,6 +1,6 @@
--add_subdirectory(Analysis)
-+#add_subdirectory(Analysis)
- add_subdirectory(IR)
--add_subdirectory(Pipelines)
--add_subdirectory(TransformOps)
--add_subdirectory(Transforms)
--add_subdirectory(Utils)
-+#add_subdirectory(Pipelines)
-+#add_subdirectory(TransformOps)
-+#add_subdirectory(Transforms)
-+#add_subdirectory(Utils)
-diff --git a/bishengir/lib/Dialect/HIVM/CMakeLists.txt b/bishengir/lib/Dialect/HIVM/CMakeLists.txt
-index 680d074..3807071 100644
---- a/bishengir/lib/Dialect/HIVM/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/HIVM/CMakeLists.txt
-@@ -1,6 +1,6 @@
--add_subdirectory(Analysis)
-+#add_subdirectory(Analysis)
- add_subdirectory(IR)
--add_subdirectory(Pipelines)
--add_subdirectory(TransformOps)
--add_subdirectory(Transforms)
-+#add_subdirectory(Pipelines)
-+#add_subdirectory(TransformOps)
-+#add_subdirectory(Transforms)
- add_subdirectory(Utils)
-diff --git a/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp b/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
-index b7437ee..f509b46 100644
---- a/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
-+++ b/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
-@@ -17,9 +17,9 @@
- 
- #include "bishengir/Config/bishengir-config.h"
+diff --git a/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp b/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp
+index 43291f0b..94b7adfd 100644
+--- a/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp
++++ b/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp
+@@ -1898,7 +1898,7 @@ void ConvertHIVMToStandardPass::runOnOperation() {
+       canonicalPatterns, canonicalPatterns.getContext());
+   scf::ForOp::getCanonicalizationPatterns(canonicalPatterns,
+                                           canonicalPatterns.getContext());
+-  if (failed(applyPatternsGreedily(module, std::move(canonicalPatterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(module, std::move(canonicalPatterns)))) {
+     return signalPassFailure();
+   }
+
+diff --git a/bishengir/lib/Dialect/Analysis/ProcessOperations.cpp b/bishengir/lib/Dialect/Analysis/ProcessOperations.cpp
+index d92fa0c3..4780c16a 100644
+--- a/bishengir/lib/Dialect/Analysis/ProcessOperations.cpp
++++ b/bishengir/lib/Dialect/Analysis/ProcessOperations.cpp
+@@ -245,7 +245,8 @@ void DimensionAnalyzerBase::processSlicingOp(T slicingOp) {
+     std::swap(src, res);
+   SmallVector<OpFoldResult> srcShape;
+   if (auto expandOp = src.template getDefiningOp<tensor::ExpandShapeOp>()) {
+-    srcShape = expandOp.getMixedOutputShape();
++    Builder b(expandOp.getContext());
++    srcShape = getMixedValues(expandOp.getStaticOutputShape(), expandOp.getOutputShape(), b);
+   } else {
+     srcShape = llvm::map_to_vector(
+         utils::getShape(src.getType()),
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/AddFFTSToSyncBlockSetOp.cpp b/bishengir/lib/Dialect/HIVM/Transforms/AddFFTSToSyncBlockSetOp.cpp
+index 6d0ab90a..f1effeed 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/AddFFTSToSyncBlockSetOp.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/AddFFTSToSyncBlockSetOp.cpp
+@@ -94,7 +94,7 @@ void AddFFTSToSyncBlockSetOpPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.insert<AddFFTSPattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/EnableStrideAlign.cpp b/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/EnableStrideAlign.cpp
+index 9b6618ee..2810ed56 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/EnableStrideAlign.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/EnableStrideAlign.cpp
+@@ -379,7 +379,7 @@ LogicalResult applyPatterns(MLIRContext *context, GreedyRewriteConfig config,
+                             Operation *op, bool *changed = nullptr) {
+   RewritePatternSet patterns(context);
+   addPattern<PATTERNS...>(patterns);
+-  return applyPatternsGreedily(op, std::move(patterns), config, changed);
++  return applyPatternsAndFoldGreedily(op, std::move(patterns), config, changed);
+ }
+
+ template <typename OpType>
+@@ -472,7 +472,7 @@ LogicalResult propagteAlignInfoUpToAlloc(MLIRContext *context,
+   populatePropagateAlignUpToRootAllocationPattern(
+       patterns, hivm::StrideAlignDimsAttr::name.str(),
+       hivm::StrideAlignValueInByteAttr::name.str());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns), config))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns), config))) {
+     LDBG("propagating up failed");
+     return failure();
+   }
+@@ -500,7 +500,7 @@ LogicalResult populatePropagateAlignAmongOpOperands(MLIRContext *context,
+   populatePropagateAlignAmongOpOperandsPatterns(patterns);
+   GreedyRewriteConfig config = GreedyRewriteConfig();
+   config.maxIterations = 10000;
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns), config))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns), config))) {
+     LDBG("propagating in operation failed");
+     return failure();
+   }
+@@ -585,7 +585,7 @@ void EnableStrideAlignPass::runOnOperation() {
+   ConversionTarget target(getContext());
+   patterns.add<EnableAlignAllocation<memref::AllocOp>,
+                EnableAlignAllocation<memref::AllocaOp>>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+     LDBG("enable align allocation failed");
+     return signalPassFailure();
+   }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/HIVMAlignAllocSize.cpp b/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/HIVMAlignAllocSize.cpp
+index 50b2a7e6..c950d6ff 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/HIVMAlignAllocSize.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/HIVMAlignAllocSize.cpp
+@@ -215,7 +215,7 @@ void AlignAllocSizePass::runOnOperation() {
+   populatePropagateAlignUpToRootAllocationPattern(
+       patterns, hivm::AllocAlignDimsAttr::name.str(),
+       hivm::AllocAlignValueInByteAttr::name.str());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     return signalPassFailure();
+   }
+
+@@ -225,7 +225,7 @@ void AlignAllocSizePass::runOnOperation() {
+   // step 3: modify the alloc and do size alignment
+   patterns.clear();
+   populateAlignAllocAlignPattern(patterns);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     return signalPassFailure();
+   }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/AllocToAlloca.cpp b/bishengir/lib/Dialect/HIVM/Transforms/AllocToAlloca.cpp
+index 87e183bb..fe4bbe3d 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/AllocToAlloca.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/AllocToAlloca.cpp
+@@ -69,7 +69,7 @@ void AllocToAllocaPass::runOnOperation() {
+   Operation *op = getOperation();
+   RewritePatternSet patterns(op->getContext());
+   populateAllocToAllocaPatterns(patterns);
+-  if (failed(applyPatternsGreedily(op, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/CMakeLists.txt b/bishengir/lib/Dialect/HIVM/Transforms/CMakeLists.txt
+index efc5e4b7..6a1a8118 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/CMakeLists.txt
++++ b/bishengir/lib/Dialect/HIVM/Transforms/CMakeLists.txt
+@@ -6,12 +6,13 @@ file(GLOB TILING ${CMAKE_CURRENT_SOURCE_DIR}/Tiling/*.cpp)
+ file(GLOB TILE_AND_BIND_SUB_BLOCK ${CMAKE_CURRENT_SOURCE_DIR}/TileAndBindSubBlock/*.cpp)
+
+ add_bishengir_dialect_library(BiShengIRHIVMTransforms
++  PARTIAL_SOURCES_INTENDED
+   ${ALIGN_BUFFER}
+-  ${BUBBLE_UP_EXTRACT_SLICE}
++  #${BUBBLE_UP_EXTRACT_SLICE}
+   ${INJECT_SYNC}
+   ${GRAPH_SYNC_CONFLICT_SOLVER}
+-  ${TILING}
+-  ${TILE_AND_BIND_SUB_BLOCK}
++  #${TILING}
++  #${TILE_AND_BIND_SUB_BLOCK}
+   AddFFTSToSyncBlockSetOp.cpp
+   AllocExtraBuffer.cpp
+   AllocToAlloca.cpp
+@@ -42,7 +43,7 @@ add_bishengir_dialect_library(BiShengIRHIVMTransforms
+   EnableMultiBuffer.cpp
+   FlattenOps.cpp
+   HIVMAggregatedDecomposeOp.cpp
+-  HIVMBubbleUpExtractSlice.cpp
++  #HIVMBubbleUpExtractSlice.cpp
+   HIVMDecomposeOp.cpp
+   HIVMInlineOTFLoadStore.cpp
+   HIVMLowerToLoops.cpp
+@@ -54,17 +55,17 @@ add_bishengir_dialect_library(BiShengIRHIVMTransforms
+   InferHIVMMemScope.cpp
+   InitEntryKernel.cpp
+   InjectBlockSync.cpp
+-  InlineFixpipe.cpp
++  #InlineFixpipe.cpp
+   InlineLoadCopy.cpp
+   InlineOTFBroadcast.cpp
+   InsertFreeLockVarBeforeReturn.cpp
+   InsertInferSyncBlockLockNumAndInitFunc.cpp
+   InsertInferTaskTypeFunc.cpp
+   InsertInferWorkSpaceSizeFunc.cpp
+-  InsertInitAndFinishForDebug.cpp
+-  InsertLoadStoreForMixCV.cpp
+-  InsertNZ2NDForDebug.cpp
+-  InsertWorkSpaceForMixCV.cpp
++  #InsertInitAndFinishForDebug.cpp
++  #InsertLoadStoreForMixCV.cpp
++  #InsertNZ2NDForDebug.cpp
++  #InsertWorkSpaceForMixCV.cpp
+   LiftLowestStride.cpp
+   LiftZeroRank.cpp
+   LowerCreateSyncBlockLock.cpp
+@@ -85,9 +86,9 @@ add_bishengir_dialect_library(BiShengIRHIVMTransforms
+   SinkOpToConsumerInLoop.cpp
+   SplitMixKernel.cpp
+   SyncBlockHoisting.cpp
+-  TileAndBindSubBlock.cpp
++  #TileAndBindSubBlock.cpp
+   TileBatchMMIntoLoop.cpp
+-  TileCubeVectorLoop.cpp
++  #TileCubeVectorLoop.cpp
+   TritonGlobalKernelArgsToHIVMOp.cpp
+   UnitFlagInfoBase.cpp
+
+@@ -125,5 +126,5 @@ add_bishengir_dialect_library(BiShengIRHIVMTransforms
+   MLIRMemRefDialect
+   BiShengIRMemRefExtDialect
+   BiShengIRDialectUtils
+-  BiShengIRTransform
++  #BiShengIRTransform
+   )
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/CloneTensorEmpty.cpp b/bishengir/lib/Dialect/HIVM/Transforms/CloneTensorEmpty.cpp
+index 8e0b1d67..0a039a35 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/CloneTensorEmpty.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/CloneTensorEmpty.cpp
+@@ -174,7 +174,7 @@ void CloneTensorEmptyPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   populateCloneTensorEmptyPattern(patterns);
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ComposeCollapseExpand.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ComposeCollapseExpand.cpp
+index aaf948bb..cf528e16 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ComposeCollapseExpand.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ComposeCollapseExpand.cpp
+@@ -289,7 +289,7 @@ void ComposeCollapseExpandPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.add<ComposeExpandOfCollapseOpPattern>(patterns.getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createComposeCollapseExpandPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ConstantizeBufferSize.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ConstantizeBufferSize.cpp
+index e10e10b7..e4feeeb1 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ConstantizeBufferSize.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ConstantizeBufferSize.cpp
+@@ -147,7 +147,7 @@ void ConstantizeBufferPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<ConstantizeAllocLikeOp<memref::AllocOp>,
+                ConstantizeAllocLikeOp<memref::AllocaOp>>(patterns.getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createConstantizeBufferSizePass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ConvertLayout/Propagate/PropagateConvertLayout.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ConvertLayout/Propagate/PropagateConvertLayout.cpp
+index ba1516e5..590c1046 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ConvertLayout/Propagate/PropagateConvertLayout.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ConvertLayout/Propagate/PropagateConvertLayout.cpp
+@@ -55,7 +55,7 @@ struct PropagateConvertLayoutPass
+     GreedyRewriteConfig config;
+     config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+
+-    if (failed(applyPatternsGreedily(module, std::move(patterns))))
++    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns))))
+       signalPassFailure();
+   }
+ };
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ConvertNonContiguousReshapeToCopy.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ConvertNonContiguousReshapeToCopy.cpp
+index 9150f26c..9062571e 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ConvertNonContiguousReshapeToCopy.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ConvertNonContiguousReshapeToCopy.cpp
+@@ -99,7 +99,7 @@ void ConvertNonContiguousReshapeToCopyPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<ConvertMaybeNonContiguousReassociativeReshapeOpToCopy>(
+       patterns.getContext());
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+     signalPassFailure();
+ }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ConvertToHIVMOp.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ConvertToHIVMOp.cpp
+index 2d304a49..a6ffee64 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ConvertToHIVMOp.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ConvertToHIVMOp.cpp
+@@ -301,7 +301,7 @@ void ConvertToHIVMOpPass::runOnOperation() {
+     // rewrite op within cur funcOp
+     RewritePatternSet patterns(ctx);
+     populateHIVMOpRewritingRule(patterns);
+-    (void)applyPatternsGreedily(funcOp, std::move(patterns));
++    (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+   });
+ }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/EnableMultiBuffer.cpp b/bishengir/lib/Dialect/HIVM/Transforms/EnableMultiBuffer.cpp
+index 1beb5e46..ab675613 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/EnableMultiBuffer.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/EnableMultiBuffer.cpp
+@@ -376,7 +376,7 @@ void EnableMultiBufferPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.insert<MultiBufferPattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/FlattenOps.cpp b/bishengir/lib/Dialect/HIVM/Transforms/FlattenOps.cpp
+index f71aa2fd..651413b9 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/FlattenOps.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/FlattenOps.cpp
+@@ -93,7 +93,7 @@ void FlattenOpsPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.add<FlattenOpsRewritePattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     return signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMAggregatedDecomposeOp.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMAggregatedDecomposeOp.cpp
+index 070383b0..d32d04e5 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMAggregatedDecomposeOp.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMAggregatedDecomposeOp.cpp
+@@ -102,7 +102,7 @@ void HIVMAggregatedDecomposeOpPass::runOnOperation() {
+     return;
+   RewritePatternSet patterns(&getContext());
+   patterns.add<HIVMDecomposePattern>(&getContext(), decomposePhase);
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createHIVMAggregatedDecomposeOpPass(
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMBubbleUpExtractSlice.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMBubbleUpExtractSlice.cpp
+index 9098065b..8f401080 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMBubbleUpExtractSlice.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMBubbleUpExtractSlice.cpp
+@@ -107,7 +107,7 @@ public:
+     populateBubbleUpExtractSliceOpPatterns(patterns);
+     populateCSEPattern(patterns);
+     tensor::populateFoldTensorEmptyPatterns(patterns, true);
+-    if (failed(applyPatternsGreedily(funcOp, std::move(patterns), config))) {
++    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns), config))) {
+       return signalPassFailure();
+     }
+     PassManager pm(funcOp->getContext());
+@@ -127,7 +127,7 @@ public:
+     populateBubbleUpExtractSliceOpPatterns(patterns2);
+     populateCSEPattern(patterns2);
+     tensor::populateFoldTensorEmptyPatterns(patterns2, true);
+-    if (failed(applyPatternsGreedily(funcOp, std::move(patterns2), config))) {
++    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns2), config))) {
+       return signalPassFailure();
+     }
+     if (failed(verifyMarkedExtractSlicesAreBubbledUp(funcOp))) {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMDecomposeOp.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMDecomposeOp.cpp
+index d04fa86f..6ddf7489 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMDecomposeOp.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMDecomposeOp.cpp
+@@ -1775,7 +1775,7 @@ void HIVMDecomposeOpPass::runOnOperation() {
+   auto funcCoreType = funcCoreTypeOpt.has_value() ? funcCoreTypeOpt.value()
+                                                   : TFuncCoreType::AIC_OR_AIV;
+   patterns.add<SyncBlockOpLowering>(&getContext(), isMixModule, funcCoreType);
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createHIVMDecomposeOpPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMInlineOTFLoadStore.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMInlineOTFLoadStore.cpp
+index e7f8fc36..f34559c9 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMInlineOTFLoadStore.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMInlineOTFLoadStore.cpp
+@@ -138,7 +138,7 @@ void HIVMInlineOTFLoadStore::runOnOperation() {
+   MLIRContext *context = &getContext();
+   RewritePatternSet patterns(context);
+   patterns.add<UnalignedLastDimConcatStorePattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+     return signalPassFailure();
+ }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMLowerToLoops.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMLowerToLoops.cpp
+index 57562eea..a20741de 100755
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMLowerToLoops.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMLowerToLoops.cpp
+@@ -85,7 +85,7 @@ void HIVMLowerToLoopsPass::runOnOperation() {
+     return;
+   RewritePatternSet patterns(&getContext());
+   patterns.add<HIVMLowerToLoopsPattern>(&getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createHIVMLowerToLoopsPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMMapForallToBlocks.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMMapForallToBlocks.cpp
+index 03216b6b..94fa5b8f 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMMapForallToBlocks.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMMapForallToBlocks.cpp
+@@ -76,7 +76,7 @@ void HIVMMapForallToBlocksPass::runOnOperation() {
+   populateForallToBlocksPatterns(patterns);
+   // To expand delinearizeIndexOps
+   affine::populateAffineExpandIndexOpsPatterns(patterns);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/HIVMOptSinglePoint.cpp b/bishengir/lib/Dialect/HIVM/Transforms/HIVMOptSinglePoint.cpp
+index c80d2ddb..ad68b57e 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/HIVMOptSinglePoint.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/HIVMOptSinglePoint.cpp
+@@ -269,7 +269,7 @@ void HIVMOptSinglePointOpPass::runOnOperation() {
+       SinglePointEltVecOp<hivm::VMinOp, arith::MinNumFOp, arith::MinSIOp,
+                           None>>(&getContext());
+
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns))))
+     signalPassFailure();
+ }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InlineFixpipe.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InlineFixpipe.cpp
+index 8535bbf1..a3fef4ba 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InlineFixpipe.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InlineFixpipe.cpp
+@@ -592,13 +592,13 @@ void InlineFixpipe::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   populateInlineFixpipePatterns(patterns);
+
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+     signalPassFailure();
+   }
+   RewritePatternSet insertFixpipeForDevicePrintPattern(&getContext());
+   MLIRContext *ctx = insertFixpipeForDevicePrintPattern.getContext();
+   insertFixpipeForDevicePrintPattern.add<InsertFixpipeForDevicePrint>(ctx);
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(insertFixpipeForDevicePrintPattern)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(insertFixpipeForDevicePrintPattern)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InlineLoadCopy.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InlineLoadCopy.cpp
+index 6e0a6bfe..16a0ebf7 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InlineLoadCopy.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InlineLoadCopy.cpp
+@@ -321,7 +321,7 @@ public:
+ void InlineLoadCopyPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<LoadCopyInlinePattern>(patterns.getContext());
+-  (void)applyPatternsGreedily(getOperation(), std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createInlineLoadCopyPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InlineOTFBroadcast.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InlineOTFBroadcast.cpp
+index 3c60ffa3..5a80bf97 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InlineOTFBroadcast.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InlineOTFBroadcast.cpp
+@@ -155,7 +155,7 @@ public:
+ void InlineOTFBroadcastPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<VBrcInlinePattern>(patterns.getContext());
+-  (void)applyPatternsGreedily(getOperation(), std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createInlineOTFBroadcastPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InsertInitAndFinishForDebug.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InsertInitAndFinishForDebug.cpp
+index f3501e63..27a35133 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InsertInitAndFinishForDebug.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InsertInitAndFinishForDebug.cpp
+@@ -117,7 +117,7 @@ void InsertInitAndFinishForDebug::runOnOperation() {
+   // insert finish for every debug
+   RewritePatternSet patterns(context);
+   patterns.add<InsertFinish>(patterns.getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InsertLoadStoreForMixCV.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InsertLoadStoreForMixCV.cpp
+index 58b23d35..7c99936f 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InsertLoadStoreForMixCV.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InsertLoadStoreForMixCV.cpp
+@@ -869,7 +869,7 @@ LogicalResult applyInsertLoadBeforeSCFInitArgs(MLIRContext *context,
+   patterns.insert<InsertLoadBeforeSCFInitArgs<scf::ForOp>,
+                   InsertLoadBeforeSCFInitArgs<scf::WhileOp>>(
+       patterns.getContext());
+-  return applyPatternsGreedily(funcOp, std::move(patterns));
++  return applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ LogicalResult preProcessComplexControlFlow(MLIRContext *context, Operation *funcOp) {
+@@ -878,7 +878,7 @@ LogicalResult preProcessComplexControlFlow(MLIRContext *context, Operation *func
+   patterns.insert<InsertLoadOpBetweenStoreLikeAndVectorOrCube<scf::YieldOp>>(
+     patterns.getContext()
+   );
+-  return applyPatternsGreedily(funcOp, std::move(patterns));
++  return applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ void InsertLoadStoreForMixCVPass::runOnOperation() {
+@@ -907,7 +907,7 @@ void InsertLoadStoreForMixCVPass::runOnOperation() {
+   if (hasCube) {
+     patterns.insert<DuplicateTensorExtractForCube>(patterns.getContext());
+   }
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InsertNZ2NDForDebug.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InsertNZ2NDForDebug.cpp
+index 5f1f1336..f30c9289 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InsertNZ2NDForDebug.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InsertNZ2NDForDebug.cpp
+@@ -104,7 +104,7 @@ public:
+ void InsertNZ2NDForDebug::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<InsertNZ2NDForDebugPattern>(patterns.getContext());
+-  (void)applyPatternsGreedily(getOperation(), std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/InsertWorkSpaceForMixCV.cpp b/bishengir/lib/Dialect/HIVM/Transforms/InsertWorkSpaceForMixCV.cpp
+index 45cd7e06..01bbc469 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/InsertWorkSpaceForMixCV.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/InsertWorkSpaceForMixCV.cpp
+@@ -163,7 +163,7 @@ void InsertWorkSpaceForMixCVPass::runOnOperation() {
+   auto funcOp = getOperation();
+   RewritePatternSet patterns(context);
+   InsertWorkSpaceForMixCVPattern(patterns);
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createInsertWorkSpaceForMixCVPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/LiftLowestStride.cpp b/bishengir/lib/Dialect/HIVM/Transforms/LiftLowestStride.cpp
+index 549b1eb3..69900724 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/LiftLowestStride.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/LiftLowestStride.cpp
+@@ -463,7 +463,7 @@ void LiftLowestStridePass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   populateLiftLowestStridePatterns(patterns);
+
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+     return signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/LiftZeroRank.cpp b/bishengir/lib/Dialect/HIVM/Transforms/LiftZeroRank.cpp
+index 679a20af..5562029f 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/LiftZeroRank.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/LiftZeroRank.cpp
+@@ -89,7 +89,7 @@ void LiftZeroRankPass::runOnOperation() {
+   auto *ctx = &getContext();
+   RewritePatternSet patterns(ctx);
+   patterns.add<HIVMLiftZeroRankPattern>(ctx);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/LowerCreateSyncBlockLock.cpp b/bishengir/lib/Dialect/HIVM/Transforms/LowerCreateSyncBlockLock.cpp
+index 4749545e..5da5ce91 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/LowerCreateSyncBlockLock.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/LowerCreateSyncBlockLock.cpp
+@@ -96,7 +96,7 @@ void LowerCreateSyncBlockLockPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+
+   patterns.add<LowerCreateSyncBlockLock>(&getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ std::unique_ptr<Pass> mlir::hivm::createSyncBlockLockLoweringPass() {
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/MarkDisableLoad.cpp b/bishengir/lib/Dialect/HIVM/Transforms/MarkDisableLoad.cpp
+index 88d9abe7..b356aeb1 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/MarkDisableLoad.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/MarkDisableLoad.cpp
+@@ -122,7 +122,7 @@ void MarkDisableLoad::runOnOperation() {
+   MLIRContext *context = &getContext();
+   RewritePatternSet patterns(context);
+   patterns.add<MarkDCacheInvalidatePattern>(patterns.getContext());
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/MarkMultiBuffer.cpp b/bishengir/lib/Dialect/HIVM/Transforms/MarkMultiBuffer.cpp
+index 1f527bb9..1c4e7e26 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/MarkMultiBuffer.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/MarkMultiBuffer.cpp
+@@ -246,7 +246,7 @@ void MarkMultiBufferPass::runOnOperation() {
+                     MarkWorkspaceMultiBuffer<hivm::FixpipeOp>>(
+         patterns.getContext(), workspaceMultiBufferNum);
+
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns))))
+     signalPassFailure();
+ }
+ } // end anonymous namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/MarkRealCoreType.cpp b/bishengir/lib/Dialect/HIVM/Transforms/MarkRealCoreType.cpp
+index 8e5cbae7..02819303 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/MarkRealCoreType.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/MarkRealCoreType.cpp
+@@ -19,8 +19,10 @@
  #include "bishengir/Dialect/HIVM/IR/HIVM.h"
--#if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
-+// #if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
- #include "bishengir/Dialect/HACC/IR/HACC.h"
--#endif // BISHENGIR_BUILD_STANDALONE_IR_ONLY
-+// #endif // BISHENGIR_BUILD_STANDALONE_IR_ONLY
  #include "bishengir/Dialect/HIVM/IR/HIVMImpl.h"
  #include "bishengir/Dialect/HIVM/IR/HIVMInterfaces.h"
- #include "bishengir/Dialect/HIVM/Utils/Utils.h"
-diff --git a/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp b/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
-index b2419f4..a267fdd 100644
---- a/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
-+++ b/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
-@@ -1031,9 +1031,9 @@ Value createNestedIndexModular(OpBuilder &builder, Operation *op, int modular) {
-                                                loopInfoVec, modular);
- }
- 
--Value mlir::hivm::createNestedIndexModular(OpBuilder &builder,
--                                           LoopLikeOpInterface loopOp,
--                                           int modular) {
-+Value createNestedIndexModular(OpBuilder &builder,
-+                               LoopLikeOpInterface loopOp,
-+                               int modular) {
-   auto loopInfoVec = getLoopsInfo(loopOp);
-   // Insert at the beginning of the For loop.
-   auto forOp = dyn_cast<scf::ForOp>(loopOp.getOperation());
-diff --git a/bishengir/lib/Dialect/MemRef/CMakeLists.txt b/bishengir/lib/Dialect/MemRef/CMakeLists.txt
-index 3b88171..218c20c 100644
---- a/bishengir/lib/Dialect/MemRef/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/MemRef/CMakeLists.txt
-@@ -1,2 +1,2 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
-\ No newline at end of file
-+#add_subdirectory(Transforms)
-diff --git a/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp b/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
-index 18266dd..e65fc84 100644
---- a/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
-+++ b/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
-@@ -16,7 +16,7 @@
- //===----------------------------------------------------------------------===//
- 
- #include "bishengir/Dialect/MemRef/IR/MemRefImpl.h"
--#include "mlir/Dialect/Utils/ExpandShapeUtils.h"
-+#include "bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h"
- #include "mlir/IR/TypeUtilities.h"
- 
- namespace {
-@@ -219,10 +219,12 @@ Value createMemRefAllocOp(OpBuilder &builder, Location loc, Value source) {
- 
- void getExtendedCanonicalizationPatterns(mlir::RewritePatternSet &results) {
-   auto *context = results.getContext();
-+  /*
-   results.add<OpWithOffsetSizesAndStridesConstantArgumentFolder<
-       ReinterpretCastOp, ReinterpretCastReturnTypeCanonicalizer,
-       ReinterpretCastCanonicalizer>>(context,
-                                      "ReinterpretCastConstantArgumentFolder");
-+                                     */
-   results.add<FoldRedundantCopy>(context);
-   results.add<FoldConstantDimOfOutputShape<ExpandShapeOp, CastOp>>(context);
- }
-diff --git a/bishengir/lib/Dialect/Symbol/CMakeLists.txt b/bishengir/lib/Dialect/Symbol/CMakeLists.txt
-index 1a8b75d..fa8bb0d 100644
---- a/bishengir/lib/Dialect/Symbol/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/Symbol/CMakeLists.txt
-@@ -1,3 +1,3 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
--add_subdirectory(Utils)
-\ No newline at end of file
-+#add_subdirectory(Transforms)
-+#add_subdirectory(Utils)
-diff --git a/bishengir/lib/Dialect/Tensor/CMakeLists.txt b/bishengir/lib/Dialect/Tensor/CMakeLists.txt
-index 1a8b75d..fa8bb0d 100644
---- a/bishengir/lib/Dialect/Tensor/CMakeLists.txt
-+++ b/bishengir/lib/Dialect/Tensor/CMakeLists.txt
-@@ -1,3 +1,3 @@
- add_subdirectory(IR)
--add_subdirectory(Transforms)
--add_subdirectory(Utils)
-\ No newline at end of file
-+#add_subdirectory(Transforms)
-+#add_subdirectory(Utils)
--- 
-2.51.0
+-#include "bishengir/Dialect/HIVM/Pipelines/Passes.h"
+ #include "bishengir/Dialect/HIVM/Transforms/Passes.h"
++#include "bishengir/Dialect/SCF/Transforms/Passes.h"
++#include "mlir/Transforms/Passes.h"
++#include "mlir/Dialect/SCF/Transforms/Passes.h"
+ #include "mlir/Dialect/Affine/IR/AffineOps.h"
+ #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
+ #include "mlir/Dialect/Func/IR/FuncOps.h"
+@@ -98,7 +100,16 @@ void MarkRealCoreTypePass::runOnOperation() {
+   // run split mix kernel pass to annotate core type attribute
+   PassManager pm(moduleClone.getContext());
+   pm.addPass(createSplitMixKernelPass());
+-  canonicalizationHIVMPipeline(pm);
++
++  // pm.addPass(createArithToAffineConversionPass());
++  pm.nest<func::FuncOp>().addPass(scf::createCanonicalizeIterArgPass());
++  pm.addPass(createCanonicalizerPass());
++  pm.addPass(createSCFForLoopCanonicalizationPass());
++  pm.addPass(createCSEPass());
++  pm.nest<func::FuncOp>().addPass(createCanonicalizerPass());
++  pm.nest<func::FuncOp>().addPass(createHIVMOptSinglePointPass());
++  pm.nest<func::FuncOp>().addPass(createCanonicalizerPass());
++  // pm.nest<func::FuncOp>().addPass(memref::createDeadStoreEliminationPass());
+   if (failed(pm.run(moduleClone))) {
+     return signalPassFailure();
+   }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeBitwiseSelect.cpp b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeBitwiseSelect.cpp
+index 37b83692..f3e950c6 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeBitwiseSelect.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeBitwiseSelect.cpp
+@@ -118,7 +118,7 @@ public:
+     MLIRContext *context = &getContext();
+     RewritePatternSet patterns(context);
+     patterns.add<NormalizeBitwiseSelectPattern>(patterns.getContext());
+-    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+       return signalPassFailure();
+   }
+ };
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeConvOps.cpp b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeConvOps.cpp
+index 3f3374ce..f85a5732 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeConvOps.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeConvOps.cpp
+@@ -292,13 +292,13 @@ void NormalizeConvOpsPass::runOnOperation() {
+   RewritePatternSet patterns1(context);
+   populateNormalizeConvOpsPattern1(patterns1);
+   GreedyRewriteConfig config1 = GreedyRewriteConfig();
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns1), config1);
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns1), config1);
 
+   // Second Round
+   RewritePatternSet patterns2(context);
+   populateNormalizeConvOpsPattern2(patterns2);
+   GreedyRewriteConfig config2 = GreedyRewriteConfig();
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns2), config2);
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns2), config2);
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeLoopIterator.cpp b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeLoopIterator.cpp
+index 42fbe5c6..f28e87c5 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeLoopIterator.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeLoopIterator.cpp
+@@ -275,7 +275,7 @@ void NormalizeLoopIteratorPass::runOnOperation() {
+   func::FuncOp funcOp = getOperation();
+   RewritePatternSet rewritePatterns(&getContext());
+   populateNormalizeLoopIneratorPattern(rewritePatterns);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(rewritePatterns))))
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(rewritePatterns))))
+     signalPassFailure();
+ }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeMatmul.cpp b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeMatmul.cpp
+index e8dfe618..c3352be7 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/NormalizeMatmul.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/NormalizeMatmul.cpp
+@@ -509,7 +509,7 @@ void NormalizeMatmulPass::runOnOperation() {
+   // But if it is BottomUpTraversal, the second mad will be decompose to
+   // 'mad + add' and lose 'mad + mad' optimization.
+   config.useTopDownTraversal = true;
+-  (void)applyPatternsGreedily(funcOp, std::move(patterns), config);
++  (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns), config);
+ }
+
+ } // namespace
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/PlanMemory.cpp b/bishengir/lib/Dialect/HIVM/Transforms/PlanMemory.cpp
+index 4ce78279..867190b4 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/PlanMemory.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/PlanMemory.cpp
+@@ -2444,7 +2444,7 @@ void PlanMemoryPass::runOnOperation() {
+   if (this->memMode == MemPlanMode::LOCAL_MEM_PLAN) {
+     RewritePatternSet normalizeLoopIterPatterns(&getContext());
+     populateNormalizeLoopIneratorPattern(normalizeLoopIterPatterns);
+-    if (failed(applyPatternsGreedily(funcOp,
++    if (failed(applyPatternsAndFoldGreedily(funcOp,
+                                      std::move(normalizeLoopIterPatterns)))) {
+       return signalPassFailure();
+     }
+@@ -2517,7 +2517,7 @@ void PlanMemoryPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   populateBufferAddressToAllocOp(patterns, plannedBuffer2Offsets);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     return signalPassFailure();
+   }
+
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/RecognizeDeinterleaveOp.cpp b/bishengir/lib/Dialect/HIVM/Transforms/RecognizeDeinterleaveOp.cpp
+index 44ef40c2..65e7745e 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/RecognizeDeinterleaveOp.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/RecognizeDeinterleaveOp.cpp
+@@ -350,7 +350,7 @@ void RecognizeDeinterleaveOpPass::runOnOperation() {
+   patterns.add<RecognizeDeinterleaveOpForLoad>(ctx);
+   patterns.add<RecognizeDeinterleaveOpForCopy>(ctx);
+
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/ReduceRankSubview.cpp b/bishengir/lib/Dialect/HIVM/Transforms/ReduceRankSubview.cpp
+index 51ff71fb..49683363 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/ReduceRankSubview.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/ReduceRankSubview.cpp
+@@ -387,7 +387,7 @@ void ReduceRankSubviewPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   populateReduceRankSubviewPatterns(patterns);
+
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+     return signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/SinkOpToConsumerInLoop.cpp b/bishengir/lib/Dialect/HIVM/Transforms/SinkOpToConsumerInLoop.cpp
+index 0c5d132b..3aac140f 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/SinkOpToConsumerInLoop.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/SinkOpToConsumerInLoop.cpp
+@@ -67,7 +67,7 @@ void SinkOpToConsumerInLoopPass::runOnOperation() {
+   patterns.add<SinkOpToConsumerInLoop<hivm::VBrcOp>,
+                SinkOpToConsumerInLoop<linalg::BroadcastOp>,
+                SinkOpToConsumerInLoop<linalg::FillOp>>(ctx);
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/SplitMixKernel.cpp b/bishengir/lib/Dialect/HIVM/Transforms/SplitMixKernel.cpp
+index 87c12af2..e6ccbc37 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/SplitMixKernel.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/SplitMixKernel.cpp
+@@ -210,7 +210,7 @@ void postProcessCubeFunc(func::FuncOp func) {
+   patterns.insert<PostCubeReplacement>(patterns.getContext());
+   patterns.insert<FoldEmptyInsertSlice>(patterns.getContext());
+   tensor::populateFoldTensorEmptyPatterns(patterns);
+-  if (failed(applyPatternsGreedily(func.getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(func.getOperation(), std::move(patterns)))) {
+     llvm::report_fatal_error("postProcessCubeFunc failed");
+   }
+   removeOpWithAttrFromFunc<bufferization::ToTensorOp>(
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/SyncBlockHoisting.cpp b/bishengir/lib/Dialect/HIVM/Transforms/SyncBlockHoisting.cpp
+index 7c023192..d2c897e8 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/SyncBlockHoisting.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/SyncBlockHoisting.cpp
+@@ -148,7 +148,7 @@ void SyncBlockHoistingPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+   patterns.add<HoistCreateSyncBlockLockInIfPattern>(patterns.getContext());
+   patterns.add<HoistingSyncBlockPattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/TileAndBindSubBlock.cpp b/bishengir/lib/Dialect/HIVM/Transforms/TileAndBindSubBlock.cpp
+index cd6e2d5b..ea7c5e61 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/TileAndBindSubBlock.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/TileAndBindSubBlock.cpp
+@@ -605,7 +605,7 @@ static LogicalResult limitUniqueSubBlockToStore(func::FuncOp funcOp) {
+   patterns.add<LimitUniqueSubBlockIdToStore>(funcOp.getContext());
+   GreedyRewriteConfig config;
+   config.maxIterations = kMaxIterations;
+-  return applyPatternsGreedily(funcOp, std::move(patterns));
++  return applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+ }
+
+ static scf::ForOp createSubBlockLoop(Location loc, OpBuilder &builder,
+@@ -722,7 +722,7 @@ static LogicalResult tileAndSliceStore(func::FuncOp func,
+       func->getContext(), analyzer);
+   GreedyRewriteConfig config;
+   config.maxIterations = kMaxIterations;
+-  if (failed(applyPatternsGreedily(func, std::move(patterns), config))) {
++  if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns), config))) {
+     return failure();
+   }
+
+@@ -844,7 +844,7 @@ TileAndBindSubBlockPass::attemptBindSubBlock(func::FuncOp func) {
+   RewritePatternSet patternsPost(&getContext());
+   patternsPost.add<mlir::hivm::detail::BubbleUpSubviewFromTiling>(
+       &getContext());
+-  if (failed(applyPatternsGreedily(newFunc, std::move(patternsPost)))) {
++  if (failed(applyPatternsAndFoldGreedily(newFunc, std::move(patternsPost)))) {
+     failAndRevert(newFunc);
+     return failure();
+   }
+@@ -885,7 +885,7 @@ void TileAndBindSubBlockPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.add<CanonicalizeAllocToTensor>(&getContext());
+-  (void)applyPatternsGreedily(moduleOp, std::move(patterns));
++  (void)applyPatternsAndFoldGreedily(moduleOp, std::move(patterns));
+
+   // Collect functions to process (can't modify while iterating)
+   SmallVector<func::FuncOp> functionsToProcess;
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/TileBatchMMIntoLoop.cpp b/bishengir/lib/Dialect/HIVM/Transforms/TileBatchMMIntoLoop.cpp
+index 99c32bf2..fbe4a1fc 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/TileBatchMMIntoLoop.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/TileBatchMMIntoLoop.cpp
+@@ -388,7 +388,7 @@ void TileBatchMMIntoLoopPass::runOnOperation() {
+
+   RewritePatternSet patterns(&getContext());
+   patterns.add<TileBatchMM>(&getContext());
+-  if (failed(applyPatternsGreedily(funcOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+     return signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/HIVM/Transforms/TileCubeVectorLoop.cpp b/bishengir/lib/Dialect/HIVM/Transforms/TileCubeVectorLoop.cpp
+index 35b1d0c9..0759a9bc 100644
+--- a/bishengir/lib/Dialect/HIVM/Transforms/TileCubeVectorLoop.cpp
++++ b/bishengir/lib/Dialect/HIVM/Transforms/TileCubeVectorLoop.cpp
+@@ -296,7 +296,7 @@ LogicalResult liftMemRefLoadsInLoop(ModuleOp module) {
+   MLIRContext *ctx = module.getContext();
+   RewritePatternSet patterns(ctx);
+   patterns.add<LiftToTensor>(ctx);
+-  return applyPatternsGreedily(module, std::move(patterns));
++  return applyPatternsAndFoldGreedily(module, std::move(patterns));
+ }
+
+ /// Pattern to shrink memref alloc's size.
+@@ -343,7 +343,7 @@ LogicalResult shrinkAlloc(ModuleOp module) {
+   MLIRContext *ctx = module.getContext();
+   RewritePatternSet patterns(ctx);
+   patterns.add<ShrinkAlloc>(ctx);
+-  return applyPatternsGreedily(module, std::move(patterns));
++  return applyPatternsAndFoldGreedily(module, std::move(patterns));
+ }
+
+ /// Pattern to remove the dummy store.
+@@ -709,7 +709,7 @@ public:
+     MLIRContext *ctx = module.getContext();
+     RewritePatternSet patterns(ctx);
+     patterns.add<RemoveDummyStore>(ctx);
+-    return applyPatternsGreedily(module, std::move(patterns));
++    return applyPatternsAndFoldGreedily(module, std::move(patterns));
+   }
+ };
+
+diff --git a/bishengir/lib/Dialect/SCF/Transforms/CanonicalizeIterArg.cpp b/bishengir/lib/Dialect/SCF/Transforms/CanonicalizeIterArg.cpp
+index cdb34df4..54a63c61 100644
+--- a/bishengir/lib/Dialect/SCF/Transforms/CanonicalizeIterArg.cpp
++++ b/bishengir/lib/Dialect/SCF/Transforms/CanonicalizeIterArg.cpp
+@@ -402,7 +402,7 @@ struct CanonicalizeIterArgPass
+                     CanonicalizeIterArgPattern<scf::WhileOp>,
+                     RemoveDeadIterArgPattern<scf::ForOp>>(
+         patterns.getContext());
+-    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+       return signalPassFailure();
+   }
+ };
+diff --git a/bishengir/lib/Dialect/SCF/Transforms/MapForToForall.cpp b/bishengir/lib/Dialect/SCF/Transforms/MapForToForall.cpp
+index d859c022..c1eac6a7 100644
+--- a/bishengir/lib/Dialect/SCF/Transforms/MapForToForall.cpp
++++ b/bishengir/lib/Dialect/SCF/Transforms/MapForToForall.cpp
+@@ -78,7 +78,7 @@ void ForToForallPass::runOnOperation() {
+   MLIRContext *context = &getContext();
+   RewritePatternSet patterns(context);
+   patterns.insert<ForToForallRewritePattern>(patterns.getContext());
+-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+     return signalPassFailure();
+ }
+
+diff --git a/bishengir/lib/Dialect/SCF/Transforms/RemoveRedundantLoopInit.cpp b/bishengir/lib/Dialect/SCF/Transforms/RemoveRedundantLoopInit.cpp
+index 200f035d..bef1ba90 100644
+--- a/bishengir/lib/Dialect/SCF/Transforms/RemoveRedundantLoopInit.cpp
++++ b/bishengir/lib/Dialect/SCF/Transforms/RemoveRedundantLoopInit.cpp
+@@ -276,7 +276,7 @@ struct RemoveRedundantLoopInitPass
+     MLIRContext *context = &getContext();
+     RewritePatternSet patterns(context);
+     patterns.insert<RemoveRedundantLoopInitPattern>(patterns.getContext());
+-    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
++    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+       return signalPassFailure();
+   }
+ };
+diff --git a/bishengir/lib/Dialect/Scope/Transforms/InlineScope.cpp b/bishengir/lib/Dialect/Scope/Transforms/InlineScope.cpp
+index 35da1d41..92b86b03 100644
+--- a/bishengir/lib/Dialect/Scope/Transforms/InlineScope.cpp
++++ b/bishengir/lib/Dialect/Scope/Transforms/InlineScope.cpp
+@@ -86,7 +86,7 @@ void ExtractScopeBodyPass::runOnOperation() {
+   RewritePatternSet patterns(&getContext());
+
+   patterns.add<ExtractOpsFromBodyPattern<ScopeOp>>(&getContext());
+-  if (failed(applyPatternsGreedily(moduleOp, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(moduleOp, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }
+diff --git a/bishengir/lib/Dialect/Scope/Transforms/OutlineScope.cpp b/bishengir/lib/Dialect/Scope/Transforms/OutlineScope.cpp
+index 26663d22..22d3445a 100644
+--- a/bishengir/lib/Dialect/Scope/Transforms/OutlineScope.cpp
++++ b/bishengir/lib/Dialect/Scope/Transforms/OutlineScope.cpp
+@@ -166,7 +166,7 @@ void OutlineScopePass::runOnOperation() {
+
+   patterns.add<OutlineScopeOp>(&getContext());
+
+-  if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
++  if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
+     signalPassFailure();
+   }
+ }

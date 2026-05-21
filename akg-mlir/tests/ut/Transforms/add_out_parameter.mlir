@@ -1,7 +1,7 @@
 // RUN: akg-opt %s --add-out-parameter | FileCheck %s
 
 // CHECK-LABEL: module {
-// CHECK-NEXT:  func.func @Fused_Sub_Add_fusion_97330263758862449(%arg0: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<2>}, %arg3: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) -> memref<1x1666x1024xf32> attributes {OperatorType = "Elementwise", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
+// CHECK-NEXT:  func.func @Fused_Sub_Add_fusion_97330263758862449(%arg0: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<2>}, %arg3: memref<1x1666x1024xf32> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) attributes {OperatorType = "Elementwise", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
 // CHECK-NEXT:    affine.for %arg4 = 0 to 1536 step 512 {
 // CHECK-NEXT:      affine.for %arg5 = 0 to 1024 step 512 {
 // CHECK-NEXT:        affine.for %arg6 = #map(%arg4) to #map1(%arg4) {
@@ -28,9 +28,9 @@
 // CHECK-NEXT:        }
 // CHECK-NEXT:      }
 // CHECK-NEXT:    }
-// CHECK-NEXT:    return %arg3 : memref<1x1666x1024xf32>
+// CHECK-NEXT:    return 
 // CHECK-NEXT:  }
-// CHECK-NEXT: func.func @reshape_from_temp_buffer(%arg0: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) -> memref<512xbf16> attributes {OperatorType = "Broadcast", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
+// CHECK-NEXT: func.func @reshape_from_temp_buffer(%arg0: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) attributes {OperatorType = "Broadcast", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
 // CHECK-NEXT:  %c0 = arith.constant 0 : index
 // CHECK-NEXT:  %c512 = arith.constant 512 : index
 // CHECK-NEXT:  %c1 = arith.constant 1 : index
@@ -51,9 +51,9 @@
 // CHECK-NEXT:  }
 // CHECK-NEXT:  %c0_4 = arith.constant 0 : index
 // CHECK-NEXT:  %c512_5 = arith.constant 512 : index
-// CHECK-NEXT:  return %arg2 : memref<512xbf16>
+// CHECK-NEXT:  return 
 // CHECK-NEXT: }
-// CHECK-NEXT:  func.func @reshape_from_output_buffer(%arg0: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}, %arg3: memref<512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<1>}) -> (memref<1x512xbf16>, memref<512xbf16>) attributes {OperatorType = "Broadcast", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
+// CHECK-NEXT:  func.func @reshape_from_output_buffer(%arg0: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<1>}, %arg2: memref<1x512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}, %arg3: memref<512xbf16> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<1>}) attributes {OperatorType = "Broadcast", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
 // CHECK-NEXT:  %alloc = memref.alloc() : memref<2xindex>
 // CHECK-NEXT:  %c1 = arith.constant 1 : index
 // CHECK-NEXT:  %c0 = arith.constant 0 : index
@@ -73,7 +73,7 @@
 // CHECK-NEXT:  }
 // CHECK-NEXT:  %c0_4 = arith.constant 0 : index
 // CHECK-NEXT:  %c512_5 = arith.constant 512 : index
-// CHECK-NEXT: return %arg2, %arg3 : memref<1x512xbf16>, memref<512xbf16>
+// CHECK-NEXT: return 
 // CHECK-NEXT: }
 // CHECK-NEXT:}
 

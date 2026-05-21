@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,10 @@
 
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -86,6 +88,48 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
     return loadResult;
   }
 
+  bool accessSameLocation(Operation *op1, Operation *op2) const {
+    SmallVector<Value, 4> vals1, vals2;
+    if (isa<affine::AffineStoreOp, affine::AffineLoadOp>(op1) &&
+        isa<affine::AffineStoreOp, affine::AffineLoadOp>(op2)) {
+      AffineMap map1, map2;
+      CommonUtils::getUnifiedAffineAccess(op1, map1, vals1);
+      CommonUtils::getUnifiedAffineAccess(op2, map2, vals2);
+      if (!map1 || !map2 || map1 != map2) return false;
+    } else if (isa<memref::StoreOp, memref::LoadOp>(op1) && isa<memref::StoreOp, memref::LoadOp>(op2)) {
+      llvm::append_range(vals1, CommonUtils::getStoreLoadIndices(op1));
+      llvm::append_range(vals2, CommonUtils::getStoreLoadIndices(op2));
+    } else {
+      return false;
+    }
+    if (vals1.size() != vals2.size()) return false;
+    for (size_t i = 0; i < vals1.size(); ++i) {
+      if (vals1[i] != vals2[i]) return false;
+    }
+    return true;
+  }
+
+  // Returns true if any store in otherStores writes to the same location as loadOp
+  // and is executed strictly between storeOp and loadOp (would shadow the forward).
+  // Conservative across blocks: if the intervening store is in a different block,
+  // we treat it as intervening.
+  bool hasInterveningStore(Operation *storeOp, Operation *loadOp, const SmallVector<Operation *> &otherStores) const {
+    auto storeBlock = storeOp->getBlock();
+    auto loadBlock = loadOp->getBlock();
+    for (auto otherStore : otherStores) {
+      if (!accessSameLocation(otherStore, loadOp)) continue;
+      auto otherBlock = otherStore->getBlock();
+      if (otherBlock == storeBlock && loadBlock == storeBlock) {
+        if (storeOp->isBeforeInBlock(otherStore) && otherStore->isBeforeInBlock(loadOp)) {
+          return true;
+        }
+      } else {
+        return true;
+      }
+    }
+    return false;
+  }
+
   SmallVector<Operation *> getPossibleElimLoads(Operation *storeOp) const {
     SmallVector<Operation *> elimLoads;
     auto memref = CommonUtils::getStoreMemref(storeOp);
@@ -93,72 +137,102 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
     if (!memref || !isa<MemRefType>(memref.getType())) {
       return SmallVector<Operation *>();
     }
+
+    // Partition users into other stores vs. candidate loads.
+    // Other users (memref.copy, etc.) don't block forwarding but may block alloc cleanup.
+    SmallVector<Operation *> otherStores;
+    SmallVector<Operation *> candidateLoads;
     for (auto user : memref.getUsers()) {
       if (user == storeOp) {
         continue;
       }
-      if (dyn_cast<memref::LoadOp>(user) || dyn_cast<affine::AffineLoadOp>(user)) {
-        auto storeBlock = storeOp->getBlock();
-        auto loadBlock = user->getBlock();
-        bool inDiffBranch = (storeBlock != loadBlock);
-        bool isNestBranch = inDiffBranch && (storeBlock->getParent() && loadBlock->getParent() &&
-                                             storeBlock->getParent()->isAncestor(loadBlock->getParent()));
-        bool isSameBranchWAR = !isNestBranch && !inDiffBranch && user->isBeforeInBlock(storeOp);
-        if ((inDiffBranch && !isNestBranch) || isSameBranchWAR) {
-          return SmallVector<Operation *>();
-        }
-        elimLoads.push_back(user);
-      } else {
-        // That means this store has other users rather than just affine.load, cannot elim
-        return SmallVector<Operation *>();
+      if (isa<memref::StoreOp, affine::AffineStoreOp>(user)) {
+        otherStores.push_back(user);
+      } else if (isa<memref::LoadOp, affine::AffineLoadOp>(user)) {
+        candidateLoads.push_back(user);
       }
+    }
+
+    for (auto loadOp : candidateLoads) {
+      auto storeBlock = storeOp->getBlock();
+      auto loadBlock = loadOp->getBlock();
+      bool inDiffBranch = (storeBlock != loadBlock);
+      bool isNestBranch = inDiffBranch && (storeBlock->getParent() && loadBlock->getParent() &&
+                                           storeBlock->getParent()->isAncestor(loadBlock->getParent()));
+      bool isSameBranchWAR = !isNestBranch && !inDiffBranch && loadOp->isBeforeInBlock(storeOp);
+
+      bool canEliminate = !(inDiffBranch && !isNestBranch) && !isSameBranchWAR && accessSameLocation(storeOp, loadOp);
+      if (!canEliminate) continue;
+      if (hasInterveningStore(storeOp, loadOp, otherStores)) continue;
+      elimLoads.push_back(loadOp);
     }
     return elimLoads;
   }
 };
 
 void StoreLoadElimPass::runOnOperation() {
-  SmallVector<Operation *> toElimStores;
+  DominanceInfo &domInfo = getAnalysis<DominanceInfo>();
   SmallVector<Operation *> toElimLoads;
+  // Avoid processing the same load multiple times
+  llvm::DenseSet<Operation *> processedLoads;
+  // Memrefs that had at least one load forwarded — candidates for store/alloc cleanup.
+  llvm::SmallDenseSet<Value> affectedMemrefs;
+
   getOperation()->walk([&](Operation *op) {
-    if (dyn_cast<memref::StoreOp>(op) || dyn_cast<affine::AffineStoreOp>(op)) {
-      // check if the memref is valid and the type is correct, skip invalid store operations
-      auto memref = CommonUtils::getStoreMemref(op);
-      if (!memref || !isa<MemRefType>(memref.getType())) {
-        return;
+    if (!isa<memref::StoreOp, affine::AffineStoreOp>(op)) {
+      return;
+    }
+    auto memref = CommonUtils::getStoreMemref(op);
+    if (!memref || !isa<MemRefType>(memref.getType())) {
+      return;
+    }
+
+    auto elimLoads = getPossibleElimLoads(op);
+    for (auto loadOp : elimLoads) {
+      if (processedLoads.count(loadOp)) {
+        continue;
       }
-      auto elimLoads = getPossibleElimLoads(op);
-      size_t eraseSize = 0;
-      for (auto loadOp : elimLoads) {
-        Value storeValue = CommonUtils::getStoreValue(op);
-        Value loadResult = getLoadResult(loadOp);
-        loadResult.replaceAllUsesWith(storeValue);
-        if (loadOp->use_empty()) {
-          toElimLoads.push_back(loadOp);
-          eraseSize++;
-        }
+      processedLoads.insert(loadOp);
+
+      Value storeValue = CommonUtils::getStoreValue(op);
+      if (!domInfo.properlyDominates(storeValue, loadOp)) {
+        continue;
       }
-      bool isGlobalBuffer = memref.getDefiningOp() == nullptr;
-      bool elimAllLoads = eraseSize > 0 && eraseSize == elimLoads.size();
-      if (elimAllLoads && !isGlobalBuffer) {
-        toElimStores.push_back(op);
+      Value loadResult = getLoadResult(loadOp);
+      loadResult.replaceAllUsesWith(storeValue);
+      if (loadOp->use_empty()) {
+        toElimLoads.push_back(loadOp);
+        affectedMemrefs.insert(memref);
       }
     }
   });
+
+  // Erase load operations first
   for (auto loadOp : toElimLoads) {
     loadOp->erase();
   }
-  for (auto storeOp : toElimStores) {
-    // before erasing storeOp, capture the memref
-    auto memref = CommonUtils::getStoreMemref(storeOp);
-    if (storeOp->use_empty()) {
+
+  // If all loads were forwarded and remaining users are only stores, the buffer
+  // is dead — erase those stores and the allocation.
+  for (auto memref : affectedMemrefs) {
+    auto memrefOp = memref.getDefiningOp();
+    if (!memrefOp) continue;  // function arg / global buffer
+    SmallVector<Operation *> storesToErase;
+    bool onlyStores = true;
+    for (auto user : memref.getUsers()) {
+      if (isa<memref::StoreOp, affine::AffineStoreOp>(user)) {
+        storesToErase.push_back(user);
+      } else {
+        onlyStores = false;
+        break;
+      }
+    }
+    if (!onlyStores) continue;
+    for (auto storeOp : storesToErase) {
       storeOp->erase();
     }
-    if (memref && isa<MemRefType>(memref.getType())) {
-      auto memrefOp = memref.getDefiningOp();
-      if (memrefOp && memrefOp->use_empty()) {
-        memrefOp->erase();
-      }
+    if (memrefOp->use_empty()) {
+      memrefOp->erase();
     }
   }
 }

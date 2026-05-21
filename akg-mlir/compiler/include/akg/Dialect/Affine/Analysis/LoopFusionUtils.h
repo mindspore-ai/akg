@@ -17,24 +17,73 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
 
+#include <climits>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 
 namespace mlir {
 namespace akg {
 
+// Loop transformation types for fusion planning.
 enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
+inline const char *loopTransformToString(LoopTransform type) {
+  switch (type) {
+    case LoopTransform::Merge:
+      return "Merge";
+    case LoopTransform::Replicate:
+      return "Replicate";
+    case LoopTransform::ReplicateIf:
+      return "ReplicateIf";
+    case LoopTransform::Permute:
+      return "Permute";
+    case LoopTransform::StripMine:
+      return "StripMine";
+    case LoopTransform::Collapse:
+      return "Collapse";
+    case LoopTransform::BackTracking:
+      return "BackTracking";
+  }
+  return "UNKNOWN";
+}
 
-struct DependenceInfo {
-  std::vector<unsigned> sourceOps;
-  std::vector<unsigned> targetOps;
-  std::vector<Value> memrefs;
-  unsigned loopDepth;
-};
+// Dependency type between two memory access operations.
+enum class DepType { RAW, WAR, WAW, RAR, OTHER };
+inline const char *depTypeToString(DepType type) {
+  switch (type) {
+    case DepType::RAW:
+      return "RAW";
+    case DepType::WAR:
+      return "WAR";
+    case DepType::WAW:
+      return "WAW";
+    case DepType::RAR:
+      return "RAR";
+    case DepType::OTHER:
+      return "OTHER";
+  }
+  return "UNKNOWN";
+}
+
+// Memory reference kind classification.
+enum class MemrefKind { Normal, Input, Subview };
+inline const char *memrefKindToString(MemrefKind kind) {
+  switch (kind) {
+    case MemrefKind::Normal:
+      return "Normal";
+    case MemrefKind::Input:
+      return "Input";
+    case MemrefKind::Subview:
+      return "Subview";
+  }
+  return "UNKNOWN";
+}
 
 struct Group {
  public:
@@ -66,11 +115,21 @@ struct FuseEdge {
   unsigned to;
 };
 
+struct DependenceInfo {
+  unsigned predNodeId{UINT_MAX};
+  unsigned targetNodeId{UINT_MAX};
+  DepType depType{DepType::OTHER};
+  Value memref;
+  unsigned loopDepth{UINT_MAX};
+  MemrefKind memrefKind{MemrefKind::Normal};
+};
+
 struct FusionPlan {
   FuseEdge fusedGroup{FuseEdge(0, 0)};
   FuseEdge fusedBand{FuseEdge(0, 0)};
-  std::string fusionType{"H"};
+
   DependenceInfo depInfo;
+  std::string fusionType{"H"};
   LoopTransform loopTransform{LoopTransform::Merge};
 };
 
@@ -78,4 +137,3 @@ struct FusionPlan {
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
-

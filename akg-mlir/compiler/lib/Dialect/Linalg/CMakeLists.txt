@@ -17,7 +17,10 @@ add_mlir_dialect_library(AKGLinalgPasses
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRFuncDialect
+  MLIRLinalgDialect
   MLIRMemRefDialect
+  MLIRTensorDialect
   MLIRSideEffectInterfaces
   MLIRSupport
   MLIRLinalgExtDialect

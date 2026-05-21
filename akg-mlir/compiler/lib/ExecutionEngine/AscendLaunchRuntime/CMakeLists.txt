@@ -14,7 +14,7 @@ add_library(akg_ascend_launch_runtime
   RuntimeErrorCodes.cpp
 )
 set_property(TARGET akg_ascend_launch_runtime PROPERTY CXX_STANDARD 17)
-target_link_libraries(akg_ascend_launch_runtime glog dl)
+target_link_libraries(akg_ascend_launch_runtime glog dl nlohmann_json::nlohmann_json)
 
 check_cxx_compiler_flag(-Wweak-vtables
   COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
@@ -26,5 +26,9 @@ target_compile_definitions(akg_ascend_launch_runtime PRIVATE akg_ascend_launch_r
 find_package(pybind11 REQUIRED)
 pybind11_add_module(akgAscendLaunch AKGAscendLaunch.cpp)
 target_link_libraries(akgAscendLaunch PRIVATE akg_ascend_launch_runtime)
+set_target_properties(akgAscendLaunch PROPERTIES BUILD_RPATH $ORIGIN)
+set_target_properties(akgAscendLaunch PROPERTIES INSTALL_RPATH $ORIGIN)
 pybind11_add_module(akgProfileMgr ProfileMgr.cpp)
 target_link_libraries(akgProfileMgr PRIVATE akg_ascend_launch_runtime)
+set_target_properties(akgProfileMgr PROPERTIES BUILD_RPATH $ORIGIN)
+set_target_properties(akgProfileMgr PROPERTIES INSTALL_RPATH $ORIGIN)

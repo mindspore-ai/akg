@@ -27,6 +27,16 @@ set(LIBS
   ${conversion_libs}
   ${AKG_MLIR_LIBS}
   AKGLinalgPasses
+  BiShengIRArithToAffine
+  BiShengIRHIVMToStandard
+  BiShengIRHIVMTransforms
+  BiShengIRHACCTransforms
+  BiShengIRSCFTransforms
+  BiShengIRScopeTransforms
+  BiShengIRAnnotationTransforms
+  BiShengIRHIVMUtils
+  BiShengIRHACCUtils
+  BiShengIRSCFUtils
   BiShengIRDialectUtils
   BiShengIRAnnotationDialect
   BiShengIRHACCDialect
@@ -37,7 +47,8 @@ set(LIBS
   BiShengIRTensorDialect
   BiShengIRMemRefDialect
   BiShengIRHIVMDialect
-  BiShengIRHIVMUtils
+  BiShengIRMemRefExtDialect
+  BiShengIRScopeDialect
   MLIRAnalysis
   MLIRDialect
   MLIROptLib

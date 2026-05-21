@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,12 +25,13 @@
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
-#include "bishengir/Dialect/HACC/IR/HACC.h"
-#include "bishengir/Dialect/HIVM/IR/HIVM.h"
-#include "bishengir/Dialect/Annotation/IR/Annotation.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HIVM/IR/HIVM.h"
+#include "bishengir/Dialect/HIVM/IR/HIVMDialectExtension.h"
+#include "bishengir/Dialect/Annotation/IR/Annotation.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/InitLLVM.h"
@@ -85,6 +86,10 @@ int main(int argc, char **argv) {
   registry.insert<mlir::hivm::HIVMDialect>();
   registry.insert<mlir::npuvector::NPUVectorDialect>();
   registerLLVMDialectTranslation(registry);
+
+  bishengir::hivm::registerHIVMDialectExtension(registry);
+  mlir::hacc::func_ext::registerHACCDialectExtension(registry);
+  mlir::hacc::llvm_ext::registerHACCDialectExtension(registry);
 
   registerMLIRContextCLOptions();
   registerPassManagerCLOptions();
