@@ -24,7 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import run_akg_opt, write_code, get_block_dim_from_mlir, ascend_compile
+from .backends.ascend import akg_opt, write_code, ascend_compile
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -260,7 +260,7 @@ class AkgMlirDriver:
         if self.dump_ir:
             dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
 
-        run_akg_opt(
+        akg_opt(
             input_file=input_file,
             output_file=out_file,
             akg_tools_dir=self.akg_tools_dir,
@@ -279,12 +279,9 @@ class AkgMlirDriver:
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
 
-        self.block_dim = get_block_dim_from_mlir(input_file)
-
         ascend_compile(
             input_file=input_file,
             output_so_path=so_file,
-            block_dim=self.block_dim,
             enable_loop_fusion=self.enable_loop_fusion,
             dump_ir=self.dump_ir,
             dump_log_path=dump_log,

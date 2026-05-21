@@ -99,7 +99,7 @@ def get_akg_opt_path(akg_tools_dir=None):
         akg_tools_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
 
-def run_akg_opt(
+def akg_opt(
     input_file,
     output_file,
     akg_tools_dir=None,
@@ -167,7 +167,7 @@ def run_akg_opt(
                 dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(result.stderr)
-        logging.info("akg-opt pipeline success")
+        logging.debug("akg-opt pipeline success")
         return result
     except subprocess.CalledProcessError as e:
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
@@ -201,18 +201,19 @@ def check_ascend_compile(output_so_path):
     ) from None
 
 
-def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
+def ascend_compile(input_file, output_so_path, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
         input_file: Input MLIR file path
         output_so_path: Output .so file path
-        block_dim: Block dimension
         enable_loop_fusion: Whether loop fusion is enabled in pipeline
         dump_ir: Whether to dump bishengir-compile stderr log
         dump_log_path: Optional path to dump bishengir-compile stderr log.
+
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
+    block_dim = get_block_dim_from_mlir(input_file)
 
     compile_cmd = [
         "bishengir-compile",
@@ -231,7 +232,7 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
     else:
         compile_cmd.append("-enable-hfusion-compile=true")
 
-    logging.info("exec command: %s", compile_cmd)
+    logging.debug("exec command: %s", compile_cmd)
     try:
         result = subprocess.run(
             compile_cmd,
@@ -250,7 +251,7 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(str(e))
         raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
-    logging.info("generate ascend binary success")
+    logging.debug("generate ascend binary success")
 
     output_dir = os.path.dirname(output_so_path)
     kernel_name = os.path.splitext(os.path.basename(output_so_path))[0]
@@ -259,9 +260,9 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
     dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
 
 
-def _get_device_shape_for_dyn(data, kernel_name, output_so_dir):
+def _get_device_shape_for_dyn(data, kernel_name, work_dir):
     """Get device shape for dynamic shape. Returns None if not dynamic."""
-    cur_dir = os.path.dirname(output_so_dir) if output_so_dir else ""
+    cur_dir = os.path.dirname(work_dir) if work_dir else ""
     try:
         device_shape, _, _ = get_device_shape(data, kernel_name, True, cur_dir=cur_dir)
         return device_shape
@@ -308,14 +309,14 @@ def _process_tensor_arg(d):
     return (is_bf16, shape)
 
 
-def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, output_so_dir=""):
+def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_dir=""):
     """Preprocess in Python: bf16, output_indexes, device_shape.
     Returns list of (numpy_or_tensor, is_output, is_bf16, shape) - still passing numpy/tensor.
     """
     if len(data) == 0:
         return []
 
-    device_shape = _get_device_shape_for_dyn(data, kernel_name, output_so_dir) if is_dyn_shape else None
+    device_shape = _get_device_shape_for_dyn(data, kernel_name, work_dir) if is_dyn_shape else None
     output_idx_set = _build_output_idx_set(output_indexes, len(data))
 
     result = []
@@ -334,7 +335,7 @@ def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, output
 
 
 def benckmark_launch(
-    output_so_dir,
+    work_dir,
     kernel_name,
     device_id,
     is_dyn_shape,
@@ -350,11 +351,11 @@ def benckmark_launch(
     """
     data_list = list(input_for_mod)
     processed = _prepare_ascend_args(
-        data_list, kernel_name, output_indexes or [], is_dyn_shape, output_so_dir
+        data_list, kernel_name, output_indexes or [], is_dyn_shape, work_dir
     )
 
     akg_ascend_run(
-        output_so_dir,
+        work_dir,
         kernel_name,
         device_id,
         is_dyn_shape,
@@ -373,7 +374,7 @@ def dump_ascend_meta_data(output_dir, kernel_name, block_dim):
         kernel_name: Name of the kernel
         block_dim: Block dimension
     """
-    logging.info("dump ascend meta data:")
+    logging.debug("dump ascend meta data:")
     title_dict = {}
     # ascend info
     set_ascend_info("VectorCore", title_dict)

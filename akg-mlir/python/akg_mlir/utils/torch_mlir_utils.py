@@ -20,7 +20,7 @@ import re
 import math
 from typing import Optional
 from pathlib import Path
-from akg.backends.ascend import run_akg_opt, dump_ascend_meta_data
+from akg.backends.ascend import akg_opt, dump_ascend_meta_data
 
 
 def find_first_func_name(mlir_text: str) -> Optional[str]:
@@ -189,7 +189,7 @@ def run_mlir_ascend_pipeline(
     Returns:
         Path to final output file
     """
-    run_akg_opt(
+    akg_opt(
         input_file=input_file,
         output_file=output_file,
         akg_tools_dir=akg_tools_dir,
