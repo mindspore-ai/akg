@@ -256,6 +256,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createNPUAutoTilingPass());
     pm.addPass(mlir::createAllocBufferShrinkPass());
     // vector
+    pm.addPass(mlir::createSCFForLoopCanonicalizationPass());
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
     pm.addPass(mlir::createCanonicalizerPass());
