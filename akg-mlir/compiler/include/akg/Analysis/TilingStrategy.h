@@ -195,7 +195,6 @@ class VectorizationStrategy : public TilingStrategy {
   void AddNpuConstraint(NpuModelGraphPtr npuGraph) override;
 
  private:
-  SmallVector<int64_t> getDimSizes(const SmallVector<AxisPtr> &axes);
   void applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum, int pos);
 
   // Helper functions for applyVectorizationTiling
@@ -218,11 +217,9 @@ class NpuDefaultTileStrategy : public TilingStrategy {
 
  private:
   llvm::SmallVector<AxisPtr> collectAxes(const NpuModelGraphPtr npuGraph);
-  std::unordered_map<size_t, unsigned> buildBandRankMap(const llvm::SmallVector<AxisPtr> &axes);
   llvm::SmallVector<unsigned, 4> parseTileSizesConfig(const NpuModelGraphPtr npuGraph);
   void applyTilingToAxes(const NpuModelGraphPtr npuGraph, const llvm::SmallVector<AxisPtr> &axes,
-                         const std::unordered_map<size_t, unsigned> &bandRankMap,
-                         const llvm::SmallVector<unsigned, 4> &tileSizes, bool isReduceOp);
+                         const llvm::SmallVector<unsigned, 4> &tileSizes);
 };
 
 class TilingStrategyManager {

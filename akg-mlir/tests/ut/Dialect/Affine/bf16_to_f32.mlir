@@ -1,4 +1,4 @@
-// RUN: akg-opt %s --bf16-to-f32 | FileCheck %s
+// RUN: akg-opt %s --legalize-type-for-ascend | FileCheck %s
 
 // CHECK-LABEL: func.func @test_load_bf16(%arg0: memref<4xbf16>) -> memref<4xbf16> {
 // CHECK:         %alloc = memref.alloc() {alignment = 64 : i64} : memref<4xbf16>

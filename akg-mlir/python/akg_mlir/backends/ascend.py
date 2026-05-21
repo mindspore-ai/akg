@@ -13,7 +13,10 @@
 # limitations under the License.
 """ akg launch and compile utils """
 import os
+import re
 import sys
+import hashlib
+import json
 import logging
 import subprocess
 import numpy as np
@@ -22,9 +25,72 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg import akgAscendLaunch
+from akg.akgAscendLaunch import akg_ascend_run
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
+
+
+def write_code(js_dict, fname):
+    """
+    Export kernel config files.
+
+    Args:
+        js_dict: dict of kernel information.
+        fname: the name of json file to be generated.
+    """
+    if os.path.exists(fname):
+        os.remove(fname)
+    with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), "w") as f:
+        json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
+
+
+# Matches device func attrs like: hacc.block_dim = 40 : i64
+_BLOCK_DIM_MLIR_RE = re.compile(r"hacc\.block_dim\s*=\s*(\d+)\s*:\s*i64")
+
+
+def get_block_dim_from_mlir(mlir_path):
+    """Read ``hacc.block_dim`` from an MLIR file on disk.
+
+    Args: mlir_path (str): Path to the MLIR file.
+
+    Returns: int: Parsed block dimension.
+
+    Raises:
+        FileNotFoundError: If ``mlir_path`` is not a file.
+        ValueError: If no ``hacc.block_dim = <n> : i64`` line is found.
+    """
+    if not os.path.isfile(mlir_path):
+        raise FileNotFoundError(f"MLIR file not found: {mlir_path}")
+    with open(mlir_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    match = _BLOCK_DIM_MLIR_RE.search(text)
+    if not match:
+        raise ValueError(
+            f"No hacc.block_dim = <n> : i64 attribute found in {mlir_path}"
+        )
+    return int(match.group(1))
+
+def set_ascend_info(core_type, title_dict):
+    """Set ascend binary metadata (magic, coreType, etc.) in title_dict by core type.
+
+    Args:
+        core_type: Core type ("MIX", "AiCore", or "VectorCore")
+        title_dict: Dict to update in-place with magic, coreType, etc.
+    """
+    if len(core_type) == 0:
+        return
+    if core_type == "MIX":
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF"
+        title_dict["coreType"] = "MIX"
+        title_dict["intercoreSync"] = 1
+        title_dict["taskRation"] = "1:2"
+    elif core_type == "AiCore":
+        title_dict["coreType"] = "AiCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AICUBE"
+    elif core_type == "VectorCore":
+        title_dict["coreType"] = "VectorCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
+
 
 def get_akg_opt_path(akg_tools_dir=None):
     """Get the path of akg-opt executable."""
@@ -33,7 +99,7 @@ def get_akg_opt_path(akg_tools_dir=None):
         akg_tools_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
 
-def run_akg_opt(
+def akg_opt(
     input_file,
     output_file,
     akg_tools_dir=None,
@@ -42,7 +108,7 @@ def run_akg_opt(
     arch=None,
     dump_ir=False,
     mlir_timing=False,
-    dump_log_path=None
+    dump_log_path=None,
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -64,6 +130,8 @@ def run_akg_opt(
     Raises:
         RuntimeError: If akg-opt execution fails
     """
+    dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
+
     akg_opt_path = get_akg_opt_path(akg_tools_dir)
 
     # Build ascend-opt option
@@ -89,149 +157,246 @@ def run_akg_opt(
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if dump_ir and dump_log_path:
+        if dump_ir:
+            if not dump_log_path:
+                output_dir = os.path.dirname(output_file)
+                base_name = os.path.basename(output_file)
+                kernel_name, _ = os.path.splitext(base_name)
+                if kernel_name.endswith("_out"):
+                    kernel_name = kernel_name[: -len("_out")]
+                dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(result.stderr)
-        logging.info("akg-opt pipeline success")
+        logging.debug("akg-opt pipeline success")
         return result
     except subprocess.CalledProcessError as e:
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
 
-def run_mlir_ascend_pipeline(
-    input_file,
-    output_file,
-    akg_tools_dir=None,
-    dyn_shape=False,
-    enable_loop_fusion=True,
-    arch=None,
-    dump_ir=False,
-    mlir_timing=False,
-    dump_log_path=None,
-):
+def check_ascend_compile(output_so_path):
+    """Assert bishengir output exists: non-empty ``.o`` or ``.so`` for the ``-o`` path.
+
+    Checks ``-o`` target first, then same-stem ``.so``/``.o`` alternate.
+
+    Args:
+        output_so_path: Path passed to bishengir ``-o`` (same stem as ``.o``/``.so``).
+
+    Raises:
+        RuntimeError: If neither artifact exists or both are empty.
     """
-    Run complete MLIR pipeline for Ascend: akg-opt.
+    root, ext = os.path.splitext(output_so_path)
+    ext = ext.lower()
+    cands = [output_so_path]
+    if ext == ".so":
+        cands.append(root + ".o")
+    elif ext == ".o":
+        cands.append(root + ".so")
+    for p in cands:
+        if os.path.isfile(p) and os.path.getsize(p) > 0:
+            return
+    logging.error("bishengir-compile: .o/.so not found at %s", output_so_path)
+    raise RuntimeError(
+        "generate ascend binary: .o or .so not found at " + output_so_path
+    ) from None
+
+
+def ascend_compile(input_file, output_so_path, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
+    """Using bishengir-compile to generate Ascend binary.
 
     Args:
         input_file: Input MLIR file path
-        output_file: Final output MLIR file path
-        akg_tools_dir: Directory containing akg tools (default: auto-detect)
-        dyn_shape: Whether to enable dynamic shape optimization
-        enable_loop_fusion: Whether to enable loop fusion
-        arch: Architecture specification (optional)
-        dump_ir: Whether to dump IR after all passes
-        mlir_timing: Whether to print every pass time
-        dump_log_path: Path to dump log file (optional)
-    Returns:
-        Path to final output file
-    """
-    run_akg_opt(
-        input_file=input_file,
-        output_file=output_file,
-        akg_tools_dir=akg_tools_dir,
-        dyn_shape=dyn_shape,
-        enable_loop_fusion=enable_loop_fusion,
-        arch=arch,
-        dump_ir=dump_ir,
-        mlir_timing=mlir_timing,
-        dump_log_path=dump_log_path
-    )
-    return output_file
+        output_so_path: Output .so file path
+        enable_loop_fusion: Whether loop fusion is enabled in pipeline
+        dump_ir: Whether to dump bishengir-compile stderr log
+        dump_log_path: Optional path to dump bishengir-compile stderr log.
 
-def ascend_compile(input_file, output_so_path):
-    """ using bisheng-compile """
+    """
+    dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
+    block_dim = get_block_dim_from_mlir(input_file)
+
     compile_cmd = [
         "bishengir-compile",
         input_file,
-        "-enable-hfusion-compile=false",
         "-enable-hivm-compile=true",
         "-enable-bin-relocation=false",
-        "-block-dim=40",
+        f"-block-dim={block_dim}",
         "-enable-auto-multi-buffer=true",
+        "-disable-auto-cv-work-space-manage",
         "-o",
         output_so_path
     ]
-    logging.info("exec command: %s", compile_cmd)
+
+    if enable_loop_fusion:
+        compile_cmd.append("-enable-hfusion-compile=false")
+    else:
+        compile_cmd.append("-enable-hfusion-compile=true")
+
+    logging.debug("exec command: %s", compile_cmd)
     try:
-        subprocess.run(
+        result = subprocess.run(
             compile_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=True
+            check=True,
         )
+        if dump_ir and dump_log_path:
+            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                f.write(result.stderr)
+        check_ascend_compile(output_so_path)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-        raise RuntimeError("bishengir-compile failed in case: " + os.path.basename(input_file) + "!\n") from e
+        if dump_ir and dump_log_path:
+            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                f.write(str(e))
+        raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
+    logging.debug("generate ascend binary success")
+
+    output_dir = os.path.dirname(output_so_path)
+    kernel_name = os.path.splitext(os.path.basename(output_so_path))[0]
+    if kernel_name.startswith("lib"):
+        kernel_name = kernel_name[3:]
+    dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
 
 
-def transform_data_to_ascend(
-    data,
-    kernel_name,
-    output_indexes,
-    is_dyn_shape=False,
-    backend="ascend",
-    is_profile_params=False
-):
-    """ transform tensor input data to ctypes for ascend """
-    data_ctypes = []
+def _get_device_shape_for_dyn(data, kernel_name, work_dir):
+    """Get device shape for dynamic shape. Returns None if not dynamic."""
+    cur_dir = os.path.dirname(work_dir) if work_dir else ""
+    try:
+        device_shape, _, _ = get_device_shape(data, kernel_name, True, cur_dir=cur_dir)
+        return device_shape
+    except (ValueError, RuntimeError):
+        return [
+            d.shape if hasattr(d, 'shape') and not isinstance(d, (int, float, bool)) else ()
+            for d in data
+        ]
+
+
+def _build_output_idx_set(output_indexes, data_len):
+    """Build set of output indices from output_indexes list."""
+    output_idx_set = set()
+    for idx in output_indexes or []:
+        output_idx_set.add(idx if idx >= 0 else idx + data_len)
+    return output_idx_set
+
+
+def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
+    """Process numpy array: bf16, float16, contiguous, shape.
+    Returns (processed_d, is_bf16, shape). May modify data[data_idx] in place.
+    """
+    is_bf16 = d.dtype.name == "bfloat16"
+    if is_bf16 and not is_output:
+        d = d.astype(np.float32)
+        data[data_idx] = d
+    if d.dtype == np.float16 or (hasattr(d.dtype, 'char') and d.dtype.char in ('e', 'E')):
+        d = d.view(np.uint16)
+    if not is_output and not d.flags.c_contiguous:
+        d = np.ascontiguousarray(d)
+        data[data_idx] = d
+    if device_shape is not None and data_idx < len(device_shape):
+        s = device_shape[data_idx]
+        shape = list(s) if isinstance(s, (tuple, list)) else []
+    else:
+        shape = list(d.shape)
+    return (d, is_bf16, shape)
+
+
+def _process_tensor_arg(d):
+    """Process tensor (non-numpy): is_bf16, shape. Returns (is_bf16, shape)."""
+    is_bf16 = hasattr(d, 'dtype') and str(d.dtype) == 'torch.bfloat16'
+    shape = list(d.shape) if hasattr(d, 'shape') else []
+    return (is_bf16, shape)
+
+
+def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_dir=""):
+    """Preprocess in Python: bf16, output_indexes, device_shape.
+    Returns list of (numpy_or_tensor, is_output, is_bf16, shape) - still passing numpy/tensor.
+    """
     if len(data) == 0:
-        # dynamic shape info cannot generate inputs while compilation
-        return data_ctypes
+        return []
 
-    device_shape, _, _ = get_device_shape(
-        data, kernel_name, is_dyn_shape and not is_profile_params
-    )
+    device_shape = _get_device_shape_for_dyn(data, kernel_name, work_dir) if is_dyn_shape else None
+    output_idx_set = _build_output_idx_set(output_indexes, len(data))
 
-    output_idx_set = []
-    for output_idx in output_indexes:
-        if output_idx >= 0:
-            output_idx_set.append(output_idx)
-        else:
-            output_idx_set.append(output_idx + len(data))
-    output_idx_set = set(output_idx_set)
+    result = []
     for data_idx, d in enumerate(data):
         if isinstance(d, (int, float, bool, complex)):
-            data_ctypes.append(d)
+            result.append((d, False, False, None))
             continue
-        data_shape = np.array(device_shape[data_idx])
-        data_bytes = d.nbytes
-        is_numpy_bf16 = False
-        is_numpy_output = False
+
+        is_output = data_idx in output_idx_set
         if isinstance(d, np.ndarray):
-            if data_idx in output_idx_set:
-                is_numpy_output = True
-            if d.dtype.name == "bfloat16":
-                d = d.astype(np.float32)
-                data[data_idx] = d
-                is_numpy_bf16 = True
-
-        ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
-        ascend_tensor_obj.tensor_info = d
-        ascend_tensor_obj.shape_info = data_shape
-        ascend_tensor_obj.nbytes = data_bytes
-        ascend_tensor_obj.is_output = is_numpy_output
-        ascend_tensor_obj.is_bf16 = is_numpy_bf16
-        data_ctypes.append(ascend_tensor_obj)
-
-    return data_ctypes
+            d, is_bf16, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
+        else:
+            is_bf16, shape = _process_tensor_arg(d)
+        result.append((d, is_output, is_bf16, shape))
+    return result
 
 
-def launch(
-    output_so_dir,
+def benckmark_launch(
+    work_dir,
     kernel_name,
     device_id,
     is_dyn_shape,
-    *input_for_mod_ctypes,
-    use_mem_pool = False
+    *input_for_mod,
+    use_mem_pool=False,
+    stream=None,
+    output_indexes=None
 ):
-    """ launch .so file by akg_ascend_backend """
-    akgAscendLaunch.akg_ascend_run(
-        output_so_dir,
+    """Launch .so file by akg_ascend_backend.
+
+    All preprocessing (bf16, output_indexes, device_shape) done in Python.
+    Interface: *input_for_mod (numpy/tensor), stream. No kwargs.
+    """
+    data_list = list(input_for_mod)
+    processed = _prepare_ascend_args(
+        data_list, kernel_name, output_indexes or [], is_dyn_shape, work_dir
+    )
+
+    akg_ascend_run(
+        work_dir,
         kernel_name,
         device_id,
         is_dyn_shape,
         use_mem_pool,
-        *input_for_mod_ctypes
+        processed_args=processed,
+        stream=stream
     )
+
+
+def dump_ascend_meta_data(output_dir, kernel_name, block_dim):
+    """
+    Dump ascend meta data to JSON file.
+
+    Args:
+        output_dir: Directory where the binary file and JSON file will be saved
+        kernel_name: Name of the kernel
+        block_dim: Block dimension
+    """
+    logging.debug("dump ascend meta data:")
+    title_dict = {}
+    # ascend info
+    set_ascend_info("VectorCore", title_dict)
+    title_dict["kernelName"] = kernel_name
+    # thread info
+    title_dict["blockDim"] = block_dim
+    # bin file info
+    bin_file_suffix = ".o"
+    title_dict["binFileSuffix"] = bin_file_suffix
+    bin_file_name = kernel_name
+    title_dict["binFileName"] = bin_file_name
+    # sha256
+    buf_size = 64 * 1024  # once read 64kb
+    sha256 = hashlib.sha256()
+    kernel_file_name = os.path.join(output_dir, bin_file_name + bin_file_suffix)
+    with open(kernel_file_name, "rb") as kf:
+        while True:
+            data = kf.read(buf_size)
+            if not data:
+                break
+            sha256.update(data)
+    title_dict["sha256"] = sha256.hexdigest()
+
+    json_file = os.path.join(output_dir, kernel_name + ".json")
+    write_code(title_dict, json_file)

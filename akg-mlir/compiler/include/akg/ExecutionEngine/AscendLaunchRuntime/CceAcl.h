@@ -223,6 +223,17 @@ typedef enum {
   ACL_AICORE_NONE = 0xFF
 } aclprofAicoreMetrics;
 
+// Match Ascend runtime / hacl_rt.h device binary magic values.
+#ifndef RT_ERROR_NONE
+#define RT_ERROR_NONE 0
+#endif
+#define RT_DEV_BINARY_MAGIC_PLAIN 0xabceed50U
+#define RT_DEV_BINARY_MAGIC_PLAIN_AICPU 0xabceed51U
+#define RT_DEV_BINARY_MAGIC_PLAIN_AIVEC 0xabceed52U
+#define RT_DEV_BINARY_MAGIC_ELF 0x43554245U
+#define RT_DEV_BINARY_MAGIC_ELF_AICPU 0x41415243U
+#define RT_DEV_BINARY_MAGIC_ELF_AIVEC 0x41415246U
+
 typedef struct tagRtDevBinary {
   uint32_t magic;    // magic number
   uint32_t version;  // version of binary
