@@ -842,7 +842,6 @@ constexpr int64_t kDefaultTypeBits = 32;
 constexpr int64_t kBitsPerByte = 8;
 constexpr int64_t kUbAlignBytes = 32;
 constexpr int64_t kUbAlignBits = kUbAlignBytes * kBitsPerByte;
-constexpr int64_t kMinNonLastParallelWork = 20;
 constexpr int64_t kUbGuardReserveBytes = 64;
 constexpr int64_t kHivmAutoMultiBufferFactor = 2;
 constexpr int64_t kGenericHivmWorkspaceBuffers = 1;
@@ -2397,6 +2396,13 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
     return false;
   }
 
+  NpuBandContext transposeCtx = ctx;
+  int64_t elemBytes = std::max<int64_t>(ceilDivInt64(std::max<int64_t>(transposeCtx.transposeElementBits, 1),
+                                                     kBitsPerByte),
+                                        1);
+  transposeCtx.axesAlignUnits.back() =
+    std::lcm(transposeCtx.axesAlignUnits.back(), std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
+
   initWholeBandPlan(ctx, plan);
   unsigned firstAxisTile = saturateToTileValue(ceilDivInt64(ctx.extents.front(), ctx.targetBlocks));
   plan.outerTiles.front() = firstAxisTile;
@@ -2407,7 +2413,7 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
     searchAxisOrder.push_back(i);
   // NPU vectorization materializes the full suffix starting at the outermost
   // transpose axis; non-transpose suffix axes participate in UB search with align=1.
-  chooseAlignedTransposeTiles(ctx, plan, searchAxisOrder, ubLimitBytes);
+  chooseAlignedTransposeTiles(transposeCtx, plan, searchAxisOrder, ubLimitBytes);
   return true;
 }
 
@@ -2458,6 +2464,7 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
 
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx) {
   if (axisIdx >= ctx.axes.size()) return false;
+  if (ctx.axes.size() > 1 && axisIdx + 1 == ctx.axes.size()) return false;
   const AxisPtr &axis = ctx.axes[axisIdx];
   if (!axis || isReductionAxis(axis) || isDynamicAxis(axis) || !axis->hasConstantBounds() ||
       ctx.extents[axisIdx] <= 1)
@@ -2478,7 +2485,6 @@ void adjustParallelAxisOuterTile(const NpuBandContext &ctx, BandTilePlan &plan) 
   int bestAxis = -1;
   int64_t bestWork = 0;
   int64_t bestDistance = LLONG_MAX;
-  bool preferNonLast = false;
   SmallVector<int64_t, 6> axisTiles(ctx.axes.size(), 1);
   SmallVector<int64_t, 6> axisWorks(ctx.axes.size(), 0);
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
@@ -2492,10 +2498,9 @@ void adjustParallelAxisOuterTile(const NpuBandContext &ctx, BandTilePlan &plan) 
     if (!isParallelCandidateAxis(ctx, i)) continue;
     axisTiles[i] = getParallelOuterTile(ctx, i);
     axisWorks[i] = ceilDivInt64(std::max<int64_t>(ctx.extents[i], 1), axisTiles[i]);
-    preferNonLast |= (i + 1 < ctx.axes.size() && axisWorks[i] >= kMinNonLastParallelWork);
   }
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    if (axisWorks[i] <= 0 || (preferNonLast && i + 1 == ctx.axes.size())) continue;
+    if (axisWorks[i] <= 0) continue;
     int64_t distance =
       axisWorks[i] > ctx.targetBlocks ? axisWorks[i] - ctx.targetBlocks : ctx.targetBlocks - axisWorks[i];
     if (distance < bestDistance || (distance == bestDistance && axisWorks[i] > bestWork)) {
