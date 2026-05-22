@@ -31,13 +31,14 @@ constexpr auto kSoc910B2C = "Ascend910B2C";
 constexpr auto kSoc910B3 = "Ascend910B3";
 constexpr auto kSoc910B4 = "Ascend910B4";
 constexpr auto kSoc910B4_1 = "Ascend910B4-1";
+constexpr auto kSoc950PR_9599 = "Ascend950PR_9599";
 
 class HardwareConfig {
  public:
   HardwareConfig() = default;
   ~HardwareConfig() = default;
   HardwareConfig(uint32_t coreNumAic, uint32_t coreNumAiv, uint32_t l2Size, uint32_t l1Size, uint32_t l0aSize,
-                 uint32_t l0bSize, uint32_t l0cSize, uint32_t ubSize)
+                 uint32_t l0bSize, uint32_t l0cSize, uint32_t ubSize, bool isRegBasedArch)
       : coreNumAic(coreNumAic),
         coreNumAiv(coreNumAiv),
         l2(l2Size),
@@ -45,7 +46,8 @@ class HardwareConfig {
         l0a(l0aSize),
         l0b(l0bSize),
         l0c(l0cSize),
-        ub(ubSize) {}
+        ub(ubSize),
+        isRegBasedArch(isRegBasedArch) {}
 
   uint32_t coreNumAic{0};
   uint32_t coreNumAiv{0};
@@ -55,6 +57,7 @@ class HardwareConfig {
   uint32_t l0b{0};
   uint32_t l0c{0};
   uint32_t ub{0};
+  bool isRegBasedArch{false};
 };
 
 static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = {
@@ -65,7 +68,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                              /*l0a = */ 65536,
                              /*l0b = */ 65536,
                              /*l0c = */ 131072,
-                             /*ub = */ 196608}},
+                             /*ub = */ 196608,
+                             /*isRegBasedArch = */ false}},
   {kSoc910B2, HardwareConfig{/*coreNumAic = */ 24,
                              /*coreNumAiv = */ 48,
                              /*l2 = */ 201326592,
@@ -73,7 +77,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                              /*l0a = */ 65536,
                              /*l0b = */ 65536,
                              /*l0c = */ 131072,
-                             /*ub = */ 196608}},
+                             /*ub = */ 196608,
+                             /*isRegBasedArch = */ false}},
   {kSoc910B2C, HardwareConfig{/*coreNumAic = */ 24,
                               /*coreNumAiv = */ 48,
                               /*l2 = */ 201326592,
@@ -81,7 +86,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                               /*l0a = */ 65536,
                               /*l0b = */ 65536,
                               /*l0c = */ 131072,
-                              /*ub = */ 196608}},
+                              /*ub = */ 196608,
+                              /*isRegBasedArch = */ false}},
   {kSoc910B3, HardwareConfig{/*coreNumAic = */ 20,
                              /*coreNumAiv = */ 40,
                              /*l2 = */ 201326592,
@@ -89,7 +95,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                              /*l0a = */ 65536,
                              /*l0b = */ 65536,
                              /*l0c = */ 131072,
-                             /*ub = */ 196608}},
+                             /*ub = */ 196608,
+                             /*isRegBasedArch = */ false}},
   {kSoc910B4, HardwareConfig{/*coreNumAic = */ 20,
                              /*coreNumAiv = */ 40,
                              /*l2 = */ 100663296,
@@ -97,7 +104,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                              /*l0a = */ 65536,
                              /*l0b = */ 65536,
                              /*l0c = */ 131072,
-                             /*ub = */ 196608}},
+                             /*ub = */ 196608,
+                             /*isRegBasedArch = */ false}},
   {kSoc910B4_1, HardwareConfig{/*coreNumAic = */ 20,
                                /*coreNumAiv = */ 40,
                                /*l2 = */ 176160768,
@@ -105,7 +113,17 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                                /*l0a = */ 65536,
                                /*l0b = */ 65536,
                                /*l0c = */ 131072,
-                               /*ub = */ 196608}},
+                               /*ub = */ 196608,
+                               /*isRegBasedArch = */ false}},
+  {kSoc950PR_9599, HardwareConfig{/*coreNumAic = */ 36,
+                                  /*coreNumAiv = */ 72,
+                                  /*l2 = */ 134217728,
+                                  /*l1 = */ 524288,
+                                  /*l0a = */ 65536,
+                                  /*l0b = */ 65536,
+                                  /*l0c = */ 262144,
+                                  /*ub = */ 253952,
+                                  /*isRegBasedArch = */ true}},
 };
 
 class NpuInfo {
@@ -127,6 +145,7 @@ class NpuInfo {
   inline uint32_t getL0bSize() const { return hwConfig.l0b; }
   inline uint32_t getL0cSize() const { return hwConfig.l0c; }
   inline uint32_t getUbSize() const { return hwConfig.ub; }
+  inline bool isRegBasedArch() const { return hwConfig.isRegBasedArch; }
 
   const HardwareConfig &getConfigByVersion(const std::string &socVersion) const {
     static HardwareConfig invalidHardwareConfig;

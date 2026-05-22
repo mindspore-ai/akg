@@ -3174,9 +3174,8 @@ struct ArithToHIVMConversionPass : public impl::ConvertArithToHIVMBase<ArithToHI
 };
 
 void ArithToHIVMConversionPass::runOnOperation() {
-  if (hacc::utils::isHost(getOperation())) {
-    return;
-  }
+  func::FuncOp func = getOperation();
+  if (!hacc::utils::isDevice(func)) return;
 
   ConversionTarget target(getContext());
   // HIVM and Tensor are legal
