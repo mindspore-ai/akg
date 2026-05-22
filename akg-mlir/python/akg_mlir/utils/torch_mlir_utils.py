@@ -15,12 +15,10 @@
 """torch op acc check pipline utils"""
 import os
 import subprocess
-import logging
 import re
 import math
 from typing import Optional
 from pathlib import Path
-from akg.backends.ascend import akg_opt, dump_ascend_meta_data
 
 
 def find_first_func_name(mlir_text: str) -> Optional[str]:
@@ -38,6 +36,7 @@ def torch_normalize_dtype(dtype):
 
 def get_named_op_str(
     input_file_path: str,
+    output_file_path: str,
     kernel_name: str,
     dynamic: bool = False,
     output_dir: Optional[str] = None,
@@ -108,9 +107,6 @@ def get_named_op_str(
 
         processed_mlir = _inject_func_attrs(processed_mlir, func_attr)
 
-        output_file_path = os.path.join(
-            output_dir, f"{kernel_name}_named_op.mlir"
-        )
         with open(output_file_path, "w", encoding="utf=8") as f:
             f.write(processed_mlir)
 
@@ -120,87 +116,6 @@ def get_named_op_str(
     except Exception as e:
         print(f"[ERROR] exception: {e}")
         raise
-
-
-def ascend_compile_with_hfusion(input_file, output_so_path):
-    """bisheng-compile for bisheng pipeline."""
-    compile_cmd = [
-        "bishengir-compile",
-        input_file,
-        "-enable-hfusion-compile=true",
-        "-enable-hivm-compile=true",
-        "-enable-bin-relocation=false",
-        "-block-dim=40",
-        "-enable-auto-multi-buffer=true",
-        "-o",
-        output_so_path,
-    ]
-    try:
-        subprocess.run(
-            compile_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        print(f"[INFO] bishengir-compile {input_file} success")
-    except subprocess.CalledProcessError as e:
-        print("compile_error!!!")
-        logging.error(
-            "run bishengir-compile failed! cmd:\n %s \nerror message:\n %s",
-            e.cmd,
-            e.stderr,
-        )
-        raise RuntimeError(
-            "bishengir-compile failed in case: "
-            + os.path.basename(input_file)
-            + "!\n"
-        ) from e
-    output_dir = os.path.dirname(output_so_path)
-    kernel_name = os.path.splitext(os.path.basename(output_so_path))[0]
-    if kernel_name.startswith("lib"):
-        kernel_name = kernel_name[3:]
-    dump_ascend_meta_data(output_dir, kernel_name, block_dim=40)
-
-def run_mlir_ascend_pipeline(
-    input_file,
-    output_file,
-    akg_tools_dir=None,
-    dyn_shape=False,
-    enable_loop_fusion=True,
-    arch=None,
-    dump_ir=False,
-    mlir_timing=False,
-    dump_log_path=None,
-):
-    """
-    Run complete MLIR pipeline for Ascend: akg-opt.
-
-    Args:
-        input_file: Input MLIR file path
-        output_file: Final output MLIR file path
-        akg_tools_dir: Directory containing akg tools (default: auto-detect)
-        dyn_shape: Whether to enable dynamic shape optimization
-        enable_loop_fusion: Whether to enable loop fusion
-        arch: Architecture specification (optional)
-        dump_ir: Whether to dump IR after all passes
-        mlir_timing: Whether to print every pass time
-        dump_log_path: Path to dump log file (optional)
-    Returns:
-        Path to final output file
-    """
-    akg_opt(
-        input_file=input_file,
-        output_file=output_file,
-        akg_tools_dir=akg_tools_dir,
-        dyn_shape=dyn_shape,
-        enable_loop_fusion=enable_loop_fusion,
-        arch=arch,
-        dump_ir=dump_ir,
-        mlir_timing=mlir_timing,
-        dump_log_path=dump_log_path
-    )
-    return output_file
 
 def run_torch_mlir_to_json(torch_mlir_opt: str, file_path: str | Path) -> None:
     """
@@ -217,6 +132,9 @@ def run_torch_mlir_to_json(torch_mlir_opt: str, file_path: str | Path) -> None:
     try:
         subprocess.run(
             [torch_mlir_opt, str(file_path), "--torch-to-json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
             check=True,
         )
         print("[INFO] torch-mlir to Json success")
