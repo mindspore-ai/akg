@@ -8,6 +8,28 @@ set(AKG_MLIR_LIBS
 
 set(LIBS
   ${AKG_MLIR_LIBS}
+  BiShengIRArithToAffine
+  BiShengIRHIVMToStandard
+  BiShengIRHIVMTransforms
+  BiShengIRHACCTransforms
+  BiShengIRSCFTransforms
+  BiShengIRScopeTransforms
+  BiShengIRAnnotationTransforms
+  BiShengIRHIVMUtils
+  BiShengIRHACCUtils
+  BiShengIRSCFUtils
+  BiShengIRDialectUtils
+  BiShengIRAnnotationDialect
+  BiShengIRHACCDialect
+  BiShengIRHFusionDialect
+  BiShengIRSymbolDialect
+  BiShengIRMathExtDialect
+  BiShengIRDialectUtils
+  BiShengIRTensorDialect
+  BiShengIRMemRefDialect
+  BiShengIRHIVMDialect
+  BiShengIRMemRefExtDialect
+  BiShengIRScopeDialect
   MLIRAnalysis
   MLIRDialect
   MLIROptLib

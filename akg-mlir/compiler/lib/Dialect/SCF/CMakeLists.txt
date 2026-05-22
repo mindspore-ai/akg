@@ -10,7 +10,7 @@ add_mlir_dialect_library(AKGSCFPasses
   DEPENDS
   AKGSCFPassIncGen
   MLIRSCFDialect
-  
+
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRArithDialect
@@ -23,7 +23,9 @@ add_mlir_dialect_library(AKGSCFPasses
   MLIRSCFDialect
   MLIRSideEffectInterfaces
   MLIRSupport
+  MLIRMathDialect
   MLIRTransformUtils
   AKGMLIRAnalysis
   BiShengIRHACCDialect
+  BiShengIRHACCUtils
   )

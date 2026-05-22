@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2025 Huawei Technologies Co., Ltd
+ * Copyright 2024-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,28 +15,223 @@
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendLaunchRuntime.h"
 #include <climits>
+#include <cstdint>
 #include <limits>
 #include <algorithm>
 #include <iostream>
 #include <cstdlib>
 #include <string>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <vector>
+#include <unordered_map>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
+#include "akg/ExecutionEngine/AscendLaunchRuntime/CceWrapper.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
+#include <nlohmann/json.hpp>
 
 using std::vector;
 
 namespace mlir {
 namespace runtime {
-constexpr auto kBinFileSuffix = ".so";
-constexpr auto kDoBinFileSuffix = "";
+
+constexpr auto kDynamicSuffix = ".so";
+constexpr auto kStaticSuffix = ".o";
 constexpr auto kAiCoreStr = "AiCore";
 constexpr auto kMIXStr = "MIX";
-
 static thread_local aclrtContext thread_local_rt_context{nullptr};
+typedef void (*CallFunc)(uint32_t, void *, void *, void **);
 
-AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool) {
+uint64_t kDevRegStub = 0xbadbeefULL;
+std::mutex kDevRegStubMutex;
+
+/// Read a device binary file into memory. Returns empty vector if open/read fails.
+std::vector<char> ReadDeviceBinaryFile(const std::string &bin_path) {
+  std::ifstream ifs(bin_path, std::ios::binary);
+  if (!ifs) {
+    return {};
+  }
+  ifs.seekg(0, std::ios::end);
+  const auto end = ifs.tellg();
+  if (end <= 0) {
+    return {};
+  }
+  ifs.seekg(0, std::ios::beg);
+  std::vector<char> buffer(static_cast<size_t>(end));
+  if (!ifs.read(buffer.data(), end)) {
+    return {};
+  }
+  return buffer;
+}
+
+/// Register an in-memory device binary via rtDevBinaryRegister and rtFunctionRegister (CANN runtime).
+/// \p data must remain valid for the duration of this call.
+/// \return Host stub address suitable for rtKernelLaunch, or 0 on failure.
+uintptr_t RegisterDeviceKernel(const std::string &func_name, const void *data, size_t length,
+                               uint32_t magic = RT_DEV_BINARY_MAGIC_ELF_AIVEC, uint32_t version = 0) {
+  if (data == nullptr || length == 0) {
+    return 0;
+  }
+
+  rtDevBinary_t binary{};
+  binary.data = data;
+  binary.length = static_cast<uint64_t>(length);
+  binary.magic = magic;
+  binary.version = version;
+
+  void *bin_handle = nullptr;
+  auto ret = rtDevBinaryRegister(&binary, &bin_handle);
+  if (ret != RT_ERROR_NONE) {
+    LOG(FATAL) << "Call rtDevBinaryRegister, ret[" << ret << "]";
+    return 0;
+  }
+
+  uintptr_t stub_addr = 0;
+  {
+    std::lock_guard<std::mutex> lock(kDevRegStubMutex);
+    stub_addr = kDevRegStub += 1;
+  }
+
+  ret = rtFunctionRegister(bin_handle, reinterpret_cast<void *>(stub_addr), func_name.c_str(),
+                           reinterpret_cast<const void *>(func_name.c_str()), 0);
+  if (ret != RT_ERROR_NONE) {
+    LOG(FATAL) << "Call rtFunctionRegister, ret[" << ret << "]";
+    return 0;
+  }
+  return stub_addr;
+}
+
+uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin_path) {
+  std::vector<char> bin = ReadDeviceBinaryFile(bin_path);
+  auto func = RegisterDeviceKernel(func_name, bin.data(), bin.size());
+  return func;
+}
+
+void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, std::vector<void *> args,
+                  bool is_dynamic) {
+  if (is_dynamic) {
+    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
+    kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
+  } else {
+    rtError_t ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), NULL,
+                                   (rtStream_t)stream);
+    if (ret != RT_ERROR_NONE) {
+      LOG(FATAL) << "Call rtKernelLaunch, ret[" << ret << "]";
+    }
+  }
+}
+
+namespace {
+// key: so_path::symbol_name, value: (handle, func_ptr)
+struct KernelFuncCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::pair<void *, void *>> cache;
+
+  void *Get(const std::string &path, const std::string &kernel_name, const std::string &func_name,
+            bool is_dynamic = false) {
+    std::string file_str =
+      is_dynamic ? path + "/lib" + kernel_name + kDynamicSuffix : path + "/" + kernel_name + kStaticSuffix;
+    std::string func_str = func_name;
+    std::string key = file_str + "::" + func_str;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second.second;
+    }
+
+    void *handle = nullptr;
+    void *func = nullptr;
+    if (is_dynamic) {
+      handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
+      CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
+
+      func = dlsym(handle, func_str.c_str());
+      CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
+    } else {
+      func = reinterpret_cast<void *>(GetKernelFunction(kernel_name, file_str));
+    }
+
+    cache[key] = {handle, func};
+    return func;
+  }
+};
+
+KernelFuncCache &GetKernelFuncCache() {
+  static KernelFuncCache cache;
+  return cache;
+}
+
+struct BlockDimCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, uint32_t> cache;
+
+  uint32_t Get(const std::string &path, const std::string &kernel_name) {
+    std::string key = path + "/" + kernel_name + ".json";
+
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+
+    std::ifstream json_stream(key);
+    nlohmann::json json_data;
+    json_stream >> json_data;
+    uint32_t blockdim = json_data["blockDim"].get<uint32_t>();
+    cache[key] = blockdim;
+    return blockdim;
+  }
+};
+
+BlockDimCache &GetBlockDimCache() {
+  static BlockDimCache cache;
+  return cache;
+}
+
+struct RuntimeCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::unique_ptr<AscendKernelRuntime>> cache;
+
+  AscendKernelRuntime *GetOrCreate(uint32_t device_id, bool use_mem_pool, void *external_stream) {
+    std::string key = std::to_string(device_id) + "_" + std::to_string(use_mem_pool) + "_" +
+                      std::to_string(reinterpret_cast<uintptr_t>(external_stream));
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second.get();
+    }
+    auto rt = std::make_unique<AscendKernelRuntime>(device_id, use_mem_pool, external_stream);
+    AscendKernelRuntime *ptr = rt.get();
+    cache[key] = std::move(rt);
+    return ptr;
+  }
+};
+
+RuntimeCache &GetRuntimeCache() {
+  static RuntimeCache cache;
+  return cache;
+}
+
+}  // namespace
+
+AscendKernelRuntime *AscendKernelRuntime::GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool,
+                                                             void *external_stream) {
+  return GetRuntimeCache().GetOrCreate(device_id, use_mem_pool, external_stream);
+}
+
+AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream) {
   set_device_id(device_id);
   use_mem_pool_ = use_mem_pool;
+  if (external_stream != nullptr) {
+    if (reinterpret_cast<uintptr_t>(external_stream) == static_cast<uintptr_t>(-1)) {
+      stream_ = nullptr;
+    } else {
+      stream_ = external_stream;
+    }
+    owns_stream_ = false;
+  }
 }
 
 void AscendKernelRuntime::SetContext() {
@@ -68,7 +263,19 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
   if (!initialized_) {
     return;
   }
-  SetCurrentContext();
+  if (!owns_stream_) {
+    initialized_ = false;
+    DLOG(INFO) << "Ascend finalize end (external stream / PTA, skipped device reset)";
+    return;
+  }
+  if (rt_context_ != nullptr) {
+    auto ret = aclrtSetCurrentContext(rt_context_);
+    if (ret != ACL_SUCCESS) {
+      DLOG(WARNING) << "aclrtSetCurrentContext failed at shutdown, ret[" << GetErrorMsg(ret)
+                    << "], skip ReleaseDeviceRes";
+      return;
+    }
+  }
   if (mem_manager_ != nullptr) {
     mem_manager_->FreeDeviceMemory();
   }
@@ -78,7 +285,9 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
 
 bool AscendKernelRuntime::Init() {
   if (initialized_) {
-    SetCurrentContext();
+    if (owns_stream_) {
+      SetCurrentContext();
+    }
     return true;
   }
 
@@ -108,6 +317,17 @@ void AscendKernelRuntime::CreateContext() {
 
 bool AscendKernelRuntime::InitDevice() {
   DLOG(INFO) << "InitDevice: " << device_id_;
+
+  if (!owns_stream_) {
+    auto ret = aclrtGetCurrentContext(&rt_context_);
+    if (ret != ACL_SUCCESS || rt_context_ == nullptr) {
+      DLOG(WARNING) << "External stream mode: aclrtGetCurrentContext failed, ret[" << GetErrorMsg(ret)
+                    << "], context will be nullptr";
+      rt_context_ = nullptr;
+    }
+    return true;
+  }
+
   uint32_t device_count = 0;
   auto ret = aclrtGetDeviceCount(&device_count);
   if (ret != ACL_SUCCESS) {
@@ -126,9 +346,12 @@ bool AscendKernelRuntime::InitDevice() {
     return false;
   }
 
-  ret = aclrtCreateStreamWithConfig(&stream_, 0, RT_STREAM_DEFAULT);
-  if (ret != ACL_SUCCESS) {
-    LOG(FATAL) << "Call aclrtCreateStreamWithConfig, ret[" << GetErrorMsg(ret) << "]";
+  if (stream_ == nullptr) {
+    ret = aclrtCreateStreamWithConfig(&stream_, 0, RT_STREAM_DEFAULT);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "Call aclrtCreateStreamWithConfig, ret[" << GetErrorMsg(ret) << "]";
+    }
+    owns_stream_ = true;
   }
   return true;
 }
@@ -141,7 +364,7 @@ AscendKernelRuntime::~AscendKernelRuntime() {
 bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
   SetCurrentContext();
   int32_t ret;
-  if (stream_ != nullptr) {
+  if (stream_ != nullptr && owns_stream_) {
     ret = aclrtDestroyStream(stream_);
     if (ret != ACL_SUCCESS) {
       LOG(FATAL) << "Call aclrtDestroyStream, ret[" << GetErrorMsg(ret) << "]";
@@ -166,15 +389,8 @@ inline unsigned int UlongToUint(uint64_t u) {
 }
 
 void *AscendKernelRuntime::GetKernelFunc(const std::string &path, const std::string &kernel_name,
-                                         const std::string &func_name) {
-  std::string file_str = path + "/lib" + kernel_name + kBinFileSuffix;
-  void *handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
-  CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
-
-  std::string func_str = func_name + kDoBinFileSuffix;
-  void *func = dlsym(handle, func_str.c_str());
-  CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
-  cce_handle_ = handle;
+                                         const std::string &func_name, bool is_dynamic) {
+  void *func = GetKernelFuncCache().Get(path, kernel_name, func_name, is_dynamic);
   return func;
 }
 
@@ -192,7 +408,7 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
                               const std::vector<BaseDevicePtr> &input_tensors,
                               const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                               int64_t tiling_struct_size) {
-  uint32_t blockdim = 40;  // default blockdim equal to 1.
+  uint32_t blockdim = GetBlockDimCache().Get(path, kernel_name);
   std::string func_name = kernel_name;
   std::vector<void *> runtimeargs;
 
@@ -226,13 +442,12 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
     }
 
     if (tiling_struct_size > 0) {
+      runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));
       auto tensor = mlir::runtime::AsTensorDevice(input_tensors[input_size]);
-      runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(reinterpret_cast<void *>(offset));
-      runtimeargs.push_back(reinterpret_cast<void *>(tiling_struct_size));
-      runtimeargs.push_back(reinterpret_cast<void *>(1));
+      for (int i = 0; i < tiling_struct_size; i++) {
+        DLOG(INFO) << "tiling data[" << i << "]: " << (((int64_t*)tensor->GetHostAddress())[i]);
+        runtimeargs.push_back(reinterpret_cast<void *>(((int64_t*)tensor->GetHostAddress())[i]));
+      }
     }
   } else {
     for (const auto &base : input_tensors) {
@@ -241,11 +456,12 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
     }
   }
 
-  typedef void (*CallFunc)(uint32_t, void *, void *, void **);
-  // kernel_name is for .so, func_name is for host func name.
-  auto func_ptr = reinterpret_cast<CallFunc>(GetKernelFunc(path, kernel_name, func_name));
-  func_ptr(blockdim, nullptr, stream(), runtimeargs.data());
-  SyncStream();
+  auto kernel_func = GetKernelFunc(path, kernel_name, func_name, is_dynamic);
+  KernelLaunch(reinterpret_cast<uint64_t>(kernel_func), blockdim, stream(), runtimeargs, is_dynamic);
+
+  if (owns_stream_) {
+    SyncStream();
+  }
   return true;
 }
 
@@ -362,6 +578,5 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
     tensor->SetDeviceAddress(nullptr);
   }
 }
-
 }  // namespace runtime
 }  // namespace mlir

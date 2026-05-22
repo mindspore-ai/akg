@@ -17,6 +17,8 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_DEPENDENCEANALYSIS_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_DEPENDENCEANALYSIS_H_
 
+#include <climits>
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -61,7 +63,7 @@ struct Edge {
   Value value;
   // The loop depth at which the dependence occurs.
   // This represents the depth of the common loop nest where the dependence exists.
-  unsigned loopDepth = 0;
+  unsigned loopDepth = UINT_MAX;
 };
 
 // MemRefDependenceGraph is a graph data structure where graph nodes are
@@ -98,9 +100,10 @@ struct MemRefDependenceGraph {
 
   bool hasEdge(unsigned srcId, unsigned dstId, Value value);
   // Adds an edge from node 'srcId' to node 'dstId' for 'value'.
-  void addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth = 0);
+  void addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth = UINT_MAX);
   bool hasDependencePath(unsigned srcId, unsigned dstId);
-  bool hasMemrefAccessDependence(unsigned srcId, unsigned dstId, unsigned &loopDepth);
+  bool hasMemrefAccessDependence(unsigned srcId, unsigned dstId);
+  unsigned computeMemrefLoopDepth(int dstId, Value memref);
 
   void getPredecessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
   void getPredecessorNodes(unsigned id, std::vector<unsigned> &dependentNodes);
@@ -109,6 +112,12 @@ struct MemRefDependenceGraph {
 
   virtual void print(raw_ostream &os) const;
   virtual void dump() const { print(llvm::errs()); }
+
+ private:
+  void addMemrefDependenceEdgesForPair(unsigned srcId, unsigned dstId, Value memref, bool srcHasStore,
+                                       const SmallVector<std::pair<unsigned, Operation *>, 2> &forLoopEntries);
+  void addMemrefDependenceEdges(Value memref, const SetVector<unsigned> &accessIds);
+  void addSSAResultEdges();
 };
 
 }  // namespace akg

@@ -26,9 +26,6 @@ namespace mlir {
 #define GEN_PASS_DECL_AKGOPERATORIDENTIFY
 #define GEN_PASS_DEF_AKGOPERATORIDENTIFY
 #include "akg/Transforms/Passes.h.inc"
-}  // namespace mlir
-
-using namespace mlir;
 
 namespace {
 struct AKGOperatorIdentify : public impl::AKGOperatorIdentifyBase<AKGOperatorIdentify> {
@@ -66,7 +63,7 @@ static OperatorTemplate getOperatorTemplate(Operation *op) {
   } else if (isa<tosa::ReshapeOp>(op)) {
     opTemplate = OperatorTemplate::Reshape;
   } else if (TosaOperatorType::isTosaReduceOp(op) || MindOperatorType::isMindReduceOp(op)) {
-    opTemplate = OperatorTemplate::Reduce;
+    opTemplate = OperatorTemplate::Reduction;
   } else if (isa<tosa::MatMulOp>(op)) {
     opTemplate = OperatorTemplate::Matmul;
   } else if (isa<tosa::Conv2DOp, tosa::Conv3DOp, tosa::DepthwiseConv2DOp>(op)) {
@@ -95,6 +92,7 @@ void AKGOperatorIdentify::runOnOperation() {
   funcOp->setAttr(kOperatorTypeStr, opType);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGOperatorIdentifyPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGOperatorIdentifyPass() {
   return std::make_unique<AKGOperatorIdentify>();
 }
+}  // namespace mlir

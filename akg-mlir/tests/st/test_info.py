@@ -27,7 +27,7 @@ class TestCase:
 
 
     @pytest.mark.level0
-    @pytest.mark.platform_arm_ascend
+    @pytest.mark.platform_ascend910b
     @pytest.mark.env_onecard
     def test_fuse_sub_add(self):
         """

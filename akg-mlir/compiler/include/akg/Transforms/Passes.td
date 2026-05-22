@@ -52,7 +52,7 @@ def InferSymbolicShapes : Pass<"infer-symbolic-shapes", "func::FuncOp"> {
   let constructor = "mlir::createInferSymbolicShapesPass()";
 }
 
-def RemoveSymbolic : Pass<"remove-symbolic"> {
+def RemoveSymbolic : Pass<"remove-symbolic", "mlir::ModuleOp"> {
   let summary = "Remove symbolic attribute from Tensor Type";
   let constructor = "mlir::createSymbolicRemovalPass()";
 }
@@ -65,6 +65,28 @@ def SymbolRemoval : Pass<"symbol-removal"> {
 def StoreLoadElim : Pass<"elim-store-load"> {
   let summary = "Remove redundant store-and-immediate load pair";
   let constructor = "mlir::createStoreLoadElimPass()";
+}
+
+def AllocBufferShrink : Pass<"alloc-buffer-shrink"> {
+  let summary = "Shrink alloc buffers to minimum required size based on loop access patterns";
+  let constructor = "mlir::createAllocBufferShrinkPass()";
+}
+
+def SubviewAllocElim : Pass<"subview-alloc-elim"> {
+  let summary = "Eliminate temporary alloc buffers used by subview partitions via store-load forwarding";
+  let constructor = "mlir::createSubviewAllocElimPass()";
+}
+
+def FoldMemRefSubViewOnly : Pass<"fold-memref-subview-only", "func::FuncOp"> {
+  let summary = "Fold memref.subview into its consumer load/store ops only";
+  let description = [{
+    A subview-restricted variant of upstream `fold-memref-alias-ops`. It
+    reuses `memref::populateFoldMemRefAliasOpPatterns` verbatim, but feeds
+    the greedy driver only operations that touch a `memref.subview`
+    (the subview itself and its direct users). The expand_shape and
+    collapse_shape folders in the same pattern set therefore never match.
+  }];
+  let constructor = "mlir::createFoldMemRefSubViewOnlyPass()";
 }
 
 def PromoteTempBuffer : Pass<"promote-temp-buffer"> {

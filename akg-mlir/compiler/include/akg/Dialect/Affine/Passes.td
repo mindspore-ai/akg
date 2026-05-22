@@ -28,6 +28,15 @@ def AffineLoopReorder : Pass<"affine-loop-reorder", "func::FuncOp"> {
   ];
 }
 
+def LoopSliceSplit : Pass<"loop-slice-split", "func::FuncOp"> {
+  let summary = "Split affine.for by producer slice boundaries and shrink WAW-overwritten ranges";
+  let description = [{
+    Pre-fusion shape regularization for affine.for nests with constant bounds
+    and unit step.
+  }];
+  let constructor = "mlir::createLoopSliceSplitPass()";
+}
+
 def AKGLoopFusion : Pass<"akg-loop-fusion", "func::FuncOp"> {
   let summary = "Fuse compatible loops for optimization";
   let description = [{
@@ -241,6 +250,22 @@ def AffineReductionAnnotation : Pass<"affine-reduction-annotation", "func::FuncO
   ];
 }
 
+def ReductionSiblingRecompute : Pass<"reduction-sibling-recompute", "func::FuncOp"> {
+  let summary = "Recompute reduction temporaries in sibling loops to enable store/load elimination";
+  let description = [{
+    Runs on Reduction functions only. Finds sibling loops of reduction loops that load from local
+    buffers written in the reduction loop; replaces those loads with recomputed values (cloning
+    the producer and forwarding same-block store/load). Erases dead stores and unused allocs so
+    later passes can remove the remaining memory traffic.
+  }];
+  let constructor = "mlir::createReductionSiblingRecomputePass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "memref::MemRefDialect",
+    "mlir::affine::AffineDialect"
+  ];
+}
+
 def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::FuncOp"> {
   let summary = "Generate explicit copying for affine memory operations";
   let constructor = "mlir::affine::createAKGAffineDataCopyGenerationPass()";
@@ -269,14 +294,13 @@ def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::F
   ];
 }
 
-def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
-  let summary = "Convert bf16 operands to float32 in affine operations";
+def LegalizeTypeForAscend : Pass<"legalize-type-for-ascend", "func::FuncOp"> {
+  let summary = "Legalize bf16 and float types for Ascend (affine + arith)";
   let description = [{
-    This pass converts bf16 operands to float32 type in affine operations.
-    It inserts type conversion operations (arith::ExtFOp) to extend bf16 values
-    to float32 before they are used in affine operations.
+    Promotes bf16 compute to f32, narrows stores to bf16 memrefs, and legalizes
+    related affine.for / arith casts for Ascend pipelines.
   }];
-  let constructor = "mlir::createBF16ToF32Pass()";
+  let constructor = "mlir::createLegalizeTypeForAscendPass()";
   let dependentDialects = [
     "arith::ArithDialect",
     "affine::AffineDialect"
@@ -301,5 +325,31 @@ def Normalize : Pass<"normalize", "func::FuncOp"> {
     }];
     let constructor = "mlir::createNormalizePass()";
   }
+
+def HoistLoopIndependentOps: Pass<"hoist-loop-independent-ops", "func::FuncOp"> {
+  let summary = "Hoist top-level non-affine ops before the first affine.for when dependency-safe";
+  let description = [{
+    HoistLoopIndependentOps pass performs preprocessing operations before loop fusion.
+    It hoist top-level non-affine ops before the first affine.for when dependency-safe.
+  }];
+  let constructor = "mlir::createHoistLoopIndependentOpsPass()";
+}
+
+def BroadcastLoopHoist : Pass<"broadcast-loop-hoist", "func::FuncOp"> {
+  let summary = "Hoist broadcast loops outward to enable vectorization";
+  let description = [{
+    This pass identifies innermost broadcast loops and hoists them outward
+    by interchanging with their parent loops. This improves vectorization
+    opportunities by ensuring the broadcast dimension is not the innermost loop.
+  }];
+  let constructor = "mlir::createBroadcastLoopHoistPass()";
+  let options = [
+    Option<"insertIf", "insert-if", "bool", /*default=*/"false",
+           "Whether to insert an affine.if guard after loop interchange (default: false)">,
+  ];
+  let dependentDialects = [
+    "mlir::affine::AffineDialect"
+  ];
+}
 
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES

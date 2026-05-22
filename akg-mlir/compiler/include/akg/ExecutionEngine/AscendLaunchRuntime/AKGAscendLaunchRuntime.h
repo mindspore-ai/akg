@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2025 Huawei Technologies Co., Ltd
+ * Copyright 2024-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ namespace mlir {
 namespace runtime {
 class AscendKernelRuntime {
  public:
-  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool);
+  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream = nullptr);
   ~AscendKernelRuntime();
   bool Init();
   void SetContext();
@@ -65,23 +65,30 @@ class AscendKernelRuntime {
   uint32_t device_id() { return device_id_; }
   void *stream() { return stream_; }
 
+  static AscendKernelRuntime *GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream);
+
  private:
   bool InitDevice();
   bool ResetDevice(uint32_t device_id);
   void SetCurrentContext();
   void SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind);
-  void *GetKernelFunc(const std::string &path, const std::string &kernel_name, const std::string &func_name);
+  void *GetKernelFunc(const std::string &path, const std::string &kernel_name, const std::string &func_name,
+                      bool is_dynamic);
   bool UnLoadKernelFunc();
 
   aclrtContext rt_context_{nullptr};
   bool initialized_{false};
   uint32_t device_id_{0};
   void *stream_{nullptr};
+  bool owns_stream_{true};  // false when using external_stream from PTA
   std::shared_ptr<AscendMemoryManager> mem_manager_{nullptr};
   void *cce_handle_{nullptr};
   bool use_mem_pool_{true};
 };
 
+uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin_path);
+void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, std::vector<void *> args,
+                  bool is_dynamic = false);
 }  // namespace runtime
 }  // namespace mlir
 

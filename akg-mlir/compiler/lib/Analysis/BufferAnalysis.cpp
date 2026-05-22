@@ -20,6 +20,8 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <type_traits>
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -46,27 +48,6 @@ static std::optional<int64_t> getStaticTotalSize(ArrayRef<int64_t> shapes) {
     totalSize *= dim;
   }
   return totalSize;
-}
-
-/// Trace back to the original memref from aliasing operations.
-static Value tracebackMemRef(Value memrefVal) {
-  Value current = memrefVal;
-  while (true) {
-    if (auto subview = current.getDefiningOp<memref::SubViewOp>()) {
-      current = subview.getSource();
-    } else if (auto reshape = current.getDefiningOp<memref::ReshapeOp>()) {
-      current = reshape.getSource();
-    } else if (auto expand = current.getDefiningOp<memref::ExpandShapeOp>()) {
-      current = expand.getSrc();
-    } else if (auto collapse = current.getDefiningOp<memref::CollapseShapeOp>()) {
-      current = collapse.getSrc();
-    } else if (auto cast = current.getDefiningOp<memref::ReinterpretCastOp>()) {
-      current = cast.getSource();
-    } else {
-      break;
-    }
-  }
-  return current;
 }
 
 /// Check if an operation defines an alloc-like operation.
@@ -96,6 +77,23 @@ static bool canInplaceReuse(Value genBuffer, Value killBuffer, const llvm::Dense
   return genBitWidth == killBitWidth;
 }
 
+static bool isMemRefValue(Value value) { return isa<MemRefType>(value.getType()); }
+
+static bool isScalarTrackedValue(Value value) { return value.getType().isIntOrFloat(); }
+
+static bool isDefinedInsideRegion(Value value, Region &region) {
+  Operation *defOp = value.getDefiningOp();
+  if (defOp == nullptr) {
+    return false;
+  }
+  for (Region *parent = defOp->getParentRegion(); parent != nullptr; parent = parent->getParentRegion()) {
+    if (parent == &region) {
+      return true;
+    }
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // BufferAnalysis Implementation
 //===----------------------------------------------------------------------===//
@@ -113,6 +111,16 @@ SmallVector<std::pair<Value, Value>> getOperationAliasInfo(Operation *op) {
     }
   }
   return aliasPairs;
+}
+
+template <typename ForOpType>
+SmallVector<Value> getForOpYieldedValues(ForOpType forOp) {
+  if constexpr (std::is_same_v<ForOpType, mlir::affine::AffineForOp>) {
+    return forOp.getYieldedValues();
+  } else {
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    return SmallVector<Value>(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
+  }
 }
 }  // namespace
 
@@ -136,7 +144,7 @@ void BufferAnalysis::UpdateOpBufferInfo(Operation *op, const ValueRange &results
 
     if (auto memRefType = dyn_cast<MemRefType>(opType)) {
       // Handle MemRef type
-      Value traceValue = tracebackMemRef(operand);
+      Value traceValue = affine::getSourceMemRef(operand);
       auto tracedMemRefType = cast<MemRefType>(traceValue.getType());
       elementType = tracedMemRefType.getElementType();
       std::optional<int64_t> totalStaticSize = getStaticTotalSize(tracedMemRefType.getShape());
@@ -164,6 +172,9 @@ void BufferAnalysis::UpdateBufferAlias(Value buffer, Value aliasBuffer) {
 }
 
 void BufferAnalysis::UpdateBufferAlias(Value buffer, Value aliasBuffer, bool hasCond) {
+  if (!isMemRefValue(buffer) || !isMemRefValue(aliasBuffer)) {
+    return;
+  }
   SetVector<Value> buffers = GetAliasBuffers(buffer);
   SetVector<Value> aliasBuffers = GetAliasBuffers(aliasBuffer);
   buffers.insert(buffer);
@@ -203,6 +214,35 @@ SetVector<Value> BufferAnalysis::GetAliasBuffers(Value aliasBuffer) {
     }
   }
   return aliasBuffers;
+}
+
+void BufferAnalysis::MaterializeScalarResults(OpInfo *opInfo, const ValueRange &results) {
+  SmallVector<Value> scalarResults;
+  std::copy_if(results.begin(), results.end(), std::back_inserter(scalarResults),
+               [this](Value result) { return isScalarTrackedValue(result); });
+  if (scalarResults.empty()) {
+    return;
+  }
+  UpdateOpBufferInfo(opInfo->operation, ValueRange(scalarResults));
+  UpdateOpGenInfo(opInfo, ValueRange(scalarResults));
+}
+
+void BufferAnalysis::KillTransferredScalarSources(OpInfo *opInfo, Region &region, const ValueRange &sources) {
+  SetVector<Value> scalarSources;
+  for (Value source : sources) {
+    if (isScalarTrackedValue(source) && isDefinedInsideRegion(source, region)) {
+      scalarSources.insert(source);
+    }
+  }
+
+  for (Value source : scalarSources) {
+    auto iter = buffer2status.find(source);
+    if (iter == buffer2status.end() || iter->second != BufferStatus::GENED) {
+      continue;
+    }
+    genKillMap[opInfo].kill.push_back(source);
+    iter->second = BufferStatus::KILLED;
+  }
 }
 
 void BufferAnalysis::UpdateOpGenInfo(OpInfo *opInfo, const ValueRange &results) {
@@ -356,8 +396,11 @@ void BufferAnalysis::UpdateForOpInitArgsAliasImpl(ForOpType forOp) {
   }
   assert(inits.size() == forOp.getRegionIterArgs().size());
   for (auto [i, arg] : llvm::enumerate(inits)) {
-    // init args alias region iter args
-    UpdateBufferAlias(forOp.getRegionIterArgs()[i], arg);
+    Value iterArg = forOp.getRegionIterArgs()[i];
+    if (isMemRefValue(iterArg) && isMemRefValue(arg)) {
+      // init args alias region iter args
+      UpdateBufferAlias(iterArg, arg);
+    }
   }
 }
 
@@ -367,15 +410,7 @@ void BufferAnalysis::UpdateForOpBufferAliasImpl(ForOpType forOp) {
     return;
   }
 
-  // Get yielded values - different API for affine vs scf
-  SmallVector<Value> yieldedValues;
-  if constexpr (std::is_same_v<ForOpType, mlir::affine::AffineForOp>) {
-    yieldedValues = forOp.getYieldedValues();
-  } else {
-    // For SCF, get yielded values from the yield operation
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    yieldedValues = SmallVector<Value>(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
-  }
+  SmallVector<Value> yieldedValues = getForOpYieldedValues(forOp);
 
   if (!forOp.getRegionIterArgs().empty()) {
     assert(yieldedValues.size() == forOp.getRegionIterArgs().size());
@@ -387,14 +422,19 @@ void BufferAnalysis::UpdateForOpBufferAliasImpl(ForOpType forOp) {
     }
     assert(inits.size() == forOp.getRegionIterArgs().size());
     for (auto [i, arg] : llvm::enumerate(forOp.getRegionIterArgs())) {
-      // yielded values alias region iter args
-      UpdateBufferAlias(yieldedValues[i], arg);
+      if (isMemRefValue(yieldedValues[i]) && isMemRefValue(arg)) {
+        // yielded values alias region iter args
+        UpdateBufferAlias(yieldedValues[i], arg);
+      }
     }
   }
   assert(forOp->getResults().size() == yieldedValues.size());
   for (auto [i, arg] : llvm::enumerate(yieldedValues)) {
-    // forOp result values alias region iter yielded values
-    UpdateBufferAlias(forOp->getResult(i), arg);
+    Value result = forOp->getResult(i);
+    if (isMemRefValue(result) && isMemRefValue(arg)) {
+      // forOp result values alias region iter yielded values
+      UpdateBufferAlias(result, arg);
+    }
   }
 }
 
@@ -405,7 +445,10 @@ void BufferAnalysis::RecursiveForOpImpl(ForOpType forOp, Liveness live) {
   UpdateForOpInitArgsAliasImpl(forOp);
   RecursionIR(&forOp.getRegion(), live);
   UpdateForOpBufferAliasImpl(forOp);
+  SmallVector<Value> yieldedValues = getForOpYieldedValues(forOp);
   auto forEndSeq = UpdateLinearOperation(forOp.getOperation());
+  MaterializeScalarResults(forEndSeq, forOp->getResults());
+  KillTransferredScalarSources(forEndSeq, forOp.getRegion(), ValueRange(yieldedValues));
   OpKillHandle(forEndSeq, live, forOp->getBlock());
 }
 
@@ -420,8 +463,11 @@ void BufferAnalysis::UpdateIfOpBufferAliasImpl(IfOpType ifOp, YieldOpType yieldO
   }
   assert(ifOp->getResults().size() == yieldOp->getOperands().size());
   for (auto [i, arg] : llvm::enumerate(yieldOp->getOperands())) {
-    // Multiple buffers involved, requiring one-to-one correspondence
-    UpdateBufferAlias(ifOp->getResult(i), arg, /*hasCond=*/true);
+    Value result = ifOp->getResult(i);
+    if (isMemRefValue(result) && isMemRefValue(arg)) {
+      // Multiple buffers involved, requiring one-to-one correspondence
+      UpdateBufferAlias(result, arg, /*hasCond=*/true);
+    }
   }
 }
 
@@ -435,11 +481,14 @@ void BufferAnalysis::RecursiveIfOpImpl(IfOpType ifOp, Liveness live) {
   (void)UpdateLinearOperation(ifOp.getOperation());
   RecursionIR(&ifOp.getThenRegion(), live);
   auto curIfElse = UpdateLinearOperation(ifOp.getOperation());
+  SmallVector<Value> thenYieldedValues;
+  SmallVector<Value> elseYieldedValues;
 
   // Get then yield op
   if (!ifOp.getThenRegion().empty()) {
     auto &thenBlock = ifOp.getThenRegion().front();
     if (auto thenYield = dyn_cast<YieldOpType>(thenBlock.getTerminator())) {
+      thenYieldedValues = SmallVector<Value>(thenYield->getOperands().begin(), thenYield->getOperands().end());
       UpdateIfOpBufferAliasImpl(ifOp, thenYield);
     }
   }
@@ -460,10 +509,14 @@ void BufferAnalysis::RecursiveIfOpImpl(IfOpType ifOp, Liveness live) {
     if (!ifOp.getElseRegion().empty()) {
       auto &elseBlock = ifOp.getElseRegion().front();
       if (auto elseYield = dyn_cast<YieldOpType>(elseBlock.getTerminator())) {
+        elseYieldedValues = SmallVector<Value>(elseYield->getOperands().begin(), elseYield->getOperands().end());
         UpdateIfOpBufferAliasImpl(ifOp, elseYield);
       }
     }
   }
+  MaterializeScalarResults(curIfEnd, ifOp->getResults());
+  KillTransferredScalarSources(curIfEnd, ifOp.getThenRegion(), ValueRange(thenYieldedValues));
+  KillTransferredScalarSources(curIfEnd, ifOp.getElseRegion(), ValueRange(elseYieldedValues));
   OpKillHandle(curIfEnd, live, ifOp->getBlock());
 }
 
@@ -507,13 +560,7 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
     } else if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
       // Handle memref alloc
       UpdateOpBufferInfo(op, op->getResults());
-    } else if (auto affineLoadOp = dyn_cast<mlir::affine::AffineLoadOp>(op)) {
-      // AffineLoad produces a scalar result, register it as buffer
-      UpdateOpBufferInfo(op, op->getResults());
-      UpdateOpGenInfo(curOpInfo, op->getResults());
-      OpKillHandle(curOpInfo, live, op->getBlock());
-    } else if (auto memrefLoadOp = dyn_cast<memref::LoadOp>(op)) {
-      // memref.load produces a scalar result, register it as buffer (corresponding to affine.load)
+    } else if (isa<mlir::affine::AffineLoadOp, memref::LoadOp>(op)) {
       UpdateOpBufferInfo(op, op->getResults());
       UpdateOpGenInfo(curOpInfo, op->getResults());
       OpKillHandle(curOpInfo, live, op->getBlock());
@@ -523,23 +570,18 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
       // memref.store (corresponding to affine.store)
       UpdateStoreOpInfo(curOpInfo, memrefStoreOp.getMemRef(), live);
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
-      // Handle arith.select - establishes conditional alias relationships
-      UpdateBufferAlias(selectOp.getResult(), selectOp.getTrueValue(), /*hasCond=*/true);
-      UpdateBufferAlias(selectOp.getResult(), selectOp.getFalseValue(), /*hasCond=*/true);
+      UpdateOpBufferInfo(op, selectOp->getResults());
+      UpdateOpGenInfo(curOpInfo, selectOp->getResults());
       OpKillHandle(curOpInfo, live, op->getBlock());
     } else if (op->getNumResults() > 0) {
-      // Handle all other operations that produce results (arith ops, etc.)
-      bool hasScalarOrMemRefResult = false;
-      for (Value result : op->getResults()) {
+      auto results = op->getResults();
+      bool hasScalarOrMemRefResult = std::any_of(results.begin(), results.end(), [](Value result) {
         Type resultType = result.getType();
-        if (resultType.isIntOrFloat() || isa<MemRefType>(resultType)) {
-          hasScalarOrMemRefResult = true;
-          break;
-        }
-      }
+        return resultType.isIntOrFloat() || isa<MemRefType>(resultType);
+      });
       if (hasScalarOrMemRefResult) {
-        UpdateOpBufferInfo(op, op->getResults());
-        UpdateOpGenInfo(curOpInfo, op->getResults());
+        UpdateOpBufferInfo(op, results);
+        UpdateOpGenInfo(curOpInfo, results);
         OpKillHandle(curOpInfo, live, op->getBlock());
       }
     }

@@ -935,9 +935,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     auto loc = op.getLoc();
     auto input = op.getInput();
     auto inputTy = cast<ShapedType>(input.getType());
-    auto inputShape = inputTy.getShape();
     auto resultTy = cast<ShapedType>(op.getType());
-    auto resultShape = resultTy.getShape();
     auto elementTy = inputTy.getElementType();
     int64_t rank = inputTy.getRank();
     Value newShape = op.getNewShapeValue();
