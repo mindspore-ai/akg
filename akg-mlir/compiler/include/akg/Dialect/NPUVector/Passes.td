@@ -30,4 +30,30 @@ def OutlineVectorFunction : Pass<"outline-vector-function", "mlir::ModuleOp"> {
   let constructor = "mlir::npuvector::createOutlineVectorFunctionPass()";
 }
 
+def ElimScfIterArgs : Pass<"elim-scf-iter-args", "mlir::ModuleOp"> {
+  let summary = "The pass eliminates NPUVector-typed iter_args of scf.for via memref buffers";
+  let description = [{
+    This pass rewrites `scf.for` loops whose `iter_args` contain NPUVector
+    values into an equivalent form where cross-iteration data flow is
+    materialized through explicit `memref` buffers and
+    `npuvector.transfer_read` / `npuvector.transfer_write` ops, instead of
+    implicit SSA `iter_args`.
+
+    For each target loop, the pass:
+      1. Allocates one `memref` per NPUVector `iter_arg` before the loop and
+         seeds it with the original init value via `transfer_write`.
+      2. Rebuilds the loop without `iter_args`: reloads each value from its
+         buffer at the top of the body, clones the original body through an
+         `IRMapping`, and writes each yielded value back to its buffer at
+         the end of the body.
+      3. Reloads the final values from the buffers after the loop, replaces
+         all uses of the original `scf.for` results, and erases the old loop.
+
+    Loops are processed in reverse walk order so inner loops are rewritten
+    before their enclosing ones. Functions tagged with `kVectorFunctionAttr`
+    are skipped.
+  }];
+  let constructor = "mlir::npuvector::createElimScfIterArgsPass()";
+}
+
 #endif // AKG_MLIR_DIALECT_NPUVECTOR_PASSES
