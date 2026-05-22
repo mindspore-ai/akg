@@ -13,4 +13,4 @@
 # limitations under the License.
 # ============================================================================
 """__init__ file for AKG-MLIR Driver"""
-from .message import AkgMlirDriver
+from .mlir_driver import MlirDriver
