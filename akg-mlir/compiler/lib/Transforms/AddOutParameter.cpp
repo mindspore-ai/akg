@@ -66,13 +66,36 @@ static void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, unsigned nOutput
 }
 
 static bool isAliasOfOriginalInput(Value v, func::FuncOp func, unsigned origNumInputs) {
-  if (auto ba = mlir::dyn_cast<BlockArgument>(v)) {
-    Block *owner = ba.getOwner();
-    if (&func.front() != owner) return false;
-    unsigned idx = ba.getArgNumber();
-    return idx < origNumInputs;
+  while (true) {
+    if (auto ba = mlir::dyn_cast<BlockArgument>(v)) {
+      Block *owner = ba.getOwner();
+      if (&func.front() != owner)
+        return false;
+      unsigned idx = ba.getArgNumber();
+      return idx < origNumInputs;
+    }
+
+    Operation *def = v.getDefiningOp();
+    if (!def)
+      return false;
+
+    if (auto collapse = mlir::dyn_cast<memref::CollapseShapeOp>(def)) {
+      v = collapse.getSrc();
+      continue;
+    }
+
+    if (auto expand = mlir::dyn_cast<memref::ExpandShapeOp>(def)) {
+      v = expand.getSrc();
+      continue;
+    }
+
+    if (auto reshape = mlir::dyn_cast<memref::ReshapeOp>(def)) {
+      v = reshape.getSource();
+      continue;
+    }
+
+    return false;
   }
-  return false;
 }
 
 static LogicalResult collectOriginalReturnValues(func::FuncOp func, unsigned origNumResults,
@@ -107,6 +130,150 @@ static SmallVector<ReassociationIndices> parseReassociation(ArrayAttr reassocAtt
     result.push_back(std::move(inds));
   }
   return result;
+}
+
+struct ShapeOpInChain {
+  Operation *op;
+  Value src;
+  Value dst;
+};
+
+static bool isShapeOp(Operation *op) {
+  return isa<memref::ExpandShapeOp, memref::CollapseShapeOp, memref::ReshapeOp>(op);
+}
+
+static LogicalResult collectShapeChainToAlloc(Value v,
+                                              SmallVectorImpl<ShapeOpInChain> &chain,
+                                              memref::AllocOp &rootAlloc) {
+  Value cur = v;
+
+  while (true) {
+    Operation *def = cur.getDefiningOp();
+    if (!def) return failure();
+
+    if (auto alloc = dyn_cast<memref::AllocOp>(def)) {
+      rootAlloc = alloc;
+      return success();
+    }
+
+    if (!isShapeOp(def)) return failure();
+
+    if (def->getNumResults() != 1) return failure();
+
+    ShapeOpInChain elem;
+    elem.op  = def;
+    elem.dst = cur;
+    elem.src = def->getOperand(0);
+    chain.push_back(elem);
+
+    cur = elem.src;
+  }
+}
+
+static Value buildReshapeFromOut(OpBuilder &b, Location loc, MemRefType tmpTy, Value outArg,
+                                 ArrayRef<int64_t> staticDims) {
+  MLIRContext *ctx = b.getContext();
+  unsigned rank = tmpTy.getRank();
+
+  auto idxTy = IndexType::get(ctx);
+  auto shapeMemrefTy = MemRefType::get({static_cast<int64_t>(rank)}, idxTy);
+  Value shapeMemref = b.create<memref::AllocOp>(loc, shapeMemrefTy).getResult();
+
+  for (unsigned i = 0; i < rank; ++i) {
+    Value dimVal;
+    if (ShapedType::isDynamic(staticDims[i])) {
+      dimVal = b.create<memref::DimOp>(loc, outArg, i);
+    } else {
+      dimVal = b.create<arith::ConstantIndexOp>(loc, staticDims[i]);
+    }
+
+    Value idx = b.create<arith::ConstantIndexOp>(loc, i);
+    b.create<memref::StoreOp>(loc, dimVal, shapeMemref, ValueRange{idx});
+  }
+
+  auto newView = b.create<memref::ReshapeOp>(loc, tmpTy, outArg, shapeMemref);
+  return newView.getResult();
+}
+
+static LogicalResult buildInverseShapeChainOnOut(Value outArg,
+                                                 ArrayRef<ShapeOpInChain> chain,
+                                                 memref::AllocOp rootAlloc,
+                                                 Value &allocViewFromOut) {
+  if (chain.empty()) {
+    allocViewFromOut = outArg;
+    return success();
+  }
+
+  OpBuilder b(rootAlloc);
+  Value cur = outArg;
+
+  for (auto it = chain.begin(); it != chain.end(); ++it) {
+    Operation *op = it->op;
+
+    if (auto c = dyn_cast<memref::CollapseShapeOp>(op)) {
+      auto srcTy = cast<MemRefType>(c.getSrc().getType());
+      auto reassoc = parseReassociation(c.getReassociation());
+      auto newExpand =
+          b.create<memref::ExpandShapeOp>(c.getLoc(), srcTy, cur, reassoc);
+      cur = newExpand.getResult();
+    } else if (auto e = dyn_cast<memref::ExpandShapeOp>(op)) {
+      auto srcTy = cast<MemRefType>(e.getSrc().getType());
+      auto reassoc = parseReassociation(e.getReassociation());
+      auto newCollapse =
+          b.create<memref::CollapseShapeOp>(e.getLoc(), srcTy, cur, reassoc);
+      cur = newCollapse.getResult();
+    } else if (auto r = dyn_cast<memref::ReshapeOp>(op)) {
+      auto srcTy = dyn_cast<MemRefType>(r.getSource().getType());
+      if (!srcTy) return failure();
+
+      SmallVector<int64_t, 4> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
+      cur = buildReshapeFromOut(b, r.getLoc(), srcTy, cur, staticDims);
+    } else {
+      return failure();
+    }
+  }
+
+  if (cur.getType() != rootAlloc.getResult().getType()) {
+    rootAlloc.emitError()
+        << "inverse shape chain constructed value type " << cur.getType()
+        << " not matching alloc result type " << rootAlloc.getResult().getType();
+    return failure();
+  }
+
+  allocViewFromOut = cur;
+  return success();
+}
+
+static LogicalResult rewriteTempShapeChainToOutView(Value oldResVal, Value outArg) {
+  SmallVector<ShapeOpInChain, 4> chain;
+  memref::AllocOp rootAlloc;
+
+  if (failed(collectShapeChainToAlloc(oldResVal, chain, rootAlloc)))
+    return success();
+  Value allocViewFromOut;
+  if (failed(buildInverseShapeChainOnOut(outArg, chain, rootAlloc, allocViewFromOut)))
+    return failure();
+
+  Value allocResult = rootAlloc.getResult();
+  SmallVector<OpOperand *> usesToRewrite;
+  for (OpOperand &use : allocResult.getUses()) {
+    Operation *user = use.getOwner();
+    if (isShapeOp(user)) continue;
+    usesToRewrite.push_back(&use);
+  }
+  for (OpOperand *u : usesToRewrite)
+    u->set(allocViewFromOut);
+
+  oldResVal.replaceAllUsesWith(outArg);
+
+  for (auto &elem : chain) {
+    if (elem.op->use_empty())
+      elem.op->erase();
+  }
+  if (rootAlloc->use_empty())
+    rootAlloc->erase();
+
+  return success();
 }
 
 template <typename SrcOpTy, typename BackViewOpTy>
@@ -149,85 +316,6 @@ static LogicalResult rewriteSrcOutExpandOpToOutView(memref::ExpandShapeOp expand
 
 static LogicalResult rewriteSrcOutCollapseToOutView(memref::CollapseShapeOp collapseOp, Value outArg) {
   return rewriteSrcOutShapeOpToOutViewImpl<memref::CollapseShapeOp, memref::ExpandShapeOp>(collapseOp, outArg);
-}
-
-template <typename SrcOpTy, typename NewViewOpTy>
-static LogicalResult rewriteTempSourceToOutViewImpl(SrcOpTy srcOp, Value outArg) {
-  Value tmp = srcOp.getSrc();
-  auto tmpTy = dyn_cast<MemRefType>(tmp.getType());
-  auto outTy = dyn_cast<MemRefType>(outArg.getType());
-  if (!tmpTy || !outTy) return success();
-
-  auto reassoc = parseReassociation(srcOp.getReassociation());
-
-  Operation *tmpDef = tmp.getDefiningOp();
-  Value newViewVal;
-
-  if (!tmpDef) {
-    BlockArgument ba = mlir::cast<BlockArgument>(tmp);
-    Block *parentBlock = ba.getOwner();
-    if (!parentBlock) return success();
-
-    auto insertPt = parentBlock->begin();
-    OpBuilder b(parentBlock, insertPt);
-    auto newView = b.template create<NewViewOpTy>(srcOp.getLoc(), tmpTy, outArg, reassoc);
-    newViewVal = newView.getResult();
-  } else {
-    Block *parentBlock = tmpDef->getBlock();
-    auto insertPt = std::next(Block::iterator(tmpDef));
-    OpBuilder b(parentBlock, insertPt);
-    auto newView = b.template create<NewViewOpTy>(srcOp.getLoc(), tmpTy, outArg, reassoc);
-    newViewVal = newView.getResult();
-  }
-
-  SmallVector<OpOperand *> uses;
-  for (OpOperand &use : tmp.getUses()) {
-    if (use.getOwner() == srcOp) continue;
-    uses.push_back(&use);
-  }
-  for (auto *u : uses) u->set(newViewVal);
-
-  srcOp.getResult().replaceAllUsesWith(outArg);
-  srcOp.erase();
-
-  if (auto tmpAlloc = tmp.getDefiningOp<memref::AllocOp>()) {
-    if (tmpAlloc->use_empty()) tmpAlloc->erase();
-  }
-
-  return success();
-}
-
-static LogicalResult rewriteTempCollapseSourceToOutView(memref::CollapseShapeOp collapseOp, Value outArg) {
-  return rewriteTempSourceToOutViewImpl<memref::CollapseShapeOp, memref::ExpandShapeOp>(collapseOp, outArg);
-}
-
-static LogicalResult rewriteTempExpandSourceToOutView(memref::ExpandShapeOp expandOp, Value outArg) {
-  return rewriteTempSourceToOutViewImpl<memref::ExpandShapeOp, memref::CollapseShapeOp>(expandOp, outArg);
-}
-
-static Value buildReshapeFromOut(OpBuilder &b, Location loc, MemRefType tmpTy, Value outArg,
-                                 ArrayRef<int64_t> staticDims) {
-  MLIRContext *ctx = b.getContext();
-  unsigned rank = tmpTy.getRank();
-
-  auto idxTy = IndexType::get(ctx);
-  auto shapeMemrefTy = MemRefType::get({static_cast<int64_t>(rank)}, idxTy);
-  Value shapeMemref = b.create<memref::AllocOp>(loc, shapeMemrefTy).getResult();
-
-  for (unsigned i = 0; i < rank; ++i) {
-    Value dimVal;
-    if (ShapedType::isDynamic(staticDims[i])) {
-      dimVal = b.create<memref::DimOp>(loc, outArg, i);
-    } else {
-      dimVal = b.create<arith::ConstantIndexOp>(loc, staticDims[i]);
-    }
-
-    Value idx = b.create<arith::ConstantIndexOp>(loc, i);
-    b.create<memref::StoreOp>(loc, dimVal, shapeMemref, ValueRange{idx});
-  }
-
-  auto newView = b.create<memref::ReshapeOp>(loc, tmpTy, outArg, shapeMemref);
-  return newView.getResult();
 }
 
 static void tryEraseOldShapeMemref(Value tmpShape) {
@@ -362,7 +450,7 @@ static LogicalResult handleCollapseReturn(Value oldResVal, Value outArg, SmallVe
     return rewriteSrcOutCollapseToOutView(collapseOp, outArg);
   }
 
-  return rewriteTempCollapseSourceToOutView(collapseOp, outArg);
+  return rewriteTempShapeChainToOutView(oldResVal, outArg);
 }
 
 static LogicalResult handleExpandReturn(Value oldResVal, Value outArg, SmallVector<Value> &origReturnValues,
@@ -376,7 +464,7 @@ static LogicalResult handleExpandReturn(Value oldResVal, Value outArg, SmallVect
     return rewriteSrcOutExpandOpToOutView(expandOp, outArg);
   }
 
-  return rewriteTempExpandSourceToOutView(expandOp, outArg);
+  return rewriteTempShapeChainToOutView(oldResVal, outArg);
 }
 
 static LogicalResult handleReshapeReturn(Value oldResVal, Value outArg, SmallVector<Value> &origReturnValues,
@@ -422,6 +510,11 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
   }
 
   if (!maybeOutArg) {
+    func::FuncOp func = ret->getParentOfType<func::FuncOp>();
+    unsigned origNumInputs = func.getFunctionType().getNumInputs();
+    if (isAliasOfOriginalInput(oldResVal, func, origNumInputs)) {
+      return success();
+    }
     ret.emitError() << "no out-argument is assigned for this return value, "
                        "but it is not a block argument: "
                     << oldResVal;
@@ -484,7 +577,7 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
   ret.emitError() << "unsupported pattern for return value when converting to "
                      "out-parameter: "
                   << oldResVal;
-  return success();
+  return failure();
 }
 
 static LogicalResult handleAllReturns(func::FuncOp func, unsigned origNumResults, SmallVector<Value> maybeOutArgs,
@@ -528,21 +621,12 @@ static void eraseDeadOps(func::FuncOp func) {
   eraseDeadOpsOfType<memref::AllocOp>(func);
 }
 
-static void rebuildAllReturns(const SmallVectorImpl<func::ReturnOp> &returns, unsigned origNumResults,
-                              ArrayRef<bool> needOut, ArrayRef<Value> resultToOutArg) {
+// Rebuild all return ops as no-operand returns since the function no longer
+// has any results.
+static void rebuildAllReturns(const SmallVectorImpl<func::ReturnOp> &returns) {
   for (auto ret : returns) {
-    SmallVector<Value, 4> newRetOperands;
-    newRetOperands.reserve(origNumResults);
-    auto oldOps = ret.getOperands();
-    for (unsigned i = 0; i < origNumResults; ++i) {
-      if (needOut[i]) {
-        newRetOperands.push_back(resultToOutArg[i]);
-      } else {
-        newRetOperands.push_back(oldOps[i]);
-      }
-    }
     OpBuilder builder(ret);
-    builder.create<func::ReturnOp>(ret.getLoc(), newRetOperands);
+    builder.create<func::ReturnOp>(ret.getLoc());
     ret.erase();
   }
 }
@@ -595,7 +679,7 @@ static LogicalResult rewriteReturnsAndAllocToUseOutParams(func::FuncOp func, uns
 
   if (failed(handleAllReturns(func, origNumResults, resultToOutArg, origReturnValues))) return failure();
 
-  rebuildAllReturns(returns, origNumResults, needOut, resultToOutArg);
+  rebuildAllReturns(returns);
   eraseDeadOps(func);
 
   return success();
@@ -622,7 +706,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     newInputs.append(origInputs.begin(), origInputs.end());
     newInputs.append(origResults.begin(), origResults.end());
 
-    auto newFuncTy = FunctionType::get(ctx, newInputs, origResults);
+    // Function no longer returns anything.
+    auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
     func.setFunctionType(newFuncTy);
 
     setHaccIOArgAttrs(func, origNumInputs, origNumResults, builder);
@@ -660,7 +745,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     }
   }
 
-  auto newFuncTy = FunctionType::get(ctx, newInputs, origResults);
+  // Function no longer returns anything.
+  auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
   func.setFunctionType(newFuncTy);
 
   Block &entry = func.front();

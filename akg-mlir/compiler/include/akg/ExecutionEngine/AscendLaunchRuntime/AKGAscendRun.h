@@ -60,6 +60,7 @@ struct AscendTensorObjStructPyTorch{
 };
 
 using AscendTensorObjStructPyTorchPtr = std::shared_ptr<AscendTensorObjStructPyTorch>;
-extern "C" void akg_ascend_run(std::string path, std::string kernel_name,
-    int device_id, bool is_dynamic, bool use_mem_pool, const py::args &args);
+void akg_ascend_run(std::string path, std::string kernel_name,
+    int device_id, bool is_dynamic, bool use_mem_pool, const py::args &args,
+    py::kwargs kwargs);
 #endif  // COMPILER_INCLUDE_AKG_EXECUTIONENGINE_AKGASCENDLAUNCHRUNTIME_AKGASCENDRUN_H_

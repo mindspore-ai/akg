@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,17 @@ def LinalgTemplated: Pass<"linalg-template-named-ops", "ModuleOp"> {
     "memref::MemRefDialect",
     "fusion::FusionDialect",
     "vector::VectorDialect"
+  ];
+}
+
+def ShapeNormalization : Pass<"shape-normalization", "ModuleOp"> {
+  let summary = "Normalize shapes on memref IR (alloc/get_global/global/expand/collapse)";
+  let constructor = "mlir::createShapeNormalizationPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "memref::MemRefDialect",
+    "linalg::LinalgDialect",
+    "func::FuncDialect"
   ];
 }
 
@@ -125,6 +136,43 @@ def CloneTensorEmpty : Pass<"clone-tensor-empty", "func::FuncOp"> {
   let description = [{This pass clone different tensor.empty to linalg Op output}];
   let constructor = "mlir::createCloneTensorEmptyPass()";
   let dependentDialects = ["linalg::LinalgDialect", "tensor::TensorDialect"];
+}
+
+def EraseUnusedOperandsAndResults : Pass<"erase-unused-operands-and-results", "func::FuncOp"> {
+  let summary = "Erase unused linalg.generic operands and tensor results when safe";
+  let description = [{
+    Runs MLIR's `populateEraseUnusedOperandsAndResultsPatterns` on `linalg.generic`
+    with pure tensor semantics: drops dead outputs (and related indexing maps,
+    region args, yield operands) and redundant inputs when valid for loop bounds.
+  }];
+  let constructor = "mlir::createEraseUnusedOperandsAndResultsPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "tensor::TensorDialect"
+  ];
+}
+
+def CopyReturnedFuncArgs : Pass<"copy-returned-func-args", "func::FuncOp"> {
+  let summary = "Copy returned function arguments via linalg.copy (tensor) or alloc+linalg.copy (memref)";
+  let description = [{
+    When a `func.return` operand is a block argument of the function entry block
+    (i.e. a direct function input), this pass inserts a copy (`tensor.empty` +
+    `linalg.copy` for ranked tensors, `memref.alloc` + `linalg.copy` for memrefs)
+    before the return and replaces the operand with the copied value.
+  }];
+  let constructor = "mlir::createCopyReturnedFuncArgsPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "tensor::TensorDialect",
+    "memref::MemRefDialect",
+    "func::FuncDialect"
+  ];
+}
+
+def HoistTensorSlice : Pass<"hoist-tensor-slice", "func::FuncOp"> {
+  let summary = "Move tensor.extract_slice up to process the input.";
+  let constructor = "mlir::createHoistTensorSlicePass()";
+  let dependentDialects = [];
 }
 
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES

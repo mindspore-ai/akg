@@ -29,7 +29,8 @@ from collections import namedtuple
 from bfloat16 import bfloat16
 import numpy as np
 from .gen_random import random_gaussian, gen_indices, gen_csr_indices
-from .op_dsl import get_attr, get_op_dsl
+from .op_dsl import get_attr, get_op_dsl, get_op_dsl_torch_mlir
+from .torch_mlir_utils import torch_normalize_dtype
 
 
 def get_cpptype_from_pytype(pytype):
@@ -450,6 +451,7 @@ def _pack_matrix(data, feature):
 
 def _gen_input_item(tensor_name, infos, shape, dtype, csr_idx_pair, input_mean_value):
     """Gen input item."""
+    dtype = torch_normalize_dtype(dtype)
     item = None
     if tensor_name in infos["clean_input"]:
         item = np.zeros(shape).astype(dtype)
@@ -526,6 +528,7 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
         if infos["gen_data"]:
             shape = [1] if not output_desc["shape"] else output_desc["shape"]
             dtype = output_desc["data_type"]
+            dtype = torch_normalize_dtype(dtype)
             if dtype == "bfloat16":
                 dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
@@ -603,6 +606,18 @@ def _gen_op_compute(desc, commands):
                        operation['output_desc'], operation['attr'])
         commands.append(sent)
 
+def _gen_torch_op_compute(desc, commands):
+    """Generate torch op compute."""
+    for operation in desc["op_desc"]:
+        dsl_fun = get_op_dsl_torch_mlir().get(operation["name"], None)
+        if dsl_fun is None:
+            raise ValueError(f'op [{operation["name"]}] is not supported!')
+        attrs = operation.get("attr", [])
+        attrs = list(attrs)
+        attrs.append({"name": "process", "value": desc["process"]})
+        sent = dsl_fun(operation['input_desc'],
+                       operation['output_desc'], attrs)
+        commands.append(sent)
 
 def _update_inplace_tensors(infos, output_indexes, commands):
     """Update inplace tensors."""
@@ -676,7 +691,10 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     # Parse input_desc
     _gen_input_data(desc, infos, input_for_mod, commands)
     # Parse op_desc
-    _gen_op_compute(desc, commands)
+    if "ir_type" in desc and desc.get("ir_type") == "torch-mlir":
+        _gen_torch_op_compute(desc, commands)
+    else:
+        _gen_op_compute(desc, commands)
     # Parse output_desc
     _gen_output_data(desc, infos, input_for_mod, output_indexes, commands)
 

@@ -26,6 +26,7 @@
 #include "akg/Dialect/Affine/Transforms/AKGLoopParallelize.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopUnroll.h"
+#include "akg/Dialect/Affine/Transforms/LoopSliceSplit.h"
 #include "akg/Dialect/Affine/Transforms/AffineDataCopyGeneration.h"
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfExtract.h"
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfRestore.h"
@@ -40,13 +41,16 @@
 #include "akg/Dialect/Affine/Transforms/ForceConvertAffineForToAffineParallel.h"
 #include "akg/Dialect/Affine/Transforms/GenerateSingleAffineParallel.h"
 #include "akg/Dialect/Affine/Transforms/MergeFusionOp.h"
+#include "akg/Dialect/Affine/Transforms/ReductionSiblingRecompute.h"
 #include "akg/Dialect/Affine/Transforms/RemoveRedundantLoops.h"
 #include "akg/Dialect/Affine/Transforms/ReplaceUnknownDimsToOutputDim.h"
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
 #include "akg/Dialect/Affine/Transforms/UnifyShape.h"
 #include "akg/Dialect/Affine/Transforms/WorkaroundFixReduceInitialization.h"
-#include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
+#include "akg/Dialect/Affine/Transforms/LegalizeTypeForAscend.h"
+#include "akg/Dialect/Affine/Transforms/BroadcastLoopHoist.h"
 #include "akg/Dialect/Affine/Transforms/Normalize.h"
+#include "akg/Dialect/Affine/Transforms/HoistLoopIndependentOps.h"
 
 namespace mlir {
 namespace func {

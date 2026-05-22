@@ -1,3 +1,17 @@
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""AKG MLIR setup module."""
 import os
 import sys
 import glob
@@ -19,7 +33,7 @@ def _read_version():
         with open("version.txt", "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return "2.0.0"
+        return "3.0.0"
 
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -47,7 +61,10 @@ class AkgBuild(_build):
 
 
 class CMakeBuild(build_ext):
+    """CMake build class for AKG MLIR."""
+
     def copy_so(self, cmake_build_dir, target_dir):
+        """Copy shared library files."""
         dst = os.path.join(target_dir, "akg")
         os.makedirs(dst, exist_ok=True)
         generated_so_files = glob.glob(os.path.join(cmake_build_dir, "lib", '*.so'), recursive=True)
@@ -55,13 +72,14 @@ class CMakeBuild(build_ext):
             shutil.copy2(src, dst, follow_symlinks=False)
 
     def cmake_build(self, cmake_build_dir):
+        """Run CMake build."""
         cmake_config_args = [
-            f"cmake",
+            "cmake",
             f"-DCMAKE_BUILD_TYPE={CMAKE_BUILD_TYPE}",
-            f"{BASE_DIR}",
+            BASE_DIR,
         ]
         if AKG_ENABLE_BINDINGS_PYTHON:
-            cmake_config_args = [ f"-DAKG_ENABLE_BINDINGS_PYTHON=ON", ]
+            cmake_config_args = [ "-DAKG_ENABLE_BINDINGS_PYTHON=ON", ]
 
         if LLVM_INSTALL_DIR:
             cmake_config_args += [
@@ -70,12 +88,12 @@ class CMakeBuild(build_ext):
             ]
 
         cmake_build_args = [
-            f"cmake",
-            f"--build",
-            f".",
-            f"--config",
-            f"{CMAKE_BUILD_TYPE}",
-            f"--",
+            "cmake",
+            "--build",
+            ".",
+            "--config",
+            CMAKE_BUILD_TYPE,
+            "--",
             f"-j{MAX_JOBS}",
         ]
         try:
@@ -127,8 +145,11 @@ class CMakeExtension(Extension):
         self.sourcedir = os.path.abspath(sourcedir)
 
 
-class PythonPackageBuild(build_py, object):
+class PythonPackageBuild(build_py):
+    """Python package build class for AKG MLIR."""
+
     def get_src_py_and_dst(self):
+        """Get source and destination paths for Python files."""
         target_dir = self.build_lib
         ret = []
         generated_python_files = glob.glob(os.path.join(BASE_DIR, "python/akg_mlir", '**/*.py'), recursive=True)
@@ -138,11 +159,13 @@ class PythonPackageBuild(build_py, object):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             ret.append((src, dst))
         return ret
+
     def run(self) -> None:
+        """Run Python package build."""
         ret = self.get_src_py_and_dst()
         for src, dst in ret:
             self.copy_file(src, dst)
-        super(PythonPackageBuild, self).finalize_options()
+        super().finalize_options()
 
 # 读取 README.md 作为长描述
 with open("README.md", "r", encoding="utf-8") as fh:
