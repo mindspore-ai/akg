@@ -40,6 +40,7 @@ def TorchFuseRoPE : Pass<"torch-fuse-rope", "::mlir::ModuleOp"> {
   let description = [{
     Matches the RoPE pattern on Torch IR (slice/neg/cat + mul.Tensor + add.Tensor)
     and replaces it with a single torch.operator "torch.npu.npu_rotary_mul"(x, cos, sin).
+    Skips fusion when the RoPE input x has bf16 element type to avoid ACL numeric drift.
     Runs before convert-torch-to-mfuse.
   }];
   let constructor = "mlir::createTorchFuseRoPEPass()";
