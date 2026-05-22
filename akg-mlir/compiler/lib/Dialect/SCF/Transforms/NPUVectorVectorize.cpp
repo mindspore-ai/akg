@@ -3035,7 +3035,7 @@ static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, ArrayRef<Value>
     for (auto [scalarResult, finalResult] : llvm::zip(ctx.scalarLoop.getResults(), finalResults)) {
       ctx.parent->valueMapping.map(scalarResult, finalResult);
       if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(finalResult.getType())) {
-        if (nvt.getRank() > 1) {
+        if (nvt.getRank() > 0) {
           SmallVector<int> parentDimOrder;
           for (auto &[loop, localDim] : ctx.allLoopToVectorDim) {
             if (loop == ctx.scalarLoop.getOperation()) continue;
@@ -3043,7 +3043,7 @@ static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, ArrayRef<Value>
             if (pit != ctx.parent->allLoopToVectorDim.end()) parentDimOrder.push_back(static_cast<int>(pit->second));
           }
           llvm::sort(parentDimOrder);
-          ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
+          if (parentDimOrder.size() == nvt.getRank()) ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
         }
       }
     }
