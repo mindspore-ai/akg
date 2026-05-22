@@ -113,6 +113,11 @@ static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastR
     return false;
   }
 
+  Value otherOperand = user->getOperand(isLhs ? 1 : 0);
+  if (auto otherBroadcast = otherOperand.getDefiningOp<npuvector::BroadcastOp>()) {
+    if (isScalarType(otherBroadcast.getSource().getType())) return false;
+  }
+
   // The binary lowering path accepts a scalar RHS. A scalar LHS can only be
   // folded when the source op is commutative and can be swapped before lowering.
   return isRhs || user->hasTrait<OpTrait::IsCommutative>();
@@ -324,8 +329,56 @@ static FailureOr<Value> allocMemRef(ConversionPatternRewriter &rewriter, Locatio
   return allocOp.getResult();
 }
 
+static FailureOr<DenseI64ArrayAttr> inferElementwiseBroadcastAttr(Value lhs, Value rhs, MemRefType resultTy,
+                                                                  PatternRewriter &rewriter) {
+  SmallVector<int64_t> broadcastDims;
+  auto collectFromOperand = [&](Value operand) -> LogicalResult {
+    auto operandTy = dyn_cast<MemRefType>(operand.getType());
+    if (!operandTy) return success();
+    if (operandTy.getRank() != resultTy.getRank()) return failure();
+
+    for (int64_t i = 0; i < resultTy.getRank(); ++i) {
+      bool operandStaticOne = !operandTy.isDynamicDim(i) && operandTy.getDimSize(i) == 1;
+      bool resultStaticOne = !resultTy.isDynamicDim(i) && resultTy.getDimSize(i) == 1;
+      if (operandStaticOne && !resultStaticOne) {
+        broadcastDims.push_back(i);
+        continue;
+      }
+
+      if (!operandTy.isDynamicDim(i) && !resultTy.isDynamicDim(i) &&
+          operandTy.getDimSize(i) != resultTy.getDimSize(i)) {
+        return failure();
+      }
+    }
+    return success();
+  };
+
+  if (failed(collectFromOperand(lhs)) || failed(collectFromOperand(rhs))) return failure();
+
+  llvm::sort(broadcastDims);
+  broadcastDims.erase(std::unique(broadcastDims.begin(), broadcastDims.end()), broadcastDims.end());
+  return rewriter.getDenseI64ArrayAttr(broadcastDims);
+}
+
+static DenseI64ArrayAttr getElementwiseBroadcastAttr(Value lhs, Value rhs, Value resBuf, PatternRewriter &rewriter) {
+  auto resTy = dyn_cast<MemRefType>(resBuf.getType());
+  if (!resTy) return {};
+
+  auto inferredAttr = inferElementwiseBroadcastAttr(lhs, rhs, resTy, rewriter);
+  if (failed(inferredAttr)) return {};
+  return *inferredAttr;
+}
+
 template <typename HIVMOp>
 static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf) {
+  DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+
+  if (broadcastAttr && !broadcastAttr.empty()) {
+    rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
+                            rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+    return;
+  }
+
   rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf});
 }
 
@@ -339,6 +392,13 @@ struct HIVMElementwiseBinaryCreator {
 template <>
 struct HIVMElementwiseBinaryCreator<hivm::VShROp> {
   static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf) {
+    DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+    if (broadcastAttr && !broadcastAttr.empty()) {
+      rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
+                                    rewriter.getBoolAttr(true), rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+      return;
+    }
+
     rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                                   rewriter.getBoolAttr(true));
   }
@@ -826,7 +886,13 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
 
-    rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
+    DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+    if (broadcastAttr && !broadcastAttr.empty()) {
+      rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
+                                    rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+    } else {
+      rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
+    }
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -914,7 +980,13 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
 
-    rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
+    DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+    if (broadcastAttr && !broadcastAttr.empty()) {
+      rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
+                                    rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+    } else {
+      rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
+    }
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -2631,19 +2703,30 @@ static FailureOr<Value> expandMemRefRankWithBroadcastMapping(PatternRewriter &re
   return cur;
 }
 
-// Constant scalar with only foldable users: replace broadcast by the source value.
-static bool tryFoldBroadcast(npuvector::BroadcastOp op, Value source, ConversionPatternRewriter &rewriter) {
-  auto constOp = source.getDefiningOp<arith::ConstantOp>();
-  TypedAttr scalarAttr;
-  if (constOp) {
-    if (auto ta = dyn_cast<TypedAttr>(constOp.getValue())) scalarAttr = isa<DenseElementsAttr>(ta) ? TypedAttr{} : ta;
+static bool isSupportedBroadcastVectorFoldUser(Operation *user, Value broadcastResult) {
+  if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumOperands() != 2) {
+    return false;
   }
+
+  if (user->getOperand(0) != broadcastResult && user->getOperand(1) != broadcastResult) {
+    return false;
+  }
+
+  return !isa<arith::MulSIExtendedOp, arith::MulUIExtendedOp>(user);
+}
+
+static bool tryFoldScalarBroadcast(npuvector::BroadcastOp op, Value source, ConversionPatternRewriter &rewriter) {
+  if (!isScalarType(source.getType())) return false;
+
   Value broadcastVal = op.getResult();
   const bool hasNonFoldUser = llvm::any_of(broadcastVal.getUsers(), [broadcastVal](Operation *user) {
     return !isSupportedBroadcastScalarFoldUser(user, broadcastVal) && !isa<annotation::MarkOp>(user);
   });
-  if (!scalarAttr || hasNonFoldUser) return false;
+  if (hasNonFoldUser) return false;
+
   rewriter.replaceOp(op, source);
+
+  auto constOp = source.getDefiningOp<arith::ConstantOp>();
   if (constOp && constOp->getResult(0).use_empty()) rewriter.eraseOp(constOp);
   return true;
 }
@@ -2732,6 +2815,29 @@ static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, 
   return success();
 }
 
+static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemRefType dstMemTy,
+                                   npuvector::NPUVectorType npuVecType, Type elemType, Location loc,
+                                   ConversionPatternRewriter &rewriter) {
+  if (!isa<MemRefType>(source.getType())) return false;
+
+  Value broadcastVal = op.getResult();
+  const bool hasNonFoldUser = llvm::any_of(broadcastVal.getUsers(), [broadcastVal](Operation *user) {
+    return !isSupportedBroadcastVectorFoldUser(user, broadcastVal) && !isa<annotation::MarkOp>(user);
+  });
+  if (hasNonFoldUser) return false;
+
+  Value vbrcSrc;
+  DenseI64ArrayAttr broadcastDimsAttr;
+  if (failed(
+        prepareMemrefVbrc(op, source, dstMemTy, npuVecType, elemType, loc, rewriter, vbrcSrc, broadcastDimsAttr))) {
+    return false;
+  }
+  if (broadcastDimsAttr.empty()) return false;
+
+  rewriter.replaceOp(op, vbrcSrc);
+  return true;
+}
+
 struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::BroadcastOp> {
   using OpConversionPattern<npuvector::BroadcastOp>::OpConversionPattern;
 
@@ -2758,7 +2864,8 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     }
     auto memRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
-    if (tryFoldBroadcast(op, source, rewriter)) return success();
+    if (tryFoldScalarBroadcast(op, source, rewriter)) return success();
+    if (tryFoldVectorBroadcast(op, source, memRefType, npuVecType, elemType, loc, rewriter)) return success();
 
     Value resultBuf;
     if (failed(allocBroadcastBuffer(op, loc, memRefType, npuVecType, elemType, adaptor.getDynamicSizes(), rewriter,
