@@ -4,6 +4,7 @@ set(AKG_MLIR_LIBS
   AKGTensorPasses
   AKGLLVMIRPasses
   AKGMLIRAnalysis
+  AKGNPUVectorPasses
   )
 
 set(LIBS

@@ -26,6 +26,7 @@ set(LIBS
   MLIRSparseTensorTransforms
   MLIRBufferizationTransforms
   MLIRArithValueBoundsOpInterfaceImpl
+  MLIRPolynomialDialect
   )
 
 link_directories(${AKG_BIN_LIB_DIR})

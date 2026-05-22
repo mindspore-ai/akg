@@ -205,7 +205,9 @@ def bisheng_compile(input_file,
                     enable_bin_relocation=False,
                     block_dim=40,
                     dump_ir=False,
-                    dump_ir_path=None):
+                    dump_ir_path=None,
+                    arch=None,
+                    ):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
@@ -228,8 +230,7 @@ def bisheng_compile(input_file,
         input_file,
         "-o",
         output_file,
-        f"-block-dim={block_dim}",
-        "-disable-auto-cv-work-space-manage"
+        f"-block-dim={block_dim}"
     ]
 
     if enable_hfusion_compile:
@@ -243,6 +244,12 @@ def bisheng_compile(input_file,
     if dump_ir:
         compile_cmd.append("-mlir-print-ir-after-all")
 
+    if isinstance(arch, str) and (
+        arch.startswith("Ascend910_95") or arch.startswith("Ascend950DT") or arch.startswith("Ascend950PR")
+    ):
+        compile_cmd.append(f"-target={arch}")
+    else:
+        compile_cmd.append("-disable-auto-cv-work-space-manage")
 
     logging.debug("exec command: %s", compile_cmd)
     try:
@@ -322,6 +329,7 @@ def ascend_compile(
         block_dim=block_dim,
         dump_ir=dump_ir,
         dump_ir_path=dump_ir_path,
+        arch=arch,
     )
 
 

@@ -85,6 +85,11 @@ def _get_kernel_name(desc):
     json_obj = _get_json_dict(desc)
     return json_obj["op"]
 
+def _get_arch_name(desc):
+    json_obj = _get_json_dict(desc)
+    target_info = json_obj.get("target_info", {})
+    return target_info.get("arch", "")
+
 def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=compare_tolerance, atol=compare_tolerance)
 
@@ -174,6 +179,7 @@ def run_a_kernel(desc,
         backend = _auto_get_target(desc)
 
     kernel_name = _get_kernel_name(desc)
+    arch = _get_arch_name(desc)
     # Generate data
     input_for_mod, expect, output_indexes = gen_json_data(
         static_desc if is_dyn_shape else desc, with_compute=True)
@@ -189,7 +195,8 @@ def run_a_kernel(desc,
                              repo_path=repo_path,
                              profiling_trails=profiling_trails,
                              runtime_provider="MLIR",
-                             enable_loop_fusion=enable_loop_fusion)
+                             enable_loop_fusion=enable_loop_fusion,
+                             arch=arch)
 
     mlir_driver.compile()
     mlir_driver.run(input_for_mod, output_indexes)
