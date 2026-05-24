@@ -26,7 +26,8 @@ sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 from akg.akgAscendLaunch import get_host_functions, get_device_function, torch_launch
 sys.setdlopenflags(flags)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
 
 
 class Kernel:

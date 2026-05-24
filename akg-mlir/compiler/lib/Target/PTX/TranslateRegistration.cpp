@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,12 +26,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/TypeID.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
-
-using namespace mlir;
 
 namespace mlir {
 
@@ -44,6 +44,10 @@ void registerToPTXTranslation() {
   static llvm::cl::opt<std::string> arch("arch", llvm::cl::desc("architecture"), llvm::cl::init("sm_70"),
                                          llvm::cl::cat(PTXCodeGenCat));
 
+  // Register pass manager options to ensure applyPassManagerCLOptions works
+  registerPassManagerCLOptions();
+  registerMLIRContextCLOptions();
+
   TranslateFromMLIRRegistration reg(
     "gen-ptx", "generate ptx code",
     [](ModuleOp module, raw_ostream &output) { return mlir::translateToPTX(module, output, kernelName, arch); },
@@ -51,6 +55,7 @@ void registerToPTXTranslation() {
       registerAllDialects(registry);
       registerLLVMDialectTranslation(registry);
       registerNVVMDialectTranslation(registry);
+      registerGPUDialectTranslation(registry);
     });
 }
 
