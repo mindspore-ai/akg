@@ -161,7 +161,7 @@ def akg_opt(
                 output_dir = os.path.dirname(output_file)
                 log_file_name = os.path.basename(output_file) + ".log"
                 dump_ir_path = os.path.join(output_dir, log_file_name)
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
                 f.write(result.stderr)
         logging.debug("akg-opt pipeline success")
         return result
@@ -257,7 +257,7 @@ def bisheng_compile(input_file,
             if not dump_ir_path:
                 log_file_name = os.path.basename(output_file) + ".log"
                 dump_ir_path = os.path.join(output_dir, log_file_name)
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
                 f.write(result.stderr)
         check_ascend_compile(output_file)
     except subprocess.CalledProcessError as e:
