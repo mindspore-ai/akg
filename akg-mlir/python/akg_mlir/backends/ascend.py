@@ -65,9 +65,9 @@ def get_block_dim_from_mlir(mlir_path):
         text = f.read()
     match = _BLOCK_DIM_MLIR_RE.search(text)
     if not match:
-        raise ValueError(
-            f"No hacc.block_dim = <n> : i64 attribute found in {mlir_path}"
-        )
+        logging.error("get block number failed, No hacc.block_dim = <n> : i64 attribute found in %s, "
+                      "using 48 as default", mlir_path)
+        return 48
     return int(match.group(1))
 
 def set_ascend_info(core_type, title_dict):

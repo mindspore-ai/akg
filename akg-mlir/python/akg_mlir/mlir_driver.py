@@ -439,6 +439,10 @@ class MlirDriver:
         if self.dump_ir:
             dump_ir_path = os.path.join(self.output_dir, kernel_name + "_opt.log")
 
+        if not self.enable_loop_fusion and self.input_file.endswith(".mlir"):
+            shutil.copy(input_file, out_file)
+            return
+
         akg_opt(
             input_file=input_file,
             output_file=out_file,
