@@ -250,18 +250,15 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
 
     input_file = pathlib.Path(file_path)
     if info_file.suffix == ".mlir":
-        run_torch_mlir_to_json(compile_args.torch_mlir_opt, info_file)
         mlir = input_file.read_text(encoding='utf-8')
         kernel_name = find_first_func_name(mlir)
         if not kernel_name:
             raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
-        info_file = pathlib.Path.cwd() / f"{kernel_name}_.json"
-        if not info_file.exists():
-            raise RuntimeError(f"Cannot find torch-to-json output: {info_file}")
-
+        info_file = dump_dir / f"{kernel_name}_.info"
+        run_torch_mlir_to_json(input_file, info_file)
         if compile_args.akg_fusion:
             input_file = dump_dir / f"{kernel_name}_linalg.mlir"
-            run_torch_mlir_to_linalg_on_tensors(compile_args.torch_mlir_opt, file_path, input_file)
+            run_torch_mlir_to_linalg_on_tensors(file_path, input_file)
         else:
             input_file = dump_dir / f"{kernel_name}_hfusion.mlir"
             get_named_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
@@ -357,10 +354,6 @@ def main(args=None):
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
-    parser.add_argument("--torch-mlir-opt",
-                        type=str,
-                        default="torch-mlir-opt",
-                        help="Path to torch-mlir-opt binary")
     args = parser.parse_args()
     _create_dirs()
     if args.dir:
