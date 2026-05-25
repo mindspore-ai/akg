@@ -9,6 +9,7 @@ metadata:
   hardware: "Atlas A5"
   note: "A5(Ascend950) Cube/Vector 亲和接口串行版"
   operator_type: "attention"
+  requires_affinity: true
 ---
 
 # A5 Flash Attention 串行优化指南

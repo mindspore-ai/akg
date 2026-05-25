@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A5"
   operator_type: "attention"
+  requires_affinity: true
 ---
 
 # A5 Flash Attention — 实现示例
