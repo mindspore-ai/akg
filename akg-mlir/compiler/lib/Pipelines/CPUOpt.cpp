@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include "akg/Pipelines/CPUOpt.h"
 
-#include <nlohmann/json.hpp>
 #include <string>
+#include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/CPU/Passes.h"
@@ -50,20 +50,18 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
-using namespace mlir;
-using namespace akgglobal;
-
+namespace mlir {
 namespace {
 void jsonToLinalg(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   // Conversion: MindSpore Dialect -> Linalg
   OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
   if (options.dynamicShape) {
-    nestedFunctionPM.addPass(mlir::createInferSymbolicShapesPass());
+    nestedFunctionPM.addPass(createInferSymbolicShapesPass());
   }
-  nestedFunctionPM.addPass(mlir::createRemoveRedundantReducePass());
+  nestedFunctionPM.addPass(createRemoveRedundantReducePass());
   bool IgnoreImplicitBroadcast = true;
-  nestedFunctionPM.addPass(mlir::createMakeDynamicBroadcastablePass(IgnoreImplicitBroadcast));
-  nestedFunctionPM.addPass(mlir::createMindSporeToTosaPass());
+  nestedFunctionPM.addPass(createMakeDynamicBroadcastablePass(IgnoreImplicitBroadcast));
+  nestedFunctionPM.addPass(createMindSporeToTosaPass());
   nestedFunctionPM.addPass(tosa::createTosaMakeBroadcastablePass());
   nestedFunctionPM.addPass(createCanonicalizerPass());
   nestedFunctionPM.addPass(createAKGOperatorIdentifyPass());
@@ -74,8 +72,8 @@ void jsonToLinalg(OpPassManager &pm, const CpuOptPipelineOptions &options) {
     nestedFunctionPM.addPass(createCanonicalizerPass());
   }
 
-  nestedFunctionPM.addPass(mlir::createMindSporeToLinalgPass());
-  nestedFunctionPM.addPass(mlir::createMindSporeFinalizingLowerPass());
+  nestedFunctionPM.addPass(createMindSporeToLinalgPass());
+  nestedFunctionPM.addPass(createMindSporeFinalizingLowerPass());
 
   // Conversion TOSA -> Linalg
   if (options.cpuFast) {
@@ -165,7 +163,8 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(createConvertVectorToLLVMPass());
   pm.addPass(createArithToLLVMConversionPass());
   pm.addPass(createConvertMathToLLVMPass());
-  mlir::MLIRContext tmp_context;
+  pm.addPass(createFinalizeMemRefToLLVMConversionPass());
+  MLIRContext tmp_context;
   ConvertFuncToLLVMPassOptions llvmOptions;
   llvmOptions.useBarePtrCallConv = true;
   pm.addPass(createConvertFuncToLLVMPass(llvmOptions));
@@ -194,12 +193,12 @@ void createCpuOptPipelineImpl(OpPassManager &pm, const CpuOptPipelineOptions &op
   if (options.cpuFast) {
     OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
     nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
-    nestedFunctionPM.addPass(mlir::createLinalgExtLowerPass());
+    nestedFunctionPM.addPass(createLinalgExtLowerPass());
     affinePreprocess(pm, options);
     affineOptimize(pm, options);
   } else {
     OpPassManager &nestedFunctionPM1 = pm.nest<func::FuncOp>();
-    nestedFunctionPM1.addPass(mlir::createLinalgExtLowerPass());
+    nestedFunctionPM1.addPass(createLinalgExtLowerPass());
     pm.addPass(createConvertLinalgToLoopsPass());
     pm.addPass(createConvertShapeToStandardPass());
     pm.addPass(createCanonicalizerPass());
@@ -209,7 +208,6 @@ void createCpuOptPipelineImpl(OpPassManager &pm, const CpuOptPipelineOptions &op
 }
 }  // namespace
 
-namespace mlir {
 void createCpuOptPipeline(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   if (options.dynamicShape) {
     assert(options.cpuFast);

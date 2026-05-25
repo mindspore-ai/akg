@@ -1,4 +1,4 @@
-# Copyright 2025 Huawei Technologies Co., Ltd
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -102,13 +102,13 @@ def get_akg_opt_path(akg_tools_dir=None):
 def akg_opt(
     input_file,
     output_file,
-    akg_tools_dir=None,
     dyn_shape=False,
-    enable_loop_fusion=False,
+    enable_loop_fusion=True,
+    enable_hivm_compile=False,
     arch=None,
     dump_ir=False,
     mlir_timing=False,
-    dump_log_path=None,
+    dump_ir_path=None,
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -116,13 +116,12 @@ def akg_opt(
     Args:
         input_file: Input MLIR file path
         output_file: Output MLIR file path
-        akg_tools_dir: Directory containing akg tools (default: auto-detect)
         dyn_shape: Whether to enable dynamic shape optimization
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
         mlir_timing: Whether to print every pass time
-        dump_log_path: Path to dump log file (optional)
+        dump_ir_path: Path to dump log file (optional)
 
     Returns:
         subprocess.CompletedProcess result
@@ -132,7 +131,7 @@ def akg_opt(
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    akg_opt_path = get_akg_opt_path(akg_tools_dir)
+    akg_opt_path = get_akg_opt_path()
 
     # Build ascend-opt option
     ascend_opt_option = "--ascend-opt"
@@ -141,7 +140,7 @@ def akg_opt(
     if dyn_shape:
         options.append("dynamic-shape=true")
     if not enable_loop_fusion:
-        options.append("enable-loop-fusion=0")
+        options.append("enable-loop-fusion=false")
     if arch:
         options.append(f"arch={arch}")
 
@@ -158,14 +157,11 @@ def akg_opt(
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if dump_ir:
-            if not dump_log_path:
+            if not dump_ir_path:
                 output_dir = os.path.dirname(output_file)
-                base_name = os.path.basename(output_file)
-                kernel_name, _ = os.path.splitext(base_name)
-                if kernel_name.endswith("_out"):
-                    kernel_name = kernel_name[: -len("_out")]
-                dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
-            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                log_file_name = os.path.basename(output_file) + ".log"
+                dump_ir_path = os.path.join(output_dir, log_file_name)
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
                 f.write(result.stderr)
         logging.debug("akg-opt pipeline success")
         return result
@@ -174,20 +170,20 @@ def akg_opt(
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
 
-def check_ascend_compile(output_so_path):
+def check_ascend_compile(output_file):
     """Assert bishengir output exists: non-empty ``.o`` or ``.so`` for the ``-o`` path.
 
     Checks ``-o`` target first, then same-stem ``.so``/``.o`` alternate.
 
     Args:
-        output_so_path: Path passed to bishengir ``-o`` (same stem as ``.o``/``.so``).
+        output_file: Path passed to bishengir ``-o`` (same stem as ``.o``/``.so``).
 
     Raises:
         RuntimeError: If neither artifact exists or both are empty.
     """
-    root, ext = os.path.splitext(output_so_path)
+    root, ext = os.path.splitext(output_file)
     ext = ext.lower()
-    cands = [output_so_path]
+    cands = [output_file]
     if ext == ".so":
         cands.append(root + ".o")
     elif ext == ".o":
@@ -195,42 +191,58 @@ def check_ascend_compile(output_so_path):
     for p in cands:
         if os.path.isfile(p) and os.path.getsize(p) > 0:
             return
-    logging.error("bishengir-compile: .o/.so not found at %s", output_so_path)
+    logging.error("bishengir-compile: .o/.so not found at %s", output_file)
     raise RuntimeError(
-        "generate ascend binary: .o or .so not found at " + output_so_path
+        "generate ascend binary: .o or .so not found at " + output_file
     ) from None
 
 
-def ascend_compile(input_file, output_so_path, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
+def bisheng_compile(input_file,
+                    output_file,
+                    enable_hfusion_compile=False,
+                    enable_hivm_compile=True,
+                    enable_auto_multi_buffer=True,
+                    enable_bin_relocation=False,
+                    block_dim=40,
+                    dump_ir=False,
+                    dump_ir_path=None):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
         input_file: Input MLIR file path
-        output_so_path: Output .so file path
-        enable_loop_fusion: Whether loop fusion is enabled in pipeline
+        output_file: Output file
+        enable_hfusion_compile: Whether hfusion compile pipeline
+        enable_hivm_compile: Whether hivm compile pipeline
+        enable_auto_multi_buffer: Whether enabled auto mulit buffer in hivm compile pipeline
+        enable_bin_relocation: Whether enabled relocation,
         dump_ir: Whether to dump bishengir-compile stderr log
-        dump_log_path: Optional path to dump bishengir-compile stderr log.
+        dump_ir_path: Optional path to dump bishengir-compile log.
 
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
-    block_dim = get_block_dim_from_mlir(input_file)
+    output_dir = os.path.dirname(output_file)
+
 
     compile_cmd = [
         "bishengir-compile",
         input_file,
-        "-enable-hivm-compile=true",
-        "-enable-bin-relocation=false",
-        f"-block-dim={block_dim}",
-        "-enable-auto-multi-buffer=true",
-        "-disable-auto-cv-work-space-manage",
         "-o",
-        output_so_path
+        output_file,
+        f"-block-dim={block_dim}",
+        "-disable-auto-cv-work-space-manage"
     ]
 
-    if enable_loop_fusion:
-        compile_cmd.append("-enable-hfusion-compile=false")
-    else:
-        compile_cmd.append("-enable-hfusion-compile=true")
+    if enable_hfusion_compile:
+        compile_cmd.append("-enable-hfusion-compile")
+    if enable_hivm_compile:
+        compile_cmd.append("-enable-hivm-compile")
+    if enable_auto_multi_buffer:
+        compile_cmd.append("-enable-auto-multi-buffer")
+    if enable_bin_relocation:
+        compile_cmd.append("-enable-bin-relocation")
+    if dump_ir:
+        compile_cmd.append("-mlir-print-ir-after-all")
+
 
     logging.debug("exec command: %s", compile_cmd)
     try:
@@ -241,23 +253,76 @@ def ascend_compile(input_file, output_so_path, enable_loop_fusion=True, dump_ir=
             text=True,
             check=True,
         )
-        if dump_ir and dump_log_path:
-            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+        if dump_ir and dump_ir_path:
+            if not dump_ir_path:
+                log_file_name = os.path.basename(output_file) + ".log"
+                dump_ir_path = os.path.join(output_dir, log_file_name)
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
                 f.write(result.stderr)
-        check_ascend_compile(output_so_path)
+        check_ascend_compile(output_file)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-        if dump_ir and dump_log_path:
-            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+        if dump_ir and dump_ir_path:
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(str(e))
         raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
     logging.debug("generate ascend binary success")
 
-    output_dir = os.path.dirname(output_so_path)
-    kernel_name = os.path.splitext(os.path.basename(output_so_path))[0]
+    kernel_name = os.path.splitext(os.path.basename(output_file))[0]
     if kernel_name.startswith("lib"):
         kernel_name = kernel_name[3:]
     dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
+
+def ascend_compile(
+    input_file,
+    output_file,
+    dyn_shape=False,
+    enable_loop_fusion=True,
+    arch=None,
+    dump_ir=False,
+    mlir_timing=False,
+    dump_ir_path=None):
+    """
+    Run MLIR compile for Ascend backend.
+
+    Args:
+        input_file: Input MLIR file path
+        output_file: Output ascend binary file
+        dyn_shape: Whether to enable dynamic shape optimization
+        arch: Architecture specification (optional)
+        dump_ir: Whether to dump IR after all passes
+        mlir_timing: Whether to print every pass time
+        dump_ir_path: Path to dump log file (optional)
+
+    Returns:
+        subprocess.CompletedProcess result
+
+    Raises:
+        RuntimeError: If compile execution fails
+    """
+
+    output_dir = os.path.dirname(output_file)
+    opt_file_name = os.path.basename(output_file) + "_opt"
+    opt_file = os.path.join(output_dir, f"{opt_file_name}.mlir")
+    akg_opt(
+        input_file=input_file,
+        output_file=opt_file,
+        dyn_shape=dyn_shape,
+        enable_loop_fusion=enable_loop_fusion,
+        arch=arch,
+        dump_ir=dump_ir,
+        mlir_timing=mlir_timing,
+        dump_ir_path=dump_ir_path,
+    )
+    block_dim = get_block_dim_from_mlir(opt_file)
+    bisheng_compile(
+        opt_file,
+        output_file,
+        enable_hfusion_compile=not enable_loop_fusion,
+        block_dim=block_dim,
+        dump_ir=dump_ir,
+        dump_ir_path=dump_ir_path,
+    )
 
 
 def _get_device_shape_for_dyn(data, kernel_name, work_dir):
@@ -334,7 +399,7 @@ def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_d
     return result
 
 
-def benckmark_launch(
+def benchmark_launch(
     work_dir,
     kernel_name,
     device_id,

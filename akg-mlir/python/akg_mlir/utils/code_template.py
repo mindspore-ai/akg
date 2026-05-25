@@ -1,6 +1,21 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Code template for runtime"""
+
 cuda_runtime_template = '''
 /**
- * Copyright 2023-2025 Huawei Technologies Co., Ltd
+ * Copyright 2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +41,7 @@ cuda_runtime_template = '''
 #include <numeric>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include<iomanip>
+#include <iomanip>
 #include <cuda_fp16.h>
 
 #define checkCudaDrvErrors(call)                                                                                   \\
@@ -217,7 +232,7 @@ cpu_profiling_template = '''
     llvm.return
   }
   llvm.func @_mlir_ciface_nanoTime() -> i64 attributes {llvm.emit_c_interface, sym_visibility = "private"}
-  llvm.func @main(INPUTS_NAME : INPUTS_PTR, %arg_time: !llvm.ptr<i64>) attributes {llvm.emit_c_interface, sym_visibility = "public"} {
+  llvm.func @main(INPUTS_NAME : INPUTS_PTR, %arg_time: !llvm.ptr) attributes {llvm.emit_c_interface, sym_visibility = "public"} {
     %c0 = llvm.mlir.constant(0 : index) : i64
     %c1 = llvm.mlir.constant(1 : index) : i64
     %ctimes = llvm.mlir.constant(CTIMES : index) : i64
@@ -234,7 +249,7 @@ cpu_profiling_template = '''
   ^bb3:  // pred: ^bb1
     %4 = llvm.call @nanoTime() : () -> i64
     %5 = llvm.sub %4, %0  : i64
-    llvm.store %5, %arg_time : !llvm.ptr<i64>
+    llvm.store %5, %arg_time : i64, !llvm.ptr
     llvm.return
   }
 '''

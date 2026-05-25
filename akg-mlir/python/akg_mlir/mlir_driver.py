@@ -1,4 +1,4 @@
-# Copyright 2023-2025 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,12 +19,17 @@ import hashlib
 import json
 import logging
 import os
+import ctypes
 import pathlib
 import subprocess
 import shutil
+import numpy as np
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import akg_opt, write_code, ascend_compile
+from .utils.dynamic_utils import get_device_shape
+from .utils.gen_runtime_code import ProfilingParams, gen_cuda_runtime_code
+from .backends.ascend import akg_opt, write_code, bisheng_compile, get_block_dim_from_mlir
+from .backends.ascend import benchmark_launch as launch
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -73,11 +78,114 @@ def get_npucompiler_path():
         raise EnvironmentError("Couldn't find executable bishengir-compile.")
     return npu_compiler_path
 
-class AkgMlirDriver:
-    """class AkgMlirDriver."""
+def _compile_lib(kernel_name, file_path="./tmp_files/"):
+    """Compile cuda runtime source."""
+    so_file = os.path.join(file_path, "gen_func_" + kernel_name + ".so")
+    gen_lib_file = os.path.join(file_path, "gen_func_" + kernel_name + ".cu")
+
+    cmd = ["nvcc", "-o", so_file, gen_lib_file, "--shared",
+           "-Xcompiler", "-fPIC", "-lcudart", "-lcuda", "-O3"]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        logging.error("run compile lib failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+        raise RuntimeError("nvcc compile failed in converting the case: " + kernel_name + "!\n") from e
+
+def create_executable(kernel_name,
+                      input_for_mod,
+                      output_indexes,
+                      is_dyn_shape):
+    """Generate executable files"""
+    cur_path = get_kernel_meta_path()
+    tmp_file_path = os.path.join(cur_path, "tmp_files")
+    tmp_file_name = os.path.join(tmp_file_path, "gen_func_" + kernel_name + ".so")
+    fake_output_indices = []
+    gen_cuda_runtime_code(kernel_name,
+                          input_for_mod,
+                          output_indexes,
+                          is_dyn_shape,
+                          fake_output_indices,
+                          path=cur_path)
+    try:
+        _compile_lib(kernel_name, file_path=tmp_file_path)
+    except Exception as e:
+        raise RuntimeError("Compile cuda runtime lib fail") from e
+    try:
+        lib = ctypes.cdll.LoadLibrary(tmp_file_name)
+    except Exception as e:
+        raise RuntimeError("Load cuda runtime lib fail") from e
+    return lib
+
+def transform_data_to_ctypes(data,
+                             kernel_name,
+                             is_dyn_shape=False,
+                             backend="gpu",
+                             is_profile_params=False,
+                             ):
+    """ transform input data to ctypes """
+    def get_max_shape_length(shapes):
+        max_len = 0
+        for shape in shapes:
+            max_len = max(max_len, len(shape))
+        return max_len
+
+    data_ctypes = []
+    if len(data) == 0:
+        # dynamic shape info cannot generate inputs while compilation
+        return data_ctypes
+    shape_arg_list = []
+    int_p = ctypes.POINTER(ctypes.c_int)
+    device_shape, _, _ = get_device_shape(data, kernel_name, is_dyn_shape and not is_profile_params)
+
+    for data_idx, d in enumerate(data):
+        shape_list = [0]
+        data_shape = device_shape[data_idx]
+        if isinstance(d, int):
+            data_ctypes.append(ctypes.c_int(d))
+        elif isinstance(d, np.ndarray):
+            data_ctypes.append(d.ctypes.data_as(int_p))
+            shape_list += list(data_shape)
+            # for tensor (m, n, k), strides is [n*k, k, 1]
+            stride_list = [1] * len(data_shape)
+            for idx, _ in enumerate(data_shape[1:]):
+                stride_list[-idx - 2] = stride_list[-idx - 1] * \
+                    data_shape[-idx - 1]
+            shape_list += stride_list
+        else:
+            raise TypeError("wrong data to cytpes, current type is '", type(d), "'")
+        shape_list += [0] * (1 + 2 * 0 if is_profile_params else get_max_shape_length(device_shape) - len(shape_list))
+        shape_arg_list.append(shape_list)
+    if is_profile_params or backend == "gpu":
+        return data_ctypes
+    # pack parameters into an array of pointers
+    # static shape: array of pointers of data
+    packed_tensors = (int_p * len(data))()
+    packed_tensors[:] = [
+        ctypes.cast(data_ctype, int_p) for data_ctype in data_ctypes
+    ]
+
+    if backend == "cpu" and not is_dyn_shape:
+        return [packed_tensors]
+
+    # dynamic shape: array of pointers of data, array of [0, shape, stride] of data
+    # tensor_num * [0, shape_list 1,2,...,n, strides 0,1,2,...,n]
+    packed_shape_lists = (int_p * len(data))()
+    for idx, shape_list in enumerate(shape_arg_list):
+        packed_shapes = (int_p * len(shape_list))()
+        packed_shapes[:] = [
+            ctypes.cast(shape, int_p) for shape in shape_list
+        ]
+        packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
+    return [packed_tensors, packed_shape_lists]
+
+
+class MlirDriver:
+    """class MlirDriver."""
 
     def __init__(
         self,
+        kernel_name: str,
         input_file: str,
         output_dir: str = "",
         akg_tools_dir: str = "",
@@ -90,9 +198,12 @@ class AkgMlirDriver:
         profiling_trails=0,
         runtime_provider="MindSpore",
         enable_loop_fusion=True,
+        arch="Ascend910B1",
+        backend="ascend",
     ):
         super().__init__()
 
+        self.kernel_name = kernel_name
         self.input_file = input_file
         self.output_dir = get_kernel_meta_path() if output_dir == "" else output_dir
         self.akg_tools_dir = (
@@ -107,23 +218,14 @@ class AkgMlirDriver:
         )
         self.log_level = log_level
         self.target_info = ""
-        self.arch = ""
         self.dump_ir = dump_ir
         self.mlir_timing = mlir_timing
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
         self.runtime_provider = runtime_provider
         self.enable_loop_fusion = enable_loop_fusion
-
-        with open(input_file, "r", encoding='utf-8') as f:
-            kernel_info = json.loads(f.read())
-            self.kernel_name = kernel_info["op"]
-            self.backend = "ascend" if kernel_info["process"] == "aicore" else kernel_info["process"]
-            target_info = kernel_info.get("target_info")
-            if target_info:
-                compute_capability = target_info.get("compute_capability", "7.0")
-                self.target_info = "v100" if compute_capability == "7.0" else "a100"
-                self.arch = target_info.get("arch", "")
+        self.arch = arch
+        self.backend = backend
         self.dynamic_shape = dynamic_shape
 
     def compile(self):
@@ -131,38 +233,42 @@ class AkgMlirDriver:
         compile interface of akg-mlir. The input is the OP description json file
         generated by MindSpore GraphKernel Module
         """
-        with os.fdopen(os.open(self.input_file, os.O_RDONLY, 0o755), "r") as f_info:
-            kernel_info = json.loads(f_info.read())
-            if (
-                self.backend == "cuda"
-                and self.dynamic_shape
-                and _is_single_op(kernel_info)
-                and "Reduce" not in self.kernel_name
-            ):
-                return
         if self.backend == "cpu":
-            self.run_cpu()
-        elif self.backend == "cuda":
-            self.run_gpu()
+            self.compile_cpu()
+        elif self.backend == "gpu":
+            self.compile_gpu()
         elif self.backend == "ascend":
-            self.run_ascend()
+            self.compile_ascend()
         else:
             raise RuntimeError("Unsupported backend: " + self.backend + "!\n")
 
-    def run_ascend(self):
+    def run(self, input_for_mod, output_indexes=None):
+        """
+        launch kernel interface of akg-mlir.
+        """
+        if self.backend == "cpu":
+            self.run_cpu(input_for_mod, output_indexes)
+        elif self.backend == "gpu":
+            self.run_gpu(input_for_mod, output_indexes)
+        elif self.backend == "ascend":
+            self.run_ascend(input_for_mod, output_indexes)
+        else:
+            raise RuntimeError("Unsupported backend: " + self.backend + "!\n")
+
+    def compile_ascend(self):
         """compile ascend kernel of akg_mlir."""
         self._run_mlir_convert()
         self._run_mlir_ascend_pipeline(self.dynamic_shape, self.kernel_name)
         self._run_ascend_generate_binary(self.kernel_name)
 
-    def run_cpu(self):
+    def compile_cpu(self):
         """compile cpu kernel of akg-mlir."""
         self._run_mlir_convert()
         self._run_mlir_cpu_pipeline(self.dynamic_shape, self.kernel_name)
         self._run_mlir_to_llvm(self.kernel_name)
         self._run_cpu_generate_binary(self.kernel_name)
 
-    def run_gpu(self):
+    def compile_gpu(self):
         """compile gpu kernel of akg-mlir."""
 
         def _build(is_dyn, kernel_name, tiling_mode):
@@ -183,14 +289,12 @@ class AkgMlirDriver:
                 with os.fdopen(os.open(sub_input_file, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                     f.write(json.dumps(sub_input_file_desc))
                 self._run_mlir_convert(sub_kernel_name, sub_input_file)
-                logging.info("Start to build %s", sub_kernel_name)
+                logging.debug("Start to build %s", sub_kernel_name)
                 _build(True, sub_kernel_name, "static")
-                logging.info("Success to build %s", sub_kernel_name)
+                logging.debug("Success to build %s", sub_kernel_name)
             except RuntimeError as exc:
-                logging.info("Fail to build %s : %s", sub_kernel_name, exc)
-                if self.log_level == "ERROR":
-                    raise RuntimeError(f"Compile error, kernel: {sub_kernel_name} is not generated") from exc
-                logging.info("Compile error, kernel: %s", sub_kernel_name)
+                logging.error("Fail to build %s : %s", sub_kernel_name, exc)
+                raise RuntimeError(f"Compile error, kernel: {sub_kernel_name} is not generated") from exc
 
         default_tiling_mode = None
         if self.dynamic_shape and os.environ.get("MLIR_TILING_MODE", "auto") == "both":
@@ -200,9 +304,81 @@ class AkgMlirDriver:
             self._run_mlir_convert()
             _build(self.dynamic_shape, self.kernel_name, default_tiling_mode)
         except RuntimeError as exc:
-            if self.log_level == "ERROR":
-                raise RuntimeError(f"Compile error, kernel: {self.kernel_name} is not generated") from exc
-            logging.info("Compile error, kernel: %s", self.kernel_name)
+            logging.error("Compile error, kernel: %s", self.kernel_name)
+            raise RuntimeError(f"Compile error, kernel: {self.kernel_name} is not generated") from exc
+
+    def run_ascend(self, input_for_mod, output_indexes=None):
+        """run kernel for npu"""
+        # Run executable and profiling
+        # All preprocessing (bf16, output_indexes, device_shape) done inside launch()
+        device_id = int(os.environ.get("DEVICE_ID", 0))
+        if self.profiling_trails == 0:
+            launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
+                   use_mem_pool=True, output_indexes=output_indexes)
+        else:
+            akgProfileMgr.ascend_start_profiling(device_id)
+            for _ in range(5):
+                launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
+                       use_mem_pool=True, output_indexes=output_indexes)
+            akgProfileMgr.ascend_stop_profiling()
+            # analysis
+            cycle = profiling_analyse(None)
+            logging.info('=====Task Duration(us)==============================')
+            if cycle != PROF_ERROR_CODE:
+                logging.info(cycle)
+            else:
+                logging.error("OOPS, can't correctly Task Duration!")
+            logging.info('=====Task Duration(us)==============================')
+            logging.info("%s Task Duration(us) : %s", kernel_name, str(cycle))
+        return input_for_mod
+
+    def run_cpu(self, input_for_mod, output_indexes=None):
+        """run kernel for npu"""
+        input_for_mod_ctypes = transform_data_to_ctypes(
+            input_for_mod,
+            self.kernel_name,
+            self.dynamic_shape,
+            "cpu")
+        # Profiling
+        cur = ctypes.cdll.LoadLibrary(os.path.join(self.output_dir, self.kernel_name + ".so"))
+        if self.profiling_trails > 0:
+            func = getattr(cur, "main")
+            np_timers_ns = np.array([0], dtype=np.int64)
+            input_for_mod_ctypes.append(np_timers_ns.ctypes.data_as(ctypes.POINTER(ctypes.c_longlong)))
+            func(*input_for_mod_ctypes)
+            logging.info("%s : Running %s times, the average execution time is %s ms.",
+                         self.kernel_name,
+                         self.profiling_trails,
+                         np_timers_ns / 1000000 / self.profiling_trails)
+        else:
+            func = getattr(cur, self.kernel_name)
+            # Run executable and compare results
+            func(*input_for_mod_ctypes)
+
+
+    def run_gpu(self, input_for_mod, output_indexes=None):
+        """run kernel for gpu"""
+        input_for_mod_ctypes = transform_data_to_ctypes(
+            input_for_mod,
+            self.kernel_name,
+            self.dynamic_shape,
+            "gpu")
+        if self.profiling_trails == 0:
+            # Run executable
+            lib = create_executable(self.kernel_name, input_for_mod, output_indexes, self.dynamic_shape)
+            lib.cuda_runtime_exec(*input_for_mod_ctypes)
+        else:
+            # Profiling
+            prof_params = ProfilingParams(number=10, repeat=self.profiling_trails, min_repeat_ms=0)
+            prof_params_ctypes = transform_data_to_ctypes(
+                prof_params.get_data(),
+                self.kernel_name,
+                self.dynamic_shape,
+                "gpu",
+                is_profile_params=True)
+            lib = create_executable(self.kernel_name, input_for_mod, output_indexes, self.dynamic_shape)
+            lib.cuda_runtime_profiling(*input_for_mod_ctypes, *prof_params_ctypes)
+
 
     def _run_mlir_convert(self, kernel_name=None, input_file=None):
         """convert info to mlir."""
@@ -211,6 +387,9 @@ class AkgMlirDriver:
         if input_file is None:
             input_file = self.input_file
         out_file = os.path.join(self.output_dir, kernel_name + ".mlir")
+        if input_file.endswith(".mlir"):
+            shutil.copy(input_file, out_file)
+            return
         cmd = [
             os.path.join(self.akg_tools_dir, "bin/mindspore-translate"),
             "-json-to-mindspore",
@@ -254,37 +433,38 @@ class AkgMlirDriver:
     def _run_mlir_ascend_pipeline(self, dyn_shape, kernel_name):
         """compile mlir use ascend pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
-        out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
+        out_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
 
-        dump_log_path = None
+        dump_ir_path = None
         if self.dump_ir:
-            dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
+            dump_ir_path = os.path.join(self.output_dir, kernel_name + "_opt.log")
 
         akg_opt(
             input_file=input_file,
             output_file=out_file,
-            akg_tools_dir=self.akg_tools_dir,
             dyn_shape=dyn_shape,
             enable_loop_fusion=self.enable_loop_fusion,
             arch=self.arch,
             dump_ir=self.dump_ir,
             mlir_timing=self.mlir_timing,
-            dump_log_path=dump_log_path,
+            dump_ir_path=dump_ir_path,
         )
 
     def _run_ascend_generate_binary(self, kernel_name):
         """compile mlir to binary for ascend."""
         logging.info("bishengir-compile code generator:")
-        input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
+        input_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
-        dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
+        dump_log = os.path.join(self.output_dir, kernel_name + "_bisheng.log")
 
-        ascend_compile(
+        block_dim = get_block_dim_from_mlir(input_file)
+        bisheng_compile(
             input_file=input_file,
-            output_so_path=so_file,
-            enable_loop_fusion=self.enable_loop_fusion,
+            output_file=so_file,
+            enable_hfusion_compile=not self.enable_loop_fusion,
+            block_dim=block_dim,
             dump_ir=self.dump_ir,
-            dump_log_path=dump_log,
+            dump_ir_path=dump_log,
         )
 
     def _run_mlir_to_llvm(self, kernel_name):
@@ -295,7 +475,7 @@ class AkgMlirDriver:
             input_file = wrap_timer_func(input_file, self.kernel_name, self.profiling_trails)
         out_file = os.path.join(self.output_dir, kernel_name + ".ll")
         cmd = ["mlir-translate", input_file, "--mlir-to-llvmir", "-o", out_file]
-        print("_run_mlir_to_llvm:", cmd)
+        logging.debug("_run_mlir_to_llvm cmd: %s", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -337,9 +517,11 @@ class AkgMlirDriver:
             "-lmlir_c_runner_utils",
         ]
         if self.runtime_provider == "MLIR":
-            cmd.extend(["-L", os.path.join(self.akg_tools_dir, "lib/"), "-lmlir_akgParallelLaunch_runtime"])
+            cmd.extend(["-L", self.akg_tools_dir, "-lmlir_akgParallelLaunch_runtime",
+                        f"-Wl,-rpath,{self.akg_tools_dir}"])
         if self.profiling_trails > 0:
-            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils"])
+            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils",
+                        f"-Wl,-rpath,{self.llvm_tools_dir}/lib"])
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -377,7 +559,7 @@ class AkgMlirDriver:
             "-o",
             out_file,
         ]
-        print("_run_ascend_generate_binary:0 ", cmd)
+        logging.debug("_run_ascend_generate_binary step 0 cmd: %s", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -401,7 +583,7 @@ class AkgMlirDriver:
             cmd.extend(["-L", os.path.join(self.akg_tools_dir, "lib/"), "-lmlir_akgParallelLaunch_runtime"])
         if self.profiling_trails > 0:
             cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils"])
-        print("_run_ascend_generate_binary:1 ", cmd)
+        logging.debug("_run_ascend_generate_binary step 1 cmd: %s", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -582,6 +764,8 @@ class AkgMlirDriver:
                 f.write(line)
 
 
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run akg-mlir End to End")
     parser.add_argument("-f", type=str, help="Run single file.")
@@ -593,7 +777,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.info(args)
 
-    driver = AkgMlirDriver(
+    driver = MlirDriver(
+        kernel_name='',
         input_file=args.f,
         output_dir=args.o,
         akg_tools_dir=args.akg_tools_dir,

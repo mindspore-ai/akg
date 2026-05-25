@@ -17,7 +17,7 @@ import sys
 import logging
 import json
 
-from .backends.ascend import ascend_compile, akg_opt
+from .backends.ascend import ascend_compile
 
 flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
@@ -26,7 +26,8 @@ sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 from akg.akgAscendLaunch import get_host_functions, get_device_function, torch_launch
 sys.setdlopenflags(flags)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
 
 
 class Kernel:
@@ -91,33 +92,21 @@ class Kernel:
 
         kernel_bin_name = f"lib{self.kernel_name}.so" if self.dynamic else f"{self.kernel_name}.o"
         input_file = os.path.join(work_dir, f"{self.kernel_name}.mlir")
-        out_file = os.path.join(work_dir, f"{self.kernel_name}_out.mlir")
         binary_file = os.path.join(work_dir, kernel_bin_name)
 
         if need_compile:
             self._write_mlir(input_mlir, input_file)
 
-            # get akg_tools_dir
-            akg_tools_dir = os.path.dirname(os.path.abspath(__file__))
-            dump_log_path = os.path.join(work_dir, f"{self.kernel_name}.log") if debug else None
-
+            dump_ir_path = os.path.join(work_dir, f"{self.kernel_name}.log") if debug else None
             try:
-                akg_opt(
+                ascend_compile(
                     input_file=input_file,
-                    output_file=out_file,
-                    akg_tools_dir=akg_tools_dir,
+                    output_file=binary_file,
                     dyn_shape=self.dynamic,
-                    enable_loop_fusion=True,
                     arch=self.arch,
                     dump_ir=debug,
                     mlir_timing=True,
-                    dump_log_path=dump_log_path,
-                )
-                ascend_compile(
-                    out_file,
-                    binary_file,
-                    dump_ir=debug,
-                    dump_log_path=dump_log_path,
+                    dump_ir_path=dump_ir_path
                 )
                 logging.debug("compile finish, binary save to %s", os.path.abspath(binary_file))
             except Exception as compile_err:
