@@ -27,7 +27,8 @@ from bfloat16 import bfloat16
 from akg import MlirDriver
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.result_analysis import get_compare_tolerance
-from ..utils.torch_mlir_utils import find_first_func_name, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
+from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
+                                      run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
 
@@ -263,7 +264,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
             run_torch_mlir_to_linalg_on_tensors(compile_args.torch_mlir_opt, file_path, input_file)
         else:
             input_file = dump_dir / f"{kernel_name}_hfusion.mlir"
-            get_name_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
+            get_named_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
 
     with open(info_file, "r", encoding='utf-8') as f:
         desc = f.read()
