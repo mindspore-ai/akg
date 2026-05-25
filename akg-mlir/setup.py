@@ -208,7 +208,7 @@ setup(
     install_requires=INSTALL_REQUIRES,
     entry_points={
         "console_scripts": [
-            "akg_benchmark = akg.exec_tools.py_benchmark:main",
+            "akg_benchmark = akg.exec_tools.benchmark:main",
         ],
     },
     zip_safe=False,
