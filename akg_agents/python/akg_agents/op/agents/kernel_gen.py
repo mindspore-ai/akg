@@ -38,6 +38,7 @@ from akg_agents.op.skill.operator_selector import (
 from akg_agents.op.utils.triton_ascend_api_docs import (
     resolve_triton_ascend_api_docs,
 )
+from akg_agents.op.utils.code_checker import _A5_ENABLE_AFFINITY_CHECK
 from akg_agents.utils.hardware_utils import get_hardware_doc
 
 # 设置 Skills 目录路径
@@ -278,7 +279,11 @@ class KernelGen(AgentBase):
         if not all_skills:
             return []
 
-        context = OperatorSelectionContext(backend=backend, arch=arch)
+        context = OperatorSelectionContext(
+            backend=backend,
+            arch=arch,
+            enable_affinity=_A5_ENABLE_AFFINITY_CHECK,
+        )
         all_skills = self.skill_selector.coarse_filter(all_skills, context)
 
         if self.exclude_skill_names:

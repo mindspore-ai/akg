@@ -8,6 +8,7 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A5"
   operator_type: "all"
+  requires_affinity: true
 ---
 
 # A5 Cube/Vector 协同编程接口

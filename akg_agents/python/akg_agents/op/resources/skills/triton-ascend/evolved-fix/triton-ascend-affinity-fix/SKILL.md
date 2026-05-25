@@ -8,6 +8,7 @@ metadata:
   backend: ascend
   dsl: triton_ascend
   hardware: "Atlas A5"
+  requires_affinity: true
 ---
 
 # Cube/Vector 亲和写法问题修复

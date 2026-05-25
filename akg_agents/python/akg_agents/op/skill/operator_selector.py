@@ -150,6 +150,7 @@ class OperatorSelectionContext(SelectionContext):
     arch: Optional[str] = None               # 硬件架构（ascend910b4, a100 等）
     hardware: Optional[str] = None           # 硬件系列名（Atlas A2, a100 等，可选）
     framework: Optional[str] = None          # 框架（torch, mindspore等）
+    enable_affinity: Optional[bool] = None   # A5 亲和写法开关；None=不过滤，False=排除 requires_affinity 的 skill
 
 
 # ==================== 算子生成过滤器 ====================
@@ -223,6 +224,30 @@ def hardware_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
         candidates.append(arch_to_hardware(arch_value))
 
     return any(c in values for c in candidates if c)
+
+
+def affinity_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
+    """
+    A5 亲和写法开关过滤器。
+
+    语义：``metadata.requires_affinity == True`` 的 skill 仅当
+    ``context.enable_affinity`` 显式为 ``True`` 时才保留；为 ``False``
+    时一律 DROP。``enable_affinity`` 为 ``None`` 表示调用方未指明，
+    维持"放行"语义以保持向后兼容。
+
+    其它没有 ``requires_affinity`` 标记的 skill 完全不受影响。
+    """
+    requires = bool((skill.metadata or {}).get("requires_affinity", False))
+    if not requires:
+        return True
+
+    enable = getattr(context, "enable_affinity", None)
+    if enable is None:
+        enable = context.custom_fields.get("enable_affinity")
+
+    if enable is None:
+        return True
+    return bool(enable)
 
 
 def create_operator_filters() -> List[Callable]:
@@ -303,6 +328,7 @@ def create_operator_filters() -> List[Callable]:
         hardware_filter, 
         framework_filter,
         operator_type_filter,
+        affinity_filter,
         category_include_filter,
         category_exclude_filter
     ]
