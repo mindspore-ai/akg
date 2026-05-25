@@ -94,12 +94,38 @@ static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
 static bool isScalarType(Type type) { return isa<IntegerType, FloatType, IndexType>(type); }
 
 static bool requiresVectorRhsForHIVMLowering(Operation *user) {
-  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp>(
-    user);
+  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp>(user);
 }
 
-static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastResult) {
-  if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumOperands() != 2) {
+static bool isVectorOrNPUVectorLike(Type type) { return isa<VectorType, npuvector::NPUVectorType>(type); }
+
+static bool hasVectorOrNPUVectorLikeResult(Operation *op) {
+  return llvm::any_of(op->getResultTypes(), isVectorOrNPUVectorLike);
+}
+
+static bool isI1VectorOrNPUVectorLike(Type type) {
+  if (auto vectorType = dyn_cast<VectorType>(type)) return vectorType.getElementType().isInteger(1);
+  if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(type)) {
+    return npuVectorType.getElementType().isInteger(1);
+  }
+  return false;
+}
+
+static SmallVector<unsigned> getOperandIndices(Operation *user, Value operand) {
+  SmallVector<unsigned> indices;
+  for (unsigned i = 0, e = user->getNumOperands(); i < e; ++i) {
+    if (user->getOperand(i) == operand) indices.push_back(i);
+  }
+  return indices;
+}
+
+static bool isScalarBroadcast(Value value) {
+  auto broadcast = value.getDefiningOp<npuvector::BroadcastOp>();
+  return broadcast && isScalarType(broadcast.getSource().getType());
+}
+
+static bool isSupportedBinaryComputeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
+  if (user->getNumOperands() != 2 || !hasVectorOrNPUVectorLikeResult(user)) {
     return false;
   }
 
@@ -107,20 +133,46 @@ static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastR
     return false;
   }
 
-  bool isLhs = user->getOperand(0) == broadcastResult;
-  bool isRhs = user->getOperand(1) == broadcastResult;
-  if (!isLhs && !isRhs) {
+  bool foldsLhs = llvm::is_contained(operandIndices, 0);
+  bool foldsRhs = llvm::is_contained(operandIndices, 1);
+  if (!foldsLhs && !foldsRhs) {
     return false;
   }
 
-  Value otherOperand = user->getOperand(isLhs ? 1 : 0);
-  if (auto otherBroadcast = otherOperand.getDefiningOp<npuvector::BroadcastOp>()) {
-    if (isScalarType(otherBroadcast.getSource().getType())) return false;
+  // Folding both operands would leave no vector input to drive the HIVM op.
+  if (foldsLhs && foldsRhs) {
+    return false;
   }
 
-  // The binary lowering path accepts a scalar RHS. A scalar LHS can only be
-  // folded when the source op is commutative and can be swapped before lowering.
-  return isRhs || user->hasTrait<OpTrait::IsCommutative>();
+  if (foldsLhs && !user->hasTrait<OpTrait::IsCommutative>()) {
+    return false;
+  }
+
+  Value otherOperand = user->getOperand(foldsLhs ? 1 : 0);
+  return !isScalarType(otherOperand.getType()) && !isScalarBroadcast(otherOperand);
+}
+
+static bool isSupportedSelectLikeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
+  if (user->getNumOperands() != 3 || !hasVectorOrNPUVectorLikeResult(user)) {
+    return false;
+  }
+
+  if (!isI1VectorOrNPUVectorLike(user->getOperand(0).getType())) {
+    return false;
+  }
+
+  // Keep the condition vector-shaped. HIVM select value operands may be scalar.
+  return llvm::all_of(operandIndices, [](unsigned idx) { return idx == 1 || idx == 2; });
+}
+
+static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastResult) {
+  SmallVector<unsigned> operandIndices = getOperandIndices(user, broadcastResult);
+  if (operandIndices.empty()) {
+    return false;
+  }
+
+  return isSupportedBinaryComputeScalarFoldUser(user, operandIndices) ||
+         isSupportedSelectLikeScalarFoldUser(user, operandIndices);
 }
 
 static std::optional<std::pair<ArrayRef<int64_t>, Type>> getShapeAndElemType(Type type) {
@@ -232,6 +284,72 @@ static SmallVector<int64_t> buildAdjacentSwapPerm(int64_t rank, int64_t a) {
   return perm;
 }
 
+static bool traceSubviewDim(memref::SubViewOp subviewOp, MemRefType baseType, int64_t dim,
+                            std::optional<Value> &resolvedOut) {
+  int64_t sourceRank = cast<MemRefType>(subviewOp.getSource().getType()).getRank();
+  int64_t resultRank = baseType.getRank();
+  int64_t sourceDim = sourceRank - resultRank + dim;
+  auto mixedSizes = subviewOp.getMixedSizes();
+  if (sourceDim < 0 || sourceDim >= static_cast<int64_t>(mixedSizes.size())) {
+    return false;
+  }
+  if (Value mixVal = mixedSizes[sourceDim].dyn_cast<Value>()) {
+    resolvedOut = mixVal;
+  }
+  return false;
+}
+
+static bool traceCollapseDim(memref::CollapseShapeOp collapseOp, Value &curMemRef, MemRefType &baseType, int64_t &dim) {
+  auto srcType = cast<MemRefType>(collapseOp.getSrc().getType());
+  auto reassoc = collapseOp.getReassociationIndices();
+  if (dim < 0 || dim >= static_cast<int64_t>(reassoc.size())) return false;
+
+  int64_t dynSrcDim = -1;
+  for (int64_t srcDim : reassoc[dim]) {
+    if (!srcType.isDynamicDim(srcDim)) continue;
+    if (dynSrcDim != -1) return false;
+    dynSrcDim = srcDim;
+  }
+  if (dynSrcDim < 0) return false;
+
+  curMemRef = collapseOp.getSrc();
+  baseType = srcType;
+  dim = dynSrcDim;
+  return true;
+}
+
+static bool expandGroupIsTraceable(ArrayRef<int64_t> group, MemRefType baseType, int64_t dim) {
+  for (int64_t resultDim : group) {
+    if (resultDim == dim) continue;
+    if (baseType.isDynamicDim(resultDim) || baseType.getDimSize(resultDim) != 1) return false;
+  }
+  return true;
+}
+
+static bool traceExpandDim(memref::ExpandShapeOp expandOp, Value &curMemRef, MemRefType &baseType, int64_t &dim) {
+  auto srcType = cast<MemRefType>(expandOp.getSrc().getType());
+  auto reassoc = expandOp.getReassociationIndices();
+  for (int64_t srcDim = 0; srcDim < static_cast<int64_t>(reassoc.size()); ++srcDim) {
+    const auto &group = reassoc[srcDim];
+    if (!llvm::is_contained(group, dim)) continue;
+    if (!srcType.isDynamicDim(srcDim) || !expandGroupIsTraceable(group, baseType, dim)) return false;
+    curMemRef = expandOp.getSrc();
+    baseType = srcType;
+    dim = srcDim;
+    return true;
+  }
+  return false;
+}
+
+template <typename AllocLikeOp>
+static bool traceAllocDim(AllocLikeOp allocLikeOp, int64_t dim, MemRefType baseType,
+                          std::optional<Value> &resolvedOut) {
+  if (auto dimVal = getDynamicDimFromAllocLike(allocLikeOp, dim, baseType)) {
+    resolvedOut = *dimVal;
+  }
+  return false;
+}
+
 static bool advanceMemRefDimTrace(Value &curMemRef, MemRefType &baseType, int64_t &dim,
                                   std::optional<Value> &resolvedOut) {
   resolvedOut.reset();
@@ -240,52 +358,19 @@ static bool advanceMemRefDimTrace(Value &curMemRef, MemRefType &baseType, int64_
     return true;
   }
   if (auto subviewOp = curMemRef.getDefiningOp<memref::SubViewOp>()) {
-    int64_t sourceRank = cast<MemRefType>(subviewOp.getSource().getType()).getRank();
-    int64_t resultRank = baseType.getRank();
-    int64_t sourceDim = sourceRank - resultRank + dim;
-    auto mixedSizes = subviewOp.getMixedSizes();
-    if (sourceDim >= 0 && sourceDim < static_cast<int64_t>(mixedSizes.size())) {
-      if (Value mixVal = mixedSizes[sourceDim].dyn_cast<Value>()) {
-        resolvedOut = mixVal;
-        return false;
-      }
-    }
-    return false;
+    return traceSubviewDim(subviewOp, baseType, dim, resolvedOut);
   }
   if (auto collapseOp = curMemRef.getDefiningOp<memref::CollapseShapeOp>()) {
-    auto srcType = cast<MemRefType>(collapseOp.getSrc().getType());
-    auto reassoc = collapseOp.getReassociationIndices();
-    if (dim < 0 || dim >= static_cast<int64_t>(reassoc.size())) return false;
-    const auto &group = reassoc[dim];
-    int64_t dynSrcDim = -1;
-    for (int64_t srcDim : group) {
-      if (srcType.isDynamicDim(srcDim)) {
-        if (dynSrcDim != -1) {
-          dynSrcDim = -1;
-          break;
-        }
-        dynSrcDim = srcDim;
-      }
-    }
-    if (dynSrcDim < 0) return false;
-    curMemRef = collapseOp.getSrc();
-    baseType = srcType;
-    dim = dynSrcDim;
-    return true;
+    return traceCollapseDim(collapseOp, curMemRef, baseType, dim);
+  }
+  if (auto expandOp = curMemRef.getDefiningOp<memref::ExpandShapeOp>()) {
+    return traceExpandDim(expandOp, curMemRef, baseType, dim);
   }
   if (auto allocOp = curMemRef.getDefiningOp<memref::AllocOp>()) {
-    if (auto dimVal = getDynamicDimFromAllocLike(allocOp, dim, baseType)) {
-      resolvedOut = *dimVal;
-      return false;
-    }
-    return false;
+    return traceAllocDim(allocOp, dim, baseType, resolvedOut);
   }
   if (auto allocaOp = curMemRef.getDefiningOp<memref::AllocaOp>()) {
-    if (auto dimVal = getDynamicDimFromAllocLike(allocaOp, dim, baseType)) {
-      resolvedOut = *dimVal;
-      return false;
-    }
-    return false;
+    return traceAllocDim(allocaOp, dim, baseType, resolvedOut);
   }
   if (auto next = traceToScfForInitArgFromIterArg(curMemRef)) {
     curMemRef = *next;
@@ -1796,8 +1881,7 @@ struct ScfYieldToHIVM : public OpConversionPattern<scf::YieldOp> {
 struct ScfIfToHIVM : public OpConversionPattern<scf::IfOp> {
   using OpConversionPattern<scf::IfOp>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(scf::IfOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(scf::IfOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
     if (op.getNumResults() == 0) return failure();
     if (llvm::none_of(op.getResultTypes(),
                       [](Type t) { return isa<VectorType>(t) || isa<npuvector::NPUVectorType>(t); })) {
@@ -1818,8 +1902,8 @@ struct ScfIfToHIVM : public OpConversionPattern<scf::IfOp> {
     // replaceOp runs, which can segfault in ConversionPatternRewriter::applyRewrites
     // when the op is finally erased. Match AffineIfToSCFPattern: move regions with
     // inlineRegionBefore, then drop the placeholder block that scf.if builder adds.
-    auto newIfOp = rewriter.create<scf::IfOp>(op.getLoc(), newResultTypes, adaptor.getCondition(),
-                                              op.elseBlock() != nullptr);
+    auto newIfOp =
+      rewriter.create<scf::IfOp>(op.getLoc(), newResultTypes, adaptor.getCondition(), op.elseBlock() != nullptr);
     rewriter.inlineRegionBefore(op.getThenRegion(), &newIfOp.getThenRegion().back());
     rewriter.eraseBlock(&newIfOp.getThenRegion().back());
     if (op.elseBlock()) {
@@ -1995,10 +2079,9 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
 };
 
 static LogicalResult rewritePartialMemRefReductionCollapse(npuvector::ReductionOp op,
-                                                             ConversionPatternRewriter &rewriter, Location loc,
-                                                             MemRefType srcMemRefType, Type elemType, Value resultBuf,
-                                                             const llvm::DenseSet<int64_t> &reduceDimSet,
-                                                             int64_t rank) {
+                                                           ConversionPatternRewriter &rewriter, Location loc,
+                                                           MemRefType srcMemRefType, Type elemType, Value resultBuf,
+                                                           const llvm::DenseSet<int64_t> &reduceDimSet, int64_t rank) {
   SmallVector<int64_t> collapsedShape;
   for (int64_t i = 0; i < rank; ++i) {
     if (!reduceDimSet.contains(i)) collapsedShape.push_back(srcMemRefType.getDimSize(i));
@@ -3185,9 +3268,8 @@ void ArithToHIVMConversionPass::runOnOperation() {
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegalArithOp);
   target.addDynamicallyLegalDialect<math::MathDialect>(isLegalMathOp);
   target.addDynamicallyLegalOp<scf::ForOp>(isLegalSCFForOp);
-  target.addDynamicallyLegalOp<scf::IfOp>([](scf::IfOp op) {
-    return llvm::none_of(op.getResultTypes(), isVectorOrNPUVectorType);
-  });
+  target.addDynamicallyLegalOp<scf::IfOp>(
+    [](scf::IfOp op) { return llvm::none_of(op.getResultTypes(), isVectorOrNPUVectorType); });
   target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp, vector::TransferWriteOp, vector::BroadcastOp>();
   target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::TransferWriteOp,
