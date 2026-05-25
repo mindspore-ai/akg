@@ -250,6 +250,16 @@ class TorchFuseRoPEPattern : public OpRewritePattern<TorchD::AtenAddTensorOp> {
       return failure();
     }
 
+    // Skip fusion when RoPE input x is bf16 (ACL npu_rotary_mul numeric drift vs eager).
+    // Decision uses x's element type only; cos/sin are assumed aligned in practice.
+    auto xTensorTy = mlir::dyn_cast<TorchD::BaseTensorType>(state.x.getType());
+    if (xTensorTy && xTensorTy.getOptionalDtype()) {
+      auto dtype = xTensorTy.getOptionalDtype();
+      if (dtype.isBF16()) {
+        return rewriter.notifyMatchFailure(op, "bf16: skip fusion to avoid ACL numeric drift");
+      }
+    }
+
     rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
       op, op.getResult().getType(), rewriter.getStringAttr("torch.npu.npu_rotary_mul"),
       SmallVector<Value>{state.x, state.cos, state.sin}, /*numResults=*/0);
@@ -260,7 +270,7 @@ class TorchFuseRoPEPattern : public OpRewritePattern<TorchD::AtenAddTensorOp> {
 struct TorchFuseRoPEPass : public PassWrapper<TorchFuseRoPEPass, OperationPass<ModuleOp>> {
   StringRef getArgument() const final { return "torch-fuse-rope"; }
   StringRef getDescription() const final {
-    return "Fuse decomposed RoPE on Torch dialect into torch.npu.npu_rotary_mul";
+    return "Fuse decomposed RoPE into torch.npu.npu_rotary_mul (skipped when x is bf16)";
   }
 
   void getDependentDialects(DialectRegistry &registry) const override { registry.insert<TorchD::TorchDialect>(); }
