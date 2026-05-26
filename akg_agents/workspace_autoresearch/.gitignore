@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.egg-info/
+ar_tasks/
+.ar_state/.heartbeat
+.ar_state/.edit_started
+.autoresearch/.active_task
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
