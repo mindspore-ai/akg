@@ -35,6 +35,7 @@
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.utils.common_utils import load_yaml
 from akg_agents.core.worker.manager import register_worker
+from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_proto
 from akg_agents import get_project_root
 import sys
 import os
@@ -355,6 +356,9 @@ class BatchAdaptiveSearchPool:
             with open(task_file / "definition.json", "r", encoding="utf-8") as _f:
                 _def = json.load(_f)
             op_name = _def.get("name", task_file.name)
+        elif task_file.is_dir() and is_cann_task_dir(task_file):
+            _proto = load_cann_proto(task_file)
+            op_name = _proto.get("operator", {}).get("name", task_file.name)
         else:
             op_name = "akg_agents_" + task_file.stem
         start_time = datetime.now()
@@ -585,24 +589,34 @@ class BatchAdaptiveSearchPool:
 # ============================================================================
 
 def discover_task_files(task_dir: str) -> List[Path]:
-    """发现所有任务文件（.py 文件和 SOL 数据集目录）"""
+    """发现所有任务文件（.py 文件、SOL 数据集目录、CANN-Bench 算子目录）"""
     task_path = Path(task_dir)
     if not task_path.exists():
         raise FileNotFoundError(f"任务目录不存在: {task_dir}")
 
     # 发现 .py 任务文件
     task_files = list(task_path.glob("*.py"))
-    
+
     # 发现 SOL 数据集目录（包含 definition.json 的子目录）
+    # 发现 CANN-Bench 算子目录（包含 proto.yaml + golden.py 的子目录）
     for sub_dir in sorted(task_path.iterdir()):
-        if sub_dir.is_dir() and (sub_dir / "definition.json").exists():
+        if not sub_dir.is_dir():
+            continue
+        if (sub_dir / "definition.json").exists():
             task_files.append(sub_dir)
-    
+        elif is_cann_task_dir(sub_dir):
+            task_files.append(sub_dir)
+
     task_files.sort(key=lambda p: p.name)
 
     print(f"发现 {len(task_files)} 个任务:")
     for i, file_path in enumerate(task_files, 1):
-        suffix = " [SOL]" if file_path.is_dir() else ""
+        if (file_path / "definition.json").exists():
+            suffix = " [SOL]"
+        elif is_cann_task_dir(file_path):
+            suffix = " [CANN]"
+        else:
+            suffix = ""
         print(f"  {i}. {file_path.name}{suffix}")
 
     return task_files
@@ -704,7 +718,7 @@ async def run_batch_adaptive_search(config_path: Optional[str] = None) -> None:
         task_files = discover_task_files(task_dir)
 
         if not task_files:
-            print("未找到任何任务（.py 文件或 SOL 数据集目录）")
+            print("未找到任何任务（.py 文件、SOL 数据集目录或 CANN-Bench 算子目录）")
             return
 
         # 注册 Worker（仅用于验证环境，实际任务由子进程独立注册）

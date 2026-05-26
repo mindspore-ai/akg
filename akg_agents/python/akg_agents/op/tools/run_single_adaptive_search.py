@@ -35,7 +35,8 @@ from akg_agents import get_project_root
 from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
-from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
+from akg_agents.op.utils.sol_utils import load_sol_task, load_sol_task_source, resolve_path_from_base
+from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
 from akg_agents.op.utils.npukb_utils import (
     is_npukb_task_file, load_npukb_task, load_npukb_metadata_if_any,
 )
@@ -79,6 +80,7 @@ class AdaptiveSearchRunnerConfig:
     # 配置文件路径
     config_path: Optional[str] = None
     _sol_problem_dir: Optional[str] = field(default=None, init=False, repr=False)
+    _cann_problem_dir: Optional[str] = field(default=None, init=False, repr=False)
     _npukb_aux_files: Optional[Dict[str, str]] = field(default=None, init=False, repr=False)
     _npukb_factory_names: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
     
@@ -108,10 +110,16 @@ class AdaptiveSearchRunnerConfig:
                 task_desc = task_config.get("task_desc", "")
                 if task_desc:
                     resolved_task_path = resolve_path_from_base(task_desc, config_dir)
-                    task_op_name, task_desc, resolved_sol_dir = load_task_source(resolved_task_path)
-                    instance.op_name = explicit_op_name or task_op_name or instance.op_name
-                    instance.task_desc = task_desc
-                    instance._sol_problem_dir = resolved_sol_dir
+                    if is_cann_task_dir(resolved_task_path):
+                        task_op_name, task_desc, resolved_cann_dir = load_cann_task_source(resolved_task_path)
+                        instance.op_name = explicit_op_name or task_op_name or instance.op_name
+                        instance.task_desc = task_desc
+                        instance._cann_problem_dir = resolved_cann_dir
+                    else:
+                        task_op_name, task_desc, resolved_sol_dir = load_sol_task_source(resolved_task_path)
+                        instance.op_name = explicit_op_name or task_op_name or instance.op_name
+                        instance.task_desc = task_desc
+                        instance._sol_problem_dir = resolved_sol_dir
 
                     npukb_meta = load_npukb_metadata_if_any(resolved_task_path)
                     if npukb_meta is not None:
@@ -350,6 +358,11 @@ def parse_batch_runner_mode(args):
         op_name = sol_op_name
         config._sol_problem_dir = sol_problem_dir
         print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    elif os.path.isdir(task_file) and is_cann_task_dir(task_file):
+        cann_op_name, task_desc, cann_problem_dir = load_cann_task_for_runner(task_file)
+        op_name = cann_op_name
+        config._cann_problem_dir = cann_problem_dir
+        print(f"CANN 模式: 算子目录={cann_problem_dir}")
     elif is_npukb_task_file(task_file):
         _npukb_stem, task_desc, npukb_aux_files, npukb_factory_names = load_npukb_task(task_file)
         config._npukb_aux_files = npukb_aux_files
@@ -412,6 +425,12 @@ async def run_wrapper(op_name: str, task_desc: str, config: AdaptiveSearchRunner
     if sol_problem_dir:
         loaded_config["bench_type"] = "sol"
         loaded_config["sol_problem_dir"] = sol_problem_dir
+
+    # CANN 模式：注入 bench_type 和 cann_problem_dir
+    cann_problem_dir = getattr(config, '_cann_problem_dir', None)
+    if cann_problem_dir:
+        loaded_config["bench_type"] = "cann"
+        loaded_config["cann_problem_dir"] = cann_problem_dir
 
     npukb_aux_files = getattr(config, '_npukb_aux_files', None)
     npukb_factory_names = getattr(config, '_npukb_factory_names', None)
