@@ -1,58 +1,60 @@
+#!/usr/bin/env python3
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
-实验报告生成器 — 从 log.jsonl 生成带内嵌 SVG 图表的 Markdown 报告
+FINISH-phase report generator — produces .ar_state/report.md with summary
+tables and an inline SVG optimization curve.
 
-输出: report.md (含内嵌 SVG 优化曲线, 无外部依赖)
+Stdlib only — no matplotlib, no numpy. The SVG is embedded directly so the
+report is a self-contained Markdown file (renders in VS Code / GitHub).
+
+Usage:
+    python report.py <task_dir>          # write .ar_state/report.md
+    python report.py <task_dir> --print  # dump to stdout (debug)
 """
 
 
-# pylint: disable=broad-exception-caught,import-outside-toplevel,missing-function-docstring
-import datetime as _dt
+# pylint: disable=missing-function-docstring,wrong-import-position
+import argparse
 import os
+import sys
 from html import escape as _h
 from typing import Optional
 
-from .config import TaskConfig
-from .logger import RoundLogger, _escape_md_cell
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from task_config import load_task_config
+from phase_machine import history_path, load_progress
+from utils.json_io import load_jsonl
 
 
-def _find_ref_latency(history: list[dict]) -> Optional[float]:
-    """Find ref_latency_us from baseline round. Returns None if not found."""
-    for rec in history:
-        metrics = rec.get("metrics", {})
-        ref_val = metrics.get("ref_latency_us") or metrics.get("_ref_latency_raw")
-        if isinstance(ref_val, (int, float)) and ref_val > 0:
-            return float(ref_val)
-    return None
+REPORT_FILE = "report.md"
 
 
-def generate_report(task_dir: str, config: TaskConfig,
-                    output_dir: Optional[str] = None) -> str:
-    """
-    生成实验报告 (Markdown + 内嵌 SVG), 返回 report.md 路径.
+def report_path(task_dir: str) -> str:
+    return os.path.join(task_dir, ".ar_state", REPORT_FILE)
 
-    Args:
-        task_dir: 任务目录 (log.jsonl 所在位置).
-        config: 任务配置.
-        output_dir: 报告输出目录. 默认 None 表示写入 task_dir;
-                    传入其他路径可避免污染 task_dir (如 --report 在 main 分支上运行时).
 
-    包含:
-      1. 主指标随轮次变化曲线 (区分 keep/discard/fail)
-      2. 最优值演进线 (best so far, step-post)
-      3. PyTorch 参考基线水平线 + 加速比标注
-      4. 文字摘要 + 全部轮次表格
-    """
-    out = output_dir or task_dir
-    history = RoundLogger(task_dir, config).load_history()
-    report_md = os.path.join(out, "report.md")
-    svg = _generate_svg_chart(history, config) if history else ""
-    _generate_markdown(history, config, report_md, svg)
-    print(f"[report] Report saved: {os.path.relpath(report_md)}")
-    return report_md
+def _load_history(task_dir: str) -> list[dict]:
+    return load_jsonl(history_path(task_dir))
+
+
+def _escape_md_cell(s: str) -> str:
+    return str(s).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
 
 
 def _fmt_num(v: float) -> str:
-    """Y-axis tick label formatter: pick precision by magnitude."""
     av = abs(v)
     if av >= 1000:
         return f"{v:.0f}"
@@ -62,10 +64,6 @@ def _fmt_num(v: float) -> str:
         return f"{v:.2f}"
     return f"{v:.3g}"
 
-
-# ---------------------------------------------------------------------------
-# SVG chart
-# ---------------------------------------------------------------------------
 
 class _Series:
     """Per-decision-bucket history view used by the SVG renderer."""
@@ -79,21 +77,24 @@ class _Series:
         self.best_vals: list = []
 
 
-def _collect_series(history: list, metric_key: str,
+def _collect_series(history: list, primary: str,
                     lower_is_better: bool) -> _Series:
     """Bucket history into keep / discard / fail series plus the
     monotonic best-so-far curve."""
     s = _Series()
     current_best: Optional[float] = None
     for rec in history:
-        r = rec["round"]
-        val = rec.get("metrics", {}).get(metric_key)
-        if not rec.get("correctness") or rec.get("constraint_violations"):
+        r = rec.get("round")
+        if r is None:
+            continue
+        decision = rec.get("decision", "")
+        val = rec.get("metrics", {}).get(primary)
+        if decision == "FAIL":
             s.rounds_fail.append(r)
             continue
         if val is None:
             continue
-        if rec["accepted"]:
+        if decision in ("KEEP", "SEED"):
             s.rounds_keep.append(r)
             s.vals_keep.append(val)
             if current_best is None:
@@ -104,7 +105,7 @@ def _collect_series(history: list, metric_key: str,
                 current_best = max(current_best, val)
             s.best_rounds.append(r)
             s.best_vals.append(current_best)
-        else:
+        elif decision == "DISCARD":
             s.rounds_discard.append(r)
             s.vals_discard.append(val)
             if current_best is not None:
@@ -133,10 +134,10 @@ def _compute_y_range(all_vals: list,
     return ymin, ymax
 
 
-def _svg_header(W: int, H: int, task_name: str, metric_key: str,
+def _svg_header(W: int, H: int, task_name: str, primary: str,
                 lower_is_better: bool) -> list:
     direction = "lower is better" if lower_is_better else "higher is better"
-    title = _h(f"{task_name} — {metric_key} ({direction})")
+    title = _h(f"{task_name} — {primary} ({direction})")
     return [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
         f'viewBox="0 0 {W} {H}" font-family="sans-serif" font-size="11">',
@@ -147,7 +148,7 @@ def _svg_header(W: int, H: int, task_name: str, metric_key: str,
 
 def _svg_axes_and_grid(W: int, H: int, ML: int, MT: int, PW: int, PH: int,
                        xmin: float, xmax: float, ymin: float, ymax: float,
-                       metric_key: str, sx, sy) -> list:
+                       primary: str, sx, sy) -> list:
     """Plot rectangle, horizontal grid + Y tick labels, X ticks, axis labels."""
     out = [
         f'<rect x="{ML}" y="{MT}" width="{PW}" height="{PH}" '
@@ -186,7 +187,7 @@ def _svg_axes_and_grid(W: int, H: int, ML: int, MT: int, PW: int, PH: int,
     cy = MT + PH / 2
     out.append(
         f'<text x="16" y="{cy:.1f}" text-anchor="middle" font-size="12" '
-        f'transform="rotate(-90 16,{cy:.1f})">{_h(metric_key)}</text>'
+        f'transform="rotate(-90 16,{cy:.1f})">{_h(primary)}</text>'
     )
     return out
 
@@ -235,7 +236,7 @@ def _svg_speedup_labels(s: _Series, ref_val: Optional[float],
                         all_vals: list, sx, sy) -> list:
     """Speedup-x labels next to KEEP points. Skips seed/R0 — its speedup
     is by definition 1.0x and would clutter the chart."""
-    if not (ref_val is not None and ref_val > 0 and s.rounds_keep):
+    if ref_val is None or not s.rounds_keep:
         return []
     annotations = [(kr, kv) for kr, kv in zip(s.rounds_keep, s.vals_keep)
                    if kr != 0 and kv > 0]
@@ -259,7 +260,8 @@ def _svg_speedup_labels(s: _Series, ref_val: Optional[float],
     return out
 
 
-def _svg_legend_items(s: _Series, ref_val: Optional[float]) -> list:
+def _svg_legend_items(s: _Series, ref_val: Optional[float],
+                      ref_label: str) -> list:
     items = []
     if s.vals_keep:
         items.append(("circle", "#2ca02c", "darkgreen",
@@ -274,7 +276,7 @@ def _svg_legend_items(s: _Series, ref_val: Optional[float]) -> list:
         items.append(("line", "#1f77b4", "#1f77b4", "best so far"))
     if ref_val is not None:
         items.append(("dashline", "#ff8c00", "#ff8c00",
-                      f"PyTorch ref ({ref_val:.1f})"))
+                      f"{ref_label} ({ref_val:.1f})"))
     return items
 
 
@@ -315,12 +317,11 @@ def _svg_legend(items: list, legend_x: int, legend_y: int) -> list:
     return out
 
 
-def _generate_svg_chart(history: list[dict], config: TaskConfig) -> str:
-    """Render an inline SVG of the optimization curve. Returns "" if nothing to plot."""
-    metric_key = config.primary_metric
-    lower_is_better = config.lower_is_better
-    ref_val = _find_ref_latency(history)
-    s = _collect_series(history, metric_key, lower_is_better)
+def _generate_svg(history: list[dict], primary: str, lower_is_better: bool,
+                  ref_val: Optional[float], ref_label: str,
+                  task_name: str) -> str:
+    """Render the optimization curve as inline SVG. Returns "" if no data."""
+    s = _collect_series(history, primary, lower_is_better)
     all_vals = s.vals_keep + s.vals_discard
     if not all_vals and not s.rounds_fail:
         return ""
@@ -335,16 +336,16 @@ def _generate_svg_chart(history: list[dict], config: TaskConfig) -> str:
         xmax = xmin + 1
     ymin, ymax = _compute_y_range(all_vals, ref_val)
 
-    def sx(r: float) -> float:
-        return ML + (r - xmin) / (xmax - xmin) * PW
+    def sx(x: float) -> float:
+        return ML + (x - xmin) / (xmax - xmin) * PW
 
     def sy(v: float) -> float:
         return MT + (1 - (v - ymin) / (ymax - ymin)) * PH
 
     p: list[str] = []
-    p.extend(_svg_header(W, H, config.name, metric_key, lower_is_better))
+    p.extend(_svg_header(W, H, task_name, primary, lower_is_better))
     p.extend(_svg_axes_and_grid(W, H, ML, MT, PW, PH,
-                                xmin, xmax, ymin, ymax, metric_key, sx, sy))
+                                xmin, xmax, ymin, ymax, primary, sx, sy))
     if ref_val is not None and ymin <= ref_val <= ymax:
         ry = sy(ref_val)
         p.append(
@@ -356,162 +357,142 @@ def _generate_svg_chart(history: list[dict], config: TaskConfig) -> str:
     p.extend(_svg_data_points(s, sx, sy, MT))
     p.extend(_svg_speedup_labels(s, ref_val, all_vals, sx, sy))
     p.extend(_svg_legend(
-        _svg_legend_items(s, ref_val),
+        _svg_legend_items(s, ref_val, ref_label),
         ML + PW + 14, MT + 14,
     ))
     p.append("</svg>")
     return "\n".join(p)
 
 
-# ---------------------------------------------------------------------------
-# Markdown report
-# ---------------------------------------------------------------------------
+def _resolve_baseline(progress: dict) -> tuple:
+    """(ref_val, ref_label). baseline_source distinguishes PyTorch ref
+    from seed-fallback so the report labels the line honestly."""
+    raw_ref = progress.get("baseline_metric")
+    ref_val = (raw_ref if isinstance(raw_ref, (int, float))
+               and raw_ref > 0 else None)
+    src = progress.get("baseline_source", "")
+    if src == "ref":
+        ref_label = "PyTorch ref"
+    elif src == "seed_fallback":
+        ref_label = "seed baseline"
+    else:
+        ref_label = "baseline"
+    return ref_val, ref_label
 
-def _baseline_and_best(history: list, metric_key: str,
-                       lower_is_better: bool) -> tuple:
-    """Walk history once for (baseline_val, best_val, best_round). Baseline
-    is the first KEEP's metric (R0 / seed); best is the lower/higher
-    KEEP depending on direction."""
-    baseline_val = None
-    best_val = None
-    best_round = None
+
+def _find_best_round(history: list, primary: str, best_val) -> Optional[int]:
+    """Earliest KEEP/SEED round whose metric equals best_val. Improvements
+    are monotonic in best-so-far so the first match is the introducing
+    round."""
+    if not isinstance(best_val, (int, float)):
+        return None
     for rec in history:
-        val = rec.get("metrics", {}).get(metric_key)
-        if val is None or not rec["accepted"]:
+        if rec.get("decision") not in ("KEEP", "SEED"):
             continue
-        if baseline_val is None:
-            baseline_val = val
-        if (best_val is None
-                or (lower_is_better and val < best_val)
-                or (not lower_is_better and val > best_val)):
-            best_val = val
-            best_round = rec["round"]
-    return baseline_val, best_val, best_round
+        v = rec.get("metrics", {}).get(primary)
+        if isinstance(v, (int, float)) and abs(v - best_val) < 1e-9:
+            return rec.get("round")
+    return None
 
 
-def _improvement_str(baseline_val, best_val, lower_is_better: bool) -> str:
-    if not (baseline_val is not None and best_val is not None
-            and baseline_val != 0):
+def _improvement_str(seed_val, best_val, lower_is_better: bool) -> str:
+    if not (isinstance(seed_val, (int, float))
+            and isinstance(best_val, (int, float)) and seed_val):
         return "N/A"
     if lower_is_better:
-        pct = (baseline_val - best_val) / baseline_val * 100
+        pct = (seed_val - best_val) / seed_val * 100
         return f"{pct:.1f}% reduction"
-    pct = (best_val - baseline_val) / baseline_val * 100
+    pct = (best_val - seed_val) / seed_val * 100
     return f"{pct:.1f}% increase"
 
 
-def _compute_wall_seconds(history: list) -> float:
-    """Real wall-clock from the first/last timestamp. Per-round
-    duration_sec only covers eval — not LLM calls or turn-to-turn idle
-    — so it underestimates. Falls back to sum-of-durations when the
-    timestamps are missing/malformed."""
-    try:
-        ts_first = history[0].get("timestamp", "") if history else ""
-        ts_last = history[-1].get("timestamp", "") if history else ""
-        if ts_first and ts_last:
-            t0 = _dt.datetime.strptime(ts_first, "%Y-%m-%d %H:%M:%S")
-            t1 = _dt.datetime.strptime(ts_last, "%Y-%m-%d %H:%M:%S")
-            wall = (t1 - t0).total_seconds()
-            if wall > 0:
-                return wall
-    except Exception:
-        pass
-    return sum(rec.get("duration_sec", 0) for rec in history)
-
-
-def _format_wall_time(secs: float) -> str:
-    if secs >= 3600:
-        return f"{secs / 3600:.1f}h"
-    if secs >= 60:
-        return f"{secs / 60:.1f}min"
-    return f"{secs:.0f}s"
-
-
-def _count_status_buckets(history: list) -> tuple:
-    total = len(history)
-    n_keep = sum(1 for r in history if r["accepted"])
-    n_fail = sum(
-        1 for r in history
-        if not r["accepted"]
-        and (not r.get("correctness") or r.get("constraint_violations"))
-    )
-    return n_keep, n_fail, total - n_keep - n_fail, total
-
-
-def _collect_improvements(history: list, metric_key: str,
+def _collect_improvements(history: list, primary: str,
                           lower_is_better: bool) -> list:
-    """Monotonic best-so-far steps among KEEP rounds."""
+    """Monotonic best-so-far steps among KEEP/SEED rounds."""
     improvements: list = []
     prev_best: Optional[float] = None
     for rec in history:
-        if not rec["accepted"]:
+        if rec.get("decision") not in ("KEEP", "SEED"):
             continue
-        val = rec.get("metrics", {}).get(metric_key)
-        if val is None:
+        v = rec.get("metrics", {}).get(primary)
+        if v is None:
             continue
-        if prev_best is not None and val != prev_best:
-            delta = prev_best - val if lower_is_better else val - prev_best
+        if prev_best is not None and v != prev_best:
+            delta = prev_best - v if lower_is_better else v - prev_best
             if delta > 0:
                 improvements.append({
-                    "round": rec["round"],
-                    "desc": rec["description"],
+                    "round": rec.get("round"),
+                    "desc": rec.get("description", ""),
                     "from": prev_best,
-                    "to": val,
+                    "to": v,
                     "delta": delta,
                 })
         if (prev_best is None
-                or (lower_is_better and val < prev_best)
-                or (not lower_is_better and val > prev_best)):
-            prev_best = val
+                or (lower_is_better and v < prev_best)
+                or (not lower_is_better and v > prev_best)):
+            prev_best = v
     return improvements
 
 
-def _render_overview(config: TaskConfig, total_rounds: int, n_keep: int,
-                     n_fail: int, n_discard: int, wall_time_str: str,
-                     ref_baseline_val, baseline_val, best_val, best_round,
+def _first_case_descs(history: list) -> list:
+    """per_shape_descs from the first history record that carries them
+    (the SEED round, populated by
+    task_config.eval_assemble.assemble_eval_result)."""
+    for rec in history:
+        d = (rec.get("metrics", {}) or {}).get("per_shape_descs")
+        if isinstance(d, list) and d:
+            return d
+    return []
+
+
+def _render_overview(task_name: str, total_rounds: int, n_keep: int,
+                     n_discard: int, n_fail: int, primary: str,
+                     lower_is_better: bool, ref_val, ref_label: str,
+                     seed_val, best_val, best_round,
                      improvement_str: str,
-                     best_speedup: Optional[float]) -> list:
-    metric_key = config.primary_metric
-    direction_zh = "越低越好" if config.lower_is_better else "越高越好"
+                     speedup_str: Optional[str]) -> list:
+    direction_zh = "越低越好" if lower_is_better else "越高越好"
     lines = [
-        f"# {config.name} — 优化报告",
+        f"# {task_name} — 优化报告",
         "",
         "## 总览",
         "",
         "| 项目 | 值 |",
         "|------|---|",
-        f"| 任务 | {_escape_md_cell(config.description)} |",
+        f"| 任务 | {_escape_md_cell(task_name)} |",
         f"| 总轮次 | {total_rounds} |",
         f"| 接受 / 失败 / 丢弃 | {n_keep} / {n_fail} / {n_discard} |",
-        f"| 主指标 | {metric_key} ({direction_zh}) |",
-        f"| 优化总用时 | {wall_time_str} |",
+        f"| 主指标 | {primary} ({direction_zh}) |",
     ]
-    if ref_baseline_val is not None:
-        unit = metric_key.split('_')[-1]
-        lines.append(
-            "| **PyTorch 参考基线** | "
-            f"**{ref_baseline_val:.2f} {unit}** |"
-        )
-    lines.extend([
-        f"| Kernel Baseline (R0) | {baseline_val} |",
-        f"| **最优结果** | **{best_val} (Round {best_round})** |",
-        f"| 总改进 (vs Kernel Baseline) | {improvement_str} |",
-    ])
-    if best_speedup is not None:
-        lines.append(
-            f"| **最优加速比 (vs PyTorch)** | **{best_speedup:.2f}x** |"
-        )
+    if ref_val is not None:
+        lines.append(f"| **{ref_label}** | **{ref_val:.2f}** |")
+    if seed_val is not None:
+        lines.append(f"| Seed kernel | {seed_val} |")
+    lines.append(f"| **最优结果** | **{best_val} (Round {best_round})** |")
+    lines.append(f"| 总改进 (vs seed) | {improvement_str} |")
+    if speedup_str:
+        lines.append(f"| **最优加速比 (vs {ref_label})** | **{speedup_str}** |")
     lines.append("")
     return lines
 
 
-def _render_improvements_table(improvements: list, metric_key: str) -> list:
+def _render_shapes(case_descs: list) -> list:
+    if len(case_descs) <= 1:
+        return []
+    lines = [f"## 测试形状 ({len(case_descs)})", ""]
+    for i, d in enumerate(case_descs):
+        lines.append(f"{i}. {d}")
+    lines.append("")
+    return lines
+
+
+def _render_improvements_table(improvements: list, primary: str) -> list:
     if not improvements:
         return []
     lines = [
         "## Key Improvements",
         "",
-        f"| Round | Description | {metric_key} | Improvement |",
+        f"| Round | Description | {primary} | Improvement |",
         f"|-------|-------------|{'---' * 4}|-------------|",
     ]
     for imp in improvements:
@@ -529,61 +510,98 @@ def _render_improvements_table(improvements: list, metric_key: str) -> list:
     return lines
 
 
-def _round_status(rec: dict) -> str:
-    if rec["accepted"]:
-        return "keep"
-    if not rec.get("correctness") or rec.get("constraint_violations"):
-        return "fail"
-    return "discard"
-
-
-def _render_all_rounds(history: list, metric_key: str) -> list:
+def _render_all_rounds(history: list, primary: str) -> list:
     lines = [
         "## All Rounds",
         "",
-        f"| Round | Description | Correctness | {metric_key} | Status |",
-        f"|-------|-------------|-------------|{'---' * 4}|--------|",
+        f"| Round | Description | Decision | {primary} |",
+        f"|-------|-------------|----------|{'---' * 4}|",
     ]
     for rec in history:
-        status = _round_status(rec)
-        correct = "PASS" if rec.get("correctness") else "FAIL"
-        val = rec.get("metrics", {}).get(metric_key, "N/A")
+        rnd = rec.get("round", "?")
+        decision = rec.get("decision", "?")
+        val = rec.get("metrics", {}).get(primary, "—")
         if isinstance(val, float):
             val = f"{val:.4f}"
-        desc = _escape_md_cell(rec["description"][:50])
-        lines.append(
-            f"| R{rec['round']} | {desc} | {correct} | {val} | {status} |"
-        )
+        desc = _escape_md_cell((rec.get("description") or "")[:80])
+        lines.append(f"| R{rnd} | {desc} | {decision} | {val} |")
     lines.append("")
     return lines
 
 
-def _generate_markdown(history: list[dict], config: TaskConfig,
-                       output_path: str, svg_chart: str):
-    """生成 Markdown 文字报告 (svg_chart 为空字符串时跳过曲线区段)"""
-    metric_key = config.primary_metric
-    n_keep, n_fail, n_discard, total_rounds = _count_status_buckets(history)
-    baseline_val, best_val, best_round = _baseline_and_best(
-        history, metric_key, config.lower_is_better)
-    ref_baseline_val = _find_ref_latency(history)
-    improvement_str = _improvement_str(baseline_val, best_val,
-                                       config.lower_is_better)
-    wall_time_str = _format_wall_time(_compute_wall_seconds(history))
-    best_speedup = (ref_baseline_val / best_val
-                    if (ref_baseline_val is not None
-                        and best_val is not None and best_val > 0)
-                    else None)
-    improvements = _collect_improvements(history, metric_key,
-                                         config.lower_is_better)
+def render_report(task_dir: str) -> str:
+    """Build the full markdown report. Returns "" if no plottable data."""
+    config = load_task_config(task_dir)
+    if config is None:
+        return ""
+    history = _load_history(task_dir)
+    if not history:
+        return ""
+    primary = config.primary_metric
+    lower_is_better = config.lower_is_better
+    progress = load_progress(task_dir) or {}
 
-    lines = _render_overview(config, total_rounds, n_keep, n_fail,
-                             n_discard, wall_time_str, ref_baseline_val,
-                             baseline_val, best_val, best_round,
-                             improvement_str, best_speedup)
-    if svg_chart:
-        lines.extend(["## Optimization Curve", "", svg_chart, ""])
-    lines.extend(_render_improvements_table(improvements, metric_key))
-    lines.extend(_render_all_rounds(history, metric_key))
+    ref_val, ref_label = _resolve_baseline(progress)
+    n_keep = sum(1 for r in history if r.get("decision") in ("KEEP", "SEED"))
+    n_discard = sum(1 for r in history if r.get("decision") == "DISCARD")
+    n_fail = sum(1 for r in history if r.get("decision") == "FAIL")
+    seed_val = progress.get("seed_metric")
+    best_val = progress.get("best_metric")
+    best_round = _find_best_round(history, primary, best_val)
+    improvement_str = _improvement_str(seed_val, best_val, lower_is_better)
+    speedup_str = (f"{ref_val / best_val:.2f}x"
+                   if (ref_val is not None
+                       and isinstance(best_val, (int, float))
+                       and best_val > 0) else None)
+    task_name = (progress.get("task")
+                 or os.path.basename(os.path.normpath(task_dir)))
+    svg = _generate_svg(history, primary, lower_is_better, ref_val,
+                        ref_label, task_name)
+    improvements = _collect_improvements(history, primary, lower_is_better)
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    lines = _render_overview(task_name, len(history), n_keep, n_discard,
+                             n_fail, primary, lower_is_better,
+                             ref_val, ref_label, seed_val, best_val,
+                             best_round, improvement_str, speedup_str)
+    lines.extend(_render_shapes(_first_case_descs(history)))
+    if svg:
+        lines.extend(["## Optimization Curve", "", svg, ""])
+    lines.extend(_render_improvements_table(improvements, primary))
+    lines.extend(_render_all_rounds(history, primary))
+
+    return "\n".join(lines)
+
+
+def write_report(task_dir: str) -> Optional[str]:
+    """Write the report to .ar_state/report.md. Returns path or None."""
+    md = render_report(task_dir)
+    if not md:
+        return None
+    out = report_path(task_dir)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(md)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Generate FINISH-phase report.md")
+    ap.add_argument("task_dir", help="Path to autoresearch task directory")
+    ap.add_argument("--print", dest="to_stdout", action="store_true",
+                    help="Print report to stdout instead of writing")
+    args = ap.parse_args()
+
+    task_dir = os.path.abspath(args.task_dir)
+    if args.to_stdout:
+        sys.stdout.write(render_report(task_dir))
+        return
+    p = write_report(task_dir)
+    if p:
+        print(p)
+    else:
+        print("(no plottable data — empty history)", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
