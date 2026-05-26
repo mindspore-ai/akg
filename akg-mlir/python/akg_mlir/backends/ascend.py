@@ -234,6 +234,8 @@ def bisheng_compile(input_file,
 
     if enable_hfusion_compile:
         compile_cmd.append("-enable-hfusion-compile")
+    else:
+        compile_cmd.append("-disable-hivm-tensor-compile")
     if enable_hivm_compile:
         compile_cmd.append("-enable-hivm-compile")
     if enable_auto_multi_buffer:
