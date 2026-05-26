@@ -28,6 +28,7 @@
 </details>
 
 ## 📘 1. Project Overview
+
 **AKG Agents** is an LLM-powered multi-agent collaboration framework for AI Infra and high-performance computing, aimed at boosting the development and optimization efficiency of high-performance code through intelligent agent collaboration.
 
 The framework provides a complete agent infrastructure: ReAct Agent base classes, extensible **Skill / Tools / SubAgent** mechanisms, LangGraph workflow orchestration, tree-based Trace system, and a unified configuration and registry. Developers can rapidly build, compose, and deploy intelligent agents tailored to diverse tasks.
@@ -35,11 +36,13 @@ The framework provides a complete agent infrastructure: ReAct Agent base classes
 The current production scenario is **AI kernel code generation**: leveraging LLM planning and multi-agent collaboration to automate multi-backend, multi-DSL high-performance kernel generation and optimization. Future extensions will cover kernel migration, performance tuning, code refactoring, and more AI Infra related scenarios.
 
 ## 🗓️ 2. Changelog
+
+- 2026-05-26: Added [workspace_autoresearch](./workspace_autoresearch/README.md) — Claude Code-driven iterative kernel optimization workspace. Reuses akg_agents' `KernelVerifier` / `WorkerManager` / `GitRepo` / `CodeChecker` directly; phase machine + hooks + slash command are workspace-local.
 - 2026-04-28: CLI module (`akg_cli`) deprecated and will no longer receive updates.
 - 2026-03-31: Added [AutoResearch](./docs/v2/AutoResearch.md) workflow — agent-driven iterative deep optimization with KernelVerifier eval, supporting all DSLs.
 - 2026-03-11：Streamline the [operator optimization](./docs/v2/AKG-Op.md) process by integrating AKG Agents and OpenCode (`akg-op` Agent).
 - 2026-02-26: Supported PyPTO backend code generation.
-- 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`. 
+- 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`.
 - 2026-02-10: Core framework refactored (v2). Decoupled general-purpose Agent capabilities from kernel-specific logic to build a reusable multi-agent collaboration framework. See [Architecture](./docs/v2/Architecture.md), [Agent System](./docs/v2/AgentSystem.md), [Skill System](./docs/v2/SkillSystem.md), [Workflow](./docs/v2/Workflow.md), [Trace System](./docs/v2/Trace.md), [Configuration](./docs/v2/Configuration.md).
 - 2025-12-01: Introduced LangGraph for task orchestration. New `LangGraphTask` replaces original `Task Orchestration` scheme. See [Workflow Documentation](./docs/v2/Workflow.md).
 - 2025-11-25: Supported service architecture, including `client-server-worker` separation architecture. See [Service Architecture Documentation](./docs/v1/ServerArchitecture.md).
@@ -49,10 +52,10 @@ The current production scenario is **AI kernel code generation**: leveraging LLM
 - 2025-08-12: Supported "Doc-Driven Integration" (now replaced by [Skill System](./docs/v2/SkillSystem.md)).
 - 2025-06-27: Initial AIKG release with code generation support for Triton and SWFT backends.
 
-
 ## 🛠️ 3. Quick Start
 
 ### Installation
+
 ```bash
 # 1. Environment setup (optional, recommended Python 3.10/3.11/3.12)
 conda create -n akg_agents python=3.11
@@ -70,6 +73,7 @@ pip install -e ./akg_agents --no-build-isolation
 
 # 5. Download third-party benchmarks as needed
 bash akg_agents/download.sh --with_all_benchmarks
+
 ```
 
 ### Configure LLM
@@ -79,6 +83,7 @@ Copy the example config to `~/.akg/settings.json` and fill in your API Key and m
 ```bash
 mkdir -p ~/.akg
 cp akg_agents/examples/settings.example.json ~/.akg/settings.json
+
 ```
 
 A minimal configuration only requires one model (auto-applies to all levels):
@@ -94,6 +99,7 @@ A minimal configuration only requires one model (auto-applies to all levels):
   },
   "default_model": "standard"
 }
+
 ```
 
 **Advanced Configuration**:
@@ -127,6 +133,7 @@ AKG Agents provides kernel generation, optimization, and migration capabilities 
 | Migration | `run_cuda_to_ascend_conversion.py`, `run_cuda_to_ascend_evolve.py` |
 
 Usage examples:
+
 ```bash
 # Kernel generation
 python examples/kernel_related/run_torch_npu_triton_single.py
@@ -142,8 +149,8 @@ python examples/kernel_related/run_cuda_to_ascend_conversion.py
 
 # AutoResearch
 python scripts/run_autoresearch.py
-```
 
+```
 
 ## ▶️ 4. Tutorial Examples
 
@@ -179,10 +186,9 @@ python scripts/run_autoresearch.py
 
 </details>
 
-
 ## 🧭 Usage Mode vs Development Mode
 
-```
+```text
 akg_agents/
 ├── workspace/          ← Usage: open a Code Agent here to use operator optimization
 │   ├── .opencode/      　 skills / agents definitions, auto-loaded
@@ -190,6 +196,7 @@ akg_agents/
 └── ...                 ← Development: open here to develop the framework itself
     ├── AGENTS.md
     └── python/akg_agents/
+
 ```
 
 - **Usage mode** (`workspace/`): For operator optimization users. Open OpenCode / Claude Code / Cursor and the built-in Agents and Skills handle env setup, kernel generation, fusion analysis, etc.
@@ -200,6 +207,7 @@ akg_agents/
 > Start with [Architecture](./docs/v2/Architecture.md) for an overview, then read [Workflow](./docs/v2/Workflow.md) and [Skill System](./docs/v2/SkillSystem.md) to understand the core mechanisms.
 
 ### Core Framework
+
 - **[Architecture](./docs/v2/Architecture.md)** - Overall architecture and module overview
 - **[Agent System](./docs/v2/AgentSystem.md)** - Agent base classes, ReAct Agent, registry
 - **[Skill System](./docs/v2/SkillSystem.md)** - Skill management and dynamic knowledge injection
@@ -210,18 +218,22 @@ akg_agents/
 - **[LLM](./docs/v2/LLM.md)** - LLM provider, client, embedding
 
 ### Scenarios
+
 - **Generation** — Direct kernel code generation and correctness verification
 - **Optimization** — Adaptive Search (UCB), Evolve (evolutionary algorithm), [AutoResearch](./docs/v2/AutoResearch.md) (agent-driven iteration)
 - **Migration** — CUDA → Ascend kernel conversion
 - **[Verifier Data Cache](./docs/v2/VerifierDataCache.md)** - Verifier-side local cache for reference data and baseline profile results
 
 ### OpenCode Integration
+
 - **[akg-op User Guide](./docs/v2/AKG-Op.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code integration, supporting single-operator optimization and model fusion analysis
 
 ### Contributing
+
 - **[Skill Contribution Guide](./docs/v2/SkillContributionGuide.md)** - How to contribute new Skills
 
 ### Additional Modules (v1 Documentation)
+
 - **[Database](./docs/v1/Database.md)** - Database module
 - **[RAG](./docs/v1/RAG.md)** - Vector retrieval-augmented generation
 - **[RAG Usage Guide](./docs/v1/RAG_Usage.md)** - RAG configuration and usage tutorial

@@ -28,6 +28,7 @@
 </details>
 
 ## 📘 1. 项目简介
+
 **AKG Agents** 是一个面向 AI Infra 与高性能计算场景的 LLM 多 Agent 协作框架，致力于通过智能 Agent 协同提升高性能代码的开发与优化效率。
 
 框架提供完整的 Agent 基础设施：包括 ReAct Agent 基类、可扩展的 **Skill / Tools / SubAgent** 机制、LangGraph 工作流编排、树状 Trace 追踪系统，以及统一的配置与注册体系。开发者可以基于这些能力快速构建、组合和部署面向不同任务的智能 Agent。
@@ -35,6 +36,8 @@
 当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
 
 ## 🗓️ 2. 更新日志
+
+- 2026-05-26：新增 [workspace_autoresearch](./workspace_autoresearch/README.md) — Claude Code 驱动的算子迭代优化工作区，直接复用 akg_agents 的 `KernelVerifier` / `WorkerManager` / `GitRepo` / `CodeChecker`；phase machine + hooks + slash 命令为 workspace 本地实现。
 - 2026-04-28：CLI 模块（`akg_cli`）已废弃，停止后续演进。
 - 2026-03-31：新增 [AutoResearch](./docs/v2/CN/AutoResearch.md) 工作流 — Agent 驱动的多轮自主迭代深度优化，基于 KernelVerifier 评测，支持所有 DSL。
 - 2026-03-11：打通集成 AKG Agents 和 OpenCode 的算子优化流程（[akg-op](./docs/v2/CN/AKG-Op.md) Agent）。
@@ -49,10 +52,10 @@
 - 2025-08-12：支持"文档驱动式接入"功能（已被 [Skill System](./docs/v2/CN/SkillSystem.md) 替代）。
 - 2025-06-27：AIKG 初始版本，支持 Triton 与 SWFT 后端代码生成能力。
 
-
 ## 🛠️ 3. 快速上手
 
 ### 安装
+
 ```bash
 # 1. 环境设置（可选，推荐 Python 3.10/3.11/3.12）
 conda create -n akg_agents python=3.11
@@ -70,6 +73,7 @@ pip install -e ./akg_agents --no-build-isolation
 
 # 5. 按需下载第三方 benchmark
 bash akg_agents/download.sh --with_all_benchmarks
+
 ```
 
 ### 配置 LLM
@@ -79,6 +83,7 @@ bash akg_agents/download.sh --with_all_benchmarks
 ```bash
 mkdir -p ~/.akg
 cp akg_agents/examples/settings.example.json ~/.akg/settings.json
+
 ```
 
 最简配置只需填写一个模型（自动应用到所有等级）：
@@ -94,6 +99,7 @@ cp akg_agents/examples/settings.example.json ~/.akg/settings.json
   },
   "default_model": "standard"
 }
+
 ```
 
 **进阶配置**：
@@ -127,6 +133,7 @@ AKG Agents 提供算子生成、优化、迁移能力，脚本分布在三个目
 | 迁移 | `run_cuda_to_ascend_conversion.py`、`run_cuda_to_ascend_evolve.py` |
 
 使用示例：
+
 ```bash
 # 算子生成
 python examples/kernel_related/run_torch_npu_triton_single.py
@@ -142,6 +149,7 @@ python examples/kernel_related/run_cuda_to_ascend_conversion.py
 
 # AutoResearch
 python scripts/run_autoresearch.py
+
 ```
 
 ## ▶️ 4. 教程示例
@@ -178,10 +186,9 @@ python scripts/run_autoresearch.py
 
 </details>
 
-
 ## 🧭 使用态 vs 开发态
 
-```
+```text
 akg_agents/
 ├── workspace/          ← 使用态：在此目录打开 Code Agent，即可使用算子优化能力
 │   ├── .opencode/      　 skills / agents 定义，自动加载
@@ -189,6 +196,7 @@ akg_agents/
 └── ...                 ← 开发态：在 akg_agents/ 目录打开，开发框架代码本身
     ├── AGENTS.md
     └── python/akg_agents/
+
 ```
 
 - **使用态**（`workspace/`）：面向算子优化用户。打开 OpenCode / Claude Code / Cursor，环境检查、算子生成、融合分析等由内置 Agent 和 Skill 自动编排。
@@ -199,6 +207,7 @@ akg_agents/
 > 建议先阅读《[框架架构](./docs/v2/CN/Architecture.md)》了解整体架构，再阅读《[Workflow 文档](./docs/v2/CN/Workflow.md)》和《[Skill 系统](./docs/v2/CN/SkillSystem.md)》了解核心机制。
 
 ### 核心框架
+
 - **[框架架构](./docs/v2/CN/Architecture.md)** - 整体架构、模块概览
 - **[Agent 体系](./docs/v2/CN/AgentSystem.md)** - Agent 基类、ReAct Agent、注册机制
 - **[Skill 系统](./docs/v2/CN/SkillSystem.md)** - 技能管理与动态知识注入
@@ -209,18 +218,22 @@ akg_agents/
 - **[LLM 接入](./docs/v2/CN/LLM.md)** - LLM 提供者、客户端、Embedding
 
 ### 场景
+
 - **生成** — 直接生成算子代码并验证正确性
 - **优化** — Adaptive Search（UCB策略）、Evolve（进化算法）、[AutoResearch](./docs/v2/CN/AutoResearch.md)（Agent驱动迭代）、[Dynamic Tune](./docs/v2/CN/DynamicTune.md)（Triton Ascend 动态 shape 离线调优）
 - **迁移** — CUDA → Ascend 算子转换
 - **[Verifier Data Cache](./docs/v2/CN/VerifierDataCache.md)** - Verifier 侧 reference data / baseline 结果本地缓存设计
 
 ### OpenCode 集成
+
 - **[akg-op 使用指南](./docs/v2/CN/AKG-Op.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码集成，支持单算子优化与模型融合分析
 
 ### 贡献
+
 - **[Skill 贡献指南](./docs/v2/CN/SkillContributionGuide.md)** - 如何贡献新的 Skill
 
 ### 其他模块（v1 文档）
+
 - **[Database](./docs/v1/CN/Database.md)** - 数据库模块
 - **[RAG](./docs/v1/CN/RAG.md)** - 向量检索增强生成
 - **[RAG 使用指南](./docs/v1/CN/RAG_Usage.md)** - RAG 配置与使用教程
