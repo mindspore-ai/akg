@@ -268,6 +268,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   // hivm optimize pipeline
   if (options.enableHIVMCompile) {
     createHIVMPipeline(pm, options);
+  } else {
+    pm.addPass(mlir::hivm::createInferFuncCoreTypePass());
   }
 }
 }  // namespace
