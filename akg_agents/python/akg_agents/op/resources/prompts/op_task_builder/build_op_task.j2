@@ -6,6 +6,20 @@
 - `definition.json`：定义输入输出的名称、形状和数据类型。
 - `workload.jsonl`：定义具体的动态 shape 参数和容差。
 - `reference.py`：必须包含 `run(**inputs)` 函数。
+{% elif bench_type == "cann" %}
+## CANN-Bench 格式要求
+当用户要求使用 CANN 格式时，你需要基于算子目录中的信息（proto.yaml、golden.py、cases.yaml、desc.md）生成算子实现代码。
+
+关键信息来源：
+- `proto.yaml`：算子原型定义（输入输出 schema、属性、数据类型）
+- `desc.md`：算子详细描述（数学公式、接口规范、精度要求）
+- `golden.py`：PyTorch 参考实现
+- `cases.yaml`：测试用例（Shape、dtype、属性、值域、性能基线）
+
+生成的代码需满足：
+1. 实现与 proto.yaml schema 一致的算子函数
+2. 通过 cases.yaml 中所有用例的 MERE/MARE 精度校验
+3. 性能优于 baseline_perf_us 基线
 {% else %}
 ## KernelBench格式要求
 确保导入必要依赖，如：

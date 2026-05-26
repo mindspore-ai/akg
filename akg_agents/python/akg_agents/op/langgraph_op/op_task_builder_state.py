@@ -48,7 +48,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     backend: str                        # 后端：cuda/ascend
     arch: str                           # 架构：a100/ascend910b4等
     dsl: str                            # DSL类型
-    bench_type: str                     # 基准测试类型：kernelbench 或 sol
+    bench_type: str                     # 基准测试类型：kernelbench, sol, 或 cann
     task_label: Optional[str]           # 任务标签（用于路由）
     
     # === 状态控制 ===

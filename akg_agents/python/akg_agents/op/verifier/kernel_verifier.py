@@ -133,7 +133,7 @@ class KernelVerifier:
                  impl_func_name: Optional[str] = None,
                  config: Optional[Dict[str, Any]] = None,
                  worker: Optional[WorkerInterface] = None,
-                 bench_type: Literal["kernelbench", "sol"] = "kernelbench"):
+                 bench_type: Literal["kernelbench", "sol", "cann"] = "kernelbench"):
         """
         初始化Kernel验证器。
 
@@ -1064,6 +1064,20 @@ if __name__ == "__main__":
         )
 
     def _get_baseline_cache_source(self) -> Optional[str]:
+        if self.bench_type == "cann":
+            try:
+                cann_problem_dir = self.config.get("cann_problem_dir")
+                if not cann_problem_dir:
+                    logger.info(
+                        f"[{self.op_name}] config['cann_problem_dir'] 未配置，跳过 CANN baseline cache"
+                    )
+                    return None
+                return cann_problem_dir
+            except Exception as exc:
+                logger.info(
+                    f"[{self.op_name}] CANN baseline cache key 构建失败，跳过: {exc}"
+                )
+                return None
         if self.bench_type != "sol":
             return self.framework_code
         try:
@@ -1287,7 +1301,7 @@ if __name__ == "__main__":
         self.config["_data_cache_reference_key"] = cache_key or self._get_reference_cache_key()
 
     def _get_cached_baseline_time_us(self, warmup_times: int, run_times: int) -> Optional[float]:
-        if self.bench_type not in {"kernelbench", "sol"}:
+        if self.bench_type not in {"kernelbench", "sol", "cann"}:
             return None
 
         cache_cfg = self._get_data_cache_config()
@@ -1333,7 +1347,7 @@ if __name__ == "__main__":
         run_times: int,
         artifacts: Optional[Dict[str, str]] = None,
     ) -> None:
-        if self.bench_type not in {"kernelbench", "sol"} or base_time_us is None:
+        if self.bench_type not in {"kernelbench", "sol", "cann"} or base_time_us is None:
             return
         if base_time_us <= 0 or base_time_us >= float("inf"):
             return
@@ -1390,6 +1404,9 @@ if __name__ == "__main__":
         if self.bench_type == "sol":
             from akg_agents.op.verifier.sol_verifier import generate_sol_verify_project
             return generate_sol_verify_project(self, impl_code, verify_dir, device_id)
+        if self.bench_type == "cann":
+            from akg_agents.op.verifier.cann_verifier import generate_cann_verify_project
+            return generate_cann_verify_project(self, impl_code, verify_dir, device_id)
 
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
 
@@ -1718,6 +1735,11 @@ if __name__ == "__main__":
         if self.bench_type == "sol":
             from akg_agents.op.verifier.sol_verifier import generate_sol_profile_project
             return generate_sol_profile_project(
+                self, verify_dir, device_id, warmup_times, run_times, skip_base
+            )
+        if self.bench_type == "cann":
+            from akg_agents.op.verifier.cann_verifier import generate_cann_profile_project
+            return generate_cann_profile_project(
                 self, verify_dir, device_id, warmup_times, run_times, skip_base
             )
 
@@ -2151,6 +2173,10 @@ if __name__ == "__main__":
             if self.bench_type == "sol":
                 # SOL: 检查 definition.json 和 impl 文件
                 needed_file = os.path.join(verify_dir, "definition.json")
+                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
+            elif self.bench_type == "cann":
+                # CANN: 检查 proto.yaml 和 impl 文件
+                needed_file = os.path.join(verify_dir, "proto.yaml")
                 impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
             else:
                 # KernelBench: 检查框架实现文件和 DSL 实现文件

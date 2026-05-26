@@ -35,7 +35,8 @@ from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.evolve import evolve
-from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
+from akg_agents.op.utils.sol_utils import load_sol_task, load_sol_task_source, resolve_path_from_base
+from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
 from akg_agents.op.utils.npukb_utils import load_npukb_metadata_if_any
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.environment_check import check_env_for_task
@@ -45,6 +46,66 @@ from .result_collector import RealtimeResultCollector
 # ============================================================================
 # 配置管理
 # ============================================================================
+
+
+def _resolve_task_config(
+    task_config: Dict[str, Any],
+    config_dir: Path,
+    default_task_desc: str,
+) -> Dict[str, Any]:
+    """Resolve task configuration from YAML task section.
+
+    Detects path type (SOL dir / CANN dir / plain .py file) and loads
+    the appropriate task. Returns a dict with resolved fields.
+    """
+    result = {
+        "op_name": task_config.get("op_name") or None,
+        "task_desc": default_task_desc,
+        "sol_problem_dir": None,
+        "cann_problem_dir": None,
+        "npukb_aux_files": None,
+        "npukb_factory_names": None,
+    }
+
+    explicit_op_name = result["op_name"]
+
+    sol_problem_dir = task_config.get('sol_problem_dir')
+    if sol_problem_dir and isinstance(sol_problem_dir, str):
+        resolved_sol_dir = resolve_path_from_base(sol_problem_dir, config_dir)
+        sol_op_name, task_desc, resolved_sol_dir = load_sol_task(resolved_sol_dir)
+        result["op_name"] = explicit_op_name or sol_op_name
+        result["task_desc"] = task_desc.strip()
+        result["sol_problem_dir"] = resolved_sol_dir
+        return result
+
+    task_desc_value = task_config.get('task_desc', default_task_desc)
+    if not task_desc_value or not isinstance(task_desc_value, str):
+        return result
+
+    resolved_task_path = resolve_path_from_base(task_desc_value, config_dir)
+    if is_cann_task_dir(resolved_task_path):
+        task_op_name, task_desc, resolved_cann_dir = load_cann_task_source(resolved_task_path)
+        result["op_name"] = explicit_op_name or task_op_name
+        result["task_desc"] = task_desc.strip()
+        result["cann_problem_dir"] = resolved_cann_dir
+    else:
+        task_op_name, task_desc, resolved_sol_dir = load_sol_task_source(resolved_task_path)
+        result["op_name"] = explicit_op_name or task_op_name
+        result["task_desc"] = task_desc.strip()
+        result["sol_problem_dir"] = resolved_sol_dir
+
+    npukb_meta = load_npukb_metadata_if_any(resolved_task_path)
+    if npukb_meta is not None:
+        npukb_aux_files, npukb_factory_names = npukb_meta
+        result["npukb_aux_files"] = npukb_aux_files
+        result["npukb_factory_names"] = npukb_factory_names
+        print(
+            f"NPUKernelBench 模式（yaml 入口）：sidecar="
+            f"{list(npukb_aux_files.keys())}",
+        )
+
+    return result
+
 
 class RunnerConfig:
     """进化Runner配置参数类"""
@@ -100,6 +161,7 @@ def get_init_inputs():
     return []
 """
         self._sol_problem_dir = None
+        self._cann_problem_dir = None
         self._npukb_aux_files = None
         self._npukb_factory_names = None
 
@@ -153,36 +215,15 @@ def get_init_inputs():
 
             # 任务配置（仅在非批量调用模式下加载）
             if not skip_task_config and 'task' in yaml_config:
-                task_config = yaml_config['task']
-                explicit_op_name = task_config.get('op_name')
-                if explicit_op_name:
-                    config.op_name = explicit_op_name
-
-                sol_problem_dir = task_config.get('sol_problem_dir')
-                if sol_problem_dir and isinstance(sol_problem_dir, str):
-                    resolved_sol_dir = resolve_path_from_base(sol_problem_dir, config_dir)
-                    sol_op_name, task_desc, resolved_sol_dir = load_sol_task(resolved_sol_dir)
-                    config.op_name = explicit_op_name or sol_op_name
-                    config.task_desc = task_desc.strip()
-                    config._sol_problem_dir = resolved_sol_dir
-                else:
-                    task_desc_value = task_config.get('task_desc', config.task_desc)
-                    if task_desc_value and isinstance(task_desc_value, str):
-                        resolved_task_path = resolve_path_from_base(task_desc_value, config_dir)
-                        task_op_name, task_desc, resolved_sol_dir = load_task_source(resolved_task_path)
-                        config.op_name = explicit_op_name or task_op_name or config.op_name
-                        config.task_desc = task_desc.strip()
-                        config._sol_problem_dir = resolved_sol_dir
-
-                        npukb_meta = load_npukb_metadata_if_any(resolved_task_path)
-                        if npukb_meta is not None:
-                            npukb_aux_files, npukb_factory_names = npukb_meta
-                            config._npukb_aux_files = npukb_aux_files
-                            config._npukb_factory_names = npukb_factory_names
-                            print(
-                                f"NPUKernelBench 模式（yaml 入口）：sidecar="
-                                f"{list(npukb_aux_files.keys())}",
-                            )
+                resolved = _resolve_task_config(yaml_config['task'], config_dir, config.task_desc)
+                if resolved["op_name"]:
+                    config.op_name = resolved["op_name"]
+                config.task_desc = resolved["task_desc"]
+                config._sol_problem_dir = resolved["sol_problem_dir"]
+                config._cann_problem_dir = resolved["cann_problem_dir"]
+                if resolved["npukb_aux_files"] and resolved["npukb_factory_names"]:
+                    config._npukb_aux_files = resolved["npukb_aux_files"]
+                    config._npukb_factory_names = resolved["npukb_factory_names"]
 
             return config
         except Exception as e:

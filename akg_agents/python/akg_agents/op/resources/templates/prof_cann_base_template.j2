@@ -1,0 +1,186 @@
+import os
+import json
+import math
+import time
+import sys
+import yaml
+
+import torch
+{% if backend == "ascend" %}
+from akg_agents.op.verifier.profiler import profiler_npu
+{% endif %}
+
+from cann_correctness import set_seed
+import golden
+
+# CANN-Bench source repo imports (same pattern as SOL)
+sys.path.append("{{ cann_bench_src_dir }}")
+
+_OPTIONAL_DTYPES = {
+    "uint16": None,
+    "uint32": None,
+    "uint64": None,
+}
+for _attr_name, _fallback in _OPTIONAL_DTYPES.items():
+    if not hasattr(torch, _attr_name):
+        setattr(torch, _attr_name, _fallback)
+
+from kernel_eval.data.data_generator import DataGenerator
+from kernel_eval.utils.param_builder import ParamBuilder
+from kernel_eval.benches.cann_spec import CannInputSpec
+
+
+def sync_device(backend):
+    if backend == "cuda":
+        torch.cuda.synchronize()
+    elif backend == "ascend":
+        torch.npu.synchronize()
+
+
+def run_cann_base_profile():
+    result_data = None
+    try:
+        backend = "{{ backend }}"
+
+        # Device setup
+{% for line in device_setup_code %}
+        {{ line }}
+{% endfor %}
+
+        with open("proto.yaml", "r", encoding="utf-8") as f:
+            proto = yaml.safe_load(f)
+        op_spec = proto.get("operator", {})
+        op_name = op_spec.get("name", "{{ op_name }}")
+        schema = op_spec.get("schema", "")
+
+        # Build proto_inputs list for ParamBuilder
+        proto_inputs = []
+        for input_data in op_spec.get("inputs", []) or []:
+            proto_inputs.append(CannInputSpec(
+                name=input_data.get("name", ""),
+                dtypes=input_data.get("dtype", []),
+                description=input_data.get("description", ""),
+                optional=input_data.get("optional", False),
+            ))
+
+        # Find golden function name
+        golden_fn_name = schema.split("(")[0] if "(" in schema else op_name.lower()
+        golden_fn = getattr(golden, golden_fn_name, None)
+        if golden_fn is None:
+            golden_fn = getattr(golden, golden_fn_name.lower(), None)
+        if golden_fn is None:
+            raise AttributeError(f"Golden function '{golden_fn_name}' not found")
+
+        data_generator = DataGenerator(seed=42)
+        param_builder = ParamBuilder()
+
+        with open("cases.yaml", "r", encoding="utf-8") as f:
+            cases_data = yaml.safe_load(f)
+        cases = cases_data.get("cases", [])
+
+        warmup_times = {{ warmup_times }}
+        run_times = {{ run_times }}
+        all_case_times_ms = []
+        method = "cann_base_profiler_npu" if backend == "ascend" else "cann_base_loop_timer"
+
+        for case_idx, case in enumerate(cases):
+            input_shapes = case.get("input_shape", [])
+            dtypes = case.get("dtype", [])
+            attrs = case.get("attrs", {})
+            value_ranges = case.get("value_range", [])
+
+            # Use CANN-Bench native DataGenerator
+            input_tensors = data_generator.generate_input_tensors_from_case(
+                input_shapes, dtypes, value_ranges
+            )
+
+            # Move tensors to device
+            for i, t in enumerate(input_tensors):
+                if t is None:
+                    continue
+                if isinstance(t, list):
+                    input_tensors[i] = [tt.to(device) if tt is not None else None for tt in t]
+                else:
+                    input_tensors[i] = t.to(device)
+
+            # Build kwargs using ParamBuilder
+            input_kwargs = param_builder.build_params_by_proto_order(
+                input_tensors, proto_inputs, case_attrs=attrs
+            )
+
+            def base_fn(_kwargs=input_kwargs):
+                return golden_fn(**_kwargs)
+
+            set_seed(42)
+
+            if backend == "ascend":
+                execution_time_us = profiler_npu(
+                    base_fn,
+                    warmup=warmup_times,
+                    active=run_times,
+                    prof_dir_name=f"prof_cann_base_case_{case_idx:03d}",
+                    keep_res=False,
+                    suppress_warnings=True,
+                    clear_l2_cache=True,
+                    dsl="{{ dsl }}",
+                )
+                execution_time_ms = execution_time_us / 1000.0
+            else:
+                for _ in range(warmup_times):
+                    _ = base_fn()
+                    sync_device(backend)
+
+                sync_device(backend)
+                start_time = time.perf_counter()
+                for _ in range(run_times):
+                    _ = base_fn()
+                    sync_device(backend)
+                end_time = time.perf_counter()
+
+                execution_time_ms = (end_time - start_time) * 1000.0 / max(run_times, 1)
+
+            all_case_times_ms.append(execution_time_ms)
+            print(f"[{{ op_name }}] Case {case_idx + 1}/{len(cases)} base time: {execution_time_ms * 1000:.4f} us")
+
+        valid_times = [t for t in all_case_times_ms if t > 0]
+        if valid_times:
+            log_sum = sum(math.log(max(t, 1e-12)) for t in valid_times)
+            geomean_time_ms = math.exp(log_sum / len(valid_times))
+        else:
+            geomean_time_ms = None
+
+        result_data = {
+            "execution_time_ms": geomean_time_ms,
+            "execution_time_us": geomean_time_ms * 1000 if geomean_time_ms is not None else None,
+            "avg_time_us": geomean_time_ms * 1000 if geomean_time_ms is not None else None,
+            "warmup_times": warmup_times,
+            "run_times": run_times,
+            "case_count": len(cases),
+            "case_times_us": [t * 1000 for t in all_case_times_ms],
+            "method": method,
+            "bench_type": "cann",
+        }
+
+        if geomean_time_ms is not None:
+            print(f"[{{ op_name }}] Geometric mean base time: {geomean_time_ms * 1000:.4f} us")
+
+    except Exception as e:
+        print(f"[{{ op_name }}] CANN base profiling failed: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        result_data = {
+            "execution_time_ms": None,
+            "execution_time_us": None,
+            "avg_time_us": None,
+            "error": str(e),
+        }
+    finally:
+        if result_data is not None:
+            for k, v in result_data.items():
+                if isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")):
+                    result_data[k] = None
+            with open("base_profile_result.json", "w") as f:
+                json.dump(result_data, f, indent=2)
+
+
+if __name__ == "__main__":
+    run_cann_base_profile()

@@ -1,0 +1,238 @@
+import os
+import sys
+import math
+import signal
+import functools
+import traceback
+import yaml
+import json
+from typing import Union, List, Tuple, Any
+
+# Framework imports
+import torch
+
+# DSL imports
+{{ dsl_imports }}
+
+# CANN Correctness imports
+from cann_correctness import compare_tensors, set_seed
+
+# CANN-Bench source repo imports (same pattern as SOL)
+sys.path.append("{{ cann_bench_src_dir }}")
+
+# NPU dtype compatibility shim (same pattern as SOL's _OPTIONAL_DTYPES)
+_OPTIONAL_DTYPES = {
+    "uint16": None,
+    "uint32": None,
+    "uint64": None,
+}
+for _attr_name, _fallback in _OPTIONAL_DTYPES.items():
+    if not hasattr(torch, _attr_name):
+        setattr(torch, _attr_name, _fallback)
+
+from kernel_eval.data.data_generator import DataGenerator
+from kernel_eval.benches.cann_loader import CannTaskLoader, CannCaseLoader, GoldenLoader
+from kernel_eval.benches.cann_spec import CannInputSpec
+from kernel_eval.utils.param_builder import ParamBuilder
+
+# Golden reference imports
+import golden
+
+# Timeout decorator
+def timeout_handler(signum, frame):
+    raise TimeoutError("计算超时")
+
+def with_timeout(timeout_seconds):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        return wrapper
+    return decorator
+
+
+def verify_implementations():
+    print("Starting CANN-Bench verification...")
+
+    # Device setup
+{% for line in device_setup_code %}
+    {{ line }}
+{% endfor %}
+
+    # Create impl_model
+    init_params = []
+{% for line in create_impl_code %}
+    {{ line }}
+{% endfor %}
+
+    if hasattr(impl_model, "to"):
+        impl_model = impl_model.to(device)
+
+    # Load proto.yaml
+    with open("proto.yaml", "r", encoding="utf-8") as f:
+        proto = yaml.safe_load(f)
+
+    op_spec = proto.get("operator", {})
+    op_name = op_spec.get("name", "{{ op_name }}")
+    schema = op_spec.get("schema", "")
+
+    # Parse precision thresholds
+    precision_thresholds_raw = {{ precision_thresholds_yaml }}
+    custom_thresholds = precision_thresholds_raw if precision_thresholds_raw is not None else {}
+
+    # Parse ignore_output_indices
+    ignore_output_indices = {{ ignore_output_indices }}
+
+    # Load cases using CANN-Bench native CannCaseLoader
+    data_generator = DataGenerator(seed=42)
+    param_builder = ParamBuilder()
+
+    # Find golden function name from schema
+    golden_fn_name = schema.split("(")[0] if "(" in schema else op_name.lower()
+    golden_fn = getattr(golden, golden_fn_name, None)
+    if golden_fn is None:
+        golden_fn = getattr(golden, golden_fn_name.lower(), None)
+    if golden_fn is None:
+        raise AttributeError(f"Golden function '{golden_fn_name}' not found in golden.py")
+
+    # Build proto_inputs list for ParamBuilder
+    proto_inputs = []
+    for input_data in op_spec.get("inputs", []) or []:
+        proto_inputs.append(CannInputSpec(
+            name=input_data.get("name", ""),
+            dtypes=input_data.get("dtype", []),
+            description=input_data.get("description", ""),
+            optional=input_data.get("optional", False),
+        ))
+
+    # Load cases.yaml
+    with open("cases.yaml", "r", encoding="utf-8") as f:
+        cases_data = yaml.safe_load(f)
+    cases = cases_data.get("cases", [])
+
+    total_cases = len(cases)
+    passed_cases = 0
+    case_details = []
+
+    @with_timeout(300)
+    def verify_case(case, case_idx):
+        input_shapes = case.get("input_shape", [])
+        dtypes = case.get("dtype", [])
+        attrs = case.get("attrs", {})
+        value_ranges = case.get("value_range", [])
+
+        # Use CANN-Bench native DataGenerator for input generation
+        input_tensors = data_generator.generate_input_tensors_from_case(
+            input_shapes, dtypes, value_ranges
+        )
+
+        # Build kwargs using CANN-Bench native ParamBuilder
+        # Keep CPU copies for golden (fp64), move to device for impl
+        input_kwargs_cpu = param_builder.build_params_by_proto_order(
+            input_tensors, proto_inputs, case_attrs=attrs
+        )
+
+        # Golden: run on CPU with fp64 precision
+        # Convert all tensor inputs to CPU fp64 for golden
+        golden_kwargs = {}
+        for key, val in input_kwargs_cpu.items():
+            if isinstance(val, torch.Tensor):
+                golden_kwargs[key] = val.detach().cpu().double()
+            elif isinstance(val, list):
+                golden_kwargs[key] = [v.detach().cpu().double() if isinstance(v, torch.Tensor) else v for v in val]
+            else:
+                golden_kwargs[key] = val
+
+        golden_outputs = golden_fn(**golden_kwargs)
+        if not isinstance(golden_outputs, (list, tuple)):
+            golden_outputs = [golden_outputs]
+        # Keep golden outputs on CPU in fp64
+
+        # Impl: run on device with native dtype
+        # Move input tensors to device
+        for i, t in enumerate(input_tensors):
+            if t is None:
+                continue
+            if isinstance(t, list):
+                input_tensors[i] = [tt.to(device) if tt is not None else None for tt in t]
+            else:
+                input_tensors[i] = t.to(device)
+
+        input_kwargs_device = param_builder.build_params_by_proto_order(
+            input_tensors, proto_inputs, case_attrs=attrs
+        )
+
+        # Run implementation
+        try:
+            impl_outputs = impl_model(**input_kwargs_device)
+        except Exception as e:
+            raise RuntimeError(f"Implementation execution failed: {e}\n{traceback.format_exc()}")
+
+        if not isinstance(impl_outputs, (list, tuple)):
+            impl_outputs = [impl_outputs]
+
+        # Use primary dtype for threshold lookup
+        primary_dtype = dtypes[0] if dtypes else "float32"
+        if isinstance(primary_dtype, list):
+            primary_dtype = primary_dtype[0] if primary_dtype else "float32"
+
+        # Compare using cann_correctness
+        result = compare_tensors(
+            output=impl_outputs,
+            golden=golden_outputs,
+            dtype=primary_dtype,
+            ignore_output_indices=ignore_output_indices,
+            custom_thresholds=custom_thresholds,
+        )
+
+        if not result["passed"]:
+            msg = f"Verification failed for case {case_idx + 1}\n"
+            msg += f"MERE: {result['mere']:.6f}, MARE: {result['mare']:.6f}\n"
+            msg += f"Threshold: {result['threshold']:.6f}\n"
+            if result.get("error_msg"):
+                msg += f"Error: {result['error_msg']}\n"
+            for sr in result.get("output_results", []):
+                if not sr["passed"]:
+                    msg += f"  Output {sr['index']}: MERE={sr['mere']:.6f}, MARE={sr['mare']:.6f}\n"
+            raise AssertionError(msg)
+
+        return True
+
+    import time
+    import uuid
+    verification_id = str(uuid.uuid4())[:8]
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+    for idx, case in enumerate(cases):
+        try:
+            verify_case(case, idx)
+            passed_cases += 1
+            print(f"[{verification_id}] Case {idx+1}/{total_cases} PASSED")
+        except Exception as e:
+            print(f"[{verification_id}] Case {idx+1}/{total_cases} FAILED: {e}")
+
+    if passed_cases == total_cases:
+        status = "成功"
+    else:
+        status = "失败"
+
+    verification_log = f"""[{verification_id}] 验证结果: {status}
+[{verification_id}] 算子: {{ op_name }} | 框架: {{ framework }} | 后端: {{ backend }} | 架构: {{ arch }}
+[{verification_id}] DSL: {{ dsl }} | 设备ID: {{ device_id }} | 时间: {timestamp}
+[{verification_id}] 形状类型: 动态 | 通过的Case: {passed_cases}/{total_cases}
+[{verification_id}] {'='*60}\n\n"""
+
+    print(verification_log)
+
+    if passed_cases != total_cases:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    verify_implementations()
