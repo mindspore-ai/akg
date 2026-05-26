@@ -1,0 +1,26 @@
+[MASTER]
+# workspace_autoresearch-specific lint policy. The codebase is Claude Code
+# orchestration glue with patterns akg's mainline pylint config doesn't
+# anticipate (sys.path.insert + late imports for hook isolation; broad
+# except for defensive failure surfacing in agent prompts; lazy imports
+# to keep hook startup cheap). Disable the rules those patterns trigger;
+# the substantive ones (real bugs, security) stay on.
+disable=
+    C0114,  # missing-module-docstring (covered by file headers / docstrings already)
+    C0115,  # missing-class-docstring (dataclasses + simple containers don't need it)
+    C0116,  # missing-function-docstring (private _foo helpers don't need it)
+    C0413,  # wrong-import-position (sys.path.insert pattern before package imports)
+    C0411,  # wrong-import-order (same root cause as C0413)
+    C0412,  # ungrouped-imports (same)
+    C0415,  # import-outside-toplevel (lazy imports keep hook startup cheap)
+    W0707,  # raise-missing-from (clarity > strict chain in error paths)
+    W0718,  # broad-exception-caught (defensive boundaries in hook/eval code)
+    R1714,  # consider-using-in (style)
+    R1732,  # consider-using-with (subprocess usage doesn't always fit)
+    R0124,  # comparison-with-itself (NaN sentinel patterns)
+    R1723,  # no-else-break (style)
+    C0206,  # consider-using-dict-items (style)
+    W0621,  # redefined-outer-name (queue var in main vs module scope)
+    W0612,  # unused-variable (`_*` underscore prefix already signals intent)
+    W0611,  # unused-import (re-exports + lazy-import probes are intentional;
+            #                real-dead imports already removed)

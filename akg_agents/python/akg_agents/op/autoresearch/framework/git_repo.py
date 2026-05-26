@@ -29,6 +29,8 @@ property and a single ``task_dir`` instance, so callers hold one
 handle instead of importing N helpers.
 """
 
+
+# pylint: disable=broad-exception-caught
 import os
 import shutil
 import subprocess
@@ -46,7 +48,7 @@ def _git_repo_root(task_dir: str) -> str:
     """
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, cwd=task_dir,
+        capture_output=True, text=True, cwd=task_dir, check=False
     )
     if result.returncode != 0:
         raise RuntimeError(f"Not a git repository: {task_dir}\n{result.stderr}")
@@ -62,11 +64,11 @@ def _git_add(repo_root: str, rel_path: str) -> bool:
     """
     subprocess.run(
         ["git", "diff", "--", rel_path],
-        cwd=repo_root, capture_output=True,
+        cwd=repo_root, capture_output=True, check=False
     )
     result = subprocess.run(
         ["git", "add", rel_path],
-        cwd=repo_root, capture_output=True, text=True,
+        cwd=repo_root, capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
         print(f"[git] WARNING: git add failed for {rel_path}: {result.stderr.strip()}")
@@ -105,7 +107,7 @@ class GitRepo:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True, cwd=self.repo_root,
+                capture_output=True, text=True, cwd=self.repo_root, check=False
             )
             if result.returncode == 0:
                 return result.stdout.strip()
@@ -118,7 +120,7 @@ class GitRepo:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, cwd=self.repo_root,
+                capture_output=True, text=True, cwd=self.repo_root, check=False
             )
             return result.stdout.strip() if result.returncode == 0 else None
         except Exception:
@@ -134,7 +136,7 @@ class GitRepo:
                 for p in paths:
                     cmd.append(self._rel(p))
             result = subprocess.run(
-                cmd, capture_output=True, text=True, cwd=self.repo_root,
+                cmd, capture_output=True, text=True, cwd=self.repo_root, check=False
             )
             if result.returncode == 0:
                 return result.stdout
@@ -154,7 +156,7 @@ class GitRepo:
 
                 result = subprocess.run(
                     ["git", "diff", "HEAD", "--", rel_path],
-                    capture_output=True, text=True, cwd=self.repo_root,
+                    capture_output=True, text=True, cwd=self.repo_root, check=False
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     dirty.add(f)
@@ -164,7 +166,7 @@ class GitRepo:
                     result = subprocess.run(
                         ["git", "ls-files", "--others", "--exclude-standard",
                          "--", rel_path],
-                        capture_output=True, text=True, cwd=self.repo_root,
+                        capture_output=True, text=True, cwd=self.repo_root, check=False
                     )
                     if result.returncode == 0 and result.stdout.strip():
                         dirty.add(f)
@@ -198,7 +200,7 @@ class GitRepo:
                     raise RuntimeError(
                         f"Branch mismatch: on '{current}' but expected "
                         f"'{expected_branch}'. Aborting to prevent commits "
-                        f"on the wrong branch."
+                        "on the wrong branch."
                     )
 
             add_failures = []
@@ -214,7 +216,7 @@ class GitRepo:
 
             diff_result = subprocess.run(
                 ["git", "diff", "--cached", "--quiet"],
-                cwd=repo_root, capture_output=True,
+                cwd=repo_root, capture_output=True, check=False
             )
             if diff_result.returncode == 0:
                 if add_failures:
@@ -232,7 +234,7 @@ class GitRepo:
             ]
             commit_result = subprocess.run(
                 git_cmd,
-                cwd=repo_root, capture_output=True, text=True,
+                cwd=repo_root, capture_output=True, text=True, check=False
             )
             if commit_result.returncode != 0:
                 err = commit_result.stderr.strip()
@@ -241,14 +243,14 @@ class GitRepo:
 
             result = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True, cwd=repo_root,
+                capture_output=True, text=True, cwd=repo_root, check=False
             )
             commit_hash = result.stdout.strip()
 
             if push:
                 push_result = subprocess.run(
                     ["git", "push", "-u", "origin", "HEAD"],
-                    cwd=repo_root, capture_output=True, text=True,
+                    cwd=repo_root, capture_output=True, text=True, check=False
                 )
                 if push_result.returncode != 0:
                     print(f"[git] WARNING: push failed: {push_result.stderr.strip()}")
@@ -275,7 +277,7 @@ class GitRepo:
 
                 ls_result = subprocess.run(
                     ["git", "ls-files", "--error-unmatch", rel_path],
-                    cwd=repo_root, capture_output=True,
+                    cwd=repo_root, capture_output=True, check=False
                 )
                 if ls_result.returncode != 0:
                     if os.path.exists(fpath):
@@ -285,7 +287,7 @@ class GitRepo:
 
                 result = subprocess.run(
                     ["git", "checkout", "HEAD", "--", rel_path],
-                    cwd=repo_root, capture_output=True, text=True,
+                    cwd=repo_root, capture_output=True, text=True, check=False
                 )
                 if result.returncode != 0:
                     print(f"[git] WARNING: rollback failed for {rel_path}: {result.stderr.strip()}")
@@ -304,13 +306,13 @@ class GitRepo:
 
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, check=False
         )
         current_branch = result.stdout.strip()
 
         result = subprocess.run(
             ["git", "rev-parse", "--verify", branch_name],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, check=False
         )
         branch_exists = result.returncode == 0
 
@@ -320,23 +322,23 @@ class GitRepo:
                 for candidate in ["main", "master"]:
                     check = subprocess.run(
                         ["git", "rev-parse", "--verify", candidate],
-                        capture_output=True, cwd=repo_root,
+                        capture_output=True, cwd=repo_root, check=False
                     )
                     if check.returncode == 0:
                         subprocess.run(
                             ["git", "checkout", candidate],
-                            capture_output=True, cwd=repo_root,
+                            capture_output=True, cwd=repo_root, check=False
                         )
                         break
             subprocess.run(
                 ["git", "branch", "-D", branch_name],
-                capture_output=True, text=True, cwd=repo_root,
+                capture_output=True, text=True, cwd=repo_root, check=False
             )
             print(f"[git] Deleted stale branch '{branch_name}'")
 
         result = subprocess.run(
             ["git", "checkout", "-b", branch_name],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, check=False
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -361,7 +363,7 @@ class GitRepo:
         # 1. Remove experiment artifacts FIRST (before checkout)
         experiment_artifacts = [
             "agent.log", "log.jsonl", "perf_log.md",
-            "report.png", "report.md", "plan.md", heartbeat_file,
+            "report.md", "plan.md", heartbeat_file,
         ]
         for fname in experiment_artifacts:
             fpath = os.path.join(self.task_dir, fname)
@@ -381,7 +383,7 @@ class GitRepo:
         # 2. Discard remaining uncommitted changes so checkout won't fail
         subprocess.run(
             ["git", "checkout", "--", rel_dir],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, check=False
         )
 
         # 3. Switch back to original branch (exp branch preserved)
@@ -389,7 +391,7 @@ class GitRepo:
         if current == exp_branch:
             result = subprocess.run(
                 ["git", "checkout", original_branch],
-                capture_output=True, text=True, cwd=repo_root,
+                capture_output=True, text=True, cwd=repo_root, check=False
             )
             if result.returncode != 0:
                 print(f"[git] WARNING: checkout {original_branch} failed: {result.stderr.strip()}")

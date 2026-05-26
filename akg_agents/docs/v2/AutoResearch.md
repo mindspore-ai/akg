@@ -49,7 +49,7 @@ and want an agent to push on it.
 
 ## 2. Architecture
 
-```
+```text
                  call_autoresearch_workflow
                              │
                              ▼
@@ -79,7 +79,7 @@ State owners (single writer per artefact):
   • messages_*.jsonl    ← ConversationBuffer
   • op_summary.md       ← compress.auto_compact (LLM #1; force_rebuild writes fallback)
   • plan_analysis.md    ← compress.auto_compact (LLM #2; force_rebuild writes fallback)
-  • ranking.md / log.jsonl / perf_log.md / report.png ← RoundLogger / Runner
+  • ranking.md / log.jsonl / perf_log.md / report.md ← RoundLogger / Runner
 ```
 
 The key structural rule: **one component owns each piece of state**. The LLM
@@ -150,7 +150,7 @@ pool, conversation buffer, counters). After baseline eval commits to git,
 the **startup refill** seeds the skill pool concurrently with the baseline
 measurement:
 
-```
+```text
 SkillPool.refill(mode="replace", include_categories=["guide"])
 ```
 
@@ -243,7 +243,7 @@ artefact; the corresponding git commit is the reproducible checkpoint.
 
 A `plan_item` is a dict with fields:
 
-```
+```text
 id               "p1", "p2", ...
 text             short action description
 rationale        validated one-sentence reasoning (required)
@@ -262,7 +262,7 @@ active item is what the agent edits.
 
 ### 5.2 Lifecycle
 
-```
+```text
 update_plan(items) ──► all items pending; first → active
                          │
                          ▼ (if item.backing_skill != None)
@@ -312,7 +312,7 @@ and for the binding-priority tier computation.
 `FeedbackBuilder._persist_plan` writes plan.md on every state change, in
 three sections:
 
-```
+```text
 # Plan vN
 - [status] p1: text  (keywords: ...) (skill: backing_skill)
   ...
@@ -369,7 +369,7 @@ A single slot on the plan item:
 
 Binding at `update_plan`:
 
-```
+```text
 agent submits item with keywords
   ↓
 pool.match_by_keywords(keywords, exclude_names=already_bound)
@@ -413,7 +413,7 @@ SkillBuilder is a flat registry with no terminal states. Every
 registered skill stays bindable; two monotonic badge lists drive the
 binding priority tier:
 
-```
+```text
     registered  ◄──► record_applied  → applied_versions = [v, ...]
         │                                        │
         │                                        └─ tier 0 (top priority)
@@ -492,10 +492,10 @@ When a plan item has `backing_skill != None`:
    kernel fusion-split) FIRST, with parameter tuning only when
    backed by a specific structural hypothesis.
 4. On `unbind` the feedback builder:
-   - calls `SkillBuilder.mark_unbound(backing_skill, reason)`
+  - calls `SkillBuilder.mark_unbound(backing_skill, reason)`
      (NOT terminal — the skill stays in the registry, tier 2);
-   - clears `item.backing_skill` (the item becomes unbound);
-   - opens the edit gate — edits continue as free exploration.
+  - clears `item.backing_skill` (the item becomes unbound);
+  - opens the edit gate — edits continue as free exploration.
 5. On `apply` the ack is stored on the item under `skill_ack`
    (rendered in plan.md, persisted in session.json); the gate opens.
 
@@ -559,13 +559,13 @@ component that mutates the message list. Public operations:
 - `on_buffer_rebuilt` — post auto_compact / force_rebuild hook. The
   new buffer carries recent rounds forward verbatim, so we do NOT
   clear the tracking maps blindly. Instead:
-    * auto-inject track: rescan surviving user messages for the
+    - auto-inject track: rescan surviving user messages for the
       `[skill auto-injected for pN vM (name)]` marker and repopulate
       `_skill_inject_keys` + `_item_inject_markers` from what
       actually survived. Dedup continues to block re-inject if the
       marker is still in recent rounds; releases if compaction
       dropped it.
-    * voluntary-read track: intersect each item's tool_use_id set
+    - voluntary-read track: intersect each item's tool_use_id set
       with the ids still present as `tool_result` blocks in the new
       buffer. Ids the rebuild threw away are purged; ids that
       survived stay elide-able at settle time.
@@ -589,7 +589,7 @@ budget on unusable prompts.
 
 After `auto_compact` the buffer layout is:
 
-```
+```text
 [COMPACT_BOUNDARY]                  — marker only
 [BOOTSTRAP]                         — current plan vN + [OPERATOR_SUMMARY]
 [STATE_ATTACHMENT:KERNEL]           — editable files, full content (80k sanity cap)
@@ -799,7 +799,7 @@ Everything the run produces is under `task_dir`:
 | `log.jsonl` | RoundLogger | One JSON per evaluated round |
 | `perf_log.md` | RoundLogger | Human-readable results table |
 | `ranking.md` | RoundLogger | Top-K correct + failed attempts |
-| `report.png` | Runner | Optimization curve chart |
+| `report.md` | Runner | Optimization report (markdown with inline SVG curve, no external deps) |
 | `agent.log` | FileLogger | Stdout tee with timestamps |
 | `RUNNING` | SessionStore | PID + status heartbeat |
 
@@ -829,9 +829,10 @@ preserve:
 4. **Budget accounting is counter-only.** The loop's "continue /
    terminate / escalate" decisions read from `RunCounters` exclusively —
    never from ad-hoc flags.
-5. **plan.md is the recovery point.** After any compact cycle, plan.md
-   + session.json are enough to reconstruct the agent's world-view.
-   Section-aware truncation exists specifically to protect this.
+5. **plan.md is the recovery point.** After any compact cycle,
+   plan.md + session.json are enough to reconstruct the agent's
+   world-view. Section-aware truncation exists specifically to
+   protect this.
 6. **Tool schemas are the trust boundary.** Anything beyond the declared
    tool args (including agent-emitted `backing_skill`) is stripped by
    `TurnExecutor` before it can mutate state.
@@ -876,7 +877,7 @@ Key flags:
 > `ToolExecutor → prepare_config() → build_initial_state() → workflow
 > execution` when a user requests deep iterative optimization; end
 > users do not call it directly.
-
+>
 > **Quick remote-worker setup**: on a machine with NPU / CUDA, run
 > `akg_cli worker --start --backend <backend> --arch <arch>
 > --devices <ids> --port <port>`; if the local host cannot reach it
@@ -963,7 +964,7 @@ Component unit tests live in `tests/op/ut/`:
 
 ## Appendix A: Public constants
 
-```
+```text
 compress.COMPACT_BOUNDARY    "[COMPACT_BOUNDARY]"
 compress.STATE_ATTACHMENT    "[STATE_ATTACHMENT]"
 compress.BOOTSTRAP_MARKER    "[BOOTSTRAP]"
