@@ -62,7 +62,7 @@ namespace mlir {
 namespace mlir {
 namespace {
 
-static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
+static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
   for (Operation *user : src.getUsers()) {
     if (auto markOp = dyn_cast<annotation::MarkOp>(user)) {
       if (auto attr = markOp->getAttrOfType<IntegerAttr>(kBufferSizeInByteAttr)) {
@@ -70,14 +70,14 @@ static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
         auto destType = cast<ShapedType>(dest.getType()).getElementType();
 
         if (srcType.isIndex() || destType.isIndex()) {
-          return;
+          return false;
         }
 
         unsigned srcWidth = srcType.getIntOrFloatBitWidth();
         unsigned destWidth = destType.getIntOrFloatBitWidth();
 
         if (srcWidth == 0) {
-          return;
+          return false;
         }
 
         int64_t oldSize = attr.getInt();
@@ -85,9 +85,20 @@ static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
 
         auto newMarkOp = rewriter.create<annotation::MarkOp>(loc, dest);
         newMarkOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(newSize));
-        break;
+        return true;
       }
     }
+  }
+  return false;
+}
+
+static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value trueVal,
+                                          Value falseVal, Value dest) {
+  if (isa<ShapedType>(trueVal.getType())) {
+    if (propagateBufferSizeMark(rewriter, loc, trueVal, dest)) return;
+  }
+  if (isa<ShapedType>(falseVal.getType())) {
+    propagateBufferSizeMark(rewriter, loc, falseVal, dest);
   }
 }
 
@@ -1256,7 +1267,7 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
       }
     }
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, cond, resBuf);
+    propagateSelectBufferSizeMark(rewriter, loc, trueVal, falseVal, resBuf);
 
     rewriter.create<hivm::VSelOp>(loc, TypeRange{}, ValueRange{cond, trueVal, falseVal}, ValueRange{resBuf}, Value(),
                                   SmallVector<int64_t>{}, SmallVector<int64_t>{});
