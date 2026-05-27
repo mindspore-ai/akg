@@ -28,6 +28,7 @@
 #include "akg/Conversion/MindSporeToTosa/MindSporeToTosa.h"
 #include "akg/Conversion/PureOpenMPToLLVM/PureOpenMPToLLVM.h"
 #include "akg/Conversion/SCFToGPUExt/SCFToGPUPassExt.h"
+#include "akg/Conversion/NPUVectorToVector/NPUVectorToVector.h"
 #include "akg/Conversion/TosaToLinalgUpdate/TosaMultiReduceToLinalg.h"
 #include "akg/Conversion/VectorTransferLower/VectorTransferLower.h"
 #include "akg/Conversion/AffineToSCF/AffineToSCF.h"
