@@ -175,4 +175,21 @@ def ConvertAffineToSCF : Pass<"convert-affine-to-scf", "func::FuncOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// NPUVectorToVector
+//===----------------------------------------------------------------------===//
+
+def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
+  let summary = "Lower NPUVector ops to MLIR community vector/arith on vector types";
+  let description = [{
+    After npuvector-vectorize, rewrites npuvector.transfer_read/write, reduction, broadcast,
+    transpose, and npuvector elementwise cast/cmp ops to vector.transfer_* and arith.*; refreshes
+    arith that still use npuvector-typed results.
+
+    Anchored on ModuleOp and walks every func.func including those under nested builtin.module ops
+    (func.func(pipeline) nesting does not descend into nested modules).
+  }];
+  let constructor = "mlir::createNPUVectorToVectorPass()";
+}
+
 #endif // AKG_CONVERSION_PASSES
