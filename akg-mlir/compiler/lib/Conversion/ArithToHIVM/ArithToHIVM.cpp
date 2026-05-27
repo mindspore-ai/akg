@@ -896,6 +896,45 @@ struct NPUVectorBitcastToHIVM : public OpConversionPattern<npuvector::BitcastOp>
   }
 };
 
+static FailureOr<Value> castI8ToI16ForVCmp(ConversionPatternRewriter &rewriter, Location loc, Value input) {
+  Type elemType = getElementTypeOrSelf(input.getType());
+  if (!elemType.isInteger(8)) {
+    return input;
+  }
+
+  if (auto inputType = dyn_cast<MemRefType>(input.getType())) {
+    auto i16Type = MemRefType::get(inputType.getShape(), rewriter.getI16Type());
+    auto i16Buf = allocMemRef(rewriter, loc, i16Type, input);
+    if (failed(i16Buf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, input, *i16Buf);
+    auto roundAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::RINT);
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, input, *i16Buf, roundAttr, hivm::TypeFnAttr{});
+    return *i16Buf;
+  }
+
+  if (!isScalarType(input.getType())) {
+    return failure();
+  }
+  return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI16Type(), input).getResult();
+}
+
+static LogicalResult legalizeI8VCmpOperands(ConversionPatternRewriter &rewriter, Location loc, Value &lhs,
+                                            Value &rhs) {
+  auto castedLhs = castI8ToI16ForVCmp(rewriter, loc, lhs);
+  if (failed(castedLhs)) {
+    return failure();
+  }
+  auto castedRhs = castI8ToI16ForVCmp(rewriter, loc, rhs);
+  if (failed(castedRhs)) {
+    return failure();
+  }
+  lhs = *castedLhs;
+  rhs = *castedRhs;
+  return success();
+}
+
 template <typename CompareOp>
 struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
   using OpConversionPattern<CompareOp>::OpConversionPattern;
@@ -981,6 +1020,10 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
+
+    if (failed(legalizeI8VCmpOperands(rewriter, loc, lhs, rhs))) {
+      return failure();
+    }
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
@@ -1075,6 +1118,10 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
+
+    if (failed(legalizeI8VCmpOperands(rewriter, loc, lhs, rhs))) {
+      return failure();
+    }
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
