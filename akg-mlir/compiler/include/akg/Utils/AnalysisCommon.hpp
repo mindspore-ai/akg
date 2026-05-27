@@ -83,6 +83,7 @@ constexpr auto kBlockDimSize = 40;
 constexpr auto kTransposeLoopAttr = "transpose";
 constexpr auto kVectorFunctionAttr = "hivm.vector_function";
 constexpr auto kNoInlineAttr = "no_inline";
+constexpr auto kMultiVecLoopAttr = "multi_vec_loop";
 
 const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039,
                                           100000049, 100000073, 100000079, 100000081, 100000091};
