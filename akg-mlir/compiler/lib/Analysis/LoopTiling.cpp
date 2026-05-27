@@ -36,6 +36,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -271,9 +272,11 @@ static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::For
                                                    unsigned tileSizesNum, mlir::IRMapping &mapping,
                                                    mlir::OpBuilder &builder);
 static bool isTransposePointLoop(mlir::scf::ForOp loop);
+static bool isMultiVecPointLoop(mlir::scf::ForOp loop);
 static void clearTransposeChain(mlir::scf::ForOp loop);
 static bool sinkTransposePointLoopOnce(mlir::scf::ForOp pointLoop);
 static void sinkTransposePointLoops(func::FuncOp funcOp);
+static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
 static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
@@ -617,7 +620,7 @@ static bool isParallelCandidate(mlir::scf::ForOp loop, unsigned tileSize0, int64
 }
 
 static int markParallelAxis(func::FuncOp funcOp, ArrayRef<mlir::scf::ForOp> band, ArrayRef<unsigned> tileSizesInt,
-                            unsigned tileLevels, OpBuilder &builder, int64_t &useCore) {
+                            unsigned tileLevels, OpBuilder &builder, int64_t &useCore, bool allowLastAxis = false) {
   useCore = -1;
   if (band.empty() || tileLevels == 0 || tileSizesInt.size() < band.size()) {
     return -1;
@@ -631,7 +634,7 @@ static int markParallelAxis(func::FuncOp funcOp, ArrayRef<mlir::scf::ForOp> band
   }
   SmallVector<int64_t, 6> axisWorks(band.size(), 0);
   for (unsigned dim = 0; dim < band.size(); ++dim) {
-    if (band.size() > 1 && dim + 1 == band.size()) continue;
+    if (!allowLastAxis && band.size() > 1 && dim + 1 == band.size()) continue;
     int64_t parallelWork = 0;
     if (!isParallelCandidate(band[dim], tileSizesInt[dim], parallelWork)) {
       continue;
@@ -1337,10 +1340,29 @@ static bool shouldPropagateTransposeAttrToTileLoop(int tileLevel, int tileNum, m
   return tileLevel == tileNum || origLoop->hasAttr(kTreeLeafAttr);
 }
 
+static bool shouldDeleteRedundantTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
+                                          ArrayRef<unsigned> tileSizesInt) {
+  if (i >= tileNum) return false;
+  unsigned curTile = static_cast<unsigned>(i * bandSize + j);
+  if (curTile >= tileSizesInt.size() || tileSizesInt[curTile] == static_cast<unsigned>(-1)) return false;
+  if (i == 0) {
+    std::optional<int64_t> lb = getConstantIndexValue(origLoop.getLowerBound());
+    std::optional<int64_t> ub = getConstantIndexValue(origLoop.getUpperBound());
+    return lb && ub && *ub - *lb == static_cast<int64_t>(tileSizesInt[curTile]);
+  }
+  unsigned prevTile = static_cast<unsigned>((i - 1) * bandSize + j);
+  return prevTile < tileSizesInt.size() && tileSizesInt[prevTile] == tileSizesInt[curTile];
+}
+
 static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
-                                       mlir::scf::ForOp newLoop, mlir::OpBuilder &builder) {
+                                       mlir::scf::ForOp newLoop, ArrayRef<unsigned> tileSizesInt,
+                                       mlir::OpBuilder &builder) {
   if (!origLoop) {
     return;
+  }
+
+  if (shouldDeleteRedundantTileLoop(i, j, bandSize, tileNum, origLoop, tileSizesInt)) {
+    newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
   }
 
   if (shouldPropagateTransposeAttrToTileLoop(i, tileNum, origLoop)) {
@@ -1488,8 +1510,7 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
 
   if (i == tileNum) {
     copySemanticLoopAttrsToPointLoop(origLoop, newLoop);
-    if ((!origLoop->hasAttr(kReductionLoopAttr) || origLoop->hasAttr(kTransposeLoopAttr)) && lastTile >= 0 &&
-        lastTile < static_cast<int>(tileSizesInt.size())) {
+    if (lastTile >= 0 && lastTile < static_cast<int>(tileSizesInt.size())) {
       unsigned pointVectorSize = tileSizesInt[lastTile];
       if (pointVectorSize != static_cast<unsigned>(-1)) {
         newLoop->setAttr(kInnerLoopAttr, loopBuilder.getI64IntegerAttr(pointVectorSize));
@@ -1497,7 +1518,7 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
     }
   }
 
-  updateLoopAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
+  updateLoopAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, tileSizesInt, loopBuilder);
   recordTileLevelInfoForLoop(i, j, tileNum, curTile, tileSizeValues, newLoop, tileLevelInfo, mappedIv);
 }
 
@@ -1816,9 +1837,10 @@ static LogicalResult findUniqueLoopByTreeNodeId(func::FuncOp funcOp, int64_t nod
 // Returns a null ForOp only when the band root carries non-reduction iter_args
 // (in which case parallel binding is unsafe).
 static mlir::scf::ForOp markAndWrapParallelAxis(func::FuncOp funcOp, ArrayRef<mlir::scf::ForOp> band,
-                                                ArrayRef<unsigned> tileSizesInt, unsigned tileLevels,
-                                                OpBuilder &builder, int &parallelDim, int64_t &parallelUseCore) {
-  parallelDim = markParallelAxis(funcOp, band, tileSizesInt, tileLevels, builder, parallelUseCore);
+                                                 ArrayRef<unsigned> tileSizesInt, unsigned tileLevels,
+                                                 OpBuilder &builder, int &parallelDim, int64_t &parallelUseCore,
+                                                 bool allowLastAxis = false) {
+  parallelDim = markParallelAxis(funcOp, band, tileSizesInt, tileLevels, builder, parallelUseCore, allowLastAxis);
   mlir::scf::ForOp root = band.front();
   if (root.getNumResults() != 0 && !isReductionLoopWithIterArgs(root)) {
     if (parallelDim >= 0) {
@@ -2277,6 +2299,37 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
   }
 }
 
+// Multi-dim vec analogue of `markTransposeLoopChainWithVectorAttr`. Walks the
+// ancestor chain from `innermostLoop` upward, converting every loop tagged
+// with `kMultiVecLoopAttr` into the appropriate vec / reduction marker. The
+// strategy is responsible for *not* placing `kMultiVecLoopAttr` on innermost
+// `reduce_y` loops, so this function only needs to handle reduction X / ALL
+// alongside the normal vec case.
+static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
+  for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (shouldSkipVectorAttrCandidate(curLoop, /*restrictToPointLoops=*/false, /*skipDeleteLoops=*/true)) {
+      continue;
+    }
+    if (!curLoop->hasAttr(kMultiVecLoopAttr)) {
+      break;
+    }
+    curLoop->removeAttr(kMultiVecLoopAttr);
+    if (curLoop->hasAttr(kReductionLoopAttr)) {
+      curLoop->removeAttr(kReductionLoopAttr);
+      ReduceDirection reduceType = getReduceType(curLoop);
+      if (reduceType == ReduceDirection::ALL) {
+        curLoop->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
+      } else {
+        // reduce_y was banned by the strategy; treat the residual UNKNOWN /
+        // X case as reduction along the contiguous dimension.
+        curLoop->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
+      }
+    } else {
+      curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
+    }
+  }
+}
+
 static bool hasReductionVectorAttr(mlir::scf::ForOp loop) {
   return loop && (loop->hasAttr(kReductionLoopAttr) || loop->hasAttr(kReductionXLoopAttr) ||
                   loop->hasAttr(kReductionYLoopAttr) || loop->hasAttr(kReductionAllLoopAttr));
@@ -2297,6 +2350,14 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
     if (isInnermostScfLoop(forOp)) {
       auto reduceType = ReduceDirection::UNKNOWN;
       const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
+      // Multi-dim vec is consumed first: when an innermost point loop is part
+      // of a `kMultiVecLoopAttr` chain, the whole chain owns the vec marking.
+      // The strategy guarantees this branch is mutually exclusive with the
+      // transpose / broadcast paths below, so the early-return is safe.
+      if (forOp->hasAttr(kMultiVecLoopAttr)) {
+        markMultiVecLoopChainWithVectorAttr(forOp, builder);
+        return;
+      }
       if (forOp->hasAttr(kTransposeLoopAttr)) {
         markTransposeLoopChainWithVectorAttr(forOp, builder);
         return;
@@ -2996,7 +3057,6 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
     return failure();
   }
 
-  sinkTransposePointLoops(originalKernel);
   return success();
 }
 
@@ -3103,8 +3163,11 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
 
   int prefixParallelDim = -1;
   int64_t prefixParallelUseCore = 0;
+  // The shared prefix excludes the actual leaf/vector axis, so its last axis is still
+  // eligible for block-level parallel mapping.
   mlir::scf::ForOp prefixParallelMapLoop = markAndWrapParallelAxis(
-    originalKernel, prefixBand, prefixTileSizesInt, tileLevels, builder, prefixParallelDim, prefixParallelUseCore);
+    originalKernel, prefixBand, prefixTileSizesInt, tileLevels, builder, prefixParallelDim, prefixParallelUseCore,
+    /*allowLastAxis=*/true);
 
   SmallVector<int64_t, 6> branchLeafNodeIds;
   if (failed(
@@ -3156,8 +3219,10 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
 static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &builder) {
   // Step 5: Post-processing - mark attributes.
   clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
-  markInnermostLoopsWithVectorAttr(originalKernel, builder);
   inlineDeleteMarkedLoops(originalKernel, builder);
+  sinkTransposePointLoops(originalKernel);
+  sinkMultiVecPointLoops(originalKernel);
+  markInnermostLoopsWithVectorAttr(originalKernel, builder);
   clearNotInnerDimensionBroadcastLoopAttr(originalKernel);
   clearTemporaryLoopIdentificationAttrs(originalKernel);
   setBlockDimAttribute(originalKernel, builder);
@@ -3412,14 +3477,23 @@ static bool isTransposePointLoop(mlir::scf::ForOp loop) {
   return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kTransposeLoopAttr);
 }
 
-static void clearTransposeChain(mlir::scf::ForOp loop) {
-  for (mlir::scf::ForOp cur = loop; isTransposePointLoop(cur);) {
+static bool isMultiVecPointLoop(mlir::scf::ForOp loop) {
+  return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kMultiVecLoopAttr);
+}
+
+// Drop the chain-marker attribute (e.g. `kTransposeLoopAttr` or
+// `kMultiVecLoopAttr`) on `loop` and any nested point loops also part of the
+// chain. Used to abort the sink for one chain when an op can't be safely
+// hoisted across a downstream point loop.
+static void clearPointLoopChain(mlir::scf::ForOp loop, llvm::StringRef chainAttr,
+                                llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
+  for (mlir::scf::ForOp cur = loop; cur && isPointLoop(cur);) {
     mlir::scf::ForOp parentLoop = cur;
-    cur->removeAttr(kTransposeLoopAttr);
+    cur->removeAttr(chainAttr);
     cur = mlir::scf::ForOp();
     for (mlir::scf::ForOp innerLoop = getUniqueChildLoop(parentLoop); innerLoop;
          innerLoop = getUniqueChildLoop(innerLoop)) {
-      if (isTransposePointLoop(innerLoop)) {
+      if (isPointLoop(innerLoop)) {
         cur = innerLoop;
         break;
       }
@@ -3427,11 +3501,17 @@ static void clearTransposeChain(mlir::scf::ForOp loop) {
   }
 }
 
-static bool sinkTransposePointLoopOnce(mlir::scf::ForOp pointLoop) {
+// Walk down `pointLoop`'s unique-child chain to locate the nearest matching
+// inner point loop. If their bodies allow it (no iter_args / no side-effecting
+// non-load ops in between), hoist the independent ops up past `pointLoop` and
+// re-nest so `pointLoop` and the next point loop sit back-to-back. Returns
+// `true` when one sink step actually happened, `false` otherwise.
+static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainAttr,
+                              llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
   mlir::scf::ForOp nextPointLoop;
   mlir::scf::ForOp nextPointParent;
   for (mlir::scf::ForOp loop = getUniqueChildLoop(pointLoop); loop; loop = getUniqueChildLoop(loop)) {
-    if (isTransposePointLoop(loop)) {
+    if (isPointLoop(loop)) {
       nextPointLoop = loop;
       break;
     }
@@ -3459,7 +3539,7 @@ static bool sinkTransposePointLoopOnce(mlir::scf::ForOp pointLoop) {
     }
 
     if (op.getNumRegions() != 0 || (!isa<memref::LoadOp>(op) && !mlir::isMemoryEffectFree(&op))) {
-      clearTransposeChain(pointLoop);
+      clearPointLoopChain(pointLoop, chainAttr, isPointLoop);
       return false;
     }
 
@@ -3481,18 +3561,30 @@ static bool sinkTransposePointLoopOnce(mlir::scf::ForOp pointLoop) {
   return true;
 }
 
-static void sinkTransposePointLoops(func::FuncOp funcOp) {
-  SmallVector<mlir::scf::ForOp, 8> transposePointLoops;
+// Generic point-loop sink driver. `chainAttr` is the marker that identifies a
+// chain (`kTransposeLoopAttr` for transpose, `kMultiVecLoopAttr` for
+// multi-dim vectorization). `isPointLoop` recognises members of the chain.
+static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chainAttr,
+                                      llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
+  SmallVector<mlir::scf::ForOp, 8> pointLoops;
   funcOp.walk([&](mlir::scf::ForOp loop) {
-    if (isTransposePointLoop(loop)) {
-      transposePointLoops.push_back(loop);
+    if (isPointLoop(loop)) {
+      pointLoops.push_back(loop);
     }
   });
 
-  for (mlir::scf::ForOp pointLoop : transposePointLoops) {
-    while (isTransposePointLoop(pointLoop) && sinkTransposePointLoopOnce(pointLoop)) {
+  for (mlir::scf::ForOp pointLoop : pointLoops) {
+    while (isPointLoop(pointLoop) && sinkPointLoopOnce(pointLoop, chainAttr, isPointLoop)) {
     }
   }
+}
+
+static void sinkTransposePointLoops(func::FuncOp funcOp) {
+  sinkPointLoopsByPredicate(funcOp, kTransposeLoopAttr, isTransposePointLoop);
+}
+
+static void sinkMultiVecPointLoops(func::FuncOp funcOp) {
+  sinkPointLoopsByPredicate(funcOp, kMultiVecLoopAttr, isMultiVecPointLoop);
 }
 
 static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::ForOp> band,
