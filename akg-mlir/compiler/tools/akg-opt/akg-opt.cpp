@@ -25,6 +25,7 @@
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
+#include "akg/Dialect/NPUVector/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
@@ -75,6 +76,7 @@ int main(int argc, char **argv) {
   registerAKGSCFPasses();
   registerAKGGPUPasses();
   registerAKGTensorPasses();
+  registerAKGNPUVectorPasses();
 
   DialectRegistry registry;
   registerAllDialects(registry);

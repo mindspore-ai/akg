@@ -22,12 +22,14 @@
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
+#include "akg/Dialect/NPUVector/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
 #include "bishengir/Dialect/Annotation/Transforms/Passes.h"
 #include "bishengir/Dialect/HIVM/Transforms/Passes.h"
 #include "bishengir/Dialect/HACC/Transforms/Passes.h"
@@ -259,6 +261,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createSCFForLoopCanonicalizationPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
+    if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
+      pm.addPass(mlir::npuvector::createOutlineVectorFunctionPass());
+    }
     pm.addPass(mlir::createArithToHIVMConversionPass());
     pm.addPass(mlir::createCanonicalizerPass());
   }
