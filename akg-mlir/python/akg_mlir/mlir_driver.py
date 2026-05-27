@@ -469,6 +469,7 @@ class MlirDriver:
             block_dim=block_dim,
             dump_ir=self.dump_ir,
             dump_ir_path=dump_log,
+            arch=self.arch,
         )
 
     def _run_mlir_to_llvm(self, kernel_name):
