@@ -34,6 +34,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from akg_agents.op.utils.json_safe import sanitize_floats
+
 logger = logging.getLogger(__name__)
 
 ROOFLINE_MODEL = "fused"
@@ -279,7 +281,7 @@ def write_roofline_profile_result(verify_dir: str, roofline_result: Dict[str, An
     """将 roofline 结果写入 verify_dir/roofline_profile_result.json。"""
     output_path = Path(verify_dir) / ROOFLINE_RESULT_JSON
     output_path.write_text(
-        json.dumps(_sanitize_for_json(roofline_result), ensure_ascii=False, indent=2),
+        json.dumps(sanitize_floats(roofline_result), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return str(output_path)
@@ -796,19 +798,6 @@ def _merge_strings_keep_mixed(values: list[str]) -> Optional[str]:
 
 def _cycles_to_us(cycles: float, freq_ghz: float) -> float:
     return cycles / (freq_ghz * 1e3) if freq_ghz > 0 else 0.0
-
-
-def _sanitize_for_json(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        return {key: _sanitize_for_json(value) for key, value in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_for_json(item) for item in obj]
-    if isinstance(obj, tuple):
-        return [_sanitize_for_json(item) for item in obj]
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return None
-    return obj
 
 
 def _is_valid_positive_number(value: Optional[float]) -> bool:

@@ -39,11 +39,32 @@ of the dependency stack avoids the cycle.
 
 # pylint: disable=broad-exception-caught,import-outside-toplevel,missing-function-docstring
 import json
+import math
 import os
 import sys
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from .models import Progress
+
+
+def _sanitize_floats(obj: Any) -> Any:
+    """Replace non-finite floats with ``None`` before writing JSON.
+
+    Mirrors ``akg_agents.op.utils.json_safe.sanitize_floats`` — kept
+    inline here because state_store is imported by every hook and
+    pulling in the akg_agents package adds ~2s of cold-import overhead
+    per hook invocation. Function body must stay in sync (stateless,
+    7 lines, won't drift in practice).
+    """
+    if isinstance(obj, float):
+        return None if not math.isfinite(obj) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_floats(v) for v in obj)
+    return obj
 
 
 # ---------------------------------------------------------------------------
@@ -335,17 +356,22 @@ def save_progress(task_dir: str, progress: Union[Progress, dict],
             payload["last_updated"] = datetime.now(timezone.utc).isoformat()
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(_sanitize_floats(payload), f, indent=2)
     os.replace(tmp_path, path)
 
 
 def append_history(task_dir: str, record: dict):
     """Append one JSON record to history.jsonl. Single canonical writer
-    used by keep_or_discard and _baseline_init."""
+    used by keep_or_discard and _baseline_init.
+
+    Non-finite floats (NaN / inf, e.g. from a degenerate roofline ratio
+    or an msprof parse glitch) are mapped to ``null`` before serialization
+    so the JSONL file stays strict-JSON-parseable for external dashboards.
+    """
     path = history_path(task_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(json.dumps(_sanitize_floats(record), ensure_ascii=False) + "\n")
 
 
 def update_progress(task_dir: str, **fields) -> Optional[Progress]:
