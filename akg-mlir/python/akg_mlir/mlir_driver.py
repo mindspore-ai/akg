@@ -316,11 +316,11 @@ class MlirDriver:
             launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                    use_mem_pool=True, output_indexes=output_indexes)
         else:
-            akgProfileMgr.ascend_start_profiling(device_id)
+            profile_mgr.ascend_start_profiling(device_id)
             for _ in range(5):
                 launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                        use_mem_pool=True, output_indexes=output_indexes)
-            akgProfileMgr.ascend_stop_profiling()
+            profile_mgr.ascend_stop_profiling()
             # analysis
             cycle = profiling_analyse(None)
             logging.info('=====Task Duration(us)==============================')

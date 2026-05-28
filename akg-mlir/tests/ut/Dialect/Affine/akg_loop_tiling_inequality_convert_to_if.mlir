@@ -29,7 +29,7 @@
 // CHECK-NEXT:     }
 // CHECK-NEXT:   }
 
- 
+
 module {
   func.func @elementwise(%arg0: memref<32x1280x768xf32>, %arg1: memref<32x1280x768xf32>, %arg2: memref<32x1280x768xf32>) attributes {OperatorType = "Elementwise", enable_atomic_add = false, mindspore_kernel, process = "cuda", scop.ignored} {
     affine.for %arg3 = 0 to 32 {
