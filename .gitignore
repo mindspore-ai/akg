@@ -84,6 +84,14 @@ mindspore/default_config.py
 .claude/
 azy/
 
+# workspace_autoresearch ships project-level Claude Code config
+# (slash command, subagent prompts, permissions allowlist) — these
+# are shared across users, unlike the editor-local .claude/ caught
+# by the generic rules above. Last-match-wins, so this negation
+# must sit after both .claude/ entries.
+!akg_agents/workspace_autoresearch/.claude/
+!akg_agents/workspace_autoresearch/.claude/**
+
 # autoresearch scratch artefacts (kept under .akg/)
 .akg/reference.py
 .akg/*_kernel.py

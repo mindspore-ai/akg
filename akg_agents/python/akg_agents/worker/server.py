@@ -8,6 +8,7 @@ import uvicorn
 
 from akg_agents.core.worker.local_worker import LocalWorker
 from akg_agents.core.async_pool.device_pool import DevicePool
+from akg_agents.op.utils.json_safe import sanitize_floats
 
 # Configure logging
 logging.basicConfig(
@@ -15,6 +16,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 # Global worker instance
 worker: Optional[LocalWorker] = None
@@ -77,12 +79,12 @@ async def verify(
         
         # Execute verification (now returns artifacts)
         success, log, artifacts = await worker.verify(package_data, task_id, op_name, timeout)
-        
-        return {
+
+        return sanitize_floats({
             "success": success,
             "log": log,
             "artifacts": artifacts
-        }
+        })
         
     except Exception as e:
         logger.error(f"[{task_id}] Verification request failed: {e}", exc_info=True)
@@ -110,7 +112,7 @@ async def profile(
     try:
         package_data = await package.read()
         result = await worker.profile(package_data, task_id, op_name, settings)
-        return result
+        return sanitize_floats(result)
     except Exception as e:
         logger.error(f"[{task_id}] Profiling request failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -194,11 +196,11 @@ async def profile_single_task(
     
     try:
         logger.info(f"[{task_id}] Received profile_single_task request for {op_name}")
-        
+
         package_data = await package.read()
         result = await worker.profile_single_task(package_data, task_id, op_name, settings)
-        return result
-        
+        return sanitize_floats(result)
+
     except Exception as e:
         logger.error(f"[{task_id}] Profile single task request failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

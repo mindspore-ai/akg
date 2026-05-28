@@ -283,9 +283,13 @@ class LocalWorker(WorkerInterface):
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
                         logger.info(f"[{task_id}] Collected {len(artifacts)} artifact files: {list(artifacts.keys())}")
-                    
-                    # 7. 处理返回值，确保 JSON 可序列化（inf -> None）
-                    # JSON 标准不支持 float('inf')
+
+                    # gen_time / base_time get nulled here because in-process
+                    # callers (dynamic_tune, etc.) treat None as the "no
+                    # measurement" sentinel; the other float fields below
+                    # may still be non-finite. JSON-safety for HTTP / disk
+                    # boundaries lives in `worker/server.py` and
+                    # `op/utils/json_safe.sanitize_floats`.
                     serializable_gen_time = gen_time if gen_time < float('inf') else None
                     serializable_base_time = base_time if base_time < float('inf') else None
                     return {
