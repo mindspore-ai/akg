@@ -157,6 +157,34 @@ func.func @test_vadd_npuvector_vector_broadcast_otf(%arg0 : memref<32x10x10xf32>
   return
 }
 
+// -----
+
+func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs(%arg0 : memref<?x1024xf32>, %arg1 : memref<1024xf32>, %arg2 : memref<?x1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<?x1024xf32>, %[[ARG1:.*]]: memref<1024xf32>, %[[ARG2:.*]]: memref<?x1024xf32>)
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[DIM:.*]] = memref.dim %[[ARG0]], %[[C0]] : memref<?x1024xf32>
+  // CHECK: %[[WIDE:.*]] = memref.alloc(%[[DIM]]) : memref<?x1024xf32>
+  // CHECK: hivm.hir.load {{.*}} outs(%[[WIDE]] : memref<?x1024xf32>)
+  // CHECK: %[[NARROW:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load {{.*}} outs(%[[NARROW]] : memref<1024xf32>)
+  // CHECK: %[[EXPAND:.*]] = memref.expand_shape %[[NARROW]]
+  // CHECK-SAME: into memref<1x1024xf32>
+  // CHECK: %[[OUT:.*]] = memref.alloc(%[[DIM]]) : memref<?x1024xf32>
+  // CHECK: hivm.hir.vmul ins(%[[EXPAND]], %[[WIDE]] : memref<1x1024xf32>, memref<?x1024xf32>) outs(%[[OUT]] : memref<?x1024xf32>) broadcast = [0]
+  %c0 = arith.constant 0 : index
+  %c9 = arith.constant 9 : index
+  %c1024 = arith.constant 1024 : index
+  %dim = memref.dim %arg0, %c0 : memref<?x1024xf32>
+  %pad = arith.constant 0.000000e+00 : f32
+  %wide = npuvector.transfer_read %arg0[%c0, %c0] [%dim, %c1024] [%c9, %c1024], %pad : memref<?x1024xf32>, !npuvector<?x1024xf32>
+  %narrow = npuvector.transfer_read %arg1[%c0] [%c1024] [%c1024], %pad : memref<1024xf32>, !npuvector<1024xf32>
+  %brc = npuvector.broadcast %narrow[%dim, %c1024] [%c9, %c1024] : !npuvector<1024xf32> to !npuvector<?x1024xf32> {dimension = array<i64: 1>}
+  %mul = arith.mulf %brc, %wide : !npuvector<?x1024xf32>
+  npuvector.transfer_write %mul, %arg2[%c0, %c0] : !npuvector<?x1024xf32>, memref<?x1024xf32>
+  return
+}
+
 // CHECK-LABEL: func.func @test_transfer_write_alloc_root_offset_after_truncf
 // CHECK-SAME: %{{.*}}: memref<?xf32>, %[[BASE:.*]]: index, %[[SIZE:.*]]: index
 func.func @test_transfer_write_alloc_root_offset_after_truncf(%arg0: memref<?xf32>, %arg1: index, %arg2: index) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
