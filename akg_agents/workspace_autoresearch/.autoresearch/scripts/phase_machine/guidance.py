@@ -123,10 +123,12 @@ def _format_fail_record(rec: dict) -> str:
 #    underperform — pair each "don't" with a concrete "do" alternative.
 #
 # 4. Example items deliberately avoid every word in create_plan.py's
-#    `_PARAM_WORDS` / `_PARAM_PHRASES` (block, tile, num_warps, etc.) so
-#    the diversity check passes when the agent generalises the shape to
-#    their own task. The three items represent: kernel fusion / memory
-#    layout / data alignment — structural changes, not parameter sweeps.
+#    `_PARAM_WORDS` / `_PARAM_PHRASES` so the diversity check passes when
+#    the agent generalises the shape to their own task. The three items
+#    represent: algorithmic change / memory layout / data alignment —
+#    structural changes, not parameter sweeps. Vocabulary stays DSL-neutral
+#    (no warps / tiles / blocks / cube) so the same example reads naturally
+#    for triton, ascendc, cuda_c, tilelang, etc.
 #
 # 5. XML stays the required format (tag-delimited beats JSON for LLMs —
 #    no commas to forget, no brace balance).
@@ -156,24 +158,26 @@ _PLAN_XML_RULES = (
 _PLAN_XML_EXAMPLE = (
     '<items>\n'
     '  <item>\n'
-    '    <desc>Fuse the activation into the matmul epilogue to avoid a second '
-    'kernel launch</desc>\n'
-    '    <rationale>The separate activation kernel re-reads the matmul output '
-    'from DRAM; folding it into the epilogue removes one round-trip and one '
-    'launch overhead.</rationale>\n'
+    '    <desc>Replace the explicit reduction loop with a tree-style '
+    'accumulation</desc>\n'
+    '    <rationale>The current per-element reduction serialises the '
+    'dependency chain and prevents the hardware from issuing parallel adds; '
+    'a tree pattern lets independent partial sums proceed concurrently.'
+    '</rationale>\n'
     '  </item>\n'
     '  <item>\n'
-    '    <desc>Transpose the input layout so the reduction axis is contiguous '
-    'in memory</desc>\n'
-    '    <rationale>Current reduction stride is 16380 bytes, which traps the '
-    'vector core because it needs 256-byte-aligned access. Making the reduce '
-    'axis contiguous gives aligned vectorised loads.</rationale>\n'
+    '    <desc>Re-lay out the input so the inner-most axis matches the '
+    "hardware's preferred access stride</desc>\n"
+    '    <rationale>The current layout forces strided gathers on every step; '
+    'switching axes makes the inner access contiguous, which is what the '
+    'memory subsystem is designed for.</rationale>\n'
     '  </item>\n'
     '  <item>\n'
-    '    <desc>Pad the inner dimension to a multiple of 64 elements</desc>\n'
-    '    <rationale>The current inner dim is 4095, one short of the 4096 '
-    'alignment the vector unit needs; padding to the next multiple lets the '
-    'main loop drop its tail-handling branch entirely.</rationale>\n'
+    '    <desc>Pad the inner dimension to align with the hardware vector '
+    'width</desc>\n'
+    '    <rationale>The inner dim is one element short of a vector lane; '
+    'padding lets the main loop drop its tail-handling branch and process '
+    'every step at full width.</rationale>\n'
     '  </item>\n'
     '</items>'
 )
@@ -613,8 +617,8 @@ def _diagnose_skills_section(dsl) -> tuple:
 
 def _diagnose_subagent_prompt(task_dir: str, *, dsl, backend, arch,
                               metric_line, plan_version, recent_summary,
-                              fail_details, editable_paths, skills_block,
-                              scope_constraint, cite_clause,
+                              fail_details, editable, editable_paths,
+                              skills_block, scope_constraint, cite_clause,
                               artifact_path, marker) -> str:
     fail_details_block = (
         f"Last 3 FAILs (use these as the primary evidence):\n"
@@ -622,6 +626,7 @@ def _diagnose_subagent_prompt(task_dir: str, *, dsl, backend, arch,
         if fail_details
         else "Last 3 FAILs: (none yet — use history.jsonl if needed)\n\n"
     )
+    editable_list = ", ".join(editable or ["kernel.py"])
     return (
         "Diagnose why the current optimization rounds are failing, then "
         f"Write a structured report to a fixed path.\n\n"
@@ -644,7 +649,8 @@ def _diagnose_subagent_prompt(task_dir: str, *, dsl, backend, arch,
         f"{scope_constraint}"
         f"  - Stop after at most 12 tool uses.\n"
         "  - Write tool may ONLY target the artifact path below. Do "
-        f"NOT Write kernel.py, plan.md, or anywhere else.\n\n"
+        f"NOT Write any of the editable files ({editable_list}), "
+        "plan.md, or anywhere else.\n\n"
         "REQUIRED OUTPUT — your final action MUST be a Write call to "
         f"this exact path:\n"
         f"  {artifact_path}\n\n"
@@ -691,8 +697,9 @@ def _g_diagnose(task_dir: str, progress: dict, config, dsl, editable: list,
         task_dir, dsl=dsl, backend=backend, arch=arch,
         metric_line=metric_line, plan_version=plan_version,
         recent_summary=recent_summary, fail_details=fail_details,
-        editable_paths=editable_paths, skills_block=skills_block,
-        scope_constraint=scope_constraint, cite_clause=cite_clause,
+        editable=editable, editable_paths=editable_paths,
+        skills_block=skills_block, scope_constraint=scope_constraint,
+        cite_clause=cite_clause,
         artifact_path=artifact_path, marker=marker,
     )
     retry_note = ""
