@@ -572,12 +572,17 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     auto memRefType = MemRefType::get(shapeAndElem->first, shapeAndElem->second);
     Value resBuf = tryGetInPlaceInitIfResultIsYieldOperand(op.getOperation());
     if (!resBuf) {
-      auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhsMemRef);
+      Value dimSource = lhsMemRef;
+      auto resBufOr = allocMemRef(rewriter, loc, memRefType, dimSource);
+      if (failed(resBufOr) && rhsIsMemRef) {
+        dimSource = rhsMemRef;
+        resBufOr = allocMemRef(rewriter, loc, memRefType, dimSource);
+      }
       if (failed(resBufOr)) {
         return failure();
       }
       resBuf = *resBufOr;
-      propagateBufferSizeMark(rewriter, loc, lhsMemRef, resBuf);
+      propagateBufferSizeMark(rewriter, loc, dimSource, resBuf);
     }
 
     createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf);
@@ -1216,12 +1221,17 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
     auto memRefType = MemRefType::get(shapeAndElem->first, shapeAndElem->second);
     Value resBuf = tryGetInPlaceInitIfResultIsYieldOperand(op.getOperation());
     if (!resBuf) {
-      auto resBufOr = allocMemRef(rewriter, loc, memRefType, lhs);
+      Value dimSource = lhs;
+      auto resBufOr = allocMemRef(rewriter, loc, memRefType, dimSource);
+      if (failed(resBufOr) && rhsIsMemRef) {
+        dimSource = rhs;
+        resBufOr = allocMemRef(rewriter, loc, memRefType, dimSource);
+      }
       if (failed(resBufOr)) {
         return failure();
       }
       resBuf = *resBufOr;
-      propagateBufferSizeMark(rewriter, loc, lhs, resBuf);
+      propagateBufferSizeMark(rewriter, loc, dimSource, resBuf);
     }
 
     createHIVMElementwiseBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf);
