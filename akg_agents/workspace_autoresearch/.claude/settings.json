@@ -1,0 +1,94 @@
+{
+  "env": {
+    "AKG_AGENTS_AR_SKILLS_ROOT": "../python/akg_agents/op/resources/skills"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)",
+      "MultiEdit(*)",
+      "NotebookEdit(*)",
+      "Read(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Task(*)",
+      "TodoWrite(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "Skill(*)",
+      "ExitPlanMode(*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; [ ! -f .autoresearch/.active_task ] && exit 0; python .autoresearch/scripts/hooks/guard_edit.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; python .autoresearch/scripts/hooks/guard_bash.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; [ ! -f .autoresearch/.active_task ] && exit 0; python .autoresearch/scripts/hooks/guard_task.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; python .autoresearch/scripts/hooks/post_bash.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; [ ! -f .autoresearch/.active_task ] && exit 0; python .autoresearch/scripts/hooks/post_edit.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; [ ! -f .autoresearch/.active_task ] && exit 0; python .autoresearch/scripts/hooks/post_task.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null; [ ! -f .autoresearch/.active_task ] && exit 0; python .autoresearch/scripts/hooks/stop_save.py"
+          }
+        ]
+      }
+    ]
+  }
+}
