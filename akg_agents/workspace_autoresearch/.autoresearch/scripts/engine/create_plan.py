@@ -87,15 +87,33 @@ from workflow import PlanStore
 
 # Words that indicate parameter tuning, used by `_check_diversity` to flag
 # plans where every item is a parameter sweep.
+#
+# Kept DSL-neutral on purpose: backends differ in their parameter vocabulary
+# (triton: warps/stages/block_size_*; ascendc: block_dim/tile_num/queue_depth;
+# cuda_c: threads_per_block) but the *semantic class* — "I'm just tuning a
+# knob, not changing the structure" — is shared. The token set below tries
+# to cover the union of common tuning vocabulary across triton / ascendc /
+# cuda_c / tilelang so the diversity check has equal teeth on every DSL.
 _PARAM_WORDS = {
-    "block", "tile", "tiling", "autotune", "config", "configs",
-    "warps", "stages", "size", "tune", "adjust", "sweep",
-    "parameter", "param", "group", "num",
+    # universal tuning vocabulary
+    "tune", "adjust", "sweep", "parameter", "param", "size", "value",
+    "config", "configs", "autotune", "search",
+    # partitioning (every backend has some flavour of these)
+    "block", "tile", "tiling", "chunk", "shard",
+    # parallelism / hardware-unit counts
+    "warps", "stages", "lanes", "threads", "cores", "queue", "depth",
+    # numeric counts / dims
+    "num", "count", "group", "dim",
 }
 _PARAM_PHRASES = {
+    # triton
     "block_size", "block_m", "block_n", "block_k", "block_size_m",
     "block_size_n", "block_size_k", "num_warps", "num_stages",
     "group_size", "group_size_m",
+    # ascendc
+    "block_dim", "tile_num", "core_num", "queue_depth", "tiling_key",
+    # cuda_c
+    "threads_per_block", "blocks_per_grid", "shared_mem",
 }
 _STOPWORDS = {"the", "a", "to", "of", "in", "for", "and", "with", "from", "by",
               "on", "is", "it", "as", "at", "or", "an", "be", "was", "that"}
