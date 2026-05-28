@@ -264,6 +264,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::npuvector::createElimScfIterArgsPass());
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
       pm.addPass(mlir::npuvector::createOutlineVectorFunctionPass());
+      pm.addPass(mlir::createNPUVectorToVectorPass());
     }
     pm.addPass(mlir::createArithToHIVMConversionPass());
     pm.addPass(mlir::createCanonicalizerPass());
