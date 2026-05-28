@@ -5,7 +5,7 @@ func.func @Fused_Cast_fusion_7941949564244712559(%arg0: tensor<1xf32>) -> tensor
   // CHECK: ^bb0(%[[IN:.+]]: f32, %{{.+}}: bf16):
   // CHECK:   %[[TRUNCF:.+]] = arith.truncf %[[IN:.+]] : f32 to bf16
   // CHECK:   linalg.yield %[[TRUNCF:.+]] : bf16
-  // CHECK: } -> tensor<1xbf16> 
+  // CHECK: } -> tensor<1xbf16>
   %1 = "mindspore.cast"(%arg0) {dst_type = "bfloat16", ms_attr = {is_backend_cat = false}} : (tensor<1xf32>) -> tensor<1xbf16>
   return %1 : tensor<1xbf16>
 }

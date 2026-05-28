@@ -1,4 +1,4 @@
-# Copyright 2023-2025 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(AKG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-set(AKG_MLIR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/compiler")
+set(AKG_MLIR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -54,9 +54,6 @@ include(FetchContent)
 find_package(PkgConfig)
 include(cmake/utils.cmake)
 include(cmake/external_libs/symengine.cmake)
-if(ENABLE_AKG)
-  include(cmake/external_libs/llvm.cmake)
-endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -Wno-unknown-pragmas")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -99,7 +96,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/MLIR.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ascendnpu_ir.cmake)
 
-set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
+set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
 #-------------------------------------------------------------------------------
 # AKG-MLIR
@@ -147,5 +144,5 @@ endif()
 
 install(
   DIRECTORY
-  ${AKG_MLIR_SOURCE_DIR}/../python/akg_mlir/
+  ${AKG_MLIR_SOURCE_DIR}/python/akg_mlir/
   DESTINATION ${AKG_MLIR_BINARY_DIR}/akg)

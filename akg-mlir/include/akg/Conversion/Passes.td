@@ -1,0 +1,195 @@
+/**
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef AKG_CONVERSION_PASSES
+#define AKG_CONVERSION_PASSES
+
+include "mlir/Pass/PassBase.td"
+
+
+//===----------------------------------------------------------------------===//
+// TosaToLinalgUpdate
+//===----------------------------------------------------------------------===//
+
+def TosaMultiReduceToLinalg : Pass<"tosa-multi-reduce-to-linalg", "func::FuncOp"> {
+  let summary = "Convert multi tosa.reduce to one linalg.reduce if is possible.";
+  let description = [{
+    Pass that converts multi tosa.reduce to one linalg.reduce. Use this pass to enable
+    multi-dims reduction.
+  }];
+  let constructor = "mlir::createTosaMultiReduceToLinalgPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// FusionToMemVec
+//===----------------------------------------------------------------------===//
+
+def ConvertFusionToMemVec : Pass<"lower-fusion"> {
+  let summary = "Convert Fusion dialect to MemRef or Vector dialect";
+  let constructor = "mlir::createLowerFusionPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// VectorTransferLower
+//===----------------------------------------------------------------------===//
+
+def VectorTransferLower : Pass<"vector-transfer-lower"> {
+  let summary = "VectorTransferLower";
+  let description = [{
+    Pass that converts vector transfer read/write to vector load/store.
+  }];
+  let constructor = "mlir::createVectorTransferLowerPass()";
+}
+
+//===---------------------------------------------------------------------===//
+// ConvertMindSporeToTosa
+//===----------------------------------------------------------------------===//
+
+def ConvertMindSporeToTosa : Pass<"convert-mindspore-to-tosa", "func::FuncOp"> {
+  let summary = "Convert MindSpore ops to TOSA ops";
+  let description = [{
+    This pass assumes that TOSA ops are responsible for emitting error
+    guards in case of shape mismatches.
+  }];
+  let constructor = "mlir::createMindSporeToTosaPass()";
+}
+
+//===---------------------------------------------------------------------===//
+// ConvertMindSporeToLinalg
+//===----------------------------------------------------------------------===//
+def ConvertMindSporeToLinalg : Pass<"convert-mindspore-to-linalg", "func::FuncOp"> {
+  let summary = "Convert MindSpore ops to Linalg ops";
+  let description = [{
+    ...
+  }];
+  let constructor = "mlir::createMindSporeToLinalgPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertMindSporeToLinalgNamed
+//===----------------------------------------------------------------------===//
+def ConvertMindSporeToLinalgNamed : Pass<"convert-mindspore-to-linalg-named", "func::FuncOp"> {
+  let summary = "Convert MindSpore ops to Linalg named ops";
+  let description = [{
+    ...
+  }];
+  let constructor = "mlir::createMindSporeToLinalgNamedPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertArithToLinalg
+//===----------------------------------------------------------------------===//
+def ConvertArithToLinalg : Pass<"convert-arith-to-linalg", "func::FuncOp"> {
+  let summary = "Convert Arith ops to Linalg ops";
+  let description = [{
+    Pass that converts element-wise arithmetic and math operations from the Arith and Math dialects
+    to equivalent generic operations in the Linalg dialect.
+  }];
+  let constructor = "mlir::createArithToLinalgConversionPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertArithToHIVM
+//===----------------------------------------------------------------------===//
+def ConvertArithToHIVM : Pass<"convert-arith-to-hivm", "func::FuncOp"> {
+  let summary = "Convert arith ops to HIVM ops";
+  let description = [{
+    Pass that converts element-wise arithmetic operations from the Arith dialect
+    to equivalent operations in the HIVM dialect to enable further lowering.
+  }];
+  let constructor = "mlir::createArithToHIVMConversionPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// MindSporeFinalizingLower
+//===----------------------------------------------------------------------===//
+def MindSporeFinalizingLower : Pass<"mindspore-finalizing-lower", "func::FuncOp"> {
+  let summary = "Convert MindSpore ops to Linalg ops";
+  let description = [{
+    ...
+  }];
+  let constructor = "mlir::createMindSporeFinalizingLowerPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// LinalgExtLower
+//===----------------------------------------------------------------------===//
+
+def LinalgExtLower : Pass<"linalg-ext-lower", "func::FuncOp"> {
+  let summary = "LinalgExtLower";
+  let description = [{
+    Pass that converts LinalgExt operations to the equivalent operations using the
+    operations in Affine Dialect.
+  }];
+  let constructor = "mlir::createLinalgExtLowerPass()";
+  let options = [
+    Option<"vectorSize", "virtual-vector-size", "int64_t", /*default=*/"8",
+               "Specify a vector size for vectorization">
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// PureOpenMPToLLVM
+//===----------------------------------------------------------------------===//
+def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
+  let summary = "lower OpenMP dialect to LLVM dialect";
+  let description = [{
+    This pass only deal with openmp dialect, while MLIR's convert-openmp-to-llvm
+    also converts func, arith, memref and other related dialects.
+  }];
+  let constructor = "mlir::createPureOpenMPToLLVMPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// SCFToGPU
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// AffineToSCF
+//===----------------------------------------------------------------------===//
+
+def ConvertAffineToSCF : Pass<"convert-affine-to-scf", "func::FuncOp"> {
+  let summary = "Convert affine.for to scf.for, preserving all attributes";
+  let description = [{
+    This pass converts affine.for operations to scf.for operations while
+    preserving all attributes from the original affine.for operation.
+  }];
+  let constructor = "mlir::createConvertAffineToSCFPass()";
+  let dependentDialects = [
+    "affine::AffineDialect",
+    "scf::SCFDialect",
+    "arith::ArithDialect",
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// NPUVectorToVector
+//===----------------------------------------------------------------------===//
+
+def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
+  let summary = "Lower NPUVector ops to MLIR community vector/arith on vector types";
+  let description = [{
+    After npuvector-vectorize, rewrites npuvector.transfer_read/write, reduction, broadcast,
+    transpose, and npuvector elementwise cast/cmp ops to vector.transfer_* and arith.*; refreshes
+    arith that still use npuvector-typed results.
+
+    Anchored on ModuleOp and walks every func.func including those under nested builtin.module ops
+    (func.func(pipeline) nesting does not descend into nested modules).
+  }];
+  let constructor = "mlir::createNPUVectorToVectorPass()";
+}
+
+#endif // AKG_CONVERSION_PASSES
