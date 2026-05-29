@@ -71,8 +71,12 @@ def load_sol_task(sol_dir: str | Path) -> Tuple[str, str, str]:
     return op_name, task_desc, str(case_dir)
 
 
-def load_task_source(task_path: str | Path) -> Tuple[Optional[str], str, Optional[str]]:
-    """Load either a plain task file or a SOL problem directory."""
+def load_sol_task_source(task_path: str | Path) -> Tuple[Optional[str], str, Optional[str]]:
+    """Load a plain task file or a SOL problem directory.
+
+    Returns (op_name, task_desc, problem_dir). op_name and problem_dir are
+    None for plain .py files.
+    """
     resolved_path = Path(task_path).expanduser().resolve()
     if is_sol_problem_dir(resolved_path):
         op_name, task_desc, sol_problem_dir = load_sol_task(resolved_path)
@@ -81,4 +85,4 @@ def load_task_source(task_path: str | Path) -> Tuple[Optional[str], str, Optiona
     if resolved_path.is_file():
         return None, resolved_path.read_text(encoding="utf-8"), None
 
-    raise FileNotFoundError(f"Task description file or SOL problem dir not found: {resolved_path}")
+    raise FileNotFoundError(f"SOL task path not found: {resolved_path}")

@@ -89,7 +89,7 @@ class OpTaskBuilder(AgentBase):
             },
             "bench_type": {
                 "type": "string",
-                        "description": "基准测试类型（例如：'kernelbench', 'sol'）",
+                        "description": "基准测试类型（例如：'kernelbench', 'sol', 'cann'）",
                         "default": "kernelbench"
             },
             "user_feedback": {
@@ -716,7 +716,7 @@ class OpTaskBuilder(AgentBase):
 
         # 执行静态检查（SOL 格式暂不进行静态检查）
         bench_type = state.get("bench_type", "kernelbench")
-        if bench_type == "sol":
+        if bench_type in ("sol", "cann"):
             static_check_passed, static_check_error = True, ""
         else:
             static_check_passed, static_check_error = self._check_task_desc_static(task_desc)
@@ -732,7 +732,7 @@ class OpTaskBuilder(AgentBase):
         # 静态检查通过，执行运行时检查（SOL 格式暂不进行运行时检查）
         runtime_check_passed = True
         runtime_check_error = ""
-        if bench_type != "sol":
+        if bench_type not in ("sol", "cann"):
             runtime_check_passed, runtime_check_error = await self._check_task_desc_runtime(
                 task_desc=task_desc,
                 op_name=op_name,

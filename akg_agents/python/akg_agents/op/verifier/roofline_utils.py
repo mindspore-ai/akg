@@ -220,6 +220,13 @@ def compute_roofline_profile(
                 arch_spec=arch_spec,
                 precision_override=precision_override,
             )
+        elif bench_type == "cann":
+            # CANN-Bench: roofline not applicable, return skip result
+            return _skipped_result(
+                "CANN-Bench 暂不支持 roofline 评分",
+                bench_type=bench_type,
+                arch=arch,
+            )
         else:
             result = _compute_kernelbench_roofline(
                 verify_dir=verify_path,
@@ -727,10 +734,12 @@ def _find_framework_source_file(verify_dir: Path, op_name: str, framework: str) 
 
 
 def _infer_bench_type(verify_dir: Path, explicit_bench_type: Optional[str]) -> str:
-    if explicit_bench_type in {"sol", "kernelbench"}:
+    if explicit_bench_type in {"sol", "kernelbench", "cann"}:
         return explicit_bench_type
     if (verify_dir / "definition.json").is_file() and (verify_dir / "workload.jsonl").is_file():
         return "sol"
+    if (verify_dir / "proto.yaml").is_file() and (verify_dir / "golden.py").is_file():
+        return "cann"
     return "kernelbench"
 
 
