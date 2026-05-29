@@ -208,6 +208,27 @@ impl_outputs = impl_model(*inputs_list)   # 你的实现
 - **注意标量参数**：`inputs` 中可能包含标量（如 `float` 类型的 `attention_dropout`），它们不是 tensor，不要对其调用 `.shape` 等 tensor 方法。
 - **返回值必须与 `reference.py` 中 `run()` 函数的返回值一致**（数量、dtype、shape）。
 - **所有可变维度从输入 tensor 的 `.shape` 获取**，不要硬编码可变维度（如 batch_size、seq_len）；常量维度（definition 中 `type: const`）可以硬编码。
+{% elif bench_type == "cann" %}
+4. **CANN-Bench 模式的接口规范**（验证框架会按此方式调用你的代码）：
+
+验证框架按以下方式实例化和调用 `ModelNew`：
+```python
+init_params = []                           # 固定为空列表
+impl_model = ModelNew(*init_params)        # 即 ModelNew()
+impl_model = impl_model.to(device)
+
+# 按 proto.yaml schema 生成输入 kwargs
+impl_outputs = impl_model(**input_kwargs)  # 你的实现
+```
+
+因此：
+- **`__init__(self)` 不接收额外参数**。如果需要可学习参数（如权重），在 `__init__` 中通过固定随机种子创建。
+- **`forward(self, ...)` 的参数必须与 proto.yaml schema 的 inputs + attrs 一致**。Tensor 输入和标量属性都作为 forward 的参数。
+- **TensorList 输入**：proto.yaml 中标记 `is_list: true` 的输入是多个 tensor 的列表，forward 中对应参数类型为 `List[Tensor]`。
+- **optional 输入**：proto.yaml 中标记 `optional: true` 的输入可能为 None，forward 中对应参数默认值应为 None。
+- **返回值必须与 golden.py 函数的返回值一致**（数量、dtype、shape）。
+- **多输出**：如果 schema 返回多个输出（如 `(Tensor y, Tensor idx)`），forward 应返回 tuple。
+- **精度要求**：必须通过 MERE/MARE 精度校验，注意 proto.yaml 中可能有 precision_thresholds 覆盖默认阈值。
 {% else %}
 4. 对于任务输入中固定写死的init_inputs参数，以及class外定义的参数，硬编码至代码中。
 所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
@@ -434,6 +455,13 @@ class ModelNew(nn.Cell):
 - `__init__(self)` **不接收额外参数**
 - `forward(self, ...)` 的参数必须与 `definition.json` 的 `inputs` 字段**按顺序一一对应**（包括标量参数如 `float`）
 - 返回值必须与 `reference.py` 中 `run()` 函数的返回值一致（数量、dtype、shape）
+{% elif bench_type == "cann" %}
+**⚠️ 重要（CANN-Bench 模式）**：验证框架通过 `ModelNew()` 实例化（**无参数**），然后按 proto.yaml schema 生成 input_kwargs，以 `model(**input_kwargs)` 调用 `forward`。因此：
+- `__init__(self)` **不接收额外参数**
+- `forward(self, ...)` 的参数必须与 proto.yaml 的 inputs + attrs **按名称一致**（Tensor 输入和标量属性都是 forward 参数）
+- TensorList 输入（`is_list: true`）对应 `List[Tensor]` 类型参数
+- optional 输入（`optional: true`）可能为 None，参数默认值应为 None
+- 返回值必须与 golden.py 函数的返回值一致（数量、dtype、shape）
 {% else %}
 **⚠️ 重要**：验证框架通过 `ModelNew(*get_init_inputs())` 实例化、`model(*get_inputs())` 调用，因此 `__init__` 和 `forward` 的参数必须与上述函数返回值一一对应。
 {% endif %}

@@ -9,6 +9,7 @@ WITH_MULTIKERNELBENCH=false
 WITH_EVOKERNEL=false
 WITH_SOLAR=false
 WITH_ASCENDOPGENAGENT=false
+WITH_CANN_BENCH=false
 WITH_ALL_BENCHMARKS=false
 for arg in "$@"; do
   if [ "$arg" = "--with_local_model" ]; then
@@ -25,6 +26,8 @@ for arg in "$@"; do
     WITH_SOLAR=true
   elif [ "$arg" = "--with_ascendopgenagent" ]; then
     WITH_ASCENDOPGENAGENT=true
+  elif [ "$arg" = "--with_cann_bench" ]; then
+    WITH_CANN_BENCH=true
   elif [ "$arg" = "--with_all_benchmarks" ]; then
     WITH_ALL_BENCHMARKS=true
   fi
@@ -43,6 +46,10 @@ MULTIKERNELBENCH_DIR="${THIRDPARTY_DIR}/MultiKernelBench"
 EVOKERNEL_DIR="${THIRDPARTY_DIR}/EvoKernel"
 SOLAR_DIR="${SOLAR_DIR:-${THIRDPARTY_DIR}/SOLAR}"
 ASCENDOPGENAGENT_DIR="${THIRDPARTY_DIR}/AscendOpGenAgent"
+CANN_BENCH_DIR="${THIRDPARTY_DIR}/cann-bench"
+
+CANN_BENCH_REPO_URL="https://gitcode.com/cann/cann-bench.git"
+CANN_BENCH_COMMIT=""
 
 KERNELBENCH_REPO_URL="https://github.com/ScalingIntelligence/KernelBench.git"
 # 优先以历史 .gitmodules 中记录的 commit 为准。
@@ -250,6 +257,23 @@ function download_ascendopgenagent() {
   fi
 }
 
+function download_cann_bench() {
+  check_git
+  clone_and_checkout_repo "cann-bench" "${CANN_BENCH_REPO_URL}" "${CANN_BENCH_DIR}" "${CANN_BENCH_COMMIT}"
+
+  local tasks_dir="${CANN_BENCH_DIR}/tasks"
+  if [ -d "${tasks_dir}" ]; then
+    local level_count
+    level_count="$(find "${tasks_dir}" -maxdepth 1 -mindepth 1 -type d -name 'level*' | wc -l)"
+    local op_count
+    op_count="$(find "${tasks_dir}" -name 'proto.yaml' | wc -l)"
+    echo "cann-bench 就位：${CANN_BENCH_DIR}"
+    echo "CANN-Bench 数据集：${tasks_dir}（${level_count} 个 level，${op_count} 个算子）"
+  else
+    echo "警告：${tasks_dir} 缺失，AKG 的 CANN-Bench 接入将无法找到数据集。"
+  fi
+}
+
 function download_and_install_solar() {
   check_git
 
@@ -294,6 +318,7 @@ if $WITH_ALL_BENCHMARKS; then
   WITH_MULTIKERNELBENCH=true
   WITH_EVOKERNEL=true
   WITH_ASCENDOPGENAGENT=true
+  WITH_CANN_BENCH=true
 fi
 
 if $WITH_LOCAL_MODEL; then
@@ -325,4 +350,8 @@ fi
 
 if $WITH_ASCENDOPGENAGENT; then
   download_ascendopgenagent
+fi
+
+if $WITH_CANN_BENCH; then
+  download_cann_bench
 fi

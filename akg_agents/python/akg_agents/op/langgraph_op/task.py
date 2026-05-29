@@ -121,7 +121,7 @@ class LangGraphTask(BaseLangGraphTask):
             source_backend: 源后端，用于跨后端转换
             source_arch: 源架构，用于跨后端转换
             user_requirements: 用户额外需求（来自 ReAct 多轮对话）
-            bench_type: 基准测试类型（kernelbench 或 sol）
+            bench_type: 基准测试类型（kernelbench, sol, 或 cann）
             previous_code: 初始 kernel 代码（跳过 KernelGen 生成）
         """
         # 验证任务配置

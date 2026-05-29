@@ -42,6 +42,7 @@ from akg_agents.core.worker.manager import register_worker
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.utils.sol_utils import load_sol_task
+from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner
 from akg_agents.op.utils.npukb_utils import is_npukb_task_file, load_npukb_task
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.core.async_pool.task_pool import TaskPool
@@ -159,6 +160,11 @@ def parse_batch_runner_mode(args):
         op_name = sol_op_name
         config._sol_problem_dir = sol_problem_dir
         print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    elif os.path.isdir(task_file) and is_cann_task_dir(task_file):
+        cann_op_name, task_desc, cann_problem_dir = load_cann_task_for_runner(task_file)
+        op_name = cann_op_name
+        config._cann_problem_dir = cann_problem_dir
+        print(f"CANN 模式: 算子目录={cann_problem_dir}")
     elif is_npukb_task_file(task_file):
         _npukb_stem, task_desc, npukb_aux_files, npukb_factory_names = load_npukb_task(task_file)
         config._npukb_aux_files = npukb_aux_files
@@ -195,12 +201,14 @@ async def run_wrapper(op_name, task_desc, config):
     )
     
     sol_problem_dir = getattr(config, '_sol_problem_dir', None)
-    if sol_problem_dir:
+    cann_problem_dir = getattr(config, '_cann_problem_dir', None)
+
+    if sol_problem_dir or cann_problem_dir:
         if config.config_path and os.path.exists(config.config_path):
             loaded_config = load_config(config_path=config.config_path)
         else:
             loaded_config = load_config(dsl=config.dsl, backend=config.backend)
-        
+
         if "agent_model_config" not in loaded_config or not isinstance(
             loaded_config.get("agent_model_config"), dict
         ):
@@ -210,9 +218,13 @@ async def run_wrapper(op_name, task_desc, config):
         mc.setdefault("default", default_level)
         for agent_name in ["designer", "coder", "conductor", "verifier", "selector", "op_task_builder"]:
             mc.setdefault(agent_name, mc["default"])
-        
-        loaded_config["bench_type"] = "sol"
-        loaded_config["sol_problem_dir"] = sol_problem_dir
+
+        if sol_problem_dir:
+            loaded_config["bench_type"] = "sol"
+            loaded_config["sol_problem_dir"] = sol_problem_dir
+        if cann_problem_dir:
+            loaded_config["bench_type"] = "cann"
+            loaded_config["cann_problem_dir"] = cann_problem_dir
         
         is_remote = get_akg_env_var("WORKER_URL") is not None
         check_env_for_task(config.framework, config.backend, config.dsl, loaded_config, is_remote=is_remote)

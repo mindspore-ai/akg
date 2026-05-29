@@ -10,6 +10,7 @@ bash download.sh --with_multikernelbench
 bash download.sh --with_evokernel
 bash download.sh --with_sol_execbench
 bash download.sh --with_ascendopgenagent
+bash download.sh --with_cann_bench
 # 一次性下载全部 benchmark
 bash download.sh --with_all_benchmarks
 ```
