@@ -29,55 +29,9 @@ from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.result_analysis import get_compare_tolerance
 from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
                                       run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
-from ..ascend_profilier.cann_file_parser import CANNFileParser
-from ..ascend_profilier.op_summary_parser import OpSummaryParser
 
-logging.basicConfig(level=logging.WARN,
+logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
-
-PROF_ERROR_CODE = 9999999999
-
-def validate_and_normalize_path(
-    path,
-    check_absolute_path=False,
-    allow_parent_dir=True):
-    """
-    Validates path and returns its normalized form.
-
-    If path has a valid scheme, treat path as url, otherwise consider path a
-    unix local path.
-
-    Note:
-        File scheme (rfc8089) is currently not supported.
-
-    Args:
-        path (str): Path to be normalized.
-        check_absolute_path (bool): Whether check path scheme is supported.
-        allow_parent_dir (bool): Whether allow parent dir in path.
-
-    Returns:
-        str, normalized path.
-    """
-    if not path:
-        raise RuntimeError("The path is invalid!")
-
-    path_str = str(path)
-    if not allow_parent_dir:
-        path_components = path_str.split("/")
-        if ".." in path_components:
-            raise RuntimeError("The parent path is not allowed!")
-
-    # path does not have valid schema, treat it as unix local path.
-    if check_absolute_path:
-        if not path_str.startswith("/"):
-            raise RuntimeError("The path is invalid!")
-    try:
-        # most unix systems allow
-        normalized_path = os.path.realpath(path)
-    except ValueError as e:
-        raise RuntimeError("The path is invalid!") from e
-
-    return normalized_path
 
 def _get_json_dict(desc):
     return json.loads(desc) if isinstance(desc, str) else desc
@@ -150,17 +104,6 @@ def _auto_get_target(desc):
     if target is None:
         raise RuntimeError(f"Can't get target for process({process}) in desc")
     return target
-
-
-def profiling_analyse(arch):
-    public_path = os.getenv('PROFILING_DIR')
-    if public_path is None:
-        raise RuntimeError("Environment PROFILING_DIR not set!")
-    public_path = validate_and_normalize_path(public_path)
-    CANNFileParser(public_path).export_cann_profiling()
-    cann_file_parser = OpSummaryParser(public_path, arch)
-    task_duration = cann_file_parser.generate_op_summary_data()
-    return task_duration
 
 
 def run_a_kernel(desc,
