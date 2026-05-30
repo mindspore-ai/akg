@@ -38,7 +38,8 @@ class HardwareConfig {
   HardwareConfig() = default;
   ~HardwareConfig() = default;
   HardwareConfig(uint32_t coreNumAic, uint32_t coreNumAiv, uint32_t l2Size, uint32_t l1Size, uint32_t l0aSize,
-                 uint32_t l0bSize, uint32_t l0cSize, uint32_t ubSize, bool isRegBasedArch)
+                 uint32_t l0bSize, uint32_t l0cSize, uint32_t ubSize, bool isRegBasedArch,
+                 uint32_t RegVectorLength = 0)
       : coreNumAic(coreNumAic),
         coreNumAiv(coreNumAiv),
         l2(l2Size),
@@ -47,7 +48,8 @@ class HardwareConfig {
         l0b(l0bSize),
         l0c(l0cSize),
         ub(ubSize),
-        isRegBasedArch(isRegBasedArch) {}
+        isRegBasedArch(isRegBasedArch),
+        RegVectorLength(RegVectorLength) {}
 
   uint32_t coreNumAic{0};
   uint32_t coreNumAiv{0};
@@ -58,6 +60,7 @@ class HardwareConfig {
   uint32_t l0c{0};
   uint32_t ub{0};
   bool isRegBasedArch{false};
+  uint32_t RegVectorLength{0};
 };
 
 static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = {
@@ -123,7 +126,8 @@ static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = 
                                   /*l0b = */ 65536,
                                   /*l0c = */ 262144,
                                   /*ub = */ 253952,
-                                  /*isRegBasedArch = */ true}},
+                                  /*isRegBasedArch = */ true,
+                                  /*RegVectorLength = */ 256}},
 };
 
 class NpuInfo {
@@ -146,6 +150,7 @@ class NpuInfo {
   inline uint32_t getL0cSize() const { return hwConfig.l0c; }
   inline uint32_t getUbSize() const { return hwConfig.ub; }
   inline bool isRegBasedArch() const { return hwConfig.isRegBasedArch; }
+  inline uint32_t getRegVectorLength() const { return hwConfig.RegVectorLength; }
 
   const HardwareConfig &getConfigByVersion(const std::string &socVersion) const {
     static HardwareConfig invalidHardwareConfig;
