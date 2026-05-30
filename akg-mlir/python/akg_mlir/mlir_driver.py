@@ -30,6 +30,9 @@ from .utils.dynamic_utils import get_device_shape
 from .utils.gen_runtime_code import ProfilingParams, gen_cuda_runtime_code
 from .backends.ascend import akg_opt, write_code, bisheng_compile, get_block_dim_from_mlir
 from .backends.ascend import benchmark_launch as launch
+from .ascend_profilier.cann_file_parser import CANNFileParser
+from .ascend_profilier.op_summary_parser import OpSummaryParser
+from .profile_mgr import ascend_start_profiling, ascend_stop_profiling
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -40,6 +43,7 @@ DYNAMIC = "is_dynamic"
 SHA256 = "sha256"
 KERNEL_NAME = "kernelName"
 STATIC_TILE_IMPL = "StaticTileImpl"
+PROF_ERROR_CODE = 9999999999
 
 def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
@@ -48,6 +52,48 @@ def get_kernel_meta_path():
         os.path.realpath(os.getenv("MS_COMPILER_CACHE_PATH", "")),
         kernel_meta_dir,
     )
+
+def validate_and_normalize_path(
+    path,
+    check_absolute_path=False,
+    allow_parent_dir=True):
+    """
+    Validates path and returns its normalized form.
+
+    If path has a valid scheme, treat path as url, otherwise consider path a
+    unix local path.
+
+    Note:
+        File scheme (rfc8089) is currently not supported.
+
+    Args:
+        path (str): Path to be normalized.
+        check_absolute_path (bool): Whether check path scheme is supported.
+        allow_parent_dir (bool): Whether allow parent dir in path.
+
+    Returns:
+        str, normalized path.
+    """
+    if not path:
+        raise RuntimeError("The path is invalid!")
+
+    path_str = str(path)
+    if not allow_parent_dir:
+        path_components = path_str.split("/")
+        if ".." in path_components:
+            raise RuntimeError("The parent path is not allowed!")
+
+    # path does not have valid schema, treat it as unix local path.
+    if check_absolute_path:
+        if not path_str.startswith("/"):
+            raise RuntimeError("The path is invalid!")
+    try:
+        # most unix systems allow
+        normalized_path = os.path.realpath(path)
+    except ValueError as e:
+        raise RuntimeError("The path is invalid!") from e
+
+    return normalized_path
 
 def _is_single_op(desc_d):
     """Return the number of desc op is 1."""
@@ -116,6 +162,16 @@ def create_executable(kernel_name,
     except Exception as e:
         raise RuntimeError("Load cuda runtime lib fail") from e
     return lib
+
+def profiling_analyse(arch):
+    public_path = os.getenv('PROFILING_DIR')
+    if public_path is None:
+        raise RuntimeError("Environment PROFILING_DIR not set!")
+    public_path = validate_and_normalize_path(public_path)
+    CANNFileParser(public_path).export_cann_profiling()
+    cann_file_parser = OpSummaryParser(public_path, arch)
+    task_duration = cann_file_parser.generate_op_summary_data()
+    return task_duration
 
 def transform_data_to_ctypes(data,
                              kernel_name,
@@ -316,11 +372,11 @@ class MlirDriver:
             launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                    use_mem_pool=True, output_indexes=output_indexes)
         else:
-            profile_mgr.ascend_start_profiling(device_id)
+            ascend_start_profiling(device_id)
             for _ in range(5):
                 launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                        use_mem_pool=True, output_indexes=output_indexes)
-            profile_mgr.ascend_stop_profiling()
+            ascend_stop_profiling()
             # analysis
             cycle = profiling_analyse(None)
             logging.info('=====Task Duration(us)==============================')
@@ -329,7 +385,7 @@ class MlirDriver:
             else:
                 logging.error("OOPS, can't correctly Task Duration!")
             logging.info('=====Task Duration(us)==============================')
-            logging.info("%s Task Duration(us) : %s", kernel_name, str(cycle))
+            logging.info("%s Task Duration(us) : %s", self.kernel_name, str(cycle))
         return input_for_mod
 
     def run_cpu(self, input_for_mod, output_indexes=None):
