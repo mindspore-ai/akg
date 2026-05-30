@@ -25,7 +25,7 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg.akgAscendLaunch import akg_ascend_run
+from akg.ascend_launch import akg_ascend_run
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
 
