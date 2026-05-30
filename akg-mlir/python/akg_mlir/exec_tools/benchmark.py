@@ -22,7 +22,6 @@ import shutil
 import time
 import distutils
 import numpy as np
-from bfloat16 import bfloat16
 
 from akg import MlirDriver
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
@@ -146,7 +145,7 @@ def run_a_kernel(desc,
     mlir_driver.run(input_for_mod, output_indexes)
 
     for idx, d in enumerate(expect):
-        expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+        expect[idx] = d.astype(np.float32) if d.dtype.name == "bfloat16" else d
     compare_results(kernel_name, desc, input_for_mod, output_indexes, expect)
 
     if clear_tmp:

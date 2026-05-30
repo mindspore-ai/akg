@@ -1,2 +1,2 @@
-numpy<=1.26
-bfloat16
+numpy>=1.25
+bfloat16>=1.0
