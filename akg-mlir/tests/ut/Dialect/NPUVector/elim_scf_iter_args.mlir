@@ -1,5 +1,5 @@
 // RUN: akg-opt %s --elim-scf-iter-args | FileCheck %s
-  
+
 
 // CHECK-LABEL:  module {
 // CHECK-NEXT:  func.func @test_reduction_x_two_results(%arg0: memref<1024xf32>, %arg1: memref<1024xf32>, %arg2: memref<f32>, %arg3: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
