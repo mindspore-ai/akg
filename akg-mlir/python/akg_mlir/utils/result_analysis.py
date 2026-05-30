@@ -19,7 +19,6 @@ import logging
 import json
 import math
 import numpy as np
-from bfloat16 import bfloat16
 
 
 def result_compare(actual, bench_mark, r_tol=5e-3):
@@ -248,8 +247,7 @@ def bisect_sum(a, axis=0, keepdims=True):
     elif axis == 7:
         s = _bisect_sum_axis7(s1, reduce_num, tail_num)
     else:
-        raise ValueError(
-            "axis should be {} or in range[0, 7], but got {}".format(len(shape) - 1, axis))
+        raise ValueError(f"axis should be {len(shape) - 1} or in range[0, 7], but got {axis}")
     if not keepdims:
         s = np.squeeze(s, axis)
     return s
@@ -269,8 +267,7 @@ def count_unequal_element(data_expected, data_actual, rtol, atol):
             data_actual, data_expected, atol=atol, rtol=rtol, equal_nan=False)
         unequal_index = np.where(np.logical_not(res_elewise))
     if not isinstance(unequal_index, tuple):
-        raise ValueError(
-            "unequal_index should be tuple but get %s" % type(unequal_index))
+        raise ValueError(f"unequal_index should be tuple but get {type(unequal_index)}")
     index_len = len(unequal_index)
     unequal_num = unequal_index[0].size
     unequal_actual = data_actual[unequal_index]
@@ -311,7 +308,7 @@ def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):
         count_unequal_element(data_expected, data_actual, rtol, atol)
 
 
-class IOInfo(object):
+class IOInfo():
     """
     class for IO info for tensors and operators
     """
@@ -350,11 +347,11 @@ def _get_op_attr(op_name, attrs, attr_name):
     for attr in attrs:
         if attr["name"] == attr_name:
             return attr["value"]
-    raise ValueError(
-        "Can not find attr '{}' in op {}".format(attr_name, op_name))
+    raise ValueError(f"Can not find attr '{attr_name}' in op {op_name}")
 
 
 def _precision_analyze(desc: dict, tensors):
+    """Precision analyze."""
     exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
                        "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
                        "TransData", "BroadcastTo", "Assign"]
@@ -387,8 +384,7 @@ def _precision_analyze(desc: dict, tensors):
 
     def _precision_reduce(x: IOInfo):
         if x in input_tensors:
-            logging.debug(
-                "Skip %s, because it comes from input tensors", str(x))
+            logging.debug("Skip %s, because it comes from input tensors", str(x))
             return False
         if x in ops and ops.get(x) in exclude_op_list:
             logging.debug(
@@ -406,8 +402,7 @@ def _precision_analyze(desc: dict, tensors):
     tensors = tensors if isinstance(tensors, (list, tuple)) else [tensors]
     cast_from_fp16 = [False for _ in range(len(tensors))]
     for i, tensor in enumerate(tensors):
-        logging.debug(
-            "[%d/%d] Analyzing sources of %s...", i + 1, len(tensors), str(tensor))
+        logging.debug("[%d/%d] Analyzing sources of %s...", i + 1, len(tensors), str(tensor))
         visited = []
         stack = [tensor]
         while len(stack) > 0:
