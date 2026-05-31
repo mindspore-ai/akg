@@ -26,7 +26,6 @@ import string
 import importlib.util
 from logging.handlers import TimedRotatingFileHandler
 from collections import namedtuple
-from bfloat16 import bfloat16
 import numpy as np
 from .gen_random import random_gaussian, gen_indices, gen_csr_indices
 from .op_dsl import get_attr, get_op_dsl, get_op_dsl_torch_mlir
@@ -451,6 +450,12 @@ def _pack_matrix(data, feature):
 def _gen_input_item(tensor_name, infos, shape, dtype, csr_idx_pair, input_mean_value):
     """Gen input item."""
     dtype = torch_normalize_dtype(dtype)
+    if dtype == "bfloat16":
+        try:
+            from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
+        except ImportError as err:
+            raise ImportError("bfloat16 is not installed, install it first.") from err
+        dtype = bfloat16
     item = None
     if tensor_name in infos["clean_input"]:
         item = np.zeros(shape).astype(dtype)
@@ -497,8 +502,6 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
-        if dtype == "bfloat16":
-            dtype = bfloat16
         item = _gen_input_item(tensor_name, infos, shape,
                                dtype, csr_idx_pair, input_mean_value)
 
@@ -529,6 +532,10 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
             dtype = output_desc["data_type"]
             dtype = torch_normalize_dtype(dtype)
             if dtype == "bfloat16":
+                try:
+                    from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
+                except ImportError as err:
+                    raise ImportError("bfloat16 is not installed, install it first.") from err
                 dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
