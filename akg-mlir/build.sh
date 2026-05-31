@@ -18,17 +18,18 @@ set -e
 AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
 BUILD_DIR="${AKG_MLIR_DIR}/build"
 # Parse arguments
-THREAD_NUM=$(nproc)
-CMAKE_ARGS="-DENABLE_GITEE=ON"
-AKG_MLIR_CMAKE_ARGS=""
-AKG_MLIR_ARGS=""
 BUILD_TYPE="Release"
+THREAD_NUM=""
+AKG_MLIR_ARGS=""
+AKG_MLIR_CMAKE_ARGS=""
+BUILD_MLIR="OFF"
 ENABLE_BINDINGS_PYTHON="OFF"
+CMAKE_ARGS="-DENABLE_GITEE=ON"
 
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t] [-b] [-u] [-s path] [-c] [-h]"
+    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t] [-b] [-u] [-s path] [-c] [-m] [-h]"
     echo ""
     echo "Options:"
     echo "    -b enable binds python (Default: disable)"
@@ -36,7 +37,8 @@ usage()
     echo "    -d Debug mode"
     echo "    -e Hardware environment: cpu, gpu, ascend or all"
     echo "    -h Print usage"
-    echo "    -j[n] Set the threads when building (Default: the number of cpu)"
+    echo "    -j[n] Set the threads when building (Default: auto)"
+    echo "    -m Enable auto build mlir (Default: disable)"
     echo "    -s Specifies the source path of third-party, default: none"
     echo "    -t Enable unit test (Default: disable)"
     echo "    -u Enable auto tune (Default: disable)"
@@ -49,7 +51,7 @@ make_clean()
   cmake --build . --target clean
 }
 
-while getopts 'bcde:hj:s:tu' opt
+while getopts 'bcde:hj:ms:tu' opt
 do
     case "${opt}" in
         b)
@@ -86,6 +88,9 @@ do
         j)
             THREAD_NUM=${OPTARG}
             ;;
+        m)
+            BUILD_MLIR="ON"
+            ;;
         s)
             PREFIX_PATH=${OPTARG}
             ;;
@@ -118,8 +123,12 @@ cd $BUILD_DIR
 set -x
 cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
     -DAKG_ENABLE_BINDINGS_PYTHON=${ENABLE_BINDINGS_PYTHON} \
-    -DCMAKE_PREFIX_PATH=${PREFIX_PATH}
-cmake --build . --config ${BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
+    -DCMAKE_PREFIX_PATH=${PREFIX_PATH} -DAKG_BUILD_MLIR=${BUILD_MLIR} -G Ninja
+if [[ -n "${THREAD_NUM}" ]]; then
+    cmake --build . --config ${BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
+else
+    cmake --build . --config ${BUILD_TYPE} ${AKG_MLIR_ARGS}
+fi
 
 cd $AKG_MLIR_DIR
 AKG_CMAKE_ALREADY_BUILD=1 \
