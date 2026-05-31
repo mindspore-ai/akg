@@ -1,7 +1,4 @@
 file(GLOB_RECURSE SRC_LIST *.cpp)
-FetchContent_Declare(json URL ${JSON_TARBALL_URL})
-FetchContent_MakeAvailable(json)
-
 add_mlir_dialect_library(AKGGPUPasses
   ${SRC_LIST}
 
@@ -36,5 +33,5 @@ add_mlir_dialect_library(AKGGPUPasses
   MLIRSupport
   MLIRTransformUtils
 
-  nlohmann_json::nlohmann_json
+  akg::nlohmann_json
   )

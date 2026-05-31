@@ -42,13 +42,18 @@ set(LIBS
   MLIRIR
   )
 
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
+
 add_mlir_library(AKGAscendPipelines
   AscendOpt.cpp
 
   DEPENDS
   ${AKG_MLIR_LIBS}
+  ${conversion_libs}
 
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
   ${LIBS}
+  ${conversion_libs}
+
 )

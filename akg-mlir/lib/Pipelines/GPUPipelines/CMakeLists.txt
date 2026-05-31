@@ -21,6 +21,7 @@ set(LIBS
   MLIRIR
   )
 
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 add_mlir_library(AKGGPUPipelines
   GPUOpt.cpp
   GPUDynOpt.cpp
@@ -28,8 +29,10 @@ add_mlir_library(AKGGPUPipelines
 
   DEPENDS
   ${AKG_MLIR_LIBS}
+  ${conversion_libs}
   DISABLE_INSTALL
 
   LINK_LIBS PUBLIC
   ${LIBS}
+  ${conversion_libs}
 )
