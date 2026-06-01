@@ -11,6 +11,27 @@ metadata:
 
 # PyPTO 常见陷阱
 
+## 0. kernel 输出：禁止 return / 返回注解，输出走参数（硬约束，最高优先级）
+
+PyPTO kernel **不是普通 Python 函数**：输出张量必须作为 kernel 形参传入，并在 kernel 内**原地写出**。**禁止 `-> ...` 返回注解，禁止 `return` 输出**，否则解析阶段直接报错：
+
+- `NotImplementedError: Return annotation is not allowed` —— 写了 `def kernel(...) -> pypto.Tensor(...):`
+- `ParserError: Return statements are not allowed` —— kernel 里 `return out`
+
+正确写法：输出也是入参，三种写出方式任选其一。
+
+```python
+@pypto.frontend.jit(...)
+def kernel(
+    x: pypto.Tensor((flat_size,), pypto.DT_FP32),
+    out: pypto.Tensor((flat_size,), pypto.DT_FP32),   # 输出张量也是形参，不要 return
+):
+    pypto.set_vec_tile_shapes(8192)
+    out[:] = pypto.exp(x)                              # 1) 整块覆盖写
+    # 2) loop 分块按偏移写： pypto.assemble(chunk_result, [off], out)
+    # 3) 显式 in-place 提交： out.move(src)（loop+assemble 后常见收尾）
+```
+
 ## 1. 运算符规则（最高频错误）
 
 `+` `*`：标量任意位置。`-` `/`：tensor 必须在左。函数调用：第一参数必须 Tensor。
