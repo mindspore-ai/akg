@@ -2870,6 +2870,13 @@ static bool tryFoldScalarBroadcast(npuvector::BroadcastOp op, Value source, Conv
   if (!isScalarType(source.getType())) return false;
 
   Value broadcastVal = op.getResult();
+  const bool hasSinglePointVectorLhsUser = llvm::any_of(broadcastVal.getUsers(), [broadcastVal](Operation *user) {
+    if (user->getNumOperands() != 2 || user->getOperand(1) != broadcastVal) return false;
+    auto shapeAndElem = getShapeAndElemType(user->getOperand(0).getType());
+    return shapeAndElem && llvm::all_of(shapeAndElem->first, [](int64_t dim) { return dim == 1; });
+  });
+  if (hasSinglePointVectorLhsUser) return false;
+
   const bool hasNonFoldUser = llvm::any_of(broadcastVal.getUsers(), [broadcastVal](Operation *user) {
     return !isSupportedBroadcastScalarFoldUser(user, broadcastVal) && !isa<annotation::MarkOp>(user);
   });
