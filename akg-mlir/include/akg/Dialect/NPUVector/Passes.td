@@ -19,6 +19,19 @@
 
 include "mlir/Pass/PassBase.td"
 
+def EliminateNPUVectorRedundantOpsPass
+    : Pass<"eliminate-npuvector-redundant-ops", "mlir::func::FuncOp"> {
+  let summary = "Eliminate semantically redundant NPUVector reads and seed reads";
+  let description = [{
+    Performs local forwarding for NPUVector transfer_read operations. Reads from
+    the same source/index tile are reused when there is no intervening write,
+    and reads immediately satisfied by a previous transfer_write to the same
+    tile are replaced by the written SSA value. A following CSE can then merge
+    duplicate broadcasts and elementwise ops.
+  }];
+  let constructor = "mlir::npuvector::createEliminateNPUVectorRedundantOpsPass()";
+}
+
 def OutlineVectorFunction : Pass<"outline-vector-function", "mlir::ModuleOp"> {
   let summary = "This pass is designed to support SMID Reg";
   let description = [{

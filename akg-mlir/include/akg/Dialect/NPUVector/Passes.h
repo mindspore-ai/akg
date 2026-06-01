@@ -17,9 +17,11 @@
 #ifndef AKG_DIALECT_NPUVECTOR_PASSES_H_
 #define AKG_DIALECT_NPUVECTOR_PASSES_H_
 
-#include "akg/Dialect/NPUVector/Transforms/OutlineVectorFunction.h"
+#include "akg/Dialect/NPUVector/Transforms/EliminateNPUVectorRedundantOps.h"
 #include "akg/Dialect/NPUVector/Transforms/ElimScfIterArgs.h"
+#include "akg/Dialect/NPUVector/Transforms/OutlineVectorFunction.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
