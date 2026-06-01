@@ -27,6 +27,47 @@
 namespace mlir {
 namespace mfuse {
 
+mlir::LogicalResult AclnnVarOp::verify() {
+  auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(getSelf().getType());
+  if (!inputType || !inputType.hasRank()) {
+    return emitOpError("input must be a ranked tensor");
+  }
+
+  int64_t rank = inputType.getRank();
+  auto dimAttr = getDim();
+
+  llvm::DenseSet<int64_t> seenDims;
+  for (auto dimAttrVal : dimAttr.getValue()) {
+    auto dim = mlir::cast<mlir::IntegerAttr>(dimAttrVal).getValue().getSExtValue();
+    int64_t actualDim = dim < 0 ? rank + dim : dim;
+    if (actualDim < 0) {
+      return emitOpError("dimension out of range, got ") << dim;
+    }
+    if (actualDim >= rank) {
+      return emitOpError("dimension out of range, got ") << dim << " for input rank " << rank;
+    }
+    if (!seenDims.insert(actualDim).second) {
+      return emitOpError("duplicate reduction dimensions are not supported, got ") << dim;
+    }
+  }
+
+  auto varianceOutType = mlir::dyn_cast<mlir::RankedTensorType>(getVarianceOut().getType());
+  if (!varianceOutType) {
+    return emitOpError("result must be a ranked tensor");
+  }
+
+  if (!mlir::isa<mlir::FloatType>(varianceOutType.getElementType())) {
+    return emitOpError("result element type must be floating point");
+  }
+
+  auto correction = getCorrection();
+  if (correction < 0) {
+    return emitOpError("correction must be non-negative, got ") << correction;
+  }
+
+  return mlir::success();
+}
+
 mlir::LogicalResult AclnnVarMeanOp::verify() {
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(getSelf().getType());
   if (!inputType || !inputType.hasRank()) {

@@ -71,6 +71,8 @@ void registerDecomposePatterns(RewritePatternSet &patterns, DecomposePatternType
       registerAclnnDecomposePatterns(patterns, opList);
       break;
     case DecomposePatternType::AFTER_MANUAL_FUSION:
+      // Expand aclnn.var / var_mean while reduce_mean is still a meta op, then decompose reduce_mean.
+      registerAclnnPostFusionDecomposePatterns(patterns, opList);
       registerDecomposeMathOpPatterns(patterns, opList);
       break;
     case DecomposePatternType::NONE:

@@ -18,6 +18,7 @@
 
 #include "llvm/Support/FormatVariadic.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/VarianceUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/DecomposePatterns.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
@@ -220,6 +221,36 @@ class AclnnSubDecomposePattern : public OpRewritePattern<mfuse::AclnnSubOp> {
   }
 };
 
+/// Decompose mfuse.aclnn.var into meta ops (reuse sibling reduce_mean when present).
+class AclnnVarDecomposePattern : public OpRewritePattern<mfuse::AclnnVarOp> {
+ public:
+  using OpRewritePattern<mfuse::AclnnVarOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mfuse::AclnnVarOp op, PatternRewriter &rewriter) const override {
+    auto varOr = decomposeAclnnVar(op, rewriter);
+    if (failed(varOr)) {
+      return failure();
+    }
+    rewriter.replaceOp(op, *varOr);
+    return success();
+  }
+};
+
+/// Decompose mfuse.aclnn.var_mean after manual fusion when layer_norm fusion did not match.
+class AclnnVarMeanDecomposePattern : public OpRewritePattern<mfuse::AclnnVarMeanOp> {
+ public:
+  using OpRewritePattern<mfuse::AclnnVarMeanOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mfuse::AclnnVarMeanOp op, PatternRewriter &rewriter) const override {
+    auto resultsOr = decomposeAclnnVarMean(op, rewriter);
+    if (failed(resultsOr)) {
+      return failure();
+    }
+    rewriter.replaceOp(op, {resultsOr->first, resultsOr->second});
+    return success();
+  }
+};
+
 /// Register decomposition patterns for Aclnn operations
 void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList) {
   MLIRContext *ctx = patterns.getContext();
@@ -236,6 +267,15 @@ void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vect
      [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnBatchMatmulToMatMulPattern>(c); }}};
 
   // Register patterns using the common function
+  registerPatternsByOpList(patterns, ctx, patternMap, opList);
+}
+
+void registerAclnnPostFusionDecomposePatterns(RewritePatternSet &patterns,
+                                              const std::vector<std::string> &opList) {
+  MLIRContext *ctx = patterns.getContext();
+  std::map<std::string, PatternFunc> patternMap = {
+    {"aclnnvar", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnVarDecomposePattern>(c); }},
+    {"aclnnvarmean", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnVarMeanDecomposePattern>(c); }}};
   registerPatternsByOpList(patterns, ctx, patternMap, opList);
 }
 
