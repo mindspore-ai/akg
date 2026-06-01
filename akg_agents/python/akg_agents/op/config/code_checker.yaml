@@ -210,10 +210,26 @@ kernel_forward_method: forward
 # kernel functions.
 triton_module_name: triton
 
-# DSL-prefix gate: the compliance + autotune checks only run when
-# `self.dsl` startswith this string. Keeps the checker silent for
-# non-Triton DSLs (torch-only baselines, cpp, tilelang, etc.).
+# DSL-prefix gate: the Triton compliance + autotune checks only run when
+# `self.dsl` startswith this string. Keeps the Triton-specific rules
+# silent for non-Triton DSLs (torch-only baselines, cpp, tilelang, etc.).
+# PyPTO has its own compliance branch (see `pypto_compliance` below).
 dsl_compliance_prefix: triton
+
+# ---------------------------------------------------------------------------
+# PyPTO anti-cheat compliance. PyPTO kernels are marked with
+# `@pypto.frontend.jit` / `@pypto.jit` and invoked as ordinary function
+# calls `kernel(...)` (often built by a factory then returned), unlike
+# Triton's `kernel[grid](...)`. The checker uses these literals to detect
+# the two unambiguous cheats: no jit kernel at all, or a jit kernel that is
+# never invoked while torch does the real work. Rules are intentionally
+# lenient (any call anywhere counts) to avoid false positives.
+# ---------------------------------------------------------------------------
+pypto_compliance:
+  dsl: pypto
+  # Root namespace of the kernel decorator (`<module>....<attr>`).
+  decorator_module: pypto
+  decorator_attr: jit
 
 # DSLs whose generated code is Python and can be checked by this
 # checker. DSLs not listed here (e.g. cpp, cuda_c, ascendc) produce

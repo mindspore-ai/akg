@@ -133,6 +133,11 @@ class CodeChecker:
         self._torch_call_prefixes_ordered = tuple(
             sorted(self.torch_call_prefixes, key=len, reverse=True)
         )
+        # PyPTO anti-cheat literals (decorator namespace/attr + dsl name).
+        _pypto = _POLICY["pypto_compliance"]
+        self._pypto_dsl = _pypto["dsl"]
+        self._pypto_decorator_module = _pypto["decorator_module"]
+        self._pypto_decorator_attr = _pypto["decorator_attr"]
         logger.info(f"CodeChecker initialized: backend={self.backend}, dsl={self.dsl}, arch={self.arch}")
 
     def _is_triton_decorator(self, node: ast.expr) -> bool:
@@ -151,6 +156,20 @@ class CodeChecker:
             if call_name.startswith(f"{prefix}."):
                 return prefix
         return None
+
+    def _is_pypto_kernel_decorator(self, node: ast.expr) -> bool:
+        """True for ``@pypto.jit`` / ``@pypto.frontend.jit`` (with or without
+        call arguments). Matched by decorator-namespace root + trailing attr,
+        so any ``pypto.*.jit`` spelling is covered."""
+        target = node.func if isinstance(node, ast.Call) else node
+        name = _dotted_name(target)
+        if not name:
+            return False
+        parts = name.split(".")
+        return (
+            parts[0] == self._pypto_decorator_module
+            and parts[-1] == self._pypto_decorator_attr
+        )
 
     # ------------------------------------------------------------------
     # 主入口
@@ -488,9 +507,26 @@ class CodeChecker:
 
     def _check_dsl_compliance(self, code: str) -> List[Dict]:
         """
-        检测生成代码是否真正使用了指定的 DSL 实现（纯 AST 静态分析）。
+        DSL 反作弊检测入口（纯 AST 静态分析），按 DSL 家族分派：
 
-        仅对 triton 系列 DSL 生效（triton_cuda / triton_ascend），检查三类问题：
+        - triton 系列（triton_cuda / triton_ascend）→ _check_triton_compliance
+        - pypto                                       → _check_pypto_compliance
+        - 其他（torch 基线 / cpp / tilelang 等）       → 不检查，返回 []
+
+        作为唯一对外入口，workspace_autoresearch 的 quick_check 与 akg 内置
+        autoresearch 的 _qc_dsl_compliance 都经此进入，无需各自感知 DSL 家族。
+        """
+        if self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
+            return self._check_triton_compliance(code)
+        if self.dsl == self._pypto_dsl:
+            return self._check_pypto_compliance(code)
+        return []
+
+    def _check_triton_compliance(self, code: str) -> List[Dict]:
+        """
+        检测 triton 代码是否真正使用了 triton kernel（纯 AST 静态分析）。
+
+        检查三类问题：
 
         A. 没有定义任何 @triton.jit kernel            → 硬失败
         B. 定义了 kernel 但没有通过 kernel[grid](...) 调用 → 硬失败
@@ -498,9 +534,6 @@ class CodeChecker:
            - kernel 未调用 + torch API → 硬失败（明确作弊）
            - kernel 已调用 + torch API → 仅日志警告（可能是合理辅助操作）
         """
-        if not self.dsl.startswith(_POLICY["dsl_compliance_prefix"]):
-            return []
-
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -647,6 +680,121 @@ class CodeChecker:
                     f"同时包含 {len(soft_calls)} 处 torch 辅助计算 API: "
                     f"{_fmt_calls(soft_calls)}。（融合算子可能合理，仅记录警告）"
                 )
+
+        return errors
+
+    # ------------------------------------------------------------------
+    # Step 5 (pypto 分支): PyPTO 反作弊检测
+    # ------------------------------------------------------------------
+
+    def _check_pypto_compliance(self, code: str) -> List[Dict]:
+        """
+        PyPTO 反作弊检测（纯 AST 静态分析，规则刻意宽松，避免误伤）。
+
+        PyPTO kernel 用 @pypto.frontend.jit / @pypto.jit 装饰，调用方式是普通
+        函数调用 kernel(...)（常由工厂函数构造后返回再调用），不同于 triton 的
+        kernel[grid](...)。因此只拦截两类“明确作弊”信号：
+
+        A. 整个文件没有任何 @pypto(...).jit 装饰的 kernel → 硬失败（纯 torch 兜底）
+        B. 定义了 kernel 但 kernel 名与其工厂名都从未被调用 → 硬失败
+           （kernel 只是摆设，真正计算落回 torch，如 forward 直接 torch.cummin）
+        C. forward() 中使用了 torch 高层硬算子（matmul/conv/softmax 等）→ 硬失败
+
+        soft 类 torch 调用（exp/relu/sum 等）不做拦截，避免误伤前后处理。
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        # --- A. 收集 @pypto(...).jit kernel，以及包裹 kernel 定义的工厂函数名 ---
+        # kernel_bearing 既含 kernel 自身名，也含其外层工厂名：任一被调用即视为使用。
+        kernel_bearing: set = set()
+        for outer in ast.walk(tree):
+            if not isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(outer):
+                if not isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if any(self._is_pypto_kernel_decorator(d) for d in inner.decorator_list):
+                    kernel_bearing.add(outer.name)
+                    break
+
+        if not kernel_bearing:
+            return [{
+                "line": 0,
+                "error_type": "no_pypto_kernel",
+                "detail": (
+                    f"DSL 指定为 {self.dsl}，但代码中未找到任何 @pypto.frontend.jit "
+                    "（或 @pypto.jit）装饰的 kernel，疑似直接用 torch 实现替代了 pypto。"
+                ),
+                "suggestion": (
+                    "请用 @pypto.frontend.jit 定义 kernel，在 kernel 内通过 pypto.* "
+                    "算子完成核心计算，并在 ModelNew.forward() 中调用该 kernel。"
+                ),
+                "code_snippet": "",
+                "fix_strategy": "rewrite",
+            }]
+
+        # --- B. kernel / 工厂是否被实际调用（普通函数名调用，全文件范围，规则宽松）---
+        called_names: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                called_names.add(node.func.id)
+
+        errors: List[Dict] = []
+        if not (kernel_bearing & called_names):
+            errors.append({
+                "line": 0,
+                "error_type": "pypto_kernel_not_called",
+                "detail": (
+                    f"定义了 pypto kernel（或其工厂）{sorted(kernel_bearing)}，"
+                    "但全文件未找到任何对它们的调用，kernel 可能只是摆设，"
+                    "实际计算落回了 torch。"
+                ),
+                "suggestion": (
+                    "请在 ModelNew.forward() 中实际调用 pypto kernel（或构造它的工厂函数），"
+                    "由 kernel 承担核心计算，而不是用 torch 算子直接出结果。"
+                ),
+                "code_snippet": "",
+                "fix_strategy": "rewrite",
+            })
+
+        # --- C. forward() 中的 torch 高层硬算子（复用与 triton 相同的硬名单）---
+        model_cls = _find_model_new_class(tree)
+        forward_node = _find_forward(model_cls) if model_cls is not None else None
+        if forward_node is None:
+            return errors
+
+        hard_calls: List[tuple] = []
+        for node in ast.walk(forward_node):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                call_name = _dotted_name(node.func)
+                if (call_name
+                        and self._match_torch_call_prefix(call_name)
+                        and node.func.attr in self.torch_compute_ops_hard):
+                    hard_calls.append((node.lineno, call_name))
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
+                hard_calls.append((node.lineno, "@ (matmul operator)"))
+
+        if hard_calls:
+            summary = ", ".join(f"{name}(第{line}行)" for line, name in hard_calls[:5])
+            if len(hard_calls) > 5:
+                summary += f" 等（共 {len(hard_calls)} 处）"
+            errors.append({
+                "line": hard_calls[0][0],
+                "error_type": "torch_api_instead_of_kernel",
+                "detail": (
+                    f"forward() 中使用了 {len(hard_calls)} 个不允许的 torch 高层算子: "
+                    f"{summary}。矩阵乘法/卷积/归一化等核心计算必须在 pypto kernel 内实现。"
+                ),
+                "suggestion": (
+                    "请将这些核心计算移入 @pypto.frontend.jit kernel，"
+                    "forward() 仅负责准备输入、调用 kernel 和整理输出。"
+                ),
+                "code_snippet": "",
+                "fix_strategy": "rewrite",
+            })
 
         return errors
 
