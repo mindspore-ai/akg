@@ -69,25 +69,28 @@ static bool isCanonicalChannelBroadcastReshape(ReshapeOp reshape, int64_t channe
   return false;
 }
 
-std::optional<double> readF32SplatConstant(mlir::Value v) {
+std::optional<double> readSplatConstant(mlir::Value v) {
   auto cst = v.getDefiningOp<ConstantOp>();
   if (!cst) {
     return std::nullopt;
   }
   auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
-  if (!dense || !dense.getElementType().isF32() || !dense.isSplat()) {
+  if (!dense || !dense.isSplat()) {
     return std::nullopt;
   }
-  return static_cast<double>(dense.getSplatValue<llvm::APFloat>().convertToFloat());
+  if (dense.getElementType().isF32() || dense.getElementType().isF64()) {
+    return dense.getSplatValue<llvm::APFloat>().convertToDouble();
+  }
+  return std::nullopt;
 }
 
-bool isF32OneScalar(mlir::Value v) {
-  auto o = readF32SplatConstant(v);
+bool isOneScalar(mlir::Value v) {
+  auto o = readSplatConstant(v);
   return o.has_value() && *o == 1.0;
 }
 
-static bool isF32ScalarConstant(mlir::Value v) {
-  return readF32SplatConstant(v).has_value();
+static bool isScalarConstant(mlir::Value v) {
+  return readSplatConstant(v).has_value();
 }
 
 static bool isReasonableBatchNormEps(double eps) {
@@ -123,11 +126,11 @@ static bool isScaledReduceSumOverX(mlir::Value v, mlir::Value x) {
     return true;
   }
   if (auto mul = v.getDefiningOp<MulOp>()) {
-    return (isReduceSumOverX(mul.getLhs(), x) && isF32ScalarConstant(mul.getRhs())) ||
-           (isReduceSumOverX(mul.getRhs(), x) && isF32ScalarConstant(mul.getLhs()));
+    return (isReduceSumOverX(mul.getLhs(), x) && isScalarConstant(mul.getRhs())) ||
+           (isReduceSumOverX(mul.getRhs(), x) && isScalarConstant(mul.getLhs()));
   }
   if (auto div = v.getDefiningOp<DivOp>()) {
-    return isReduceSumOverX(div.getSelf(), x) && isF32ScalarConstant(div.getOther());
+    return isReduceSumOverX(div.getSelf(), x) && isScalarConstant(div.getOther());
   }
   if (auto reshape = v.getDefiningOp<ReshapeOp>()) {
     return isScaledReduceSumOverX(reshape.getInput(), x);
@@ -167,11 +170,11 @@ static bool isVarianceOfX(mlir::Value v, mlir::Value x, mlir::Value meanRank1) {
     return true;
   }
   if (auto mul = v.getDefiningOp<MulOp>()) {
-    return (isVarianceNumeratorFromX(mul.getLhs(), x, meanRank1) && isF32ScalarConstant(mul.getRhs())) ||
-           (isVarianceNumeratorFromX(mul.getRhs(), x, meanRank1) && isF32ScalarConstant(mul.getLhs()));
+    return (isVarianceNumeratorFromX(mul.getLhs(), x, meanRank1) && isScalarConstant(mul.getRhs())) ||
+           (isVarianceNumeratorFromX(mul.getRhs(), x, meanRank1) && isScalarConstant(mul.getLhs()));
   }
   if (auto div = v.getDefiningOp<DivOp>()) {
-    return isVarianceNumeratorFromX(div.getSelf(), x, meanRank1) && isF32ScalarConstant(div.getOther());
+    return isVarianceNumeratorFromX(div.getSelf(), x, meanRank1) && isScalarConstant(div.getOther());
   }
   if (auto reshape = v.getDefiningOp<ReshapeOp>()) {
     return isVarianceOfX(reshape.getInput(), x, meanRank1);
@@ -187,7 +190,7 @@ std::optional<double> matchRunningVarPlusEps(AddOp add, mlir::Value &runningVarO
     if (!isRank1(a)) {
       return std::nullopt;
     }
-    auto eps = readF32SplatConstant(b);
+    auto eps = readSplatConstant(b);
     if (!eps.has_value()) {
       return std::nullopt;
     }
@@ -305,10 +308,10 @@ static void resolveReciprocalInput(mlir::Value invRank1, mlir::SmallVectorImpl<m
   if (auto scaleMul = invRank1.getDefiningOp<MulOp>()) {
     ReciprocalOp recL = scaleMul.getLhs().getDefiningOp<ReciprocalOp>();
     ReciprocalOp recR = scaleMul.getRhs().getDefiningOp<ReciprocalOp>();
-    if (recL && isF32OneScalar(scaleMul.getRhs()) && scaleMul->hasOneUse()) {
+    if (recL && isOneScalar(scaleMul.getRhs()) && scaleMul->hasOneUse()) {
       deadOptional.push_back(scaleMul);
       recipValOut = recL.getResult();
-    } else if (recR && isF32OneScalar(scaleMul.getLhs()) && scaleMul->hasOneUse()) {
+    } else if (recR && isOneScalar(scaleMul.getLhs()) && scaleMul->hasOneUse()) {
       deadOptional.push_back(scaleMul);
       recipValOut = recR.getResult();
     }

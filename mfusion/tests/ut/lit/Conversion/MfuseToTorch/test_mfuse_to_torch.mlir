@@ -418,8 +418,8 @@ func.func @test_full_with_explicit_attrs() -> tensor<2x3xf32> {
   // CHECK-DAG: %[[DEVICE:.*]] = torch.constant.device "npu"
   // CHECK-DAG: %[[PIN:.*]] = torch.constant.bool true
   // CHECK: %[[FULL0:.*]] = torch.aten.full %[[SIZE]], %[[FILL]], %[[DTYPE]], %[[LAYOUT]], %[[DEVICE]], %[[PIN]]
-  %cst = mfuse.constant dense<3.500000e+00> : tensor<f32, {is_scalar = ""}>
-  %0 = mfuse.full %cst {device = "npu", dtype = 6 : i64, layout = 0 : i64, pin_memory = true} : (tensor<f32, {is_scalar = ""}>) -> tensor<2x3xf32>
+  %cst = mfuse.constant dense<3.500000e+00> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.full %cst {device = "npu", dtype = 6 : i64, layout = 0 : i64, pin_memory = true} : (tensor<f64, {is_scalar = ""}>) -> tensor<2x3xf32>
   return %0 : tensor<2x3xf32>
 }
 
