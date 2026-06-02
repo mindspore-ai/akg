@@ -2687,7 +2687,7 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
 }
 
 bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
-  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.empty() || ctx.graphTemplate != GraphTemplate::PURE_ELEM) {
+  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.empty()) {
     return false;
   }
 
