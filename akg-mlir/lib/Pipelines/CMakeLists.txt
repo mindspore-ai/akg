@@ -1,5 +1,3 @@
-FetchContent_Declare(json URL ${JSON_TARBALL_URL})
-FetchContent_MakeAvailable(json)
 add_subdirectory(GPUPipelines)
 add_subdirectory(AscendPipelines)
 set(AKG_MLIR_LIBS
@@ -13,7 +11,7 @@ set(AKG_MLIR_LIBS
   AKGCPUPasses
   AKGLinalgExtDialect
   AKGMLIRAnalysis
-  nlohmann_json::nlohmann_json
+  akg::nlohmann_json
   )
 
 set(LIBS
