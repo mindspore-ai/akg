@@ -14,14 +14,13 @@ add_library(ascend_launch_runtime
   RuntimeErrorCodes.cpp
 )
 set_property(TARGET ascend_launch_runtime PROPERTY CXX_STANDARD 17)
-target_link_libraries(ascend_launch_runtime glog dl nlohmann_json::nlohmann_json)
+target_link_libraries(ascend_launch_runtime glog dl akg::nlohmann_json)
 
 check_cxx_compiler_flag(-Wweak-vtables COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
 if(COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
   target_compile_options(ascend_launch_runtime PUBLIC "-Wweak-vtables")
 endif()
 
-find_package(pybind11 REQUIRED)
 pybind11_add_module(ascend_launch AscendLaunch.cpp)
 target_link_libraries(ascend_launch PRIVATE ascend_launch_runtime)
 set_target_properties(ascend_launch PROPERTIES BUILD_RPATH $ORIGIN)
