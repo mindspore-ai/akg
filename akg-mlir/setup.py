@@ -1,4 +1,4 @@
-# Copyright 2025 Huawei Technologies Co., Ltd
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,177 +13,271 @@
 # limitations under the License.
 """AKG MLIR setup module."""
 import os
-import sys
-import glob
 import shutil
 import subprocess
 import multiprocessing
+import logging
+from pathlib import Path
+from typing import List, Tuple
 
-from distutils.command.build import build as _build
 from setuptools import setup, Extension
+from setuptools.command.build import build
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
-def _check_env_flag(name: str, default=None) -> bool:
-    return str(os.getenv(name, default)).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
-def _read_version():
+def check_env_flag(name: str, default: str = "OFF") -> bool:
+    val = os.getenv(name, default)
+    return val.upper() in ("ON", "1", "YES", "TRUE", "Y")
+
+
+def read_version() -> str:
     try:
-        with open("version.txt", "r", encoding="utf-8") as f:
-            return f.read().strip()
+        version_file = Path(__file__).parent / "version.txt"
+        return version_file.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return "3.0.0"
 
 
-BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+def get_cmake_generator() -> str:
+    if shutil.which("ninja"):
+        logger.info("Using Ninja generator for faster builds")
+        return "Ninja"
+    return "Unix Makefiles"
 
-# If true, enable LTC build by default
-AKG_ENABLE_LTC = _check_env_flag("AKG_ENABLE_LTC", True)
-AKG_ENABLE_BINDINGS_PYTHON = _check_env_flag("AKG_ENABLE_BINDINGS_PYTHON", False)
-LLVM_INSTALL_DIR = os.getenv("LLVM_INSTALL_DIR", None)
+
+def check_cmake_version(min_version: str = "3.15") -> None:
+    """get cmake version"""
+    try:
+        result = subprocess.run(
+            ["cmake", "--version"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        version_str = result.stdout.split()[2]
+        logger.info("CMake version: %s", version_str)
+    except Exception as e:
+        raise RuntimeError("CMake not found. Please install CMake >= 3.15") from e
+
+
+BASE_DIR = Path(__file__).parent.resolve()
+
+AKG_ENABLE_LTC = check_env_flag("AKG_ENABLE_LTC", "ON")
+AKG_ENABLE_BINDINGS_PYTHON = check_env_flag("AKG_ENABLE_BINDINGS_PYTHON", "OFF")
+LLVM_INSTALL_DIR = os.getenv("LLVM_INSTALL_DIR")
 CMAKE_BUILD_TYPE = os.getenv("CMAKE_BUILD_TYPE", "Release")
-
-AKG_CMAKE_ALREADY_BUILD = _check_env_flag( "AKG_CMAKE_ALREADY_BUILD", False)
+AKG_CMAKE_ALREADY_BUILD = check_env_flag("AKG_CMAKE_ALREADY_BUILD", "OFF")
 AKG_CMAKE_BUILD_DIR = os.getenv("AKG_CMAKE_BUILD_DIR")
 MAX_JOBS = os.getenv("MAX_JOBS", str(multiprocessing.cpu_count()))
 
 
-class AkgBuild(_build):
+class CMakeConfig:
+    """CMake config"""
+    def __init__(self):
+        self.build_type = CMAKE_BUILD_TYPE
+        self.generator = get_cmake_generator()
+        self.max_jobs = MAX_JOBS
+        self.base_dir = BASE_DIR
+
+    def get_configure_args(self) -> List[str]:
+        """get cmake args"""
+        args = [
+            "cmake",
+            "-G", self.generator,
+            f"-DCMAKE_BUILD_TYPE={self.build_type}",
+            str(self.base_dir),
+        ]
+
+        if AKG_ENABLE_BINDINGS_PYTHON:
+            args.append("-DAKG_ENABLE_BINDINGS_PYTHON=ON")
+
+        if LLVM_INSTALL_DIR:
+            llvm_path = Path(LLVM_INSTALL_DIR)
+            args.extend([
+                f"-DMLIR_DIR={llvm_path / 'lib' / 'cmake' / 'mlir'}",
+                f"-DLLVM_DIR={llvm_path / 'lib' / 'cmake' / 'llvm'}",
+            ])
+
+        return args
+
+    def get_build_args(self) -> List[str]:
+        """get build args"""
+        return [
+            "cmake",
+            "--build", ".",
+            "--config", self.build_type,
+            "--", f"-j{self.max_jobs}", ]
+
+
+class AkgBuild(build):
+    """AKG build config"""
     def initialize_options(self):
-        _build.initialize_options(self)
+        super().initialize_options()
         self.build_base = "build"
 
     def run(self):
+        logger.info("Starting AKG build process")
         self.run_command("build_ext")
         self.run_command("build_py")
         self.run_command("build_scripts")
 
 
 class CMakeBuild(build_ext):
-    """CMake build class for AKG MLIR."""
+    """AKG cmake build"""
+    def copy_so_files(self, cmake_build_dir: Path, target_dir: Path) -> None:
+        """copy dynamic libraries to dest"""
+        so_files = list(cmake_build_dir.glob("lib/**/*.so"))
 
-    def copy_so(self, cmake_build_dir, target_dir):
-        """Copy shared library files."""
-        dst = os.path.join(target_dir, "akg")
-        os.makedirs(dst, exist_ok=True)
-        generated_so_files = glob.glob(os.path.join(cmake_build_dir, "lib", '*.so'), recursive=True)
-        for src in generated_so_files:
-            shutil.copy2(src, dst, follow_symlinks=False)
+        lib_so_files = [f for f in so_files if f.name.startswith('lib')]
+        so_files = [f for f in so_files if not f.name.startswith('lib')]
 
-    def cmake_build(self, cmake_build_dir):
-        """Run CMake build."""
-        cmake_config_args = [
-            "cmake",
-            f"-DCMAKE_BUILD_TYPE={CMAKE_BUILD_TYPE}",
-            BASE_DIR,
+        lib_dir = target_dir / "akg" / "lib"
+        lib_dir.mkdir(parents=True, exist_ok=True)
+
+        akg_dir = target_dir / "akg"
+        akg_dir.mkdir(parents=True, exist_ok=True)
+
+        if lib_so_files:
+            for src_file in lib_so_files:
+                shutil.copy2(src_file, lib_dir, follow_symlinks=False)
+
+        if so_files:
+            for src_file in so_files:
+                shutil.copy2(src_file, akg_dir, follow_symlinks=False)
+
+    def cmake_build(self, cmake_build_dir: Path) -> None:
+        """cmake build"""
+        cmake_config = CMakeConfig()
+        configure_args = cmake_config.get_configure_args()
+        build_args = cmake_config.get_build_args()
+
+        logger.info("CMake configure: %s", configure_args)
+        logger.info("CMake build: %s", build_args)
+        logger.info("CMake workspace: %s", cmake_build_dir)
+
+        try:
+            subprocess.check_call(configure_args, cwd=cmake_build_dir)
+            subprocess.check_call(build_args, cwd=cmake_build_dir)
+            logger.info("CMake build completed successfully")
+        except subprocess.CalledProcessError as e:
+            logger.error("CMake build failed!")
+            logger.error("CMake configure: %s", configure_args)
+            logger.error("CMake build: %s", build_args)
+            logger.error("CMake workspace: %s", cmake_build_dir)
+            if e.output:
+                logger.error("Error output: %s", e.output.decode() if isinstance(e.output, bytes) else e.output)
+            raise RuntimeError(f"CMake build failed with return code {e.returncode}") from e
+
+    def verify_build(self, target_dir: Path) -> None:
+        """verify build target"""
+        expected_files = [
+            target_dir / "akg" / "bin",
+            target_dir / "akg" / "lib",
         ]
         if AKG_ENABLE_BINDINGS_PYTHON:
-            cmake_config_args = [ "-DAKG_ENABLE_BINDINGS_PYTHON=ON", ]
+            expected_files.append(target_dir / "akg" / "_mlir_libs")
 
-        if LLVM_INSTALL_DIR:
-            cmake_config_args += [
-                f"-DMLIR_DIR='{LLVM_INSTALL_DIR}/lib/cmake/mlir/'",
-                f"-DLLVM_DIR='{LLVM_INSTALL_DIR}/lib/cmake/llvm/'",
-            ]
+        for file_path in expected_files:
+            if not file_path.exists():
+                raise RuntimeError(f"Build verification failed: Missing {file_path}")
 
-        cmake_build_args = [
-            "cmake",
-            "--build",
-            ".",
-            "--config",
-            CMAKE_BUILD_TYPE,
-            "--",
-            f"-j{MAX_JOBS}",
-        ]
-        try:
-            subprocess.check_call(cmake_config_args, cwd=cmake_build_dir)
-            subprocess.check_call(cmake_build_args, cwd=cmake_build_dir)
-        except subprocess.CalledProcessError as e:
-            print("cmake build failed with\n", e)
-            print("debug by follow cmake command:")
-            sys.exit(e.returncode)
-        finally:
-            print(f"cmake config: {' '.join(cmake_config_args)}")
-            print(f"cmake build: {' '.join(cmake_build_args)}")
-            print(f"cmake workspace: {cmake_build_dir}")
+        logger.info("Build verification passed")
 
     def run(self):
-        target_dir = self.build_lib
-        cmake_build_dir = AKG_CMAKE_BUILD_DIR
-        if not cmake_build_dir:
-            cmake_build_dir = os.path.abspath(
-                os.path.join(target_dir, "..")
-            )
-        python_package_dir = os.path.join(cmake_build_dir, "python_packages")
+        """run build"""
+        target_dir = Path(self.build_lib)
+        cmake_build_dir = Path(AKG_CMAKE_BUILD_DIR) if AKG_CMAKE_BUILD_DIR else target_dir.parent
+        python_package_dir = cmake_build_dir / "python_packages"
+
         if not AKG_CMAKE_ALREADY_BUILD:
-            os.makedirs(cmake_build_dir, exist_ok=True)
-            mlir_libs_dir = os.path.join(python_package_dir,  "akg", "akg_mlir", "_mlir_libs")
-            if os.path.exists(mlir_libs_dir):
-                print(f"Removing _mlir_mlibs dir to force rebuild: {mlir_libs_dir}")
+            cmake_build_dir.mkdir(parents=True, exist_ok=True)
+
+            mlir_libs_dir = python_package_dir / "akg" / "akg_mlir" / "_mlir_libs"
+            if mlir_libs_dir.exists():
+                logger.info("Removing _mlir_libs dir to force rebuild: %s", mlir_libs_dir)
                 shutil.rmtree(mlir_libs_dir)
             else:
-                print(f"Not removing _mlir_libs dir (does not exist): {mlir_libs_dir}")
+                logger.info("_mlir_libs dir does not exist: %s", mlir_libs_dir)
+
+            check_cmake_version()
             self.cmake_build(cmake_build_dir)
 
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir, ignore_errors=False, onerror=None)
+        if target_dir.exists():
+            logger.info("Cleaning target directory: %s", target_dir)
+            shutil.rmtree(target_dir)
 
         if AKG_ENABLE_BINDINGS_PYTHON:
+            logger.info("Copying Python packages from %s to %s", python_package_dir, target_dir)
             shutil.copytree(python_package_dir, target_dir, symlinks=False)
 
-        self.copy_so(cmake_build_dir, target_dir)
+        self.copy_so_files(cmake_build_dir, target_dir)
 
-        bin_src = os.path.join(cmake_build_dir, "bin")
-        bin_dst = os.path.join(target_dir, "akg", "bin")
-        shutil.copytree(bin_src, bin_dst, symlinks=False)
+        bin_src = cmake_build_dir / "bin"
+        bin_dst = target_dir / "akg" / "bin"
+        if bin_src.exists():
+            shutil.copytree(bin_src, bin_dst, symlinks=False)
+
+        self.verify_build(target_dir)
 
 
 class CMakeExtension(Extension):
-    def __init__(self, name, sourcedir=""):
-        Extension.__init__(self, name, sources=[])
-        self.sourcedir = os.path.abspath(sourcedir)
+    def __init__(self, name: str, sourcedir: str = ""):
+        super().__init__(name, sources=[])
+        self.sourcedir = Path(sourcedir).resolve() if sourcedir else BASE_DIR
 
 
 class PythonPackageBuild(build_py):
-    """Python package build class for AKG MLIR."""
+    """python build"""
+    def get_src_py_and_dst(self) -> List[Tuple[Path, Path]]:
+        """init src dir and dst dir"""
+        target_dir = Path(self.build_lib)
+        src_dir = BASE_DIR / "python" / "akg_mlir"
 
-    def get_src_py_and_dst(self):
-        """Get source and destination paths for Python files."""
-        target_dir = self.build_lib
-        ret = []
-        generated_python_files = glob.glob(os.path.join(BASE_DIR, "python/akg_mlir", '**/*.py'), recursive=True)
-        for src in generated_python_files:
-            dst = os.path.join(os.path.join(target_dir, "akg"),
-                               os.path.relpath(src, os.path.join(BASE_DIR, "python/akg_mlir")))
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            ret.append((src, dst))
-        return ret
+        py_files = list(src_dir.glob("**/*.py"))
+
+        result = []
+        for src_file in py_files:
+            rel_path = src_file.relative_to(src_dir)
+            dst_file = target_dir / "akg" / rel_path
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            result.append((src_file, dst_file))
+
+        return result
 
     def run(self) -> None:
-        """Run Python package build."""
-        ret = self.get_src_py_and_dst()
-        for src, dst in ret:
-            self.copy_file(src, dst)
-        super().finalize_options()
+        logger.info("Building Python package")
+        src_dst_pairs = self.get_src_py_and_dst()
 
-# 读取 README.md 作为长描述
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+        for src, dst in src_dst_pairs:
+            self.copy_file(str(src), str(dst))
+
+        super().finalize_options()
+        logger.info("Python package build completed")
+
+
+try:
+    readme_path = BASE_DIR / "README.md"
+    long_description = readme_path.read_text(encoding="utf-8")
+except FileNotFoundError:
+    logger.warning("README.md not found, using default description")
+    long_description = "AKG MLIR - An optimizer for operators in Deep Learning Networks"
 
 
 INSTALL_REQUIRES = [
     "numpy",
 ]
+
 EXT_MODULES = [
     CMakeExtension("akg_mlir._mlir_libs._akgMlir"),
 ]
 
-NAME = "akg"
-
 setup(
-    name=NAME,
-    version=_read_version(),
+    name="akg",
+    version=read_version(),
     author="The MindSpore Authors",
     author_email="contact@mindspore.cn",
     description="An optimizer for operators in Deep Learning Networks, which provides the ability to automatically "
