@@ -901,37 +901,37 @@ struct NPUVectorBitcastToHIVM : public OpConversionPattern<npuvector::BitcastOp>
   }
 };
 
-static FailureOr<Value> castI8ToI16ForVCmp(ConversionPatternRewriter &rewriter, Location loc, Value input) {
+static FailureOr<Value> castI8ToF16ForVCmp(ConversionPatternRewriter &rewriter, Location loc, Value input) {
   Type elemType = getElementTypeOrSelf(input.getType());
   if (!elemType.isInteger(8)) {
     return input;
   }
 
   if (auto inputType = dyn_cast<MemRefType>(input.getType())) {
-    auto i16Type = MemRefType::get(inputType.getShape(), rewriter.getI16Type());
-    auto i16Buf = allocMemRef(rewriter, loc, i16Type, input);
-    if (failed(i16Buf)) {
+    auto f16Type = MemRefType::get(inputType.getShape(), rewriter.getF16Type());
+    auto f16Buf = allocMemRef(rewriter, loc, f16Type, input);
+    if (failed(f16Buf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, input, *i16Buf);
+    propagateBufferSizeMark(rewriter, loc, input, *f16Buf);
     auto roundAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::RINT);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, input, *i16Buf, roundAttr, hivm::TypeFnAttr{});
-    return *i16Buf;
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, input, *f16Buf, roundAttr, hivm::TypeFnAttr{});
+    return *f16Buf;
   }
 
   if (!isScalarType(input.getType())) {
     return failure();
   }
-  return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI16Type(), input).getResult();
+  return rewriter.create<arith::SIToFPOp>(loc, rewriter.getF16Type(), input).getResult();
 }
 
 static LogicalResult legalizeI8VCmpOperands(ConversionPatternRewriter &rewriter, Location loc, Value &lhs,
                                             Value &rhs) {
-  auto castedLhs = castI8ToI16ForVCmp(rewriter, loc, lhs);
+  auto castedLhs = castI8ToF16ForVCmp(rewriter, loc, lhs);
   if (failed(castedLhs)) {
     return failure();
   }
-  auto castedRhs = castI8ToI16ForVCmp(rewriter, loc, rhs);
+  auto castedRhs = castI8ToF16ForVCmp(rewriter, loc, rhs);
   if (failed(castedRhs)) {
     return failure();
   }
