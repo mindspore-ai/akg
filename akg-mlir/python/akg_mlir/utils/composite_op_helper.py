@@ -359,7 +359,14 @@ def _collect_infos(desc, infos):
     if target == "cpu":
         target_info = desc.get("target_info", {})
         infos["feature"] = target_info.get("feature", "avx")
+    infos["bfloat16"] = False
     for operation in desc["op_desc"]:
+        inputs = [item for op_inputs in operation["input_desc"] for item in op_inputs]
+        input_outputs = inputs + operation["output_desc"]
+        if not infos["bfloat16"]:
+            for item in input_outputs:
+                if item["data_type"] == "bfloat16":
+                    infos["bfloat16"] = True
         if (operation["name"] in ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"] and
                 "enable_atomic_add" in _get_attr_dict(operation["attr"])) or operation["name"] in ["ElemAny"]:
             sum_out.append(operation["output_desc"][0]["tensor_name"])
@@ -713,7 +720,11 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
     printer.out("from akg.utils.op_dsl import *", False)
-    printer.out("from bfloat16 import bfloat16", True)
+    if infos['bfloat16']:
+        printer.out("try:", True)
+        printer.out("    from bfloat16 import bfloat16", True)
+        printer.out("except ImportError as err:", True)
+        printer.out("    raise ImportError(\"bfloat16 is not installed, install it first.\") from err", True)
     printer.out("def get_expect(input_dict, expect):", True)
     for command in commands:
         single_commands = command.split("\n")
