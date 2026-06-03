@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import ctypes
-import pathlib
 import subprocess
 import shutil
 import numpy as np
@@ -267,11 +266,7 @@ class MlirDriver:
             if akg_tools_dir == ""
             else akg_tools_dir
         )
-        self.llvm_tools_dir = (
-            os.path.join(pathlib.Path(__file__).absolute().parent, "../../third-party/llvm-project/build/")
-            if llvm_tools_dir == ""
-            else llvm_tools_dir
-        )
+        self.llvm_tools_dir = llvm_tools_dir
         self.log_level = log_level
         self.target_info = ""
         self.dump_ir = dump_ir
@@ -573,16 +568,16 @@ class MlirDriver:
             "-fPIC",
             "-o",
             bin_file,
-            "-L",
-            os.path.join(self.llvm_tools_dir, "lib/"),
-            "-lmlir_c_runner_utils",
         ]
+        if self.llvm_tools_dir:
+            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), f"-Wl,-rpath,{self.llvm_tools_dir}/lib"])
+        cmd.append("-lmlir_c_runner_utils")
+
         if self.runtime_provider == "MLIR":
-            cmd.extend(["-L", self.akg_tools_dir, "-lmlir_akgParallelLaunch_runtime",
-                        f"-Wl,-rpath,{self.akg_tools_dir}"])
+            cmd.extend(["-L", os.path.join(self.akg_tools_dir, "lib"), "-lcpu_launch_runtime",
+                        f"-Wl,-rpath,{self.akg_tools_dir}/lib"])
         if self.profiling_trails > 0:
-            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils",
-                        f"-Wl,-rpath,{self.llvm_tools_dir}/lib"])
+            cmd.append("-lmlir_runner_utils")
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -620,7 +615,7 @@ class MlirDriver:
             "-o",
             out_file,
         ]
-        logging.debug("_run_ascend_generate_binary step 0 cmd: %s", cmd)
+        logging.debug("_run_ascend_generate_binary_ step 0 cmd: %s", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -636,15 +631,16 @@ class MlirDriver:
             "-fPIC",
             "-o",
             bin_file,
-            "-L",
-            os.path.join(self.llvm_tools_dir, "lib/"),
-            "-lmlir_c_runner_utils",
         ]
+        if self.llvm_tools_dir:
+            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), f"-Wl,-rpath,{self.llvm_tools_dir}/lib"])
+        cmd.append("-lmlir_c_runner_utils")
         if self.runtime_provider == "MLIR":
-            cmd.extend(["-L", os.path.join(self.akg_tools_dir, "lib/"), "-lmlir_akgParallelLaunch_runtime"])
+            cmd.extend(["-L", os.path.join(self.akg_tools_dir, "lib"), "-lcpu_launch_runtime",
+                        f"-Wl,-rpath,{self.akg_tools_dir}/lib"])
         if self.profiling_trails > 0:
-            cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils"])
-        logging.debug("_run_ascend_generate_binary step 1 cmd: %s", cmd)
+            cmd.append("-lmlir_runner_utils")
+        logging.debug("_run_ascend_generate_binary_ step 1 cmd: %s", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
