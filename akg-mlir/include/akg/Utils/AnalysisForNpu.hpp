@@ -17,13 +17,28 @@
 #ifndef AKG_UTILS_ANALYSISFORNPU_H
 #define AKG_UTILS_ANALYSISFORNPU_H
 
+#include <algorithm>
+#include <climits>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <numeric>
 #include <string>
+#include <unordered_map>
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir {
 namespace akg {
+
+constexpr int64_t kNpuBitsPerByte = 8;
+constexpr int64_t kNpuUbAlignBytes = 32;
+constexpr int64_t kNpuUbAlignBits = kNpuUbAlignBytes * kNpuBitsPerByte;
 
 constexpr auto kSoc910B1 = "Ascend910B1";
 constexpr auto kSoc910B2 = "Ascend910B2";
@@ -168,6 +183,95 @@ class NpuInfo {
 
   HardwareConfig hwConfig;
 };
+
+inline int64_t ceilDivInt64(int64_t lhs, int64_t rhs) { return (rhs <= 0) ? lhs : (lhs + rhs - 1) / rhs; }
+
+inline int64_t alignUpInt64(int64_t value, int64_t alignment) {
+  if (alignment <= 1) return value;
+  return ceilDivInt64(value, alignment) * alignment;
+}
+
+inline int64_t multiplyAndCap(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0) return 0;
+  return (lhs > LLONG_MAX / rhs) ? LLONG_MAX : lhs * rhs;
+}
+
+inline int64_t getElementBitWidth(Type type) {
+  Type elemType = type;
+  if (auto shapedType = dyn_cast<ShapedType>(type)) elemType = shapedType.getElementType();
+  if (elemType.isIndex()) return 64;
+  if (!llvm::isa<IntegerType, FloatType>(elemType)) return 0;
+  return static_cast<int64_t>(elemType.getIntOrFloatBitWidth());
+}
+
+inline int64_t getBishengStrideAlignTargetForBits(int64_t elementBits) {
+  int64_t bitWidth = std::max<int64_t>(elementBits, 1);
+  if (bitWidth >= kNpuUbAlignBits || kNpuUbAlignBits % bitWidth != 0) return 1;
+  return kNpuUbAlignBits / bitWidth;
+}
+
+inline SmallVector<int32_t, 6> getDefaultBishengStrideAlignDims(int64_t rank) {
+  if (rank <= 1) return {};
+  return {static_cast<int32_t>(rank <= 2 ? 0 : rank - 3)};
+}
+
+inline SmallVector<int64_t, 6> collectBishengStrideAlignUnits(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
+                                                              ArrayRef<int32_t> alignDims, int64_t elementBits) {
+  SmallVector<int64_t, 6> alignUnits(shape.size() + 1, 1);
+  if (shape.empty() || staticDims.size() != shape.size()) return alignUnits;
+
+  int64_t unit = getBishengStrideAlignTargetForBits(elementBits);
+  SmallVector<int64_t, 6> alignTargets(shape.size(), 1);
+  if (unit > 1) {
+    for (int32_t dim : alignDims) {
+      if (dim < 0 || static_cast<size_t>(dim) >= shape.size()) continue;
+      size_t idx = static_cast<size_t>(dim);
+      alignTargets[idx] = std::lcm(alignTargets[idx], unit);
+    }
+  }
+
+  int64_t innerAlignedUnits = 1;
+  int64_t shapeAccumulation = 1;
+  for (int64_t dim = static_cast<int64_t>(shape.size()) - 1; dim >= 0; --dim) {
+    size_t idx = static_cast<size_t>(dim);
+    int64_t newAlignedUnits = std::lcm(innerAlignedUnits, alignTargets[idx]);
+    alignUnits[idx + 1] = (shapeAccumulation % newAlignedUnits == 0) ? 1 : newAlignedUnits / innerAlignedUnits;
+    innerAlignedUnits = newAlignedUnits;
+    if (staticDims[idx]) {
+      shapeAccumulation = multiplyAndCap(shapeAccumulation, std::lcm(std::max<int64_t>(shape[idx], 1),
+                                                                     std::max<int64_t>(alignUnits[idx + 1], 1)));
+    }
+  }
+  return alignUnits;
+}
+
+inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
+                                                       ArrayRef<int32_t> alignDims, int64_t elementBits) {
+  SmallVector<int64_t, 6> alignUnits = collectBishengStrideAlignUnits(shape, staticDims, alignDims, elementBits);
+
+  int64_t elems = 1;
+  for (size_t i = 0; i < alignUnits.size(); ++i) {
+    int64_t dim = i < shape.size() ? shape[i] : 1;
+    elems = multiplyAndCap(elems, alignUpInt64(std::max<int64_t>(dim, 1), alignUnits[i]));
+  }
+  return alignUpInt64(ceilDivInt64(multiplyAndCap(elems, std::max<int64_t>(elementBits, 1)), kNpuBitsPerByte),
+                      kNpuUbAlignBytes);
+}
+
+inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> typeShape,
+                                                       Type elemType) {
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (shape.empty() || elementBits <= 0) return 0;
+
+  SmallVector<char, 6> staticDims;
+  staticDims.reserve(shape.size());
+  for (size_t i = 0; i < shape.size(); ++i) {
+    staticDims.push_back(i < typeShape.size() && !ShapedType::isDynamic(typeShape[i]));
+  }
+  return computeBishengStrideAlignedStorageBytes(shape, staticDims,
+                                                 getDefaultBishengStrideAlignDims(static_cast<int64_t>(shape.size())),
+                                                 elementBits);
+}
 
 }  // namespace akg
 }  // namespace mlir

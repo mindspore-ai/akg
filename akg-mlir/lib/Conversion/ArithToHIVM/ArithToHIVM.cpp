@@ -24,13 +24,16 @@
 #include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 
 #include <algorithm>
+#include <climits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
 #include "bishengir/Dialect/Annotation/IR/Annotation.h"
 #include "bishengir/Dialect/HACC/Utils/Utils.h"
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
@@ -63,26 +66,29 @@ namespace mlir {
 namespace mlir {
 namespace {
 
+using akg::alignUpInt64;
+using akg::ceilDivInt64;
+using akg::computeBishengStrideAlignedStorageBytes;
+using akg::getElementBitWidth;
+using akg::kNpuUbAlignBytes;
+using akg::multiplyAndCap;
+
 static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
   for (Operation *user : src.getUsers()) {
     if (auto markOp = dyn_cast<annotation::MarkOp>(user)) {
       if (auto attr = markOp->getAttrOfType<IntegerAttr>(kBufferSizeInByteAttr)) {
-        auto srcType = cast<ShapedType>(src.getType()).getElementType();
-        auto destType = cast<ShapedType>(dest.getType()).getElementType();
-
-        if (srcType.isIndex() || destType.isIndex()) {
-          return false;
-        }
-
-        unsigned srcWidth = srcType.getIntOrFloatBitWidth();
-        unsigned destWidth = destType.getIntOrFloatBitWidth();
-
-        if (srcWidth == 0) {
-          return false;
-        }
-
+        auto srcShapedType = dyn_cast<ShapedType>(src.getType());
+        auto destShapedType = dyn_cast<ShapedType>(dest.getType());
+        if (!srcShapedType || !destShapedType) return false;
+        int64_t srcWidth = getElementBitWidth(srcShapedType.getElementType());
+        int64_t destWidth = getElementBitWidth(destShapedType.getElementType());
+        if (srcWidth <= 0 || destWidth <= 0) return false;
         int64_t oldSize = attr.getInt();
-        int64_t newSize = (oldSize * destWidth) / srcWidth;
+        int64_t newSize = oldSize;
+        if (!srcShapedType.hasRank() || !destShapedType.hasRank() ||
+            !llvm::equal(srcShapedType.getShape(), destShapedType.getShape()) || srcShapedType.getRank() <= 1) {
+          newSize = alignUpInt64(ceilDivInt64(multiplyAndCap(oldSize, destWidth), srcWidth), kNpuUbAlignBytes);
+        }
 
         auto newMarkOp = rewriter.create<annotation::MarkOp>(loc, dest);
         newMarkOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(newSize));
@@ -91,6 +97,19 @@ static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
     }
   }
   return false;
+}
+
+static bool markAlignedBufferSizeFromVectorAttr(ConversionPatternRewriter &rewriter, Location loc, Operation *op,
+                                                Value dest) {
+  if (!op) return false;
+  auto attr = op->getAttrOfType<IntegerAttr>(kVectorAlignedBufferSizeInByteAttr);
+  if (!attr || attr.getInt() <= 0) return false;
+  auto markOp = rewriter.create<annotation::MarkOp>(loc, dest);
+  markOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(attr.getInt()));
+  // The source op is being lowered away; drop the schedule-side hint so it can not
+  // leak into clones, dumps, or any downstream pattern that inspects the original op.
+  op->removeAttr(kVectorAlignedBufferSizeInByteAttr);
+  return true;
 }
 
 static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value trueVal,
@@ -583,7 +602,15 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
         return failure();
       }
       resBuf = *resBufOr;
-      propagateBufferSizeMark(rewriter, loc, dimSource, resBuf);
+      auto sameShapeAsResult = [&](Value value) {
+        auto shapedType = dyn_cast<ShapedType>(value.getType());
+        return shapedType && shapedType.hasRank() && shapedType.getRank() == memRefType.getRank() &&
+               llvm::equal(shapedType.getShape(), memRefType.getShape());
+      };
+      Value markSource = (rhsIsMemRef && sameShapeAsResult(rhsMemRef)) ? rhsMemRef : dimSource;
+      if (!propagateBufferSizeMark(rewriter, loc, markSource, resBuf) && markSource != dimSource) {
+        propagateBufferSizeMark(rewriter, loc, dimSource, resBuf);
+      }
     }
 
     createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf);
@@ -1023,6 +1050,9 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
       }
     }
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    if (!markAlignedBufferSizeFromVectorAttr(rewriter, loc, op.getOperation(), resBuf)) {
+      propagateSelectBufferSizeMark(rewriter, loc, lhs, rhs, resBuf);
+    }
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
@@ -1121,6 +1151,9 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
       }
     }
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    if (!markAlignedBufferSizeFromVectorAttr(rewriter, loc, op.getOperation(), resBuf)) {
+      propagateSelectBufferSizeMark(rewriter, loc, lhs, rhs, resBuf);
+    }
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
@@ -2289,12 +2322,8 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
 
 static int64_t computeNPUVectorMarkBufferBytes(npuvector::NPUVectorType ty, Type elemType,
                                                ArrayRef<int64_t> maxPerRankDim) {
-  int64_t n = 1;
   if (maxPerRankDim.size() != static_cast<size_t>(ty.getRank())) return 0;
-  for (int64_t i = 0; i < ty.getRank(); ++i) {
-    n *= maxPerRankDim[static_cast<size_t>(i)];
-  }
-  return n * (static_cast<int64_t>(elemType.getIntOrFloatBitWidth()) / 8);
+  return computeBishengStrideAlignedStorageBytes(maxPerRankDim, ty.getShape(), elemType);
 }
 
 /// Returns one folded upper bound per result rank. Rank-wide maxSizes are kept
