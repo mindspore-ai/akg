@@ -41,6 +41,7 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -2605,6 +2606,47 @@ static LogicalResult materializeSubviewIndicesBefore(SmallVectorImpl<OpFoldResul
                  failed(materializeRange(strides)));
 }
 
+static bool canForwardDest(Operation *anchor, Value dest) {
+  for (OpOperand &use : dest.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == anchor || isa<annotation::MarkOp>(user)) continue;
+    if (isa<memref::DeallocOp>(user) || user->getBlock() != anchor->getBlock() || !anchor->isBeforeInBlock(user)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void eraseBufferMarks(Value buffer, ConversionPatternRewriter &rewriter) {
+  for (Operation *user : llvm::make_early_inc_range(buffer.getUsers())) {
+    if (isa<annotation::MarkOp>(user)) rewriter.eraseOp(user);
+  }
+}
+
+static LogicalResult forwardAllocViewTransferWrite(npuvector::TransferWriteOp op, Value dataToWrite, Value dest,
+                                                   ArrayRef<OpFoldResult> offsets,
+                                                   ConversionPatternRewriter &rewriter) {
+  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
+  if (!dataSubview) return failure();
+  if (!isEqualConstantIntOrValueArray(dataSubview.getMixedOffsets(), offsets)) return failure();
+
+  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  if (dataRoot == dest || !isRootFromAlloc(dataRoot) || !isRootFromAlloc(dest) ||
+      dataRoot.getType() != dest.getType()) {
+    return failure();
+  }
+
+  Operation *anchor = op.getOperation();
+  if (!canForwardDest(anchor, dest)) return failure();
+
+  eraseBufferMarks(dest, rewriter);
+  dest.replaceUsesWithIf(dataRoot, [&](OpOperand &use) { return use.getOwner() != anchor; });
+  rewriter.eraseOp(op);
+  if (dataSubview->use_empty()) rewriter.eraseOp(dataSubview);
+  if (dest.use_empty()) rewriter.eraseOp(dest.getDefiningOp());
+  return success();
+}
+
 /// Unified optimized lowering when transfer_write dest traces to memref.alloc/alloca.
 /// Traces dataToWrite through scf.for results to find the actual buffer (alloc),
 /// then inserts a subview of dest before that buffer's earliest use and RAUW-replaces it.
@@ -2639,17 +2681,19 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
   }
 
   // Strip annotation::MarkOps attached to actualBuf.
-  for (Operation *user : llvm::make_early_inc_range(actualBuf.getUsers())) {
-    if (isa<annotation::MarkOp>(user)) rewriter.eraseOp(user);
-  }
+  eraseBufferMarks(actualBuf, rewriter);
 
-  // Insert subview before earliest same-block user of actualBuf (SSA dominance).
-  Block *block = op->getBlock();
-  Operation *insertPt = op.getOperation();
+  // Insert subview before the earliest same-block producer/consumer of actualBuf.
+  // This intentionally always tries to fuse into the producer side; if dest
+  // does not dominate the producer, the verifier should report the dominance
+  // violation instead of silently falling back.
+  Operation *insertPt = nullptr;
+  const Block *block = allocDef->getBlock();
   for (Operation *user : actualBuf.getUsers()) {
     if (user == op.getOperation()) continue;
-    if (user->getBlock() == block && user->isBeforeInBlock(insertPt)) insertPt = user;
+    if (user->getBlock() == block && (!insertPt || user->isBeforeInBlock(insertPt))) insertPt = user;
   }
+  if (!insertPt) insertPt = allocDef->getNextNode();
 
   SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
   SmallVector<OpFoldResult> subviewSizes(sizes.begin(), sizes.end());
@@ -2730,6 +2774,10 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
 
     auto resultType =
       memref::SubViewOp::inferRankReducedResultType(dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
+
+    if (destIsAllocRoot && succeeded(forwardAllocViewTransferWrite(op, dataToWrite, dest, offsets, rewriter))) {
+      return success();
+    }
 
     if (destIsAllocRoot) {
       return lowerNPUVectorTransferWriteAllocRootOptimized(op, loc, dest, dataToWrite, resultType, offsets, sizes,

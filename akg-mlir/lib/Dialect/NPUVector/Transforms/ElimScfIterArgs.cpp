@@ -187,11 +187,10 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
   static Operation *findAllocAnchor(scf::ForOp forOp) {
     Operation *earliest = nullptr;
-    Block *parent = forOp->getBlock();
+    const Block *parent = forOp->getBlock();
     for (Value initVal : forOp.getInitArgs()) {
       Operation *defOp = initVal.getDefiningOp();
       if (!defOp) continue;
-      if (!llvm::isa<mlir::npuvector::BroadcastOp>(defOp)) continue;
       if (defOp->getBlock() != parent) continue;
       if (!earliest || defOp->isBeforeInBlock(earliest)) {
         earliest = defOp;
@@ -341,9 +340,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     Location loc = forOp.getLoc();
     Value c0Outer = builder.create<arith::ConstantIndexOp>(loc, 0);
 
-    // Pick a stable insertion point for the allocations. Anchoring at the
-    // earliest broadcast that produced an init value guarantees the allocs
-    // dominate the broadcasts (which may themselves use those buffers).
+    // Anchor allocations at the earliest same-block init value producer.
     Operation *anchor = findAllocAnchor(forOp);
     OpBuilder allocBuilder = anchor ? OpBuilder(anchor) : OpBuilder(forOp);
 
