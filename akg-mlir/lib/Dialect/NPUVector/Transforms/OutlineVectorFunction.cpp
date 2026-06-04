@@ -60,13 +60,10 @@ using VecSizesPair = std::pair<SmallVector<Value>, SmallVector<Value>>;
 static FailureOr<int64_t> getVectorWidth(func::FuncOp funcOp) {
   assert(funcOp && "funcOp is null, cannot get vector width");
   auto archAttr = funcOp->getAttrOfType<StringAttr>("arch");
-  if (!archAttr)
-    return funcOp.emitOpError("does not have 'arch' attribute, cannot get vector width");
-  uint32_t vectorWidth =
-      akg::NpuInfo::getInstance(archAttr.getValue().str()).getRegVectorLength();
+  if (!archAttr) return funcOp.emitOpError("does not have 'arch' attribute, cannot get vector width");
+  uint32_t vectorWidth = akg::NpuInfo::getInstance(archAttr.getValue().str()).getRegVectorLength();
   if (vectorWidth == 0)
-    return funcOp.emitOpError("failed to get vector width from arch attribute: ")
-           << archAttr.getValue();
+    return funcOp.emitOpError("failed to get vector width from arch attribute: ") << archAttr.getValue();
   return static_cast<int64_t>(vectorWidth);
 }
 
@@ -79,12 +76,10 @@ static FailureOr<int64_t> getVectorWidth(func::FuncOp funcOp) {
 //   f16 -> 256/2 = 128
 static FailureOr<int64_t> getUbAlignment(func::FuncOp parentFunc, Type elemType) {
   auto vectorWidthOr = getVectorWidth(parentFunc);
-  if (failed(vectorWidthOr))
-    return failure();
+  if (failed(vectorWidthOr)) return failure();
   int64_t vectorWidth = *vectorWidthOr;
 
-  if (!elemType || !elemType.isIntOrFloat())
-    return vectorWidth;
+  if (!elemType || !elemType.isIntOrFloat()) return vectorWidth;
 
   unsigned bitWidth = elemType.getIntOrFloatBitWidth();
   unsigned byteWidth = std::max(1u, bitWidth / 8);
@@ -178,6 +173,58 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     if (!op) return false;
     return isa<memref::CollapseShapeOp, memref::ExpandShapeOp, memref::SubViewOp, memref::CastOp,
                memref::ReinterpretCastOp>(op);
+  }
+
+  // Allocate a `memref.alloc` at the start of the entry block of the function
+  // containing `nearOp`.  Hoisting UB allocations out of inner regions (such
+  // as scf.for bodies) ensures each buffer is allocated once per kernel
+  // invocation rather than once per iteration, and guarantees the allocation
+  // dominates every use even when the call site is nested.  Falls back to
+  // inserting before `nearOp` when no enclosing func::FuncOp is found.
+  static Value allocAtFuncStart(Operation *nearOp, Location loc, MemRefType t) {
+    auto parentFunc = nearOp ? nearOp->getParentOfType<func::FuncOp>() : func::FuncOp();
+    if (!parentFunc || parentFunc.getBody().empty()) {
+      OpBuilder b(nearOp);
+      return b.create<memref::AllocOp>(loc, t);
+    }
+    Block &entry = parentFunc.getBody().front();
+    OpBuilder b(&entry, entry.begin());
+    return b.create<memref::AllocOp>(loc, t);
+  }
+
+  // Hoist memref view ops (collapse/expand/subview/cast/reinterpret_cast) out
+  // of `group` when all their operands are defined outside the group.  Such
+  // ops only prepare a memref operand (e.g. the destination of a
+  // transfer_write) and must stay in the parent function.  Otherwise, when the
+  // corresponding kernel argument is later resized during UB promotion, an
+  // in-kernel view op (e.g. `memref.collapse_shape` collapsing to a rank-0
+  // memref) would become invalid.  Keeping these ops in the parent also lets
+  // the read/write through them be recognized by UB promotion (the kernel arg
+  // becomes the viewed memref directly), mirroring how view ops that already
+  // precede the first vector op are handled.
+  static void hoistMemrefViewOps(SmallVector<Operation *> &group, Operation *insertBeforeOp) {
+    llvm::SetVector<Operation *> groupSet(group.begin(), group.end());
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (Operation *op : group) {
+        if (!groupSet.count(op)) continue;
+        if (!isMemrefViewOp(op)) continue;
+        bool allExternal = llvm::all_of(op->getOperands(), [&](Value v) {
+          Operation *d = v.getDefiningOp();
+          return !d || !groupSet.count(d);
+        });
+        if (!allExternal) continue;
+        op->moveBefore(insertBeforeOp);
+        groupSet.remove(op);
+        changed = true;
+      }
+    }
+    SmallVector<Operation *> filtered;
+    filtered.reserve(group.size());
+    for (Operation *op : group)
+      if (groupSet.count(op)) filtered.push_back(op);
+    group = std::move(filtered);
   }
 
   // Walk back through memref view ops (collapse/expand/subview/cast/...) to
@@ -287,12 +334,20 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return outFirst >= 0;
   }
 
+  // A group consisting of a single npuvector.transfer_read is not worth
+  // outlining: it just loads data and would produce a degenerate vf whose
+  // only job is a read.  Leave such reads in place.
+  static bool isSingleTransferReadGroup(const SmallVector<Operation *> &group) {
+    return group.size() == 1 && llvm::isa<mlir::npuvector::TransferReadOp>(group.front());
+  }
+
   void extractKernelsInBlock(func::FuncOp funcOp, Block &block, int &kernelId) {
     auto segments = splitBlockSegments(block);
     for (auto &seg : segments) {
       int firstIdx = -1, lastIdx = -1;
       if (!findVectorRange(seg, firstIdx, lastIdx)) continue;
       SmallVector<Operation *> group(seg.begin() + firstIdx, seg.begin() + lastIdx + 1);
+      if (isSingleTransferReadGroup(group)) continue;
       extractGroupToFunction(funcOp, group, kernelId++);
     }
   }
@@ -399,6 +454,12 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     Operation *firstOp = group.front();
     Location loc = firstOp->getLoc();
 
+    // Keep pure memref view ops (e.g. the collapse_shape feeding a
+    // transfer_write destination) in the parent function instead of cloning
+    // them into the kernel; see hoistMemrefViewOps for the rationale.
+    hoistMemrefViewOps(group, firstOp);
+    if (group.empty()) return;
+
     llvm::SetVector<Operation *> groupSet;
     for (Operation *op : group) groupSet.insert(op);
 
@@ -415,6 +476,163 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     auto newFunc = buildKernelFuncShell(parentFunc, loc, id, inputTypes, outputTypes);
     populateKernelBody(newFunc, realArgs, constInputs, group, outputs, loc);
     emitCallAndErase(firstOp, newFunc, realArgs, outputs, group, loc);
+  }
+
+  // =========================================================================
+  // Step 1.5: Convert vf return values into output memref params
+  //
+  // Subsequent passes cannot handle vf functions that return npuvector or
+  // scalar float values.  We drop the results and route each returned value
+  // through an extra UB memref output parameter:
+  //   - npuvector result -> aligned memref<...> UB; written via transfer_write
+  //     inside the kernel, read back via transfer_read at the call site.
+  //   - scalar (f32/f16/bf16/...) result -> memref<1xT> UB; written via
+  //     memref.store inside the kernel, loaded back via memref.load outside.
+  // =========================================================================
+
+  struct RetUbInfo {
+    bool isVector = false;
+    MemRefType ubType;                       // UB memref type (aligned for vectors).
+    SmallVector<int64_t> logicalShape;       // vector logical shape (sizes).
+    mlir::npuvector::NPUVectorType vecType;  // original npuvector type.
+    Type elemType;                           // element / scalar type.
+  };
+
+  // Compute UB info for a returned value.  Returns failure if the type cannot
+  // be boxed into a UB memref (caller should then leave the kernel untouched).
+  FailureOr<RetUbInfo> computeReturnUbInfo(Value retVal, func::FuncOp parentFunc) {
+    RetUbInfo info;
+    Type t = retVal.getType();
+    if (auto vt = llvm::dyn_cast<mlir::npuvector::NPUVectorType>(t)) {
+      Type elemType = vt.getElementType();
+      SmallVector<int64_t> logical;
+      if (auto vs = tryExtractVecSizes(retVal)) {
+        logical = shapeFromMaxSizes(vs->second);
+        if (logical.empty()) logical = shapeFromMaxSizes(vs->first);
+      }
+      if (logical.empty()) {
+        for (int64_t d : vt.getShape()) {
+          if (ShapedType::isDynamic(d)) return failure();
+          logical.push_back(d);
+        }
+      }
+      if (logical.empty()) return failure();
+      auto kUbAlignmentOr = getUbAlignment(parentFunc, elemType);
+      if (failed(kUbAlignmentOr)) return failure();
+      info.isVector = true;
+      info.vecType = vt;
+      info.elemType = elemType;
+      info.logicalShape = logical;
+      info.ubType = MemRefType::get(alignUbShape(logical, *kUbAlignmentOr), elemType);
+      return info;
+    }
+    if (t.isIntOrFloat()) {
+      info.isVector = false;
+      info.elemType = t;
+      info.ubType = MemRefType::get({1}, t);
+      return info;
+    }
+    return failure();
+  }
+
+  // Write a returned value into its UB output param inside the kernel.
+  static void emitWriteToOutParam(OpBuilder &b, Location loc, Value retVal, Value outArg, const RetUbInfo &info,
+                                  Value c0) {
+    if (info.isVector) {
+      unsigned rank = info.ubType.getRank();
+      SmallVector<Value> idx(rank ? rank : 1u, c0);
+      b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, retVal, outArg, idx, /*mask=*/Value());
+    } else {
+      b.create<memref::StoreOp>(loc, retVal, outArg, ValueRange{c0});
+    }
+  }
+
+  // Read a value back from its UB output param at the call site.
+  static Value emitReadFromOutParam(OpBuilder &b, Location loc, Value ubBuf, const RetUbInfo &info) {
+    Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    if (!info.isVector) return b.create<memref::LoadOp>(loc, ubBuf, ValueRange{c0});
+
+    Type elemType = info.elemType;
+    Value padding = b.create<arith::ConstantOp>(loc, elemType, b.getZeroAttr(elemType));
+    SmallVector<Value> sizes, maxSizes;
+    ArrayRef<int64_t> bufShape = info.ubType.getShape();
+    sizes.reserve(info.logicalShape.size());
+    maxSizes.reserve(bufShape.size());
+    std::transform(info.logicalShape.begin(), info.logicalShape.end(), std::back_inserter(sizes),
+                   [&](int64_t d) { return b.create<arith::ConstantIndexOp>(loc, d); });
+    std::transform(bufShape.begin(), bufShape.end(), std::back_inserter(maxSizes),
+                   [&](int64_t d) { return b.create<arith::ConstantIndexOp>(loc, d); });
+    unsigned rank = info.ubType.getRank();
+    SmallVector<Value> rIdx(rank ? rank : 1u, c0);
+    return b.create<mlir::npuvector::TransferReadOp>(loc, info.vecType, ubBuf, rIdx, padding,
+                                                     /*mask=*/Value(), sizes, maxSizes);
+  }
+
+  LogicalResult convertReturnsToOutParams(func::FuncOp kernelFunc) {
+    if (kernelFunc.getBody().empty() || kernelFunc.getNumResults() == 0) return success();
+
+    Block &entry = kernelFunc.getBody().front();
+    auto retOp = llvm::dyn_cast<func::ReturnOp>(entry.getTerminator());
+    if (!retOp || retOp.getNumOperands() == 0) return success();
+
+    ModuleOp module = kernelFunc->getParentOfType<ModuleOp>();
+    auto callOps = collectCallers(module, kernelFunc);
+    func::FuncOp parentFunc = pickParentFunc(callOps);
+
+    // Compute UB info for every returned value first; bail out (leave the
+    // kernel untouched) if any result type cannot be boxed into a UB memref.
+    SmallVector<RetUbInfo> retInfos;
+    retInfos.reserve(retOp.getNumOperands());
+    for (Value rv : retOp.getOperands()) {
+      auto infoOr = computeReturnUbInfo(rv, parentFunc);
+      if (failed(infoOr)) return success();
+      retInfos.push_back(*infoOr);
+    }
+
+    Location loc = kernelFunc.getLoc();
+
+    // 1. Append UB output params and write returned values into them.
+    SmallVector<Value> outArgs;
+    outArgs.reserve(retInfos.size());
+    std::transform(retInfos.begin(), retInfos.end(), std::back_inserter(outArgs),
+                   [&](const RetUbInfo &info) { return entry.addArgument(info.ubType, loc); });
+
+    OpBuilder wb(retOp);
+    Value c0k = wb.create<arith::ConstantIndexOp>(loc, 0);
+    for (size_t k = 0; k < retInfos.size(); ++k)
+      emitWriteToOutParam(wb, loc, retOp.getOperand(k), outArgs[k], retInfos[k], c0k);
+
+    // 2. Replace the return with an empty one and drop the results.
+    wb.create<func::ReturnOp>(loc);
+    retOp.erase();
+    SmallVector<Type> inTypes;
+    inTypes.reserve(entry.getNumArguments());
+    for (unsigned i = 0; i < entry.getNumArguments(); ++i) inTypes.push_back(entry.getArgument(i).getType());
+    kernelFunc.setType(FunctionType::get(kernelFunc.getContext(), inTypes, TypeRange{}));
+
+    // 3. Rewrite every call site: alloc UB, append as operands, read back.
+    for (func::CallOp call : callOps) {
+      OpBuilder cb(call);
+      Location cloc = call.getLoc();
+      SmallVector<Value> ubBufs;
+      ubBufs.reserve(retInfos.size());
+      std::transform(retInfos.begin(), retInfos.end(), std::back_inserter(ubBufs),
+                     [&](const RetUbInfo &info) { return allocAtFuncStart(call, cloc, info.ubType); });
+
+      SmallVector<Value> newOperands(call.getOperands().begin(), call.getOperands().end());
+      newOperands.append(ubBufs.begin(), ubBufs.end());
+      auto newCall = cb.create<func::CallOp>(cloc, kernelFunc, newOperands);
+      if (call->hasAttr(kVectorFunctionAttr)) newCall->setAttr(kVectorFunctionAttr, cb.getUnitAttr());
+      if (call->hasAttr(kNoInlineAttr)) newCall->setAttr(kNoInlineAttr, cb.getUnitAttr());
+
+      cb.setInsertionPointAfter(newCall);
+      for (size_t k = 0; k < retInfos.size(); ++k) {
+        Value readback = emitReadFromOutParam(cb, cloc, ubBufs[k], retInfos[k]);
+        call.getResult(k).replaceAllUsesWith(readback);
+      }
+      call.erase();
+    }
+    return success();
   }
 
   // =========================================================================
@@ -527,35 +745,93 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return gmIndices;
   }
 
-  // Emit GM -> UB transfer before the call, preserving multi-dim shape.
+  // Remap a kernel-side size ValueRange (the dynamic/max sizes of a transfer)
+  // to caller values.  Returns empty if any element cannot be mapped, so the
+  // caller can fall back to a static-size copy.
+  static SmallVector<Value> remapSizesToCaller(ValueRange sizes, func::CallOp callOp, func::FuncOp kernelFunc) {
+    SmallVector<Value> result;
+    result.reserve(sizes.size());
+    for (Value s : sizes) {
+      Value mapped = remapKernelValueToCaller(s, callOp, kernelFunc);
+      if (!mapped) return {};
+      result.push_back(mapped);
+    }
+    return result;
+  }
+
+  // Emit GM -> UB transfer before the call.  `vecType`/`dynSizes`/`maxSizes`
+  // describe the actual tile being moved; using the original transfer's
+  // dynamic extents (rather than the padded UB size) ensures only the valid
+  // region is copied for partial/tail tiles.
   static void emitGmToUbCopy(OpBuilder &builder, Location loc, Value origArg, Value ubBuf, ValueRange gmIndices,
-                             Value c0, Type elemType, ArrayRef<int64_t> ubShape) {
+                             Value c0, Type elemType, Type vecType, ValueRange dynSizes, ValueRange maxSizes,
+                             unsigned ubRank) {
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
-    auto vecType = mlir::npuvector::NPUVectorType::get(ubShape, elemType);
-    SmallVector<Value> sizes;
-    std::transform(ubShape.begin(), ubShape.end(), std::back_inserter(sizes),
-                   [&](int64_t d) { return builder.create<arith::ConstantIndexOp>(loc, d); });
-    SmallVector<Value> ubIndices(ubShape.size(), c0);
+    SmallVector<Value> ubIndices(ubRank ? ubRank : 1u, c0);
     Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, origArg, gmIndices, padding,
-                                                                /*mask=*/Value(), sizes, sizes);
+                                                                /*mask=*/Value(), dynSizes, maxSizes);
     builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, ubIndices, /*mask=*/Value());
   }
 
-  // Emit UB -> GM transfer after the call, preserving multi-dim shape.
+  // Emit UB -> GM transfer after the call.  Mirrors `emitGmToUbCopy`: only the
+  // valid tile (described by `dynSizes`) is written back, so partial/tail
+  // tiles do not overwrite neighboring GM data.
   static void emitUbToGmCopy(OpBuilder &builder, func::CallOp callOp, Location loc, Value ubBuf, Value origArg,
-                             ValueRange gmIndices, Type elemType, ArrayRef<int64_t> ubShape) {
+                             ValueRange gmIndices, Type elemType, Type vecType, ValueRange dynSizes,
+                             ValueRange maxSizes, unsigned ubRank) {
     builder.setInsertionPointAfter(callOp);
     Value c0p = builder.create<arith::ConstantIndexOp>(loc, 0);
-    SmallVector<Value> sizes;
-    std::transform(ubShape.begin(), ubShape.end(), std::back_inserter(sizes),
-                   [&](int64_t d) { return builder.create<arith::ConstantIndexOp>(loc, d); });
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
-    auto vecType = mlir::npuvector::NPUVectorType::get(ubShape, elemType);
-    SmallVector<Value> ubIndices(ubShape.size(), c0p);
+    SmallVector<Value> ubIndices(ubRank ? ubRank : 1u, c0p);
     Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, ubBuf, ubIndices, padding,
-                                                                /*mask=*/Value(), sizes, sizes);
+                                                                /*mask=*/Value(), dynSizes, maxSizes);
     builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, origArg, gmIndices, /*mask=*/Value());
     builder.setInsertionPoint(callOp);
+  }
+
+  // Determine tile extents (copyVecType, dynSizes, maxSizes) for GM<->UB copies.
+  // Prefer the original transfer's dynamic sizes so partial/tail tiles copy only
+  // the valid region.
+  static void resolveGmUbCopyTileParams(func::CallOp callOp, func::FuncOp kernelFunc, OpBuilder &builder,
+                                        Location loc, unsigned argIdx, ArgReadMap &argToRead,
+                                        ArgWriteMap &argToWrite, ArrayRef<int64_t> ubShape, Type elemType,
+                                        Type &copyVecType, SmallVector<Value> &dynSizes,
+                                        SmallVector<Value> &maxSizes) {
+    auto rIt = argToRead.find(argIdx);
+    auto wIt = argToWrite.find(argIdx);
+    copyVecType = mlir::npuvector::NPUVectorType::get(ubShape, elemType);
+    bool dynamicCopy = false;
+    SmallVector<Value> origDyn, origMax;
+    Type origVecType;
+    if (rIt != argToRead.end()) {
+      origVecType = rIt->second.getResult().getType();
+      origDyn.assign(rIt->second.getDynamicSizes().begin(), rIt->second.getDynamicSizes().end());
+      origMax.assign(rIt->second.getMaxSizes().begin(), rIt->second.getMaxSizes().end());
+    } else if (wIt != argToWrite.end()) {
+      origVecType = wIt->second.getVector().getType();
+      if (auto vs = tryExtractVecSizes(wIt->second.getVector())) {
+        origDyn = vs->first;
+        origMax = vs->second;
+      }
+    }
+    if (auto vt = llvm::dyn_cast_or_null<mlir::npuvector::NPUVectorType>(origVecType)) {
+      unsigned numDyn = 0;
+      for (int64_t d : vt.getShape())
+        if (ShapedType::isDynamic(d)) ++numDyn;
+      SmallVector<Value> rd = remapSizesToCaller(origDyn, callOp, kernelFunc);
+      SmallVector<Value> rm = remapSizesToCaller(origMax, callOp, kernelFunc);
+      if (numDyn > 0 && rd.size() == numDyn && rm.size() == numDyn) {
+        copyVecType = vt;
+        dynSizes = std::move(rd);
+        maxSizes = std::move(rm);
+        dynamicCopy = true;
+      }
+    }
+    if (!dynamicCopy) {
+      std::transform(ubShape.begin(), ubShape.end(), std::back_inserter(dynSizes),
+                     [&](int64_t d) { return builder.create<arith::ConstantIndexOp>(loc, d); });
+      maxSizes = dynSizes;
+    }
   }
 
   // Promote a single (call, arg) pair. Returns:
@@ -588,7 +864,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     OpBuilder builder(callOp);
     Location loc = callOp.getLoc();
     builder.setInsertionPoint(callOp);
-    Value ubBuf = builder.create<memref::AllocOp>(loc, ubType);
+    Value ubBuf = allocAtFuncStart(callOp, loc, ubType);
     Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
 
     SmallVector<Value> gmIndices;
@@ -608,9 +884,18 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
     if (gmIndices.empty()) gmIndices.push_back(c0);
 
-    if (rIt != argToRead.end()) emitGmToUbCopy(builder, loc, origArg, ubBuf, gmIndices, c0, elemType, ubShape);
+    Type copyVecType;
+    SmallVector<Value> dynSizes, maxSizes;
+    resolveGmUbCopyTileParams(callOp, kernelFunc, builder, loc, i, argToRead, argToWrite, ubShape, elemType,
+                              copyVecType, dynSizes, maxSizes);
+    unsigned ubRank = static_cast<unsigned>(ubBufShape.size());
+
+    if (rIt != argToRead.end())
+      emitGmToUbCopy(builder, loc, origArg, ubBuf, gmIndices, c0, elemType, copyVecType, dynSizes, maxSizes, ubRank);
     newCallArgs[i] = ubBuf;
-    if (wIt != argToWrite.end()) emitUbToGmCopy(builder, callOp, loc, ubBuf, origArg, gmIndices, elemType, ubShape);
+    if (wIt != argToWrite.end())
+      emitUbToGmCopy(builder, callOp, loc, ubBuf, origArg, gmIndices, elemType, copyVecType, dynSizes, maxSizes,
+                     ubRank);
     return Type(ubType);
   }
 
@@ -717,8 +1002,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     bool sigUpdated = false;
     for (func::CallOp callOp : callOps) {
       bool updated = false;
-      if (failed(processOneCall(callOp, kernelFunc, argToRead, argToWrite, newArgTypes, updated)))
-        return failure();
+      if (failed(processOneCall(callOp, kernelFunc, argToRead, argToWrite, newArgTypes, updated))) return failure();
       sigUpdated = sigUpdated || updated;
     }
     if (!sigUpdated) return success();
@@ -781,7 +1065,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
         unsigned ai = vecArgIdx[k];
         Value vec = callOp.getOperand(ai);
         b.setInsertionPoint(callOp);
-        Value ubBuf = b.create<memref::AllocOp>(loc, vecArgBufType[k]);
+        Value ubBuf = allocAtFuncStart(callOp, loc, vecArgBufType[k]);
         Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
         unsigned rank = vecArgBufType[k].getRank();
         SmallVector<Value> wIdx(rank ? rank : 1u, c0);
@@ -841,8 +1125,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     for (size_t k = 0; k < vecArgIdx.size(); ++k) {
       BlockArgument arg = entry.getArgument(vecArgIdx[k]);
-      if (failed(emitVectorReloadAtEntry(kb, kloc, c0k, arg, vecArgOrigType[k], parentFunc)))
-        return failure();
+      if (failed(emitVectorReloadAtEntry(kb, kloc, c0k, arg, vecArgOrigType[k], parentFunc))) return failure();
     }
     return success();
   }
@@ -938,9 +1221,16 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     int kernelId = 0;
     for (auto f : targetFuncs) extractKernels(f, kernelId);
 
-    // Steps 2, 2.3, 2.4
+    // Steps 1.5, 2, 2.3, 2.4
     SmallVector<func::FuncOp> kernelFuncs;
     collectKernelFuncs(module, kernelFuncs);
+
+    // Step 1.5: drop vf return values, route them through UB memref out-params.
+    if (std::any_of(kernelFuncs.begin(), kernelFuncs.end(),
+                    [this](func::FuncOp f) { return failed(convertReturnsToOutParams(f)); })) {
+      signalPassFailure();
+      return;
+    }
 
     if (std::any_of(kernelFuncs.begin(), kernelFuncs.end(),
                     [this](func::FuncOp f) { return failed(promoteToUB(f)); })) {
