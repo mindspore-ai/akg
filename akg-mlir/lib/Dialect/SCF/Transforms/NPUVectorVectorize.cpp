@@ -419,6 +419,7 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
 
   npuvector::NPUVectorType vecType = ctx.getVectorType(elemType);
 
+  Value neutralVec;
   if (ctx.isDynamic()) {
     Value neutralScalar = ctx.builder.create<arith::ConstantOp>(loc, mlir::cast<TypedAttr>(neutralAttr));
 
@@ -434,18 +435,21 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
       else
         dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[i]));
     }
-    Value neutralVec =
-      ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
-                                                 ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
-
-    return neutralVec;
+    neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
+                                                            ValueRange(maxSizes),
+                                                            ctx.builder.getDenseI64ArrayAttr({}));
 
   } else {
     auto vecAttr = DenseElementsAttr::get(vecType, neutralAttr);
-    Value neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
-
-    return neutralVec;
+    neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
   }
+
+  SmallVector<int> dimOrder;
+  dimOrder.reserve(ctx.allVectorSizes.size());
+  for (unsigned axisIdx = 0; axisIdx < ctx.allVectorSizes.size(); ++axisIdx)
+    dimOrder.push_back(static_cast<int>(axisIdx));
+  ctx.valueDimOrder[neutralVec] = std::move(dimOrder);
+  return neutralVec;
 }
 
 static bool isNeutralElement(arith::AtomicRMWKind kind, Value value, OpBuilder &builder) {
@@ -2432,8 +2436,16 @@ static LogicalResult vectorizeLoopBody(LoopVectorizationCtx &ctx) {
   }
 
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
-    for (auto [scalarArg, vecArg] : llvm::zip(ctx.scalarLoop.getRegionIterArgs(), ctx.vecLoop.getRegionIterArgs())) {
+    for (unsigned idx = 0, e = ctx.scalarLoop.getNumRegionIterArgs(); idx < e; ++idx) {
+      Value scalarArg = ctx.scalarLoop.getRegionIterArgs()[idx];
+      Value vecArg = ctx.vecLoop.getRegionIterArgs()[idx];
       ctx.valueMapping.map(scalarArg, vecArg);
+
+      Value vecInit = ctx.vecLoop.getInitArgs()[idx];
+      auto dimOrderIter = ctx.valueDimOrder.find(vecInit);
+      if (dimOrderIter != ctx.valueDimOrder.end()) {
+        ctx.valueDimOrder[vecArg] = dimOrderIter->second;
+      }
     }
   }
 

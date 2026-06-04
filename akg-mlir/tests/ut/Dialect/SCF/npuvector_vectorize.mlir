@@ -1688,3 +1688,38 @@ func.func @test_vf1_store_seed_after_reduction(%input: memref<64xf32>, %output: 
   memref.store %sum, %output[%idx] : memref<128xf32>
   return
 }
+
+// -----
+
+// CHECK-LABEL: func.func @test_nested_vector_reduction_x_rank_lift_accumulator_dim_order
+// CHECK: %[[VEC_ADD:.*]] = arith.addf {{.*}} : !npuvector<64xf16>
+// CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<64x8xf16>
+// CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[NEUTRAL]]) -> (!npuvector<64x8xf16>) {
+// CHECK: %[[LIFTED:.*]] = npuvector.broadcast %[[VEC_ADD]][{{.*}}] [{{.*}}] : !npuvector<64xf16> to !npuvector<64x8xf16>
+// CHECK-SAME: {dimension = array<i64: 0>}
+// CHECK: arith.addf %[[LIFTED]], %[[ACC]] {{.*}} : !npuvector<64x8xf16>
+func.func @test_nested_vector_reduction_x_rank_lift_accumulator_dim_order(
+    %input: memref<32x64xf16>,
+    %output: memref<64x32xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %c32 = arith.constant 32 : index
+  %c64 = arith.constant 64 : index
+  %zero = arith.constant 0.000000e+00 : f16
+  %one = arith.constant 1.000000e+00 : f16
+
+  scf.for %row = %c0 to %c32 step %c1 {
+    scf.for %col = %c0 to %c64 step %c1 {
+      %value = memref.load %input[%row, %col] : memref<32x64xf16>
+      %plus = arith.addf %value, %one : f16
+      %sum = scf.for %red = %c0 to %c8 step %c1 iter_args(%acc = %zero) -> (f16) {
+        %next = arith.addf %plus, %acc {reduction_axes = [2 : index], reduction_type = "x"} : f16
+        scf.yield %next : f16
+      } {reduction_x = 8 : i64}
+      %cast = arith.extf %sum : f16 to f32
+      memref.store %cast, %output[%col, %row] : memref<64x32xf32>
+    } {vector = 64 : i64}
+  }
+  return
+}
