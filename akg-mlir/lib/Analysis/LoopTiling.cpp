@@ -272,8 +272,6 @@ static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::For
                                                    mlir::OpBuilder &builder);
 static bool isTransposePointLoop(mlir::scf::ForOp loop);
 static bool isMultiVecPointLoop(mlir::scf::ForOp loop);
-static void clearTransposeChain(mlir::scf::ForOp loop);
-static bool sinkTransposePointLoopOnce(mlir::scf::ForOp pointLoop);
 static void sinkTransposePointLoops(func::FuncOp funcOp);
 static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
