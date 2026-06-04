@@ -23,7 +23,7 @@
 | `autoresearch_workflow` | `op/workflows/autoresearch_workflow.py` |
 | AutoResearch agent 工具 | `op/autoresearch/agent/tools.py` |
 
-调用方构造 `CodeChecker(backend, dsl)` 并 `await checker.check(code)`。
+调用方构造 `CodeChecker(backend, dsl)` 并 `checker.check(code)`。
 检查失败时调用方将 `error_message` 传给 coder / KernelGen 作为下一次
 重试的输入。
 
@@ -97,7 +97,7 @@ CodeChecker(backend: str, dsl: str, config: Optional[dict] = None)
 `config` 参数保留仅为调用方签名兼容，CodeChecker 不读取。
 
 ```python
-await checker.check(code: str) -> Tuple[bool, str, List[Dict]]
+checker.check(code: str) -> Tuple[bool, str, List[Dict]]
 ```
 
 - `passed` —— 总结果。

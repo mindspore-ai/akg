@@ -102,7 +102,7 @@ The `config` parameter is retained for call-site signature
 compatibility; CodeChecker does not read it.
 
 ```python
-await checker.check(code: str) -> Tuple[bool, str, List[Dict]]
+checker.check(code: str) -> Tuple[bool, str, List[Dict]]
 ```
 
 - `passed` — overall result.

@@ -14,15 +14,20 @@ follow the latest `[AR Phase: ...]` message and never stop between phases.
 - **Init flags** — new task from a ref + seed kernel:
   ```
   --ref <file> --kernel <file> --op-name <name>
-  --dsl ascendc|cpp|cuda_c|pypto|swft|tilelang_cuda|tilelang_npuir|torch|triton_ascend|triton_cuda
-  [--framework torch|mindspore|numpy]
-  (--devices <N[,M,...]> | --worker-url <host:port>)
+  --devices <N[,M,...]>
   [--max-rounds <N>] [--eval-timeout <sec>]
   [--no-code-checker]
+  [--worker-url host:port[,host:port,...]]
   ```
-  Both `--ref` and `--kernel` are required. Hardware spec is exactly one of
-  `--devices` (local) or `--worker-url` (remote). `--backend` and `--arch`
-  are auto-derived from `--dsl` + hardware probe; never typed by the user.
+  Both `--ref` and `--kernel` are required. `--devices` selects the local
+  Ascend NPU id(s) for eval; arch is auto-derived from the picked card
+  via `npu-smi`.
+
+  `--worker-url` routes eval to a remote HTTP worker. The worker must
+  already be running and reachable at that URL when eval starts. If it
+  isn't, stop with an actionable error — do NOT try to start, restart,
+  or repair the worker from inside the agent loop. Worker lifecycle is
+  the operator's concern, not yours.
 
   Convention: source files live in `workspace/<op_name>_ref.py` and
   `workspace/<op_name>_kernel.py`.
@@ -33,12 +38,12 @@ follow the latest `[AR Phase: ...]` message and never stop between phases.
 
 | flags | initial phase |
 |-------|---------------|
-| `--ref X.py --kernel Y.py` | `BASELINE` runs first; on PASS → `PLAN`; on FAIL → also `PLAN` (first plan items rewrite the seed) |
+| `--ref X.py --kernel Y.py` | `BASELINE` runs first; OK / KERNEL_FAIL (ref measured) → `PLAN`; INFRA_FAIL / no valid ref → task parks at `BASELINE` with no committed progress, fix env/ref and re-run |
 
 ## Step 1 — Parse `$ARGUMENTS`
 
 ```bash
-python .autoresearch/scripts/engine/parse_args.py $ARGUMENTS
+python scripts/engine/parse_args.py $ARGUMENTS
 ```
 
 Returns a single-line JSON dispatch record:
@@ -47,7 +52,7 @@ Returns a single-line JSON dispatch record:
 {
   "mode": "scaffold|resume|ask",
   "command": "python ... (verbatim, ready to exec)" or null,
-  "values": {ref, desc, op_name, dsl, devices, worker_url, max_rounds, ...},
+  "values": {ref, kernel, op_name, devices, max_rounds, ...},
   "missing": [...]
 }
 ```
@@ -63,15 +68,21 @@ missing, dispatch via `mode: "ask"`.
 - **`resume`** / **`scaffold`** — run `command` verbatim. Last line of
   stdout is the resolved task_dir. Non-zero exit → stop and report.
 
-Scaffold's `--run-baseline` runs the seed and writes `.phase = PLAN`
-on success — the next activation drops straight into PLAN. If the seed
-fails, `.phase` is also set to PLAN and the first plan items rewrite
-the kernel.
+Scaffold's `--run-baseline` runs the seed eval at scaffold time. The
+outcome decides the next activation's starting phase (all written to
+`state.json`, single source of truth):
+
+- **OK / KERNEL_FAIL** (ref baseline measured) → phase = `PLAN`; the
+  next activation drops into PLAN. KERNEL_FAIL means the first plan
+  items must rewrite the broken seed.
+- **INFRA_FAIL / no valid ref baseline** → phase stays at `BASELINE`
+  with no committed progress (baseline pending). Fix env / ref /
+  worker, then `/autoresearch --resume <task_dir>` re-runs baseline.
 
 ## Step 3 — Activate
 
 ```bash
-export AKG_AGENTS_AR_TASK_DIR="<task_dir from step 2>"
+export AR_TASK_DIR="<task_dir from step 2>"
 ```
 
 The activation hook prints `[AR Phase: ...]` guidance on stderr. Follow it.
@@ -80,12 +91,11 @@ The activation hook prints `[AR Phase: ...]` guidance on stderr. Follow it.
 
 Follow the phase guidance. Never stop between phases.
 
-- **BASELINE** — `python .autoresearch/scripts/engine/baseline.py "$AKG_AGENTS_AR_TASK_DIR"`
-  (append `--worker-url` if configured). Skipped automatically if scaffold
-  already ran it.
+- **BASELINE** — `python scripts/engine/baseline.py "$AR_TASK_DIR"`.
+  Skipped automatically if scaffold already ran it.
 - **PLAN / REPLAN** — two-step plan creation:
-  1. Write `<items>...</items>` XML to `$AKG_AGENTS_AR_TASK_DIR/.ar_state/plan_items.xml`.
-  2. Run `python .autoresearch/scripts/engine/create_plan.py "$AKG_AGENTS_AR_TASK_DIR"` (no
+  1. Write `<items>...</items>` XML to `$AR_TASK_DIR/.ar_state/plan_items.xml`.
+  2. Run `python scripts/engine/create_plan.py "$AR_TASK_DIR"` (no
      second argument — the script reads the canonical path).
   See the hook guidance for the XML schema. When the hook emits a
   TodoWrite payload, call TodoWrite with it verbatim.
@@ -96,7 +106,7 @@ Follow the phase guidance. Never stop between phases.
   invariant #10 and the runtime hook guidance; no need to reproduce it
   here.
 - **EDIT** — Edit `kernel.py` (multiple Edit calls OK). When done:
-  `python .autoresearch/scripts/engine/pipeline.py "$AKG_AGENTS_AR_TASK_DIR"`.
+  `python scripts/engine/pipeline.py "$AR_TASK_DIR"`.
 - **FINISH** — `.ar_state/report.md` is auto-generated by `pipeline.py`. Summarize, stop. Do not write any files.
 
 ## Rules
@@ -104,6 +114,6 @@ Follow the phase guidance. Never stop between phases.
 - Keep going between phases.
 - Hooks block wrong actions and tell you what to do next — read their
   messages.
-- Never hand-edit `plan.md` or `.ar_state/.phase`; always go through
+- Never hand-edit `plan.md` or `.ar_state/state.json`; always go through
   the scripts.
 - Never invent flag values not produced by `parse_args.py`.

@@ -1,0 +1,156 @@
+# Static code-checker policy. Every value below is authoritative — the
+# Python module `scripts/utils/code_checker.py` has zero fallback
+# defaults, so every key listed here MUST be present (or the framework
+# hard-errors on startup, by design).
+#
+# - triton_decorators:   decorator `.attr` names that count as marking a
+#                        Triton kernel (must see `@triton.<name>`).
+# - torch_call_prefixes: top-level names whose `.method(...)` calls are
+#                        scanned against the hard / soft blacklists.
+#                        `torch` covers `torch.matmul(...)`; `F` covers
+#                        the usual `import torch.nn.functional as F`.
+# - hard_ops: forbidden in forward() regardless of whether a Triton kernel
+#             is launched. Reserve for ops where letting torch do them is
+#             equivalent to not optimizing at all (matmul / conv / einsum
+#             / softmax / embedding).
+# - soft_ops: forbidden only when no Triton kernel is launched. Legit as
+#             hybrid building blocks once the kernel is present — if the
+#             hybrid doesn't beat the pure-torch baseline, eval rejects it
+#             on perf grounds.
+#
+# Remove an op from both lists to whitelist it unconditionally.
+
+triton_decorators:
+  - jit
+  - autotune
+  - heuristics
+
+torch_call_prefixes:
+  - torch
+  - F
+
+hard_ops:
+  - matmul
+  - mm
+  - bmm
+  - addmm
+  - addmv
+  - addbmm
+  - baddbmm
+  - einsum
+  - dot
+  - mv
+  - inner
+  - outer
+  - linear
+  - conv1d
+  - conv2d
+  - conv3d
+  - conv_transpose1d
+  - conv_transpose2d
+  - conv_transpose3d
+  - softmax
+  - log_softmax
+  - logsumexp
+  - embedding
+
+soft_ops:
+  # Simple activations
+  - relu
+  - gelu
+  - silu
+  - sigmoid
+  - tanh
+  - leaky_relu
+  - elu
+  - hardswish
+  - mish
+  # Elementwise math
+  - exp
+  - log
+  - sqrt
+  - rsqrt
+  - pow
+  - sin
+  - cos
+  - abs
+  - clamp
+  - clamp_min
+  - clamp_max
+  # Simple reductions
+  - sum
+  - mean
+  - prod
+  - norm
+  - amax
+  - amin
+  - argmax
+  - argmin
+  # Pool / norm / interpolate / cumsum — HARD until 2026-04, moved here to
+  # unblock Ascend seeds that can't express the full op as a single
+  # 256-B-aligned Triton schedule (e.g. strided width reduction).
+  - layer_norm
+  - batch_norm
+  - group_norm
+  - instance_norm
+  - max_pool1d
+  - max_pool2d
+  - max_pool3d
+  - avg_pool1d
+  - avg_pool2d
+  - avg_pool3d
+  - adaptive_avg_pool2d
+  - interpolate
+  - cumsum
+  - cumprod
+
+# ---------------------------------------------------------------------------
+# Framework-identifier literals. These replace formerly hard-coded names in
+# `scripts/utils/code_checker.py`. The checker walks the AST looking
+# for these exact spellings; change a value only if the project convention
+# itself changes (e.g. you rename the kernel class from `ModelNew` or move
+# Triton under a vendored namespace).
+# ---------------------------------------------------------------------------
+
+# Class that must exist in every generated kernel module. Verify loads it
+# via `from <kernel_file> import <kernel_class_name>`.
+kernel_class_name: ModelNew
+
+# Method on the kernel class that holds the forward computation. The DSL
+# compliance scan (hard/soft torch ops, `@` matmul operator) runs over this
+# method's body only.
+kernel_forward_method: forward
+
+# Top-level module name treated as the Triton namespace. Decorators like
+# `@<triton_module_name>.jit` (combined with triton_decorators above) mark
+# kernel functions. Usually just "triton".
+triton_module_name: triton
+
+# DSL-prefix gate: the compliance checks (hard/soft ops, kernel presence,
+# kernel launch, autotune) only run when `self.dsl` startswith this string.
+# Keeps the checker silent for non-Triton DSLs (e.g. torch-only baselines).
+dsl_compliance_prefix: triton
+
+# ---------------------------------------------------------------------------
+# Stray-text detector (Step 4). Flags runs of >= `min_run` consecutive
+# characters whose code point falls in any range in `unicode_ranges`,
+# observed in code tokens (not inside comments/strings). Defaults match
+# CJK Unified Ideographs — add kana/hangul ranges here if LLMs start
+# leaking those too.
+# ---------------------------------------------------------------------------
+stray_text:
+  min_run: 3
+  unicode_ranges:
+    # CJK Unified Ideographs
+    - [0x4e00, 0x9fff]
+
+# ---------------------------------------------------------------------------
+# @triton.autotune enforcement (Step 6). `decorator_attr` is the attribute
+# name off `<triton_module_name>` that triggers the check. `required_kwarg`
+# is the keyword the decorator call must contain; when absent, autotune
+# re-runs the kernel per config and output buffers pollute across configs,
+# breaking verify.
+# ---------------------------------------------------------------------------
+autotune:
+  decorator_attr: autotune
+  required_kwarg: restore_value
