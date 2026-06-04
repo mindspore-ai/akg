@@ -1,3 +1,24 @@
+if(POLICY CMP0054)
+    cmake_policy(SET CMP0054 NEW)
+endif()
+if(POLICY CMP0072)
+    cmake_policy(SET CMP0072 NEW)
+endif()
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 OLD)
+endif()
+if(POLICY CMP0148)
+    cmake_policy(SET CMP0148 OLD)
+endif()
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+if(POLICY CMP0175)
+    cmake_policy(SET CMP0175 OLD)
+endif()
+
+# We may use projects that rely on PkgConfig
+find_package(PkgConfig)
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
@@ -25,7 +46,7 @@ if(DEFINED ENV{MSLIBS_CACHE_PATH})
 else()
     set(_MS_LIB_CACHE ${CMAKE_BINARY_DIR}/.mslib)
 endif()
-message("MS LIBS CACHE PATH:  ${_MS_LIB_CACHE}")
+message(STATUS "MS LIBS CACHE PATH:  ${_MS_LIB_CACHE}")
 
 if(NOT EXISTS ${_MS_LIB_CACHE})
     file(MAKE_DIRECTORY ${_MS_LIB_CACHE})
@@ -33,22 +54,8 @@ endif()
 
 if(DEFINED ENV{MSLIBS_SERVER})
     set(LOCAL_LIBS_SERVER  $ENV{MSLIBS_SERVER})
-    message("LOCAL_LIBS_SERVER:  ${LOCAL_LIBS_SERVER}")
+    message(STATUS "LOCAL_LIBS_SERVER:  ${LOCAL_LIBS_SERVER}")
 endif()
-
-include(ProcessorCount)
-ProcessorCount(N)
-if(JOBS)
-    set(THNUM ${JOBS})
-else()
-    set(JOBS 8)
-    if(${JOBS} GREATER ${N})
-        set(THNUM ${N})
-    else()
-        set(THNUM ${JOBS})
-    endif()
-endif()
-message("set make thread num: ${THNUM}")
 
 if(LOCAL_LIBS_SERVER)
     if(NOT ENV{no_proxy})
@@ -61,16 +68,16 @@ if(LOCAL_LIBS_SERVER)
     endif()
 endif()
 
-function(__download_pkg pkg_name pkg_url pkg_md5)
+function(__download_pkg pkg_name pkg_url pkg_sha256)
 
     if(LOCAL_LIBS_SERVER)
         get_filename_component(_URL_FILE_NAME ${pkg_url} NAME)
         set(pkg_url "http://${LOCAL_LIBS_SERVER}:8081/libs/${pkg_name}/${_URL_FILE_NAME}" ${pkg_url})
     endif()
 
-    FetchContent_Declare(${pkg_name} URL ${pkg_url} URL_HASH MD5=${pkg_md5})
+    FetchContent_Declare(${pkg_name} URL ${pkg_url} URL_HASH SHA256=${pkg_sha256})
     FetchContent_GetProperties(${pkg_name})
-    message("download: ${${pkg_name}_SOURCE_DIR} , ${pkg_name} , ${pkg_url}")
+    message(STATUS "download: ${${pkg_name}_SOURCE_DIR} , ${pkg_name} , ${pkg_url}")
     if(NOT ${pkg_name}_POPULATED)
         FetchContent_Populate(${pkg_name})
         set(${pkg_name}_SOURCE_DIR ${${pkg_name}_SOURCE_DIR} PARENT_SCOPE)
@@ -78,7 +85,7 @@ function(__download_pkg pkg_name pkg_url pkg_md5)
 
 endfunction()
 
-function(__download_pkg_with_git pkg_name pkg_url pkg_git_commit pkg_git_submudules pkg_md5)
+function(__download_pkg_with_git pkg_name pkg_url pkg_git_commit pkg_git_submudules pkg_sha256)
 
     FetchContent_Declare(
         ${pkg_name}
@@ -86,7 +93,7 @@ function(__download_pkg_with_git pkg_name pkg_url pkg_git_commit pkg_git_submudu
         GIT_TAG            ${pkg_git_commit}
         GIT_SUBMODULES     "${pkg_git_submudules}")
     FetchContent_GetProperties(${pkg_name})
-    message("download: ${${pkg_name}_SOURCE_DIR} , ${pkg_name} , ${pkg_url}")
+    message(STATUS "download: ${${pkg_name}_SOURCE_DIR} , ${pkg_name} , ${pkg_url}")
     if(NOT ${pkg_name}_POPULATED)
         FetchContent_Populate(${pkg_name})
         set(${pkg_name}_SOURCE_DIR ${${pkg_name}_SOURCE_DIR} PARENT_SCOPE)
@@ -99,7 +106,7 @@ function(__find_pkg_then_add_target pkg_name pkg_exe lib_path)
 
     unset(${pkg_name}_LIBS)
 
-    message("_FIND:${${pkg_name}_BASE_DIR}")
+    message(STATUS "FIND:${${pkg_name}_BASE_DIR}")
 
     if(pkg_exe)
         find_program(${pkg_exe}_EXE ${pkg_exe} PATHS ${${pkg_name}_BASE_DIR}/bin NO_DEFAULT_PATH)
@@ -109,7 +116,7 @@ function(__find_pkg_then_add_target pkg_name pkg_exe lib_path)
         add_executable(${pkg_name}::${pkg_exe} IMPORTED GLOBAL)
         set_target_properties(${pkg_name}::${pkg_exe} PROPERTIES
                 IMPORTED_LOCATION ${${pkg_exe}_EXE})
-        message("found ${${pkg_exe}_EXE}")
+        message(STATUS "found ${${pkg_exe}_EXE}")
     endif()
 
     foreach(_LIB_NAME ${ARGN})
@@ -139,7 +146,7 @@ function(__find_pkg_then_add_target pkg_name pkg_exe lib_path)
         endif()
 
         list(APPEND ${pkg_name}_LIBS ${pkg_name}::${_LIB_NAME})
-        message("found ${${_LIB_NAME}_LIB}")
+        message(STATUS "found ${${_LIB_NAME}_LIB}")
         STRING(REGEX REPLACE "(.+)/(.+)" "\\1" LIBPATH ${${_LIB_NAME}_LIB})
         set(${pkg_name}_LIBPATH ${LIBPATH} CACHE STRING INTERNAL)
     endforeach()
@@ -155,8 +162,8 @@ function(__exec_cmd)
     cmake_parse_arguments(EXEC "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     execute_process(COMMAND ${EXEC_COMMAND}
-            WORKING_DIRECTORY ${EXEC_WORKING_DIRECTORY}
-            RESULT_VARIABLE RESULT)
+        WORKING_DIRECTORY ${EXEC_WORKING_DIRECTORY}
+        RESULT_VARIABLE RESULT)
     if(NOT RESULT EQUAL "0")
         message(FATAL_ERROR "error! when ${EXEC_COMMAND} in ${EXEC_WORKING_DIRECTORY}")
     endif()
@@ -165,22 +172,22 @@ endfunction()
 function(__check_patches pkg_patches)
     # check patches
     if(PKG_PATCHES)
-        file(TOUCH ${_MS_LIB_CACHE}/${pkg_name}_patch.md5)
-        file(READ ${_MS_LIB_CACHE}/${pkg_name}_patch.md5 ${pkg_name}_PATCHES_MD5)
+        file(TOUCH ${_MS_LIB_CACHE}/${pkg_name}_patch.sha256)
+        file(READ ${_MS_LIB_CACHE}/${pkg_name}_patch.sha256 ${pkg_name}_PATCHES_SHA256)
 
-        message("patches md5:${${pkg_name}_PATCHES_MD5}")
+        message(STATUS "patches sha256:${${pkg_name}_PATCHES_SHA256}")
 
-        set(${pkg_name}_PATCHES_NEW_MD5)
+        set(${pkg_name}_PATCHES_NEW_SHA256)
         foreach(_PATCH ${PKG_PATCHES})
-            file(MD5 ${_PATCH} _PF_MD5)
-            set(${pkg_name}_PATCHES_NEW_MD5 "${${pkg_name}_PATCHES_NEW_MD5},${_PF_MD5}")
+            file(SHA256 ${_PATCH} _PF_SHA256)
+            set(${pkg_name}_PATCHES_NEW_SHA256 "${${pkg_name}_PATCHES_NEW_SHA256},${_PF_SHA256}")
         endforeach()
 
-        if(NOT ${pkg_name}_PATCHES_MD5 STREQUAL ${pkg_name}_PATCHES_NEW_MD5)
+        if(NOT ${pkg_name}_PATCHES_SHA256 STREQUAL ${pkg_name}_PATCHES_NEW_SHA256)
             set(${pkg_name}_PATCHES ${PKG_PATCHES})
             file(REMOVE_RECURSE "${_MS_LIB_CACHE}/${pkg_name}-subbuild")
-            file(WRITE ${_MS_LIB_CACHE}/${pkg_name}_patch.md5 ${${pkg_name}_PATCHES_NEW_MD5})
-            message("patches changed : ${${pkg_name}_PATCHES_NEW_MD5}")
+            file(WRITE ${_MS_LIB_CACHE}/${pkg_name}_patch.sha256 ${${pkg_name}_PATCHES_NEW_SHA256})
+            message(STATUS "patches changed : ${${pkg_name}_PATCHES_NEW_SHA256}")
         endif()
     endif()
 endfunction()
@@ -191,7 +198,8 @@ set(AKG_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_E
 
 function(akg_add_pkg pkg_name)
     set(options)
-    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG GIT_SUBMODULES VER EXE DIR HEAD_ONLY CMAKE_PATH CUSTOM_CMAKE)
+    set(oneValueArgs URL SHA256 GIT_REPOSITORY GIT_TAG GIT_SUBMODULES VER EXE DIR HEAD_ONLY
+        CMAKE_PATH CUSTOM_CMAKE CUSTOM_CMAKE_GENERATOR)
     set(multiValueArgs CMAKE_OPTION  CONFIGURE_COMMAND LIBS PATCHES)
     cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -201,32 +209,32 @@ function(akg_add_pkg pkg_name)
 
     set(__FIND_PKG_NAME ${pkg_name})
     string(TOLOWER ${pkg_name} pkg_name)
-    message("pkg name:${__FIND_PKG_NAME},${pkg_name}")
+    message(STATUS "pkg name:${__FIND_PKG_NAME},${pkg_name}")
 
     # Generate hash for current pkg
     set(${pkg_name}_CUSTOM_CMAKE_HASH)
     if(PKG_CUSTOM_CMAKE)
-        file(MD5 ${PKG_CUSTOM_CMAKE}/CMakeLists.txt _CUSTOM_CMAKE_MD5)
-        set(${pkg_name}_CUSTOM_CMAKE_HASH "${_CUSTOM_CMAKE_MD5}")
+        file(SHA256 ${PKG_CUSTOM_CMAKE}/CMakeLists.txt _CUSTOM_CMAKE_SHA256)
+        set(${pkg_name}_CUSTOM_CMAKE_HASH "${_CUSTOM_CMAKE_SHA256}")
     endif()
 
     set(${pkg_name}_PATCHES_HASH)
     foreach(_PATCH ${PKG_PATCHES})
-        file(MD5 ${_PATCH} _PF_MD5)
-        set(${pkg_name}_PATCHES_HASH "${${pkg_name}_PATCHES_HASH},${_PF_MD5}")
+        file(SHA256 ${_PATCH} _PF_SHA256)
+        set(${pkg_name}_PATCHES_HASH "${${pkg_name}_PATCHES_HASH},${_PF_SHA256}")
     endforeach()
 
     # strip directory variables to ensure third party packages are installed in consistent locations
     string(REPLACE ${CMAKE_SOURCE_DIR} "" ARGN_STRIPPED ${ARGN})
     string(REPLACE ${_MS_LIB_CACHE} "" ARGN_STRIPPED ${ARGN_STRIPPED})
     set(${pkg_name}_CONFIG_TXT
-            "${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_C_COMPILER_VERSION}
-            ${ARGN_STRIPPED}-${${pkg_name}_USE_STATIC_LIBS}-${${pkg_name}_PATCHES_HASH}
-            ${${pkg_name}_CXXFLAGS}-${${pkg_name}_CFLAGS}-${${pkg_name}_LDFLAGS}")
+        "${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_C_COMPILER_VERSION}
+        ${ARGN_STRIPPED}-${${pkg_name}_USE_STATIC_LIBS}-${${pkg_name}_PATCHES_HASH}
+        ${${pkg_name}_CXXFLAGS}-${${pkg_name}_CFLAGS}-${${pkg_name}_LDFLAGS}")
     string(REPLACE ";" "-" ${pkg_name}_CONFIG_TXT ${${pkg_name}_CONFIG_TXT})
-    string(MD5 ${pkg_name}_CONFIG_HASH ${${pkg_name}_CONFIG_TXT})
+    string(SHA256 ${pkg_name}_CONFIG_HASH ${${pkg_name}_CONFIG_TXT})
 
-    message("${pkg_name} config hash: ${${pkg_name}_CONFIG_HASH}")
+    message(STATUS "${pkg_name} config hash: ${${pkg_name}_CONFIG_HASH}")
     # Generate hash for current pkg end
 
     set(${pkg_name}_BASE_DIR ${_MS_LIB_CACHE}/${pkg_name}_${${pkg_name}_CONFIG_HASH})
@@ -244,7 +252,7 @@ function(akg_add_pkg pkg_name)
         __find_pkg_then_add_target(${pkg_name} ${PKG_EXE} ${PKG_LIB_PATH} ${PKG_LIBS})
         if(${pkg_name}_LIBS)
             set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
-            message("Found libs: ${${pkg_name}_LIBS}")
+            message(STATUS "Found libs: ${${pkg_name}_LIBS}")
             return()
         endif()
     endif()
@@ -252,10 +260,10 @@ function(akg_add_pkg pkg_name)
     # Download pkg
     if(NOT PKG_DIR)
         if(PKG_GIT_REPOSITORY)
-          __download_pkg_with_git(${pkg_name} ${PKG_GIT_REPOSITORY} ${PKG_GIT_TAG} "${PKG_GIT_SUBMODULES}" ${PKG_MD5})
+            __download_pkg_with_git(${pkg_name} ${PKG_GIT_REPOSITORY} ${PKG_GIT_TAG}
+                "${PKG_GIT_SUBMODULES}" ${PKG_SHA256})
         else()
-            message("--__download_pkg")
-            __download_pkg(${pkg_name} ${PKG_URL} ${PKG_MD5})
+            __download_pkg(${pkg_name} ${PKG_URL} ${PKG_SHA256})
         endif()
         foreach(_SUBMODULE_FILE ${PKG_SUBMODULES})
             STRING(REGEX REPLACE "(.+)_(.+)" "\\1" _SUBMODEPATH ${_SUBMODULE_FILE})
@@ -304,7 +312,7 @@ function(akg_add_pkg pkg_name)
 
     # Apply patches on pkg
     foreach(_PATCH_FILE ${PKG_PATCHES})
-        message("patching ${${pkg_name}_SOURCE_DIR} --binary -p1 < ${_PATCH_FILE}")
+        message(STATUS "patching ${${pkg_name}_SOURCE_DIR} --binary -p1 < ${_PATCH_FILE}")
         execute_process(COMMAND patch --binary -p1 INPUT_FILE ${_PATCH_FILE}
                         WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}
                         RESULT_VARIABLE Result)
@@ -334,30 +342,118 @@ function(akg_add_pkg pkg_name)
             endif()
 
         elseif(PKG_CMAKE_OPTION)
-            # in cmake
             file(MAKE_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
+
+            set(_CONFIG_FILE_DIR ${${pkg_name}_SOURCE_DIR}/_build/.cmake_cache)
+            file(MAKE_DIRECTORY ${_CONFIG_FILE_DIR})
+
+            set(_CONFIG_FILE ${_CONFIG_FILE_DIR}/initial_cache.cmake)
+            file(WRITE ${_CONFIG_FILE} "# Auto-generated initial cache file for ${pkg_name}\n")
+            file(APPEND ${_CONFIG_FILE} "# Generated by utils.cmake to handle semicolon-separated parameters\n\n")
+
+            set(_DIRECT_OPTIONS "")
+            set(_CURRENT_PARAM "")
+            set(_IS_COLLECTING FALSE)
+
+            foreach(_OPTION ${PKG_CMAKE_OPTION})
+                string(REGEX MATCH "^-D" _IS_D_PARAM "${_OPTION}")
+
+                if(_IS_D_PARAM)
+                    if(_IS_COLLECTING AND NOT "${_CURRENT_PARAM}" STREQUAL "")
+                        string(REGEX MATCH "^-D([^:=]+)(:([^:]+))?=(.*)$" _MATCH "${_CURRENT_PARAM}")
+                        if(_MATCH)
+                            set(_VAR_NAME "${CMAKE_MATCH_1}")
+                            set(_VAR_TYPE "${CMAKE_MATCH_3}")
+                            set(_VAR_VALUE "${CMAKE_MATCH_4}")
+                            if(_VAR_TYPE)
+                                file(APPEND ${_CONFIG_FILE} "set(${_VAR_NAME} \"${_VAR_VALUE}\"
+                                    CACHE ${_VAR_TYPE} \"Initial value from akg_add_pkg\")\n")
+                            else()
+                                file(APPEND ${_CONFIG_FILE} "set(${_VAR_NAME} \"${_VAR_VALUE}\"
+                                    CACHE INTERNAL \"Initial value from akg_add_pkg\")\n")
+                            endif()
+                            message(STATUS "  Cache file: ${_VAR_NAME} = \"${_VAR_VALUE}\"")
+                        endif()
+                    endif()
+
+                    set(_CURRENT_PARAM "${_OPTION}")
+                    set(_IS_COLLECTING TRUE)
+                elseif(_IS_COLLECTING)
+                    set(_CURRENT_PARAM "${_CURRENT_PARAM};${_OPTION}")
+                else()
+                    list(APPEND _DIRECT_OPTIONS "${_OPTION}")
+                endif()
+            endforeach()
+
+            if(_IS_COLLECTING AND NOT "${_CURRENT_PARAM}" STREQUAL "")
+                string(REGEX MATCH "^-D([^:=]+)(:([^:]+))?=(.*)$" _MATCH "${_CURRENT_PARAM}")
+                if(_MATCH)
+                    set(_VAR_NAME "${CMAKE_MATCH_1}")
+                    set(_VAR_TYPE "${CMAKE_MATCH_3}")
+                    set(_VAR_VALUE "${CMAKE_MATCH_4}")
+
+                    if(_VAR_TYPE)
+                        file(APPEND ${_CONFIG_FILE} "set(${_VAR_NAME} \"${_VAR_VALUE}\"
+                            CACHE ${_VAR_TYPE} \"Initial value from akg_add_pkg\")\n")
+                    else()
+                        file(APPEND ${_CONFIG_FILE} "set(${_VAR_NAME} \"${_VAR_VALUE}\"
+                            CACHE INTERNAL \"Initial value from akg_add_pkg\")\n")
+                    endif()
+                    message(STATUS "  Cache file: ${_VAR_NAME} = \"${_VAR_VALUE}\"")
+                endif()
+            endif()
+
             if(${pkg_name}_CFLAGS)
                 set(${pkg_name}_CMAKE_CFLAGS "-DCMAKE_C_FLAGS=${${pkg_name}_CFLAGS}")
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_CMAKE_CFLAGS}")
             endif()
             if(${pkg_name}_CXXFLAGS)
                 set(${pkg_name}_CMAKE_CXXFLAGS "-DCMAKE_CXX_FLAGS=${${pkg_name}_CXXFLAGS}")
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_CMAKE_CXXFLAGS}")
             endif()
-
             if(${pkg_name}_LDFLAGS)
                 if(${pkg_name}_USE_STATIC_LIBS)
                     set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_STATIC_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
                 else()
                     set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_SHARED_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
                 endif()
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_CMAKE_LDFLAGS}")
             endif()
 
-            __exec_cmd(COMMAND ${CMAKE_COMMAND} ${PKG_CMAKE_OPTION} -G ${CMAKE_GENERATOR}
-                ${${pkg_name}_CMAKE_CFLAGS} ${${pkg_name}_CMAKE_CXXFLAGS} ${${pkg_name}_CMAKE_LDFLAGS}
-                ${${pkg_name}_CONFIG_FILE_DIR} ${${pkg_name}_DEPEND_INCLUDE_DIR} ${${pkg_name}_DEPEND_LIB_DIR}
-                -DCMAKE_INSTALL_PREFIX=${${pkg_name}_BASE_DIR} ${${pkg_name}_SOURCE_DIR}/${PKG_CMAKE_PATH}
+            list(APPEND _DIRECT_OPTIONS "-DCMAKE_INSTALL_PREFIX=${${pkg_name}_BASE_DIR}")
+
+            if(${pkg_name}_CONFIG_FILE_DIR)
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_CONFIG_FILE_DIR}")
+            endif()
+            if(${pkg_name}_DEPEND_INCLUDE_DIR)
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_DEPEND_INCLUDE_DIR}")
+            endif()
+            if(${pkg_name}_DEPEND_LIB_DIR)
+                list(APPEND _DIRECT_OPTIONS "${${pkg_name}_DEPEND_LIB_DIR}")
+            endif()
+
+            if(PKG_CMAKE_PATH)
+                set(_SOURCE_PATH "${${pkg_name}_SOURCE_DIR}/${PKG_CMAKE_PATH}")
+                message(STATUS "Building in subdirectory: ${PKG_CMAKE_PATH}")
+            else()
+                set(_SOURCE_PATH "${${pkg_name}_SOURCE_DIR}")
+                message(STATUS "Building in root directory")
+            endif()
+
+            if(PKG_CUSTOM_CMAKE_GENERATOR)
+                set(_CMAKE_GENERATOR ${PKG_CUSTOM_CMAKE_GENERATOR})
+            else()
+                set(_CMAKE_GENERATOR ${CMAKE_GENERATOR})
+            endif()
+
+            __exec_cmd(COMMAND ${CMAKE_COMMAND}
+                -C ${_CONFIG_FILE}
+                ${_DIRECT_OPTIONS}
+                -G ${_CMAKE_GENERATOR}
+                ${_SOURCE_PATH}
                 WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
 
-            __exec_cmd(COMMAND ${CMAKE_COMMAND} --build . --target install -- -j${THNUM}
+            __exec_cmd(COMMAND ${CMAKE_COMMAND} --build . --target install --
                 WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
 
         elseif(PKG_CONFIGURE_COMMAND)
@@ -365,7 +461,7 @@ function(akg_add_pkg pkg_name)
                 ${${pkg_name}_MAKE_CFLAGS} ${${pkg_name}_MAKE_CXXFLAGS} ${${pkg_name}_MAKE_LDFLAGS}
                 --prefix=${${pkg_name}_BASE_DIR}
                 WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
-            __exec_cmd(COMMAND ${CMAKE_MAKE_PROGRAM} ${${pkg_name}_BUILD_OPTION} -j${THNUM}
+            __exec_cmd(COMMAND ${CMAKE_MAKE_PROGRAM} ${${pkg_name}_BUILD_OPTION}
                 WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
             __exec_cmd(COMMAND ${CMAKE_MAKE_PROGRAM} install
                 WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
@@ -382,24 +478,24 @@ function(akg_add_pkg pkg_name)
         find_package(${__FIND_PKG_NAME} ${PKG_VER} QUIET)
         if(${__FIND_PKG_NAME}_FOUND)
             set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
-            message("Found pkg: ${${__FIND_PKG_NAME}_LIBRARIES}")
+            message(STATUS "Found pkg: ${${__FIND_PKG_NAME}_LIBRARIES}")
             return()
         endif()
     endif()
 endfunction()
 
 function(find_python_package out_lib)
-  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if("${PYTHON_EXECUTABLE}" STREQUAL "")
-    set(PYTHON_EXECUTABLE "python3")
-  else()
-    set(PYTHON_EXECUTABLE "${PYTHON_EXECUTABLE}")
-  endif()
+    # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
+    if("${PYTHON_EXECUTABLE}" STREQUAL "")
+        set(PYTHON_EXECUTABLE "python3")
+    else()
+        set(PYTHON_EXECUTABLE "${PYTHON_EXECUTABLE}")
+    endif()
 
-  execute_process(
-          COMMAND "${PYTHON_EXECUTABLE}" -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())"
-          RESULT_VARIABLE result
-          OUTPUT_VARIABLE lib)
-  string(STRIP "${lib}" lib)
-  set(${out_lib} ${lib} PARENT_SCOPE)
+    execute_process(
+        COMMAND "${PYTHON_EXECUTABLE}" -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE lib)
+    string(STRIP "${lib}" lib)
+    set(${out_lib} ${lib} PARENT_SCOPE)
 endfunction()

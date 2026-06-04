@@ -38,7 +38,7 @@ module {
   }
 // CHECK: tensor.empty(%1, %dim) : tensor<32x?x?xf32>
 // CHECK: linalg.generic {indexing_maps = [#map, #map1], iterator_types = ["parallel", "parallel", "parallel"]} ins(%arg0 : tensor<32x?xf32>) outs(%2 : tensor<32x?x?xf32>) {
-// CHECK: tensor.collapse_shape 
+// CHECK: tensor.collapse_shape
 
   // outDimSize > 1
   // inputDimSize < outDimSize
@@ -49,7 +49,7 @@ module {
 // CHECK: tensor.empty(%1, %dim) : tensor<16x2x?x?xf32>
 // CHECK: linalg.generic {indexing_maps = [#map2, #map3], iterator_types = ["parallel", "parallel", "parallel", "parallel"]} ins(%arg0 : tensor<2x?xf32>) outs(%2 : tensor<16x2x?x?xf32>) {
 // CHECK: tensor.collapse_shape
-    
+
   // output type is dynamic
   // inputDimSize == 1
   func.func @Fused_dyn_tile_20_dynamic(%arg0: tensor<1x?xf32>, %arg1: tensor<2xindex>) -> tensor<?x?xf32> {
@@ -69,7 +69,7 @@ module {
 // CHECK: tensor.empty(%1, %3, %dim) : tensor<?x2x?x?xf32>
 // CHECK: linalg.generic {indexing_maps = [#map2, #map3], iterator_types = ["parallel", "parallel", "parallel", "parallel"]} ins(%arg0 : tensor<2x?xf32>) outs(%4 : tensor<?x2x?x?xf32>) {
 // CHECK:  tensor.collapse_shape
-  
+
   // output type is dynamic
   // output type is dynamic
   func.func @Fused_dyn_tile_22_dynamic(%arg0: tensor<?x?xf32>, %arg1: tensor<2xindex>) -> tensor<?x?xf32> {

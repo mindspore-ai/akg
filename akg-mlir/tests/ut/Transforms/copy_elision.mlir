@@ -21,17 +21,17 @@ func.func @test_basic_copy() -> memref<10x20xf32> {
   %c0 = arith.constant 0.0 : f32
   %alloc_src = memref.alloc() : memref<10x20xf32>
   %alloc_dst = memref.alloc() : memref<10x20xf32>
-  
+
   // Initialize source
   affine.for %i = 0 to 10 {
     affine.for %j = 0 to 20 {
       affine.store %c0, %alloc_src[%i, %j] : memref<10x20xf32>
     }
   }
-  
+
   // Copy operation
   memref.copy %alloc_src, %alloc_dst : memref<10x20xf32> to memref<10x20xf32>
-  
+
   return %alloc_dst : memref<10x20xf32>
 }
 
@@ -46,10 +46,10 @@ func.func @test_basic_copy() -> memref<10x20xf32> {
 func.func @test_stride_layout(%arg0: tensor<5x10xf32>) -> memref<5x10xf32> {
   %0 = bufferization.to_memref %arg0 : memref<5x10xf32, strided<[10, 1], offset: ?>>
   %alloc_dst = memref.alloc() : memref<5x10xf32>
-  
+
   // Copy from strided memref to non-strided memref
   memref.copy %0, %alloc_dst : memref<5x10xf32, strided<[10, 1], offset: ?>> to memref<5x10xf32>
-  
+
   return %alloc_dst : memref<5x10xf32>
 }
 
@@ -65,13 +65,13 @@ func.func @test_stride_layout(%arg0: tensor<5x10xf32>) -> memref<5x10xf32> {
 func.func @test_with_collapse(%arg0: tensor<1x1x100xf32>) -> memref<100xf32> {
   %0 = bufferization.to_memref %arg0 : memref<1x1x100xf32, strided<[100, 100, 1], offset: ?>>
   %alloc_temp = memref.alloc() : memref<1x1x100xf32>
-  
+
   // Copy operation
   memref.copy %0, %alloc_temp : memref<1x1x100xf32, strided<[100, 100, 1], offset: ?>> to memref<1x1x100xf32>
-  
+
   // collapse_shape operation
   %collapsed = memref.collapse_shape %alloc_temp [[0, 1, 2]] : memref<1x1x100xf32> into memref<100xf32>
-  
+
   return %collapsed : memref<100xf32>
 }
 
@@ -86,14 +86,14 @@ func.func @test_with_collapse(%arg0: tensor<1x1x100xf32>) -> memref<100xf32> {
 func.func @test_multiple_copies(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32>) -> (memref<8x8xf32>, memref<8x8xf32>) {
   %0 = bufferization.to_memref %arg0 : memref<8x8xf32, strided<[8, 1], offset: ?>>
   %1 = bufferization.to_memref %arg1 : memref<8x8xf32, strided<[8, 1], offset: ?>>
-  
+
   %alloc1 = memref.alloc() : memref<8x8xf32>
   %alloc2 = memref.alloc() : memref<8x8xf32>
   %alloc3 = memref.alloc() : memref<8x8xf32>
-  
+
   // First copy - should be eliminated
   memref.copy %0, %alloc1 : memref<8x8xf32, strided<[8, 1], offset: ?>> to memref<8x8xf32>
-  
+
   // Some computation using alloc1
   %c1 = arith.constant 1.0 : f32
   affine.for %i = 0 to 8 {
@@ -103,13 +103,13 @@ func.func @test_multiple_copies(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32>) 
       affine.store %new_val, %alloc1[%i, %j] : memref<8x8xf32>
     }
   }
-  
+
   // Second copy
   memref.copy %alloc1, %alloc2 : memref<8x8xf32> to memref<8x8xf32>
-  
+
   // Third copy - from strided to non-strided
   memref.copy %1, %alloc3 : memref<8x8xf32, strided<[8, 1], offset: ?>> to memref<8x8xf32>
-  
+
   return %alloc2, %alloc3 : memref<8x8xf32>, memref<8x8xf32>
 }
 
@@ -212,7 +212,7 @@ func.func @test_complex_scenario(
   }
   %7 = bufferization.to_tensor %alloc_7 : memref<1x5100x3072xf32>
   return %5, %6, %7 : tensor<1x5100x3072xbf16>, tensor<1x1x3072xf32>, tensor<1x5100x3072xf32>
-} 
+}
 
 // -----
 
@@ -225,17 +225,17 @@ func.func @test_nested_loop() -> memref<16x16xf32> {
   %alloc_src = memref.alloc() : memref<16x16xf32>
   %alloc_dst = memref.alloc() : memref<16x16xf32>
   %c1 = arith.constant 1.0 : f32
-  
+
   // Initialize source
   affine.for %i = 0 to 16 {
     affine.for %j = 0 to 16 {
       affine.store %c1, %alloc_src[%i, %j] : memref<16x16xf32>
     }
   }
-  
+
   // Copy in nested loop context
   memref.copy %alloc_src, %alloc_dst : memref<16x16xf32> to memref<16x16xf32>
-  
+
   // Use destination after copy
   affine.for %i = 0 to 16 {
     affine.for %j = 0 to 16 {
@@ -244,6 +244,6 @@ func.func @test_nested_loop() -> memref<16x16xf32> {
       affine.store %new_val, %alloc_dst[%i, %j] : memref<16x16xf32>
     }
   }
-  
+
   return %alloc_dst : memref<16x16xf32>
 }

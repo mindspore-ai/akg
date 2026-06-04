@@ -18,8 +18,31 @@ import subprocess
 import re
 import math
 from typing import Optional
+import pathlib
 from pathlib import Path
 
+def _import_torch_mlir():
+    """Import torch-mlir lazily.
+
+    torch-mlir is only required by torch-mlir pipeline functions. Keep this
+    import lazy so that users of pure Python helpers in this module do not need
+    torch-mlir installed.
+    """
+    # pylint: disable=import-outside-toplevel
+    try:
+        from torch_mlir import ir as torch_mlir_ir
+        from torch_mlir.passmanager import PassManager as TorchMlirPassManager
+        from torch_mlir.dialects import torch as torch_dialect
+    except ImportError as exc:
+        raise RuntimeError(
+            "torch_mlir is required for torch-mlir pipeline functions, "
+            "but it is not installed or cannot be imported. Please install "
+            "torch-mlir in the current Python environment, or avoid calling "
+            "run_torch_mlir_to_json() and "
+            "run_torch_mlir_to_linalg_on_tensors()."
+        ) from exc
+
+    return torch_mlir_ir, TorchMlirPassManager, torch_dialect
 
 def find_first_func_name(mlir_text: str) -> Optional[str]:
     pat = re.compile(
@@ -117,70 +140,99 @@ def get_named_op_str(
         print(f"[ERROR] exception: {e}")
         raise
 
-def run_torch_mlir_to_json(torch_mlir_opt: str, file_path: str | Path) -> None:
+def run_torch_mlir_to_json(file_path, output_file):
     """
-    Run: torch-mlir-opt <file_path> --torch-to-json
+    Run torch-to-json pass by using torch-mlir Python wheel package.
 
     Args:
-        torch_mlir_opt: path to torch-mlir-opt executable
-        file_path: input mlir file
+        file_path: input .mlir path.
+        output_file: output info/json file path, for example
+                     "/tmp/kernel_meta/model.info" or "model.info".
 
-    Raises:
-        RuntimeError: if the command fails
+    Returns:
+        Path to the expected output file.
     """
-    file_path = Path(file_path)
-    try:
-        subprocess.run(
-            [torch_mlir_opt, str(file_path), "--torch-to-json"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
+    torch_mlir_ir, torch_mlir_pass_manager, torch_dialect = _import_torch_mlir()
+    file_path = pathlib.Path(file_path)
+    output_file = pathlib.Path(output_file)
+    if not str(output_file):
+        raise ValueError("output_file cannot be empty")
+    output_parent = output_file.parent
+    if str(output_parent) and str(output_parent) != ".":
+        output_parent.mkdir(parents=True, exist_ok=True)
+    output_file_str = str(output_file)
+    if any(ch.isspace() for ch in output_file_str):
+        raise ValueError(
+            f"output_file cannot contain whitespace for MLIR pass pipeline: "
+            f"{output_file_str}"
         )
+    pass_options = [f"output-name={output_file_str}"]
+    mlir_text = file_path.read_text(encoding="utf-8")
+    try:
+        with torch_mlir_ir.Context() as ctx:
+            torch_dialect.register_dialect(ctx)
+            module = torch_mlir_ir.Module.parse(mlir_text)
+            pipeline = (
+                "builtin.module("
+                "func.func("
+                f"torch-to-json{{{' '.join(pass_options)}}}"
+                ")"
+                ")"
+            )
+            print("[INFO] torch-to-json pipeline:")
+            print(pipeline)
+            pm = torch_mlir_pass_manager.parse(pipeline)
+            pm.run(module.operation)
         print("[INFO] torch-mlir to Json success")
-    except subprocess.CalledProcessError as e:
+    except Exception as exc:
         print("[ERROR] torch-to-json failed")
-        raise RuntimeError("torch-to-json failed") from e
+        raise RuntimeError("torch-to-json failed") from exc
+    return output_file
 
-def run_torch_mlir_to_linalg_on_tensors(
-    torch_mlir_opt: str,
-    file_path: str | Path,
-    output_path: str | Path,
-) -> Path:
+def run_torch_mlir_to_linalg_on_tensors(file_path, output_path):
     """
-    Run:
-      torch-mlir-opt <file_path> --torch-backend-to-linalg-on-tensors-backend-pipeline -o <output_path>
+    Run torch backend to linalg-on-tensors backend pipeline by using
+    torch-mlir Python wheel package.
+
+    Equivalent to:
+      torch-mlir-opt <file_path> \
+        --torch-backend-to-linalg-on-tensors-backend-pipeline \
+        -o <output_path>
 
     Args:
-        torch_mlir_opt: path to torch-mlir-opt executable
         file_path: input torch mlir file
-        output_path: output mlir path (e.g. dump_dir/'out_linalg.mlir')
+        output_path: output mlir path, e.g. dump_dir / "{kernel_name}_linalg.mlir"
 
     Returns:
         Path: output_path as Path
 
     Raises:
-        RuntimeError: if the command fails
+        RuntimeError: if the pipeline fails
     """
+    torch_mlir_ir, torch_mlir_pass_manager, torch_dialect = _import_torch_mlir()
     file_path = Path(file_path)
     output_path = Path(output_path)
-
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    mlir_text = file_path.read_text(encoding="utf-8")
     try:
-        subprocess.run(
-            [
-                torch_mlir_opt,
-                str(file_path),
-                "--torch-backend-to-linalg-on-tensors-backend-pipeline",
-                "-o",
-                str(output_path),
-            ],
-            check=True,
-        )
-        print("[INFO] torch-mlir to linalg-on-tensors success")
-    except subprocess.CalledProcessError as e:
-        print("[ERROR] torch-mlir to linalg-on-tensors failed")
-        raise RuntimeError("torch-mlir to linalg-on-tensors failed") from e
+        with torch_mlir_ir.Context() as ctx:
+            torch_dialect.register_dialect(ctx)
+            module = torch_mlir_ir.Module.parse(mlir_text)
+            pipeline = (
+                "builtin.module("
+                "torch-backend-to-linalg-on-tensors-backend-pipeline"
+                ")"
+            )
+            print("[INFO] torch-mlir to linalg-on-tensors pipeline:")
+            print(pipeline)
+            pm = torch_mlir_pass_manager.parse(pipeline)
+            pm.run(module.operation)
+            output_path.write_text(str(module), encoding="utf-8")
 
+        print(f"[INFO] torch-mlir to linalg-on-tensors success: {output_path}")
+    except Exception as exc:
+        print("[ERROR] torch-mlir to linalg-on-tensors failed")
+        raise RuntimeError("torch-mlir to linalg-on-tensors failed") from exc
     return output_path
 
 _VAR_REF_RE = re.compile(r"^(output|input)_\d+$")
