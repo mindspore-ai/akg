@@ -411,18 +411,15 @@ static bool valueDependsOnTarget(Value value, Value target, llvm::DenseSet<Value
     return false;
   }
 
-  if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-    auto opResult = dyn_cast<OpResult>(value);
-    if (opResult) {
-      unsigned resultIdx = opResult.getResultNumber();
-      auto dependsOnYieldOperand = [&](Region &region) {
-        auto yieldOp = dyn_cast<scf::YieldOp>(region.front().getTerminator());
-        if (!yieldOp || resultIdx >= yieldOp.getNumOperands()) {
-          return false;
-        }
-        return valueDependsOnTarget(yieldOp.getOperand(resultIdx), target, visitedValues, visitedOps);
-      };
-      if (dependsOnYieldOperand(ifOp.getThenRegion()) || dependsOnYieldOperand(ifOp.getElseRegion())) {
+  if (auto opResult = dyn_cast<OpResult>(value)) {
+    unsigned resultIdx = opResult.getResultNumber();
+    for (Region &region : defOp->getRegions()) {
+      if (region.empty()) {
+        continue;
+      }
+      auto yieldOp = dyn_cast<scf::YieldOp>(region.front().getTerminator());
+      if (yieldOp && resultIdx < yieldOp.getNumOperands() &&
+          valueDependsOnTarget(yieldOp.getOperand(resultIdx), target, visitedValues, visitedOps)) {
         return true;
       }
     }
@@ -2105,6 +2102,21 @@ static void markTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<mli
   applyTransposeLoopAttrsForOrderPair(band, *info, transposeAttr, linearBand);
 }
 
+static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
+  auto isDerivedStore = [](memref::StoreOp store, memref::LoadOp load) {
+    llvm::DenseSet<Value> visitedValues;
+    llvm::SmallPtrSet<Operation *, 32> visitedOps;
+    return valueDependsOnTarget(store.getValueToStore(), load.getResult(), visitedValues, visitedOps);
+  };
+  if (auto lhsLoad = dyn_cast<memref::LoadOp>(lhs)) {
+    if (auto rhsStore = dyn_cast<memref::StoreOp>(rhs)) return isDerivedStore(rhsStore, lhsLoad);
+  }
+  if (auto rhsLoad = dyn_cast<memref::LoadOp>(rhs)) {
+    if (auto lhsStore = dyn_cast<memref::StoreOp>(lhs)) return isDerivedStore(lhsStore, rhsLoad);
+  }
+  return true;
+}
+
 static SmallVector<mlir::scf::ForOp, 4> extractMemrefLoopOrder(Operation *op, ArrayRef<mlir::scf::ForOp> band) {
   SmallVector<mlir::scf::ForOp, 4> order;
   auto appendIfMatch = [&](Value idx) {
@@ -2167,8 +2179,12 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
     }
 
     mlir::scf::ForOp leafLoop = band.back();
+    mlir::scf::ForOp scanRoot = leafLoop;
+    if (linearBand && band.size() > 1 && isReductionLoop(leafLoop)) {
+      scanRoot = band[band.size() - 2];
+    }
     SmallVector<Operation *, 8> memOps;
-    leafLoop.walk([&](Operation *op) {
+    scanRoot.walk([&](Operation *op) {
       if (isa<memref::LoadOp, memref::StoreOp>(op)) {
         memOps.push_back(op);
       }
@@ -2177,6 +2193,9 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
     for (size_t i = 0; i < memOps.size(); ++i) {
       SmallVector<mlir::scf::ForOp, 4> lhsOrder = extractMemrefLoopOrder(memOps[i], band);
       for (size_t j = i + 1; j < memOps.size(); ++j) {
+        if (!memOpsMayFormTransposePair(memOps[i], memOps[j])) {
+          continue;
+        }
         SmallVector<mlir::scf::ForOp, 4> rhsOrder = extractMemrefLoopOrder(memOps[j], band);
         markTransposeOrderPair(band, lhsOrder, rhsOrder, transposeAttr, linearBand);
       }
