@@ -137,13 +137,13 @@ def reduce_str(inputs, output, attr, op_type):
     if not axis:
         s = (
             f"{name} = np.{op_type}({in0}.astype(np.float32) if {in0}.dtype "
-            f"== np.float16 or {in0}.dtype == bfloat16 else {in0}, "
+            f"== np.float16 or {in0}.dtype.name == 'bfloat16' else {in0}, "
             f"keepdims={keepdims}).astype({in0}.dtype)"
         )
     else:
         s = (
             f"{name} = np.{op_type}({in0}.astype(np.float32) if {in0}.dtype "
-            f"== np.float16 or {in0}.dtype == bfloat16 else {in0}, "
+            f"== np.float16 or {in0}.dtype.name == 'bfloat16' else {in0}, "
             f"axis=tuple({axis}), keepdims={keepdims})"
             f".astype({in0}.dtype); {name} = np.reshape({name}, {output[0]['shape']}) "
         )
