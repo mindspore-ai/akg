@@ -1357,7 +1357,7 @@ class NodeFactory:
                 }
 
             # 执行检查
-            passed, error_message, errors = await checker_instance.check(code, state)
+            passed, error_message, errors = checker_instance.check(code, state)
 
             # 记录到 Trace（write_record: 不自增 step，与 kernel_gen 共享编号）
             check_result = {

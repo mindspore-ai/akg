@@ -2767,6 +2767,23 @@ if __name__ == "__main__":
             # 拼接项目生成日志和验证日志
             verify_log = project_gen_log + verify_log
 
+            # The verify script (kernel_verify_template_refactored.j2) drops
+            # a structured per-case sidecar at verify_dir/verify_result.json.
+            # Surface it via `self.last_verify_sidecar` so callers that want
+            # the per-case shape (per_case / failed_indices / error_source /
+            # failure_kind) can read it without an extra disk hop. The
+            # (bool, str) tuple return stays unchanged for backward compat.
+            self.last_verify_sidecar = None
+            self.last_verify_dir = verify_dir
+            sidecar_path = os.path.join(verify_dir, "verify_result.json")
+            if os.path.isfile(sidecar_path):
+                try:
+                    with open(sidecar_path, "r", encoding="utf-8") as _fp:
+                        self.last_verify_sidecar = json.load(_fp)
+                except Exception as _e:
+                    logger.warning(
+                        f"[{self.op_name}] failed to read verify_result.json: {_e}")
+
             # 保存验证结果到JSONL文件
             self._save_verification_result_to_jsonl(verify_dir, current_step, verify_res, verify_log)
 
