@@ -6,6 +6,7 @@ import functools
 import traceback
 import yaml
 import json
+from inspect import signature, Parameter
 from typing import Union, List, Tuple, Any
 
 # Framework imports
@@ -37,6 +38,40 @@ from kernel_eval.utils.param_builder import ParamBuilder
 
 # Golden reference imports
 import golden
+
+def _to_cpu_golden_dtype(tensor: torch.Tensor) -> torch.Tensor:
+    """Move tensor to CPU for golden while preserving non-floating dtypes."""
+    tensor_cpu = tensor.detach().cpu()
+    return tensor_cpu.double() if tensor_cpu.is_floating_point() else tensor_cpu
+
+def _to_cpu_native_dtype(tensor: torch.Tensor) -> torch.Tensor:
+    """Move tensor to CPU while preserving its native dtype."""
+    return tensor.detach().cpu()
+
+def _map_tensor_values(value, tensor_fn):
+    if isinstance(value, torch.Tensor):
+        return tensor_fn(value)
+    if isinstance(value, list):
+        return [_map_tensor_values(item, tensor_fn) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_map_tensor_values(item, tensor_fn) for item in value)
+    return value
+
+def _build_params_from_signature(func, input_tensors, case_attrs):
+    """Build kwargs the same way kernel_eval does after golden.get_input."""
+    params = {}
+    tensor_idx = 0
+    sig = signature(func)
+    for param_name, param in sig.parameters.items():
+        annotation = str(param.annotation) if param.annotation != Parameter.empty else ""
+        if "Tensor" in annotation:
+            params[param_name] = input_tensors[tensor_idx] if tensor_idx < len(input_tensors) else None
+            tensor_idx += 1
+        elif param_name in case_attrs:
+            params[param_name] = case_attrs[param_name]
+        elif param.default != Parameter.empty:
+            params[param_name] = param.default
+    return params
 
 # Timeout decorator
 def timeout_handler(signum, frame):
@@ -91,7 +126,7 @@ def verify_implementations():
     ignore_output_indices = {{ ignore_output_indices }}
 
     # Load cases using CANN-Bench native CannCaseLoader
-    data_generator = DataGenerator(seed=42)
+    data_generator = DataGenerator()
     param_builder = ParamBuilder()
 
     # Find golden function name from schema
@@ -101,6 +136,7 @@ def verify_implementations():
         golden_fn = getattr(golden, golden_fn_name.lower(), None)
     if golden_fn is None:
         raise AttributeError(f"Golden function '{golden_fn_name}' not found in golden.py")
+    get_input_fn = getattr(golden, "get_input", None)
 
     # Build proto_inputs list for ParamBuilder
     proto_inputs = []
@@ -125,7 +161,7 @@ def verify_implementations():
     def verify_case(case, case_idx):
         input_shapes = case.get("input_shape", [])
         dtypes = case.get("dtype", [])
-        attrs = case.get("attrs", {})
+        attrs = case.get("attrs", {}) or {}
         value_ranges = case.get("value_range", [])
 
         # Use CANN-Bench native DataGenerator for input generation
@@ -133,41 +169,57 @@ def verify_implementations():
             input_shapes, dtypes, value_ranges
         )
 
-        # Build kwargs using CANN-Bench native ParamBuilder
-        # Keep CPU copies for golden (fp64), move to device for impl
-        input_kwargs_cpu = param_builder.build_params_by_proto_order(
-            input_tensors, proto_inputs, case_attrs=attrs
-        )
+        if get_input_fn is not None:
+            get_input_kwargs = param_builder.build_params_by_proto_order(
+                input_tensors, proto_inputs, case_attrs=attrs
+            )
+            if "skip2_exist" not in get_input_kwargs:
+                get_input_kwargs["skip2_exist"] = attrs.get("skip2_exist", True)
+            input_tensors = get_input_fn(**get_input_kwargs)
+            if isinstance(input_tensors, tuple):
+                input_tensors = list(input_tensors)
 
-        # Golden: run on CPU with fp64 precision
-        # Convert all tensor inputs to CPU fp64 for golden
-        golden_kwargs = {}
-        for key, val in input_kwargs_cpu.items():
-            if isinstance(val, torch.Tensor):
-                golden_kwargs[key] = val.detach().cpu().double()
-            elif isinstance(val, list):
-                golden_kwargs[key] = [v.detach().cpu().double() if isinstance(v, torch.Tensor) else v for v in val]
-            else:
-                golden_kwargs[key] = val
+        if get_input_fn is not None:
+            input_kwargs_cpu = _build_params_from_signature(golden_fn, input_tensors, attrs)
+        else:
+            input_kwargs_cpu = param_builder.build_params_by_proto_order(
+                input_tensors, proto_inputs, case_attrs=attrs
+            )
+
+        # Golden: run on CPU. Upcast floating tensors to fp64, but keep integer/bool
+        # dtypes unchanged; integer ops like gcd and index-based ops require them.
+        golden_kwargs = {
+            key: _map_tensor_values(val, _to_cpu_golden_dtype)
+            for key, val in input_kwargs_cpu.items()
+        }
 
         golden_outputs = golden_fn(**golden_kwargs)
         if not isinstance(golden_outputs, (list, tuple)):
             golden_outputs = [golden_outputs]
         # Keep golden outputs on CPU in fp64
 
-        # Impl: run on device with native dtype
-        # Move input tensors to device
-        for i, t in enumerate(input_tensors):
-            if t is None:
-                continue
-            if isinstance(t, list):
-                input_tensors[i] = [tt.to(device) if tt is not None else None for tt in t]
-            else:
-                input_tensors[i] = t.to(device)
+        # Native CPU reference: same dtype as impl, used by CANN-Bench for
+        # small-value and cancellation-domain error accounting.
+        native_kwargs = {
+            key: _map_tensor_values(val, _to_cpu_native_dtype)
+            for key, val in input_kwargs_cpu.items()
+        }
+        native_outputs = golden_fn(**native_kwargs)
+        if not isinstance(native_outputs, (list, tuple)):
+            native_outputs = [native_outputs]
 
-        input_kwargs_device = param_builder.build_params_by_proto_order(
-            input_tensors, proto_inputs, case_attrs=attrs
-        )
+        # Impl: run on device with native dtype
+        input_tensors_device = [
+            _map_tensor_values(t, lambda tensor: tensor.to(device))
+            for t in input_tensors
+        ]
+
+        if get_input_fn is not None:
+            input_kwargs_device = _build_params_from_signature(golden_fn, input_tensors_device, attrs)
+        else:
+            input_kwargs_device = param_builder.build_params_by_proto_order(
+                input_tensors_device, proto_inputs, case_attrs=attrs
+            )
 
         # Run implementation
         try:
@@ -188,6 +240,7 @@ def verify_implementations():
             output=impl_outputs,
             golden=golden_outputs,
             dtype=primary_dtype,
+            native_output=native_outputs,
             ignore_output_indices=ignore_output_indices,
             custom_thresholds=custom_thresholds,
         )
