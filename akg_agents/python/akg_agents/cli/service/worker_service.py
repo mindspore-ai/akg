@@ -237,10 +237,17 @@ class WorkerService:
         env["WORKER_HOST"] = str(host)
         env["WORKER_PORT"] = str(port)
 
+        # stdin=DEVNULL is what lets this Popen detach cleanly when the
+        # akg_cli that's calling us was itself spawned over SSH — without
+        # it the child inherits the SSH channel 0 fd, setsid orphans the
+        # group but ssh still sees an open channel and won't return.
+        # See ar_cli.py:cmd_worker_start in claude-autoresearch for the
+        # upstream reference (same pattern).
         process = subprocess.Popen(
             [sys.executable, str(worker_module)],
             stdout=log_f,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             env=env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )

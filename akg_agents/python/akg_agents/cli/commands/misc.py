@@ -69,6 +69,15 @@ def register_misc_commands(
             False, "--start", help="启动 Worker Service（后台进程）"
         ),
         stop: bool = typer.Option(False, "--stop", help="停止 Worker Service"),
+        status: bool = typer.Option(
+            False, "--status",
+            help="探测 /api/v1/status（远端模式走本机 tunnel）",
+        ),
+        reconnect_tunnel: bool = typer.Option(
+            False, "--reconnect-tunnel",
+            help="只重连本机 ssh -L tunnel，不重启远端 daemon。"
+                 "long-running batch 中 tunnel 静默断开时使用。仅 --remote-host 模式有效。",
+        ),
         backend: str | None = typer.Option(
             None, "--backend", help="后端类型（cuda/ascend）。可省略，默认 cuda"
         ),
@@ -80,14 +89,30 @@ def register_misc_commands(
         ),
         host: str = typer.Option("0.0.0.0", "--host", help="监听地址（默认 0.0.0.0）"),
         port: int = typer.Option(9001, "--port", help="监听端口（默认 9001）"),
+        remote_host: str | None = typer.Option(
+            None, "--remote-host",
+            help="按 alias SSH 调起远端 worker + 本机 ssh -L tunnel。"
+                 "alias 在 --remote-config 指向的 yaml 里 "
+                 "`remote_worker.hosts.<alias>` 定义。",
+        ),
+        remote_config: str | None = typer.Option(
+            None, "--remote-config",
+            help="读 remote_worker.hosts 的 yaml 路径。默认 ./config.yaml。",
+        ),
     ) -> None:
-        """启动/停止 Worker Service（后台进程）"""
+        """启动/停止 Worker Service（本地直跑或经 --remote-host SSH 远端跑）"""
         akg_console = AKGConsole(console)
         print_logo_once(akg_console)
 
-        if start == stop:
+        actions = sum(1 for x in (start, stop, status, reconnect_tunnel) if x)
+        if actions != 1:
             akg_console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 必须且只能指定 --start 或 --stop 之一"
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 必须且只能指定 --start / --stop / --status / --reconnect-tunnel 之一"
+            )
+            raise typer.Exit(code=2)
+        if reconnect_tunnel and not remote_host:
+            akg_console.print(
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --reconnect-tunnel 只在 --remote-host 模式下有意义"
             )
             raise typer.Exit(code=2)
 
@@ -97,6 +122,49 @@ def register_misc_commands(
             )
             raise typer.Exit(code=2)
 
+        # --- Remote dispatch branch -----------------------------------
+        if remote_host:
+            from akg_agents.cli.service import worker_remote
+            host_cfg = worker_remote.load_remote_host_config(
+                remote_host, remote_config,
+            )
+            if host_cfg is None:
+                akg_console.print(
+                    f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] "
+                    f"未在 {remote_config or './config.yaml'} 找到 "
+                    f"remote_worker.hosts.{remote_host}"
+                )
+                raise typer.Exit(code=2)
+
+            if status:
+                rc = worker_remote.dispatch_status(remote_host, host_cfg, port)
+                raise typer.Exit(code=rc)
+            if reconnect_tunnel:
+                rc = worker_remote.dispatch_reconnect_tunnel(
+                    remote_host, host_cfg, port,
+                )
+                raise typer.Exit(code=rc)
+            if stop:
+                rc = worker_remote.dispatch_stop(remote_host, host_cfg, port)
+                raise typer.Exit(code=rc)
+            # start: same defaults as local branch
+            backend_n = (backend or os.environ.get("WORKER_BACKEND") or
+                         "cuda").strip().lower()
+            arch_n = (arch or os.environ.get("WORKER_ARCH") or "a100").strip()
+            rc = worker_remote.dispatch_start(
+                remote_host, host_cfg,
+                backend=backend_n, arch=arch_n,
+                devices=devices, port=port,
+            )
+            raise typer.Exit(code=rc)
+
+        # --- Local branch ---------------------------------------------
+        if status:
+            from akg_agents.cli.service import worker_remote
+            rc = worker_remote.dispatch_status(
+                "local", {"ssh_alias": "local"}, port,
+            )
+            raise typer.Exit(code=rc)
         if stop:
             services.worker_service.stop(akg_console, port=port)
             return

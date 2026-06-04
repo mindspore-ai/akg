@@ -307,7 +307,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                                 )
                                 break
 
-                            passed, error_msg, _ = await checker.check(seed_code)
+                            passed, error_msg, _ = checker.check(seed_code)
                             if not passed:
                                 logger.warning(
                                     f"[AutoresearchWorkflow] Static check failed "
