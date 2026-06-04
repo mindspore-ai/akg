@@ -175,7 +175,7 @@ class CodeChecker:
     # 主入口
     # ------------------------------------------------------------------
 
-    async def check(self, code: str, task_info: Optional[dict] = None) -> Tuple[bool, str, List[Dict]]:
+    def check(self, code: str, task_info: Optional[dict] = None) -> Tuple[bool, str, List[Dict]]:
         """
         检查代码（纯静态检查，不调用 LLM）
 
