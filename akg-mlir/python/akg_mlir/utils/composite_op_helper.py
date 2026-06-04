@@ -650,7 +650,10 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         tensor_name = input_desc[0]["tensor_name"]
         infos["input_order"][tensor_name] = idx
-        commands.append(f"{tensor_name} = np.array(input_dict.get('{tensor_name}'))")
+        if not input_desc[0]["shape"] and "int" in input_desc[0].get("data_type", ""):
+            commands.append(f"{tensor_name} = int(np.array(input_dict.get('{tensor_name}')).item())")
+        else:
+            commands.append(f"{tensor_name} = np.array(input_dict.get('{tensor_name}'))")
 
         if not infos["gen_data"] and idx < len(input_for_mod):
             infos["input_dict"][tensor_name] = input_for_mod[idx]
@@ -659,8 +662,12 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
-        item = _gen_input_item(tensor_name, infos, shape,
-                               dtype, csr_idx_pair, input_mean_value)
+        if "value" in input_desc[0]:
+            item = np.full(shape, input_desc[0]["value"],
+                           dtype=torch_normalize_dtype(dtype))
+        else:
+            item = _gen_input_item(tensor_name, infos, shape,
+                                   dtype, csr_idx_pair, input_mean_value)
 
         if target == "cpu" and tensor_name in infos["need_pack_b"].keys() and \
                 infos["need_pack_b"][tensor_name]:

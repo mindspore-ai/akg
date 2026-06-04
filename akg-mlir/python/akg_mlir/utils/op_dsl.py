@@ -1258,5 +1258,11 @@ def get_op_dsl_torch_mlir():
             get_input(inputs[1][0]),
             get_input(inputs[2][0]),
         ),
+        "Torch.aten.gather": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.take_along_axis("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[2][0])}, "
+            f"axis={get_input(inputs[1][0])})"
+        ),
     }
     return op_dsl
