@@ -133,7 +133,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 // the reshape cannot be fused with the generic op by collapsing the op
 // dimensions since the indexing maps will have to contain mods and divs
 // to preserve the accesses pattern. When no dimensions of the iteration
-// space are collapsable and empty vector is returned.
+// space are collapsible and empty vector is returned.
 static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
   GenericOp genericOp, OpOperand *fusableOperand, ArrayRef<ReassociationIndices> reassociation) {
   // Some basic checks for this fusion to be valid.
