@@ -25,7 +25,7 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg.akgAscendLaunch import akg_ascend_run
+from akg.ascend_launch import akg_ascend_run
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
 
@@ -65,9 +65,9 @@ def get_block_dim_from_mlir(mlir_path):
         text = f.read()
     match = _BLOCK_DIM_MLIR_RE.search(text)
     if not match:
-        raise ValueError(
-            f"No hacc.block_dim = <n> : i64 attribute found in {mlir_path}"
-        )
+        logging.error("get block number failed, No hacc.block_dim = <n> : i64 attribute found in %s, "
+                      "using 48 as default", mlir_path)
+        return 48
     return int(match.group(1))
 
 def set_ascend_info(core_type, title_dict):
@@ -205,7 +205,9 @@ def bisheng_compile(input_file,
                     enable_bin_relocation=False,
                     block_dim=40,
                     dump_ir=False,
-                    dump_ir_path=None):
+                    dump_ir_path=None,
+                    arch=None,
+                    ):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
@@ -228,12 +230,13 @@ def bisheng_compile(input_file,
         input_file,
         "-o",
         output_file,
-        f"-block-dim={block_dim}",
-        "-disable-auto-cv-work-space-manage"
+        f"-block-dim={block_dim}"
     ]
 
     if enable_hfusion_compile:
         compile_cmd.append("-enable-hfusion-compile")
+    else:
+        compile_cmd.append("-disable-hivm-tensor-compile")
     if enable_hivm_compile:
         compile_cmd.append("-enable-hivm-compile")
     if enable_auto_multi_buffer:
@@ -243,6 +246,12 @@ def bisheng_compile(input_file,
     if dump_ir:
         compile_cmd.append("-mlir-print-ir-after-all")
 
+    if isinstance(arch, str) and (
+        arch.startswith("Ascend910_95") or arch.startswith("Ascend950DT") or arch.startswith("Ascend950PR")
+    ):
+        compile_cmd.append(f"-target={arch}")
+    else:
+        compile_cmd.append("-disable-auto-cv-work-space-manage")
 
     logging.debug("exec command: %s", compile_cmd)
     try:
@@ -322,6 +331,7 @@ def ascend_compile(
         block_dim=block_dim,
         dump_ir=dump_ir,
         dump_ir_path=dump_ir_path,
+        arch=arch,
     )
 
 

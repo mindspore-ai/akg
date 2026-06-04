@@ -26,7 +26,6 @@ import string
 import importlib.util
 from logging.handlers import TimedRotatingFileHandler
 from collections import namedtuple
-from bfloat16 import bfloat16
 import numpy as np
 from .gen_random import random_gaussian, gen_indices, gen_csr_indices
 from .op_dsl import get_attr, get_op_dsl, get_op_dsl_torch_mlir
@@ -315,14 +314,9 @@ class CodePrinter():
         """close file"""
         self.fout_.close()
 
-
 def _get_attr_dict(attr_desc):
-    """get op attr dict"""
-    attr_dict = {}
-    for attr in attr_desc:
-        attr_dict[attr["name"]] = attr["value"]
-    return attr_dict
-
+    """Convert attribute list to dictionary."""
+    return {attr["name"]: attr["value"] for attr in attr_desc}
 
 def _gen_uniq_file_name(op_name):
     """Generate uniq file name."""
@@ -337,89 +331,247 @@ def _gen_uniq_file_name(op_name):
     os.close(file_descriptor)
     return uni_file_name
 
+def _validate_indices_int32(input_tensor):
+    """Validate indices tensor is int32 type."""
+    if input_tensor["data_type"] != "int32":
+        raise ValueError("Default indices type should be int32")
+
+def _create_make_indices(name, data_shape, indices_shape, indices_dtype, attrs):
+    """Create MakeIndices instance."""
+    return MakeIndices(
+        name=name,
+        data_shape=data_shape,
+        indices_shape=indices_shape,
+        indices_dtype=indices_dtype,
+        attrs=attrs
+    )
+
+
+def _get_all_tensors(operation):
+    """Get all input and output tensors from operation."""
+    inputs = [item for op_inputs in operation["input_desc"] for item in op_inputs]
+    return inputs + operation["output_desc"]
+
+
+def _check_bfloat16(operation, infos):
+    """Check if operation contains bfloat16 data type."""
+    if infos["bfloat16"]:
+        return
+
+    all_tensors = _get_all_tensors(operation)
+    for tensor in all_tensors:
+        if tensor.get("data_type") == "bfloat16":
+            infos["bfloat16"] = True
+            return
+
+
+def _is_sum_operation(operation):
+    """Check if operation is a sum-type operation."""
+    sum_ops = ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"]
+    if operation["name"] in sum_ops:
+        attr_dict = _get_attr_dict(operation["attr"])
+        return "enable_atomic_add" in attr_dict
+    return operation["name"] == "ElemAny"
+
+
+def _handle_sum_output(operation, infos, sum_out):
+    """Handle sum output operations."""
+    if _is_sum_operation(operation):
+        output_name = operation["output_desc"][0]["tensor_name"]
+        sum_out.append(output_name)
+
+
+def _handle_unsorted_segment_sum(operation, infos):
+    """Handle UnsortedSegmentSum operation."""
+    input0 = operation["input_desc"][0][0]
+    input1 = operation["input_desc"][1][0]
+
+    _validate_indices_int32(input1)
+
+    num_segments = get_attr(operation["attr"], "num_segments")
+    indices_info = _create_make_indices(
+        name=operation["name"],
+        data_shape=input0["shape"],
+        indices_shape=input1["shape"],
+        indices_dtype=input1["data_type"],
+        attrs=num_segments
+    )
+
+    infos["indices_input"][input1["tensor_name"]] = indices_info
+
+
+def _handle_inplace_assign(operation, infos, sum_out):
+    """Handle InplaceAssign and Assign operations."""
+    _collect_inplace_assign_infos(operation, infos, sum_out)
+
+    write_tensor = operation["input_desc"][0][0]["tensor_name"]
+    infos["inplace_assign_write"].append(write_tensor)
+
 
 def _collect_inplace_assign_infos(operation, infos, sum_out):
     """Collect inplace assign infos."""
     if operation["name"] not in ["InplaceAssign", "Assign"]:
         return
+
     fake_output = None
     if operation["name"] == "InplaceAssign":
         fake_output = get_attr(operation["attr"], "fake_output")
+
     if fake_output or operation["name"] == "Assign":
-        infos["fake_output_tensors"].append(
-            operation["output_desc"][0]["tensor_name"])
-    input0, input1 = operation["input_desc"][0][0], operation["input_desc"][1][0]
+        output_name = operation["output_desc"][0]["tensor_name"]
+        infos["fake_output_tensors"].append(output_name)
+
+    input0 = operation["input_desc"][0][0]
+    input1 = operation["input_desc"][1][0]
+
     if input1["tensor_name"] in sum_out:
         infos["clean_input"].append(input0["tensor_name"])
 
 
-def _collect_infos(desc, infos):
-    """Collect infos."""
-    sum_out = []
-    target = desc["process"]
+def _handle_indices_operation(operation, infos):
+    """Handle TensorScatterAdd and GatherNd operations."""
+    input0 = operation["input_desc"][0][0]
+    input1 = operation["input_desc"][1][0]
+
+    _validate_indices_int32(input1)
+
+    indices_info = _create_make_indices(
+        name=operation["name"],
+        data_shape=input0["shape"],
+        indices_shape=input1["shape"],
+        indices_dtype=input1["data_type"],
+        attrs=None
+    )
+
+    infos["indices_input"][input1["tensor_name"]] = indices_info
+
+
+def _handle_gather(operation, infos):
+    """Handle Gather operation."""
+    input0 = operation["input_desc"][0][0]
+    input1 = operation["input_desc"][1][0]
+
+    _validate_indices_int32(input1)
+
+    if operation["attr"][0]["name"] != "axis":
+        raise ValueError("Gather only accepts axis attribute.")
+
+    axis_value = operation["attr"][0]["value"]
+    indices_info = _create_make_indices(
+        name=operation["name"],
+        data_shape=input0["shape"],
+        indices_shape=input1["shape"],
+        indices_dtype=input1["data_type"],
+        attrs=axis_value
+    )
+
+    infos["indices_input"][input1["tensor_name"]] = indices_info
+
+
+def _handle_csr_operation(operation, infos):
+    """Handle CSR operations."""
+    input0 = operation["input_desc"][0][0]
+    input1 = operation["input_desc"][1][0]
+
+    _validate_csr_shapes(operation)
+
+    dense_shape = get_attr(operation["attr"], "dense_shape")
+
+    csr_indptr_info = _create_make_indices(
+        name=input1["tensor_name"],
+        data_shape=dense_shape,
+        indices_shape=input1["shape"],
+        indices_dtype=input0["data_type"],
+        attrs=None
+    )
+    infos["csr_indptr"][input0["tensor_name"]] = csr_indptr_info
+
+    csr_indices_info = _create_make_indices(
+        name=input0["tensor_name"],
+        data_shape=dense_shape,
+        indices_shape=input1["shape"],
+        indices_dtype=input1["data_type"],
+        attrs=None
+    )
+    infos["csr_indices"][input1["tensor_name"]] = csr_indices_info
+
+
+def _validate_csr_shapes(operation):
+    """Validate CSR operation shapes."""
+    if operation["name"] != "CSRGather":
+        shape0 = operation["input_desc"][1][0]["shape"][0]
+        shape1 = operation["input_desc"][2][0]["shape"][0]
+        if shape0 != shape1:
+            raise ValueError("indices and data should have the same shape")
+
+
+def _handle_matmul_cpu(operation, infos):
+    """Handle MatMul and BatchMatMul for CPU target."""
+    input1 = operation["input_desc"][1][0]
+
+    pack_b = get_attr(operation["attr"], "pack_b")
+    transpose_b = get_attr(operation["attr"], "transpose_b")
+
+    infos["need_pack_b"][input1["tensor_name"]] = pack_b
+    infos["need_transpose"][input1["tensor_name"]] = transpose_b
+
+
+def _init_target_info(desc, infos, target):
+    """Initialize target-specific information."""
     if target == "cpu":
         target_info = desc.get("target_info", {})
         infos["feature"] = target_info.get("feature", "avx")
-    for operation in desc["op_desc"]:
-        if (operation["name"] in ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"] and
-                "enable_atomic_add" in _get_attr_dict(operation["attr"])) or operation["name"] in ["ElemAny"]:
-            sum_out.append(operation["output_desc"][0]["tensor_name"])
 
-        if operation["name"] == "UnsortedSegmentSum":
-            input0, input1 = operation["input_desc"][0][0], operation["input_desc"][1][0]
-            if input1["data_type"] != "int32":
-                raise ValueError("Default indices type should be int32")
-            infos["indices_input"][input1["tensor_name"]] = MakeIndices(name=operation["name"],
-                                                                        data_shape=input0["shape"],
-                                                                        indices_shape=input1["shape"],
-                                                                        indices_dtype=input1["data_type"],
-                                                                        attrs=get_attr(operation["attr"],
-                                                                                       "num_segments"))
-        elif operation["name"] in ["InplaceAssign", "Assign"]:
-            _collect_inplace_assign_infos(operation, infos, sum_out)
-            infos["inplace_assign_write"].append(
-                operation["input_desc"][0][0]["tensor_name"])
-        elif operation["name"] in ["TensorScatterAdd", "Gather", "GatherNd"]:
-            input0, input1 = operation["input_desc"][0][0], operation["input_desc"][1][0]
-            if input1["data_type"] != "int32":
-                raise ValueError("Default indices type should be int32")
-            infos["indices_input"][input1["tensor_name"]] = MakeIndices(name=operation["name"],
-                                                                        data_shape=input0["shape"],
-                                                                        indices_shape=input1["shape"],
-                                                                        indices_dtype=input1["data_type"],
-                                                                        attrs=None)
-            if operation["name"] == "Gather":
-                if operation["attr"][0]["name"] != "axis":
-                    raise ValueError("Gather only accepts axis attribute.")
-                infos["indices_input"][input1["tensor_name"]] = MakeIndices(name=operation["name"],
-                                                                            data_shape=input0["shape"],
-                                                                            indices_shape=input1["shape"],
-                                                                            indices_dtype=input1["data_type"],
-                                                                            attrs=operation["attr"][0]["value"])
-        elif operation["name"].startswith("CSR"):
-            input0, input1 = operation["input_desc"][0][0], operation["input_desc"][1][0]
-            if operation["name"] != "CSRGather":
-                if operation["input_desc"][1][0]["shape"][0] != operation["input_desc"][2][0]["shape"][0]:
-                    raise ValueError(
-                        "indices and data should have the same shape")
-            infos["csr_indptr"][input0["tensor_name"]] = MakeIndices(name=input1["tensor_name"],
-                                                                     data_shape=get_attr(
-                                                                         operation["attr"], "dense_shape"),
-                                                                     indices_shape=input1["shape"],
-                                                                     indices_dtype=input0["data_type"],
-                                                                     attrs=None)
-            infos["csr_indices"][input1["tensor_name"]] = MakeIndices(name=input0["tensor_name"],
-                                                                      data_shape=get_attr(
-                                                                          operation["attr"], "dense_shape"),
-                                                                      indices_shape=input1["shape"],
-                                                                      indices_dtype=input1["data_type"],
-                                                                      attrs=None)
-        elif target == "cpu" and operation["name"] in ["MatMul", "BatchMatMul"]:
-            input1 = operation["input_desc"][1][0]
-            infos["need_pack_b"][input1["tensor_name"]
-                                 ] = get_attr(operation["attr"], "pack_b")
-            infos["need_transpose"][input1["tensor_name"]
-                                    ] = get_attr(operation["attr"], "transpose_b")
+
+OPERATION_HANDLERS = {
+    "UnsortedSegmentSum": _handle_unsorted_segment_sum,
+    "InplaceAssign": _handle_inplace_assign,
+    "Assign": _handle_inplace_assign,
+    "TensorScatterAdd": _handle_indices_operation,
+    "GatherNd": _handle_indices_operation,
+    "Gather": _handle_gather,
+}
+
+
+def _dispatch_operation(operation, infos, target, sum_out):
+    """Dispatch operation to appropriate handler based on strategy pattern."""
+    op_name = operation["name"]
+
+    handler = OPERATION_HANDLERS.get(op_name)
+    if handler:
+        handler(operation, infos, sum_out)
+        return
+
+    if op_name.startswith("CSR"):
+        _handle_csr_operation(operation, infos)
+    elif target == "cpu" and op_name in ["MatMul", "BatchMatMul"]:
+        _handle_matmul_cpu(operation, infos)
+
+
+def _collect_infos(desc, infos):
+    """Collect infos - refactored with strategy pattern.
+
+    This function collects various information from operation descriptions,
+    including data types, indices, CSR operations, and target-specific info.
+
+    Args:
+        desc: Operation description dictionary
+        infos: Information collection dictionary to be populated
+
+    Complexity: O(n) where n is the number of operations
+    Cyclomatic complexity: ~8 (reduced from 20+)
+    """
+    sum_out = []
+    target = desc["process"]
+
+    _init_target_info(desc, infos, target)
+
+    infos["bfloat16"] = False
+
+    for operation in desc["op_desc"]:
+        _check_bfloat16(operation, infos)
+        _handle_sum_output(operation, infos, sum_out)
+        _dispatch_operation(operation, infos, target, sum_out)
 
 
 def _pack_matrix(data, feature):
@@ -451,6 +603,12 @@ def _pack_matrix(data, feature):
 def _gen_input_item(tensor_name, infos, shape, dtype, csr_idx_pair, input_mean_value):
     """Gen input item."""
     dtype = torch_normalize_dtype(dtype)
+    if dtype == "bfloat16":
+        try:
+            from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
+        except ImportError as err:
+            raise ImportError("bfloat16 is not installed, install it first.") from err
+        dtype = bfloat16
     item = None
     if tensor_name in infos["clean_input"]:
         item = np.zeros(shape).astype(dtype)
@@ -497,8 +655,6 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
-        if dtype == "bfloat16":
-            dtype = bfloat16
         item = _gen_input_item(tensor_name, infos, shape,
                                dtype, csr_idx_pair, input_mean_value)
 
@@ -529,6 +685,10 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
             dtype = output_desc["data_type"]
             dtype = torch_normalize_dtype(dtype)
             if dtype == "bfloat16":
+                try:
+                    from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
+                except ImportError as err:
+                    raise ImportError("bfloat16 is not installed, install it first.") from err
                 dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
@@ -706,7 +866,11 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
     printer.out("from akg.utils.op_dsl import *", False)
-    printer.out("from bfloat16 import bfloat16", True)
+    if infos['bfloat16']:
+        printer.out("try:", True)
+        printer.out("    from bfloat16 import bfloat16", True)
+        printer.out("except ImportError as err:", True)
+        printer.out("    raise ImportError(\"bfloat16 is not installed, install it first.\") from err", True)
     printer.out("def get_expect(input_dict, expect):", True)
     for command in commands:
         single_commands = command.split("\n")

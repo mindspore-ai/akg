@@ -23,7 +23,7 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg.akgAscendLaunch import get_host_functions, get_device_function, torch_launch
+from .ascend_launch import get_host_functions, get_device_function, torch_launch
 sys.setdlopenflags(flags)
 
 logging.basicConfig(level=logging.INFO,

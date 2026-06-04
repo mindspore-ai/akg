@@ -1,1 +1,3 @@
 https://gitee.com/mirrors/LLVM/repository/archive/
+https://github.com/llvm/llvm-project/archive/llvmorg-
+https://gitee.com/mirrors/LLVM/repository/archive/llvmorg-

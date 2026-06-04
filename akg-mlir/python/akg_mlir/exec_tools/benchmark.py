@@ -22,61 +22,15 @@ import shutil
 import time
 import distutils
 import numpy as np
-from bfloat16 import bfloat16
 
 from akg import MlirDriver
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.result_analysis import get_compare_tolerance
-from ..utils.torch_mlir_utils import find_first_func_name, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
-from ..ascend_profilier.cann_file_parser import CANNFileParser
-from ..ascend_profilier.op_summary_parser import OpSummaryParser
+from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
+                                      run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
 
-logging.basicConfig(level=logging.WARN,
+logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
-
-PROF_ERROR_CODE = 9999999999
-
-def validate_and_normalize_path(
-    path,
-    check_absolute_path=False,
-    allow_parent_dir=True):
-    """
-    Validates path and returns its normalized form.
-
-    If path has a valid scheme, treat path as url, otherwise consider path a
-    unix local path.
-
-    Note:
-        File scheme (rfc8089) is currently not supported.
-
-    Args:
-        path (str): Path to be normalized.
-        check_absolute_path (bool): Whether check path scheme is supported.
-        allow_parent_dir (bool): Whether allow parent dir in path.
-
-    Returns:
-        str, normalized path.
-    """
-    if not path:
-        raise RuntimeError("The path is invalid!")
-
-    path_str = str(path)
-    if not allow_parent_dir:
-        path_components = path_str.split("/")
-        if ".." in path_components:
-            raise RuntimeError("The parent path is not allowed!")
-
-    # path does not have valid schema, treat it as unix local path.
-    if check_absolute_path:
-        if not path_str.startswith("/"):
-            raise RuntimeError("The path is invalid!")
-    try:
-        # most unix systems allow
-        normalized_path = os.path.realpath(path)
-    except ValueError as e:
-        raise RuntimeError("The path is invalid!") from e
-
-    return normalized_path
 
 def _get_json_dict(desc):
     return json.loads(desc) if isinstance(desc, str) else desc
@@ -84,6 +38,11 @@ def _get_json_dict(desc):
 def _get_kernel_name(desc):
     json_obj = _get_json_dict(desc)
     return json_obj["op"]
+
+def _get_arch_name(desc):
+    json_obj = _get_json_dict(desc)
+    target_info = json_obj.get("target_info", {})
+    return target_info.get("arch", "")
 
 def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=compare_tolerance, atol=compare_tolerance)
@@ -146,17 +105,6 @@ def _auto_get_target(desc):
     return target
 
 
-def profiling_analyse(arch):
-    public_path = os.getenv('PROFILING_DIR')
-    if public_path is None:
-        raise RuntimeError("Environment PROFILING_DIR not set!")
-    public_path = validate_and_normalize_path(public_path)
-    CANNFileParser(public_path).export_cann_profiling()
-    cann_file_parser = OpSummaryParser(public_path, arch)
-    task_duration = cann_file_parser.generate_op_summary_data()
-    return task_duration
-
-
 def run_a_kernel(desc,
                  file_path,
                  backend=None,
@@ -174,6 +122,7 @@ def run_a_kernel(desc,
         backend = _auto_get_target(desc)
 
     kernel_name = _get_kernel_name(desc)
+    arch = _get_arch_name(desc)
     # Generate data
     input_for_mod, expect, output_indexes = gen_json_data(
         static_desc if is_dyn_shape else desc, with_compute=True)
@@ -189,13 +138,14 @@ def run_a_kernel(desc,
                              repo_path=repo_path,
                              profiling_trails=profiling_trails,
                              runtime_provider="MLIR",
-                             enable_loop_fusion=enable_loop_fusion)
+                             enable_loop_fusion=enable_loop_fusion,
+                             arch=arch)
 
     mlir_driver.compile()
     mlir_driver.run(input_for_mod, output_indexes)
 
     for idx, d in enumerate(expect):
-        expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+        expect[idx] = d.astype(np.float32) if d.dtype.name == "bfloat16" else d
     compare_results(kernel_name, desc, input_for_mod, output_indexes, expect)
 
     if clear_tmp:
@@ -249,21 +199,18 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
 
     input_file = pathlib.Path(file_path)
     if info_file.suffix == ".mlir":
-        run_torch_mlir_to_json(compile_args.torch_mlir_opt, info_file)
         mlir = input_file.read_text(encoding='utf-8')
         kernel_name = find_first_func_name(mlir)
         if not kernel_name:
             raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
-        info_file = pathlib.Path.cwd() / f"{kernel_name}_.json"
-        if not info_file.exists():
-            raise RuntimeError(f"Cannot find torch-to-json output: {info_file}")
-
+        info_file = dump_dir / f"{kernel_name}_.info"
+        run_torch_mlir_to_json(input_file, info_file)
         if compile_args.akg_fusion:
             input_file = dump_dir / f"{kernel_name}_linalg.mlir"
-            run_torch_mlir_to_linalg_on_tensors(compile_args.torch_mlir_opt, file_path, input_file)
+            run_torch_mlir_to_linalg_on_tensors(file_path, input_file)
         else:
             input_file = dump_dir / f"{kernel_name}_hfusion.mlir"
-            get_name_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
+            get_named_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
 
     with open(info_file, "r", encoding='utf-8') as f:
         desc = f.read()
@@ -356,10 +303,6 @@ def main(args=None):
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
-    parser.add_argument("--torch-mlir-opt",
-                        type=str,
-                        default="torch-mlir-opt",
-                        help="Path to torch-mlir-opt binary")
     args = parser.parse_args()
     _create_dirs()
     if args.dir:

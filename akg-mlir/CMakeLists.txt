@@ -1,4 +1,4 @@
-# Copyright 2023-2025 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,53 +13,24 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.14)
-
-if(POLICY CMP0054)
-  cmake_policy(SET CMP0054 NEW)
-endif()
-if(POLICY CMP0072)
-  cmake_policy(SET CMP0072 NEW)
-endif()
-if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 OLD)
-endif()
-if(POLICY CMP0169)
-  cmake_policy(SET CMP0169 OLD)
-endif()
-if(POLICY CMP0175)
-  cmake_policy(SET CMP0175 OLD)
-endif()
-
 project(akg C CXX)
 
 option(AKG_ENABLE_BINDINGS_PYTHON "Enables MLIR Python Bindings" OFF)
 option(AKG_INCLUDE_TESTS "Generate build targets for the akg-mlir tests." ON)
+option(AKG_BUILD_MLIR "Automatic download and build MLIR from source " OFF)
 
+include(CheckCXXCompilerFlag)
+include(CheckLanguage)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.5.0)
         message(FATAL_ERROR "GCC version must be 7.5.0 and above, but found ${CMAKE_CXX_COMPILER_VERSION}")
     endif()
 endif()
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(AKG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-set(AKG_MLIR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/compiler")
-
 set(CMAKE_CXX_STANDARD 17)
-
-include(CheckCXXCompilerFlag)
-include(CheckLanguage)
-include(FetchContent)
-# We may use projects that rely on PkgConfig
-find_package(PkgConfig)
-include(cmake/utils.cmake)
-include(cmake/external_libs/symengine.cmake)
-if(ENABLE_AKG)
-  include(cmake/external_libs/llvm.cmake)
-endif()
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -Wno-unknown-pragmas")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(AKG_MLIR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -Wno-unknown-pragmas")
 
 # Set Path
 get_filename_component(AKG_MLIR_SOURCE_DIR "${AKG_MLIR_SOURCE_DIR}" ABSOLUTE)
@@ -95,16 +66,17 @@ endif()
 set(LLVM_REQUIRES_EH ON)
 set(LLVM_REQUIRES_RTTI ON)
 
-include(${CMAKE_SOURCE_DIR}/cmake/MLIR.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/utils.cmake)
+find_package(pybind11 REQUIRED)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/symengine.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/MLIR.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/json.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ascendnpu_ir.cmake)
-
-set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
 #-------------------------------------------------------------------------------
 # AKG-MLIR
 #-------------------------------------------------------------------------------
-
 include_directories(${AKG_MLIR_SRC_INCLUDE_DIR})
 include_directories(${AKG_MLIR_BIN_INCLUDE_DIR})
 
@@ -147,5 +119,5 @@ endif()
 
 install(
   DIRECTORY
-  ${AKG_MLIR_SOURCE_DIR}/../python/akg_mlir/
+  ${AKG_MLIR_SOURCE_DIR}/python/akg_mlir/
   DESTINATION ${AKG_MLIR_BINARY_DIR}/akg)

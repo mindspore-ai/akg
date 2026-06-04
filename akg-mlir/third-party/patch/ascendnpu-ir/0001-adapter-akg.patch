@@ -78,6 +78,18 @@ index 728dea91..9ebb1709 100644
  else()
    add_subdirectory(bishengir/include/bishengir)
    add_subdirectory(bishengir/lib)
+diff --git a/bishengir/include/bishengir/Dialect/HIVM/IR/HIVMDMAOps.td b/bishengir/include/bishengir/Dialect/HIVM/IR/HIVMDMAOps.td
+index 7750d60d..4cbe0866 100644
+--- a/bishengir/include/bishengir/Dialect/HIVM/IR/HIVMDMAOps.td
++++ b/bishengir/include/bishengir/Dialect/HIVM/IR/HIVMDMAOps.td
+@@ -134,7 +134,6 @@ def LoadOp : HIVM_DmaOp<"load", [
+     (`init_out_buffer` `=` $init_out_buffer^ )?
+     (`right_padding_num` `=` $right_padding_num^ `:` type($right_padding_num))?
+     (`init_condition` `=` $init_condition^ `:` type($init_condition))?
+-    (`may_implicit_transpose_with_last_axis` `=` $may_implicit_transpose_with_last_axis^ )?
+     (`->` type($result_tensor)^)?
+   }];
+   let hasFolder = 1;
 diff --git a/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp b/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp
 index 43291f0b..94b7adfd 100644
 --- a/bishengir/lib/Conversion/HIVMToStandard/HIVMToStandard.cpp
