@@ -78,6 +78,13 @@ constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+// Hint for sub-byte cmp results (e.g. arith.cmpf/cmpi producing i1 vectors):
+// stride-aligned UB buffer size in bytes, computed during NPU schedule
+// (see TilingStrategy.cpp::annotateSpecialStrideAlignedBuffers) and consumed
+// during ArithToHIVM lowering (see ArithToHIVM.cpp::markAlignedBufferSizeFromVectorAttr),
+// where it is materialized into a `kBufferSizeInByteAttr` MarkOp and then erased.
+// Should not survive past ArithToHIVM lowering on any op.
+constexpr auto kVectorAlignedBufferSizeInByteAttr = "vector_aligned_buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;
 constexpr auto kTransposeLoopAttr = "transpose";
