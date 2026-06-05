@@ -24,6 +24,7 @@
     - [OpenCode Integration](#opencode-integration)
     - [Contributing](#contributing)
     - [Additional Modules (v1 Documentation)](#additional-modules-v1-documentation)
+  - [📊 6. Benchmark Results](#-6-benchmark-results)
 
 </details>
 
@@ -240,3 +241,12 @@ akg_agents/
 - **[Server Architecture](./docs/v1/ServerArchitecture.md)** - Service architecture (Client-Server-Worker)
 - **[TaskPool](./docs/v1/TaskPool.md)** - Task pool management
 - **[DevicePool](./docs/v1/DevicePool.md)** - Device pool management
+
+## 📊 6. Benchmark Results
+
+| Benchmark | DSL | Report | Doc Date |
+|-----------|-----|--------|----------|
+| KernelBench | PyPTO | [DSLBenchmarkResults](./docs/v1/DSLBenchmarkResults202606.md) | 2026-06-05 |
+| KernelBench | CUDA C \| CPP \| TileLang_CUDA | [DSLBenchmarkResults](./docs/v1/DSLBenchmarkResults202509.md) | 2025-10-14 |
+| KernelBench | Triton_Ascend \| Triton | [DSLBenchmarkResults](./docs/v1/BenchmarkResults202509.md) | 2025-09-14 |
+
