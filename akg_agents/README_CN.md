@@ -24,6 +24,7 @@
     - [OpenCode 集成](#opencode-集成)
     - [贡献](#贡献)
     - [其他模块（v1 文档）](#其他模块v1-文档)
+  - [📊 6. 基准测试数据](#-6-基准测试数据)
 
 </details>
 
@@ -240,3 +241,11 @@ akg_agents/
 - **[Server Architecture](./docs/v1/CN/ServerArchitecture.md)** - 服务化架构（Client-Server-Worker）
 - **[TaskPool](./docs/v1/CN/TaskPool.md)** - 任务池管理
 - **[DevicePool](./docs/v1/CN/DevicePool.md)** - 设备池管理
+
+## 📊 6. 基准测试数据
+
+| Benchmark | DSL | 报告 | 文档日期 |
+|-----------|-----|---------------------|----------|
+| KernelBench | PyPTO | [DSLBenchmarkResults](./docs/v1/CN/DSLBenchmarkResults202606.md) | 2026-06-05 |
+| KernelBench | CUDA C \| CPP \| TileLang_CUDA | [DSLBenchmarkResults](./docs/v1/CN/DSLBenchmarkResults202509.md) | 2025-10-14 |
+| KernelBench | Triton_Ascend \| Triton | [DSLBenchmarkResults](./docs/v1/CN/BenchmarkResults202509.md) | 2025-09-14 |
