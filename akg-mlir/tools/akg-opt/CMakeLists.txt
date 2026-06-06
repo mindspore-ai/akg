@@ -3,6 +3,7 @@ set(AKG_MLIR_LIBS
   AKGTransformsPasses
   AKGSCFPasses
   AKGTensorPasses
+  AKGVectorPasses
   AKGGPUPasses
   AKGLinalgPasses
   AKGPipelines
