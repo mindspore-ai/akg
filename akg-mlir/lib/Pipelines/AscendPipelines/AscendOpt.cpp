@@ -23,6 +23,7 @@
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Dialect/Vector/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
@@ -267,6 +268,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
       pm.addPass(npuvector::createOutlineVectorFunctionPass());
       pm.addPass(createNPUVectorToVectorPass());
+      pm.addPass(vector::createVectorLegalizeTypePass());
     }
     pm.addPass(createArithToHIVMConversionPass());
     pm.addPass(createCanonicalizerPass());
