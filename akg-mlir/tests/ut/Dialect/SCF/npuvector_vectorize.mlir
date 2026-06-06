@@ -635,6 +635,63 @@ func.func @test_multidim_elementwise_dynamic(
 
 // -----
 
+// CHECK-LABEL: func.func @test_multidim_arith_disjoint_operand_axes
+func.func @test_multidim_arith_disjoint_operand_axes(
+    %input: memref<512xi64>, %out: memref<512x512xi1>, %M: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %c512 = arith.constant 512 : index
+
+  // CHECK: %[[OUTER:.*]] = npuvector.transfer_read {{.*}} : memref<512xi64>, !npuvector<?xi64>
+  // CHECK: %[[INNER:.*]] = npuvector.transfer_read {{.*}} : memref<512xi64>, !npuvector<512xi64>
+  // CHECK: %[[INNER_BCAST:.*]] = npuvector.broadcast %[[INNER]]{{.*}} : !npuvector<512xi64> to !npuvector<?x512xi64> {dimension = array<i64: 1>}
+  // CHECK: %[[OUTER_BCAST:.*]] = npuvector.broadcast %[[OUTER]]{{.*}} : !npuvector<?xi64> to !npuvector<?x512xi64> {dimension = array<i64: 0>}
+  // CHECK: %[[CMP:.*]] = npuvector.cmpi sle, %[[INNER_BCAST]], %[[OUTER_BCAST]] : !npuvector<?x512xi64> to !npuvector<?x512xi1>
+  // CHECK: npuvector.transfer_write %[[CMP]], {{.*}} : !npuvector<?x512xi1>, memref<512x512xi1>
+  scf.for %i = %c0 to %M step %c1 {
+    %outer = memref.load %input[%i] : memref<512xi64>
+    scf.for %j = %c0 to %c512 step %c1 {
+      %inner = memref.load %input[%j] : memref<512xi64>
+      %cmp = arith.cmpi sle, %inner, %outer : i64
+      memref.store %cmp, %out[%i, %j] : memref<512x512xi1>
+    } {vector=512}
+  } {vector=8}
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_multidim_arith_partially_overlapping_operand_axes
+func.func @test_multidim_arith_partially_overlapping_operand_axes(
+    %lhs: memref<4x8xf32>, %rhs: memref<8x16xf32>, %out: memref<4x8x16xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+
+  // CHECK: %[[LHS:.*]] = npuvector.transfer_read {{.*}} : memref<4x8xf32>, !npuvector<4x8xf32>
+  // CHECK: %[[RHS:.*]] = npuvector.transfer_read {{.*}} : memref<8x16xf32>, !npuvector<8x16xf32>
+  // CHECK: %[[LHS_BCAST:.*]] = npuvector.broadcast %[[LHS]]{{.*}} : !npuvector<4x8xf32> to !npuvector<4x8x16xf32> {dimension = array<i64: 0, 1>}
+  // CHECK: %[[RHS_BCAST:.*]] = npuvector.broadcast %[[RHS]]{{.*}} : !npuvector<8x16xf32> to !npuvector<4x8x16xf32> {dimension = array<i64: 1, 2>}
+  // CHECK: %[[ADD:.*]] = arith.addf %[[LHS_BCAST]], %[[RHS_BCAST]] : !npuvector<4x8x16xf32>
+  // CHECK: npuvector.transfer_write %[[ADD]], {{.*}} : !npuvector<4x8x16xf32>, memref<4x8x16xf32>
+  scf.for %i = %c0 to %c4 step %c1 {
+    scf.for %j = %c0 to %c8 step %c1 {
+      %a = memref.load %lhs[%i, %j] : memref<4x8xf32>
+      scf.for %k = %c0 to %c16 step %c1 {
+        %b = memref.load %rhs[%j, %k] : memref<8x16xf32>
+        %sum = arith.addf %a, %b : f32
+        memref.store %sum, %out[%i, %j, %k] : memref<4x8x16xf32>
+      } {vector=16}
+    } {vector=8}
+  } {vector=4}
+  return
+}
+
+// -----
+
 // ============================================================================
 // 6. Multi-dim with Transpose static and dynamic
 // ============================================================================
