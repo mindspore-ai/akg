@@ -6,6 +6,7 @@ set(AKG_MLIR_LIBS
   AKGTransformsPasses
   AKGGPUPasses
   AKGSCFPasses
+  AKGVectorPasses
   AKGLinalgPasses
   AKGLLVMIRPasses
   AKGCPUPasses
