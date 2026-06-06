@@ -1134,9 +1134,36 @@ static bool isScalarSlotOperand(unsigned opIdx, llvm::ArrayRef<unsigned> scalarI
 
 static bool lookupPeerBroadcastAxes(Operation *arithOp, LoopVectorizationCtx &ctx,
                                     const SmallVectorImpl<Value> &vecOperands, llvm::ArrayRef<unsigned> scalarIndices,
-                                    npuvector::NPUVectorType refVecType, SmallVectorImpl<int> &outAxes) {
+                                    npuvector::NPUVectorType &refVecType, SmallVectorImpl<int> &outAxes) {
   outAxes.clear();
   const unsigned refRank = static_cast<unsigned>(refVecType.getRank());
+
+  llvm::SmallDenseSet<int> unionAxes;
+  bool hasCompleteOrders = true;
+  for (Value operand : vecOperands) {
+    auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(operand.getType());
+    if (!nvt) continue;
+    auto it = ctx.valueDimOrder.find(operand);
+    if (it == ctx.valueDimOrder.end() || it->second.size() != static_cast<unsigned>(nvt.getRank())) {
+      hasCompleteOrders = false;
+      break;
+    }
+    for (int axis : it->second) {
+      if (axis < 0 || static_cast<unsigned>(axis) >= ctx.allVectorSizes.size()) return false;
+      unionAxes.insert(axis);
+    }
+  }
+  if (hasCompleteOrders && unionAxes.size() > refRank) {
+    outAxes.assign(unionAxes.begin(), unionAxes.end());
+    llvm::sort(outAxes);
+    SmallVector<int64_t> shape;
+    std::transform(outAxes.begin(), outAxes.end(), std::back_inserter(shape), [&ctx](int axis) {
+      return ctx.allVectorSizeValues[axis] ? ShapedType::kDynamic : ctx.allVectorSizes[axis];
+    });
+    refVecType = npuvector::NPUVectorType::get(shape, refVecType.getElementType());
+    return true;
+  }
+
   for (unsigned j = 0, e = vecOperands.size(); j < e; ++j) {
     if (isScalarSlotOperand(j, scalarIndices)) continue;
     Value vo = vecOperands[j];

@@ -50,6 +50,15 @@ void TransferWriteOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<Mem
 }
 
 //===----------------------------------------------------------------------===//
+// BroadcastOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult BroadcastOp::fold(FoldAdaptor) {
+  if (getSource().getType() == getResult().getType()) return getSource();
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
 
