@@ -16,9 +16,7 @@
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
 void akg_log_init(void) {
-  static bool is_glog_initialzed = false;
-  if (!is_glog_initialzed) {
-    google::InitGoogleLogging("akg-mlir");
-    is_glog_initialzed = true;
+  if (!google::IsGoogleLoggingInitialized()) {
+    google::InitGoogleLogging("akg");
   }
 }
