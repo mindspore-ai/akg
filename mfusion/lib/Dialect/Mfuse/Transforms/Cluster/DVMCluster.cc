@@ -264,7 +264,7 @@ class DvmSupportChecker {
   bool checkFormat(Operation *op) const { return true; }
 
   void initializeCheckFunc() {
-    auto inputSameType = [](Operation *op) { return isElementTypesConsistent(op); };
+    auto compareInputSupported = [](Operation *op) { return compareInputCheck(op); };
     auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
@@ -278,12 +278,12 @@ class DvmSupportChecker {
     // reduce sum op
     checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    checkFunc_["mfuse.eq"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.ne"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.gt"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.ge"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.lt"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.le"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.eq"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.ne"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.gt"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.ge"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.lt"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.le"] = {compareCheck, compareInputSupported};
     checkFunc_["mfuse.is_finite"] = {compareCheck, isFiniteOpCheckFunc};
     // select op
     checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
@@ -683,24 +683,15 @@ class DvmSupportChecker {
     return true;
   }
 
-  /// Check if element types are consistent
-  static bool isElementTypesConsistent(Operation *op) {
-    if (op->getNumOperands() <= 1) {
+  static bool compareInputCheck(Operation *op) {
+    if (op->getNumOperands() != 2) {
+      return false;
+    }
+    Value rhs = op->getOperand(1);
+    if (!isRankZeroTensor(rhs.getType()) && !hasScalarMarker(rhs.getType())) {
       return true;
     }
-
-    Type firstElemType = getElementType(op->getOperand(0).getType());
-    if (!firstElemType) {
-      return false;  // Can't check without element type
-    }
-
-    for (size_t i = 1; i < op->getNumOperands(); ++i) {
-      Type elemType = getElementType(op->getOperand(i).getType());
-      if (!elemType || elemType != firstElemType) {
-        return false;
-      }
-    }
-    return true;
+    return isDvmSupportedScalarOperand(rhs);
   }
 
   static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
