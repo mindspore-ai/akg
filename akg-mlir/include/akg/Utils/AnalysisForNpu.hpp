@@ -215,6 +215,29 @@ inline SmallVector<int32_t, 6> getDefaultBishengStrideAlignDims(int64_t rank) {
   return {static_cast<int32_t>(rank <= 2 ? 0 : rank - 3)};
 }
 
+inline SmallVector<int32_t, 6> getBishengLogicalStructuredStrideAlignDims(int64_t rank) {
+  if (rank <= 1) return {};
+  // BiShengIR MarkStrideAlign picks the last non-continuous dim before the
+  // innermost unit-stride dimension. collectAlignUnits then expands dim+1, so
+  // a rank-N structured vector buffer aligns its logical innermost dimension.
+  return {static_cast<int32_t>(rank - 2)};
+}
+
+inline SmallVector<int32_t, 6> getBishengStorageStrideAlignDims(ArrayRef<char> staticDims) {
+  if (staticDims.size() <= 1) return {};
+  // This entry is for an already materialized storage shape. When ArithToHIVM
+  // rank-extends a VBrc source, the trailing size-1 broadcast axis becomes the
+  // innermost unit-stride dimension, so the raw stride-align mark starts one dim
+  // further out than the logical vector-axis rule above. Dynamic dims between
+  // that mark and the innermost axis block BiShengIR's static accumulation, so
+  // the mark moves inward to the last such dynamic dim.
+  int32_t alignDim = static_cast<int32_t>(staticDims.size() <= 2 ? 0 : staticDims.size() - 3);
+  for (int64_t dim = alignDim + 1, e = static_cast<int64_t>(staticDims.size()) - 1; dim < e; ++dim) {
+    if (!staticDims[dim]) alignDim = static_cast<int32_t>(dim);
+  }
+  return {alignDim};
+}
+
 inline SmallVector<int64_t, 6> collectBishengStrideAlignUnits(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
                                                               ArrayRef<int32_t> alignDims, int64_t elementBits) {
   SmallVector<int64_t, 6> alignUnits(shape.size() + 1, 1);
@@ -268,9 +291,8 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
   for (size_t i = 0; i < shape.size(); ++i) {
     staticDims.push_back(i < typeShape.size() && !ShapedType::isDynamic(typeShape[i]));
   }
-  return computeBishengStrideAlignedStorageBytes(shape, staticDims,
-                                                 getDefaultBishengStrideAlignDims(static_cast<int64_t>(shape.size())),
-                                                 elementBits);
+  return computeBishengStrideAlignedStorageBytes(
+    shape, staticDims, getBishengStorageStrideAlignDims(staticDims), elementBits);
 }
 
 }  // namespace akg
