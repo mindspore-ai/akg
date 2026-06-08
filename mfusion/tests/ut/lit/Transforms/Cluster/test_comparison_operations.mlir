@@ -67,6 +67,44 @@ func.func @test_ne_comparison_chain(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf3
   return %1 : tensor<4x4xi1>
 }
 
+// Test scenario: Greater-equal comparison accepts a supported scalar as RHS input.
+// CHECK-LABEL: func @test_ge_with_rank0_scalar_rhs
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>) -> tensor<4x4xi1>
+// CHECK: ^bb0(%[[ARG1:.*]]: tensor<4x4xf32>):
+// CHECK: %[[CST:.*]] = mfuse.constant dense<2.500000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[ADD:.*]] = mfuse.add %[[ARG1]], %[[ARG1]]
+// CHECK: %[[GE:.*]] = mfuse.ge %[[ADD]], %[[CST]]
+// CHECK: mfuse.yield %[[GE]]
+// CHECK: return %[[FUSED]]
+func.func @test_ge_with_rank0_scalar_rhs(%arg0: tensor<4x4xf32>) -> tensor<4x4xi1> {
+  %0 = mfuse.constant dense<2.5> : tensor<f64, {is_scalar = ""}>
+  %1 = mfuse.add %arg0, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %2 = mfuse.ge %1, %0 : (tensor<4x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xi1>
+  return %2 : tensor<4x4xi1>
+}
+
+// Test scenario: Less-equal comparison accepts a supported scalar produced via constant/cast chain as RHS input.
+// CHECK-LABEL: func @test_le_with_rank0_scalar_rhs
+// CHECK: %[[CST:.*]] = mfuse.constant dense<3.500000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[CAST:.*]] = mfuse.cast %[[CST]] : (tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}>
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %[[CAST]]
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x4xi1>
+// CHECK: ^bb0(%[[ARG1:.*]]: tensor<4x4xf32>, %[[ARG2:.*]]: tensor<f32, {is_scalar = ""}>):
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[ARG1]], %[[ARG1]]
+// CHECK: %[[LE:.*]] = mfuse.le %[[MUL]], %[[ARG2]]
+// CHECK: mfuse.yield %[[LE]]
+// CHECK: return %[[FUSED]]
+func.func @test_le_with_rank0_scalar_rhs(%arg0: tensor<4x4xf32>) -> tensor<4x4xi1> {
+  %0 = mfuse.constant dense<3.5> : tensor<f64, {is_scalar = ""}>
+  %1 = mfuse.cast %0 : (tensor<f64, {is_scalar = ""}>) -> tensor<f32, {is_scalar = ""}>
+  %2 = mfuse.mul %arg0, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %3 = mfuse.le %2, %1 : (tensor<4x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x4xi1>
+  return %3 : tensor<4x4xi1>
+}
+
 // Test scenario: Multiple independent comparison operations in the same function
 // Each comparison chain forms its own cluster
 // CHECK-LABEL: func @test_multiple_comparisons
