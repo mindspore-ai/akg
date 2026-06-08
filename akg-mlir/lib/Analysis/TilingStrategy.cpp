@@ -43,6 +43,7 @@ using akg::utils::StrategyHelper;
 using akg::alignUpInt64;
 using akg::ceilDivInt64;
 using akg::computeBishengStrideAlignedStorageBytes;
+using akg::getBishengLogicalStructuredStrideAlignDims;
 using akg::getDefaultBishengStrideAlignDims;
 using akg::getBishengStrideAlignTargetForBits;
 using akg::multiplyAndCap;
@@ -1276,7 +1277,13 @@ bool isBishengStrideAlignedCandidate(const NodePtr &node, Operation *op) {
 SmallVector<int32_t, 6> getBishengStrideAlignDims(const NpuBandContext &ctx, const NodePtr &node, Operation *op,
                                                   ArrayRef<size_t> axisOrder) {
   if (!isBishengStrideAlignedCandidate(node, op)) return {};
-  SmallVector<int32_t, 6> alignDims = getDefaultBishengStrideAlignDims(static_cast<int64_t>(axisOrder.size()));
+  // Mirror BiShengIR MarkStrideAlign.cpp::getLastUnContinuousDim for the
+  // ordinary structured/load path: when the flattened operands have unit
+  // innermost stride, the marked dim is the last non-continuous dim before it.
+  // EnableStrideAlign's collectAlignUnits applies that mark to dim+1, i.e. the
+  // logical innermost vector dimension for the shape seen by akg-opt.
+  SmallVector<int32_t, 6> alignDims =
+    getBishengLogicalStructuredStrideAlignDims(static_cast<int64_t>(axisOrder.size()));
   // Drop align dims whose entire prefix [0..dim] is degenerate (extent==1).
   // bishengir's MarkStrideAlign / flatten step collapses unit-extent prefixes
   // away; pretending they need stride padding inflates the live footprint and
