@@ -1445,6 +1445,7 @@ struct ArithNegfToHIVM : public OpConversionPattern<arith::NegFOp> {
     if (failed(zeroBuf)) {
       return failure();
     }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *zeroBuf);
     rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, zeroScalar, *zeroBuf, rewriter.getDenseI64ArrayAttr({}));
 
     auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
