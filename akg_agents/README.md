@@ -246,7 +246,7 @@ akg_agents/
 
 | Benchmark | DSL | Report | Doc Date |
 |-----------|-----|--------|----------|
-| KernelBench | PyPTO | [DSLBenchmarkResults](./docs/v1/DSLBenchmarkResults202606.md) | 2026-06-05 |
+| KernelBench | PyPTO \| TileLang_Ascend | [DSLBenchmarkResults](./docs/v2/DSLBenchmarkResults202606.md) | 2026-06-05 |
 | KernelBench | CUDA C \| CPP \| TileLang_CUDA | [DSLBenchmarkResults](./docs/v1/DSLBenchmarkResults202509.md) | 2025-10-14 |
 | KernelBench | Triton_Ascend \| Triton | [DSLBenchmarkResults](./docs/v1/BenchmarkResults202509.md) | 2025-09-14 |
 

@@ -10,6 +10,7 @@ structure:
   child_skills:
     - tilelang-cuda-memory
     - tilelang-cuda-synchronization
+    - tilelang-cuda-gemm
 ---
 
 # TileLang CUDA 性能优化指南

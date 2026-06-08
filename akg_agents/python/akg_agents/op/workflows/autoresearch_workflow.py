@@ -61,7 +61,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
         super().__init__(**kwargs)
         # Scale workflow_timeout before task.py reads it for asyncio.wait_for.
         max_rounds = self.config.get("max_step", 20)
-        eval_timeout = self.config.get("eval_timeout", 120)
+        eval_timeout = self.config.get("eval_timeout", 300)
         self.config["workflow_timeout"] = max(
             self.config.get("workflow_timeout", 1800),
             max_rounds * (eval_timeout + 60) + 300,
@@ -484,6 +484,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
             # ---- 5. Scaffold task_dir ----
             log_dir = workflow_config.get("log_dir", "/tmp/autoresearch")
+            eval_timeout = workflow_config.get("eval_timeout", 300)
             task_dir = scaffold_task_dir(
                 base_dir=log_dir,
                 op_name=op_name,
@@ -493,6 +494,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 context_files=context_files,
                 extra_files=extra_files,
                 max_rounds=max_rounds,
+                eval_timeout=eval_timeout,
                 dsl=dsl,
                 framework=framework,
                 backend=backend,

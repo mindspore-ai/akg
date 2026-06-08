@@ -67,7 +67,7 @@ def normalize_dsl(dsl: str, backend: str = None) -> str:
     dsl = dsl.lower()
     
     # 如果已经是规范化的类型，直接返回
-    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch", "pypto"]:
+    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "tilelang_ascend", "ascendc", "torch", "pypto"]:
         return dsl
     
     # 如果是通用的triton，需要根据backend转换
@@ -99,7 +99,7 @@ def check_dsl(dsl: str):
     Args:
         dsl: 实现类型(triton_cuda/triton_ascend/triton-russia/swft/torch/pypto等)
     """
-    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch", "pypto"]
+    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "tilelang_ascend", "ascendc", "torch", "pypto"]
     if dsl not in valid_dsls:
         raise ValueError(
             f"dsl must be one of {valid_dsls}. "
@@ -161,40 +161,40 @@ VALID_CONFIGS = {
     },
     "torch": {
         "ascend": {
-            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
             "ascend310p3": ["swft", "ascendc", "torch"],
-            "ascend910_9362": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910_9372": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910_9381": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910_9382": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910_9391": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend910_9392": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950dt_95a": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_950z": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9572": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9574": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9575": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9576": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9577": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9578": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9579": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_957b": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_957d": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9581": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9582": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9584": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9587": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9588": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9589": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_958a": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_958b": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9591": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9592": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend950pr_9599": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9362": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910_9372": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910_9381": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910_9382": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910_9391": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend910_9392": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950dt_95a": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_950z": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9572": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9574": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9575": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9576": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9577": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9578": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9579": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_957b": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_957d": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9581": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9582": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9584": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9587": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9588": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9589": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_958a": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_958b": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9591": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9592": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
+            "ascend950pr_9599": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
         },
         "cuda": {
             "a100": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],

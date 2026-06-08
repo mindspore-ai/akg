@@ -194,6 +194,8 @@ def matmul(M, N, K, block_M, block_N, block_K):
 - **内置 GEMM**: 使用 `T.gemm` 利用 Tensor Core 加速
 - **混合精度**: 输入用 float16，累加器用 float32
 
+> 💡 完整的 GEMM 优化指南（Swizzling、Autotuning、Persistent、Split-K、Stream-K、FP8、Int4、Fine-grained MMA 等）请参考 [tilelang-cuda-gemm](../tilelang-cuda-gemm/SKILL.md) Skill。
+
 ## 4. GEMV 模式
 
 适用于矩阵向量乘法等不规则访问模式。

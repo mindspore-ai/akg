@@ -107,7 +107,7 @@ def square_matrix_multiply_call(A: torch.Tensor, B: torch.Tensor) -> torch.Tenso
     return C
 ```
 
-### 3. 逐元素操作（Element-wise Add）
+### 3. 逐元素操作（Element-wise Add, Global Memory 直访）
 **算子类型**: Element-wise
 **关键点**:
 - 最简单的 TileLang 内核示例
@@ -141,6 +141,83 @@ def add_call(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     threads = 256
     kernel = elementwise_add(M, N, block_M, block_N, threads)
     return kernel(A, B)
+```
+
+### 3b. 逐元素操作（Shared Memory + Fragment 模式）
+**算子类型**: Element-wise
+**关键点**:
+- 标准数据流: GM → Shared → Fragment → 计算 → Fragment → Shared → GM
+- 利用 fragment (寄存器) 加速计算
+- `T.copy` 自动合并内存访问
+
+```python
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit(out_idx=[-1])
+def elementwise_add_shared(M, N, block_M, block_N, in_dtype, out_dtype, threads):
+    @T.prim_func
+    def main(A: T.Tensor((M, N), in_dtype),
+             B: T.Tensor((M, N), in_dtype),
+             C: T.Tensor((M, N), out_dtype)):
+        with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=threads) as (bx, by):
+            A_shared = T.alloc_shared((block_M, block_N), in_dtype)
+            B_shared = T.alloc_shared((block_M, block_N), in_dtype)
+            C_local = T.alloc_fragment((block_M, block_N), out_dtype)
+            C_shared = T.alloc_shared((block_M, block_N), out_dtype)
+
+            T.copy(A[by * block_M, bx * block_N], A_shared)
+            T.copy(B[by * block_M, bx * block_N], B_shared)
+            for local_y, local_x in T.Parallel(block_M, block_N):
+                C_local[local_y, local_x] = A_shared[local_y, local_x] + B_shared[local_y, local_x]
+            T.copy(C_local, C_shared)
+            T.copy(C_shared, C[by * block_M, bx * block_N])
+
+    return main
+
+# 调用方式
+def add_call_shared(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    M, N = A.shape
+    kernel = elementwise_add_shared(M, N, 32, 32, T.float32, T.float32, 128)
+    return kernel(A, B)
+```
+
+### 3c. ReLU（Shared Memory + Fragment 模式）
+**算子类型**: Element-wise
+**关键点**:
+- CUDA 使用 `T.max(x, 0)` 表达 ReLU（**不是** `T.tile.relu`，那是 Ascend 后端）
+- 标准数据流: GM → Shared → Fragment → `T.max` → Fragment → Shared → GM
+
+```python
+import torch
+import tilelang
+import tilelang.language as T
+
+@tilelang.jit(out_idx=[-1])
+def relu_kernel(M, N, block_M, block_N, dtype):
+    @T.prim_func
+    def main(X: T.Tensor((M, N), dtype),
+             Y: T.Tensor((M, N), dtype)):
+        with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=128) as (bx, by):
+            X_shared = T.alloc_shared((block_M, block_N), dtype)
+            Y_local = T.alloc_fragment((block_M, block_N), dtype)
+            Y_shared = T.alloc_shared((block_M, block_N), dtype)
+
+            T.copy(X[by * block_M, bx * block_N], X_shared)
+            T.copy(X_shared, Y_local)
+            for i, j in T.Parallel(block_M, block_N):
+                Y_local[i, j] = T.max(Y_local[i, j], 0)
+            T.copy(Y_local, Y_shared)
+            T.copy(Y_shared, Y[by * block_M, bx * block_N])
+
+    return main
+
+# 调用方式
+def relu_call(x: torch.Tensor) -> torch.Tensor:
+    M, N = x.shape
+    kernel = relu_kernel(M, N, 128, 256, x.dtype)
+    return kernel(x)
 ```
 
 ### 4. LayerNorm（层归一化）
@@ -368,3 +445,39 @@ diff = (output_tilelang - output_torch).abs().max()
 print(f"Max difference: {diff.item()}")
 assert diff < 1e-3, "Results mismatch!"
 ```
+
+## Profiling / Benchmark
+
+使用 tilelang 内置的 `do_bench` 进行性能评测：
+
+```python
+from tilelang.profiler import do_bench
+
+# 编译内核
+kernel = matmul(M, N, K, block_M=128, block_N=128, block_K=32)
+a = torch.randn(M, K, device="cuda", dtype=torch.float16)
+b = torch.randn(K, N, device="cuda", dtype=torch.float16)
+
+# 基本 profiling
+latency_ms = do_bench(lambda: kernel(a, b))
+
+# 完整 profiling（指定模式）
+latency = do_bench(
+    lambda: kernel(a, b),
+    warmup=25,        # warmup 目标时间(ms)
+    rep=100,          # 评测目标时间(ms)
+    backend="event",  # "event" | "cupti" | "cudagraph"
+    return_mode="min" # "mean" | "median" | "min" | "max"
+)
+print(f"Latency: {latency:.3f} ms")
+
+# 使用 Profiler 类（内置正确性验证 + profiling）
+profiler = kernel.get_profiler()
+profiler.assert_allclose(ref_program, atol=1e-2, rtol=1e-2)
+latency = profiler.do_bench(backend="event")
+```
+
+- **do_bench 自动管理**：L2 cache flush (256MB)、warmup/rep 迭代数自动计算、CUDA Event 高精度计时
+- **backend="event"**: 默认，CUDA Event 计时
+- **backend="cupti"**: CUPTI profiler，更精确
+- **backend="cudagraph"**: CUDA graph replay，最小化 launch overhead
