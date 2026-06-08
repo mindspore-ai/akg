@@ -659,6 +659,8 @@ def NPUVector_BroadcastOp :
             /*dimension=*/$_builder.getDenseI64ArrayAttr({}));
     }]>
   ];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
