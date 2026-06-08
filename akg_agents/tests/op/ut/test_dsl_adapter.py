@@ -238,9 +238,10 @@ class TestDSLAdapterTilelangCuda:
     def test_benchmark_impl(self):
         adapter = get_dsl_adapter("tilelang_cuda")
         code = adapter.benchmark_impl("test_func", "inputs", 5, 50, "cuda", "test_op")
-        assert "tilelang_cuda_benchmark_fn" in code
+        assert "tilelang_benchmark_fn" in code
         assert "impl_model(*inputs)" in code
         assert "torch.cuda.synchronize()" in code
+        assert "torch.cuda.Event" in code
 
 
 class TestDSLAdapterFactory:
@@ -268,4 +269,64 @@ class TestDSLAdapterFactory:
         """Test getting invalid DSL adapter."""
         with pytest.raises(ValueError, match="Unsupported DSL"):
             get_dsl_adapter("invalid")
+
+
+class TestDSLAdapterTilelangAscend:
+    """Test TileLang-Ascend DSL Adapter."""
+
+    def test_get_import_statements(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        imports = adapter.get_import_statements("torch")
+        assert "import tilelang" in imports
+        assert "import tilelang.language as T" in imports
+        assert "import torch_npu" in imports
+        assert "apply_tilelang_patches" in imports
+
+    def test_get_impl_import(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        imports = adapter.get_impl_import("test_op", "test_func")
+        assert "from test_op_tilelang_ascend_impl import ModelNew" in imports
+
+    def test_create_impl_module(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.create_impl_module("torch", framework_adapter)
+        assert "impl_model = ModelNew(*init_params)" in code
+        assert "impl_model = impl_model.to(device)" in code
+
+    def test_call_impl(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
+        assert "impl_output = impl_model(*inputs)" in code
+
+    def test_benchmark_impl(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        code = adapter.benchmark_impl("test_func", "inputs", 5, 50, "ascend", "test_op")
+        assert "tilelang_benchmark_fn" in code
+        assert "impl_model(*inputs)" in code
+        assert "torch.npu.synchronize()" in code
+
+    def test_get_special_setup_code(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        code = adapter.get_special_setup_code()
+        assert "tilelang.cache.clear_cache()" in code
+        assert "apply_tilelang_patches" in code
+
+    def test_needs_binary_io(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        assert adapter.needs_binary_io() is False
+
+    def test_needs_compilation(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        assert adapter.needs_compilation() is False
+
+
+class TestDSLAdapterFactoryTilelangAscend:
+    """Test Factory produces correct tilelang_ascend adapter."""
+
+    def test_get_dsl_adapter_tilelang_ascend(self):
+        adapter = get_dsl_adapter("tilelang_ascend")
+        assert adapter is not None
+        assert adapter.__class__.__name__ == "DSLAdapterTilelangAscend"
 

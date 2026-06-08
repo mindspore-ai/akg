@@ -337,6 +337,115 @@ normalized.astype("float16")
 4. **选择合适的线程数**: 通常为 128 或 256，考虑硬件特性和工作负载
 5. **利用内置原语**: 使用 `T.gemm`、`T.reduce_sum` 等优化原语，避免重复实现已有功能
 
+## 13. 异步拷贝 (async_copy)
+
+```python
+# 异步全局 → 共享拷贝
+T.async_copy(A[by * BM, ko * BK], A_s)
+# ...独立工作...
+T.ptx_wait_group(0)  # 必须在消费 A_s 之前调用
+# ThreadSync("shared") 自动在第一次读 A_s 前插入共享内存屏障
+T.gemm(A_s, B_s, C_f)
+```
+
+- `T.async_copy` 必须能降低到 `cp.async`，否则编译失败
+- 使用 `T.copy` 时编译器可自由选择同步/异步降低方式
+
+## 14. TMA (Tensor Memory Accelerator, SM90+)
+
+```python
+T.tma_copy(desc, A_shared)      # TMA 异步拷贝
+T.alloc_descriptor(kind, dtype) # 分配描述符
+T.tma_store_arrive(...)
+T.tma_store_wait(...)
+```
+
+## 15. 内存分配扩展
+
+```python
+T.alloc_tmem(shape, dtype)        # Tensor Memory (SM100+)
+T.alloc_barrier(arrive_count)     # 分配 mbarrier
+T.alloc_wgmma_desc(dtype='uint64')      # WGMMA 描述符
+T.alloc_tcgen05_smem_desc(dtype='uint64') # TCGEN05 共享内存描述符
+T.empty(shape, dtype='float32')   # 函数输出张量声明
+```
+
+## 16. Warp 操作
+
+### 16.1 Warp Vote / Ballot
+
+```python
+T.any_sync(predicate [, mask])  # __any_sync
+T.all_sync(predicate [, mask])  # __all_sync
+T.ballot(predicate)             # 全选战投票 (uint64)
+T.ballot_sync(predicate [, mask])  # 条件投票
+T.activemask()                  # 活跃线程掩码
+```
+
+### 16.2 Warp Shuffle
+
+```python
+T.shfl_sync(value, src_lane)     # 广播
+T.shfl_xor(value, delta)         # XOR 交换
+T.shfl_down(value, delta)        # 下移
+T.shfl_up(value, delta)          # 上移
+```
+
+### 16.3 Warp Match (SM70+, 非 HIP)
+
+```python
+T.match_any_sync(value [, mask])
+T.match_all_sync(value [, mask])
+```
+
+### 16.4 Block Predicated Sync
+
+```python
+T.syncthreads_count(predicate)
+T.syncthreads_and(predicate)
+T.syncthreads_or(predicate)
+```
+
+## 17. 高级同步
+
+```python
+T.sync_threads(barrier_id, arrive_count)  # 带 mbarrier
+T.sync_warp(mask)                         # Warp 同步
+T.sync_grid()                             # 协作网格屏障
+T.pdl_trigger()                           # 程序化启动完成信号
+T.pdl_sync()                              # 等待依赖满足
+```
+
+## 18. WGMMA 和 Warp Group
+
+```python
+T.mbarrier_wait_parity(barrier, parity)
+T.mbarrier_arrive(barrier)
+T.fence_proxy_async(...)
+T.warpgroup_fence_operand(...)
+T.warpgroup_arrive()
+T.warpgroup_commit_batch()
+T.warpgroup_wait(num_mma)
+T.wait_wgmma(id)
+```
+
+## 19. 寄存器控制 (SM90+)
+
+```python
+T.set_max_nreg(reg_count, is_inc)
+T.inc_max_nreg(n) / T.dec_max_nreg(n)
+T.annotate_producer_reg_dealloc(n=24)
+T.annotate_consumer_reg_alloc(n=240)
+```
+
+## 20. 自定义内联函数
+
+```python
+T.dp4a(A, B, C)       # 4 元素点积累加
+T.clamp(x, lo, hi)    # 钳位到 [lo, hi]
+T.loop_break()        # 循环中断
+```
+
 ## 常见错误
 
 1. **内存分配过大**: 超出硬件限制
