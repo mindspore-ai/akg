@@ -22,6 +22,7 @@ SAVE_FILE = "profiling_base.csv"
 
 
 def _uniform_units(data):
+    """uniform data"""
     columns = ['Avg', 'Min', 'Max']
     data_new = data.drop(index=0, inplace=False)
     for col in columns:
@@ -34,6 +35,7 @@ def _uniform_units(data):
 
 
 def _data_cleaning(data, network, level):
+    """clean data"""
     data = _uniform_units(data)
     data = data[data['Type'].str.contains('GPU activities')]
     data = data[data['Name'].str.contains('Fused_')]
@@ -50,6 +52,7 @@ def _data_cleaning(data, network, level):
 
 
 def _get_output_files(home_dir):
+    """get output files"""
     file_lists = []
 
     def get_all_files(out_dir):
@@ -68,13 +71,13 @@ def _get_output_files(home_dir):
 
 
 def _find_op_profiling(csv_file, network, level, op_name):
+    """get profiling by op"""
     reader = pd.read_csv(csv_file, header=3, error_bad_lines=False)
     data = pd.DataFrame(reader)
     data = _data_cleaning(data, network, level)
 
     if len(data['Name']) <= 0:
-        raise ValueError(
-            "Please check the profiling file %s.csv of %s network." % (op_name, network))
+        raise ValueError(f"Please check the profiling file {op_name}.csv of {network} network.")
     return data
 
 
@@ -195,8 +198,6 @@ def compare_base_line(pwd, new_csv, network, level, op_name):
             logging.warning(query[columns[-3:]])
             logging.warning("-----------------------------------")
             return False
-        else:
-            return True
-    else:
-        logging.info("baseline performance was not found!")
         return True
+    logging.info("baseline performance was not found!")
+    return True

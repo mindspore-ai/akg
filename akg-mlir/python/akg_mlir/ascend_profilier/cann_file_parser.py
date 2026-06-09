@@ -1,6 +1,7 @@
 """CANN profiling file parser module."""
 import os
 import re
+import shutil
 import subprocess
 from enum import Enum
 
@@ -47,7 +48,10 @@ class CANNFileParser:
             return
         self._del_summary_and_timeline_data()
         try:
-            subprocess.run(["msprof", "--export=on", f"--output={self._cann_path}"],
+            msprof_path = shutil.which("msprof")
+            if not msprof_path:
+                raise RuntimeError("msprof not found in PATH, please verify that the ascend-toolkit is installed")
+            subprocess.run([msprof_path, "--export=on", f"--output={self._cann_path}"],
                           capture_output=True, check=True)
         except subprocess.CalledProcessError as error:
             raise RuntimeError(
@@ -57,6 +61,7 @@ class CANNFileParser:
 
 
     def get_file_list_by_type(self, file_type: CANNDataEnum) -> set:
+        """Get file list by file type."""
         return self._file_dict.get(file_type, set())
 
     def _file_dispatch(self):
@@ -74,6 +79,7 @@ class CANNFileParser:
                         self._file_dict.setdefault(data_type, set()).add(file_path)
 
     def _del_summary_and_timeline_data(self):
+        """delete summary and timeline data."""
         device_path = PathManager.get_device_path(self._cann_path)
         if not device_path:
             return

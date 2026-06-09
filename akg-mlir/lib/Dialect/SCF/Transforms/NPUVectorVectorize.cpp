@@ -42,8 +42,6 @@
 //      │   value's axes (deduped); then `npuvector.broadcast` rank-lifts to full store-index vector
 //      │   rank when needed (`resultDimToCtxAxis` = per-result-dim global axis, same as arith peer).
 //      ├── vectorizeArithOp → type conversion and arithmetic; scalar operands broadcast here.
-//      │   If **every** operand (after `valueMapping`) is non-`!npuvector`, clone the op (stay scalar);
-//      │   otherwise broadcast scalar slots to the peer `!npuvector` tile.
 //      └── vectorizeBroadcastScalar → npuvector.broadcast (rank-lift `dimension` must resolve; no fallback)
 //   4. Finalization
 //      ├── Elementwise: inline or loop-based transformation
