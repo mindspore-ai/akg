@@ -1151,6 +1151,8 @@ void pushUniqueTransposeInfo(SmallVectorImpl<TransposeVectorInfo> &infos, Transp
 }
 SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContext &ctx) {
   SmallVector<TransposeVectorInfo, 6> infos;
+  const bool hasTaggedTransposeAxis =
+    llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
   auto tryAddInfo = [&](Operation *loadOp, ArrayRef<size_t> loadOrder, Operation *storeOp,
                         ArrayRef<size_t> storeOrder) {
     if (!isValueDerivedFrom(storeOp->getOperand(0), loadOp->getResult(0))) return;
@@ -1158,7 +1160,8 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
     SmallVector<size_t, 6> storeCommon = intersectAxisOrder(storeOrder, loadOrder);
     if (loadCommon.size() < 2 || loadCommon.size() != storeCommon.size() || loadCommon == storeCommon ||
         !std::is_permutation(loadCommon.begin(), loadCommon.end(), storeCommon.begin()) ||
-        !llvm::any_of(loadCommon, [&](size_t idx) { return isTransposeAxis(ctx.axes[idx]); }))
+        (hasTaggedTransposeAxis &&
+         !llvm::any_of(loadCommon, [&](size_t idx) { return isTransposeAxis(ctx.axes[idx]); })))
       return;
     pushUniqueTransposeInfo(infos,
                             TransposeVectorInfo{loadCommon, storeCommon, getValueElementBits(loadOp->getResult(0)),
@@ -1168,6 +1171,8 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
   auto transposeAxisIt = llvm::find_if(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
   if (transposeAxisIt != ctx.axes.end()) {
     scanRoot = (*transposeAxisIt)->getLoopOperation();
+  } else if (!ctx.axes.empty() && ctx.axes.front()) {
+    scanRoot = ctx.axes.front()->getLoopOperation();
   }
   SmallVector<memref::LoadOp, 8> loads;
   SmallVector<memref::StoreOp, 8> stores;
@@ -1541,10 +1546,9 @@ BandNodeInfo collectBandNodeInfo(const NpuModelGraphPtr &npuGraph, const NpuBand
 }
 // Common def-use walker for the BiSheng vector chain inside a band.
 //
-// The two stride-align consumers (`mergeGenericStrideAlignUnits` and
-// `annotateSpecialStrideAlignedBuffers`) share an identical "vector flows
-// from Load down through structured ops, stops at Store" propagation
-// pattern. This helper centralizes that logic so they can not drift apart.
+// Stride-align consumers share an identical "vector flows from Load down
+// through structured ops, stops at Store" propagation pattern. This helper
+// centralizes that logic so they can not drift apart.
 //
 // `fn` receives `(node, op, hasVectorResult, hasVectorInput, axisOrder)`.
 // `vectorValues` is updated AFTER `fn` runs, so a node's hasVectorInput is
@@ -2599,6 +2603,65 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
   }
 }
 
+std::optional<std::pair<size_t, size_t>> getPrefixTransposeDiffRange(const TransposeVectorInfo &info) {
+  if (info.sourceAxisOrder.size() < 3 || info.sourceAxisOrder.size() != info.targetAxisOrder.size()) {
+    return std::nullopt;
+  }
+
+  size_t firstDiff = info.sourceAxisOrder.size();
+  size_t lastDiff = 0;
+  for (size_t i = 0; i < info.sourceAxisOrder.size(); ++i) {
+    if (info.sourceAxisOrder[i] == info.targetAxisOrder[i]) continue;
+    if (firstDiff == info.sourceAxisOrder.size()) firstDiff = i;
+    lastDiff = i;
+  }
+  if (firstDiff == info.sourceAxisOrder.size() || lastDiff + 1 >= info.sourceAxisOrder.size()) {
+    return std::nullopt;
+  }
+  return std::make_pair(firstDiff, lastDiff);
+}
+
+void preserveDegeneratePrefixTransposeAxes(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.transposeInfos.empty() || plan.innerTiles.size() != plan.multiVecAxisMask.size()) return;
+
+  auto isAxisMarked = [&](size_t axisIdx) {
+    return axisIdx < plan.multiVecAxisMask.size() && plan.multiVecAxisMask[axisIdx];
+  };
+  auto markUnitNonReductionAxis = [&](size_t axisIdx) {
+    if (axisIdx >= plan.innerTiles.size() || axisIdx >= ctx.axes.size()) return;
+    if (plan.innerTiles[axisIdx] != 1 || isReductionAxis(ctx.axes[axisIdx])) return;
+    plan.multiVecAxisMask[axisIdx] = true;
+  };
+
+  for (const TransposeVectorInfo &info : ctx.transposeInfos) {
+    std::optional<std::pair<size_t, size_t>> diffRange = getPrefixTransposeDiffRange(info);
+    if (!diffRange) continue;
+    size_t firstDiff = diffRange->first;
+    size_t lastDiff = diffRange->second;
+
+    bool hasActivePermutedAxis = false;
+    for (size_t dim = firstDiff; dim <= lastDiff; ++dim) {
+      hasActivePermutedAxis |= isAxisMarked(info.sourceAxisOrder[dim]) || isAxisMarked(info.targetAxisOrder[dim]);
+    }
+    if (!hasActivePermutedAxis) continue;
+
+    bool hasActiveCommonInnerSuffix = false;
+    for (size_t dim = lastDiff + 1; dim < info.sourceAxisOrder.size(); ++dim) {
+      if (info.sourceAxisOrder[dim] != info.targetAxisOrder[dim]) {
+        hasActiveCommonInnerSuffix = false;
+        break;
+      }
+      hasActiveCommonInnerSuffix |= isAxisMarked(info.sourceAxisOrder[dim]);
+    }
+    if (!hasActiveCommonInnerSuffix) continue;
+
+    for (size_t dim = firstDiff; dim <= lastDiff; ++dim) {
+      markUnitNonReductionAxis(info.sourceAxisOrder[dim]);
+      markUnitNonReductionAxis(info.targetAxisOrder[dim]);
+    }
+  }
+}
+
 // Attach `kMultiVecLoopAttr` to the original (un-tiled) loop ops of axes that
 // participate in multi-dim vectorization. `copySemanticLoopAttrsToPointLoop`
 // later carries the marker to the resulting point loops, which is what the
@@ -2643,6 +2706,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
     // in the prefix.
     computeOuterTilesParallelBased(ctx, parallelDim, plan);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
+    preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
     return true;
   }
@@ -2811,37 +2875,6 @@ void adjustParallelAxisOuterTile(const NpuBandContext &ctx, BandTilePlan &plan) 
   innerTile = std::min<int64_t>(alignUpInt64(innerTile, alignUnit), outerTile);
   plan.outerTiles[axisIdx] = saturateToTileValue(outerTile);
   plan.innerTiles[axisIdx] = saturateToTileValue(innerTile);
-}
-
-void annotateSpecialStrideAlignedBuffers(const NpuBandContext &ctx, const BandTilePlan &plan) {
-  if (ctx.hasDynamicAxis) return;
-  // NOTE: transpose path is intentionally NOT skipped here. bishengir's
-  // transpose-specific alignment is already complete on its own; the sub-byte
-  // cmp annotation we add below is orthogonal and harmless on transpose bands.
-  SmallVector<int64_t, 6> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
-  forEachBishengVectorNode(
-    ctx, [&](const NodePtr &node, Operation *op, bool, bool hasVectorInput, ArrayRef<size_t> axisOrder) {
-      if (!hasVectorInput || classifyVectorOp(op) != VectorOpKind::Compare || op->getNumResults() == 0) return;
-      // Always clear any stale annotation first, even if we end up skipping below:
-      // the schedule may have changed between runs, so we never leak an outdated value.
-      op->removeAttr(kVectorAlignedBufferSizeInByteAttr);
-      int64_t resultBits = getValueElementBits(op->getResult(0));
-      // Only sub-byte cmp results need this hint; >=byte results follow the
-      // regular MarkOp-based buffer-size propagation in ArithToHIVM.
-      if (resultBits <= 0 || resultBits >= kBitsPerByte) return;
-      SmallVector<size_t, 6> vectorAxisOrder;
-      for (size_t axisIdx : axisOrder) {
-        int64_t tile = axisIdx < axisTiles.size() ? axisTiles[axisIdx] : 1;
-        if (tile > 1) vectorAxisOrder.push_back(axisIdx);
-      }
-      SmallVector<int32_t, 6> alignDims = getBishengStrideAlignDims(ctx, node, op, vectorAxisOrder);
-      if (alignDims.empty()) return;
-      VectorLiveReserve reserve{std::move(vectorAxisOrder), alignDims, resultBits};
-      int64_t bytes = computeReserveBytes(ctx, reserve, axisTiles);
-      if (bytes <= 0 || bytes == LLONG_MAX) return;
-      op->setAttr(kVectorAlignedBufferSizeInByteAttr,
-                  IntegerAttr::get(IntegerType::get(op->getContext(), 64), bytes));
-    });
 }
 
 void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan,
@@ -3044,7 +3077,6 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
       if (!bandPlan.usesMultiVecScheme) {
         adjustParallelAxisOuterTile(bandCtx, bandPlan);
       }
-      annotateSpecialStrideAlignedBuffers(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
       tagMultiVecLoops(bandAxes, bandPlan);
       continue;
