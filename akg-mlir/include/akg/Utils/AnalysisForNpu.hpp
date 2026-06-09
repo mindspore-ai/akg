@@ -281,6 +281,20 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
                       kNpuUbAlignBytes);
 }
 
+inline int64_t computeBishengStrideAlignedStorageBytesWithTrailingUnit(ArrayRef<int64_t> shape,
+                                                                       ArrayRef<char> staticDims,
+                                                                       ArrayRef<int32_t> alignDims,
+                                                                       int64_t elementBits) {
+  if (shape.empty() || staticDims.size() != shape.size() || elementBits <= 0) return 0;
+
+  SmallVector<int64_t, 6> storageShape(shape.begin(), shape.end());
+  SmallVector<char, 6> storageStaticDims(staticDims.begin(), staticDims.end());
+  // BiShengIR EnableStrideAlign materializes aligned storage with a trailing unit dimension.
+  storageShape.push_back(1);
+  storageStaticDims.push_back(true);
+  return computeBishengStrideAlignedStorageBytes(storageShape, storageStaticDims, alignDims, elementBits);
+}
+
 inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> typeShape,
                                                        Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
@@ -293,6 +307,24 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
   }
   return computeBishengStrideAlignedStorageBytes(
     shape, staticDims, getBishengStorageStrideAlignDims(staticDims), elementBits);
+}
+
+inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankDim, ArrayRef<int64_t> typeShape,
+                                                   Type elemType) {
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) return 0;
+
+  SmallVector<int64_t, 6> shape;
+  SmallVector<char, 6> staticDims;
+  shape.reserve(typeShape.size());
+  staticDims.reserve(typeShape.size());
+  for (size_t i = 0; i < typeShape.size(); ++i) {
+    bool isDynamic = ShapedType::isDynamic(typeShape[i]);
+    shape.push_back(isDynamic ? maxPerRankDim[i] : typeShape[i]);
+    staticDims.push_back(!isDynamic);
+  }
+  return computeBishengStrideAlignedStorageBytesWithTrailingUnit(
+    shape, staticDims, getDefaultBishengStrideAlignDims(static_cast<int64_t>(typeShape.size())), elementBits);
 }
 
 }  // namespace akg
