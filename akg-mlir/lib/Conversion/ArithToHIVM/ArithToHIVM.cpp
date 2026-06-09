@@ -1054,7 +1054,7 @@ static std::optional<int64_t> computeNPUVectorF16TempBufferBytes(Operation *op, 
     return std::nullopt;
   }
 
-  int64_t bytes = computeNPUVectorMarkBufferBytes(npuVectorType, rewriter.getF16Type(), *maxShape);
+  int64_t bytes = computeBishengNpuVectorStorageBytes(*maxShape, npuVectorType.getShape(), rewriter.getF16Type());
   if (bytes <= 0 || bytes == LLONG_MAX) {
     return std::nullopt;
   }
