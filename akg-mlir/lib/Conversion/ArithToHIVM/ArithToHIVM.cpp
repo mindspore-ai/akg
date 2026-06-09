@@ -1002,8 +1002,8 @@ struct NPUVectorBitcastToHIVM : public OpConversionPattern<npuvector::BitcastOp>
   }
 };
 
-static FailureOr<Value> castI8ToF16ForVCmp(ConversionPatternRewriter &rewriter, Location loc, Value input,
-                                           std::optional<int64_t> alignedBufferBytes = std::nullopt) {
+static FailureOr<Value> castI8ToF16ForHIVMValue(ConversionPatternRewriter &rewriter, Location loc, Value input,
+                                                std::optional<int64_t> alignedBufferBytes = std::nullopt) {
   Type elemType = getElementTypeOrSelf(input.getType());
   if (!elemType.isInteger(8)) {
     return input;
@@ -1016,7 +1016,7 @@ static FailureOr<Value> castI8ToF16ForVCmp(ConversionPatternRewriter &rewriter, 
       return failure();
     }
     if (alignedBufferBytes && *alignedBufferBytes > 0) {
-      // Same-shape i8 -> f16 vcmp temps still need their own stride-aligned byte size.
+      // Same-shape i8 -> f16 temps still need their own stride-aligned byte size.
       setBufferSizeMark(rewriter, loc, *f16Buf, *alignedBufferBytes);
     } else {
       propagateBufferSizeMark(rewriter, loc, input, *f16Buf);
@@ -1034,17 +1034,36 @@ static FailureOr<Value> castI8ToF16ForVCmp(ConversionPatternRewriter &rewriter, 
 
 static LogicalResult legalizeI8VCmpOperands(ConversionPatternRewriter &rewriter, Location loc, Value &lhs, Value &rhs,
                                             std::optional<int64_t> alignedBufferBytes = std::nullopt) {
-  auto castedLhs = castI8ToF16ForVCmp(rewriter, loc, lhs, alignedBufferBytes);
+  auto castedLhs = castI8ToF16ForHIVMValue(rewriter, loc, lhs, alignedBufferBytes);
   if (failed(castedLhs)) {
     return failure();
   }
-  auto castedRhs = castI8ToF16ForVCmp(rewriter, loc, rhs, alignedBufferBytes);
+  auto castedRhs = castI8ToF16ForHIVMValue(rewriter, loc, rhs, alignedBufferBytes);
   if (failed(castedRhs)) {
     return failure();
   }
   lhs = *castedLhs;
   rhs = *castedRhs;
   return success();
+}
+
+static std::optional<int64_t> computeNPUVectorF16TempBufferBytes(Operation *op, Type resType,
+                                                                 ConversionPatternRewriter &rewriter) {
+  auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType);
+  if (!npuVectorType) {
+    return std::nullopt;
+  }
+
+  auto maxShape = inferNPUVectorMaxShapeFromOperands(op, npuVectorType);
+  if (failed(maxShape)) {
+    return std::nullopt;
+  }
+
+  int64_t bytes = computeNPUVectorMarkBufferBytes(npuVectorType, rewriter.getF16Type(), *maxShape);
+  if (bytes <= 0 || bytes == LLONG_MAX) {
+    return std::nullopt;
+  }
+  return bytes;
 }
 
 template <typename CompareOp>
@@ -1433,6 +1452,10 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
     Value cond = adaptor.getCondition();
     Value trueVal = adaptor.getTrueValue();
     Value falseVal = adaptor.getFalseValue();
+    std::optional<int64_t> f16TempBufferBytes;
+    if (elemType.isInteger(8)) {
+      f16TempBufferBytes = computeNPUVectorF16TempBufferBytes(op.getOperation(), resType, rewriter);
+    }
 
     auto memRefType = MemRefType::get(shape, elemType);
     SmallVector<Value> allocOperands;
@@ -1447,6 +1470,31 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
     }
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
     propagateSelectBufferSizeMark(rewriter, loc, trueVal, falseVal, resBuf);
+
+    if (elemType.isInteger(8)) {
+      auto castedTrueVal = castI8ToF16ForHIVMValue(rewriter, loc, trueVal, f16TempBufferBytes);
+      if (failed(castedTrueVal)) {
+        return failure();
+      }
+      auto castedFalseVal = castI8ToF16ForHIVMValue(rewriter, loc, falseVal, f16TempBufferBytes);
+      if (failed(castedFalseVal)) {
+        return failure();
+      }
+
+      auto f16MemRefType = MemRefType::get(shape, rewriter.getF16Type());
+      Value f16ResBuf = rewriter.create<memref::AllocOp>(loc, f16MemRefType, allocOperands);
+      if (!f16TempBufferBytes || !setBufferSizeMark(rewriter, loc, f16ResBuf, *f16TempBufferBytes)) {
+        propagateSelectBufferSizeMark(rewriter, loc, *castedTrueVal, *castedFalseVal, f16ResBuf);
+      }
+
+      rewriter.create<hivm::VSelOp>(loc, TypeRange{}, ValueRange{cond, *castedTrueVal, *castedFalseVal},
+                                    ValueRange{f16ResBuf}, Value(), SmallVector<int64_t>{}, SmallVector<int64_t>{});
+      auto roundAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::TRUNC);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f16ResBuf, resBuf, roundAttr, hivm::TypeFnAttr{});
+
+      rewriter.replaceOp(op, resBuf);
+      return success();
+    }
 
     rewriter.create<hivm::VSelOp>(loc, TypeRange{}, ValueRange{cond, trueVal, falseVal}, ValueRange{resBuf}, Value(),
                                   SmallVector<int64_t>{}, SmallVector<int64_t>{});
