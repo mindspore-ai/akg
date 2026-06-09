@@ -40,11 +40,11 @@ module {
       ^bb0(%arg_x: tensor<4x128x7x7xf32>, %arg_scalar: tensor<f32>, %arg_alt: tensor<4x128x7x7xf32>,
            %arg_stat1: tensor<128xf32>, %arg_stat2: tensor<128xf32>, %arg_input2: tensor<4x128x7x7xf32>,
            %arg_gamma: tensor<128xf32>):
-        %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-        %zero = mfuse.constant dense<0.000000e+00> : tensor<f32, {is_scalar = ""}>
-        %mask = mfuse.le %arg_x, %zero : (tensor<4x128x7x7xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x128x7x7xi1>
+        %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+        %zero = mfuse.constant dense<0.000000e+00> : tensor<f64, {is_scalar = ""}>
+        %mask = mfuse.le %arg_x, %zero : (tensor<4x128x7x7xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x128x7x7xi1>
         %selected = mfuse.select %mask, %arg_scalar, %arg_alt : (tensor<4x128x7x7xi1>, tensor<f32>, tensor<4x128x7x7xf32>) -> tensor<4x128x7x7xf32>
-        %var_eps = mfuse.add %arg_stat1, %eps : (tensor<128xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<128xf32>
+        %var_eps = mfuse.add %arg_stat1, %eps : (tensor<128xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<128xf32>
         %inv_std = mfuse.rsqrt %var_eps : (tensor<128xf32>) -> tensor<128xf32>
         %stat2_reshaped = mfuse.reshape %arg_stat2 {is_squeeze_like = true} : (tensor<128xf32>) -> tensor<1x128x1x1xf32>
         %sum1 = mfuse.reduce_sum %selected {dimensions = [0, 2, 3], keepdim = false} : (tensor<4x128x7x7xf32>) -> tensor<128xf32>

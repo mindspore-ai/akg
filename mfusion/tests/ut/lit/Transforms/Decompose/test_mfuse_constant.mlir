@@ -1,9 +1,9 @@
 // RUN: mfusion-opt %s | FileCheck %s
 
-func.func @test_mfuse_constant() -> tensor<f32, {is_scalar = ""}> {
+func.func @test_mfuse_constant() -> tensor<f64, {is_scalar = ""}> {
   // CHECK-LABEL: func @test_mfuse_constant
-  %0 = mfuse.constant dense<42.0> : tensor<f32, {is_scalar = ""}>
-  return %0 : tensor<f32, {is_scalar = ""}>
+  %0 = mfuse.constant dense<42.0> : tensor<f64, {is_scalar = ""}>
+  return %0 : tensor<f64, {is_scalar = ""}>
 }
 
 func.func @test_mfuse_constant_int() -> tensor<i32, {is_scalar = ""}> {

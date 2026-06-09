@@ -19,6 +19,7 @@
 
 include "mfusion/Dialect/Dvm/IR/DvmDialect.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/BuiltinAttributes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/IR/EnumAttr.td"
@@ -88,9 +89,11 @@ def Dvm_BinaryOpType : I32EnumAttr<"BinaryOpType", "DVM binary operation type",
 }
 
 def Dvm_ReduceOpSum : I32EnumAttrCase<"Sum", 0>;
+def Dvm_ReduceOpMax : I32EnumAttrCase<"Max", 1>;
+def Dvm_ReduceOpMin : I32EnumAttrCase<"Min", 2>;
 
 def Dvm_ReduceOpType : I32EnumAttr<"ReduceOpType", "DVM reduce operation type",
-    [Dvm_ReduceOpSum]> {
+    [Dvm_ReduceOpSum, Dvm_ReduceOpMax, Dvm_ReduceOpMin]> {
   let cppNamespace = "::mlir::dvm";
   let description = [{
     Enum for ReduceOp input parameter.
@@ -235,6 +238,52 @@ def Dvm_BinaryOp : Dvm_Op<"binary", [Pure]> {
   let assemblyFormat = [{
     $op_type $lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)
   }];
+
+  let hasVerifier = 1;
+}
+
+def Dvm_BinaryScalarOp : Dvm_Op<"binary_scalar", [Pure]> {
+  let summary = "Generic binary operation with one scalar operand";
+  let description = [{
+    Represents a binary operation in DVM where one operand is a tensor and the
+    other is an inline scalar attribute.
+
+    The custom assembly format preserves the logical lhs/rhs order:
+
+      dvm.binary_scalar Pow %x, 2 : tensor<4xf32>, i32 -> tensor<4xf32>
+      dvm.binary_scalar Sub 0.0, %x : f32, tensor<4xf32> -> tensor<4xf32>
+
+    Internally, the op stores only the tensor SSA operand plus the scalar
+    attribute. The scalar_on_lhs attribute records which textual side the
+    scalar occupied.
+  }];
+
+  let arguments = (ins
+    Dvm_BinaryOpType:$op_type,
+    AnyRankedTensor:$input,
+    TypedAttrInterface:$scalar,
+    BoolAttr:$scalar_on_lhs
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType,
+                   "::mlir::dvm::BinaryOpTypeAttr":$opType,
+                   "::mlir::Value":$input,
+                   "::mlir::Attribute":$scalar,
+                   "bool":$scalarOnLhs), [{
+      $_state.addAttribute("op_type", opType);
+      $_state.addOperands(input);
+      $_state.addAttribute("scalar", scalar);
+      $_state.addAttribute("scalar_on_lhs", $_builder.getBoolAttr(scalarOnLhs));
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -292,6 +341,51 @@ def Dvm_SelectOp : Dvm_Op<"select", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Constant Operation
+// Represents a scalar constant value that can be inlined in code generation
+//===----------------------------------------------------------------------===//
+
+def Dvm_ConstantOp : Dvm_Op<"constant", [Pure, ConstantLike]> {
+  let summary = "Scalar constant operation";
+  let description = [{
+    Creates a scalar constant value as a tensor from dense attribute.
+
+    This op is used to represent constant scalar values in DVM. During Python
+    code generation, if an operand comes from a dvm.constant, the constant
+    value can be inlined directly instead of creating a separate load operation.
+
+    Example: `dvm.constant dense<9.7> : tensor<f32>`
+    Python: `k.add(arg0, 9.7)` instead of loading a constant tensor first.
+
+    Note: Only scalar constants (shape=[], e.g. tensor<f32>) are supported.
+    Element types are restricted to the scalar types supported by the current
+    DVM runtime scalar APIs: f32, i32, f16 and bf16. f64, i64 and i1 are
+    rejected before DVM serialization/runtime.
+  }];
+
+  let arguments = (ins TypedAttrInterface:$value);
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Attribute":$value), [{
+      $_state.addAttribute("value", value);
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    ::mlir::OpFoldResult fold(FoldAdaptor adaptor) {
+      return getValueAttr();
+    }
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Cast Operation
 // Maps to: dvm::Kernel::Cast(NDObject* input, DType type)
 //===----------------------------------------------------------------------===//
@@ -332,6 +426,49 @@ def Dvm_BroadcastOp : Dvm_Op<"broadcast", [Pure]> {
   let results = (outs AnyRankedTensor:$result);
 
   let assemblyFormat = "$input `shape` $shape attr-dict `:` type($input) `->` type($result)";
+}
+
+def Dvm_BroadcastScalarOp : Dvm_Op<"broadcast_scalar", [Pure]> {
+  let summary = "Broadcast scalar operation";
+  let description = [{
+    Broadcasts an inline scalar attribute to a new shape.
+    Maps directly to `dvm::Kernel::Broadcast(value, shape, dtype)`.
+
+    The scalar attribute stores the C++ scalar value to pass to the templated
+    runtime API. The `type` attribute stores the logical DVM result dtype. For
+    bool results, `type` is Bool while the scalar may still use any supported
+    scalar value type, matching `dvm::Kernel::Broadcast(value, shape, dtype)`.
+    i1/bool scalar attributes are not supported by the DVM scalar ABI.
+
+    Example:
+      dvm.broadcast_scalar 1.000000e+00 shape [4, 4] type Float32 : f32 -> tensor<4x4xf32>
+      dvm.broadcast_scalar 1 shape [4, 4] type Bool : i32 -> tensor<4x4xi1>
+      dvm.broadcast_scalar 5.000000e-01 shape [4, 4] type Bool : f32 -> tensor<4x4xi1>
+  }];
+
+  let arguments = (ins
+    TypedAttrInterface:$scalar,
+    I64ArrayAttr:$shape,
+    Dvm_DType:$type
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType,
+                   "::mlir::Attribute":$scalar,
+                   "::mlir::ArrayAttr":$shape,
+                   "::mlir::dvm::DTypeAttr":$type), [{
+      $_state.addAttribute("scalar", scalar);
+      $_state.addAttribute("shape", shape);
+      $_state.addAttribute("type", type);
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
