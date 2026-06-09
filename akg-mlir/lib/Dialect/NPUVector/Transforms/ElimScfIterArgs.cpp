@@ -321,8 +321,8 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
         }
       }
     });
-    for (auto it = targets.rbegin(); it != targets.rend(); ++it) {
-      transformForOp(*it);
+    for (scf::ForOp forOp : targets) {
+      transformForOp(forOp);
     }
   }
 
