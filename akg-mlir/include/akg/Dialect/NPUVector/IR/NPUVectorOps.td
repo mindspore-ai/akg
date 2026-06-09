@@ -716,5 +716,58 @@ def NPUVector_TransposeOp :
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// ExtractSliceOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_ExtractSliceOp :
+  NPUVector_Op<"extract_slice", [Pure, AttrSizedOperandSegments]>,
+    Arguments<(ins NPUVectorOfAnyRank:$source,
+                   Variadic<Index>:$offsets,
+                   Variadic<Index>:$sizes,
+                   Variadic<Index>:$strides,
+                   DenseI64ArrayAttr:$keep_dims)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "Extract a (optionally rank-reduced) sub-tile from an !npuvector.";
+  let description = [{
+    Projects a sub-tile out of an `!npuvector` value, analogous to
+    `memref.subview` / `tensor.extract_slice` but acting on an SSA NPU vector tile.
+
+    `offsets`, `sizes`, `strides` each have one `Index` SSA value per **source**
+    dimension. `keep_dims` is a strictly increasing subsequence of `[0, srcRank)`
+    whose length equals the result rank: result dimension `r` comes from source
+    dimension `keep_dims[r]`. Source dimensions that are dropped (not in
+    `keep_dims`) must be sliced with size `1`. Element type is preserved.
+
+    This op is the canonical way for the vectorizer to forward a high-rank scratch
+    tile (kept entirely in SSA after `AllocBufferShrink`) into the lower-rank tiles
+    that downstream consumers expect, without materializing a physical write to the
+    shrunk buffer.
+
+    Example:
+
+    ```mlir
+    // keep dims 0,1; drop the trailing channel dim at offset %c1.
+    %sub = npuvector.extract_slice %src [%c0, %c0, %c1] [%s0, %s1, %c1] [%c1, %c1, %c1]
+             {keep_dims = array<i64: 0, 1>}
+           : !npuvector<?x?x2xbf16> to !npuvector<?x?xbf16>
+    ```
+  }];
+
+  let assemblyFormat = [{
+    $source `[` $offsets `]` `[` $sizes `]` `[` $strides `]` attr-dict
+    `:` qualified(type($source)) `to` qualified(type($result))
+  }];
+
+  let extraClassDeclaration = [{
+    NPUVectorType getSourceVectorType() {
+      return ::llvm::cast<NPUVectorType>(getSource().getType());
+    }
+    NPUVectorType getResultVectorType() {
+      return ::llvm::cast<NPUVectorType>(getResult().getType());
+    }
+  }];
+}
+
 #endif // NPUVECTOR_OPS
 
