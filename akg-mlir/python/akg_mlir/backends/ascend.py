@@ -20,6 +20,7 @@ import json
 import logging
 import subprocess
 import numpy as np
+import acl
 
 flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
@@ -141,8 +142,9 @@ def akg_opt(
         options.append("dynamic-shape=true")
     if not enable_loop_fusion:
         options.append("enable-loop-fusion=false")
-    if arch:
-        options.append(f"arch={arch}")
+    if not arch:
+        arch = acl.get_soc_name()
+    options.append(f"arch={arch}")
 
     if options:
         ascend_opt_option += "=" + " ".join(options)

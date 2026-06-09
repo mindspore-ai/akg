@@ -962,7 +962,7 @@ class PureElemwiseTiling : public TilingBase {
 };
 
 struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
-  NPUAutoTiling() = default;
+  explicit NPUAutoTiling(StringRef arch = StringRef()) : arch(arch.str()) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -976,6 +976,9 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
       auto kind = f->getAttrOfType<StringAttr>(HACCFuncTypeAttr::name);
       if (kind && kind.getValue() == "DEVICE") {
         return;
+      }
+      if (!arch.empty() && !f->hasAttr("arch")) {
+        f->setAttr("arch", StringAttr::get(f.getContext(), arch));
       }
       kernels.push_back(f);
     });
@@ -993,11 +996,14 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
       }
     }
   }
+
+ private:
+  std::string arch;
 };
 
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUAutoTilingPass() {
-  return std::make_unique<NPUAutoTiling>();
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUAutoTilingPass(const std::string &arch) {
+  return std::make_unique<NPUAutoTiling>(arch);
 }
