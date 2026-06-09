@@ -47,16 +47,6 @@ Pattern ConvertMfuseLogicalOr {
   replace root with op<torch.aten.logical_or>(convertValues(operands)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseMaximum {
-  let root = op<mfuse.maximum>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.maximum>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMfuseMinimum {
-  let root = op<mfuse.minimum>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.minimum>(convertValues(operands)) -> (convertType(result));
-}
-
 Pattern ConvertMfuseNeg {
   let root = op<mfuse.neg>(input: Value) -> (result: Type);
   replace root with op<torch.aten.neg>(convertValue(input)) -> (convertType(result));
