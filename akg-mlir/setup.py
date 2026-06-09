@@ -30,19 +30,25 @@ logger = logging.getLogger(__name__)
 
 
 def check_env_flag(name: str, default: str = "OFF") -> bool:
+    """check env flag"""
     val = os.getenv(name, default)
     return val.upper() in ("ON", "1", "YES", "TRUE", "Y")
 
 
 def read_version() -> str:
+    """Read the package version from version.txt."""
     try:
         version_file = Path(__file__).parent / "version.txt"
         return version_file.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return "3.0.0"
 
+def get_cmake():
+    """get cmake"""
+    return shutil.which("cmake")
 
 def get_cmake_generator() -> str:
+    """Determine the CMake generator to use."""
     if shutil.which("ninja"):
         logger.info("Using Ninja generator for faster builds")
         return "Ninja"
@@ -53,7 +59,7 @@ def check_cmake_version(min_version: str = "3.15") -> None:
     """get cmake version"""
     try:
         result = subprocess.run(
-            ["cmake", "--version"],
+            [get_cmake(), "--version"],
             capture_output=True,
             text=True,
             check=True
@@ -86,7 +92,7 @@ class CMakeConfig:
     def get_configure_args(self) -> List[str]:
         """get cmake args"""
         args = [
-            "cmake",
+            get_cmake(),
             "-G", self.generator,
             f"-DCMAKE_BUILD_TYPE={self.build_type}",
             str(self.base_dir),
@@ -107,7 +113,7 @@ class CMakeConfig:
     def get_build_args(self) -> List[str]:
         """get build args"""
         return [
-            "cmake",
+            get_cmake(),
             "--build", ".",
             "--config", self.build_type,
             "--", f"-j{self.max_jobs}", ]

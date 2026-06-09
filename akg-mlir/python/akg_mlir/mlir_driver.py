@@ -44,6 +44,7 @@ KERNEL_NAME = "kernelName"
 STATIC_TILE_IMPL = "StaticTileImpl"
 PROF_ERROR_CODE = 9999999999
 
+
 def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
     kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
@@ -51,6 +52,7 @@ def get_kernel_meta_path():
         os.path.realpath(os.getenv("MS_COMPILER_CACHE_PATH", "")),
         kernel_meta_dir,
     )
+
 
 def validate_and_normalize_path(
     path,
@@ -94,15 +96,18 @@ def validate_and_normalize_path(
 
     return normalized_path
 
+
 def _is_single_op(desc_d):
     """Return the number of desc op is 1."""
     input_lists = desc_d.get("op_desc", [])
     return len(input_lists) <= 1
 
+
 def generate_unique_hash(input_str):
     """Return the hash of input."""
     unique_hash = hashlib.md5(input_str.encode("utf8")).hexdigest()
     return unique_hash
+
 
 def deal_input(desc):
     """Deal input dict."""
@@ -110,18 +115,22 @@ def deal_input(desc):
         if len(input_desc[0]["shape"]) == 1 and input_desc[0]["shape"][0] == 1 and "value" in input_desc[0]:
             input_desc[0]["value"] = 0
 
+
 def del_value(desc):
     """Deal op desc."""
     for operation in desc["op_desc"]:
         deal_input(operation)
     desc["op"] = ""
 
+
 def get_npucompiler_path():
     """Return the path of bishengir-compile."""
     npu_compiler_path = shutil.which("bishengir-compile")
     if npu_compiler_path is None:
         raise EnvironmentError("Couldn't find executable bishengir-compile.")
+
     return npu_compiler_path
+
 
 def _compile_lib(kernel_name, file_path="./tmp_files/"):
     """Compile cuda runtime source."""
@@ -134,8 +143,10 @@ def _compile_lib(kernel_name, file_path="./tmp_files/"):
     try:
         subprocess.run(cmd, check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
+
         logging.error("run compile lib failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("nvcc compile failed in converting the case: " + kernel_name + "!\n") from e
+
 
 def create_executable(kernel_name,
                       input_for_mod,
@@ -162,15 +173,19 @@ def create_executable(kernel_name,
         raise RuntimeError("Load cuda runtime lib fail") from e
     return lib
 
+
 def profiling_analyse(arch):
+    """Analyse Ascend kernel profiling data and return task duration."""
     public_path = os.getenv('PROFILING_DIR')
     if public_path is None:
         raise RuntimeError("Environment PROFILING_DIR not set!")
     public_path = validate_and_normalize_path(public_path)
     CANNFileParser(public_path).export_cann_profiling()
+
     cann_file_parser = OpSummaryParser(public_path, arch)
     task_duration = cann_file_parser.generate_op_summary_data()
     return task_duration
+
 
 def transform_data_to_ctypes(data,
                              kernel_name,
@@ -185,32 +200,38 @@ def transform_data_to_ctypes(data,
             max_len = max(max_len, len(shape))
         return max_len
 
+    def get_shape_arg_list(data, kernel_name, is_dyn_shape, is_profile_params):
+        """ get shape arg list """
+        shape_arg_list = []
+        device_shape, _, _ = get_device_shape(data, kernel_name, is_dyn_shape and not is_profile_params)
+        for data_idx, d in enumerate(data):
+            shape_list = [0]
+            data_shape = device_shape[data_idx]
+            if isinstance(d, int):
+                data_ctypes.append(ctypes.c_int(d))
+            elif isinstance(d, np.ndarray):
+                data_ctypes.append(d.ctypes.data_as(int_p))
+                shape_list += list(data_shape)
+                # for tensor (m, n, k), strides is [n*k, k, 1]
+                stride_list = [1] * len(data_shape)
+                for idx, _ in enumerate(data_shape[1:]):
+                    stride_list[-idx - 2] = stride_list[-idx - 1] * \
+                        data_shape[-idx - 1]
+                shape_list += stride_list
+            else:
+                raise TypeError("wrong data to cytpes, current type is '", type(d), "'")
+            shape_list += ([0] *
+                           (1 + 2 * 0 if is_profile_params else get_max_shape_length(device_shape) - len(shape_list)))
+            shape_arg_list.append(shape_list)
+        return shape_arg_list
+
     data_ctypes = []
     if len(data) == 0:
         # dynamic shape info cannot generate inputs while compilation
         return data_ctypes
-    shape_arg_list = []
     int_p = ctypes.POINTER(ctypes.c_int)
-    device_shape, _, _ = get_device_shape(data, kernel_name, is_dyn_shape and not is_profile_params)
+    shape_arg_list = get_shape_arg_list(data, kernel_name, is_dyn_shape, is_profile_params)
 
-    for data_idx, d in enumerate(data):
-        shape_list = [0]
-        data_shape = device_shape[data_idx]
-        if isinstance(d, int):
-            data_ctypes.append(ctypes.c_int(d))
-        elif isinstance(d, np.ndarray):
-            data_ctypes.append(d.ctypes.data_as(int_p))
-            shape_list += list(data_shape)
-            # for tensor (m, n, k), strides is [n*k, k, 1]
-            stride_list = [1] * len(data_shape)
-            for idx, _ in enumerate(data_shape[1:]):
-                stride_list[-idx - 2] = stride_list[-idx - 1] * \
-                    data_shape[-idx - 1]
-            shape_list += stride_list
-        else:
-            raise TypeError("wrong data to cytpes, current type is '", type(d), "'")
-        shape_list += [0] * (1 + 2 * 0 if is_profile_params else get_max_shape_length(device_shape) - len(shape_list))
-        shape_arg_list.append(shape_list)
     if is_profile_params or backend == "gpu":
         return data_ctypes
     # pack parameters into an array of pointers
@@ -246,7 +267,6 @@ class MlirDriver:
         akg_tools_dir: str = "",
         llvm_tools_dir: str = "",
         dynamic_shape: bool = False,
-        log_level: bool = "INFO",
         dump_ir=False,
         mlir_timing=False,
         repo_path: str = "",
@@ -267,7 +287,6 @@ class MlirDriver:
             else akg_tools_dir
         )
         self.llvm_tools_dir = llvm_tools_dir
-        self.log_level = log_level
         self.target_info = ""
         self.dump_ir = dump_ir
         self.mlir_timing = mlir_timing

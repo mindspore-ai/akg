@@ -163,8 +163,6 @@ NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   npuGraph->InitResource();
 
   tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
-  // tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
-  // tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
 
   tilingMgr->processOn(npuGraph);
   return npuGraph;
@@ -312,19 +310,6 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp
     if (solver->solved.find(a) == solver->solved.end()) {
       solver->solve(a);
     }
-    // if (level < a->configs[kTileCfg].size()) {
-    //   auto config = a->configs[kTileCfg][level];
-    //   int tileValue = config->value;
-    //   if (tileValue == -1) {
-    //     // Dynamic case: get constraint upper bound from finalConstraint.max
-    //     const int constraintMax = config->finalConstraint.max;
-    //     resMap[axisIdx] = {static_cast<unsigned>(-1), constraintMax};
-    //   } else {
-    //     resMap[axisIdx] = {static_cast<unsigned>(tileValue), 0};
-    //   }
-    // } else {
-    //   resMap[axisIdx] = {1, 0};
-    // }
     if (level < a->configs[kTileCfg].size()) {
       resMap[axisIdx] = {a->configs[kTileCfg][level]->value, 0};
     } else {

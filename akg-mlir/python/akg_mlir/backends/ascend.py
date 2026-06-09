@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import hashlib
+import pathlib
 import json
 import logging
 import subprocess
@@ -70,6 +71,7 @@ def get_block_dim_from_mlir(mlir_path):
         return 48
     return int(match.group(1))
 
+
 def set_ascend_info(core_type, title_dict):
     """Set ascend binary metadata (magic, coreType, etc.) in title_dict by core type.
 
@@ -98,6 +100,7 @@ def get_akg_opt_path(akg_tools_dir=None):
         # Default to the directory containing this file
         akg_tools_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
+
 
 def akg_opt(
     input_file,
@@ -131,8 +134,6 @@ def akg_opt(
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    akg_opt_path = get_akg_opt_path()
-
     # Build ascend-opt option
     ascend_opt_option = "--ascend-opt"
     options = []
@@ -147,7 +148,7 @@ def akg_opt(
     if options:
         ascend_opt_option += "=" + " ".join(options)
 
-    cmd = [akg_opt_path, input_file, ascend_opt_option, "-o", output_file]
+    cmd = [get_akg_opt_path(), input_file, ascend_opt_option, "-o", output_file]
 
     if dump_ir:
         cmd.append("--mlir-print-ir-after-all")
@@ -158,10 +159,8 @@ def akg_opt(
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if dump_ir:
             if not dump_ir_path:
-                output_dir = os.path.dirname(output_file)
-                log_file_name = os.path.basename(output_file) + ".log"
-                dump_ir_path = os.path.join(output_dir, log_file_name)
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
+                dump_ir_path = pathlib.Path(output_file).with_suffix(".log")
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), "a") as f:
                 f.write(result.stderr)
         logging.debug("akg-opt pipeline success")
         return result
@@ -222,8 +221,6 @@ def bisheng_compile(input_file,
 
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
-    output_dir = os.path.dirname(output_file)
-
 
     compile_cmd = [
         "bishengir-compile",
@@ -262,17 +259,16 @@ def bisheng_compile(input_file,
             text=True,
             check=True,
         )
-        if dump_ir and dump_ir_path:
+        if dump_ir:
             if not dump_ir_path:
-                log_file_name = os.path.basename(output_file) + ".log"
-                dump_ir_path = os.path.join(output_dir, log_file_name)
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o755), "w") as f:
+                dump_ir_path = pathlib.Path(output_file).with_suffix(".log")
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
                 f.write(result.stderr)
         check_ascend_compile(output_file)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         if dump_ir and dump_ir_path:
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
                 f.write(str(e))
         raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
     logging.debug("generate ascend binary success")
@@ -280,7 +276,8 @@ def bisheng_compile(input_file,
     kernel_name = os.path.splitext(os.path.basename(output_file))[0]
     if kernel_name.startswith("lib"):
         kernel_name = kernel_name[3:]
-    dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
+    dump_ascend_meta_data(os.path.dirname(output_file), kernel_name, block_dim=block_dim)
+
 
 def ascend_compile(
     input_file,

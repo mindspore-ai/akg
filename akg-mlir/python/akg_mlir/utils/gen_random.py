@@ -82,15 +82,10 @@ def func(size_, miu_=0, sigma_=8, seed_=None):
 @func_time_required
 def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
     """Generate random array with absolution value obeys gaussian distribution."""
-    random_data_disk_path = None
-    if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
-        random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH") + "/random_data_%s_%s.bin" % (
-            str(miu), str(sigma))
-
-    if random_data_disk_path is None or (not os.path.exists(random_data_disk_path)):
+    def random_data(size, miu, sigma, epsilon, seed):
+        """no random data disk path"""
         if sigma <= 0:
-            sys.stderr.write(
-                "Error: Expect positive sigmal for gaussian distribution. but get %f\n" % sigma)
+            logging.critical("Expect positive sigmal for gaussian distribution. but get %s\n", sigma)
             sys.exit(1)
         size_c = 1
         for x in size:
@@ -111,12 +106,19 @@ def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
                 ret = np.array(pool.starmap(
                     func, zip(repeat(size_c), repeat(miu), repeat(sigma), seed_)))
         else:
-            numbers = list()
+            numbers = []
             for s in seed_:
                 numbers.extend(func(size_c, miu, sigma, s))
             ret = np.array(numbers)
         ret = ret.flatten()
         return ret[:size_c].reshape(size) + epsilon
+
+    random_data_disk_path = None
+    if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
+        random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH") + f"/random_data_{str(miu)}_{str(sigma)}.bin"
+
+    if random_data_disk_path is None or (not os.path.exists(random_data_disk_path)):
+        return random_data(size, miu, sigma, epsilon, seed)
 
     data_len = functools.reduce(lambda x, y: x * y, size)
     data_pool = np.fromfile(random_data_disk_path)
@@ -212,12 +214,12 @@ def gen_indices(indices_argument):
     attrs = indices_argument.attrs
     if op_name == "Gather":
         return gen_indices_gather(data_shape, indices_shape, indices_dtype, attrs)
-    elif op_name == "GatherNd":
+    if op_name == "GatherNd":
         return gen_indices_gather_nd(data_shape, indices_shape, indices_dtype)
-    elif op_name == "UnsortedSegmentSum":
+    if op_name == "UnsortedSegmentSum":
         return gen_indices_unsorted_segment_sum(indices_shape, indices_dtype, attrs)
     if op_name != "TensorScatterAdd":
-        raise ValueError("Input OP Name: {} Not Known!".format(op_name))
+        raise ValueError(f"Input OP Name: {op_name} Not Known!")
     return gen_indices_tensor_scatter_add(data_shape, indices_shape, indices_dtype)
 
 
