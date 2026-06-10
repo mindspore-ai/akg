@@ -825,18 +825,15 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
 }
 
 unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
+  const unsigned MIN_TILE_SIZE = 512;
   if (!axis || !axis->hasConstantBounds()) {
-    const unsigned MIN_TILE_SIZE = 512;
     return MIN_TILE_SIZE;
   }
   int64_t upperBound = axis->getConstantUpperBound();
   int64_t lowerBound = axis->getConstantLowerBound();
   unsigned extent = static_cast<unsigned>(upperBound - lowerBound);
-  // Simple ceiling division, no power of 2 alignment to avoid extreme cases
   unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
 
-  // tileSizePerBlock = llvm::bit_ceil(tileSizePerBlock);
-  const unsigned MIN_TILE_SIZE = 512;
   if (tileSizePerBlock < MIN_TILE_SIZE && extent >= MIN_TILE_SIZE) {
     tileSizePerBlock = MIN_TILE_SIZE;
   }

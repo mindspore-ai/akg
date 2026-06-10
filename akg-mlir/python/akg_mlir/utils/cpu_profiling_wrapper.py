@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
 
 """CPU Profiling Wrapper Function"""
 import argparse
-import os
-import pathlib
 from .code_template import cpu_profiling_template
 
 
@@ -38,7 +36,7 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     file_src = ""
     kernel_func_line_id = 0
     template_src = cpu_profiling_template
-    with open(file, 'r') as f:
+    with open(file, 'r', encoding='utf-8') as f:
         file_src = f.readlines()
         for idx, line in enumerate(file_src):
             if "llvm.func @Fused_" in line:
@@ -53,7 +51,7 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     kernel_func = "".join(file_src[kernel_func_line_id:])
     wrapped_timer_src = "\n".join([module_func, template_src, kernel_func])
     timer_file = file.split(".")[0] + "_wrapped_timer." + file.split(".")[1]
-    with open(timer_file, "wt") as f:
+    with open(timer_file, "wt", encoding='utf-8') as f:
         f.writelines(wrapped_timer_src)
     return timer_file
 

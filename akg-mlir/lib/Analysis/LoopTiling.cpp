@@ -2746,12 +2746,7 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   if (failed(createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape))) {
     return failure();
   }
-  // func::FuncOp tilingFuncMemAnalysis;
-  // if (failed(createTilingFuncMemAnalysis(originalKernel, builder, tilingFuncMemAnalysis, isStaticShape))) {
-  //   return failure();
-  // }
   out[0] = tilingFunc;
-  // out[1] = tilingFuncMemAnalysis;
   return success();
 }
 

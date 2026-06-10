@@ -314,9 +314,11 @@ class CodePrinter():
         """close file"""
         self.fout_.close()
 
+
 def _get_attr_dict(attr_desc):
     """Convert attribute list to dictionary."""
     return {attr["name"]: attr["value"] for attr in attr_desc}
+
 
 def _gen_uniq_file_name(op_name):
     """Generate uniq file name."""
@@ -331,10 +333,12 @@ def _gen_uniq_file_name(op_name):
     os.close(file_descriptor)
     return uni_file_name
 
+
 def _validate_indices_int32(input_tensor):
     """Validate indices tensor is int32 type."""
     if input_tensor["data_type"] != "int32":
         raise ValueError("Default indices type should be int32")
+
 
 def _create_make_indices(name, data_shape, indices_shape, indices_dtype, attrs):
     """Create MakeIndices instance."""
@@ -676,14 +680,10 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
     """Generate output data."""
     idx = 0
-    fake_output_tensors = infos["fake_output_tensors"]
-    out_nums = len(desc["output_desc"])
     for output_desc in desc["output_desc"]:
-        tensor_name = output_desc["tensor_name"]
         if infos["gen_data"]:
             shape = [1] if not output_desc["shape"] else output_desc["shape"]
-            dtype = output_desc["data_type"]
-            dtype = torch_normalize_dtype(dtype)
+            dtype = torch_normalize_dtype(output_desc["data_type"])
             if dtype == "bfloat16":
                 try:
                     from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
@@ -692,10 +692,10 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
                 dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
-        if tensor_name not in fake_output_tensors:
-            real_idx = idx - out_nums
+        if output_desc["tensor_name"] not in infos["fake_output_tensors"]:
+            real_idx = idx - len(desc["output_desc"])
             output_indexes.append(real_idx)
-            commands.append(f"expect.append({tensor_name})")
+            commands.append(f"expect.append({output_desc['tensor_name']})")
         idx += 1
 
 
@@ -723,7 +723,7 @@ def _emit_reshape(fractal_tensor, default_tensor):
     shape_new = []
     for i in range(len(shape_default) - 2):
         shape_new.append(shape_default[i])
-    for i in range(len(shape_default), 2):
+    for _ in range(len(shape_default), 2):
         shape_tmp.append(1)
     for _, sh in enumerate(shape_default):
         shape_tmp.append(sh)
@@ -765,6 +765,7 @@ def _gen_op_compute(desc, commands):
                        operation['output_desc'], operation['attr'])
         commands.append(sent)
 
+
 def _gen_torch_op_compute(desc, commands):
     """Generate torch op compute."""
     for operation in desc["op_desc"]:
@@ -777,6 +778,7 @@ def _gen_torch_op_compute(desc, commands):
         sent = dsl_fun(operation['input_desc'],
                        operation['output_desc'], attrs)
         commands.append(sent)
+
 
 def _update_inplace_tensors(infos, output_indexes, commands):
     """Update inplace tensors."""
@@ -861,12 +863,12 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     _update_inplace_tensors(infos, output_indexes, commands)
     # Update workspace
     output_indexes = _update_workspace_data(
-        desc["op"], input_for_mod, output_indexes)
+        desc.get("op"), input_for_mod, output_indexes)
 
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
     printer.out("from akg.utils.op_dsl import *", False)
-    if infos['bfloat16']:
+    if infos.get('bfloat16', False):
         printer.out("try:", True)
         printer.out("    from bfloat16 import bfloat16", True)
         printer.out("except ImportError as err:", True)

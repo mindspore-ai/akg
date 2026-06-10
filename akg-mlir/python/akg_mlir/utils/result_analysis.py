@@ -256,50 +256,42 @@ def bisect_sum(a, axis=0, keepdims=True):
 def count_unequal_element(data_expected, data_actual, rtol, atol):
     """Function for asserting unequal elements in data_actual and data_expected."""
     if not data_expected.shape == data_actual.shape:
-        raise AssertionError(
-            "'data_expected' and 'data_actual' should have the same shape")
+        raise AssertionError("'data_expected' and 'data_actual' should have the same shape")
     count = 0
-    eps = 1e-10
     if data_expected.dtype == np.bool_ and data_actual.dtype == np.bool_:
         unequal_index = np.where(np.not_equal(data_expected, data_actual))
     else:
-        res_elewise = np.isclose(
-            data_actual, data_expected, atol=atol, rtol=rtol, equal_nan=False)
-        unequal_index = np.where(np.logical_not(res_elewise))
+        unequal_index = np.where(np.logical_not(np.isclose(data_actual, data_expected,
+                                                           atol=atol, rtol=rtol, equal_nan=False)))
     if not isinstance(unequal_index, tuple):
         raise ValueError(f"unequal_index should be tuple but get {type(unequal_index)}")
-    index_len = len(unequal_index)
-    unequal_num = unequal_index[0].size
-    unequal_actual = data_actual[unequal_index]
-    unequal_expected = data_expected[unequal_index]
-    log_max_count = 32
-    while count < unequal_num:
-        if count >= log_max_count:
+    while count < unequal_index[0].size:
+        if count >= 32:
             break
         index = []
-        for i in range(index_len):
-            index.append(unequal_index[i][count])
-        a = unequal_actual[count]
-        b = unequal_expected[count]
-        is_bool = isinstance(a, np.bool_) or isinstance(b, np.bool_)
-        is_nan = np.isnan(a) or np.isnan(b)
-        is_numeric = not (is_bool or is_nan)
-        if is_numeric:
-            b_1 = b + eps if b == 0.0 else b
-            logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]",
-                          str(index), str(a), str(b), str(abs(a - b) / abs(b_1)))
+        for idx in unequal_index:
+            index.append(idx[count])
+        if (isinstance(data_actual[unequal_index][count], np.bool_) or
+                isinstance(data_expected[unequal_index][count], np.bool_) or
+                np.isnan(data_actual[unequal_index][count]) or
+                np.isnan(data_expected[unequal_index][count])):
+            logging.error("%s: Actual[%s] Expected[%s]", str(index),
+                          str(data_actual[unequal_index][count]), str(data_expected[unequal_index][count]))
         else:
-            logging.error("%s: Actual[%s] Expected[%s]",
-                          str(index), str(a), str(b))
+            b_1 = (data_expected[unequal_index][count] + 1e-10 if data_expected[unequal_index][count] == 0.0
+                   else data_expected[unequal_index][count])
+            logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]", str(index),
+                          str(data_actual[unequal_index][count]),
+                          str(data_expected[unequal_index][count]),
+                          str(abs(data_actual[unequal_index][count] - data_expected[unequal_index][count]) / abs(b_1)))
         count += 1
 
     if count != 0:
-        if unequal_num > log_max_count:
+        if unequal_index[0].size > 32:
             logging.error("...")
-            logging.error("Total %s mismatch detected!!!, Only print %s...", str(
-                unequal_num), str(log_max_count))
+            logging.error("Total %s mismatch detected!!!, Only print 32...", str(unequal_index[0].size))
         else:
-            logging.error("Total %s mismatch detected!!!", str(unequal_num))
+            logging.error("Total %s mismatch detected!!!", str(unequal_index[0].size))
 
 
 def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):
@@ -352,43 +344,36 @@ def _get_op_attr(op_name, attrs, attr_name):
 
 def _precision_analyze(desc: dict, tensors):
     """Precision analyze."""
-    exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
-                       "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
-                       "TransData", "BroadcastTo", "Assign"]
-    input_tensors = _collect_inputs(desc["input_desc"])
 
     # Construct graph of current json
     graph = {}
     ops = {}  # recorder the operator that generates the current output
     for op in desc["op_desc"]:
         if op["name"] == "InplaceAssign":
-            output = IOInfo(op["input_desc"][0][0]["tensor_name"],
-                            op["input_desc"][0][0]["data_type"])
-            inputs = IOInfo(op["input_desc"][1][0]["tensor_name"],
-                            op["input_desc"][1][0]["data_type"])
+            output = IOInfo(op["input_desc"][0][0]["tensor_name"], op["input_desc"][0][0]["data_type"])
+            inputs = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
             graph[output] = [inputs]
             ops[output] = op["name"]
-            fake_output = _get_op_attr(op["name"], op["attr"], "fake_output")
-            if not fake_output:
-                output = IOInfo(op["output_desc"][0]["tensor_name"],
-                                op["output_desc"][0]["data_type"])
-                inputs = IOInfo(op["input_desc"][2][0]["tensor_name"],
-                                op["input_desc"][2][0]["data_type"])
+            if not _get_op_attr(op["name"], op["attr"], "fake_output"):
+                output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
+                inputs = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
                 graph[output] = [inputs]
                 ops[output] = op["name"]
         else:
-            output = IOInfo(op["output_desc"][0]["tensor_name"],
-                            op["output_desc"][0]["data_type"])
+            output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
             graph[output] = _collect_inputs(op["input_desc"])
             ops[output] = op["name"]
 
     def _precision_reduce(x: IOInfo):
-        if x in input_tensors:
+        if x in _collect_inputs(desc["input_desc"]):
             logging.debug("Skip %s, because it comes from input tensors", str(x))
             return False
-        if x in ops and ops.get(x) in exclude_op_list:
-            logging.debug(
-                "Skip %s, because it comes from [%s] that will not reduce precision", str(x), str(ops.get(x)))
+        if x in ops and ops.get(x) in ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select",
+                                       "InplaceAssign", "Greater", "SelectGT", "SelectLT", "LessEqual",
+                                       "Less", "EquivFormat", "ExpandDims", "Transpose", "TransData",
+                                       "BroadcastTo", "Assign"]:
+            logging.debug("Skip %s, because it comes from [%s] that will not reduce precision",
+                          str(x), str(ops.get(x)))
             return False
         return True
 

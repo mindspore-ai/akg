@@ -38,13 +38,17 @@ class Kernel:
         self.arch = kernel_meta.get('device_name')
         self.work_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
         self.torch_path = str(torch_path)
+        self.launcher = None
 
-    def _write_mlir(self, input_mlir, mlir_path):
+    @staticmethod
+    def _write_mlir(input_mlir, mlir_path):
         with open(mlir_path, "w", encoding="utf-8") as f:
             f.write(input_mlir)
         return mlir_path
 
-    def get_block_dim(self, meta_json_path):
+    @staticmethod
+    def get_block_dim(meta_json_path):
+        """Get block dimension from the metadata JSON file."""
         if not meta_json_path:
             raise ValueError("meta_json_path is required")
         with open(meta_json_path, "r", encoding="utf-8") as f:
@@ -95,7 +99,7 @@ class Kernel:
         binary_file = os.path.join(work_dir, kernel_bin_name)
 
         if need_compile:
-            self._write_mlir(input_mlir, input_file)
+            Kernel._write_mlir(input_mlir, input_file)
 
             dump_ir_path = os.path.join(work_dir, f"{self.kernel_name}.log") if debug else None
             try:
@@ -115,13 +119,12 @@ class Kernel:
                 ) from compile_err
 
         meta_json_path = os.path.join(work_dir, f"{self.kernel_name}.json")
-        block_dim = self.get_block_dim(meta_json_path)
+        block_dim = Kernel.get_block_dim(meta_json_path)
 
         self.launcher = self.get_launcher(block_dim, binary_file)
 
     def run(self, *args, **kwargs):
         """ launch .so file by akg_ascend_backend. """
-
         try:
             self.launcher(*args, **kwargs)
             logging.debug("success launch kernel: %s", {self.kernel_name})
