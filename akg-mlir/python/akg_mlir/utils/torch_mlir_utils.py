@@ -14,12 +14,13 @@
 
 """torch op acc check pipline utils"""
 import os
-import subprocess
 import re
 import math
-from typing import Optional
 import pathlib
-from pathlib import Path
+import subprocess
+import logging
+from typing import Optional
+
 
 def _import_torch_mlir():
     """Import torch-mlir lazily.
@@ -44,7 +45,11 @@ def _import_torch_mlir():
 
     return torch_mlir_ir, TorchMlirPassManager, torch_dialect
 
-def find_first_func_name(mlir_text: str) -> Optional[str]:
+
+def find_first_func_name(input_file: str) -> Optional[str]:
+    """get kernle name"""
+    input_file = pathlib.Path(input_file)
+    mlir_text = input_file.read_text(encoding='utf-8')
     pat = re.compile(
         r"""\bfunc\.func\b(?:\s+\w+)*\s+@([^\s(]+)\s*\(""",
         re.MULTILINE,
@@ -52,10 +57,13 @@ def find_first_func_name(mlir_text: str) -> Optional[str]:
     m = pat.search(mlir_text)
     return m.group(1) if m else None
 
+
 def torch_normalize_dtype(dtype):
+    """Normalize a torch dtype string to a standard form."""
     if dtype in ("int1", "i1"):
         return "bool"
     return dtype
+
 
 def get_named_op_str(
     input_file_path: str,
@@ -82,15 +90,14 @@ def get_named_op_str(
     try:
         result = subprocess.run(
             cmd,
-            shell=True,
             capture_output=True,
             text=True,
             check=False,
         )
-        print(f"[INFO] bishengir-opt exec {kernel_name}.mlir")
+        logging.debug("bishengir-opt exec %s.mlir", kernel_name)
 
         if result.returncode != 0:
-            print("[ERROR] bishengir-opt failed")
+            logging.error("bishengir-opt failed, message: %s", result.stderr)
             raise RuntimeError(f"MLIR fail: {result.stderr[:500]}")
 
         processed_lines = []
@@ -133,12 +140,13 @@ def get_named_op_str(
         with open(output_file_path, "w", encoding="utf=8") as f:
             f.write(processed_mlir)
 
-        print(f"[INFO] wrote named-op mlir to {output_file_path}")
+        logging.debug("wrote named-op mlir to %s", output_file_path)
         return output_file_path
 
     except Exception as e:
-        print(f"[ERROR] exception: {e}")
-        raise
+        logging.error("bishengir-opt failed!")
+        raise RuntimeError("bishengir-opt failed!") from e
+
 
 def run_torch_mlir_to_json(file_path, output_file):
     """
@@ -179,15 +187,15 @@ def run_torch_mlir_to_json(file_path, output_file):
                 ")"
                 ")"
             )
-            print("[INFO] torch-to-json pipeline:")
-            print(pipeline)
+            logging.debug("torch-to-json pipeline: %s", pipeline)
             pm = torch_mlir_pass_manager.parse(pipeline)
             pm.run(module.operation)
-        print("[INFO] torch-mlir to Json success")
+        logging.debug("torch-mlir to Json success")
     except Exception as exc:
-        print("[ERROR] torch-to-json failed")
-        raise RuntimeError("torch-to-json failed") from exc
+        logging.error("torch-to-json failed!")
+        raise RuntimeError("torch-to-json failed!") from exc
     return output_file
+
 
 def run_torch_mlir_to_linalg_on_tensors(file_path, output_path):
     """
@@ -210,8 +218,8 @@ def run_torch_mlir_to_linalg_on_tensors(file_path, output_path):
         RuntimeError: if the pipeline fails
     """
     torch_mlir_ir, torch_mlir_pass_manager, torch_dialect = _import_torch_mlir()
-    file_path = Path(file_path)
-    output_path = Path(output_path)
+    file_path = pathlib.Path(file_path)
+    output_path = pathlib.Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     mlir_text = file_path.read_text(encoding="utf-8")
     try:
@@ -223,19 +231,19 @@ def run_torch_mlir_to_linalg_on_tensors(file_path, output_path):
                 "torch-backend-to-linalg-on-tensors-backend-pipeline"
                 ")"
             )
-            print("[INFO] torch-mlir to linalg-on-tensors pipeline:")
-            print(pipeline)
+            logging.debug("torch-mlir to linalg-on-tensors pipeline: %s", pipeline)
             pm = torch_mlir_pass_manager.parse(pipeline)
             pm.run(module.operation)
             output_path.write_text(str(module), encoding="utf-8")
 
-        print(f"[INFO] torch-mlir to linalg-on-tensors success: {output_path}")
+        logging.debug("torch-mlir to linalg-on-tensors success: %s", output_path)
     except Exception as exc:
-        print("[ERROR] torch-mlir to linalg-on-tensors failed")
-        raise RuntimeError("torch-mlir to linalg-on-tensors failed") from exc
+        logging.error("torch-mlir to linalg-on-tensors failed!")
+        raise RuntimeError("torch-mlir to linalg-on-tensors failed!") from exc
     return output_path
 
 _VAR_REF_RE = re.compile(r"^(output|input)_\d+$")
+
 
 def format_py_value(v):
     """Format a Python value as source code for generated NumPy reference code."""
@@ -262,6 +270,7 @@ def format_py_value(v):
         return "[" + ", ".join(format_py_value(x) for x in v) + "]"
 
     return repr(v)
+
 
 def gen_slice_tensor(dst_name, src, dim, start, end, step):
     """Generate NumPy code that approximates torch.aten.slice.Tensor semantics.
@@ -303,6 +312,7 @@ def gen_slice_tensor(dst_name, src, dim, start, end, step):
         f"{dst_name} = {src}[tuple({idx_name})]",
     ])
 
+
 def gen_slice_scatter(dst_name, base, src, dim, start, end, step):
     """Generate NumPy code that approximates torch.aten.slice_scatter semantics.
 
@@ -319,7 +329,6 @@ def gen_slice_scatter(dst_name, base, src, dim, start, end, step):
       full reimplementation of every PyTorch edge case.
     """
     idx_name = f"_{dst_name}_slices"
-    dim_name = f"_{dst_name}_dim"
     start_name = f"_{dst_name}_start"
     end_name = f"_{dst_name}_end"
     step_name = f"_{dst_name}_step"
@@ -331,22 +340,23 @@ def gen_slice_scatter(dst_name, base, src, dim, start, end, step):
 
     return "\n".join([
         f"{dst_name} = np.array({base}, copy=True)",
-        f"{dim_name} = int({dim})",
+        f"_{dst_name}_dim = int({dim})",
         f"{start_name} = {start_expr}",
         f"{end_name} = {end_expr}",
         f"{step_name} = int({step})",
-        f"{dim_size_name} = {dst_name}.shape[{dim_name}]",
+        f"{dim_size_name} = {dst_name}.shape[_{dst_name}_dim]",
         f"if {start_name} is None:",
         f"    {start_name} = 0 if {step_name} > 0 else {dim_size_name} - 1",
         f"if {end_name} is None or {end_name} >= 2**63 - 1:",
         f"    {end_name} = {dim_size_name}",
         f"{idx_name} = [slice(None)] * {dst_name}.ndim",
-        f"{idx_name}[{dim_name}] = slice({start_name}, {end_name}, {step_name})",
+        f"{idx_name}[_{dst_name}_dim] = slice({start_name}, {end_name}, {step_name})",
         f"{target_view_name} = {dst_name}[tuple({idx_name})]",
         f"if {target_view_name}.shape != {src}.shape:",
         f"    raise ValueError('slice_scatter shape mismatch: %s vs %s' % ({target_view_name}.shape, {src}.shape))",
         f"{dst_name}[tuple({idx_name})] = {src}",
     ])
+
 
 def gen_constant_pad_nd(dst_name, x, pad, value):
     """Generate reference code for torch.aten.constant_pad_nd.
@@ -365,10 +375,8 @@ def gen_constant_pad_nd(dst_name, x, pad, value):
     pad_name = f"_{dst_name}_pad"
     ndim_name = f"_{dst_name}_ndim"
     num_pad_dims_name = f"_{dst_name}_num_pad_dims"
-    slices_name = f"_{dst_name}_slices"
     pad_width_name = f"_{dst_name}_pad_width"
     i_name = f"_{dst_name}_i"
-    dim_name = f"_{dst_name}_dim"
     left_name = f"_{dst_name}_left"
     right_name = f"_{dst_name}_right"
     start_name = f"_{dst_name}_start"
@@ -379,19 +387,20 @@ def gen_constant_pad_nd(dst_name, x, pad, value):
         f"{pad_name} = list({pad})",
         f"{ndim_name} = {x}.ndim",
         f"{num_pad_dims_name} = len({pad_name}) // 2",
-        f"{slices_name} = [slice(None)] * {ndim_name}",
+        f"_{dst_name}_slices = [slice(None)] * {ndim_name}",
         f"{pad_width_name} = [(0, 0)] * {ndim_name}",
         f"for {i_name} in range({num_pad_dims_name}):",
-        f"    {dim_name} = {ndim_name} - 1 - {i_name}",
+        f"    _{dst_name}_dim = {ndim_name} - 1 - {i_name}",
         f"    {left_name} = int({pad_name}[2 * {i_name}])",
         f"    {right_name} = int({pad_name}[2 * {i_name} + 1])",
         f"    {start_name} = max(-{left_name}, 0)",
-        f"    {end_name} = {x}.shape[{dim_name}] - max(-{right_name}, 0)",
-        f"    {slices_name}[{dim_name}] = slice({start_name}, {end_name})",
-        f"    {pad_width_name}[{dim_name}] = (max({left_name}, 0), max({right_name}, 0))",
-        f"{cropped_name} = {x}[tuple({slices_name})]",
+        f"    {end_name} = {x}.shape[_{dst_name}_dim] - max(-{right_name}, 0)",
+        f"    _{dst_name}_slices[_{dst_name}_dim] = slice({start_name}, {end_name})",
+        f"    {pad_width_name}[_{dst_name}_dim] = (max({left_name}, 0), max({right_name}, 0))",
+        f"{cropped_name} = {x}[tuple(_{dst_name}_slices)]",
         f"{dst_name} = np.pad({cropped_name}, {pad_width_name}, mode='constant', constant_values={value})",
     ])
+
 
 def gen_broadcast_to(dst_name, x, shape):
     """Generate reference code for torch.aten.broadcast_to.

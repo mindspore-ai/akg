@@ -173,9 +173,15 @@ static bool isUnitNPUVector(Type t) {
   return total == 1;
 }
 
-// True when `v` is consumed by at least one npuvector broadcast op.
-static bool feedsBroadcast(Value v) {
-  return llvm::any_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
+// True when `v` is consumed *exclusively* by npuvector broadcast ops. Only such
+// a unit read is a pure scalar / broadcast source that may stay vector<1>: the
+// following broadcasts stretch its lone element across all lanes. If `v` has any
+// other (e.g. arith element-wise) consumer it must instead be tiled to the
+// register width, otherwise that consumer would mix a vector<1> operand with the
+// laneCount-wide operands and fail verification.
+static bool onlyFeedsBroadcast(Value v) {
+  return !v.use_empty() &&
+         llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
 }
 
 // Convert an `!npuvector` type to a community `vector` type, resolving every
@@ -593,19 +599,43 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     auto vecTypeOf = [&](Type elemType) { return VectorType::get({laneCount}, elemType); };
     // The register vector is always 1-D (vector<laneCount>); the permutation
     // map projects the n-D memref index space onto its innermost dimension.
-    auto permMap = AffineMap::getMinorIdentityMap(static_cast<unsigned>(indices.size()), 1, b.getContext());
+    // A memref source may have FEWER dims than the anchor iteration space when
+    // it is a broadcast operand that aligns with the innermost dims (e.g. a 1-D
+    // bias added to a 2-D tensor). Such an op must be indexed with exactly its
+    // own source rank, using the trailing induction variables, so the emitted
+    // vector.transfer_{read,write} carries the right number of indices.
+    auto sourceRank = [&](Value src) -> int64_t {
+      auto mt = llvm::dyn_cast<MemRefType>(src.getType());
+      return mt ? mt.getRank() : static_cast<int64_t>(indices.size());
+    };
+    auto trailingIndices = [&](int64_t srcRank) {
+      SmallVector<Value> result(indices.begin(), indices.end());
+      int64_t n = static_cast<int64_t>(result.size());
+      if (srcRank < n) {
+        result.erase(result.begin(), result.begin() + (n - srcRank));
+      }
+      return result;
+    };
+    auto permMapForRank = [&](int64_t srcRank) {
+      return AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), 1, b.getContext());
+    };
     auto inBounds = b.getBoolArrayAttr({true});
 
     if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
       auto nvt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
       auto elemType = nvt.getElementType();
-      // A unit (single-element) read feeding a broadcast is a scalar load. Read
-      // it at its OWN fixed indices and keep its static shape so the following
-      // broadcast can stretch the lone element across all `laneCount` lanes.
-      // Tiling it as a register-wide masked read would (a) index out of its
-      // small buffer with the loop IV and (b) degrade the broadcast into an
-      // identity op, corrupting every lane but the first.
-      if (isUnitNPUVector(nvt) && feedsBroadcast(rd.getResult())) {
+      // A unit (single-element) read whose ONLY consumers are broadcasts is a
+      // scalar load. Read it at its OWN fixed indices and keep its static shape
+      // so the following broadcast can stretch the lone element across all
+      // `laneCount` lanes. Tiling it as a register-wide masked read would (a)
+      // index out of its small buffer with the loop IV and (b) degrade the
+      // broadcast into an identity op, corrupting every lane but the first.
+      // If the read also feeds a direct (non-broadcast) element-wise op, it
+      // must be tiled to the register width instead: keeping it vector<1> would
+      // mix a vector<1> operand with laneCount-wide operands (e.g. arith.mulf)
+      // and fail verification. The broadcast consumers then become legal
+      // identity broadcasts (vector<laneCountxT> -> vector<laneCountxT>).
+      if (isUnitNPUVector(nvt) && onlyFeedsBroadcast(rd.getResult())) {
         SmallVector<int64_t> shape(nvt.getShape().begin(), nvt.getShape().end());
         auto unitVecTy = VectorType::get(shape, elemType);
         SmallVector<Value> unitIndices(rd.getIndices().size());
@@ -618,14 +648,17 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
         map.map(rd.getResult(), res);
         return success();
       }
-      Value res = b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()), indices, permMap,
+      int64_t srcRank = sourceRank(rd.getSource());
+      Value res = b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()),
+                                                   trailingIndices(srcRank), permMapForRank(srcRank),
                                                    remap(rd.getPadding()), mask, inBounds);
       map.map(rd.getResult(), res);
       return success();
     }
     if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
+      int64_t srcRank = sourceRank(wr.getSource());
       b.create<vector::TransferWriteOp>(loc, /*resultType=*/Type(), remap(wr.getVector()), remap(wr.getSource()),
-                                        indices, permMap, mask, inBounds);
+                                        trailingIndices(srcRank), permMapForRank(srcRank), mask, inBounds);
       return success();
     }
     if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
@@ -882,6 +915,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     npuv::TransferReadOp refRead;
     npuv::TransferReadOp unitRead;
     npuv::TransferWriteOp refWrite;
+    int64_t refReadRank = -1;
     for (Operation &op : entry) {
       if (auto rd = dyn_cast<npuv::TransferReadOp>(&op)) {
         // Unit reads are scalar / broadcast-source loads, never the iteration
@@ -892,8 +926,14 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
           }
           continue;
         }
-        if (!refRead) {
+        // Anchor on the highest-rank read: it spans the full iteration space.
+        // A lower-rank read (e.g. a 1-D bias broadcast onto a 2-D tensor) would
+        // under-count the loop nest and leave higher-rank reads/writes with too
+        // few indices.
+        int64_t rank = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType()).getRank();
+        if (!refRead || rank > refReadRank) {
           refRead = rd;
+          refReadRank = rank;
         }
       } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
         if (!refWrite && isNpuVectorType(wr.getVector().getType())) {

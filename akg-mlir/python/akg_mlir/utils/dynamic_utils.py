@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ SP_BLOCK_Y = 8
 
 
 def _get_symbol_expr_value(symbol_map, sym_expr):
+    """Generate symbol value."""
     accum_value = 1
     for sym in sym_expr.split("*"):
         if sym.isdigit():
@@ -43,8 +44,7 @@ def _get_symbol_expr_value(symbol_map, sym_expr):
         elif sym in symbol_map:
             accum_value *= symbol_map[sym]
         else:
-            raise RuntimeError("Symbol {} not found in symbol map {}!".format(
-                sym, symbol_map))
+            raise RuntimeError(f"Symbol {sym} not found in symbol map {symbol_map}!")
     return accum_value
 
 
@@ -64,66 +64,49 @@ def get_device_shape(input_for_mod, kernel_name, is_dyn_shape, cur_dir=""):
         device shapes and related info
     """
     host_shape = []
-    support_info = dict()
     for each_in in input_for_mod:
         if isinstance(each_in, int):
             host_shape.append(each_in)
         else:
             host_shape.append(each_in.shape)
-    symbol_map = dict()
 
     if not is_dyn_shape:
-        return host_shape, symbol_map, support_info
+        return host_shape, {}, {}
 
-    shape_info_file = os.path.join(
-        cur_dir, "akg_kernel_meta", kernel_name + "_shape_info.json")
+    shape_info_file = os.path.join(cur_dir, "akg_kernel_meta", kernel_name + "_shape_info.json")
     if not os.path.exists(shape_info_file):
         logging.warning(
             "Dynamic shape needs file %s to get the device shape. Please use "
             "`--dump-shape-info` to generate. Otherwise, the result may be incorrect.",
             str(shape_info_file))
-        return host_shape, symbol_map, support_info
+        return host_shape, {}, {}
 
     device_shape = []
-    with open(shape_info_file, "r") as f:
+    with open(shape_info_file, "r", encoding="utf-8") as f:
         shape_map = json.loads(f.read())
-        host_sym_shape = shape_map.get(HOST_SHAPES)
-        device_sym_shape = shape_map.get(DEVICE_SHAPES)
-        runtime_vars = shape_map.get(RUNTIME_VARS, dict())
-        support_info = shape_map.get(SUPPORT_INFO, dict())
-        for var in runtime_vars:
+        for var in shape_map.get(RUNTIME_VARS, {}):
             symbol_map[var.get(RUNTIME_VARS_PRIME)] = var
-        if host_sym_shape is None:
-            raise RuntimeError(
-                "host_shape not found in {}".format(shape_info_file))
-        if device_sym_shape is None:
-            raise RuntimeError(
-                "device_shape not found in {}".format(shape_info_file))
-        if len(host_sym_shape) != len(host_shape):
-            raise ValueError(
-                "Host' real shape and symbolic shape ranks not equal: {} vs {}"
-                .format(len(host_shape), len(host_sym_shape)))
+        if shape_map.get(HOST_SHAPES) is None:
+            raise RuntimeError(f"host_shape not found in {shape_info_file}")
+        if shape_map.get(DEVICE_SHAPES) is None:
+            raise RuntimeError(f"device_shape not found in {shape_info_file}")
+        if len(shape_map.get(HOST_SHAPES)) != len(host_shape):
+            raise ValueError(f"Host' real shape and symbolic shape ranks not equal:"
+                             f"{len(host_shape)} vs {len(shape_map.get(HOST_SHAPES))}")
         # 1. map the symbol of host to real static shape
-        for real_sh, sym_host in zip(host_shape, host_sym_shape):
+        for real_sh, sym_host in zip(host_shape, shape_map.get(HOST_SHAPES)):
             for idx, sym_h in enumerate(sym_host):
                 symbol_map[sym_h] = real_sh[idx]
 
         # 2. generate new device shapes based on the symbol_map
-        for sym_device in device_sym_shape:
-            new_shape = []
-            gen = (sym_d for sym_d in sym_device if "*" in sym_d)
-            for sym_d in gen:
+        for sym_device in shape_map.get(DEVICE_SHAPES):
+            for sym_d in (sym_d for sym_d in sym_device if "*" in sym_d):
                 # map the symbol expr of device to real static shape like s0x1024xs1
-                symbol_map[sym_d] = _get_symbol_expr_value(
-                    symbol_map, sym_d)
-            new_shape = [
-                int(sym_d) if sym_d.isdigit() else symbol_map[sym_d]
-                for sym_d in sym_device
-            ]
-            device_shape.append(tuple(new_shape))
+                symbol_map[sym_d] = _get_symbol_expr_value(symbol_map, sym_d)
+            device_shape.append(tuple(int(sym_d) if sym_d.isdigit() else symbol_map[sym_d] for sym_d in sym_device))
     logging.info("Host shape: %s Device shape %s, symbol_map = %s",
                  str(host_shape), str(device_shape), str(symbol_map))
-    return device_shape, symbol_map, support_info
+    return device_shape, symbol_map, shape_map.get(SUPPORT_INFO, {})
 
 
 def dump_shape_arg_list(data, kernel_name, cur_dir):
@@ -139,7 +122,7 @@ def dump_shape_arg_list(data, kernel_name, cur_dir):
                                           kernel_name,
                                           is_dyn_shape=True,
                                           cur_dir=cur_dir)
-    shape_arg_list = list()
+    shape_arg_list = []
     for data_idx, d in enumerate(data):
         # NOTE(yanzhi): If input is a memeref<f32>, its shape_arg is [0];
         # for the case of memref<?xf32>, its shape_args is [offset, sizes, strides].
@@ -164,6 +147,7 @@ def dump_shape_arg_list(data, kernel_name, cur_dir):
 
 
 def _get_proper_reduce_y_config(red_size, use_atomic=False):
+    """get proper for reduce-Y"""
     block_num = 1
     acc_seq = red_size
     if use_atomic:
@@ -179,6 +163,7 @@ def _get_proper_reduce_y_config(red_size, use_atomic=False):
 
 
 def _get_proper_reduce_x_config(red_size, use_atomic=False):
+    """get proper for reduce-X"""
     block_num = 1
     if use_atomic:
         block_num = (red_size - 1) // 1024 + 1
@@ -190,6 +175,7 @@ def _get_proper_reduce_x_config(red_size, use_atomic=False):
 
 
 def _get_proper_parallel_thread_config(length, is_reduce_y):
+    """get proper for parallel thread"""
     if is_reduce_y:
         return 32
     if length < 64:
@@ -203,47 +189,49 @@ def _get_proper_parallel_thread_config(length, is_reduce_y):
 
 
 def _get_reduce_tile_size(map_info, upper_bound, proper_block, proper_thread, proper_seq):
+    """get tile size for reduce"""
     if "thread" in map_info["mark"]:
         return min(upper_bound, proper_thread)
-    elif "reduce-small-seq" in map_info["mark"]:
+    if "reduce-small-seq" in map_info["mark"]:
         return upper_bound
-    elif "seq" in map_info["mark"]:
+    if "seq" in map_info["mark"]:
         return min(upper_bound, proper_seq)
-    elif "1" == map_info["mark"]:
+    if "1" == map_info["mark"]:
         return 1
+    return 1
+
+
+def _decode_expr_single(expr, upper_bound):
+    """Decode a single expression into tile candidates."""
+    if expr == "-1":
+        return [upper_bound]
+    if expr.isdigit():
+        val = int(expr)
+        return [val] if val <= upper_bound else []
+    if "min" in expr:
+        min_tile = float("inf")
+        gen = (n for n in expr.replace("min", "").split(",") if n.isdigit() or n == "-1")
+        for n in gen:
+            min_tile = min(min_tile, int(n) if n.isdigit() else upper_bound)
+        return [int(min_tile)]
+    if "mod" in expr:
+        mod_size = int(expr.replace("mod", ""))
+        gen = (n for n in range(upper_bound, -1, -1) if n >= mod_size and n % mod_size)
+        result = list(gen)
+        return result if result else [1]
+    if "lessequal" in expr:
+        num = int(expr.split("lessequal")[-1])
+        return list(range(1, min(num + 1, upper_bound)))
+    return []
 
 
 def _decode_expr(orig_expr, upper_bound):
-    orig_expr = orig_expr.replace("(", "").replace(")",
-                                                   "").replace(" ", "")
+    """decode expr"""
+    orig_expr = orig_expr.replace("(", "").replace(")", "").replace(" ", "")
     all_expr = orig_expr.split("OR")
     tile_candidates = []
     for expr in all_expr:
-        if expr == "-1":
-            tile_candidates.append(upper_bound)
-        elif expr.isdigit():
-            if int(expr) <= upper_bound:
-                tile_candidates.append(int(expr))
-        elif "min" in expr:
-            min_tile = float("inf")
-            gen = (n for n in expr.replace("min", "").split(
-                ",") if n.isdigit() or n == "-1")
-            for n in gen:
-                min_tile = min(min_tile, int(
-                    n) if n.isdigit() else upper_bound)
-            tile_candidates.append(int(min_tile))
-        elif "mod" in expr:
-            mod_size = int(expr.replace("mod", ""))
-            gen = (n for n in range(upper_bound, -1, -1)
-                   if n >= mod_size and n % mod_size)
-            for n in gen:
-                tile_candidates.append(n)
-            if len(tile_candidates) == 0:
-                tile_candidates.append(1)
-        elif "lessequal" in expr:
-            num = int(expr.split("lessequal")[-1])
-            for i in range(1, min(num + 1, upper_bound)):
-                tile_candidates.append(i)
+        tile_candidates.extend(_decode_expr_single(expr, upper_bound))
     return tile_candidates
 
 
@@ -274,13 +262,9 @@ class DynamicTilingSolver:
         self.dyn_map = copy.deepcopy(dyn_map)
         self.runtime_arg_file = runtime_arg_file
         self.support_info = support_info
-        self.runtime_args = dict()
-        self.curr_grid = [
-            1,
-        ] * len(MAX_GPU_BLOCKDIMS)
-        self.curr_block = [
-            1,
-        ] * len(MAX_GPU_THREADDIMS)
+        self.runtime_args = {}
+        self.curr_grid = [1,] * len(MAX_GPU_BLOCKDIMS)
+        self.curr_block = [1,] * len(MAX_GPU_THREADDIMS)
         self.total_alloc_blocks = 1
         self.total_alloc_threads = 1
 
@@ -294,6 +278,7 @@ class DynamicTilingSolver:
         }
 
     def _update_static_map(self, map_key, map_size):
+        """update map"""
         if map_key in self.lookup_map:
             write_map = self.lookup_map[map_key][0]
             write_index = self.lookup_map[map_key][1]
@@ -305,6 +290,7 @@ class DynamicTilingSolver:
                 self.total_alloc_threads *= map_size
 
     def _record_solved(self, map_info, map_key, map_res, tile_size):
+        """record solved"""
         if map_key in self.dyn_map.keys():
             self.dyn_map[map_key] = tile_size
             self._update_static_map(map_key, tile_size)
@@ -320,69 +306,120 @@ class DynamicTilingSolver:
                 RUNTIME_VARS_ARGINDEX)] = -tile_size
 
     def _get_match_key(self, key):
+        """get match"""
         for k, v in self.dyn_map.items():
             if isinstance(v, int) and v == key:
                 return k
         return key
 
-    def _gen_values(self):
-        axis_length_left = {}  # record the use of this axis
-        product_var = {}  # point out key to bound
-        related_values = {}  # record tile = tile0xtile1
-        for map_key, map_res in self.dyn_map.items():
-            if isinstance(map_res, list) and len(tuple(map_res)) == 2:
-                symbol_part = tuple(map_res)[0]
-                const_part = tuple(map_res)[1]
-                if not (isinstance(symbol_part, str) and isinstance(const_part, int)):
-                    continue
-                if const_part in self.symbol_map and symbol_part in self.symbol_map:
-                    axis_length_left[symbol_part] = self.symbol_map[symbol_part]
-                    product_var[const_part] = symbol_part
-                else:
-                    print("{} or {} not in map".format(
-                        const_part, symbol_part))
-                    print(const_part in self.symbol_map)
-                    print(symbol_part in self.symbol_map)
+    def _is_valid_pair(self, symbol_part, const_part):
+        """Check if symbol_part and const_part are valid and both in symbol_map."""
+        return (isinstance(symbol_part, str) and isinstance(const_part, int)
+                and const_part in self.symbol_map and symbol_part in self.symbol_map)
 
-        keys = self.symbol_map.keys()
+    def _process_list_map_res(self, map_key, map_res, axis_length_left, product_var):
+        """Process list-type map_res entries."""
+        symbol_part, const_part = map_res
+        if not self._is_valid_pair(symbol_part, const_part):
+            return False
+        axis_length_left[symbol_part] = self.symbol_map.get(symbol_part, 0)
+        product_var[const_part] = symbol_part
+        if "Idx" in map_key or "Seq" in map_key:
+            self.symbol_map.get(const_part, {}).update({
+                "upper_bound": self.symbol_map.get(symbol_part, 0),
+                "outer_map": map_key
+            })
+            self._update_static_map(map_key, -1)
+        return True
+
+    def _find_factor_relations(self, map_res, product_var, related_values, int_keys):
+        """Find factor relations for map_res among int_keys."""
+        for k in int_keys:
+            if k != map_res and k % map_res == 0:
+                product_var[map_res] = product_var[k]
+                product_var[k // map_res] = product_var[k]
+                related_values[k] = [map_res, k // map_res]
+
+    def _process_int_map_res(self, map_key, map_res, product_var, related_values, int_keys):
+        """Process int-type map_res entries for Idx/Seq keys."""
+        if map_res <= 1:
+            return -1
+        if map_res in self.symbol_map:
+            self._find_factor_relations(map_res, product_var, related_values, int_keys)
+            return -1
+        return map_res
+
+    def _gen_values(self):
+        """gen values"""
+        axis_length_left = {}
+        product_var = {}
+        related_values = {}
+        int_keys = [k for k in self.symbol_map.keys() if isinstance(k, int) and k > 1]
         for map_key, map_res in self.dyn_map.items():
+            if isinstance(map_res, list) and len(map_res) == 2:
+                self._process_list_map_res(map_key, map_res, axis_length_left, product_var)
+                continue
             if not ("Idx" in map_key or "Seq" in map_key):
                 continue
             if isinstance(map_res, int):
-                if map_res <= 1:
-                    continue
-                if map_res in self.symbol_map:
-                    curr_map = -1
-                    for k in keys:
-                        if not isinstance(k, int) or k <= 1 or k == map_res:
-                            continue
-                        if k % map_res == 0:
-                            product_var[map_res] = product_var[k]
-                            product_var[k // map_res] = product_var[k]
-                            related_values[k] = [map_res, k // map_res]
-
-                else:
-                    curr_map = map_res
-
-            elif len(tuple(map_res)) == 2:
-                symbol_part = tuple(map_res)[0]
-                const_part = tuple(map_res)[1]
-                if not (isinstance(symbol_part, str) and isinstance(const_part, int)):
-                    continue
-                if const_part in self.symbol_map and symbol_part in self.symbol_map:
-                    self.symbol_map[const_part].update({
-                        "upper_bound":
-                        self.symbol_map[symbol_part],
-                        "outer_map":
-                        map_key
-                    })
-                curr_map = -1
-            self._update_static_map(map_key, curr_map)
+                curr_map = self._process_int_map_res(map_key, map_res, product_var, related_values, int_keys)
+                self._update_static_map(map_key, curr_map)
         return axis_length_left, product_var, related_values
 
+    def _build_mark_map(self):
+        """Build a mapping from mark to list of int keys."""
+        int_keys = [k for k in self.symbol_map.keys() if isinstance(k, int) and k > 0]
+        mark_map = {}
+        for key in int_keys:
+            info = self.symbol_map[key]
+            if isinstance(info, dict):
+                mark_map.setdefault(info.get("mark", "unknown"), []).append(key)
+        return int_keys, mark_map
+
+    def _compute_reduce_config(self, dyn_algo, axis_length_left, product_var, mark_map):
+        """Compute proper block/thread/seq config for reduce algorithm."""
+        total_red_size = self.support_info["ReduceSizeStatic"]
+        proper_block, proper_thread, proper_seq = None, None, None
+        reduce_orders = {
+            "reduce-x": ["reduce-thread-last", "reduce-thread", "thread-last", "thread"],
+            "reduce-y": ["reduce-y-seq"],
+        }
+        if dyn_algo in reduce_orders:
+            for order in reduce_orders[dyn_algo]:
+                for key in mark_map.get(order, []):
+                    total_red_size *= axis_length_left[product_var[key]]
+            if dyn_algo == "reduce-x":
+                proper_block, proper_thread, proper_seq = _get_proper_reduce_x_config(
+                    total_red_size, self.support_info["EnableAtomic"])
+            else:
+                proper_block, proper_seq = _get_proper_reduce_y_config(
+                    total_red_size, self.support_info["EnableAtomic"])
+        elif dyn_algo == "reduce-small":
+            proper_seq = 64
+        if dyn_algo != "reduce-x":
+            proper_thread = 32
+        proper_thread = (proper_thread - 1) // self.total_alloc_threads + 1
+        return proper_block, proper_thread, proper_seq
+
+    def _compute_tile_size(self, key, order, axis_length_left, product_var, related_values,
+                           proper_block, proper_thread, proper_seq):
+        """Compute tile size for a single key."""
+        if "thread" in order:
+            upper_bound = min(axis_length_left[product_var[key]], 1024 // self.total_alloc_threads)
+        else:
+            upper_bound = axis_length_left[product_var[key]]
+        if key in related_values:
+            return (self.symbol_map[related_values[key][0]]["tile_size"] *
+                    self.symbol_map[related_values[key][1]]["tile_size"])
+        map_info = self.symbol_map.get(key)
+        tile_size = _get_reduce_tile_size(map_info, upper_bound, proper_block,
+                                          proper_thread, proper_seq)
+        if "seq" in map_info["mark"]:
+            proper_seq = max(proper_seq // tile_size, 1)
+        return tile_size, map_info, proper_seq
+
     def _solve_reduce(self, axis_length_left, product_var, related_values):
-        # solve reduce
-        keys = self.symbol_map.keys()
+        """solve reduce"""
         orders = [
             "reduce-thread-last",
             "reduce-thread",
@@ -394,65 +431,25 @@ class DynamicTilingSolver:
             "parallel-seq",
             "1",
             "product"]
-        total_red_size = self.support_info["ReduceSizeStatic"]
-        proper_block, proper_thread, proper_seq = None, None, None
-        if self.support_info["DynAlgorithm"] == "reduce-x":
-            for order in ["reduce-thread-last", "reduce-thread", "thread-last", "thread", ]:
-                for key in keys:
-                    if not isinstance(key, int) or key <= 0:
-                        continue
-                    if isinstance(self.symbol_map[key], dict) and self.symbol_map[key].get(
-                            "mark", "unknown") == order:
-                        total_red_size *= axis_length_left[product_var[key]]
-            proper_block, proper_thread, proper_seq = _get_proper_reduce_x_config(
-                total_red_size, self.support_info["EnableAtomic"])
-        elif self.support_info["DynAlgorithm"] == "reduce-y":
-            for order in ["reduce-y-seq", ]:
-                for key in keys:
-                    if not isinstance(key, int) or key <= 0:
-                        continue
-                    if isinstance(self.symbol_map[key], dict) and self.symbol_map[key].get(
-                            "mark", "unknown") == order:
-                        total_red_size *= axis_length_left[product_var[key]]
-            proper_block, proper_seq = _get_proper_reduce_y_config(
-                total_red_size, self.support_info["EnableAtomic"])
-        elif self.support_info["DynAlgorithm"] == "reduce-small":
-            proper_seq = 64
-        if self.support_info["DynAlgorithm"] != "reduce-x":
-            # since we don't know real parallel-length here, we set a default value(32) currently.
-            # update `information structure` / `auto-tiling` later
-            proper_thread = 32
-        proper_thread = (proper_thread - 1) // self.total_alloc_threads + 1
+        dyn_algo = self.support_info["DynAlgorithm"]
+        _, mark_map = self._build_mark_map()
+        proper_block, proper_thread, proper_seq = self._compute_reduce_config(
+            dyn_algo, axis_length_left, product_var, mark_map)
         for order in orders:
-            for key in keys:
-                if not isinstance(key, int) or key <= 0:
-                    continue
-                if isinstance(self.symbol_map[key], dict) and self.symbol_map[key].get(
-                        "mark", "unknown") == order:
-                    if "thread" in order:
-                        upper_bound = min(
-                            axis_length_left[product_var[key]], 1024 // self.total_alloc_threads)
-                    else:
-                        upper_bound = axis_length_left[product_var[key]]
+            for key in mark_map.get(order, []):
+                result = self._compute_tile_size(key, order, axis_length_left, product_var,
+                                                 related_values, proper_block, proper_thread, proper_seq)
+                if isinstance(result, tuple):
+                    tile_size, map_info, proper_seq = result
+                else:
+                    tile_size = result
                     map_info = self.symbol_map.get(key)
-                    if key in related_values:
-                        tile_size = self.symbol_map[
-                            related_values[key][0]]["tile_size"] * self.symbol_map[
-                                related_values[key][1]]["tile_size"]
-                    else:
-                        tile_size = _get_reduce_tile_size(
-                            map_info, upper_bound, proper_block, proper_thread, proper_seq)
-                        if "seq" in map_info["mark"]:
-                            proper_seq = max(proper_seq // tile_size, 1)
-                    match_key = self._get_match_key(key)
-                    self._record_solved(
-                        map_info, match_key, key, tile_size)
-                    self.symbol_map[key].update({"tile_size": tile_size})
-                    axis_length_left[product_var[key]] = (axis_length_left[product_var[key]] -
-                                                          1) // tile_size + 1
+                self._record_solved(map_info, self._get_match_key(key), key, tile_size)
+                self.symbol_map[key].update({"tile_size": tile_size})
+                axis_length_left[product_var[key]] = (axis_length_left[product_var[key]] - 1) // tile_size + 1
 
     def _solve_elemwise(self):
-        # solve elemwise
+        """solve elemwise"""
         block_solve_order = ["threadIdx.x", "threadIdx.y", "threadIdx.z"]
         grid_solve_order = ["blockIdx.x", "blockIdx.y", "blockIdx.z"]
         solve_order = [block_solve_order, grid_solve_order]
@@ -504,8 +501,7 @@ class DynamicTilingSolver:
         else:
             self._solve_elemwise()
 
-        logging.info(
-            "Dynamic tiling solve result: %s", str(self.runtime_args))
+        logging.info("Dynamic tiling solve result: %s", str(self.runtime_args))
         with os.fdopen(os.open(self.runtime_arg_file, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
             f.write(json.dumps(self.runtime_args))
 
@@ -539,8 +535,7 @@ def get_gpu_setting_dynamic(symbol_map, dyn_map, dyn_map_file, support_info):
             if not (isinstance(symbol_part, str) and isinstance(const_part, int)):
                 continue
             if symbol_part not in symbol_map:
-                raise ValueError("Cannot find {} in symbol map: {}".format(
-                    symbol_part, symbol_map))
+                raise ValueError(f"Cannot find {symbol_part} in symbol map: {symbol_map}")
             shape = symbol_map[symbol_part]
             if const_part == 0:
                 raise ValueError("Const part is zero, please check")
@@ -557,11 +552,9 @@ def get_gpu_setting_by_input(symbol_map, dyn_map_file: str, support_info):
     if os.path.splitext(dyn_map_file)[1].lower() != ".json":
         raise ValueError(f"{dyn_map_file} is not a .json file")
 
-    with open(dyn_map_file) as f:
+    with open(dyn_map_file, encoding="utf-8") as f:
         dyn_map = json.load(f)
     if dyn_map.get("is_dynamic", False):
-        out = get_gpu_setting_dynamic(symbol_map, dyn_map, dyn_map_file,
-                                      support_info)
+        out = get_gpu_setting_dynamic(symbol_map, dyn_map, dyn_map_file, support_info)
         return out
-    else:
-        return dyn_map
+    return dyn_map

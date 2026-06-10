@@ -22,6 +22,7 @@ class PathManager:
 
     @classmethod
     def get_device_path(cls, cann_path: str) -> str:
+        """Get CANN profiling device path from profiler directory."""
         sub_dirs = os.listdir(os.path.realpath(cann_path))
         for sub_dir in sub_dirs:
             sub_path = os.path.join(cann_path, sub_dir)

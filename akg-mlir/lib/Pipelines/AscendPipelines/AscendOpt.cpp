@@ -23,6 +23,7 @@
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Dialect/Vector/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
@@ -68,7 +69,6 @@ void canonicalizationPipeline(OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.nest<func::FuncOp>().addPass(hivm::createHIVMOptSinglePointPass());
   pm.addPass(createCanonicalizerPass());
-  // pm.nest<func::FuncOp>().addPass(memref::createDeadStoreEliminationPass());
 }
 
 void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &options) {
@@ -167,7 +167,6 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
     }
     pm.nest<func::FuncOp>().addPass(hivm::createInjectSyncPass(syncOptions));
   }
-  // pm.addPass(createMemrefExtLoweringPass());
   pm.nest<func::FuncOp>().addPass(hivm::createAddFFTSToSyncBlockSetOpPass());
   pm.nest<func::FuncOp>().addPass(hivm::createEnableMultiBufferPass());
   pm.nest<func::FuncOp>().addPass(hivm::createLiftLowestStridePass());
@@ -176,7 +175,6 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   pm.addPass(scope::createInlineScopePass(InlineScopeOptions{/*forceInline=*/true}));
   pm.addPass(hivm::createEnableHIVMCCompatiblePrintPass());
   pm.addPass(annotation::createAnnotationLoweringPass());
-  // pm.nest<func::FuncOp>().addPass(hivm::createInsertInitAndFinishForDebugPass());
   pm.nest<func::FuncOp>().addPass(hivm::createMarkDisableLoadPass());
   pm.addPass(hivm::createMarkSyncBlockLockWithSubblockPass());
   pm.addPass(hivm::createInsertFreeLockVarBeforeReturnPass());
@@ -189,7 +187,6 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
   pm.addPass(createMindsporeMakeBroadcastablePass());
   pm.addPass(createEliminateDimensionPass());
   pm.addPass(createLegalizeTypePass());
-  // pm.addPass(createFoldDimensionPass());
   if (options.enableLoopFusion) {
     pm.addPass(createMindSporeToLinalgNamedPass(options.dynamicShape, !options.enableLoopFusion));
     pm.addPass(createCopyReturnedFuncArgsPass());
@@ -254,7 +251,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(createCanonicalizerPass());
     pm.addPass(createLegalizeBoolPass());
     // tiling
-    pm.addPass(createNPUAutoTilingPass());
+    pm.addPass(createNPUAutoTilingPass(options.arch));
     pm.addPass(createAllocBufferShrinkPass());
     // vector
     pm.addPass(createSCFForLoopCanonicalizationPass());
@@ -267,6 +264,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
       pm.addPass(npuvector::createOutlineVectorFunctionPass());
       pm.addPass(createNPUVectorToVectorPass());
+      pm.addPass(vector::createVectorLegalizeTypePass());
     }
     pm.addPass(createArithToHIVMConversionPass());
     pm.addPass(createCanonicalizerPass());

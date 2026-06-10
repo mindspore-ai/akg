@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2026 Huawei Technologies Co., Ltd
+ * Copyright 2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,10 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
-void akg_log_init(void) {
-  if (!google::IsGoogleLoggingInitialized()) {
-    google::InitGoogleLogging("akg");
-  }
-}
+#ifndef AKG_DIALECT_VECTOR_PASSES_H_
+#define AKG_DIALECT_VECTOR_PASSES_H_
+
+#include "akg/Dialect/Vector/Transforms/VectorLegalizeType.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+
+namespace mlir {
+
+/// Generate the code for registering transforms passes.
+#ifndef GEN_PASS_REGISTRATION
+#define GEN_PASS_REGISTRATION
+#include "akg/Dialect/Vector/Passes.h.inc"
+#endif
+
+}  // namespace mlir
+
+#endif  // AKG_DIALECT_VECTOR_PASSES_H_

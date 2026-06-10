@@ -21,6 +21,7 @@
 #include <fstream>
 #include <mutex>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendRun.h"
+#include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
 typedef uint64_t (*TilingFunc)(void *);
 typedef uint64_t (*GetTilingSizeFunc)();
@@ -371,6 +372,10 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
 
 // PYBIND interface
 PYBIND11_MODULE(ascend_launch, m) {
+  akg_log_init();
+  if (!google::IsGoogleLoggingInitialized()) {
+    google::InitGoogleLogging("akg");
+  }
   py::class_<AscendTensorObjStructPyTorch, std::shared_ptr<AscendTensorObjStructPyTorch>>(
     m, "AscendTensorObjStructPyTorch")
     .def(py::init<>())
@@ -390,5 +395,4 @@ PYBIND11_MODULE(ascend_launch, m) {
   m.def("launch", py::overload_cast<uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
         "Launch kernel without tiling support");
   m.def("torch_launch", &TorchLaunch, "Launch kernel for torch_npu");
-  akg_log_init();
 }

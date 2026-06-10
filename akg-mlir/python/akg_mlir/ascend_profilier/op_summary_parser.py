@@ -7,6 +7,7 @@ from .path_manager import PathManager
 
 MAX_TIME_CONSUME = 9999999999
 
+
 class OpSummaryParser():
     """Parser for operation summary data."""
 
@@ -59,7 +60,8 @@ class OpSummaryParser():
             is_res = is_res and cur_task_type in ('AI_CORE', 'AI_VECTOR_CORE')
         return is_res
 
-    def create_dict(self, summary_data, headers):
+    @staticmethod
+    def create_dict(summary_data, headers):
         """Create dictionary from summary data and headers."""
         summary_dict = {}
         for i, data in enumerate(summary_data):

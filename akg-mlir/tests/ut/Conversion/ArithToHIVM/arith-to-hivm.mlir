@@ -2336,7 +2336,7 @@ func.func @dynamic_npuvector_transfer_read_write(%in: memref<?xf32>, %out: memre
 func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max(%in: memref<1024x1024x12xf32>, %out: memref<1024x1024x12xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
   // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max
   // CHECK: %[[ALLOC:.*]] = memref.alloc(%{{.*}}, %{{.*}}) : memref<?x?x12xf32>
-  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 28672 : index} : memref<?x?x12xf32>
+  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 21504 : index} : memref<?x?x12xf32>
   %c0 = arith.constant 0 : index
   %c8 = arith.constant 8 : index
   %c12 = arith.constant 12 : index
@@ -2401,7 +2401,7 @@ func.func @simple_broadcast_dynamic(%mem: memref<?xf32>, %out: memref<?xf32>) at
 func.func @dynamic_npuvector_broadcast_static_dim_uses_rank_max(%out: memref<12x1024x1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
   // CHECK-LABEL: func.func @dynamic_npuvector_broadcast_static_dim_uses_rank_max
   // CHECK: %[[ALLOC:.*]] = memref.alloc(%{{.*}}, %{{.*}}) : memref<12x?x?xf32>
-  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 28672 : index} : memref<12x?x?xf32>
+  // CHECK: annotation.mark %[[ALLOC]] {buffer_size_in_byte = 21504 : index} : memref<12x?x?xf32>
   %c0 = arith.constant 0 : index
   %c8 = arith.constant 8 : index
   %c12 = arith.constant 12 : index

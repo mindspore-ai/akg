@@ -26,9 +26,11 @@
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -38,6 +40,13 @@ namespace autotiling {
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
 using akg::utils::GpuInfo;
 using akg::utils::StrategyHelper;
+using akg::alignUpInt64;
+using akg::ceilDivInt64;
+using akg::computeBishengStrideAlignedStorageBytes;
+using akg::getBishengLogicalStructuredStrideAlignDims;
+using akg::getDefaultBishengStrideAlignDims;
+using akg::getBishengStrideAlignTargetForBits;
+using akg::multiplyAndCap;
 using llvm::SmallVector;
 using mlir::akg::autotiling::GpuTemplateSolver;
 
@@ -816,18 +825,15 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
 }
 
 unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
+  const unsigned MIN_TILE_SIZE = 512;
   if (!axis || !axis->hasConstantBounds()) {
-    const unsigned MIN_TILE_SIZE = 512;
     return MIN_TILE_SIZE;
   }
   int64_t upperBound = axis->getConstantUpperBound();
   int64_t lowerBound = axis->getConstantLowerBound();
   unsigned extent = static_cast<unsigned>(upperBound - lowerBound);
-  // Simple ceiling division, no power of 2 alignment to avoid extreme cases
   unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
 
-  // tileSizePerBlock = llvm::bit_ceil(tileSizePerBlock);
-  const unsigned MIN_TILE_SIZE = 512;
   if (tileSizePerBlock < MIN_TILE_SIZE && extent >= MIN_TILE_SIZE) {
     tileSizePerBlock = MIN_TILE_SIZE;
   }
@@ -880,6 +886,7 @@ struct NpuBandContext {
   size_t bandIdx{0};
   SmallVector<AxisPtr, 4> axes;
   SmallVector<int64_t, 4> extents;
+  SmallVector<NodePtr, 32> nodes;
   GraphTemplate graphTemplate{GraphTemplate::DEFAULT};
   int64_t rawUbElems{1};
   int64_t ubCapacityElems{1};
@@ -944,18 +951,6 @@ inline bool isTransposeAxis(const AxisPtr &axis) {
   if (!axis || !axis->loop) return false;
   Operation *loopOp = axis->getLoopOperation();
   return loopOp && loopOp->hasAttr(kTransposeLoopAttr);
-}
-
-inline int64_t ceilDivInt64(int64_t lhs, int64_t rhs) { return (rhs <= 0) ? lhs : (lhs + rhs - 1) / rhs; }
-
-inline int64_t multiplyAndCap(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0) return 0;
-  return (lhs > LLONG_MAX / rhs) ? LLONG_MAX : lhs * rhs;
-}
-
-inline int64_t alignUpInt64(int64_t value, int64_t alignment) {
-  if (alignment <= 1) return value;
-  return ceilDivInt64(value, alignment) * alignment;
 }
 
 inline unsigned saturateToTileValue(int64_t value) {
@@ -1065,11 +1060,6 @@ SmallVector<size_t, 6> getNodeAxisOrder(const NodePtr &node, ArrayRef<AxisPtr> a
   }
   return order;
 }
-SmallVector<int32_t, 6> getDefaultStrideAlignDims(ArrayRef<size_t> axisOrder) {
-  size_t rank = axisOrder.size();
-  if (rank <= 1) return {};
-  return {static_cast<int32_t>(rank - 2)};
-}
 SmallVector<size_t, 6> intersectAxisOrder(ArrayRef<size_t> lhs, ArrayRef<size_t> rhs) {
   SmallVector<size_t, 6> order;
   for (size_t idx : lhs)
@@ -1158,6 +1148,8 @@ void pushUniqueTransposeInfo(SmallVectorImpl<TransposeVectorInfo> &infos, Transp
 }
 SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContext &ctx) {
   SmallVector<TransposeVectorInfo, 6> infos;
+  const bool hasTaggedTransposeAxis =
+    llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
   auto tryAddInfo = [&](Operation *loadOp, ArrayRef<size_t> loadOrder, Operation *storeOp,
                         ArrayRef<size_t> storeOrder) {
     if (!isValueDerivedFrom(storeOp->getOperand(0), loadOp->getResult(0))) return;
@@ -1165,7 +1157,8 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
     SmallVector<size_t, 6> storeCommon = intersectAxisOrder(storeOrder, loadOrder);
     if (loadCommon.size() < 2 || loadCommon.size() != storeCommon.size() || loadCommon == storeCommon ||
         !std::is_permutation(loadCommon.begin(), loadCommon.end(), storeCommon.begin()) ||
-        !llvm::any_of(loadCommon, [&](size_t idx) { return isTransposeAxis(ctx.axes[idx]); }))
+        (hasTaggedTransposeAxis &&
+         !llvm::any_of(loadCommon, [&](size_t idx) { return isTransposeAxis(ctx.axes[idx]); })))
       return;
     pushUniqueTransposeInfo(infos,
                             TransposeVectorInfo{loadCommon, storeCommon, getValueElementBits(loadOp->getResult(0)),
@@ -1175,6 +1168,8 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
   auto transposeAxisIt = llvm::find_if(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
   if (transposeAxisIt != ctx.axes.end()) {
     scanRoot = (*transposeAxisIt)->getLoopOperation();
+  } else if (!ctx.axes.empty() && ctx.axes.front()) {
+    scanRoot = ctx.axes.front()->getLoopOperation();
   }
   SmallVector<memref::LoadOp, 8> loads;
   SmallVector<memref::StoreOp, 8> stores;
@@ -1247,6 +1242,81 @@ VectorOpKind classifyVectorOp(Operation *op) {
     return VectorOpKind::Generic;
   return VectorOpKind::None;
 }
+
+// Whitelist of arith/math/vector ops that bishengir lowers as "structured" UB-resident
+// vector ops, i.e. their UB buffers participate in stride-align padding driven by
+// MarkStrideAlign. Keep this list in sync with the lowerable elementwise/math
+// surface in `bishengir/lib/Dialect/HIVM/Transforms/AlignBuffer/MarkStrideAlign.cpp`
+// and `Conversion/ArithToHIVM`. Missing an entry here silently disables stride-align
+// merging for that op and can re-introduce the very alignment bug this analysis
+// is intended to prevent.
+//
+// Note: `arith.constant` is intentionally included because vectorized splat
+// constants flow through the same UB stride-align path as elementwise results.
+bool isBishengStructuredVectorLoweringOp(Operation *op) {
+  if (!op || op->getNumResults() == 0) return false;
+  static const llvm::StringSet<> kStructuredOps = {
+    "arith.addf",     "arith.addi",     "arith.mulf",     "arith.muli",       "arith.subf",
+    "arith.subi",     "arith.divf",     "arith.divsi",    "arith.divui",      "arith.maxsi",
+    "arith.maxui",    "arith.minsi",    "arith.minui",    "arith.andi",       "arith.ori",
+    "arith.xori",     "arith.remf",     "arith.remsi",    "arith.remui",      "arith.minnumf",
+    "arith.minimumf", "arith.maxnumf",  "arith.maximumf", "arith.shli",       "arith.shrsi",
+    "arith.shrui",    "arith.extf",     "arith.fptosi",   "arith.fptoui",     "arith.sitofp",
+    "arith.uitofp",   "arith.extsi",    "arith.extui",    "arith.trunci",     "arith.truncf",
+    "arith.cmpf",     "arith.cmpi",     "arith.select",   "arith.constant",   "arith.negf",
+    "arith.mulsi_extended",             "arith.mului_extended",
+    "math.exp",       "math.log",       "math.absf",      "math.sqrt",       "math.rsqrt",
+    "math.tanh",      "math.sin",       "math.cos",       "math.erf",        "math.ceil",
+    "math.floor",     "math.absi",      "vector.reduction", "vector.broadcast"};
+  return kStructuredOps.contains(op->getName().getStringRef());
+}
+
+bool isBishengStrideAlignedCandidate(const NodePtr &node, Operation *op) {
+  if (!node || !op) return false;
+  if (node->opType == "Load") return isa<memref::LoadOp>(op);
+  return isBishengStructuredVectorLoweringOp(op);
+}
+SmallVector<int32_t, 6> getBishengStrideAlignDims(const NpuBandContext &ctx, const NodePtr &node, Operation *op,
+                                                  ArrayRef<size_t> axisOrder) {
+  if (!isBishengStrideAlignedCandidate(node, op)) return {};
+  // Mirror BiShengIR MarkStrideAlign.cpp::getLastUnContinuousDim for the
+  // ordinary structured/load path: when the flattened operands have unit
+  // innermost stride, the marked dim is the last non-continuous dim before it.
+  // EnableStrideAlign's collectAlignUnits applies that mark to dim+1, i.e. the
+  // logical innermost vector dimension for the shape seen by akg-opt.
+  SmallVector<int32_t, 6> alignDims =
+    getBishengLogicalStructuredStrideAlignDims(static_cast<int64_t>(axisOrder.size()));
+  // Drop align dims whose entire prefix [0..dim] is degenerate (extent==1).
+  // bishengir's MarkStrideAlign / flatten step collapses unit-extent prefixes
+  // away; pretending they need stride padding inflates the live footprint and
+  // produces tiles that bishengir would just flatten back. An out-of-range
+  // axis index also falls into this branch as a defensive guard.
+  llvm::erase_if(alignDims, [&](int32_t dim) {
+    if (dim < 0 || static_cast<size_t>(dim) >= axisOrder.size()) return true;
+    for (size_t i = 0; i <= static_cast<size_t>(dim); ++i) {
+      size_t axisIdx = axisOrder[i];
+      if (axisIdx >= ctx.extents.size() || ctx.extents[axisIdx] != 1) return false;
+    }
+    return true;
+  });
+  return alignDims;
+}
+// `alignDims` mirrors BiShengIR's raw stride-align dims. collectAlignUnits places
+// the actual storage expansion on the inner sub-shape dim, so schedule hard-align
+// uses rawDim+1 when that dimension exists in the vector shape.
+void mergeStrideAlignUnits(NpuBandContext &ctx, ArrayRef<size_t> axisOrder, ArrayRef<int32_t> alignDims,
+                           int64_t elementBits) {
+  if (axisOrder.empty() || alignDims.empty() || elementBits < kBitsPerByte) return;
+  int64_t unit = getBishengStrideAlignTargetForBits(elementBits);
+  if (unit <= 1) return;
+  for (int32_t alignDim : alignDims) {
+    int64_t expandedDim = static_cast<int64_t>(alignDim) + 1;
+    if (expandedDim < 0 || static_cast<size_t>(expandedDim) >= axisOrder.size()) continue;
+    size_t axisIdx = axisOrder[static_cast<size_t>(expandedDim)];
+    if (axisIdx >= ctx.axesAlignUnits.size()) continue;
+    ctx.axesAlignUnits[axisIdx] = std::lcm(std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1), unit);
+  }
+}
 int64_t getScalarVbrcBitsPerElem(Operation *op, VectorOpKind kind, const llvm::DenseMap<Value, int64_t> &liveBits) {
   if (!hasTrackedVectorOperand(op, liveBits)) return 0;
   if (kind != VectorOpKind::Compare && kind != VectorOpKind::Select) return 0;
@@ -1317,7 +1387,8 @@ void recordVectorUbPeakState(VectorUbFootprint &footprint, const NpuBandContext 
 
   VectorPeakReserveSet set;
   set.fixedBytes = getSelectTempBytes(kind, hasVectorInput, resultBits);
-  SmallVector<int32_t, 6> nodeAlignDims = getDefaultStrideAlignDims(nodeAxisOrder);
+  Operation *op = node ? node->op() : nullptr;
+  SmallVector<int32_t, 6> nodeAlignDims = getBishengStrideAlignDims(ctx, node, op, nodeAxisOrder);
   for (const auto &entry : state.liveBits) {
     auto axisIt = state.liveAxisOrders.find(entry.first);
     if (axisIt == state.liveAxisOrders.end()) continue;
@@ -1352,9 +1423,9 @@ void recordVectorUbPeakState(VectorUbFootprint &footprint, const NpuBandContext 
   if (!liveSet.empty()) footprint.transposeCoLiveReserveSets.push_back(std::move(liveSet));
 }
 
-void updateVectorUbLiveState(VectorUbFootprint &footprint, VectorUbLiveState &state, const NodePtr &node, Operation *op,
-                             ArrayRef<size_t> nodeAxisOrder, int64_t resultBits, VectorOpKind kind, bool hasVectorInput,
-                             bool inheritsMultiBuffer) {
+void updateVectorUbLiveState(VectorUbFootprint &footprint, const NpuBandContext &ctx, VectorUbLiveState &state,
+                             const NodePtr &node, Operation *op, ArrayRef<size_t> nodeAxisOrder, int64_t resultBits,
+                             VectorOpKind kind, bool hasVectorInput, bool inheritsMultiBuffer) {
   bool addLoadResult = node->opType == "Load";
   bool addVectorResult = node->opType != "Store" && hasVectorInput;
   if (addLoadResult || addVectorResult) {
@@ -1370,7 +1441,7 @@ void updateVectorUbLiveState(VectorUbFootprint &footprint, VectorUbLiveState &st
       if (inheritsMultiBuffer && bits >= kBitsPerByte) state.multiBufferedValues[result] = true;
       state.liveBits[result] = bits;
       state.liveAxisOrders[result] = SmallVector<size_t, 6>(nodeAxisOrder.begin(), nodeAxisOrder.end());
-      state.liveAlignDims[result] = getDefaultStrideAlignDims(nodeAxisOrder);
+      state.liveAlignDims[result] = getBishengStrideAlignDims(ctx, node, op, nodeAxisOrder);
       state.liveBitsSum += bits;
       state.liveMultiBufferExtraBitsSum += state.multiBufferedValues.lookup(result) * bits;
       footprint.peakBitsPerElem =
@@ -1435,7 +1506,7 @@ VectorUbFootprint computeVectorUbFootprint(ArrayRef<NodePtr> bandNodes, const Np
         : 1;
     recordVectorUbPeakState(footprint, ctx, state, node, nodeAxisOrder, scalarVbrcBits, resultBits, resultBufferCopies,
                             opDataBits, workspaceBits, kind, hasVectorInput);
-    updateVectorUbLiveState(footprint, state, node, op, nodeAxisOrder, resultBits, kind, hasVectorInput,
+    updateVectorUbLiveState(footprint, ctx, state, node, op, nodeAxisOrder, resultBits, kind, hasVectorInput,
                             inheritsMultiBuffer);
   }
   if (ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP ||
@@ -1469,6 +1540,53 @@ BandNodeInfo collectBandNodeInfo(const NpuModelGraphPtr &npuGraph, const NpuBand
   }
   info.transposeInfos = findTransposeVectorInfos(ctx);
   return info;
+}
+// Common def-use walker for the BiSheng vector chain inside a band.
+//
+// Stride-align consumers share an identical "vector flows from Load down
+// through structured ops, stops at Store" propagation pattern. This helper
+// centralizes that logic so they can not drift apart.
+//
+// `fn` receives `(node, op, hasVectorResult, hasVectorInput, axisOrder)`.
+// `vectorValues` is updated AFTER `fn` runs, so a node's hasVectorInput is
+// decided before its own results join the set. Propagation is deliberately
+// limited to loads and BiSheng stride-aligned candidates; unsupported ops break
+// the chain instead of making later structured ops look vector-resident.
+template <typename Fn>
+void forEachBishengVectorNode(const NpuBandContext &ctx, Fn &&fn) {
+  llvm::DenseSet<Value> vectorValues;
+  for (const NodePtr &node : ctx.nodes) {
+    Operation *op = node ? node->op() : nullptr;
+    if (!op) continue;
+    bool isLoad = node->opType == "Load";
+    bool hasVectorInput =
+      llvm::any_of(op->getOperands(), [&](Value operand) { return vectorValues.contains(operand); });
+    SmallVector<size_t, 6> axisOrder = getNodeAxisOrder(node, ctx.axes);
+    bool hasVectorResult = isLoad || (hasVectorInput && isBishengStrideAlignedCandidate(node, op));
+    fn(node, op, hasVectorResult, hasVectorInput, ArrayRef<size_t>(axisOrder));
+    if (hasVectorResult) {
+      for (Value result : op->getResults()) vectorValues.insert(result);
+    }
+  }
+}
+
+void mergeGenericStrideAlignUnits(NpuBandContext &ctx) {
+  if (!ctx.transposeInfos.empty() || llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); }))
+    return;
+  // Shared loop tiles follow the widest byte type; narrower buffers are padded by their own reserve/mark path.
+  int64_t maxElementBits = 0;
+  forEachBishengVectorNode(
+    ctx, [&](const NodePtr &, Operation *op, bool hasVectorResult, bool, ArrayRef<size_t>) {
+      if (!hasVectorResult) return;
+      for (Value result : op->getResults())
+        maxElementBits = std::max(maxElementBits, getValueElementBits(result));
+    });
+  if (maxElementBits < kBitsPerByte) return;
+  forEachBishengVectorNode(
+    ctx, [&](const NodePtr &node, Operation *op, bool hasVectorResult, bool, ArrayRef<size_t> axisOrder) {
+      if (!hasVectorResult) return;
+      mergeStrideAlignUnits(ctx, axisOrder, getBishengStrideAlignDims(ctx, node, op, axisOrder), maxElementBits);
+    });
 }
 
 NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t bandIdx,
@@ -1511,8 +1629,12 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     ctx.axesAlignUnits[i] = std::max<int64_t>(computeAxisAlignSize(i, ctx), 1);
   }
-  applyF32LastDimDoubleAlign(ctx, ctx.axesAlignUnits);
+  // computeVectorUbFootprint only reads ctx.{axes, extents, transposeInfos}, not axesAlignUnits.
+  // Run it before moving nodes into ctx to avoid an extra SmallVector copy of NodePtr.
   VectorUbFootprint footprint = computeVectorUbFootprint(nodeInfo.nodes, ctx);
+  ctx.nodes = std::move(nodeInfo.nodes);
+  mergeGenericStrideAlignUnits(ctx);
+  applyF32LastDimDoubleAlign(ctx, ctx.axesAlignUnits);
   ctx.vectorElementBits = std::max<int64_t>(footprint.vectorElementBits, ctx.smallestTypeBits);
   ctx.vectorUbBitsPerElem = std::max<int64_t>(footprint.peakBitsPerElem, ctx.vectorElementBits);
   ctx.transposeCoLiveReserveSets = footprint.transposeCoLiveReserveSets;
@@ -1633,34 +1755,6 @@ int64_t getVectorUbBytes(const NpuBandContext &ctx) {
   int64_t rawBytes = multiplyAndCap(ctx.rawUbElems, ctx.smallestTypeBits) / kBitsPerByte;
   return std::max<int64_t>(rawBytes - ctx.fixedReserveBytes, kUbAlignBytes);
 }
-SmallVector<int64_t, 6> collectBishengStrideAlignUnits(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
-                                                       ArrayRef<int32_t> alignDims, int64_t elementBits) {
-  SmallVector<int64_t, 6> alignUnits(shape.size() + 1, 1);
-  if (shape.empty() || alignDims.empty()) return alignUnits;
-
-  int64_t bitWidth = std::max<int64_t>(elementBits, 1);
-  SmallVector<int64_t, 6> alignTargets(shape.size(), 1);
-  for (int32_t dim : alignDims) {
-    if (dim < 0 || static_cast<size_t>(dim) >= shape.size()) continue;
-    if (bitWidth % kUbAlignBits == 0) continue;
-    if (kUbAlignBits % bitWidth != 0) continue;
-    size_t idx = static_cast<size_t>(dim);
-    alignTargets[idx] = std::lcm(alignTargets[idx], kUbAlignBits / bitWidth);
-  }
-
-  int64_t innerAlignedUnits = 1;
-  int64_t shapeAccumulation = 1;
-  for (int64_t dim = static_cast<int64_t>(shape.size()) - 1; dim >= 0; --dim) {
-    size_t idx = static_cast<size_t>(dim);
-    int64_t newAlignedUnits = std::lcm(innerAlignedUnits, alignTargets[idx]);
-    alignUnits[idx + 1] = (shapeAccumulation % newAlignedUnits == 0) ? 1 : newAlignedUnits / innerAlignedUnits;
-    innerAlignedUnits = newAlignedUnits;
-    if (staticDims[idx]) {
-      shapeAccumulation = multiplyAndCap(shapeAccumulation, std::lcm(shape[idx], alignUnits[idx + 1]));
-    }
-  }
-  return alignUnits;
-}
 int64_t computeReserveBytes(const NpuBandContext &ctx, const VectorLiveReserve &reserve, ArrayRef<int64_t> axisTiles) {
   SmallVector<int64_t, 6> shape;
   SmallVector<char, 6> staticDims;
@@ -1672,15 +1766,7 @@ int64_t computeReserveBytes(const NpuBandContext &ctx, const VectorLiveReserve &
     shape.push_back(std::max<int64_t>(tile, 1));
     staticDims.push_back(tile >= extent);
   }
-
-  SmallVector<int64_t, 6> alignUnits =
-    collectBishengStrideAlignUnits(shape, staticDims, reserve.alignDims, reserve.elementBits);
-  int64_t elems = 1;
-  for (size_t i = 0; i < alignUnits.size(); ++i) {
-    int64_t dim = i < shape.size() ? shape[i] : 1;
-    elems = multiplyAndCap(elems, alignUpInt64(std::max<int64_t>(dim, 1), alignUnits[i]));
-  }
-  return alignUpInt64(ceilDivInt64(multiplyAndCap(elems, reserve.elementBits), kBitsPerByte), kUbAlignBytes);
+  return computeBishengStrideAlignedStorageBytes(shape, staticDims, reserve.alignDims, reserve.elementBits);
 }
 int64_t computeLogicalShapeBytes(ArrayRef<int64_t> shape, int64_t elementBits) {
   int64_t elems = 1;
@@ -1704,7 +1790,8 @@ int64_t computeReductionBackendExtraReserveBytes(const NpuBandContext &ctx, Arra
   axisOrder.reserve(axisTiles.size());
   for (size_t i = 0; i < axisTiles.size() && i < ctx.axes.size(); ++i) axisOrder.push_back(i);
   if (axisOrder.empty()) return 0;
-  VectorLiveReserve reserve{axisOrder, getDefaultStrideAlignDims(axisOrder), ctx.vectorElementBits};
+  VectorLiveReserve reserve{axisOrder, getDefaultBishengStrideAlignDims(static_cast<int64_t>(axisOrder.size())),
+                            ctx.vectorElementBits};
   int64_t extraBytes =
     multiplyAndCap(kReductionBackendExtraReserveBuffers, computeReserveBytes(ctx, reserve, axisTiles));
   return (extraBytes > LLONG_MAX - kReductionBackendExtraFixedReserveBytes)
@@ -1901,11 +1988,13 @@ bool fitsVectorUb(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
 int64_t findMaxFittingCommonFactorTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisTiles, size_t axisIdx,
                                        int64_t candidate) {
   int64_t extent = axisIdx < ctx.extents.size() ? std::max<int64_t>(ctx.extents[axisIdx], 1) : 1;
+  int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
   int64_t fitTile = 1;
   for (int64_t q = std::max<int64_t>(candidate, 1); q >= 1;) {
     int64_t tile = candidate / q;
     q = candidate / (tile + 1);
     if (tile <= 1 || candidate % tile != 0 || extent % tile != 0) continue;
+    if (tile % alignUnit != 0) continue;
     axisTiles[axisIdx] = tile;
     if (!fitsVectorUb(ctx, axisTiles)) break;
     fitTile = tile;
@@ -1916,17 +2005,23 @@ int64_t findMaxFittingCommonFactorTile(const NpuBandContext &ctx, SmallVectorImp
 
 int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisTiles, size_t axisIdx,
                            int64_t upper) {
-  int64_t best = 1;
+  int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+  int64_t safeUpper = std::max<int64_t>(upper, 1);
+  // Enumerate by `alignUnit` cells. The last cell may be `alignUp(upper, alignUnit)`,
+  // which is intentional: BiSheng pads stride-aligned vector buffers to that logical
+  // tile shape, so the schedule-side tile must preserve the same aligned extent.
+  int64_t high = ceilDivInt64(safeUpper, alignUnit);
+  int64_t best = alignUnit;
   int64_t low = 1;
-  int64_t high = std::max<int64_t>(upper, 1);
   while (low <= high) {
-    int64_t mid = (low + high) / 2;
+    int64_t cell = (low + high) / 2;
+    int64_t mid = cell * alignUnit;
     axisTiles[axisIdx] = mid;
     if (fitsVectorUb(ctx, axisTiles)) {
       best = mid;
-      low = mid + 1;
+      low = cell + 1;
     } else {
-      high = mid - 1;
+      high = cell - 1;
     }
   }
   axisTiles[axisIdx] = best;
@@ -1986,8 +2081,11 @@ int64_t computeTransposeTempReserveBytes(const NpuBandContext &ctx, ArrayRef<int
     normalizeTransposeTargetAxisOrder(sourceAxisOrder, targetAxisOrder);
 
   SmallVector<size_t, 6> sourceOrder(sourceAxisOrder.begin(), sourceAxisOrder.end());
-  VectorLiveReserve source{sourceOrder, getDefaultStrideAlignDims(sourceAxisOrder), elementBits};
-  VectorLiveReserve target{normalizedTargetAxisOrder, getDefaultStrideAlignDims(normalizedTargetAxisOrder),
+  VectorLiveReserve source{sourceOrder,
+                           getDefaultBishengStrideAlignDims(static_cast<int64_t>(sourceAxisOrder.size())),
+                           elementBits};
+  VectorLiveReserve target{normalizedTargetAxisOrder,
+                           getDefaultBishengStrideAlignDims(static_cast<int64_t>(normalizedTargetAxisOrder.size())),
                            elementBits};
   int64_t sourceBytes = computeReserveBytes(ctx, source, axisTiles);
   int64_t targetBytes = computeReserveBytes(ctx, target, axisTiles);
@@ -2344,59 +2442,6 @@ int64_t getBroadcastSuffixPointRows(const NpuBandContext &ctx, size_t suffixStar
   return broadcastCloneLike ? kBroadcastSuffixPointRows : kSuffixPreservePointRows;
 }
 
-size_t computePureElemSuffixStart(const NpuBandContext &ctx, int64_t tileBudget) {
-  if (ctx.axes.size() <= 1) return 0;
-  size_t suffixStart = ctx.axes.size() - 1;
-  int64_t suffixElems = ctx.extents.back();
-  while (suffixStart > 1) {
-    int64_t candidate = ctx.extents[suffixStart - 1];
-    if (suffixElems > tileBudget / candidate) break;
-    --suffixStart;
-    suffixElems = multiplyAndCap(suffixElems, candidate);
-  }
-  return suffixStart;
-}
-
-void buildPureElemPlan(const NpuBandContext &ctx, size_t suffixStart, int64_t tileBudget, BandTilePlan &plan) {
-  initWholeBandPlan(ctx, plan);
-  if (ctx.axes.size() == 1) {
-    int64_t extent = ctx.extents.front();
-    SmallVector<int64_t, 4> axisTiles{extent};
-    int64_t innerCap = findMaxFittingTile(ctx, axisTiles, 0, extent);
-    int64_t parallelBlocks = std::min<int64_t>(ctx.targetBlocks, ceilDivInt64(extent, innerCap));
-    int64_t outerTile = ceilDivInt64(extent, parallelBlocks);
-    plan.outerTiles.front() = saturateToTileValue(outerTile);
-    plan.innerTiles.front() = saturateToTileValue(std::min<int64_t>(outerTile, innerCap));
-    return;
-  }
-
-  int64_t suffixElems = getSliceProduct(ctx.extents, suffixStart, ctx.extents.size());
-  int64_t prefixRows = getSliceProduct(ctx.extents, 0, suffixStart);
-  int64_t pointRowsCap = std::max<int64_t>(tileBudget / suffixElems, 1);
-  int64_t parallelBlocks = std::min<int64_t>(ctx.targetBlocks, ceilDivInt64(prefixRows, pointRowsCap));
-  SmallVector<unsigned, 4> prefixOuterTiles =
-    assignPrefixOuterTiles(ArrayRef<int64_t>(ctx.extents).take_front(suffixStart), parallelBlocks);
-
-  int64_t preservedPrefixInner = 1;
-  for (size_t i = 0; i < prefixOuterTiles.size(); ++i) {
-    plan.outerTiles[i] = prefixOuterTiles[i];
-    plan.innerTiles[i] = prefixOuterTiles[i];
-    if (i > 0) preservedPrefixInner = multiplyAndCap(preservedPrefixInner, prefixOuterTiles[i]);
-  }
-
-  int64_t firstInner = std::max<int64_t>(tileBudget / suffixElems, 1);
-  firstInner = std::max<int64_t>(firstInner / preservedPrefixInner, 1);
-  SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
-  firstInner = std::min<int64_t>(firstInner, prefixOuterTiles.front());
-  plan.innerTiles.front() = saturateToTileValue(findMaxFittingTile(ctx, axisTiles, 0, firstInner));
-  if (!fitsVectorUb(ctx, axisTiles)) {
-    axisTiles.front() = 1;
-    plan.innerTiles.front() = 1;
-    size_t innermost = ctx.extents.size() - 1;
-    plan.innerTiles[innermost] = saturateToTileValue(findMaxFittingTile(ctx, axisTiles, innermost, ctx.extents.back()));
-  }
-}
-
 // Scan the loop body for `reduction_type` attribute markers and resolve the
 // dominant reduction direction for `loop`. Mirrors the apply-side helper of the
 // same name in LoopTiling.cpp so the strategy can decide which reduction shapes
@@ -2485,7 +2530,8 @@ void computeOuterTilesParallelBased(const NpuBandContext &ctx, std::optional<uns
   plan.outerTiles.assign(ctx.axes.size(), 1);
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     int64_t extent = std::max<int64_t>(ctx.extents[i], 1);
-    int64_t tile = extent;
+    int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+    int64_t tile = alignUpInt64(extent, alignUnit);
     if (parallelDim && *parallelDim == i) tile = std::max<int64_t>(getParallelOuterTile(ctx, i), 1);
     plan.outerTiles[i] = saturateToTileValue(tile);
   }
@@ -2554,6 +2600,65 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
   }
 }
 
+std::optional<std::pair<size_t, size_t>> getPrefixTransposeDiffRange(const TransposeVectorInfo &info) {
+  if (info.sourceAxisOrder.size() < 3 || info.sourceAxisOrder.size() != info.targetAxisOrder.size()) {
+    return std::nullopt;
+  }
+
+  size_t firstDiff = info.sourceAxisOrder.size();
+  size_t lastDiff = 0;
+  for (size_t i = 0; i < info.sourceAxisOrder.size(); ++i) {
+    if (info.sourceAxisOrder[i] == info.targetAxisOrder[i]) continue;
+    if (firstDiff == info.sourceAxisOrder.size()) firstDiff = i;
+    lastDiff = i;
+  }
+  if (firstDiff == info.sourceAxisOrder.size() || lastDiff + 1 >= info.sourceAxisOrder.size()) {
+    return std::nullopt;
+  }
+  return std::make_pair(firstDiff, lastDiff);
+}
+
+void preserveDegeneratePrefixTransposeAxes(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.transposeInfos.empty() || plan.innerTiles.size() != plan.multiVecAxisMask.size()) return;
+
+  auto isAxisMarked = [&](size_t axisIdx) {
+    return axisIdx < plan.multiVecAxisMask.size() && plan.multiVecAxisMask[axisIdx];
+  };
+  auto markUnitNonReductionAxis = [&](size_t axisIdx) {
+    if (axisIdx >= plan.innerTiles.size() || axisIdx >= ctx.axes.size()) return;
+    if (plan.innerTiles[axisIdx] != 1 || isReductionAxis(ctx.axes[axisIdx])) return;
+    plan.multiVecAxisMask[axisIdx] = true;
+  };
+
+  for (const TransposeVectorInfo &info : ctx.transposeInfos) {
+    std::optional<std::pair<size_t, size_t>> diffRange = getPrefixTransposeDiffRange(info);
+    if (!diffRange) continue;
+    size_t firstDiff = diffRange->first;
+    size_t lastDiff = diffRange->second;
+
+    bool hasActivePermutedAxis = false;
+    for (size_t dim = firstDiff; dim <= lastDiff; ++dim) {
+      hasActivePermutedAxis |= isAxisMarked(info.sourceAxisOrder[dim]) || isAxisMarked(info.targetAxisOrder[dim]);
+    }
+    if (!hasActivePermutedAxis) continue;
+
+    bool hasActiveCommonInnerSuffix = false;
+    for (size_t dim = lastDiff + 1; dim < info.sourceAxisOrder.size(); ++dim) {
+      if (info.sourceAxisOrder[dim] != info.targetAxisOrder[dim]) {
+        hasActiveCommonInnerSuffix = false;
+        break;
+      }
+      hasActiveCommonInnerSuffix |= isAxisMarked(info.sourceAxisOrder[dim]);
+    }
+    if (!hasActiveCommonInnerSuffix) continue;
+
+    for (size_t dim = firstDiff; dim <= lastDiff; ++dim) {
+      markUnitNonReductionAxis(info.sourceAxisOrder[dim]);
+      markUnitNonReductionAxis(info.targetAxisOrder[dim]);
+    }
+  }
+}
+
 // Attach `kMultiVecLoopAttr` to the original (un-tiled) loop ops of axes that
 // participate in multi-dim vectorization. `copySemanticLoopAttrsToPointLoop`
 // later carries the marker to the resulting point loops, which is what the
@@ -2598,6 +2703,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
     // in the prefix.
     computeOuterTilesParallelBased(ctx, parallelDim, plan);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
+    preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
     return true;
   }
@@ -2768,7 +2874,8 @@ void adjustParallelAxisOuterTile(const NpuBandContext &ctx, BandTilePlan &plan) 
   plan.innerTiles[axisIdx] = saturateToTileValue(innerTile);
 }
 
-void applyBandTilePlan(const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan, size_t &maxLevelToTile) {
+void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan,
+                       size_t &maxLevelToTile) {
   constexpr size_t kTileLevels = 2;
   for (size_t i = 0; i < bandAxes.size(); ++i) {
     const auto &axis = bandAxes[i];
@@ -2786,7 +2893,8 @@ void applyBandTilePlan(const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePl
       }
       tileConfig->constraints.clear();
       unsigned tileValue = (level == 0) ? plan.outerTiles[i] : plan.innerTiles[i];
-      if (isReductionAxis(axis) && !isTransposeAxis(axis) && axis->hasConstantBounds()) {
+      int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+      if (alignUnit <= 1 && isReductionAxis(axis) && !isTransposeAxis(axis) && axis->hasConstantBounds()) {
         int64_t fullExtent = axis->getConstantUpperBound() - axis->getConstantLowerBound();
         if (static_cast<int64_t>(tileValue) >= fullExtent) {
           tileValue = saturateToTileValue(std::max<int64_t>(fullExtent, 1));
@@ -2966,7 +3074,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
       if (!bandPlan.usesMultiVecScheme) {
         adjustParallelAxisOuterTile(bandCtx, bandPlan);
       }
-      applyBandTilePlan(bandAxes, bandPlan, maxLevelToTile);
+      applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
       tagMultiVecLoops(bandAxes, bandPlan);
       continue;
     }
