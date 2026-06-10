@@ -44,7 +44,7 @@ from hooks.utils import read_hook_input, emit_status, emit_todowrite_context
 from workflow import PhaseController
 from phase_machine import (
     read_phase, get_guidance, compute_resume_phase,
-    get_task_dir, set_task_dir, get_active_item, touch_heartbeat,
+    set_task_dir, get_active_item, touch_heartbeat,
     load_progress, update_progress,
     parse_invoked_ar_script,
     history_path, plan_path, edit_marker_path, state_record_path,
@@ -66,6 +66,20 @@ def _activation_target(command: str) -> str | None:
     for tok in tokens:
         if tok.startswith("AR_TASK_DIR="):
             return tok[len("AR_TASK_DIR="):] or None
+    return None
+
+
+def _task_dir_from_command(command: str) -> str | None:
+    """Find a Bash token that names an existing task directory (has
+    ``.ar_state/state.json``). The Bash command tells us which task it
+    operates on; this is a hard fact, independent of session ownership."""
+    try:
+        tokens = shlex.split(command, posix=True, comments=False)
+    except ValueError:
+        return None
+    for tok in tokens:
+        if tok and os.path.isfile(os.path.join(tok, ".ar_state", "state.json")):
+            return os.path.abspath(tok)
     return None
 
 
@@ -208,9 +222,14 @@ def main():
         _handle_activation(target)
         sys.exit(0)
 
-    task_dir = get_task_dir()
+    # Path-driven routing: the Bash command tells us which task it
+    # operated on. Session ownership is only used as bookkeeping below
+    # (set_task_dir adopts the task if the previous owner went silent;
+    # rule 5 refuses cleanly when a live owner exists).
+    task_dir = _task_dir_from_command(command)
     if not task_dir:
         sys.exit(0)
+    set_task_dir(task_dir, force=False)
     touch_heartbeat(task_dir)
 
     phase = read_phase(task_dir)

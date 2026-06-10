@@ -17,7 +17,9 @@ from __future__ import annotations
 from typing import List
 
 from akg_agents.cli.constants import Backend, Framework
-from akg_agents.op.utils.config_utils import VALID_CONFIGS, check_backend_arch, check_dsl
+from akg_agents.op.utils.config_utils import (
+    VALID_CONFIGS, check_backend_arch, check_dsl, supported_dsls, arch_hint,
+)
 
 
 def normalize_backend(v: str) -> str:
@@ -94,19 +96,23 @@ def validate_target_config(
         )
         return errors
 
-    be_cfg = fw_cfg.get(be, {})
     if not ar:
         errors.append(
-            f"arch 不能为空（framework={fw}, backend={be} 可选: {'/'.join(_sorted_keys(be_cfg))}）"
+            f"arch 不能为空（framework={fw}, backend={be} 可选: {arch_hint(be)}）"
         )
         return errors
-    if ar not in be_cfg:
+    # Canonical (framework, backend, arch) → dsl list via supported_dsls;
+    # cuda / cpu accept any token matching their family regex (the dict
+    # under VALID_CONFIGS[fw][be] is empty for those by design — only
+    # ascend's enumerated SKUs end up as dict keys).
+    family_dsls = supported_dsls(fw, be, ar)
+    if family_dsls is None:
         errors.append(
-            f"arch 不支持: {ar}（在 framework={fw}, backend={be} 下可选: {'/'.join(_sorted_keys(be_cfg))}）"
+            f"arch 不支持: {ar}（framework={fw}, backend={be} 接受: {arch_hint(be)}）"
         )
         return errors
+    allowed_dsls = list(family_dsls)
 
-    allowed_dsls = be_cfg.get(ar, [])
     if not ds:
         errors.append(
             f"dsl 不能为空（framework={fw}, backend={be}, arch={ar} 可选: {'/'.join(allowed_dsls)}）"

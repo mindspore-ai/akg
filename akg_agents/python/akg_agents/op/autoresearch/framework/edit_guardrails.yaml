@@ -52,6 +52,13 @@ dsl:
       - "\\bforce_simt_template\\s*="
       - "\\benable_linearize\\s*="
 
+  ascendc_catlass:
+    # CATLASS AR tasks use pybind + .asc/.h, not Triton.
+    diff_any:
+      - "\\bimport triton\\b"
+      - "\\bfrom triton\\b"
+      - "\\btriton\\.jit\\b"
+
 # ---------------------------------------------------------------------------
 # By hardware (uncomment and extend as needed)
 # ---------------------------------------------------------------------------

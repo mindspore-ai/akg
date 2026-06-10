@@ -318,14 +318,13 @@ def get_akg_kernels_bench_op_name(category="all", subcategory="all", framework="
 
 
 def _get_npukernelbench_dir():
-    """返回 NPUKernelBench 顶层目录（thirdparty/AscendOpGenAgent/benchmarks/NPUKernelBench）"""
+    """返回 NPUKernelBench 顶层目录（thirdparty/NPUKernelBench/npu_benchmark）"""
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)  # tests/op/
     tests_path = os.path.dirname(commom_path)  # tests/
     akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
     return os.path.join(
-        akg_agents_path, 'thirdparty', 'AscendOpGenAgent',
-        'benchmarks', 'NPUKernelBench',
+        akg_agents_path, 'thirdparty', 'NPUKernelBench', 'npu_benchmark',
     )
 
 

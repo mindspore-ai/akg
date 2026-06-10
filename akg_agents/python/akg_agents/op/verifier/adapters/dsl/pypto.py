@@ -27,6 +27,8 @@ class DSLAdapterPypto(DSLAdapter):
     与 Triton 不同，PyPTO 使用 tensor[start:end] 语法而非 tl.load/store。
     """
     
+    profile_via_python_script = True
+
     def get_import_statements(self, framework: str) -> str:
         """Return PyPTO import statements."""
         code = ""
@@ -119,15 +121,7 @@ class DSLAdapterPypto(DSLAdapter):
             f"impl_output = impl_model(*{inputs})\n"
         )
     
-    def needs_binary_io(self) -> bool:
-        """PyPTO doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """PyPTO doesn't need separate compilation step."""
-        return False
-    
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
+    def benchmark_impl(self, impl_func_name: str, inputs: str,
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,

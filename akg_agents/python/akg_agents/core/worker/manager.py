@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 import asyncio
 import logging
 import os
@@ -107,7 +107,7 @@ class WorkerManager:
                 and (not tags or tags.issubset(info.tags))
             ]
 
-    async def release(self, worker: WorkerInterface):
+    async def release(self, worker: WorkerInterface) -> bool:
         """
         归还 Worker (减少负载计数)。
         应在任务完成或异常退出时调用。
@@ -117,8 +117,9 @@ class WorkerManager:
                 if info.worker is worker:
                     info.load = max(0, info.load - 1)
                     logger.debug(f"Released worker {id(info.worker)} (load={info.load}/{info.capacity})")
-                    return
-            logger.warning("Released unknown worker")
+                    return True
+            logger.error(f"Release called for unknown worker id={id(worker)}")
+            return False
 
     async def get_status(self) -> List[dict]:
         """获取所有 Worker 的状态快照"""
@@ -171,7 +172,9 @@ async def register_local_worker(device_ids: List[int], backend: str, arch: str, 
     )
     logger.info(f"✅ Registered LocalWorker: backend={backend}, arch={arch}, devices={device_ids}")
 
-async def register_remote_worker(backend: str, arch: str, worker_url: Optional[str] = None, capacity: Optional[int] = None, tags: Set[str] = None) -> None:
+async def register_remote_worker(backend: str, arch: str, worker_url: Optional[str] = None, capacity: Optional[int] = None, tags: Set[str] = None,
+                                 expected_device_ids: Optional[List[int]] = None,
+                                 on_transient_failure: Optional[Callable[[], None]] = None) -> None:
     """
     便捷函数：创建并注册 RemoteWorker 到全局 WorkerManager。
     如果未提供 worker_url，将从环境变量 AKG_AGENTS_WORKER_URL 读取。
@@ -209,26 +212,50 @@ async def register_remote_worker(backend: str, arch: str, worker_url: Optional[s
                 "  export AKG_AGENTS_WORKER_URL=http://localhost:9001"
             )
     
-    # 如果 capacity 未指定，从 remote worker 查询实际设备数量
-    if capacity is None:
+    # Probe /status: derives capacity when not given, AND asserts the
+    # daemon's reported devices intersect `expected_device_ids` so we
+    # don't silently bind the task to the wrong daemon (e.g. someone
+    # else's worker happens to be listening on the same local tunnel
+    # port). Mismatch raises rather than warning — silent device drift
+    # produces correct-looking but invalid benchmark numbers.
+    remote_devices: List[int] = []
+    if capacity is None or expected_device_ids:
         try:
             status_url = f"{worker_url.rstrip('/')}/api/v1/status"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(status_url)
                 response.raise_for_status()
                 status = response.json()
-                devices = status.get("devices", [])
-                if isinstance(devices, list) and len(devices) > 0:
-                    capacity = len(devices)
-                    logger.info(f"从 remote worker 查询到 {capacity} 个设备: {devices}")
-                else:
-                    capacity = 1
-                    logger.warning(f"无法从 remote worker 获取设备信息，使用默认 capacity=1")
+                devs = status.get("devices", [])
+                if isinstance(devs, list):
+                    remote_devices = [int(d) for d in devs]
         except Exception as e:
-            capacity = 1
-            logger.warning(f"查询 remote worker status 失败: {e}，使用默认 capacity=1")
-    
-    remote_worker = RemoteWorker(worker_url)
+            if expected_device_ids:
+                raise RuntimeError(
+                    f"无法校验 worker {worker_url}: /status 探活失败 ({e})。"
+                    f"期望 device={expected_device_ids}。"
+                )
+            logger.warning(f"查询 remote worker status 失败：{e}，使用默认 capacity=1")
+        if expected_device_ids:
+            if not remote_devices:
+                raise RuntimeError(
+                    f"worker {worker_url} 返回空设备列表，无法校验 "
+                    f"task 要求 device={sorted(expected_device_ids)}。"
+                    f"常见原因：daemon 旧版本 /status 不报 devices，或 "
+                    f"tunnel 串到了别人未完成 init 的 daemon。"
+                )
+            if not (set(remote_devices) & set(expected_device_ids)):
+                raise RuntimeError(
+                    f"worker {worker_url} 设备不匹配：daemon 报告 "
+                    f"devices={remote_devices}，task 要求 "
+                    f"{sorted(expected_device_ids)}。常见原因：task.yaml 的 "
+                    f"worker.urls 写错，或 ssh -L tunnel 串到了别人的 daemon。"
+                )
+        if capacity is None:
+            capacity = len(remote_devices) if remote_devices else 1
+            logger.info(f"从 remote worker 查询到 {capacity} 个设备: {remote_devices}")
+
+    remote_worker = RemoteWorker(worker_url, on_transient_failure=on_transient_failure)
     await _GLOBAL_MANAGER.register(
         remote_worker,
         backend=backend,
@@ -245,7 +272,8 @@ async def register_worker(
     *,
     device_ids: Optional[List[int]] = None,
     worker_url: Optional[str] = None,
-    tags: Optional[Set[str]] = None
+    tags: Optional[Set[str]] = None,
+    on_transient_failure: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     统一的 Worker 注册入口。
@@ -254,6 +282,11 @@ async def register_worker(
       1. 若提供 worker_url 或设置 AKG_AGENTS_WORKER_URL，则注册 RemoteWorker
       2. 否则若提供 device_ids，则注册 LocalWorker
       3. 若均未提供，则抛出错误提示用户如何注册
+
+    Remote 路径下 ``device_ids`` 不当作本机设备，而是作为对远端 daemon
+    报告设备的预期校验集合 —— 不交集就拒绝注册，避免 tunnel 串了 daemon
+    导致用错 device。``on_transient_failure`` 透传给 ``RemoteWorker``，
+    在 ConnectError 时由调用方决定怎么自愈（典型：重建 ssh -L tunnel）。
     """
     resolved_worker_url = worker_url or get_akg_env_var("WORKER_URL")
     if resolved_worker_url:
@@ -261,7 +294,9 @@ async def register_worker(
             backend=backend,
             arch=arch,
             worker_url=resolved_worker_url,
-            tags=tags
+            tags=tags,
+            expected_device_ids=device_ids,
+            on_transient_failure=on_transient_failure,
         )
         return
 

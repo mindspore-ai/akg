@@ -36,6 +36,11 @@ def checker_no_dsl():
 def checker_a5():
     return CodeChecker(backend="ascend", dsl="triton_ascend", arch="ascend950pr_9589")
 
+
+@pytest.fixture
+def checker_catlass():
+    return CodeChecker(backend="ascend", dsl="ascendc_catlass")
+
 # ============================================================
 # 语法错误
 # ============================================================
@@ -1122,6 +1127,111 @@ def test_false_bare_jit_not_detected(checker_tilelang_ascend):
     passed, _, errors = checker_tilelang_ascend.check(TILELANG_FALSE_BARE_JIT)
     assert passed is False
     assert any(e["error_type"] == "no_tilelang_kernel" for e in errors)
+
+
+# ============================================================
+# Catlass DSL 合规性检测 (Step 8)
+# ============================================================
+
+CATLASS_COMPLIANT_KERNEL = '''\
+import os
+import torch
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        catlass_op_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "catlass_op")
+        lib_path = os.path.join(catlass_op_dir, "build", "libcatlass.so")
+        torch.ops.load_library(lib_path)
+
+    def forward(self, A, B):
+        A_fp16 = A.npu().half()
+        B_fp16 = B.npu().half()
+        out = torch.ops.catlass.matmul_small_k(A_fp16, B_fp16)
+        return torch.relu(out.to(A.dtype))
+'''
+
+CATLASS_CHEAT_KERNEL = '''\
+import torch
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, A, B):
+        return torch.matmul(A, B)
+'''
+
+CATLASS_CALL_PLUS_HARD_OP_KERNEL = '''\
+import torch
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        torch.ops.load_library("libcatlass.so")
+
+    def forward(self, A, B):
+        out = torch.ops.catlass.matmul_small_k(A.half(), B.half())
+        return A @ out
+'''
+
+
+@pytest.mark.level0
+def test_catlass_compliant_and_skipped(checker_catlass, checker):
+    """合规 catlass 代码通过；非 catlass DSL 跳过 Step 8"""
+    passed, _, errors = checker_catlass.check(CATLASS_COMPLIANT_KERNEL)
+    catlass_errors = [e for e in errors if e["error_type"] in (
+        "no_catlass_call", "torch_api_instead_of_kernel", "torch_api_without_kernel")]
+    assert catlass_errors == []
+
+    cheat_code = '''\
+import torch
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        return torch.matmul(x, x)
+'''
+    _, _, errs = checker.check(cheat_code)
+    assert not any(e["error_type"] == "no_catlass_call" for e in errs)
+
+
+@pytest.mark.level0
+def test_catlass_cheat_detected(checker_catlass):
+    """无 catlass 调用 + hard/soft ops → no_catlass_call + torch_api errors"""
+    passed, _, errors = checker_catlass.check(CATLASS_CHEAT_KERNEL)
+    assert passed is False
+    error_types = {e["error_type"] for e in errors}
+    assert "no_catlass_call" in error_types
+    assert "torch_api_instead_of_kernel" in error_types
+
+
+@pytest.mark.level0
+def test_catlass_hard_ops_and_at_op_always_rejected(checker_catlass):
+    """catlass 调用存在 + hard ops / @ 运算符 → 仍硬失败；soft ops 合理辅助可接受"""
+    # hard op + @ operator: always fail
+    passed, _, errors = checker_catlass.check(CATLASS_CALL_PLUS_HARD_OP_KERNEL)
+    assert passed is False
+    assert any(e["error_type"] == "torch_api_instead_of_kernel" for e in errors)
+
+    # soft op with catlass call: pass (relu is auxiliary)
+    soft_code = '''\
+import torch
+import torch_npu
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        torch.ops.load_library("libcatlass.so")
+    def forward(self, A, B):
+        out = torch.ops.catlass.matmul_small_k(A.half(), B.half())
+        return torch.relu(out)
+'''
+    _, _, errs = checker_catlass.check(soft_code)
+    assert not any(e["error_type"] in ("no_catlass_call", "torch_api_instead_of_kernel",
+                                       "torch_api_without_kernel") for e in errs)
 
 
 # ============================================================

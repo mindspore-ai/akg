@@ -8,18 +8,25 @@ import logging
 import sys
 import io
 import json
-from typing import Tuple, Dict, Any, Union
+from typing import Tuple, Dict, Any, Union, Optional
 from contextlib import ExitStack
 
-from .interface import WorkerInterface
+from .interface import (
+    WorkerInterface,
+    DEFAULT_EVAL_TIMEOUT_S,
+    DEFAULT_GEN_REF_TIMEOUT_S,
+    DEFAULT_WARMUP_TIMES,
+    DEFAULT_RUN_TIMES,
+)
 from ..async_pool.device_pool import DevicePool
 from akg_agents.op.utils.triton_ascend_api_docs import load_triton_ascend_api_docs
 from akg_agents.op.verifier.profiler_utils import (
     run_profile_scripts_and_collect_results,
+    make_profile_section,
     run_msprof,
     analyze_prof_data,
     run_nsys,
-    analyze_nsys_data
+    analyze_nsys_data,
 )
 from akg_agents.op.verifier.roofline_utils import (
     augment_roofline_metrics,
@@ -45,6 +52,30 @@ _SIGNAL_NAMES = {
 def _get_signal_name(signum: int) -> str:
     """将信号编号转换为可读名称"""
     return _SIGNAL_NAMES.get(signum, f"SIG({signum})")
+
+
+def _empty_profile_result(error: Optional[str] = None) -> Dict[str, Any]:
+    """Canonical "no measurement" result shape returned on every dispatch
+    failure (unsupported backend, profile subprocess crash, exception).
+    Keeps the per_shape_* arrays present-but-empty so consumers don't have
+    to special-case ``KeyError`` vs ``None``."""
+    out: Dict[str, Any] = {
+        "gen_time": None,
+        "base_time": None,
+        "speedup": 0.0,
+        "per_shape_gen_us": [],
+        "per_shape_base_us": [],
+        "gen_method": None,
+        "base_method": None,
+        "roofline_time": None,
+        "roofline_speedup": 0.0,
+        "roofline": None,
+        "artifacts": {},
+    }
+    if error is not None:
+        out["error"] = error
+    return out
+
 
 def collect_json_artifacts(directory: str) -> Dict[str, str]:
     """
@@ -82,7 +113,7 @@ class LocalWorker(WorkerInterface):
         self.device_pool = device_pool
         self.backend = backend
 
-    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
+    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = DEFAULT_EVAL_TIMEOUT_S) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Execute verification task locally.
         
@@ -159,7 +190,7 @@ class LocalWorker(WorkerInterface):
                             f"Process terminated by signal {-returncode} ({signal_name}).\n"
                             f"No output captured (process died before writing to stdout/stderr).\n"
                         )
-                    
+
                     # 收集执行过程中生成的 JSON 文件
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
@@ -239,56 +270,60 @@ class LocalWorker(WorkerInterface):
                 # 3. Get settings
                 backend = profile_settings.get('backend', self.backend)
                 dsl = profile_settings.get('dsl', '')
-                run_times = profile_settings.get('run_times', 50)
-                warmup_times = profile_settings.get('warmup_times', 5)
+                run_times = profile_settings.get('run_times', DEFAULT_RUN_TIMES)
+                warmup_times = profile_settings.get('warmup_times', DEFAULT_WARMUP_TIMES)
                 override_base_time_us = profile_settings.get('override_base_time_us')
                 
-                # 4. Execute profiling based on backend/dsl
+                # 4. Execute profiling based on backend/dsl. Every dispatched
+                # helper returns the canonical ``{"base": Section | None,
+                # "gen": Section | None}`` shape (see profiler_utils), so the
+                # post-processing below is backend-uniform.
                 try:
-                    if "tilelang" in dsl or "pypto" in dsl or "triton_cuda" in dsl or "triton_ascend" in dsl or backend == "cpu":
-                        # TileLang/PyPTO/Triton/CPU: run profile scripts directly (in sync context)
+                    from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+                    if get_dsl_adapter(dsl).profile_via_python_script or backend == "cpu":
                         loop = asyncio.get_running_loop()
-                        base_time, gen_time = await loop.run_in_executor(
+                        sections = await loop.run_in_executor(
                             None,
                             run_profile_scripts_and_collect_results,
-                            extract_dir, op_name, task_id, override_base_time_us
+                            extract_dir, op_name, task_id, override_base_time_us,
                         )
-                        logger.info(f"[{task_id}] Profile results: base={base_time:.2f} us, gen={gen_time:.2f} us")
                     elif backend == "ascend":
-                        # Ascend: use msprof
                         loop = asyncio.get_running_loop()
-                        base_time, gen_time = await loop.run_in_executor(
+                        sections = await loop.run_in_executor(
                             None,
                             self._run_msprof_profiling,
-                            extract_dir, op_name, task_id, warmup_times, run_times
+                            extract_dir, op_name, task_id, warmup_times, run_times,
                         )
                     elif backend == "cuda":
-                        # CUDA: use nsys
                         loop = asyncio.get_running_loop()
-                        base_time, gen_time = await loop.run_in_executor(
+                        sections = await loop.run_in_executor(
                             None,
                             self._run_nsys_profiling,
-                            extract_dir, op_name, task_id, warmup_times, run_times
+                            extract_dir, op_name, task_id, warmup_times, run_times,
                         )
                     else:
                         logger.warning(f"[{task_id}] Unsupported backend for profiling: {backend}")
-                        return {
-                            'gen_time': None,
-                            'base_time': None,
-                            'speedup': 0.0,
-                            'roofline_time': None,
-                            'roofline_speedup': 0.0,
-                            'roofline': None,
-                            'artifacts': {},
-                        }
-                    
-                    # 5. Calculate speedup
-                    # 注意：跨后端场景下 base_time 可能是 inf（跳过 base profile）
-                    if base_time < float('inf') and gen_time > 0:
+                        return _empty_profile_result()
+
+                    base_sec = sections.get("base")
+                    gen_sec = sections.get("gen")
+                    if gen_sec is None:
+                        logger.error(f"[{task_id}] Generation profile produced no result")
+                        return _empty_profile_result(error="generation profile failed")
+
+                    gen_time = gen_sec["avg_us"]
+                    base_time = base_sec["avg_us"] if base_sec else float("inf")
+                    per_shape_gen_us = list(gen_sec["per_case_us"])
+                    per_shape_base_us = (list(base_sec["per_case_us"])
+                                         if base_sec else [])
+                    gen_method = gen_sec.get("method")
+                    base_method = base_sec.get("method") if base_sec else None
+
+                    if base_sec and gen_time > 0:
                         speedup = base_time / gen_time
                     else:
-                        speedup = 0.0  # 无法计算 speedup
-                    
+                        speedup = 0.0
+
                     roofline_result = compute_roofline_profile(
                         verify_dir=extract_dir,
                         op_name=op_name,
@@ -298,129 +333,97 @@ class LocalWorker(WorkerInterface):
                     roofline_result = augment_roofline_metrics(
                         roofline_result,
                         gen_time_us=gen_time,
-                        base_time_us=base_time if base_time < float('inf') else None,
+                        base_time_us=base_time if base_sec else None,
                     )
                     write_roofline_profile_result(extract_dir, roofline_result)
 
                     roofline_time = roofline_result.get("time_us") if roofline_result.get("success") else None
                     roofline_speedup = roofline_result.get("speedup_vs_generated", 0.0)
 
-                    # 6. 收集执行过程中生成的 JSON 文件
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
                         logger.info(f"[{task_id}] Collected {len(artifacts)} artifact files: {list(artifacts.keys())}")
 
-                    # gen_time / base_time get nulled here because in-process
-                    # callers (dynamic_tune, etc.) treat None as the "no
-                    # measurement" sentinel; the other float fields below
-                    # may still be non-finite. JSON-safety for HTTP / disk
-                    # boundaries lives in `worker/server.py` and
-                    # `op/utils/json_safe.sanitize_floats`.
-                    serializable_gen_time = gen_time if gen_time < float('inf') else None
-                    serializable_base_time = base_time if base_time < float('inf') else None
+                    # ``gen_time`` / ``base_time`` get None-ified on inf so
+                    # in-process callers (dynamic_tune etc.) see the
+                    # "no-measurement" sentinel uniformly. JSON-safety for
+                    # the HTTP / disk boundary lives in
+                    # ``worker/server.py`` + ``op/utils/json_safe``.
                     return {
-                        'gen_time': serializable_gen_time,
-                        'base_time': serializable_base_time,
-                        'speedup': speedup,
-                        'roofline_time': roofline_time,
-                        'roofline_speedup': roofline_speedup,
-                        'roofline': roofline_result,
-                        'artifacts': artifacts
+                        "gen_time": gen_time if gen_time < float("inf") else None,
+                        "base_time": (base_time if base_sec
+                                      and base_time < float("inf") else None),
+                        "speedup": speedup,
+                        "per_shape_gen_us": per_shape_gen_us,
+                        "per_shape_base_us": per_shape_base_us,
+                        "gen_method": gen_method,
+                        "base_method": base_method,
+                        "roofline_time": roofline_time,
+                        "roofline_speedup": roofline_speedup,
+                        "roofline": roofline_result,
+                        "artifacts": artifacts,
                     }
-                    
+
                 except Exception as e:
                     logger.error(f"[{task_id}] Profiling execution failed: {e}", exc_info=True)
-                    return {
-                        'gen_time': None,
-                        'base_time': None,
-                        'speedup': 0.0,
-                        'roofline_time': None,
-                        'roofline_speedup': 0.0,
-                        'roofline': None,
-                        'artifacts': {},
-                        'error': str(e),
-                    }
-        
+                    return _empty_profile_result(error=str(e))
+
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker profiling failed: {e}", exc_info=True)
-            return {
-                'gen_time': None,
-                'base_time': None,
-                'speedup': 0.0,
-                'roofline_time': None,
-                'roofline_speedup': 0.0,
-                'roofline': None,
-                'artifacts': {},
-                'error': str(e),
-            }
+            return _empty_profile_result(error=str(e))
     
-    def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int, timeout: int = 600) -> Tuple[float, float]:
-        """Run msprof profiling for Ascend backend (synchronous)"""
+    def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str,
+                              warmup_times: int, run_times: int,
+                              timeout: int = 600) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Run msprof on the base + generation scripts and return canonical
+        ``{"base": Section | None, "gen": Section | None}`` sections.
+
+        msprof aggregates over a single profile run (the script may iterate
+        multiple shapes internally, but msprof attributes the kernel time to
+        the whole run), so each section's ``per_case_us`` is a single-element
+        list — the same as static-shape python-script profiling. Downstream
+        consumers iterate per_case_us uniformly regardless of backend."""
+        sections: Dict[str, Optional[Dict[str, Any]]] = {"base": None, "gen": None}
         try:
-            # Run msprof for base script
-            base_script = os.path.join(extract_dir, f"profile_{op_name}_base.py")
-            success, error, base_prof_path = run_msprof(base_script, op_name, task_id, timeout=timeout)
-            if not success or not base_prof_path:
-                logger.error(f"[{task_id}] Base msprof failed: {error}")
-                return float('inf'), float('inf')
-            
-            # Run msprof for generation script
-            gen_script = os.path.join(extract_dir, f"profile_{op_name}_generation.py")
-            success, error, gen_prof_path = run_msprof(gen_script, op_name, task_id, timeout=timeout)
-            if not success or not gen_prof_path:
-                logger.error(f"[{task_id}] Generation msprof failed: {error}")
-                return float('inf'), float('inf')
-            
-            # Analyze prof data
-            success, error, base_time = analyze_prof_data(base_prof_path, warmup_times, run_times, op_name, task_id)
-            if not success:
-                logger.error(f"[{task_id}] Base prof analysis failed: {error}")
-                return float('inf'), float('inf')
-            
-            success, error, gen_time = analyze_prof_data(gen_prof_path, warmup_times, run_times, op_name, task_id)
-            if not success:
-                logger.error(f"[{task_id}] Generation prof analysis failed: {error}")
-                return float('inf'), float('inf')
-            
-            return base_time, gen_time
-            
+            for kind, json_key in (("base", "base"), ("generation", "gen")):
+                script = os.path.join(extract_dir, f"profile_{op_name}_{kind}.py")
+                ok, err, prof_path = run_msprof(script, op_name, task_id, timeout=timeout)
+                if not ok or not prof_path:
+                    logger.error(f"[{task_id}] {kind} msprof failed: {err}")
+                    continue
+                ok, err, avg_us = analyze_prof_data(
+                    prof_path, warmup_times, run_times, op_name, task_id)
+                if not ok:
+                    logger.error(f"[{task_id}] {kind} prof analysis failed: {err}")
+                    continue
+                sections[json_key] = make_profile_section(avg_us, method="msprof")
         except Exception as e:
             logger.error(f"[{task_id}] msprof profiling failed: {e}", exc_info=True)
-            return float('inf'), float('inf')
-    
-    def _run_nsys_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int, timeout: int = 600) -> Tuple[float, float]:
-        """Run nsys profiling for CUDA backend (synchronous)"""
+        return sections
+
+    def _run_nsys_profiling(self, extract_dir: str, op_name: str, task_id: str,
+                            warmup_times: int, run_times: int,
+                            timeout: int = 600) -> Dict[str, Optional[Dict[str, Any]]]:
+        """nsys variant of :meth:`_run_msprof_profiling`. Same canonical
+        section shape; ``method`` distinguishes the two backends in
+        downstream metrics."""
+        sections: Dict[str, Optional[Dict[str, Any]]] = {"base": None, "gen": None}
         try:
-            # Run nsys for base script
-            base_script = os.path.join(extract_dir, f"profile_{op_name}_base.py")
-            success, error, base_rep_path = run_nsys(base_script, op_name, task_id, timeout=timeout)
-            if not success or not base_rep_path:
-                logger.error(f"[{task_id}] Base nsys failed: {error}")
-                return float('inf'), float('inf')
-            
-            # Run nsys for generation script
-            gen_script = os.path.join(extract_dir, f"profile_{op_name}_generation.py")
-            success, error, gen_rep_path = run_nsys(gen_script, op_name, task_id, timeout=timeout)
-            if not success or not gen_rep_path:
-                logger.error(f"[{task_id}] Generation nsys failed: {error}")
-                return float('inf'), float('inf')
-            
-            # Analyze nsys data
-            success, error, base_time = analyze_nsys_data(base_rep_path, warmup_times, run_times, "base", op_name, task_id)
-            if not success:
-                logger.error(f"[{task_id}] Base nsys analysis failed: {error}")
-                return float('inf'), float('inf')
-            
-            success, error, gen_time = analyze_nsys_data(gen_rep_path, warmup_times, run_times, "generation", op_name, task_id)
-            if not success:
-                logger.error(f"[{task_id}] Generation nsys analysis failed: {error}")
-                return float('inf'), float('inf')
-            
-            return base_time, gen_time
-            
+            for kind, json_key in (("base", "base"), ("generation", "gen")):
+                script = os.path.join(extract_dir, f"profile_{op_name}_{kind}.py")
+                ok, err, rep_path = run_nsys(script, op_name, task_id, timeout=timeout)
+                if not ok or not rep_path:
+                    logger.error(f"[{task_id}] {kind} nsys failed: {err}")
+                    continue
+                ok, err, avg_us = analyze_nsys_data(
+                    rep_path, warmup_times, run_times, kind, op_name, task_id)
+                if not ok:
+                    logger.error(f"[{task_id}] {kind} nsys analysis failed: {err}")
+                    continue
+                sections[json_key] = make_profile_section(avg_us, method="nsys")
         except Exception as e:
             logger.error(f"[{task_id}] nsys profiling failed: {e}", exc_info=True)
-            return float('inf'), float('inf')
+        return sections
 
     async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str, 
                                    profile_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,7 +473,7 @@ class LocalWorker(WorkerInterface):
                     stderr=asyncio.subprocess.PIPE
                 )
                 
-                timeout = profile_settings.get('timeout', 300)
+                timeout = profile_settings.get('timeout', DEFAULT_EVAL_TIMEOUT_S)
                 try:
                     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
                     returncode = process.returncode
@@ -518,7 +521,7 @@ class LocalWorker(WorkerInterface):
             logger.error(f"[{task_id}] LocalWorker profile_single_task failed: {e}", exc_info=True)
             return {'time_us': None, 'success': False, 'log': str(e)}
 
-    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = DEFAULT_GEN_REF_TIMEOUT_S) -> Tuple[bool, str, bytes]:
         """
         Execute task_desc and generate reference data locally.
         

@@ -21,7 +21,10 @@ from .base import DSLAdapter
 
 class DSLAdapterTritonCuda(DSLAdapter):
     """Adapter for Triton CUDA DSL."""
-    
+
+    profile_via_python_script = True
+    impl_func_name_template = "ModelNew"
+
     def get_import_statements(self, framework: str) -> str:
         """Return Triton import statements."""
         if framework == "mindspore":
@@ -71,15 +74,7 @@ class DSLAdapterTritonCuda(DSLAdapter):
         """
         return f"impl_output = impl_model(*{inputs})\n"
     
-    def needs_binary_io(self) -> bool:
-        """Triton CUDA doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """Triton CUDA doesn't need compilation."""
-        return False
-    
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
+    def benchmark_impl(self, impl_func_name: str, inputs: str,
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,

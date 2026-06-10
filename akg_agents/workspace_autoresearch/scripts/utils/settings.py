@@ -132,31 +132,11 @@ def eval_repeats() -> int:
     return _get("eval", "repeats")
 
 
-# --- remote worker -----------------------------------------------------
-def worker_port() -> int:
-    """Worker TCP port. Single source for akg_cli (tunnel/status) and
-    worker.server (bind) so the two cannot drift."""
-    return _get("worker", "port")
-
-
-def worker_ready_timeout() -> float:
-    """Seconds akg_cli waits for a freshly started daemon to answer /status."""
-    return float(_get("worker", "ready_timeout"))
-
-
-def worker_ready_poll_interval() -> float:
-    """Seconds between readiness polls while waiting for daemon startup."""
-    return float(_get("worker", "ready_poll_interval"))
-
-
-def worker_ready_probe_timeout() -> float:
-    """Per-poll /status probe timeout during the readiness loop (short)."""
-    return float(_get("worker", "ready_probe_timeout"))
-
-
-def worker_status_timeout() -> float:
-    """Seconds for a single /status reachability probe."""
-    return float(_get("worker", "status_timeout"))
+# Worker port / readiness timing 之前在这里有 worker_port / worker_ready_*
+# 访问器，现已下线 —— akg_cli 全程从 ``cli/service/worker_config.WorkerConfig``
+# 一处读 yaml，workspace 这边没有直接调用 worker.* 字段的脚本。如果需要
+# 在 WA 脚本读 worker.*，请改用 ``from akg_agents.cli.service.worker_config
+# import WorkerConfig; cfg = WorkerConfig.load()`` 走单一事实源。
 
 
 # --- batch pre-flight verification timeouts (seconds) ------------------

@@ -23,12 +23,13 @@ verifier/
     │   ├── ascend.py          #   BackendAdapterAscend
     │   └── cpu.py             #   BackendAdapterCpu
     ├── dsl/                   # DSLAdapter 及实现
-    │   ├── base.py            #   DSLAdapter(ABC)
+    │   ├── base.py            #   DSLAdapter(ABC) — 扩展钩子在此
     │   ├── triton_cuda.py     #   DSLAdapterTritonCuda
     │   ├── triton_ascend.py   #   DSLAdapterTritonAscend
     │   ├── cpp.py             #   DSLAdapterCpp
     │   ├── cuda_c.py          #   DSLAdapterCudaC
     │   ├── ascendc.py         #   DSLAdapterAscendC
+    │   ├── ascendc_catlass.py #   DSLAdapterAscendC_Catlass
     │   ├── tilelang_cuda.py   #   DSLAdapterTilelangCuda
     │   ├── tilelang_npuir.py  #   DSLAdapterTilelangNpuir
     │   ├── torch.py           #   DSLAdapterTorch
@@ -47,12 +48,68 @@ verifier/
 
 1. 确定适配器类型（backend / dsl / framework）
 2. 在对应子目录创建文件，继承 `BackendAdapter(ABC)` / `DSLAdapter(ABC)` / `FrameworkAdapter(ABC)`
-3. 实现所有抽象方法
+3. 实现 ABC 的抽象方法 + 按需 override 下文的扩展钩子
 4. 在 `adapters/factory.py` 中注册名称映射
+5. 在 `op/utils/config_utils.py` 的 `VALID_CONFIGS / valid_dsls` 表里追加 DSL 名
+
+### DSLAdapter 扩展钩子（base.py）
+
+每加一个 DSL 应该 **只** 改 adapter 文件，不要在 `kernel_verifier.py` / `local_worker.py` /
+`workspace_autoresearch/scripts/scaffold.py` 等调用方加 `if self.dsl == "xxx":` 分支。
+所有 per-DSL 行为通过下面的钩子表达；调用方拿到 adapter 实例后直接调用对应钩子。
+
+**抽象方法（必须实现）**：
+
+| 方法 | 用途 |
+|---|---|
+| `get_import_statements(framework)` | impl 文件顶部的 import 行 |
+| `get_impl_import(op_name, impl_func_name)` | 验证脚本里 import impl 的语句 |
+| `call_impl(...)` | 验证脚本里调用 impl 的代码片段 |
+| `benchmark_impl(...)` | profile 模板里 benchmark 的代码片段 |
+
+**类属性（pure constant，override 用 `= value`，不要写成 `def f(self): return value`）**：
+
+| 属性 | 默认 | 含义 |
+|---|---|---|
+| `needs_binary_io` | `False` | 是否需要二进制 I/O 文件中转（swft = True） |
+| `static_check_via_python_ast` | `True` | LLM 提交的源码是否合法 Python（cpp / cuda_c / ascendc / swft = False，`CodeChecker` 跳过 AST 层） |
+| `profile_via_python_script` | `False` | LocalWorker dispatch：True → 跑 Python 脚本读 JSON；False → 走 msprof / nsys（triton_* / pypto / catlass = True） |
+| `benchmark_requires_l2_clear` | `True` | base benchmark 模板是否每次清 L2（catlass = False） |
+| `impl_func_name_template` | `"{op_name}_{dsl}_{framework}"` | 默认 impl 函数名模板（ModelNew 类 DSL = `"ModelNew"`，AscendC = `"{op_name}_kernel"`） |
+| `kernel_arg_is_directory` | `False` | DSL 的 kernel handoff 是不是目录（catlass = True：目录里有 sibling Python wrapper + 项目子树） |
+| `kernel_project_dir_name` | `None` | `kernel_arg_is_directory=True` 时的项目子目录名（catlass = `"catlass_op"`） |
+| `kernel_project_files` | `[]` | 构成 DSL kernel 项目的文件清单（相对 Python wrapper 同级目录），驱动层（如 WA scaffold）据此决定要拷哪些 / 设哪些可编辑 |
+
+**可选钩子（默认 no-op，按需 override）**：
+
+| 钩子 | 调用方 | 用途 |
+|---|---|---|
+| `materialize_impl(impl_code, verify_dir, op_name, framework, dsl_name, task_info, config)` | `KernelVerifier.gen_verify_project` | 把 LLM 生成的代码落到 verify_dir。默认写 `<op>_<dsl>_impl.py` 并 prepend imports；catlass 写 kernel.py + 拷 catlass_op 树 |
+| `expected_artifacts(verify_dir, op_name, framework, bench_type, dsl_filename_hint)` | `KernelVerifier._verify_impl_artifacts_ready` | 列 verify_dir 必备产物路径；默认是 framework 文件 + impl 文件 |
+| `prepare_config(config, task_info)` | `KernelVerifier.run / run_profile`、调用 `get_special_setup_code` 之前 | 每轮跑前的 config 副作用（resolve CATLASS_ROOT 等） |
+| `get_special_setup_code(framework)` | impl 文件顶部 | 注入一次性 setup 片段（tilelang clear_cache、catlass cmake build 等）；arch / catlass_root 等不要进签名，从 `prepare_config` 缓存到 self 上读 |
+| `get_runtime_env_override_code(**kwargs)` | impl 文件顶部 | 注入运行时 env 覆盖（pypto 运行模式 / 调试位）；默认空字符串 |
+| `post_iteration_cleanup(verify_dir)` | WA `akg_eval._eval_async` finally 块 | 每轮结束后清理短命产物（catlass 删 `catlass_op/build`） |
+| `read_kernel_source(kernel_arg, op_name=None)` | WA scaffold | 把 kernel handoff 路径解析成 `(source_code, project_dir_or_None)`；默认按文件读，catlass 按目录读 + 同级 `kernel.py` / `<op>_kernel.py` 兜底 |
+| `materialize_project_tree(dst_dir, project_src)` | WA scaffold | 把项目子树拷到 dst_dir 并做 DSL 特定修补（catlass 拷 `catlass_op/` + patch CMakeLists） |
+
+### 调用方约定
+
+| 调用方 | 通过 adapter 拿到的能力 |
+|---|---|
+| `KernelVerifier.gen_verify_project` | `materialize_impl` + `get_import_statements` + `get_impl_import` + `get_special_setup_code` + `get_runtime_env_override_code` + `impl_func_name_template` + `needs_binary_io` |
+| `KernelVerifier.run / run_profile` | `prepare_config` + `expected_artifacts` + `benchmark_requires_l2_clear` |
+| `LocalWorker.profile`（`core/worker/local_worker.py`） | `profile_via_python_script` → 决定走 Python-script 路径还是 msprof / nsys |
+| `CodeChecker.check`（`op/utils/code_checker.py`） | `static_check_via_python_ast` → 是否跑 AST 层检查 |
+| WA `scripts/scaffold.py` | `read_kernel_source` + `materialize_project_tree` + `kernel_project_files`（WA 据此派生 task.yaml `editable_files`；"editable" 这层语义是 WA 策略，不放 adapter 上） |
+| WA `scripts/batch/manifest.py` | `kernel_arg_is_directory` + `kernel_project_dir_name`（决定 batch 单文件 vs 多文件解析路径） |
+| WA `scripts/utils/akg_eval.py` | `post_iteration_cleanup` |
 
 ### KernelVerifier 核心逻辑
 
-`KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例，然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
+`KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例（DSL adapter 在
+`__init__` 里 cache 到 `self.dsl_adapter`，因为 `prepare_config` 会在 adapter 实例
+上 stash state），然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
 
 ### Verifier Data Cache
 
@@ -91,4 +148,14 @@ verifier/
 ## 不做什么
 
 - **不要**在适配器中实现 Agent/Workflow 逻辑
-- **不要**硬编码后端/DSL 特定行为到 `kernel_verifier.py`——通过适配器扩展
+- **不要**硬编码后端/DSL 特定行为到 `kernel_verifier.py` / `local_worker.py` /
+  `workspace_autoresearch/scripts/scaffold.py` ——通过适配器扩展钩子。新增 `if
+  self.dsl == "xxx":` 分支审查时会被打回；正确做法是在 `DSLAdapter` 里加扩展钩子
+  / 类属性，调用方只 query adapter
+- **不要**把纯常量写成 `def f(self): return value` 的方法。pure constant 应写成类
+  属性（`flag: bool = False`），方法体只留给真有副作用 / 计算的钩子（如
+  `prepare_config`, `materialize_impl`, `post_iteration_cleanup`）
+- **不要**在 base `DSLAdapter` 的方法签名里塞某个 DSL 私有的参数（如 `arch`,
+  `catlass_root`）。这是"接口泄漏"——应让 adapter 在 `prepare_config` 里从
+  config 读出来缓存到 `self.*`，`get_special_setup_code(framework)` 等签名保持
+  跨 DSL 一致

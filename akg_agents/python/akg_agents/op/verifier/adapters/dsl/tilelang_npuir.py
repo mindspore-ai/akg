@@ -21,7 +21,9 @@ from .base import DSLAdapter
 
 class DSLAdapterTilelangNpuir(DSLAdapter):
     """Adapter for TileLang NPUIR DSL."""
-    
+
+    profile_via_python_script = True
+
     def get_import_statements(self, framework: str) -> str:
         """Return TileLang NPUIR import statements."""
         code = """import tilelang
@@ -47,15 +49,7 @@ except ImportError:
         """Return code string to call TileLang NPUIR implementation function."""
         return f"impl_output = {impl_func_name}(*{inputs})\n"
     
-    def needs_binary_io(self) -> bool:
-        """TileLang NPUIR doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """TileLang NPUIR doesn't need compilation."""
-        return False
-    
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
+    def benchmark_impl(self, impl_func_name: str, inputs: str,
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,

@@ -786,20 +786,12 @@ def load_progress(task_dir: str) -> Optional[Progress]:
     return Progress.from_dict(progress_fields)
 
 
-def save_progress(task_dir: str, progress: Union[Progress, dict],
-                  *, stamp: bool = True):
+def save_progress(task_dir: str, progress: Union[Progress, dict]):
     """Merge progress fields into state.json and atomically save.
-    `stamp=True` updates the in-state `last_updated` field (Progress
-    schema's own timestamp, distinct from state.last_touched)."""
+    state.last_touched is bumped inside save_state — callers don't need
+    a separate progress-side timestamp."""
     state = load_state(task_dir) or _fresh_state()
-    if isinstance(progress, Progress):
-        if stamp:
-            progress = progress.apply(last_updated=_now_iso())
-        payload = progress.to_dict()
-    else:
-        payload = dict(progress)
-        if stamp:
-            payload["last_updated"] = _now_iso()
+    payload = progress.to_dict() if isinstance(progress, Progress) else dict(progress)
     for k, v in payload.items():
         if k in _PROGRESS_FIELD_NAMES:
             state[k] = v
@@ -834,7 +826,7 @@ def update_progress(task_dir: str, **fields) -> Optional[Progress]:
         return None
     new_progress = progress.apply(**fields)
     try:
-        save_progress(task_dir, new_progress, stamp=False)
+        save_progress(task_dir, new_progress)
     except Exception as e:
         print(f"[state_store] CRITICAL: failed to save state.json for "
               f"{task_dir}: {type(e).__name__}: {e}. fields="

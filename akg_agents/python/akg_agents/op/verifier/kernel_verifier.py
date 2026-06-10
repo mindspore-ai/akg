@@ -19,12 +19,13 @@ import logging
 import json
 import textwrap
 from datetime import datetime
-from typing import Optional, Literal, Tuple, Dict, Any, List
+from typing import Optional, Literal, Tuple, Dict, Any, List, Union
 from jinja2 import Template
 from pathlib import Path
 
 from akg_agents import get_project_root
 from akg_agents.op.utils.config_utils import normalize_dsl
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )
@@ -46,7 +47,13 @@ from akg_agents.op.verifier.data_cache import (
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
 )
-from akg_agents.core.worker.interface import WorkerInterface
+from akg_agents.core.worker.interface import (
+    WorkerInterface,
+    DEFAULT_EVAL_TIMEOUT_S,
+    DEFAULT_GEN_REF_TIMEOUT_S,
+    DEFAULT_WARMUP_TIMES,
+    DEFAULT_RUN_TIMES,
+)
 import tarfile
 import io
 import ast
@@ -61,29 +68,14 @@ PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
 PROFILE_SINGLE_TASK_TEMPLATE_PATH = os.path.join(
     get_project_root(), "op", "resources", "templates", "prof_single_task_template.j2")
 # 生成CMakeLists.txt和运行脚本的路径
-CMAKE_TEMPLATE_PATH = os.path.join(get_project_root(), "op", "resources", "templates", "cmake_template.j2")
-RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "ascend_compile", "run.sh")
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
 ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft",
-                   "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
+                   "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc",
+                   "ascendc_catlass", "torch"]
 BackendType = Literal["cuda", "ascend", "cpu"]
-ArchType = Literal[
-    "a100", "v100", "h20", "l20", "rtx3090",
-    "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
-    "ascend310p3",
-    "ascend910_9362", "ascend910_9372", "ascend910_9381",
-    "ascend910_9382", "ascend910_9391", "ascend910_9392",
-    "ascend950dt_95a",
-    "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
-    "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
-    "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
-    "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
-    "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
-    "ascend950pr_9599",
-    "x86_64", "aarch64",
-]
+ArchType = str
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +137,7 @@ class KernelVerifier:
             framework (FrameworkType): 深度学习框架，可选值包括 "torch", "mindspore", "numpy"
             dsl (ImplType): 实现类型，可选值包括 "triton_cuda", "triton_ascend", "triton-russia", "swft"
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
-            arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3"
+            arch (ArchType): 硬件架构，由 backend-specific 校验层判定
             impl_func_name (str, optional): 实现函数名，默认为op_name_dsl_framework
             worker (WorkerInterface, optional): Worker实例，用于执行验证任务
         """
@@ -158,8 +150,6 @@ class KernelVerifier:
         self.arch = arch.lower()
         self.task_id = task_id
         self.bench_type = bench_type
-        # 获取AscendC代码
-        self.context = {}
         # 从config中获取log_dir
         if config:
             self.config = config
@@ -167,12 +157,22 @@ class KernelVerifier:
         else:
             raise ValueError("config is required for KernelVerifier")
         self.config["bench_type"] = bench_type
+        # Arch is canonical config too: per-DSL adapters (e.g. catlass)
+        # read it in prepare_config / special_setup. Stash here so adapter
+        # hooks don't need a separate plumbing path.
+        self.config["arch"] = self.arch
+
+        # Cache the DSL adapter once: per-instance state set by
+        # prepare_config (catlass stashes arch / catlass_root for the
+        # subsequent get_special_setup_code call) would be lost across
+        # re-instantiations.
+        self.dsl_adapter = get_dsl_adapter(self.dsl)
 
         aux_files = self.config.get("framework_aux_files") or {}
         factory_names = self.config.get("framework_factory_names") or {}
         if not isinstance(aux_files, dict):
             raise TypeError(
-                "config['framework_aux_files'] 必须是 Dict[str, str]，"
+                "config['framework_aux_files'] 必须是 Dict[str, str | bytes], "
                 f"实际是 {type(aux_files).__name__}",
             )
         if not isinstance(factory_names, dict):
@@ -180,49 +180,63 @@ class KernelVerifier:
                 "config['framework_factory_names'] 必须是 Dict[str, Any]，"
                 f"实际是 {type(factory_names).__name__}",
             )
-        self.framework_aux_files: Dict[str, str] = aux_files
+        self.framework_aux_files: Dict[str, Union[str, bytes]] = aux_files
         self.framework_factory_names: Dict[str, Any] = factory_names
-        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            # 对于 triton_cuda 和 triton_ascend，统一使用 ModelNew 类格式
-            self.impl_func_name = impl_func_name or "ModelNew"
-        elif self.dsl == "torch":
-            # 对于 torch DSL (Kernel → PyTorch 转换，支持 Triton/CUDA C 等)，统一使用 ModelNew 类格式
-            self.impl_func_name = impl_func_name or "ModelNew"
-        elif self.dsl == "tilelang_ascend" or self.dsl == "tilelang_cuda":
-            self.impl_func_name = impl_func_name or "ModelNew"
-        elif self.dsl == "ascendc":
-            self.impl_func_name = impl_func_name or f"{op_name}_kernel"
-        else:
-            self.impl_func_name = impl_func_name or f"{op_name}_{dsl}_{framework}"
+        self.framework_module_name = (
+            self.config.get("framework_module_name")
+            or f"{self.op_name}_{self.framework}"
+        )
+        self.framework_filename = (
+            self.config.get("framework_filename")
+            or f"{self.framework_module_name}.py"
+        )
+        # impl_func_name: per-DSL convention. Caller-pinned wins; else the
+        # adapter's ``impl_func_name_template`` (e.g. "ModelNew" for
+        # class-style, "{op_name}_kernel" for AscendC). Default template
+        # on the base class is "{op_name}_{dsl}_{framework}".
+        self.impl_func_name = impl_func_name or self.dsl_adapter.impl_func_name_template.format(
+            op_name=op_name, dsl=dsl, framework=framework,
+        )
 
-        # 验证backend和arch的组合是否有效
-        if self.backend == "cuda" and self.arch not in ["a100", "v100", "h20", "l20", "rtx3090"]:
-            raise ValueError(f"cuda后端只支持a100、v100、h20、l20和rtx3090架构，当前架构: {self.arch}")
-        if self.backend == "ascend":
-            supported_ascend_archs = [
-                "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
-                "ascend310p3",
-                "ascend910_9362", "ascend910_9372", "ascend910_9381",
-                "ascend910_9382", "ascend910_9391", "ascend910_9392",
-                "ascend950dt_95a",
-                "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
-                "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
-                "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
-                "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
-                "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
-                "ascend950pr_9599",
-            ]
-            if self.arch not in supported_ascend_archs:
-                raise ValueError(f"ascend后端不支持架构: {self.arch}，支持的架构: {supported_ascend_archs}")
+        # 验证 backend / arch 组合 —— 单一来源 config_utils.check_backend_arch。
+        # 之前这里有第二份 hard-coded 列表，扩新卡时容易遗漏。
+        from akg_agents.op.utils.config_utils import check_backend_arch
+        check_backend_arch(self.backend, self.arch)
 
         # 保存Worker实例（可以在运行时动态设置）
         self.worker = worker
 
-    def _write_framework_aux_files(self, target_dir: str) -> None:
-        """把 self.framework_aux_files 写到 framework 代码所在目录。
+    def _materialize_framework_bundle(self, target_dir: str,
+                                      framework_code: str,
+                                      target_filename: Optional[str] = None
+                                      ) -> str:
+        """Write the framework reference module and its sidecars to
+        ``target_dir`` as a single unit.
+
+        ``target_filename`` is the .py basename to land at. Sidecars in
+        ``self.framework_aux_files`` are written verbatim by their declared
+        task-relative names. Callers that want
+        ``reference.py/reference.json`` should set the framework filename and
+        import module to ``reference`` instead of relying on implicit sidecar
+        renames.
+
+        Returns the absolute path of the .py file written.
         """
+        target_filename = target_filename or self.framework_filename
+
+        py_path = os.path.join(target_dir, target_filename)
+        try:
+            with open(py_path, "w", encoding="utf-8") as f:
+                f.write(framework_code)
+            logger.debug(f"[{self.op_name}] framework 文件已写入: {py_path}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] framework 文件写入失败: "
+                         f"{py_path}, 错误: {e}")
+            raise
+
         if not self.framework_aux_files:
-            return
+            return py_path
+
         for rel_name, content in self.framework_aux_files.items():
             if (
                 os.path.isabs(rel_name)
@@ -237,8 +251,12 @@ class KernelVerifier:
             aux_path = os.path.join(target_dir, rel_name)
             os.makedirs(os.path.dirname(aux_path) or target_dir, exist_ok=True)
             try:
-                with open(aux_path, "w", encoding="utf-8") as f:
-                    f.write(content)
+                if isinstance(content, bytes):
+                    with open(aux_path, "wb") as f:
+                        f.write(content)
+                else:
+                    with open(aux_path, "w", encoding="utf-8") as f:
+                        f.write(content)
                 logger.debug(
                     f"[{self.op_name}] sidecar 文件已写入: {aux_path}"
                 )
@@ -247,6 +265,8 @@ class KernelVerifier:
                     f"[{self.op_name}] sidecar 文件写入失败: {aux_path}, 错误: {e}"
                 )
                 raise
+
+        return py_path
 
     def check_task_desc_static(self, code: str) -> Tuple[bool, str]:
         """
@@ -315,12 +335,9 @@ class KernelVerifier:
                 if isinstance(self.worker, LocalWorker) and self.worker.device_pool:
                     device_id = self.worker.device_pool.device_list[0]
 
-            # 2. 写入 task_desc 到 reference.py
-            ref_file = os.path.join(check_dir, "reference.py")
-            with open(ref_file, "w", encoding="utf-8") as f:
-                f.write(task_desc)
-            # 同步写入json文件。
-            self._write_framework_aux_files(check_dir)
+            # 2. 写入 task_desc 到 REF_FILE_DEFAULT + 同步 sidecar
+            ref_file = self._materialize_framework_bundle(
+                check_dir, task_desc, target_filename=REF_FILE_DEFAULT)
 
             # 3. 生成验证脚本 verify_{op_name}.py
             if self.framework == "mindspore":
@@ -499,7 +516,7 @@ if __name__ == "__main__":
     async def generate_reference_data(
         self,
         task_desc: str,
-        timeout: int = 120,
+        timeout: int = DEFAULT_GEN_REF_TIMEOUT_S,
         save_inputs: bool = False,
         device_id: Optional[int] = None,
     ) -> Tuple[bool, str, bytes]:
@@ -526,12 +543,9 @@ if __name__ == "__main__":
         os.makedirs(ref_dir, exist_ok=True)
 
         try:
-            # 2. 写入 task_desc 到 reference.py
-            ref_file = os.path.join(ref_dir, "reference.py")
-            with open(ref_file, "w", encoding="utf-8") as f:
-                f.write(task_desc)
-            # 同步 json 文件
-            self._write_framework_aux_files(ref_dir)
+            # 2. 写入 task_desc 到 REF_FILE_DEFAULT + 同步 sidecar
+            ref_file = self._materialize_framework_bundle(
+                ref_dir, task_desc, target_filename=REF_FILE_DEFAULT)
 
             # 3. 生成参考数据脚本
             save_inputs_flag = "True" if save_inputs else "False"
@@ -731,8 +745,10 @@ if __name__ == "__main__":
             # 清理临时目录
             shutil.rmtree(ref_dir, ignore_errors=True)
 
-    async def profile_single_task(self, task_desc: str, warmup_times: int = 5,
-                                  run_times: int = 50, timeout: int = 300,
+    async def profile_single_task(self, task_desc: str,
+                                  warmup_times: int = DEFAULT_WARMUP_TIMES,
+                                  run_times: int = DEFAULT_RUN_TIMES,
+                                  timeout: int = DEFAULT_EVAL_TIMEOUT_S,
                                   device_id: int = 0) -> Dict[str, Any]:
         """
         执行单个任务的性能测试（只测量 task_desc 的性能，不进行 base vs generation 对比）
@@ -755,13 +771,10 @@ if __name__ == "__main__":
         os.makedirs(profile_dir, exist_ok=True)
 
         try:
-            framework_file = os.path.join(
-                profile_dir, f"{self.op_name}_{self.framework}.py"
-            )
-            with open(framework_file, "w", encoding="utf-8") as f:
-                f.write(task_desc)
-            # 同步 json文件
-            self._write_framework_aux_files(profile_dir)
+            # framework code + sidecar 一起落盘（bundle 内部决定 .py 名 +
+            # sidecar 跟 stem 改名）。
+            framework_file = self._materialize_framework_bundle(
+                profile_dir, task_desc)
 
             # 3. 使用模板生成性能测试脚本
             script_file = os.path.join(profile_dir, f"profile_single_{self.op_name}.py")
@@ -826,7 +839,8 @@ if __name__ == "__main__":
             framework_model_import = framework_adapter.get_framework_import(
                 self.op_name,
                 is_dynamic_shape,
-                inputs_factory_name=(self.framework_factory_names or {}).get("inputs_factory"),
+                inputs_factory_name=self._resolve_dyn_factory(),
+                module_name=self.framework_module_name,
             )
             logger.debug(
                 f"[{self.op_name}] Framework model import 生成成功 "
@@ -886,6 +900,26 @@ if __name__ == "__main__":
             logger.error(f"[{self.op_name}] 脚本写入失败: {e}")
             raise
 
+    def _verify_impl_artifacts_ready(self, verify_dir: str) -> bool:
+        """Return True when generated verify/profile artifacts exist.
+
+        bench_type variants (sol / cann) override the default ``framework
+        file + <op>_<dsl>_impl.py`` shape. Per-DSL artifact shape (e.g.
+        catlass needs kernel.py + CMakeLists.txt) is delegated to the
+        adapter via ``expected_artifacts``."""
+        # bench_type variants are not per-DSL — handle at this layer.
+        impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
+        if self.bench_type == "sol":
+            return (os.path.isfile(os.path.join(verify_dir, "definition.json"))
+                    and os.path.isfile(impl_file))
+        if self.bench_type == "cann":
+            return (os.path.isfile(os.path.join(verify_dir, "proto.yaml"))
+                    and os.path.isfile(impl_file))
+        artifacts = self.dsl_adapter.expected_artifacts(
+            verify_dir, self.op_name, self.framework, self.bench_type, self.dsl,
+        )
+        return all(os.path.isfile(p) for p in artifacts)
+
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
@@ -895,141 +929,42 @@ if __name__ == "__main__":
         os.makedirs(target_dir, exist_ok=True)
         return target_dir
 
-    def _generate_import_statements(self) -> str:
-        """根据framework和dsl生成适当的import语句"""
-        import_lines = []
+    # Accepted multi-shape factory names (any one triggers dynamic mode).
+    # ``get_inputs_dyn_list`` — legacy (209 internal benchmark refs);
+    # ``get_input_groups`` — NPUKernelBench + WA new convention. The
+    # framework adapter aliases whichever the ref defines back to
+    # ``get_inputs_dyn_list`` (the template's internal local name).
+    _DYN_FACTORY_NAMES = ("get_inputs_dyn_list", "get_input_groups")
 
-        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            if self.framework == "mindspore":
-                import_lines = [
-                    "import torch",
-                    "import triton",
-                    "import triton.language as tl",
-                    "import mindspore as ms"
-                ]
-            elif self.framework == "torch":
-                import_lines = [
-                    "import torch",
-                    "import triton",
-                    "import triton.language as tl"
-                ]
-            elif self.framework == "numpy":
-                import_lines = [
-                    "import numpy as np",
-                    "import triton",
-                    "import triton.language as tl"
-                ]
-        elif self.dsl == "torch":
-            # Kernel → PyTorch 转换场景（支持 Triton/CUDA C 等）
-            # 生成的代码是纯 PyTorch，不需要任何自定义 Kernel
-            import_lines = [
-                "import torch",
-                "import torch.nn as nn",
-                "import torch.nn.functional as F"
-            ]
-        elif self.dsl == "tilelang_npuir":
-            if self.framework == "torch":
-                import_lines = [
-                    "import torch",
-                    "import torch_npu",
-                    "import tilelang",
-                    "import tilelang.language as T"
-                ]
-        elif self.dsl == "swft":
-            import_lines = [
-                "from swft.core import *",
-                "from swft.api import *",
-                "import numpy as np"
-            ]
-        elif self.dsl == "cuda_c" or self.dsl == "cpp":
-            import_lines = [
-                "import torch",
-                "import torch.nn as nn",
-                "import torch.nn.functional as F",
-                "from torch.utils.cpp_extension import load_inline"
-            ]
-        elif self.framework == "numpy":
-            import_lines = [
-                "import numpy as np"
-            ]
-        elif self.framework == "torch":
-            import_lines = [
-                "import torch"
-            ]
-        elif self.framework == "mindspore":
-            import_lines = [
-                "import mindspore as ms"
-            ]
-
-        # 添加换行符并连接
-        if import_lines:
-            return "\n".join(import_lines) + "\n\n"
-        return ""
-
-    def generate_ascendc_project(self, impl_code: str, verify_dir: str):
-        """生成AscendC项目文件"""
-        try:
-            # 生成CMakeLists.txt
-            cmake_file = os.path.join(verify_dir, "CMakeLists.txt")
-            with open(CMAKE_TEMPLATE_PATH, "r", encoding="utf-8") as f:
-                template = Template(f.read())
-            cmake_code = template.render(op_name=self.op_name)
-            with open(cmake_file, "w", encoding="utf-8") as f:
-                f.write(cmake_code)
-            shutil.copy(RUN_TEMPLATE_PATH, verify_dir)
-
-            # 填充代码
-            try:
-                compile(impl_code, "<string>", "exec")
-                exec(impl_code, self.context)
-            except Exception as e:
-                raise Exception(f"Error in generated code: {e}")
-
-            # 检查并写入三个关键文件
-            host_tiling_src = self.context.get('host_tiling_src')
-            python_binding_src = self.context.get('python_bind_src')
-            kernel_src = self.context.get('kernel_src')
-
-            # 检查代码是否为None
-            if host_tiling_src is None:
-                raise Exception("host_tiling_src is None - 生成的代码中缺少host侧tiling部分")
-            if python_binding_src is None:
-                raise Exception("python_bind_src is None - 生成的代码中缺少内核调用python_bind部分")
-            if kernel_src is None:
-                raise Exception("kernel_src is None - 生成的代码中缺少kernel主函数部分")
-
-            # 写入文件
-            with open(os.path.join(verify_dir, f"{self.op_name}_tiling.cpp"), "w") as f:
-                f.write(host_tiling_src)
-            with open(os.path.join(verify_dir, "pybind11.cpp"), "w") as f:
-                f.write(python_binding_src)
-            with open(os.path.join(verify_dir, f"{self.op_name}_kernel.cpp"), "w") as f:
-                f.write(kernel_src)
-
-            logger.info(f"[{self.op_name}] AscendC项目文件生成完成")
-
-        except Exception as e:
-            logger.error(f"AscendC项目生成失败: {e}")
-            raise Exception(f"AscendC项目生成失败: {e}")
-
-    def _detect_dynamic_shape(self) -> bool:
-        """检测框架代码是否走动态 shape 
-
-        Returns:
-            bool: True if dynamic-shape semantics apply, False otherwise.
-        """
-        declared = (self.framework_factory_names or {}).get("is_dynamic_shape")
-        if isinstance(declared, bool):
-            return declared
+    def _resolve_dyn_factory(self) -> Optional[str]:
+        """Name of the ref's multi-shape factory, or None for single-shape.
+        Explicit ``framework_factory_names.inputs_factory`` wins; else AST-
+        scan the ref source for one of :attr:`_DYN_FACTORY_NAMES`."""
+        explicit = (self.framework_factory_names or {}).get("inputs_factory")
+        if explicit:
+            return explicit
         code = self.framework_code or ""
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return "get_inputs_dyn_list" in code
-        return any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "get_inputs_dyn_list"
-            for node in tree.body
-        )
+            for n in self._DYN_FACTORY_NAMES:
+                if n in code:
+                    return n
+            return None
+        for node in tree.body:
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name in self._DYN_FACTORY_NAMES):
+                return node.name
+        return None
+
+    def _detect_dynamic_shape(self) -> bool:
+        """True iff the ref module exposes a multi-shape factory (auto-
+        detected) or ``framework_factory_names.is_dynamic_shape=True``
+        is explicitly declared."""
+        declared = (self.framework_factory_names or {}).get("is_dynamic_shape")
+        if isinstance(declared, bool):
+            return declared
+        return self._resolve_dyn_factory() is not None
 
     @staticmethod
     def _prepare_code_lines(code_snippet: Any) -> List[str]:
@@ -1247,7 +1182,8 @@ if __name__ == "__main__":
 
                 logger.info(f"[{self.op_name}] 开始生成 reference data")
                 reference_timeout = int(
-                    self.config.get("reference_data_timeout", self.config.get("verify_timeout", 300))
+                    self.config.get("reference_data_timeout",
+                                    self.config.get("verify_timeout", DEFAULT_EVAL_TIMEOUT_S))
                 )
                 try:
                     success, log, reference_bytes = await self.generate_reference_data(
@@ -1444,42 +1380,23 @@ if __name__ == "__main__":
         # use_reference_inputs 依赖 use_reference_data，且要求 .pt 中包含 inputs
         use_reference_inputs = self.config.get('use_reference_inputs', False) and use_reference_data
 
-        # 创建框架实现文件
-        framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
-        try:
-            with open(framework_file, "w", encoding="utf-8") as f:
-                f.write(self.framework_code)
-            logger.debug(f"[{self.op_name}] 框架实现文件已创建: {framework_file}")
-        except Exception as e:
-            logger.error(f"[{self.op_name}] 框架实现文件创建失败: {framework_file}, 错误: {e}")
-            raise
-        self._write_framework_aux_files(verify_dir)
+        # 框架代码 + sidecar 一起落盘（bundle 内部决定 .py 名 +
+        # sidecar 跟 stem 改名）。
+        framework_file = self._materialize_framework_bundle(
+            verify_dir, self.framework_code)
 
-        # 创建具体实现文件
-        if "ascendc" in self.dsl:
-            logger.info(f"[{self.op_name}] 检测到AscendC DSL，生成编译项目")
-            self.generate_ascendc_project(impl_code, verify_dir)
-        else:
-            # 统一使用 _impl 后缀，与 framework 文件区分
-            file_name = f"{self.op_name}_{self.dsl}_impl.py"
-            impl_file = os.path.join(verify_dir, file_name)
-
-            # 使用adapter生成import语句
-            try:
-                dsl_adapter = get_dsl_adapter(self.dsl)
-                import_statements = dsl_adapter.get_import_statements(self.framework)
-                logger.debug(f"[{self.op_name}] DSL import语句生成成功")
-            except Exception as e:
-                logger.error(f"[{self.op_name}] DSL import语句生成失败: {e}")
-                raise
-
-            try:
-                with open(impl_file, "w", encoding="utf-8") as f:
-                    f.write(import_statements + impl_code)
-                logger.debug(f"[{self.op_name}] 实现文件已创建: {impl_file}")
-            except Exception as e:
-                logger.error(f"[{self.op_name}] 实现文件创建失败: {impl_file}, 错误: {e}")
-                raise
+        # 写实现文件：每个 DSL 自己的 adapter 决定 schema（默认
+        # ``<op>_<dsl>_impl.py``，catlass 写 kernel.py + 拷 catlass_op 树，
+        # ascendc 渲染 CMakeLists + 写 tiling/kernel/pybind11 三个 cpp）。
+        self.dsl_adapter.materialize_impl(
+            impl_code=impl_code,
+            verify_dir=verify_dir,
+            op_name=self.op_name,
+            framework=self.framework,
+            dsl_name=self.dsl,
+            task_info=None,
+            config=self.config,
+        )
 
         # 生成验证脚本
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
@@ -1518,21 +1435,24 @@ if __name__ == "__main__":
             framework_model_import = framework_adapter.get_framework_import(
                 self.op_name,
                 is_dynamic_shape,
-                inputs_factory_name=self.framework_factory_names.get("inputs_factory"),
+                inputs_factory_name=self._resolve_dyn_factory(),
+                module_name=self.framework_module_name,
             )
             logger.debug(f"[{self.op_name}] Framework model import生成成功 (长度: {len(framework_model_import)})")
 
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
             logger.debug(f"[{self.op_name}] DSL imports生成成功 (长度: {len(dsl_imports)})")
-            if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
-                dsl_imports += dsl_adapter.get_runtime_env_override_code(
-                    pypto_run_mode=self.config.get("pypto_run_mode"),
-                    pypto_runtime_debug_mode=0,
-                )
+            # get_runtime_env_override_code defaults to "" on the ABC;
+            # only the pypto adapter emits a non-empty body. No dsl check.
+            dsl_imports += dsl_adapter.get_runtime_env_override_code(
+                pypto_run_mode=self.config.get("pypto_run_mode"),
+                pypto_runtime_debug_mode=0,
+            )
 
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             logger.debug(f"[{self.op_name}] DSL impl import生成成功 (长度: {len(dsl_impl_import)})")
 
+            dsl_adapter.prepare_config(self.config, task_info=None)
             special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
             logger.debug(f"[{self.op_name}] Special setup code生成成功 (长度: {len(special_setup_code)})")
 
@@ -1564,7 +1484,7 @@ if __name__ == "__main__":
 
             # 生成binary I/O函数（如果需要）
             binary_io_functions = ""
-            needs_binary_io = dsl_adapter.needs_binary_io()
+            needs_binary_io = dsl_adapter.needs_binary_io
             if needs_binary_io:
                 binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
                 logger.info(f"[{self.op_name}] Binary I/O函数生成成功 (长度: {len(binary_io_functions)})")
@@ -1598,7 +1518,7 @@ if __name__ == "__main__":
                 backend=self.backend,
                 arch=self.arch,
                 is_dynamic_shape=is_dynamic_shape,
-                timeout=self.config.get('verify_timeout', 300),
+                timeout=self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S),
                 # 参考数据模式（用于跨后端转换场景）
                 use_reference_data=use_reference_data,
                 use_reference_inputs=use_reference_inputs,
@@ -1645,7 +1565,9 @@ if __name__ == "__main__":
                     tar_file.add(file_path, arcname=arcname)
         return tar_buffer.getvalue()
 
-    async def run_verify(self, verify_dir: str, timeout: int = 300, device_id: int = 0):
+    async def run_verify(self, verify_dir: str,
+                         timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+                         device_id: int = 0):
         """
         运行验证脚本
 
@@ -1723,8 +1645,10 @@ if __name__ == "__main__":
             logger.error(f"[{self.op_name}] 验证执行异常: {e}", exc_info=True)
             return False, str(e)
 
-    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5,
-                            run_times: int = 50, skip_base: bool = False):
+    def gen_profile_project(self, verify_dir: str, device_id: int = 0,
+                            warmup_times: int = DEFAULT_WARMUP_TIMES,
+                            run_times: int = DEFAULT_RUN_TIMES,
+                            skip_base: bool = False):
         """生成profile项目文件到指定目录
 
         Args:
@@ -1793,15 +1717,18 @@ if __name__ == "__main__":
             framework_model_import = framework_adapter.get_framework_import(
                 self.op_name,
                 is_dynamic_shape,
-                inputs_factory_name=self.framework_factory_names.get("inputs_factory"),
+                inputs_factory_name=self._resolve_dyn_factory(),
+                module_name=self.framework_module_name,
             )
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
-            if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
-                dsl_imports += dsl_adapter.get_runtime_env_override_code(
-                    pypto_run_mode=self.config.get("pypto_run_mode"),
-                    pypto_runtime_debug_mode=1,
-                )
+            # get_runtime_env_override_code defaults to "" on the ABC;
+            # only the pypto adapter emits a non-empty body. No dsl check.
+            dsl_imports += dsl_adapter.get_runtime_env_override_code(
+                pypto_run_mode=self.config.get("pypto_run_mode"),
+                pypto_runtime_debug_mode=1,
+            )
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
+            dsl_adapter.prepare_config(self.config, task_info=None)
             special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
 
             # 生成设备设置代码
@@ -1820,7 +1747,7 @@ if __name__ == "__main__":
 
             # 生成binary I/O函数（如果需要）
             binary_io_functions = ""
-            needs_binary_io = dsl_adapter.needs_binary_io()
+            needs_binary_io = dsl_adapter.needs_binary_io
             if needs_binary_io:
                 binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
                 logger.info(f"[{self.op_name}] 性能测试Binary I/O函数生成成功")
@@ -1835,8 +1762,11 @@ if __name__ == "__main__":
             # 生成benchmark代码
             if is_base_template:
                 # Base模板：benchmark framework model
-                benchmark_code = self._generate_base_benchmark_code(framework_adapter, dsl_adapter,
-                                                                    warmup_times, run_times)
+                benchmark_code = self._generate_base_benchmark_code(
+                    framework_adapter, dsl_adapter,
+                    warmup_times, run_times,
+                    clear_l2_cache=dsl_adapter.benchmark_requires_l2_clear,
+                )
                 logger.debug(f"[{self.op_name}] Base benchmark代码生成成功 (长度: {len(benchmark_code)})")
             else:
                 # Generation模板：benchmark implementation
@@ -2151,8 +2081,10 @@ if __name__ == "__main__":
             logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
 
         try:
-            run_times = profile_settings.get("run_times", 50)
-            warmup_times = profile_settings.get("warmup_times", 5)
+            self.dsl_adapter.prepare_config(self.config, task_info=task_info)
+
+            run_times = profile_settings.get("run_times", DEFAULT_RUN_TIMES)
+            warmup_times = profile_settings.get("warmup_times", DEFAULT_WARMUP_TIMES)
             effective_profile_settings = dict(profile_settings)
 
             cached_baseline_time_us = None
@@ -2172,20 +2104,7 @@ if __name__ == "__main__":
             os.makedirs(verify_dir, exist_ok=True)
 
             # 检查是否需要先生成代码文件（独立调用 profile 时需要）
-            if self.bench_type == "sol":
-                # SOL: 检查 definition.json 和 impl 文件
-                needed_file = os.path.join(verify_dir, "definition.json")
-                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
-            elif self.bench_type == "cann":
-                # CANN: 检查 proto.yaml 和 impl 文件
-                needed_file = os.path.join(verify_dir, "proto.yaml")
-                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
-            else:
-                # KernelBench: 检查框架实现文件和 DSL 实现文件
-                needed_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
-                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
-
-            if not os.path.exists(needed_file) or not os.path.exists(impl_file):
+            if not self._verify_impl_artifacts_ready(verify_dir):
                 # 代码文件不存在，需要先生成
                 impl_code = task_info.get("coder_code", "")
                 if not impl_code:
@@ -2274,14 +2193,29 @@ if __name__ == "__main__":
             if artifacts:
                 sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
 
-            # 从 Worker 返回的结果中提取数据
-            # 注意：跨后端场景下 base_time 可能是 None（跳过 base profile）
+            # Worker 返回的是 canonical 字段: gen_time / base_time 是 aggregate
+            # 标量, per_shape_gen_us / per_shape_base_us 是 per-case 数组.
+            # 跨后端场景下 base_time 可能为 None (跳过 base profile).
             gen_time = result.get('gen_time')
             base_time = result.get('base_time')
             speedup = result.get('speedup', 0.0)
+            per_shape_gen_us = list(result.get('per_shape_gen_us') or [])
+            per_shape_base_us = list(result.get('per_shape_base_us') or [])
+            gen_method = result.get('gen_method')
+            base_method = result.get('base_method')
             roofline_time = result.get('roofline_time')
             roofline_speedup = result.get('roofline_speedup', 0.0)
             roofline_result = result.get('roofline')
+
+            # Shape descriptors come from the verify sidecar (populated by
+            # ``run()`` immediately before this profile call). One owner,
+            # one source — no defensive fallbacks in downstream consumers.
+            case_descs: list = []
+            sidecar = getattr(self, "last_verify_sidecar", None)
+            if isinstance(sidecar, dict):
+                case_descs = [c.get("case_desc", "")
+                              for c in (sidecar.get("per_case") or [])
+                              if isinstance(c, dict)]
 
             if not skip_base:
                 self._store_baseline_result_in_data_cache(
@@ -2312,15 +2246,21 @@ if __name__ == "__main__":
                 logger.info(f"roofline speedup is {roofline_speedup:.4f}x")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
 
-            # 构建返回结果
+            # 构建返回结果. per_shape_* / case_descs 在 caller 侧 (akg_eval) 直接
+            # 拼进 metrics dict, 不需要再去 sidecar 取一次.
             result = {
                 'gen_time': gen_time_display,
                 'base_time': base_time_display,
                 'speedup': speedup,
+                'per_shape_gen_us': per_shape_gen_us,
+                'per_shape_base_us': per_shape_base_us,
+                'case_descs': case_descs,
+                'gen_method': gen_method,
+                'base_method': base_method,
                 'roofline_time': roofline_time,
                 'roofline_speedup': roofline_speedup,
                 'roofline': roofline_result,
-                'unique_dir': unique_dir_name  # 添加 unique_dir
+                'unique_dir': unique_dir_name,
             }
 
             # 只在 triton_ascend 情况下添加 autotune_summary
@@ -2337,6 +2277,11 @@ if __name__ == "__main__":
                 'gen_time': None,
                 'base_time': None,
                 'speedup': 0.0,
+                'per_shape_gen_us': [],
+                'per_shape_base_us': [],
+                'case_descs': [],
+                'gen_method': None,
+                'base_method': None,
                 'roofline_time': None,
                 'roofline_speedup': 0.0,
                 'roofline': None,
@@ -2701,6 +2646,8 @@ if __name__ == "__main__":
         # 动态创建验证目录
         verify_dir = self._create_verify_dir(current_step)
 
+        self.dsl_adapter.prepare_config(self.config, task_info=task_info)
+
         # 【关键】对于 LocalWorker 和 RemoteWorker，在 run() 方法开始时就 acquire device
         # 整个 verify 流程（生成脚本 + 执行）都使用这个 device_id
         # 最后在 finally 中统一释放
@@ -2734,7 +2681,7 @@ if __name__ == "__main__":
 
             if verify_per_config and is_triton_autotune:
                 config_verify_result, config_verify_log, final_code = await self._verify_configs_separately(
-                    target_code, verify_dir, actual_device_id, self.config.get('verify_timeout', 300), current_step
+                    target_code, verify_dir, actual_device_id, self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S), current_step
                 )
                 if config_verify_result is not None:
                     if config_verify_result:
@@ -2758,7 +2705,7 @@ if __name__ == "__main__":
                 project_gen_log = f"项目生成失败: {error_msg}\n"
 
             # 从config获取timeout配置，默认5分钟
-            verify_timeout = self.config.get('verify_timeout', 300)
+            verify_timeout = self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S)
 
             # 运行验证
             # worker.verify() 只是执行脚本，不需要管理 device（device 已经在脚本中设置好了）

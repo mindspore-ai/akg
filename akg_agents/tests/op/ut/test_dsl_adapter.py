@@ -15,6 +15,7 @@
 """Unit tests for DSL Adapters."""
 
 import pytest
+from akg_agents.op.utils.arch_normalize import ascend_soc_version
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter, get_framework_adapter
 
 
@@ -46,13 +47,8 @@ class TestDSLAdapterTritonCuda:
     def test_needs_binary_io(self):
         """Test binary I/O requirement."""
         adapter = get_dsl_adapter("triton_cuda")
-        assert adapter.needs_binary_io() is False
-    
-    def test_needs_compilation(self):
-        """Test compilation requirement."""
-        adapter = get_dsl_adapter("triton_cuda")
-        assert adapter.needs_compilation() is False
-    
+        assert adapter.needs_binary_io is False
+
     def test_benchmark_impl(self):
         """Test benchmark code generation."""
         adapter = get_dsl_adapter("triton_cuda")
@@ -125,17 +121,22 @@ class TestDSLAdapterAscendC:
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
         assert "subprocess.run" in code
         assert "run.sh" in code
+        assert "ascend_soc_version" in code
+        assert "ARCH_TO_SOC_VERSION" not in code
         # impl_func_name 和 inputs 现在由 f-string 直接替换
         assert "import test_func" in code
         assert "run_test_func" in code
         assert "test_func.run_test_func(*inputs)" in code
+
+    def test_ascend_soc_version_derives_from_arch(self):
+        assert ascend_soc_version("ascend910b4") == "Ascend910B4"
+        assert ascend_soc_version("ascend910b2c") == "Ascend910B2C"
+        assert ascend_soc_version("ascend310p3") == "Ascend310P3"
+        assert ascend_soc_version("ascend910_9392") == "Ascend910_9392"
+        assert ascend_soc_version("ascend950dt_95a") == "Ascend950DT_95A"
+        assert ascend_soc_version("ascend950pr_9589") == "Ascend910_9589"
+        assert ascend_soc_version("unknown") is None
     
-    def test_needs_compilation(self):
-        """Test compilation requirement."""
-        adapter = get_dsl_adapter("ascendc")
-        assert adapter.needs_compilation() is True
-
-
 class TestDSLAdapterCpp:
     """Test C++ DSL Adapter."""
     
@@ -315,11 +316,13 @@ class TestDSLAdapterTilelangAscend:
 
     def test_needs_binary_io(self):
         adapter = get_dsl_adapter("tilelang_ascend")
-        assert adapter.needs_binary_io() is False
+        assert adapter.needs_binary_io is False
+        assert not callable(adapter.needs_binary_io)
 
     def test_needs_compilation(self):
         adapter = get_dsl_adapter("tilelang_ascend")
-        assert adapter.needs_compilation() is False
+        assert adapter.needs_compilation is False
+        assert not callable(adapter.needs_compilation)
 
 
 class TestDSLAdapterFactoryTilelangAscend:
@@ -329,4 +332,3 @@ class TestDSLAdapterFactoryTilelangAscend:
         adapter = get_dsl_adapter("tilelang_ascend")
         assert adapter is not None
         assert adapter.__class__.__name__ == "DSLAdapterTilelangAscend"
-

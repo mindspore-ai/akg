@@ -22,17 +22,20 @@ from .base import DSLAdapter
 class DSLAdapterTilelangCuda(DSLAdapter):
     """Adapter for TileLang CUDA DSL."""
 
+    profile_via_python_script = True
+    impl_func_name_template = "ModelNew"
+
     def get_import_statements(self, framework: str) -> str:
         """Return TileLang CUDA import statements."""
         code = "import tilelang\nimport tilelang.language as T\n"
         if framework == "torch":
             code = "import torch\n" + code
         return code
-
+    
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation ModelNew import."""
         return f"from {op_name}_tilelang_cuda_impl import ModelNew\n"
-
+    
     def create_impl_module(
         self,
         framework: str,
@@ -45,22 +48,14 @@ class DSLAdapterTilelangCuda(DSLAdapter):
         if framework == "torch":
             code += f"impl_model = impl_model.to({device_var})\n"
         return code
-
+    
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
-                  framework_adapter: Any, op_name: str,
-                  data_dir: Optional[str] = None,
+                  framework_adapter: Any, op_name: str, 
+                  data_dir: Optional[str] = None, 
                   framework_output: Optional[str] = None) -> str:
         """Return code string to call TileLang CUDA implementation function."""
         return f"impl_output = impl_model(*{inputs})\n"
-
-    def needs_binary_io(self) -> bool:
-        """TileLang CUDA doesn't need binary I/O."""
-        return False
-
-    def needs_compilation(self) -> bool:
-        """TileLang CUDA doesn't need compilation."""
-        return False
-
+    
     def benchmark_impl(self, impl_func_name: str, inputs: str,
                        warmup: int, runs: int, backend: str, op_name: str,
                        case_idx: int = 0, framework_model: Optional[str] = None,
@@ -117,3 +112,4 @@ class DSLAdapterTilelangCuda(DSLAdapter):
                 f"got framework='{framework}'"
             )
         return code
+

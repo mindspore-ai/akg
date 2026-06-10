@@ -8,8 +8,9 @@ WITH_KERNELBENCH=false
 WITH_MULTIKERNELBENCH=false
 WITH_EVOKERNEL=false
 WITH_SOLAR=false
-WITH_ASCENDOPGENAGENT=false
+WITH_NPUKERNELBENCH=false
 WITH_CANN_BENCH=false
+WITH_CATLASS=false
 WITH_ALL_BENCHMARKS=false
 for arg in "$@"; do
   if [ "$arg" = "--with_local_model" ]; then
@@ -24,10 +25,12 @@ for arg in "$@"; do
     WITH_EVOKERNEL=true
   elif [ "$arg" = "--with_solar" ]; then
     WITH_SOLAR=true
-  elif [ "$arg" = "--with_ascendopgenagent" ]; then
-    WITH_ASCENDOPGENAGENT=true
+  elif [ "$arg" = "--with_npukernelbench" ]; then
+    WITH_NPUKERNELBENCH=true
   elif [ "$arg" = "--with_cann_bench" ]; then
     WITH_CANN_BENCH=true
+  elif [ "$arg" = "--with_catlass" ]; then
+    WITH_CATLASS=true
   elif [ "$arg" = "--with_all_benchmarks" ]; then
     WITH_ALL_BENCHMARKS=true
   fi
@@ -45,8 +48,9 @@ KERNELBENCH_DIR="${THIRDPARTY_DIR}/KernelBench"
 MULTIKERNELBENCH_DIR="${THIRDPARTY_DIR}/MultiKernelBench"
 EVOKERNEL_DIR="${THIRDPARTY_DIR}/EvoKernel"
 SOLAR_DIR="${SOLAR_DIR:-${THIRDPARTY_DIR}/SOLAR}"
-ASCENDOPGENAGENT_DIR="${THIRDPARTY_DIR}/AscendOpGenAgent"
+NPUKERNELBENCH_DIR="${THIRDPARTY_DIR}/NPUKernelBench"
 CANN_BENCH_DIR="${THIRDPARTY_DIR}/cann-bench"
+CATLASS_DIR="${THIRDPARTY_DIR}/catlass"
 
 CANN_BENCH_REPO_URL="https://gitcode.com/cann/cann-bench.git"
 CANN_BENCH_COMMIT=""
@@ -60,8 +64,10 @@ EVOKERNEL_REPO_URL="https://huggingface.co/datasets/noahli/EvoKernel"
 EVOKERNEL_COMMIT="af61b2a307d6d9f8d313893f2c87414c51a97863"
 SOLAR_REPO_URL="${SOLAR_REPO_URL:-https://github.com/NVlabs/SOLAR.git}"
 SOLAR_REF="${SOLAR_REF:-}"
-ASCENDOPGENAGENT_REPO_URL="https://github.com/Just-it/AscendOpGenAgent.git"
-ASCENDOPGENAGENT_COMMIT="f24df03f2e79c7debcf0f72cec49d71bc6289955"
+NPUKERNELBENCH_REPO_URL="https://atomgit.com/Ascend/ascendc-kernelgen-data.git"
+NPUKERNELBENCH_COMMIT="0b7c7c8f75656cd7cd7c2b2e3d1c1f4407ee80f9"
+CATLASS_REPO_URL="https://gitcode.com/cann/catlass.git"
+CATLASS_COMMIT="d60bf08c278c07d8fd1a74d3a4a4f590555d9ab9"
 
 function check_python_and_deps() {
   if ! command -v python3 &> /dev/null; then
@@ -238,19 +244,19 @@ function download_evokernel() {
   clone_and_checkout_repo "EvoKernel" "${EVOKERNEL_REPO_URL}" "${EVOKERNEL_DIR}" "${EVOKERNEL_COMMIT}" "true"
 }
 
-function download_ascendopgenagent() {
+function download_npukernelbench() {
   check_git
   clone_and_checkout_repo \
-    "AscendOpGenAgent" \
-    "${ASCENDOPGENAGENT_REPO_URL}" \
-    "${ASCENDOPGENAGENT_DIR}" \
-    "${ASCENDOPGENAGENT_COMMIT}"
+    "NPUKernelBench" \
+    "${NPUKERNELBENCH_REPO_URL}" \
+    "${NPUKERNELBENCH_DIR}" \
+    "${NPUKERNELBENCH_COMMIT}"
 
-  local npukb_dir="${ASCENDOPGENAGENT_DIR}/benchmarks/NPUKernelBench"
+  local npukb_dir="${NPUKERNELBENCH_DIR}/npu_benchmark"
   if [ -d "${npukb_dir}" ]; then
     local level_count
     level_count="$(find "${npukb_dir}" -maxdepth 1 -mindepth 1 -type d -name 'level*' | wc -l)"
-    echo "AscendOpGenAgent 就位：${ASCENDOPGENAGENT_DIR}"
+    echo "NPUKernelBench 就位：${NPUKERNELBENCH_DIR}"
     echo "NPUKernelBench 数据集：${npukb_dir}（${level_count} 个 level）"
   else
     echo "警告：${npukb_dir} 缺失，AKG 的 NPUKernelBench 接入将无法找到数据集。"
@@ -271,6 +277,21 @@ function download_cann_bench() {
     echo "CANN-Bench 数据集：${tasks_dir}（${level_count} 个 level，${op_count} 个算子）"
   else
     echo "警告：${tasks_dir} 缺失，AKG 的 CANN-Bench 接入将无法找到数据集。"
+  fi
+}
+
+function download_catlass() {
+  # CATLASS 是 ascendc_catlass DSL 用的 C++ 模板头文件库。装到
+  # thirdparty/catlass 后，catlass_paths.resolve_catlass_root 会按这条
+  # 标准路径自动发现，operator 不再需要 export CATLASS_ROOT 或填 config。
+  check_git
+  clone_and_checkout_repo "catlass" "${CATLASS_REPO_URL}" "${CATLASS_DIR}" "${CATLASS_COMMIT}"
+
+  local include_dir="${CATLASS_DIR}/include/catlass"
+  if [ -d "${include_dir}" ]; then
+    echo "catlass 就位：${CATLASS_DIR}（include/catlass 头文件树可用）"
+  else
+    echo "警告：${include_dir} 缺失，ascendc_catlass DSL 编译会失败。"
   fi
 }
 
@@ -317,8 +338,9 @@ if $WITH_ALL_BENCHMARKS; then
   WITH_KERNELBENCH=true
   WITH_MULTIKERNELBENCH=true
   WITH_EVOKERNEL=true
-  WITH_ASCENDOPGENAGENT=true
+  WITH_NPUKERNELBENCH=true
   WITH_CANN_BENCH=true
+  WITH_CATLASS=true
 fi
 
 if $WITH_LOCAL_MODEL; then
@@ -348,10 +370,14 @@ if $WITH_SOLAR; then
   download_and_install_solar
 fi
 
-if $WITH_ASCENDOPGENAGENT; then
-  download_ascendopgenagent
+if $WITH_NPUKERNELBENCH; then
+  download_npukernelbench
 fi
 
 if $WITH_CANN_BENCH; then
   download_cann_bench
+fi
+
+if $WITH_CATLASS; then
+  download_catlass
 fi

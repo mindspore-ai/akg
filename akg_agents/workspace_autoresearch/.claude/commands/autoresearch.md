@@ -19,9 +19,13 @@ follow the latest `[AR Phase: ...]` message and never stop between phases.
   [--no-code-checker]
   [--worker-url host:port[,host:port,...]]
   ```
-  Both `--ref` and `--kernel` are required. `--devices` selects the local
-  Ascend NPU id(s) for eval; arch is auto-derived from the picked card
-  via `npu-smi`.
+  Both `--ref` and `--kernel` are required. `--kernel` is normally a seed
+  `.py` file; for `ascendc_catlass` it may instead be a `catlass_op/`
+  directory (sibling `kernel.py` next to that directory is used as the seed).
+  `--devices` selects the local device id(s) for eval; ``arch`` is
+  auto-derived from the picked card via the backend-appropriate probe
+  (``npu-smi`` for ascend, ``nvidia-smi`` for cuda — picked by
+  ``config.yaml``'s ``defaults.backend``).
 
   `--worker-url` routes eval to a remote HTTP worker. The worker must
   already be running and reachable at that URL when eval starts. If it
@@ -39,6 +43,7 @@ follow the latest `[AR Phase: ...]` message and never stop between phases.
 | flags | initial phase |
 |-------|---------------|
 | `--ref X.py --kernel Y.py` | `BASELINE` runs first; OK / KERNEL_FAIL (ref measured) → `PLAN`; INFRA_FAIL / no valid ref → task parks at `BASELINE` with no committed progress, fix env/ref and re-run |
+| `--ref X.py --kernel catlass_op/` (DSL pinned to `ascendc_catlass` in `config.yaml`) | Same flow; scaffold copies the folder and uses the sibling `kernel.py` as the editable seed |
 
 ## Step 1 — Parse `$ARGUMENTS`
 

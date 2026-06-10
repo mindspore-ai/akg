@@ -1,0 +1,27 @@
+# CATLASS autoresearch 任务模板（由 pipeline 生成 task 时参考）
+# 复制到 task_dir/task.yaml 并按 op 名修改 name / description / arch
+
+name: my_catlass_op
+description: Optimize CATLASS kernel via autoresearch
+dsl: ascendc_catlass
+framework: torch
+backend: ascend
+arch: ascend910b4
+# CATLASS 路径（可选；不设则用环境变量 CATLASS_ROOT + 下方 op_dir 目录名）
+catlass:
+  root: /path/to/catlass
+  op_dir: catlass_op
+editable_files:
+  - kernel.py
+  - catlass_op/kernel/catlass_kernel.asc
+  - catlass_op/include/catlass_kernel.h
+  - catlass_op/src/catlass_torch.cpp
+  - catlass_op/CMakeLists.txt
+eval:
+  timeout: 600
+metric:
+  primary: latency_us
+  lower_is_better: true
+agent:
+  ref_file: reference.py
+  max_rounds: 50
