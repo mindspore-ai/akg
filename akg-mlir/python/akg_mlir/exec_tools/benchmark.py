@@ -113,6 +113,14 @@ def _auto_get_target(desc):
     return target
 
 
+def _is_matmul_op(desc):
+    json_obj = _get_json_dict(desc)
+    for op in json_obj.get("op_desc", []):
+        if op.get("name", "") in ("MatMul", "BatchMatMul"):
+            return True
+    return False
+
+
 def run_a_kernel(desc,
                  file_path,
                  backend=None,
@@ -128,6 +136,9 @@ def run_a_kernel(desc,
     is_dyn_shape = static_desc is not None
     if not backend:
         backend = _auto_get_target(desc)
+
+    if backend == "ascend" and enable_loop_fusion and _is_matmul_op(desc):
+        raise RuntimeError("MatMul is not supported on ascend backend with akg fusion")
 
     kernel_name = _get_kernel_name(desc)
     arch = _get_arch_name(desc)
