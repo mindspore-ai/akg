@@ -22,6 +22,8 @@ from typing import Dict, Any
 
 from langgraph.graph import StateGraph, END
 
+from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
 from akg_agents.op.workflows.base_workflow import OpBaseWorkflow, _DSL_DOCS_DIR_MAP
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.core_v2.workflows.registry import register_workflow
@@ -61,7 +63,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
         super().__init__(**kwargs)
         # Scale workflow_timeout before task.py reads it for asyncio.wait_for.
         max_rounds = self.config.get("max_step", 20)
-        eval_timeout = self.config.get("eval_timeout", 300)
+        eval_timeout = self.config.get("eval_timeout", DEFAULT_EVAL_TIMEOUT_S)
         self.config["workflow_timeout"] = max(
             self.config.get("workflow_timeout", 1800),
             max_rounds * (eval_timeout + 60) + 300,
@@ -174,6 +176,40 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 config=workflow_config,
                 worker=None,
             )
+            dsl_adapter = get_dsl_adapter(dsl)
+            entry_filename = dsl_adapter.entry_filename_template.format(
+                op_name=op_name)
+            kernel_project_src = workflow_config.get("kernel_project_src")
+            dsl_config = dict(workflow_config.get("dsl_config") or {})
+            for _key in ("catlass_root", "catlass_op_dir", "catlass_op_src"):
+                if workflow_config.get(_key) is not None:
+                    dsl_config.setdefault(_key, workflow_config[_key])
+
+            if dsl_adapter.kernel_arg_is_directory and not kernel_project_src:
+                raise ValueError(
+                    f"DSL '{dsl}' is multi-file (kernel_arg_is_directory=True) "
+                    f"but workflow_config did not provide 'kernel_project_src' "
+                    f"pointing to the project tree (e.g. catlass_op/).")
+
+            project_dir_name = (
+                dsl_adapter.kernel_project_dir_name or "catlass_op"
+            )
+
+            def _make_task_info(code: str,
+                                current_task_dir: str | None = None) -> dict:
+                task_info = {"coder_code": code, **dsl_config}
+                if current_task_dir:
+                    task_info["task_dir"] = current_task_dir
+                if dsl_adapter.kernel_arg_is_directory:
+                    if current_task_dir:
+                        project_src = os.path.join(
+                            current_task_dir, project_dir_name)
+                        task_info["catlass_op_src"] = project_src
+                        task_info["catlass_op_dir"] = project_dir_name
+                    elif kernel_project_src:
+                        task_info.setdefault("catlass_op_src",
+                                             kernel_project_src)
+                return task_info
 
             # ---- 2. Preflight: validate reference + resolve seed ----
             # Guarantee: AgentLoop only starts when BOTH reference and seed
@@ -217,7 +253,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
                 verifier.worker = _pf_worker
                 ref_ok, ref_err = await verifier.check_task_desc_runtime(
-                    task_desc, timeout=300)
+                    task_desc, timeout=DEFAULT_EVAL_TIMEOUT_S)
                 verifier.worker = None
                 if not ref_ok:
                     return {
@@ -233,7 +269,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 # Runtime verify helper for seed candidates.
                 async def _verify_seed(code: str) -> tuple[bool, str, str]:
                     """Returns (ok, log, verified_code)."""
-                    task_info = {"coder_code": code}
+                    task_info = _make_task_info(code)
                     verifier.worker = _pf_worker
                     try:
                         ok, log = await verifier.run(task_info, current_step=0)
@@ -388,7 +424,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                     main_file = os.path.join(task_dir, editable[0])
                     with open(main_file, "r", encoding="utf-8") as f:
                         code = f.read()
-                    task_info = {"coder_code": code}
+                    task_info = _make_task_info(code, task_dir)
 
                     # Verify
                     verifier.config.pop("use_reference_data", None)
@@ -484,12 +520,12 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
             # ---- 5. Scaffold task_dir ----
             log_dir = workflow_config.get("log_dir", "/tmp/autoresearch")
-            eval_timeout = workflow_config.get("eval_timeout", 300)
+            eval_timeout = workflow_config.get("eval_timeout", DEFAULT_EVAL_TIMEOUT_S)
             task_dir = scaffold_task_dir(
                 base_dir=log_dir,
                 op_name=op_name,
                 task_desc=task_desc,
-                editable_files={"kernel.py": seed},
+                editable_files={entry_filename: seed},
                 program_md=program_md,
                 context_files=context_files,
                 extra_files=extra_files,
@@ -498,6 +534,8 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 dsl=dsl,
                 framework=framework,
                 backend=backend,
+                kernel_project_src=kernel_project_src,
+                dsl_config=dsl_config,
                 arch=arch,
             )
             logger.info(f"[AutoresearchWorkflow] task_dir: {task_dir}")
@@ -583,7 +621,8 @@ class AutoresearchWorkflow(OpBaseWorkflow):
             best_metrics = loop_result.get("best_metrics")
             has_valid_result = best_metrics is not None
 
-            final_code_path = os.path.join(task_dir, "kernel.py")
+            # Read back the LLM-edited entry file (per-DSL filename).
+            final_code_path = os.path.join(task_dir, entry_filename)
             final_code = ""
             if os.path.exists(final_code_path):
                 with open(final_code_path, "r", encoding="utf-8") as f:
@@ -894,5 +933,3 @@ async def _assemble_knowledge(
         extra_files[f"skills/{name}/SKILL.md"] = raw
 
     return "", context_files, extra_files
-
-

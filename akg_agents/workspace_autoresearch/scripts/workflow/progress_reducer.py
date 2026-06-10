@@ -57,6 +57,18 @@ def eval_result_from_data(eval_data: dict) -> EvalResult:
     )
 
 
+def _shape_progress_fields(metrics: dict) -> dict[str, Any]:
+    """Progress fields derived from the current eval's shape metadata."""
+    fields: dict[str, Any] = {}
+    n_cases = metrics.get("num_cases")
+    if isinstance(n_cases, int) and n_cases >= 1:
+        fields["num_cases"] = int(n_cases)
+    descs = metrics.get("per_shape_descs")
+    if isinstance(descs, list) and descs:
+        fields["per_shape_descs"] = [str(d) for d in descs if d]
+    return fields
+
+
 @dataclass(frozen=True)
 class BaselineReduction:
     progress: Progress
@@ -86,8 +98,6 @@ def reduce_baseline_init(existing: Progress, config: Any, eval_data: dict,
 
     anchor = resolve_baseline_init_anchor(existing, metrics)
 
-    n_cases = metrics.get("num_cases")
-    descs = metrics.get("per_shape_descs")
     progress = Progress(
         task=config.name,
         eval_rounds=0,
@@ -104,12 +114,7 @@ def reduce_baseline_init(existing: Progress, config: Any, eval_data: dict,
         seed_metric=seed_metric,
         consecutive_failures=0,
         plan_version=0,
-        num_cases=(int(n_cases) if isinstance(n_cases, int)
-                   and n_cases >= 1 else None),
-        per_shape_descs=(
-            [str(d) for d in descs if d]
-            if isinstance(descs, list) and descs else None
-        ),
+        **_shape_progress_fields(metrics),
     )
     return BaselineReduction(
         progress=progress,
@@ -143,5 +148,6 @@ def reduce_round_progress(progress: Progress, eval_result: EvalResult,
         baseline_source=anchor.source,
         baseline_per_shape_us=anchor.per_shape_us,
         baseline_fingerprint=anchor.fingerprint,
+        **_shape_progress_fields(eval_result.metrics),
     )
     return RoundReduction(progress=new_progress, anchor=anchor)

@@ -14,6 +14,7 @@ from typing import Dict, Any, Tuple
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "python"))
 
+from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ class GeneralizationKernelVerifier(KernelVerifier):
             
             # 生成binary I/O函数（如果需要）
             binary_io_functions = ""
-            needs_binary_io = dsl_adapter.needs_binary_io()
+            needs_binary_io = dsl_adapter.needs_binary_io
             if needs_binary_io:
                 binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
             
@@ -212,7 +213,7 @@ class GeneralizationKernelVerifier(KernelVerifier):
                 backend=self.backend,
                 arch=self.arch,
                 is_dynamic_shape=is_dynamic_shape,
-                timeout=self.config.get('verify_timeout', 300),
+                timeout=self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S),
                 # Adapter生成的代码
                 framework_imports=self._prepare_code_lines(framework_imports),
                 framework_model_import=self._prepare_code_lines(framework_model_import),
@@ -272,7 +273,7 @@ class GeneralizationKernelVerifier(KernelVerifier):
         self.gen_verify_project(target_code, verify_dir, device_id)
         
         # 运行验证
-        verify_timeout = self.config.get('verify_timeout', 300)
+        verify_timeout = self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S)
         verify_res, verify_log = self.run_verify(verify_dir, timeout=verify_timeout)
         
         # 读取详细结果JSON

@@ -93,6 +93,43 @@ class TestScaffoldRoundtrip:
         assert os.path.isfile(os.path.join(task_dir, "reference.py"))
         assert os.path.isfile(os.path.join(task_dir, "program.md"))
 
+    def test_multifile_dsl_project_files_are_editable(self, tmp_path):
+        """Multi-file DSL scaffolds expose the project tree to AgentLoop."""
+        project_src = tmp_path / "catlass_src"
+        project_files = [
+            "kernel/catlass_kernel.asc",
+            "include/catlass_kernel.h",
+            "src/catlass_torch.cpp",
+            "CMakeLists.txt",
+        ]
+        for rel in project_files:
+            path = project_src / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// catlass fixture\n", encoding="utf-8")
+
+        td = scaffold_task_dir(
+            base_dir=str(tmp_path),
+            op_name="catlass_case",
+            task_desc="# reference\n",
+            editable_files={"kernel.py": "# wrapper\n"},
+            dsl="ascendc_catlass",
+            framework="torch",
+            backend="ascend",
+            arch="ascend910b4",
+            kernel_project_src=str(project_src),
+        )
+        cfg = load_yaml_config(td)
+        expected = [
+            "kernel.py",
+            "catlass_op/kernel/catlass_kernel.asc",
+            "catlass_op/include/catlass_kernel.h",
+            "catlass_op/src/catlass_torch.cpp",
+            "catlass_op/CMakeLists.txt",
+        ]
+        for rel in expected:
+            assert rel in cfg.editable_files
+            assert os.path.isfile(os.path.join(td, rel))
+
 
 # A fake guardrails dict with a hardware-scoped rule for "a100".
 _FAKE_GUARDRAILS = {

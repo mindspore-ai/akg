@@ -24,7 +24,9 @@ class TestTaskConfig:
         """测试有效的配置组合"""
         valid_configs = [
             ("torch", "triton_ascend", "ascend", "ascend910b4"),
-            ("torch", "triton_cuda", "cuda", "a100")
+            ("torch", "triton_cuda", "cuda", "a100"),
+            ("torch", "torch", "ascend", "ascend310p3"),
+            ("mindspore", "triton_ascend", "ascend", "ascend910b3"),
         ]
 
         for framework, dsl, backend, arch in valid_configs:
@@ -91,6 +93,9 @@ class TestTaskConfig:
             ("torch", "triton_cuda", "ascend", "ascend910b4"),
             # a100只支持triton_cuda，但使用了triton_ascend
             ("torch", "triton_ascend", "cuda", "a100"),
+            ("mindspore", "torch", "ascend", "ascend910b3"),
+            ("mindspore", "ascendc_catlass", "ascend", "ascend910b3"),
+            ("mindspore", "pypto", "ascend", "ascend910b3"),
         ]
 
         for framework, dsl, backend, arch in mismatched_configs:
@@ -171,6 +176,8 @@ class TestTaskConfig:
             # torch
             ("torch", "triton_ascend", "ascend", "ascend910b4"),
             ("torch", "triton_cuda", "cuda", "a100"),
+            ("torch", "torch", "ascend", "ascend310p3"),
+            ("mindspore", "triton_ascend", "ascend", "ascend910b3"),
         ]
 
         for framework, dsl, backend, arch in all_valid_combinations:

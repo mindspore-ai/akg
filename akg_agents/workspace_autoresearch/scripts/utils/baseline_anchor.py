@@ -23,13 +23,20 @@ anchor:
 
 Keeping the rules here prevents those paths from drifting.
 
-AOA fingerprint only tracks `num_cases` — task.yaml schema doesn't
-surface warmup_times / run_times, so they can't vary between rounds for
-the same task. Fingerprints with extra keys on `stored` are tolerated:
-comparisons only consult the keys in `current`.
+Fingerprint tracks ``num_cases`` AND ``shape_signature`` (SHA-256 of
+the joined per_shape_descs strings). Same ``num_cases`` with different
+shapes — sidecar JSON edits, get_input_groups() returning different
+tensor shapes — would otherwise silently reuse stale baseline_metric /
+per_shape_base_us. task.yaml schema doesn't surface warmup_times /
+run_times, so they can't vary between rounds for the same task.
+Fingerprints with extra keys on `stored` are tolerated, but
+``shape_signature`` is always present in ``current`` (possibly ``None``)
+so a stored shape-aware baseline is not reused when current shape
+descriptors disappear.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -45,13 +52,30 @@ def valid_per_shape(values: Any) -> Optional[list[float]]:
     return None
 
 
-def current_fingerprint(num_cases: Any) -> dict[str, int]:
-    """Fingerprint the eval settings that make ref timings comparable."""
-    return {"num_cases": int(num_cases or 1)}
+def _shape_signature(per_shape_descs: Any) -> Optional[str]:
+    """SHA-256 hex digest of the joined descriptor strings, or None when
+    descs aren't a non-empty list (legacy progress / non-shape ref)."""
+    if not isinstance(per_shape_descs, list) or not per_shape_descs:
+        return None
+    joined = "\x1f".join(str(d) for d in per_shape_descs)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def current_fingerprint(num_cases: Any,
+                        per_shape_descs: Any = None) -> dict[str, Any]:
+    """Fingerprint of the eval settings that make ref timings comparable.
+    Includes ``num_cases`` and a stable ``shape_signature``. The signature
+    is ``None`` when descriptors are unavailable, which still lets us
+    detect transitions from a shape-aware stored fingerprint to a
+    descriptor-less current run."""
+    return {
+        "num_cases": int(num_cases or 1),
+        "shape_signature": _shape_signature(per_shape_descs),
+    }
 
 
 def fingerprint_mismatch(stored: Any,
-                         current: dict[str, int]) -> Optional[dict[str, Any]]:
+                         current: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Return changed keys, or None when sticky reuse is allowed.
 
     Missing/empty fingerprints are tolerated for sticky override (a fresh
@@ -69,12 +93,12 @@ def fingerprint_mismatch(stored: Any,
 
 
 def exact_fingerprint_match(stored: Any,
-                            current: dict[str, int]) -> bool:
-    """Strict equality on the num_cases key (tolerating extras on
-    `stored`)."""
+                            current: dict[str, Any]) -> bool:
+    """Strict equality on every key in ``current`` (tolerating extras on
+    ``stored``)."""
     if not isinstance(stored, dict):
         return False
-    return stored.get("num_cases") == current["num_cases"]
+    return all(stored.get(k) == v for k, v in current.items())
 
 
 @dataclass(frozen=True)
@@ -90,7 +114,7 @@ class StickyDecision:
 
 
 def sticky_override_from_progress(progress: Any,
-                                  fingerprint: dict[str, int]
+                                  fingerprint: dict[str, Any]
                                   ) -> StickyDecision:
     """Return the sticky baseline override when the stored anchor is valid."""
     if progress is None or progress.get("baseline_source") != "ref":
@@ -115,7 +139,7 @@ class AnchorDecision:
     metric: Optional[float]
     source: Optional[str]
     per_shape_us: Optional[list[float]]
-    fingerprint: Optional[dict[str, int]]
+    fingerprint: Optional[dict[str, Any]]
     reused_existing: bool
     changed: bool
     message: Optional[str] = None
@@ -152,7 +176,8 @@ def resolve_baseline_init_anchor(progress: Any, metrics: dict[str, Any],
                                  ) -> AnchorDecision:
     """Choose the anchor written by round-0 baseline initialization."""
     ref_metric = _ref_from_metrics(metrics)
-    fp = current_fingerprint(metrics.get("num_cases") or 1)
+    fp = current_fingerprint(metrics.get("num_cases") or 1,
+                             metrics.get("per_shape_descs"))
 
     existing_metric = progress.get("baseline_metric")
     existing_source = progress.get("baseline_source")
@@ -236,7 +261,8 @@ def refresh_round_anchor(progress: Any,
     speedup display for tasks whose seed kernel failed verify.
     """
     ref_metric = _ref_from_metrics(metrics)
-    fp = current_fingerprint(metrics.get("num_cases") or 1)
+    fp = current_fingerprint(metrics.get("num_cases") or 1,
+                             metrics.get("per_shape_descs"))
 
     existing_metric = progress.get("baseline_metric")
     existing_source = progress.get("baseline_source")

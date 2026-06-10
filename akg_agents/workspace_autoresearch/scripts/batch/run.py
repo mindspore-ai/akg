@@ -720,7 +720,8 @@ def main() -> int:
                          "and --devices is not required (the orchestrator "
                          "machine can be GPU/NPU-free).")
     ap.add_argument("--devices", default="",
-                    help="NPU device ids, e.g. 0 or 0,1 (required)")
+                    help="device ids, e.g. 0 or 0,1; required only for local eval. "
+                         "With --worker-url, this is an optional expected-device filter.")
     ap.add_argument("--max-rounds", type=int, default=default_max_rounds())
     ap.add_argument("--eval-timeout", type=int, default=default_eval_timeout(),
                     help="per-shape verify/profile budget in seconds. The "
@@ -768,14 +769,12 @@ def main() -> int:
     if not args.devices and not args.worker_url:
         sys.exit("--devices (local eval) or --worker-url (remote worker) is required")
     if args.worker_url:
-        # Remote-eval path: still forward --devices to /autoresearch if the
-        # caller supplied one (it's a required slash-command arg and gets
-        # written into task.yaml for arch derivation), but bake a placeholder
-        # `0` when only --worker-url was given. The actual NPU id the eval
-        # runs on is decided by the worker daemon's device pool, not by this
-        # CLI.
-        dev_part = args.devices or "0"
-        hw_arg = f"--devices {dev_part} --worker-url {args.worker_url}"
+        # Remote-eval path: --devices is optional. When omitted, the worker
+        # daemon's /status + DevicePool declare and allocate the actual
+        # device; when supplied, it is forwarded as an expected-device filter.
+        hw_arg = f"--worker-url {args.worker_url}"
+        if args.devices:
+            hw_arg = f"--devices {args.devices} {hw_arg}"
     else:
         hw_arg = f"--devices {args.devices}"
 

@@ -69,39 +69,26 @@ def run_base_implementations():
 
             return execution_time_ms, method
 
+        # Same canonical per-case schema as profile_generation: ``per_case_us``
+        # is always populated (single-element list for static-shape), with
+        # ``execution_time_us`` carrying the aggregate mean for legacy readers.
         {% if is_dynamic_shape %}
-        # 动态shape：获取多组输入数据
         inputs_list = get_inputs_dyn_list()
-
-        # 对每组输入进行性能测试
-        all_execution_times = []
+        per_case_us = []
+        method = None
         for case_idx, inputs in enumerate(inputs_list):
             {% if framework == "torch" %}
             inputs = [process_input(x) for x in inputs]
             {% endif %}
-
-            execution_time, method = run_benchmark(inputs)
-            all_execution_times.append(execution_time)
-            print(f"[{{ op_name }}] Case {case_idx + 1} execution time: {execution_time * 1000:.4f} us")
-
-        # 计算平均执行时间
-        avg_execution_time = sum(all_execution_times) / len(all_execution_times)
-
-        result_data = {
-            "execution_time_ms": avg_execution_time,
-            "execution_time_us": avg_execution_time * 1000,
-            "case_count": len(inputs_list),
-            "case_times": all_execution_times,
-            "warmup_times": {{ warmup_times }},
-            "run_times": {{ run_times }},
-            "method": method,
-            "shape_type": "dynamic"
-        }
-
-        print(f"[{{ op_name }}] Average execution time: {avg_execution_time * 1000:.4f} us")
+            case_ms, method = run_benchmark(inputs)
+            case_us = case_ms * 1000.0
+            per_case_us.append(case_us)
+            print(f"[{{ op_name }}] Case {case_idx + 1} execution time: {case_us:.4f} us")
+        avg_us = sum(per_case_us) / len(per_case_us)
+        print(f"[{{ op_name }}] Average execution time: {avg_us:.4f} us")
+        shape_type = "dynamic"
 
         {% else %}
-        # 静态shape：获取单组输入数据
         {% if framework == "torch" %}
         inputs = get_inputs()
         inputs = [process_input(x) for x in inputs]
@@ -110,20 +97,24 @@ def run_base_implementations():
         {% elif framework == "mindspore" %}
         inputs = get_inputs()
         {% endif %}
-
-        execution_time, method = run_benchmark(inputs)
+        case_ms, method = run_benchmark(inputs)
+        case_us = case_ms * 1000.0
+        per_case_us = [case_us]
+        avg_us = case_us
+        print(f"[{{ op_name }}] Base execution time: {case_us:.4f} us")
+        shape_type = "static"
+        {% endif %}
 
         result_data = {
-            "execution_time_ms": execution_time,
-            "execution_time_us": execution_time * 1000,
+            "execution_time_us": avg_us,
+            "execution_time_ms": avg_us / 1000.0,
+            "per_case_us": per_case_us,
+            "case_count": len(per_case_us),
             "warmup_times": {{ warmup_times }},
             "run_times": {{ run_times }},
             "method": method,
-            "shape_type": "static"
+            "shape_type": shape_type,
         }
-
-        print(f"[{{ op_name }}] Base execution time: {execution_time * 1000:.4f} us")
-        {% endif %}
 
     except Exception as e:
         print(f"[{{ op_name }}] Base profiling failed: {e}", flush=True)

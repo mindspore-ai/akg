@@ -6,9 +6,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 
-_NPUKB_INPUTS_FACTORY = "get_input_groups"
-
-
 def is_npukb_task_file(path_value: str | Path) -> bool:
     py_path = Path(path_value).expanduser()
     if not py_path.is_file() or py_path.suffix.lower() != ".py":
@@ -45,10 +42,10 @@ def load_npukb_task(py_path: str | Path) -> Tuple[str, str, Dict[str, str], Dict
 
     op_name = py_path.stem
     aux_files: Dict[str, str] = {f"{op_name}.json": jsonl_content}
-    factory_names: Dict[str, Any] = {
-        "inputs_factory": _NPUKB_INPUTS_FACTORY,
-        "is_dynamic_shape": True,
-    }
+    # ``framework_factory_names`` now auto-detected by KernelVerifier from
+    # the ref source (sees ``get_input_groups`` → dynamic + alias). Pass an
+    # empty dict for back-compat with the inject_npukb_into_config tuple.
+    factory_names: Dict[str, Any] = {}
     return op_name, py_code, aux_files, factory_names
 
 

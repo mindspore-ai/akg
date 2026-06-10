@@ -21,7 +21,9 @@ Zero external dependency. Creates a self-contained task directory with:
   - reference.py (correctness baseline; AST-checked via utils.ref_ast.
     validate_ref before scaffold copies it. Runtime correctness is
     validated by --run-baseline whose verify routine tags error_source.)
-  - kernel.py (editable seed; written from the user's --kernel file)
+  - kernel.py (editable seed; from --kernel file, or sibling kernel.py when
+    --kernel is a catlass_op directory)
+  - catlass_op/ (ascendc_catlass only, when --kernel points at that folder)
   - .ar_state/ (progress tracking)
   - .git/ (baseline commit)
 
@@ -29,7 +31,8 @@ Usage:
     # NOTE: --devices values below are placeholders; pass the actual free
     # device id at invocation time.
 
-    # Local eval (arch auto-derived via npu-smi):
+    # Local eval (arch auto-derived from device — npu-smi for ascend,
+    # nvidia-smi for cuda; dispatch via config.yaml defaults.backend):
     python scripts/scaffold.py --ref reference.py --kernel kernel.py --op-name my_op --devices <DEV>
 
     # Custom output directory:
@@ -59,9 +62,21 @@ import yaml
 from utils.ref_ast import validate_ref  # noqa: E402, F401  (re-export)
 from utils.settings import (  # noqa: E402
     default_max_rounds, default_eval_timeout, default_metric,
-    default_code_checker_enabled,
+    default_code_checker_enabled, target_backend, target_dsl,
 )
-from task_config import REF_FILE_DEFAULT  # noqa: E402
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# DSL-aware scaffold dispatch: every per-DSL knob (does --kernel take a
+# directory, what files beyond kernel.py are editable, what extra source
+# tree gets copied into task_dir) is owned by the DSL adapter. Scaffold
+# stays DSL-name-agnostic.
+# ---------------------------------------------------------------------------
+
+def _scaffold_dsl_adapter():
+    from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+    return get_dsl_adapter(target_dsl())
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +95,8 @@ def scaffold_task_dir(
     eval_timeout: int | None = None,
     output_dir: str | None = None,
     editable_filename: str = "kernel.py",
+    editable_files: list | None = None,
+    kernel_project_src: str | None = None,
     code_checker_enabled: bool | None = None,
     ref_source_path: str | None = None,
     worker_url: str = "",
@@ -104,6 +121,9 @@ def scaffold_task_dir(
     # Write reference.py and the seed kernel.py from the user's files.
     _write(task_dir, REF_FILE_DEFAULT, ref_code)
     _write(task_dir, editable_filename, kernel_code)
+    # Per-DSL hook: copy extra source trees (e.g. catlass_op/) +
+    # any one-shot patches the adapter wants done at scaffold time.
+    _scaffold_dsl_adapter().materialize_project_tree(task_dir, kernel_project_src)
 
     # NPUKernelBench-style refs read shape lists from a sibling JSON via
     # `os.path.join(os.path.dirname(__file__), "<basename>.json")`;
@@ -157,25 +177,25 @@ def scaffold_task_dir(
                   file=sys.stderr)
 
     # Generate task.yaml — only fields that vary per-task. dsl /
-    # framework / backend are constants (triton_ascend / torch / ascend)
-    # baked into TaskConfig; not written here.
+    # framework / backend are pinned per repo in config.yaml's
+    # ``defaults`` block (utils.settings.target_*); not written here.
     # Probe the ref's case count once, here at scaffold time (cwd has the
     # ref + data_files already written above). Pin it into task.yaml
     # `eval.num_cases` so later rounds — including a first remote baseline
     # on a dev host that can't import the ref — scale the eval timeout and
     # sticky fingerprint correctly instead of falling back to 1. Probe
-    # failure (no torch/CANN here) just omits the field; eval_request then
+    # failure (no torch/CANN here) just omits the field; eval client then
     # falls back to its own probe / fingerprint reuse as before.
     eval_block = {"timeout": eval_timeout}
     num_cases = _probe_num_cases(task_dir, REF_FILE_DEFAULT)
-    if num_cases and num_cases > 1:
+    if num_cases and num_cases >= 1:
         eval_block["num_cases"] = num_cases
 
     task_yaml = {
         "name": op_name,
         "description": desc or f"Optimize {op_name}",
         "arch": arch or None,
-        "editable_files": [editable_filename],
+        "editable_files": editable_files or [editable_filename],
         "eval": eval_block,
         "metric": {
             "primary": default_metric()["primary"],
@@ -219,16 +239,22 @@ def scaffold_task_dir(
 
 
 def _probe_num_cases(task_dir: str, ref_file: str):
-    """Best-effort case count for task.yaml `eval.num_cases`, using the
-    exact runtime resolver (task_config.eval_request.count_ref_cases) so
-    scaffold and eval agree. Returns the count, or None if the ref can't
-    be imported here (e.g. no torch on the dev host) — the caller then
-    simply omits the field and lets eval_request probe at run time."""
+    """Best-effort case count for task.yaml ``eval.num_cases``. Loads the
+    just-written reference module and delegates to
+    ``utils.input_groups.num_cases`` so single / dyn_list / input_groups
+    refs all resolve consistently. Returns None when the ref can't be
+    imported here (e.g. no torch on the dev host); caller omits the
+    field and eval_timeout scaling falls back to a runtime re-probe."""
+    import importlib.util
+    from utils.input_groups import num_cases
+    ref_path = os.path.join(task_dir, ref_file)
+    if not os.path.isfile(ref_path):
+        return None
     try:
-        from task_config.loader import TaskConfig
-        from task_config.eval_request import count_ref_cases
-        probe_cfg = TaskConfig(name="_probe", ref_file=ref_file)
-        return count_ref_cases(task_dir, probe_cfg)
+        spec = importlib.util.spec_from_file_location("_ref_probe", ref_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return num_cases(mod)
     except Exception:
         return None
 
@@ -274,11 +300,13 @@ def _make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ref", required=True,
                         help="Path to reference.py (Model/get_inputs format)")
     parser.add_argument("--kernel", required=True,
-                        help="Path to seed kernel file")
+                        help="Seed kernel .py file, or catlass_op directory "
+                             "(ascendc_catlass only; needs sibling kernel.py)")
     parser.add_argument("--op-name", default=None,
                         help="Operator name (required)")
-    # The repo is locked to triton_ascend on Ascend NPU + PyTorch by
-    # construction. arch is derived from the picked --devices via npu-smi.
+    # backend / framework / dsl are pinned per repo in config.yaml's
+    # ``defaults`` block. arch is derived from the picked --devices via
+    # the backend-appropriate probe (npu-smi / nvidia-smi).
     parser.add_argument("--devices", default=None,
                         help="Comma-separated device IDs for local eval "
                              "(e.g. '5' or '0,1,2,3'). Required.")
@@ -302,7 +330,7 @@ def _make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--worker-url", default="",
                         help="Remote worker URL(s) (host:port, comma-separated). "
                              "Routes eval through the remote HTTP worker "
-                             "instead of local npu-smi.")
+                             "instead of probing a local device.")
     return parser
 
 
@@ -311,12 +339,14 @@ def main():
     args = parser.parse_args()
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from utils.hw_detect import derive_arch
+    from utils.hw_detect import derive_arch, probe_hint
 
     # Hardware resolution: --devices is required unless --worker-url routes
-    # eval to a remote machine. The repo is locked to triton_ascend / torch
-    # / ascend by construction — those constants live in TaskConfig defaults
-    # / generated templates, not on `args`.
+    # eval to a remote machine. dsl / framework / backend are pinned by
+    # this workspace's config.yaml (single-target-per-repo); arch varies
+    # per machine and is auto-probed from the picked --devices via the
+    # backend-appropriate tool (npu-smi for ascend, nvidia-smi for cuda).
+    backend = target_backend()
     devices_list: list = []
     args.arch = None
 
@@ -332,16 +362,17 @@ def main():
         devices_list = [int(d.strip()) for d in args.devices.split(",")
                         if d.strip()]
     if not devices_list:
-        # Remote-only: default to device 0 (the worker owns the real NPU).
+        # Remote-only: default to device 0 (the worker owns the real device).
         devices_list = [0]
 
     if not has_remote:
-        args.arch = derive_arch(devices_list[0])
+        args.arch = derive_arch(devices_list[0], backend=backend)
         if not args.arch:
             print(json.dumps({"status": "error",
                               "error": (f"could not derive arch from "
-                                        f"device {devices_list[0]} "
-                                        f"(is npu-smi on PATH?)")}))
+                                        f"device {devices_list[0]} for "
+                                        f"backend={backend!r} "
+                                        f"({probe_hint(backend)})")}))
             sys.exit(1)
 
     if not args.op_name:
@@ -361,12 +392,24 @@ def main():
         print(json.dumps({"status": "error", "error": str(e)}))
         sys.exit(1)
 
-    if not os.path.isfile(args.kernel):
+    # Ask the configured DSL's adapter how to interpret --kernel. The
+    # default reads a .py file; catlass overrides to accept a directory
+    # and resolve the sibling kernel.py. Errors raised here render as
+    # JSON-on-stdout for parse_args to forward.
+    kernel_path = os.path.abspath(args.kernel)
+    if not os.path.exists(kernel_path):
         print(json.dumps({"status": "error",
-                          "error": f"Kernel file not found: {args.kernel}"}))
+                          "error": f"--kernel path not found: {args.kernel}"}))
         sys.exit(1)
-    with open(args.kernel, "r", encoding="utf-8") as f:
-        kernel_code = f.read()
+    adapter = _scaffold_dsl_adapter()
+    try:
+        kernel_code, kernel_project_src = adapter.read_kernel_source(
+            kernel_path, op_name=args.op_name)
+    except FileNotFoundError as e:
+        print(json.dumps({"status": "error", "error": str(e)}))
+        sys.exit(1)
+    entry_filename = adapter.entry_filename_template.format(op_name=args.op_name)
+    editable_files = [entry_filename] + list(adapter.kernel_project_files)
 
     # devices_list was resolved above.
     print(f"[scaffold] Creating task directory for {args.op_name}...", file=sys.stderr)
@@ -383,6 +426,9 @@ def main():
         code_checker_enabled=args.code_checker,  # None -> config default
         ref_source_path=args.ref,
         worker_url=args.worker_url,
+        kernel_project_src=kernel_project_src,
+        editable_filename=entry_filename,
+        editable_files=editable_files,
     )
 
     print(f"[scaffold] Task directory created: {task_dir}", file=sys.stderr)

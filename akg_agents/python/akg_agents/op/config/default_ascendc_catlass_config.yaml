@@ -1,0 +1,19 @@
+# Log configuration
+log_dir: "~/akg_agents_logs"
+
+# Workflow configuration
+default_workflow: "default_workflow"
+max_step: 20
+
+# Documentation directory configuration
+docs_dir:
+  designer: "op/resources/docs/ascendc_docs"
+  coder: "op/resources/docs/ascendc_docs"
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 600

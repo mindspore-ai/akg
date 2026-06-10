@@ -40,8 +40,9 @@
 | 5 | DSL 合规 | 对整个模块与 kernel 类体做 AST walk | 未定义 `@<triton>.<decorator>` kernel；kernel 定义了但未通过 `kernel[grid](...)` 启动；`forward()` 调用 `torch_compute_ops_hard` 中的方法；`forward()` 调用 `torch_compute_ops_soft` 中的方法且无 kernel 启动 |
 | 6 | Autotune | 正则 + 括号匹配 | `@<triton_module_name>.<decorator_attr>(...)` 缺 `<required_kwarg>=` |
 
-第 5、6 步仅当 `dsl.startswith(dsl_compliance_prefix)` 时运行（默认
-前缀 `triton`）。
+第 5、6 步仅当 `dsl.startswith(<p>)` 对 `dsl_compliance_prefixes` 中任一
+前缀成立时运行（默认 `[triton, tilelang]`）。Autotune（第 6 步）只匹配
+triton 前缀。
 
 ## 4. 策略（`op/config/code_checker.yaml`）
 
@@ -59,7 +60,11 @@
 | `kernel_class_name` | str | 第 5 步 AST walker 搜索的类名 |
 | `kernel_forward_method` | str | 上述类中被扫描的方法名 |
 | `triton_module_name` | str | Triton 装饰器匹配的顶层命名空间 |
-| `dsl_compliance_prefix` | str | 激活第 5–6 步的 DSL 字符串前缀 |
+| `dsl_compliance_prefixes` | list[str] | 激活第 5 步的 DSL 字符串前缀集合（triton + tilelang）。第 6 步仅匹配 triton |
+| `tilelang_compliance.module_name` | str | TileLang 装饰器匹配的顶层命名空间 |
+| `tilelang_compliance.decorators` | list[str] | `<tilelang_module_name>` 下视作 kernel 装饰器的属性名 |
+| `tilelang_compliance.prim_func_attr` | str | `@T.prim_func` 的 attr 名 |
+| `tilelang_compliance.tl_namespace` | str | TileLang language module 的常用别名（`T`） |
 | `stray_text.min_run` | int | 触发标记的最小连续字符数 |
 | `stray_text.unicode_ranges` | list of `[lo, hi]` | 第 4 步扫描的码点区间 |
 | `autotune.decorator_attr` | str | `<triton_module_name>` 下触发第 6 步的装饰器属性名 |

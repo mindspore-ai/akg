@@ -28,6 +28,11 @@ import logging
 from contextlib import AsyncExitStack
 from typing import Optional, Dict, Any
 
+from akg_agents.core.worker.interface import (
+    DEFAULT_EVAL_TIMEOUT_S,
+    DEFAULT_WARMUP_TIMES,
+    DEFAULT_RUN_TIMES,
+)
 from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
@@ -53,9 +58,9 @@ async def profile_baseline_once(
     backend: str,
     arch: str,
     config: Dict[str, Any],
-    warmup_times: int = 5,
-    run_times: int = 50,
-    timeout: int = 300
+    warmup_times: int = DEFAULT_WARMUP_TIMES,
+    run_times: int = DEFAULT_RUN_TIMES,
+    timeout: int = DEFAULT_EVAL_TIMEOUT_S,
 ) -> Optional[float]:
     """
     预先 profile baseline 一次（只测量框架实现的性能）
@@ -782,13 +787,8 @@ def _save_baseline_profile_scripts(verifier, op_name: str, task_desc: str,
         )
         os.makedirs(baseline_dir, exist_ok=True)
 
-        framework_file = os.path.join(
-            baseline_dir, f"{op_name}_{verifier.framework}.py"
-        )
-        with open(framework_file, "w", encoding="utf-8") as f:
-            f.write(task_desc)
-
-        verifier._write_framework_aux_files(baseline_dir)
+        framework_file = verifier._materialize_framework_bundle(
+            baseline_dir, task_desc)
 
         script_file = os.path.join(baseline_dir, f"profile_baseline_{op_name}.py")
         verifier.gen_profile_single_task_file(script_file, device_id=device_id,
