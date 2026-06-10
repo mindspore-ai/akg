@@ -17,7 +17,6 @@ from __future__ import annotations
 import ipaddress
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -26,8 +25,6 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 import logging
-
-from rich.console import Console
 
 from akg_agents.cli.constants import DisplayStyle, UISymbol
 
@@ -46,6 +43,25 @@ from akg_agents.cli.utils.worker_state import (
     set_worker_entry,
     terminate_pid,
 )
+
+
+def _env_float(key: str, default: float) -> float:
+    """Parse env var as float, fall back to default on missing/invalid."""
+    try:
+        v = float(os.environ.get(key, ""))
+        return v if v > 0 else default
+    except (ValueError, TypeError):
+        return default
+
+
+# Silence httpx/httpcore DEBUG loggers — their connect_tcp.started /
+# connect_tcp.failed trace messages call logger.debug 上千次/s。当远端 /
+# 本机磁盘满（ENOSPC）时，Python logging 试 flush 失败，触发 "Logging
+# error" 元 traceback，再 cascade 报错把终端灌成洪水。这些 trace 对终
+# 端用户没用，强制 WARNING 级。
+import logging as _logging
+_logging.getLogger("httpx").setLevel(_logging.WARNING)
+_logging.getLogger("httpcore").setLevel(_logging.WARNING)
 
 
 class WorkerService:
@@ -118,13 +134,35 @@ class WorkerService:
         return dedup
 
     @staticmethod
-    def _probe_local_worker(url: str) -> bool:
-        """探测本地 worker 是否可用。"""
+    def _tail_log(path: str, lines: int = 30) -> str:
+        """Best-effort read of last ``lines`` lines for in-CLI dump."""
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return "".join(f.readlines()[-lines:])
+        except OSError as e:
+            logger.debug("[WorkerService] tail log failed, path=%s", path, exc_info=e)
+            return ""
+
+    @staticmethod
+    def _probe_local_worker(url: str, timeout: Optional[float] = None,
+                            ready_only: bool = True) -> bool:
+        """探测本地 worker。
+
+        - ``ready_only=True``（默认，poll loop / state-reuse 用）：daemon
+          的 /status 必须返回 ``ready`` 或 ``ok`` 才算可用。``initializing``
+          意味着 HTTP 在线但 worker 还没装好，把它当 ready 会让 --start
+          跳过 spawn / 给一个永远转 init 的 daemon 写 state。
+        - ``ready_only=False``：仅查 HTTP 是否 200，状态 ``initializing``
+          也算 alive；用于纯探活场景。
+
+        ``timeout`` 不传时回落 ``AKG_WORKER_READY_PROBE_TIMEOUT`` env，
+        再回落 1s。"""
         try:
             import httpx
-
+            if timeout is None:
+                timeout = _env_float("AKG_WORKER_READY_PROBE_TIMEOUT", 1.0)
             status_url = f"{url.rstrip('/')}/api/v1/status"
-            with httpx.Client(timeout=1.0, trust_env=False) as client:
+            with httpx.Client(timeout=timeout, trust_env=False) as client:
                 resp = client.get(status_url)
                 if resp.status_code != 200:
                     return False
@@ -132,7 +170,9 @@ class WorkerService:
             status = (
                 str(data.get("status", "")).lower() if isinstance(data, dict) else ""
             )
-            return status in ["ready", "ok", "initializing"]
+            ready_set = ("ready", "ok")
+            alive_set = ("ready", "ok", "initializing")
+            return status in (ready_set if ready_only else alive_set)
         except Exception as e:
             logger.debug(f"[WorkerService] probe local worker failed, url={url}", exc_info=e)
             return False
@@ -164,10 +204,10 @@ class WorkerService:
         backend: str,
         arch: str,
         devices: List[int],
-        host: str = "127.0.0.1",
-        port: int = 9001,
+        host: str,
+        port: int,
     ) -> Tuple[Optional[subprocess.Popen], str, str]:
-        """启动本地 worker service 子进程。"""
+        """启动本地 worker service 子进程。host/port 由调用方解析。"""
         if self._process is not None and self._process.poll() is None:
             # 已在运行：直接返回已有信息
             return self._process, self._log_file or "", self._url or ""
@@ -198,36 +238,43 @@ class WorkerService:
             remove_worker_entry(state, port)
             save_worker_state(state)
 
+        # log_file 在 POSIX 上落 /tmp/akg_worker_$port.log —— akg_cli 的远端
+        # 探针 (cli/service/remote_probe.py) 默认 tail 这条路径；两边对齐到
+        # 单一约定避免 probe "(no log)" 误诊断。Windows 仍走 process_log_dir
+        # （本机起 daemon 通常只在 Linux NPU 上发生）。
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_dir = get_process_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = str(log_dir / f"worker_server_{timestamp}.log")
+        if os.name == "posix":
+            log_file = f"/tmp/akg_worker_{port}.log"
+        else:
+            log_dir = get_process_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = str(log_dir / f"worker_server_{timestamp}.log")
 
         pkg_dir = get_akg_agents_pkg_dir()
         worker_module = pkg_dir / "worker" / "server.py"
         if not worker_module.exists():
             raise FileNotFoundError(f"Worker Service not found at: {worker_module}")
 
+        # 调用方（misc.py worker_cmd）已经吃过 CLI → env → WorkerConfig
+        # 的 precedence，传过来的 backend/arch 不会是空；这里只 normalize
+        # 大小写不做兜底，避免 defensive double-fallback 跟 WorkerConfig
+        # 的默认值分裂。
         backend_n = (backend or "").strip().lower()
         arch_n = (arch or "").strip()
-        if not backend_n:
-            backend_n = (os.environ.get("WORKER_BACKEND") or "").strip().lower()
-        if not arch_n:
-            arch_n = (os.environ.get("WORKER_ARCH") or "").strip()
-        if not backend_n:
-            backend_n = "cuda"
-        if not arch_n:
-            arch_n = "a100"
 
         if not devices:
             devices = [0]
 
-        console.print(
-            f"[{DisplayStyle.CYAN}]{UISymbol.ROCKET} 启动 worker service (端口: {port})...[/{DisplayStyle.CYAN}]"
-        )
-        console.print(
-            f"[{DisplayStyle.DIM}]   日志文件: {log_file}[/{DisplayStyle.DIM}]"
-        )
+        # AKG_CLI_QUIET=1 表示被 SSH 递归调用（remote_dispatch 起远端 daemon），
+        # 本机已经印过 [N/4] 进度，远端这边只回一两行关键信息就够。
+        quiet = os.environ.get("AKG_CLI_QUIET") == "1"
+        if not quiet:
+            console.print(
+                f"[{DisplayStyle.CYAN}]{UISymbol.ROCKET} 启动 worker service (端口: {port})...[/{DisplayStyle.CYAN}]"
+            )
+            console.print(
+                f"[{DisplayStyle.DIM}]   日志文件: {log_file}[/{DisplayStyle.DIM}]"
+            )
 
         log_f = open(log_file, "w", encoding="utf-8")
         env = os.environ.copy()
@@ -236,6 +283,9 @@ class WorkerService:
         env["WORKER_DEVICES"] = ",".join(str(x) for x in devices)
         env["WORKER_HOST"] = str(host)
         env["WORKER_PORT"] = str(port)
+        # daemon 通过 /api/v1/status 暴露这个路径，让 akg_cli probe 不再靠
+        # 猜（process_log_dir/worker_server_*.log vs /tmp/akg_worker_*.log）。
+        env["AKG_WORKER_LOG_FILE"] = log_file
 
         # stdin=DEVNULL is what lets this Popen detach cleanly when the
         # akg_cli that's calling us was itself spawned over SSH — without
@@ -252,37 +302,67 @@ class WorkerService:
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
 
-        console.print(
-            f"[{DisplayStyle.DIM}]   等待 worker 启动...[/{DisplayStyle.DIM}]"
-        )
-        time.sleep(2)
-
-        if process.poll() is not None:
-            log_f.close()
-            try:
-                with open(log_file, "r", encoding="utf-8") as f:
-                    error_log = f.read()
-            except OSError as e:
-                logger.debug(
-                    "[WorkerService] read worker log failed",
-                    path=str(log_file),
-                    exc_info=e,
-                )
-                error_log = ""
-            raise RuntimeError(
-                f"Worker 启动失败，退出码: {process.returncode}\n日志:\n{error_log}"
-            )
-
-        # url：用于 server 注册（本地默认用 localhost/127.0.0.1）
         access_host = self._format_url_host(host)
         url = f"http://{access_host}:{port}"
+        # Timing：递归 SSH 路径下，remote_dispatch 把 worker.ready_timeout /
+        # ready_poll_interval 通过 env 传过来；本机直跑则用 60s/5s 默认。
+        # 这是 worker.* config 的单一事实源能传到远端 daemon 的关键，
+        # 否则远端 worker_service 永远卡 60s 不能调。
+        ready_timeout = _env_float("AKG_WORKER_READY_TIMEOUT", 60.0)
+        ready_tick = _env_float("AKG_WORKER_READY_POLL_INTERVAL", 5.0)
+        if not quiet:
+            console.print(
+                f"[{DisplayStyle.DIM}]   等待 worker /status ready（最长 {ready_timeout}s）...[/{DisplayStyle.DIM}]"
+            )
+        deadline = time.time() + ready_timeout
+        last_beat = time.time()
+        while time.time() < deadline:
+            if process.poll() is not None:
+                log_f.close()
+                console.print(
+                    f"[{DisplayStyle.RED}]Worker 启动期退出 rc={process.returncode}，"
+                    f"log tail:[/{DisplayStyle.RED}]\n{self._tail_log(log_file)}"
+                )
+                raise RuntimeError(
+                    f"Worker 启动失败 rc={process.returncode}（log: {log_file}）"
+                )
+            if self._probe_local_worker(url):
+                break
+            now = time.time()
+            if not quiet and now - last_beat >= ready_tick:
+                console.print(
+                    f"[{DisplayStyle.DIM}]   /status 未就绪 "
+                    f"({int(now - deadline + ready_timeout)}s/{ready_timeout}s),"
+                    f" PID={process.pid} 仍在运行[/{DisplayStyle.DIM}]"
+                )
+                last_beat = now
+            time.sleep(1)
+        else:
+            # /status 在 ready_timeout 内都不通：daemon 进程仍在运行但不可用
+            # （torch_npu 卡 init / 端口被抢 / FastAPI bind 失败等）。不写
+            # worker_state，不打"已启动"，raise 让上层 typer 退非 0 —— 比
+            # "伪装成功"诚实。
+            raise RuntimeError(
+                f"Worker PID={process.pid} 仍在运行但 /status "
+                f"{ready_timeout}s 未就绪 —— 可能 daemon 卡在初始化"
+                f"（torch_npu import / device init / FastAPI bind 失败）。"
+                f"log tail:\n{self._tail_log(log_file)}\n"
+                f"完整 log: {log_file}"
+            )
 
-        console.print(
-            f"[{DisplayStyle.GREEN}]{UISymbol.DONE} Worker 已启动 (PID: {process.pid})[/{DisplayStyle.GREEN}]"
-        )
-        console.print(
-            f"[{DisplayStyle.DIM}]   健康检查: {url}/api/v1/status[/{DisplayStyle.DIM}]"
-        )
+        if quiet:
+            # Recursive SSH 调用下，本机 dispatch_start 会自己打"daemon spawned"
+            # + 后续 poll heartbeat —— 这里只回一行远端 ready 简讯。
+            console.print(
+                f"[{DisplayStyle.DIM}]   远端 worker ready (PID {process.pid}, log {log_file})[/{DisplayStyle.DIM}]"
+            )
+        else:
+            console.print(
+                f"[{DisplayStyle.GREEN}]{UISymbol.DONE} Worker 已启动 (PID: {process.pid})[/{DisplayStyle.GREEN}]"
+            )
+            console.print(
+                f"[{DisplayStyle.DIM}]   健康检查: {url}/api/v1/status[/{DisplayStyle.DIM}]"
+            )
 
         entry = {
             "pid": process.pid,

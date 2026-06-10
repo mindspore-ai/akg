@@ -103,7 +103,7 @@ def main():
             "values": {},
             "missing": [
                 "--ref <file>",
-                "--kernel <file>",
+                "--kernel <file|catlass_op_dir>",
                 "--op-name <name>",
                 "--devices <N>",
                 f"--max-rounds (optional, default {default_max_rounds()})",

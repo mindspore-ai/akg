@@ -12,42 +12,71 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Hardware detection — arch derivation from a local NPU device id.
+"""Hardware detection: derive an AKG arch token from a local device id."""
 
-This module's only job is to map `--devices N` to an `arch` string
-(e.g. `ascend910b3`) by parsing `npu-smi info`.
-
-No autoresearch/task dependencies — only needs stdlib + subprocess.
-Safe to import from scaffold, baseline, or anywhere.
-"""
 from __future__ import annotations
 
 import re
 import subprocess
 from typing import Optional
 
+from akg_agents.op.utils.arch_normalize import (
+    normalize_ascend_arch_name,
+    normalize_cpu_arch_name,
+    normalize_cuda_arch_name,
+)
 
-def derive_arch(device_id: int) -> Optional[str]:
-    """Return the Ascend NPU arch string (e.g. 'ascend910b3') for
-    `device_id`, or None when `npu-smi info` is missing / unparseable.
-    Caller decides whether None is fatal."""
+
+def derive_arch(device_id: int, backend: str = "ascend") -> Optional[str]:
+    """Return the arch token for ``device_id`` on ``backend``.
+
+    Returns None if the probe is unavailable or unparseable; callers decide
+    whether that is fatal for their workflow.
+    """
+    backend = (backend or "ascend").lower()
+    if backend == "ascend":
+        return _derive_arch_ascend(device_id)
+    if backend == "cuda":
+        return _derive_arch_cuda(device_id)
+    if backend == "cpu":
+        return normalize_cpu_arch_name()
+    return None
+
+
+def probe_hint(backend: str) -> str:
+    """User-facing probe-tool hint for arch derivation errors."""
+    backend = (backend or "ascend").lower()
+    return {
+        "ascend": "is npu-smi on PATH?",
+        "cuda": "is nvidia-smi on PATH?",
+        "cpu": "platform.machine() returned empty",
+    }.get(backend, f"no arch probe registered for backend={backend!r}")
+
+
+def _derive_arch_ascend(device_id: int) -> Optional[str]:
     try:
         r = subprocess.run(
             ["npu-smi", "info"],
             capture_output=True, text=True, timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:
         return None
-    # The npu-smi main table row looks like:
-    #     | 5     910B3               | Alarm         | ...
-    # Match the leading <device_id> and capture the next token →
-    # 'ascend910b3'. `npu-smi info -t board -i N` exposes Product/Model
-    # but not the architecture string, so we go through the main table.
-    pat = re.compile(rf"^\|\s*{int(device_id)}\s+(\S+)\s*\|", re.MULTILINE)
-    m = pat.search(r.stdout)
-    if not m:
+    match = re.search(rf"^\|\s*{int(device_id)}\s+(\S+)\s*\|", r.stdout, re.MULTILINE)
+    return normalize_ascend_arch_name(match.group(1)) if match else None
+
+
+def _derive_arch_cuda(device_id: int) -> Optional[str]:
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader",
+             "-i", str(int(device_id))],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    name = m.group(1).strip().lower()
-    return f"ascend{name}"
+    if r.returncode != 0:
+        return None
+    name = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+    return normalize_cuda_arch_name(name) if name else None

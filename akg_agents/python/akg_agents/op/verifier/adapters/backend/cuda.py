@@ -17,6 +17,8 @@
 import torch
 from typing import Optional, Any
 
+from akg_agents.op.utils.arch_normalize import CUDA_ARCH_PATTERN
+
 from .base import BackendAdapter
 
 
@@ -43,6 +45,4 @@ class BackendAdapterCuda(BackendAdapter):
     
     def validate_arch(self, arch: str) -> bool:
         """Validate CUDA architecture."""
-        supported_archs = ["a100", "v100", "h20", "l20", "rtx3090"]
-        return arch in supported_archs
-
+        return bool(CUDA_ARCH_PATTERN.match((arch or "").lower()))

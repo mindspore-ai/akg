@@ -27,7 +27,12 @@ from akg_agents.cli.console import AKGConsole
 
 
 def print_logo_once(console: Union[Console, AKGConsole]) -> None:
-    """进入命令时打印 AKG CLI Logo。"""
+    """进入命令时打印 AKG CLI Logo。``AKG_CLI_QUIET=1`` 时跳过 —— 用于
+    SSH 递归调用（remote_dispatch 起远端 daemon）这种场景，避免本机 +
+    远端各打一次，且远端 SSH 窄 TTY 会把 logo 截断成两段。"""
+    import os
+    if os.environ.get("AKG_CLI_QUIET") == "1":
+        return
     if isinstance(console, AKGConsole):
         console.print("\n")
         console.print(make_gradient_logo())

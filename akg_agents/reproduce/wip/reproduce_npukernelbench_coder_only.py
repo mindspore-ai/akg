@@ -34,7 +34,7 @@ NPUKernelBench 算子生成复现 — 固定文档导入 (coder_only_workflow)
   - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
   - NPUKernelBench benchmark 已就位：
-      thirdparty/AscendOpGenAgent/benchmarks/NPUKernelBench/level*/*.py
+      thirdparty/NPUKernelBench/npu_benchmark/level*/*.py
 
 运行方式：
   # 默认运行 level1 全部算子

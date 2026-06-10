@@ -75,14 +75,9 @@ class DSLAdapterSwft(DSLAdapter):
 """
         return code
     
-    def needs_binary_io(self) -> bool:
-        """SWFT needs binary I/O."""
-        return True
-    
-    def needs_compilation(self) -> bool:
-        """SWFT doesn't need compilation."""
-        return False
-    
+    needs_binary_io = True
+    static_check_via_python_ast = False  # swft-format src, not stdlib Python
+
     def benchmark_impl(self, impl_func_name: str, inputs: str, 
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,

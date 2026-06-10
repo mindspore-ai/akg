@@ -51,15 +51,19 @@ def _resolve_worker_url(worker_urls: Optional[list],
     return None
 
 
-def _resolve_device_id(device_id: Optional[int], config: TaskConfig) -> int:
+def _resolve_device_arg(device_id: Optional[int], config: TaskConfig,
+                        worker_url: Optional[str]):
     if device_id is not None:
         return int(device_id)
     devices = getattr(config, "devices", None)
     if devices:
-        return int(devices[0])
+        parsed = [int(d) for d in devices]
+        return parsed if worker_url else parsed[0]
+    if worker_url:
+        return None
     print(
         "[akg_eval] WARNING: no device specified (no device_id arg, "
-        "no `devices` field in task.yaml). Defaulting to NPU 0.",
+        "no `devices` field in task.yaml). Defaulting to local device 0.",
         file=sys.stderr,
     )
     return 0
@@ -78,7 +82,7 @@ def run_eval(task_dir: str, config: TaskConfig,
     from utils.akg_eval import eval_kernel  # noqa: E402
 
     worker_url = _resolve_worker_url(worker_urls, config)
-    dev_id = _resolve_device_id(device_id, config)
+    dev_id = _resolve_device_arg(device_id, config, worker_url)
 
     try:
         raw = eval_kernel(task_dir, config,

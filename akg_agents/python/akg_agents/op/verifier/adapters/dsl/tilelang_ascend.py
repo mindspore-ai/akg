@@ -22,6 +22,9 @@ from .base import DSLAdapter
 class DSLAdapterTilelangAscend(DSLAdapter):
     """Adapter for TileLang-Ascend DSL."""
 
+    profile_via_python_script = True
+    impl_func_name_template = "ModelNew"
+
     def get_import_statements(self, framework: str) -> str:
         code = """import tilelang
 tilelang.cache.clear_cache()
@@ -52,12 +55,6 @@ except ImportError:
                   data_dir: Optional[str] = None,
                   framework_output: Optional[str] = None) -> str:
         return f"impl_output = impl_model(*{inputs})\n"
-
-    def needs_binary_io(self) -> bool:
-        return False
-
-    def needs_compilation(self) -> bool:
-        return False
 
     def benchmark_impl(self, impl_func_name: str, inputs: str,
                       warmup: int, runs: int, backend: str, op_name: str,

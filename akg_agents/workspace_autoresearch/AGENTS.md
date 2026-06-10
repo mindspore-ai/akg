@@ -14,6 +14,13 @@ worker reuse `akg_agents.op.verifier` + `akg_agents.core.worker` via the
 /autoresearch --ref workspace/<op_name>_ref.py --kernel workspace/<op_name>_kernel.py \
               --op-name <op_name> --devices 0
 
+# CATLASS AR (DSL=ascendc_catlass in config.yaml): --kernel points at a
+# catlass_op/ project dir (kernel/.asc + include/.h + src/.cpp + CMakeLists.txt);
+# sibling kernel.py — or <op>_kernel.py as fallback — is the Python ModelNew
+# wrapper. See AUTORESEARCH.md §2 命名契约 for the full editable_files set.
+/autoresearch --ref workspace/<op>_ref.py --kernel workspace/<op>/catlass_op \
+              --op-name <op> --devices 0
+
 # Resume later
 /autoresearch --resume
 
@@ -29,16 +36,18 @@ If the local machine has no NPU, eval can run on a remote Ascend box. The
 AKG canonical CLI (`akg_cli`) handles SSH dispatch + local `ssh -L` tunnel:
 
 ```bash
-# `my-npu` is an entry under remote_worker.hosts in config.yaml.
+# `my-npu` is an entry under remote_worker.hosts in config.yaml. Port is
+# read from `worker.port` in the same yaml; pass --port only to override.
+# The entry's env_script selects the remote python via PATH before akg_cli starts.
 akg_cli worker --remote-host my-npu --start \
-    --backend ascend --arch ascend910b3 --devices 0 --port 9111
+    --backend ascend --arch ascend910b3 --devices 0
 
 # Point /autoresearch (or baseline.py / pipeline.py) at the tunneled port.
-/autoresearch --ref ... --kernel ... --devices 0 --worker-url 127.0.0.1:9111
+/autoresearch --ref ... --kernel ... --devices 0 --worker-url 127.0.0.1:<port>
 ```
 
-`akg_cli worker --remote-host my-npu --stop --port 9111` tears down both
-the remote daemon and the local tunnel. See [AUTORESEARCH.md §B](AUTORESEARCH.md)
+`akg_cli worker --remote-host my-npu --stop` tears down both the remote
+daemon and the local tunnel. See [AUTORESEARCH.md §B](AUTORESEARCH.md)
 for the full two-machine setup walkthrough.
 
 ## Skills Library

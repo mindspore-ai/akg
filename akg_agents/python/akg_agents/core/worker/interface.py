@@ -1,13 +1,37 @@
 from abc import ABC, abstractmethod
 from typing import Tuple, Any, Dict, Union
 
+
+# Worker-protocol-level default for eval subprocess timeouts (verify /
+# profile / profile_single_task). Concrete tasks usually pass an explicit
+# value derived from TaskConfig.eval_timeout; this default is the
+# backstop applied only when no explicit value is provided. Single owner
+# — every layer downstream (LocalWorker / RemoteWorker, KernelVerifier,
+# DSL adapters that bypass the verifier helper) references THIS constant
+# instead of redeclaring 300 as a literal at each callsite.
+DEFAULT_EVAL_TIMEOUT_S: int = 300
+
+# Worker-protocol-level default for the ``generate_reference`` step.
+# Smaller than the eval timeout because reference generation is
+# typically a one-shot torch forward pass, not a multi-shape benchmark.
+DEFAULT_GEN_REF_TIMEOUT_S: int = 120
+
+# Worker-protocol-level defaults for benchmark iteration counts. Mirror
+# the same SSOT pattern as the timeouts — every layer pulls from here
+# instead of redeclaring ``warmup_times: int = 5`` / ``run_times: int = 50``
+# at every callsite. Workspace-side overrides come via the
+# ``warmup_times`` / ``run_times`` keys in ``profile_settings``.
+DEFAULT_WARMUP_TIMES: int = 5
+DEFAULT_RUN_TIMES: int = 50
+
+
 class WorkerInterface(ABC):
     """
     Abstract base class for AIKG Workers (Local and Remote).
     """
 
     @abstractmethod
-    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
+    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = DEFAULT_EVAL_TIMEOUT_S) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Execute verification task.
         
@@ -54,7 +78,7 @@ class WorkerInterface(ABC):
         pass
 
     @abstractmethod
-    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = DEFAULT_GEN_REF_TIMEOUT_S) -> Tuple[bool, str, bytes]:
         """
         Execute task_desc and generate reference data.
         

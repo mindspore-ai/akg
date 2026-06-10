@@ -14,9 +14,124 @@
 
 import logging
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Iterable
+
+from akg_agents.op.utils.arch_normalize import CUDA_ARCH_PATTERN, CPU_ARCH_PATTERN
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Single source of truth — SKU enumeration + per-family DSL whitelists.
+#
+# A SKU is a concrete arch string KernelVerifier accepts (e.g. ``ascend910b3``
+# / ``a100`` / ``rtx4060``). Within a backend, SKUs cluster into FAMILIES that
+# share a DSL capability list:
+#   - ascend has two families: ``910`` (910B + 910_93xx + 950 — full DSL stack)
+#     and ``310`` (310p3 — smaller stack, no triton / no tilelang).
+#   - cuda / cpu are single-family (all listed archs share the same DSLs).
+#
+# Validation strategy differs by backend:
+#   - ascend uses **explicit SKU tuples** — Ascend SKUs are discrete real
+#     products (no ``ascend910b99``); enumeration gives crisp error msgs.
+#   - cuda / cpu use **family regex** — model names are parametric
+#     (``rtx<N>``, ``[ahvltb]<N>``, ``x86_64`` / ``aarch64`` / ...);
+#     enumerating every SKU AKG might see is busywork. A new RTX 5090 /
+#     B300 / H200 is automatically accepted when ``hw_detect`` extracts
+#     it from ``nvidia-smi``.
+#
+# Adding a new ascend SKU: one line in the matching ``_*_SKUS`` tuple.
+# Adding a whole new cuda generation: zero code change (regex covers it).
+# Adding a new DSL across an entire family: one entry in ``_DSL_TABLE``.
+# ---------------------------------------------------------------------------
+
+# Ascend 910-class families (full DSL stack) — explicit SKUs, real products
+_ASCEND_910B_SKUS = (
+    "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
+)
+_ASCEND_910_93_SKUS = (
+    "ascend910_9362", "ascend910_9372", "ascend910_9381",
+    "ascend910_9382", "ascend910_9391", "ascend910_9392",
+)
+_ASCEND_950_SKUS = (
+    "ascend950dt_95a",
+    "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
+    "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
+    "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
+    "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
+    "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
+    "ascend950pr_9599",
+)
+_ASCEND_910_FAMILY = _ASCEND_910B_SKUS + _ASCEND_910_93_SKUS + _ASCEND_950_SKUS
+
+# Ascend 310 family (reduced stack — no triton / no tilelang / no pypto)
+_ASCEND_310_SKUS = ("ascend310p3",)
+
+# CUDA/CPU family patterns live in ``arch_normalize.py`` so detection and
+# validation agree without maintaining a separate SKU list here.
+
+
+# Family → DSL whitelist, keyed by (framework, backend, family-tag).
+# family-tag is internal (``910`` / ``310`` / ``any``) — callers use the
+# arch string directly and we resolve the family via ``_family_of``.
+# Derived from adapters.factory.DSL_REGISTRY (the single source of truth);
+# adding a new DSL is one entry in the registry, not two.
+def _build_dsl_table():
+    from akg_agents.op.verifier.adapters.factory import DSL_REGISTRY
+    table: dict = {}
+    for name, entry in DSL_REGISTRY.items():
+        for fbf in entry.support:
+            dsls = table.setdefault(fbf, [])
+            if name not in dsls:
+                dsls.append(name)
+        for alias in entry.aliases:
+            for fbf in entry.support:
+                dsls = table.setdefault(fbf, [])
+                if alias not in dsls:
+                    dsls.append(alias)
+    return {fbf: tuple(dsls) for fbf, dsls in table.items()}
+
+
+_DSL_TABLE = _build_dsl_table()
+
+# Canonical DSL set (single source — referenced by normalize_dsl / check_dsl
+# instead of duplicating the literal list).
+_ALL_DSLS = frozenset(
+    dsl for dsls in _DSL_TABLE.values() for dsl in dsls
+)
+
+
+def _family_of(backend: str, arch: str) -> Optional[str]:
+    """Return the family tag for (backend, arch), or None if the arch
+    isn't recognized under that backend. Ascend uses explicit SKU
+    membership; cuda / cpu use family regex."""
+    if backend == "ascend":
+        if arch in _ASCEND_310_SKUS:
+            return "310"
+        if arch in _ASCEND_910_FAMILY:
+            return "910"
+        return None
+    if backend == "cuda":
+        return "any" if CUDA_ARCH_PATTERN.match(arch) else None
+    if backend == "cpu":
+        return "any" if CPU_ARCH_PATTERN.match(arch) else None
+    return None
+
+
+def arch_hint(backend: str) -> str:
+    """User-facing hint string describing what arch values ``backend``
+    accepts. Used by error messages in this module + downstream CLI
+    validators. Ascend is enumerated (discrete real SKUs); cuda / cpu
+    describe the family-regex pattern since they accept anything in the
+    family."""
+    if backend == "ascend":
+        return "/".join(_ASCEND_310_SKUS + _ASCEND_910_FAMILY)
+    if backend == "cuda":
+        return ("rtx<N> / gtx<N> / [ahvltb]<N> family "
+                "(e.g. a100, h100, h200, l40s, b200, rtx4060, rtx5090)")
+    if backend == "cpu":
+        return "x86_64 / aarch64 / riscv64 / ppc64le"
+    return ""
 
 
 def check_backend_arch(backend: str, arch: str):
@@ -26,28 +141,13 @@ def check_backend_arch(backend: str, arch: str):
         backend: 计算后端名称(ascend/cuda/cpu)
         arch: 硬件架构名称
     """
-    if backend not in ["ascend", "cuda", "cpu"]:
+    if backend not in ("ascend", "cuda", "cpu"):
         raise ValueError("backend must be ascend, cuda or cpu")
-    elif backend == "ascend":
-        supported_ascend_archs = [
-            "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
-            "ascend310p3",
-            "ascend910_9362", "ascend910_9372", "ascend910_9381",
-            "ascend910_9382", "ascend910_9391", "ascend910_9392",
-            "ascend950dt_95a",
-            "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
-            "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
-            "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
-            "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
-            "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
-            "ascend950pr_9599",
-        ]
-        if arch not in supported_ascend_archs:
-            raise ValueError(f"ascend backend only support {supported_ascend_archs}")
-    elif backend == "cuda" and arch not in ["a100", "v100", "h20", "l20", "rtx3090"]:
-        raise ValueError("cuda backend only support a100, v100, h20, l20, and rtx3090")
-    elif backend == "cpu" and arch not in ["x86_64", "aarch64"]:
-        raise ValueError("cpu backend only support x86_64 and aarch64")
+    if _family_of(backend, arch) is None:
+        raise ValueError(
+            f"{backend} backend does not recognize arch={arch} "
+            f"(accepted: {arch_hint(backend)})"
+        )
 
 
 def normalize_dsl(dsl: str, backend: str = None) -> str:
@@ -65,9 +165,9 @@ def normalize_dsl(dsl: str, backend: str = None) -> str:
         ValueError: 如果dsl为"triton"但backend未提供或无效
     """
     dsl = dsl.lower()
-    
+
     # 如果已经是规范化的类型，直接返回
-    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "tilelang_ascend", "ascendc", "torch", "pypto"]:
+    if dsl in _ALL_DSLS:
         return dsl
     
     # 如果是通用的triton，需要根据backend转换
@@ -99,10 +199,9 @@ def check_dsl(dsl: str):
     Args:
         dsl: 实现类型(triton_cuda/triton_ascend/triton-russia/swft/torch/pypto等)
     """
-    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "tilelang_ascend", "ascendc", "torch", "pypto"]
-    if dsl not in valid_dsls:
+    if dsl not in _ALL_DSLS:
         raise ValueError(
-            f"dsl must be one of {valid_dsls}. "
+            f"dsl must be one of {sorted(_ALL_DSLS)}. "
             "Note: 'triton' is no longer supported. Use 'triton_cuda' or 'triton_ascend' instead."
         )
 
@@ -117,118 +216,37 @@ def check_task_type(task_type: str):
         raise ValueError("task_type must be precision_only or profile")
 
 
-# 配置依赖关系映射表
-# 注意：ascend910b*/ascend910_93* 使用相同的配置
-VALID_CONFIGS = {
-    # framework -> backend -> arch -> dsl
-    "mindspore": {
-        "ascend": {
-            "ascend910b1": ["triton_ascend", "triton-russia"],
-            "ascend910b2": ["triton_ascend", "triton-russia"],
-            "ascend910b2c": ["triton_ascend", "triton-russia"],
-            "ascend910b3": ["triton_ascend", "triton-russia"],
-            "ascend910b4": ["triton_ascend", "triton-russia"],
-            "ascend310p3": ["swft"],
-            "ascend910_9362": ["triton_ascend", "triton-russia"],
-            "ascend910_9372": ["triton_ascend", "triton-russia"],
-            "ascend910_9381": ["triton_ascend", "triton-russia"],
-            "ascend910_9382": ["triton_ascend", "triton-russia"],
-            "ascend910_9391": ["triton_ascend", "triton-russia"],
-            "ascend910_9392": ["triton_ascend", "triton-russia"],
-            "ascend950dt_95a": ["triton_ascend", "triton-russia"],
-            "ascend950pr_950z": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9572": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9574": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9575": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9576": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9577": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9578": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9579": ["triton_ascend", "triton-russia"],
-            "ascend950pr_957b": ["triton_ascend", "triton-russia"],
-            "ascend950pr_957d": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9581": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9582": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9584": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9587": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9588": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9589": ["triton_ascend", "triton-russia"],
-            "ascend950pr_958a": ["triton_ascend", "triton-russia"],
-            "ascend950pr_958b": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9591": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9592": ["triton_ascend", "triton-russia"],
-            "ascend950pr_9599": ["triton_ascend", "triton-russia"],
-        },
-    },
-    "torch": {
-        "ascend": {
-            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend310p3": ["swft", "ascendc", "torch"],
-            "ascend910_9362": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910_9372": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910_9381": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910_9382": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910_9391": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend910_9392": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950dt_95a": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_950z": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9572": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9574": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9575": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9576": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9577": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9578": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9579": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_957b": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_957d": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9581": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9582": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9584": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9587": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9588": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9589": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_958a": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_958b": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9591": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9592": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-            "ascend950pr_9599": ["triton_ascend", "triton-russia", "tilelang_npuir", "tilelang_ascend", "ascendc", "torch", "pypto"],
-        },
-        "cuda": {
-            "a100": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
-            "h20": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
-            "l20": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
-            "rtx3090": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
-        },
-        "cpu": {
-            "x86_64": ["cpp"],
-            "aarch64": ["cpp"],
-        },
-    },
-    "numpy": {
-        "ascend": {
-            "ascend310p3": ["swft"]
-        },
+def supported_dsls(framework: str, backend: str, arch: str) -> Optional[tuple]:
+    """Return the DSL whitelist for ``(framework, backend, arch)``, or
+    None if the combination is not supported. Single canonical lookup —
+    every other validator in this module routes through this."""
+    family = _family_of(backend, arch)
+    if family is None:
+        return None
+    return _DSL_TABLE.get((framework, backend, family))
+
+
+# Backward-compat: VALID_CONFIGS is the derived (framework, backend) →
+# {arch: dsl_list} view. Only ascend gets per-arch keys (those SKUs are
+# enumerated); cuda / cpu inner dicts are empty by design — their
+# canonical accept-set is the regex family, not a list of dict keys.
+# Use ``supported_dsls(framework, backend, arch)`` for membership checks;
+# iterate ``VALID_CONFIGS[fw][be]`` only when you need the ascend SKU
+# enumeration.
+def _build_valid_configs() -> Dict[str, Dict[str, Dict[str, list]]]:
+    table: Dict[str, Dict[str, Dict[str, list]]] = {}
+    enumerated_skus = {
+        ("ascend", "910"): _ASCEND_910_FAMILY,
+        ("ascend", "310"): _ASCEND_310_SKUS,
     }
-}
+    for (fw, be, fam), dsls in _DSL_TABLE.items():
+        be_table = table.setdefault(fw, {}).setdefault(be, {})
+        for sku in enumerated_skus.get((be, fam), ()):
+            be_table[sku] = list(dsls)
+    return table
 
 
-def _get_config_for_arch(backend_config: dict, arch: str) -> list:
-    """
-    获取指定架构的配置
-    Args:
-        backend_config: 后端配置字典
-        arch: 架构名称
-    Returns:
-        DSL 列表
-    """
-    # 直接匹配
-    if arch in backend_config:
-        return backend_config[arch]
-    
-    return None
+VALID_CONFIGS = _build_valid_configs()
 
 
 def check_task_config(framework: str, backend: str, arch: str, dsl: str):
@@ -240,25 +258,28 @@ def check_task_config(framework: str, backend: str, arch: str, dsl: str):
         arch: 硬件架构名称
         dsl: 实现类型（会自动转换triton为triton_cuda或triton_ascend）
     """
-    # 首先规范化DSL（自动转换triton）
     normalized_dsl = normalize_dsl(dsl, backend)
-    
+
     if framework not in VALID_CONFIGS:
         raise ValueError(f"Unsupported framework: {framework}")
-
     if backend not in VALID_CONFIGS[framework]:
         raise ValueError(f"Framework {framework} does not support backend: {backend}")
 
-    backend_config = VALID_CONFIGS[framework][backend]
-    dsl_list = _get_config_for_arch(backend_config, arch)
-    
-    if dsl_list is None:
-        raise ValueError(f"Backend {backend} does not support arch: {arch}")
+    dsls = supported_dsls(framework, backend, arch)
+    if dsls is None:
+        # Distinguish "unknown arch under this backend" from "arch known but
+        # this framework doesn't support that family" — the second case can
+        # happen e.g. for mindspore + ascend910b3 (family 910 has no row
+        # under mindspore at the moment? actually it does. example only).
+        if _family_of(backend, arch) is None:
+            raise ValueError(f"Backend {backend} does not support arch: {arch}")
+        raise ValueError(
+            f"Framework {framework} does not support arch {arch} on {backend}"
+        )
 
-    if normalized_dsl not in dsl_list:
+    if normalized_dsl not in dsls:
         raise ValueError(f"Arch {arch} does not support dsl: {normalized_dsl}")
-    
-    # 返回规范化后的DSL，供调用者使用
+
     return normalized_dsl
 
 

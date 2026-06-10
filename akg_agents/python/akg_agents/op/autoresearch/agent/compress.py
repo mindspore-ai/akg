@@ -31,6 +31,8 @@ import re
 from collections import Counter
 from typing import Iterable, Optional
 
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
+
 logger = logging.getLogger(__name__)
 
 
@@ -414,11 +416,11 @@ async def _summarize_operator_from_keywords(llm, config, feedback,
     op_name = getattr(config, "name", "") or ""
     # Honour ``TaskConfig.ref_file`` — tasks that don't come from the
     # default scaffolder may place the reference somewhere other than
-    # ``reference.py``. ``ref_file`` is declared on ``TaskConfig``
+    # ``REF_FILE_DEFAULT``. ``ref_file`` is declared on ``TaskConfig``
     # (config root), NOT on ``AgentConfig`` — don't read it off ``a``.
     # Falls back to the scaffolder default for legacy callers that
     # don't set ref_file explicitly.
-    ref_file = getattr(config, "ref_file", None) or "reference.py"
+    ref_file = getattr(config, "ref_file", None) or REF_FILE_DEFAULT
     ref_path = os.path.join(task_dir, ref_file)
     ref_head = _read_safe(ref_path)[:3000] if os.path.exists(ref_path) else ""
     keywords = _collect_historical_keywords(feedback)

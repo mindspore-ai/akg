@@ -15,21 +15,33 @@
 """Pre-flight verification for batch directories.
 
 Tier 1 (default, no hardware): compile + import + required-symbol check
-on ref.py (Model + get_inputs + get_init_inputs) and kernel.py (ModelNew).
-Kernel.py also runs the triton-impl validator (`utils.validate_triton_impl`):
-must use @triton.jit, forward() must launch it, no host-side for/while
-loops, no forbidden torch.X / F.X / @ matmul.
+on ref.py (Model + get_inputs/get_input_groups + get_init_inputs) and the
+kernel's importable wrapper (ModelNew). Kernel.py additionally runs the
+DSL-aware static check via ``akg_agents.op.utils.code_checker.CodeChecker``
+(syntax / py_compile / import / per-DSL anti-cheat / autotune); each DSL
+contributes its own ``_<dsl>ComplianceCheck`` subclass - so the same
+tier-1 path covers triton (@triton.jit + forward must launch it), pypto
+(@pypto.jit), catlass (forward must call torch.ops.<ns>.*), etc.
+``static_check_via_python_ast=False`` DSLs (cpp / cuda_c / ascendc /
+swft) skip the AST layer; tier-1 only catches syntax/import errors for
+them, real failures surface in the verify/profile subprocess later.
 
-Tier 2 (--full): LOCAL smoke test. Loads both modules on `torch.npu:0`
-(or CPU), runs them, allclose via `utils.correctness`. NOT a proxy for
-the batch eval path — `batch/run.py` defaults to a remote worker, and
-a green --full says only "kernel runs locally".
+Tier 2 (--full): FORMAL verify-only pass. It materializes a temporary
+task directory and calls ``utils.akg_eval.eval_kernel(...,
+verify_only=True)``, so it reuses the same ``KernelVerifier`` +
+``DSLAdapter`` chain as batch eval / worker correctness, minus profiling.
+
+For multi-file DSLs (ascendc_catlass), ``case["kernel"]`` is a directory
+that gets passed to ``/autoresearch --kernel``, while
+``case["kernel_module"]`` is the sibling ``kernel.py`` (or
+``<op>_kernel.py``) that tier-1 imports and tier-2 verifies.
 
 Each op runs in its own subprocess. Results: <batch_dir>/verify_results.json.
 
 Usage:
     python scripts/batch/verify.py <batch_dir>             # Tier 1
     python scripts/batch/verify.py <batch_dir> --full      # Tier 1 + Tier 2
+    python scripts/batch/verify.py <batch_dir> --full --worker-url 127.0.0.1:9111
     python scripts/batch/verify.py <batch_dir> --only op1,op2
 """
 from __future__ import annotations
@@ -47,8 +59,8 @@ import manifest as mf
 # Reach up one level for the shared precision module - single source of
 # truth so verify.py and autoresearch's per-round eval can't drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils.correctness import compare_outputs_per_case  # noqa: E402
 from utils.input_groups import resolve as _resolve_groups  # noqa: E402
+from utils.hw_detect import derive_arch, probe_hint  # noqa: E402
 from utils.settings import (  # noqa: E402
     batch_tier1_timeout, batch_tier2_timeout, target_backend, target_dsl,
 )
@@ -73,7 +85,8 @@ KERNEL_REQUIRED = ("ModelNew",)
 # ---------------------------------------------------------------------------
 def _tier1_inspect(path: Path, required: tuple[str, ...]) -> dict:
     """Compile, import, check required attrs are present, and (for
-    kernel files only) run the triton-impl regression validator."""
+    kernel files only) run the DSL-aware CodeChecker (per-DSL anti-cheat
+    + autotune)."""
     out: dict = {"path": str(path), "compile": "skip", "import": "skip",
                  "exports": "skip", "validate": "skip", "missing": [], "msg": ""}
     try:
@@ -121,9 +134,10 @@ def _tier1_inspect(path: Path, required: tuple[str, ...]) -> dict:
         return out
     out["exports"] = "PASS"
 
-    # Step 4: regression validator (kernel-only). Refs legitimately use
-    # torch native; the validator is about ensuring `ModelNew.forward`
-    # actually drives a triton kernel rather than fall back to torch.
+    # Step 4: DSL-aware static check (kernel-only). Refs legitimately use
+    # torch native; CodeChecker enforces per-DSL anti-cheat - e.g. triton:
+    # ModelNew.forward must drive an @triton.jit kernel; catlass: forward
+    # must call torch.ops.<ns>.*; non-Python-AST DSLs skip silently.
     if required is KERNEL_REQUIRED:
         from akg_agents.op.utils.code_checker import CodeChecker
         try:
@@ -152,93 +166,166 @@ def _tier1_inspect(path: Path, required: tuple[str, ...]) -> dict:
     return out
 
 
-def _tier2_run(ref_path: Path, kernel_path: Path) -> dict:
-    """Run ref + kernel, compare outputs via the shared correctness module
-    (autoresearch's eval calls into the same `compare_outputs`)."""
+def _parse_device_ids(devices: str | int | list[int] | None) -> list[int]:
+    if devices is None:
+        return []
+    if isinstance(devices, list):
+        return [int(x) for x in devices]
+    text = str(devices).strip()
+    if not text:
+        return []
+    return [int(x.strip()) for x in text.split(",") if x.strip()]
+
+
+def _tier2_run(ref_path: Path, kernel_path: Path, *,
+               worker_url: str = "", device_ids: list[int] | None = None) -> dict:
+    """Run the formal KernelVerifier-backed verify path on a temp task dir."""
     out: dict = {"status": "skip", "msg": "", "max_abs_diff": None}
 
     try:
-        import torch  # type: ignore
-    except ImportError as e:
-        out["status"] = "ERROR"
-        out["msg"] = f"torch import failed: {e}"
-        return out
-    try:
-        import torch_npu  # type: ignore  # noqa: F401
-    except Exception:
-        pass  # not on Ascend; fine — kernel will pick its own device
-
-    import importlib.util
-    try:
-        ref_spec = importlib.util.spec_from_file_location("_v_ref", str(ref_path))
-        ref_mod = importlib.util.module_from_spec(ref_spec)  # type: ignore[arg-type]
-        ref_spec.loader.exec_module(ref_mod)  # type: ignore[union-attr]
-        kernel_spec = importlib.util.spec_from_file_location("_v_kernel", str(kernel_path))
-        kernel_mod = importlib.util.module_from_spec(kernel_spec)  # type: ignore[arg-type]
-        kernel_spec.loader.exec_module(kernel_mod)  # type: ignore[union-attr]
+        import shutil
+        import tempfile
+        import yaml
+        from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
+        from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+        from task_config.loader import load_task_config
+        from utils.akg_eval import eval_kernel as formal_eval
     except Exception as e:
         out["status"] = "ERROR"
-        out["msg"] = f"import: {type(e).__name__}: {e}"
+        out["msg"] = f"formal verify import failed: {type(e).__name__}: {e}"
         return out
 
+    def _op_name_from_ref(path: Path) -> str:
+        stem = path.stem
+        return stem[:-4] if stem.endswith("_ref") else stem
+
+    def _copy_ref_sidecars(src_ref: Path, task_dir: Path) -> list[str]:
+        copied: list[str] = []
+        ref_stem = src_ref.stem
+        dst_ref_stem = Path(REF_FILE_DEFAULT).stem
+        for sibling in sorted(src_ref.parent.iterdir()):
+            if sibling.name.startswith(".") or not sibling.is_file():
+                continue
+            ext = sibling.suffix.lower()
+            if ext not in (".json", ".pt", ".npz"):
+                continue
+            stem = sibling.stem
+            if stem != ref_stem and not stem.startswith(ref_stem + "_"):
+                continue
+            dest_name = f"{dst_ref_stem}{ext}" if stem == ref_stem else sibling.name
+            shutil.copy2(sibling, task_dir / dest_name)
+            copied.append(dest_name)
+        return copied
+
+    op_name = _op_name_from_ref(ref_path)
+    arch = None
+    backend = target_backend()
+    device_ids = list(device_ids or [])
+    if not worker_url:
+        if not device_ids:
+            device_ids = [0]
+        arch = derive_arch(device_ids[0], backend=backend)
+    if not arch and not worker_url:
+        out["status"] = "ERROR"
+        out["msg"] = (
+            f"could not derive local arch for backend={backend!r} "
+            f"({probe_hint(backend)}); pass --worker-url for remote "
+            "worker verify"
+        )
+        return out
+
+    adapter = get_dsl_adapter(target_dsl())
+    temp_root = Path(tempfile.mkdtemp(prefix=f"_batch_verify_{op_name}_"))
+    task_dir = temp_root / "task"
     try:
-        init_args = ref_mod.get_init_inputs()
-        cases = _resolve_groups(ref_mod)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        entry_name = adapter.entry_filename_template.format(op_name=op_name)
+        shutil.copy2(ref_path, task_dir / REF_FILE_DEFAULT)
+        shutil.copy2(kernel_path, task_dir / entry_name)
+
+        editable_files = [entry_name]
+        if adapter.kernel_arg_is_directory:
+            project_name = adapter.kernel_project_dir_name or "catlass_op"
+            shutil.copytree(kernel_path.parent / project_name, task_dir / project_name)
+            for rel in getattr(adapter, "kernel_project_files", []) or []:
+                if rel not in editable_files:
+                    editable_files.append(rel)
+
+        data_files = _copy_ref_sidecars(ref_path, task_dir)
+        task_yaml = {
+            "name": op_name,
+            "editable_files": editable_files,
+            "eval": {"timeout": TIER2_TIMEOUT},
+            "agent": {
+                "ref_file": REF_FILE_DEFAULT,
+                "max_rounds": 1,
+            },
+        }
+        if device_ids:
+            task_yaml["devices"] = device_ids
+        if arch:
+            task_yaml["arch"] = arch
+        if data_files:
+            task_yaml["data_files"] = data_files
+        if target_dsl() == "ascendc_catlass":
+            task_yaml["catlass"] = {
+                "op_dir": adapter.kernel_project_dir_name or "catlass_op",
+            }
+
+        (task_dir / "task.yaml").write_text(
+            yaml.dump(task_yaml, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        config = load_task_config(str(task_dir))
+        if config is None:
+            raise RuntimeError("load_task_config returned None")
+        raw = formal_eval(
+            str(task_dir),
+            config,
+            device_id=device_ids or None,
+            worker_url=worker_url or None,
+            current_step=0,
+            verify_only=True,
+        )
     except Exception as e:
         out["status"] = "ERROR"
-        out["msg"] = f"get_inputs/get_input_groups: {type(e).__name__}: {e}"
+        out["msg"] = f"formal verify setup failed: {type(e).__name__}: {e}"
         return out
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
 
-    # NPU when available; CPU otherwise. Kernels allocate output buffers
-    # via torch.empty_like(x), so CPU input → CPU output buffer → garbage.
-    npu_mod = getattr(torch, "npu", None)
-    if npu_mod is not None and getattr(npu_mod, "is_available", lambda: False)():
-        device = torch.device("npu:0")
-    else:
-        device = torch.device("cpu")
+    metrics = raw.get("metrics") or {}
+    out["max_abs_diff"] = metrics.get("max_abs_diff")
+    out["num_cases"] = int(metrics.get("num_cases") or 1)
+    per_case = list(raw.get("per_case") or [])
+    if per_case:
+        out["per_case"] = per_case
 
-    try:
-        ref = ref_mod.Model(*init_args).to(device).eval()
-        new = kernel_mod.ModelNew(*init_args).to(device).eval()
-    except Exception as e:
-        out["status"] = "ERROR"
-        out["msg"] = f"construct: {type(e).__name__}: {e}"
-        return out
-
-    def _to_list(x):
-        if isinstance(x, (tuple, list)):
-            return list(x)
-        return [x]
-
-    def _to_device(seq):
-        return [t.to(device) if hasattr(t, "to") else t for t in seq]
-
-    out_ref_per_case: list = []
-    out_new_per_case: list = []
-    try:
-        with torch.no_grad():
-            for case in cases:
-                inp = _to_device(list(case))
-                out_ref_per_case.append(_to_list(ref(*inp)))
-                out_new_per_case.append(_to_list(new(*inp)))
-    except Exception as e:
-        out["status"] = "ERROR"
-        out["msg"] = f"forward: {type(e).__name__}: {e}"
-        return out
-
-    cmp = compare_outputs_per_case(out_ref_per_case, out_new_per_case)
-    out["max_abs_diff"] = cmp["max_abs_diff"]
-    out["num_cases"] = len(cases)
-    out["per_case"] = cmp["per_case"]
-    if cmp["correctness"]:
+    if raw.get("outcome") == "ok":
         out["status"] = "PASS"
-        out["msg"] = f"OK (n={len(cases)})"
+        out["msg"] = f"OK (n={out['num_cases']})"
+        return out
+
+    failure_kinds = {
+        str(item.get("failure_kind") or "")
+        for item in per_case
+        if isinstance(item, dict)
+    }
+    out["status"] = "FAIL" if "kernel_miss" in failure_kinds else "ERROR"
+
+    for item in per_case:
+        if isinstance(item, dict) and item.get("error"):
+            err_text = str(item["error"])
+            out["msg"] = err_text[-2000:]
+            out["raw_output_tail"] = str(
+                item.get("raw_output_tail") or item.get("log") or ""
+            )[-4000:]
+            break
     else:
-        out["status"] = "FAIL"
-        # Surface the first failing diagnostic — full list goes into JSON.
-        bad = next((d for d in cmp["diagnostics"] if "OK" not in d), None)
-        out["msg"] = bad or "correctness mismatch (no diagnostics)"
-        out["diagnostics"] = cmp["diagnostics"]
+        err_text = str(raw.get("error") or raw.get("outcome") or "formal verify failed")
+        out["msg"] = err_text[-2000:]
+        out["raw_output_tail"] = str(raw.get("raw_output_tail") or "")[-4000:]
     return out
 
 
@@ -249,6 +336,8 @@ def _run_tier_subprocess() -> int:
     ap.add_argument("--ref", required=True)
     ap.add_argument("--kernel", default="")
     ap.add_argument("--sidecar", required=True)
+    ap.add_argument("--worker-url", default="")
+    ap.add_argument("--device-ids", default="")
     args = ap.parse_args(sys.argv[2:])  # skip the --tier-runner sentinel
 
     ref_path = Path(args.ref)
@@ -259,7 +348,12 @@ def _run_tier_subprocess() -> int:
     elif args.tier == "1kernel":
         result = _tier1_inspect(kernel_path, KERNEL_REQUIRED)
     else:  # tier == "2"
-        result = _tier2_run(ref_path, kernel_path)
+        result = _tier2_run(
+            ref_path,
+            kernel_path,
+            worker_url=args.worker_url,
+            device_ids=_parse_device_ids(args.device_ids),
+        )
 
     Path(args.sidecar).write_text(json.dumps(result), encoding="utf-8")
     return 0
@@ -269,7 +363,8 @@ def _run_tier_subprocess() -> int:
 # Driver
 # ---------------------------------------------------------------------------
 def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
-                    timeout: int) -> dict:
+                    timeout: int, worker_url: str = "",
+                    device_ids: list[int] | None = None) -> dict:
     sidecar = Path(os.environ.get("TMP", "/tmp")) / f"_verify_{os.getpid()}_{tier}_{ref.stem}.json"
     if sidecar.exists():
         sidecar.unlink()
@@ -280,6 +375,12 @@ def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
            "--sidecar", str(sidecar)]
     if kernel is not None:
         cmd += ["--kernel", str(kernel)]
+    if tier == "2":
+        if worker_url:
+            cmd += ["--worker-url", worker_url]
+        ids = ",".join(str(x) for x in (device_ids or []))
+        if ids:
+            cmd += ["--device-ids", ids]
 
     env = os.environ.copy()
     # Default the Windows libomp/libiomp5md double-init workaround so users
@@ -316,10 +417,14 @@ def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
     return result
 
 
-def _verify_one(case: dict, full: bool) -> dict:
+def _verify_one(case: dict, full: bool, *, worker_url: str = "",
+                device_ids: list[int] | None = None) -> dict:
     op = case["op_name"]
     ref = Path(case["ref"])
-    kernel = Path(case["kernel"])
+    # Tier-1 + tier-2 always import the Python wrapper. For single-file
+    # DSLs kernel_module == kernel; for catlass kernel is the catlass_op
+    # directory and kernel_module is the sibling kernel.py.
+    kernel = Path(case.get("kernel_module") or case["kernel"])
 
     out: dict = {"op_name": op, "tier1_ref": None, "tier1_kernel": None,
                  "tier2": None}
@@ -341,7 +446,9 @@ def _verify_one(case: dict, full: bool) -> dict:
     if full:
         if tier1_ok:
             out["tier2"] = _run_subprocess(tier="2", ref=ref, kernel=kernel,
-                                           timeout=TIER2_TIMEOUT)
+                                           timeout=TIER2_TIMEOUT,
+                                           worker_url=worker_url,
+                                           device_ids=device_ids)
         else:
             out["tier2"] = {"status": "skip",
                             "msg": "tier1 failed; skipping tier2",
@@ -435,7 +542,8 @@ def _print_table(results: dict, full: bool) -> None:
 
 
 def run_verification(batch_dir: Path, *, full: bool = False,
-                     only: str = "") -> int:
+                     only: str = "", worker_url: str = "",
+                     devices: str | int = "") -> int:
     """Run the verification loop programmatically (so prepare.py and other
     scripts can call us without subprocessing). Returns the same exit code
     main() would: 0 if everything passed, 1 if any FAIL/ERROR. All output
@@ -464,6 +572,10 @@ def run_verification(batch_dir: Path, *, full: bool = False,
     print(f"verify  batch_dir={batch_dir}  "
           f"tier={'1+2' if full else '1'}  ops={len(cases)}  "
           f"precision: allclose-style (per-dtype rtol+atol)")
+    device_ids = _parse_device_ids(devices)
+    if full and worker_url:
+        dev_desc = ",".join(str(x) for x in device_ids) if device_ids else "worker-declared"
+        print(f"  worker_url={worker_url}  devices={dev_desc}")
     print()
 
     results: dict = {}
@@ -472,7 +584,12 @@ def run_verification(batch_dir: Path, *, full: bool = False,
         op = case["op_name"]
         sys.stdout.write(f"  [{i:>3}/{len(cases)}] {op} ... ")
         sys.stdout.flush()
-        rec = _verify_one(case, full=full)
+        rec = _verify_one(
+            case,
+            full=full,
+            worker_url=worker_url,
+            device_ids=device_ids,
+        )
         results[op] = rec
         ok = _summary_status(rec, full=full)
         sys.stdout.write(f"{ok}\n")
@@ -508,15 +625,22 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Pre-flight verify for batch directories.")
     ap.add_argument("batch_dir")
     ap.add_argument("--full", action="store_true",
-                    help="also run Tier 2 (execute ref + kernel, compare outputs); "
+                    help="also run Tier 2 (formal verify-only path via KernelVerifier); "
                          "needs the same hardware /autoresearch eval would use")
     ap.add_argument("--only", default="",
                     help="comma-separated op names")
+    ap.add_argument("--worker-url", default="",
+                    help="remote worker URL for --full Tier 2, e.g. 127.0.0.1:9111")
+    ap.add_argument("--devices", default="",
+                    help="optional device id/list filter for --full Tier 2; "
+                         "omitted with --worker-url lets the worker declare/allocate")
     args = ap.parse_args()
 
     return run_verification(
         Path(args.batch_dir),
         full=args.full, only=args.only,
+        worker_url=args.worker_url,
+        devices=args.devices,
     )
 
 

@@ -113,7 +113,7 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
             r"aivec error, core id is (\d+), error code = (\d+)",
         ),
         lambda m: {"core_id": int(m.group(1)), "error_code": int(m.group(2))},
-        "NPU vector core trap — usually a tl.load whose per-row stride isn't "
+        "NPU vector core trap - usually a tl.load whose per-row stride isn't "
         "256-B aligned (i.e. stride-in-elements not divisible by 64 for fp32), "
         "or an out-of-bounds gather. Audit every tl.load address expression.",
     ),
@@ -149,60 +149,8 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
         "acl_stream_error",
         re.compile(r"ACL stream synchronize failed, error code:(\d+)"),
         lambda m: {"error_code": int(m.group(1))},
-        "ACL runtime error — usually a downstream effect of an earlier kernel "
+        "ACL runtime error - usually a downstream effect of an earlier kernel "
         "crash (check aivec_exception / kernel_task_error above for the cause).",
-    ),
-    # --- Multi-shape correctness summary (emitted by compare_outputs_per_case) ---
-    (
-        "multi_shape_correctness_fail",
-        re.compile(
-            r"\[verify\] CORRECTNESS_SUMMARY: failed=(\d+)/(\d+) "
-            r"failed_idx=\[([^\]]*)\] worst_case=(\d+|None) "
-            r"max_abs=([\d.eE+-]+|None)"
-        ),
-        lambda m: {
-            "failed_count": int(m.group(1)),
-            "total_cases": int(m.group(2)),
-            "failed_idx": [int(x.strip()) for x in m.group(3).split(",") if x.strip()],
-            "worst_case": int(m.group(4)) if m.group(4) != "None" else None,
-            "worst_max_abs": (float(m.group(5)) if m.group(5) != "None" else None),
-        },
-        "Multi-shape verify: at least one input shape failed the allclose "
-        "check. Inspect FAILED_SHAPES (next line) for the offending shape(s); "
-        "common multi-shape pitfalls — kernel hard-codes block size for one "
-        "shape; assumes 1D normalize axis but JSON has multi-axis; doesn't "
-        "handle the dtype mix (fp16/bf16/fp32) or the 4-D inputs in the case list.",
-    ),
-    (
-        "multi_shape_failed_shapes",
-        re.compile(r"\[verify\] FAILED_SHAPES: (.+)$", re.MULTILINE),
-        lambda m: {"shapes_text": m.group(1).strip()[:1000]},
-        "Per-case shape descriptors for the failing inputs. Compare them to "
-        "the passing cases to find the dimensional / dtype assumption your "
-        "kernel violates.",
-    ),
-    # --- Correctness check output (allclose-style format emitted by
-    # correctness.py). Pass: |diff| <= atol + rtol*|ref| element-wise;
-    # the line we look for is the failure variant (no leading "OK").
-    (
-        "correctness_fail",
-        re.compile(
-            r"(out\d+):\s*max_abs_err=([\d.eE+-]+)\s+"
-            r"max_allowed=([\d.eE+-]+)\s+rtol=([\d.eE+-]+)\s+"
-            r"atol=([\d.eE+-]+)"
-        ),
-        lambda m: {
-            "output": m.group(1),
-            "max_abs_err": float(m.group(2)),
-            "max_allowed": float(m.group(3)),
-            "rtol": float(m.group(4)),
-            "atol": float(m.group(5)),
-        },
-        "Numerical mismatch fails the allclose gate "
-        "(|diff| <= atol + rtol*|ref|, per-dtype tolerance). "
-        "Common causes: wrong reduction order producing accumulated drift; "
-        "missing 1/K or other scale factor; integer overflow in index math; "
-        "off-by-one in window bounds.",
     ),
     # --- Import / symbol missing ---
     (
@@ -225,8 +173,63 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
         "mlir_compile_error",
         re.compile(r"MLIRCompilationError"),
         lambda m: {},
-        "Triton compilation failed — check earlier signals in this list for "
+        "Triton compilation failed - check earlier signals in this list for "
         "the specific cause (UB overflow, unsupported op, etc.).",
+    ),
+    # --- tbe module missing: ASC runtime environment issue ---
+    (
+        "tbe_module_missing",
+        re.compile(
+            r"ModuleNotFoundError: No module named 'tbe'",
+        ),
+        lambda m: {},
+        "infra_fail: CANN environment not properly configured - ASCEND_HOME_PATH "
+        "is unset or TBE module path is missing. This is an environment issue, "
+        "not a kernel bug. Re-source set_env.sh or fix ASCEND_HOME_PATH.",
+    ),
+    # --- catlass / ascendc: numerical precision failure (AssertionError format) ---
+    (
+        "precision_fail",
+        re.compile(
+            r"AssertionError:\s*.*?"
+            r"(?:outlier=(\d+)\s*/\s*cap=(\d+)|(\d+)\s*.*?hard_fail).*?"
+            r"rtol=([\d.eE+-]+)\s*atol=([\d.eE+-]+).*?"
+            r"mere=([\d.eE+-]+)\s*mare=([\d.eE+-]+)",
+            re.DOTALL,
+        ),
+        lambda m: {
+            "outlier_count": int(m.group(1) or m.group(3) or 0),
+            "outlier_cap": int(m.group(2) or 0),
+            "is_hard_fail": m.group(3) is not None,
+            "rtol": float(m.group(4)),
+            "atol": float(m.group(5)),
+            "mean_rel_err": float(m.group(6)),
+            "max_rel_err": float(m.group(7)),
+        },
+        "Numerical precision failure - output values exceed tolerance. "
+        "Common causes: fp16 precision loss in intermediate computation; "
+        "wrong reduce/accumulate order; missing cast to fp32 before "
+        "summation; incorrect scale factor in epilogue.",
+    ),
+    # --- catlass / ascendc: worst mismatch location detail ---
+    (
+        "precision_fail_location",
+        re.compile(
+            r"位置\[[^\]]+\]:\s*"
+            r"ref=([\d.eE+-]+)\s*impl=([\d.eE+-]+)\s*"
+            r"abs_diff=([\d.eE+-]+)\s*"
+            r"strict_tol=([\d.eE+-]+)",
+        ),
+        lambda m: {
+            "ref_val": float(m.group(1)),
+            "impl_val": float(m.group(2)),
+            "abs_diff": float(m.group(3)),
+            "strict_tol": float(m.group(4)),
+        },
+        "Worst mismatch location - shows the single most off element "
+        "and how far it exceeds strict_tol. If abs_diff is only slightly "
+        "above strict_tol, consider widening atol or switching to fp32 "
+        "for the critical computation path.",
     ),
 ]
 
@@ -280,7 +283,7 @@ def extract_failure_signals(raw_output: str,
 def format_for_stdout(sig: dict[str, Any]) -> str:
     """Render a signals dict for pipeline.py's human-readable output.
 
-    Empty string if nothing useful was extracted — callers can skip printing.
+    Empty string if nothing useful was extracted - callers can skip printing.
     """
     if not sig.get("signals") and not sig.get("python_error"):
         return ""

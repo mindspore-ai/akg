@@ -32,20 +32,13 @@ class FrameworkAdapterNumpy(FrameworkAdapter):
         op_name: str,
         is_dynamic_shape: bool,
         inputs_factory_name: Optional[str] = None,
+        module_name: Optional[str] = None,
     ) -> str:
-        akg_inputs_name = "get_inputs_dyn_list" if is_dynamic_shape else "get_inputs"
-
-        if inputs_factory_name is None or inputs_factory_name == akg_inputs_name:
-            if is_dynamic_shape:
-                return f"from {op_name}_numpy import Model as FrameworkModel, get_init_inputs, get_inputs_dyn_list\n"
-            return f"from {op_name}_numpy import Model as FrameworkModel, get_init_inputs, get_inputs\n"
-
-        return (
-            f"from {op_name}_numpy import "
-            f"Model as FrameworkModel, "
-            f"get_init_inputs, "
-            f"{inputs_factory_name} as {akg_inputs_name}\n"
-        )
+        local = "get_inputs_dyn_list" if is_dynamic_shape else "get_inputs"
+        factory = inputs_factory_name or local
+        module = module_name or f"{op_name}_numpy"
+        return (f"from {module} import Model as FrameworkModel, "
+                f"get_init_inputs, {factory} as {local}\n")
     
     def setup_device(self, backend: str, arch: str, device_id: int) -> Any:
         """Setup device (NumPy doesn't need device)."""
@@ -324,4 +317,3 @@ def compare(fw_out, impl_out, data_type):
         return '''            data_type = framework_output[i].dtype
             compare(fw_out, impl_out, data_type)
 '''
-

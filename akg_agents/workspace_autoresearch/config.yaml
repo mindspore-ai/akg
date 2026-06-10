@@ -51,11 +51,11 @@ hallucinated_scripts:
 #                           runs the checked-out source, not whatever
 #                           `pip install` left in site-packages.
 #   env_script  (required)  shell script source'd before launching the
-#                           daemon. Must leave `python -c "import
-#                           torch_npu, triton"` working in the
-#                           non-interactive shell.
-#   python      (optional)  python binary to invoke remotely. Default
-#                           "python" (whatever env_script puts on PATH).
+#                           daemon. The launcher enables conda first, so
+#                           plain `conda activate ...` works in SSH shells.
+#                           It must leave `python -c "import torch_npu,
+#                           triton"` working; that same PATH-selected
+#                           `python` runs the remote akg_cli command.
 #   ssh_alias   (optional)  hostname passed to ssh. Default = the key
 #                           name itself; override when the host alias in
 #                           ~/.ssh/config differs from how you want to
@@ -68,12 +68,15 @@ hallucinated_scripts:
 # transparently hit the remote daemon over that tunnel.
 # ---------------------------------------------------------------------------
 remote_worker:
-  hosts: {}
+  hosts:
+    npu:
+      repo_path: /home/yyz/cxy/akg
+      env_script: /home/yyz/env.sh
+      ssh_alias: npu
   # Example entry — fill in with deployment-specific path / env_script:
   #   my-npu:
   #     repo_path: /abs/path/to/akg
   #     env_script: /abs/path/env.sh
-  #     # python: python3
   #     # ssh_alias: my-host
 
 
@@ -175,10 +178,10 @@ defaults:
     primary: latency_us
     lower_is_better: true
     improvement_threshold: 0.0
-  skill_dsl: triton-ascend
+  skill_dsl: ascendc-catlass
   backend: ascend
   framework: torch
-  dsl: triton_ascend
+  dsl: ascendc_catlass
   consecutive_fail_threshold: 3
   diagnose_max_attempts: 5
 

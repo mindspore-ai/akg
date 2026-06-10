@@ -23,6 +23,9 @@ import uuid
 
 import yaml
 
+from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
+
 
 def scaffold_task_dir(
     base_dir: str,
@@ -33,11 +36,13 @@ def scaffold_task_dir(
     context_files: dict[str, str] | None = None,
     extra_files: dict[str, str] | None = None,
     max_rounds: int = 20,
-    eval_timeout: int = 300,
+    eval_timeout: int = DEFAULT_EVAL_TIMEOUT_S,
     dsl: str = "",
     framework: str = "",
     backend: str = "",
     arch: str = "",
+    kernel_project_src: str | None = None,
+    dsl_config: dict | None = None,
 ) -> str:
     """Create a fresh task_dir and git init. Returns task_dir path.
 
@@ -49,9 +54,9 @@ def scaffold_task_dir(
         base_dir: Parent directory for the task.
         op_name: Operator name (used in directory name and task.yaml).
         task_desc: Framework code (Model/get_inputs) -> reference.py.
-        editable_files: {filename: content} written to task_dir and listed in
-            task.yaml editable_files. API accepts multi-file; v1 workflow
-            passes single file (KernelVerifier only accepts one coder_code).
+        editable_files: {filename: content} written to task_dir. For
+            multi-file DSLs, the adapter's project files are added to
+            task.yaml editable_files after the project tree is materialized.
         program_md: Agent instructions -> program.md (enters system prompt).
         context_files: {filename: content} — key is relative path within task_dir
             (may contain subdirectories like "api/api.md"). Listed in task.yaml
@@ -70,12 +75,27 @@ def scaffold_task_dir(
     task_dir = os.path.join(base_dir, dir_name)
     os.makedirs(task_dir)
 
-    # Write reference.py
-    _write_file(task_dir, "reference.py", task_desc)
+    # Write reference file
+    _write_file(task_dir, REF_FILE_DEFAULT, task_desc)
 
     # Write editable files
     for filename, content in editable_files.items():
         _write_file(task_dir, filename, content)
+
+    editable_file_names = list(editable_files.keys())
+
+    # Multi-file DSL project subtree (e.g. catlass_op/). The DSL adapter
+    # owns the copy logic — pass the source directory through; adapter's
+    # materialize_project_tree handles per-DSL patching (catlass cmake
+    # rewrite etc.). Single-file DSLs pass kernel_project_src=None and
+    # this is a no-op.
+    if kernel_project_src:
+        from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+        adapter = get_dsl_adapter(dsl)
+        adapter.materialize_project_tree(task_dir, kernel_project_src)
+        for filename in getattr(adapter, "kernel_project_files", []) or []:
+            if filename not in editable_file_names:
+                editable_file_names.append(filename)
 
     # program.md is optional now — fundamentals flow through
     # task_dir/skills/<name>/SKILL.md (Layer 0 in system prompt)
@@ -107,7 +127,7 @@ def scaffold_task_dir(
         "framework": framework or None,
         "backend": backend or None,
         "arch": arch or None,
-        "editable_files": list(editable_files.keys()),
+        "editable_files": editable_file_names,
         "eval": {
             "timeout": eval_timeout,
             "import_timeout": 0,  # AKG mode: skip import check, syntax-only quick_check
@@ -118,11 +138,22 @@ def scaffold_task_dir(
         },
         "agent": {
             **_program_yaml_key,
-            "ref_file": "reference.py",
+            "ref_file": REF_FILE_DEFAULT,
             "context_files": list(context_files.keys()),
             "max_rounds": max_rounds,
         },
     }
+    # Per-DSL block (e.g. ``catlass: {root, op_dir}``). Loader's
+    # dsl_config normalizer rebuilds the flat keys at load time.
+    if dsl_config:
+        if dsl == "ascendc_catlass":
+            catlass_block = {}
+            if dsl_config.get("catlass_root"):
+                catlass_block["root"] = dsl_config["catlass_root"]
+            if dsl_config.get("catlass_op_dir"):
+                catlass_block["op_dir"] = dsl_config["catlass_op_dir"]
+            if catlass_block:
+                task_yaml["catlass"] = catlass_block
     yaml_content = yaml.dump(task_yaml, default_flow_style=False, allow_unicode=True)
     _write_file(task_dir, "task.yaml", yaml_content)
 

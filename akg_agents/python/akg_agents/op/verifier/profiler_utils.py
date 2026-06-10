@@ -21,8 +21,9 @@ import os
 import re
 import json
 import logging
+import math
 import subprocess
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any, List
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -31,105 +32,153 @@ from akg_agents.utils.process_utils import run_command
 logger = logging.getLogger(__name__)
 
 
-def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_id: str = "0", override_base_time_us: float = None) -> Tuple[float, float]:
-    """运行性能测试脚本并收集结果
+# Canonical per-section schema returned by both the python-script profile
+# path here and the msprof/nsys path in LocalWorker. ``per_case_us`` is the
+# load-bearing field: a single-element list for static-shape ops keeps the
+# downstream consumer iteration uniform with multi-shape ops. ``avg_us`` is
+# the arithmetic mean (== per_case_us[0] for the static case) — present so
+# legacy callers asking for "the aggregate timing" don't need to redo the
+# sum themselves.
+#
+#   {
+#     "avg_us": float,            # mean of per_case_us
+#     "per_case_us": [float, ...],# length 1+ ; never empty when present
+#     "method": str | None,       # timer name (e.g. "msprof", "loop_timer")
+#   }
+#
+# `run_profile_scripts_and_collect_results` returns
+#   {"base": Section | None, "gen": Section | None}
+# where ``base is None`` covers the "skipped / no base script / measurement
+# failed" cases uniformly. ``gen is None`` means the generation profile
+# couldn't be measured (subprocess failed or JSON missing). Callers see one
+# None-check, not two sentinel-value branches.
 
-    Args:
-        verify_dir: 验证目录，包含性能测试脚本
-        op_name: 算子名称
-        task_id: 任务ID
-        override_base_time_us: 覆盖的 baseline 时间（微秒），用于 evolve/adaptive_search 场景
 
-    Returns:
-        (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
-        - 如果 base 脚本不存在（跨后端场景），base_time_us 返回 inf
-        - 如果提供了 override_base_time_us，则使用该值作为 base_time_us
-    
-    注意: 此函数是线程安全的，不使用 os.chdir()。
-    多个任务可以在线程池中并发执行而不会互相干扰。
-    """
+def make_profile_section(avg_us: float,
+                         per_case_us: Optional[List[float]] = None,
+                         method: Optional[str] = None) -> Dict[str, Any]:
+    """Build a canonical profile section. Use this everywhere we synthesize
+    a per-shape section from a single aggregate measurement (override
+    baseline, msprof/nsys path, etc.) so the schema stays consistent."""
+    if per_case_us is None or not per_case_us:
+        per_case_us = [float(avg_us)]
+    return {
+        "avg_us": float(avg_us),
+        "per_case_us": [float(t) for t in per_case_us],
+        "method": method,
+    }
+
+
+def _finite(x: Any) -> Optional[float]:
+    """Coerce to a finite float; None on inf/nan/non-numeric. Used to
+    sanitize values read out of profile JSON before they propagate."""
+    if isinstance(x, (int, float)) and math.isfinite(float(x)):
+        return float(x)
+    return None
+
+
+def read_profile_result_from_json(verify_dir: str,
+                                  json_filename: str) -> Optional[Dict[str, Any]]:
+    """Read a profile-result JSON written by ``prof_{base,generation}_template_refactored.j2``.
+
+    Returns a canonical section dict (see module docstring) or ``None`` when
+    the file is absent / unparsable / inf-only. Templates emit
+    ``per_case_us`` (always a list, length 1 for static-shape); we fall back
+    to wrapping ``execution_time_us`` so older JSON written by the previous
+    template revision still parses (transitional — drop once all task dirs
+    have been re-profiled)."""
+    json_path = os.path.join(verify_dir, json_filename)
+    if not os.path.exists(json_path):
+        logger.error(f"profile JSON not found: {json_path}")
+        return None
     try:
-        # 【优化】如果提供了 override_base_time_us，直接使用（避免重复测量）
-        if override_base_time_us is not None and override_base_time_us > 0 and override_base_time_us < float('inf'):
-            base_time_us = override_base_time_us
-            logger.info(f"[{op_name}: {task_id}] 使用缓存的 baseline: {base_time_us:.2f} us")
-        else:
-            base_time_us = float('inf')
-        
-        # 步骤1：运行基准性能测试脚本（如果存在）
-        # 跨后端场景（使用参考数据）下，base 脚本可能不存在
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.error(f"profile JSON unreadable {json_filename}: {e}")
+        return None
+
+    avg = _finite(data.get("avg_time_us")) or _finite(data.get("execution_time_us"))
+    if avg is None:
+        return None
+
+    raw_per_case = data.get("per_case_us")
+    if isinstance(raw_per_case, list) and raw_per_case:
+        per_case = [c for c in (_finite(t) for t in raw_per_case) if c is not None]
+    else:
+        per_case = []
+    if not per_case:
+        per_case = [avg]
+    return {
+        "avg_us": avg,
+        "per_case_us": per_case,
+        "method": data.get("method"),
+    }
+
+
+def run_profile_scripts_and_collect_results(
+    verify_dir: str, op_name: str, task_id: str = "0",
+    override_base_time_us: Optional[float] = None,
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """Run base + generation profile scripts and collect their canonical
+    per-shape sections.
+
+    Returns ``{"base": Section | None, "gen": Section | None}``. ``base``
+    is ``None`` when the base script is absent (cross-backend / cached) and
+    no override was provided, or when its measurement otherwise failed.
+    ``gen`` is ``None`` when generation measurement failed (subprocess
+    non-zero or JSON missing); callers treat that as an infra error.
+
+    Thread-safe: uses ``cwd=`` instead of ``os.chdir()``.
+    """
+    base_section: Optional[Dict[str, Any]] = None
+
+    # Cached / cross-backend path: caller already has the baseline. Wrap as
+    # single-case section so downstream array consumers see the same shape.
+    if (override_base_time_us is not None and override_base_time_us > 0
+            and override_base_time_us < float("inf")):
+        base_section = make_profile_section(
+            override_base_time_us, method="override")
+        logger.info(f"[{op_name}: {task_id}] 使用缓存的 baseline: "
+                    f"{base_section['avg_us']:.2f} us")
+    else:
         base_script = f"profile_{op_name}_base.py"
         base_script_path = os.path.join(verify_dir, base_script)
-        
         if os.path.exists(base_script_path):
-            # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
-            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=600, cwd=verify_dir)
+            base_result = run_command(
+                ["python", base_script], cmd_msg="base_profile",
+                timeout=600, cwd=verify_dir,
+            )
             if not base_result[0]:
-                logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: {base_result[1]}")
-                # base 失败不影响 generation 的执行
+                logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: "
+                             f"{base_result[1]}")
             else:
-                base_time_us = read_profile_result_from_json(verify_dir, "base_profile_result.json")
+                base_section = read_profile_result_from_json(
+                    verify_dir, "base_profile_result.json")
         else:
-            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在（使用缓存 baseline 或跨后端场景），跳过 base profile")
+            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在"
+                        f"（使用缓存 baseline 或跨后端场景），跳过 base profile")
 
-        # 步骤2：运行生成代码性能测试脚本
-        gen_script = f"profile_{op_name}_generation.py"
-        gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=600, cwd=verify_dir)
-        if not gen_result[0]:
-            logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
-            return base_time_us, float('inf')
+    gen_section: Optional[Dict[str, Any]] = None
+    gen_script = f"profile_{op_name}_generation.py"
+    gen_result = run_command(
+        ["python", gen_script], cmd_msg="generation_profile",
+        timeout=600, cwd=verify_dir,
+    )
+    if not gen_result[0]:
+        logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: "
+                     f"{gen_result[1]}")
+    else:
+        gen_section = read_profile_result_from_json(
+            verify_dir, "generation_profile_result.json")
 
-        # 步骤3：从JSON文件读取性能数据
-        gen_time_us = read_profile_result_from_json(verify_dir, "generation_profile_result.json")
-        
-        logger.info(f"[{op_name}: {task_id}] Read profile results: base={base_time_us:.2f} us, gen={gen_time_us:.2f} us")
-
-        return base_time_us, gen_time_us
-
-    except Exception as e:
-        logger.error(f"[{op_name}: {task_id}] 性能脚本执行和结果收集失败: {e}")
-        return float('inf'), float('inf')
-
-
-def read_profile_result_from_json(verify_dir: str, json_filename: str) -> float:
-    """从JSON文件读取性能结果
-    
-    Args:
-        verify_dir: 验证目录
-        json_filename: JSON文件名
-        
-    Returns:
-        平均时间（微秒）
-    """
-    json_path = os.path.join(verify_dir, json_filename)
-    try:
-        if not os.path.exists(json_path):
-            error_msg = f"JSON file not found: {json_path}"
-            logger.error(error_msg)
-            print(f"[DEBUG] {error_msg}")
-            
-            cwd_msg = f"Current directory: {os.getcwd()}"
-            logger.error(cwd_msg)
-            print(f"[DEBUG] {cwd_msg}")
-            
-            files_msg = f"Files in verify_dir: {os.listdir(verify_dir) if os.path.exists(verify_dir) else 'N/A'}"
-            logger.error(files_msg)
-            print(f"[DEBUG] {files_msg}")
-            return float('inf')
-            
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # Try multiple possible field names for compatibility
-            avg_time = data.get('avg_time_us') or data.get('execution_time_us') or float('inf')
-            print(f"[DEBUG] Successfully read {json_filename}: avg_time={avg_time} us, data_keys={list(data.keys())}")
-            return avg_time
-    except Exception as e:
-        error_msg = f"Failed to read {json_filename}: {e}"
-        logger.error(error_msg)
-        print(f"[DEBUG] {error_msg}")
-        import traceback
-        traceback.print_exc()
-        return float('inf')
+    base_avg = base_section["avg_us"] if base_section else float("inf")
+    gen_avg = gen_section["avg_us"] if gen_section else float("inf")
+    logger.info(f"[{op_name}: {task_id}] Read profile results: "
+                f"base={base_avg:.2f} us, gen={gen_avg:.2f} us "
+                f"(base_cases={len(base_section['per_case_us']) if base_section else 0}, "
+                f"gen_cases={len(gen_section['per_case_us']) if gen_section else 0})")
+    return {"base": base_section, "gen": gen_section}
 
 
 def run_msprof(script_path: str, op_name: str = "", task_id: str = "0", timeout: int = 600) -> Tuple[bool, str, Optional[str]]:

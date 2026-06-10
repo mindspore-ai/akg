@@ -27,6 +27,10 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any
 
+from akg_agents.core.worker.interface import (
+    DEFAULT_EVAL_TIMEOUT_S, DEFAULT_WARMUP_TIMES, DEFAULT_RUN_TIMES,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +40,7 @@ async def verify_kernel(
     op_name: str,
     task_id: str = "default_task",
     device_id: int = 0,
-    timeout: int = 300,
+    timeout: int = DEFAULT_EVAL_TIMEOUT_S,
     cur_path: str = "",
     framework: str = "torch",
     backend: str = "cuda",
@@ -124,8 +128,8 @@ async def profile_kernel(
     op_name: str,
     task_id: str = "default_task",
     device_id: int = 0,
-    run_times: int = 50,
-    warmup_times: int = 5,
+    run_times: int = DEFAULT_RUN_TIMES,
+    warmup_times: int = DEFAULT_WARMUP_TIMES,
     cur_path: str = "",
     framework: str = "torch",
     backend: str = "cuda",
