@@ -80,12 +80,11 @@ def get_named_op_str(
         os.makedirs(output_dir, exist_ok=True)
         output_dir_obj = None
 
-    cmd = (
-        f"bishengir-opt "
-        "--torch-backend-to-named-op-backend-pipeline="
-        "\"ensure-no-implicit-broadcast=true\" "
-        f"{input_file_path}"
-    )
+    cmd = [
+        "bishengir-opt",
+        "--torch-backend-to-named-op-backend-pipeline=ensure-no-implicit-broadcast=true",
+        input_file_path,
+    ]
 
     try:
         result = subprocess.run(
