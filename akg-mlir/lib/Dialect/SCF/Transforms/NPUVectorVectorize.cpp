@@ -2714,7 +2714,7 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
       Value padding = tailCtx.builder.create<arith::ConstantOp>(loc, tailCtx.builder.getZeroAttr(memrefElemType));
 
       SmallVector<Value> tailMaxSizes;
-      tailMaxSizes.resize(typeInfo.dynamicSizes.size(), tailSize);
+      tailMaxSizes.resize(typeInfo.dynamicSizes.size(), tailCtx.getMaxStepValue());
       auto tailRead = tailCtx.builder.create<npuvector::TransferReadOp>(
         loc, typeInfo.vecType, mappedMemRef, ValueRange(tailIndices), padding, Value(),
         ValueRange(typeInfo.dynamicSizes), ValueRange(tailMaxSizes));
