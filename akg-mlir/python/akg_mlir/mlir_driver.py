@@ -143,7 +143,6 @@ def _compile_lib(kernel_name, file_path="./tmp_files/"):
     try:
         subprocess.run(cmd, check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-
         logging.error("run compile lib failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("nvcc compile failed in converting the case: " + kernel_name + "!\n") from e
 
