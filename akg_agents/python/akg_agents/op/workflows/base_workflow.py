@@ -20,6 +20,7 @@
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
 from akg_agents.core_v2.langgraph_base.base_workflow import BaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.utils.common_utils import get_prompt_path
@@ -30,53 +31,31 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-# DSL → docs_dir 映射表
-# 来源：各 default_{dsl}_config.yaml 中的 docs_dir 配置
-_DSL_DOCS_DIR_MAP: Dict[str, Dict[str, str]] = {
-    "triton_ascend": {
-        "designer": "op/resources/docs/sketch_docs",
-        "coder": "op/resources/docs/triton_ascend_docs",
-        "sketch": "op/resources/docs/sketch_docs",
-    },
-    "triton_cuda": {
-        "designer": "op/resources/docs/sketch_docs",
-        "coder": "op/resources/docs/triton_cuda_docs",
-        "sketch": "op/resources/docs/sketch_docs",
-    },
-    "ascendc": {
-        "designer": "op/resources/docs/ascendc_docs",
-        "coder": "op/resources/docs/ascendc_docs",
-    },
-    "swft": {
-        "designer": "op/resources/docs/aul_docs",
-        "coder": "op/resources/docs/swft_docs",
-    },
-    "torch": {
-        "designer": "op/resources/docs/torch_docs",
-        "coder": "op/resources/docs/torch_docs",
-    },
-    "cuda_c": {
-        "designer": "op/resources/docs/cuda_docs",
-        "coder": "op/resources/docs/cuda_docs",
-    },
-    "cpp": {
-        "designer": "op/resources/docs/cpu_docs",
-        "coder": "op/resources/docs/cpu_docs",
-    },
-    "tilelang_cuda": {
-        "designer": "op/resources/docs/tilelang_cuda_docs",
-        "coder": "op/resources/docs/tilelang_cuda_docs",
-    },
-    "tilelang_npuir": {
-        "designer": "op/resources/docs/sketch_docs",
-        "coder": "op/resources/docs/tilelang_npuir_docs",
-    },
-    "pypto": {
-        "designer": "op/resources/docs/sketch_docs",
-        "coder": "op/resources/docs/pypto_docs",
-        "sketch": "op/resources/docs/sketch_docs",
-    },
-}
+# DSL → docs_dir 映射表，从 ``op/config/default_<dsl>_config.yaml`` 的
+# ``docs_dir`` 字段 derive。加新 DSL 只需放对应 default config 文件。
+def _load_docs_dir_map() -> Dict[str, Dict[str, str]]:
+    import importlib.resources
+    import yaml as _yaml
+    out: Dict[str, Dict[str, str]] = {}
+    pkg = importlib.resources.files("akg_agents.op.config")
+    for entry in pkg.iterdir():
+        name = entry.name
+        if not (name.startswith("default_") and name.endswith("_config.yaml")):
+            continue
+        dsl_key = name[len("default_"):-len("_config.yaml")]
+        try:
+            with entry.open("r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning(f"[_load_docs_dir_map] {name} load failed: {e}")
+            continue
+        dd = cfg.get("docs_dir")
+        if isinstance(dd, dict) and dd:
+            out[dsl_key] = {k: v for k, v in dd.items() if isinstance(v, str) and v}
+    return out
+
+
+_DSL_DOCS_DIR_MAP: Dict[str, Dict[str, str]] = _load_docs_dir_map()
 
 
 class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
@@ -204,8 +183,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "warmup_times": 5,
         }
 
-        # 6. verify_timeout（硬编码，5 分钟）
-        config["verify_timeout"] = 300
+        # 6. verify_timeout —— worker 协议层默认（DEFAULT_EVAL_TIMEOUT_S）
+        config["verify_timeout"] = DEFAULT_EVAL_TIMEOUT_S
 
         # 7. default_workflow（仅在未设置时使用默认值，不覆盖已有配置）
         config.setdefault("default_workflow", "default_workflow")

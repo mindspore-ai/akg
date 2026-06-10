@@ -47,6 +47,9 @@ class TestBackendAdapterCuda:
         assert adapter.validate_arch("a100") is True
         assert adapter.validate_arch("v100") is True
         assert adapter.validate_arch("rtx3090") is True
+        assert adapter.validate_arch("rtx5090") is True
+        assert adapter.validate_arch("h200") is True
+        assert adapter.validate_arch("l40s") is True
         assert adapter.validate_arch("invalid") is False
 
 
@@ -101,6 +104,7 @@ class TestBackendAdapterCpu:
         adapter = get_backend_adapter("cpu")
         assert adapter.validate_arch("x86_64") is True
         assert adapter.validate_arch("aarch64") is True
+        assert adapter.validate_arch("riscv64") is True
         assert adapter.validate_arch("invalid") is False
 
 
@@ -129,4 +133,3 @@ class TestBackendAdapterFactory:
         """Test getting invalid backend adapter."""
         with pytest.raises(ValueError, match="Unsupported backend"):
             get_backend_adapter("invalid")
-

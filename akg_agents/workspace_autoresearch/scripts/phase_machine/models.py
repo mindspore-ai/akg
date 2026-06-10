@@ -71,7 +71,7 @@ class Progress:
     # doesn't match the current config — protects against users changing
     # eval.warmup_times / eval.run_times or the case-count for the same
     # task, where the old ref anchor would no longer be comparable.
-    # Shape: {"warmup_times": int, "run_times": int, "num_cases": int}.
+    # Shape: {"num_cases": int, "shape_signature": str | None}.
     baseline_fingerprint: Optional[dict] = None
     seed_metric: Optional[float] = None
 
@@ -91,9 +91,6 @@ class Progress:
     # Stop-hook trace
     last_stop_reason: Optional[str] = None
     last_stop_time: Optional[str] = None
-
-    # Auto-stamped by state_store.save_progress when stamp=True
-    last_updated: Optional[str] = None
 
     # ---- dict-compat read API --------------------------------------------
     # Readers do `progress.get("X", default)` everywhere; supplying this

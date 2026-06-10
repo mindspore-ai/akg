@@ -155,10 +155,7 @@ def _build_npukb_config(loader_config):
     benchmark-agnostic.
     """
     loader_config["framework_aux_files"] = {SIDECAR_JSON_NAME: INPUT_GROUPS_JSONL}
-    loader_config["framework_factory_names"] = {
-        "inputs_factory": "get_input_groups",
-        "is_dynamic_shape": True,
-    }
+    # framework_factory_names left default — auto-detected from ref source.
     return loader_config
 
 
@@ -201,13 +198,11 @@ async def test_npukernelbench_add_verify_ascend():
         worker=worker,
     )
 
-    # Sanity-check the unified config contract before invoking verify:
-    # the verifier must have picked up the metadata via self.config alone,
-    # not via any kwargs (those have been removed in the unified design).
+    # Sanity-check the unified config contract before invoking verify.
+    # framework_factory_names is now empty by default — KernelVerifier
+    # auto-detects the multi-shape factory from the ref source.
     assert verifier.framework_aux_files == {SIDECAR_JSON_NAME: INPUT_GROUPS_JSONL}
-    assert verifier.framework_factory_names["inputs_factory"] == "get_input_groups"
-    assert verifier.framework_factory_names["is_dynamic_shape"] is True
-    # And dynamic-shape detection must be protocol-driven (not source-literal).
+    assert verifier._resolve_dyn_factory() == "get_input_groups"
     assert verifier._detect_dynamic_shape() is True
 
     task_info = {"coder_code": ADD_TRITON_ASCEND_MODELNEW}

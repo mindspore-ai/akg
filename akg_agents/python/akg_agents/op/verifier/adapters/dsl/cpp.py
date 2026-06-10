@@ -21,7 +21,9 @@ from .base import DSLAdapter
 
 class DSLAdapterCpp(DSLAdapter):
     """Adapter for C++ DSL."""
-    
+
+    static_check_via_python_ast = False  # C++ inline string, no Python AST
+
     def get_import_statements(self, framework: str) -> str:
         """Return C++ import statements."""
         return "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.cpp_extension import load_inline\n"
@@ -64,15 +66,7 @@ class DSLAdapterCpp(DSLAdapter):
         """
         return f"impl_output = impl_model(*{inputs})\n"
     
-    def needs_binary_io(self) -> bool:
-        """C++ doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """C++ doesn't need compilation (handled by load_inline)."""
-        return False
-    
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
+    def benchmark_impl(self, impl_func_name: str, inputs: str,
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,

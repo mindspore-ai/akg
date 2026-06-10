@@ -32,7 +32,9 @@ claude
 
 ```text
 /autoresearch --ref workspace/<op>_ref.py --kernel workspace/<op>_kernel.py \
-  --op-name <op> --devices <NPU-id>
+  --op-name <op> --devices <dev-id>
 ```
+
+后端默认 Ascend NPU；改 [config.yaml](config.yaml) `defaults.backend` + `dsl` 可切到 cuda / cpu，`<dev-id>` 由对应平台的 `npu-smi` / `nvidia-smi` 决定。
 
 监控：`python scripts/dashboard.py <task_dir> --watch`。

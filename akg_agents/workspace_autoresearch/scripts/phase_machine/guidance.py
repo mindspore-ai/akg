@@ -489,6 +489,11 @@ def get_guidance(task_dir: str) -> str:
         # fixing/rewriting the seed kernel — surface the per-shape
         # failure detail and steer the agent toward that goal.
         seed_failed_section = ""
+        # editable[0] is per-DSL via scaffold (kernel.py for triton /
+        # tilelang / pypto / catlass / ascendc, custom for pure-C++
+        # adapters). "kernel.py" fallback only fires when task.yaml
+        # failed to load — loader.py refuses empty editable_files on
+        # the happy path.
         target_file = editable[0] if editable else "kernel.py"
         # SEED FAILED fires for kernel-side baseline failures (kernel_fail);
         # infra_fail never reaches PLAN: the ref-baseline gate parks

@@ -31,6 +31,10 @@ import logging
 from typing import Dict, Any
 from dataclasses import dataclass
 
+from akg_agents.core.worker.interface import (
+    DEFAULT_WARMUP_TIMES, DEFAULT_RUN_TIMES,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,8 +59,8 @@ async def generate_reference_with_profile(
     framework: str = "torch",
     log_dir: str = None,
     task_id: str = "0",
-    warmup_times: int = 5,
-    run_times: int = 50,
+    warmup_times: int = DEFAULT_WARMUP_TIMES,
+    run_times: int = DEFAULT_RUN_TIMES,
     timeout: int = 180
 ) -> CrossPlatformReferenceResult:
     """
@@ -155,8 +159,8 @@ def create_cross_platform_config(
     base_config: Dict[str, Any],
     reference_bytes: bytes,
     gpu_kernel_time_us: float,
-    warmup_times: int = 5,
-    run_times: int = 50
+    warmup_times: int = DEFAULT_WARMUP_TIMES,
+    run_times: int = DEFAULT_RUN_TIMES,
 ) -> Dict[str, Any]:
     """
     创建跨平台 Evolve 的配置

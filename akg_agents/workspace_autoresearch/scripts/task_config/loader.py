@@ -30,27 +30,12 @@ import os
 import yaml
 
 
-# ---------------------------------------------------------------------------
-# File-name constants + helpers
-# ---------------------------------------------------------------------------
-# `reference.py` was hardcoded in six unrelated files (scaffold, loader,
-# package_builder x2, eval_client, worker.server) and the inverse
-# stem/basename conversion was implemented twice as inline
-# `.replace(".py", "")` plus once as `+ ".py"`. A renamed default or a
-# new caller forgetting one of the conversions silently produced
-# `reference.py.py` or "no such file". Funnel through these constants
-# + helpers so the contract has a single owner.
+# File-name conventions (REF_FILE_DEFAULT / py_stem / editable-files
+# helpers / resolve_kernel_paths_for_op) live in akg_agents.op.utils.
+# task_layout — workflow-neutral SoT. Re-exported here for back-compat
+# (legacy callers still import from task_config.loader).
 
-REF_FILE_DEFAULT = "reference.py"
-
-
-def py_stem(name: str) -> str:
-    """Strip a trailing `.py` extension. Idempotent: passing in a stem
-    returns it unchanged. Used at the eval_kernel / worker / eval_client
-    boundary because eval_kernel's CLI takes `--ref-file <stem>` (no
-    extension) while TaskConfig.ref_file carries the basename WITH `.py`.
-    """
-    return name[:-3] if name.endswith(".py") else name
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT, py_stem  # noqa: E402, F401
 
 
 def _is_contained(path: str) -> bool:
@@ -109,11 +94,13 @@ def _filter_contained(paths: list, field_name: str) -> list:
 class TaskConfig:
     """Minimal task configuration parsed from task.yaml.
 
-    The repo is locked to a single combination by construction
-    (Triton-Ascend kernel, Ascend NPU, PyTorch ref). Downstream code
-    refers to those constants directly rather than carrying them on
-    TaskConfig. `arch` (e.g. `ascend910b3`) varies per machine and is
-    derived from the picked --devices via npu-smi.
+    The workspace's target triple ``(backend, framework, dsl)`` is pinned
+    per repo in ``config.yaml``'s ``defaults`` block (single-target-per-
+    repo design); downstream code reads it via ``utils.settings.target_*``
+    rather than carrying it on TaskConfig. ``arch`` (e.g. ``ascend910b3``
+    / ``a100``) varies per machine and is auto-derived from the picked
+    ``--devices`` via the backend-appropriate probe in ``utils.hw_detect``
+    (npu-smi for ascend, nvidia-smi for cuda).
     """
     name: str
     description: str = ""
@@ -179,6 +166,15 @@ class TaskConfig:
     When non-empty (or `--worker-url` passed on the CLI), run_eval ships
     the task package via HTTP POST to the first reachable worker. Local
     devices are the fallback."""
+
+    # Per-DSL knobs (e.g. ascendc_catlass's ``catlass.root`` /
+    # ``catlass.op_dir``). Keys are flat (``catlass_root`` /
+    # ``catlass_op_dir`` historically); akg_eval forwards them verbatim
+    # into the eval ``config_dict`` + ``task_info`` so the adapter's
+    # ``prepare_config`` consumes them without TaskConfig knowing any DSL.
+    # Loader normalizes the ``catlass:`` yaml block into this dict for
+    # back-compat; new DSLs add a sibling block + normalizer.
+    dsl_config: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +265,19 @@ def load_task_config(task_dir: str) -> Optional[TaskConfig]:
               f"if this isn't what you intended.", file=_sys.stderr)
         raw_ref = REF_FILE_DEFAULT
 
+    # Per-DSL block flatteners. catlass is the only one today; future
+    # DSLs add a sibling 2-line block. Loader stays one place for the
+    # yaml → dsl_config mapping so akg_eval can forward a single dict.
+    dsl_config: dict = {}
+    catlass_block = raw.get("catlass") or {}
+    if catlass_block.get("root") is not None:
+        dsl_config["catlass_root"] = catlass_block["root"]
+    dsl_config["catlass_op_dir"] = (
+        catlass_block.get("op_dir")
+        or catlass_block.get("catlass_op_dir")
+        or "catlass_op"
+    )
+
     config = TaskConfig(
         name=name,
         description=raw.get("description", ""),
@@ -292,6 +301,7 @@ def load_task_config(task_dir: str) -> Optional[TaskConfig]:
         max_rounds=agent_block.get("max_rounds", default_max_rounds()),
         devices=devices,
         worker_urls=worker_urls,
+        dsl_config=dsl_config,
     )
     # editable_files drives kernel-file resolution in eval (local + remote).
     # Reject an empty list (e.g. an 'editable_file' typo in task.yaml) at

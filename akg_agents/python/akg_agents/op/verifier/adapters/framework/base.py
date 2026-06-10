@@ -41,6 +41,7 @@ class FrameworkAdapter(ABC):
         op_name: str,
         is_dynamic_shape: bool,
         inputs_factory_name: Optional[str] = None,
+        module_name: Optional[str] = None,
     ) -> str:
         """Return import statement for framework model and input functions.
 
@@ -265,4 +266,3 @@ class FrameworkAdapter(ABC):
             str: Code for comparing outputs
         """
         pass
-

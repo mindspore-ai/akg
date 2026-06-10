@@ -21,7 +21,9 @@ from .base import DSLAdapter
 
 class DSLAdapterCudaC(DSLAdapter):
     """Adapter for CUDA C DSL."""
-    
+
+    static_check_via_python_ast = False  # CUDA-C inline string, no Python AST
+
     def get_import_statements(self, framework: str) -> str:
         """Return CUDA C import statements."""
         return (
@@ -61,14 +63,6 @@ class DSLAdapterCudaC(DSLAdapter):
     ) -> str:
         """Invoke the instantiated CUDA C ModelNew."""
         return f"impl_output = impl_model(*{inputs})\n"
-    
-    def needs_binary_io(self) -> bool:
-        """CUDA C doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """CUDA C doesn't need compilation (handled by load_inline)."""
-        return False
     
     def benchmark_impl(
         self,

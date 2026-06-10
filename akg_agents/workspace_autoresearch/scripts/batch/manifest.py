@@ -14,13 +14,25 @@
 
 """Manifest loading + progress JSON I/O for the batch runner.
 
-Workspace convention:
+Workspace convention (single-file DSLs — triton, pypto, tilelang, cpp,
+cuda_c, ascendc, swft):
     <batch_dir>/
-        manifest.yaml | manifest.json    # user-authored
-        batch_progress.json              # written here
-        batch.log                        # written here
+        manifest.yaml | manifest.json        # user-authored
+        batch_progress.json                  # written here
+        batch.log                            # written here
         <ref_dir>/<op_name>_ref.py
         <kernel_dir>/<op_name>_kernel.py
+
+Multi-file DSL convention (ascendc_catlass — adapter sets
+``kernel_arg_is_directory = True`` and
+``kernel_project_dir_name = "catlass_op"``):
+    <batch_dir>/
+        manifest.yaml | manifest.json
+        <ref_dir>/<op_name>_ref.py
+        <kernel_dir>/<op_name>/
+            kernel.py                 (or <op_name>_kernel.py — fallback)
+            catlass_op/               ← passed to /autoresearch --kernel
+                kernel/, include/, src/, CMakeLists.txt
 
 YAML support is optional (requires pyyaml). JSON works with stdlib only.
 """
@@ -31,7 +43,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 PROGRESS_FILENAME = "batch_progress.json"
 LOG_FILENAME = "batch.log"
@@ -83,11 +95,33 @@ def load_manifest(manifest_path: Path) -> dict:
     return data
 
 
-def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
-    """Apply the <op_name>_{ref,kernel}.py naming convention and return resolved
-    case dicts. Pre-flight check that every referenced file exists.
+def resolve_kernel_paths_for_op(kernel_dir: Path, op_name: str
+                                ) -> Tuple[Path, Path]:
+    """Thin wrapper around ``task_layout.resolve_kernel_paths_for_op``
+    that hooks WA settings (``target_dsl()``) + maps the layout-layer
+    exceptions into ``ManifestError`` for uniform batch error format."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from utils.settings import target_dsl  # noqa: E402
+    from akg_agents.op.utils.task_layout import (  # noqa: E402
+        resolve_kernel_paths_for_op as _resolve,
+    )
+    from akg_agents.op.verifier.adapters.factory import (  # noqa: E402
+        get_dsl_adapter,
+    )
+    try:
+        return _resolve(get_dsl_adapter(target_dsl()), kernel_dir, op_name)
+    except (FileNotFoundError, ValueError) as e:
+        raise ManifestError(str(e)) from e
 
-    Returns a list of dicts with keys: op_name, ref (abs path), kernel (abs path).
+
+def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
+    """Apply the per-DSL naming convention and return resolved case dicts.
+    Pre-flight check that every referenced file exists.
+
+    Returns a list of dicts with keys: op_name, ref (abs path), kernel
+    (abs path; the value passed to ``/autoresearch --kernel`` — file or
+    directory depending on DSL), kernel_module (abs path; the importable
+    ``.py`` wrapper for verify.py — always a file).
     """
     if mode not in VALID_MODES:
         raise ManifestError(f"mode must be one of {VALID_MODES}, got {mode!r}")
@@ -128,16 +162,18 @@ def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
         if not ref_path.is_file():
             raise ManifestError(f"{ref_path.relative_to(batch_dir)} not found")
 
-        kernel_path = kernel_dir / f"{op_name}_kernel.py"
-        if not kernel_path.is_file():
-            raise ManifestError(
-                f"{kernel_path.relative_to(batch_dir)} not found"
-            )
+        try:
+            kernel_arg, kernel_module = resolve_kernel_paths_for_op(
+                kernel_dir, op_name)
+        except ManifestError as e:
+            # Make message relative to batch_dir for consistency with ref.
+            raise ManifestError(str(e))
 
         cases.append({
             "op_name": op_name,
             "ref": str(ref_path),
-            "kernel": str(kernel_path),
+            "kernel": str(kernel_arg),
+            "kernel_module": str(kernel_module),
         })
 
     return cases

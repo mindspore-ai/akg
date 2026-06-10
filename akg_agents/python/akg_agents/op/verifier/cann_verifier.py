@@ -29,6 +29,9 @@ import json
 import yaml
 from jinja2 import Template
 from akg_agents import get_project_root
+from akg_agents.core.worker.interface import (
+    DEFAULT_WARMUP_TIMES, DEFAULT_RUN_TIMES,
+)
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter,
 )
@@ -189,7 +192,8 @@ def generate_cann_verify_project(verifier, impl_code: str, verify_dir: str, devi
 
 
 def generate_cann_profile_project(verifier, verify_dir: str, device_id: int = 0,
-                                   warmup_times: int = 5, run_times: int = 50,
+                                   warmup_times: int = DEFAULT_WARMUP_TIMES,
+                                   run_times: int = DEFAULT_RUN_TIMES,
                                    skip_base: bool = False):
     """Generate CANN-Bench profile project files into verify_dir.
 

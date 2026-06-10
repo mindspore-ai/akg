@@ -21,7 +21,16 @@ import platform
 logger = logging.getLogger(__name__)
 
 
-def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300, cwd=None):
+# Default wall-clock cap for ``run_command`` when the caller doesn't pass
+# an explicit ``timeout=``. This is a generic "subprocess hasn't hung"
+# floor; long-running invocations (e.g. profile / cmake) override with
+# their own value. Reuses the worker-protocol default so all of
+# akg_agents' "subprocess didn't hang" defaults read from one place.
+from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S as _SUBPROCESS_DEFAULT
+
+
+def run_command(cmd_list, cmd_msg="untitled_command", env=None,
+                timeout=_SUBPROCESS_DEFAULT, cwd=None):
     """
     运行命令行程序
 

@@ -14,17 +14,27 @@
 # limitations under the License.
 
 """
-PreToolUse hook for Edit/Write — thin dispatcher.
+PreToolUse hook for Edit/Write — path-driven gate.
 
-Per-phase allow/block for file targets lives in phase_machine.check_edit.
-This hook handles two concerns check_edit can't express as a pure function:
+Two clean branches, no fallback chains:
 
-  1. Files outside the active task dir are rejected. The agent's job is to
-     optimise the kernel inside <task_dir>; touching the source workspace/
-     files, repo configs, or any other path outside the task is out of
-     scope (e.g., the agent must not "fix" a workspace/<op>_ref.py the
-     user shared with git / CI).
-  2. EDIT-phase dirty-tree gate — needs live git state, not just phase.
+  Branch 1: edit target lives inside an AR task_dir (has a
+  ``.ar_state/state.json`` ancestor) → that task's ``phase`` +
+  ``editable_files`` rules apply via ``phase_machine.check_edit``. Session
+  ownership is irrelevant here — file path is a hard fact, state.owner is
+  a soft hint that can drift out of sync with the live process.
+
+  Branch 2: edit target is outside every AR task_dir. If the current
+  session owns a task in flight, this is an off-flow edit ("the agent's
+  scope is its task_dir") → block. If no session owns anything (pre-
+  activation, or operator setup), allow.
+
+Note: cross-task edits (session owns T1, edit lands inside T2) are
+handled by Branch 1's per-task rules, NOT by the off-flow check —
+T2's editable_files is the right gate for that case.
+
+The EDIT-phase dirty-tree git gate runs alongside Branch 1 when the
+edit lands on an editable file.
 """
 import os
 import subprocess
@@ -127,60 +137,80 @@ def _edit_phase_git_gate(task_dir: str, editable_files):
 _WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
+def _task_dir_from_edit_target(file_path: str):
+    """Walk up from ``file_path`` looking for a ``.ar_state/state.json``
+    sibling. The first ancestor that has one is the task this edit
+    belongs to. Returns None if no ancestor matches (edit is outside
+    every AR task)."""
+    p = os.path.abspath(file_path)
+    while True:
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        if os.path.isfile(os.path.join(parent, ".ar_state", "state.json")):
+            return parent
+        p = parent
+
+
 def main():
     hook_input = read_hook_input()
     if hook_input.get("tool_name", "") not in _WRITE_TOOLS:
         sys.exit(0)
 
-    task_dir = get_task_dir()
-    if not task_dir:
-        sys.exit(0)
-    touch_heartbeat(task_dir)
-
     file_path = extract_target_path(hook_input)
     if not file_path:
         sys.exit(0)
 
-    rel = _rel_to_task(file_path, task_dir)
-    if rel is None:
-        # Out-of-scope edit. Block instead of allowing — agent should only
-        # touch files inside the active task_dir. Most common offender:
-        # editing the source workspace/<op>_ref.py the user passed via
-        # --ref. scaffold has already copied it into task_dir, so any
-        # legitimate "fix the ref" decision belongs to a fresh /autoresearch
-        # invocation by the user, not a side-effect of the current task.
+    target_task = _task_dir_from_edit_target(file_path)
+
+    # Branch 1: edit lands inside an AR task → that task's editability
+    # rules apply, regardless of who owns it.
+    if target_task:
+        touch_heartbeat(target_task)
+        # rel is guaranteed non-None: _task_dir_from_edit_target returned
+        # target_task BECAUSE file_path is inside it.
+        rel = _rel_to_task(file_path, target_task)
+
+        from task_config import load_task_config
+        config = load_task_config(target_task)
+        editable_files = list(config.editable_files) if config else []
+
+        phase = read_phase(target_task)
+        # plan_items.xml in DIAGNOSE is gated on the three-state action;
+        # in EDIT it's gated on pending-settle recovery. Compute both so
+        # check_edit can apply the rules.
+        diag_action = (diagnose_state(target_task).action
+                       if phase == DIAGNOSE else None)
+        pending = (phase == EDIT and _has_pending_settle(target_task))
+        ok, reason = check_edit(phase, rel, editable_files,
+                                diagnose_action=diag_action,
+                                pending_settle=pending)
+        if not ok:
+            block_with_guidance(target_task, reason)
+
+        # Phase says OK. For EDIT writes to editable files, also check
+        # the git state gate (dirty tree on entry to a new round).
+        if phase == EDIT and rel in set(editable_files):
+            _edit_phase_git_gate(target_task, editable_files)
+
+        sys.exit(0)
+
+    # Branch 2: edit is outside every AR task. Only meaningful when a
+    # session has an active claim — then this is an off-flow edit (the
+    # agent should stay within its task_dir). With no active claim
+    # there's nothing to enforce: pre-activation scaffolding or
+    # operator-side repo work is legitimate.
+    owned = get_task_dir()
+    if owned:
         block_with_guidance(
-            task_dir,
+            owned,
             f"Edit target {file_path!r} is outside the active task "
-            f"directory ({task_dir}). The agent's scope is the task_dir "
+            f"directory ({owned}). The agent's scope is the task_dir "
             f"only — source files in workspace/, repo configs, hooks, "
             f"and anything else outside are off-limits. If you need to "
             f"change a source --ref or --kernel file, exit the task and "
             f"re-run /autoresearch with the corrected source."
         )
-
-    from task_config import load_task_config
-    config = load_task_config(task_dir)
-    editable_files = list(config.editable_files) if config else []
-
-    phase = read_phase(task_dir)
-    # plan_items.xml in DIAGNOSE is gated on the three-state action; in
-    # EDIT it's gated on pending-settle recovery. Compute both so
-    # check_edit can apply the rules.
-    diag_action = (diagnose_state(task_dir).action
-                   if phase == DIAGNOSE else None)
-    pending = (phase == EDIT and _has_pending_settle(task_dir))
-    ok, reason = check_edit(phase, rel, editable_files,
-                            diagnose_action=diag_action,
-                            pending_settle=pending)
-    if not ok:
-        block_with_guidance(task_dir, reason)
-
-    # Phase says OK. For EDIT writes to editable files, also check the git
-    # state gate (dirty tree on entry to a new round).
-    if phase == EDIT and rel in set(editable_files):
-        _edit_phase_git_gate(task_dir, editable_files)
-
     sys.exit(0)
 
 

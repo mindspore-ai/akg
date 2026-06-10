@@ -14,14 +14,35 @@
 
 """AscendC DSL adapter."""
 
-from typing import Any, Optional
+import logging
+import os
+import shutil
+from typing import Any, Dict, Optional
 
+from jinja2 import Template
+
+from akg_agents import get_project_root
 from .base import DSLAdapter
+
+logger = logging.getLogger(__name__)
+
+# Templates for the AscendC compile project. The impl_code is exec'd in an
+# isolated namespace; it must populate ``host_tiling_src`` /
+# ``python_bind_src`` / ``kernel_src`` strings, which are then dropped
+# alongside a rendered CMakeLists.txt + copied run.sh.
+_CMAKE_TEMPLATE_PATH = os.path.join(
+    get_project_root(), "op", "resources", "templates", "cmake_template.j2"
+)
+_RUN_TEMPLATE_PATH = os.path.join(
+    get_project_root(), "utils", "compile_tools", "ascend_compile", "run.sh"
+)
 
 
 class DSLAdapterAscendC(DSLAdapter):
     """Adapter for AscendC DSL."""
-    
+
+    impl_func_name_template = "{op_name}_kernel"
+
     def get_import_statements(self, framework: str) -> str:
         """Return AscendC import statements."""
         return "import sys, os\nimport torch_npu\nimport subprocess\n"
@@ -46,46 +67,11 @@ class DSLAdapterAscendC(DSLAdapter):
         code = f"""        # 处理器
         # 映射架构到 SOC_VERSION
         # arch 变量由验证模板在外层设置
-        ARCH_TO_SOC_VERSION = {{
-            "ascend910b1": "Ascend910B1",
-            "ascend910b2": "Ascend910B2",
-            "ascend910b2c": "Ascend910B2C",
-            "ascend910b3": "Ascend910B3",
-            "ascend910b4": "Ascend910B4",
-            "ascend310p3": "Ascend310P3",
-            "ascend910_9362": "Ascend910_9362",
-            "ascend910_9372": "Ascend910_9372",
-            "ascend910_9381": "Ascend910_9381",
-            "ascend910_9382": "Ascend910_9382",
-            "ascend910_9391": "Ascend910_9391",
-            "ascend910_9392": "Ascend910_9392",
-            "ascend950dt_95a": "Ascend950DT_95A",
-            "ascend950pr_950z": "Ascend910_950z",
-            "ascend950pr_9572": "Ascend910_9572",
-            "ascend950pr_9574": "Ascend910_9574",
-            "ascend950pr_9575": "Ascend910_9575",
-            "ascend950pr_9576": "Ascend910_9576",
-            "ascend950pr_9577": "Ascend910_9577",
-            "ascend950pr_9578": "Ascend910_9578",
-            "ascend950pr_9579": "Ascend910_9579",
-            "ascend950pr_957b": "Ascend910_957b",
-            "ascend950pr_957d": "Ascend910_957d",
-            "ascend950pr_9581": "Ascend910_9581",
-            "ascend950pr_9582": "Ascend910_9582",
-            "ascend950pr_9584": "Ascend910_9584",
-            "ascend950pr_9587": "Ascend910_9587",
-            "ascend950pr_9588": "Ascend910_9588",
-            "ascend950pr_9589": "Ascend910_9589",
-            "ascend950pr_958a": "Ascend910_958a",
-            "ascend950pr_958b": "Ascend910_958b",
-            "ascend950pr_9591": "Ascend910_9591",
-            "ascend950pr_9592": "Ascend910_9592",
-            "ascend950pr_9599": "Ascend910_9599",
-        }}
+        from akg_agents.op.utils.arch_normalize import ascend_soc_version
 
-        SOC_VERSION = ARCH_TO_SOC_VERSION.get(arch)
+        SOC_VERSION = ascend_soc_version(arch)
         if SOC_VERSION is None:
-            raise ValueError(f"不支持的ascend架构: {{arch}}，支持的架构: {{list(ARCH_TO_SOC_VERSION.keys())}}")
+            raise ValueError(f"unsupported Ascend arch for AscendC SOC_VERSION: {{arch}}")
         try:
             result = subprocess.run(["bash", "run.sh", "-v", SOC_VERSION], check=True, capture_output=True, text=True)
             if result.returncode != 0:
@@ -107,14 +93,55 @@ class DSLAdapterAscendC(DSLAdapter):
 """
         return code
     
-    def needs_binary_io(self) -> bool:
-        """AscendC doesn't need binary I/O."""
-        return False
-    
-    def needs_compilation(self) -> bool:
-        """AscendC needs compilation."""
-        return True
-    
+    static_check_via_python_ast = False  # C++ kernel src, no Python AST
+
+    def materialize_impl(self, impl_code: str, verify_dir: str,
+                         op_name: str, framework: str,
+                         dsl_name: str,
+                         task_info: Optional[Dict[str, Any]] = None,
+                         config: Optional[Dict[str, Any]] = None) -> None:
+        """渲染 CMakeLists.txt + 拷 run.sh，并把 impl_code 在隔离 namespace
+        中 exec，取 ``host_tiling_src`` / ``python_bind_src`` / ``kernel_src``
+        三段字符串写到对应文件。"""
+        try:
+            cmake_file = os.path.join(verify_dir, "CMakeLists.txt")
+            with open(_CMAKE_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+                template = Template(f.read())
+            cmake_code = template.render(op_name=op_name)
+            with open(cmake_file, "w", encoding="utf-8") as f:
+                f.write(cmake_code)
+            shutil.copy(_RUN_TEMPLATE_PATH, verify_dir)
+
+            ns: Dict[str, Any] = {}
+            try:
+                compile(impl_code, "<string>", "exec")
+                exec(impl_code, ns)
+            except Exception as e:
+                raise Exception(f"Error in generated code: {e}")
+
+            host_tiling_src = ns.get('host_tiling_src')
+            python_binding_src = ns.get('python_bind_src')
+            kernel_src = ns.get('kernel_src')
+
+            if host_tiling_src is None:
+                raise Exception("host_tiling_src is None - 生成的代码中缺少host侧tiling部分")
+            if python_binding_src is None:
+                raise Exception("python_bind_src is None - 生成的代码中缺少内核调用python_bind部分")
+            if kernel_src is None:
+                raise Exception("kernel_src is None - 生成的代码中缺少kernel主函数部分")
+
+            with open(os.path.join(verify_dir, f"{op_name}_tiling.cpp"), "w") as f:
+                f.write(host_tiling_src)
+            with open(os.path.join(verify_dir, "pybind11.cpp"), "w") as f:
+                f.write(python_binding_src)
+            with open(os.path.join(verify_dir, f"{op_name}_kernel.cpp"), "w") as f:
+                f.write(kernel_src)
+
+            logger.info(f"[{op_name}] AscendC项目文件生成完成")
+        except Exception as e:
+            logger.error(f"AscendC项目生成失败: {e}")
+            raise Exception(f"AscendC项目生成失败: {e}")
+
     def benchmark_impl(self, impl_func_name: str, inputs: str, 
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
@@ -128,4 +155,3 @@ class DSLAdapterAscendC(DSLAdapter):
         # AscendC profiling is handled by msprof in kernel_verifier
         # This method is not used for ascendc
         return ""
-

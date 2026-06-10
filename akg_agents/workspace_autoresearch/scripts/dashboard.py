@@ -220,7 +220,7 @@ def render(task_dir, history_offset=0, history_window=None):
     # plan been validated yet?". Derive it here from plan.md presence so
     # the dashboard label stays identical for users.
     status = "active" if os.path.exists(_pm.plan_path(task_dir)) else "no_plan"
-    updated_raw = progress.get("last_updated", "?")
+    updated_raw = progress.get("last_touched", "?")
     # Convert UTC to local time
     try:
         from datetime import datetime

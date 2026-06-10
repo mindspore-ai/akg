@@ -43,8 +43,9 @@ reports an error.
 | 5 | DSL compliance | AST walk over the module and the kernel class body | no `@<triton>.<decorator>` kernel defined; kernel defined but never launched via `kernel[grid](...)`; `forward()` calls a method in `torch_compute_ops_hard`; `forward()` calls a method in `torch_compute_ops_soft` while no kernel is launched |
 | 6 | Autotune | regex + paren matching | `@<triton_module_name>.<decorator_attr>(...)` missing `<required_kwarg>=` |
 
-Stages 5 and 6 run only when `dsl.startswith(dsl_compliance_prefix)`
-(default prefix `triton`).
+Stage 5 runs when `dsl.startswith(<p>)` matches any prefix in
+`dsl_compliance_prefixes` (default `[triton, tilelang]`). Stage 6
+(autotune) only matches the `triton` prefix.
 
 ## 4. Policy (`op/config/code_checker.yaml`)
 
@@ -62,7 +63,11 @@ key raises `KeyError` or `re.error` at module import.
 | `kernel_class_name` | str | class name the AST walker searches for in stage 5 |
 | `kernel_forward_method` | str | method within that class whose body is scanned |
 | `triton_module_name` | str | top-level namespace for the Triton decorator match |
-| `dsl_compliance_prefix` | str | DSL-string prefix that activates stages 5–6 |
+| `dsl_compliance_prefixes` | list[str] | DSL-string prefix set that activates stage 5 (triton + tilelang). Stage 6 only matches triton |
+| `tilelang_compliance.module_name` | str | top-level namespace for the TileLang decorator match |
+| `tilelang_compliance.decorators` | list[str] | attribute names under `<tilelang_module_name>` recognized as kernel decorators |
+| `tilelang_compliance.prim_func_attr` | str | the `@T.prim_func` attr name |
+| `tilelang_compliance.tl_namespace` | str | common alias for the TileLang language module (`T`) |
 | `stray_text.min_run` | int | minimum consecutive characters required to flag |
 | `stray_text.unicode_ranges` | list of `[lo, hi]` | code-point ranges scanned in stage 4 |
 | `autotune.decorator_attr` | str | attribute name off `<triton_module_name>` that triggers stage 6 |

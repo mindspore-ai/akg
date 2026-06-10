@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Auto-discover op names in a batch dir by the <op>_ref.py / <op>_kernel.py
-naming convention, and optionally write/update the manifest's ops list.
+"""Auto-discover op names in a batch dir by the per-DSL kernel layout
+(see ``manifest.resolve_kernel_paths_for_op``) paired with the universal
+``<op>_ref.py`` naming, and optionally write/update the manifest's ops list.
 
 Usage:
     # Just print the discovered ops (one per line, sorted):
@@ -29,9 +30,11 @@ Usage:
     python scripts/batch/discover.py <batch_dir> \\
         --filter "*norm" --exclude "groupnorm"
 
-Pairing rule: an op is included only if BOTH <ref_dir>/<op>_ref.py and
-<kernel_dir>/<op>_kernel.py exist; unpaired files are printed as
-warnings on stderr.
+Pairing rule: an op is included only if BOTH ``<ref_dir>/<op>_ref.py``
+exists AND ``manifest.resolve_kernel_paths_for_op(<kernel_dir>, <op>)``
+accepts the kernel-side layout for the configured DSL (flat
+``<op>_kernel.py`` or multi-file ``<op>/{kernel.py,catlass_op/}``).
+Unpaired sides are printed as warnings on stderr.
 """
 from __future__ import annotations
 
@@ -45,26 +48,52 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as mf
 
 
-def _scan_dir(dir_path: Path, suffix: str) -> set[str]:
-    """Return op names whose files match <op_name><suffix>.py in dir_path."""
-    if not dir_path.is_dir():
-        sys.exit(f"directory not found: {dir_path}")
+def _scan_ref_ops(ref_path: Path) -> set[str]:
+    """Universal across DSLs: every op exposes ``<op>_ref.py``."""
+    if not ref_path.is_dir():
+        sys.exit(f"directory not found: {ref_path}")
     out: set[str] = set()
-    pattern = f"*{suffix}.py"
-    for p in dir_path.glob(pattern):
-        op = p.stem[: -len(suffix)]
+    for p in ref_path.glob("*_ref.py"):
+        op = p.stem[: -len("_ref")]
         if op:
             out.add(op)
+    return out
+
+
+def _scan_kernel_ops(kern_path: Path) -> set[str]:
+    """Enumerate kernel-side ops by delegating the per-DSL layout rule to
+    ``manifest.resolve_kernel_paths_for_op``. discover only collects
+    *candidate names* from the filesystem (flat-file stems + subdir
+    names); the resolver decides which ones actually satisfy the DSL's
+    convention. One owner for the rule — manifest — instead of forking
+    flat-vs-multi-file logic here."""
+    if not kern_path.is_dir():
+        sys.exit(f"directory not found: {kern_path}")
+    candidates: set[str] = set()
+    for p in kern_path.glob("*_kernel.py"):
+        op = p.stem[: -len("_kernel")]
+        if op:
+            candidates.add(op)
+    for child in kern_path.iterdir():
+        if child.is_dir():
+            candidates.add(child.name)
+    out: set[str] = set()
+    for op in candidates:
+        try:
+            mf.resolve_kernel_paths_for_op(kern_path, op)
+            out.add(op)
+        except mf.ManifestError:
+            continue
     return out
 
 
 def discover(batch_dir: Path, ref_dir: str, kernel_dir: str,
              include_glob: str | None, exclude_globs: list[str]) -> list[str]:
     ref_path = (batch_dir / ref_dir).resolve()
-    ref_ops = _scan_dir(ref_path, "_ref")
+    ref_ops = _scan_ref_ops(ref_path)
 
     kern_path = (batch_dir / kernel_dir).resolve()
-    kern_ops = _scan_dir(kern_path, "_kernel")
+    kern_ops = _scan_kernel_ops(kern_path)
 
     only_ref = ref_ops - kern_ops
     only_kern = kern_ops - ref_ops

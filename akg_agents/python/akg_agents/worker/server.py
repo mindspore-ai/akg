@@ -6,6 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 import uvicorn
 
+from akg_agents.core.worker.interface import (
+    DEFAULT_EVAL_TIMEOUT_S,
+    DEFAULT_GEN_REF_TIMEOUT_S,
+)
 from akg_agents.core.worker.local_worker import LocalWorker
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.op.utils.json_safe import sanitize_floats
@@ -58,7 +62,7 @@ async def verify(
     package: UploadFile = File(...),
     task_id: str = Form(...),
     op_name: str = Form(...),
-    timeout: int = Form(300)
+    timeout: int = Form(DEFAULT_EVAL_TIMEOUT_S)
 ):
     """
     Execute verification task.
@@ -122,7 +126,7 @@ async def generate_reference(
     package: UploadFile = File(...),
     task_id: str = Form(...),
     op_name: str = Form(...),
-    timeout: int = Form(120)
+    timeout: int = Form(DEFAULT_GEN_REF_TIMEOUT_S)
 ):
     """
     Execute task_desc and generate reference data.
@@ -272,18 +276,87 @@ async def release_device(
 
 @app.get("/api/v1/status")
 async def status():
-    """Get worker status."""
+    """Daemon liveness + identity. ``log_file`` echoes the daemon's stdout
+    log path (set by worker_service via ``AKG_WORKER_LOG_FILE`` env) so
+    akg_cli's remote probe tails the actual file instead of guessing."""
+    log_file = os.environ.get("AKG_WORKER_LOG_FILE") or ""
     if worker is None:
-        return {"status": "initializing"}
-    
+        return {"status": "initializing", "log_file": log_file}
+
     backend, arch, devices = get_worker_config()
     return {
         "status": "ready",
         "backend": backend,
         "arch": arch,
         "devices": devices,
-        # "available_devices": worker.device_pool.qsize() # DevicePool uses Queue
+        "log_file": log_file,
     }
+
+
+@app.get("/api/v1/health")
+async def health():
+    """非阻塞健康探活 —— 验"daemon 接 verify 时的请求路径还活着"，但
+    不抢占设备：
+
+      - 用 ``asyncio.Queue.get_nowait()`` 试取一次 device，能取就立刻
+        放回；空队列（满载）当作 healthy（"忙不是坏"），不报 degraded
+      - 整个 handler 5s 超时；超时仅当事件循环本身卡了
+
+    /status 只验证 HTTP server 在线；/health 走一遍真实的 queue 操作
+    路径，能抓出"event loop 卡住"或"queue 锁竞争"那类故障。**不会**
+    阻塞等设备，所以满载 worker 不会被误判 degraded。"""
+    import asyncio
+    if worker is None:
+        return {"status": "initializing", "healthy": False, "free": 0}
+
+    backend, arch, devices = get_worker_config()
+    device_pool = worker.device_pool
+    pool = device_pool.available_devices
+    base = {
+        "status": "ready",
+        "backend": backend,
+        "arch": arch,
+        "devices": devices,
+        "free": pool.qsize(),
+        "healthy": False,
+    }
+
+    async def _probe():
+        # Take the same condition lock real acquire_device / release_device
+        # use, so the brief get+put doesn't race with a waiter that just
+        # observed "queue empty" and entered condition.wait(). Without
+        # this lock, get_nowait + put_nowait could shuttle the queue
+        # through an empty window, leaving a real acquire waiter sleeping
+        # forever (no one calls notify between the two operations).
+        async with device_pool.condition:
+            try:
+                device_id = pool.get_nowait()
+            except asyncio.QueueEmpty:
+                # All devices busy — daemon is fine, just at capacity.
+                return None
+            pool.put_nowait(device_id)
+            # notify any waiter that may have entered wait() while we
+            # held the lock between get and put (timing-wise impossible
+            # since we hold the lock throughout, but cheap insurance).
+            device_pool.condition.notify()
+            return device_id
+
+    try:
+        device_id = await asyncio.wait_for(_probe(), timeout=5.0)
+        base["healthy"] = True
+        if device_id is not None:
+            base["probed_device"] = device_id
+        else:
+            base["note"] = "all devices busy (healthy, just at capacity)"
+        return base
+    except asyncio.TimeoutError:
+        base["error"] = "event loop unresponsive (>5s) —— 事件循环可能阻塞"
+        logger.warning("健康探活超时：event loop 5 秒内未响应")
+        return base
+    except Exception as e:
+        base["error"] = f"健康探活异常：{type(e).__name__}: {e}"
+        logger.warning(f"健康探活异常：{e}")
+        return base
 
 
 def start_server(host: Optional[str] = None, port: Optional[int] = None):

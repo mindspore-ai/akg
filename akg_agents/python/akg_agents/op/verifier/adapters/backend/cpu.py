@@ -16,6 +16,8 @@
 
 from typing import Optional, Any
 
+from akg_agents.op.utils.arch_normalize import CPU_ARCH_PATTERN
+
 from .base import BackendAdapter
 
 
@@ -40,6 +42,4 @@ class BackendAdapterCpu(BackendAdapter):
     
     def validate_arch(self, arch: str) -> bool:
         """Validate CPU architecture."""
-        supported_archs = ["x86_64", "aarch64"]
-        return arch in supported_archs
-
+        return bool(CPU_ARCH_PATTERN.match((arch or "").lower()))
