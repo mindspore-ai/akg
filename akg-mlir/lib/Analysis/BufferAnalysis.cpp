@@ -602,22 +602,6 @@ void BufferAnalysis::UpdateStoreOpInfo(OpInfo *opInfo, const Value storeValue, L
 }
 
 int64_t BufferAnalysis::getExtraBufferSizeByFactor(Operation *op) const {
-  // Reference: ExtraBuffer.cpp getExtraBufferSizeForReduceOp (line 207-239)
-  // and BufferUtils.cpp getExtraBufferSizeByFactor
-  //
-  // ExtraBuffer.cpp logic:
-  //   if (auto reduceOp = dyn_cast<linalg::ReduceOp>(op)) {
-  //     std::optional<int64_t> bufSize =
-  //         unit == BufferSizeUnit::ELEMENT
-  //             ? utils::traceToAllocMaxSize(dpsOp.getDpsInputOperand(0)->get())
-  //             : 1;  // FACTOR mode returns 1
-  //     return bufSize;
-  //   }
-  //
-  // BufferUtils.cpp applies this factor:
-  //   return *res * reduceOp.getNumResults() * getValDataTypeWeight(input)
-
-  // Check if this is a reduce operation by checking for reduction_axes attribute
   if (!op->hasAttr("reduction_axes")) {
     return 0;
   }
@@ -846,20 +830,6 @@ void BufferAnalysis::createLiveRangesFromBufferLife(const llvm::DenseSet<Value> 
 }
 
 void BufferAnalysis::addExtraBufferLiveRanges(const DataTypeWeightMap &dataTypeWeightMap) {
-  // Add extra buffer live ranges for reduce operations
-  // Reference: BufferUtils.cpp gatherLiveRanges - adds extra weight for reduce ops
-  //
-  // The pattern in BufferUtils.cpp (line 421-428):
-  //   if (auto extraWeight = getExtraBufferSizeByFactor(&op)) {
-  //     extraWeight *= std::max(
-  //         (uint32_t)1, getValMultiBuffer(op.getResult(0), 0) +
-  //                          getValMultiBuffer(
-  //                              cast<linalg::LinalgOp>(op).getDpsInits()[0], 0));
-  //     LDBG("Appending " << op << " with " << extraWeight);
-  //     liveRanges.emplace_back(currentOpIndex, currentOpIndex, extraWeight);
-  //   }
-
-  // Build a map from linearOperation index to scopeTime
   llvm::DenseMap<size_t, uint32_t> opIndexToScopeTime;
   uint32_t scopeTime = 0;
   for (size_t i = 0; i < linearOperation.size(); ++i) {
