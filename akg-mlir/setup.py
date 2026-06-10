@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import multiprocessing
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
@@ -35,13 +36,58 @@ def check_env_flag(name: str, default: str = "OFF") -> bool:
     return val.upper() in ("ON", "1", "YES", "TRUE", "Y")
 
 
-def read_version() -> str:
-    """Read the package version from version.txt."""
+def get_version() -> str:
+    """Read the package version from env or version.txt."""
+    version_env = os.getenv("AKG_VERSION")
+    if version_env:
+        return version_env.replace("\n", "")
     try:
         version_file = Path(__file__).parent / "version.txt"
         return version_file.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        return "3.0.0"
+        logging.info("version.txt not found.")
+    return "2.10.0.dev" + get_build_time()
+
+
+def get_commit_id() -> str:
+    """Get git commit id from env or git command."""
+    commit_id_env = os.getenv("COMMIT_ID")
+    if commit_id_env:
+        return commit_id_env.replace("\n", "")
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=BASE_DIR,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        logging.info("get commit failed! error message: %s", e.stderr)
+        return "unknown"
+
+
+def get_build_time() -> str:
+    """Get build timestamp."""
+    return datetime.now().strftime("%Y%m%d")
+
+
+def build_dependencies(pkg_dir: Path) -> None:
+    """Generate version.py and .commit_id files."""
+    version_content = f"__version__ = '{VERSION}'\n__commit_id__ = '{COMMIT_ID}'\n"
+    version_file = pkg_dir / "akg" / "akg_mlir" / "version.py"
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    version_file.write_text(version_content, encoding="utf-8")
+    logger.info("Generated version.py: %s", version_file)
+
+    src_version_file = BASE_DIR / "python" / "akg_mlir" / "version.py"
+    src_version_file.write_text(version_content, encoding="utf-8")
+    logger.info("Updated source version.py: %s", src_version_file)
+
+    commit_file = pkg_dir / "akg" / "akg_mlir" / ".commit_id"
+    commit_file.write_text(f"__commit_id__ = '{COMMIT_ID}'\n", encoding="utf-8")
+    logger.info("Generated .commit_id: %s", commit_file)
 
 def get_cmake():
     """get cmake"""
@@ -66,7 +112,7 @@ def check_cmake_version(min_version: str = "3.15") -> None:
         )
         version_str = result.stdout.split()[2]
         logger.info("CMake version: %s", version_str)
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
         raise RuntimeError("CMake not found. Please install CMake >= 3.15") from e
 
 
@@ -79,6 +125,9 @@ CMAKE_BUILD_TYPE = os.getenv("CMAKE_BUILD_TYPE", "Release")
 AKG_CMAKE_ALREADY_BUILD = check_env_flag("AKG_CMAKE_ALREADY_BUILD", "OFF")
 AKG_CMAKE_BUILD_DIR = os.getenv("AKG_CMAKE_BUILD_DIR")
 MAX_JOBS = os.getenv("MAX_JOBS", str(multiprocessing.cpu_count()))
+VERSION = get_version()
+COMMIT_ID = get_commit_id()
+BUILD_TIME = get_build_time()
 
 
 class CMakeConfig:
@@ -227,6 +276,8 @@ class CMakeBuild(build_ext):
         if bin_src.exists():
             shutil.copytree(bin_src, bin_dst, symlinks=False)
 
+        build_dependencies(target_dir)
+
         self.verify_build(target_dir)
 
 
@@ -281,9 +332,13 @@ EXT_MODULES = [
     CMakeExtension("akg_mlir._mlir_libs._akgMlir"),
 ]
 
+PACKAGE_DATA = {
+    "akg_mlir": [".commit_id"],
+}
+
 setup(
     name="akg",
-    version=read_version(),
+    version=VERSION,
     author="The MindSpore Authors",
     author_email="contact@mindspore.cn",
     description="An optimizer for operators in Deep Learning Networks, which provides the ability to automatically "
@@ -298,6 +353,7 @@ setup(
     },
     license="Apache 2.0",
     include_package_data=True,
+    package_data=PACKAGE_DATA,
     cmdclass={
         "build": AkgBuild,
         "build_ext": CMakeBuild,
