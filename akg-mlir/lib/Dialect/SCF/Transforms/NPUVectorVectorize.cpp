@@ -42,8 +42,6 @@
 //      │   value's axes (deduped); then `npuvector.broadcast` rank-lifts to full store-index vector
 //      │   rank when needed (`resultDimToCtxAxis` = per-result-dim global axis, same as arith peer).
 //      ├── vectorizeArithOp → type conversion and arithmetic; scalar operands broadcast here.
-//      │   If **every** operand (after `valueMapping`) is non-`!npuvector`, clone the op (stay scalar);
-//      │   otherwise broadcast scalar slots to the peer `!npuvector` tile.
 //      └── vectorizeBroadcastScalar → npuvector.broadcast (rank-lift `dimension` must resolve; no fallback)
 //   4. Finalization
 //      ├── Elementwise: inline or loop-based transformation
@@ -310,11 +308,12 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
     lowerBound = valueMapping->lookupOrDefault(lowerBound);
   }
 
-  Value tripCount = builder.create<arith::SubIOp>(loc, upperBound, lowerBound);
-
-  Value vectorSize = builder.create<arith::MinSIOp>(loc, tripCount, maxStepValue);
-
-  return vectorSize;
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value, 3> operands{upperBound, lowerBound, maxStepValue};
+  SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
+                                      getAffineDimExpr(2, context)};
+  AffineMap minMap = AffineMap::get(/*dimCount=*/3, /*symbolCount=*/0, minExprs, context);
+  return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
 static VectorizationMode getVectorizationMode(scf::ForOp loop, int64_t &maxStepFromAttr) {
@@ -500,6 +499,13 @@ static vector::CombiningKind convertToCombiningKind(arith::AtomicRMWKind kind) {
 
 static std::optional<int64_t> tryConstantIndex(Value indexValue);
 
+static Value createAffineAdd(OpBuilder &builder, Location loc, Value lhs, Value rhs);
+
+static Value createAffineSub(OpBuilder &builder, Location loc, Value lhs, Value rhs);
+
+static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Value upperBound, Value lowerBound,
+                                           int64_t alignment);
+
 static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   Location loc = ctx.scalarLoop.getLoc();
 
@@ -553,11 +559,14 @@ static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
       }
     } else {
       Value vfAlign = ctx.allVectorSizeValues[dim];
-      if (!vfAlign) vfAlign = ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.getActualStep());
-      Value tripCount = ctx.builder.create<arith::SubIOp>(loc, upperBound, lowerBound);
-      Value numIterations = ctx.builder.create<arith::DivSIOp>(loc, tripCount, vfAlign);
-      Value alignedTripCount = ctx.builder.create<arith::MulIOp>(loc, numIterations, vfAlign);
-      upperBound = ctx.builder.create<arith::AddIOp>(loc, alignedTripCount, lowerBound);
+      if (vfAlign) {
+        Value tripCount = createAffineSub(ctx.builder, loc, upperBound, lowerBound);
+        Value numIterations = ctx.builder.create<arith::DivSIOp>(loc, tripCount, vfAlign);
+        Value alignedTripCount = ctx.builder.create<arith::MulIOp>(loc, numIterations, vfAlign);
+        upperBound = createAffineAdd(ctx.builder, loc, alignedTripCount, lowerBound);
+      } else {
+        upperBound = createAffineAlignedUpperBound(ctx.builder, loc, upperBound, lowerBound, ctx.getActualStep());
+      }
     }
   }
 
@@ -580,6 +589,60 @@ static std::optional<int64_t> tryConstantIndex(Value indexValue) {
     if (auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) return integerAttr.getValue().getSExtValue();
   }
   return std::nullopt;
+}
+
+static Value createAffineBinaryApply(OpBuilder &builder, Location loc, Value lhs, Value rhs, AffineExpr expr) {
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value, 2> operands{lhs, rhs};
+  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, expr, context);
+  return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
+}
+
+static Value createAffineAdd(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
+  MLIRContext *context = builder.getContext();
+  AffineExpr expr = getAffineDimExpr(0, context) + getAffineDimExpr(1, context);
+  return createAffineBinaryApply(builder, loc, lhs, rhs, expr);
+}
+
+static Value createAffineSub(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
+  MLIRContext *context = builder.getContext();
+  AffineExpr expr = getAffineDimExpr(0, context) - getAffineDimExpr(1, context);
+  return createAffineBinaryApply(builder, loc, lhs, rhs, expr);
+}
+
+static Value createAffineMinWithConstant(OpBuilder &builder, Location loc, Value value, int64_t constant) {
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value, 1> operands{value};
+  SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
+  AffineMap minMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, minExprs, context);
+  return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
+}
+
+static Value createAffineMax(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value, 2> operands{lhs, rhs};
+  SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
+  AffineMap maxMap = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, maxExprs, context);
+  return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
+}
+
+static Value createAffineMaxWithConstant(OpBuilder &builder, Location loc, Value value, int64_t constant) {
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value, 1> operands{value};
+  SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
+  AffineMap maxMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, maxExprs, context);
+  return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
+}
+
+static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Value upperBound, Value lowerBound,
+                                           int64_t alignment) {
+  MLIRContext *context = builder.getContext();
+  AffineExpr tripCount = getAffineDimExpr(0, context) - getAffineDimExpr(1, context);
+  AffineExpr alignedTripCount = tripCount.floorDiv(alignment) * alignment;
+  AffineExpr alignedUpperBound = alignedTripCount + getAffineDimExpr(1, context);
+  SmallVector<Value, 2> operands{upperBound, lowerBound};
+  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, alignedUpperBound, context);
+  return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
 static bool gatherVectorDynExtents(Value vectorVal, SmallVectorImpl<Value> &outExtents) {
@@ -1134,9 +1197,36 @@ static bool isScalarSlotOperand(unsigned opIdx, llvm::ArrayRef<unsigned> scalarI
 
 static bool lookupPeerBroadcastAxes(Operation *arithOp, LoopVectorizationCtx &ctx,
                                     const SmallVectorImpl<Value> &vecOperands, llvm::ArrayRef<unsigned> scalarIndices,
-                                    npuvector::NPUVectorType refVecType, SmallVectorImpl<int> &outAxes) {
+                                    npuvector::NPUVectorType &refVecType, SmallVectorImpl<int> &outAxes) {
   outAxes.clear();
   const unsigned refRank = static_cast<unsigned>(refVecType.getRank());
+
+  llvm::SmallDenseSet<int> unionAxes;
+  bool hasCompleteOrders = true;
+  for (Value operand : vecOperands) {
+    auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(operand.getType());
+    if (!nvt) continue;
+    auto it = ctx.valueDimOrder.find(operand);
+    if (it == ctx.valueDimOrder.end() || it->second.size() != static_cast<unsigned>(nvt.getRank())) {
+      hasCompleteOrders = false;
+      break;
+    }
+    for (int axis : it->second) {
+      if (axis < 0 || static_cast<unsigned>(axis) >= ctx.allVectorSizes.size()) return false;
+      unionAxes.insert(axis);
+    }
+  }
+  if (hasCompleteOrders && unionAxes.size() > refRank) {
+    outAxes.assign(unionAxes.begin(), unionAxes.end());
+    llvm::sort(outAxes);
+    SmallVector<int64_t> shape;
+    std::transform(outAxes.begin(), outAxes.end(), std::back_inserter(shape), [&ctx](int axis) {
+      return ctx.allVectorSizeValues[axis] ? ShapedType::kDynamic : ctx.allVectorSizes[axis];
+    });
+    refVecType = npuvector::NPUVectorType::get(shape, refVecType.getElementType());
+    return true;
+  }
+
   for (unsigned j = 0, e = vecOperands.size(); j < e; ++j) {
     if (isScalarSlotOperand(j, scalarIndices)) continue;
     Value vo = vecOperands[j];
@@ -1789,26 +1879,24 @@ static bool emitIfSlice(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc,
       opBuilder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[dimForTileOnSliceAxis]);
   }
   Value tileHalfOpenUpperBound =
-    opBuilder.create<arith::AddIOp>(loc, tileLowerBoundOnVectorAxis, vectorExtentAlongAxisForThisTile);
+    createAffineAdd(opBuilder, loc, tileLowerBoundOnVectorAxis, vectorExtentAlongAxisForThisTile);
 
   Value sliceLowerBoundOnVectorAxis = tileLowerBoundOnVectorAxis;
   if (sliceBounds.hasFiniteLowerInclusive) {
-    Value constantPredicateLowerInclusive = opBuilder.create<arith::ConstantIndexOp>(loc, sliceBounds.lowerInclusive);
     sliceLowerBoundOnVectorAxis =
-      opBuilder.create<arith::MaxSIOp>(loc, tileLowerBoundOnVectorAxis, constantPredicateLowerInclusive);
+      createAffineMaxWithConstant(opBuilder, loc, tileLowerBoundOnVectorAxis, sliceBounds.lowerInclusive);
   }
 
   Value sliceHalfOpenUpperBound = tileHalfOpenUpperBound;
   if (sliceBounds.hasFiniteUpperExclusive) {
-    Value constantPredicateUpperExclusive = opBuilder.create<arith::ConstantIndexOp>(loc, sliceBounds.upperExclusive);
     sliceHalfOpenUpperBound =
-      opBuilder.create<arith::MinSIOp>(loc, tileHalfOpenUpperBound, constantPredicateUpperExclusive);
+      createAffineMinWithConstant(opBuilder, loc, tileHalfOpenUpperBound, sliceBounds.upperExclusive);
   }
 
   Value sliceHalfOpenUpperClampedNotBelowSliceLower =
-    opBuilder.create<arith::MaxSIOp>(loc, sliceHalfOpenUpperBound, sliceLowerBoundOnVectorAxis);
+    createAffineMax(opBuilder, loc, sliceHalfOpenUpperBound, sliceLowerBoundOnVectorAxis);
   Value vectorLengthForThenRegionAlongAxis =
-    opBuilder.create<arith::SubIOp>(loc, sliceHalfOpenUpperClampedNotBelowSliceLower, sliceLowerBoundOnVectorAxis);
+    createAffineSub(opBuilder, loc, sliceHalfOpenUpperClampedNotBelowSliceLower, sliceLowerBoundOnVectorAxis);
 
   if (sliceBounds.predicateEmptyOnIntegers) {
     vectorLengthForThenRegionAlongAxis = opBuilder.create<arith::ConstantIndexOp>(loc, 0);
@@ -1854,18 +1942,16 @@ static bool emitIfSliceWithElse(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Locat
     tileVF = ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[dTile]);
   else
     tileVF = b.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[dTile]);
-  Value tileUb = b.create<arith::AddIOp>(loc, tileLb, tileVF);
+  Value tileUb = createAffineAdd(b, loc, tileLb, tileVF);
 
   Value thenSliceLb = tileLb;
   if (sliceBounds.hasFiniteLowerInclusive)
-    thenSliceLb =
-      b.create<arith::MaxSIOp>(loc, tileLb, b.create<arith::ConstantIndexOp>(loc, sliceBounds.lowerInclusive));
+    thenSliceLb = createAffineMaxWithConstant(b, loc, tileLb, sliceBounds.lowerInclusive);
   Value thenSliceUb = tileUb;
   if (sliceBounds.hasFiniteUpperExclusive)
-    thenSliceUb =
-      b.create<arith::MinSIOp>(loc, tileUb, b.create<arith::ConstantIndexOp>(loc, sliceBounds.upperExclusive));
-  thenSliceUb = b.create<arith::MaxSIOp>(loc, thenSliceUb, thenSliceLb);
-  Value thenLen = b.create<arith::SubIOp>(loc, thenSliceUb, thenSliceLb);
+    thenSliceUb = createAffineMinWithConstant(b, loc, tileUb, sliceBounds.upperExclusive);
+  thenSliceUb = createAffineMax(b, loc, thenSliceUb, thenSliceLb);
+  Value thenLen = createAffineSub(b, loc, thenSliceUb, thenSliceLb);
 
   if (sliceBounds.predicateEmptyOnIntegers) {
     thenLen = b.create<arith::ConstantIndexOp>(loc, 0);
@@ -1905,8 +1991,8 @@ static bool emitIfSliceWithElse(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Locat
 
   // --- else slice ---
   Value elseSliceLb = thenSliceUb;
-  Value elseLen = b.create<arith::SubIOp>(loc, tileUb, elseSliceLb);
-  elseLen = b.create<arith::MaxSIOp>(loc, elseLen, c0);
+  Value rawElseLen = createAffineSub(b, loc, tileUb, elseSliceLb);
+  Value elseLen = createAffineMaxWithConstant(b, loc, rawElseLen, 0);
   Value elseGuard = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, elseLen, c0);
   auto elseIfOp = b.create<scf::IfOp>(loc, TypeRange{}, elseGuard, false);
   {
@@ -2626,7 +2712,7 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
       Value padding = tailCtx.builder.create<arith::ConstantOp>(loc, tailCtx.builder.getZeroAttr(memrefElemType));
 
       SmallVector<Value> tailMaxSizes;
-      tailMaxSizes.resize(typeInfo.dynamicSizes.size(), tailSize);
+      tailMaxSizes.resize(typeInfo.dynamicSizes.size(), tailCtx.getMaxStepValue());
       auto tailRead = tailCtx.builder.create<npuvector::TransferReadOp>(
         loc, typeInfo.vecType, mappedMemRef, ValueRange(tailIndices), padding, Value(),
         ValueRange(typeInfo.dynamicSizes), ValueRange(tailMaxSizes));
@@ -2979,7 +3065,7 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
   }
 
   Value lb = ctx.scalarLoop.getLowerBound();
-  Value tripCount = ctx.builder.create<arith::SubIOp>(loc, originalUb, lb);
+  Value tripCount = createAffineSub(ctx.builder, loc, originalUb, lb);
   Value vfVal = ctx.allVectorSizeValues.back()
                   ? ctx.allVectorSizeValues.back()
                   : ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes.back());
@@ -3394,7 +3480,7 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect, npuvector::NPUVectorDialect, memref::MemRefDialect, func::FuncDialect,
-                    arith::ArithDialect, mlir::math::MathDialect>();
+                    affine::AffineDialect, arith::ArithDialect, mlir::math::MathDialect>();
   }
 
   void runOnOperation() override {

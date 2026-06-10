@@ -21,6 +21,7 @@
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
 #include "akg/Dialect/Linalg/Passes.h"
+#include "akg/Dialect/Vector/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
   mlir::registerAKGLLVMIRPasses();
   mlir::registerAKGSCFPasses();
   mlir::registerAKGGPUPasses();
+  mlir::registerAKGVectorPasses();
   mlir::registerAKGTensorPasses();
   mlir::registerAKGNPUVectorPasses();
 

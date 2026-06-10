@@ -19,7 +19,11 @@ import inspect
 import itertools
 from copy import deepcopy
 import numpy as np
-from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY, format_py_value, gen_slice_scatter, gen_slice_tensor, gen_constant_pad_nd, gen_broadcast_to
+from .torch_mlir_utils import (
+    TORCH_DTYPE_TO_NUMPY, format_py_value,
+    gen_slice_scatter, gen_slice_tensor,
+    gen_constant_pad_nd, gen_broadcast_to,
+)
 
 
 def get_attr(attr_desc, attr_type):
@@ -208,17 +212,15 @@ def trans_data_two2fractal(input_, src_format, dst_format):
     if src_format not in ("DefaultFormat", "NCHW"):
         raise ValueError(f"src_format {src_format} is not supported!")
     shape = list(input_.shape)
-    m, n = shape[-2], shape[-1]
-    m1, n1 = m // 16, n // 16
-    m0, n0 = 16, 16
-    if m % 16 != 0 or n % 16 != 0:  # need pad
-        pad_m, pad_n = (m + 15) // 16 * 16, (n + 15) // 16 * 16
+    m1, n1 = shape[-2] // 16, shape[-1] // 16
+    if shape[-2] % 16 != 0 or shape[-1] % 16 != 0:  # need pad
+        pad_m, pad_n = (shape[-2] + 15) // 16 * 16, (shape[-1] + 15) // 16 * 16
         pad_shape = [shape[0], shape[1], pad_m, pad_n]
         pad_input = np.zeros(pad_shape).astype(input_.dtype)
-        pad_input[..., :m, :n] = input_
+        pad_input[..., :shape[-2], :shape[-1]] = input_
         m1, n1 = pad_m // 16, pad_n // 16
         input_ = pad_input
-    reshape_shape = shape[:-2] + [m1, m0, n1, n0]
+    reshape_shape = shape[:-2] + [m1, 16, n1, 16]
     reshape_input = input_.reshape(reshape_shape)
     if dst_format != "FRACTAL_NZ":
         raise ValueError(
@@ -344,49 +346,39 @@ def strided_slice_str(inputs, output, attr):
         if not isinstance(value, (tuple, list)):
             value = [value]
         return value
-    # get begin/end/strides from attr or input
-    begin = get_value("begin", 1)
-    end = get_value("end", 2)
-    strides = get_value("strides", 3)
-    shape = inputs[0][0]["shape"]
 
     def get_pos_value(attr_name):
         attr_value = get_attr(attr, attr_name)
-        value = [0] if attr_value == [] else bin(attr_value)[-1:1:-1]
+        value = [0] if attr_value == [] else bin(attr_value)[2:][::-1]
         return value
-    begin_pos = get_pos_value("begin_mask")
-    end_pos = get_pos_value("end_mask")
-    ellipsis_pos = get_pos_value("ellipsis_mask")
-    new_axis_pos = get_pos_value("new_axis_mask")
-    shrink_axis_pos = get_pos_value("shrink_axis_mask")
 
     new_axis = -1
     shrink_axis = -1
     slice_string = ""
-    for i, start_num in enumerate(begin):
-        end_num = end[i]
-        strides_num = strides[i]
-        if i < len(begin_pos) and begin_pos[i] == '1':
+    for i, start_num in enumerate(get_value("begin", 1)):
+        end_num = get_value("end", 2)[i]
+        strides_num = get_value("strides", 3)[i]
+        if i < len(get_pos_value("begin_mask")) and get_pos_value("begin_mask")[i] == '1':
             # use the largest range
-            start_num = 0 if strides[i] >= 0 else -1
-        if i < len(end_pos) and end_pos[i] == '1':
+            start_num = 0 if get_value("strides", 3)[i] >= 0 else -1
+        if i < len(get_pos_value("end_mask")) and get_pos_value("end_mask")[i] == '1':
             # use the largest range
-            end_num = shape[i] if strides[i] >= 0 else -shape[i] - 1
-        if i < len(ellipsis_pos) and ellipsis_pos[i] == '1':
+            end_num = inputs[0][0]["shape"][i] if get_value("strides", 3)[i] >= 0 else -inputs[0][0]["shape"][i] - 1
+        if i < len(get_pos_value("ellipsis_mask")) and get_pos_value("ellipsis_mask")[i] == '1':
             # do not change on this axis
             start_num = 0
-            end_num = shape[i]
+            end_num = inputs[0][0]["shape"][i]
             strides_num = 1
-        if i < len(new_axis_pos) and new_axis_pos[i] == '1':
+        if i < len(get_pos_value("new_axis_mask")) and get_pos_value("new_axis_mask")[i] == '1':
             # insert a new axis and ignore slice
             start_num = 0
-            end_num = shape[i]
+            end_num = inputs[0][0]["shape"][i]
             strides_num = 1
             new_axis = i
-        if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
+        if i < len(get_pos_value("shrink_axis_mask")) and get_pos_value("shrink_axis_mask")[i] == '1':
             # delete an axis
             if start_num < 0:
-                start_num += shape[i]
+                start_num += inputs[0][0]["shape"][i]
             end_num = start_num + 1
             strides_num = 1
             shrink_axis = i
@@ -394,12 +386,11 @@ def strided_slice_str(inputs, output, attr):
             ':' + str(strides_num) + ","
     slice_string = slice_string[:-1]
 
-    tn = output[0]['tensor_name']
-    res = f"{tn} = {get_input(inputs[0][0])}[{slice_string}]"
+    res = f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}[{slice_string}]"
     if new_axis != -1:
-        res += f"\n{tn} = np.expand_dims({tn}, axis={new_axis})"
+        res += f"\n{output[0]['tensor_name']} = np.expand_dims({output[0]['tensor_name']}, axis={new_axis})"
     if shrink_axis != -1:
-        res += f"\n{tn} = np.squeeze({tn}, axis={shrink_axis})"
+        res += f"\n{output[0]['tensor_name']} = np.squeeze({output[0]['tensor_name']}, axis={shrink_axis})"
     return res
 
 
@@ -444,10 +435,8 @@ def func_pack(func_name, func_body, params, ret):
 
 def matmul_str(inputs, output, attr):
     """gen matmul string"""
-    left_input = inputs[0][0]
-    right_input = inputs[1][0]
-    left_input_name = get_input(left_input)
-    right_input_name = get_input(right_input)
+    left_input_name = get_input(inputs[0][0])
+    right_input_name = get_input(inputs[1][0])
 
     left_format = get_attr(attr, "left_format")
     if not left_format:
@@ -456,44 +445,46 @@ def matmul_str(inputs, output, attr):
     right_format = get_attr(attr, "right_format")
     if not right_format:
         right_format = get_attr(attr, "pri_format")
-    right_ori_shape = convert_fracal_shape(right_input['shape'], right_format)
+    right_ori_shape = convert_fracal_shape(inputs[1][0]['shape'], right_format)
 
     res = ''
     if get_attr(attr, 'process') != 'cpu':
         if left_format == 'FRACTAL_NZ':
-            left_ori_shape = convert_fracal_shape(left_input['shape'], "zN")
-            left_trans_str = get_trans_data_str(left_input_name, left_input_name, left_ori_shape, left_format,
-                                                'DefaultFormat')
-            res += left_trans_str + "\n"
+            res += get_trans_data_str(left_input_name,
+                                      left_input_name,
+                                      convert_fracal_shape(inputs[0][0]['shape'], "zN"),
+                                      left_format,
+                                      'DefaultFormat')
+            res += "\n"
 
         if right_format == 'FRACTAL_NZ':
-            right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
-            right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format,
-                                                 'DefaultFormat')
-            res += right_trans_str + "\n"
+            res += get_trans_data_str(right_input_name,
+                                      right_input_name,
+                                      convert_fracal_shape(inputs[1][0]['shape'], "zN"),
+                                      right_format,
+                                      'DefaultFormat')
+            res += "\n"
     res += np_matmul_str(inputs, output, attr) + "\n"
 
-    output_name = output[0]['tensor_name']
-    output_format = output[0]['format']
     if len(inputs) > 2:
-        bias = inputs[2][0]
-        bias_shape = right_ori_shape[-2] if get_attr(
-            attr, "transpose_b") else right_ori_shape[-1]
-        if bias['shape'][0] != bias_shape:
+        bias_shape = right_ori_shape[-2] if get_attr(attr, "transpose_b") else right_ori_shape[-1]
+        if inputs[2][0]['shape'][0] != bias_shape:
             res += (
-                f"{get_input(bias)} = random_gaussian([{bias_shape}, ], "
-                f"miu=1, sigma=0.1).astype(np.{bias['data_type']}) \n"
+                f"{get_input(inputs[2][0])} = random_gaussian([{bias_shape}, ], "
+                f"miu=1, sigma=0.1).astype(np.{inputs[2][0]['data_type']}) \n"
             )
-        res += f"{output_name} = np.add({output_name}, {get_input(bias)})\n"
+        res += f"{output[0]['tensor_name']} = np.add({output[0]['tensor_name']}, {get_input(inputs[2][0])})\n"
 
-    if get_attr(attr, 'process') != 'cpu' and output_format != 'DefaultFormat':
-        output_trans_str = get_trans_data_str(
-            output_name, output_name, output[0]['shape'], 'DefaultFormat', output_format)
-        res += output_trans_str + "\n"
-    func_name = "matmul_func"
+    if get_attr(attr, 'process') != 'cpu' and output[0]['format'] != 'DefaultFormat':
+        res += get_trans_data_str(output[0]['tensor_name'],
+                                  output[0]['tensor_name'],
+                                  output[0]['shape'],
+                                  'DefaultFormat',
+                                  output[0]['format'])
+        res += "\n"
     params = [get_input(i[0]) for i in inputs]
-    func = func_pack(func_name, res, params, output_name)
-    return func + f"{output_name} = {func_name}({','.join(params)})\n"
+    func = func_pack("matmul_func", res, params, output[0]['tensor_name'])
+    return func + f"{output[0]['tensor_name']} = matmul_func({','.join(params)})\n"
 
 
 def custom_str(inputs, output, attr):
@@ -513,11 +504,9 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     data = inputs[0][0]
     # OIHWio
     filter_data = inputs[1][0]
-    dtype = inputs[0][0]['data_type']
     padding = get_attr(attr, "pad_list")
     stride = get_attr(attr, "stride")
     dilation = get_attr(attr, "dilation")
-    out_dtype = output[0]["data_type"]
     output_name = output[0]["tensor_name"]
 
     indent = "    "
@@ -538,14 +527,14 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     res += "out_shape = (n, c_o_o, out_h, out_w, c_o_i)\n"
     res += "shape_data_pad = (n, c_i_o, h + p_t + p_b, w + p_l + p_r, c_i_i)\n"
 
-    res += f"data_pad = np.zeros(shape_data_pad).astype({support_list[dtype]})\n"
+    res += f"data_pad = np.zeros(shape_data_pad).astype({support_list.get(inputs[0][0]['data_type'])})\n"
     if np.sum(padding) > 0:
         res += f"data_pad[:, :, p_t:p_t+h, p_l:p_l+w, :] = {data['tensor_name']}\n"
     else:
         res += f"data_pad = {data['tensor_name']}\n"
 
     res += (
-        f"{output_name} = np.zeros(out_shape).astype({support_list[out_dtype]})\n"
+        f"{output_name} = np.zeros(out_shape).astype({support_list.get(output[0]['data_type'])})\n"
     )
     res += "for oh in range(out_h):\n"
     res += indent + "for ow in range(out_w):\n"

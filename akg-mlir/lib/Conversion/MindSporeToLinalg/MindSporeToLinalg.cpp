@@ -52,6 +52,7 @@ namespace mlir {
 #include "akg/Conversion/Passes.h.inc"
 #endif
 
+namespace {
 static Value createAsinhOp(Operation *op, const ValueRange args, ArrayRef<Type> resultTypes,
                            PatternRewriter &rewriter) {
   Location loc = op->getLoc();
@@ -1408,6 +1409,7 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
     return success();
   }
 };
+}  // namespace
 
 void populateLowerMindSporeToLinalgPattern(RewritePatternSet &patterns) {
   (void)patterns.add<

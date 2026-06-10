@@ -262,15 +262,6 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(src, lastOpUsingSrc);
     bool isDestReadAfter =
       hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(dest, lastOpUsingSrc);
-    // Capture all the cases when copy removal and replacing uses of `dest` with
-    // `src` is not possible
-    // 1. Check if dest value is used before the copy
-    // 2. Check if (src value is write or read after the copy) and dest value is write after the copy
-    // 3. Check if (src value is write after the copy) and dest value is read after the copy
-    // if (isDestReadBefore ||
-    //     ((isSrcWriteAfter || isSrcReadAfter) && isDestWriteAfter) ||
-    //     (isSrcWriteAfter && isDestReadAfter)
-    //     )
     if (isDestReadBefore || (isSrcWriteAfter && (isDestReadAfter || isDestWriteAfter)) ||
         (isSrcReadAfter && isDestWriteAfter)) {
       return false;

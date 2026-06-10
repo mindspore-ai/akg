@@ -32,20 +32,25 @@ from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_js
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
 
+
 def _get_json_dict(desc):
     return json.loads(desc) if isinstance(desc, str) else desc
+
 
 def _get_kernel_name(desc):
     json_obj = _get_json_dict(desc)
     return json_obj["op"]
+
 
 def _get_arch_name(desc):
     json_obj = _get_json_dict(desc)
     target_info = json_obj.get("target_info", {})
     return target_info.get("arch", "")
 
+
 def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=compare_tolerance, atol=compare_tolerance)
+
 
 def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     """Helper function to compare result"""
@@ -59,16 +64,19 @@ def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output, expect, compare_tolerance))
     if not all(compare_res):
-        print(kernel_name + " precision error")
+        logging.error("%s precision error", kernel_name)
     else:
-        print(kernel_name + " precision correct")
+        logging.info("%s precision correct", kernel_name)
+
 
 def _get_kernel_meta_dir():
     kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
     return kernel_meta_dir
 
+
 def _get_tmp_dir():
     return os.path.join(_get_kernel_meta_dir(), "tmp_files")
+
 
 def _create_dirs():
     dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
@@ -199,8 +207,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
 
     input_file = pathlib.Path(file_path)
     if info_file.suffix == ".mlir":
-        mlir = input_file.read_text(encoding='utf-8')
-        kernel_name = find_first_func_name(mlir)
+        kernel_name = find_first_func_name(info_file)
         if not kernel_name:
             raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
         info_file = dump_dir / f"{kernel_name}_.info"
@@ -223,13 +230,12 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                 raise ValueError("Dynamic shape info must come with static shape info.")
             static_desc = static_info_path.read_text('utf-8')
         if compile_args.profiling:
-            print("profiling ", kernel_name)
-            compute = _get_compute(desc)
-            logging.info("input_shape = %s compute %s", input_shape, compute)
+            logging.info("profiling %s", kernel_name)
+            logging.info("input_shape = %s compute %s", input_shape, _get_compute(desc))
             logging.info("input_dtype = %s", _get_input_dtype(desc))
 
         try:
-            print("Start running " + kernel_name)
+            logging.info("Start running %s", kernel_name)
             run_a_kernel(desc,
                          str(input_file),
                          backend=compile_args.backend,
@@ -242,7 +248,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                          repo_path=compile_args.repo_path,
                          enable_loop_fusion=compile_args.akg_fusion)
         except ValueError as e:
-            print(kernel_name + " error :", e)
+            logging.error("run %s get an error, error message: %s", kernel_name, e)
             if run_res is not None and run_idx is not None:
                 run_res[run_idx] = False
             return False
@@ -257,9 +263,10 @@ class TestUtils:
 
     @staticmethod
     def record_cycle(cycle):
+        """Record cycle data to the profiling result file."""
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
                 f.write(f"{format(cycle)}\n")
 
     @staticmethod
@@ -274,10 +281,12 @@ class TestUtils:
 
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
                 f.write(f"{format(get_core_num())}; ")
 
+
 def main(args=None):
+    """Main entry point for running kernel benchmark tests."""
     # usage: python py_benchmark.py -e gpu --file ./info_cases/Fused_BiasAdd_1551558231201032373.info --prof_trails 100
     parser = argparse.ArgumentParser(description='Run cases')
     parser.add_argument("-e",
@@ -346,13 +355,13 @@ def main(args=None):
 
         while _alive_task() > 0:
             time.sleep(1)
-        print(f"Finish profiling, total file {len(files)}")
+        logging.info("Finish profiling, total file %s", len(files))
         if args.ci_test and not _has_fail():
-            print("dir test success")
+            logging.info("dir test success")
     else:
         if args.ci_test and args.file.endswith("_static.info"):
-            print("Skip static info")
-            print("precision correct")
+            logging.info("Skip static info")
+            logging.info("precision correct")
         else:
             _run_single_file(args.file, args)
     return 0

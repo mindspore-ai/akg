@@ -25,7 +25,7 @@ class ModuleOp;
 }  // namespace mlir
 
 namespace mlir {
-std::unique_ptr<OperationPass<ModuleOp>> createNPUAutoTilingPass();
+std::unique_ptr<OperationPass<ModuleOp>> createNPUAutoTilingPass(const std::string &arch = "Ascend910B1");
 }  // namespace mlir
 
 #endif  // AKG_TRANSFORMS_NPUAUTOTILINGFUNC_H_
