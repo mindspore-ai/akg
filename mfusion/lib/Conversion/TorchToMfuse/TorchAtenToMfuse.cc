@@ -270,6 +270,60 @@ struct ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
   }
 };
 
+static bool isBoolTensorType(Type type) {
+  auto rankedType = dyn_cast<RankedTensorType>(type);
+  return rankedType && rankedType.getElementType().isInteger(1);
+}
+
+template <typename SourceOp, typename TargetOp>
+struct ConvertBoolTensorBinaryOpPattern : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto operands = adaptor.getOperands();
+    if (operands.size() < 2) {
+      return rewriter.notifyMatchFailure(op, "binary op requires at least 2 operands");
+    }
+    Value lhs = operands[0];
+    Value rhs = operands[1];
+    Type resType = this->getTypeConverter()->convertType(op.getType());
+    if (!resType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    if (!isBoolTensorType(lhs.getType()) || !isBoolTensorType(rhs.getType()) || !isBoolTensorType(resType)) {
+      return rewriter.notifyMatchFailure(op, "requires bool tensor inputs and result");
+    }
+    auto targetOp = rewriter.create<TargetOp>(op.getLoc(), resType, lhs, rhs);
+    rewriter.replaceOp(op, targetOp.getResult());
+    return success();
+  }
+};
+
+template <typename SourceOp, typename TargetOp>
+struct ConvertBoolTensorUnaryOpPattern : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto operands = adaptor.getOperands();
+    if (operands.empty()) {
+      return rewriter.notifyMatchFailure(op, "unary op requires an input operand");
+    }
+    Value input = operands.front();
+    Type resType = this->getTypeConverter()->convertType(op.getType());
+    if (!resType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    if (!isBoolTensorType(input.getType()) || !isBoolTensorType(resType)) {
+      return rewriter.notifyMatchFailure(op, "requires bool tensor input and result");
+    }
+    auto targetOp = rewriter.create<TargetOp>(op.getLoc(), resType, input);
+    rewriter.replaceOp(op, targetOp.getResult());
+    return success();
+  }
+};
+
 // Convert reshape like ops to mfuse.reshape
 template <typename SourceOp>
 struct ConvertReshapeLikeOp : public OpConversionPattern<SourceOp> {
@@ -906,6 +960,11 @@ struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
 // Populate custom (hand-written) Aten ops to Mfuse conversion patterns
 static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
+  patterns.add<ConvertBoolTensorBinaryOpPattern<TorchD::AtenBitwiseAndTensorOp, mfuse::LogicalAndOp>>(converter,
+                                                                                                        context);
+  patterns.add<ConvertBoolTensorUnaryOpPattern<TorchD::AtenBitwiseNotOp, mfuse::LogicalNotOp>>(converter, context);
+  patterns.add<ConvertBoolTensorBinaryOpPattern<TorchD::AtenBitwiseOrTensorOp, mfuse::LogicalOrOp>>(converter,
+                                                                                                      context);
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
   patterns.add<ConvertAtenExpand>(converter, context);

@@ -23,6 +23,26 @@ from setuptools import setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 
+PACKAGE_VERSION = "1.0"
+
+
+def _get_git_commit_id(repo_root: Path) -> str:
+    """Resolve the current git commit id for packaging metadata."""
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _write_commit_id_file(target_dir: Path, repo_root: Path) -> None:
+    """Write the git commit id into the installed Python package."""
+    commit_id = _get_git_commit_id(repo_root)
+    (target_dir / ".commit_id").write_text(f"{commit_id}\n", encoding="utf-8")
+
 
 class CMakeBuild(build_ext):
     """Custom build command to compile C++ extensions."""
@@ -72,6 +92,7 @@ class CMakeBuild(build_ext):
         source_python_dir = Path(__file__).parent / "python" / "mfusion"
         if source_python_dir.exists():
             shutil.copytree(source_python_dir, target_dir, dirs_exist_ok=True)
+        _write_commit_id_file(target_dir, Path(__file__).parent)
 
         # Copy tests
         if build_tests == "ON":
