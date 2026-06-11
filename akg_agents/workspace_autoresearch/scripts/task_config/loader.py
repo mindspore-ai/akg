@@ -35,6 +35,7 @@ import yaml
 # task_layout — workflow-neutral SoT. Re-exported here for back-compat
 # (legacy callers still import from task_config.loader).
 
+from akg_agents.op.utils.dsl_project_config import flatten_task_yaml_dsl_blocks  # noqa: E402
 from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT, py_stem  # noqa: E402, F401
 
 
@@ -167,13 +168,15 @@ class TaskConfig:
     the task package via HTTP POST to the first reachable worker. Local
     devices are the fallback."""
 
-    # Per-DSL knobs (e.g. ascendc_catlass's ``catlass.root`` /
-    # ``catlass.op_dir``). Keys are flat (``catlass_root`` /
-    # ``catlass_op_dir`` historically); akg_eval forwards them verbatim
-    # into the eval ``config_dict`` + ``task_info`` so the adapter's
-    # ``prepare_config`` consumes them without TaskConfig knowing any DSL.
-    # Loader normalizes the ``catlass:`` yaml block into this dict for
-    # back-compat; new DSLs add a sibling block + normalizer.
+    # Per-DSL knobs (e.g. ``catlass.root`` / ``catlass.op_dir`` or
+    # ``ascendc.op_dir``). Keys are flat (``catlass_root`` /
+    # ``catlass_op_dir`` / ``ascendc_op_dir`` historically); akg_eval
+    # forwards them verbatim into the eval ``config_dict`` + ``task_info``
+    # so the adapter's ``prepare_config`` consumes them without TaskConfig
+    # knowing any DSL.
+    # Loader normalizes explicit DSL yaml blocks into this dict; adapter
+    # defaults own absent blocks so unrelated DSLs do not receive stale
+    # keys.
     dsl_config: dict = field(default_factory=dict)
 
 
@@ -265,18 +268,8 @@ def load_task_config(task_dir: str) -> Optional[TaskConfig]:
               f"if this isn't what you intended.", file=_sys.stderr)
         raw_ref = REF_FILE_DEFAULT
 
-    # Per-DSL block flatteners. catlass is the only one today; future
-    # DSLs add a sibling 2-line block. Loader stays one place for the
-    # yaml → dsl_config mapping so akg_eval can forward a single dict.
-    dsl_config: dict = {}
-    catlass_block = raw.get("catlass") or {}
-    if catlass_block.get("root") is not None:
-        dsl_config["catlass_root"] = catlass_block["root"]
-    dsl_config["catlass_op_dir"] = (
-        catlass_block.get("op_dir")
-        or catlass_block.get("catlass_op_dir")
-        or "catlass_op"
-    )
+    # Per-DSL blocks are opt-in; adapter defaults handle the common layout.
+    dsl_config = flatten_task_yaml_dsl_blocks(raw, yaml_path=yaml_path)
 
     config = TaskConfig(
         name=name,

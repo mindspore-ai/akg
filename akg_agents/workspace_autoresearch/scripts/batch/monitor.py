@@ -49,6 +49,12 @@ from utils.settings import classify_speedup  # noqa: E402
 DASHBOARD_PY = mf.repo_root() / "scripts" / "dashboard.py"
 
 
+def fmt_metric(value) -> str:
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
 def task_state(task_dir: Path) -> dict:
     """Snapshot of one task for the monitor TUI. Goes through
     phase_machine.task_summary so the schema has one owner; the
@@ -198,7 +204,7 @@ def render(batch_dir: Path, progress: dict, active: dict | None,
         bm = active.get("baseline_metric")
         best = active.get("best_metric")
         if isinstance(bm, (int, float)) and isinstance(best, (int, float)) and best > 0:
-            out.append(f"        baseline={bm:.3f}  best={best:.3f}  "
+            out.append(f"        baseline={fmt_metric(bm)}  best={fmt_metric(best)}  "
                        f"speedup={bm/best:.2f}x")
         elif bm is not None or best is not None:
             out.append(f"        baseline={bm}  best={best}")
@@ -218,7 +224,7 @@ def render(batch_dir: Path, progress: dict, active: dict | None,
                 m_short = ""
                 for k in ("latency_us", "metric"):
                     if k in metrics:
-                        m_short = f" {k}={metrics[k]}"
+                        m_short = f" {k}={fmt_metric(metrics[k])}"
                         break
                 corr = "" if rec.get("correctness") is None else f" correct={rec['correctness']}"
                 desc = (rec.get("description") or "")[:50]

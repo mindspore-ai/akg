@@ -27,6 +27,7 @@ from typing import Optional
 import yaml
 
 from .config import TaskConfig, AgentConfig
+from akg_agents.op.utils.dsl_project_config import flatten_task_yaml_dsl_blocks
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +210,7 @@ def load_yaml_config(task_dir: str) -> Optional[TaskConfig]:
 
     # ---- metadata ----
     metadata = raw.get("metadata", {})
+    dsl_config = flatten_task_yaml_dsl_blocks(raw, yaml_path=yaml_path)
 
     return TaskConfig(
         name=name,
@@ -217,6 +219,7 @@ def load_yaml_config(task_dir: str) -> Optional[TaskConfig]:
         framework=framework,
         backend=backend,
         arch=arch,
+        dsl_config=dsl_config,
         eval_script=eval_script,
         editable_files=editable_files,
         eval_timeout=eval_timeout,

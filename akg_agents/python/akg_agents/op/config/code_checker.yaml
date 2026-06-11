@@ -213,19 +213,20 @@ triton_module_name: triton
 # DSL-prefix gate: the compliance + autotune checks only run when
 # `self.dsl` startswith any of these prefixes. Keeps the checker silent
 # for non-kernel DSLs (torch-only baselines) and non-Python DSLs
-# (cpp, cuda_c, ascendc).
+# (cpp, cuda_c).
 dsl_compliance_prefixes:
   - triton
   - tilelang
 
 # DSLs whose generated code is Python and can be checked by this
-# checker. DSLs not listed here (e.g. cpp, cuda_c, ascendc) produce
+# checker. DSLs not listed here (e.g. cpp, cuda_c) produce
 # non-Python code — running ast.parse / py_compile on them would always
 # fail and cause an infinite retry loop.
 python_dsls:
   - torch
   - triton_cuda
   - triton_ascend
+  - ascendc
   - tilelang_cuda
   - tilelang_ascend
   - ascendc_catlass

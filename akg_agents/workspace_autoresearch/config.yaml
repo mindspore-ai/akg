@@ -67,12 +67,6 @@ hallucinated_scripts:
 # --status / --stop / `--worker-url 127.0.0.1:<port>` calls all
 # transparently hit the remote daemon over that tunnel.
 # ---------------------------------------------------------------------------
-remote_worker:
-  hosts:
-    npu:
-      repo_path: /home/yyz/cxy/akg
-      env_script: /home/yyz/env.sh
-      ssh_alias: npu
   # Example entry — fill in with deployment-specific path / env_script:
   #   my-npu:
   #     repo_path: /abs/path/to/akg
