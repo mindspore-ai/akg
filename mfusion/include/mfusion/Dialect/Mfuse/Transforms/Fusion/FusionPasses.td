@@ -52,6 +52,26 @@ def FuseLayerNorm : Pass<"fuse-layernorm", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// FuseLayerNormDvm pass
+//===----------------------------------------------------------------------===//
+
+def FuseLayerNormDvm : Pass<"fuse-layer-norm-dvm", "::mlir::ModuleOp"> {
+  let summary = "Tag BERT LayerNorm subgraphs for DVM split/codegen";
+  let description = [{
+    Tag decomposed LayerNorm subgraphs via the generic fusion-region API
+    (mfusion.dvm_fuse_group / mfusion.dvm_fuse_role member|affinity). Legacy unit attrs
+    mfusion.layer_norm_dvm are also set for compatibility. Split uses
+    FuseTagBarrierByGroupId to merge adjacent areas sharing the same group id (member
+    only; affinity nodes are not merge hubs).
+  }];
+  let constructor = "mlir::mfuse::createFuseLayerNormDvmPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseGelu pass
 //===----------------------------------------------------------------------===//
 
