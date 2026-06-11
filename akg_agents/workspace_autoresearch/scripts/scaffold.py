@@ -22,8 +22,8 @@ Zero external dependency. Creates a self-contained task directory with:
     validate_ref before scaffold copies it. Runtime correctness is
     validated by --run-baseline whose verify routine tags error_source.)
   - kernel.py (editable seed; from --kernel file, or sibling kernel.py when
-    --kernel is a catlass_op directory)
-  - catlass_op/ (ascendc_catlass only, when --kernel points at that folder)
+    --kernel is a multi-file DSL project directory)
+  - <dsl project>/ (multi-file DSLs only, when --kernel points at that folder)
   - .ar_state/ (progress tracking)
   - .git/ (baseline commit)
 
@@ -300,8 +300,8 @@ def _make_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ref", required=True,
                         help="Path to reference.py (Model/get_inputs format)")
     parser.add_argument("--kernel", required=True,
-                        help="Seed kernel .py file, or catlass_op directory "
-                             "(ascendc_catlass only; needs sibling kernel.py)")
+                        help="Seed kernel .py file, or multi-file DSL project "
+                             "directory with sibling kernel.py")
     parser.add_argument("--op-name", default=None,
                         help="Operator name (required)")
     # backend / framework / dsl are pinned per repo in config.yaml's
@@ -409,7 +409,10 @@ def main():
         print(json.dumps({"status": "error", "error": str(e)}))
         sys.exit(1)
     entry_filename = adapter.entry_filename_template.format(op_name=args.op_name)
-    editable_files = [entry_filename] + list(adapter.kernel_project_files)
+    editable_files = [entry_filename] + list(
+        adapter.list_kernel_project_files(
+            kernel_project_src, op_name=args.op_name)
+    )
 
     # devices_list was resolved above.
     print(f"[scaffold] Creating task directory for {args.op_name}...", file=sys.stderr)

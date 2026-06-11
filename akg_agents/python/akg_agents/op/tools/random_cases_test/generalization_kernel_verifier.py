@@ -101,31 +101,23 @@ class GeneralizationKernelVerifier(KernelVerifier):
             logger.error(f"[{self.op_name}] 框架实现文件创建失败: {framework_file}, 错误: {e}")
             raise
 
-        # 创建具体实现文件（与父类相同）
-        if "ascendc" in self.dsl:
-            logger.info(f"[{self.op_name}] 检测到AscendC DSL，生成编译项目")
-            self.generate_ascendc_project(impl_code, verify_dir)
-        else:
-            file_name = f"{self.op_name}_{self.dsl}.py"
-            impl_file = os.path.join(verify_dir, file_name)
-
-            # 使用adapter生成import语句
-            try:
-                from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
-                dsl_adapter = get_dsl_adapter(self.dsl)
-                import_statements = dsl_adapter.get_import_statements(self.framework)
-                logger.debug(f"[{self.op_name}] DSL import语句生成成功")
-            except Exception as e:
-                logger.error(f"[{self.op_name}] DSL import语句生成失败: {e}")
-                raise
-
-            try:
-                with open(impl_file, "w", encoding="utf-8") as f:
-                    f.write(import_statements + impl_code)
-                logger.debug(f"[{self.op_name}] 实现文件已创建: {impl_file}")
-            except Exception as e:
-                logger.error(f"[{self.op_name}] 实现文件创建失败: {impl_file}, 错误: {e}")
-                raise
+        # Materialize implementation artifacts through the DSL adapter.
+        try:
+            from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+            dsl_adapter = get_dsl_adapter(self.dsl)
+            dsl_adapter.prepare_config(self.config, task_info=None)
+            dsl_adapter.materialize_impl(
+                impl_code=impl_code,
+                verify_dir=verify_dir,
+                op_name=self.op_name,
+                framework=self.framework,
+                dsl_name=self.dsl,
+                task_info=None,
+                config=self.config,
+            )
+        except Exception as e:
+            logger.error(f"[{self.op_name}] implementation materialization failed: {e}")
+            raise
 
         # 生成验证脚本（使用泛化性模板）
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
@@ -166,7 +158,8 @@ class GeneralizationKernelVerifier(KernelVerifier):
             framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
-            special_setup_code = dsl_adapter.get_special_setup_code()
+            dsl_adapter.prepare_config(self.config, task_info=None)
+            special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
             
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)

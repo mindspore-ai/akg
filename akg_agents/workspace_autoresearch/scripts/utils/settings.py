@@ -97,7 +97,9 @@ def default_metric() -> dict:
 def skill_dsl() -> str:
     """Kebab-case name of the skills/ subtree this repo consults
     (`triton-ascend` / `triton-cuda` / `pypto` / `cpp` / `cuda-c` /
-    `tilelang-cuda`). Used by guidance.py to expand `<dsl>` in PLAN /
+    `tilelang-cuda` / `tilelang-ascend` / `tilelang-npuir` /
+    `ascendc` / `ascendc-catlass` / `swft` / `torch`). Used by guidance.py
+    to expand `<dsl>` in PLAN /
     REPLAN / DIAGNOSE prompt Glob patterns to a literal directory name.
     Single-DSL-per-repo by design; lives at defaults/skill_dsl in
     config.yaml, not on per-task TaskConfig."""

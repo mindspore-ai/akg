@@ -240,13 +240,20 @@ def _load_config_safe(task_dir: str):
 
 
 # Skills tree root. The new layout is DSL-partitioned
-# (`skills/triton-ascend/`, `skills/triton-cuda/`, `skills/pypto/`,
-# `skills/cpp/`, `skills/cuda-c/`, `skills/tilelang-cuda/`) with
+# (`triton-ascend/`, `triton-cuda/`, `pypto/`, `cpp/`, `cuda-c/`,
+# `tilelang-cuda/`, `tilelang-ascend/`, `tilelang-npuir/`, `ascendc/`,
+# `ascendc-catlass/`, `swft/`, `torch/`) with
 # per-topic SKILL.md files under each DSL's `fundamentals/`, `guides/`,
 # `cases/`, `examples/`, and `evolved-*/` subdirs. The hint instructs
 # the LLM to Glob inside the relevant DSL subtree. Returns "" when the
 # skills root itself is missing so the prompt doesn't dispatch the
 # agent to a dead Glob.
+
+
+def _skills_subtree(dsl: str) -> str:
+    root = os.path.abspath(latency_refs_dir())
+    path = os.path.join(root, dsl)
+    return path.replace(os.sep, "/")
 
 
 def _skills_hint() -> str:
@@ -261,23 +268,47 @@ def _skills_hint() -> str:
 
     The Glob path is expanded with `settings.skill_dsl()`
     (config.yaml `defaults.skill_dsl`; kebab-case, e.g.
-    `triton-ascend`) so the LLM gets a literal
-    `../skills/triton-ascend/**/SKILL.md` and not a "<dsl>"
-    placeholder that the Glob tool would treat as a literal dir name
-    and return zero matches for.
+    `triton-ascend`) so the LLM gets a literal path to the resolved
+    skills tree and not a "<dsl>" placeholder that the Glob tool would
+    treat as a literal dir name and return zero matches for.
     """
     if not os.path.isdir(latency_refs_dir()):
         return ""
     from utils.settings import skill_dsl as _skill_dsl
     dsl = _skill_dsl()
+    subtree = _skills_subtree(dsl)
     return (
-        f"\nSkills: Glob ../skills/{dsl}/**/SKILL.md "
+        f"\nSkills: Glob {subtree}/**/SKILL.md "
         f"(skill subdirs are `fundamentals/` `guides/` `cases/` "
-        f"`examples/` `evolved-improvement/`), Read 1-3 most relevant "
+        f"`examples/` `evolved-improvement/` `evolved-fix/`), "
+        f"Read 1-3 most relevant "
         f"to a candidate plan-item direction. Citing the filename in "
         f"the rationale is recommended for traceability but not "
         f"enforced."
     )
+
+
+def _target_dsl_safe() -> tuple[str, str, str]:
+    """Return (KernelVerifier DSL, skills DSL dir, backend) for prompts."""
+    try:
+        from utils.settings import (
+            skill_dsl as _skill_dsl,
+            target_backend as _target_backend,
+            target_dsl as _target_dsl,
+        )
+        return _target_dsl(), _skill_dsl(), _target_backend()
+    except Exception:
+        return "<configured-dsl>", "<configured-skill-dsl>", "<backend>"
+
+
+def _editable_paths(task_dir: str, editable: list[str]) -> list[str]:
+    return [f"{task_dir}/{name}" for name in editable]
+
+
+def _editable_scope_text(editable: list[str]) -> str:
+    if editable:
+        return ", ".join(editable)
+    return "task.yaml editable_files"
 
 
 def _multi_shape_plan_note(progress: Optional[dict],
@@ -461,6 +492,7 @@ def get_guidance(task_dir: str) -> str:
     # Extract config fields
     editable = config.editable_files if config else []
     primary_metric = config.primary_metric if config else "score"
+    target_dsl, skill_name, backend = _target_dsl_safe()
 
     if phase == INIT:
         return f"[AR Phase: INIT] Run: export AR_TASK_DIR=\"{task_dir}\""
@@ -489,12 +521,10 @@ def get_guidance(task_dir: str) -> str:
         # fixing/rewriting the seed kernel — surface the per-shape
         # failure detail and steer the agent toward that goal.
         seed_failed_section = ""
-        # editable[0] is per-DSL via scaffold (kernel.py for triton /
-        # tilelang / pypto / catlass / ascendc, custom for pure-C++
-        # adapters). "kernel.py" fallback only fires when task.yaml
-        # failed to load — loader.py refuses empty editable_files on
-        # the happy path.
-        target_file = editable[0] if editable else "kernel.py"
+        # editable_files is the per-DSL edit surface. Single-file DSLs
+        # usually expose kernel.py; directory-backed DSLs expose wrapper
+        # plus project source/build files.
+        target_file = _editable_scope_text(editable)
         # SEED FAILED fires for kernel-side baseline failures (kernel_fail);
         # infra_fail never reaches PLAN: the ref-baseline gate parks
         # such tasks at BASELINE with no committed progress.
@@ -521,8 +551,10 @@ def get_guidance(task_dir: str) -> str:
             seed_failed_section = (
                 f"\n\nSEED FAILED: {seed_reason}.\n"
                 f"Plan items must focus on FIXING / REWRITING "
-                f"{target_file} so the next round passes baseline.\n"
-                f"Read {task_dir}/{target_file} to see what failed; "
+                f"the editable seed surface ({target_file}) so the next "
+                f"round passes baseline.\n"
+                f"Read these editable files to see what failed: "
+                f"{', '.join(_editable_paths(task_dir, editable)) or task_dir}. "
                 f"baseline.py printed structured failure signals "
                 f"(UB overflow / aivec trap / OOM / correctness mismatch) "
                 f"above — use those as primary evidence. Each plan item "
@@ -532,7 +564,12 @@ def get_guidance(task_dir: str) -> str:
             )
 
         return (f"[AR Phase: PLAN] "
-                f"Read task.yaml, editable files ({editable}), and reference.py.{_skills_hint()}{metric_hint}{plan_note_section}{seed_failed_section}\n"
+                f"Target DSL: {target_dsl} (skills: {skill_name}, backend: {backend}). "
+                f"Read task.yaml, reference.py, and editable files "
+                f"({_editable_scope_text(editable)}). Directory-backed DSLs "
+                f"may expose multiple editable project files; plan only "
+                f"changes inside that editable surface.{_skills_hint()}"
+                f"{metric_hint}{plan_note_section}{seed_failed_section}\n"
                 f"\n"
                 f"{_create_plan_instruction(task_dir)}"
                 f"\n"
@@ -554,6 +591,9 @@ def get_guidance(task_dir: str) -> str:
         return (f"[AR Phase: EDIT] ACTIVE item: **{item_id}** - {desc}\n"
                 f"{files_hint}\n"
                 f"CRITICAL: Implement ONLY {item_id}'s idea. Do NOT implement other plan items.\n"
+                f"Target DSL: {target_dsl}; edit only task.yaml editable_files. "
+                f"For directory-backed DSLs, this may include wrapper and "
+                f"project source/build files, not just kernel.py.\n"
                 f"The pipeline will settle {item_id} with this round's metric.\n"
                 f"Make your edit(s), then: python scripts/engine/pipeline.py \"{task_dir}\"\n"
                 f"(TodoWrite payloads are delivered by the hook after each "
@@ -622,8 +662,9 @@ def get_guidance(task_dir: str) -> str:
             return _diagnose_plan_next_step(task_dir, fallback=True)
 
         arch = (config.arch if config and config.arch else "<unknown>")
+        editable_list = editable or ["<task editable file>"]
         editable_paths = "\n".join(
-            f"  - {task_dir}/{name}" for name in (editable or ["kernel.py"])
+            f"  - {task_dir}/{name}" for name in editable_list
         )
         # Skills section is conditional on the references dir being present.
         # Without the dir-existence check we'd hand the agent a Glob
@@ -634,31 +675,32 @@ def get_guidance(task_dir: str) -> str:
         # patterns below target an actual subtree (`triton-ascend/`
         # etc.) rather than the literal `<dsl>` token, which the Glob
         # tool would search for and return zero matches.
-        from utils.settings import skill_dsl as _skill_dsl
-        dsl = _skill_dsl()
+        dsl = skill_name
         if skills_present:
+            subtree = _skills_subtree(dsl)
             skills_block = (
                 f"Read curated DSL-specific skill references for "
                 f"`{dsl}` (use them to ground fix directions in "
                 f"known-good patterns for this hardware):\n"
-                f"  - Glob ../skills/{dsl}/**/SKILL.md "
+                f"  - Glob {subtree}/**/SKILL.md "
                 f"(subdirs: `fundamentals/` `guides/` `cases/` "
-                f"`examples/` `evolved-improvement/`) and Read what "
+                f"`examples/` `evolved-improvement/` `evolved-fix/`) "
+                f"and Read what "
                 f"matches the fix direction.\n"
                 f"  - Cite filename in the rationale of items you "
                 f"propose.\n\n"
             )
             scope_constraint = (
-                f"  - Glob / Grep ONLY under ../skills/{dsl}/. "
-                f"The 4 task files plus that skills subtree are the "
+                f"  - Glob / Grep ONLY under {subtree}/. "
+                f"The listed task files plus that skills subtree are the "
                 f"entire scope.\n"
             )
             cite_clause = " Cite reference filenames where relevant."
         else:
             skills_block = ""
             scope_constraint = (
-                "  - Do NOT Glob / Grep the wider codebase. The 4 task "
-                "files are the entire scope.\n"
+                "  - Do NOT Glob / Grep the wider codebase. The listed "
+                "task files are the entire scope.\n"
             )
             cite_clause = ""
 
@@ -685,7 +727,8 @@ def get_guidance(task_dir: str) -> str:
         subagent_prompt = (
             f"Diagnose why the current optimization rounds are failing, then "
             f"Write a structured report to a fixed path.\n\n"
-            f"Target: arch={arch}{metric_line}\n"
+            f"Target: dsl={target_dsl}, skill_dsl={skill_name}, "
+            f"backend={backend}, arch={arch}{metric_line}\n"
             f"plan_version={plan_version}\n\n"
             f"Recent rounds (last 5 from history.jsonl):\n"
             f"{recent_summary or '  (none settled yet)'}\n"
@@ -704,7 +747,8 @@ def get_guidance(task_dir: str) -> str:
             f"{scope_constraint}"
             f"  - Stop after at most 12 tool uses.\n"
             f"  - Write tool may ONLY target the artifact path below. Do "
-            f"NOT Write kernel.py, plan.md, or anywhere else.\n\n"
+            f"NOT Write editable source files, reference.py, plan.md, or "
+            f"anywhere else.\n\n"
             f"REQUIRED OUTPUT - your final action MUST be a Write call to "
             f"this exact path:\n"
             f"  {artifact_path}\n\n"

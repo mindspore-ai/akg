@@ -161,16 +161,21 @@ def run_profile_scripts_and_collect_results(
 
     gen_section: Optional[Dict[str, Any]] = None
     gen_script = f"profile_{op_name}_generation.py"
-    gen_result = run_command(
-        ["python", gen_script], cmd_msg="generation_profile",
-        timeout=600, cwd=verify_dir,
-    )
-    if not gen_result[0]:
-        logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: "
-                     f"{gen_result[1]}")
+    gen_script_path = os.path.join(verify_dir, gen_script)
+    if os.path.exists(gen_script_path):
+        gen_result = run_command(
+            ["python", gen_script], cmd_msg="generation_profile",
+            timeout=600, cwd=verify_dir,
+        )
+        if not gen_result[0]:
+            logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: "
+                         f"{gen_result[1]}")
+        else:
+            gen_section = read_profile_result_from_json(
+                verify_dir, "generation_profile_result.json")
     else:
-        gen_section = read_profile_result_from_json(
-            verify_dir, "generation_profile_result.json")
+        logger.info(f"[{op_name}: {task_id}] 生成代码性能脚本不存在，"
+                    "跳过 generation profile")
 
     base_avg = base_section["avg_us"] if base_section else float("inf")
     gen_avg = gen_section["avg_us"] if gen_section else float("inf")
@@ -369,4 +374,3 @@ def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int, profile_
     except Exception as e:
         logger.error(f"[{task_id}:{op_name}] 分析nsys数据时出错: {e}")
         return False, f"分析nsys数据时出错: {str(e)}", float('inf')
-

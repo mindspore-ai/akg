@@ -276,8 +276,40 @@ def _build_verifier(task_dir: str, config, ref_code: str, backend: str,
     )
 
 
+def _base_metrics_from_profile(profile_result: dict,
+                               op_name: str) -> Dict[str, Any]:
+    base_us = _float(profile_result.get("base_time"))
+    if base_us is None or base_us <= 0:
+        return {}
+
+    per_shape_base = list(profile_result.get("per_shape_base_us") or [])
+    if not per_shape_base:
+        per_shape_base = [base_us]
+    num_cases = len(per_shape_base)
+
+    descs = list(profile_result.get("case_descs") or [])
+    if len(descs) != num_cases:
+        if descs:
+            logger.warning(
+                f"[{op_name}] base-only case_descs len {len(descs)} != "
+                f"per_shape_base_us len {num_cases}; regenerating labels")
+        descs = [f"case{i}" for i in range(num_cases)]
+
+    base_method = profile_result.get("base_method") or "akg_kernel_verifier"
+    return {
+        "ref_latency_us": base_us,
+        "num_cases": num_cases,
+        "per_shape_base_us": per_shape_base,
+        "per_shape_base_method": [base_method] * num_cases,
+        "timing_method_base": base_method,
+        "per_shape_descs": descs,
+    }
+
+
 def _verify_fail_payload(verify_log: Optional[str],
-                         sidecar: Optional[dict] = None) -> Dict[str, Any]:
+                         sidecar: Optional[dict] = None,
+                         metrics: Optional[Dict[str, Any]] = None
+                         ) -> Dict[str, Any]:
     """Build the dict downstream eval_client consumes. When the verify
     script wrote a per-case sidecar (kernel_verify_template_refactored.j2
     -> verify_result.json -> KernelVerifier.last_verify_sidecar), use its
@@ -287,7 +319,7 @@ def _verify_fail_payload(verify_log: Optional[str],
     payload: Dict[str, Any] = {
         "outcome": "kernel_fail",
         "correctness": False,
-        "metrics": {},
+        "metrics": dict(metrics or {}),
         "error": (verify_log or "verify failed")[-2000:],
         "error_source": "kernel",
         "raw_output_tail": (verify_log or "")[-4000:],
@@ -517,8 +549,24 @@ async def _eval_async(task_dir: str, config, device_id: Any,
         verify_ok, verify_log = await verifier.run(
             task_info, current_step=current_step)
         if not verify_ok:
+            ref_metrics: Dict[str, Any] = {}
+            if not verify_only:
+                try:
+                    base_profile = await verifier.run_profile(
+                        task_info, current_step=current_step,
+                        profile_settings={
+                            "timeout": _resolve_eval_timeout_s(task_dir, config),
+                        },
+                    )
+                    ref_metrics = _base_metrics_from_profile(
+                        base_profile, config.name)
+                except Exception as e:
+                    logger.warning(
+                        f"[{config.name}] failed to profile reference after "
+                        f"verify failure: {e}", exc_info=True)
             return _verify_fail_payload(
-                verify_log, getattr(verifier, "last_verify_sidecar", None))
+                verify_log, getattr(verifier, "last_verify_sidecar", None),
+                ref_metrics)
         if verify_only:
             return _make_verify_ok_payload(
                 getattr(verifier, "last_verify_sidecar", None))

@@ -117,18 +117,66 @@ class TestScaffoldRoundtrip:
             backend="ascend",
             arch="ascend910b4",
             kernel_project_src=str(project_src),
+            dsl_config={
+                "catlass_root": "/opt/catlass",
+                "catlass_op_dir": "custom_catlass_op",
+            },
         )
         cfg = load_yaml_config(td)
+        assert cfg.dsl_config == {
+            "catlass_root": "/opt/catlass",
+            "catlass_op_dir": "custom_catlass_op",
+        }
         expected = [
             "kernel.py",
-            "catlass_op/kernel/catlass_kernel.asc",
-            "catlass_op/include/catlass_kernel.h",
-            "catlass_op/src/catlass_torch.cpp",
-            "catlass_op/CMakeLists.txt",
+            "custom_catlass_op/kernel/catlass_kernel.asc",
+            "custom_catlass_op/include/catlass_kernel.h",
+            "custom_catlass_op/src/catlass_torch.cpp",
+            "custom_catlass_op/CMakeLists.txt",
         ]
         for rel in expected:
             assert rel in cfg.editable_files
             assert os.path.isfile(os.path.join(td, rel))
+
+    def test_ascendc_multifile_project_files_and_block_roundtrip(self, tmp_path):
+        """AscendC direct-invoke keeps task.yaml, files, and config aligned."""
+        project_src = tmp_path / "seed_ascendc"
+        project_files = [
+            "CMakeLists.txt",
+            "src/vector_add.cpp",
+            "include/vector_add.h",
+            "build/ignored.cpp",
+        ]
+        for rel in project_files:
+            path = project_src / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// ascendc fixture\n", encoding="utf-8")
+
+        td = scaffold_task_dir(
+            base_dir=str(tmp_path),
+            op_name="ascendc_case",
+            task_desc="# reference\n",
+            editable_files={"kernel.py": "# wrapper\n"},
+            dsl="ascendc",
+            framework="torch",
+            backend="ascend",
+            arch="ascend910b4",
+            kernel_project_src=str(project_src),
+            dsl_config={"ascendc_op_dir": "direct_op"},
+        )
+        cfg = load_yaml_config(td)
+        assert cfg.dsl_config == {"ascendc_op_dir": "direct_op"}
+
+        expected = [
+            "kernel.py",
+            "direct_op/CMakeLists.txt",
+            "direct_op/src/vector_add.cpp",
+            "direct_op/include/vector_add.h",
+        ]
+        for rel in expected:
+            assert rel in cfg.editable_files
+            assert os.path.isfile(os.path.join(td, rel))
+        assert "direct_op/build/ignored.cpp" not in cfg.editable_files
 
 
 # A fake guardrails dict with a hardware-scoped rule for "a100".
