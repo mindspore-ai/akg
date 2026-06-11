@@ -43,9 +43,18 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
     shutil.copy2(sol_correctness_src, sol_correctness_dst)
 
     # 3. 创建具体实现文件
-    if "ascendc" in verifier.dsl:
-        logger.info(f"[{verifier.op_name}] 检测到AscendC DSL，生成编译项目")
-        verifier.generate_ascendc_project(impl_code, verify_dir)
+    dsl_adapter = get_dsl_adapter(verifier.dsl)
+    if getattr(dsl_adapter, "kernel_arg_is_directory", False):
+        dsl_adapter.prepare_config(verifier.config, task_info=None)
+        dsl_adapter.materialize_impl(
+            impl_code=impl_code,
+            verify_dir=verify_dir,
+            op_name=verifier.op_name,
+            framework=verifier.framework,
+            dsl_name=verifier.dsl,
+            task_info=None,
+            config=verifier.config,
+        )
     else:
         file_name = f"{verifier.op_name}_{verifier.dsl}_impl.py"
         impl_file = os.path.join(verify_dir, file_name)
@@ -92,7 +101,13 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
             import_name = dsl_impl_import.split(" ")[3].strip()
             dsl_impl_import = f"import importlib.util\nimport sys\nspec = importlib.util.spec_from_file_location('{module_name}', '{module_name}.py')\nmodule = importlib.util.module_from_spec(spec)\nsys.modules['{module_name}'] = module\nspec.loader.exec_module(module)\n{import_name} = getattr(module, '{import_name}')"
         
+        dsl_adapter.prepare_config(verifier.config, task_info=None)
+        special_setup = dsl_adapter.get_special_setup_code(
+            framework=verifier.framework
+        )
         dsl_imports += "\n" + dsl_impl_import
+        if special_setup:
+            dsl_imports += "\n" + special_setup
         
         backend_adapter.setup_environment(device_id, verifier.arch)
         create_impl_code = verifier._prepare_code_lines(dsl_adapter.create_impl_module(verifier.framework, framework_adapter))
@@ -146,7 +161,13 @@ def _get_sol_common_template_vars(verifier, device_id: int):
             f"spec.loader.exec_module(module)\n"
             f"{import_name} = getattr(module, '{import_name}')"
         )
+    dsl_adapter.prepare_config(verifier.config, task_info=None)
+    special_setup = dsl_adapter.get_special_setup_code(
+        framework=verifier.framework
+    )
     dsl_imports += "\n" + dsl_impl_import
+    if special_setup:
+        dsl_imports += "\n" + special_setup
 
     create_impl_code = verifier._prepare_code_lines(
         dsl_adapter.create_impl_module(verifier.framework, framework_adapter)
@@ -204,7 +225,20 @@ def generate_sol_profile_project(verifier, verify_dir: str, device_id: int = 0,
         )
         shutil.copy2(sol_correctness_src, sol_correctness_dst)
 
-    common_vars = _get_sol_common_template_vars(verifier, device_id)
+    profile_generation_enabled = getattr(
+        verifier, "_profile_generation_enabled", True)
+
+    framework_adapter = get_framework_adapter(verifier.framework)
+    backend_adapter = get_backend_adapter(verifier.backend)
+    backend_adapter.setup_environment(device_id, verifier.arch)
+    base_device_setup_code = verifier._prepare_code_lines(
+        framework_adapter.get_device_setup_code(
+            verifier.backend, verifier.arch, device_id)
+    )
+    sol_execbench_src_dir = os.path.abspath(
+        os.path.join(get_project_root(), "..", "..",
+                     "thirdparty", "sol-execbench", "src")
+    )
 
     # 生成 base profile 脚本（测量 reference.run 的性能）
     if not skip_base:
@@ -218,8 +252,8 @@ def generate_sol_profile_project(verifier, verify_dir: str, device_id: int = 0,
                 device_id=device_id,
                 warmup_times=warmup_times,
                 run_times=run_times,
-                device_setup_code=common_vars["device_setup_code"],
-                sol_execbench_src_dir=common_vars["sol_execbench_src_dir"],
+                device_setup_code=base_device_setup_code,
+                sol_execbench_src_dir=sol_execbench_src_dir,
             )
             base_path = os.path.join(verify_dir, f"profile_{verifier.op_name}_base.py")
             with open(base_path, "w", encoding="utf-8") as f:
@@ -230,6 +264,12 @@ def generate_sol_profile_project(verifier, verify_dir: str, device_id: int = 0,
             raise
     else:
         logger.info(f"[{verifier.op_name}] 跳过 SOL base profile 生成（skip_base=True）")
+
+    if not profile_generation_enabled:
+        logger.info(f"[{verifier.op_name}] 跳过 SOL generation profile 生成（上一轮 verify 未通过）")
+        return
+
+    common_vars = _get_sol_common_template_vars(verifier, device_id)
 
     # 生成 generation profile 脚本（测量生成实现的性能）
     try:

@@ -337,13 +337,14 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
         )
 
     def materialize_project_tree(self, dst_dir: str,
-                                 project_src: Optional[str]) -> None:
+                                 project_src: Optional[str],
+                                 project_dir_name: Optional[str] = None) -> None:
         """Copy catlass_op tree into ``dst_dir`` and patch its
         CMakeLists.txt for the AR task layout."""
         if not project_src:
             return
         from akg_agents.op.utils.catlass_paths import patch_catlass_op_cmake
-        dst = os.path.join(dst_dir, "catlass_op")
+        dst = os.path.join(dst_dir, project_dir_name or self.kernel_project_dir_name)
         if os.path.isdir(dst):
             shutil.rmtree(dst)
         shutil.copytree(

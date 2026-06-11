@@ -273,6 +273,15 @@ class LocalWorker(WorkerInterface):
                 run_times = profile_settings.get('run_times', DEFAULT_RUN_TIMES)
                 warmup_times = profile_settings.get('warmup_times', DEFAULT_WARMUP_TIMES)
                 override_base_time_us = profile_settings.get('override_base_time_us')
+                base_script = os.path.join(extract_dir, f"profile_{op_name}_base.py")
+                gen_script = os.path.join(extract_dir, f"profile_{op_name}_generation.py")
+                has_valid_base_override = (
+                    override_base_time_us is not None
+                    and override_base_time_us > 0
+                    and override_base_time_us < float("inf")
+                )
+                base_requested = os.path.exists(base_script) or has_valid_base_override
+                generation_requested = os.path.exists(gen_script)
                 
                 # 4. Execute profiling based on backend/dsl. Every dispatched
                 # helper returns the canonical ``{"base": Section | None,
@@ -307,38 +316,53 @@ class LocalWorker(WorkerInterface):
 
                     base_sec = sections.get("base")
                     gen_sec = sections.get("gen")
-                    if gen_sec is None:
+                    if base_requested and base_sec is None:
+                        logger.error(f"[{task_id}] Base profile produced no result")
+                        return _empty_profile_result(error="base profile failed")
+                    if generation_requested and gen_sec is None:
                         logger.error(f"[{task_id}] Generation profile produced no result")
                         return _empty_profile_result(error="generation profile failed")
+                    if not base_requested and not generation_requested:
+                        logger.error(f"[{task_id}] No profile scripts or base override found")
+                        return _empty_profile_result(error="no profile section requested")
 
-                    gen_time = gen_sec["avg_us"]
+                    gen_time = gen_sec["avg_us"] if gen_sec else float("inf")
                     base_time = base_sec["avg_us"] if base_sec else float("inf")
-                    per_shape_gen_us = list(gen_sec["per_case_us"])
+                    per_shape_gen_us = (list(gen_sec["per_case_us"])
+                                        if gen_sec else [])
                     per_shape_base_us = (list(base_sec["per_case_us"])
                                          if base_sec else [])
-                    gen_method = gen_sec.get("method")
+                    gen_method = gen_sec.get("method") if gen_sec else None
                     base_method = base_sec.get("method") if base_sec else None
 
-                    if base_sec and gen_time > 0:
+                    if base_sec and gen_sec and gen_time > 0:
                         speedup = base_time / gen_time
                     else:
                         speedup = 0.0
 
-                    roofline_result = compute_roofline_profile(
-                        verify_dir=extract_dir,
-                        op_name=op_name,
-                        task_id=task_id,
-                        profile_settings=profile_settings,
-                    )
-                    roofline_result = augment_roofline_metrics(
-                        roofline_result,
-                        gen_time_us=gen_time,
-                        base_time_us=base_time if base_sec else None,
-                    )
-                    write_roofline_profile_result(extract_dir, roofline_result)
+                    if gen_sec:
+                        roofline_result = compute_roofline_profile(
+                            verify_dir=extract_dir,
+                            op_name=op_name,
+                            task_id=task_id,
+                            profile_settings=profile_settings,
+                        )
+                        roofline_result = augment_roofline_metrics(
+                            roofline_result,
+                            gen_time_us=gen_time,
+                            base_time_us=base_time if base_sec else None,
+                        )
+                        write_roofline_profile_result(extract_dir, roofline_result)
 
-                    roofline_time = roofline_result.get("time_us") if roofline_result.get("success") else None
-                    roofline_speedup = roofline_result.get("speedup_vs_generated", 0.0)
+                        roofline_time = (
+                            roofline_result.get("time_us")
+                            if roofline_result.get("success") else None
+                        )
+                        roofline_speedup = roofline_result.get("speedup_vs_generated", 0.0)
+                    else:
+                        roofline_result = None
+                        roofline_time = None
+                        roofline_speedup = 0.0
 
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
@@ -350,7 +374,8 @@ class LocalWorker(WorkerInterface):
                     # the HTTP / disk boundary lives in
                     # ``worker/server.py`` + ``op/utils/json_safe``.
                     return {
-                        "gen_time": gen_time if gen_time < float("inf") else None,
+                        "gen_time": (gen_time if gen_sec
+                                     and gen_time < float("inf") else None),
                         "base_time": (base_time if base_sec
                                       and base_time < float("inf") else None),
                         "speedup": speedup,
@@ -387,6 +412,9 @@ class LocalWorker(WorkerInterface):
         try:
             for kind, json_key in (("base", "base"), ("generation", "gen")):
                 script = os.path.join(extract_dir, f"profile_{op_name}_{kind}.py")
+                if not os.path.exists(script):
+                    logger.info(f"[{task_id}] {kind} profile script not found; skipping")
+                    continue
                 ok, err, prof_path = run_msprof(script, op_name, task_id, timeout=timeout)
                 if not ok or not prof_path:
                     logger.error(f"[{task_id}] {kind} msprof failed: {err}")
@@ -411,6 +439,9 @@ class LocalWorker(WorkerInterface):
         try:
             for kind, json_key in (("base", "base"), ("generation", "gen")):
                 script = os.path.join(extract_dir, f"profile_{op_name}_{kind}.py")
+                if not os.path.exists(script):
+                    logger.info(f"[{task_id}] {kind} profile script not found; skipping")
+                    continue
                 ok, err, rep_path = run_nsys(script, op_name, task_id, timeout=timeout)
                 if not ok or not rep_path:
                     logger.error(f"[{task_id}] {kind} nsys failed: {err}")

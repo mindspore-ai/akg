@@ -69,7 +69,8 @@ class TestFrameworkAdapterTorch:
         adapter = get_framework_adapter("torch")
         code = adapter.get_process_input_code("ascend", "ascendc")
         assert "def process_input" in code
-        assert "x.npu()" in code
+        assert "x.to(device)" in code
+        assert "x.npu()" not in code
     
     def test_get_set_seed_code(self):
         """Test set seed code generation."""
@@ -121,4 +122,3 @@ class TestFrameworkAdapterFactory:
         """Test getting invalid framework adapter."""
         with pytest.raises(ValueError, match="Unsupported framework"):
             get_framework_adapter("invalid")
-

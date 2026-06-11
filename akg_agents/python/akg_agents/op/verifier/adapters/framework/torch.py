@@ -252,26 +252,8 @@ class FrameworkAdapterTorch(FrameworkAdapter):
     
     def get_process_input_code(self, backend: str, dsl: str) -> str:
         """Get process_input function code for PyTorch."""
-        if dsl == "ascendc":
-            return """    def process_input(x):
-        \"\"\"处理输入数据，将数据移动到正确的设备\"\"\"
-        if isinstance(x, torch.Tensor):
-            return x.npu()
-        elif isinstance(x, np.ndarray):
-            return torch.from_numpy(x).npu()
-        elif isinstance(x, (list, tuple)):
-            return type(x)(process_input(item) for item in x)
-        elif isinstance(x, (int, float, bool, type(None))):
-            return x
-        else:
-            try:
-                return x.npu()
-            except (AttributeError, TypeError):
-                return x
-"""
-        else:
-            return """    def process_input(x):
-        \"\"\"处理输入数据，将数据移动到正确的设备\"\"\"
+        return """    def process_input(x):
+        \"\"\"Move inputs to the selected torch device.\"\"\"
         if isinstance(x, torch.Tensor):
             return x.to(device)
         elif isinstance(x, np.ndarray):

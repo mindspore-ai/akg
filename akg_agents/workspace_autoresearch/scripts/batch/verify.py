@@ -22,8 +22,8 @@ DSL-aware static check via ``akg_agents.op.utils.code_checker.CodeChecker``
 contributes its own ``_<dsl>ComplianceCheck`` subclass - so the same
 tier-1 path covers triton (@triton.jit + forward must launch it), pypto
 (@pypto.jit), catlass (forward must call torch.ops.<ns>.*), etc.
-``static_check_via_python_ast=False`` DSLs (cpp / cuda_c / ascendc /
-swft) skip the AST layer; tier-1 only catches syntax/import errors for
+``static_check_via_python_ast=False`` DSLs (cpp / cuda_c / swft) skip
+the AST layer; tier-1 only catches syntax/import errors for
 them, real failures surface in the verify/profile subprocess later.
 
 Tier 2 (--full): FORMAL verify-only pass. It materializes a temporary
@@ -31,7 +31,7 @@ task directory and calls ``utils.akg_eval.eval_kernel(...,
 verify_only=True)``, so it reuses the same ``KernelVerifier`` +
 ``DSLAdapter`` chain as batch eval / worker correctness, minus profiling.
 
-For multi-file DSLs (ascendc_catlass), ``case["kernel"]`` is a directory
+For multi-file DSLs (ascendc / ascendc_catlass), ``case["kernel"]`` is a directory
 that gets passed to ``/autoresearch --kernel``, while
 ``case["kernel_module"]`` is the sibling ``kernel.py`` (or
 ``<op>_kernel.py``) that tier-1 imports and tier-2 verifies.
@@ -245,9 +245,16 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
 
         editable_files = [entry_name]
         if adapter.kernel_arg_is_directory:
-            project_name = adapter.kernel_project_dir_name or "catlass_op"
-            shutil.copytree(kernel_path.parent / project_name, task_dir / project_name)
-            for rel in getattr(adapter, "kernel_project_files", []) or []:
+            project_name = adapter.kernel_project_dir_name
+            if not project_name:
+                raise RuntimeError(
+                    f"{type(adapter).__name__} is directory-backed but has no "
+                    "kernel_project_dir_name"
+                )
+            project_src = kernel_path.parent / project_name
+            adapter.materialize_project_tree(str(task_dir), str(project_src))
+            for rel in adapter.list_kernel_project_files(
+                    str(project_src), op_name=op_name):
                 if rel not in editable_files:
                     editable_files.append(rel)
 
@@ -422,8 +429,8 @@ def _verify_one(case: dict, full: bool, *, worker_url: str = "",
     op = case["op_name"]
     ref = Path(case["ref"])
     # Tier-1 + tier-2 always import the Python wrapper. For single-file
-    # DSLs kernel_module == kernel; for catlass kernel is the catlass_op
-    # directory and kernel_module is the sibling kernel.py.
+    # DSLs kernel_module == kernel; for directory-backed DSLs kernel is
+    # the project directory and kernel_module is the sibling kernel.py.
     kernel = Path(case.get("kernel_module") or case["kernel"])
 
     out: dict = {"op_name": op, "tier1_ref": None, "tier1_kernel": None,

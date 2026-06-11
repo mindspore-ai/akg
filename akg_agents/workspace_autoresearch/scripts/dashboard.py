@@ -104,6 +104,12 @@ CYAN = "\033[36m"
 RESET = "\033[0m"
 
 
+def fmt_metric(value):
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
 _read_raw = _shared_read_whole_file  # canonical loader lives in utils.json_io
 
 
@@ -287,19 +293,19 @@ def render(task_dir, history_offset=0, history_window=None):
     else:
         baseline_tag = baseline_tags.get(progress.get("baseline_source"),
                                           f"{DIM}(source unknown){RESET}")
-        lines.append(f"  {BOLD}Baseline:{RESET} {baseline}  {baseline_tag}")
+        lines.append(f"  {BOLD}Baseline:{RESET} {fmt_metric(baseline)}  {baseline_tag}")
 
     # Seed (initial kernel timing).
     seed = progress.get("seed_metric")
     if seed is not None:
         if seed != baseline:
-            lines.append(f"  {BOLD}Seed:{RESET}     {seed}  {DIM}(initial kernel){RESET}")
+            lines.append(f"  {BOLD}Seed:{RESET}     {fmt_metric(seed)}  {DIM}(initial kernel){RESET}")
     elif outcome == "kernel_fail":
         lines.append(f"  {BOLD}Seed:{RESET}     {RED}FAILED{RESET}  "
                      f"{DIM}(kernel verify or profile failed; timing dropped){RESET}")
     else:
         lines.append(f"  {BOLD}Seed:{RESET}     {DIM}— (no timing recorded){RESET}")
-    lines.append(f"  {BOLD}Best:{RESET}     {GREEN}{best}{RESET}  ({improv_str})")
+    lines.append(f"  {BOLD}Best:{RESET}     {GREEN}{fmt_metric(best)}{RESET}  ({improv_str})")
     lines.append(f"  {BOLD}Commit:{RESET}   {best_commit}")
     lines.append(f"  {BOLD}Failures:{RESET} {fail_color}{failures}{RESET} consecutive" +
                  (f"  {RED}⚠ DIAGNOSIS WILL TRIGGER{RESET}" if failures >= 3 else ""))
@@ -353,7 +359,7 @@ def render(task_dir, history_offset=0, history_window=None):
         metric_val = "—"
         for k in ["latency_us", "score"]:
             if k in metrics and metrics[k] is not None:
-                metric_val = f"{metrics[k]:.1f}" if isinstance(metrics[k], float) else str(metrics[k])
+                metric_val = fmt_metric(metrics[k])
                 break
 
         if decision == "KEEP":

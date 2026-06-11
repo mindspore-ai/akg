@@ -15,7 +15,10 @@
 """Unit tests for DSL Adapters."""
 
 import pytest
-from akg_agents.op.utils.arch_normalize import ascend_soc_version
+from akg_agents.op.utils.arch_normalize import (
+    ascend_direct_invoke_npu_arch,
+    ascend_soc_version,
+)
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter, get_framework_adapter
 
 
@@ -99,34 +102,141 @@ class TestDSLAdapterTritonAscend:
 
 
 class TestDSLAdapterAscendC:
-    """Test AscendC DSL Adapter."""
-    
+    """Test AscendC direct-invoke DSL Adapter."""
+
+    def _materialize_project(self, tmp_path, cmake_text):
+        adapter = get_dsl_adapter("ascendc")
+        project = tmp_path / "src_ascendc_op"
+        project.mkdir()
+        (project / "CMakeLists.txt").write_text(cmake_text, encoding="utf-8")
+        cfg = {
+            "arch": "ascend910b4",
+            "ascendc_op_src": str(project),
+            "verify_timeout": 1,
+        }
+        adapter.prepare_config(cfg, {"task_dir": str(tmp_path)})
+        verify_dir = tmp_path / "verify"
+        verify_dir.mkdir()
+        adapter.materialize_impl(
+            "import torch\n\nclass ModelNew(torch.nn.Module):\n    pass\n",
+            str(verify_dir),
+            "add_custom",
+            "torch",
+            "ascendc",
+            task_info={"task_dir": str(tmp_path)},
+            config=cfg,
+        )
+        return verify_dir / "ascendc_op" / "CMakeLists.txt"
+
+    def test_direct_invoke_layout(self):
+        adapter = get_dsl_adapter("ascendc")
+        assert adapter.kernel_arg_is_directory is True
+        assert adapter.kernel_project_dir_name == "ascendc_op"
+        assert adapter.impl_func_name_template == "ModelNew"
+        assert adapter.profile_via_python_script is True
+
+    def test_list_kernel_project_files_keeps_edit_surface_core(self, tmp_path):
+        adapter = get_dsl_adapter("ascendc")
+        project = tmp_path / "ascendc_op"
+        files = [
+            "CMakeLists.txt",
+            "CMakePresets.json",
+            "op_kernel/add_custom_kernel.asc",
+            "op_kernel/add_custom_tiling.h",
+            "op_extension/add_custom_torch.cpp",
+            "op_host/add_custom.asc",
+            "src/launcher.cpp",
+            "include/epilogue.h",
+            "common/host_utils.h",
+            "cmake/options.cmake",
+            "scripts/gen_data.py",
+            "scripts/test_torch.py",
+            "run.sh",
+            "README.md",
+            "docs/DESIGN.md",
+            "third_party/tensor_api/include/tensor.h",
+            "build/generated.cpp",
+        ]
+        for rel in files:
+            path = project / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// fixture\n", encoding="utf-8")
+
+        editable = set(adapter.list_kernel_project_files(str(project)))
+
+        assert {
+            "ascendc_op/CMakeLists.txt",
+            "ascendc_op/CMakePresets.json",
+            "ascendc_op/op_kernel/add_custom_kernel.asc",
+            "ascendc_op/op_kernel/add_custom_tiling.h",
+            "ascendc_op/op_extension/add_custom_torch.cpp",
+            "ascendc_op/op_host/add_custom.asc",
+            "ascendc_op/src/launcher.cpp",
+            "ascendc_op/include/epilogue.h",
+            "ascendc_op/common/host_utils.h",
+            "ascendc_op/cmake/options.cmake",
+        } <= editable
+        assert "ascendc_op/scripts/gen_data.py" not in editable
+        assert "ascendc_op/scripts/test_torch.py" not in editable
+        assert "ascendc_op/run.sh" not in editable
+        assert "ascendc_op/README.md" not in editable
+        assert "ascendc_op/docs/DESIGN.md" not in editable
+        assert "ascendc_op/third_party/tensor_api/include/tensor.h" not in editable
+        assert "ascendc_op/build/generated.cpp" not in editable
+
+    def test_materialize_patches_literal_cmake_npu_arch(self, tmp_path):
+        cmake_path = self._materialize_project(
+            tmp_path,
+            "add_compile_options($<$<COMPILE_LANGUAGE:ASC>:--npu-arch=dav-old>)\n",
+        )
+
+        assert "--npu-arch=dav-2201" in cmake_path.read_text(encoding="utf-8")
+
+    def test_materialize_accepts_cmake_npu_arch_variable_channel(self, tmp_path):
+        cmake_path = self._materialize_project(
+            tmp_path,
+            "set(_akg_arch ${NPU_ARCH})\n",
+        )
+
+        assert "${NPU_ARCH}" in cmake_path.read_text(encoding="utf-8")
+
+    def test_materialize_rejects_uncontrollable_cmake_npu_arch(self, tmp_path):
+        with pytest.raises(ValueError, match="no controllable NPU arch channel"):
+            self._materialize_project(
+                tmp_path,
+                "cmake_minimum_required(VERSION 3.16)\nproject(no_arch_channel)\n",
+            )
+
+    def test_special_setup_checks_unused_cmake_arch_variables(self, tmp_path):
+        adapter = get_dsl_adapter("ascendc")
+        cfg = {"arch": "ascend910b4", "task_dir": str(tmp_path)}
+        adapter.prepare_config(cfg, {"task_dir": str(tmp_path)})
+
+        code = adapter.get_special_setup_code()
+
+        assert "Manually-specified variables were not used by the project" in code
+        assert "_unused_arch_vars" in code
+        assert "ignored -DNPU_ARCH/-DASCENDC_NPU_ARCH" in code
+
     def test_get_import_statements(self):
         """Test import statements generation."""
         adapter = get_dsl_adapter("ascendc")
         imports = adapter.get_import_statements("torch")
+        assert "import torch" in imports
         assert "import torch_npu" in imports
-        assert "import subprocess" in imports
-    
+
     def test_get_impl_import(self):
-        """Test implementation import (should be empty for AscendC)."""
+        """Test implementation import."""
         adapter = get_dsl_adapter("ascendc")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert imports == ""
-    
+        assert imports == "from kernel import ModelNew\n"
+
     def test_call_impl(self):
         """Test call implementation code generation."""
         adapter = get_dsl_adapter("ascendc")
         framework_adapter = get_framework_adapter("torch")
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert "subprocess.run" in code
-        assert "run.sh" in code
-        assert "ascend_soc_version" in code
-        assert "ARCH_TO_SOC_VERSION" not in code
-        # impl_func_name 和 inputs 现在由 f-string 直接替换
-        assert "import test_func" in code
-        assert "run_test_func" in code
-        assert "test_func.run_test_func(*inputs)" in code
+        assert code == "impl_output = impl_model(*inputs)\n"
 
     def test_ascend_soc_version_derives_from_arch(self):
         assert ascend_soc_version("ascend910b4") == "Ascend910B4"
@@ -136,7 +246,13 @@ class TestDSLAdapterAscendC:
         assert ascend_soc_version("ascend950dt_95a") == "Ascend950DT_95A"
         assert ascend_soc_version("ascend950pr_9589") == "Ascend910_9589"
         assert ascend_soc_version("unknown") is None
-    
+
+    def test_ascend_direct_invoke_npu_arch_derives_from_arch(self):
+        assert ascend_direct_invoke_npu_arch("ascend910b4") == "dav-2201"
+        assert ascend_direct_invoke_npu_arch("ascend310p3") == "dav-2201"
+        assert ascend_direct_invoke_npu_arch("ascend950dt_95a") == "dav-3510"
+
+
 class TestDSLAdapterCpp:
     """Test C++ DSL Adapter."""
     
