@@ -14,6 +14,7 @@
 """Op summary bean module."""
 from .op_summary_headers import OpSummaryHeaders
 
+
 class OpSummaryBean:
     """Op summary bean."""
     headers = []
@@ -37,5 +38,5 @@ class OpSummaryBean:
 
     @property
     def all_headers(self) -> list:
-        """get all headers."""
+        """Get all headers."""
         return list(self._data.keys())

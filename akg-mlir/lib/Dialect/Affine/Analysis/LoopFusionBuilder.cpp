@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 #include <queue>
 
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
@@ -1589,11 +1590,165 @@ static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel,
   return afterChild;
 }
 
+// For an affine load/store, return the single induction variable indexing each
+// result dimension. dimIV[d] is null if dim d is not a bare single-dim expression.
+static SmallVector<Value, 4> extractPerDimIV(Operation *accessOp) {
+  AffineMap map;
+  SmallVector<Value, 4> operands;
+  if (auto r = dyn_cast<affine::AffineReadOpInterface>(accessOp)) {
+    map = r.getAffineMap();
+    operands = llvm::to_vector<4>(r.getMapOperands());
+  } else if (auto w = dyn_cast<affine::AffineWriteOpInterface>(accessOp)) {
+    map = w.getAffineMap();
+    operands = llvm::to_vector<4>(w.getMapOperands());
+  } else {
+    return {};
+  }
+  SmallVector<Value, 4> dimIV(map.getNumResults());
+  for (unsigned d = 0; d < map.getNumResults(); ++d)
+    if (auto dimE = dyn_cast<AffineDimExpr>(map.getResult(d)))
+      if (dimE.getPosition() < operands.size()) dimIV[d] = operands[dimE.getPosition()];
+  return dimIV;
+}
+
+// Index of the loop in `spine` whose IV is `iv`, or -1 if not found.
+static int spineLevelOf(Value iv, ArrayRef<affine::AffineForOp> spine) {
+  for (unsigned i = 0; i < spine.size(); ++i) {
+    affine::AffineForOp f = spine[i];
+    if (f.getInductionVar() == iv) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// Map each src spine level onto the dst spine level that indexes the SAME dep-memref
+// dimension, derived from how srcAnchor (write) and dstAnchor (read) index it. When
+// src and dst iterate the shared memref in a transposed axis order this is non-identity.
+// Returns identity if a full level bijection cannot be established (caller then keeps
+// the original positional behavior).
+static SmallVector<unsigned, 4> computeAxisLevelMap(Operation *srcAnchor, Operation *dstAnchor,
+                                                    ArrayRef<affine::AffineForOp> srcSpine,
+                                                    ArrayRef<affine::AffineForOp> dstSpine) {
+  unsigned depth = static_cast<unsigned>(srcSpine.size());
+  SmallVector<unsigned, 4> identity;
+  for (unsigned i = 0; i < depth; ++i) identity.push_back(i);
+  if (dstSpine.size() != depth) return identity;
+
+  SmallVector<Value, 4> srcDimIV = extractPerDimIV(srcAnchor);
+  SmallVector<Value, 4> dstDimIV = extractPerDimIV(dstAnchor);
+  if (srcDimIV.empty() || srcDimIV.size() != dstDimIV.size()) return identity;
+
+  SmallVector<int, 4> m(depth, -1);
+  SmallVector<bool, 4> used(depth, false);
+  for (unsigned d = 0; d < srcDimIV.size(); ++d) {
+    if (!srcDimIV[d] || !dstDimIV[d]) continue;
+    int sl = spineLevelOf(srcDimIV[d], srcSpine);
+    int dl = spineLevelOf(dstDimIV[d], dstSpine);
+    if (sl < 0 || dl < 0) continue;
+    if (m[sl] != -1 && m[sl] != dl) return identity;  // src level feeds two dst levels
+    if (used[dl] && m[sl] != dl) return identity;     // dst level claimed by two src levels
+    m[sl] = dl;
+    used[dl] = true;
+  }
+  SmallVector<unsigned, 4> result;
+  for (unsigned i = 0; i < depth; ++i) {
+    if (m[i] < 0) return identity;  // not a full bijection
+    result.push_back(static_cast<unsigned>(m[i]));
+  }
+  return result;
+}
+
+// Collect src spine ops to clone, in src program order: off-spine ops at each level,
+// descending into the spine child at its program position. Spine for-ops and
+// terminators are excluded.
+static void collectSpineCloneOps(ArrayRef<affine::AffineForOp> srcSpine, unsigned level,
+                                 SmallVector<Operation *, 16> &out) {
+  affine::AffineForOp cur = srcSpine[level];
+  affine::AffineForOp childLoop = (level + 1 < srcSpine.size()) ? srcSpine[level + 1] : affine::AffineForOp();
+  Operation *child = childLoop ? childLoop.getOperation() : nullptr;
+  for (Operation &op : cur.getBody()->without_terminator()) {
+    if (child && &op == child) {
+      collectSpineCloneOps(srcSpine, level + 1, out);
+      continue;
+    }
+    out.push_back(&op);
+  }
+}
+
+// Positional fusion (src spine level i aligns with dst level i): clone src stage ops
+// into dst[i] at a dependence-safe position, then clone the leaf body at srcSlice.
+static void fuseSpinePositional(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef<affine::AffineForOp> dstSpine,
+                                affine::ComputationSliceState &srcSlice, IRMapping &mapper, unsigned fusionDepth) {
+  for (unsigned L = 0; L + 1 < fusionDepth; ++L) {
+    affine::AffineForOp dstL = dstSpine[L];
+    SmallVector<Operation *, 8> preSpine, postSpine;
+    collectStageOps(srcSpine[L], srcSpine[L + 1], preSpine, postSpine);
+    if (!preSpine.empty()) {
+      Block::iterator insertPt = computeStageInsertPoint(dstSpine[L], dstSpine[L + 1], preSpine);
+      OpBuilder b(dstL.getBody(), insertPt);
+      for (Operation *op : preSpine) b.clone(*op, mapper);
+    }
+    if (!postSpine.empty()) {
+      Block::iterator insertPt = computePostStageInsertPoint(dstSpine[L], dstSpine[L + 1], postSpine);
+      OpBuilder b(dstL.getBody(), insertPt);
+      for (Operation *op : postSpine) b.clone(*op, mapper);
+    }
+  }
+
+  OpBuilder b(srcSlice.insertPoint->getBlock(), srcSlice.insertPoint);
+  affine::AffineForOp leaf = srcSpine.back();
+  for (Operation &op : leaf.getBody()->without_terminator()) b.clone(op, mapper);
+}
+
+// Deepest dst spine level the op touches, via the shared-memref axis alignment in levelMap.
+static unsigned requiredDstLevel(Operation *op, ArrayRef<affine::AffineForOp> srcSpine, ArrayRef<unsigned> levelMap) {
+  unsigned lvl = 0;
+  op->walk([&](Operation *n) {
+    for (Value v : n->getOperands()) {
+      int sl = spineLevelOf(v, srcSpine);
+      if (sl >= 0) lvl = std::max(lvl, levelMap[sl]);
+    }
+  });
+  return lvl;
+}
+
+// Transposed-axis fusion: place each src op at the dst spine level matching the deepest
+// dep-memref axis it touches, so every remapped IV stays in scope. src ran fully before
+// dst, so cloning src ops before dst's own ops at each level is safe. Returns false if an
+// SSA value would be consumed outside its producer's scope (needs loop restructuring).
+static bool fuseSpineTransposed(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef<affine::AffineForOp> dstSpine,
+                                ArrayRef<unsigned> levelMap, IRMapping &mapper, unsigned fusionDepth) {
+  SmallVector<Operation *, 16> cloneOps;
+  collectSpineCloneOps(srcSpine, 0, cloneOps);
+
+  DenseMap<Operation *, unsigned> assigned;
+  for (Operation *op : cloneOps) assigned[op] = requiredDstLevel(op, srcSpine, levelMap);
+
+  for (Operation *op : cloneOps) {
+    unsigned useLvl = assigned[op];
+    bool outOfScope = false;
+    op->walk([&](Operation *n) {
+      for (Value v : n->getOperands())
+        if (Operation *def = v.getDefiningOp())
+          if (assigned.count(def) && assigned[def] > useLvl) outOfScope = true;
+    });
+    if (outOfScope) return false;
+  }
+
+  SmallVector<std::unique_ptr<OpBuilder>, 4> levelBuilders;
+  for (unsigned d = 0; d < fusionDepth; ++d) {
+    affine::AffineForOp dstD = dstSpine[d];
+    levelBuilders.push_back(std::make_unique<OpBuilder>(dstD.getBody(), dstD.getBody()->begin()));
+  }
+
+  for (Operation *op : cloneOps) levelBuilders[assigned[op]]->clone(*op, mapper);
+  return true;
+}
+
 // Stage-wise fuse for two imperfectly nested loop nests (src→dst, dst is host).
 // 1. Build src/dst spines from anchor ops.
-// 2. Map srcSpine[i].iv → dstSpine[i].iv.
-// 3. For L in 0..depth-2: clone src stage ops into dst at dependence-safe position.
-// 4. At leaf: clone src leaf body at srcSlice.insertPoint.
+// 2. Map srcSpine[i].iv → dstSpine[levelMap[i]].iv (levelMap aligns shared-memref axes).
+// 3. Identity levelMap: clone src stages into dst[i] / leaf at srcSlice.insertPoint.
+//    Transposed levelMap: clone each src op at the dst level matching its deepest axis.
 // Returns true on success; false on structural failure (caller falls back to fuseLoops).
 static bool fuseImperfectLoops(const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo,
                                affine::ComputationSliceState &srcSlice, const FusionAccessInfo &accessInfo) {
@@ -1608,28 +1763,26 @@ static bool fuseImperfectLoops(const FusionLoopNestInfo &srcInfo, const FusionLo
   SmallVector<affine::AffineForOp, 4> dstSpine = buildSpine(dstAnchor, dstInfo.root, fusionDepth);
   if (srcSpine.empty() || dstSpine.empty()) return false;
 
+  // Align src/dst loop levels by the shared dep-memref axes rather than by nesting
+  // position, so a transposed src store ([..,arg3,arg2]) keeps feeding the dimension
+  // the dst expects after fusion.
+  SmallVector<unsigned, 4> levelMap = computeAxisLevelMap(srcAnchor, dstAnchor, srcSpine, dstSpine);
+  bool isIdentity = true;
+  for (unsigned i = 0; i < fusionDepth; ++i)
+    if (levelMap[i] != i) {
+      isIdentity = false;
+      break;
+    }
+
   IRMapping mapper;
-  for (unsigned i = 0; i < fusionDepth; ++i) mapper.map(srcSpine[i].getInductionVar(), dstSpine[i].getInductionVar());
+  for (unsigned i = 0; i < fusionDepth; ++i)
+    mapper.map(srcSpine[i].getInductionVar(), dstSpine[levelMap[i]].getInductionVar());
 
-  for (unsigned L = 0; L + 1 < fusionDepth; ++L) {
-    SmallVector<Operation *, 8> preSpine, postSpine;
-    collectStageOps(srcSpine[L], srcSpine[L + 1], preSpine, postSpine);
-    if (!preSpine.empty()) {
-      Block::iterator insertPt = computeStageInsertPoint(dstSpine[L], dstSpine[L + 1], preSpine);
-      OpBuilder b(dstSpine[L].getBody(), insertPt);
-      for (Operation *op : preSpine) b.clone(*op, mapper);
-    }
-    if (!postSpine.empty()) {
-      Block::iterator insertPt = computePostStageInsertPoint(dstSpine[L], dstSpine[L + 1], postSpine);
-      OpBuilder b(dstSpine[L].getBody(), insertPt);
-      for (Operation *op : postSpine) b.clone(*op, mapper);
-    }
+  if (isIdentity) {
+    fuseSpinePositional(srcSpine, dstSpine, srcSlice, mapper, fusionDepth);
+    return true;
   }
-
-  OpBuilder b(srcSlice.insertPoint->getBlock(), srcSlice.insertPoint);
-  for (Operation &op : srcSpine.back().getBody()->without_terminator()) b.clone(op, mapper);
-
-  return true;
+  return fuseSpineTransposed(srcSpine, dstSpine, levelMap, mapper, fusionDepth);
 }
 
 // --- FusionCodeGenHelper member functions ---

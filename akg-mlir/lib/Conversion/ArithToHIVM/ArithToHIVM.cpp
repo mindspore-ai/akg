@@ -1883,11 +1883,14 @@ struct MathErfToHIVM : public OpConversionPattern<math::ErfOp> {
   }
 };
 
-struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
-  using OpConversionPattern<math::CeilOp>::OpConversionPattern;
-  using OpAdaptor = typename OpConversionPattern<math::CeilOp>::OpAdaptor;
+/// Lowers math unary rounding ops (ceil/floor/round/roundeven/trunc) to same-type
+/// f32 hivm.vcast with the corresponding round_mode.
+template <typename MathOp, hivm::RoundMode RoundMode>
+struct MathUnaryRoundToHIVM : public OpConversionPattern<MathOp> {
+  using OpConversionPattern<MathOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<MathOp>::OpAdaptor;
 
-  LogicalResult matchAndRewrite(math::CeilOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
+  LogicalResult matchAndRewrite(MathOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
     auto shapeAndElem = getShapeAndElemType(resType);
@@ -1896,7 +1899,7 @@ struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
     }
     ArrayRef<int64_t> shape = shapeAndElem->first;
     Type elemType = shapeAndElem->second;
-    if (!elemType.isF16() && !elemType.isF32()) {
+    if (!elemType.isF32()) {
       return failure();
     }
     Value inputMemRef = adaptor.getOperand();
@@ -1906,37 +1909,7 @@ struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
       return failure();
     }
     propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::CEIL);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
-    rewriter.replaceOp(op, *resBuf);
-    return success();
-  }
-};
-
-struct MathFloorToHIVM : public OpConversionPattern<math::FloorOp> {
-  using OpConversionPattern<math::FloorOp>::OpConversionPattern;
-  using OpAdaptor = typename OpConversionPattern<math::FloorOp>::OpAdaptor;
-
-  LogicalResult matchAndRewrite(math::FloorOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
-    Location loc = op.getLoc();
-    Type resType = op.getResult().getType();
-    auto shapeAndElem = getShapeAndElemType(resType);
-    if (!shapeAndElem) {
-      return failure();
-    }
-    ArrayRef<int64_t> shape = shapeAndElem->first;
-    Type elemType = shapeAndElem->second;
-    if (!elemType.isF16() && !elemType.isF32()) {
-      return failure();
-    }
-    Value inputMemRef = adaptor.getOperand();
-    auto memRefType = MemRefType::get(shape, elemType);
-    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
-    if (failed(resBuf)) {
-      return failure();
-    }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::FLOOR);
+    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(RoundMode);
     rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2836,30 +2809,132 @@ static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, Conv
   return Value();
 }
 
-// Avoid UB->UB store: redirect dest uses to the source alloc (reshaped if needed).
+// True when `t` describes a packed, row-major, zero-offset slab: its elements are exactly
+// the leading getNumElements(t) elements of the underlying buffer, in linear order. Such a
+// view can be aliased as a contiguous prefix regardless of rank or extent (multi-dim and
+// dynamic-extent contiguous reads included); strided gathers and non-zero offsets cannot.
+// Unit-size dims are ignored (their stride is immaterial). Once a dynamic extent is seen the
+// outer strides become unverifiable, so any further non-unit dim is rejected conservatively.
+static bool isContiguousZeroOffsetSlab(MemRefType t) {
+  int64_t offset = 0;
+  SmallVector<int64_t> strides;
+  if (failed(getStridesAndOffset(t, strides, offset)) || offset != 0) return false;
+  ArrayRef<int64_t> shape = t.getShape();
+  int64_t expected = 1;
+  bool expectedKnown = true;
+  for (int64_t i = t.getRank() - 1; i >= 0; --i) {
+    int64_t dim = shape[static_cast<size_t>(i)];
+    if (dim == 1) continue;
+    int64_t stride = strides[static_cast<size_t>(i)];
+    if (!expectedKnown || ShapedType::isDynamic(stride) || stride != expected) return false;
+    if (ShapedType::isDynamic(dim)) {
+      expectedKnown = false;
+      continue;
+    }
+    expected *= dim;
+  }
+  return true;
+}
+
+// Returns true if `dest` (or any of its view aliases) is written by an op other than
+// `anchor`. View-like ops are followed so writes through a subview/cast are detected.
+// DPS-init operands, sibling transfer_writes and memref.copy targets count as writers;
+// func.call and plain reads are treated as readers (matching the full-coverage path).
+static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
+  SmallVector<Value> worklist{dest};
+  SmallPtrSet<Value, 8> visited;
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    if (!visited.insert(cur).second) continue;
+    for (OpOperand &use : cur.getUses()) {
+      Operation *owner = use.getOwner();
+      if (owner == anchor || isa<annotation::MarkOp>(owner)) continue;
+      if (isa<memref::SubViewOp, memref::CastOp, memref::ReinterpretCastOp, memref::ReshapeOp, memref::ExpandShapeOp,
+              memref::CollapseShapeOp, hivm::BitcastOp>(owner)) {
+        worklist.append(owner->getResults().begin(), owner->getResults().end());
+        continue;
+      }
+      if (auto dps = dyn_cast<DestinationStyleOpInterface>(owner)) {
+        if (dps.isDpsInit(&use)) return true;
+        continue;
+      }
+      if (auto tw = dyn_cast<npuvector::TransferWriteOp>(owner)) {
+        if (use.get() == tw.getSource()) return true;
+        continue;
+      }
+      if (isa<memref::CopyOp>(owner) && use.getOperandNumber() == 1) return true;
+    }
+  }
+  return false;
+}
+
+// Build a value of type `destTy` aliasing the leading getNumElements(destTy) elements of
+// `dataRoot` (an alloc). The source's first elements are exactly what the copy stored into
+// `dest`, so reads of `dest` observe identical data through this alias; trailing elements
+// (only present when the source is larger) map to dest positions the copy never defined, so
+// reading them was undefined either way. Returns null only when the source is too small to
+// cover `dest` (no contiguous alias possible) or shapes cannot be reconciled.
+static Value buildForwardedSourceView(Value dataRoot, MemRefType destTy, Location loc,
+                                      ConversionPatternRewriter &rewriter) {
+  auto rootTy = cast<MemRefType>(dataRoot.getType());
+  if (!rootTy.hasStaticShape() || !destTy.hasStaticShape() ||
+      rootTy.getElementType() != destTy.getElementType()) {
+    return Value();
+  }
+  int64_t need = destTy.getNumElements();
+  int64_t have = rootTy.getNumElements();
+  if (have < need) return Value();
+
+  Value src = dataRoot;
+  // Source larger than dest: collapse to 1D and slice the contiguous prefix of `need` elems.
+  // The explicit canonical (offset 0, unit stride) result type keeps a default-layout memref
+  // so the following reshape stays valid.
+  if (have > need) {
+    Value flat = src;
+    if (rootTy.getRank() != 1) {
+      ReassociationIndices group(static_cast<size_t>(rootTy.getRank()));
+      std::iota(group.begin(), group.end(), 0);
+      flat = rewriter.create<memref::CollapseShapeOp>(loc, src, ArrayRef<ReassociationIndices>{group});
+    }
+    auto prefixTy = MemRefType::get({need}, destTy.getElementType());
+    src = rewriter.create<memref::SubViewOp>(loc, prefixTy, flat, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(0)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(need)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+  }
+
+  // src and dest now share element count; only shape/rank may differ -> reshape (linear order
+  // preserved). reshapeMemRefToType returns src unchanged when the types already match.
+  return reshapeMemRefToType(src, destTy, loc, rewriter);
+}
+
+// "Take the read value, drop the write": when a copy moves data between two allocs (which
+// would otherwise lower to an unsupported UB->UB store), redirect every later read of `dest`
+// to a dest-typed alias of the source alloc, then delete the copy and the now-dead dest.
+// This always handles the read-alloc -> write-alloc pattern; no full-coverage requirement.
+// The only guards are mechanical (both roots are allocs, base-aligned offsets, dest not read
+// before the write / not deallocated) plus a single-writer check: a `dest` assembled by
+// several writers cannot be aliased to one source, so that (genuinely unsupported) case is
+// left to the caller to diagnose rather than silently miscompiled.
 static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteOp op, Location loc, Value dataToWrite,
                                                        Value dest, ArrayRef<OpFoldResult> offsets,
-                                                       ArrayRef<OpFoldResult> sizes,
                                                        ConversionPatternRewriter &rewriter) {
   auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
   if (!dataSubview) return failure();
 
   Value dataRoot = traceMemRefToRoot(dataToWrite);
   auto destTy = cast<MemRefType>(dest.getType());
-  auto rootTy = cast<MemRefType>(dataRoot.getType());
+  Operation *anchor = op.getOperation();
   auto isZero = [](OpFoldResult ofr) { return isConstantIntValue(ofr, 0); };
-  if (dataRoot == dest || !isRootFromAlloc(dataRoot) || !isRootFromAlloc(dest) || !destTy.hasStaticShape() ||
-      !rootTy.hasStaticShape() || !llvm::all_of(offsets, isZero) ||
-      sizes.size() != destTy.getShape().size() ||
-      !llvm::all_of(llvm::zip(sizes, destTy.getShape()), [&](auto it) {
-        return isConstantIntValue(std::get<0>(it), std::get<1>(it));
-      }) ||
-      !llvm::all_of(dataSubview.getMixedOffsets(), isZero) ||
-      cast<MemRefType>(dataSubview.getType()).getNumElements() != rootTy.getNumElements()) {
+  // The forwarded alias maps dest[i] -> dataRoot[i] (linear). That is correct for reads of
+  // any extent/rank as long as the read is a contiguous prefix of the root (a zero-offset
+  // packed slab); a strided gather or offset read would alias the wrong elements. The write
+  // into dest is contiguous from base by construction (offsets 0, unit strides).
+  if (dataRoot == dest || !isRootFromAlloc(dataRoot) || !isRootFromAlloc(dest) || !llvm::all_of(offsets, isZero) ||
+      !isContiguousZeroOffsetSlab(cast<MemRefType>(dataToWrite.getType())) ||
+      allocDestHasForeignWriter(dest, anchor)) {
     return failure();
   }
 
-  Operation *anchor = op.getOperation();
   DominanceInfo domInfo;
   if (llvm::any_of(dest.getUses(), [&](OpOperand &use) {
         Operation *user = use.getOwner();
@@ -2870,7 +2945,7 @@ static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteO
   }
 
   rewriter.setInsertionPoint(anchor);
-  Value forwarded = reshapeMemRefToType(dataRoot, destTy, loc, rewriter);
+  Value forwarded = buildForwardedSourceView(dataRoot, destTy, loc, rewriter);
   if (!forwarded) return failure();
 
   eraseBufferMarks(dest, rewriter);
@@ -2883,6 +2958,16 @@ static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteO
 
 static bool dominatesInsertPoint(DominanceInfo &domInfo, Value value, Operation *insertPt) {
   return domInfo.dominates(value, insertPt);
+}
+
+static Value resolveActualBuffer(Value dataToWrite) {
+  auto forOp = dataToWrite.getDefiningOp<scf::ForOp>();
+  if (!forOp) return dataToWrite;
+
+  for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
+    if (forOp.getResult(i) == dataToWrite) return forOp.getInitArgs()[i];
+  }
+  return dataToWrite;
 }
 
 static LogicalResult fuseTransferWriteOnProducerSide(npuvector::TransferWriteOp op, Location loc, Value dest,
@@ -2976,18 +3061,18 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
                                                                    ConversionPatternRewriter &rewriter) {
   auto resultMemType = cast<MemRefType>(resultType);
 
-  Value actualBuf = dataToWrite;
-  if (auto forOp = dataToWrite.getDefiningOp<scf::ForOp>()) {
-    for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
-      if (forOp.getResult(i) == dataToWrite) {
-        actualBuf = forOp.getInitArgs()[i];
-        break;
-      }
-    }
-  }
+  Value actualBuf = resolveActualBuffer(dataToWrite);
 
   Operation *allocDef = actualBuf.getDefiningOp();
   if (!allocDef || !isa<memref::AllocOp, memref::AllocaOp>(allocDef)) {
+    // dataToWrite is not a producer-temp alloc. If it aliases another alloc this would be a
+    // UB->UB store, which the hardware does not support and forwarding could not eliminate
+    // (e.g. partial copy into an alloc that has a foreign writer). Report instead of falling
+    // back to an illegal store.
+    if (isRootFromAlloc(traceMemRefToRoot(dataToWrite))) {
+      return rewriter.notifyMatchFailure(
+        op, "unsupported UB->UB transfer_write into alloc: copy can be neither fused nor forwarded");
+    }
     rewriter.setInsertionPoint(op);
     Value slicedDest = rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, offsets, sizes, strides);
     rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, slicedDest);
@@ -3089,7 +3174,7 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
       memref::SubViewOp::inferRankReducedResultType(dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
 
     if (destIsAllocRoot &&
-        succeeded(forwardAllocViewCopyTransferWrite(op, loc, dataToWrite, dest, offsets, sizes, rewriter))) {
+        succeeded(forwardAllocViewCopyTransferWrite(op, loc, dataToWrite, dest, offsets, rewriter))) {
       return success();
     }
 
@@ -3663,8 +3748,11 @@ void hivm::populateArithToHIVMConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<MathSinToHIVM>(patterns.getContext());
   patterns.add<MathCosToHIVM>(patterns.getContext());
   patterns.add<MathErfToHIVM>(patterns.getContext());
-  patterns.add<MathCeilToHIVM>(patterns.getContext());
-  patterns.add<MathFloorToHIVM>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::CeilOp, hivm::RoundMode::CEIL>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::FloorOp, hivm::RoundMode::FLOOR>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::RoundOp, hivm::RoundMode::ROUND>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::RoundEvenOp, hivm::RoundMode::RINT>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::TruncOp, hivm::RoundMode::TRUNC>>(patterns.getContext());
   patterns.add<MathAbsIToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());

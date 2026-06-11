@@ -210,9 +210,11 @@ def _decode_expr_single(expr, upper_bound):
         return [val] if val <= upper_bound else []
     if "min" in expr:
         min_tile = float("inf")
-        gen = (n for n in expr.replace("min", "").split(",") if n.isdigit() or n == "-1")
-        for n in gen:
-            min_tile = min(min_tile, int(n) if n.isdigit() else upper_bound)
+        for n in expr.replace("min", "").split(","):
+            if n == "-1":
+                min_tile = min(min_tile, upper_bound)
+            elif n.isdigit():
+                min_tile = min(min_tile, int(n))
         return [int(min_tile)]
     if "mod" in expr:
         mod_size = int(expr.replace("mod", ""))
@@ -336,8 +338,8 @@ class DynamicTilingSolver:
         """Find factor relations for map_res among int_keys."""
         for k in int_keys:
             if k != map_res and k % map_res == 0:
-                product_var[map_res] = product_var[k]
-                product_var[k // map_res] = product_var[k]
+                product_var[map_res] = product_var.get(k, 0)
+                product_var[k // map_res] = product_var.get(k, 0)
                 related_values[k] = [map_res, k // map_res]
 
     def _process_int_map_res(self, map_key, map_res, product_var, related_values, int_keys):
