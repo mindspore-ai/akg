@@ -269,6 +269,8 @@ class DvmSupportChecker {
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
     auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
+    auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
+    auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
     auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
     auto fullOpCheck = [](Operation *op) { return fullCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
@@ -296,6 +298,9 @@ class DvmSupportChecker {
     checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.neg"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.logical_and"] = {boolOpCheck, boolTensorInputCheck};
+    checkFunc_["mfuse.logical_or"] = {boolOpCheck, boolTensorInputCheck};
+    checkFunc_["mfuse.logical_not"] = {boolOpCheck, boolTensorInputCheck};
     // Should add Assign check. There is no corresponding op in aten.
     checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
     checkFunc_["mfuse.full"] = {fullOpCheck};
@@ -369,6 +374,25 @@ class DvmSupportChecker {
   static bool intOpCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     return outputType && isFloatIntType(outputType);
+  }
+
+  static bool boolOpCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isBoolType(outputType);
+  }
+
+  static bool boolTensorInputCheckFunc(Operation *op) {
+    for (Value operand : op->getOperands()) {
+      Type operandType = operand.getType();
+      if (hasScalarMarker(operandType) || isRankZeroTensor(operandType) || !isa<TensorType>(operandType)) {
+        return false;
+      }
+      Type inputType = getElementType(operandType);
+      if (!inputType || !isBoolType(inputType)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static bool fullCheckFunc(Operation *op) {
@@ -695,6 +719,8 @@ class DvmSupportChecker {
   }
 
   static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
+
+  static bool isBoolType(Type type) { return type.isInteger(1); }
 
   /// Check if output type is float/int type
   static bool isFloatIntType(Type type) { return isFloatType(type) || type.isInteger(32); }
