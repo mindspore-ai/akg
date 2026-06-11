@@ -357,12 +357,8 @@ def _build_output_idx_set(output_indexes, data_len):
 
 def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
     """Process numpy array: bf16, float16, contiguous, shape.
-    Returns (processed_d, is_bf16, shape). May modify data[data_idx] in place.
+    Returns (processed_d, shape). May modify data[data_idx] in place.
     """
-    is_bf16 = d.dtype.name == "bfloat16"
-    if is_bf16 and not is_output:
-        d = d.astype(np.float32)
-        data[data_idx] = d
     if d.dtype == np.float16 or (hasattr(d.dtype, 'char') and d.dtype.char in ('e', 'E')):
         d = d.view(np.uint16)
     if not is_output and not d.flags.c_contiguous:
@@ -373,14 +369,7 @@ def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
         shape = list(s) if isinstance(s, (tuple, list)) else []
     else:
         shape = list(d.shape)
-    return (d, is_bf16, shape)
-
-
-def _process_tensor_arg(d):
-    """Process tensor (non-numpy): is_bf16, shape. Returns (is_bf16, shape)."""
-    is_bf16 = hasattr(d, 'dtype') and str(d.dtype) == 'torch.bfloat16'
-    shape = list(d.shape) if hasattr(d, 'shape') else []
-    return (is_bf16, shape)
+    return (d, shape)
 
 
 def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_dir=""):
@@ -401,10 +390,10 @@ def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_d
 
         is_output = data_idx in output_idx_set
         if isinstance(d, np.ndarray):
-            d, is_bf16, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
+            d, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
         else:
-            is_bf16, shape = _process_tensor_arg(d)
-        result.append((d, is_output, is_bf16, shape))
+            shape = list(d.shape) if hasattr(d, 'shape') else []
+        result.append((d, is_output, shape))
     return result
 
 
