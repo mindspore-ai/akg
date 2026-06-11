@@ -17,6 +17,7 @@
 #include "mfusion/Conversion/TorchToMfuse/TorchAtenToMfuse.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 #include <string>
@@ -505,6 +506,95 @@ struct ConvertAtenMeanDim : public OpConversionPattern<TorchD::AtenMeanDimOp> {
   }
 };
 
+static LogicalResult extractConstantCorrection(ConversionPatternRewriter &rewriter, Operation *op,
+                                               Value correctionValue, int64_t &correction) {
+  if (matchPattern(correctionValue, TorchD::m_TorchConstantInt(&correction))) {
+    return success();
+  }
+  double correctionFloat = 0.0;
+  if (!matchPattern(correctionValue, TorchD::m_TorchConstantFloat(&correctionFloat))) {
+    return rewriter.notifyMatchFailure(op, "correction must be constant int or float");
+  }
+  const double maxCorrection = static_cast<double>(std::numeric_limits<int64_t>::max());
+  if (correctionFloat < 0.0 || correctionFloat > maxCorrection ||
+      correctionFloat != std::trunc(correctionFloat)) {
+    return rewriter.notifyMatchFailure(op, "correction float must be a non-negative integer value");
+  }
+  correction = static_cast<int64_t>(correctionFloat);
+  return success();
+}
+
+struct ConvertAtenVarCorrection : public OpConversionPattern<TorchD::AtenVarCorrectionOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenVarCorrectionOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+    auto inType = dyn_cast<RankedTensorType>(self.getType());
+    if (!inType || !inType.hasRank()) {
+      return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
+    }
+
+    int64_t inputRank = inType.getRank();
+    bool reduceAll = isa<TorchD::NoneType>(op.getDim().getType());
+
+    llvm::SmallVector<int64_t, 4> dims;
+    if (!reduceAll) {
+      llvm::SmallVector<Value, 4> dimValues;
+      if (!TorchD::getListConstructElements(op.getDim(), dimValues)) {
+        return rewriter.notifyMatchFailure(op, "dim must come from list construct");
+      }
+      if (dimValues.empty()) {
+        reduceAll = true;
+      } else {
+        dims.reserve(dimValues.size());
+        for (Value dimValue : dimValues) {
+          int64_t dim = 0;
+          if (!matchPattern(dimValue, TorchD::m_TorchConstantInt(&dim))) {
+            return rewriter.notifyMatchFailure(op, "dim list must be constant ints");
+          }
+          dim = TorchD::toPositiveDim(dim, inputRank);
+          if (!TorchD::isValidDim(dim, inputRank)) {
+            return rewriter.notifyMatchFailure(op, "dim out of range");
+          }
+          if (std::find(dims.begin(), dims.end(), dim) != dims.end()) {
+            return rewriter.notifyMatchFailure(op, "duplicate reduction dims are not supported");
+          }
+          dims.push_back(dim);
+        }
+        std::sort(dims.begin(), dims.end());
+      }
+    }
+
+    if (reduceAll) {
+      dims.resize(inputRank);
+      std::iota(dims.begin(), dims.end(), 0);
+    }
+
+    int64_t correction = 0;
+    if (failed(extractConstantCorrection(rewriter, op, op.getCorrection(), correction))) {
+      return failure();
+    }
+
+    bool keepdimValue = false;
+    if (!matchPattern(op.getKeepdim(), TorchD::m_TorchConstantBool(&keepdimValue))) {
+      return rewriter.notifyMatchFailure(op, "keepdim must be constant bool");
+    }
+
+    auto varType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!varType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+
+    auto dimsAttr = rewriter.getI64ArrayAttr(dims);
+    auto correctionAttr = rewriter.getI64IntegerAttr(correction);
+    auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
+
+    rewriter.replaceOpWithNewOp<mfuse::AclnnVarOp>(op, varType, self, dimsAttr, correctionAttr, keepdimAttr);
+    return success();
+  }
+};
+
 struct ConvertAtenVarMeanCorrection : public OpConversionPattern<TorchD::AtenVarMeanCorrectionOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -553,8 +643,8 @@ struct ConvertAtenVarMeanCorrection : public OpConversionPattern<TorchD::AtenVar
     }
 
     int64_t correction = 0;
-    if (!matchPattern(op.getCorrection(), TorchD::m_TorchConstantInt(&correction))) {
-      return rewriter.notifyMatchFailure(op, "correction must be constant int");
+    if (failed(extractConstantCorrection(rewriter, op, op.getCorrection(), correction))) {
+      return failure();
     }
 
     bool keepdimValue = false;
@@ -969,6 +1059,7 @@ void populateAtenToMfuseConversionPatterns(TypeConverter &converter, RewritePatt
   populateAtenToMfuseBinaryOpPatterns(converter, patterns);
   populateAtenToMfuseReshapeLikeOpPatterns(converter, patterns);
 
+  patterns.add<ConvertAtenVarCorrection>(converter, patterns.getContext());
   patterns.add<ConvertAtenVarMeanCorrection>(converter, patterns.getContext());
 }
 

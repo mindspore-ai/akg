@@ -63,6 +63,10 @@ void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vec
 
 void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList = {});
 
+/// Register aclnn decompose patterns that run after manual fusion (e.g. var_mean for DVM tagging).
+void registerAclnnPostFusionDecomposePatterns(RewritePatternSet &patterns,
+                                                const std::vector<std::string> &opList = {});
+
 }  // namespace mlir::mfuse
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_DECOMPOSE_DECOMPOSE_PATTERNS_H
