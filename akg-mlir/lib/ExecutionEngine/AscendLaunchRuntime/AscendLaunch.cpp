@@ -51,50 +51,6 @@ TilingMemory *TilingMemory::GetInstance() {
   return tiling_memory_singleton_.get();
 }
 
-std::vector<std::vector<uint16_t>> bf16s_;
-
-void F32ToBF16(float *input, uint16_t *output, uint32_t size) {
-  while (size-- != 0) {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    memcpy(output, input, 2);
-#else
-    memcpy(output, (char *)input + 2, 2);
-#endif
-    input++;
-    output++;
-  }
-}
-
-void BF16ToF32(uint16_t *input, float *output, uint32_t size) {
-  memset(output, 0, size * 4);
-  while (size-- != 0) {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    memcpy(output, input, 2);
-#else
-    memcpy((char *)output + 2, input, 2);
-#endif
-    input++;
-    output++;
-  }
-}
-
-py::buffer_info ConvertToBF16(py::buffer_info &buf) {
-  size_t size = buf.size;
-  std::vector<uint16_t> bf16(size);
-  F32ToBF16(reinterpret_cast<float *>(buf.ptr), bf16.data(), size);
-  std::for_each(buf.strides.begin(), buf.strides.end(), [](ssize_t &stride) { stride /= 2; });
-  py::buffer_info new_buf(bf16.data(), 2, py::format_descriptor<uint16_t>::format(), buf.ndim, buf.shape, buf.strides);
-  bf16s_.push_back(std::move(bf16));
-  return new_buf;
-}
-
-void ConvertToFP32(py::buffer_info &bf16_buf, py::buffer_info &fp32_buf) {
-  size_t size = bf16_buf.size;
-  float *fp32 = static_cast<float *>(fp32_buf.ptr);
-  BF16ToF32(reinterpret_cast<uint16_t *>(bf16_buf.ptr), fp32, size);
-  return;
-}
-
 mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
   void *data_ptr = nullptr;
 
@@ -114,8 +70,7 @@ mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
 }
 
 void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &input,
-                    std::vector<std::vector<int64_t>> &input_shapes, std::map<uint64_t, py::buffer_info> &bf16_buf_map,
-                    const py::list &processed_args) {
+                    std::vector<std::vector<int64_t>> &input_shapes, const py::list &processed_args) {
   /* Tensor also implements buffer protocol; check tensor first for device ptr. */
   auto is_tensor_arg = [](const py::handle &h) { return py::hasattr(h, "data_ptr") && py::hasattr(h, "nbytes"); };
   auto is_numpy_arg = [](const py::handle &h) { return py::isinstance<py::buffer>(h) && !py::hasattr(h, "data_ptr"); };
@@ -124,8 +79,7 @@ void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &
     py::tuple tup = processed_args[i].cast<py::tuple>();
     py::object data = tup[0].cast<py::object>();
     bool is_output = tup[1].cast<bool>();
-    bool is_bf16 = tup[2].cast<bool>();
-    py::object shape_obj = tup[3];
+    py::object shape_obj = tup[2];
 
     if (py::isinstance<py::int_>(data) || py::isinstance<py::float_>(data) || py::isinstance<py::bool_>(data)) {
       input.push_back(CreateScalarDevice(data));
@@ -144,14 +98,7 @@ void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &
     } else if (is_numpy_arg(data)) {
       py::buffer_info buffer_info = py::cast<py::buffer>(data).request();
       bytes = static_cast<uint64_t>(buffer_info.size * buffer_info.itemsize);
-      if (is_bf16 && buffer_info.itemsize == 4) {
-        py::buffer_info bf16_buffer = ConvertToBF16(buffer_info);
-        data_addr = bf16_buffer.ptr;
-        bf16_buf_map[i] = std::move(bf16_buffer);
-        bytes /= 2;
-      } else {
-        data_addr = buffer_info.ptr;
-      }
+      data_addr = buffer_info.ptr;
       use_host = true;
     } else {
       throw std::runtime_error("processed_args element must be numpy, tensor, or scalar");
@@ -184,9 +131,8 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   py::list processed_args = kwargs["processed_args"].cast<py::list>();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();
-  std::map<uint64_t, py::buffer_info> bf16_buf_map;
 
-  ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
+  ParseInputArgs(is_dynamic, input, input_shapes, processed_args);
 
   int64_t tiling_key;
   uint64_t tiling_size = 0;
@@ -260,13 +206,6 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   auto *kernel_runtime =
     mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
   kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_size);
-
-  for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
-    py::tuple tup = processed_args[iter->first].cast<py::tuple>();
-    py::object data_src = tup[0].cast<py::object>();
-    py::buffer_info res_buf = py::cast<py::buffer>(data_src).request();
-    ConvertToFP32(bf16_buf_map[iter->first], res_buf);
-  }
   return;
 }
 
@@ -376,16 +315,6 @@ PYBIND11_MODULE(ascend_launch, m) {
   if (!google::IsGoogleLoggingInitialized()) {
     google::InitGoogleLogging("akg");
   }
-  py::class_<AscendTensorObjStructPyTorch, std::shared_ptr<AscendTensorObjStructPyTorch>>(
-    m, "AscendTensorObjStructPyTorch")
-    .def(py::init<>())
-    .def_readwrite("tensor_info", &AscendTensorObjStructPyTorch::tensor_info)
-    .def_readwrite("shape_info", &AscendTensorObjStructPyTorch::shape_info)
-    .def_readwrite("nbytes", &AscendTensorObjStructPyTorch::nbytes)
-    .def_readwrite("is_output", &AscendTensorObjStructPyTorch::is_output)
-    .def_readwrite("is_bf16", &AscendTensorObjStructPyTorch::is_bf16)
-    .def("set_value", &AscendTensorObjStructPyTorch::set_value)
-    .def("data_ptr", &AscendTensorObjStructPyTorch::data_ptr);
   // ascend_run call
   m.def("akg_ascend_run", &akg_ascend_run);
   m.def("get_host_functions", &GetHostFunctions);

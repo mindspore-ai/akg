@@ -24,10 +24,10 @@ import distutils
 import numpy as np
 
 from akg import MlirDriver
-from ..utils.composite_op_helper import compare_tensor, gen_json_data
-from ..utils.result_analysis import get_compare_tolerance
-from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
-                                      run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
+from akg.utils.composite_op_helper import compare_tensor, gen_json_data
+from akg.utils.result_analysis import get_compare_tolerance
+from akg.utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
+                                        run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
