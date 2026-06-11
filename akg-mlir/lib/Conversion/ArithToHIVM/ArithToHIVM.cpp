@@ -73,6 +73,7 @@ using akg::alignUpInt64;
 using akg::ceilDivInt64;
 using akg::computeBishengNpuVectorStorageBytes;
 using akg::computeBishengStrideAlignedStorageBytes;
+using akg::computeBishengStructuredNpuVectorStorageBytes;
 using akg::getElementBitWidth;
 using akg::kNpuUbAlignBytes;
 using akg::multiplyAndCap;
@@ -138,6 +139,19 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
   if (auto brcOp = dyn_cast<npuvector::BroadcastOp>(defOp)) {
     return foldMaxValsForNpuMark(npuTy, brcOp.getMaxSizes());
   }
+  if (auto transposeOp = dyn_cast<npuvector::TransposeOp>(defOp)) {
+    auto sourceMaxShape = inferNPUVectorMaxShape(transposeOp.getVector(), depth - 1);
+    if (failed(sourceMaxShape)) return failure();
+    ArrayRef<int64_t> perm = transposeOp.getPermutation();
+    if (perm.size() != sourceMaxShape->size()) return failure();
+    SmallVector<int64_t> transposed;
+    transposed.reserve(perm.size());
+    for (int64_t dim : perm) {
+      if (dim < 0 || static_cast<size_t>(dim) >= sourceMaxShape->size()) return failure();
+      transposed.push_back((*sourceMaxShape)[static_cast<size_t>(dim)]);
+    }
+    return transposed;
+  }
 
   for (Value operand : defOp->getOperands()) {
     auto operandTy = dyn_cast<npuvector::NPUVectorType>(operand.getType());
@@ -146,6 +160,18 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
     if (succeeded(inferred)) return inferred;
   }
   return failure();
+}
+
+static bool setStructuredNPUVectorBufferSizeMark(PatternRewriter &rewriter, Location loc, ArrayRef<int64_t> typeShape,
+                                                 Type elemType, ArrayRef<int64_t> maxShape, Value buffer) {
+  return setBufferSizeMark(rewriter, loc, buffer,
+                           computeBishengStructuredNpuVectorStorageBytes(maxShape, typeShape, elemType));
+}
+
+static bool setNPUVectorBufferSizeMark(PatternRewriter &rewriter, Location loc, npuvector::NPUVectorType npuTy,
+                                       Type elemType, ArrayRef<int64_t> maxShape, Value buffer) {
+  return setBufferSizeMark(rewriter, loc, buffer,
+                           computeBishengNpuVectorStorageBytes(maxShape, npuTy.getShape(), elemType));
 }
 
 static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operation *op,
@@ -169,13 +195,31 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operat
   return merged;
 }
 
-static bool setNPUVectorResultBufferSizeMark(PatternRewriter &rewriter, Location loc, Operation *op, Value buffer) {
+static bool setNPUVectorResultBufferSizeMark(PatternRewriter &rewriter, Location loc, Operation *op, Value buffer,
+                                             Type elemTypeOverride = Type()) {
   if (!op || op->getNumResults() != 1) return false;
   auto npuTy = dyn_cast<npuvector::NPUVectorType>(op->getResult(0).getType());
   if (!npuTy || !npuTy.hasDynamicShape()) return false;
   auto maxShape = inferNPUVectorMaxShapeFromOperands(op, npuTy);
-  return succeeded(maxShape) && setBufferSizeMark(
-    rewriter, loc, buffer, computeBishengNpuVectorStorageBytes(*maxShape, npuTy.getShape(), npuTy.getElementType()));
+  return succeeded(maxShape) &&
+         setNPUVectorBufferSizeMark(rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(),
+                                    *maxShape, buffer);
+}
+
+static bool setNPUVectorValueBufferSizeMark(PatternRewriter &rewriter, Location loc, Value value, Value buffer,
+                                            Type elemTypeOverride = Type()) {
+  auto npuTy = dyn_cast<npuvector::NPUVectorType>(value.getType());
+  if (!npuTy || !npuTy.hasDynamicShape()) return false;
+  auto maxShape = inferNPUVectorMaxShape(value);
+  return succeeded(maxShape) &&
+         setNPUVectorBufferSizeMark(rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(),
+                                    *maxShape, buffer);
+}
+
+static bool setOrPropagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Operation *op,
+                                         Value fallbackSrc, Value buffer, Type elemTypeOverride = Type()) {
+  if (setNPUVectorResultBufferSizeMark(rewriter, loc, op, buffer, elemTypeOverride)) return true;
+  return propagateBufferSizeMark(rewriter, loc, fallbackSrc, buffer);
 }
 
 static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value trueVal,
@@ -780,35 +824,39 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     }
     hivm::RoundMode rounding = selectRoundMode(op);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
+    auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
+      if (setNPUVectorResultBufferSizeMark(rewriter, loc, op.getOperation(), buffer, markElemType)) return true;
+      return propagateBufferSizeMark(rewriter, loc, srcMemRef, buffer);
+    };
 
     Value resBuf;
     if ((isa<arith::SIToFPOp>(op) || isa<arith::UIToFPOp>(op)) && srcElemType.isInteger(8) && elemType.isF32()) {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
+      setCastBufferSizeMark(midBuf, rewriter.getF16Type());
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(32)) {
       auto i8MemRefType = MemRefType::get(shape, rewriter.getI8Type());
       Value i8Buf = rewriter.create<memref::AllocOp>(loc, i8MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, i8Buf);
+      setCastBufferSizeMark(i8Buf, rewriter.getI8Type());
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, i8Buf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, i8Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
       auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
+      setCastBufferSizeMark(f32Buf, rewriter.getF32Type());
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
     } else {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr, hivm::TypeFnAttr{});
     }
 
@@ -861,6 +909,30 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     llvm_unreachable("unsupported npuvector op to hivm");
   }
 
+  // Returns the chain of element types (intermediate types plus the final
+  // destination type) to cast through. Some casts are not supported directly by
+  // HIR and must go through intermediate types:
+  //   i1 -> i32 : i1 -> i8 -> i32
+  //   i1 -> i64 : i1 -> f32 -> i64
+  //   i8 -> i64 : i8 -> f16 -> f32 -> i64
+  //   i8 -> f32 : i8 -> f16 -> f32
+  static SmallVector<Type> getCastElementChain(CastOp op, Type srcElemType, Type dstElemType, OpBuilder &b) {
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && dstElemType.isInteger(32)) {
+      return {b.getI8Type(), dstElemType};
+    }
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && dstElemType.isInteger(64)) {
+      return {b.getF32Type(), dstElemType};
+    }
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) && dstElemType.isInteger(64)) {
+      return {b.getF16Type(), b.getF32Type(), dstElemType};
+    }
+    if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) && srcElemType.isInteger(8) &&
+        dstElemType.isF32()) {
+      return {b.getF16Type(), dstElemType};
+    }
+    return {dstElemType};
+  }
+
   LogicalResult matchAndRewrite(CastOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(op.getResult().getType());
@@ -887,53 +959,23 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     }
     hivm::RoundMode rounding = selectRoundMode(op);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
+    auto maxShape = inferNPUVectorMaxShapeFromOperands(op.getOperation(), npuVectorType);
+    auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
+      if (succeeded(maxShape) && setNPUVectorBufferSizeMark(rewriter, loc, npuVectorType, markElemType, *maxShape,
+                                                            buffer))
+        return true;
+      return propagateBufferSizeMark(rewriter, loc, srcMemRef, buffer);
+    };
 
+    // Some casts are not supported directly by HIR and must go through
+    // intermediate types; emit the cast chain step by step.
+    Value cur = srcMemRef;
     Value resBuf;
-    // i1 -> i32 is not supported directly, so we convert i1 -> i8 -> i32.
-    // i1 -> i64 is not supported directly (HIR rejects bool_to_int64); use i1 -> f32 -> i64.
-    // i8 -> f32 is not supported directly, so we convert i8 -> f16 -> f32.
-    // i8 -> i64 is not supported directly, so we convert i8 -> f16 -> f32 -> i64.
-    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(32)) {
-      auto i8MemRefType = MemRefType::get(shape, rewriter.getI8Type());
-      Value i8Buf = rewriter.create<memref::AllocOp>(loc, i8MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, i8Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, i8Buf, roundingAttr, hivm::TypeFnAttr{});
-      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, i8Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
-    } else if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
-      auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
-      Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr, hivm::TypeFnAttr{});
-      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
-    } else if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) && elemType.isInteger(64)) {
-      auto midF16MemRefType = MemRefType::get(shape, rewriter.getF16Type());
-      Value midF16Buf = rewriter.create<memref::AllocOp>(loc, midF16MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, midF16Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midF16Buf, roundingAttr, hivm::TypeFnAttr{});
-      auto midF32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
-      Value midF32Buf = rewriter.create<memref::AllocOp>(loc, midF32MemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, midF32Buf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF16Buf, midF32Buf, roundingAttr, hivm::TypeFnAttr{});
-      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
-    } else if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) && srcElemType.isInteger(8) &&
-               elemType.isF32()) {
-      auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
-      Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr, hivm::TypeFnAttr{});
-      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr, hivm::TypeFnAttr{});
-    } else {
-      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr, hivm::TypeFnAttr{});
+    for (Type stepElem : getCastElementChain(op, srcElemType, elemType, rewriter)) {
+      resBuf = rewriter.create<memref::AllocOp>(loc, MemRefType::get(shape, stepElem), allocOperands);
+      setCastBufferSizeMark(resBuf, stepElem);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, cur, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      cur = resBuf;
     }
 
     rewriter.replaceOp(op, resBuf);
@@ -1343,7 +1385,9 @@ struct ArithMulExtToHIVM : public OpConversionPattern<ArithOp> {
       }
     }
     Value lowBuf = rewriter.create<memref::AllocOp>(loc, lowMemRefType, lowAllocOperands);
-    propagateBufferSizeMark(rewriter, loc, lhs, lowBuf);
+    if (!setNPUVectorValueBufferSizeMark(rewriter, loc, op.getLow(), lowBuf)) {
+      propagateBufferSizeMark(rewriter, loc, lhs, lowBuf);
+    }
 
     SmallVector<Value> highAllocOperands;
     for (int i = 0; i < highMemRefType.getRank(); ++i) {
@@ -1356,7 +1400,9 @@ struct ArithMulExtToHIVM : public OpConversionPattern<ArithOp> {
       }
     }
     Value highBuf = rewriter.create<memref::AllocOp>(loc, highMemRefType, highAllocOperands);
-    propagateBufferSizeMark(rewriter, loc, lhs, highBuf);
+    if (!setNPUVectorValueBufferSizeMark(rewriter, loc, op.getHigh(), highBuf)) {
+      propagateBufferSizeMark(rewriter, loc, lhs, highBuf);
+    }
 
     SmallVector<Value> dsts = {lowBuf, highBuf};
 
@@ -1585,14 +1631,14 @@ struct ArithNegfToHIVM : public OpConversionPattern<arith::NegFOp> {
     if (failed(zeroBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *zeroBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *zeroBuf);
     rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, zeroScalar, *zeroBuf, rewriter.getDenseI64ArrayAttr({}));
 
     auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VSubOp>(loc, TypeRange{}, ValueRange{*zeroBuf, inputMemRef}, ValueRange{*resBuf});
 
     rewriter.replaceOp(op, *resBuf);
@@ -1625,7 +1671,7 @@ struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VExpOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -1658,7 +1704,7 @@ struct MathLogToHIVM : public OpConversionPattern<math::LogOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VLnOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -1691,7 +1737,7 @@ struct MathAbsFToHIVM : public OpConversionPattern<math::AbsFOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -1724,7 +1770,7 @@ struct MathSqrtToHIVM : public OpConversionPattern<math::SqrtOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VSqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -1757,7 +1803,7 @@ struct MathRsqrtToHIVM : public OpConversionPattern<math::RsqrtOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VRsqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -1789,7 +1835,7 @@ struct MathTanhToHIVM : public OpConversionPattern<math::TanhOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VTanhOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -1818,7 +1864,7 @@ struct MathSinToHIVM : public OpConversionPattern<math::SinOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VSinOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -1847,7 +1893,7 @@ struct MathCosToHIVM : public OpConversionPattern<math::CosOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VCosOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -1876,7 +1922,7 @@ struct MathErfToHIVM : public OpConversionPattern<math::ErfOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VErfOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -1908,7 +1954,7 @@ struct MathUnaryRoundToHIVM : public OpConversionPattern<MathOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(RoundMode);
     rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
@@ -1940,7 +1986,7 @@ struct MathAbsIToHIVM : public OpConversionPattern<math::AbsIOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
     rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2448,8 +2494,7 @@ static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferRe
     return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
   }
 
-  setBufferSizeMark(rewriter, op.getLoc(), buf,
-                    computeBishengNpuVectorStorageBytes(*folded, npuVecType.getShape(), elemType));
+  setNPUVectorBufferSizeMark(rewriter, op.getLoc(), npuVecType, elemType, *folded, buf);
   return success();
 }
 
@@ -3355,8 +3400,7 @@ static LogicalResult allocBroadcastBuffer(npuvector::BroadcastOp op, Location lo
     if (failed(folded)) {
       return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
     }
-    setBufferSizeMark(rewriter, loc, outBuf,
-                      computeBishengNpuVectorStorageBytes(*folded, npuVecType.getShape(), elemType));
+    setNPUVectorBufferSizeMark(rewriter, loc, npuVecType, elemType, *folded, outBuf);
   }
   return success();
 }
@@ -3523,8 +3567,30 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
 struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::TransposeOp> {
   using OpConversionPattern<npuvector::TransposeOp>::OpConversionPattern;
 
+  static FailureOr<SmallVector<int64_t>> permuteMaxShape(ArrayRef<int64_t> maxShape, ArrayRef<int64_t> perm) {
+    if (maxShape.size() != perm.size()) return failure();
+    SmallVector<int64_t> resultMaxShape;
+    resultMaxShape.reserve(perm.size());
+    for (int64_t dim : perm) {
+      if (dim < 0 || static_cast<size_t>(dim) >= maxShape.size()) return failure();
+      resultMaxShape.push_back(maxShape[static_cast<size_t>(dim)]);
+    }
+    return resultMaxShape;
+  }
+
+  static void markTransposeSourceBufferSizeAtLeast(ConversionPatternRewriter &rewriter, Location loc,
+                                                   npuvector::TransposeOp op, Value src,
+                                                   ArrayRef<int64_t> sourceMaxShape) {
+    auto sourceNpuType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
+    if (!sourceNpuType || sourceMaxShape.empty()) return;
+    int64_t bytes = computeBishengStructuredNpuVectorStorageBytes(sourceMaxShape, sourceNpuType.getShape(),
+                                                                  sourceNpuType.getElementType());
+    setBufferSizeMarkAtLeast(rewriter, loc, src, bytes);
+  }
+
   static FailureOr<Value> lowerTranspose2Axis(ConversionPatternRewriter &rewriter, Location loc, Value src,
-                                              MemRefType srcType, ArrayRef<int64_t> perm, Type elemType) {
+                                              MemRefType srcType, ArrayRef<int64_t> perm, Type elemType,
+                                              ArrayRef<int64_t> resultMaxShape) {
     int64_t rank = srcType.getRank();
     SmallVector<int64_t> resultShape(rank);
     for (int64_t i = 0; i < rank; ++i) {
@@ -3540,22 +3606,31 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       }
     }
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, src, resultBuf);
+    if (resultMaxShape.empty() || !setStructuredNPUVectorBufferSizeMark(rewriter, loc, resultMemRefType.getShape(),
+                                                                        elemType, resultMaxShape, resultBuf)) {
+      propagateBufferSizeMark(rewriter, loc, src, resultBuf);
+    }
     rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, src, resultBuf, rewriter.getDenseI64ArrayAttr(perm));
     return resultBuf;
   }
 
   static FailureOr<Value> lowerTransposeMultiAxis(ConversionPatternRewriter &rewriter, Location loc, Value src,
-                                                  MemRefType srcType, ArrayRef<int64_t> swapSeq, Type elemType) {
+                                                  MemRefType srcType, ArrayRef<int64_t> swapSeq, Type elemType,
+                                                  ArrayRef<int64_t> sourceMaxShape) {
     int64_t rank = srcType.getRank();
     Value currentBuf = src;
     MemRefType currentType = srcType;
+    SmallVector<int64_t> currentMaxShape(sourceMaxShape.begin(), sourceMaxShape.end());
+    bool hasMaxShape = currentMaxShape.size() == static_cast<size_t>(rank);
 
     for (int64_t a : swapSeq) {
       SmallVector<int64_t> newShape(rank);
+      SmallVector<int64_t> newMaxShape;
+      if (hasMaxShape) newMaxShape.resize(rank);
       for (int64_t i = 0; i < rank; ++i) {
         int64_t srcDim = (i == a) ? a + 1 : (i == a + 1) ? a : i;
         newShape[i] = currentType.getDimSize(srcDim);
+        if (hasMaxShape) newMaxShape[i] = currentMaxShape[static_cast<size_t>(srcDim)];
       }
       auto newMemRefType = MemRefType::get(newShape, elemType);
       SmallVector<Value> allocOperands;
@@ -3568,12 +3643,16 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
         }
       }
       Value newBuf = rewriter.create<memref::AllocOp>(loc, newMemRefType, allocOperands);
-      propagateBufferSizeMark(rewriter, loc, currentBuf, newBuf);
+      if (!hasMaxShape || !setStructuredNPUVectorBufferSizeMark(rewriter, loc, newMemRefType.getShape(), elemType,
+                                                                newMaxShape, newBuf)) {
+        propagateBufferSizeMark(rewriter, loc, currentBuf, newBuf);
+      }
       SmallVector<int64_t> swapPerm = buildAdjacentSwapPerm(rank, a);
       rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, currentBuf, newBuf,
                                           rewriter.getDenseI64ArrayAttr(swapPerm));
       currentBuf = newBuf;
       currentType = newMemRefType;
+      if (hasMaxShape) currentMaxShape = std::move(newMaxShape);
     }
     return currentBuf;
   }
@@ -3603,14 +3682,24 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
     }
 
     Type elemType = npuResultType.getElementType();
+    SmallVector<int64_t> resultMaxShape;
+    auto sourceMaxShape = inferNPUVectorMaxShape(op.getVector());
+    if (succeeded(sourceMaxShape)) {
+      auto permutedMaxShape = permuteMaxShape(*sourceMaxShape, perm);
+      if (succeeded(permutedMaxShape)) resultMaxShape = std::move(*permutedMaxShape);
+    }
 
     if (transposeAxisNum == 0) {
       rewriter.replaceOp(op, src);
       return success();
     }
 
+    if (succeeded(sourceMaxShape)) {
+      markTransposeSourceBufferSizeAtLeast(rewriter, loc, op, src, *sourceMaxShape);
+    }
+
     if (transposeAxisNum == 2) {
-      auto resultBuf = lowerTranspose2Axis(rewriter, loc, src, srcType, perm, elemType);
+      auto resultBuf = lowerTranspose2Axis(rewriter, loc, src, srcType, perm, elemType, resultMaxShape);
       if (failed(resultBuf)) return failure();
       rewriter.replaceOp(op, *resultBuf);
       return success();
@@ -3621,7 +3710,9 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       return rewriter.notifyMatchFailure(op, "failed to decompose permutation");
     }
 
-    auto resultBuf = lowerTransposeMultiAxis(rewriter, loc, src, srcType, swapSeq, elemType);
+    ArrayRef<int64_t> sourceMaxShapeRef;
+    if (succeeded(sourceMaxShape)) sourceMaxShapeRef = *sourceMaxShape;
+    auto resultBuf = lowerTransposeMultiAxis(rewriter, loc, src, srcType, swapSeq, elemType, sourceMaxShapeRef);
     if (failed(resultBuf)) return failure();
     rewriter.replaceOp(op, *resultBuf);
     return success();
