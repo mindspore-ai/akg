@@ -1669,6 +1669,9 @@ if __name__ == "__main__":
                 self, verify_dir, device_id, warmup_times, run_times, skip_base
             )
 
+        profile_generation_enabled = getattr(
+            self, "_profile_generation_enabled", True)
+
         # 生成基准性能测试脚本（如果不跳过）
         if not skip_base:
             profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
@@ -1678,9 +1681,12 @@ if __name__ == "__main__":
             logger.info(f"[{self.op_name}] 跳过 base profile 生成（使用缓存 baseline 或跨后端场景）")
 
         # 生成性能测试脚本
-        profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
-        self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH,
-                                            profile_file, device_id, warmup_times, run_times)
+        if profile_generation_enabled:
+            profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
+            self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH,
+                                                profile_file, device_id, warmup_times, run_times)
+        else:
+            logger.info(f"[{self.op_name}] 跳过 generation profile 生成（上一轮 verify 未通过）")
 
     def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, warmup_times: int, run_times: int):
         """从模板生成profile文件"""
@@ -1699,6 +1705,9 @@ if __name__ == "__main__":
         # 检测是否为动态shape
         is_dynamic_shape = self._detect_dynamic_shape()
         logger.debug(f"[{self.op_name}] 性能测试shape类型: {'动态' if is_dynamic_shape else '静态'}")
+
+        is_base_template = "base" in template_path.lower()
+        logger.debug(f"[{self.op_name}] 性能测试模板类型: {'base' if is_base_template else 'generation'}")
 
         # 获取adapters
         try:
@@ -1720,16 +1729,6 @@ if __name__ == "__main__":
                 inputs_factory_name=self._resolve_dyn_factory(),
                 module_name=self.framework_module_name,
             )
-            dsl_imports = dsl_adapter.get_import_statements(self.framework)
-            # get_runtime_env_override_code defaults to "" on the ABC;
-            # only the pypto adapter emits a non-empty body. No dsl check.
-            dsl_imports += dsl_adapter.get_runtime_env_override_code(
-                pypto_run_mode=self.config.get("pypto_run_mode"),
-                pypto_runtime_debug_mode=1,
-            )
-            dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
-            dsl_adapter.prepare_config(self.config, task_info=None)
-            special_setup_code = dsl_adapter.get_special_setup_code(framework=self.framework)
 
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
@@ -1738,26 +1737,20 @@ if __name__ == "__main__":
             # 生成输入处理代码
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
 
-            # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
-            create_impl_code = dsl_adapter.create_impl_module(self.framework, framework_adapter)
-            logger.debug(f"[{self.op_name}] 性能测试Create impl module code生成成功 (长度: {len(create_impl_code)})")
-
             # 生成set_seed代码
             set_seed_code = framework_adapter.get_set_seed_code(self.backend)
 
-            # 生成binary I/O函数（如果需要）
+            # Base profile must stay framework-only. A broken generated DSL
+            # project should not prevent measuring the reference baseline.
+            dsl_imports = ""
+            dsl_impl_import = ""
+            special_setup_code = ""
+            create_impl_code = ""
             binary_io_functions = ""
-            needs_binary_io = dsl_adapter.needs_binary_io
-            if needs_binary_io:
-                binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
-                logger.info(f"[{self.op_name}] 性能测试Binary I/O函数生成成功")
+            needs_binary_io = False
 
             # 获取TensorType名称（完整路径）
             tensor_type_name = framework_adapter.get_tensor_type_name()
-
-            # 判断是base还是generation模板
-            is_base_template = "base" in template_path.lower()
-            logger.debug(f"[{self.op_name}] 性能测试模板类型: {'base' if is_base_template else 'generation'}")
 
             # 生成benchmark代码
             if is_base_template:
@@ -1769,6 +1762,33 @@ if __name__ == "__main__":
                 )
                 logger.debug(f"[{self.op_name}] Base benchmark代码生成成功 (长度: {len(benchmark_code)})")
             else:
+                dsl_imports = dsl_adapter.get_import_statements(self.framework)
+                # get_runtime_env_override_code defaults to "" on the ABC;
+                # only the pypto adapter emits a non-empty body. No dsl check.
+                dsl_imports += dsl_adapter.get_runtime_env_override_code(
+                    pypto_run_mode=self.config.get("pypto_run_mode"),
+                    pypto_runtime_debug_mode=1,
+                )
+                dsl_impl_import = dsl_adapter.get_impl_import(
+                    self.op_name, self.impl_func_name)
+                dsl_adapter.prepare_config(self.config, task_info=None)
+                special_setup_code = dsl_adapter.get_special_setup_code(
+                    framework=self.framework)
+
+                # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
+                create_impl_code = dsl_adapter.create_impl_module(
+                    self.framework, framework_adapter)
+                logger.debug(
+                    f"[{self.op_name}] 性能测试Create impl module code生成成功 "
+                    f"(长度: {len(create_impl_code)})")
+
+                # 生成binary I/O函数（如果需要）
+                needs_binary_io = dsl_adapter.needs_binary_io
+                if needs_binary_io:
+                    binary_io_functions = framework_adapter.get_binary_io_functions(
+                        self.op_name)
+                    logger.info(f"[{self.op_name}] 性能测试Binary I/O函数生成成功")
+
                 # Generation模板：benchmark implementation
                 benchmark_code = dsl_adapter.benchmark_impl(
                     self.impl_func_name, "inputs", warmup_times, run_times,
@@ -2086,6 +2106,9 @@ if __name__ == "__main__":
             run_times = profile_settings.get("run_times", DEFAULT_RUN_TIMES)
             warmup_times = profile_settings.get("warmup_times", DEFAULT_WARMUP_TIMES)
             effective_profile_settings = dict(profile_settings)
+            base_only_after_failed_verify = (
+                getattr(self, "last_verify_ok", None) is False
+            )
 
             cached_baseline_time_us = None
             has_user_override = effective_profile_settings.get("override_base_time_us") is not None
@@ -2103,8 +2126,28 @@ if __name__ == "__main__":
             # 确保目录存在
             os.makedirs(verify_dir, exist_ok=True)
 
-            # 检查是否需要先生成代码文件（独立调用 profile 时需要）
-            if not self._verify_impl_artifacts_ready(verify_dir):
+            # 检查是否需要先生成代码文件（独立调用 profile 时需要）。
+            # When the immediately preceding verify failed, profile is only
+            # allowed to measure the framework baseline; keep it independent
+            # from generated DSL artifacts so a broken seed cannot hide the
+            # ref latency WA needs for baseline anchoring.
+            if base_only_after_failed_verify:
+                self._materialize_framework_bundle(verify_dir, self.framework_code)
+                stale_gen_files = (
+                    f"profile_{self.op_name}_generation.py",
+                    "generation_profile_result.json",
+                    "roofline_profile_result.json",
+                )
+                for filename in stale_gen_files:
+                    stale_path = os.path.join(verify_dir, filename)
+                    if os.path.exists(stale_path):
+                        try:
+                            os.remove(stale_path)
+                        except OSError:
+                            logger.warning(
+                                f"[{self.op_name}] failed to remove stale "
+                                f"profile artifact: {stale_path}")
+            elif not self._verify_impl_artifacts_ready(verify_dir):
                 # 代码文件不存在，需要先生成
                 impl_code = task_info.get("coder_code", "")
                 if not impl_code:
@@ -2126,7 +2169,15 @@ if __name__ == "__main__":
                 and override_base_time_us < float('inf')
             )
             skip_base = skip_base_profile or has_valid_override
-            self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times, skip_base=skip_base)
+            old_generation_enabled = getattr(
+                self, "_profile_generation_enabled", True)
+            self._profile_generation_enabled = not base_only_after_failed_verify
+            try:
+                self.gen_profile_project(verify_dir, actual_device_id,
+                                         warmup_times, run_times,
+                                         skip_base=skip_base)
+            finally:
+                self._profile_generation_enabled = old_generation_enabled
 
             # 打包并发送给Worker执行
             package_data = self._pack_directory(verify_dir)
@@ -2217,7 +2268,8 @@ if __name__ == "__main__":
                               for c in (sidecar.get("per_case") or [])
                               if isinstance(c, dict)]
 
-            if not skip_base:
+            if (not skip_base and base_time is not None
+                    and base_time > 0 and base_time < float('inf')):
                 self._store_baseline_result_in_data_cache(
                     base_time_us=base_time,
                     warmup_times=warmup_times,
@@ -2229,18 +2281,22 @@ if __name__ == "__main__":
             gen_time_display = gen_time if gen_time is not None else float('inf')
             base_time_display = base_time if base_time is not None else float('inf')
 
-            self.save_speedup_result(
-                speedup,
-                base_time_display,
-                gen_time_display,
-                unique_dir_name,
-                roofline_time=roofline_time,
-                roofline_speedup=roofline_speedup if roofline_time is not None else None,
-            )
+            if gen_time is not None:
+                self.save_speedup_result(
+                    speedup,
+                    base_time_display,
+                    gen_time_display,
+                    unique_dir_name,
+                    roofline_time=roofline_time,
+                    roofline_speedup=roofline_speedup if roofline_time is not None else None,
+                )
 
             speedup_percent = speedup * 100.0
             logger.info(f"orig performance is {base_time_display:.2f} us")
-            logger.info(f"akg_agents performance is {gen_time_display:.2f} us")
+            if gen_time is not None:
+                logger.info(f"akg_agents performance is {gen_time_display:.2f} us")
+            else:
+                logger.info("akg_agents performance skipped (verify failed before generation profile)")
             if roofline_time is not None:
                 logger.info(f"solar roofline performance is {roofline_time:.2f} us")
                 logger.info(f"roofline speedup is {roofline_speedup:.4f}x")
@@ -2249,7 +2305,7 @@ if __name__ == "__main__":
             # 构建返回结果. per_shape_* / case_descs 在 caller 侧 (akg_eval) 直接
             # 拼进 metrics dict, 不需要再去 sidecar 取一次.
             result = {
-                'gen_time': gen_time_display,
+                'gen_time': gen_time if gen_time is not None else None,
                 'base_time': base_time_display,
                 'speedup': speedup,
                 'per_shape_gen_us': per_shape_gen_us,
@@ -2635,12 +2691,14 @@ if __name__ == "__main__":
             Tuple[bool, str]: (验证结果, 错误日志)
         """
         logger.info(f"Verifier Run - Step: {current_step}")
+        self.last_verify_ok = None
 
         # 根据实现类型从task_info获取代码
         target_code = task_info.get('coder_code', '')
 
         if not target_code:
             logger.error("No target code found for verification")
+            self.last_verify_ok = False
             return False, "No target code found for verification"
 
         # 动态创建验证目录
@@ -2686,6 +2744,7 @@ if __name__ == "__main__":
                 if config_verify_result is not None:
                     if config_verify_result:
                         task_info['coder_code'] = final_code
+                    self.last_verify_ok = bool(config_verify_result)
                     return config_verify_result, config_verify_log
 
             cached_reference_data = await self._prepare_cached_reference_data(actual_device_id)
@@ -2740,6 +2799,7 @@ if __name__ == "__main__":
             # 如果启用了多 case 测试，需要等多 case 验证也通过后才能复制
             # 复制操作由 task.py 统一管理
 
+            self.last_verify_ok = bool(verify_res)
             return verify_res, verify_log
         finally:
             # 【关键】在 run() 方法结束时统一释放设备

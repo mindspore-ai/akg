@@ -72,12 +72,12 @@ verifier/
 | 属性 | 默认 | 含义 |
 |---|---|---|
 | `needs_binary_io` | `False` | 是否需要二进制 I/O 文件中转（swft = True） |
-| `static_check_via_python_ast` | `True` | LLM 提交的源码是否合法 Python（cpp / cuda_c / ascendc / swft = False，`CodeChecker` 跳过 AST 层） |
+| `static_check_via_python_ast` | `True` | LLM 提交的源码是否合法 Python（cpp / cuda_c / swft = False，`CodeChecker` 跳过 AST 层） |
 | `profile_via_python_script` | `False` | LocalWorker dispatch：True → 跑 Python 脚本读 JSON；False → 走 msprof / nsys（triton_* / pypto / catlass = True） |
 | `benchmark_requires_l2_clear` | `True` | base benchmark 模板是否每次清 L2（catlass = False） |
 | `impl_func_name_template` | `"{op_name}_{dsl}_{framework}"` | 默认 impl 函数名模板（ModelNew 类 DSL = `"ModelNew"`，AscendC = `"{op_name}_kernel"`） |
-| `kernel_arg_is_directory` | `False` | DSL 的 kernel handoff 是不是目录（catlass = True：目录里有 sibling Python wrapper + 项目子树） |
-| `kernel_project_dir_name` | `None` | `kernel_arg_is_directory=True` 时的项目子目录名（catlass = `"catlass_op"`） |
+| `kernel_arg_is_directory` | `False` | DSL 的 kernel handoff 是不是目录（ascendc_catlass / ascendc = True：目录里有 sibling Python wrapper + 项目子树） |
+| `kernel_project_dir_name` | `None` | `kernel_arg_is_directory=True` 时的项目子目录名（如 `"catlass_op"` / `"ascendc_op"`） |
 | `kernel_project_files` | `[]` | 构成 DSL kernel 项目的文件清单（相对 Python wrapper 同级目录），驱动层（如 WA scaffold）据此决定要拷哪些 / 设哪些可编辑 |
 
 **可选钩子（默认 no-op，按需 override）**：
@@ -91,7 +91,7 @@ verifier/
 | `get_runtime_env_override_code(**kwargs)` | impl 文件顶部 | 注入运行时 env 覆盖（pypto 运行模式 / 调试位）；默认空字符串 |
 | `post_iteration_cleanup(verify_dir)` | WA `akg_eval._eval_async` finally 块 | 每轮结束后清理短命产物（catlass 删 `catlass_op/build`） |
 | `read_kernel_source(kernel_arg, op_name=None)` | WA scaffold | 把 kernel handoff 路径解析成 `(source_code, project_dir_or_None)`；默认按文件读，catlass 按目录读 + 同级 `kernel.py` / `<op>_kernel.py` 兜底 |
-| `materialize_project_tree(dst_dir, project_src)` | WA scaffold | 把项目子树拷到 dst_dir 并做 DSL 特定修补（catlass 拷 `catlass_op/` + patch CMakeLists） |
+| `materialize_project_tree(dst_dir, project_src, project_dir_name=None)` | WA scaffold | 把项目子树拷到 dst_dir 并做 DSL 特定修补（catlass 拷项目目录 + patch CMakeLists） |
 
 ### 调用方约定
 

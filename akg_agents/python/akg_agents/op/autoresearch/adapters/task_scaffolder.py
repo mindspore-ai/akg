@@ -24,6 +24,10 @@ import uuid
 import yaml
 
 from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.op.utils.dsl_project_config import (
+    project_dir_from_dsl_config,
+    task_yaml_dsl_blocks,
+)
 from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
 
 
@@ -92,8 +96,21 @@ def scaffold_task_dir(
     if kernel_project_src:
         from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
         adapter = get_dsl_adapter(dsl)
-        adapter.materialize_project_tree(task_dir, kernel_project_src)
-        for filename in getattr(adapter, "kernel_project_files", []) or []:
+        project_dir_name = project_dir_from_dsl_config(
+            dsl,
+            dsl_config,
+            default=adapter.kernel_project_dir_name,
+        )
+        adapter.materialize_project_tree(
+            task_dir,
+            kernel_project_src,
+            project_dir_name=project_dir_name,
+        )
+        for filename in adapter.list_kernel_project_files(
+                kernel_project_src,
+                op_name=op_name,
+                project_dir_name=project_dir_name,
+        ):
             if filename not in editable_file_names:
                 editable_file_names.append(filename)
 
@@ -143,17 +160,8 @@ def scaffold_task_dir(
             "max_rounds": max_rounds,
         },
     }
-    # Per-DSL block (e.g. ``catlass: {root, op_dir}``). Loader's
-    # dsl_config normalizer rebuilds the flat keys at load time.
-    if dsl_config:
-        if dsl == "ascendc_catlass":
-            catlass_block = {}
-            if dsl_config.get("catlass_root"):
-                catlass_block["root"] = dsl_config["catlass_root"]
-            if dsl_config.get("catlass_op_dir"):
-                catlass_block["op_dir"] = dsl_config["catlass_op_dir"]
-            if catlass_block:
-                task_yaml["catlass"] = catlass_block
+    # Per-DSL blocks stay explicit: absent blocks mean adapter defaults.
+    task_yaml.update(task_yaml_dsl_blocks(dsl, dsl_config))
     yaml_content = yaml.dump(task_yaml, default_flow_style=False, allow_unicode=True)
     _write_file(task_dir, "task.yaml", yaml_content)
 

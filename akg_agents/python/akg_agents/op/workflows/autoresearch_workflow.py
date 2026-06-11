@@ -24,6 +24,7 @@ from langgraph.graph import StateGraph, END
 
 from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+from akg_agents.op.utils.dsl_project_config import project_dir_from_dsl_config
 from akg_agents.op.workflows.base_workflow import OpBaseWorkflow, _DSL_DOCS_DIR_MAP
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.core_v2.workflows.registry import register_workflow
@@ -181,7 +182,15 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 op_name=op_name)
             kernel_project_src = workflow_config.get("kernel_project_src")
             dsl_config = dict(workflow_config.get("dsl_config") or {})
-            for _key in ("catlass_root", "catlass_op_dir", "catlass_op_src"):
+            for _key in (
+                "catlass_root",
+                "catlass_op_dir",
+                "catlass_op_src",
+                "ascendc_op_dir",
+                "ascendc_op_src",
+                "ascendc_project_dir",
+                "ascendc_project_src",
+            ):
                 if workflow_config.get(_key) is not None:
                     dsl_config.setdefault(_key, workflow_config[_key])
 
@@ -189,11 +198,18 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                 raise ValueError(
                     f"DSL '{dsl}' is multi-file (kernel_arg_is_directory=True) "
                     f"but workflow_config did not provide 'kernel_project_src' "
-                    f"pointing to the project tree (e.g. catlass_op/).")
+                    f"pointing to the DSL project tree.")
 
-            project_dir_name = (
-                dsl_adapter.kernel_project_dir_name or "catlass_op"
+            project_dir_name = project_dir_from_dsl_config(
+                dsl,
+                dsl_config,
+                default=dsl_adapter.kernel_project_dir_name,
             )
+            if dsl_adapter.kernel_arg_is_directory and not project_dir_name:
+                raise ValueError(
+                    f"DSL '{dsl}' is multi-file but does not declare "
+                    "kernel_project_dir_name."
+                )
 
             def _make_task_info(code: str,
                                 current_task_dir: str | None = None) -> dict:
@@ -204,11 +220,29 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                     if current_task_dir:
                         project_src = os.path.join(
                             current_task_dir, project_dir_name)
-                        task_info["catlass_op_src"] = project_src
-                        task_info["catlass_op_dir"] = project_dir_name
+                        task_info["kernel_project_src"] = project_src
+                        task_info["kernel_project_dir"] = project_dir_name
+                        if dsl == "ascendc_catlass":
+                            task_info["catlass_op_src"] = project_src
+                            task_info["catlass_op_dir"] = project_dir_name
+                        elif dsl == "ascendc":
+                            task_info["ascendc_op_src"] = project_src
+                            task_info["ascendc_op_dir"] = project_dir_name
                     elif kernel_project_src:
-                        task_info.setdefault("catlass_op_src",
+                        task_info.setdefault("kernel_project_src",
                                              kernel_project_src)
+                        task_info.setdefault("kernel_project_dir",
+                                             project_dir_name)
+                        if dsl == "ascendc_catlass":
+                            task_info.setdefault("catlass_op_src",
+                                                 kernel_project_src)
+                            task_info.setdefault("catlass_op_dir",
+                                                 project_dir_name)
+                        elif dsl == "ascendc":
+                            task_info.setdefault("ascendc_op_src",
+                                                 kernel_project_src)
+                            task_info.setdefault("ascendc_op_dir",
+                                                 project_dir_name)
                 return task_info
 
             # ---- 2. Preflight: validate reference + resolve seed ----

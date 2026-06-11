@@ -30,7 +30,7 @@ conventions, never workflow → workflow.
       <entry_file>          ← adapter.entry_filename_template, the file
                               the LLM mainly edits (kernel.py for triton /
                                tilelang / pypto / catlass wrapper /
-                               ascendc meta-Python; <op>_kernel.cpp for
+                               ascendc direct-invoke wrapper; <op>_kernel.cpp for
                                hypothetical pure-C++ DSLs, etc.)
       <project_subtree>/    ← multi-file DSLs only (e.g. catlass_op/);
                               filenames + structure from
@@ -55,8 +55,8 @@ conventions, never workflow → workflow.
           <ref_dir>/<op_name>_ref.py
           <kernel_dir>/<op_name>_kernel.py
 
-  Multi-file DSLs (e.g. ascendc_catlass — adapter sets
-  ``kernel_arg_is_directory = True`` + ``kernel_project_dir_name = "catlass_op"``):
+  Multi-file DSLs (e.g. ascendc_catlass / ascendc — adapter sets
+  ``kernel_arg_is_directory = True`` + ``kernel_project_dir_name``):
       <batch_dir>/
           manifest.yaml | manifest.json
           <ref_dir>/<op_name>_ref.py
@@ -92,8 +92,8 @@ exposes the structural metadata; this module documents what each knob
 
   kernel_project_dir_name (Optional[str])
       Subdirectory name (relative to per-op root) holding the project
-      subtree when ``kernel_arg_is_directory=True``. catlass uses
-      ``"catlass_op"``.
+      subtree when ``kernel_arg_is_directory=True``. Examples:
+      ``"catlass_op"`` and ``"ascendc_op"``.
 
   kernel_project_files (list)
       Path entries (files or directories) that belong to the DSL's
@@ -102,10 +102,8 @@ exposes the structural metadata; this module documents what each knob
 
   static_check_via_python_ast (bool)
       True iff the entry file is Python source CodeChecker should
-      ``ast.parse``. False for ascendc (meta-Python that exec's into
-      string vars but doesn't define ``ModelNew``) and any pure-C++
-      adapter. NOT the same as "entry file is .py" — ascendc's entry is
-      .py but isn't ast-checkable.
+      ``ast.parse``. False for non-Python wrappers such as pure C++ /
+      CUDA-C adapters, or source formats such as swft.
 
   needs_binary_io (bool)
       True iff the DSL uses file-based tensor I/O (swft).
@@ -163,7 +161,7 @@ def resolve_kernel_paths_for_op(adapter, kernel_dir: Path,
     Single-file DSLs (``adapter.kernel_arg_is_directory=False``):
         ``<kernel_dir>/<op>_kernel.py`` — both kernel_arg and python_module.
 
-    Multi-file DSLs (catlass etc.):
+    Multi-file DSLs (ascendc_catlass / ascendc etc.):
         ``<kernel_dir>/<op>/<adapter.kernel_project_dir_name>/`` (kernel_arg)
         + sibling entry file named by ``adapter.entry_filename_template``
         or ``<op>_kernel.py`` (KernelBench legacy)."""

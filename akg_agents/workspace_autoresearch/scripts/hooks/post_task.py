@@ -66,7 +66,8 @@ def _emit_retry_context(task_dir: str, plan_version: int, reason: str,
         f"line (plan-version-specific, do not paraphrase):\n"
         f"  {marker}\n"
         f"\n"
-        f"Do NOT call create_plan.py, do NOT Edit kernel.py, do NOT Stop. "
+        f"Do NOT call create_plan.py, do NOT Edit task source files, "
+        f"do NOT Stop. "
         f"Only Task is legal in DIAGNOSE until the artifact validates."
     )
     print(json.dumps({

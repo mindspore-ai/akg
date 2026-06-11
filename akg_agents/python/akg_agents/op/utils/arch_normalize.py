@@ -133,3 +133,20 @@ def ascend_soc_version(arch: str) -> Optional[str]:
         return f"Ascend910_{match.group(1)}"
 
     return None
+
+
+def ascend_direct_invoke_npu_arch(arch: str) -> Optional[str]:
+    """Derive CANN direct-invoke ``--npu-arch`` from an AKG Ascend arch.
+
+    CANNBot-style direct-invoke projects compile ASC kernels with dav
+    architecture tokens. Keep this rule prefix-based so new SKUs admitted by
+    config validation do not require a second hard-coded table here.
+    """
+    normalized = normalize_ascend_arch_name(arch or "")
+    if not normalized:
+        return None
+    if normalized.startswith("ascend950"):
+        return "dav-3510"
+    if normalized.startswith("ascend910") or normalized.startswith("ascend310"):
+        return "dav-2201"
+    return None

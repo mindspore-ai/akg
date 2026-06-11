@@ -185,6 +185,7 @@ class TaskConfig:
     framework: Optional[str] = None
     backend: Optional[str] = None
     arch: Optional[str] = None
+    dsl_config: dict = field(default_factory=dict)
 
     # 自定义评测脚本 (覆盖 adapter 生成)
     eval_script: Optional[str] = None

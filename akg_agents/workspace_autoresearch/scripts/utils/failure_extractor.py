@@ -160,6 +160,225 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
         "Kernel module must export `ModelNew` (name is fixed by the verify "
         "pipeline). Check class definition and file syntax.",
     ),
+    # --- AscendC direct-invoke: missing/invalid target arch ---
+    (
+        "ascendc_arch_config",
+        re.compile(
+            r"ascendc (?:requires config\['arch'\]|cannot derive "
+            r"direct-invoke --npu-arch from ([^\n]+))",
+        ),
+        lambda m: {"arch": (m.group(1) or "").strip() or None},
+        "AscendC direct-invoke needs a supported Ascend arch so the adapter "
+        "can choose the CANN --npu-arch token. Check task/config arch and "
+        "worker device selection.",
+    ),
+    # --- AscendC direct-invoke: CANN environment missing ---
+    (
+        "ascendc_env_missing",
+        re.compile(
+            r"ASCEND_HOME_PATH is not set|ASCEND_HOME_PATH.*(?:missing|unset)",
+            re.IGNORECASE,
+        ),
+        lambda m: {},
+        "infra_fail: CANN environment is not sourced. Source set_env.sh/env.sh "
+        "so ASCEND_HOME_PATH, compiler paths, and torch_npu libraries are visible.",
+    ),
+    (
+        "torch_npu_import_failed",
+        re.compile(
+            r"(?:ImportError|ModuleNotFoundError):.*(?:torch_npu|No module named 'torch_npu')|"
+            r"DLL load failed while importing torch_npu",
+            re.IGNORECASE,
+        ),
+        lambda m: {},
+        "infra_fail: torch_npu is not importable in the eval process. Activate "
+        "the NPU Python environment before running WA/worker eval.",
+    ),
+    # --- AscendC-CATLASS: project/env/build failures ---
+    (
+        "catlass_arch_config",
+        re.compile(
+            r"ascendc_catlass requires config\['arch'\]|"
+            r"Unsupported arch for ascendc_catlass:\s*([^\.\n]+)",
+        ),
+        lambda m: {"arch": (m.group(1) or "").strip() or None},
+        "ascendc_catlass needs a supported Ascend arch so the adapter can "
+        "choose the CATLASS CMake arch token. Check task/config arch and worker "
+        "device selection.",
+    ),
+    (
+        "catlass_root_missing",
+        re.compile(r"CATLASS_ROOT is not set", re.IGNORECASE),
+        lambda m: {},
+        "infra_fail: CATLASS_ROOT is missing. Set task.yaml catlass.root, "
+        "config catlass_root, CATLASS_ROOT, or install thirdparty/catlass.",
+    ),
+    (
+        "catlass_project_missing",
+        re.compile(
+            r"catlass_op_src not found or not a directory.*?Got:\s*([^\n]+)|"
+            r"catlass_op directory not found:\s*([^\n]+)|"
+            r"ascendc_catlass kernel handoff must be a catlass_op directory; got ([^\n]+)|"
+            r"ascendc_catlass kernel handoff is a directory; expected sibling .*? at ([^\n]+)",
+            re.DOTALL,
+        ),
+        lambda m: {
+            "path": next(
+                (g.strip() for g in m.groups() if g and g.strip()),
+                None,
+            )
+        },
+        "ascendc_catlass expects a catlass_op project tree plus the sibling "
+        "kernel.py wrapper. Fix task layout or catlass.op_dir/catlass_op_src.",
+    ),
+    (
+        "catlass_cmake_build_failed",
+        re.compile(r"catlass cmake build failed"),
+        lambda m: {},
+        "CATLASS build failed. Inspect the CMake/make log for missing CANN, "
+        "CATLASS_ROOT, torch_npu headers/libs, arch mismatch, or .asc compile errors.",
+    ),
+    (
+        "catlass_load_library_failed",
+        re.compile(
+            r"(?:OSError|RuntimeError):\s+.*(?:libcatlass\.so|catlass).*?"
+            r"(?:load_library|cannot open shared object file|DLL load failed|undefined symbol)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        lambda m: {},
+        "torch.ops.load_library failed for the CATLASS extension. Check that "
+        "libcatlass.so was built for the active Python/torch_npu/CANN environment.",
+    ),
+    (
+        "catlass_torch_op_missing",
+        re.compile(
+            r"_OpNamespace.*['\"]catlass['\"].*object has no attribute '([^']+)'|"
+            r"torch\.ops\.catlass\.(\w+).*?(?:not exist|no attribute)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        lambda m: {"op": (m.group(1) or m.group(2) or "").strip() or None},
+        "CATLASS extension loaded but did not register the torch.ops.catlass "
+        "symbol that kernel.py calls. Align TORCH_LIBRARY/op name with ModelNew.forward().",
+    ),
+    # --- AscendC direct-invoke: project tree missing or malformed ---
+    (
+        "ascendc_project_missing",
+        re.compile(
+            r"ascendc project directory not found:\s*([^\n]+)|"
+            r"ascendc_op_src not found or not a directory.*?Got:\s*([^\n]+)",
+            re.DOTALL,
+        ),
+        lambda m: {"path": (m.group(1) or m.group(2) or "").strip()},
+        "AscendC direct-invoke expects --kernel to point at the ascendc_op "
+        "project directory with sibling kernel.py. Fix the task layout or "
+        "task.yaml editable file paths.",
+    ),
+    (
+        "ascendc_cmakelists_missing",
+        re.compile(r"ascendc CMakeLists\.txt not found:\s*([^\n]+)"),
+        lambda m: {"path": m.group(1).strip()},
+        "The ascendc_op project is missing CMakeLists.txt. Restore the direct-"
+        "invoke project tree instead of editing only kernel.py.",
+    ),
+    # --- AscendC direct-invoke: cmake/build failures ---
+    (
+        "ascendc_cmake_configure_failed",
+        re.compile(r"ascendc cmake configure failed"),
+        lambda m: {},
+        "CMake configure failed. Inspect the configure log for missing CANN, "
+        "torch_npu, include paths, compiler, or invalid CMake target wiring.",
+    ),
+    (
+        "ascendc_cmake_missing",
+        re.compile(
+            r"FileNotFoundError:.*(?:'cmake'|\"cmake\"|cmake)",
+            re.IGNORECASE,
+        ),
+        lambda m: {},
+        "infra_fail: cmake executable was not found. Install CMake or activate "
+        "the environment that provides it before running AscendC direct-invoke eval.",
+    ),
+    (
+        "ascendc_cmake_build_failed",
+        re.compile(r"ascendc cmake build failed"),
+        lambda m: {},
+        "AscendC build failed. Inspect the build log for .asc compile errors, "
+        "npu-arch mismatch, missing headers, or host/device pass issues.",
+    ),
+    (
+        "ascendc_no_shared_library",
+        re.compile(r"ascendc build finished without a shared library in ([^\n]+)"),
+        lambda m: {"build_dir": m.group(1).strip()},
+        "CMake completed but produced no .so under build/. Ensure the PyTorch "
+        "extension target is SHARED and not only an executable/run.sh target.",
+    ),
+    # --- AscendC direct-invoke: Python wrapper / torch extension load ---
+    (
+        "ascendc_extension_missing",
+        re.compile(r"no AscendC extension found under ([^\n]+)"),
+        lambda m: {"build_dir": m.group(1).strip()},
+        "kernel.py could not find the built .so. Make _load() search build/ "
+        "recursively or align the CMake library output name/path.",
+    ),
+    (
+        "ascendc_load_library_failed",
+        re.compile(
+            r"(?:OSError|RuntimeError):\s+.*(?:load_library|cannot open shared "
+            r"object file|DLL load failed|undefined symbol)",
+            re.IGNORECASE,
+        ),
+        lambda m: {},
+        "torch.ops.load_library failed. Check that the selected .so links "
+        "torch_npu/CANN libs and that LD_LIBRARY_PATH/PATH includes them.",
+    ),
+    (
+        "ascendc_torch_op_missing",
+        re.compile(
+            r"_OpNamespace.*object has no attribute '([^']+)'|"
+            r"torch\.ops\.(\w+)\.(\w+).*?(?:not exist|no attribute)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        lambda m: {
+            "op": (m.group(1) or m.group(3) or "").strip() or None,
+            "namespace": (m.group(2) or "").strip() or None,
+        },
+        "The extension loaded but did not register the torch.ops symbol that "
+        "kernel.py calls. Align TORCH_LIBRARY namespace/op name with ModelNew.forward().",
+    ),
+    # --- Common DSL front-end/env failures ---
+    (
+        "dsl_unsupported_framework",
+        re.compile(
+            r"(?P<dsl>TileLang Ascend|TileLang CUDA|ascendc direct-invoke) "
+            r"currently (?:only supports framework='(?P<expected1>[^']+)'|"
+            r"supports (?P<expected2>\w+) only), "
+            r"got (?:framework=)?'(?P<actual>[^']+)'",
+        ),
+        lambda m: {
+            "dsl": m.group("dsl"),
+            "expected": m.group("expected1") or m.group("expected2"),
+            "actual": m.group("actual"),
+        },
+        "The selected DSL adapter was invoked with an unsupported framework. "
+        "Fix task.yaml framework/dsl instead of debugging kernel code.",
+    ),
+    (
+        "dsl_module_missing",
+        re.compile(
+            r"ModuleNotFoundError: No module named '"
+            r"((?:triton|tilelang|pypto|swft)(?:\.[^']*)?)'",
+        ),
+        lambda m: {"module": m.group(1)},
+        "infra_fail: the selected DSL runtime package is not importable in "
+        "the eval process. Activate the matching environment or install the DSL.",
+    ),
+    (
+        "python_syntax_error",
+        re.compile(r"SyntaxError:\s*([^\n]+)"),
+        lambda m: {"message": m.group(1).strip()},
+        "Generated kernel/wrapper has invalid Python syntax. Fix syntax before "
+        "reasoning about DSL/compiler behavior.",
+    ),
     # --- Grid size limit ---
     (
         "grid_too_large",
@@ -167,6 +386,18 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
         lambda m: {"limit": int(m.group(1))},
         "Launch grid exceeds Ascend limit. Flatten multi-axis grids to 1-D, "
         "or move an axis inside the kernel as a serial loop.",
+    ),
+    # --- Triton compile-time assertion / front-end compile failure ---
+    (
+        "triton_compile_failure",
+        re.compile(
+            r"triton\.compiler\.errors\."
+            r"(CompileTimeAssertionFailure|CompilationError|CompilationAssertionFailure)",
+        ),
+        lambda m: {"error_type": m.group(1)},
+        "Triton JIT compilation failed before launch. Inspect the reported "
+        "source location for failing tl.static_assert, invalid constexpr/meta "
+        "assumption, or unsupported frontend construct.",
     ),
     # --- Triton MLIR compile failure (catch-all, runs after more specific UB) ---
     (
@@ -239,7 +470,7 @@ PATTERNS: list[tuple[str, re.Pattern, Callable[[re.Match], dict], str]] = [
 # Triton's wrapped errors fell through and r4-style FAILs surfaced no
 # python_error at all.
 _PYTHON_EXCEPTION_RE = re.compile(
-    r"^(?:\w+\.)*[A-Z]\w*(?:Error|Exception|Warning):\s+.+$",
+    r"^(?:\w+\.)*[A-Z]\w*(?:Error|Exception|Warning|Failure):\s+.+$",
     re.MULTILINE,
 )
 
