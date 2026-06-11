@@ -344,13 +344,26 @@ void AffineIteratorConversion::runOnOperation() {
   // Sink reduce axes to innermost. interchangeLoops moves the Operation
   // objects themselves (not just bounds/IVs), so {reduction} attributes
   // follow the original Operation to its new (inner) position automatically.
+  auto reduceAxes = CommonUtils::collectReductionAxes(func);
+  SmallVector<affine::AffineForOp, 4> loopsToSink;
   func.walk([&](affine::AffineForOp inner) {
-    if (auto outer = dyn_cast<affine::AffineForOp>(inner->getParentOp())) {
-      if (CommonUtils::isReduceAxis(func, inner->getParentOp()) && !CommonUtils::isReduceAxis(func, inner)) {
-        affine::interchangeLoops(outer, inner);
-      }
+    auto outer = dyn_cast<affine::AffineForOp>(inner->getParentOp());
+    if (!outer) {
+      return;
     }
+    if (!CommonUtils::isReduceAxis(reduceAxes, outer) || CommonUtils::isReduceAxis(reduceAxes, inner)) {
+      return;
+    }
+    Block *outerBody = outer.getBody();
+    if (&outerBody->front() != inner.getOperation() || inner->getNextNode() != outerBody->getTerminator()) {
+      return;
+    }
+    loopsToSink.push_back(inner);
   });
+  for (auto inner : loopsToSink) {
+    auto outer = cast<affine::AffineForOp>(inner->getParentOp());
+    affine::interchangeLoops(outer, inner);
+  }
 
   removeInitMemoryCopy(func);
 
