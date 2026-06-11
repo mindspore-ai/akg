@@ -1883,11 +1883,14 @@ struct MathErfToHIVM : public OpConversionPattern<math::ErfOp> {
   }
 };
 
-struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
-  using OpConversionPattern<math::CeilOp>::OpConversionPattern;
-  using OpAdaptor = typename OpConversionPattern<math::CeilOp>::OpAdaptor;
+/// Lowers math unary rounding ops (ceil/floor/round/roundeven/trunc) to same-type
+/// f32 hivm.vcast with the corresponding round_mode.
+template <typename MathOp, hivm::RoundMode RoundMode>
+struct MathUnaryRoundToHIVM : public OpConversionPattern<MathOp> {
+  using OpConversionPattern<MathOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<MathOp>::OpAdaptor;
 
-  LogicalResult matchAndRewrite(math::CeilOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
+  LogicalResult matchAndRewrite(MathOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
     auto shapeAndElem = getShapeAndElemType(resType);
@@ -1896,7 +1899,7 @@ struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
     }
     ArrayRef<int64_t> shape = shapeAndElem->first;
     Type elemType = shapeAndElem->second;
-    if (!elemType.isF16() && !elemType.isF32()) {
+    if (!elemType.isF32()) {
       return failure();
     }
     Value inputMemRef = adaptor.getOperand();
@@ -1906,37 +1909,7 @@ struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
       return failure();
     }
     propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::CEIL);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
-    rewriter.replaceOp(op, *resBuf);
-    return success();
-  }
-};
-
-struct MathFloorToHIVM : public OpConversionPattern<math::FloorOp> {
-  using OpConversionPattern<math::FloorOp>::OpConversionPattern;
-  using OpAdaptor = typename OpConversionPattern<math::FloorOp>::OpAdaptor;
-
-  LogicalResult matchAndRewrite(math::FloorOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
-    Location loc = op.getLoc();
-    Type resType = op.getResult().getType();
-    auto shapeAndElem = getShapeAndElemType(resType);
-    if (!shapeAndElem) {
-      return failure();
-    }
-    ArrayRef<int64_t> shape = shapeAndElem->first;
-    Type elemType = shapeAndElem->second;
-    if (!elemType.isF16() && !elemType.isF32()) {
-      return failure();
-    }
-    Value inputMemRef = adaptor.getOperand();
-    auto memRefType = MemRefType::get(shape, elemType);
-    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
-    if (failed(resBuf)) {
-      return failure();
-    }
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::FLOOR);
+    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(RoundMode);
     rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -3775,8 +3748,11 @@ void hivm::populateArithToHIVMConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<MathSinToHIVM>(patterns.getContext());
   patterns.add<MathCosToHIVM>(patterns.getContext());
   patterns.add<MathErfToHIVM>(patterns.getContext());
-  patterns.add<MathCeilToHIVM>(patterns.getContext());
-  patterns.add<MathFloorToHIVM>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::CeilOp, hivm::RoundMode::CEIL>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::FloorOp, hivm::RoundMode::FLOOR>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::RoundOp, hivm::RoundMode::ROUND>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::RoundEvenOp, hivm::RoundMode::RINT>>(patterns.getContext());
+  patterns.add<MathUnaryRoundToHIVM<math::TruncOp, hivm::RoundMode::TRUNC>>(patterns.getContext());
   patterns.add<MathAbsIToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
