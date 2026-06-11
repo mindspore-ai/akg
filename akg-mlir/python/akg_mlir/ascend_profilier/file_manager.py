@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""common utils for file manager"""
+"""Common utils for file manager."""
 import os
 import csv
 import shutil
@@ -23,9 +23,10 @@ MAX_CSV_SIZE = 1024 * 1024 * 1024 * 5
 
 class FileManager:
     """Files Manager."""
+
     @classmethod
     def file_read_all(cls, file_path: str, mode: str = "r") -> any:
-        """read all files."""
+        """Read all files."""
         if not os.path.isfile(file_path):
             return ''
         file_size = os.path.getsize(file_path)
@@ -71,4 +72,4 @@ class FileManager:
                 shutil.rmtree(path)
             except Exception as e:
                 logging.error("Can't remove the directory: %s", path)
-                raise RuntimeError(f"Failed to remove the file: {file_path}") from e
+                raise RuntimeError(f"Failed to remove the file: {path}") from e
