@@ -704,6 +704,453 @@ def global_pool2d_str(inputs, output, attr):
     return res
 
 
+def sin_str(inputs, output, attr):
+    """gen sin string"""
+    return f"{output[0]['tensor_name']} = np.sin({get_input(inputs[0][0])})"
+
+
+def cos_str(inputs, output, attr):
+    """gen cos string"""
+    return f"{output[0]['tensor_name']} = np.cos({get_input(inputs[0][0])})"
+
+
+def asin_str(inputs, output, attr):
+    """gen arcsin string"""
+    return f"{output[0]['tensor_name']} = np.arcsin({get_input(inputs[0][0])})"
+
+
+def acos_str(inputs, output, attr):
+    """gen arccos string"""
+    return f"{output[0]['tensor_name']} = np.arccos({get_input(inputs[0][0])})"
+
+
+def sign_str(inputs, output, attr):
+    """gen sign string"""
+    return f"{output[0]['tensor_name']} = np.sign({get_input(inputs[0][0])})"
+
+
+def isnan_str(inputs, output, attr):
+    """gen isnan string"""
+    return f"{output[0]['tensor_name']} = np.isnan({get_input(inputs[0][0])})"
+
+
+def isinf_str(inputs, output, attr):
+    """gen isinf string"""
+    return f"{output[0]['tensor_name']} = np.isinf({get_input(inputs[0][0])})"
+
+
+def isfinite_str(inputs, output, attr):
+    """gen isfinite string"""
+    return f"{output[0]['tensor_name']} = np.isfinite({get_input(inputs[0][0])})"
+
+
+def tanh_str(inputs, output, attr):
+    """gen tanh string"""
+    return f"{output[0]['tensor_name']} = np.tanh({get_input(inputs[0][0])})"
+
+
+def mul_str(inputs, output, attr):
+    """gen mul string"""
+    return (
+        f"{output[0]['tensor_name']} = np.multiply("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def pow_str(inputs, output, attr):
+    """gen pow string"""
+    return (
+        f"{output[0]['tensor_name']} = np.power("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def sub_str(inputs, output, attr):
+    """gen sub string"""
+    return (
+        f"{output[0]['tensor_name']} = np.subtract("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def tensor_add_str(inputs, output, attr):
+    """gen tensor add string"""
+    return (
+        f"{output[0]['tensor_name']} = np.add("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def add_str(inputs, output, attr):
+    """gen add string"""
+    return (
+        f"{output[0]['tensor_name']} = np.add("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def rsqrt_str(inputs, output, attr):
+    """gen rsqrt string"""
+    return f"{output[0]['tensor_name']} = 1.0/np.sqrt({get_input(inputs[0][0])})"
+
+
+def neg_str(inputs, output, attr):
+    """gen neg string"""
+    return f"{output[0]['tensor_name']} = np.negative({get_input(inputs[0][0])})"
+
+
+def floor_str(inputs, output, attr):
+    """gen floor string"""
+    return f"{output[0]['tensor_name']} = np.floor({get_input(inputs[0][0])})"
+
+
+def exp_str(inputs, output, attr):
+    """gen exp string"""
+    return f"{output[0]['tensor_name']} = np.exp({get_input(inputs[0][0])})"
+
+
+def real_div_str(inputs, output, attr):
+    """gen real div string"""
+    return (
+        f"{output[0]['tensor_name']} = np.divide("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def div_str(inputs, output, attr):
+    """gen div string"""
+    return (
+        f"{output[0]['tensor_name']} = np.divide("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def floor_div_str(inputs, output, attr):
+    """gen floor div string"""
+    return (
+        f"{output[0]['tensor_name']} = np.floor_divide("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def mod_str(inputs, output, attr):
+    """gen mod string"""
+    return (
+        f"{output[0]['tensor_name']} = np.fmod("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def floor_mod_str(inputs, output, attr):
+    """gen floor mod string"""
+    return (
+        f"{output[0]['tensor_name']} = np.mod("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def minimum_str(inputs, output, attr):
+    """gen minimum string"""
+    return (
+        f"{output[0]['tensor_name']} = np.minimum("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def maximum_str(inputs, output, attr):
+    """gen maximum string"""
+    return (
+        f"{output[0]['tensor_name']} = np.maximum("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def log_str(inputs, output, attr):
+    """gen log string"""
+    return f"{output[0]['tensor_name']} = np.log({get_input(inputs[0][0])})"
+
+
+def sqrt_str(inputs, output, attr):
+    """gen sqrt string"""
+    return f"{output[0]['tensor_name']} = np.sqrt({get_input(inputs[0][0])})"
+
+
+def reshape_str(inputs, output, attr):
+    """gen reshape string"""
+    return (
+        f"{output[0]['tensor_name']} = np.reshape("
+        f"{get_input(inputs[0][0])}, {output[0]['shape']})"
+    )
+
+
+def one_hot_str(inputs, output, attr):
+    """gen one hot string"""
+    return (
+        f"{output[0]['tensor_name']} = one_hot_np({get_input(inputs[0][0])}, "
+        f"{get_attr(attr, 'axis')}, {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])}, {get_attr(attr, 'depth')}, "
+        f"np.{output[0]['data_type']})"
+    )
+
+
+def zeros_like_str(inputs, output, attr):
+    """gen zeros like string"""
+    return f"{output[0]['tensor_name']} = np.zeros_like({get_input(inputs[0][0])})"
+
+
+def add_n_str(inputs, output, attr):
+    """gen add n string"""
+    return (
+        f"{output[0]['tensor_name']} = " + " + ".join(
+            get_input(inputs[0][i]) for i in range(0, len(inputs[0]))
+        )
+    )
+
+
+def tile_str(inputs, output, attr):
+    """gen tile string"""
+    return (
+        f"{output[0]['tensor_name']} = np.tile("
+        f"{get_input(inputs[0][0])}, {get_attr(attr, 'multiples')})"
+    )
+
+
+def reciprocal_str(inputs, output, attr):
+    """gen reciprocal string"""
+    return f"{output[0]['tensor_name']} = np.divide(1.0, {get_input(inputs[0][0])})"
+
+
+def equal_str(inputs, output, attr):
+    """gen equal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.equal("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def not_equal_str(inputs, output, attr):
+    """gen not equal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.not_equal("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def greater_equal_str(inputs, output, attr):
+    """gen greater equal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.greater_equal("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def select_str(inputs, output, attr):
+    """gen select string"""
+    return (
+        f"{output[0]['tensor_name']} = np.where("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])})"
+    )
+
+
+def inplace_assign_str(inputs, output, attr):
+    """gen inplace assign string"""
+    return (
+        f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
+        f"{output[0]['tensor_name']} = {get_input(inputs[2][0])}"
+    )
+
+
+def greater_str(inputs, output, attr):
+    """gen greater string"""
+    return (
+        f"{output[0]['tensor_name']} = np.greater("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def select_gt_str(inputs, output, attr):
+    """gen select gt string"""
+    return (
+        f"{output[0]['tensor_name']} = np.where("
+        f"{get_input(inputs[0][0])} > {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
+    )
+
+
+def select_lt_str(inputs, output, attr):
+    """gen select lt string"""
+    return (
+        f"{output[0]['tensor_name']} = np.where("
+        f"{get_input(inputs[0][0])} < {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
+    )
+
+
+def abs_str(inputs, output, attr):
+    """gen abs string"""
+    return f"{output[0]['tensor_name']} = np.absolute({get_input(inputs[0][0])})"
+
+
+def less_equal_str(inputs, output, attr):
+    """gen less equal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.less_equal("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def less_str(inputs, output, attr):
+    """gen less string"""
+    return (
+        f"{output[0]['tensor_name']} = np.less("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def equiv_format_str(inputs, output, attr):
+    """gen equiv format string"""
+    return f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}"
+
+
+def expand_dims_str(inputs, output, attr):
+    """gen expand dims string"""
+    return (
+        f"{output[0]['tensor_name']} = np.expand_dims("
+        f"{get_input(inputs[0][0])}, {get_attr(attr, 'axis')})"
+    )
+
+
+def elem_any_str(inputs, output, attr):
+    """gen elem any string"""
+    return (
+        f"{output[0]['tensor_name']} = ({get_input(inputs[0][0])}.all() > 0)"
+        f".astype(np.{output[0]['data_type']}).reshape(1)"
+    )
+
+
+def assign_str(inputs, output, attr):
+    """gen assign string"""
+    return (
+        f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
+        f"{output[0]['tensor_name']} = {get_input(inputs[1][0])}"
+    )
+
+
+def asinh_str(inputs, output, attr):
+    """gen arcsinh string"""
+    return f"{output[0]['tensor_name']} = np.arcsinh({get_input(inputs[0][0])})"
+
+
+def acosh_str(inputs, output, attr):
+    """gen arccosh string"""
+    return f"{output[0]['tensor_name']} = np.arccosh({get_input(inputs[0][0])})"
+
+
+def atan2_str(inputs, output, attr):
+    """gen arctan2 string"""
+    return (
+        f"{output[0]['tensor_name']} = np.arctan2("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def expm1_str(inputs, output, attr):
+    """gen expm1 string"""
+    return f"{output[0]['tensor_name']} = np.expm1({get_input(inputs[0][0])})"
+
+
+def logical_not_str(inputs, output, attr):
+    """gen logical not string"""
+    return f"{output[0]['tensor_name']} = np.logical_not({get_input(inputs[0][0])})"
+
+
+def logical_and_str(inputs, output, attr):
+    """gen logical and string"""
+    return (
+        f"{output[0]['tensor_name']} = np.logical_and("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def logical_or_str(inputs, output, attr):
+    """gen logical or string"""
+    return (
+        f"{output[0]['tensor_name']} = np.logical_or("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def erf_str(inputs, output, attr):
+    """gen erf string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"__import__('scipy').special.erf({get_input(inputs[0][0])})"
+    )
+
+
+def tensor_scatter_add_str(inputs, output, attr):
+    """gen tensor scatter add string"""
+    return (
+        f"{output[0]['tensor_name']} = tensor_scatter_add_np("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])})"
+    )
+
+
+def gather_nd_str(inputs, output, attr):
+    """gen gather nd string"""
+    return (
+        f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}[tuple("
+        f"{get_input(inputs[1][0])}.transpose().tolist())]"
+    )
+
+
+def unsorted_segment_sum_str(inputs, output, attr):
+    """gen unsorted segment sum string"""
+    return (
+        f"{output[0]['tensor_name']} = np.zeros([{get_attr(attr, 'num_segments')},] + "
+        f"{inputs[0][0]['shape']}[{len(inputs[1][0]['shape'])}:]);  np.add.at("
+        f"{output[0]['tensor_name']}, {get_input(inputs[1][0])}, "
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def gather_str(inputs, output, attr):
+    """gen gather string"""
+    return (
+        f"{output[0]['tensor_name']} = gather_np("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+        f"{get_attr(attr, 'axis')})"
+    )
+
+
+def standard_normal_str(inputs, output, attr):
+    """gen standard normal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.random.standard_normal("
+        f"{get_attr(attr, 'shape')})"
+    )
+
+
+def cimag_str(inputs, output, attr):
+    """gen cimag string"""
+    return f"{output[0]['tensor_name']} = np.imag({get_input(inputs[0][0])})"
+
+
+def creal_str(inputs, output, attr):
+    """gen creal string"""
+    return f"{output[0]['tensor_name']} = np.real({get_input(inputs[0][0])})"
+
+
+def complex_str(inputs, output, attr):
+    """gen complex string"""
+    return (
+        f"{output[0]['tensor_name']} = np.vectorize(complex)("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
 def get_op_dsl():
     # #lizard forgives
     """Get DSL for operators"""
@@ -719,544 +1166,570 @@ def get_op_dsl():
         "Split": split_str,
         "CumSum": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumsum"),
         "CumProd": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumprod"),
-        "Sin": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sin({get_input(inputs[0][0])})"
-        ),
-        "Cos": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.cos({get_input(inputs[0][0])})"
-        ),
-        "Asin": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.arcsin({get_input(inputs[0][0])})"
-        ),
-        "ACos": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.arccos({get_input(inputs[0][0])})"
-        ),
-        "Sign": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sign({get_input(inputs[0][0])})"
-        ),
-        "IsNan": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.isnan({get_input(inputs[0][0])})"
-        ),
-        "IsInf": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.isinf({get_input(inputs[0][0])})"
-        ),
-        "IsFinite": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.isfinite({get_input(inputs[0][0])})"
-        ),
-        "Tanh": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.tanh({get_input(inputs[0][0])})"
-        ),
-        "Mul": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.multiply("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Pow": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.power("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Sub": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.subtract("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "TensorAdd": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.add("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Add": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.add("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Rsqrt": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = 1.0/np.sqrt({get_input(inputs[0][0])})"
-        ),
-        "Neg": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.negative({get_input(inputs[0][0])})"
-        ),
-        "Floor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.floor({get_input(inputs[0][0])})"
-        ),
-        "Exp": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.exp({get_input(inputs[0][0])})"
-        ),
-        "RealDiv": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.divide("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Div": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.divide("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "FloorDiv": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.floor_divide("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Mod": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.fmod("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "FloorMod": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.mod("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Minimum": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.minimum("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Maximum": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.maximum("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Log": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.log({get_input(inputs[0][0])})"
-        ),
-        "Sqrt": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sqrt({get_input(inputs[0][0])})"
-        ),
+        "Sin": sin_str,
+        "Cos": cos_str,
+        "Asin": asin_str,
+        "ACos": acos_str,
+        "Sign": sign_str,
+        "IsNan": isnan_str,
+        "IsInf": isinf_str,
+        "IsFinite": isfinite_str,
+        "Tanh": tanh_str,
+        "Mul": mul_str,
+        "Pow": pow_str,
+        "Sub": sub_str,
+        "TensorAdd": tensor_add_str,
+        "Add": add_str,
+        "Rsqrt": rsqrt_str,
+        "Neg": neg_str,
+        "Floor": floor_str,
+        "Exp": exp_str,
+        "RealDiv": real_div_str,
+        "Div": div_str,
+        "FloorDiv": floor_div_str,
+        "Mod": mod_str,
+        "FloorMod": floor_mod_str,
+        "Minimum": minimum_str,
+        "Maximum": maximum_str,
+        "Log": log_str,
+        "Sqrt": sqrt_str,
         "Cast": cast_str,
-        "Reshape": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.reshape("
-            f"{get_input(inputs[0][0])}, {output[0]['shape']})"
-        ),
-        "OneHot": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = one_hot_np({get_input(inputs[0][0])}, "
-            f"{get_attr(attr, 'axis')}, {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])}, {get_attr(attr, 'depth')}, "
-            f"np.{output[0]['data_type']})"
-        ),
-        "ZerosLike": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.zeros_like({get_input(inputs[0][0])})"
-        ),
-        "AddN": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = " + " + ".join(
-                get_input(inputs[0][i]) for i in range(0, len(inputs[0]))
-            )
-        ),
-        "Tile": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.tile("
-            f"{get_input(inputs[0][0])}, {get_attr(attr, 'multiples')})"
-        ),
-        "Reciprocal": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.divide(1.0, {get_input(inputs[0][0])})"
-        ),
-        "Equal": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.equal("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "NotEqual": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.not_equal("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "GreaterEqual": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.greater_equal("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Select": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.where("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])})"
-        ),
-        "InplaceAssign": lambda inputs, output, attr: (
-            f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
-            f"{output[0]['tensor_name']} = {get_input(inputs[2][0])}"
-        ),
-        "Greater": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.greater("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "SelectGT": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.where("
-            f"{get_input(inputs[0][0])} > {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
-        ),
-        "SelectLT": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.where("
-            f"{get_input(inputs[0][0])} < {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
-        ),
-        "Abs": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.absolute({get_input(inputs[0][0])})"
-        ),
-        "LessEqual": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.less_equal("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Less": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.less("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "EquivFormat": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}"
-        ),
-        "ExpandDims": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.expand_dims("
-            f"{get_input(inputs[0][0])}, {get_attr(attr, 'axis')})"
-        ),
-        "ElemAny": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ({get_input(inputs[0][0])}.all() > 0)"
-            f".astype(np.{output[0]['data_type']}).reshape(1)"
-        ),
+        "Reshape": reshape_str,
+        "OneHot": one_hot_str,
+        "ZerosLike": zeros_like_str,
+        "AddN": add_n_str,
+        "Tile": tile_str,
+        "Reciprocal": reciprocal_str,
+        "Equal": equal_str,
+        "NotEqual": not_equal_str,
+        "GreaterEqual": greater_equal_str,
+        "Select": select_str,
+        "InplaceAssign": inplace_assign_str,
+        "Greater": greater_str,
+        "SelectGT": select_gt_str,
+        "SelectLT": select_lt_str,
+        "Abs": abs_str,
+        "LessEqual": less_equal_str,
+        "Less": less_str,
+        "EquivFormat": equiv_format_str,
+        "ExpandDims": expand_dims_str,
+        "ElemAny": elem_any_str,
         "Transpose": transpose_str,
         "TransData": trans_data_dsl,
         "BroadcastTo": broadcast_str,
         "BatchMatMul": matmul_str,
-        "Assign": lambda inputs, output, attr: (
-            f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
-            f"{output[0]['tensor_name']} = {get_input(inputs[1][0])}"
-        ),
+        "Assign": assign_str,
         "MatMul": matmul_str,
         "Conv2D": conv_2d_str,
         "PadAkg": pad_str,
         "UnPadAkg": unpad_str,
-        "Asinh": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.arcsinh({get_input(inputs[0][0])})"
-        ),
-        "Acosh": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.arccosh({get_input(inputs[0][0])})"
-        ),
-        "Atan2": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.arctan2("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Expm1": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.expm1({get_input(inputs[0][0])})"
-        ),
-        "LogicalNot": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.logical_not({get_input(inputs[0][0])})"
-        ),
-        "LogicalAnd": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.logical_and("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "LogicalOr": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.logical_or("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Erf": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"__import__('scipy').special.erf({get_input(inputs[0][0])})"
-        ),
-        "TensorScatterAdd": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = tensor_scatter_add_np("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])})"
-        ),
-        "GatherNd": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}[tuple("
-            f"{get_input(inputs[1][0])}.transpose().tolist())]"
-        ),
-        "UnsortedSegmentSum": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.zeros([{get_attr(attr, 'num_segments')},] + "
-            f"{inputs[0][0]['shape']}[{len(inputs[1][0]['shape'])}:]);  np.add.at("
-            f"{output[0]['tensor_name']}, {get_input(inputs[1][0])}, "
-            f"{get_input(inputs[0][0])})"
-        ),
-        "Gather": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = gather_np("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
-            f"{get_attr(attr, 'axis')})"
-        ),
-        "StandardNormal": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.random.standard_normal("
-            f"{get_attr(attr, 'shape')})"
-        ),
-        "CImag": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.imag({get_input(inputs[0][0])})"
-        ),
-        "CReal": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.real({get_input(inputs[0][0])})"
-        ),
-        "Complex": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.vectorize(complex)("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
+        "Asinh": asinh_str,
+        "Acosh": acosh_str,
+        "Atan2": atan2_str,
+        "Expm1": expm1_str,
+        "LogicalNot": logical_not_str,
+        "LogicalAnd": logical_and_str,
+        "LogicalOr": logical_or_str,
+        "Erf": erf_str,
+        "TensorScatterAdd": tensor_scatter_add_str,
+        "GatherNd": gather_nd_str,
+        "UnsortedSegmentSum": unsorted_segment_sum_str,
+        "Gather": gather_str,
+        "StandardNormal": standard_normal_str,
+        "CImag": cimag_str,
+        "CReal": creal_str,
+        "Complex": complex_str,
         "Concat": concat_str
     }
     return op_dsl
+
+
+def torch_constant_float_str(inputs, output, attr):
+    """gen torch constant float string"""
+    return (
+        f"{output[0]['tensor_name']} = np.array("
+        f"{format_py_value(get_input(output[0]))}, dtype=np.float32)"
+    )
+
+
+def torch_constant_int_str(inputs, output, attr):
+    """gen torch constant int string"""
+    return f"{output[0]['tensor_name']} = int({get_input(output[0])})"
+
+
+def torch_mul_tensor_str(inputs, output, attr):
+    """gen torch mul tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = np.multiply("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_mul_scalar_str(inputs, output, attr):
+    """gen torch mul scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = ("
+        f"{get_input(inputs[0][0])} * "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_add_tensor_str(inputs, output, attr):
+    """gen torch add tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = ("
+        f"{get_input(inputs[0][0])} + "
+        f"({get_input(inputs[2][0])}) * "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_add_scalar_str(inputs, output, attr):
+    """gen torch add scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = ("
+        f"{get_input(inputs[0][0])} + "
+        f"({get_input(inputs[2][0])}) * "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_sub_tensor_str(inputs, output, attr):
+    """gen torch sub tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = ("
+        f"{get_input(inputs[0][0])} - "
+        f"({get_input(inputs[2][0])}) * "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_sub_scalar_str(inputs, output, attr):
+    """gen torch sub scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = ("
+        f"{get_input(inputs[0][0])} - "
+        f"({get_input(inputs[2][0])}) * "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_div_tensor_str(inputs, output, attr):
+    """gen torch div tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = np.divide("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_div_scalar_str(inputs, output, attr):
+    """gen torch div scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = np.divide("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_max_dim_str(inputs, output, attr):
+    """gen torch max dim string"""
+    return (
+        f"{output[0]['tensor_name']} = np.max("
+        f"{get_input(inputs[0][0])}, "
+        f"axis={get_input(inputs[1][0])}, "
+        f"keepdims={get_input(inputs[2][0])})\n"
+        f"{output[1]['tensor_name']} = (lambda _i, _k, _a: "
+        f"np.expand_dims(_i, axis=_a) if _k else _i)("
+        f"np.argmax({get_input(inputs[0][0])}, "
+        f"axis={get_input(inputs[1][0])}), "
+        f"{get_input(inputs[2][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_neg_str(inputs, output, attr):
+    """gen torch neg string"""
+    return (
+        f"{output[0]['tensor_name']} = np.negative("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_sqrt_str(inputs, output, attr):
+    """gen torch sqrt string"""
+    return (
+        f"{output[0]['tensor_name']} = np.sqrt("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_relu_str(inputs, output, attr):
+    """gen torch relu string"""
+    return (
+        f"{output[0]['tensor_name']} = np.maximum("
+        f"{get_input(inputs[0][0])}, 0)"
+    )
+
+
+def torch_listconstruct_str(inputs, output, attr):
+    """gen torch listconstruct string"""
+    return (
+        f"{output[0]['tensor_name']} = ["
+        f"{', '.join(str(get_input(group[0])) for group in inputs)}]"
+    )
+
+
+def torch_view_str(inputs, output, attr):
+    """gen torch view string"""
+    return (
+        f"{output[0]['tensor_name']} = np.reshape("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_cat_str(inputs, output, attr):
+    """gen torch cat string"""
+    return (
+        f"{output[0]['tensor_name']} = np.concatenate("
+        f"{get_input(inputs[0][0])}, "
+        f"axis={get_input(inputs[1][0])})"
+    )
+
+
+def torch_broadcast_to_str(inputs, output, attr):
+    """gen torch broadcast to string"""
+    return gen_broadcast_to(
+        output[0]["tensor_name"],
+        get_input(inputs[0][0]),
+        get_input(inputs[1][0]),
+    )
+
+
+def torch_slice_tensor_str(inputs, output, attr):
+    """gen torch slice tensor string"""
+    return gen_slice_tensor(
+        output[0]["tensor_name"],
+        get_input(inputs[0][0]),
+        get_input(inputs[1][0]),
+        get_input(inputs[2][0]),
+        get_input(inputs[3][0]),
+        get_input(inputs[4][0]),
+    )
+
+
+def torch_permute_str(inputs, output, attr):
+    """gen torch permute string"""
+    return (
+        f"{output[0]['tensor_name']} = np.transpose("
+        f"{get_input(inputs[0][0])}, "
+        f"axes={get_input(inputs[1][0])})"
+    )
+
+
+def torch_sigmoid_str(inputs, output, attr):
+    """gen torch sigmoid string"""
+    return (
+        f"{output[0]['tensor_name']} = 1 / (1 + np.exp("
+        f"-{get_input(inputs[0][0])}))"
+    )
+
+
+def torch_constant_none_str(inputs, output, attr):
+    """gen torch constant none string"""
+    return f"{output[0]['tensor_name']} = None"
+
+
+def torch_constant_bool_str(inputs, output, attr):
+    """gen torch constant bool string"""
+    return f"{output[0]['tensor_name']} = {get_input(output[0])}"
+
+
+def torch_sum_dim_intlist_str(inputs, output, attr):
+    """gen torch sum dim intlist string"""
+    return (
+        f"{output[0]['tensor_name']} = np.sum("
+        f"{get_input(inputs[0][0])}, "
+        f"axis=tuple({get_input(inputs[1][0])}), "
+        f"keepdims={get_input(inputs[2][0])})"
+    )
+
+
+def torch_pow_tensor_scalar_str(inputs, output, attr):
+    """gen torch pow tensor scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = np.power("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_pow_scalar_str(inputs, output, attr):
+    """gen torch pow scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = np.power("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])})"
+    )
+
+
+def torch_rsqrt_str(inputs, output, attr):
+    """gen torch rsqrt string"""
+    return (
+        f"{output[0]['tensor_name']} = 1.0 / np.sqrt("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_clamp_str(inputs, output, attr):
+    """gen torch clamp string"""
+    return (
+        f"{output[0]['tensor_name']} = np.clip("
+        f"{get_input(inputs[0][0])}, "
+        f"{'None' if inputs[1][0].get('data_type') == 'none' else format_py_value(get_input(inputs[1][0]))}, "
+        f"{'None' if inputs[2][0].get('data_type') == 'none' else format_py_value(get_input(inputs[2][0]))})"
+    )
+
+
+def torch_to_dtype_str(inputs, output, attr):
+    """gen torch to dtype string"""
+    return (
+        f"{output[0]['tensor_name']} = np.array("
+        f"{format_py_value(get_input(inputs[0][0]))}, "
+        f"dtype={TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
+    )
+
+
+def torch_lt_scalar_str(inputs, output, attr):
+    """gen torch lt scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} < "
+        f"{get_input(inputs[1][0])}"
+    )
+
+
+def torch_lt_tensor_str(inputs, output, attr):
+    """gen torch lt tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} < "
+        f"{get_input(inputs[1][0])}"
+    )
+
+
+def torch_le_scalar_str(inputs, output, attr):
+    """gen torch le scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} <= {format_py_value(get_input(inputs[1][0]))}"
+    )
+
+
+def torch_le_tensor_str(inputs, output, attr):
+    """gen torch le tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} <= "
+        f"{get_input(inputs[1][0])}"
+    )
+
+
+def torch_gt_scalar_str(inputs, output, attr):
+    """gen torch gt scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} > "
+        f"{get_input(inputs[1][0])}"
+    )
+
+
+def torch_ge_scalar_str(inputs, output, attr):
+    """gen torch ge scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])} >= "
+        f"{get_input(inputs[1][0])}"
+    )
+
+
+def torch_where_self_str(inputs, output, attr):
+    """gen torch where self string"""
+    return (
+        f"{output[0]['tensor_name']} = np.where("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[1][0])}, "
+        f"{get_input(inputs[2][0])})"
+    )
+
+
+def torch_exp_str(inputs, output, attr):
+    """gen torch exp string"""
+    return (
+        f"{output[0]['tensor_name']} = np.exp("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_log_str(inputs, output, attr):
+    """gen torch log string"""
+    return (
+        f"{output[0]['tensor_name']} = np.log("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_bitwise_not_str(inputs, output, attr):
+    """gen torch bitwise not string"""
+    return (
+        f"{output[0]['tensor_name']} = np.logical_not("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_sin_str(inputs, output, attr):
+    """gen torch sin string"""
+    return (
+        f"{output[0]['tensor_name']} = np.sin("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_cos_str(inputs, output, attr):
+    """gen torch cos string"""
+    return (
+        f"{output[0]['tensor_name']} = np.cos("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_vtensor_literal_str(inputs, output, attr):
+    """gen torch vtensor literal string"""
+    return (
+        f"{output[0]['tensor_name']} = np.array("
+        f"{format_py_value(get_input(output[0]))}, dtype=np.{output[0]['data_type']})"
+    )
+
+
+def torch_eq_scalar_str(inputs, output, attr):
+    """gen torch eq scalar string"""
+    return (
+        f"{output[0]['tensor_name']} = np.equal("
+        f"{get_input(inputs[0][0])}, {format_py_value(get_input(inputs[1][0]))})"
+    )
+
+
+def torch_tanh_str(inputs, output, attr):
+    """gen torch tanh string"""
+    return (
+        f"{output[0]['tensor_name']} = np.tanh("
+        f"{get_input(inputs[0][0])})"
+    )
+
+
+def torch_unsqueeze_str(inputs, output, attr):
+    """gen torch unsqueeze string"""
+    return (
+        f"{output[0]['tensor_name']} = np.expand_dims("
+        f"{get_input(inputs[0][0])}, axis={get_input(inputs[1][0])})"
+    )
+
+
+def torch_gt_tensor_str(inputs, output, attr):
+    """gen torch gt tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = np.greater("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def torch_slice_scatter_str(inputs, output, attr):
+    """gen torch slice scatter string"""
+    return gen_slice_scatter(
+        output[0]["tensor_name"],
+        get_input(inputs[0][0]),
+        get_input(inputs[1][0]),
+        get_input(inputs[2][0]),
+        get_input(inputs[3][0]),
+        get_input(inputs[4][0]),
+        get_input(inputs[5][0]),
+    )
+
+
+def torch_constant_pad_nd_str(inputs, output, attr):
+    """gen torch constant pad nd string"""
+    return gen_constant_pad_nd(
+        output[0]["tensor_name"],
+        get_input(inputs[0][0]),
+        get_input(inputs[1][0]),
+        get_input(inputs[2][0]),
+    )
+
+
+def torch_gather_str(inputs, output, attr):
+    """gen torch gather string"""
+    return (
+        f"{output[0]['tensor_name']} = np.take_along_axis("
+        f"{get_input(inputs[0][0])}, "
+        f"{get_input(inputs[2][0])}, "
+        f"axis={get_input(inputs[1][0])})"
+    )
 
 
 def get_op_dsl_torch_mlir():
     # #lizard forgives
     """Get DSL for torch-mlir operators."""
     op_dsl = {
-        "Torch.constant.float": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.array("
-            f"{format_py_value(get_input(output[0]))}, dtype=np.float32)"
-        ),
-
-        "Torch.constant.int": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = int({get_input(output[0])})"
-        ),
-
-        "Torch.aten.mul.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.multiply("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.mul.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} * "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.add.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} + "
-            f"({get_input(inputs[2][0])}) * "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.add.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} + "
-            f"({get_input(inputs[2][0])}) * "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.sub.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} - "
-            f"({get_input(inputs[2][0])}) * "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.sub.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} - "
-            f"({get_input(inputs[2][0])}) * "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.div.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.divide("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.div.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.divide("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.max.dim": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.max("
-            f"{get_input(inputs[0][0])}, "
-            f"axis={get_input(inputs[1][0])}, "
-            f"keepdims={get_input(inputs[2][0])})\n"
-            f"{output[1]['tensor_name']} = (lambda _i, _k, _a: "
-            f"np.expand_dims(_i, axis=_a) if _k else _i)("
-            f"np.argmax({get_input(inputs[0][0])}, "
-            f"axis={get_input(inputs[1][0])}), "
-            f"{get_input(inputs[2][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.neg": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.negative("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.sqrt": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sqrt("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.relu": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.maximum("
-            f"{get_input(inputs[0][0])}, 0)"
-        ),
-
-        "Torch.prim.listconstruct": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = ["
-            f"{', '.join(str(get_input(group[0])) for group in inputs)}]"
-        ),
-
-        "Torch.aten.view": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.reshape("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.cat": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.concatenate("
-            f"{get_input(inputs[0][0])}, "
-            f"axis={get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.broadcastTo": lambda inputs, output, attr: gen_broadcast_to(
-            output[0]["tensor_name"],
-            get_input(inputs[0][0]),
-            get_input(inputs[1][0]),
-        ),
-
-        "Torch.aten.slice.tensor": lambda inputs, output, attr: gen_slice_tensor(
-            output[0]["tensor_name"],
-            get_input(inputs[0][0]),
-            get_input(inputs[1][0]),
-            get_input(inputs[2][0]),
-            get_input(inputs[3][0]),
-            get_input(inputs[4][0]),
-        ),
-
-        "Torch.aten.permute": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.transpose("
-            f"{get_input(inputs[0][0])}, "
-            f"axes={get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.sigmoid": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = 1 / (1 + np.exp("
-            f"-{get_input(inputs[0][0])}))"
-        ),
-
-        "Torch.constant.none": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = None"
-        ),
-
-        "Torch.constant.bool": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = {get_input(output[0])}"
-        ),
-
-        "Torch.aten.sum.dimIntlist": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sum("
-            f"{get_input(inputs[0][0])}, "
-            f"axis=tuple({get_input(inputs[1][0])}), "
-            f"keepdims={get_input(inputs[2][0])})"
-        ),
-
-        "Torch.aten.pow.tensorScalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.power("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.pow.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.power("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
-        ),
-
-        "Torch.aten.rsqrt": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = 1.0 / np.sqrt("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.clamp": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.clip("
-            f"{get_input(inputs[0][0])}, "
-            f"{'None' if inputs[1][0].get('data_type') == 'none' else format_py_value(get_input(inputs[1][0]))}, "
-            f"{'None' if inputs[2][0].get('data_type') == 'none' else format_py_value(get_input(inputs[2][0]))})"
-        ),
-
-        "Torch.aten.to.dtype": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.array("
-            f"{format_py_value(get_input(inputs[0][0]))}, "
-            f"dtype={TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
-        ),
-
-        "Torch.aten.lt.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} < "
-            f"{get_input(inputs[1][0])}"
-        ),
-
-        "Torch.aten.lt.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} < "
-            f"{get_input(inputs[1][0])}"
-        ),
-
-        "Torch.aten.le.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} <= {format_py_value(get_input(inputs[1][0]))}"
-        ),
-
-        "Torch.aten.le.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} <= "
-            f"{get_input(inputs[1][0])}"
-        ),
-
-        "Torch.aten.gt.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} > "
-            f"{get_input(inputs[1][0])}"
-        ),
-
-        "Torch.aten.ge.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])} >= "
-            f"{get_input(inputs[1][0])}"
-        ),
-
-        "Torch.aten.where.self": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.where("
-            f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])}, "
-            f"{get_input(inputs[2][0])})"
-        ),
-
-        "Torch.aten.exp": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.exp("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.log": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.log("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.bitwiseNot": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.logical_not("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.sin": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.sin("
-            f"{get_input(inputs[0][0])})"
-        ),
-
-        "Torch.aten.cos": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.cos("
-            f"{get_input(inputs[0][0])})"
-        ),
-        "Torch.vtensor.literal": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.array("
-            f"{format_py_value(get_input(output[0]))}, dtype=np.{output[0]['data_type']})"
-        ),
-        "Torch.aten.eq.scalar": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.equal("
-            f"{get_input(inputs[0][0])}, {format_py_value(get_input(inputs[1][0]))})"
-        ),
-        "Torch.aten.tanh": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.tanh("
-            f"{get_input(inputs[0][0])})"
-        ),
-        "Torch.aten.unsqueeze": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.expand_dims("
-            f"{get_input(inputs[0][0])}, axis={get_input(inputs[1][0])})"
-        ),
-        "Torch.aten.gt.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.greater("
-            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
-        ),
-        "Torch.aten.sliceScatter": lambda inputs, output, attr: (
-            gen_slice_scatter(
-                output[0]["tensor_name"],
-                get_input(inputs[0][0]),
-                get_input(inputs[1][0]),
-                get_input(inputs[2][0]),
-                get_input(inputs[3][0]),
-                get_input(inputs[4][0]),
-                get_input(inputs[5][0]),
-            )
-        ),
-        "Torch.aten.constantPadNd": lambda inputs, output, attr: gen_constant_pad_nd(
-            output[0]["tensor_name"],
-            get_input(inputs[0][0]),
-            get_input(inputs[1][0]),
-            get_input(inputs[2][0]),
-        ),
+        "Torch.constant.float": torch_constant_float_str,
+        "Torch.constant.int": torch_constant_int_str,
+        "Torch.aten.mul.tensor": torch_mul_tensor_str,
+        "Torch.aten.mul.scalar": torch_mul_scalar_str,
+        "Torch.aten.add.tensor": torch_add_tensor_str,
+        "Torch.aten.add.scalar": torch_add_scalar_str,
+        "Torch.aten.sub.tensor": torch_sub_tensor_str,
+        "Torch.aten.sub.scalar": torch_sub_scalar_str,
+        "Torch.aten.div.tensor": torch_div_tensor_str,
+        "Torch.aten.div.scalar": torch_div_scalar_str,
+        "Torch.aten.max.dim": torch_max_dim_str,
+        "Torch.aten.neg": torch_neg_str,
+        "Torch.aten.sqrt": torch_sqrt_str,
+        "Torch.aten.relu": torch_relu_str,
+        "Torch.prim.listconstruct": torch_listconstruct_str,
+        "Torch.aten.view": torch_view_str,
+        "Torch.aten.cat": torch_cat_str,
+        "Torch.aten.broadcastTo": torch_broadcast_to_str,
+        "Torch.aten.slice.tensor": torch_slice_tensor_str,
+        "Torch.aten.permute": torch_permute_str,
+        "Torch.aten.sigmoid": torch_sigmoid_str,
+        "Torch.constant.none": torch_constant_none_str,
+        "Torch.constant.bool": torch_constant_bool_str,
+        "Torch.aten.sum.dimIntlist": torch_sum_dim_intlist_str,
+        "Torch.aten.pow.tensorScalar": torch_pow_tensor_scalar_str,
+        "Torch.aten.pow.scalar": torch_pow_scalar_str,
+        "Torch.aten.rsqrt": torch_rsqrt_str,
+        "Torch.aten.clamp": torch_clamp_str,
+        "Torch.aten.to.dtype": torch_to_dtype_str,
+        "Torch.aten.lt.scalar": torch_lt_scalar_str,
+        "Torch.aten.lt.tensor": torch_lt_tensor_str,
+        "Torch.aten.le.scalar": torch_le_scalar_str,
+        "Torch.aten.le.tensor": torch_le_tensor_str,
+        "Torch.aten.gt.scalar": torch_gt_scalar_str,
+        "Torch.aten.ge.scalar": torch_ge_scalar_str,
+        "Torch.aten.where.self": torch_where_self_str,
+        "Torch.aten.exp": torch_exp_str,
+        "Torch.aten.log": torch_log_str,
+        "Torch.aten.bitwiseNot": torch_bitwise_not_str,
+        "Torch.aten.sin": torch_sin_str,
+        "Torch.aten.cos": torch_cos_str,
+        "Torch.vtensor.literal": torch_vtensor_literal_str,
+        "Torch.aten.eq.scalar": torch_eq_scalar_str,
+        "Torch.aten.tanh": torch_tanh_str,
+        "Torch.aten.unsqueeze": torch_unsqueeze_str,
+        "Torch.aten.gt.tensor": torch_gt_tensor_str,
+        "Torch.aten.sliceScatter": torch_slice_scatter_str,
+        "Torch.aten.constantPadNd": torch_constant_pad_nd_str,
+        "Torch.aten.gather": torch_gather_str,
     }
     return op_dsl

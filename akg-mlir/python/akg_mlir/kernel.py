@@ -65,12 +65,12 @@ class Kernel:
             kernel_func = get_device_function(self.kernel_name, lib_path)
             tiling_func = 0
             tiling_size = 0
+
         def kernel_call(*args, stream=None):
             torch_launch(self.kernel_name, self.torch_path, kernel_func, tiling_func, tiling_size,
                          block_dim, stream, self.dynamic, *args)
 
         return kernel_call
-
 
     def compile(
         self,

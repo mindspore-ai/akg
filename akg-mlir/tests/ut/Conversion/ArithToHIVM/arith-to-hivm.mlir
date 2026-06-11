@@ -2251,41 +2251,27 @@ func.func @test_erf_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) att
 
 // -----
 
-func.func @test_ceil_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
-  // CHECK-LABEL: func.func @test_ceil_npuvector
-  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
-  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
-  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
-  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
-  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
-  // CHECK: hivm.hir.vcast ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>) round_mode = <ceil>
-  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
-  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+func.func @test_math_unary_round_npuvector(%in: memref<1024xf32>, %out_ceil: memref<1024xf32>, %out_floor: memref<1024xf32>, %out_round: memref<1024xf32>, %out_roundeven: memref<1024xf32>, %out_trunc: memref<1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @test_math_unary_round_npuvector
+  // CHECK: hivm.hir.vcast{{.*}}round_mode = <ceil>
+  // CHECK: hivm.hir.vcast{{.*}}round_mode = <floor>
+  // CHECK: hivm.hir.vcast{{.*}}round_mode = <round>
+  // roundeven maps to default RINT; assembly omits round_mode when it equals the default
+  // CHECK: hivm.hir.vcast ins({{.*}} : memref<1024xf32>) outs({{.*}} : memref<1024xf32>)
+  // CHECK: hivm.hir.vcast{{.*}}round_mode = <trunc>
   %c0 = arith.constant 0 : index
   %padding = arith.constant 0.0 : f32
   %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
-  %res = math.ceil %vec : !npuvector<1024xf32>
-  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
-  return
-}
-
-// -----
-
-func.func @test_floor_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
-  // CHECK-LABEL: func.func @test_floor_npuvector
-  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
-  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
-  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
-  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
-  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
-  // CHECK: hivm.hir.vcast ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>) round_mode = <floor>
-  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
-  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
-  %c0 = arith.constant 0 : index
-  %padding = arith.constant 0.0 : f32
-  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
-  %res = math.floor %vec : !npuvector<1024xf32>
-  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  %ceil = math.ceil %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %ceil, %out_ceil[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  %floor = math.floor %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %floor, %out_floor[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  %round = math.round %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %round, %out_round[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  %roundeven = math.roundeven %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %roundeven, %out_roundeven[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  %trunc = math.trunc %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %trunc, %out_trunc[%c0] : !npuvector<1024xf32>, memref<1024xf32>
   return
 }
 
@@ -3087,5 +3073,211 @@ func.func @test_transfer_write_alloc_root_rewrites_later_broadcast_use(%arg0: me
   %bcast = npuvector.broadcast %mul[%c1] [%c1] : !npuvector<1xf32> to !npuvector<1xf32>
   %outv = arith.mulf %bcast, %lhs : !npuvector<1xf32>
   npuvector.transfer_write %outv, %out[%c0] : !npuvector<1xf32>, memref<1xf32>
+  return
+}
+
+// -----
+
+// Helper outlined vector function that consumes a scratch allocation so the
+// forwarded buffer remains live. It must be defined before its call site.
+func.func private @vf_npu_touch_scratch(%scratch: memref<64xf32>, %touch: memref<1xf32>) attributes {hivm.vector_function, no_inline} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c64 = arith.constant 64 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %v = npuvector.transfer_read %scratch[%c0][%c1][%c64], %pad : memref<64xf32>, !npuvector<1xf32>
+  npuvector.transfer_write %v, %touch[%c0] : !npuvector<1xf32>, memref<1xf32>
+  return
+}
+
+// -----
+
+// Forward a partial alloc-to-alloc copy with matching shapes.
+// CHECK-LABEL: func.func @test_forward_alloc_partial_same_shape
+func.func @test_forward_alloc_partial_same_shape(%arg0: memref<64xf32>, %out: memref<1xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: %[[SRC:.*]] = memref.alloc() : memref<64xf32>
+  // CHECK-NOT: memref.alloc() : memref<64xf32>
+  // CHECK: memref.subview %arg0[0] [64] [1]
+  // CHECK: hivm.hir.load ins(%{{.*}} : memref<64xf32{{.*}}>) outs(%{{.*}} : memref<64xf32{{.*}}>)
+  // CHECK-NOT: hivm.hir.store ins({{.*}} : memref<64xf32>) outs({{.*}} : memref<64xf32>)
+  // CHECK: hivm.hir.store ins({{.*}} : memref<1xf32{{.*}}>) outs({{.*}} : memref<1xf32{{.*}}>)
+  %alloc = memref.alloc() : memref<64xf32>
+  %alloc_4 = memref.alloc() : memref<64xf32>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c64 = arith.constant 64 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %v_in = npuvector.transfer_read %arg0[%c0][%c64][%c1], %pad : memref<64xf32>, !npuvector<64xf32>
+  npuvector.transfer_write %v_in, %alloc_4[%c0] : !npuvector<64xf32>, memref<64xf32>
+  %1 = npuvector.transfer_read %alloc_4[%c0][%c1][%c64], %pad : memref<64xf32>, !npuvector<1xf32>
+  npuvector.transfer_write %1, %alloc[%c0] : !npuvector<1xf32>, memref<64xf32>
+  %2 = npuvector.transfer_read %alloc[%c0][%c1][%c64], %pad : memref<64xf32>, !npuvector<1xf32>
+  npuvector.transfer_write %2, %out[%c0] : !npuvector<1xf32>, memref<1xf32>
+  return
+}
+
+// -----
+
+// Forward a partial alloc-to-alloc copy from outside a loop to a loop-local write.
+// CHECK-LABEL: func.func @test_forward_alloc_partial_same_shape_in_loop
+func.func @test_forward_alloc_partial_same_shape_in_loop(%arg0: memref<64xf32>, %out: memref<1xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: %[[SRC:.*]] = memref.alloc() : memref<64xf32>
+  // CHECK-NOT: memref.alloc() : memref<64xf32>
+  // CHECK: memref.subview %arg0[0] [64] [1]
+  // CHECK: hivm.hir.load ins(%{{.*}} : memref<64xf32{{.*}}>) outs(%{{.*}} : memref<64xf32{{.*}}>)
+  // CHECK: scf.for
+  // CHECK-NOT: hivm.hir.store ins({{.*}} : memref<64xf32>) outs({{.*}} : memref<64xf32>)
+  // CHECK: hivm.hir.store ins({{.*}} : memref<1xf32{{.*}}>) outs({{.*}} : memref<1xf32{{.*}}>)
+  %alloc = memref.alloc() : memref<64xf32>
+  %alloc_4 = memref.alloc() : memref<64xf32>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c64 = arith.constant 64 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %v_in = npuvector.transfer_read %arg0[%c0][%c64][%c1], %pad : memref<64xf32>, !npuvector<64xf32>
+  npuvector.transfer_write %v_in, %alloc_4[%c0] : !npuvector<64xf32>, memref<64xf32>
+  %1 = npuvector.transfer_read %alloc_4[%c0][%c1][%c64], %pad : memref<64xf32>, !npuvector<1xf32>
+  scf.for %iv = %c0 to %c1 step %c1 {
+    %c0_in = arith.constant 0 : index
+    npuvector.transfer_write %1, %alloc[%c0_in] : !npuvector<1xf32>, memref<64xf32>
+    %2 = npuvector.transfer_read %alloc[%c0_in][%c1][%c64], %pad : memref<64xf32>, !npuvector<1xf32>
+    npuvector.transfer_write %2, %out[%c0_in] : !npuvector<1xf32>, memref<1xf32>
+  }
+  return
+}
+
+// -----
+
+// Forward between allocations with different ranks but the same element count.
+// CHECK-LABEL: func.func @test_forward_alloc_diff_rank
+func.func @test_forward_alloc_diff_rank(%arg0: memref<8xf32>, %out: memref<2x4xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: memref.alloc() : memref<8xf32>
+  // CHECK-NOT: memref.alloc() : memref<2x4xf32>
+  // CHECK: memref.subview %arg0[0] [8] [1]
+  // CHECK: hivm.hir.load ins(%{{.*}} : memref<8xf32{{.*}}>) outs(%{{.*}} : memref<8xf32{{.*}}>)
+  // CHECK: memref.expand_shape %{{.*}} output_shape [2, 4] : memref<8xf32> into memref<2x4xf32>
+  // CHECK-NOT: hivm.hir.store ins({{.*}} : memref<2x4xf32>) outs({{.*}} : memref<2x4xf32>)
+  // CHECK: hivm.hir.store ins({{.*}} : memref<2x4xf32{{.*}}>) outs({{.*}} : memref<2x4xf32{{.*}}>)
+  %src = memref.alloc() : memref<8xf32>
+  %dst = memref.alloc() : memref<2x4xf32>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %v_in = npuvector.transfer_read %arg0[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  npuvector.transfer_write %v_in, %src[%c0] : !npuvector<8xf32>, memref<8xf32>
+  %v = npuvector.transfer_read %src[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  npuvector.transfer_write %v, %dst[%c0, %c0] : !npuvector<8xf32>, memref<2x4xf32>
+  %v2 = npuvector.transfer_read %dst[%c0, %c0][%c2, %c4][%c4, %c1], %pad : memref<2x4xf32>, !npuvector<2x4xf32>
+  npuvector.transfer_write %v2, %out[%c0, %c0] : !npuvector<2x4xf32>, memref<2x4xf32>
+  return
+}
+
+// -----
+
+// Forward the contiguous prefix when the source allocation is larger than the destination.
+// CHECK-LABEL: func.func @test_forward_alloc_src_larger
+func.func @test_forward_alloc_src_larger(%arg0: memref<128xf32>, %out: memref<1xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: memref.alloc() : memref<128xf32>
+  // CHECK: memref.subview %arg0[0] [128] [1]
+  // CHECK-NOT: memref.alloc() : memref<64xf32>
+  // CHECK: hivm.hir.load ins(%{{.*}} : memref<128xf32{{.*}}>) outs(%{{.*}} : memref<128xf32{{.*}}>)
+  // CHECK-NOT: hivm.hir.store ins({{.*}} : memref<64xf32>) outs({{.*}} : memref<64xf32>)
+  // CHECK: call @vf_npu_touch_scratch(%{{.*}}, %{{.*}}) {hivm.vector_function, no_inline}
+  %src = memref.alloc() : memref<128xf32>
+  %dst = memref.alloc() : memref<64xf32>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c64 = arith.constant 64 : index
+  %c128 = arith.constant 128 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %v_in = npuvector.transfer_read %arg0[%c0][%c128][%c1], %pad : memref<128xf32>, !npuvector<128xf32>
+  npuvector.transfer_write %v_in, %src[%c0] : !npuvector<128xf32>, memref<128xf32>
+  %v = npuvector.transfer_read %src[%c0][%c64][%c1], %pad : memref<128xf32>, !npuvector<64xf32>
+  npuvector.transfer_write %v, %dst[%c0] : !npuvector<64xf32>, memref<64xf32>
+  func.call @vf_npu_touch_scratch(%dst, %out) {hivm.vector_function, no_inline} : (memref<64xf32>, memref<1xf32>) -> ()
+  return
+}
+
+// -----
+
+// Fuse a same-block elementwise producer into a scratch allocation.
+// CHECK-LABEL: func.func @test_fuse_producer_same_block_gm_to_alloc
+func.func @test_fuse_producer_same_block_gm_to_alloc(%arg0: memref<8xf32>, %out: memref<8xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: %[[SCRATCH:.*]] = memref.alloc() : memref<8xf32>
+  // CHECK: memref.subview %arg0[0] [8] [1]
+  // CHECK: %[[UB0:.*]] = memref.alloc() : memref<8xf32>
+  // CHECK: hivm.hir.load ins(%{{.*}} : {{.*}}) outs(%[[UB0]] : {{.*}})
+  // CHECK: hivm.hir.vadd ins(%[[UB0]], {{.*}} : memref<8xf32>, f32) outs(%{{.*}} : memref<8xf32{{.*}}>)
+  // CHECK-NOT: hivm.hir.store ins(%{{.*}} : memref<8xf32>) outs(%{{.*}} : memref<8xf32>)
+  // CHECK: hivm.hir.store ins(%{{.*}} : memref<8xf32{{.*}}>) outs(%{{.*}} : memref<8xf32{{.*}}>)
+  %scratch = memref.alloc() : memref<8xf32>
+  %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
+  %c1 = arith.constant 1 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %one = arith.constant 1.000000e+00 : f32
+  %v0 = npuvector.transfer_read %arg0[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  %vb = npuvector.broadcast %one : f32 to !npuvector<8xf32>
+  %v1 = arith.addf %v0, %vb : !npuvector<8xf32>
+  npuvector.transfer_write %v1, %scratch[%c0] : !npuvector<8xf32>, memref<8xf32>
+  %v2 = npuvector.transfer_read %scratch[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  npuvector.transfer_write %v2, %out[%c0] : !npuvector<8xf32>, memref<8xf32>
+  return
+}
+
+// -----
+
+// Sink a cross-block elementwise producer into a loop-local scratch allocation.
+// CHECK-LABEL: func.func @test_fuse_producer_sink_cross_block
+func.func @test_fuse_producer_sink_cross_block(%arg0: memref<8xf32>, %arg1: memref<8xf32>, %out: memref<8xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: memref.subview %arg0[0] [8] [1]
+  // CHECK: hivm.hir.load ins(%{{.*}} : {{.*}}) outs(%{{.*}} : memref<8xf32>)
+  // CHECK: memref.subview %arg1[0] [8] [1]
+  // CHECK: hivm.hir.load ins(%{{.*}} : {{.*}}) outs(%{{.*}} : memref<8xf32>)
+  // CHECK: scf.for
+  // CHECK: %[[SCRATCH:.*]] = memref.alloc() : memref<8xf32>
+  // CHECK: hivm.hir.vmul ins(%{{.*}}, %{{.*}} : memref<8xf32>, memref<8xf32>) outs(%{{.*}} : memref<8xf32{{.*}}>)
+  // CHECK-NOT: hivm.hir.store ins(%{{.*}} : memref<8xf32>) outs(%{{.*}} : memref<8xf32>)
+  // CHECK: hivm.hir.store ins(%{{.*}} : memref<8xf32{{.*}}>) outs(%{{.*}} : memref<8xf32{{.*}}>)
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %lhs = npuvector.transfer_read %arg0[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  %rhs = npuvector.transfer_read %arg1[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+  %mul = arith.mulf %lhs, %rhs : !npuvector<8xf32>
+  scf.for %i = %c0 to %c1 step %c1 {
+    %scratch = memref.alloc() : memref<8xf32>
+    npuvector.transfer_write %mul, %scratch[%c0] : !npuvector<8xf32>, memref<8xf32>
+    %v = npuvector.transfer_read %scratch[%c0][%c8][%c1], %pad : memref<8xf32>, !npuvector<8xf32>
+    npuvector.transfer_write %v, %out[%c0] : !npuvector<8xf32>, memref<8xf32>
+  }
+  return
+}
+
+// -----
+
+// Sink a dense splat constant into a loop-local allocation.
+// CHECK-LABEL: func.func @test_fuse_producer_sink_dense_constant
+func.func @test_fuse_producer_sink_dense_constant(%out: memref<512xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: scf.for
+  // CHECK: memref.alloc() : memref<512xf32>
+  // CHECK: hivm.hir.vbrc ins({{.*}} : f32) outs(%{{.*}} : memref<512xf32{{.*}}>)
+  // CHECK-NOT: hivm.hir.store ins({{.*}} : memref<512xf32>) outs({{.*}} : memref<512xf32>)
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c512 = arith.constant 512 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %cst = arith.constant dense<1.0> : !npuvector<512xf32>
+  scf.for %i = %c0 to %c1 step %c1 {
+    %alloc_2 = memref.alloc() : memref<512xf32>
+    npuvector.transfer_write %cst, %alloc_2[%c0] : !npuvector<512xf32>, memref<512xf32>
+    %c1_in = arith.constant 1 : index
+    %v = npuvector.transfer_read %alloc_2[%c0][%c512][%c1_in], %pad : memref<512xf32>, !npuvector<512xf32>
+    npuvector.transfer_write %v, %out[%c0] : !npuvector<512xf32>, memref<512xf32>
+  }
   return
 }
