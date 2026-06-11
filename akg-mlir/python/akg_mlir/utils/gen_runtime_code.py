@@ -38,12 +38,10 @@ class ProfilingParams:
 
 def get_shape_args_list(device_shape, is_dyn_shape, fake_output_indices):
     """Get shape_args list"""
-    shape_args_list = []
     if not is_dyn_shape:
-        for _ in range(len(device_shape)):
-            shape_args_list.append(["pointer"])
-        return shape_args_list
+        return [["pointer"]] * len(device_shape)
 
+    shape_args_list = []
     for idx, data_shape in enumerate(device_shape):
         shape_list = []
         if idx not in fake_output_indices:
