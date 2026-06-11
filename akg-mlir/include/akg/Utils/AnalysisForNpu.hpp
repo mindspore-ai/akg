@@ -310,7 +310,7 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
 }
 
 inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankDim, ArrayRef<int64_t> typeShape,
-                                                   Type elemType) {
+                                                    Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
   if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) return 0;
 
@@ -325,6 +325,26 @@ inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankD
   }
   return computeBishengStrideAlignedStorageBytesWithTrailingUnit(
     shape, staticDims, getDefaultBishengStrideAlignDims(static_cast<int64_t>(typeShape.size())), elementBits);
+}
+
+inline int64_t computeBishengStructuredNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankDim,
+                                                             ArrayRef<int64_t> typeShape, Type elemType) {
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) return 0;
+  if (elementBits < kNpuBitsPerByte) return computeBishengNpuVectorStorageBytes(maxPerRankDim, typeShape, elemType);
+
+  SmallVector<int64_t, 6> shape;
+  SmallVector<char, 6> staticDims;
+  shape.reserve(typeShape.size());
+  staticDims.reserve(typeShape.size());
+  for (size_t i = 0; i < typeShape.size(); ++i) {
+    bool isDynamic = ShapedType::isDynamic(typeShape[i]);
+    shape.push_back(isDynamic ? maxPerRankDim[i] : typeShape[i]);
+    staticDims.push_back(!isDynamic);
+  }
+  return computeBishengStrideAlignedStorageBytesWithTrailingUnit(
+    shape, staticDims, getBishengLogicalStructuredStrideAlignDims(static_cast<int64_t>(typeShape.size())),
+    elementBits);
 }
 
 }  // namespace akg
