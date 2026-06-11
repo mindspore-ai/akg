@@ -424,7 +424,6 @@ class MlirDriver:
             # Run executable and compare results
             func(*input_for_mod_ctypes)
 
-
     def run_gpu(self, input_for_mod, output_indexes=None):
         """run kernel for gpu"""
         input_for_mod_ctypes = transform_data_to_ctypes(
@@ -447,7 +446,6 @@ class MlirDriver:
                 is_profile_params=True)
             lib = create_executable(self.kernel_name, input_for_mod, output_indexes, self.dynamic_shape)
             lib.cuda_runtime_profiling(*input_for_mod_ctypes, *prof_params_ctypes)
-
 
     def _run_mlir_convert(self, kernel_name=None, input_file=None):
         """convert info to mlir."""
@@ -837,8 +835,6 @@ class MlirDriver:
         with os.fdopen(os.open(out_file, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
             for line in static_kernel_str:
                 f.write(line)
-
-
 
 
 if __name__ == "__main__":

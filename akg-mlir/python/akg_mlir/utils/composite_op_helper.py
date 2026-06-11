@@ -359,7 +359,7 @@ def _get_all_tensors(operation):
 
 def _check_bfloat16(operation, infos):
     """Check if operation contains bfloat16 data type."""
-    if infos["bfloat16"]:
+    if infos.get("bfloat16", False):
         return
 
     all_tensors = _get_all_tensors(operation)
@@ -728,8 +728,7 @@ def _emit_reshape(fractal_tensor, default_tensor):
     shape_default = default_tensor["shape"]
     shape_tmp = []
     shape_new = []
-    for i in range(len(shape_default) - 2):
-        shape_new.append(shape_default[i])
+    shape_new = list(shape_default[:len(shape_default) - 2])
     for _ in range(len(shape_default), 2):
         shape_tmp.append(1)
     for _, sh in enumerate(shape_default):

@@ -418,15 +418,15 @@ def get_compare_tolerance(json_str: str, output_indexes: list):
     outputs = [io[idx] for idx in output_indexes]
 
     analyze_indexes = []  # holds the index of float32 outputs
-    for i, o in enumerate(outputs):
-        if o.dtype == "float16":
+    for idx, out in enumerate(outputs):
+        if out.dtype == "float16":
             compare_tolerance.append(1e-3)
-        elif o.dtype == "bfloat16":
+        elif out.dtype == "bfloat16":
             compare_tolerance.append(1e-2)
         else:
             compare_tolerance.append(1e-2)
-            if o.dtype == "float32":
-                analyze_indexes.append(i)
+            if out.dtype == "float32":
+                analyze_indexes.append(idx)
     if not analyze_indexes:
         return compare_tolerance
 
