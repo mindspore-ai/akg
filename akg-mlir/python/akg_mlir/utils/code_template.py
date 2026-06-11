@@ -13,7 +13,7 @@
 # limitations under the License.
 """Code template for runtime"""
 
-cuda_runtime_template = '''
+CUDA_RUNTIME_TEMPLATE = '''
 /**
  * Copyright 2026 Huawei Technologies Co., Ltd
  *
@@ -211,7 +211,7 @@ rt_code_free_d_mem
 }
 '''
 
-cpu_profiling_template = '''
+CPU_PROFILING_TEMPLATE = '''
   llvm.func @nanoTime() -> i64 attributes {llvm.emit_c_interface, sym_visibility = "private"} {
     %0 = llvm.call @_mlir_ciface_nanoTime() : () -> i64
     llvm.return %0 : i64
