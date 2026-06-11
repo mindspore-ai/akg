@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 def check_env_flag(name: str, default: str = "OFF") -> bool:
-    """check env flag"""
+    """Check environment flag."""
     val = os.getenv(name, default)
     return val.upper() in ("ON", "1", "YES", "TRUE", "Y")
 
@@ -89,9 +89,11 @@ def build_dependencies(pkg_dir: Path) -> None:
     commit_file.write_text(f"__commit_id__ = '{COMMIT_ID}'\n", encoding="utf-8")
     logger.info("Generated .commit_id: %s", commit_file)
 
+
 def get_cmake():
     """get cmake"""
     return shutil.which("cmake")
+
 
 def get_cmake_generator() -> str:
     """Determine the CMake generator to use."""

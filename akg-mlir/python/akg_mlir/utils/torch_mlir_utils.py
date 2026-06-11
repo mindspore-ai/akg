@@ -47,7 +47,7 @@ def _import_torch_mlir():
 
 
 def find_first_func_name(input_file: str) -> Optional[str]:
-    """get kernle name"""
+    """Get kernel name."""
     input_file = pathlib.Path(input_file)
     mlir_text = input_file.read_text(encoding='utf-8')
     pat = re.compile(
@@ -240,6 +240,7 @@ def run_torch_mlir_to_linalg_on_tensors(file_path, output_path):
         logging.error("torch-mlir to linalg-on-tensors failed!")
         raise RuntimeError("torch-mlir to linalg-on-tensors failed!") from exc
     return output_path
+
 
 _VAR_REF_RE = re.compile(r"^(output|input)_\d+$")
 
@@ -442,6 +443,7 @@ def gen_broadcast_to(dst_name, x, shape):
         f"        {resolved_shape_name}.append(int({dim_name}))",
         f"{dst_name} = np.broadcast_to({x}, {resolved_shape_name})",
     ])
+
 
 TORCH_DTYPE_TO_NUMPY = {
     # unsigned
