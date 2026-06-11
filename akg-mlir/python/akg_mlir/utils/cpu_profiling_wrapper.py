@@ -14,8 +14,7 @@
 # ============================================================================
 
 """CPU Profiling Wrapper Function"""
-import argparse
-from .code_template import cpu_profiling_template
+from .code_template import CPU_PROFILING_TEMPLATE
 
 
 def wrap_timer_func(file, kernel_name, profiling_trails):
@@ -35,7 +34,7 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     inputs_ptr = ""
     file_src = ""
     kernel_func_line_id = 0
-    template_src = cpu_profiling_template
+    template_src = CPU_PROFILING_TEMPLATE
     with open(file, 'r', encoding='utf-8') as f:
         file_src = f.readlines()
         for idx, line in enumerate(file_src):
@@ -54,14 +53,3 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     with open(timer_file, "wt", encoding='utf-8') as f:
         f.writelines(wrapped_timer_src)
     return timer_file
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run cpu profiling wrapper")
-    parser.add_argument("-f", "--file", type=str, help="Run single file.")
-    parser.add_argument("-kn", "--kernel_name", type=str, help="kernel name")
-    parser.add_argument("-tr", "--prof_trails", type=int,
-                        required=False, default=0)
-    args = parser.parse_args()
-
-    _ = wrap_timer_func(args.file, args.kernel_name, args.prof_trails)

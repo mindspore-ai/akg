@@ -56,7 +56,8 @@ class Kernel:
 
     def get_launcher(self, block_dim, lib_path):
         """Bind launch to ``lib_path`` (absolute path to ``.o`` / ``lib*.so``). Caller must supply it
-        when the kernel was loaded from cache and never ran :meth:`compile` in this process."""
+        when the kernel was loaded from cache and never ran :meth:`compile` in this process.
+        """
         if not lib_path:
             raise ValueError("lib_path is required (path to compiled Ascend binary)")
         if self.dynamic:

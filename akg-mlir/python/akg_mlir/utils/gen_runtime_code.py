@@ -19,7 +19,7 @@ import json
 from functools import reduce
 from .dynamic_utils import get_gpu_setting_by_input, get_device_shape
 from .composite_op_helper import get_cpptype_from_pytype
-from .code_template import cuda_runtime_template
+from .code_template import CUDA_RUNTIME_TEMPLATE
 
 
 class ProfilingParams:
@@ -65,7 +65,7 @@ def gen_cuda_runtime_code(kernel_name,
                           fake_output_indices,
                           path="./akg_kernel_meta/"):
     """Generate cuda runtime code"""
-    template_src = cuda_runtime_template
+    template_src = CUDA_RUNTIME_TEMPLATE
     device_shape, symbol_map, support_info = get_device_shape(input_for_mod, kernel_name, is_dyn_shape)
     mapping_file = os.path.join(path, f"{kernel_name}.json")
     runtime_arg_file = os.path.join(path, f"{kernel_name}_runtime_arg.txt")
