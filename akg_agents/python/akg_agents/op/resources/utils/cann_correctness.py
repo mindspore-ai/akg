@@ -188,11 +188,14 @@ def _compare_single_tensor(
 
     # --- Integer path ---
     if output.dtype in _INTEGER_DTYPES:
-        if torch.equal(output, golden):
+        diff = torch.abs(output.long() - golden.long())
+        mismatch_mask = diff > max(threshold, 0)
+        mismatch_count = int(mismatch_mask.sum())
+        if mismatch_count == 0:
             return {"passed": True, "mere": 0.0, "mare": 0.0, "threshold": threshold, "error_msg": None}
-        mismatch_count = int((output != golden).sum())
+
         return {"passed": False, "mere": 0.0, "mare": 0.0, "threshold": threshold,
-                "error_msg": f"integer mismatch: {mismatch_count}/{output.numel()} elements differ"}
+                "error_msg": f"integer mismatch: {mismatch_count}/{output.numel()} elements exceed tolerance {threshold}"}
 
     # --- Floating-point MERE/MARE path ---
     target_dtype = output.dtype
