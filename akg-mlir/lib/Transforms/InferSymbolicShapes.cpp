@@ -257,6 +257,15 @@ struct PropagateMemRefAllocOp : public OpRewritePattern<memref::AllocOp> {
   }
 };
 
+bool needsCast(const llvm::SmallVector<std::string> &resSymShape,
+                const std::optional<llvm::SmallVector<std::string>> &curSym) {
+  if (!curSym || curSym->size() != resSymShape.size()) return true;
+  for (size_t i = 0; i < resSymShape.size(); ++i) {
+    if ((*curSym)[i] != resSymShape[i]) return true;
+  }
+  return false;
+}
+
 struct PropagateMemRefExpandShapeOp : public OpRewritePattern<memref::ExpandShapeOp> {
   using OpRewritePattern<memref::ExpandShapeOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(memref::ExpandShapeOp op, PatternRewriter &rewriter) const override {
@@ -345,18 +354,7 @@ struct PropagateMemRefExpandShapeOp : public OpRewritePattern<memref::ExpandShap
     Type realResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
 
     std::optional<llvm::SmallVector<std::string>> curSym = analysis.getSymbolicShape(resVal.getType());
-    bool needCast = true;
-    if (curSym && curSym->size() == resSymShape.size()) {
-      needCast = false;
-      for (size_t i = 0; i < resSymShape.size(); ++i) {
-        if ((*curSym)[i] != resSymShape[i]) {
-          needCast = true;
-          break;
-        }
-      }
-    }
-
-    if (!needCast) return success();
+    if (!needsCast(resSymShape, curSym)) return success();
 
     rewriter.setInsertionPointAfter(op);
     auto castOp = rewriter.create<memref::MemorySpaceCastOp>(op.getLoc(), realResTy, resVal);
@@ -449,18 +447,7 @@ struct PropagateMemRefCollapseShapeOp : public OpRewritePattern<memref::Collapse
     Type realResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
 
     std::optional<llvm::SmallVector<std::string>> curSym = analysis.getSymbolicShape(resVal.getType());
-    bool needCast = true;
-    if (curSym && curSym->size() == resSymShape.size()) {
-      needCast = false;
-      for (size_t i = 0; i < resSymShape.size(); ++i) {
-        if ((*curSym)[i] != resSymShape[i]) {
-          needCast = true;
-          break;
-        }
-      }
-    }
-
-    if (!needCast) return success();
+    if (!needsCast(resSymShape, curSym)) return success();
 
     rewriter.setInsertionPointAfter(op);
     auto castOp = rewriter.create<memref::MemorySpaceCastOp>(op.getLoc(), realResTy, resVal);

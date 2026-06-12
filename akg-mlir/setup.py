@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import multiprocessing
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
@@ -46,7 +45,7 @@ def get_version() -> str:
         return version_file.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         logging.info("version.txt not found.")
-    return "2.10.0.dev" + get_build_time()
+    return "2.10.0.a1"
 
 
 def get_commit_id() -> str:
@@ -66,11 +65,6 @@ def get_commit_id() -> str:
     except subprocess.CalledProcessError as e:
         logging.info("get commit failed! error message: %s", e.stderr)
         return "unknown"
-
-
-def get_build_time() -> str:
-    """Get build timestamp."""
-    return datetime.now().strftime("%Y%m%d")
 
 
 def build_dependencies(pkg_dir: Path) -> None:
@@ -129,7 +123,6 @@ AKG_CMAKE_BUILD_DIR = os.getenv("AKG_CMAKE_BUILD_DIR")
 MAX_JOBS = os.getenv("MAX_JOBS", str(multiprocessing.cpu_count()))
 VERSION = get_version()
 COMMIT_ID = get_commit_id()
-BUILD_TIME = get_build_time()
 
 
 class CMakeConfig:
