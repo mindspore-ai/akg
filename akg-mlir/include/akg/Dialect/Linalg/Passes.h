@@ -27,6 +27,7 @@
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
 #include "akg/Dialect/Linalg/Transforms/Bufferize.h"
 #include "akg/Dialect/Linalg/Transforms/LinalgCopyBufferize.h"
+#include "akg/Dialect/Linalg/Transforms/LegalizeIntWidth.h"
 #include "akg/Dialect/Linalg/Transforms/LinalgSimplify.h"
 #include "akg/Dialect/Linalg/Transforms/ShapeNormalization.h"
 #include "akg/Dialect/Linalg/Transforms/MatchAndMarkReductionOps.h"
