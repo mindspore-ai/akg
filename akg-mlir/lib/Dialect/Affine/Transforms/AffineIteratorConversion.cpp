@@ -215,25 +215,22 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
     Value memref = initStore.getMemRef();
     Operation *anchor = ifOp ? ifOp.getOperation() : initStore.getOperation();
     Block *block = anchor->getBlock();
-    SmallVector<affine::AffineLoadOp> deadLoads;
-    for (auto it = std::next(Block::iterator(anchor)); it != block->end(); ++it) {
-      auto loadOp = dyn_cast<affine::AffineLoadOp>(&*it);
+    for (auto it = std::next(Block::iterator(anchor)); it != block->end();) {
+      Operation *cur = &*it++;
+      // Stop at the post-loop store that writes the reduction result back to
+      // the accumulator; loads after it read the result, not the init value.
+      if (auto store = dyn_cast<affine::AffineStoreOp>(cur)) {
+        if (store.getMemRef() == memref && !store->getAttr(kReductionInitAttr)) {
+          break;
+        }
+        continue;
+      }
+      auto loadOp = dyn_cast<affine::AffineLoadOp>(cur);
       if (!loadOp || loadOp.getMemRef() != memref) {
         continue;
       }
-      for (auto &use : llvm::make_early_inc_range(loadOp.getResult().getUses())) {
-        if (auto store = dyn_cast<affine::AffineStoreOp>(use.getOwner())) {
-          if (store->getAttr(kReductionInitAttr)) {
-            use.set(constOp.getResult());
-          }
-        }
-      }
-      if (loadOp.use_empty()) {
-        deadLoads.push_back(loadOp);
-      }
-    }
-    for (auto load : deadLoads) {
-      load.erase();
+      loadOp.getResult().replaceAllUsesWith(constOp.getResult());
+      loadOp.erase();
     }
   }
 
