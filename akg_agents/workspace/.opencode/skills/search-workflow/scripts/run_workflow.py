@@ -211,7 +211,6 @@ async def main(args):
         base_config=config,
     )
     full_config["log_dir"] = str(Path(output_path) / "logs")
-    full_config["skip_kernel_gen"] = args.workflow != "kernelgen"
 
     logger.info(f"Workflow: {args.workflow}")
     logger.info(f"Task: {task_file_path} (op_name={op_name})")
