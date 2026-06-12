@@ -202,6 +202,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
   nestedFunctionPM.addPass(tosa::createTosaToLinalg());
   // Erase unused linalg.generic operands/results before bufferization.
   nestedFunctionPM.addPass(createEraseUnusedOperandsAndResultsPass());
+  // Narrow wide integer ops (compares, selects, bitwise) back to the element type where it is value-exact.
+  nestedFunctionPM.addPass(createLegalizeIntWidthPass());
 
   if (options.enableLoopFusion) {
     pm.addPass(createDecomposeTensorPass());

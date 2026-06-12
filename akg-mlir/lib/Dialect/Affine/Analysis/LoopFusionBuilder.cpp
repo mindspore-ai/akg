@@ -21,6 +21,7 @@
 #include <memory>
 #include <queue>
 
+#include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -1467,6 +1468,52 @@ static int getRankFromAccesses(const SmallVector<Operation *, 4> &accesses) {
   return maxRank;
 }
 
+// Fusion by induction variable requires the producer-written and consumer-read views to share the
+// same logical shape. For dynamic shapes this correspondence is only available via SymShapeAttr
+// (loop bounds have been rewritten to primes and no longer encode it). If the ranks differ or
+// SymShapeAttr is missing/mismatched, we skip fusion.
+static bool isDependenceAxisRelationUnresolved(const SmallVector<Operation *, 4> &srcAccesses,
+                                               const SmallVector<Operation *, 4> &dstAccesses) {
+  auto &symAnalysis = SymbolicShapeAnalysis::getInstance();
+  auto memrefTypeOf = [](Operation *op) -> MemRefType {
+    Value memref;
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      memref = read.getMemRef();
+    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      memref = write.getMemRef();
+    }
+    return memref ? dyn_cast<MemRefType>(memref.getType()) : MemRefType();
+  };
+
+  for (Operation *srcOp : srcAccesses) {
+    MemRefType srcType = memrefTypeOf(srcOp);
+    if (!srcType) {
+      continue;
+    }
+    auto srcSym = symAnalysis.getSymbolicShape(srcType);
+    for (Operation *dstOp : dstAccesses) {
+      MemRefType dstType = memrefTypeOf(dstOp);
+      if (!dstType) {
+        continue;
+      }
+      // Different rank: the two views cannot describe the same logical shape.
+      if (srcType.getRank() != dstType.getRank()) {
+        return true;
+      }
+      // Fully static and same rank: concrete bounds are validated by the regular path.
+      if (srcType.hasStaticShape() && dstType.hasStaticShape()) {
+        continue;
+      }
+      // Dynamic shape: the axis correspondence must be established via SymShapeAttr.
+      auto dstSym = symAnalysis.getSymbolicShape(dstType);
+      if (!srcSym.has_value() || !dstSym.has_value() || *srcSym != *dstSym) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Helper function to check if the outermost loops (up to depth) have matching bounds.
 static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
                                  const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
@@ -2131,31 +2178,25 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   srcInfo.collect(srcAffineForOp);
   dstInfo.collect(dstAffineForOp);
 
-  // Collect accesses once in true src/dst order, shared by subview and regular fusion paths.
   FusionAccessInfo accessInfo;
-  if (plan.fusionType == "I" ||
-      !collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo)) {
+  bool haveAccesses =
+    plan.depInfo.memref && collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo);
+
+  if (haveAccesses && plan.depInfo.memrefKind != MemrefKind::Subview &&
+      isDependenceAxisRelationUnresolved(accessInfo.srcAccesses, accessInfo.dstAccesses)) {
+    return;
+  }
+
+  if (plan.fusionType == "I" || !haveAccesses) {
     doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, plan);
     return;
   }
 
-  // Try subview fusion first.
-  if (plan.depInfo.memrefKind == MemrefKind::Subview) {
-    int srcRank = getRankFromAccesses(accessInfo.srcAccesses);
-    int dstRank = getRankFromAccesses(accessInfo.dstAccesses);
-    if (auto fusionPlan = subviewHelper.tryFuse(srcInfo, dstInfo, srcRank, dstRank)) {
-      unsigned erasedGid = fusionPlan->srcIsPrimary ? dstGroupId : srcGroupId;
-      unsigned aliasGid = fusionPlan->srcIsPrimary ? srcGroupId : dstGroupId;
-      eraseLoopAndCleanupNode(erasedGid, aliasGid, fusionPlan->secondaryInfo()->root);
-      return;
-    }
+  if (trySubviewFuse(srcGroupId, dstGroupId, accessInfo, srcInfo, dstInfo, plan)) {
+    return;
   }
 
-  // H-fusion uses ProducerConsumer; V-fusion uses Sibling on the dep memref (or Generic if missing).
-  affine::FusionStrategy strategy = plan.fusionType == "H"
-                                      ? affine::FusionStrategy(affine::FusionStrategy::ProducerConsumer)
-                                      : (plan.depInfo.memref ? affine::FusionStrategy(plan.depInfo.memref)
-                                                             : affine::FusionStrategy(affine::FusionStrategy::Generic));
+  affine::FusionStrategy strategy = getFusionStrategy(plan);
 
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
@@ -2176,9 +2217,42 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDepth - 1];
   assert(!bestSlice.isEmpty() && "Missing slice union for depth");
 
+  applySliceFusion(srcAffineForOp, dstAffineForOp, srcInfo, dstInfo, keepSrcDst, bestSlice, accessInfo, srcGroupId,
+                   dstGroupId);
+}
+
+bool FusionCodeGenHelper::trySubviewFuse(unsigned srcGroupId, unsigned dstGroupId, const FusionAccessInfo &accessInfo,
+                                         FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
+                                         const FusionPlan &plan) {
+  if (plan.depInfo.memrefKind != MemrefKind::Subview) {
+    return false;
+  }
+  int srcRank = getRankFromAccesses(accessInfo.srcAccesses);
+  int dstRank = getRankFromAccesses(accessInfo.dstAccesses);
+  if (auto fusionPlan = subviewHelper.tryFuse(srcInfo, dstInfo, srcRank, dstRank)) {
+    unsigned erasedGid = fusionPlan->srcIsPrimary ? dstGroupId : srcGroupId;
+    unsigned aliasGid = fusionPlan->srcIsPrimary ? srcGroupId : dstGroupId;
+    eraseLoopAndCleanupNode(erasedGid, aliasGid, fusionPlan->secondaryInfo()->root);
+    return true;
+  }
+  return false;
+}
+
+affine::FusionStrategy FusionCodeGenHelper::getFusionStrategy(const FusionPlan &plan) const {
+  if (plan.fusionType == "H") {
+    return affine::FusionStrategy(affine::FusionStrategy::ProducerConsumer);
+  }
+  if (plan.depInfo.memref) {
+    return affine::FusionStrategy(plan.depInfo.memref);
+  }
+  return affine::FusionStrategy(affine::FusionStrategy::Generic);
+}
+
+void FusionCodeGenHelper::applySliceFusion(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+                                           FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, bool keepSrcDst,
+                                           affine::ComputationSliceState &bestSlice, const FusionAccessInfo &accessInfo,
+                                           unsigned srcGroupId, unsigned dstGroupId) {
   if (keepSrcDst) {
-    // Fusion from src to dst. Try the imperfect path first; fall back to MLIR
-    // fuseLoops otherwise. Both paths leave src as the loop to erase.
     bool fused = false;
     if (!srcInfo.isPerfect && !dstInfo.isPerfect) {
       fused = fuseImperfectLoops(srcInfo, dstInfo, bestSlice, accessInfo);
@@ -2188,7 +2262,6 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
     }
     eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
   } else {
-    // Fusion from dst to src.
     fuseLoops(dstAffineForOp, srcAffineForOp, bestSlice);
     eraseLoopAndCleanupNode(dstGroupId, srcGroupId, dstAffineForOp);
   }
