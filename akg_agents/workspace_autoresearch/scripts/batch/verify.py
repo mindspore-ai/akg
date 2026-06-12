@@ -22,7 +22,7 @@ DSL-aware static check via ``akg_agents.op.utils.code_checker.CodeChecker``
 contributes its own ``_<dsl>ComplianceCheck`` subclass - so the same
 tier-1 path covers triton (@triton.jit + forward must launch it), pypto
 (@pypto.jit), catlass (forward must call torch.ops.<ns>.*), etc.
-``static_check_via_python_ast=False`` DSLs (cpp / cuda_c / swft) skip
+``static_check_via_python_ast=False`` DSLs (cpp / cuda_c) skip
 the AST layer; tier-1 only catches syntax/import errors for
 them, real failures surface in the verify/profile subprocess later.
 

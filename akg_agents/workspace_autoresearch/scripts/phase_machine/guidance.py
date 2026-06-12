@@ -241,8 +241,8 @@ def _load_config_safe(task_dir: str):
 
 # Skills tree root. The new layout is DSL-partitioned
 # (`triton-ascend/`, `triton-cuda/`, `pypto/`, `cpp/`, `cuda-c/`,
-# `tilelang-cuda/`, `tilelang-ascend/`, `tilelang-npuir/`, `ascendc/`,
-# `ascendc-catlass/`, `swft/`, `torch/`) with
+# `tilelang-cuda/`, `tilelang-ascend/`, `ascendc/`,
+# `ascendc-catlass/`) with
 # per-topic SKILL.md files under each DSL's `fundamentals/`, `guides/`,
 # `cases/`, `examples/`, and `evolved-*/` subdirs. The hint instructs
 # the LLM to Glob inside the relevant DSL subtree. Returns "" when the
