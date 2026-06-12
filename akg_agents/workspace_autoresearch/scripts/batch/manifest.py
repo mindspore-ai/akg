@@ -15,7 +15,7 @@
 """Manifest loading + progress JSON I/O for the batch runner.
 
 Workspace convention (single-file DSLs — triton, pypto, tilelang, cpp,
-cuda_c, ascendc, swft):
+cuda_c):
     <batch_dir>/
         manifest.yaml | manifest.json        # user-authored
         batch_progress.json                  # written here

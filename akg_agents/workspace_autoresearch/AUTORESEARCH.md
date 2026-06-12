@@ -1,812 +1,643 @@
-# workspace_autoresearch
+# AutoResearch
 
-Claude Code 驱动的算子自动优化框架。本目录是 `akg_agents/` 的使用态工作空间：
-phase machine + hooks + slash command 在 `scripts/`，verifier 与 worker 走
-`utils.akg_eval` 桥（直接 import `akg_agents.op.verifier.KernelVerifier` +
-`akg_agents.core.worker.manager`，不 vendor）。
+AutoResearch 是 Claude Code 驱动的算子优化工作流。它把一个 reference、一个 seed kernel 或 DSL 工程整理成 task_dir，然后按状态机自动完成 baseline、计划、编辑、评测、保留或回滚，直到达到轮数上限并生成 FINISH 报告。
 
-**主循环**：scaffold → BASELINE → PLAN → EDIT → eval → KEEP/DISCARD → 直到 `max_rounds` → FINISH。
+主循环：`scaffold -> BASELINE -> PLAN -> EDIT -> eval -> KEEP/DISCARD -> FINISH`。
 
-**后端**：默认 Ascend NPU（[`config.yaml`](config.yaml) `defaults.backend: ascend`、`dsl: triton_ascend`、`skill_dsl: triton-ascend`）。下文 walkthrough 以 NPU 为典型，但 workspace 是 single-target-per-repo 设计，**改 `config.yaml` 的 `defaults` triple 即可切到 cuda / cpu**：scaffold 会按 `defaults.backend` 走 `nvidia-smi` / `npu-smi` / `platform.machine` 自动推断 `arch`，verifier / worker dispatch 也走对应路径。具体可切换的 DSL 见 [skills 根目录](../python/akg_agents/op/resources/skills/) 的子目录名（triton-ascend / triton-cuda / pypto / cpp / cuda-c / tilelang-cuda / ascendc 等）。
+本文把 `backend`、`framework`、`dsl` 当作变量说明。示例中的 `<backend>`、`<dsl>`、`<device-id>` 需要按任务实际目标替换；只有在 DSL 专属契约里才点名具体 DSL。
 
-第一次用：按下表选一条「操作」路径走完即可，配置说明都在「参考」里按主题归档。
+## 快速导航
 
-| 目标 | 跳转 |
+| 目标 | 看这里 |
 |---|---|
-| 第一次用，本机就是 NPU 机 | [操作 A](#a-单机本机--测评机) |
-| 第一次用，本机没 NPU，要用远端 NPU | [操作 B](#b-双机本机跑-claude无-npu-远端-npu-机跑-eval) |
-| 一次跑很多算子 | [操作 C](#c-批量) |
-| 续跑、重置、查历史 | [操作 D](#d-续跑--重置--查询) |
-| 查 CLI 参数 | [参考 §1](#1-cli-参数) |
-| 算子/文件该怎么命名 | [参考 §2](#2-命名契约) |
-| 单轮 phase 怎么走 | [参考 §3](#3-主循环--状态机) |
-| eval 怎么跑、worker 怎么联 | [参考 §4](#4-eval-执行链) |
-| 精度判定标准 | [参考 §5](#5-精度容差) |
-| 状态文件在哪 | [参考 §6](#6-文件与状态布局) |
-| env.sh 该写什么 | [参考 §7](#7-envsh-契约) |
-| 起停 worker daemon / SSH tunnel | [参考 §8](#8-akg_cli-worker) |
-| Triton 调优 markdown 库 | [参考 §9](#9-skills-库) |
-| 内部机制入口 | [参考 §10](#10-hook-与内部机制) |
-| 并发跑 / 多 session / 共用卡 | [参考 §11](#11-并发与冲突) |
+| Claude Code 和评测在同一台机器 | [A. 本机运行](#a-本机运行) |
+| 本机只跑 Claude，远端机器跑 eval | [B. 远端 worker](#b-远端-worker) |
+| 批量跑多个算子 | [C. 批量运行](#c-批量运行) |
+| 恢复、重试、看状态 | [D. 恢复与排查](#d-恢复与排查) |
+| CLI 参数 | [1. CLI 参数](#1-cli-参数) |
+| 文件与命名契约 | [2. 任务文件契约](#2-任务文件契约) |
+| DSL 项目格式 | [3. DSL 项目契约](#3-dsl-项目契约) |
+| eval 和 worker 链路 | [4. Eval 与 worker 链路](#4-eval-与-worker-链路) |
+| 状态机与产物 | [5. 状态机与产物](#5-状态机与产物) |
+| env.sh 写法 | [6. env.sh 契约](#6-envsh-契约) |
 
 ---
 
 # 操作
 
-## A. 单机：本机 = 测评机
+## A. 本机运行
 
-开发与 eval 同一台 Ascend NPU 机，配置最少。
+适用场景：Claude Code 和 eval 在同一台机器上。机器可以是 Ascend、CUDA 或 CPU 环境，只要目标 backend/DSL 的依赖齐全。
 
-### A.1 准备 env.sh
+### A.1 准备环境
 
-前置：本机有 Ascend NPU，`npu-smi info` 列得出设备；本机 Python 已能 `import torch_npu, triton`；Claude Code CLI 已装。
+先确认目标 backend 的基础工具可用：
 
-写 `~/env.sh`，使非交互 shell `source` 后即可 `python -c "import torch_npu, triton"`。模板与禁项见 [参考 §7](#7-envsh-契约)。
+| backend | 最小自检 |
+|---|---|
+| `ascend` | `npu-smi info`；`python -c "import torch_npu"` |
+| `cuda` | `nvidia-smi`；`python -c "import torch"` |
+| `cpu` | `python -c "import torch"` |
 
-验证：
-```bash
-source ~/env.sh && python -c "import torch_npu, triton" && npu-smi info
+如果目标 DSL 有额外运行时依赖，也在同一个环境里检查：Python DSL 检查对应 package import，项目目录类 DSL 检查所需 thirdparty、SDK 和编译工具链。
+
+建议把环境初始化写进 `~/env.sh`，见 [6. env.sh 契约](#6-envsh-契约)。
+
+### A.2 准备 reference 和 kernel
+
+把文件放到 `workspace/` 或任意你能引用到的位置：
+
+```text
+workspace/<op>_ref.py
+workspace/<op>_kernel.py
 ```
 
-### A.2 写 ref 和 kernel
+reference 文件暴露 `Model`、`get_init_inputs()`，并通过 `get_inputs()` 或 `get_input_groups()` 提供单 shape 或多 shape 输入。kernel 文件暴露 `ModelNew`，或者在支持 DSL 工程的任务中指向一个项目目录。
 
-在 `workspace/` (相对 workspace_autoresearch 根) 下放两个文件。命名硬约束见 [参考 §2](#2-命名契约)。
-
-`workspace/<op>_ref.py`：PyTorch 标准答案，暴露 `class Model(nn.Module)`、`get_inputs()`（或 `get_input_groups()`）和 `get_init_inputs()`。
-
-`workspace/<op>_kernel.py`：种子 kernel，暴露 `class ModelNew(nn.Module)`，forward 内实际调用目标 DSL kernel。命名与接口细节见 [参考 §2](#2-命名契约)。
-
-### A.3 启动
+### A.3 启动任务
 
 ```bash
-cd workspace_autoresearch
+cd akg_agents/workspace_autoresearch
 source ~/env.sh
 claude
 ```
 
-在 Claude 输入框里：
+在 Claude Code 中输入：
 
 ```text
 /autoresearch --ref workspace/<op>_ref.py --kernel workspace/<op>_kernel.py \
-  --op-name <op> --devices <NPU-id>
+  --op-name <op> --devices <device-id>
 ```
 
-`--devices` 必填。其他可调 flag（`--max-rounds`、`--eval-timeout` 等）见 [参考 §1.1](#11-autoresearch)。
+常用可选项：`--max-rounds`、`--eval-timeout`、`--output-dir`、`--worker-url`。目标 backend/framework/DSL 通常来自 `config.yaml: defaults` 或 task config；不要在文档示例里假设某个 DSL 是唯一默认。
 
-### A.4 看进度
-
-Claude 全自动按 `scaffold → BASELINE → PLAN → EDIT → ...` 推进，无须人工干预。另开终端实时查看：
+### A.4 查看进度
 
 ```bash
-cd workspace_autoresearch
 python scripts/dashboard.py <task_dir> --watch
 ```
 
-阶段流转与产物见 [参考 §3](#3-主循环--状态机)。
-
-### A.5 拿结果
-
-达到 `--max-rounds` 自动进入 FINISH，落盘：
-- `<task_dir>/kernel.py`：最佳 kernel
-- `<task_dir>/.ar_state/report.md`：报告（含内嵌 SVG）
-
-每次 KEEP 对应一次 git commit。
-
----
-
-## B. 双机：本机跑 claude（无 NPU）+ 远端 NPU 机跑 eval
-
-本机没有 NPU，eval 委托远端 Ascend 机，orchestrator 留本机。worker 是 HTTP daemon，绑 `127.0.0.1`，访问通过 `akg_cli worker --remote-host` 自动建立的 SSH tunnel，不暴露公网。
-
-### B.1 [两端] 准备环境
-
-| 在哪 | 做什么 |
-|---|---|
-| 远端 NPU 机 | 准备 AKG checkout 作为 `<repo_path>`；写 `env_script`，source 后 `python -c "import torch_npu, triton"` 成功；`npu-smi info` 可列设备。若使用 `ascendc_catlass`，在 `<repo_path>/akg_agents` 下完成 `bash download.sh --with_catlass`。 |
-| 本机 | (1) 装 Python ≥ 3.10、PyYAML、Claude Code CLI。(2) 作为 orchestrator / SSH tunnel / 任务文件所在机器，eval 全部走远端 worker。(3) `~/.ssh/config` 配好 alias（下文以 `my-npu` 为例）+ 密钥免密登录远端。 |
-
-<details><summary><code>~/.ssh/config</code> 怎么配 + 跑前自检</summary>
-
-**第一步：本机 `~/.ssh/config` 配远端别名**。下面用 `my-npu`。
+最终产物：
 
 ```text
-# 文件路径：本机 ~/.ssh/config（没有就新建，注意是 config 不是 config.txt）
-Host my-npu                            # 本地 SSH 别名，可按团队习惯命名
-    HostName 192.168.x.x               # 远端机真实 IP 或域名
-    User <remote-user>                 # 登录远端用的账号，比如 root
-    # 私钥放在本机非默认位置时填写：
-    # IdentityFile <本机私钥绝对路径>
-    # 如需跳板机：
-    # ProxyJump bastion
+<task_dir>/kernel.py
+<task_dir>/.ar_state/report.md
+<task_dir>/.ar_state/history.jsonl
 ```
 
-`Host` 别名通常与 B.2 的 `remote_worker.hosts.<alias>` 保持一致；需要不同名称时，在 B.2 填 `ssh_alias`。
+## B. 远端 worker
 
-**第二步：跑前自检**。在本机执行：
+适用场景：本机只跑 Claude Code，eval 通过 SSH tunnel 发送到远端评测机器。远端可以是任意支持目标 backend/DSL 的机器。
+
+### B.1 远端准备
+
+远端机器需要有一份 AKG checkout，例如：
+
+```text
+/path/to/akg
+```
+
+远端 `env.sh` 需要在非交互 shell 中可用。它应完成 Python 环境、硬件 SDK、编译工具链和目标 DSL 依赖的初始化。自检命令按 backend/DSL 选择，不要把某个 backend 的工具当成通用要求。
 
 ```bash
-# 命令在本机敲。ssh 后面单引号里那一串都是在远端执行的，所以路径里的 <远端账号> 指远端机
-# 的用户名，env.sh 是远端机上的脚本。
-ssh my-npu 'source /home/<远端账号>/env.sh \
-    && python -c "import torch_npu, triton" \
-    && npu-smi info | head -3'
+source /path/to/env.sh
+python -c "import torch"
+# backend/DSL-specific checks go here: hardware CLI, Python package imports, SDK/toolchain probes.
 ```
 
-这条命令同时验证 SSH、`env_script`、`torch_npu/triton` import 和 NPU 可见性。失败时优先修对应的 SSH alias、env.sh 或 CANN/Python 环境。
+某些 DSL 需要额外准备 thirdparty 或编译资产；这类步骤应写在 DSL 专属说明或项目 README 里，而不是作为 worker 的通用前置条件。
 
-</details>
+### B.2 本机配置 SSH 和 worker host
 
-### B.2 [本机] 配 worker host
+本机 `~/.ssh/config` 中配置 SSH alias，例如：
 
-`config.yaml`：
+```text
+Host eval-host
+    HostName <remote-host-or-ip>
+    User <remote-user>
+    IdentityFile <optional-private-key>
+```
+
+在本机 `config.yaml` 写入：
 
 ```yaml
 remote_worker:
   hosts:
-    my-npu:
-      repo_path:  /home/<user>/akg               # 远端 akg checkout 路径（必填）
-      env_script: /home/<user>/env.sh            # 必填，source 后 PATH 上的 python 可 import torch_npu/triton
-      ssh_alias:  my-npu                         # 可选，默认 = key
+    eval-host:
+      repo_path: /path/to/akg
+      env_script: /path/to/env.sh
+      ssh_alias: eval-host
 ```
 
-`repo_path` 指远端 akg checkout。远端命令会在 `source env_script && cd repo_path/akg_agents` 之后运行 `python -m akg_agents.cli.cli worker ...`；解释器由 `env_script` 配好的 PATH 决定。字段语义见 [参考 §8](#8-akg_cli-worker)。`akg_cli` 读 cwd 的 `./config.yaml`。
+`ssh_alias` 可省略，默认等于 `remote_worker.hosts` 下的 key。
 
-### B.3 [本机] 启动远端 worker（akg_cli 自动开 SSH tunnel）
+### B.3 启动 worker 并建立 tunnel
+
+先看状态和远端诊断：
 
 ```bash
-akg_cli worker --remote-host my-npu --start \
-    --backend ascend --arch ascend910b3 --devices <NPU-id>
+akg_cli worker --remote-host <alias> --status \
+  --backend <backend> --dsl <dsl>
 ```
 
-`--port` 可省 —— akg_cli 从 cwd 的 `./config.yaml` 读 `worker.port`；yaml 没设才回落硬编码 9001。一条命令做两件事：(1) SSH 到远端执行 checkout 内的 `python -m akg_agents.cli.cli worker --start ...`，PYTHONPATH 锁到 `repo_path/akg_agents/python`，daemon 跟随该 checkout 启动（见 [§8](#8-akg_cli-worker)），(2) 本机起 `ssh -L <port>:127.0.0.1:<port>`，tunnel pid 存 `~/.akg_agents/tunnels/<port>.pid`。后续 `--worker-url 127.0.0.1:<port>` 透传。
+启动远端 worker：
 
-`--start` 幂等：daemon / tunnel 已活时直接返回当前状态；仅 tunnel 退出且 daemon 仍可用时只重建 tunnel；两者都不可用时执行 SSH spawn。tunnel 异常退出后再次执行 `--start` 即可恢复。
+```bash
+akg_cli worker --remote-host <alias> --start \
+  --backend <backend> --devices <device-ids> --dsl <dsl>
+```
 
-多租户机器：默认 9111 经常被其他进程占用，把 `config.yaml: worker.port` 改成 9112+，并在启动命令与 `--worker-url` 里统一使用该端口。
+这条命令会做两件事：
+
+1. SSH 到远端，在 `repo_path/akg_agents` 下运行 `python -m akg_agents.cli.cli worker --start ...`。
+2. 在本机建立 `127.0.0.1:<port> -> 远端 127.0.0.1:<port>` 的 SSH tunnel。
+
+默认端口来自 `config.yaml: worker.port`。
 
 验证：
 
 ```bash
-akg_cli worker --remote-host my-npu --status
-# → {"status":"ready","backend":"ascend","arch":"ascend910b3","devices":[0]}
+akg_cli worker --remote-host <alias> --status
 ```
 
-### B.4 [本机] 写 ref 和 kernel
+### B.4 使用远端 worker 跑 /autoresearch
 
-同 [A.2](#a2-写-ref-和-kernel)。
-
-### B.5 [本机] 启动 /autoresearch
-
-```bash
-cd workspace_autoresearch && claude
-```
+在 Claude Code 中：
 
 ```text
 /autoresearch --ref workspace/<op>_ref.py --kernel workspace/<op>_kernel.py \
-  --op-name <op> --devices <远端 NPU-id> --worker-url 127.0.0.1:9111
+  --op-name <op> --worker-url 127.0.0.1:<port> --devices <device-id>
 ```
 
-`--devices` 取**远端**卡下标。`--worker-url` 由 scaffold 透传写入 `task.yaml: worker.urls`，后续每轮 eval 自动走远端。
+`--devices` 是远端 worker 管理的设备 id。部分批跑链路可以在 `--worker-url` 存在时省略 `--devices`，由 worker 自己分配设备；单任务调试时建议显式传入，方便复现。
 
-### B.6 [本机] 看进度 / 拿结果
-
-同 [A.4](#a4-看进度)、[A.5](#a5-拿结果)。
-
-### B.7 [本机] 停 worker（不再用时）
+停止：
 
 ```bash
-akg_cli worker --remote-host my-npu --stop --port 9111
+akg_cli worker --remote-host <alias> --stop
 ```
 
-先 SIGTERM 本机 tunnel（按 `~/.akg_agents/tunnels/9111.pid`），再 SSH `lsof -ti :9111 | xargs -r kill` 终止远端 daemon。`lsof -ti` 只取占该端口的 PID，避免影响其他进程。
+## C. 批量运行
 
----
+batch 目录用于一次跑多个 `(ref, kernel)`。标准布局：
 
-## C. 批量
+```text
+<batch_dir>/
+  refs/<op>_ref.py
+  kernels/<op>_kernel.py
+```
 
-`scripts/batch/` 对一批 `(ref.py, kernel.py)` 任务循环跑 `/autoresearch`。批级状态写 `<batch_dir>/batch_progress.json`，round 级仍在 `ar_tasks/`。
-
-### C.1 标准流程
-
-约束：cwd 在 `autoresearch/` 内；长跑用 tmux/screen 包；`--devices` 指定本机或远端卡。
+准备和预检：
 
 ```bash
-BATCH_DIR=/tmp/batch_001
-DEVICE=0
-
-# 0. 进入子目录
-cd workspace_autoresearch
-
-# 1. 放 ref/kernel（命名必须严格 <op>_ref.py / <op>_kernel.py，见参考 §2）
-mkdir -p $BATCH_DIR/refs $BATCH_DIR/kernels
-cp workspace/*_ref.py    $BATCH_DIR/refs/
-cp workspace/*_kernel.py $BATCH_DIR/kernels/
-
-# 2. Tier-1 预检：纯静态（语法 / import / 必备 export），任意机器可跑，覆盖 NPU/torch_npu 环境之外的检查
-python scripts/batch/prepare.py $BATCH_DIR
-
-# 3.（可选）Tier-2 预检：在有 NPU 的机器上跑 ref vs kernel
-python scripts/batch/verify.py $BATCH_DIR --full
-
-# 4. 后台跑（tmux 默认非 login shell，须 bash --login + source env.sh）
-tmux new -d -s ar_batch \
-    "bash --login -c 'source ~/env.sh && \
-     python -u scripts/batch/run.py $BATCH_DIR --devices $DEVICE 2>&1 | tee -a $BATCH_DIR/batch.log'"
-
-# 5. 另开终端监控
-python scripts/batch/monitor.py $BATCH_DIR
-
-# 6. 结束后汇总
-python scripts/batch/summarize.py $BATCH_DIR
+python scripts/batch/prepare.py <batch_dir>
+python scripts/batch/verify.py <batch_dir>
 ```
 
-**目录型 DSL（ascendc / ascendc_catlass）的 step 1 差异**：`kernels/` 改成 per-op 子目录布局，整个项目目录跟 sibling Python wrapper 一起放：
+如果要走正式 KernelVerifier 链路做 Tier-2 预检：
 
 ```bash
-# step 1 (目录型 DSL)：每个 op 一个子目录，含 kernel.py + <project_dir>/
-mkdir -p $BATCH_DIR/refs $BATCH_DIR/kernels/<op>
-cp workspace/<op>_ref.py    $BATCH_DIR/refs/
-cp workspace/<op>/kernel.py $BATCH_DIR/kernels/<op>/        # 或 <op>_kernel.py
-cp -r workspace/<op>/ascendc_op $BATCH_DIR/kernels/<op>/    # ascendc 时复制这一行
-cp -r workspace/<op>/catlass_op $BATCH_DIR/kernels/<op>/    # ascendc_catlass 时复制这一行
+python scripts/batch/verify.py <batch_dir> --full --devices <device-id>
 ```
 
-`prepare.py` / `verify.py` / `run.py` 全部沿用相同命令；manifest 根据 `config.yaml: defaults.dsl` 对应 adapter 的 `kernel_arg_is_directory` 标志自动切换解析路径（见 §6 末尾的目录布局图）。
-
-### C.2 配合远端 worker 跑批（本机无 NPU）
-
-如果本机不是 NPU 机（即 B 章场景），批跑改动很小，整体仍按 [C.1](#c1-标准流程) 操作，但有两处差异：
-
-1. **先按 [B.3](#b3-本机-启动远端-workerakg_cli-自动开-ssh-tunnel) 启动远端 worker 并建立本机 tunnel**（每次开新 batch 前确认 tunnel 还活着：`akg_cli worker --remote-host my-npu --status --port 9111`）。
-2. **`run.py` 加 `--worker-url 127.0.0.1:9111`**，本机 tmux 直接跑 `run.py`；环境初始化放在远端 `env_script`，eval 全走远端 worker。
-
-第 4 步的 tmux 命令变为：
+远端 worker 预检：
 
 ```bash
-tmux new -d -s ar_batch \
-    "python -u scripts/batch/run.py $BATCH_DIR \
-       --worker-url 127.0.0.1:9111 --devices $REMOTE_DEVICE \
-       2>&1 | tee -a $BATCH_DIR/batch.log"
+python scripts/batch/verify.py <batch_dir> --full \
+  --worker-url 127.0.0.1:<port>
 ```
 
-`--devices` 在有 `--worker-url` 时仍要给，但取值是**远端**卡下标（透传到每个 op 的 task.yaml）。
+批跑：
 
-其它步骤（prepare / monitor / summarize）和 [C.1](#c1-标准流程) 一样在本机直接跑。Tier-2 verify 需要 NPU 环境，完整预检可在远端执行 `python scripts/batch/verify.py <batch_dir> --full`；常规批跑也会在每轮 eval 中完成 verify。
+```bash
+python -u scripts/batch/run.py <batch_dir> --devices <device-id> \
+  2>&1 | tee -a <batch_dir>/batch.log
+```
 
-### C.3 监控工具一览
+远端 worker 批跑：
 
-| 工具 | 数据源 | 用途 |
-|---|---|---|
-| `monitor.py` | progress + ar_tasks/ | 实时队列 + phase + heartbeat |
-| `monitor.py --dashboard` | 同上 | `execvp` 至 `dashboard.py` 看当前 task TUI |
-| `summarize.py` | 仅 progress JSON | 离线汇总，复制粘贴友好 |
-| `tail -f batch.log` | claude stdout | 查 hook 输出、Edit、Bash |
+```bash
+python -u scripts/batch/run.py <batch_dir> \
+  --worker-url 127.0.0.1:<port> --devices <device-id> \
+  2>&1 | tee -a <batch_dir>/batch.log
+```
 
-### C.4 断点续跑 / 重试
+监控和汇总：
 
-- `done` 保持完成状态
-- `error` 默认跳过；`--retry-errored` 重新纳入
-- `pending` 自动续
-- `running`（终止瞬间在跑的 op）下次启动时自动降级为 `error`
-- transient API/network 失败且 task 状态完整时，batch supervisor 会按 `config.yaml: batch.transient_retries` 接续
+```bash
+python scripts/batch/monitor.py <batch_dir>
+python scripts/batch/summarize.py <batch_dir>
+```
 
-同一 batch_dir 由 `.batch.lock` 串行化；已退出进程残留的 lock 会在下次启动时自动判活清理。
+## D. 恢复与排查
 
-完整 batch CLI 参数见 [参考 §1](#1-cli-参数)。
-
----
-
-## D. 续跑 / 重置 / 查询
-
-A/B/C 均适用：
-
-| 操作 | 命令 |
+| 场景 | 命令或文件 |
 |---|---|
-| 续跑最近 task | `/autoresearch --resume` |
-| 续跑指定 task | `/autoresearch --resume <task_dir>` |
-| 重新开始 | 删除 `ar_tasks/<task_dir>/`，再 `/autoresearch --ref ... --kernel ...` |
-| 查每轮记录 | `<task_dir>/.ar_state/history.jsonl`（一行一轮）|
-| 查 plan 当前状态 | `<task_dir>/.ar_state/plan.md` |
-
----
+| 恢复最近任务 | `/autoresearch --resume` |
+| 恢复指定任务 | `/autoresearch --resume <task_dir>` |
+| 看 task 状态 | `<task_dir>/.ar_state/state.json` |
+| 看当前 plan | `<task_dir>/.ar_state/plan.md` |
+| 看历史轮次 | `<task_dir>/.ar_state/history.jsonl` |
+| 看实时进度 | `python scripts/dashboard.py <task_dir> --watch` |
+| worker 状态 | `akg_cli worker --remote-host <alias> --status` |
+| 重建 tunnel | 再执行一次 `worker --remote-host <alias> --start ...` |
 
 ---
 
 # 参考
 
-操作部分已经涵盖正常使用。下面按主题归档配置和机制说明。
-
 ## 1. CLI 参数
 
 ### 1.1 `/autoresearch`
 
-四种调用形态由参数决定：
+新建任务：
 
-| 形态 | 触发条件 | 行为 |
-|---|---|---|
-| 新建任务 | `--ref X.py --kernel Y.py --op-name N` + (`--devices` 或 `--worker-url`) | scaffold 建 task_dir → 跑 baseline → 进 PLAN |
-| 续跑最近 | `--resume`（无目录参数）| 自动找最近活跃的 task |
-| 续跑指定 | `--resume <task_dir>` 或直接 `<task_dir>` | 续指定目录 |
+```text
+/autoresearch --ref <reference.py> --kernel <kernel.py-or-project-dir> \
+  --op-name <op> [--devices <ids>] [--worker-url <host:port>] \
+  [--max-rounds N] [--eval-timeout seconds] [--output-dir ar_tasks]
+```
 
-新建任务的完整参数：
+恢复任务：
 
-| flag | 类型 | 必填？ | 默认 | 说明 |
-|---|---|---|---|---|
-| `--ref` | 路径 | ✅ | — | PyTorch ref 文件（`<op>_ref.py` 或任意 `.py`，详见 [§2](#2-命名契约)）|
-| `--kernel` | 路径 | ✅ | — | 种子 kernel 文件 |
-| `--op-name` | 字符串 | ✅ | — | op 名，决定 task_dir 前缀 |
-| `--devices` | 整数或逗号列表（`5` 或 `0,1,2,3`）| 二选一 | — | 本机 NPU 卡 id；如果给了 `--worker-url` 则可不填，由 worker 自带卡列表 |
-| `--worker-url` | `host:port[,host:port]` | 二选一 | — | 走远端 worker（写入 `task.yaml: worker.urls`）|
-| `--max-rounds` | int | ❌ | 30（[config.yaml](config.yaml): `defaults.max_rounds`） | 优化轮数上限，触发后进 FINISH |
-| `--eval-timeout` | int 秒 | ❌ | 600（同上 `defaults.eval_timeout`） | 单 shape 的 verify+profile wall-clock 上限 |
-| `--output-dir` | 路径 | ❌ | `ar_tasks` | task_dir 父目录 |
-| `--no-code-checker` | flag | ❌ | (启用) | 关掉 [`engine/quick_check.py`](scripts/engine/quick_check.py) 的 Triton 退化 AST 检查（一般用于调试种子 kernel）|
+```text
+/autoresearch --resume
+/autoresearch --resume <task_dir>
+```
 
-注：`arch`（如 `ascend910b3` / `a100` / `rtx4060`）由 `--devices` 选中的卡经 backend-appropriate 探测工具自动推断（ascend → `npu-smi info`，cuda → `nvidia-smi --query-gpu=name`，由 [`config.yaml`](config.yaml) 的 `defaults.backend` 决定走哪条），写进 `task.yaml` 仅供 dashboard / report 显示；用户传入时覆盖自动推断值。
+常用参数：
 
----
-
-### 1.2 `akg_cli worker` （worker 启停 + tunnel）
-
-AKG canonical CLI。三种模式互斥：
-
-| 模式 | 用法 |
+| 参数 | 说明 |
 |---|---|
-| `--start` | 启动 worker daemon。如配合 `--remote-host`，会先 SSH 到远端执行 checkout 内的 `python -m akg_agents.cli.cli worker --start ...`（PYTHONPATH 锁到 `repo_path/akg_agents/python`），再在本机起 `ssh -L <port>:127.0.0.1:<port>` tunnel |
-| `--stop` | 停 `--port` 上的 daemon；配合 `--remote-host` 时先 SIGTERM 本机 tunnel，再 SSH `lsof -ti :<port> \| xargs kill` 杀远端 |
-| `--status` | `curl 127.0.0.1:<port>/api/v1/status`；配合 `--remote-host` 走的是本机 tunnel（假定 `--start` 已建好）|
+| `--ref` | reference 文件路径。 |
+| `--kernel` | seed kernel 文件，或支持 DSL 的项目目录。 |
+| `--op-name` | op 名称，用于 task_dir 前缀和报告。 |
+| `--devices` | 本机或远端 worker 的设备 id，逗号分隔。 |
+| `--worker-url` | 远端 worker URL，例如 `127.0.0.1:<port>`。 |
+| `--max-rounds` | 优化轮数上限，默认来自 `config.yaml: defaults.max_rounds`。 |
+| `--eval-timeout` | 单 shape eval 预算，默认来自 `config.yaml: defaults.eval_timeout`。 |
+| `--output-dir` | task_dir 父目录，默认 `ar_tasks/`。 |
+| `--no-code-checker` | 在该任务的 `task.yaml` 里关闭 CodeChecker。 |
 
-主要 flag：
+### 1.2 `akg_cli worker`
 
-| flag | 类型 | 必填？ | 默认 | 说明 |
-|---|---|---|---|---|
-| `--start` / `--stop` / `--status` | flag | ✅ 三选一 | — | 互斥。`--start` 幂等；`--status` 纯查询 |
-| `--backend` | `ascend` / `cuda` | `--start` 时必填 | — | 硬件后端 |
-| `--arch` | 字符串（如 `ascend910b3`） | ❌ | `a100` | 写入 worker 自报的 arch；远端启动可显式传以覆盖 |
-| `--devices` | 逗号分隔 | ❌ | `0` | worker 管理的卡集合 |
-| `--port` | int | ❌ | `./config.yaml: worker.port`，否则 9001 | TCP 端口；WA 习惯用 9111+ |
-| `--remote-host` | SSH alias | ❌ | (本机) | 通过 SSH 在 `./config.yaml: remote_worker.hosts.<alias>` 定义的远端机执行；`--start` 额外打通本机 tunnel |
+```bash
+akg_cli worker --start  [options]
+akg_cli worker --status [options]
+akg_cli worker --stop   [options]
+```
 
-tunnel pid 落在 `~/.akg_agents/tunnels/<port>.pid`；远端 daemon log 落在远端 `/tmp/akg_worker_<port>.log`。
+参数：
 
----
+| 参数 | 说明 |
+|---|---|
+| `--backend {ascend,cuda,cpu}` | worker 后端。 |
+| `--arch` | 硬件 arch；不传时按 backend 和第一张 device 自动探测。 |
+| `--devices` | worker 管理的设备 id，逗号分隔。 |
+| `--dsl` | 目标 DSL，用于诊断策略；不同 DSL 的必需运行时依赖会被分开判断。 |
+| `--port` | worker 端口，默认 `config.yaml: worker.port`。 |
+| `--remote-host` | 使用 `config.yaml: remote_worker.hosts.<alias>` 定义的远端机器。 |
+
+行为要点：
+
+- 本地模式不传 `--remote-host`。
+- 远端模式会先做 SSH/env/backend/DSL/端口诊断，再启动远端 daemon 和本机 tunnel。
+- `--status` 只探活和诊断，不会启动 daemon。
+- `--start` 幂等：worker 已 ready 时直接返回当前状态。
 
 ### 1.3 `scripts/batch/run.py`
 
-位置参数 `<batch_dir>` 必填（指向 [§6](#6-文件与状态布局) 的 batch 目录）。
+```bash
+python scripts/batch/run.py <batch_dir> [--devices ids] [--worker-url host:port]
+```
 
-| flag | 类型 | 必填？ | 默认 | 说明 |
-|---|---|---|---|---|
-| `--devices` | 整数或逗号列表 | ✅（除非给了 `--worker-url`）| — | 透传给每个 op 的 `/autoresearch --devices` |
-| `--worker-url` | `host:port[,host:port]` | ❌ | — | 透传 `--worker-url`，整批走远端 worker，本机可无 NPU |
-| `--mode` | `ref-kernel` / `ref` | ❌ | `manifest.mode` 或 `ref-kernel` | 整批是否要 kernel；`ref` 模式下 kernel 由 agent 现写 |
-| `--max-rounds` | int | ❌ | 同 `/autoresearch` | 透传 per-op |
-| `--eval-timeout` | int 秒 | ❌ | 同上 | 透传 per-op |
-| `--timeout-min` | int 分钟 | ❌ | 180（[config.yaml](config.yaml): `batch.run_timeout_min`）| 单 op wall-clock 上限，超时杀 `claude --print` 子进程 |
-| `--only` | 逗号分隔 op 名 | ❌ | — | 队列过滤：只跑这些 |
-| `--limit` | int | ❌ | — | 队列过滤：跑前 N 个 |
-| `--retry-errored` | flag | ❌ | (跳过) | 把 `error` / `stale running` 重新纳入队列（下一次批跑时生效）|
-| `--cooldown-sec` | int 秒 | ❌ | 5（[config.yaml](config.yaml): `batch.cooldown_sec`）| 两个 op 之间的间隔 |
-| _无 CLI flag_ | int | — | 3（[config.yaml](config.yaml): `batch.transient_retries`）| 单 op 内 transient 自动续：claude.exe 异常退但 framework progress 完整时，supervisor 自动 `/autoresearch --resume --force` 接续最多 N 次。见 [§C.4](#c4-断点续跑--重试)。|
-| `--claude-bin` | 路径 | ❌ | `claude` | Claude CLI 可执行文件路径（Windows 下需指向 `claude.cmd`）|
-| `--model` | 字符串 | ❌ | (空) | 透传到 `claude --model`，覆盖默认模型 |
-| `--extra-claude-arg` | 字符串（可重复）| ❌ | — | 任意额外 flag 透传给 `claude --print`（可叠加：`--extra-claude-arg --foo --extra-claude-arg --bar`）|
+常用参数：
 
-## 2. 命名契约
-
-### 2.1 跨 DSL 通用
-
-| 项 | 约束 |
+| 参数 | 说明 |
 |---|---|
-| ref 文件名 | 单跑任意；批跑严格 `<op>_ref.py` |
-| kernel 文件名 | 单跑任意；批跑严格 `<op>_kernel.py`（目录型 DSL 例外，见 §2.2） |
-| ref 暴露 | `class Model(nn.Module)` + `get_init_inputs()`，并二选一：`get_inputs()` 单 shape / `get_input_groups()` 多 shape |
-| 同目录数据文件 | 与 ref 同名或以 ref basename + `_` 开头的 `.json` / `.pt` / `.npz` 会随任务打包。例如 `31_IOU.py` 可配 `31_IOU.json` 或 `31_IOU_cases.json` |
-| task_dir 命名 | scaffold 生成 `ar_tasks/<op_name>_<unix_ts>_<uuid6>/`，供 resume、dashboard、batch 关联 |
-| 重命名约定 | scaffold 在 task_dir 内落地为 `reference.py` / `kernel.py`；KEEP commit 按 `task.yaml.editable_files` stage |
+| `--devices` | 传给每个 task 的设备 id。没有 `--worker-url` 时必填。 |
+| `--worker-url` | 整批 eval 走远端 worker。 |
+| `--max-rounds` | 覆盖每个 task 的轮数上限。 |
+| `--eval-timeout` | 覆盖每个 task 的 eval timeout。 |
+| `--timeout-min` | 单个 op 的 wall-clock 上限，默认来自 `batch.run_timeout_min`。 |
+| `--only` | 只跑指定 op，逗号分隔。 |
+| `--limit` | 最多跑 N 个 op。 |
+| `--retry-errored` | 把 error 状态重新纳入队列。 |
+| `--cooldown-sec` | 两个 op 之间的等待时间。 |
+| `--claude-bin` | Claude CLI 可执行文件。 |
+| `--model` | 传给 `claude --model`。 |
+| `--extra-claude-arg` | 额外传给 Claude CLI，可重复。 |
 
-### 2.2 各 DSL 的项目契约
+## 2. 任务文件契约
 
-`defaults.dsl`（[config.yaml](config.yaml)）选定后，整库按一个 DSL 契约运行。日常只需要关心：`--kernel` 传什么、wrapper 暴露什么、哪些文件会进入 WA 编辑面。
+### 2.1 Reference
 
-| DSL | `--kernel` | 主入口 | 项目形态 |
-|---|---|---|---|
-| `torch` | 单 `.py` | `class ModelNew(nn.Module)` | Python 单文件 |
-| `triton_ascend` / `triton_cuda` | 单 `.py` | `class ModelNew(nn.Module)` | Python 单文件 |
-| `pypto` | 单 `.py` | `class ModelNew(nn.Module)` | Python 单文件 |
-| `tilelang_cuda` / `tilelang_ascend` / `tilelang_npuir` | 单 `.py` | `class ModelNew(nn.Module)` | Python 单文件 |
-| `swft` | 单 `.py` | `class ModelNew` | Python 单文件，二进制 I/O |
-| `cpp` / `cuda_c` | 单 `.py` | `class ModelNew(nn.Module)` | Python wrapper + inline C/CUDA 源码 |
-| `ascendc` | `ascendc_op/` 目录 | sibling `kernel.py` 的 `class ModelNew(nn.Module)` | direct-invoke AscendC 工程 |
-| `ascendc_catlass` | `catlass_op/` 目录 | sibling `kernel.py` 的 `class ModelNew(nn.Module)` | CATLASS pybind 工程 |
+reference 文件是 PyTorch 标准答案，至少包含：
 
-完整可运行示例在 [`ar_examples/`](ar_examples/)；从 `workspace_autoresearch/` 根目录直接执行各 README 中的 `/autoresearch --ref ... --kernel ...` 命令。
+```python
+import torch
+import torch.nn as nn
 
-<details><summary><code>torch</code></summary>
+class Model(nn.Module):
+    def forward(self, *args):
+        ...
 
-单文件 Python 契约。`--kernel` 指向一个 `.py` 文件，文件里暴露 `class ModelNew(torch.nn.Module)`；`forward()` 直接实现待优化逻辑。
+def get_init_inputs():
+    return []
 
-```bash
-/autoresearch --ref ar_examples/torch/reference.py \
-  --kernel ar_examples/torch/vector_add_kernel.py \
-  --op-name vector_add --devices 0
+def get_inputs():
+    return [arg0, arg1]
 ```
 
-WA 编辑面：这个 kernel `.py` 文件。
+多 shape 使用 `get_input_groups()`：
 
-</details>
-
-<details><summary><code>triton_ascend</code> / <code>triton_cuda</code></summary>
-
-单文件 Python 契约。`--kernel` 指向 `.py` 文件，文件里暴露 `class ModelNew(torch.nn.Module)`；`forward()` 调用同文件里的 Triton kernel。后端由 `config.yaml: defaults.backend/dsl` 决定。
-
-```bash
-/autoresearch --ref ar_examples/triton_ascend/reference.py \
-  --kernel ar_examples/triton_ascend/vector_add_kernel.py \
-  --op-name vector_add --devices 0
+```python
+def get_input_groups():
+    return [
+        [arg0_case0, arg1_case0],
+        [arg0_case1, arg1_case1],
+    ]
 ```
 
-WA 编辑面：这个 kernel `.py` 文件。
+约定：
 
-</details>
+- `get_init_inputs()` 用于构造 `Model(*init_inputs)`。
+- `get_inputs()` 表示单 shape。
+- `get_input_groups()` 表示多 shape；每一组都是一次 forward 的输入。
+- batch 模式下文件名必须是 `refs/<op>_ref.py`。
 
-<details><summary><code>pypto</code></summary>
+### 2.2 Kernel
 
-单文件 Python 契约。`--kernel` 指向 `.py` 文件，文件里暴露 `class ModelNew(torch.nn.Module)`，内部调用 PyPTO kernel/API。
+常规 Python kernel 文件至少包含：
 
-```bash
-/autoresearch --ref ar_examples/pypto/reference.py \
-  --kernel ar_examples/pypto/vector_add_kernel.py \
-  --op-name vector_add --devices 0
+```python
+import torch
+import torch.nn as nn
+
+class ModelNew(nn.Module):
+    def forward(self, *args):
+        ...
 ```
 
-WA 编辑面：这个 kernel `.py` 文件。运行环境需要能 `import pypto`。
+约定：
 
-</details>
+- batch 模式下文件名必须是 `kernels/<op>_kernel.py`。
+- scaffold 后会复制到 task_dir 的 `kernel.py`。
+- 支持项目目录的 DSL 可以把 `--kernel` 指向工程目录；scaffold 会按 DSL adapter 的规则复制工程。
 
-<details><summary><code>tilelang_cuda</code> / <code>tilelang_ascend</code> / <code>tilelang_npuir</code></summary>
+### 2.3 task_dir 布局
 
-单文件 Python 契约。`--kernel` 指向 `.py` 文件，文件里暴露 `class ModelNew(torch.nn.Module)`，内部调用 TileLang/TILE NPU IR 生成的 kernel。
-
-```bash
-/autoresearch --ref ar_examples/tilelang_npuir/reference.py \
-  --kernel ar_examples/tilelang_npuir/vector_add_kernel.py \
-  --op-name vector_add --devices 0
-```
-
-WA 编辑面：这个 kernel `.py` 文件。运行环境需要能 `import tilelang`。
-
-</details>
-
-<details><summary><code>swft</code></summary>
-
-单文件 Python 契约。`--kernel` 指向 `.py` 文件，文件里暴露 `class ModelNew`；verifier 会走 SWFT 的二进制 I/O 路径。
-
-```bash
-/autoresearch --ref ar_examples/swft/reference.py \
-  --kernel ar_examples/swft/vector_add_kernel.py \
-  --op-name vector_add --devices 0
-```
-
-WA 编辑面：这个 kernel `.py` 文件。运行环境需要能 `import swft`。
-
-</details>
-
-<details><summary><code>cpp</code> / <code>cuda_c</code></summary>
-
-单文件 Python 契约。`--kernel` 指向 `.py` 文件，文件里暴露 `class ModelNew(torch.nn.Module)`；C++/CUDA 源码通常以内联字符串放在同文件，由 `torch.utils.cpp_extension` 在运行时编译。
-
-```bash
-/autoresearch --ref ar_examples/cpp/reference.py \
-  --kernel ar_examples/cpp/vector_add_kernel.py \
-  --op-name vector_add --devices 0
-```
-
-WA 编辑面：这个 kernel `.py` 文件。`cuda_c` 需要 CUDA toolchain；`cpp` 需要本机 C++ extension toolchain。
-
-</details>
-
-<details><summary><code>ascendc</code> direct-invoke</summary>
-
-目录型契约。`--kernel` 指向 `ascendc_op/` 工程目录；它的父目录必须有 Python wrapper `kernel.py`（或 `<op>_kernel.py` fallback），wrapper 暴露 `class ModelNew(torch.nn.Module)` 并调用 `torch.ops.npu.<op>(...)`。
-
-```
-<case>/
+```text
+ar_tasks/<op>_<timestamp>_<uuid>/
   reference.py
   kernel.py
-  ascendc_op/
-    CMakeLists.txt
-    op_kernel/
-    op_extension/
+  task.yaml
+  .ar_state/
+    state.json
+    plan.md
+    history.jsonl
+    report.md
 ```
 
-```bash
-/autoresearch --ref ar_examples/ascendc/add_custom/reference.py \
-  --kernel ar_examples/ascendc/add_custom/ascendc_op \
-  --op-name add_custom --devices 0
-```
-
-WA 编辑面：`kernel.py`，以及 `ascendc_op/` 下的核心算子/构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`op_kernel/`、`op_extension/`、`op_host/`、`src/`、`include/`、`common/`）。脚本、文档、third_party、build 产物不作为默认编辑面。
-
-AscendC 工程必须让 verifier 能控制 NPU arch：要么 CMake 里有可 patch 的 literal `--npu-arch=...`，要么消费 `${NPU_ARCH}` / `${ASCENDC_NPU_ARCH}`。自定义项目目录名可写 `task.yaml: ascendc.op_dir`。
-
-</details>
-
-<details><summary><code>ascendc_catlass</code></summary>
-
-目录型契约。`--kernel` 指向 `catlass_op/` 工程目录；它的父目录必须有 Python wrapper `kernel.py`（或 `<op>_kernel.py` fallback），wrapper 暴露 `class ModelNew(torch.nn.Module)` 并调用 `torch.ops.<namespace>.<entry>(...)`。
-
-```
-<case>/
-  reference.py
-  kernel.py
-  catlass_op/
-    CMakeLists.txt
-    kernel/
-    include/
-    src/
-```
-
-```bash
-/autoresearch --ref ar_examples/ascendc_catlass/matmul/reference.py \
-  --kernel ar_examples/ascendc_catlass/matmul/catlass_op \
-  --op-name catlass_matmul --devices 0
-```
-
-WA 编辑面：`kernel.py`，以及 `catlass_op/kernel/`、`catlass_op/include/`、`catlass_op/src/`、`catlass_op/CMakeLists.txt`。
-
-CATLASS 头文件默认来自 `<akg-root>/thirdparty/catlass`；也可由 `CATLASS_ROOT` 或 `task.yaml: catlass.root` 覆盖。自定义项目目录名可写 `task.yaml: catlass.op_dir`。
-
-</details>
-
-## 3. 主循环 / 状态机
-
-单轮：`PLAN → EDIT → quick_check → eval → KEEP/DISCARD → settle`。
-连续 N 次 FAIL 转 `DIAGNOSE`（N 默认 3，配 [`config.yaml`](config.yaml) `defaults.consecutive_fail_threshold`）；plan 全部 settle 转 `REPLAN`；预算耗尽转 `FINISH`。DIAGNOSE 子代理对同一 plan_version 最多重试 `defaults.diagnose_max_attempts` 次（默认 5），用尽后转人工 fallback。
-
-```
-INIT
-  │  /autoresearch --ref X.py --kernel Y.py
-  ▼
-BASELINE  (scaffold --run-baseline 原子完成，运行 seed kernel)
-  │
-  ▼
-PLAN  (BASELINE PASS 或 FAIL 均进入 PLAN；FAIL 时首批 plan items 改写 seed)
-  │  create_plan.py 校验
-  ▼
-   ┌────────────────────────────────── EDIT ◀────────────┐
-   │  pipeline.py:                                       │
-   │    quick_check → run_eval → keep_or_discard         │
-   │   ├─ KEEP    : git commit (editable_files)，更新 best│
-   │   ├─ DISCARD : 回滚 editable_files                   │
-   │   └─ FAIL    : consecutive_failures++，回滚         │
-   │                                                     │
-   │   ├─ failures ≥ N (config)     ─→ DIAGNOSE ─→ PLAN ─┤
-   │   ├─ plan 全部 settle           ─→ REPLAN  ─→ PLAN ─┤
-   │   └─ eval_rounds == max_rounds ─→ FINISH
-   └─────────────────────────────────────────────────────┘
-```
-
-DIAGNOSE / REPLAN 不绕回 PLAN：`create_plan.py` 校验通过后 hook 直接写 `phase = EDIT`。每个 plan item 在 `history.jsonl` 中持有 KEEP/DISCARD/FAIL 终态，或在 REPLAN/DIAGNOSE 边界被丢弃；pid 单调递增不复用。
-
-阶段产物：
-
-| 阶段 | Claude 操作 | 产物 |
-|---|---|---|
-| BASELINE | `baseline.py` | seed_metric 写入 state.json |
-| PLAN / DIAGNOSE / REPLAN | `create_plan.py` | plan.md（含 (ACTIVE) 标记）|
-| EDIT | Edit kernel.py 后跑 `pipeline.py` | history.jsonl，可选 git commit |
-| FINISH | (auto) `pipeline.py` → `report.py` | report.md（含内嵌 SVG）|
-
-## 4. Eval 执行链
-
-`baseline.py` 与 `pipeline.py` 进程内调用 `task_config.run_eval`
-（[scripts/task_config/eval_client.py](scripts/task_config/eval_client.py)，WA 专属薄 shim）。
-shim 把入参原样转发给 `utils.akg_eval.eval_kernel`（[scripts/utils/akg_eval.py](scripts/utils/akg_eval.py)），
-再把返回 dict 装回 `EvalResult`：
-
-```
-baseline.py / pipeline.py
- └─ task_config.run_eval(task_dir, config, device_id, worker_urls)
-     └─ utils.akg_eval.eval_kernel(task_dir, config, device_id, worker_url)
-         ├─ akg_agents.core.worker.manager.register_local_worker(device_ids=[..])
-         │      OR register_remote_worker(worker_url=...)         # 二选一
-         ├─ akg_agents.op.verifier.KernelVerifier(...).run(...)   # verify pass
-         └─ KernelVerifier.run_profile(...)                       # ref+kernel profile
-```
-
-两条路径由 `worker_url` 决定：
-
-- `worker_url is None` → `LocalWorker` 在当前进程注册并执行
-- `worker_url` 非空（`host:port` 形式）→ `RemoteWorker` 注册到 AKG worker
-  manager，由 AKG 内部 RPC 与远端通信
-
-远端 worker 的连接、排队和执行由 AKG worker 子系统接管。
-
-Sticky baseline 语义保留：`baseline_metric` 与 `baseline_source=ref` 写定到
-state.json 之后，后续轮通过 AKG verifier 内部跳过 ref profile。非有限浮点
-（inf/-inf/nan）由 `utils.akg_eval._make_ok_payload` 在 dict → EvalResult 转
-换前已经被 `_float()` 收成 None。
-
-## 5. 精度容差
-
-`/autoresearch` 每轮 verify 直接走 `akg_agents.op.verifier.KernelVerifier`，容差表来自 AKG 的 CANN MARE/MERE-aligned 分层实现。入口文件：`akg_agents/python/akg_agents/op/verifier/adapters/framework/torch.py`。
-
-核心判定：
-
-- 按 ref dtype 选择容差组。
-- 元素级 strict / relaxed 双带判定，超 relaxed 或 outlier 比例超阈值即 FAIL。
-- NaN、Inf、bool/int 走对应一致性检查。
-
-## 6. 文件与状态布局
-
-| 路径 | 用途 |
-|---|---|
-| `workspace/<op>_ref.py` / `<op>_kernel.py` | 候选 ref/kernel 输入 |
-| `task.yaml` | name / arch / editable_files / ref_file / devices / eval_timeout / max_rounds / metric / `data_files` / `worker.urls` |
-| `.ar_state/state.json` | **单文件控制态**：phase / owner / progress / pending_settle / 一致性 expected_* |
-| `.ar_state/plan.md` | 规划与结算历史（权威态）|
-| `.ar_state/history.jsonl` | 每轮 decision / metrics / commit |
-| `.ar_state/plan_items.xml` | PLAN/DIAGNOSE/REPLAN 写给 `create_plan.py` 的 XML |
-| `.ar_state/diagnose_v<N>.md` | DIAGNOSE 结构化诊断报告（AGENTS.md 不变量 #10）|
-| `config.yaml` | `hallucinated_scripts`（脚本名容错）+ `remote_worker.hosts`（SSH alias → repo_path / env_script）|
-| `.claude/settings.json` | Hook + 权限（提交至仓库）|
-| `.claude/settings.local.json` | API key / model 覆盖（不提交至 git）|
-
-`.ar_state/` 内除 `plan_items.xml` 与 `diagnose_v<N>.md` 外均由 hook 与脚本管理，Claude 不可手写。
-
-**Batch 目录布局**（单文件 DSL —— torch / triton / pypto / tilelang / cpp / cuda_c / swft）：
-
-```
-<batch_dir>/                         ← 批级
-  manifest.yaml                      # prepare.py 写
-  batch_progress.json                # run.py 写：每个 op 的 status / task_dir / metrics
-  batch.log                          # run.py 写：claude --print 的全部 stdout
-  verify_results.json                # prepare.py / verify.py 写
-  refs/<op>_ref.py                   # 文件名必须严格为 <op>_ref.py
-  kernels/<op>_kernel.py             # 文件名必须严格为 <op>_kernel.py
-
-<workspace_autoresearch>/ar_tasks/<op>_<ts>_<uuid>/    ← round 级（由 /autoresearch 维护）
-  kernel.py / reference.py / task.yaml
-  .ar_state/{state.json, plan.md, history.jsonl, report.md}
-```
-
-**目录型 DSL（ascendc / ascendc_catlass）`kernels/` 子树**：DSL adapter 标 `kernel_arg_is_directory=True` 时，[`batch/manifest.py::resolve_kernel_paths_for_op`](scripts/batch/manifest.py) 切到 per-op 子目录布局：
-
-```
-<batch_dir>/kernels/
-  <op>/
-    kernel.py        (或 <op>_kernel.py — 同 §2.2 的 fallback)
-    ascendc_op/      # ascendc direct-invoke 项目，作为 /autoresearch --kernel 传入
-      CMakeLists.txt
-      op_kernel/
-      op_extension/
-
-    # 或：
-    catlass_op/      # ascendc_catlass 项目，作为 /autoresearch --kernel 传入
-      CMakeLists.txt
-      kernel/
-      include/
-      src/
-```
-
-manifest 解析时 case dict 同时存两个字段：`kernel`（传给 `--kernel`，单文件 DSL 是 `.py`，目录型 DSL 是 `ascendc_op/` 或 `catlass_op/`）+ `kernel_module`（tier-1/tier-2 import 的 Python wrapper，永远是 `.py` 文件）。两个字段在单文件 DSL 下指向同一路径，调用方按这两个字段读取即可。
-
-`batch_progress.json:cases.<op>.task_dir` 连接批级与 round 级。
-
-## 7. env.sh 契约
-
-适用场景：tmux 非 login shell、`akg_cli worker --remote-host` 远端启动、batch `bash --login -c 'source env.sh && python ...'`。三处共用同一脚本，路径填入 `config.yaml: remote_worker.hosts.<alias>.env_script`。
-
-**唯一职责**：source 完成后，PATH 上的 `python` 执行 `python -c "import torch_npu, triton"` 不抛异常。
-
-模板（按本机 Python + CANN 安装方式选一）：
-
-```bash
-# 例 1：conda env
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate <env 名>
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-
-# 例 2：venv
-source ~/.venvs/<env 名>/bin/activate
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-
-# 例 3：系统 Python，仅加载 CANN
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-```
-
-**写法约定**：env.sh 负责环境变量和 Python 环境初始化；工作目录由 akg_cli 切换到 `repo_path`。
-
-验证：`source ~/env.sh && python -c "import torch_npu, triton"` 退出码 0。
-
-## 8. akg_cli worker
-
-Worker 是个 FastAPI HTTP daemon，跑 eval 子进程。`akg_cli worker` 子命令负责本机/远端起停、ssh -L tunnel 维护、探活。
-
-### 启动示例
-
-```bash
-akg_cli worker --remote-host my-npu --start --backend ascend --devices 0,1
-akg_cli worker --remote-host my-npu --status
-akg_cli worker --remote-host my-npu --stop
-```
-
-省略 `--remote-host <alias>` 时在本机直接起 daemon；远端模式负责 SSH / tunnel。
-
-`--start` 幂等：daemon 已在跑时返回当前状态；tunnel 抖动后再执行一次 `--start` 即可恢复。`--status` 只查询状态。
-
-### 参数
-
-`--start` / `--stop` / `--status` 三选一，互斥。
-
-| flag | 类型 | 默认 | 必填 | 说明 |
-|---|---|---|---|---|
-| `--backend` | `ascend` / `cuda` / `cpu` | — | `--start` 必填 | 硬件后端 |
-| `--devices` | csv，如 `0,1,2` | — | `--start` 必填 | device id 列表 |
-| `--arch` | 字符串，如 `ascend910b3` | auto（`npu-smi info` 推断）| 可省 | 硬件 arch |
-| `--port` | int | `config.yaml: worker.port`，否则 `9001` | 可省 | TCP 端口 |
-| `--remote-host` | alias | — | 可省 | 走 SSH 远端模式；alias 在 `./config.yaml` 里 `remote_worker.hosts.<alias>` 定义 |
-
-`./config.yaml: remote_worker.hosts` 字段：
+`task.yaml` 是任务的稳定配置面。下面是字段形状，不是推荐某个 backend/DSL：
 
 ```yaml
-remote_worker:
-  hosts:
-    my-npu:
-      repo_path:  /abs/path/to/repo   # 必填
-      env_script: /abs/path/env.sh    # 必填，source 后 PATH 上的 python 可 import torch_npu/triton
-      ssh_alias:  my-npu              # 可省，默认 = key
+name: <op>
+backend: <backend>
+framework: torch
+dsl: <dsl>
+ref_file: reference.py
+kernel_file: kernel.py
+devices: [<device-id>]
+max_rounds: 30
+eval_timeout: 600
+worker:
+  urls: []
+editable_files:
+  - kernel.py
 ```
 
-`repo_path` 指远端 akg checkout。远端入口固定为 `python -m akg_agents.cli.cli worker ...`；`python` 来自 `env_script` source 后的 PATH。
+不要手改 `.ar_state/` 里的运行状态文件，除非是在明确排查损坏状态。
 
-## 9. Skills 库
+## 3. DSL 项目契约
 
-根目录：`skills/`，按 DSL 分区：`triton-ascend/`、`triton-cuda/`、`pypto/`、`cpp/`、`cuda-c/`、`tilelang-cuda/`、`ascendc/`。每个 DSL 下进一步分为：
+AutoResearch 通过 `backend/framework/dsl` 三元组选择 adapter。`config.yaml: defaults` 可以给新任务提供默认值，但任务自己的 `task.yaml` 才是运行时最终配置。不要把默认值理解成框架只支持某个 DSL。
 
-- `fundamentals/` — API rules、hardware constraints、basics、debugging、grid-config、memory、optimization
-- `guides/` — attention、matmul、reduce、elementwise、elementwise-reduce-fused 等场景指南
-- `cases/` — 单算子题型 case
-- `examples/` — 端到端可运行示例
-- `evolved-fix/`、`evolved-improvement/` — 故障排查与性能优化的演化知识
+字段形状：
 
-PLAN 阶段 hook 提示 Claude Glob `../skills/<dsl>/**/SKILL.md`、Read 1-3 个最相关的，将文件名写入 plan item rationale。
+```yaml
+defaults:
+  backend: <backend>
+  framework: torch
+  dsl: <dsl>
+  skill_dsl: <skill-dir-name>
+```
 
-## 10. Hook 与内部机制
+常见 DSL：
 
-外部接口（slash 命令、`task.yaml`、`.ar_state/` 路径）保持稳定。修改内部实现的入口：
+| DSL | `--kernel` 形态 | 可编辑范围 |
+|---|---|---|
+| `triton_ascend` / `triton_cuda` | 单个 Python 文件 | 通常是 `kernel.py`。 |
+| `ascendc` | direct-invoke AscendC 工程目录或包装后的 kernel 文件 | `task.yaml: editable_files` 列出的算子源文件；不要改构建脚本和无关资产。 |
+| `ascendc_catlass` | CATLASS 风格 C++/AscendC 工程 | 算子实现文件和必要的 wrapper；CATLASS thirdparty 不应由 agent 修改。 |
+| `cuda_c` / `cpp` | C/C++ kernel 包装文件或工程 | adapter 列出的源码文件。 |
+| `pypto` | Python 文件 | `kernel.py`。 |
+| `tilelang_cuda` / `tilelang_ascend` | Python/TileLang 文件 | `kernel.py` 或 adapter 声明的文件。 |
 
-| 主题 | 入口 |
+项目目录类 DSL 的原则：
+
+- adapter 负责识别构建入口、复制工程、声明 `editable_files`。
+- agent 只能编辑 `editable_files` 内的文件。
+- 工程里的样例脚本、下载脚本、third_party、build 目录默认不是优化目标。
+- 如果需要扩大可编辑范围，应通过 task config 或 DSL adapter 明确表达，不要靠提示词临时放开。
+
+## 4. Eval 与 worker 链路
+
+当前正式链路：
+
+```text
+baseline.py / pipeline.py
+  -> task_config.run_eval(...)
+  -> utils.akg_eval.eval_kernel(...)
+  -> eval.KernelVerifier
+```
+
+本地 eval 和远端 worker eval 共用同一条 `KernelVerifier` 路径。worker 只是把包发到远端机器执行，不再维护另一套评测语义。
+
+### 4.1 本地 eval
+
+```text
+run_eval(task_dir, config, device_id=<device-id>)
+  -> KernelVerifier local backend
+  -> verify_result.json / profiling metrics
+```
+
+### 4.2 远端 eval
+
+```text
+run_eval(task_dir, config, worker_urls=["127.0.0.1:<port>"])
+  -> RemoteWorker HTTP client
+  -> remote worker.server
+  -> KernelVerifier on remote host
+```
+
+worker daemon 暴露的主要端点：
+
+| 端点 | 用途 |
 |---|---|
-| Bash gate（命令在何 phase 合法）| [phase_policy.py](scripts/phase_machine/phase_policy.py) 头部注释 |
-| Hook 接线 | [.claude/settings.json](.claude/settings.json)；脚本位于 [hooks/](scripts/hooks/)，`guard_*.py` / `post_*.py` / `stop_*.py` |
-| phase 转移 | [phase_machine/state_store.py](scripts/phase_machine/state_store.py) 阶段常量；`compute_next_phase` / `compute_resume_phase` 在 [phase_policy.py](scripts/phase_machine/phase_policy.py) 末尾 |
-| 测时 + verify/profile | `akg_agents.op.verifier.KernelVerifier`（在 worker 进程里跑；通过 [utils/akg_eval.py](scripts/utils/akg_eval.py) 调起）|
-| Eval 执行链 | [task_config/eval_client.py](scripts/task_config/eval_client.py) `run_eval` → [utils/akg_eval.py](scripts/utils/akg_eval.py) `eval_kernel` → `akg_agents.core.worker.manager` 注册 Local/RemoteWorker → `KernelVerifier.run` + `run_profile` |
-| Remote worker SSH 调度 | `akg_cli worker --remote-host` （实现在 [`cli/service/remote_dispatch.py`](../python/akg_agents/cli/service/remote_dispatch.py)，配合 sibling [`tunnel.py`](../python/akg_agents/cli/service/tunnel.py) + [`remote_probe.py`](../python/akg_agents/cli/service/remote_probe.py) + [`diagnostics.py`](../python/akg_agents/cli/service/diagnostics.py)）；config 在 WA [config.yaml](config.yaml) `remote_worker.hosts`；远端 daemon 是 [`akg_agents/worker/server.py`](../python/akg_agents/worker/server.py) |
-| Triton 退化静态检查 | EDIT 前入口 [`engine/quick_check.py`](scripts/engine/quick_check.py)（docstring 列出三类退化模式）；规则实现在 `akg_agents.op.utils.code_checker.CodeChecker`，quick_check + [batch/verify.py](scripts/batch/verify.py) 各自 `CodeChecker(...).check(code)` 直接同步调（无 WA-侧 wrapper） |
-| DIAGNOSE 契约 | [AGENTS.md](AGENTS.md) 不变量 #9（canonical-form bash）+ #10（DIAGNOSE artifact）|
-| 子代理 | [.claude/agents/ar-diagnosis.md](.claude/agents/ar-diagnosis.md) |
+| `/api/v1/status` | daemon 状态、backend、arch、devices、log_file。 |
+| `/api/v1/health` | 非阻塞探测 device pool/event loop 是否健康。 |
+| `/api/v1/verify` | 执行 verify。 |
+| `/api/v1/profile` | 执行 profile。 |
+| `/api/v1/acquire_device` / `/api/v1/release_device` | worker 侧设备分配。 |
 
-Hook 通过 [.claude/settings.json](.claude/settings.json) 接入，运行时围绕 `state.json` 维护 phase、owner 和 progress。日常使用主要通过 `/autoresearch`、`scripts/batch/*` 和 `akg_cli worker` 入口操作；内部改动按上表定位。
+### 4.3 baseline 和指标
 
-## 11. 并发与冲突
+- PyTorch reference latency 是 baseline source。
+- seed/candidate kernel 的 correctness 和性能都通过 `KernelVerifier` 产物进入决策。
+- 多 shape 任务会记录 per-shape 描述和 shape signature，用于 sticky baseline 和漂移检测。
+- `batch/verify.py --full` 也走正式 `KernelVerifier` verify-only 路径。
 
-运行约定：
+### 4.4 CodeChecker
 
-| 资源 | 推荐做法 |
+`quick_check.py` 在每轮 eval 前先扫 `task.yaml: editable_files` 中的 Python 文件，目的是提前拦住“看起来能跑、实际绕过 DSL 或污染验证”的改动，避免浪费一次完整评测。
+
+它主要检查四类问题：
+
+| 类别 | 会拦什么 |
 |---|---|
-| batch 目录 | 一个 `<batch_dir>` 同时跑一个 `run.py`，状态由 `.batch.lock` 串行化 |
-| task 目录 | 一个 `<task_dir>` 同时由一个 Claude session 驱动，owner/heartbeat 写在 `state.json` |
-| NPU 卡 | 一张卡交给一个本地 eval 或一个 worker；批量任务按卡分流，或统一走同一个 worker 队列 |
-| worker / config | 修改 `akg_agents/`、workspace scripts 或 `config.yaml` 后重启 worker，使 daemon 读取新代码和配置 |
+| Python 基础质量 | `ast.parse` / `py_compile` 失败、关键 import 不可解析、代码 token 中混入连续 CJK 文本。 |
+| Kernel launch 退化 | 声明了 JIT/kernel DSL，但没有对应 kernel，或 kernel 没有被 launch，或 `forward()` 仍用 torch 高层核心算子完成主要计算。 |
+| DSL 入口退化 | 需要显式入口的 DSL 必须真实调用自己的入口，不能只保留包装层而把主计算交给 framework API。 |
+| autotune 安全 | 使用 autotune 时必须恢复输出 buffer，避免不同 config 之间互相污染。 |
 
-常用恢复入口：
+硬黑名单是“核心计算不能留给 torch”的算子，例如 matmul/conv/einsum/softmax/embedding/FFT/solve 等；软黑名单是 relu/exp/sum/mean/pool/norm/interpolate 这类可能作为融合前后处理出现的算子：如果已经真正 launch 了 DSL kernel，软项只记录为提示，否则会被视为退化。
 
-| 场景 | 操作 |
+任务级关闭只应用在明确知道规则误伤时，例如临时迁移 seed 或非 Python DSL 包装不适合 AST 扫描：
+
+```yaml
+code_checker:
+  enabled: false
+```
+
+关闭后 `quick_check.py` 只保留 editable file 存在性检查和可选 smoke test，不再做 DSL 反作弊检查；正式正确性和性能仍由 `KernelVerifier` 决定。
+
+规则入口在 `scripts/utils/config/code_checker.yaml`；新增 DSL 规则时应扩展 `scripts/utils/code_checker.py` 的独立 compliance check，而不是把 DSL 特判塞进通用流程。
+
+## 5. 状态机与产物
+
+### 5.1 Phase
+
+```text
+BASELINE
+  -> PLAN
+  -> EDIT
+      -> quick_check
+      -> eval
+      -> KEEP or DISCARD or FAIL
+  -> REPLAN / DIAGNOSE / FINISH
+```
+
+关键规则：
+
+- `BASELINE` 初始化 baseline 和 seed 状态。
+- `PLAN` 由 `create_plan.py` 写入并校验 `plan.md`。
+- `EDIT` 中 agent 修改 `editable_files`，然后 `pipeline.py` 执行 quick_check 和 eval。
+- `KEEP` 会保留改动、更新 best，并写入历史。
+- `DISCARD` 会回滚本轮 editable files。
+- 连续失败达到阈值后进入 `DIAGNOSE`。
+- 达到 `max_rounds` 后进入 `FINISH`，生成报告。
+
+### 5.2 产物
+
+| 文件 | 说明 |
 |---|---|
-| batch 被旧 lock 卡住 | 确认对应进程已退出后清理 `.batch.lock` |
-| task 被旧 owner 卡住 | 等 `resume.heartbeat_fresh_seconds` 过期，或确认旧 session 已退出后清理 `state.owner` |
-| tunnel 不通 | 先 `akg_cli worker --remote-host ... --status`，再按需 `--start` |
-| worker 返回旧源码或旧配置行为 | 重启 worker |
+| `.ar_state/state.json` | phase、owner、progress、best、失败计数等。 |
+| `.ar_state/plan.md` | 当前计划和 plan item 状态。 |
+| `.ar_state/history.jsonl` | 每轮 eval/decision/metrics/commit 记录。 |
+| `.ar_state/report.md` | FINISH 报告。 |
+| `.ar_state/diagnose_v<N>.md` | DIAGNOSE 子代理产物。 |
+| `.ar_state/plan_items.xml` | 给 `create_plan.py` 的结构化计划输入。 |
+
+### 5.3 batch 产物
+
+```text
+<batch_dir>/
+  manifest.yaml
+  batch_progress.json
+  batch.log
+  verify_results.json
+  refs/<op>_ref.py
+  kernels/<op>_kernel.py
+```
+
+`batch_progress.json` 记录每个 op 的状态、task_dir、指标和错误信息。
+
+## 6. env.sh 契约
+
+`env.sh` 的唯一职责：source 完成后，当前 shell 的 `python` 能 import 目标 backend/DSL 所需包，且硬件工具在 PATH 中。
+
+模板：
+
+```bash
+# Optional: initialize package manager / virtual env.
+source /path/to/conda.sh
+conda activate <env-name>
+
+# Optional: initialize hardware SDK, compiler, and runtime paths.
+source /path/to/sdk/set_env.sh
+```
+
+按任务目标选择验证项：
+
+| 目标 | 验证 |
+|---|---|
+| Python/framework | `python -c "import torch"` |
+| Ascend backend | `python -c "import torch_npu"`；`npu-smi info` |
+| CUDA backend | `nvidia-smi` |
+| Triton-family DSL | `python -c "import triton"` |
+| 项目目录类 DSL | 运行该项目 README 或 adapter 要求的构建前置检查。 |
+
+远端 worker 会在非交互 SSH shell 中执行：
+
+```bash
+source <env_script>
+cd <repo_path>/akg_agents
+akg_cli worker --start ...
+```
+
+所以不要依赖交互 shell 专属的 alias 或手动 cd。
+
+## 7. Skills
+
+`skills/` 下按 DSL 组织优化知识。`config.yaml: defaults.skill_dsl` 决定 hook 在 PLAN 阶段提示 Claude 查找哪一类 skill。
+
+常见目录示例，实际以仓库内容为准：
+
+```text
+skills/<dsl-or-domain>/
+skills/performance-summary/
+skills/task-constructor/
+```
+
+PLAN 阶段应该读取 1-3 个最相关的 `SKILL.md`，并把使用到的文件名写进 plan rationale。
+
+## 8. 并发与恢复建议
+
+| 资源 | 建议 |
+|---|---|
+| 一个 task_dir | 同时只让一个 Claude session 驱动。 |
+| 一个 batch_dir | 同时只跑一个 `scripts/batch/run.py`。 |
+| 一张设备卡 | 交给一个本地 eval 或一个 worker 管理；多任务通过 worker 队列复用。 |
+| 修改 worker 代码后 | 重启 worker，确保远端 daemon 读到新代码。 |
+| tunnel 断开 | 重新执行 `worker --remote-host <alias> --start ...`。 |
+
+常见故障：
+
+| 现象 | 处理 |
+|---|---|
+| `worker --status` unreachable | 看诊断输出；检查 SSH、env_script、端口占用和远端日志。 |
+| `batch` 卡在 running | 确认子进程已退出后用 `--retry-errored` 重跑。 |
+| CodeChecker 拦截 seed | 临时用 `--no-code-checker` scaffold，或在 task.yaml 中关闭。 |
+| 远端返回旧代码行为 | 远端 repo pull 到最新并重启 worker。 |
+| 正确性失败 | 查看 `verify_result.json`、失败日志和 failure extractor 摘要。 |
