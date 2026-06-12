@@ -12,7 +12,7 @@ agent_model_config:
   default: standard
 
 # Log configuration
-log_dir: "~/aikg_logs"
+log_dir: "~/akg_agents_logs"
 
 # Workflow configuration
 workflow_config_path: "config/default_workflow.yaml"  # 原 Task 使用
