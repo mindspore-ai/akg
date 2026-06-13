@@ -29,6 +29,21 @@ logger = logging.getLogger(__name__)
 
 class RouterFactory:
     """算子路由工厂：实现算子场景的智能决策逻辑"""
+
+    @staticmethod
+    def _compose_error_with_diagnostics(verifier_error: str, diagnostic_error: str) -> str:
+        verifier_error = verifier_error or ""
+        diagnostic_error = diagnostic_error or ""
+        if not diagnostic_error:
+            return verifier_error
+        if not verifier_error:
+            return "## CodeChecker 非阻塞诊断\n\n" + diagnostic_error
+        return "\n\n".join([
+            "## Verifier Runtime Error",
+            verifier_error,
+            "## CodeChecker Non-Blocking Triton Diagnostics",
+            diagnostic_error,
+        ])
     
     @staticmethod
     def create_verifier_router_with_conductor(config: dict):
@@ -165,9 +180,14 @@ class RouterFactory:
             format_instructions = conductor_parser.get_format_instructions()
             
             raw_error = state.get('verifier_error', '')
-            error_for_prompt = raw_error
-            if raw_error and len(raw_error) > 4000:
-                error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+            raw_diagnostic = state.get('code_diagnostic_errors', '')
+            combined_error = RouterFactory._compose_error_with_diagnostics(
+                raw_error,
+                raw_diagnostic,
+            )
+            error_for_prompt = combined_error
+            if combined_error and len(combined_error) > 4000:
+                error_for_prompt = "... (前面省略) ...\n" + combined_error[-4000:]
 
             input_data = {
                 'dsl': state.get('dsl', ''),

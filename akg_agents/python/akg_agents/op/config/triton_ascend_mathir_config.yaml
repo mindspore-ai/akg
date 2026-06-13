@@ -48,6 +48,12 @@ multi_kernel_max_retries: 15
 # Verification configuration
 verify_timeout: 600
 
+# CodeChecker non-blocking Triton diagnostics
+code_diagnostic_checker:
+  enabled: true
+  only_errors: true
+  dedup: true
+
 # Multi-case testing configuration
 enable_multi_case_verification: false
 enable_hint_mode: false

@@ -299,6 +299,9 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "code_check_passed": None,
             "code_check_errors": None,
             "code_check_details": None,
+            "code_diagnostic_passed": None,
+            "code_diagnostic_errors": None,
+            "code_diagnostic_details": None,
             "conductor_suggestion": arguments.get("conductor_suggestion") or None,
             "conductor_decision": None,
             # 历史记录

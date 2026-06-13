@@ -247,6 +247,21 @@ class NodeFactory:
         }
 
     @staticmethod
+    def _compose_error_with_diagnostics(verifier_error: str, diagnostic_error: str) -> str:
+        verifier_error = verifier_error or ""
+        diagnostic_error = diagnostic_error or ""
+        if not diagnostic_error:
+            return verifier_error
+        if not verifier_error:
+            return "## CodeChecker 非阻塞诊断\n\n" + diagnostic_error
+        return "\n\n".join([
+            "## Verifier Runtime Error",
+            verifier_error,
+            "## CodeChecker Non-Blocking Triton Diagnostics",
+            diagnostic_error,
+        ])
+
+    @staticmethod
     def _device_env_prologue(backend: str, device_id) -> str:
         try:
             device_id_int = int(device_id)
@@ -565,6 +580,7 @@ class NodeFactory:
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
+            code_diagnostic_errors = state.get('code_diagnostic_errors', '')
             
             if verifier_error:
                 task_id = state.get('task_id', '0')
@@ -580,6 +596,11 @@ class NodeFactory:
                 task_id = state.get('task_id', '0')
                 logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
+
+            if code_diagnostic_errors:
+                task_id = state.get('task_id', '0')
+                logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 非阻塞诊断 (长度: {len(code_diagnostic_errors)})")
+                logger.debug(f"[Task {task_id}] 诊断详情: {code_diagnostic_errors[:300]}...")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
             t0 = time.time()
@@ -610,6 +631,9 @@ class NodeFactory:
                 "code_check_errors": None,     # 清除旧的检查错误
                 "code_check_passed": None,     # 重置检查状态
                 "code_check_details": None,    # 清除旧的检查详情
+                "code_diagnostic_errors": None,
+                "code_diagnostic_passed": None,
+                "code_diagnostic_details": None,
                 "codegen_invalid": codegen_invalid,
                 "codegen_invalid_reason": codegen_invalid_reason,
                 "verifier_result": False if codegen_invalid else state.get("verifier_result"),
@@ -896,6 +920,21 @@ class NodeFactory:
                                 f"{type(exc).__name__}: {exc}"
                             )
                             check_details = []
+                        diagnostic_passed = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_passed",
+                            True,
+                        )
+                        diagnostic_error = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_error_message",
+                            "",
+                        )
+                        diagnostic_details = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_errors",
+                            [],
+                        )
 
                         trace_instance.write_record(
                             "multi_expr_code_checker",
@@ -907,6 +946,9 @@ class NodeFactory:
                                             "passed": check_passed,
                                             "error_count": len(check_details),
                                             "errors": check_details[:5],
+                                            "diagnostic_passed": diagnostic_passed,
+                                            "diagnostic_error_count": len(diagnostic_details),
+                                            "diagnostic_errors": diagnostic_details[:5],
                                         },
                                         ensure_ascii=False,
                                     ),
@@ -918,6 +960,9 @@ class NodeFactory:
 
                         task_info["code_check_passed"] = check_passed
                         task_info["code_check_details"] = check_details
+                        task_info["code_diagnostic_passed"] = diagnostic_passed
+                        task_info["code_diagnostic_errors"] = diagnostic_error
+                        task_info["code_diagnostic_details"] = diagnostic_details
                         if not check_passed:
                             err = (
                                 "Sub-expression CodeChecker failed:\n"
@@ -1011,6 +1056,9 @@ class NodeFactory:
                     "code_check_errors": None,
                     "code_check_passed": None,
                     "code_check_details": None,
+                    "code_diagnostic_errors": None,
+                    "code_diagnostic_passed": None,
+                    "code_diagnostic_details": None,
                     "codegen_invalid": codegen_invalid,
                     "codegen_invalid_reason": codegen_invalid_reason,
                     "verifier_result": False if codegen_invalid else state.get("verifier_result"),
@@ -1145,6 +1193,7 @@ class NodeFactory:
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
+            code_diagnostic_errors = state.get('code_diagnostic_errors', '')
             
             if verifier_error:
                 logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
@@ -1156,6 +1205,10 @@ class NodeFactory:
             if code_check_errors:
                 logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
+
+            if code_diagnostic_errors:
+                logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 非阻塞诊断 (长度: {len(code_diagnostic_errors)})")
+                logger.debug(f"[Task {task_id}] 诊断详情: {code_diagnostic_errors[:300]}...")
             
             # 将 state 中的 session_id 注入到 kernel_gen_instance.context
             # 使 KernelGen 的 run_llm 能正确创建带 session_id 的 LLMClient，支持流式输出到 CLI
@@ -1192,6 +1245,7 @@ class NodeFactory:
                     designer_code=designer_code,
                     inspirations=inspirations_text,
                     code_check_errors=code_check_errors,
+                    code_diagnostic_errors=code_diagnostic_errors,
                     triton_api_recall=state.get('triton_api_recall', []),
                     triton_api_recall_by_source=state.get('triton_api_recall_by_source', {}),
                     api_database_enabled=state.get('api_database_enabled', False),
@@ -1229,6 +1283,9 @@ class NodeFactory:
                 "code_check_errors": None,     # 清除旧的检查错误
                 "code_check_passed": None,     # 重置检查状态
                 "code_check_details": None,    # 清除旧的检查详情
+                "code_diagnostic_errors": None,
+                "code_diagnostic_passed": None,
+                "code_diagnostic_details": None,
                 "codegen_invalid": codegen_invalid,
                 "codegen_invalid_reason": codegen_invalid_reason,
                 "verifier_result": False if codegen_invalid else state.get("verifier_result"),
@@ -1426,9 +1483,14 @@ class NodeFactory:
                 valid_options_set = {code_gen_agent, "finish"}
                 
                 raw_error = state.get('verifier_error', '')
-                error_for_prompt = raw_error
-                if raw_error and len(raw_error) > 4000:
-                    error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+                raw_diagnostic = state.get('code_diagnostic_errors', '')
+                combined_error = NodeFactory._compose_error_with_diagnostics(
+                    raw_error,
+                    raw_diagnostic,
+                )
+                error_for_prompt = combined_error
+                if combined_error and len(combined_error) > 4000:
+                    error_for_prompt = "... (前面省略) ...\n" + combined_error[-4000:]
 
                 input_data = {
                     'dsl': state.get('dsl', ''),
@@ -1494,7 +1556,7 @@ class NodeFactory:
                 if state.get('coder_code') and state.get('verifier_error'):
                     history_entry = {
                         'code': state.get('coder_code', ''),
-                        'error': state.get('verifier_error', ''),
+                        'error': combined_error,
                         'suggestion': suggestion if suggestion else '',
                         'task_desc': state.get('task_desc', '')
                     }
@@ -1864,17 +1926,30 @@ class NodeFactory:
                     "code_check_passed": True,
                     "code_check_errors": "",
                     "code_check_details": [],
+                    "code_diagnostic_passed": True,
+                    "code_diagnostic_errors": "",
+                    "code_diagnostic_details": [],
                     "agent_history": ["code_checker"]
                 }
             
             # 执行检查
             passed, error_message, errors = await checker_instance.check(code, state)
+            diagnostic_passed = getattr(checker_instance, "last_diagnostic_passed", True)
+            diagnostic_errors = getattr(checker_instance, "last_diagnostic_errors", [])
+            diagnostic_error_message = getattr(
+                checker_instance,
+                "last_diagnostic_error_message",
+                "",
+            )
             
             # 记录到 Trace（write_record: 不自增 step，与 kernel_gen 共享编号）
             check_result = {
                 "passed": passed,
                 "error_count": len(errors),
-                "errors": errors[:5]
+                "errors": errors[:5],
+                "diagnostic_passed": diagnostic_passed,
+                "diagnostic_error_count": len(diagnostic_errors),
+                "diagnostic_errors": diagnostic_errors[:5],
             }
             trace_instance.write_record("code_checker", [
                 ('result', json.dumps(check_result, ensure_ascii=False)),
@@ -1914,6 +1989,9 @@ class NodeFactory:
                 "code_check_passed": passed,
                 "code_check_errors": error_message,
                 "code_check_details": errors,
+                "code_diagnostic_passed": diagnostic_passed,
+                "code_diagnostic_errors": diagnostic_error_message,
+                "code_diagnostic_details": diagnostic_errors,
                 "agent_history": ["code_checker"]
             }
         

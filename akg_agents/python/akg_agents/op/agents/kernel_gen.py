@@ -621,6 +621,7 @@ class KernelGen(AgentBase):
         exclude_skill_names: Optional[List[str]] = None,
         force_skill_names: Optional[List[str]] = None,
         code_check_errors: str = "",
+        code_diagnostic_errors: str = "",
         triton_api_recall: Optional[List[Dict[str, Any]]] = None,
         triton_api_recall_by_source: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         api_database_enabled: bool = False,
@@ -650,6 +651,7 @@ class KernelGen(AgentBase):
             exclude_skill_names: 排除指定 skill（覆盖实例属性，AB test A 模式）
             force_skill_names: 强制导入指定 skill（覆盖实例属性，AB test B 模式）
             code_check_errors: CodeChecker 静态检查错误信息
+            code_diagnostic_errors: CodeChecker 非阻塞 Triton 诊断信息
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -735,6 +737,7 @@ class KernelGen(AgentBase):
                 verifier_error=error_for_prompt,
                 conductor_suggestion=conductor_suggestion,
                 code_check_errors=code_check_errors,
+                code_diagnostic_errors=code_diagnostic_errors,
                 skill_contents=skill_contents,
                 aggregated_api_docs=aggregated_api_docs,
                 database_api_docs=database_api_docs,

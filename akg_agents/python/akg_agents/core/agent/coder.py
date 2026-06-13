@@ -387,6 +387,7 @@ class Coder(AgentBase):
             "previous_code": task_info.get("coder_code", ""),
             "error_log": task_info.get("verifier_error", ""),
             "code_check_errors": task_info.get("code_check_errors", ""),
+            "code_diagnostic_errors": task_info.get("code_diagnostic_errors", ""),
             "api_docs_suitable": api_docs_suitable,
             "dsl_examples": dsl_examples,
             "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),
@@ -786,6 +787,7 @@ class Coder(AgentBase):
                 "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', ''),
                 "code_check_errors": task_info.get('code_check_errors', ''),  # CodeChecker静态检查错误
+                "code_diagnostic_errors": task_info.get('code_diagnostic_errors', ''),  # CodeChecker非阻塞诊断
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples": dsl_examples,
                 "strategy_glossary": strategy_glossary,  # 注入策略锚点词典

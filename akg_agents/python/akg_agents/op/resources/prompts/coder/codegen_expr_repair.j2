@@ -100,6 +100,11 @@ If this text mentions CUDA-only items such as cuBLAS, cuDNN, TF32, A100, or inpu
 {{ code_check_errors }}
 {% endif %}
 
+{% if code_diagnostic_errors %}
+## Non-Blocking Triton Diagnostics
+{{ code_diagnostic_errors }}
+{% endif %}
+
 {% if error_history %}
 ## Previous Repair Summaries
 {% for item in error_history %}
