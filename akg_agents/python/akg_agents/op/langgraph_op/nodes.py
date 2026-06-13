@@ -371,11 +371,21 @@ class NodeFactory:
             elapsed = time.time() - t0
             logger.info(f"[Task {task_id}] MathIR completed in {elapsed:.2f}s")
 
-            trace_instance.log_record("mathIR", [
+            mathir_from_preset = (
+                bool(task_info.get("preset_ir_path"))
+                and str(prompt or "").startswith("(skipped LLM; preset from ")
+            )
+            mathir_record = [
                 ('result', result),
                 ('prompt', prompt),
                 ('reasoning', reasoning),
-            ])
+            ]
+            if mathir_from_preset:
+                # Preset reuse is a cache hit, not a generation attempt. Keep it
+                # visible in logs without consuming the repair step budget.
+                trace_instance.write_record("mathIR", mathir_record)
+            else:
+                trace_instance.log_record("mathIR", mathir_record)
 
             mathIR_code = None
             mathIR_error = ""
@@ -406,8 +416,8 @@ class NodeFactory:
                 "preset_ir_path": task_info.get("preset_ir_path"),
                 "multi_kernel_gen": task_info.get("multi_kernel_gen", True),
                 "multi_kernel_max_retries": task_info.get("multi_kernel_max_retries", 15),
-                "iteration": state.get("iteration", 0) + 1,
-                "step_count": state.get("step_count", 0) + 1,
+                "iteration": state.get("iteration", 0) + (0 if mathir_from_preset else 1),
+                "step_count": state.get("step_count", 0) + (0 if mathir_from_preset else 1),
                 "agent_history": ["mathIR"],
             }
 
