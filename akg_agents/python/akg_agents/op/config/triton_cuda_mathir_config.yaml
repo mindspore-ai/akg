@@ -49,6 +49,24 @@ multi_kernel_max_retries: 15
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
+# CodeChecker non-blocking Triton diagnostics
+code_checker:
+  # base_checkers are blocking: any error routes back to Coder.
+  # Use "all" or list entries:
+  #   empty_code, python_syntax, py_compile, import_availability,
+  #   stray_chinese, triton_dsl_compliance
+  base_checkers: all
+  # triton_checkers are non-blocking: diagnostics are passed to repair context,
+  # and verifier still runs when base_checkers pass.
+  # Use "all" or list entries:
+  #   api_signature, high_confidence_semantics
+  triton_checkers: all
+
+code_diagnostic_checker:
+  enabled: true
+  only_errors: true
+  dedup: true
+
 # Multi-case testing configuration
 enable_multi_case_verification: false
 enable_hint_mode: false

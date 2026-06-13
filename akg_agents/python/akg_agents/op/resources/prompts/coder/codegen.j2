@@ -67,6 +67,11 @@
 **注意：上述问题是基于编程规范的静态检查，请严格按照建议修改。**
 {% endif %}
 
+{% if code_diagnostic_errors %}
+### CodeChecker 非阻塞 Triton 诊断（请结合错误日志修复）
+{{ code_diagnostic_errors }}
+{% endif %}
+
 {% if error_log %}
 ### 错误日志
 当前任务执行失败，请分析错误原因
@@ -1177,6 +1182,11 @@ class ModelNew(nn.Cell):
 {{ code_check_errors }}
 
 **注意：上述问题是基于编程规范的静态检查，请严格按照建议修改。**
+{% endif %}
+
+{% if code_diagnostic_errors %}
+### CodeChecker 非阻塞 Triton 诊断（请结合错误日志修复）
+{{ code_diagnostic_errors }}
 {% endif %}
 
 {% if error_log %}

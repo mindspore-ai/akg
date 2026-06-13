@@ -100,6 +100,9 @@ class KernelGenState(BaseState, total=False):
     code_check_passed: Optional[bool]
     code_check_errors: Optional[str]  # 格式化的错误信息
     code_check_details: Optional[List[Dict[str, Any]]]  # 详细错误列表
+    code_diagnostic_passed: Optional[bool]
+    code_diagnostic_errors: Optional[str]  # 非阻塞 Triton 诊断信息
+    code_diagnostic_details: Optional[List[Dict[str, Any]]]
 
     # === 代码生成异常（max_tokens 截断等）===
     codegen_invalid: Optional[bool]
