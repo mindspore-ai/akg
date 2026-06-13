@@ -108,8 +108,7 @@ def _aggregate(api_dir: Path, manifest_name: str) -> str:
             parts.append("\n")
         parts.append("\n## 当前版本不存在的 API\n\n")
         for entry in missing_entries:
-            parts.append(f"### {entry['title']}\n")
-            parts.append("这个api 在当前版本不存在.\n\n")
+            parts.append(f"- `{entry['title']}`: 这个 API 在当前版本不存在。\n")
 
     return "".join(parts)
 
