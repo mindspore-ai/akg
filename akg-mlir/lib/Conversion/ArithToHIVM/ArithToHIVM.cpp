@@ -74,6 +74,7 @@ using akg::ceilDivInt64;
 using akg::computeBishengNpuVectorStorageBytes;
 using akg::computeBishengStrideAlignedStorageBytes;
 using akg::computeBishengStructuredNpuVectorStorageBytes;
+using akg::computeBishengStrideAlignedStorageBytesWithTrailingUnit;
 using akg::getElementBitWidth;
 using akg::kNpuUbAlignBytes;
 using akg::multiplyAndCap;
@@ -2482,8 +2483,34 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
   }
 };
 
-static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferReadOp op, Value buf, Type elemType,
-                                                           npuvector::NPUVectorType npuVecType,
+static bool needsRank1StrideAlignedTransferReadBuffer(Value source, npuvector::NPUVectorType npuVecType) {
+  if (npuVecType.getRank() != 1 || !npuVecType.hasDynamicShape()) return false;
+
+  auto sourceTy = dyn_cast<MemRefType>(source.getType());
+  if (!sourceTy || sourceTy.getRank() != 1) return false;
+
+  SmallVector<int64_t> strides;
+  int64_t offset = 0;
+  if (failed(getStridesAndOffset(sourceTy, strides, offset)) || strides.size() != 1) return false;
+
+  return strides.front() > 1;
+}
+
+static int64_t computeRank1StrideAlignedTransferReadBytes(ArrayRef<int64_t> maxShape,
+                                                          npuvector::NPUVectorType npuVecType, Type elemType) {
+  if (maxShape.size() != 1 || npuVecType.getRank() != 1) return 0;
+
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (elementBits <= 0) return 0;
+
+  SmallVector<char, 1> staticDims;
+  staticDims.push_back(!ShapedType::isDynamic(npuVecType.getShape().front()));
+  SmallVector<int32_t, 1> alignDims{0};
+  return computeBishengStrideAlignedStorageBytesWithTrailingUnit(maxShape, staticDims, alignDims, elementBits);
+}
+
+static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferReadOp op, Value source, Value buf,
+                                                           Type elemType, npuvector::NPUVectorType npuVecType,
                                                            ConversionPatternRewriter &rewriter) {
   if (!npuVecType.hasDynamicShape()) {
     return success();
@@ -2492,6 +2519,15 @@ static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferRe
   auto folded = foldMaxValsForNpuMark(npuVecType, op.getMaxSizes());
   if (failed(folded)) {
     return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
+  }
+
+  // BiShengIR later materializes rank-1 non-contiguous loads as padded 2D UB storage.
+  if (needsRank1StrideAlignedTransferReadBuffer(source, npuVecType)) {
+    int64_t strideAlignedBytes = computeRank1StrideAlignedTransferReadBytes(*folded, npuVecType, elemType);
+    if (strideAlignedBytes > 0) {
+      setBufferSizeMark(rewriter, op.getLoc(), buf, strideAlignedBytes);
+      return success();
+    }
   }
 
   setNPUVectorBufferSizeMark(rewriter, op.getLoc(), npuVecType, elemType, *folded, buf);
@@ -2643,7 +2679,7 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
   }
   Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
-  if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
+  if (failed(setTransferReadBufferSizeMarkIfNeeded(op, source, tempBuf, elemType, npuVecType, rewriter))) {
     return failure();
   }
 
@@ -2723,7 +2759,7 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     }
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
-    if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
+    if (failed(setTransferReadBufferSizeMarkIfNeeded(op, finalSource, tempBuf, elemType, npuVecType, rewriter))) {
       return failure();
     }
 
