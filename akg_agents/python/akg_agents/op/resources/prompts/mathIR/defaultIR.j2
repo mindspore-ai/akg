@@ -1,0 +1,20 @@
+- 卷积:
+   ConvNd 输出大小:
+      - out = floor((in + 2 * padding - dilation * (kernel_size - 1) - 1) / stride + 1)
+   ConvTransposeNd 输出大小:
+      - out = (in - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1
+   ConvTransposeNd 输出位置反推输入位置:
+      - 对输出位置 out_pos 和卷积核偏移 k，num = out_pos + padding - k * dilation
+      - 只有 num % stride == 0 且 in_pos = num / stride 落在输入范围内时，该项才贡献；否则贡献 0
+      - PyTorch nn.ConvTranspose*d 的 weight 布局是 (C_in, C_out/groups, *kernel)，公式直接使用 weight[c_i, c_o_per_group, k...]；不要把原始 weight 写成 K-1-k 翻转，除非 PyTorch 源码显式 torch.flip 了权重
+      - output_padding 只扩展输出尺寸，不改变上述反推输入坐标公式
+   常见隐式 GEMM 维度:
+      - M: batch 与输出空间位置
+      - N: 输出通道或输出特征
+      - K: 输入通道与卷积核空间维的乘积
+- Linear:
+   y[n,o] = bias[o] + sum_i x[n,i] * weight[o,i]
+- Elementwise:
+   y = f(x) 或 y = f(x, z)，广播规则以 PyTorch eager 为准。
+- Reduction:
+   y = reduce(x, dims)，需要明确 reduction_type、keepdim、空维度与 dtype 语义。

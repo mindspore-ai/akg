@@ -1,0 +1,121 @@
+You are repairing one self-contained {{ dsl }} sub-kernel test script for a MathIR expression.
+
+Return exactly one JSON object with two keys: `code` and `error_summary`.
+Do not return Markdown fences or any text outside the JSON object.
+
+Example shape:
+{"code": "import torch\n...", "error_summary": "bad mask shape -> fixed broadcast dimensions"}
+
+## Target
+- op_name: {{ op_name }}
+- framework: {{ framework }}
+- backend: {{ backend }}{% if arch_name %}({{ arch_name }}){% endif %}
+- target_device: {{ target_device }}
+- repair_error_type: {{ repair_error_type }}
+
+## Original Framework Code
+Use this code to infer input shapes, parameter initialization, dtype/device expectations, and the reference semantics for the current expression.
+```python
+{{ task_desc }}
+```
+
+{% if dsl_basic_docs %}
+## {{ dsl }} Guide
+{{ dsl_basic_docs }}
+{% endif %}
+
+{% if hardware_docs %}
+## Hardware Notes
+{{ hardware_docs }}
+{% endif %}
+
+{% if expert_suggestion %}
+## Expert Suggestions
+{{ expert_suggestion }}
+{% endif %}
+
+{% if mathir_lowering_docs %}
+## MathIR Lowering Guide
+{{ mathir_lowering_docs }}
+{% endif %}
+
+{% if api_docs_suitable %}
+## API Docs
+{{ api_docs_suitable }}
+{% endif %}
+
+## Current Expression Truth Source ({{ expr_index + 1 }}/{{ total_expressions }})
+- name: {{ expression_name }}
+{% if consumes %}- consumes: {% for c in consumes %}{{ c.name }}({{ c.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if produces %}- produces: {% for p in produces %}{{ p.name }}({{ p.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if next_expressions %}- next expressions: {{ next_expressions | join(", ") }}{% endif %}
+
+Only repair this expression's script. Do not implement downstream expressions.
+
+### Formula
+{{ formula }}
+
+{% if boundary_treatment %}
+### Boundary Treatment
+{{ boundary_treatment }}
+{% endif %}
+
+{% if axis_mapping and (axis_mapping.parallel or axis_mapping.reduction) %}
+### Axis Mapping
+{% for axis in axis_mapping.parallel %}
+- parallel axis `{{ axis.symbol }}`: range={{ axis.range }}, binding={{ axis.binding }}{% if axis.value is defined and axis.value not in (none, "") %}, value={{ axis.value }}{% endif %}
+{% endfor %}
+{% for axis in axis_mapping.reduction %}
+- reduction axis `{{ axis.symbol }}`: range={{ axis.range }}, binding={{ axis.binding }}{% if axis.value is defined and axis.value not in (none, "") %}, value={{ axis.value }}{% endif %}{% if axis.reduction_type %}, reduction_type={{ axis.reduction_type }}{% endif %}{% if axis.accumulator_precision %}, accumulator_precision={{ axis.accumulator_precision }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if symbol_binding %}
+### Symbol Binding
+{% for symbol, binding in symbol_binding.items() %}
+- {{ symbol }} -> {{ binding.code_binding }} ({{ binding.binding_kind }}){% if binding.layout %}, layout={{ binding.layout }}{% endif %}{% if binding.stride %}, stride={{ binding.stride }}{% endif %}{% if binding.address_mapping %}, address_mapping={{ binding.address_mapping }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if TDD_requirement %}
+### Local TDD Requirement
+{% if not is_cuda_backend %}
+If this text mentions CUDA-only items such as cuBLAS, cuDNN, TF32, A100, or input_precision, keep only the generic meaning about reference comparison, shapes, indexing, reductions, boundary handling, and tolerances. The script must run on the current {{ backend }} / {{ dsl }} target.
+{% endif %}
+{{ TDD_requirement }}
+{% endif %}
+
+{% if previous_code %}
+## Previous Code
+{{ previous_code }}
+{% endif %}
+
+{% if error_log %}
+## Verification Error
+{{ error_log }}
+{% endif %}
+
+{% if code_check_errors %}
+## Static Check Errors
+{{ code_check_errors }}
+{% endif %}
+
+{% if error_history %}
+## Previous Repair Summaries
+{% for item in error_history %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+
+{% if llm_suggestions %}
+## Conductor Suggestions
+{{ llm_suggestions }}
+{% endif %}
+
+## Repair Rules
+1. If `repair_error_type` is `logic`, fix API, syntax, shape, mask, launch, or device issues while preserving the math formula.
+2. If `repair_error_type` is `numerical`, you may change the equivalent computation structure while preserving the formula semantics.
+3. Keep the script self-contained and executable as `verify_{{ op_name }}.py`.
+4. The script must print `Kernel syntax check PASSED.` only after all checks pass.
+5. If a diff is too large, the assertion message must contain `failed: diff is too large`.
+6. `error_summary` must be under 120 Chinese or English characters and follow "cause -> fix".

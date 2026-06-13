@@ -45,6 +45,19 @@ class KernelGenState(BaseState, total=False):
     designer_code: Optional[str]
     designer_prompt: Optional[str]
     designer_reasoning: Optional[str]
+
+    # === MathIR 输出 ===
+    mathIR_code: Optional[Dict[str, Any]]
+    mathIR_prompt: Optional[str]
+    mathIR_reasoning: Optional[str]
+    mathIR_error: Optional[str]
+    mlir: Optional[bool]
+    mlir_compile_code: Optional[str]
+    pytorch_doc_string: Optional[str]
+    standard_formula: Optional[str]
+    preset_ir_json: Optional[str]
+    preset_ir_path: Optional[str]
+    multi_kernel_gen: Optional[bool]
     
     # === Coder 输出 ===
     coder_code: Optional[str]

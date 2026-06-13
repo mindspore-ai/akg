@@ -45,6 +45,7 @@ from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflo
 from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
 from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
 from akg_agents.op.workflows.default_workflow_v2 import DefaultWorkflowV2
+from akg_agents.op.workflows.mathir_coder_workflow import MathIRCoderWorkflow
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
@@ -66,6 +67,9 @@ WORKFLOW_REGISTRY = {
     "adaptive_search_workflow": AdaptiveSearchWorkflow,
     "default_v2": DefaultWorkflowV2,
     "default_workflow_v2": DefaultWorkflowV2,
+    "mathir_coder": MathIRCoderWorkflow,
+    "mathir_coder_workflow": MathIRCoderWorkflow,
+    "mathIR_coder_workflow": MathIRCoderWorkflow,
 }
 
 
@@ -142,6 +146,10 @@ class LangGraphTask(BaseLangGraphTask):
         
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
+
+        # mathIR 相关配置
+        self.mathIR_save = config.get("mathir_save", True)
+        self.mathIR_overwrite = config.get("mathir_overwrite", True)
         
         # 兼容旧代码：如果提供了 device_pool，创建私有 Worker
         self._private_worker = None
@@ -194,6 +202,24 @@ class LangGraphTask(BaseLangGraphTask):
         self._init_workflow()
         
         logger.info(f"LangGraphTask initialized with workflow: {self.workflow_name}")
+
+    def _get_bool_config(
+        self,
+        key: str,
+        default: bool = False,
+        aliases: Tuple[str, ...] = (),
+    ) -> bool:
+        """Read a boolean option from top-level config or mathIR_config."""
+        mathir_config = self.config.get("mathIR_config", {})
+        raw_value = default
+        for option_key in (key, *aliases):
+            if option_key in mathir_config:
+                raw_value = mathir_config[option_key]
+            if option_key in self.config:
+                raw_value = self.config[option_key]
+        if isinstance(raw_value, str):
+            return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(raw_value)
     
     def _init_agents(self) -> dict:
         """初始化算子 Agent（Designer, Coder, Verifier）"""
@@ -238,6 +264,26 @@ class LangGraphTask(BaseLangGraphTask):
             logger.warning(f"Failed to initialize Coder: {e}")
             import traceback
             logger.debug(traceback.format_exc())
+
+        # MathIR (only needed for mathIR workflows or explicit opt-in)
+        if "mathir" in self.workflow_name.lower():
+            try:
+                from akg_agents.core.agent.mathIR import MathIR
+
+                agents['mathIR'] = MathIR(
+                    op_name=self.op_name,
+                    task_desc=self.task_desc,
+                    dsl=self.dsl,
+                    framework=self.framework,
+                    backend=self.backend,
+                    arch=self.arch,
+                    parser_config_path=parser_config_path,
+                    config=self.config,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize MathIR: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
         
         # KernelGen (基于 Skill 系统的代码生成)
         # adaptive_search / evolve 流程使用 default_workflow（Designer+Coder+Verifier），
@@ -341,7 +387,9 @@ class LangGraphTask(BaseLangGraphTask):
             "backend": self.backend,
             "arch": self.arch,
             "task_type": self.task_type,
-            "bench_type": self.config.get("bench_type", "kernelbench"),
+            "bench_type": self.bench_type,
+            "workflow_name": self.workflow_name,
+            "multi_kernel_gen": self.config.get("mathIR_config", {}).get("multi_kernel_gen", True),
             "verifier_result": False,
             "verifier_error": "",
             "history_attempts": [],
@@ -405,6 +453,41 @@ class LangGraphTask(BaseLangGraphTask):
         }
         normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+    def _save_mathIR_resource_sync(self, final_state: Dict[str, Any]) -> None:
+        """Persist successful MathIR output as a reusable preset when enabled."""
+        if not self.mathIR_save:
+            return
+        if "mathIR" not in self.agents:
+            return
+        if not self.op_name:
+            logger.warning("[%s] missing op_name, skip MathIR preset persistence", self.op_name)
+            return
+
+        mathIR_code = final_state.get("mathIR_code")
+        if mathIR_code is None:
+            logger.warning("[%s] final_state missing mathIR_code, skip MathIR preset persistence", self.op_name)
+            return
+
+        save_obj = {"code": mathIR_code}
+        try:
+            from akg_agents.core.agent.mathIR import ir_resource_json_path
+
+            save_path = ir_resource_json_path(self.op_name)
+            if os.path.exists(save_path) and not self.mathIR_overwrite:
+                logger.info(
+                    "[%s] MathIR preset exists and overwrite is disabled, skip persistence: %s",
+                    self.op_name,
+                    save_path,
+                )
+                return
+
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(save_obj, f, ensure_ascii=False, indent=2)
+            logger.info("[%s] MathIR preset persisted: %s", self.op_name, save_path)
+        except Exception as exc:
+            logger.warning("[%s] MathIR preset persistence failed: %s", self.op_name, exc)
     
     async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool, dict]:
         """执行任务（API 兼容现有 Task）
@@ -435,6 +518,8 @@ class LangGraphTask(BaseLangGraphTask):
             final_state.setdefault("cache_session_hash", initial_state.get("cache_session_hash", ""))
             # 处理结果
             success = final_state.get("verifier_result", False)
+            if success:
+                self._save_mathIR_resource_sync(final_state)
             
             logger.info(f"Task {self.task_id}, op_name: {self.op_name}, completed, success: {success}")
             

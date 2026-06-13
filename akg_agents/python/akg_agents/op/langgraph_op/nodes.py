@@ -23,6 +23,7 @@ import logging
 import asyncio
 import json
 import time
+from akg_agents.utils.common_utils import ParserFactory
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,71 @@ class NodeFactory:
             return updates
 
         return track_node("designer")(designer_node)
+
+    @staticmethod
+    def create_mathIR_node(mathIR_instance, trace_instance, config: dict):
+        """创建 MathIR 节点函数"""
+        async def mathIR_node(state: KernelGenState) -> dict:
+            """MathIR 节点：生成算子数学语义表达"""
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: mathIR")
+
+            task_info = dict(state)
+            task_info.setdefault(
+                "multi_kernel_gen",
+                config.get("multi_kernel_gen", True),
+            )
+
+            t0 = time.time()
+            result, prompt, reasoning = await mathIR_instance.run(
+                task_info=task_info,
+            )
+            elapsed = time.time() - t0
+            logger.info(f"[Task {task_id}] MathIR completed in {elapsed:.2f}s")
+
+            trace_instance.log_record("mathIR", [
+                ('result', result),
+                ('prompt', prompt),
+                ('reasoning', reasoning),
+            ])
+
+            mathIR_code = None
+            mathIR_error = ""
+            try:
+                parser = ParserFactory.get_parser("mathIR_parser")
+                parsed_result = ParserFactory.robust_parse(result, parser)
+                mathIR_code = getattr(parsed_result, "code", None) if parsed_result else None
+                if not isinstance(mathIR_code, dict):
+                    raise ValueError("MathIR parser did not produce a dict code field")
+            except Exception as exc:
+                mathIR_error = str(exc)
+                logger.warning(
+                    "[Task %s] MathIR parse failed, coder will run without MathIR: %s",
+                    task_id,
+                    exc,
+                )
+
+            updates = {
+                "mathIR_code": mathIR_code,
+                "mathIR_prompt": prompt,
+                "mathIR_reasoning": reasoning,
+                "mathIR_error": mathIR_error,
+                "mlir": task_info.get("mlir", False),
+                "mlir_compile_code": task_info.get("mlir_compile_code", ""),
+                "pytorch_doc_string": task_info.get("pytorch_doc_string", ""),
+                "standard_formula": task_info.get("standard_formula", ""),
+                "preset_ir_json": task_info.get("preset_ir_json"),
+                "preset_ir_path": task_info.get("preset_ir_path"),
+                "multi_kernel_gen": task_info.get("multi_kernel_gen", True),
+                "iteration": state.get("iteration", 0) + 1,
+                "step_count": state.get("step_count", 0) + 1,
+                "agent_history": ["mathIR"],
+            }
+
+            return updates
+
+        return track_node("mathIR")(mathIR_node)
 
     @staticmethod
     def create_coder_node(coder_instance, trace_instance):
