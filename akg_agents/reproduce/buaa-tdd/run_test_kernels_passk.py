@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,32 @@ default_workflow = "mathir_coder_workflow"
 triton_cuda_path = f"{PYTHON_ROOT}/akg_agents/op/config/triton_cuda_mathir_config.yaml"
 triton_ascend_path = f"{PYTHON_ROOT}/akg_agents/op/config/triton_ascend_mathir_config.yaml"
 
-default_config_path = triton_cuda_path
+BACKEND_ALIASES = {
+    "nvidia": "cuda",
+    "npu": "ascend",
+}
+CONFIG_BY_BACKEND = {
+    "cuda": triton_cuda_path,
+    "ascend": triton_ascend_path,
+}
+DSL_BY_BACKEND = {
+    "cuda": "triton_cuda",
+    "ascend": "triton_ascend",
+}
+ARCH_BY_BACKEND = {
+    "cuda": "a100",
+    "ascend": "ascend910b3",
+}
+
+
+def _detect_default_backend() -> str:
+    if os.environ.get("ASCEND_HOME_PATH") or os.environ.get("ASCEND_TOOLKIT_HOME") or shutil.which("npu-smi"):
+        return "ascend"
+    return "cuda"
+
+
+default_backend = _detect_default_backend()
+default_config_path = CONFIG_BY_BACKEND[default_backend]
 
 os.environ.setdefault("AKG_AGENTS_STREAM_OUTPUT", "on")
 
@@ -268,7 +294,12 @@ async def run_kernelbench_passk(args: argparse.Namespace) -> Dict[str, Any]:
     from akg_agents.utils.environment_check import check_env_for_task  # type: ignore[reportMissingImports]
 
     args.workflow = args.workflow or default_workflow
-    args.config_path = args.config_path or default_config_path
+    args.backend = BACKEND_ALIASES.get(str(args.backend).strip().lower(), str(args.backend).strip().lower())
+    if args.backend not in CONFIG_BY_BACKEND:
+        raise ValueError(f"Unsupported backend for KernelBench pass@k: {args.backend}")
+    args.dsl = args.dsl or DSL_BY_BACKEND[args.backend]
+    args.arch = args.arch or ARCH_BY_BACKEND[args.backend]
+    args.config_path = args.config_path or CONFIG_BY_BACKEND[args.backend]
     task_indices = _parse_task_indices(args.tasks)
     task_files = _select_kernelbench_files(args.level, task_indices)
     if not task_files:
@@ -344,9 +375,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallel-num", type=int, default=1, help="Max concurrent attempts")
     parser.add_argument("--devices", default="0", help="Comma-separated local device ids")
     parser.add_argument("--framework", default="torch")
-    parser.add_argument("--dsl", default="triton_cuda")
-    parser.add_argument("--backend", default="cuda")
-    parser.add_argument("--arch", default="a100")
+    parser.add_argument(
+        "--dsl",
+        default="",
+        help=f"DSL type. Default follows --backend ({DSL_BY_BACKEND[default_backend]}).",
+    )
+    parser.add_argument(
+        "--backend",
+        default=default_backend,
+        help=f"Backend type. Auto-detected default: {default_backend}",
+    )
+    parser.add_argument(
+        "--arch",
+        default="",
+        help=f"Hardware arch. Default follows --backend ({ARCH_BY_BACKEND[default_backend]}).",
+    )
     parser.add_argument("--task-type", default="precision_only", choices=["precision_only", "profile"])
     parser.add_argument("--workflow", default="", help=f"Workflow name. Default: {default_workflow}")
     parser.add_argument("--config-path", default="", help=f"Config YAML path. Default: {default_config_path}")
