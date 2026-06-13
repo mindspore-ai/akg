@@ -30,6 +30,7 @@ RANDOM_SEED_NUM = 20
 def func_time_required(func_name):
     """Checking the Time Required for Function Running."""
 
+    @functools.wraps(func_name)
     def wrapper(*args, **kwargs):
         t0 = time.time()
         result = func_name(*args, **kwargs)

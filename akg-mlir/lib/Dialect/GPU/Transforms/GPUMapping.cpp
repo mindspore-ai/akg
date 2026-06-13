@@ -167,13 +167,23 @@ struct MappingTask {
   bool isDynamicOuterAxis() const { return problemSize == 1 && isDynamicAxis; }
   bool needToMap() const { return problemSize > 1 || isDynamicAxis; }
   void dump() {
-    llvm::outs() << "Task : Length = " << problemSize << " MapLevel = " << level << "\n";
+    llvm::dbgs() << "Task : Length = " << problemSize << " MapLevel = " << level << "\n";
     loopVar.dump();
   }
 };
 
 struct MappingTaskComparator {
   bool operator()(const MappingTask &a, const MappingTask &b) const { return a.op < b.op; }
+};
+
+struct MappingState {
+  int currBlock{1};
+  int currGrid{1};
+  bool tryBlock{true};
+  std::set<MappingTask, MappingTaskComparator> unsolvedTasks;
+  std::map<MappingLevel, int> mapLevelCount;
+  int totalAvailableBlocks{0};
+  std::vector<int64_t> maxGrids;
 };
 
 struct AKGGPUMappingLoops : public impl::AKGGPUMappingBase<AKGGPUMappingLoops> {
@@ -187,6 +197,10 @@ struct AKGGPUMappingLoops : public impl::AKGGPUMappingBase<AKGGPUMappingLoops> {
 
   void createMappingTask(ParallelOp parallelOp);
   void solveMapping();
+  void markSolved(MappingTask task, const MappingLevel &level, MappingState &state);
+  void markUnsolved(MappingTask task, MappingState &state);
+  void solveBlockMappingTask(MappingState &state);
+  void solveGridMappingTask(MappingState &state);
   void loadGlobalMapping();
   void mapParallelOp(ParallelOp parallelOp, const std::vector<MappingTask> &result);
   bool saveMappingResultToJson();
@@ -759,7 +773,7 @@ void AKGGPUMappingLoops::loadGlobalMapping() {
   const int64_t factor = 16;
   if (totalMapSize * factor < totalProblemSize &&
       CommonUtils::getOperatorType(getOperation()) != OperatorTemplate::Reduction) {
-    llvm::outs() << "WARNING " << getAkgKernelName() << " totalMapSize " << totalMapSize << " totalProblemSize "
+    llvm::dbgs() << "WARNING " << getAkgKernelName() << " totalMapSize " << totalMapSize << " totalProblemSize "
                  << totalProblemSize << ", may have performance issue.\n";
   }
 }
@@ -847,86 +861,93 @@ void AKGGPUMappingLoops::solveMapping() {
   int problemSize = 1;
   (void)std::for_each(waitingList.begin(), waitingList.end(),
                       [&problemSize](auto task) { problemSize *= task.problemSize; });
-  int currBlock = 1;
-  int currGrid = 1;
-  bool tryBlock = true;
-  std::set<MappingTask, MappingTaskComparator> unsolvedTasks;
-  std::map<MappingLevel, int> mapLevelCount;
-  auto MarkSolved = [&](MappingTask task, const MappingLevel &level) {
-    auto actual_level = singleProcess ? MappingLevel::Sequential : level;
-    task.level = actual_level;
-    if (actual_level != MappingLevel::Sequential) {
-      task.mapDim = mapLevelCount[actual_level]++;
-      tryBlock = !tryBlock;
-      if (actual_level == MappingLevel::MapGrid) {
-        currGrid *= task.problemSize;
-        llvm::outs() << "Successfully map " << task.problemSize << " task to grid, currGrid = " << currGrid
-                     << ", flip to block\n";
-      } else if (actual_level == MappingLevel::MapBlock) {
-        currBlock *= task.problemSize;
-        llvm::outs() << "Successfully map " << task.problemSize << " task to block, currBlock = " << currBlock
-                     << ", flip to grid\n";
-      }
-    } else {
-      task.mapDim = -1;
-      llvm::outs() << "Successfully map " << task.problemSize << " task to sequential\n";
-    }
-    mapResults[task.op].push_back(task);
-  };
 
   std::tie(proposedGrid, proposedBlock) = StrategyHelper::getProposalParallelSize(problemSize, device_target);
 
-  llvm::outs() << " problemSize = " << problemSize << ", proposedGrid = " << proposedGrid
+  llvm::dbgs() << " problemSize = " << problemSize << ", proposedGrid = " << proposedGrid
                << " proposedBlock = " << proposedBlock << "\n";
 
-  auto MarkUnsolved = [this, &tryBlock, &unsolvedTasks](MappingTask task) {
-    if (tryBlock) {
-      llvm::outs() << "Try map block fail, push task back.\n";
-      waitingList.push_back(task);
-    } else {
-      llvm::outs() << "Try map grid fail, push task front.\n";
-      waitingList.push_front(task);
-    }
-    (void)unsolvedTasks.insert(task);
-    tryBlock = !tryBlock;
-  };
-  auto totalAvailableBlocks = GpuInfo::getInstance(device_target).getTotalAvailableBlocks();
-  auto maxGrids = GpuInfo::getInstance(device_target).getMaxGrids();
+  MappingState state;
+  state.totalAvailableBlocks = GpuInfo::getInstance(device_target).getTotalAvailableBlocks();
+  state.maxGrids = GpuInfo::getInstance(device_target).getMaxGrids();
+
   while (!waitingList.empty()) {
-    if (tryBlock) {
-      auto task = waitingList.back();
-      waitingList.pop_back();
-      bool disableThreadMapping = task.isReductionAxis();
-      if (!task.needToMap() || disableThreadMapping) {
-        MarkSolved(task, MappingLevel::Sequential);
-        continue;
-      }
-      bool badPerformance = currBlock * task.problemSize > proposedBlock;
-      bool invalid = currBlock * task.problemSize > totalAvailableBlocks;
-      bool transferred = unsolvedTasks.find(task) != unsolvedTasks.end();
-      if (task.isDynamicOuterAxis() || invalid || (badPerformance && !transferred)) {
-        llvm::outs() << "currBlock " << currBlock << " * " << task.problemSize << " >= proposedBlock(" << proposedBlock
-                     << ")\n";
-        MarkUnsolved(task);
-      } else {
-        MarkSolved(task, MappingLevel::MapBlock);
-      }
+    if (state.tryBlock) {
+      solveBlockMappingTask(state);
     } else {
-      auto task = waitingList.front();
-      waitingList.pop_front();
-      auto currDim = mapLevelCount[MappingLevel::MapGrid];
-      if (!task.needToMap() || currDim >= static_cast<int>(maxGrids.size()) || task.problemSize > maxGrids[currDim]) {
-        MarkSolved(task, MappingLevel::Sequential);
-        continue;
-      }
-      if (currGrid * task.problemSize <= proposedGrid || unsolvedTasks.find(task) != unsolvedTasks.end()) {
-        llvm::outs() << "Successfully map " << task.problemSize << " task to grid, currGrid = " << currGrid
-                     << ", flip to block\n";
-        MarkSolved(task, MappingLevel::MapGrid);
-      } else {
-        MarkUnsolved(task);
-      }
+      solveGridMappingTask(state);
     }
+  }
+}
+
+void AKGGPUMappingLoops::markSolved(MappingTask task, const MappingLevel &level, MappingState &state) {
+  auto actual_level = singleProcess ? MappingLevel::Sequential : level;
+  task.level = actual_level;
+  if (actual_level != MappingLevel::Sequential) {
+    task.mapDim = state.mapLevelCount[actual_level]++;
+    state.tryBlock = !state.tryBlock;
+    if (actual_level == MappingLevel::MapGrid) {
+      state.currGrid *= task.problemSize;
+      llvm::dbgs() << "Successfully map " << task.problemSize << " task to grid, currGrid = " << state.currGrid
+                   << ", flip to block\n";
+    } else if (actual_level == MappingLevel::MapBlock) {
+      state.currBlock *= task.problemSize;
+      llvm::dbgs() << "Successfully map " << task.problemSize << " task to block, currBlock = " << state.currBlock
+                   << ", flip to grid\n";
+    }
+  } else {
+    task.mapDim = -1;
+    llvm::dbgs() << "Successfully map " << task.problemSize << " task to sequential\n";
+  }
+  mapResults[task.op].push_back(task);
+}
+
+void AKGGPUMappingLoops::markUnsolved(MappingTask task, MappingState &state) {
+  if (state.tryBlock) {
+    llvm::dbgs() << "Try map block fail, push task back.\n";
+    waitingList.push_back(task);
+  } else {
+    llvm::dbgs() << "Try map grid fail, push task front.\n";
+    waitingList.push_front(task);
+  }
+  (void)state.unsolvedTasks.insert(task);
+  state.tryBlock = !state.tryBlock;
+}
+
+void AKGGPUMappingLoops::solveBlockMappingTask(MappingState &state) {
+  auto task = waitingList.back();
+  waitingList.pop_back();
+  bool disableThreadMapping = task.isReductionAxis();
+  if (!task.needToMap() || disableThreadMapping) {
+    markSolved(task, MappingLevel::Sequential, state);
+    return;
+  }
+  bool badPerformance = state.currBlock * task.problemSize > proposedBlock;
+  bool invalid = state.currBlock * task.problemSize > state.totalAvailableBlocks;
+  bool transferred = state.unsolvedTasks.find(task) != state.unsolvedTasks.end();
+  if (task.isDynamicOuterAxis() || invalid || (badPerformance && !transferred)) {
+    llvm::dbgs() << "currBlock " << state.currBlock << " * " << task.problemSize << " >= proposedBlock("
+                 << proposedBlock << ")\n";
+    markUnsolved(task, state);
+  } else {
+    markSolved(task, MappingLevel::MapBlock, state);
+  }
+}
+
+void AKGGPUMappingLoops::solveGridMappingTask(MappingState &state) {
+  auto task = waitingList.front();
+  waitingList.pop_front();
+  auto currDim = state.mapLevelCount[MappingLevel::MapGrid];
+  if (!task.needToMap() || currDim >= static_cast<int>(state.maxGrids.size()) ||
+      task.problemSize > state.maxGrids[currDim]) {
+    markSolved(task, MappingLevel::Sequential, state);
+    return;
+  }
+  if (state.currGrid * task.problemSize <= proposedGrid ||
+      state.unsolvedTasks.find(task) != state.unsolvedTasks.end()) {
+    markSolved(task, MappingLevel::MapGrid, state);
+  } else {
+    markUnsolved(task, state);
   }
 }
 

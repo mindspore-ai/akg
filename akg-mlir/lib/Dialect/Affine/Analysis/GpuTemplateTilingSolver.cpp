@@ -226,6 +226,46 @@ static void processLeftDynamic(ConfigPtr &seqTile, const ConfigPtr &threadTile, 
   gpuTool.updateRuntimeArgument(arg1);
 }
 
+static bool shouldMapToThread(int blockDimsLeft, int threadNum, int len, bool isDynamic) {
+  return blockDimsLeft > 0 && ((threadNum > 1 && len > 1) || (threadNum > 0 && isDynamic));
+}
+
+static bool shouldMapToBlock(int gridDimsLeft, int blockNum, int len, bool isDynamic) {
+  return gridDimsLeft > 0 && ((blockNum > 1 && len > 1) || (blockNum > 0 && isDynamic));
+}
+
+static void mapAxisToThread(AxisPtr &a, ConfigPtr &threadTile, int i, int num, int &len, int &threadNum, bool isDynamic,
+                            bool handleRedAxis, const std::vector<int> &primes, std::vector<std::string> &axisMap,
+                            akgglobal::GpuScheduleTool &gpuTool) {
+  if (isDynamic) {
+    processDynamicThreadUse(a, threadTile, i, num, handleRedAxis, primes, axisMap, gpuTool);
+  } else if (len <= threadNum) {
+    processFullThreadUse(a, threadTile, len, threadNum, axisMap);
+  } else {
+    processPartThreadUse(a, threadTile, len, threadNum, axisMap);
+  }
+}
+
+static void mapAxisToBlock(AxisPtr &a, int &len, int &blockNum, bool isDynamic, const std::vector<int> &primes,
+                           std::vector<std::string> &axisMap) {
+  if (isDynamic) {
+    processDynamicBlockUse(a, primes, axisMap);
+  } else if (len <= blockNum) {
+    processFullBlockUse(a, len, blockNum, axisMap);
+  } else {
+    processPartBlockUse(a, len, blockNum, axisMap);
+  }
+}
+
+static void setAxisSequential(AxisPtr &a, ConfigPtr &seqTile, const ConfigPtr &threadTile, int len, bool isDynamic,
+                              bool handleRedAxis, const std::vector<int> &primes, akgglobal::GpuScheduleTool &gpuTool) {
+  if (!isDynamic) {
+    seqTile->value = len * threadTile->value;
+  } else {
+    processLeftDynamic(seqTile, threadTile, handleRedAxis, primes, gpuTool);
+  }
+}
+
 void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> &axes,
                                                            const std::vector<int> &processOrder,
                                                            const std::vector<int> &flags,
@@ -251,41 +291,26 @@ void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> 
     auto threadTile = a->tryGetConfig(1);
     threadTile->value = 1;
     std::vector<int> primes;
-    if (dynFlags[i]) {
+    bool isDynamic = dynFlags[i];
+    if (isDynamic) {
       initPrimes(primes, tool);
     }
 
     // 1. tile & map to threadIdx
-    if (blockDimsLeft > 0 && ((threadNum > 1 && len > 1) || (threadNum > 0 && dynFlags[i]))) {
-      if (dynFlags[i]) {
-        processDynamicThreadUse(a, threadTile, i, num, handleRedAxis, primes, axisMap, gpuTool);
-      } else if (len <= threadNum) {
-        processFullThreadUse(a, threadTile, len, threadNum, axisMap);
-      } else {
-        processPartThreadUse(a, threadTile, len, threadNum, axisMap);
-      }
+    if (shouldMapToThread(blockDimsLeft, threadNum, len, isDynamic)) {
+      mapAxisToThread(a, threadTile, i, num, len, threadNum, isDynamic, handleRedAxis, primes, axisMap, gpuTool);
       blockDimsLeft--;
     }
 
     // 2. tile & map to blockIdx
-    if (gridDimsLeft > 0 && ((blockNum > 1 && len > 1) || (blockNum > 0 && dynFlags[i]))) {
-      if (dynFlags[i]) {
-        processDynamicBlockUse(a, primes, axisMap);
-      } else if (len <= blockNum) {
-        processFullBlockUse(a, len, blockNum, axisMap);
-      } else {
-        processPartBlockUse(a, len, blockNum, axisMap);
-      }
+    if (shouldMapToBlock(gridDimsLeft, blockNum, len, isDynamic)) {
+      mapAxisToBlock(a, len, blockNum, isDynamic, primes, axisMap);
       gridDimsLeft--;
     }
 
     // 3. left length to sequential
     auto seqTile = a->tryGetConfig(0);
-    if (!dynFlags[i]) {
-      seqTile->value = len * threadTile->value;
-    } else {
-      processLeftDynamic(seqTile, threadTile, handleRedAxis, primes, gpuTool);
-    }
+    setAxisSequential(a, seqTile, threadTile, len, isDynamic, handleRedAxis, primes, gpuTool);
     a->setMappings(axisMap);
   }
 }
