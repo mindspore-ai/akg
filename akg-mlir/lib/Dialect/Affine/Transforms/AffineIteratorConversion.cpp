@@ -238,7 +238,7 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
   if (ifOp) {
     ifOp.erase();
   }
-  if (defOp && isa<affine::AffineLoadOp>(defOp) && defOp->use_empty()) {
+  if ((defOp != nullptr) && isa<affine::AffineLoadOp>(defOp) && defOp->use_empty()) {
     defOp->erase();
   }
 }
@@ -263,7 +263,7 @@ void AffineIteratorConversion::removeInitMemoryCopy(func::FuncOp func) {
 void AffineIteratorConversion::convertReduction(Operation *band) {
   OpBuilder b(band);
   Operation *arithOp = findReduceArithOp(band);
-  if (!arithOp) {
+  if (arithOp == nullptr) {
     return;
   }
 
@@ -282,7 +282,7 @@ void AffineIteratorConversion::convertReduction(Operation *band) {
       break;
     }
   }
-  if (!reduceLoopOp) {
+  if (reduceLoopOp == nullptr) {
     return;
   }
 

@@ -79,12 +79,10 @@ int MemRefDependenceGraph::getNodeId(const Operation *op) {
 // Update the op in the graph node.
 // This command is used to delete the current op after it is cloned.
 void MemRefDependenceGraph::updateNodeOp(const Operation *oldOp, Operation *newOp) {
-  for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-    if (it->second.op == oldOp) {
-      Node *node = &it->second;
-      node->op = newOp;
-      return;
-    }
+  auto it = std::find_if(nodes.begin(), nodes.end(),
+                         [oldOp](const auto &idAndNode) { return idAndNode.second.op == oldOp; });
+  if (it != nodes.end()) {
+    it->second.op = newOp;
   }
 }
 
@@ -108,7 +106,9 @@ bool MemRefDependenceGraph::hasEdge(unsigned srcId, unsigned dstId, Value value)
 // produce multiple edges with different view-aliased values. When that happens, prefer the
 // subview-chain memref so downstream consumers see a stable, view-aware classification.
 void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth) {
-  if (hasEdge(srcId, dstId, value)) return;
+  if (hasEdge(srcId, dstId, value)) {
+    return;
+  }
 
   auto findEdge = [](SmallVector<Edge, 2> &edges, unsigned otherId) {
     return std::find_if(edges.begin(), edges.end(), [otherId](const Edge &e) { return e.id == otherId; });
@@ -118,8 +118,12 @@ void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value,
   if (inIt != dstIn.end()) {
     bool newIsSubview = false;
     bool oldIsSubview = false;
-    if (value) (void)affine::getSourceMemRef(value, &newIsSubview);
-    if (inIt->value) (void)affine::getSourceMemRef(inIt->value, &oldIsSubview);
+    if (value) {
+      (void)affine::getSourceMemRef(value, &newIsSubview);
+    }
+    if (inIt->value) {
+      (void)affine::getSourceMemRef(inIt->value, &oldIsSubview);
+    }
     if (newIsSubview && !oldIsSubview) {
       Value oldValue = inIt->value;
       auto &srcOut = outEdges[srcId];
@@ -402,7 +406,7 @@ void MemRefDependenceGraph::addSSAResultEdges() {
     for (Value value : opInst->getResults()) {
       for (Operation *user : value.getUsers()) {
         // Ignore users outside of the block.
-        if (!block->findAncestorOpInBlock(*user) || tempNodes.count(user) == 0) {
+        if ((block->findAncestorOpInBlock(*user) == nullptr) || tempNodes.count(user) == 0) {
           continue;
         }
         addEdge(node.id, tempNodes[user], value);

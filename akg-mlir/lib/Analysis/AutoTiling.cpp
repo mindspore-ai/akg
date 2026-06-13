@@ -78,7 +78,7 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
 
   if (initGraph->graphType == "Reduce") {
     auto funcReductionAxes = CommonUtils::collectReductionAxesEachDim(initGraph->funcOp);
-    initGraph->rootAxis->forEachAxisTopDown([&initGraph, &funcReductionAxes](const AxisPtr a) {
+    initGraph->rootAxis->forEachAxisTopDown([&funcReductionAxes](const AxisPtr a) {
       if (a == nullptr || a->loop == nullptr || a->loop.get() == nullptr) {
         return;
       }
@@ -86,8 +86,8 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
       if (!loopOp) {
         return;
       }
-      for (size_t dim = 0; dim < funcReductionAxes.size(); ++dim) {
-        if (CommonUtils::isReduceAxis(funcReductionAxes[dim], loopOp)) {
+      for (const auto &funcReductionAxe : funcReductionAxes) {
+        if (CommonUtils::isReduceAxis(funcReductionAxe, loopOp)) {
           (void)a->axisType.insert(mlir::autotiling::Axis::AxisLabel::kReduction);
         }
       }
@@ -103,7 +103,8 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   }
   if (hardware == kTargetCuda) {
     return buildGpuModelGraph(initGraph, tilingMgr);
-  } else if (hardware == kTargetCpu) {
+  }
+  if (hardware == kTargetCpu) {
     return buildCpuModelGraph(initGraph, tilingMgr);
   } else if (hardware == kTargetNpu) {
     return buildNpuModelGraph(initGraph, tilingMgr);

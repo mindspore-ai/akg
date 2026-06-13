@@ -42,9 +42,8 @@ static DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
   ShapedType shapedType = cast<ShapedType>(inputType);
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   SmallVector<Attribute> symAttr;
-  for (size_t i = 0; i < typeShapes.size(); i++) {
-    symAttr.emplace_back(StringAttr::get(context, std::to_string(typeShapes[i])));
-  }
+  std::transform(typeShapes.begin(), typeShapes.end(), std::back_inserter(symAttr),
+                 [context](int64_t typeShape) { return StringAttr::get(context, std::to_string(typeShape)); });
 
   SmallVector<NamedAttribute> opSymbol;
   opSymbol.emplace_back(StringAttr::get(context, "input_0"), ArrayAttr::get(context, symAttr));
@@ -65,11 +64,15 @@ struct ConvertBroadcastToOp : public OpRewritePattern<mindspore::BroadcastToOp> 
 
     SmallVector<int64_t> newShape;
     for (auto dim : inputShape) {
-      if (dim == 1) continue;
+      if (dim == 1) {
+        continue;
+      }
       newShape.push_back(dim);
     }
     auto newType = inputType.clone(newShape);
-    if (newType == inputType) return failure();
+    if (newType == inputType) {
+      return failure();
+    }
 
     rewriter.setInsertionPoint(brcOp);
     auto reshapeOp =

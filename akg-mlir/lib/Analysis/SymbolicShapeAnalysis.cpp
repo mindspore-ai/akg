@@ -62,7 +62,7 @@ std::optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolic
   } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
     dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
   }
-  ArrayAttr aAttrs = dAttrs.getAs<ArrayAttr>(getSymbolShapeAttrName());
+  auto aAttrs = dAttrs.getAs<ArrayAttr>(getSymbolShapeAttrName());
   llvm::SmallVector<std::string> symbolicShape;
   (void)std::transform(aAttrs.getValue().begin(), aAttrs.getValue().end(), std::back_inserter(symbolicShape),
                        [](const Attribute &val) { return cast<StringAttr>(val).getValue().str(); });

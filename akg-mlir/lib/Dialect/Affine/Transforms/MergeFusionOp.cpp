@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <utility>
+
 #include "akg/Dialect/Affine/Transforms/MergeFusionOp.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 
@@ -56,7 +58,7 @@ namespace {
 class MergeFusionOpPass : public impl::MergeFusionOpBase<MergeFusionOpPass> {
  public:
   MergeFusionOpPass() {}
-  explicit MergeFusionOpPass(const std::string &target) : target(target) {}
+  explicit MergeFusionOpPass(std::string target) : target(std::move(target)) {}
 
   void runOnOperation() override;
 
@@ -88,14 +90,14 @@ static Operation *getAncestorForOp(Operation &op, Block *block,
                                    SmallVectorImpl<affine::AffineForOp> *betweenLoops = nullptr) {
   auto *currOp = &op;
   // Returns nullptr if the current op doesn't lie in this block.
-  if (!block->findAncestorOpInBlock(op)) {
+  if (block->findAncestorOpInBlock(op) == nullptr) {
     return nullptr;
   }
 
   if (auto affineForOp = dyn_cast<affine::AffineForOp>(op)) {
     betweenLoops->push_back(affineForOp);
   }
-  while (currOp && currOp->getBlock() != block) {
+  while ((currOp != nullptr) && currOp->getBlock() != block) {
     currOp = currOp->getParentOp();
     if (auto affineForOp = dyn_cast<affine::AffineForOp>(currOp)) {
       betweenLoops->push_back(affineForOp);
@@ -126,7 +128,7 @@ static void insertUniqueValue(SmallVectorImpl<affine::AffineForOp> *loopA, Small
 // Get all operators between any two ops and record them in a global variable.
 void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp after) {
   clearFusionOp();
-  if (!beforeBlock->findAncestorOpInBlock(*after.getOperation())) {
+  if (beforeBlock->findAncestorOpInBlock(*after.getOperation()) == nullptr) {
     return;
   }
   beforeBlock->walk([this, &after](Operation *op) {

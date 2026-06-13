@@ -87,7 +87,7 @@ static std::optional<int64_t> getLoadRankFromValue(Value v) {
 
 static Operation *getParentAffineLoop(Operation *op) {
   Operation *current = op->getParentOp();
-  while (current) {
+  while (current != nullptr) {
     if (isa<affine::AffineForOp>(current)) {
       return current;
     }
@@ -128,7 +128,7 @@ bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
   if (op->getNumOperands() != 2 || op->getNumResults() != 1) {
     return false;
   }
-  if (!getParentAffineLoop(op)) {
+  if (getParentAffineLoop(op) == nullptr) {
     return false;
   }
   affine::AffineStoreOp storeOp = getStoreOpFromResult(op);
@@ -151,7 +151,7 @@ bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
 static void collectLoopReductionFlags(Operation *redOp, SmallVector<bool, 8> &redFlags,
                                       SmallVector<bool, 8> &sizeOneFlags) {
   Operation *curOp = redOp;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<affine::AffineForOp>(curOp)) {
       bool isSizeOne = false;
       if (auto forOp = dyn_cast<affine::AffineForOp>(curOp)) {

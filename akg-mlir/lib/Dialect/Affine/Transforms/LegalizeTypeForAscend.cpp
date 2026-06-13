@@ -50,13 +50,15 @@ static Value convertToF32(OpBuilder &builder, Location loc, Value value) {
       APFloat f32Value(bf16Value);
       f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
       return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
-    } else if (auto truncFOp = dyn_cast<arith::TruncFOp>(value.getDefiningOp())) {
+    }
+    if (auto truncFOp = dyn_cast<arith::TruncFOp>(value.getDefiningOp())) {
       if (isa<Float32Type>(truncFOp.getIn().getType())) {
         return truncFOp.getIn();
       }
     }
     return builder.create<arith::ExtFOp>(loc, f32Type, value);
-  } else if (isa<Float64Type>(valueType)) {
+  }
+  if (isa<Float64Type>(valueType)) {
     auto f32Type = builder.getF32Type();
     if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
       FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
@@ -87,7 +89,8 @@ static Value convertWideFPToBF16(OpBuilder &builder, Location loc, Value value) 
       bf16Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
       FloatAttr bf16Attr = FloatAttr::get(bf16Type, bf16Value);
       return builder.create<arith::ConstantOp>(loc, bf16Type, bf16Attr);
-    } else if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
+    }
+    if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
       if (extFOp.getIn().getType().isBF16()) {
         return extFOp.getIn();
       }
@@ -302,8 +305,9 @@ FailureOr<Operation *> legalizeOp(Operation *op, ValueRange operands, const Type
   newOp.addOperands(newOperands);
 
   SmallVector<Type> newResultTypes;
-  if (failed(converter.convertTypes(op->getResultTypes(), newResultTypes)))
+  if (failed(converter.convertTypes(op->getResultTypes(), newResultTypes))) {
     return rewriter.notifyMatchFailure(loc, "couldn't convert return types");
+  }
 
   newOp.addTypes(newResultTypes);
   newOp.addAttributes(op->getAttrs());
@@ -368,7 +372,9 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
       return failure();
     }
     FailureOr<Operation *> legalized = legalizeOp(op, op->getOperands(), typeConverter, rewriter);
-    if (failed(legalized)) return failure();
+    if (failed(legalized)) {
+      return failure();
+    }
 
     rewriter.replaceOp(op, (*legalized));
     return success();
@@ -388,7 +394,9 @@ class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<Legaliz
     TypeConverter typeConverter;
     typeConverter.addConversion([](Type type) -> std::optional<Type> { return type; });
     typeConverter.addConversion([](FloatType type) -> std::optional<Type> {
-      if (isa<BFloat16Type, Float64Type>(type)) return Float32Type::get(type.getContext());
+      if (isa<BFloat16Type, Float64Type>(type)) {
+        return Float32Type::get(type.getContext());
+      }
       return std::nullopt;
     });
 

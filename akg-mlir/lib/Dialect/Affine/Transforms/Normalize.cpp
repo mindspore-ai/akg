@@ -71,7 +71,9 @@ static Value buildInfConst(PatternRewriter &rewriter, Location loc, FloatType fT
 
 static std::optional<llvm::APFloat> getConstantFloat(Value v) {
   if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto fAttr = dyn_cast<FloatAttr>(cst.getValue())) return fAttr.getValue();
+    if (auto fAttr = dyn_cast<FloatAttr>(cst.getValue())) {
+      return fAttr.getValue();
+    }
   }
   return std::nullopt;
 }
@@ -287,7 +289,9 @@ struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
     Value input = op.getOperand();
     auto inTy = getElementTypeOrSelf(input.getType());
     auto fTy = dyn_cast<FloatType>(inTy);
-    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) {
+      return failure();
+    }
 
     Location loc = op.getLoc();
 
@@ -350,7 +354,9 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
     Value input = op.getOperand();
     auto inTy = getElementTypeOrSelf(input.getType());
     auto fTy = dyn_cast<FloatType>(inTy);
-    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) {
+      return failure();
+    }
 
     Location loc = op.getLoc();
     bool needCastBack = fTy.isF16();
@@ -416,7 +422,9 @@ struct NormalizeTanhOp : public OpRewritePattern<math::TanhOp> {
     Value input = op.getOperand();
     auto inTy = getElementTypeOrSelf(input.getType());
     auto fTy = dyn_cast<FloatType>(inTy);
-    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) {
+      return failure();
+    }
 
     Location loc = op.getLoc();
     bool needCastBack = fTy.isF16();
@@ -600,16 +608,22 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
 
   Value buildPowerByMul(PatternRewriter &rewriter, Location loc, Value base, int exponent) const {
     assert(exponent >= 1 && "exponent must be >= 1");
-    if (exponent == 1) return base;
+    if (exponent == 1) {
+      return base;
+    }
     Value result = base;
-    for (int i = 1; i < exponent; ++i) result = rewriter.create<arith::MulFOp>(loc, result, base);
+    for (int i = 1; i < exponent; ++i) {
+      result = rewriter.create<arith::MulFOp>(loc, result, base);
+    }
     return result;
   }
 
   LogicalResult tryNormalizeCstExponent(PatternRewriter &rewriter, Location loc, math::PowFOp op, Value base,
                                         Value exponent) const {
     auto cstOpt = getConstantFloat(exponent);
-    if (!cstOpt.has_value()) return failure();
+    if (!cstOpt.has_value()) {
+      return failure();
+    }
 
     llvm::APFloat val = cstOpt.value();
     auto fTy = cast<FloatType>(base.getType());
@@ -631,7 +645,7 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
     double asRound = std::round(asDouble);
     const int upperLimit = 3;
     if (val.isInteger()) {
-      int64_t iVal = static_cast<int64_t>(asRound);
+      auto iVal = static_cast<int64_t>(asRound);
       if (iVal >= 1 && iVal <= upperLimit) {
         Value res = buildPowerByMul(rewriter, loc, base, static_cast<int>(iVal));
         rewriter.replaceOp(op, res);
@@ -648,9 +662,13 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
     Location loc = op.getLoc();
 
     auto fTy = dyn_cast<FloatType>(base.getType());
-    if (!fTy) return failure();
+    if (!fTy) {
+      return failure();
+    }
 
-    if (succeeded(tryNormalizeCstExponent(rewriter, loc, op, base, exponent))) return success();
+    if (succeeded(tryNormalizeCstExponent(rewriter, loc, op, base, exponent))) {
+      return success();
+    }
 
     Value negCond = buildIsNegCondition(rewriter, loc, base, exponent);
     Value negRes = buildNegativeCompute(rewriter, loc, base, exponent);
@@ -675,7 +693,9 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
 
   LogicalResult matchAndRewrite(math::PowFOp op, PatternRewriter &rewriter) const override {
     auto fTy = dyn_cast<FloatType>(op.getType());
-    if (!fTy) return failure();
+    if (!fTy) {
+      return failure();
+    }
     return normalizePowf(rewriter, op);
   }
 };
@@ -688,7 +708,9 @@ struct NormalizeRSqrtOp : public OpRewritePattern<math::RsqrtOp> {
     Value input = op.getOperand();
     auto inTy = getElementTypeOrSelf(input.getType());
     auto fTy = dyn_cast<FloatType>(inTy);
-    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) {
+      return failure();
+    }
 
     Location loc = op.getLoc();
 

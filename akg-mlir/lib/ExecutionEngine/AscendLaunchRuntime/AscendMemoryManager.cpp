@@ -43,7 +43,9 @@ uint64_t GetDefaultDeviceMemSize() {
   uint64_t by_free = free * 8 / 10;
   uint64_t want = std::min<uint64_t>(by_free, by_total);
   constexpr uint64_t kMinAlloc = 256ULL << 20;
-  if (want < kMinAlloc) want = kMinAlloc;
+  if (want < kMinAlloc) {
+    want = kMinAlloc;
+  }
   want = GetCommonAlignSize(want);
   LOG(INFO) << "HBM total=" << total << " free=" << free << " alloc=" << want;
   return want;

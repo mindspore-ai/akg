@@ -65,17 +65,16 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
 
  private:
   size_t hasFail = 0;
-  bool promoteToPrivateMemory(gpu::GPUFuncOp op, unsigned arg) const {
+  [[nodiscard]] bool promoteToPrivateMemory(gpu::GPUFuncOp op, unsigned arg) const {
     if (arg < op.getNumArguments()) {
       Value value = op.getArgument(arg);
       return addToPrivateMemory(op, value);
-    } else {
-      llvm::errs() << "Exceed limit\n";
-      return false;
     }
+    llvm::errs() << "Exceed limit\n";
+    return false;
   }
 
-  bool addToPrivateMemory(gpu::GPUFuncOp op, Value value) const {
+  [[nodiscard]] bool addToPrivateMemory(gpu::GPUFuncOp op, Value value) const {
     auto type = dyn_cast<MemRefType>(value.getType());
     if (!type || !type.hasStaticShape()) {
       llvm::outs() << "Can only promote static shape memrefs for now.\n";
@@ -92,13 +91,12 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
     if (arg < op.getNumArguments()) {
       Value value = op.getArgument(arg);
       return addToWorkgroupMemory(op, value);
-    } else {
-      llvm::errs() << "Exceed limit\n";
-      return false;
     }
+    llvm::errs() << "Exceed limit\n";
+    return false;
   }
 
-  bool addToWorkgroupMemory(gpu::GPUFuncOp op, Value value) const {
+  [[nodiscard]] bool addToWorkgroupMemory(gpu::GPUFuncOp op, Value value) const {
     auto type = dyn_cast<MemRefType>(value.getType());
     if (!type || !type.hasStaticShape()) {
       llvm::outs() << "Can only promote static shape memrefs for now.\n";
@@ -119,7 +117,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
       for (size_t i = 0; i < operands.size(); i++) {
         auto operand = operands[i];
         if (std::any_of(globalTempBuffer.begin(), globalTempBuffer.end(), [&](auto buf) { return operand == buf; })) {
-          promotedArgIdx.push_back(std::make_pair(i, it.first));
+          promotedArgIdx.emplace_back(i, it.first);
         }
       }
     }
@@ -165,9 +163,9 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
     getOperation()->walk([&](gpu::GPUFuncOp gpuFunc) {
       for (auto [idx, bufLevel] : promotedArgIdx) {
         if (bufLevel <= kSharedCache) {
-          hasFail |= (promoteToWorkgroupMemory(gpuFunc, idx) == false ? 1 : 0);
+          hasFail |= (!promoteToWorkgroupMemory(gpuFunc, idx) ? 1 : 0);
         } else {
-          hasFail |= (promoteToPrivateMemory(gpuFunc, idx) == false ? 1 : 0);
+          hasFail |= (!promoteToPrivateMemory(gpuFunc, idx) ? 1 : 0);
         }
       }
 
@@ -187,9 +185,9 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
         for (auto buf : it.second) {
           auto value = buf.getResult();
           if (cacheLevel == kSharedCache) {
-            hasFail |= (addToWorkgroupMemory(gpuFunc, value) == false ? 1 : 0);
+            hasFail |= (!addToWorkgroupMemory(gpuFunc, value) ? 1 : 0);
           } else if (cacheLevel == kLocalCache) {
-            hasFail |= (addToPrivateMemory(gpuFunc, value) == false ? 1 : 0);
+            hasFail |= (!addToPrivateMemory(gpuFunc, value) ? 1 : 0);
           }
         }
       }

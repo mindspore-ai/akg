@@ -53,24 +53,26 @@ namespace {
 
 struct Interval {
   int64_t lo, hi;
-  bool valid() const { return lo < hi; }
-  bool equals(const Interval &o) const { return lo == o.lo && hi == o.hi; }
-  bool contains(const Interval &o) const { return o.lo >= lo && o.hi <= hi; }
+  [[nodiscard]] bool valid() const { return lo < hi; }
+  [[nodiscard]] bool equals(const Interval &o) const { return lo == o.lo && hi == o.hi; }
+  [[nodiscard]] bool contains(const Interval &o) const { return o.lo >= lo && o.hi <= hi; }
 };
 
 struct AccessDim {
   // sum_i (stride_i * iv[axis_i]) + offset. Empty contribs = pure constant.
   SmallVector<std::pair<int, int64_t>, 2> contribs;
   int64_t offset = 0;
-  bool isConst() const { return contribs.empty(); }
+  [[nodiscard]] bool isConst() const { return contribs.empty(); }
   // Single contributing axis iff the dim is exactly `iv[axis] + offset`; else -1.
-  int affineAxis() const { return (contribs.size() == 1 && contribs[0].second == 1) ? contribs[0].first : -1; }
+  [[nodiscard]] int affineAxis() const {
+    return (contribs.size() == 1 && contribs[0].second == 1) ? contribs[0].first : -1;
+  }
 };
 
 struct PerfectNest {
   SmallVector<affine::AffineForOp, 4> loops;
   SmallVector<int64_t, 4> lo, hi;
-  int axisOf(Value v) const {
+  [[nodiscard]] int axisOf(Value v) const {
     for (size_t i = 0; i < loops.size(); ++i) {
       affine::AffineForOp f = loops[i];
       if (f.getInductionVar() == v) {
@@ -247,7 +249,7 @@ static bool accessTouches(const AccessInfo &a, Value memref, ArrayRef<Interval> 
   }
   for (size_t d = 0; d < a.dims.size(); ++d) {
     Interval ia = intervalFor(a.dims[d], nest);
-    if (!(ia.lo < ref[d].hi && ref[d].lo < ia.hi)) {
+    if (ia.lo >= ref[d].hi || ref[d].lo >= ia.hi) {
       return false;
     }
   }
@@ -606,7 +608,7 @@ static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size
     if (rst.contains(rld)) {
       continue;
     }
-    if (!(rld.lo < rst.hi && rst.lo < rld.hi)) {
+    if (rld.lo >= rst.hi || rst.lo >= rld.hi) {
       return DimRel::Disjoint;
     }
     return DimRel::Partial;
@@ -840,7 +842,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
     }
   }
 
-  bool isWawDeadRegionBlocked(size_t i, size_t j, Value memref, ArrayRef<Interval> dead) const {
+  [[nodiscard]] bool isWawDeadRegionBlocked(size_t i, size_t j, Value memref, ArrayRef<Interval> dead) const {
     for (size_t k = i + 1; k < j; ++k) {
       if (!loops[k].ok) {
         if (loopHasAccessTo(loops[k].root, memref)) {
@@ -1008,8 +1010,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
 
   // Collect stride / offset-mod classes of consumer loads on dim `d` in loops
   // after `i`. Returns nullopt if any consumer disqualifies the split.
-  std::optional<StrideScan> scanConsumerStride(size_t i, const AccessInfo &st, size_t d,
-                                               const PerfectNest &stNest) const {
+  [[nodiscard]] std::optional<StrideScan> scanConsumerStride(size_t i, const AccessInfo &st, size_t d,
+                                                             const PerfectNest &stNest) const {
     StrideScan sc;
     for (size_t j = i + 1; j < loops.size(); ++j) {
       if (!loops[j].ok) {
