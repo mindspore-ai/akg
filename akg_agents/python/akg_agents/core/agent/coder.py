@@ -507,54 +507,23 @@ class Coder(AgentBase):
         }
 
     async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
-        """
-        生成API文档，如果原始API文档过长则使用LLM进行内容压缩
+        """Load API docs prepared by api_recall, falling back to static docs only."""
+        docs_path = str((task_info or {}).get("api_recall_docs_path") or "").strip()
+        if docs_path:
+            try:
+                path = Path(docs_path).expanduser()
+                if path.is_file():
+                    api_recall_docs = path.read_text(encoding="utf-8")
+                    if api_recall_docs.strip():
+                        logger.info("[Coder] Using api_recall docs from %s", path)
+                        return api_recall_docs
+                else:
+                    logger.warning("[Coder] api_recall_docs_path not found: %s", path)
+            except Exception as exc:
+                logger.warning("[Coder] failed to read api_recall docs %s: %s", docs_path, exc)
 
-        Args:
-            sketch: AUL代码作为sketch
-            conductor_suggestion: Conductor建议
-            task_info: 任务信息字典
-
-        Returns:
-            str: 适合的API文档内容
-        """
-        api_docs = await self._ensure_api_docs_loaded()
-
-        if len(api_docs) > 6000:  # 如果api文档过长，使用llm进行content压缩
-            api_parser = ParserFactory.get_api_parser()
-            format_api_instructions = api_parser.get_format_instructions()
-            api_input_data = {
-                **self.base_doc,
-                "api_docs": api_docs,
-                "sketch": sketch,  # AUL代码作为sketch
-                "llm_suggestions": conductor_suggestion,  # Conductor建议
-                "error_log": task_info.get('verifier_error', ''),
-                "format_instructions": format_api_instructions
-            }
-
-            self.api_step_count += 1
-            to_update_api_details = {
-                "agent_name": "api",
-                "hash": task_info.get("task_id", "Api") + "@" + str(self.api_step_count),
-                "task_id": "",
-                "step": self.api_step_count,
-            }
-            self.context.update(to_update_api_details)
-
-            api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator") or "standard")
-            parsed_content = api_parser.parse(api_docs_json)
-            api_docs_suitable = "\n\n".join(
-                f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
-                for name, desc, impl in zip(
-                    parsed_content.api_name,
-                    parsed_content.api_desc,
-                    parsed_content.api_example
-                )
-            )
-        else:
-            api_docs_suitable = api_docs
-
-        return api_docs_suitable
+        self.base_doc["api_docs"] = await self._ensure_api_docs_loaded()
+        return self.base_doc["api_docs"]
 
     def load_doc(self, doc_path: str) -> str:
         """

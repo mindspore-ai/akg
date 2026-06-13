@@ -35,6 +35,7 @@ from akg_agents.core_v2.filesystem import ActionRecord
 from akg_agents.op.utils.triton_ascend_api_docs import (
     resolve_triton_ascend_api_docs,
 )
+from akg_agents.database.api_helper import extract_documented_triton_apis, render_triton_recall
 from akg_agents.utils.hardware_utils import get_hardware_doc
 
 # 导入 skill 系统模块
@@ -620,6 +621,10 @@ class KernelGen(AgentBase):
         exclude_skill_names: Optional[List[str]] = None,
         force_skill_names: Optional[List[str]] = None,
         code_check_errors: str = "",
+        triton_api_recall: Optional[List[Dict[str, Any]]] = None,
+        triton_api_recall_by_source: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        api_database_enabled: bool = False,
+        api_database_status: str = "",
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -707,6 +712,18 @@ class KernelGen(AgentBase):
                 backend=backend,
                 arch=arch,
             )
+            documented_triton_apis = extract_documented_triton_apis(aggregated_api_docs)
+            database_api_docs = ""
+            if api_database_enabled:
+                database_api_docs = render_triton_recall(
+                    {
+                        "triton_api_recall": triton_api_recall or [],
+                        "triton_api_recall_by_source": triton_api_recall_by_source or {},
+                        "documented_triton_apis": documented_triton_apis,
+                    },
+                    verify_runtime=True,
+                    documented_apis=documented_triton_apis,
+                )
             
             # 4. 渲染 User Prompt（verifier_error 只保留尾部关键信息）
             error_for_prompt = verifier_error
@@ -720,6 +737,9 @@ class KernelGen(AgentBase):
                 code_check_errors=code_check_errors,
                 skill_contents=skill_contents,
                 aggregated_api_docs=aggregated_api_docs,
+                database_api_docs=database_api_docs,
+                api_database_enabled=api_database_enabled,
+                api_database_status=api_database_status,
                 op_name=op_name,
                 func_name=func_name,
                 task_desc=task_desc,

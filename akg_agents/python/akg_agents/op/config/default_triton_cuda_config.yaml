@@ -14,6 +14,11 @@ docs_dir:
   coder: "op/resources/docs/triton_cuda_docs"
   sketch: "op/resources/docs/sketch_docs"
 
+# API docs prompt configuration
+api_docs:
+  llm_compress_enabled: false
+  llm_compress_threshold: 24000
+
 # Performance analysis configuration
 profile_settings:
   run_times: 50

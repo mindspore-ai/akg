@@ -78,6 +78,20 @@ class KernelGenState(BaseState, total=False):
     multi_expr_error: Optional[str]
     multi_expr_attempt_counts: Optional[List[int]]
     multi_expr_success: Optional[List[bool]]
+
+    # === Triton API database recall ===
+    api_database_enabled: Optional[bool]
+    api_database_status: Optional[str]
+    api_database_recall_hash: Optional[str]
+    api_database_source_kind: Optional[str]
+    api_database_source_apis: Optional[List[str]]
+    api_database_embed_cache_folder: Optional[str]
+    api_recall_json_path: Optional[str]
+    api_recall_docs_path: Optional[str]
+    api_recall_llm_called: Optional[bool]
+    api_recall_step_delta: Optional[int]
+    triton_api_recall: Optional[List[Dict[str, Any]]]
+    triton_api_recall_by_source: Optional[Dict[str, List[Dict[str, Any]]]]
     
     # === 历史记录（算子专用格式，累积）===
     history_attempts: Annotated[List[Dict[str, Any]], add]
