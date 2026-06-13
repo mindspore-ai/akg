@@ -46,6 +46,7 @@ from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
 from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
 from akg_agents.op.workflows.default_workflow_v2 import DefaultWorkflowV2
 from akg_agents.op.workflows.mathir_coder_workflow import MathIRCoderWorkflow
+from akg_agents.op.workflows.mathir_multi_kernel_gen_workflow import MathIRMultiKernelGenWorkflow
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
@@ -70,6 +71,9 @@ WORKFLOW_REGISTRY = {
     "mathir_coder": MathIRCoderWorkflow,
     "mathir_coder_workflow": MathIRCoderWorkflow,
     "mathIR_coder_workflow": MathIRCoderWorkflow,
+    "mathir_multi_kernel_gen": MathIRMultiKernelGenWorkflow,
+    "mathir_multi_kernel_gen_workflow": MathIRMultiKernelGenWorkflow,
+    "mathIR_multi_kernel_gen_workflow": MathIRMultiKernelGenWorkflow,
 }
 
 
@@ -220,6 +224,25 @@ class LangGraphTask(BaseLangGraphTask):
         if isinstance(raw_value, str):
             return raw_value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(raw_value)
+
+    def _get_int_config(
+        self,
+        key: str,
+        default: int = 0,
+        aliases: Tuple[str, ...] = (),
+    ) -> int:
+        """Read an integer option from top-level config or mathIR_config."""
+        mathir_config = self.config.get("mathIR_config", {})
+        raw_value = default
+        for option_key in (key, *aliases):
+            if option_key in mathir_config:
+                raw_value = mathir_config[option_key]
+            if option_key in self.config:
+                raw_value = self.config[option_key]
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return int(default)
     
     def _init_agents(self) -> dict:
         """初始化算子 Agent（Designer, Coder, Verifier）"""
@@ -389,9 +412,13 @@ class LangGraphTask(BaseLangGraphTask):
             "task_type": self.task_type,
             "bench_type": self.bench_type,
             "workflow_name": self.workflow_name,
-            "multi_kernel_gen": self.config.get("mathIR_config", {}).get("multi_kernel_gen", True),
+            "multi_kernel_gen": self._get_bool_config("multi_kernel_gen", True),
+            "multi_kernel_max_retries": self._get_int_config("multi_kernel_max_retries", 15),
             "verifier_result": False,
             "verifier_error": "",
+            "multi_expr_error": "",
+            "multi_expr_attempt_counts": [],
+            "multi_expr_success": [],
             "history_attempts": [],
             "inspirations": self.inspirations,
             "meta_prompts": self.meta_prompts,
@@ -545,4 +572,3 @@ class LangGraphTask(BaseLangGraphTask):
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
-

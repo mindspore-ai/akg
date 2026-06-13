@@ -58,6 +58,7 @@ class KernelGenState(BaseState, total=False):
     preset_ir_json: Optional[str]
     preset_ir_path: Optional[str]
     multi_kernel_gen: Optional[bool]
+    multi_kernel_max_retries: Optional[int]
     
     # === Coder 输出 ===
     coder_code: Optional[str]
@@ -72,6 +73,11 @@ class KernelGenState(BaseState, total=False):
     
     # === 多 case 验证 ===
     multi_case_error: Optional[str]
+
+    # === MathIR multi-expression 子 kernel 生成 ===
+    multi_expr_error: Optional[str]
+    multi_expr_attempt_counts: Optional[List[int]]
+    multi_expr_success: Optional[List[bool]]
     
     # === 历史记录（算子专用格式，累积）===
     history_attempts: Annotated[List[Dict[str, Any]], add]

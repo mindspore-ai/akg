@@ -37,6 +37,8 @@ mathir_use_preset: False
 mathir_mlir_export: True
 mathir_doc_string: True
 mathir_db_math_query: False
+multi_kernel_gen: True
+multi_kernel_max_retries: 15
 
 
 # Verification configuration
