@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -33,6 +34,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir {
@@ -918,19 +920,14 @@ struct BandTilePlan {
   // `kMultiVecLoopAttr` so the apply phase can sink them together and
   // consume them as a unified vec chain.
   SmallVector<bool, 6> multiVecAxisMask;
-  // When true, the plan computed outer/inner tiles using the
-  // outer = parallel-chunk / inner = vector-chunk scheme. This signals
-  // that the legacy `adjustParallelAxisOuterTile` should be skipped (parallel
-  // selection has already been performed inside the plan).
+  // When true, the plan used multi-dimensional vectorization greedy search;
+  // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
   bool usesMultiVecScheme{false};
 };
 
 int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
 void applyF32LastDimDoubleAlign(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisAlignUnits);
-// Forward-declared helpers consumed by the multi-vec plan path; both are
-// defined further down alongside the legacy `adjustParallelAxisOuterTile`.
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx);
-int64_t getParallelOuterTile(const NpuBandContext &ctx, size_t axisIdx);
 
 static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes,
                                     unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
@@ -1716,25 +1713,68 @@ int64_t chooseBiasedTileSizeForTileCount(int64_t extent, int64_t tileCount) {
   return std::clamp(low + (high - low) * kTileSizeBiasNumerator / kTileSizeBiasDenominator, int64_t{1}, extent);
 }
 
-SmallVector<unsigned, 4> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents, int64_t targetBlocks) {
+static SmallVector<int64_t, 16> collectAlignAwareTileCandidates(int64_t extent, int64_t alignUnit) {
+  SmallVector<int64_t, 16> candidates;
+  extent = std::max<int64_t>(extent, 1);
+  alignUnit = std::max<int64_t>(alignUnit, 1);
+  if (alignUnit == 1) {
+    candidates.push_back(1);
+    for (int64_t tile = 1; tile <= extent; ++tile) {
+      if (extent % tile == 0) {
+        candidates.push_back(tile);
+      }
+    }
+  } else {
+    candidates.push_back(1);
+    for (int64_t tile = alignUnit; tile <= extent; tile += alignUnit) {
+      candidates.push_back(tile);
+    }
+  }
+  llvm::sort(candidates);
+  candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+  return candidates;
+}
+
+SmallVector<unsigned, 4> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents,
+                                                ArrayRef<int64_t> prefixAlignUnits, int64_t targetBlocks) {
   constexpr int64_t kMaxSmallPrefixTileCount = 2;
   SmallVector<unsigned, 4> outerTiles;
   outerTiles.reserve(prefixExtents.size());
   int64_t producedTiles = 1;
   for (size_t i = 0; i < prefixExtents.size(); ++i) {
-    int64_t extent = prefixExtents[i];
+    int64_t extent = std::max<int64_t>(prefixExtents[i], 1);
     if (extent == 1) {
       outerTiles.push_back(1);
       continue;
     }
+    int64_t alignUnit = i < prefixAlignUnits.size() ? std::max<int64_t>(prefixAlignUnits[i], 1) : 1;
     int64_t remaining = ceilDivInt64(targetBlocks, producedTiles);
-    int64_t desired = std::min<int64_t>(extent, remaining);
-    if (i > 0 && extent <= targetBlocks && desired > kMaxSmallPrefixTileCount) {
-      desired = kMaxSmallPrefixTileCount;
+    SmallVector<int64_t, 16> candidates = collectAlignAwareTileCandidates(extent, alignUnit);
+
+    int64_t bestTile = extent;
+    int64_t bestScore = std::numeric_limits<int64_t>::min();
+    for (int64_t tile : candidates) {
+      int64_t blocks = ceilDivInt64(extent, tile);
+      if (i > 0 && extent <= targetBlocks && blocks > kMaxSmallPrefixTileCount) {
+        continue;
+      }
+      int64_t newProduced = multiplyAndCap(producedTiles, blocks);
+      int64_t score = 0;
+      if (newProduced <= targetBlocks) {
+        score = newProduced * 10000 + blocks;
+      } else {
+        score = targetBlocks * 10000 - (newProduced - targetBlocks);
+      }
+      if (newProduced >= remaining) {
+        score += 500;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestTile = tile;
+      }
     }
-    int64_t tile = chooseBiasedTileSizeForTileCount(extent, desired);
-    outerTiles.push_back(saturateToTileValue(tile));
-    producedTiles = multiplyAndCap(producedTiles, ceilDivInt64(extent, tile));
+    outerTiles.push_back(saturateToTileValue(bestTile));
+    producedTiles = multiplyAndCap(producedTiles, ceilDivInt64(extent, bestTile));
   }
   return outerTiles;
 }
@@ -2493,51 +2533,7 @@ SmallVector<bool, 6> collectReductionAxisMask(const NpuBandContext &ctx) {
   return mask;
 }
 
-// Score-based selection that mirrors the candidate selection inside
-// `adjustParallelAxisOuterTile` (best distance to `targetBlocks`). Tile values
-// are *not* mutated here; see `computeOuterTilesParallelBased`.
-std::optional<unsigned> selectParallelAxisDim(const NpuBandContext &ctx) {
-  if (ctx.hasDynamicAxis || ctx.axes.empty()) return std::nullopt;
-  SmallVector<int64_t, 6> axisWorks(ctx.axes.size(), 0);
-  for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    if (!isParallelCandidateAxis(ctx, i)) continue;
-    int64_t tile = std::max<int64_t>(getParallelOuterTile(ctx, i), 1);
-    axisWorks[i] = ceilDivInt64(std::max<int64_t>(ctx.extents[i], 1), tile);
-  }
-  int bestAxis = -1;
-  int64_t bestWork = 0;
-  int64_t bestDistance = LLONG_MAX;
-  for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    if (axisWorks[i] <= 0) continue;
-    int64_t distance =
-      axisWorks[i] > ctx.targetBlocks ? axisWorks[i] - ctx.targetBlocks : ctx.targetBlocks - axisWorks[i];
-    if (distance < bestDistance || (distance == bestDistance && axisWorks[i] > bestWork)) {
-      bestAxis = static_cast<int>(i);
-      bestWork = axisWorks[i];
-      bestDistance = distance;
-    }
-  }
-  if (bestAxis < 0) return std::nullopt;
-  return static_cast<unsigned>(bestAxis);
-}
-
-// Phase-1 of the multi-vec scheme: for the chosen parallel axis use a per-core
-// chunk (`getParallelOuterTile`), every other axis keeps its full extent at the
-// outer level so the block-local chunk size equals the input extent. Inner
-// tiles are filled later in `computeInnerTilesVecGreedy`.
-void computeOuterTilesParallelBased(const NpuBandContext &ctx, std::optional<unsigned> parallelDim,
-                                    BandTilePlan &plan) {
-  plan.outerTiles.assign(ctx.axes.size(), 1);
-  for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    int64_t extent = std::max<int64_t>(ctx.extents[i], 1);
-    int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-    int64_t tile = alignUpInt64(extent, alignUnit);
-    if (parallelDim && *parallelDim == i) tile = std::max<int64_t>(getParallelOuterTile(ctx, i), 1);
-    plan.outerTiles[i] = saturateToTileValue(tile);
-  }
-}
-
-// Phase-2 of the multi-vec scheme: from inner to outer, try to set each axis'
+// Multi-vec scheme: from inner to outer, try to set each axis'
 // inner tile equal to its outer tile (full block-local chunk). On UB pressure
 // we shrink the current axis with `findMaxFittingTile` and stop expanding
 // further outward. Returns a per-axis mask marking which axes should receive
@@ -2697,11 +2693,6 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   // non-reduction axis.
   if (!isInnermostAxisReduceY(ctx)) {
     initWholeBandPlan(ctx, plan);
-    std::optional<unsigned> parallelDim = selectParallelAxisDim(ctx);
-    // Reduction axes must not be picked as the parallel candidate (already
-    // ensured by `isParallelCandidateAxis`), so the chosen dim, if any, lies
-    // in the prefix.
-    computeOuterTilesParallelBased(ctx, parallelDim, plan);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
@@ -2709,12 +2700,6 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  SmallVector<unsigned, 4> prefixOuterTiles =
-    assignPrefixOuterTiles(ArrayRef<int64_t>(ctx.extents).take_front(suffixStart), ctx.targetBlocks);
-  for (size_t i = 0; i < prefixOuterTiles.size(); ++i) {
-    plan.outerTiles[i] = prefixOuterTiles[i];
-    plan.innerTiles[i] = prefixOuterTiles[i];
-  }
 
   size_t innermost = ctx.extents.size() - 1;
   SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
@@ -2771,10 +2756,8 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   if (suffixStart == 0 || suffixStart >= ctx.axes.size() - 1) return false;
 
   initWholeBandPlan(ctx, plan);
-  ArrayRef<int64_t> prefixExtents(ctx.extents);
-  SmallVector<unsigned, 4> prefixOuterTiles =
-    assignPrefixOuterTiles(prefixExtents.take_front(suffixStart), ctx.targetBlocks);
-  fillPrefixSuffixTiles(ctx, prefixOuterTiles, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
+  SmallVector<unsigned, 4> prefixPlaceholder(plan.outerTiles.begin(), plan.outerTiles.begin() + suffixStart);
+  fillPrefixSuffixTiles(ctx, prefixPlaceholder, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
                         plan);
 
   SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
@@ -2797,11 +2780,7 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
     return false;
   }
 
-  // Elementwise has no reductions so no `reduce_y` corner case: always go
-  // through the unified outer = parallel-chunk / inner = vec-chunk path.
   initWholeBandPlan(ctx, plan);
-  std::optional<unsigned> parallelDim = selectParallelAxisDim(ctx);
-  computeOuterTilesParallelBased(ctx, parallelDim, plan);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
   plan.usesMultiVecScheme = true;
   return true;
@@ -2809,7 +2788,6 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
 
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx) {
   if (axisIdx >= ctx.axes.size()) return false;
-  if (ctx.axes.size() > 1 && axisIdx + 1 == ctx.axes.size()) return false;
   const AxisPtr &axis = ctx.axes[axisIdx];
   if (!axis || isReductionAxis(axis) || isDynamicAxis(axis) || !axis->hasConstantBounds() || ctx.extents[axisIdx] <= 1)
     return false;
@@ -2817,61 +2795,84 @@ bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx) {
   return !loopOp || !loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr);
 }
 
-int64_t getParallelOuterTile(const NpuBandContext &ctx, size_t axisIdx) {
-  int64_t extent = std::max<int64_t>(ctx.extents[axisIdx], 1);
-  int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
-  int64_t target = alignUpInt64(std::max<int64_t>(ceilDivInt64(extent, ctx.targetBlocks), 1), alignUnit);
-  // Prefer the smallest tile in (target, 2*target] that divides `extent`, so the outer axis
-  // stays statically tileable on the multi-vec path. Bail when block utilization would drop
-  // below 65% (large-prime extents and similar unfriendly shapes fall back to `target`).
-  if (target < extent && extent % target != 0) {
-    int64_t minBlocks = std::max<int64_t>(ceilDivInt64(ctx.targetBlocks * 65, 100), 1);
-    int64_t upperLimit = std::min<int64_t>(2 * target, extent);
-    for (int64_t t = target + alignUnit; t <= upperLimit; t += alignUnit) {
-      if (extent % t != 0) continue;
-      if (extent / t < minBlocks) break;
-      return t;
+bool isStrictPerfectAxisEdge(const NpuBandContext &ctx, size_t parentIdx) {
+  if (parentIdx + 1 >= ctx.axes.size() || !ctx.axes[parentIdx] || !ctx.axes[parentIdx + 1]) return false;
+  Operation *parentOp = ctx.axes[parentIdx]->getLoopOperation();
+  Operation *childOp = ctx.axes[parentIdx + 1]->getLoopOperation();
+  auto parentLoop = dyn_cast_or_null<scf::ForOp>(parentOp);
+  if (!parentLoop || !childOp) return false;
+
+  bool sawChild = false;
+  for (Operation &op : parentLoop.getBody()->without_terminator()) {
+    if (&op == childOp) {
+      if (sawChild) return false;
+      sawChild = true;
+      continue;
     }
+    return false;
   }
-  return target;
+  return sawChild;
 }
 
-void adjustParallelAxisOuterTile(const NpuBandContext &ctx, BandTilePlan &plan) {
-  if (ctx.hasDynamicAxis || plan.outerTiles.size() < ctx.axes.size() || plan.innerTiles.size() < ctx.axes.size())
-    return;
-  int bestAxis = -1;
-  int64_t bestWork = 0;
-  int64_t bestDistance = LLONG_MAX;
-  SmallVector<int64_t, 6> axisTiles(ctx.axes.size(), 1);
-  SmallVector<int64_t, 6> axisWorks(ctx.axes.size(), 0);
+SmallVector<size_t, 6> collectParallelPrefixAxes(const NpuBandContext &ctx) {
+  SmallVector<size_t, 6> axes;
+  for (size_t i = 0; i < ctx.axes.size(); ++i) {
+    if (!isParallelCandidateAxis(ctx, i)) break;
+    axes.push_back(i);
+    if (i + 1 == ctx.axes.size() || !isStrictPerfectAxisEdge(ctx, i)) break;
+  }
+  return axes;
+}
+
+void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-    if (alignUnit > 1) {
-      plan.outerTiles[i] = saturateToTileValue(alignUpInt64(std::max<int64_t>(plan.outerTiles[i], 1), alignUnit));
-      plan.innerTiles[i] = saturateToTileValue(alignUpInt64(std::max<int64_t>(plan.innerTiles[i], 1), alignUnit));
-    }
-    if (!isParallelCandidateAxis(ctx, i)) continue;
-    axisTiles[i] = getParallelOuterTile(ctx, i);
-    axisWorks[i] = ceilDivInt64(std::max<int64_t>(ctx.extents[i], 1), axisTiles[i]);
+    if (alignUnit <= 1) continue;
+    plan.outerTiles[i] = saturateToTileValue(alignUpInt64(std::max<int64_t>(plan.outerTiles[i], 1), alignUnit));
+    plan.innerTiles[i] = saturateToTileValue(alignUpInt64(std::max<int64_t>(plan.innerTiles[i], 1), alignUnit));
   }
-  for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    if (axisWorks[i] <= 0) continue;
-    int64_t distance =
-      axisWorks[i] > ctx.targetBlocks ? axisWorks[i] - ctx.targetBlocks : ctx.targetBlocks - axisWorks[i];
-    if (distance < bestDistance || (distance == bestDistance && axisWorks[i] > bestWork)) {
-      bestAxis = static_cast<int>(i);
-      bestWork = axisWorks[i];
-      bestDistance = distance;
+}
+
+void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (ctx.hasDynamicAxis || plan.outerTiles.size() < ctx.axes.size() || plan.innerTiles.size() < ctx.axes.size())
+    return;
+  alignPlanTiles(ctx, plan);
+
+  SmallVector<size_t, 6> parallelAxes = collectParallelPrefixAxes(ctx);
+  if (parallelAxes.empty()) return;
+
+  SmallVector<int64_t, 6> parallelExtents;
+  SmallVector<int64_t, 6> parallelAlignUnits;
+  parallelExtents.reserve(parallelAxes.size());
+  parallelAlignUnits.reserve(parallelAxes.size());
+  for (size_t axisIdx : parallelAxes) {
+    parallelExtents.push_back(std::max<int64_t>(ctx.extents[axisIdx], 1));
+    parallelAlignUnits.push_back(axisIdx < ctx.axesAlignUnits.size()
+                                   ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1)
+                                   : 1);
+  }
+  SmallVector<unsigned, 4> outerCaps =
+    assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks);
+
+  for (auto [pos, axisIdx] : llvm::enumerate(parallelAxes)) {
+    int64_t alignUnit =
+      axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+    int64_t outerCap = pos < outerCaps.size() ? std::max<int64_t>(outerCaps[pos], 1) : 1;
+    outerCap = alignUpInt64(outerCap, alignUnit);
+    int64_t innerTile = std::min<int64_t>(std::max<int64_t>(plan.innerTiles[axisIdx], 1), outerCap);
+    innerTile = std::min<int64_t>(alignUpInt64(innerTile, alignUnit), outerCap);
+    plan.innerTiles[axisIdx] = saturateToTileValue(innerTile);
+    plan.outerTiles[axisIdx] = plan.innerTiles[axisIdx];
+  }
+
+  // Greedy multi-vec planning runs before parallel outer caps are applied and may
+  // leave innerTile==1 dispatch axes marked. Drop them so tagMultiVecLoops does not
+  // emit a degenerate vector=1 chain leg alongside the real vectorized axis.
+  for (size_t axisIdx : parallelAxes) {
+    if (axisIdx < plan.multiVecAxisMask.size() && plan.innerTiles[axisIdx] == 1) {
+      plan.multiVecAxisMask[axisIdx] = false;
     }
   }
-  if (bestAxis < 0) return;
-  size_t axisIdx = static_cast<size_t>(bestAxis);
-  int64_t outerTile = axisTiles[axisIdx];
-  int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
-  int64_t innerTile = std::min<int64_t>(std::max<int64_t>(plan.innerTiles[axisIdx], 1), outerTile);
-  innerTile = std::min<int64_t>(alignUpInt64(innerTile, alignUnit), outerTile);
-  plan.outerTiles[axisIdx] = saturateToTileValue(outerTile);
-  plan.innerTiles[axisIdx] = saturateToTileValue(innerTile);
 }
 
 void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan,
@@ -3068,12 +3069,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
                    tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) || tryBuildElementwisePlan(bandCtx, bandPlan);
 
     if (matched) {
-      // The multi-vec scheme already integrates parallel-axis selection /
-      // alignment into the inner-out greedy search; running the legacy
-      // single-axis adjustment again would clobber `outerTiles` / `innerTiles`.
-      if (!bandPlan.usesMultiVecScheme) {
-        adjustParallelAxisOuterTile(bandCtx, bandPlan);
-      }
+      adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
       tagMultiVecLoops(bandAxes, bandPlan);
       continue;
