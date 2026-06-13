@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MathIR + Coder workflow: MathIR -> Coder -> CodeChecker -> Verifier."""
+"""MathIR + Coder workflow: MathIR -> API recall -> Coder -> CodeChecker -> Verifier."""
 
 import logging
 
@@ -34,18 +34,19 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
 
     默认流程（带 CodeChecker）：
 
-        mathIR -> coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> coder
-                              |                                                       ^
-                              +----------------> (未通过) ----------------------------+
+        mathIR -> api_recall -> coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> coder
+                                               |                                                       ^
+                                               +----------------> (未通过) ----------------------------+
                                              (携带错误信息回到 coder)
 
     关闭 CodeChecker 时：
 
-        mathIR -> coder -> verifier -> (成功) -> END
-                              |
-                              +------> (失败) -> conductor -> coder
+        mathIR -> api_recall -> coder -> verifier -> (成功) -> END
+                                               |
+                                               +------> (失败) -> conductor -> coder
 
     MathIR 只在入口执行一次，用于提前生成 expression-level 数学语义；
+    API recall 只基于完整 PyTorch task_desc 执行一次，后续 Coder 共享本地落盘结果；
     后续修复循环由 Coder / Verifier / Conductor 完成。
     """
 
@@ -56,10 +57,11 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
 
 完整流程：
 1. MathIR: 从 PyTorch 代码提取 expression-level 数学语义
-2. Coder: 基于任务描述和可选 MathIR 生成代码
-3. CodeChecker: 静态代码检查（默认开启）
-4. Verifier: 验证正确性和性能
-5. Conductor: 分析失败原因并指导修复
+2. API recall: 基于完整 PyTorch task_desc 召回 Triton API 并持久化到本地 log
+3. Coder: 基于任务描述和可选 MathIR/API recall 生成代码
+4. CodeChecker: 静态代码检查（默认开启）
+5. Verifier: 验证正确性和性能
+6. Conductor: 分析失败原因并指导修复
 """
 
     PARAMETERS_SCHEMA = {
@@ -98,6 +100,11 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
             self.trace,
             self.config,
         )
+        api_recall_node = NodeFactory.create_api_recall_node(
+            self.trace,
+            self.config,
+            self.backend,
+        )
         coder_node = NodeFactory.create_coder_node(
             self.agents["coder"],
             self.trace,
@@ -119,11 +126,13 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
         )
 
         workflow.add_node("mathIR", mathIR_node)
+        workflow.add_node("api_recall", api_recall_node)
         workflow.add_node("coder", coder_node)
         workflow.add_node("verifier", verifier_node)
         workflow.add_node("conductor", conductor_node)
 
-        workflow.add_edge("mathIR", "coder")
+        workflow.add_edge("mathIR", "api_recall")
+        workflow.add_edge("api_recall", "coder")
 
         if enable_code_checker and code_checker:
             code_checker_node = NodeFactory.create_code_checker_node(

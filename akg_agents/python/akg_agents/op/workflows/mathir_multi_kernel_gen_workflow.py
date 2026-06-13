@@ -36,6 +36,14 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
 
         mathIR
           |
+          v
+        api_recall
+          |
+          |   - 使用完整原始 PyTorch task_desc 做一次 PyTorch/ATen -> Triton API recall
+          |   - 写入 api_recall/api_recall_structured.json
+          |   - 写入 api_recall/api_recall_rendered.md
+          |   - 后续普通 coder 和 multi_expr_coder 子任务共享同一份本地 recall 文本
+          |
           +-- multi_kernel_gen=False 或 expression 数量 <= 1
           |       |
           |       v
@@ -99,11 +107,12 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
 
 完整流程：
 1. MathIR: 从 PyTorch 代码提取 expression-level 数学语义
-2. 多 expression 场景: 并行生成/修复子 kernel，串行 verify，全部通过后 combine
-3. 单 expression 或关闭 multi_kernel_gen: 走普通 Coder 生成
-4. CodeChecker: 静态代码检查（默认开启）
-5. Verifier: 验证正确性和性能
-6. Conductor: 仅处理普通/combined 代码检查或最终验证失败；子 kernel 耗尽预算时直接失败
+2. API recall: 基于完整 PyTorch task_desc 召回 Triton API 并持久化到本地 log
+3. 多 expression 场景: 并行生成/修复子 kernel，串行 verify，全部通过后 combine
+4. 单 expression 或关闭 multi_kernel_gen: 走普通 Coder 生成
+5. CodeChecker: 静态代码检查（默认开启）
+6. Verifier: 验证正确性和性能
+7. Conductor: 仅处理普通/combined 代码检查或最终验证失败；子 kernel 耗尽预算时直接失败
 """
 
     PARAMETERS_SCHEMA = {
@@ -142,6 +151,11 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
             self.trace,
             self.config,
         )
+        api_recall_node = NodeFactory.create_api_recall_node(
+            self.trace,
+            self.config,
+            self.backend,
+        )
         coder_node = NodeFactory.create_coder_node(
             self.agents["coder"],
             self.trace,
@@ -174,10 +188,13 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
         )
 
         workflow.add_node("mathIR", mathIR_node)
+        workflow.add_node("api_recall", api_recall_node)
         workflow.add_node("coder", coder_node)
         workflow.add_node("multi_expr_coder", multi_expr_coder_node)
         workflow.add_node("verifier", verifier_node)
         workflow.add_node("conductor", conductor_node)
+
+        workflow.add_edge("mathIR", "api_recall")
 
         async def route_after_mathIR(state: KernelGenState) -> str:
             expressions = NodeFactory._extract_mathir_expressions(state.get("mathIR_code"))
@@ -195,7 +212,7 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
             return "coder"
 
         workflow.add_conditional_edges(
-            "mathIR",
+            "api_recall",
             route_after_mathIR,
             {
                 "multi_expr_coder": "multi_expr_coder",

@@ -19,6 +19,15 @@
 
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.core_v2.langgraph_base.node_tracker import track_node
+from akg_agents.utils.stream_output import stream_output_override
+from akg_agents.database.api_helper import (
+    compose_api_docs_block,
+    extract_documented_triton_apis,
+    filter_api_doc_blocks,
+    maybe_retrieve_and_store_triton_apis,
+    persist_api_recall_artifacts,
+    render_triton_recall,
+)
 import logging
 import asyncio
 import copy
@@ -88,6 +97,46 @@ def format_inspirations(inspirations: list) -> str:
 
 class NodeFactory:
     """算子节点工厂：将算子 Agent 包装成 LangGraph 节点"""
+
+    @staticmethod
+    async def _load_coder_api_docs_for_recall(config: dict, dsl: str, backend: str = "", arch: str = "") -> str:
+        """Load the base API docs that used to be prepared by Coder."""
+        dsl_lower = (dsl or "").lower()
+        if dsl_lower == "triton_ascend":
+            try:
+                from akg_agents.op.utils.triton_ascend_api_docs import resolve_triton_ascend_api_docs
+
+                return await resolve_triton_ascend_api_docs(backend=backend, arch=arch)
+            except Exception as exc:
+                logger.warning("[api_recall] failed to load Triton Ascend API docs: %s", exc)
+                return ""
+
+        try:
+            from akg_agents import get_project_root
+
+            docs_dir = ((config or {}).get("docs_dir") or {}).get("coder", "")
+            candidates = []
+            if docs_dir:
+                candidates.append(os.path.join(get_project_root(), docs_dir, "api", "api.md"))
+            if dsl:
+                candidates.append(
+                    os.path.join(
+                        get_project_root(),
+                        "op",
+                        "resources",
+                        "docs",
+                        f"{dsl}_docs",
+                        "api",
+                        "api.md",
+                    )
+                )
+            for path in candidates:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as handle:
+                        return handle.read()
+        except Exception as exc:
+            logger.warning("[api_recall] failed to load base API docs: %s", exc)
+        return ""
     
     @staticmethod
     def _extract_codegen_status(agent_instance, agent_label: str, task_id: str) -> tuple:
@@ -350,6 +399,157 @@ class NodeFactory:
             return updates
 
         return track_node("mathIR")(mathIR_node)
+
+    @staticmethod
+    def create_api_recall_node(trace_instance, config: dict, backend=None):
+        """Create a node that performs one task-level Triton API database recall."""
+        async def api_recall_node(state: KernelGenState) -> dict:
+            task_id = state.get("task_id", "0")
+            op_name = state.get("op_name", "unknown")
+            logger.info("Task %s, op_name: %s, current_agent: api_recall", task_id, op_name)
+
+            task_info = copy.deepcopy(dict(state))
+            task_info.setdefault("api_database_enabled", False)
+            task_info.setdefault("api_database_status", "disabled")
+            task_info.setdefault("api_database_source_kind", "")
+            task_info.setdefault("api_database_source_apis", [])
+            task_info.setdefault("api_database_embed_cache_folder", "")
+            task_info.setdefault("triton_api_recall", [])
+            task_info.setdefault("triton_api_recall_by_source", {})
+
+            dsl = str(task_info.get("dsl") or "").lower()
+            framework = str(task_info.get("framework") or "").lower()
+            if "triton" not in dsl or framework != "torch":
+                task_info["api_database_enabled"] = False
+                task_info["api_database_status"] = (
+                    f"skipped for dsl={task_info.get('dsl', '')}, "
+                    f"framework={task_info.get('framework', '')}"
+                )
+            else:
+                try:
+                    maybe_retrieve_and_store_triton_apis(
+                        task_info=task_info,
+                        task_desc=state.get("task_desc", ""),
+                        target_backend=backend or state.get("backend", ""),
+                        config=config,
+                    )
+                    if not task_info.get("api_database_enabled"):
+                        task_info.setdefault("api_database_status", "disabled")
+                except Exception as exc:
+                    task_info["api_database_enabled"] = False
+                    task_info["api_database_status"] = f"{type(exc).__name__}: {exc}"
+                    task_info["triton_api_recall"] = []
+                    task_info["triton_api_recall_by_source"] = {}
+                    logger.warning(
+                        "[Task %s] api_recall failed, continue with base API docs: %s",
+                        task_id,
+                        exc,
+                    )
+
+            base_api_docs = await NodeFactory._load_coder_api_docs_for_recall(
+                config,
+                state.get("dsl", ""),
+                backend=state.get("backend", ""),
+                arch=state.get("arch", ""),
+            )
+            filtered_base_api_docs = filter_api_doc_blocks(base_api_docs)
+            documented_triton_apis = extract_documented_triton_apis(filtered_base_api_docs)
+            task_info["documented_triton_apis"] = documented_triton_apis
+            recall_block = render_triton_recall(
+                task_info,
+                verify_runtime=True,
+                documented_apis=documented_triton_apis,
+            )
+            rendered = compose_api_docs_block(
+                filtered_base_api_docs,
+                recall_block,
+            )
+            json_path = ""
+            docs_path = ""
+            try:
+                json_path, docs_path = persist_api_recall_artifacts(
+                    task_info=task_info,
+                    log_dir=(config or {}).get("log_dir", ""),
+                    op_name=op_name,
+                    rendered_text=rendered,
+                )
+                task_info["api_recall_json_path"] = json_path
+                task_info["api_recall_docs_path"] = docs_path
+            except Exception as exc:
+                task_info["api_database_status"] = (
+                    f"{task_info.get('api_database_status', '')}; "
+                    f"persist failed: {type(exc).__name__}: {exc}"
+                ).strip("; ")
+                logger.warning("[Task %s] api_recall artifact persist failed: %s", task_id, exc)
+
+            api_docs_cfg = (config or {}).get("api_docs", {}) or {}
+            llm_compress_enabled = NodeFactory._coerce_bool(
+                api_docs_cfg.get("llm_compress_enabled", False),
+                False,
+            )
+            # api_recall currently performs local retrieval/rendering. If a future
+            # path invokes LLM compression here, set this flag before accounting.
+            api_recall_llm_called = bool(
+                task_info.get("api_recall_llm_called", False)
+                or task_info.get("api_docs_llm_compress_used", False)
+            )
+            api_recall_step_delta = 1 if llm_compress_enabled and api_recall_llm_called else 0
+            api_recall_record = [
+                ("status", task_info.get("api_database_status", "")),
+                ("structured_path", json_path),
+                ("docs_path", docs_path),
+                (
+                    "summary",
+                    json.dumps(
+                        {
+                            "enabled": task_info.get("api_database_enabled", False),
+                            "source_kind": task_info.get("api_database_source_kind", ""),
+                            "source_apis": task_info.get("api_database_source_apis", []),
+                            "embed_cache_folder": task_info.get(
+                                "api_database_embed_cache_folder",
+                                "",
+                            ),
+                            "recall_sources": list(
+                                (task_info.get("triton_api_recall_by_source") or {}).keys()
+                            ),
+                            "recall_flat_count": len(task_info.get("triton_api_recall") or []),
+                            "rendered_docs_len": len(rendered or ""),
+                            "llm_compress_enabled": llm_compress_enabled,
+                            "llm_called": api_recall_llm_called,
+                            "step_delta": api_recall_step_delta,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                ),
+            ]
+            if api_recall_step_delta:
+                trace_instance.log_record("api_recall", api_recall_record)
+            else:
+                trace_instance.write_record("api_recall", api_recall_record)
+
+            return {
+                "api_database_enabled": task_info.get("api_database_enabled", False),
+                "api_database_status": task_info.get("api_database_status", ""),
+                "api_database_recall_hash": task_info.get("api_database_recall_hash", ""),
+                "api_database_source_kind": task_info.get("api_database_source_kind", ""),
+                "api_database_source_apis": task_info.get("api_database_source_apis", []),
+                "api_database_embed_cache_folder": task_info.get(
+                    "api_database_embed_cache_folder",
+                    "",
+                ),
+                "api_recall_json_path": json_path,
+                "api_recall_docs_path": docs_path,
+                "triton_api_recall": task_info.get("triton_api_recall", []),
+                "triton_api_recall_by_source": task_info.get("triton_api_recall_by_source", {}),
+                "api_recall_llm_called": api_recall_llm_called,
+                "api_recall_step_delta": api_recall_step_delta,
+                "iteration": state.get("iteration", 0) + api_recall_step_delta,
+                "step_count": state.get("step_count", 0) + api_recall_step_delta,
+                "agent_history": ["api_recall"],
+            }
+
+        return track_node("api_recall")(api_recall_node)
 
     @staticmethod
     def create_coder_node(coder_instance, trace_instance):
@@ -992,6 +1192,10 @@ class NodeFactory:
                     designer_code=designer_code,
                     inspirations=inspirations_text,
                     code_check_errors=code_check_errors,
+                    triton_api_recall=state.get('triton_api_recall', []),
+                    triton_api_recall_by_source=state.get('triton_api_recall_by_source', {}),
+                    api_database_enabled=state.get('api_database_enabled', False),
+                    api_database_status=state.get('api_database_status', ''),
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")

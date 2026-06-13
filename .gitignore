@@ -73,4 +73,11 @@ mindspore/default_config.py
 #azy
 .claude/
 azy/
-akg_agents/python/akg_agents/op/resources/mathIR
+
+logs/
+akg_agents/python/akg_agents/op/resources/mathIR/
+akg_agents/python/akg_agents/database/api/embed_model_cache/
+akg_agents/rag_models
+akg_agents/rag_models/
+akg_agents/reproduce/buaa-tdd/rag_models.tar.gz
+akg_agents/settings.json

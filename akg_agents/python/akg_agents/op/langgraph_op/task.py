@@ -33,6 +33,7 @@ from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.op.utils.config_utils import check_task_config, check_task_type
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.core_v2.config.settings import get_akg_env_var
+from akg_agents.database.api_helper import maybe_retrieve_and_store_triton_apis
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +425,31 @@ class LangGraphTask(BaseLangGraphTask):
             "meta_prompts": self.meta_prompts,
             "handwrite_suggestions": self.handwrite_suggestions,
             "user_requirements": self.user_requirements,
+            "api_database_enabled": False,
+            "api_database_status": "disabled",
+            "api_database_recall_hash": "",
+            "api_database_source_kind": "",
+            "api_database_source_apis": [],
+            "api_database_embed_cache_folder": "",
+            "api_recall_json_path": "",
+            "api_recall_docs_path": "",
+            "triton_api_recall": [],
+            "triton_api_recall_by_source": {},
         }
+
+        is_mathir_workflow = "mathir" in str(self.workflow_name or "").lower()
+        if not is_mathir_workflow and "triton" in self.dsl and self.framework == "torch":
+            try:
+                maybe_retrieve_and_store_triton_apis(
+                    task_info=state,
+                    task_desc=self.task_desc,
+                    target_backend=self.backend,
+                    config=self.config,
+                )
+            except Exception as exc:
+                state["api_database_enabled"] = False
+                state["api_database_status"] = f"{type(exc).__name__}: {exc}"
+                logger.warning("[api_database] retrieval failed, continue without API database: %s", exc)
 
         cache_mode = str(self.config.get("cache_mode") or "off").strip().lower()
         if cache_mode not in {"off", "record", "replay"}:
