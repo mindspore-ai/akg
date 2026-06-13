@@ -6,7 +6,6 @@
 
 ### 块大小选择策略
 - **基础**: 2的幂（256, 512, 1024）
-- **Ascend后端**: 可考虑16的倍数
 - **调优**: 平衡并行度与资源占用，避免过大或过小
 
 ### 内存访问优化
@@ -46,21 +45,6 @@ exp_data = tl.exp(stable_data)
 ### tl.constexpr 正确用法
 - **仅在内核参数中使用**: `BLOCK_SIZE: tl.constexpr`
 - **不可在host侧使用**: 启动函数中不可用tl.constexpr
-
-### Ascend 后端避免使用 tl.where 计算内存偏移
-Ascend 后端对`tl.where`生成的复杂指针运算支持不完全。复杂条件判断可以采用if-else静态分支处理，而非在内存访问时动态计算。
-
-**推荐示例**
-```python
-if input_shape_0 == 1:
-  input_offsets = input_offsets_n
-  case1()
-elif input_shape_1 == 1:
-  input_offsets = input_offsets_m * input_shape_1
-  case2()
-else:
-  case3()
-```
 
 ## 4. 调试与排查清单
 
