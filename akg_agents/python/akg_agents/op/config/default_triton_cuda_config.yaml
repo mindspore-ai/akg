@@ -28,6 +28,11 @@ profile_settings:
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
 # CodeChecker non-blocking Triton diagnostics
+code_checker:
+  triton_checkers:
+    - api_signature
+    - high_confidence_semantics
+
 code_diagnostic_checker:
   enabled: true
   only_errors: true
