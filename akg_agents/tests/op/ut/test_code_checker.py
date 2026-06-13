@@ -715,6 +715,31 @@ class ModelNew(torch.nn.Module):
 '''
 
 
+def _triton_mixed_scalar_slice_code() -> str:
+    return '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def slice_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    tile = tl.load(x_ptr + offsets[:, None] * BLOCK_SIZE + offsets[None, :])
+    row = tile[0, :]
+    tl.store(y_ptr + offsets, row)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        y = torch.empty_like(x)
+        grid = lambda meta: (1,)
+        slice_kernel[grid](x, y, BLOCK_SIZE=1024)
+        return y
+'''
+
+
 @pytest.mark.level0
 @pytest.mark.asyncio
 async def test_triton_jit_bad_kwargs_are_non_blocking_diagnostics(checker):
@@ -812,6 +837,36 @@ async def test_triton_checker_pipeline_can_disable_or_select_diagnostics():
     assert any(
         item["rule_id"] == "TRITON_API_BAD_KWARG"
         for item in selected.last_diagnostic_errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_ascend_semantics_checker_is_not_registered_for_cuda_all():
+    """CUDA all 只包含原有 Triton diagnostics，不包含 Ascend-only checker。"""
+    checker = CodeChecker(backend="cuda", dsl="triton_cuda")
+    passed, error_message, errors = await checker.check(_triton_mixed_scalar_slice_code())
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert not any(
+        item["rule_id"] == "TRITON_ASCEND_MIXED_SCALAR_SLICE_INDEX"
+        for item in checker.last_diagnostic_errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_ascend_semantics_checker_is_registered_for_ascend_all():
+    """Ascend all 会额外启用 Ascend-only lowering diagnostics。"""
+    checker = CodeChecker(backend="ascend", dsl="triton_ascend")
+    passed, error_message, errors = await checker.check(_triton_mixed_scalar_slice_code())
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert any(
+        item["rule_id"] == "TRITON_ASCEND_MIXED_SCALAR_SLICE_INDEX"
+        for item in checker.last_diagnostic_errors
     )
 
 

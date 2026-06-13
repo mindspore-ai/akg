@@ -22,6 +22,10 @@ from akg_agents.op.utils.code_checker.triton_checkers.high_confidence_semantics_
     CHECKER_NAME as HIGH_CONFIDENCE_SEMANTICS_CHECKER,
     TritonHighConfidenceSemanticsChecker,
 )
+from akg_agents.op.utils.code_checker.triton_checkers.triton_ascend_semantics_checker import (
+    CHECKER_NAME as ASCEND_SEMANTICS_CHECKER,
+    TritonAscendSemanticsChecker,
+)
 from akg_agents.op.utils.code_checker.registry import CheckerSpec
 from akg_agents.op.utils.code_checker.triton_checkers.runner import (
     TritonCheckerRunner,
@@ -31,9 +35,11 @@ from akg_agents.op.utils.code_checker.triton_checkers.runner import (
 )
 
 __all__ = [
+    "ASCEND_SEMANTICS_CHECKER",
     "API_SIGNATURE_CHECKER",
     "HIGH_CONFIDENCE_SEMANTICS_CHECKER",
     "TritonApiSignatureChecker",
+    "TritonAscendSemanticsChecker",
     "TritonCheckerRunner",
     "TritonHighConfidenceSemanticsChecker",
     "default_triton_checkers",
@@ -54,7 +60,7 @@ def default_triton_checkers():
 
 def register_triton_checkers(registry, *, backend: str, dsl: str, config: dict | None) -> None:
     """Register non-blocking Triton diagnostics in their default order."""
-    del backend, dsl, config
+    del config
     registry.register(
         CheckerSpec(
             name=TritonApiSignatureChecker.name,
@@ -69,3 +75,15 @@ def register_triton_checkers(registry, *, backend: str, dsl: str, config: dict |
             factory=TritonHighConfidenceSemanticsChecker,
         )
     )
+    if _is_ascend_triton(backend, dsl):
+        registry.register(
+            CheckerSpec(
+                name=TritonAscendSemanticsChecker.name,
+                group="triton",
+                factory=TritonAscendSemanticsChecker,
+            )
+        )
+
+
+def _is_ascend_triton(backend: str, dsl: str) -> bool:
+    return (backend or "").lower() == "ascend" or (dsl or "").lower() == "triton_ascend"
