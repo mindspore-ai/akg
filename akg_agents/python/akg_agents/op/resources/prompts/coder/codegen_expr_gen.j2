@@ -1,0 +1,99 @@
+You are generating one self-contained {{ dsl }} sub-kernel test script for a MathIR expression.
+
+Return pure Python code only. Do not return JSON, Markdown fences, or explanations.
+
+The script will be saved as `verify_{{ op_name }}.py` and executed directly by the verifier worker.
+It must exit with status 0 only when its own sub-expression self-test passes, and it must print exactly:
+`Kernel syntax check PASSED.`
+
+## Target
+- op_name: {{ op_name }}
+- framework: {{ framework }}
+- backend: {{ backend }}{% if arch_name %}({{ arch_name }}){% endif %}
+- target_device: {{ target_device }}
+
+## Original Framework Code
+Use this code to infer input shapes, parameter initialization, dtype/device expectations, and the reference semantics for the current expression.
+```python
+{{ task_desc }}
+```
+
+{% if dsl_basic_docs %}
+## {{ dsl }} Guide
+{{ dsl_basic_docs }}
+{% endif %}
+
+{% if hardware_docs %}
+## Hardware Notes
+{{ hardware_docs }}
+{% endif %}
+
+{% if expert_suggestion %}
+## Expert Suggestions
+{{ expert_suggestion }}
+{% endif %}
+
+{% if mathir_lowering_docs %}
+## MathIR Lowering Guide
+{{ mathir_lowering_docs }}
+{% endif %}
+
+{% if api_docs_suitable %}
+## API Docs
+{{ api_docs_suitable }}
+{% endif %}
+
+{% if dsl_examples %}
+## Reference Examples
+{{ dsl_examples }}
+{% endif %}
+
+## Current Expression ({{ expr_index + 1 }}/{{ total_expressions }})
+- name: {{ expression_name }}
+{% if consumes %}- consumes: {% for c in consumes %}{{ c.name }}({{ c.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if produces %}- produces: {% for p in produces %}{{ p.name }}({{ p.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if next_expressions %}- next expressions: {{ next_expressions | join(", ") }}{% endif %}
+
+Only implement and test the declared output of this expression. Do not implement consumers in `next_expressions` unless the formula explicitly includes them.
+
+### Formula
+{{ formula }}
+
+{% if boundary_treatment %}
+### Boundary Treatment
+{{ boundary_treatment }}
+{% endif %}
+
+{% if axis_mapping and (axis_mapping.parallel or axis_mapping.reduction) %}
+### Axis Mapping
+{% for axis in axis_mapping.parallel %}
+- parallel axis `{{ axis.symbol }}`: range={{ axis.range }}, binding={{ axis.binding }}{% if axis.value is defined and axis.value not in (none, "") %}, value={{ axis.value }}{% endif %}
+{% endfor %}
+{% for axis in axis_mapping.reduction %}
+- reduction axis `{{ axis.symbol }}`: range={{ axis.range }}, binding={{ axis.binding }}{% if axis.value is defined and axis.value not in (none, "") %}, value={{ axis.value }}{% endif %}{% if axis.reduction_type %}, reduction_type={{ axis.reduction_type }}{% endif %}{% if axis.accumulator_precision %}, accumulator_precision={{ axis.accumulator_precision }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if symbol_binding %}
+### Symbol Binding
+{% for symbol, binding in symbol_binding.items() %}
+- {{ symbol }} -> {{ binding.code_binding }} ({{ binding.binding_kind }}){% if binding.layout %}, layout={{ binding.layout }}{% endif %}{% if binding.stride %}, stride={{ binding.stride }}{% endif %}{% if binding.address_mapping %}, address_mapping={{ binding.address_mapping }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if TDD_requirement %}
+### Local TDD Requirement
+{% if not is_cuda_backend %}
+If this text mentions CUDA-only items such as cuBLAS, cuDNN, TF32, A100, or input_precision, keep only the generic meaning about reference comparison, shapes, indexing, reductions, boundary handling, and tolerances. The script must run on the current {{ backend }} / {{ dsl }} target.
+{% endif %}
+{{ TDD_requirement }}
+{% endif %}
+
+## Script Requirements
+1. Include all imports and the complete kernel/wrapper code in one file.
+2. Include `if __name__ == "__main__":`.
+3. Use `torch.manual_seed(0)` when using PyTorch random inputs.
+4. Create random inputs on CPU first, then move tensors to `device = {{ target_device_expr }}`.
+5. If a PyTorch reference module is used with device tensors, move the module and assigned parameters to the same device before calling it.
+6. Use assertions for numerical checks. If a diff is too large, the assertion message must contain `failed: diff is too large`.
+7. Print `Kernel syntax check PASSED.` only after all checks pass.

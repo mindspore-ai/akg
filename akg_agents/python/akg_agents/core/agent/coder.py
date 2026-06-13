@@ -125,6 +125,7 @@ class Coder(AgentBase):
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
             "expert_suggestion_debug": self.load_doc("suggestion_docsdebug.md"),
+            "mathir_lowering_docs": self.load_doc("mathir_lowering_docs.md"),
             "backend": self.backend,
 
             # 可选参数
@@ -576,7 +577,13 @@ class Coder(AgentBase):
                 "enable_hint_mode": enable_hint_mode,  # Hint模式
                 "has_param_space": has_param_space,  # 是否有参数空间
                 "user_requirements": task_info.get('user_requirements', ''),  # 用户额外需求（来自 ReAct）
+                "mathIR": False,
+                "mathIR_code": {},
             }
+
+            if task_info.get("mathIR_code"):
+                input_data["mathIR"] = True
+                input_data["mathIR_code"] = task_info["mathIR_code"]
 
             # 执行LLM生成前更新context，确保正确性
             self.codegen_step_count += 1

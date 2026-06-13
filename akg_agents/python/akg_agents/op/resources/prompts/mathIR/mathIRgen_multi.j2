@@ -1,0 +1,333 @@
+你的任务：
+1. 你是算子公式推导器。你会收到：
+   一段可运行的 PyTorch 代码，其中通常包含：
+   - 一个 nn.Module 子类 `Model`
+   - 一个 `get_inputs()` 返回输入张量列表/元组/单个张量
+   - 可选 `get_init_inputs()` 返回 Model 初始化参数列表
+{% if mlir %}
+   MLIR 文本（scf.for版本，可能经过 canonicalize/cse/bufferize/loop lowering）
+{% endif %}
+
+你的输出目标不是复述源码，也不是做逐行翻译，而是：
+1. 提取算子的高层语义阶段并适当切分
+2. 用数学公式表达每个阶段并建立公式符号与 PyTorch 代码对象之间的绑定关系
+3. 输出统一的 JSON schema，结果填入 json 结果的 "code" 字段中。其格式必须严格遵循其下定义的"输出格式"（不要输出额外解释、不要输出代码块，除非规范要求你输出伪代码）。
+
+========================
+提取语义并切分目标
+========================
+你必须按以下原则切分我给你提供的 PyTorch 代码语义，用于 json 结果的 expressions 内容的初步参考。
+{% if multi_kernel_gen %}
+- 原则 1：不一定按照代码行或按 PyTorch API 一对一切分
+    - 如果它们在语义和实现上形成自然融合阶段，可以合并成一个 fused expression。比如 conv -> bn -> relu 可以融合成 1 个 expression。常见可融合模式：
+        - gemm + elementwise
+        - conv / conv_transpose + bias
+        - pooling + activation
+        - reduction + epilogue elementwise
+        - matmul + bias + activation
+        - normalization 相关内部连续阶段
+        - mean/sum + tanh/sigmoid/relu 等后续逐元素操作
+
+- 原则 2：优先切分成"独立数学语义 + 独立验证价值 + 独立优化价值"的阶段
+    - 一个子阶段若满足以下至少两项，就值得成为独立 expression：
+        - 具有清晰数学含义
+        - 可以局部对拍验证
+        - 在 kernel/codegen 中可能作为自然优化/融合单元
+        - 有独立边界处理逻辑
+
+- 原则 3：常见不宜过细拆分的内容
+    - 以下内容通常不应单独拆成 expression：
+        - 单个 reshape / view / contiguous
+        - 单个 cast（若只是辅助）
+        - 单个加减乘除
+        - 纯临时变量赋值
+        - 只属于另一个 expression 内部实现细节的步骤
+
+- 原则 4：控制流处理
+    - 不要按 Python 缩进机械切 scope
+    - 外层 for 循环若只是遍历 batch/token/head 等，应优先视为 iteration 语义，而不是单独 expression
+    - 边界/空路径/裁剪/skip 等优先写入 boundary_treatment
+    - 只有真正独立的分支语义，才考虑拆为单独 expression
+
+{% else %}
+- 原则 1：将整个算子提取为一个 code.expressions 元素，**必须只输出 1 个 expression**
+    - 无论 PyTorch 代码中包含多少个 nn.Module 调用 / torch.* 调用 / 多少个串联或并联的中间阶段，全部必须**端到端**合并到同一个 expression 内
+    - 该 expression 的 `next_expressions` 字段**必须为 `[]`**
+    - 该 expression 的 `symbol_binding` 中**不允许**出现 `binding_kind: expression_output`；所有 binding_kind 只能从以下集合中取：`input_tensor` / `parameter_tensor` / `model_output` / `scalar_parameter` / `scalar_constant`
+    - Model.forward 的最终返回值在 `produces` 中只能有 1 项（或对应模型的 N 个 return tensors），其 `binding_kind` 必须为 `model_output`，`code_binding` 必须为 `forward.return`（若为多返回，可使用 `forward.return[0]` / `forward.return[1]` 等形式）
+
+- 原则 2：单个 formula 必须能够端到端表达整个 forward 的计算
+    - formula 必须以原始输入张量（forward 入参，例如 `forward.x` / `forward.predictions` / `forward.anchor` 等）、模型参数张量（`self.conv.weight` / `self.bn.running_mean` 等）以及标量超参（kernel_size / stride / padding / hardtanh_min / margin / eps 等）为起点，**一步推导到最终输出**
+    - 允许在 formula 中定义中间张量（例如 `Y_conv`, `Y_pool`, `Y_act`, `M` 等）作为推导桥梁；这些中间张量**只是数学推导中的局部命名**，**不要**把它们写进 `consumes` / `produces`，也**不要**给它们建立 `binding_kind = expression_output` 的 symbol_binding 条目
+    - 中间张量的命名只需要在 formula 内自洽，便于读者从输入张量一路读到输出张量
+
+- 原则 3：consumes / produces 仅描述"模型边界"
+    - `consumes` 只允许包含：forward 入参张量（`input_tensor`）+ 模型参数张量（`parameter_tensor`）+ 公式中显式出现的标量超参/常量（`scalar_parameter` / `scalar_constant`，按需）
+    - `produces` 只允许包含：Model.forward 的最终返回张量（`model_output`），通常只有 1 项；如模型 forward 多返回值，可顺序列出多项
+    - **绝对不要**把 PyTorch 中间产生的张量（例如 `self.conv_transpose(x)` 的输出、`self.maxpool(...)` 的输出、`torch.mean(...)` 的中间结果等）写进 `consumes` / `produces`
+
+- 原则 4：axis_mapping 必须覆盖端到端公式中出现的所有轴
+    - `parallel`：列出最终输出张量的所有独立枚举轴（batch / channel / spatial 等），即"对每个 parallel 索引组合都能并行得到一个最终输出元素"
+    - `reduction`：列出 formula 内部所有被规约的轴（卷积的 c_i / k_h / k_w，pooling 的 delta_h / delta_w，spatial mean 的 h / w，loss 的 batch i 等），并按各自的规约语义指定 `reduction_type`
+    - 同一 expression 内允许出现多种不同 `reduction_type`（例如先 `sum` 再 `mean`、先 `max` 再 `sum` 等），需要逐条列出；它们的 `symbol` 两两不重复
+    - 若整体输出是 0-d 标量张量（例如 reduction='mean' 的 loss），则 `parallel` 为 `[]`，所有轴进入 `reduction`
+    - `parallel.symbol ∪ reduction.symbol` **必须恰好等于** formula 中出现的所有下标符号，不多不少
+
+- 原则 5：boundary_treatment 必须合并表达端到端公式中的全部边界条件
+    - 把卷积 / 转置卷积 / pooling 的越界与整除条件、reduction 的空区域处理、gather/scatter 的索引合法性、`/` 与 `log` 的除零保护、Hardtanh / clamp 的截断、loss 的 reduction 模式等**全部**合并写入同一个 `boundary_treatment` 字段
+    - 多阶段串联时，按 forward 中的执行顺序逐段叙述各自的边界规则
+
+- 原则 6：name 必须能反映"整段算子"的语义
+    - 不要起成单一 op 的名字（如 `conv_transpose2d`），应当体现端到端融合性质，例如：
+        - `conv_transpose2d_maxpool_hardtanh_mean_tanh_fused`
+        - `linear_bn_relu_dropout_fused_eval`
+        - `triplet_margin_loss_mean`
+    - 仍然使用 snake_case
+{% endif %}
+
+========================
+数学公式表达推导与代码绑定
+========================
+1) 主要根据我提供的标准公式和 PyTorch 代码推导出最终的算子公式。{% if mlir %}如果同时提供了 MLIR 编译结果，也应结合 MLIR 分析。{% endif %}将算子公式的结果填入返回结果 json 的 "code" 字段中。
+   - 语义对齐契约
+      - expressions 的最终结果**必须与 PyTorch eager 执行结果数值一致**（以 PyTorch 代码为 ground truth）。
+      - 不要把非线性激活过度化简。例如 HardSwish(x)=x*clamp(x+3,0,6)/6，后接 ReLU 后仅在 x>=3 时等于 x；0<x<3 时仍是 x*(x+3)/6。
+      - 对 nn.ConvTranspose1d/2d/3d，必须使用 PyTorch eager 语义：输出位置反推输入位置 `num = out_pos + padding - kernel_offset * dilation`，仅当 `num % stride == 0` 且 `in_pos = num / stride` 落在输入范围内时该项有效；公式直接使用原始权重 `weight[c_i, c_o_per_group, kernel_offset...]`。不要把 ConvTranspose 写成普通 Conv 的 `out_pos * stride - padding + kernel_offset`，也不要把原始权重写成 `K-1-k` 空间翻转，除非 PyTorch 源码显式调用了 `torch.flip` / 预翻转权重。`output_padding` 只影响输出 shape，不改变反推输入坐标公式。
+{% if mlir %}
+      - MLIR 仅用于帮助你识别：形状、stride/布局、边界处理、groups/广播/重排等。任何在 MLIR 中出现的 flip/transpose/pad/reshape 等，都默认视为"实现细节（lowering artifact）"，除非 PyTorch 代码本身显式做了同样的变换（例如 torch.flip / permute / pad / view / transpose 等）。
+{% endif %}
+      - 标准公式用于补充 PyTorch 代码中没有明确写出的细节（例如卷积的求和符号、边界处理方式、stride/pad/dilation/groups 等参数的具体含义）。{% if mlir %}你必须结合 MLIR 编译结果分析出当前 PyTorch 模型提供的原始输入和权重的变换公式，而不仅仅参考我提供的标准公式。{% endif %}
+
+2) 生成公式适用性要求：
+   - 你只需要保证你生成的公式只适用于用户提供的 PyTorch 代码。具体来说，在以下默认前提上编写公式，且公式越简单越好：
+      - 你可以认为只需要编译在 get_init_inputs() 中提供的初始化参数下的模型，并且只需要考虑 get_inputs() 中提供的输入张量形状。
+      - 如果没有显示写出，可以默认 get_inputs() 生成的张量是 contiguous（或必须以 x.stride() 表示）
+      - dtype 按代码默认（torch.randn -> float32）。
+   - 算子默认在 Model.eval() 模式下运行，推导公式也仅符合 eval 模式下算子表述
+
+3) 为你提供一些标准公式，帮助你生成当前 PyTorch 算子的计算公式。{% if mlir %}你必须结合 MLIR 编译结果重新分析当前 PyTorch 模型提供的原始输入和权重的变换公式，而不仅仅参考我提供的如下公式。{% endif %}
+{{ standard_formula }}
+
+{% if mlir %}
+4) MLIR 结果抵抗优化诱导：我给出的 MLIR 代码可能存在多种优化痕迹（如 loop unrolling, bufferize, canonicalize 等等），你必须正确识别出哪些是"高层语义"，哪些是"实现细节"，并且只把"高层语义"还原进最终公式中。具体要求如下：
+   - 恢复高层语义：输出公式必须以"函数参数（%arg*）对应的原始输入张量/权重张量/常量参数"为基准，而不是以中间 alloc/memref 的坐标系为基准。
+   - 分离两层语义：
+      第一层：把 MLIR 中出现的中间张量（pad/flip/transpose/reshape/broadcast 等）用定义式命名清楚（例如 X_pad, W_flip）。
+      第二层：最终输出 Y = ... 公式必须只依赖原始输入/权重/显式参数（stride/pad/dilation 等），并且只在必要时通过你定义的 X_pad/W_flip 进行代入消去。
+{% endif %}
+
+========================
+返回结果中每个 JSON 字段的解释与注意点
+========================
+
+## 1. name
+含义：当前 expression 的唯一名称
+格式：str
+要求：
+- 用简洁、可读、语义明确的英文 snake_case
+- 推荐体现融合关系，如：
+  - conv_transpose2d_fused
+  - maxpool2d_hardtanh_fused
+  - spatial_mean_tanh_fused
+
+## 2. next_expressions
+含义：当前 expression 的输出会被哪一个或哪些 expression 作为输入
+格式：list[str]
+要求：
+- 使用 expression 的 name 作为值
+- 如果有多个后继，可以用数组
+- 如果是最后一个节点，写空数组 []
+注意：
+- 这是 expression 级 DAG，不是值级 DAG
+
+## 3. consumes 和 produces
+含义：consumes 表示当前 expression 在语义上消耗的输入值；produces 表示当前 expression 对外产出的值
+格式：list[dict]
+要求：
+- consumes 只列真正参与本 expression 计算的输入值；produces 只列对下游或最终输出有意义的值
+- 每个元素至少包含 `name` 和 `kind`。可选 kind 取值：
+  - `tensor`：张量类输入/输出（包括 0-d 标量张量，例如 reduction='mean' 的 loss 输出仍记为 tensor）
+  - `scalar`：纯标量超参/常量（例如 nn.MaxPool 的 kernel_size/stride/padding/dilation，nn.Hardtanh 的 min_val/max_val，TripletMarginLoss 的 margin 等）
+  - `metadata`：形状/dtype 等元信息（一般不需要）
+  - `index`：用作下标的整型张量（如 gather/scatter/embedding 的 index）
+- `consumes` 中除张量外，必须把"在 formula 中显式出现的标量超参"也列出（例如 K, S, P, D, H_min, H_max, margin, eps 等），并把 `kind` 设为 `scalar`
+注意：
+- `consumes` 中的值通常来自：模型输入/参数张量/上游 expression 输出/标量参数
+- expression 内部临时量一般不要写进 `produces`
+- `produces` 是下游 expression 连接的主要依据
+- 若整体输出是一个 0-d 标量张量（如各类 loss 的 reduction='mean'/'sum' 结果），仍然在 `produces` 中以 `kind: tensor` 出现，并在 `symbol_binding` 中按"标量张量"格式描述其 layout/stride/address_mapping
+
+## 4. formula
+含义：用数学公式表达当前 expression 的主要逻辑
+格式：str
+要求：
+- formula 必须清晰给出输入/输出张量、索引关系、求和维度、融合关系以及必要的参数定义；允许使用自然语言 + 数学表达的混合写法，但必须保证符号自洽且可读。
+- 若是 fused op，需要在同一个 formula 中体现融合过程
+- 优先表达"主要语义"，不要陷入过细实现细节
+注意：
+- 公式中的符号必须尽量出现在 symbol_binding 中
+- 如果有纯内部临时变量，可以只在 formula 中出现，不必强制放入 symbol_binding
+
+## 5. boundary_treatment
+含义：当前 expression 的边界、合法性、mask、裁剪、padding 等处理方式
+格式：str
+要求：
+- 必须明确说明边界行为
+- 对 convolution / transpose convolution / pooling / slicing / gather / scatter / reduction 等尤其重要
+{% if mlir %}
+- 具体的边界处理规则可以参考 MLIR 编译结果的变换过程。
+{% endif %}
+注意：
+- 不要遗漏 padding、越界、整除条件、空路径等特殊情况
+
+## 6. axis_mapping
+含义：对于 formula 中公式所有 axis 的说明。其中 reduction 表示归约轴，parallel 表示可以并行的轴
+格式：dict{"parallel": list[dict], "reduction": list[dict]}
+要求：
+- parallel 内容：
+  - symbol：表示 formula 中轴的公式名
+  - range：表示 formula 使用该轴的范围，例如 [0, symbol)
+  - binding："runtime" | "static"。表示该轴的大小是 runtime 指定还是 constexpr 编译推导。
+  - value：若该轴的大小是 static，则在此说明编译期值（字符串或数值均可，建议字符串以保持类型一致）
+- reduction 内容：
+  - symbol：表示 formula 中轴的公式名
+  - range：表示 formula 使用该轴的范围，例如 [0, symbol)
+  - binding："runtime" | "static"。表示该轴的大小是 runtime 指定还是 constexpr 编译推导。
+  - value：若该轴的大小是 static，则在此说明编译期值
+  - reduction_type："sum" | "mean" | "max" | "min" | "prod" | "argmax" | "argmin" | "softmax" | "logsumexp" | "softmax_with_lse" 等，表示归约类型
+  - accumulator_precision：表示规约精度，如 fp32 | fp16 等
+注意：
+- parallel 和 reduction 中的所有 symbol 字段取值两两不重复，且都必须是 formula 中出现的轴下标符号
+- 两者 symbol 的并集 = formula 中出现的所有轴下标符号，不多不少
+- 允许空数组：
+  - 纯逐元素算子（ReLU/Sigmoid/Tanh/GELU 等）：`"reduction": []`
+  - 纯全局归约算子（输出是 0-d 标量的 loss，例如 MSELoss/HingeLoss/HuberLoss 等）：此时所有轴都被归约，因此 `"parallel": []`，且 `reduction` 列出所有被归约的轴
+- 同一 expression 可以在 `reduction` 中出现多条不同 `reduction_type` 的条目，例如 CrossEntropy 在特征维 c 上是 `logsumexp`、在 batch 维 i 上是 `mean`，需要分别作为两条 reduction 项列出
+
+## 7. symbol_binding
+含义：当前 expression 中公式符号与 PyTorch 实际对象的绑定关系
+格式：dict[dict]
+要求：key 是 formula 公式中的符号名，如 X, Y1, W_deconv, H_min, margin, eps；value 是该符号的绑定信息。必须为 `consumes`/`produces` 中出现的每一个 name 提供一条 binding；formula 中显式引用到的标量常量也建议作为单独的 entry 列出
+value dict 子字段解释：
+  - binding_kind:
+    表示符号类别，必须从以下闭集中选择：
+      - input_tensor
+      - parameter_tensor
+      - expression_output
+      - model_output
+      - scalar_parameter
+      - scalar_constant
+  - code_binding:
+    表示该 formula 公式中的符号名对应 PyTorch 代码中的对象名，或系统中规范化的唯一绑定名。
+      - forward 入参张量：使用 `forward.<参数名>`。
+      - nn.Module 权重/缓冲：使用 `self.<子模块>.<属性>`，例如 `self.conv_transpose.weight`、`self.bn.running_mean`
+      - 上游 expression 输出：使用 `expr.<上游 expression name>.output`
+      - 整个模型最终返回值：使用 `forward.return`
+      - scalar_constant：可以直接写成"常数 0.5"、"eps = 1e-5" 等形式
+  - layout: 表示 PyTorch 张量的逻辑维度顺序与含义，例如："(N, C, D, H, W)" / "(C_out, C_in, Kd, Kh, Kw)"
+  - stride: 张量在内存中各维度的步长
+  - address_mapping: 从逻辑索引到线性地址/偏移的明确公式
+{% if mlir %}
+      - 可以通过 MLIR 代码分析 address_mapping；也可以借助 layout 和 stride 分析出对应的 address_mapping 公式。
+{% else %}
+      - 借助 layout 和 stride 分析出对应的 address_mapping 公式。
+{% endif %}
+  - unpack_hint（可选字段，仅当 PyTorch 张量的物理 layout 与"直觉/同类常规算子"不一致、容易解包出错时给出，一般情况下不写）
+注意：
+- 对非 tensor 符号（binding_kind in scalar_parameter / scalar_constant），只写 binding_kind 和 code_binding，且不要填 layout / stride / address_mapping / unpack_hint 四个字段
+- 对张量类符号（binding_kind in input_tensor / parameter_tensor / expression_output / model_output），layout / stride / address_mapping 三项都必须填写；unpack_hint 按上述规则按需提供；对 0-d 标量张量按上述"标量张量"格式填
+
+## 8. TDD_requirement
+每个 expression 的 `TDD_requirement` 只保留正确性验证要求，不承载后端性能 lowering 策略。用一段简短中文说明：是否需要数值对拍以及参考实现是什么；需要重点检查哪些 shape、边界、索引、广播、layout、dtype、reduction 语义；建议用哪些小 shape 做冒烟和哪些完整输入做对拍。
+
+可给出简短容忍值建议，但不要展开推导，也不要写 tile size、具体 Triton 模板、后端精度/矩阵化策略、framework fallback 或禁用实现清单。性能 lowering 由 Coder 根据 formula、axis_mapping、reduction_type、boundary_treatment 和 symbol_binding 决定。
+
+{% if backend|default("", true)|lower != "cuda" %}
+当前目标后端是 {{ backend }}{% if arch_name %}({{ arch_name }}){% endif %} / {{ dsl }}。TDD_requirement 不要写 `cuBLAS`、`cuDNN`、`TF32`、`A100`、`CUDA`、`input_precision` 等 CUDA 专名；如需要描述精度，只写“按目标后端参考实现与 dtype 设置合理 rtol/atol”。
+{% endif %}
+
+========================
+输入
+========================
+用户提供的完整的 PyTorch 代码：
+{{ code_file_content }}
+{% if mlir %}
+用户提供的完整的 PyTorch 代码对应的 MLIR 编译结果，帮助你更好的理解代码生成关键切片：
+{{ mlir_compile_code }}
+{% endif %}
+
+========================
+输出格式（必须严格匹配）
+========================
+返回结果：
+**请按照以下格式输出你的结果，仅返回 json 可解析格式。你必须输出严格可被 json.loads 解析的 JSON。不要输出 ```json 代码块围栏。**
+模板使用约束：
+  - axis_mapping.parallel 与 axis_mapping.reduction 任一可为 `[]`；当 binding="static" 时必须填 value，runtime 时可省略 value
+  - symbol_binding 中 scalar_parameter / scalar_constant 只保留 binding_kind 和 code_binding，不要填 layout/stride/address_mapping/unpack_hint
+  - symbol_binding 中张量条目的 `unpack_hint` 是**可选**字段，仅当物理 layout 容易被解包错（典型：nn.ConvTranspose*.weight 的 (C_in, C_out, K_*) 与 Conv 的 (C_out, C_in, K_*) 反序）时给出，不需要时直接省略整个键
+  - TDD_requirement 用一段简短中文写对拍参考、关键 shape/边界/索引/layout/reduction 检查和必要容忍值建议；不要写后端性能策略、tile、Triton 模板、framework fallback，非 CUDA 目标下也不要写 cuBLAS/cuDNN/TF32/A100/CUDA/input_precision 等 CUDA 绑定描述
+{% if not multi_kernel_gen %}
+  - 当前为 multi_kernel_gen=False，**必须输出且仅输出 1 个** expression，该 expression 的 `next_expressions` 必须为 `[]`，symbol_binding 不允许出现 binding_kind=expression_output
+{% endif %}
+
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "",
+        "next_expressions": [""],
+        "consumes": [
+          { "name": "", "kind": "tensor" },
+          { "name": "", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "", "kind": "tensor" }
+        ],
+        "formula": "",
+        "boundary_treatment": "",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "",
+              "range": "",
+              "binding": "static",
+              "value": ""
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "",
+              "range": "",
+              "binding": "static",
+              "value": "",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "tensor_symbol_in_formula": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "",
+            "stride": "",
+            "address_mapping": ""
+          },
+          "scalar_param_symbol_in_formula": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.module.attr"
+          },
+          "scalar_const_symbol_in_formula": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          }
+        },
+        "TDD_requirement": ""
+      }
+    ]
+  }
+}
+
+========================
+现在开始处理用户代码。
+========================

@@ -1,0 +1,77 @@
+# Log configuration
+log_dir: "~/akg_agents_logs"
+
+# Workflow configuration
+default_workflow: "mathir_coder_workflow"
+max_step: 10
+
+# Model preset configuration
+agent_model_config:
+  mathIR: deepseek_v4_pro_thinking_high
+  designer: standard
+  coder: standard
+  code_checker: standard
+  conductor: standard
+  verifier: standard
+  selector: standard
+  sketch: standard
+  op_task_builder: standard
+  api_generator: standard
+  feature_extractor: standard
+  test_case_generator: standard
+  default: standard
+
+# Documentation directory configuration
+docs_dir:
+  designer: "op/resources/docs/sketch_docs"
+  coder: "op/resources/docs/triton_ascend_docs"
+
+# API docs prompt configuration
+api_docs:
+  llm_compress_enabled: false
+  llm_compress_threshold: 24000
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+mathir_save: False
+mathir_overwrite: False
+mathir_use_preset: True
+mathir_mlir_export: True
+mathir_doc_string: True
+mathir_db_math_query: False
+multi_kernel_gen: True
+multi_kernel_max_retries: 15
+
+# Verification configuration
+verify_timeout: 600
+
+# Multi-case testing configuration
+enable_multi_case_verification: false
+enable_hint_mode: false
+enable_llm_range_inference: false
+
+# Triton API database configuration
+api_database:
+  enabled: true
+  qdrant_host: "localhost"
+  qdrant_port: 6333
+  triton_collection: "triton_api"
+  torch_collection: "torch_api"
+  target_backend: "ascend"
+  embed_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embed_cache_folder: "python/akg_agents/database/api/embed_model_cache"
+  force_rebuild: false
+  force_rebuild_triton: false
+  force_rebuild_torch: false
+  topk_per_query: 32
+  filter_tags: ["tl"]
+  enable_keyword_recall: true
+  min_keep: 2
+  max_keep: 10
+  elbow_min_gap_ratio: 0.15
+  relative_decay: 0.90
+  keyword_fallback_qdrant: true
+  keyword_fallback_limit_per_kw: 4
