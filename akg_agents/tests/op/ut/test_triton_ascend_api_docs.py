@@ -35,12 +35,16 @@ with warnings.catch_warnings():
 TRITON_ASCEND_DOCS_DIR = "op/resources/docs/triton_ascend_docs"
 
 
-def test_offline_doc_contains_missing_api_section():
+def test_offline_doc_is_curated_core_api_snapshot():
     offline_doc = get_offline_triton_ascend_api_docs()
 
-    assert "# Triton API 参考手册" in offline_doc
-    assert "## 当前版本不存在的 API" in offline_doc
-    assert "tl.extract_slice" in offline_doc
+    assert "# Triton Ascend Core API 参考手册" in offline_doc
+    assert "## 0. 高频 API 使用约束" in offline_doc
+    assert "tl.reshape" in offline_doc
+    assert "tl.static_range" in offline_doc
+    assert "tl.cumsum" not in offline_doc
+    assert "tl.extract_slice" not in offline_doc
+    assert "## 当前版本不存在的 API" not in offline_doc
 
 
 def test_update_offline_doc_writes_current_snapshot(tmp_path, monkeypatch):
