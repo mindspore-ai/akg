@@ -234,6 +234,8 @@ struct SubviewAllocElimPass : public SubviewAllocElimBase<SubviewAllocElimPass> 
   // Analysis
   bool processAlloc(memref::AllocOp allocOp);
   bool processSimpleAlloc(memref::AllocOp allocOp);
+  SmallVector<Operation *> replaceLoadsWithSource(const SmallVector<Operation *> &directLoads,
+                                                  SourceInfo &srcInfo);
   bool processTransposeAlloc(memref::AllocOp allocOp);
   bool analyzeAxisPartition(memref::AllocOp allocOp);
   std::optional<TransposeInfo> detectTransposePattern(ArrayRef<Operation *> stores, Value allocResult);
@@ -809,47 +811,8 @@ void SubviewAllocElimPass::eraseDeadOps(memref::AllocOp allocOp) {
 // Handle allocs with no subview partitions: forward store values directly to loads.
 // Pattern: alloc is written by stores inside affine.if guards, and read by loads
 // elsewhere. Replace each load by cloning the computation from the store source.
-bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
-  if (!subviewOps.empty() || directStores.empty() || directLoads.empty()) return false;
-
-  // Skip trivial store-load pairs where all stores and loads are in the same block.
-  // These are simple local temporaries (e.g., reduction results stored then immediately
-  // loaded). Cloning their source computation (which may include entire loops) is
-  // wasteful and produces redundant code. Let mem2reg handle these instead.
-  bool allSameBlock = llvm::all_of(directStores, [&](Operation *store) {
-    return llvm::all_of(directLoads, [&](Operation *load) { return store->getBlock() == load->getBlock(); });
-  });
-  if (allSameBlock) return false;
-
-  // All stores must be affine.store with traceable sources.
-  SmallVector<affine::AffineStoreOp> stores;
-  for (auto *op : directStores) {
-    auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
-    if (!affineStore) return false;
-    stores.push_back(affineStore);
-  }
-
-  // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
-  Value templateVal = stores[0].getValueToStore();
-  auto storeDiffersFromTemplate = [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; };
-  if (llvm::any_of(stores, storeDiffersFromTemplate)) return false;
-
-  // Use the first store as source template (all stores write the same computation).
-  SourceInfo srcInfo = traceStoreSource(stores[0]);
-  if (!srcInfo.sourceLoad && srcInfo.computeOps.empty()) return false;
-
-  // Verify all external operands of the source computation dominate every load site.
-  // If any load is unreachable, we cannot safely erase the stores, so bail out entirely.
-  SmallVector<Operation *> opsToCheck;
-  if (srcInfo.sourceLoad)
-    opsToCheck.push_back(srcInfo.sourceLoad.getOperation());
-  else
-    opsToCheck = srcInfo.computeOps;
-  if (llvm::any_of(directLoads, [&](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
-    return false;
-  }
-
-  // Replace each load with a clone of the store source computation.
+SmallVector<Operation *> SubviewAllocElimPass::replaceLoadsWithSource(const SmallVector<Operation *> &directLoads,
+                                                                      SourceInfo &srcInfo) {
   SmallVector<Operation *> toErase;
   for (auto *loadOp : directLoads) {
     Value loadResult = getLoadResult(loadOp);
@@ -870,11 +833,64 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
     loadResult.replaceAllUsesWith(replacement);
     toErase.push_back(loadOp);
   }
+  return toErase;
+}
 
+bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
+  if (!subviewOps.empty() || directStores.empty() || directLoads.empty()) return false;
+
+  // Skip trivial store-load pairs where all stores and loads are in the same block.
+  // These are simple local temporaries (e.g., reduction results stored then immediately
+  // loaded). Cloning their source computation (which may include entire loops) is
+  // wasteful and produces redundant code. Let mem2reg handle these instead.
+  bool allSameBlock = llvm::all_of(directStores, [&](Operation *store) {
+    return llvm::all_of(directLoads, [&](Operation *load) { return store->getBlock() == load->getBlock(); });
+  });
+  if (allSameBlock) {
+    return false;
+  }
+
+  // All stores must be affine.store with traceable sources.
+  SmallVector<affine::AffineStoreOp> stores;
+  for (auto *op : directStores) {
+    auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
+    if (!affineStore) {
+      return false;
+    }
+    stores.push_back(affineStore);
+  }
+
+  // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
+  Value templateVal = stores[0].getValueToStore();
+  if (llvm::any_of(stores, [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; })) {
+    return false;
+  }
+
+  // Use the first store as source template (all stores write the same computation).
+  SourceInfo srcInfo = traceStoreSource(stores[0]);
+  if (!srcInfo.sourceLoad && srcInfo.computeOps.empty()) {
+    return false;
+  }
+
+  // Verify all external operands of the source computation dominate every load site.
+  // If any load is unreachable, we cannot safely erase the stores, so bail out entirely.
+  SmallVector<Operation *> opsToCheck;
+  if (srcInfo.sourceLoad)
+    opsToCheck.push_back(srcInfo.sourceLoad.getOperation());
+  else
+    opsToCheck = srcInfo.computeOps;
+  if (llvm::any_of(directLoads, [&](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
+    return false;
+  }
+
+  // Replace each load with a clone of the store source computation.
+  auto toErase = replaceLoadsWithSource(directLoads, srcInfo);
   for (auto *op : toErase) {
     if (op->use_empty()) op->erase();
   }
-  if (toErase.empty()) return false;
+  if (toErase.empty()) {
+    return false;
+  }
 
   eraseDeadOps(allocOp);
   return true;
