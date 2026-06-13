@@ -49,8 +49,8 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
           |       v
           |     coder -> code_checker -> verifier
           |        ^                        |
-          |        |                        +-- 失败 -> conductor
-          |        +-----------------------------+
+          |        |                        +-- 失败
+          |        +------------------------+
           |
           +-- multi_kernel_gen=True 且 expression 数量 > 1
                   |
@@ -97,7 +97,7 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
     - MathIR 只在入口执行一次。
     - multi_expr_coder 只处理 MathIR 产生多个 expression 的场景。
     - combine 只有在所有子 kernel verify 成功后才会调用。
-    - 任一子 kernel 耗尽重试预算时，不进入 conductor/coder 兜底，任务直接失败。
+    - 任一子 kernel 耗尽重试预算时，不进入兜底修复，任务直接失败。
     """
 
     TOOL_NAME = "use_mathir_multi_kernel_gen_workflow"
@@ -112,7 +112,7 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
 4. 单 expression 或关闭 multi_kernel_gen: 走普通 Coder 生成
 5. CodeChecker: 静态代码检查（默认开启）
 6. Verifier: 验证正确性和性能
-7. Conductor: 仅处理普通/combined 代码检查或最终验证失败；子 kernel 耗尽预算时直接失败
+7. 失败后直接回到 Coder 修复；子 kernel 耗尽预算时直接失败
 """
 
     PARAMETERS_SCHEMA = {
@@ -181,18 +181,11 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
             self.backend,
             self.arch,
         )
-        conductor_node = NodeFactory.create_conductor_node(
-            self.trace,
-            self.config,
-            self.conductor_template,
-        )
-
         workflow.add_node("mathIR", mathIR_node)
         workflow.add_node("api_recall", api_recall_node)
         workflow.add_node("coder", coder_node)
         workflow.add_node("multi_expr_coder", multi_expr_coder_node)
         workflow.add_node("verifier", verifier_node)
-        workflow.add_node("conductor", conductor_node)
 
         workflow.add_edge("mathIR", "api_recall")
 
@@ -226,11 +219,17 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
                     logger.info("multi_expr_coder exhausted sub-kernel retry budget; finishing as failed")
                     return "finish"
                 if state.get("codegen_invalid"):
-                    logger.info("multi_expr_coder produced invalid combined code; routing to conductor")
-                    return "conductor"
+                    if state.get("step_count", 0) >= self.config.get("max_step", 20):
+                        logger.info("multi_expr_coder reached max_step; finishing as failed")
+                        return "finish"
+                    logger.info("multi_expr_coder produced invalid combined code; routing to coder")
+                    return "coder"
                 if not state.get("coder_code"):
-                    logger.info("multi_expr_coder did not produce code; routing to conductor")
-                    return "conductor"
+                    if state.get("step_count", 0) >= self.config.get("max_step", 20):
+                        logger.info("multi_expr_coder reached max_step; finishing as failed")
+                        return "finish"
+                    logger.info("multi_expr_coder did not produce code; routing to coder")
+                    return "coder"
                 return next_agent
 
             return route_after_multi_expr
@@ -246,13 +245,16 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="code_checker",
                 code_gen_agent="coder",
+                invalid_agent="coder",
+                config=self.config,
             )
             workflow.add_conditional_edges(
                 "coder",
                 codegen_router,
                 {
                     "code_checker": "code_checker",
-                    "conductor": "conductor",
+                    "coder": "coder",
+                    "finish": END,
                 },
             )
             workflow.add_conditional_edges(
@@ -260,7 +262,7 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
                 create_multi_expr_router("code_checker"),
                 {
                     "code_checker": "code_checker",
-                    "conductor": "conductor",
+                    "coder": "coder",
                     "finish": END,
                 },
             )
@@ -278,13 +280,16 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="verifier",
                 code_gen_agent="coder",
+                invalid_agent="coder",
+                config=self.config,
             )
             workflow.add_conditional_edges(
                 "coder",
                 codegen_router,
                 {
                     "verifier": "verifier",
-                    "conductor": "conductor",
+                    "coder": "coder",
+                    "finish": END,
                 },
             )
             workflow.add_conditional_edges(
@@ -292,26 +297,19 @@ class MathIRMultiKernelGenWorkflow(OpBaseWorkflow):
                 create_multi_expr_router("verifier"),
                 {
                     "verifier": "verifier",
-                    "conductor": "conductor",
+                    "coder": "coder",
                     "finish": END,
                 },
             )
             logger.info("CodeChecker disabled, using direct coder -> verifier flow")
 
-        verifier_router = RouterFactory.create_verifier_router_with_conductor(self.config)
+        verifier_router = RouterFactory.create_verifier_router(
+            self.config,
+            failure_agent="coder",
+        )
         workflow.add_conditional_edges(
             "verifier",
             verifier_router,
-            {
-                "conductor": "conductor",
-                "finish": END,
-            },
-        )
-
-        conductor_router = RouterFactory.create_conductor_router(self.config)
-        workflow.add_conditional_edges(
-            "conductor",
-            conductor_router,
             {
                 "coder": "coder",
                 "finish": END,

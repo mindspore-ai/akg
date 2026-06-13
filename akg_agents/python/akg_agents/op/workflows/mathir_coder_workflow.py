@@ -34,20 +34,20 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
 
     默认流程（带 CodeChecker）：
 
-        mathIR -> api_recall -> coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> coder
-                                               |                                                       ^
-                                               +----------------> (未通过) ----------------------------+
+        mathIR -> api_recall -> coder -> code_checker -> (通过) -> verifier -> (失败) -> coder
+                                               |                                             ^
+                                               +----------------> (未通过) ------------------+
                                              (携带错误信息回到 coder)
 
     关闭 CodeChecker 时：
 
         mathIR -> api_recall -> coder -> verifier -> (成功) -> END
                                                |
-                                               +------> (失败) -> conductor -> coder
+                                               +------> (失败) -> coder
 
     MathIR 只在入口执行一次，用于提前生成 expression-level 数学语义；
     API recall 只基于完整 PyTorch task_desc 执行一次，后续 Coder 共享本地落盘结果；
-    后续修复循环由 Coder / Verifier / Conductor 完成。
+    后续修复循环由 Coder / Verifier 完成。
     """
 
     TOOL_NAME = "use_mathir_coder_workflow"
@@ -61,7 +61,7 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
 3. Coder: 基于任务描述和可选 MathIR/API recall 生成代码
 4. CodeChecker: 静态代码检查（默认开启）
 5. Verifier: 验证正确性和性能
-6. Conductor: 分析失败原因并指导修复
+6. 失败后直接回到 Coder 修复
 """
 
     PARAMETERS_SCHEMA = {
@@ -119,17 +119,10 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
             self.backend,
             self.arch,
         )
-        conductor_node = NodeFactory.create_conductor_node(
-            self.trace,
-            self.config,
-            self.conductor_template,
-        )
-
         workflow.add_node("mathIR", mathIR_node)
         workflow.add_node("api_recall", api_recall_node)
         workflow.add_node("coder", coder_node)
         workflow.add_node("verifier", verifier_node)
-        workflow.add_node("conductor", conductor_node)
 
         workflow.add_edge("mathIR", "api_recall")
         workflow.add_edge("api_recall", "coder")
@@ -145,13 +138,16 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="code_checker",
                 code_gen_agent="coder",
+                invalid_agent="coder",
+                config=self.config,
             )
             workflow.add_conditional_edges(
                 "coder",
                 codegen_router,
                 {
                     "code_checker": "code_checker",
-                    "conductor": "conductor",
+                    "coder": "coder",
+                    "finish": END,
                 },
             )
 
@@ -168,31 +164,27 @@ class MathIRCoderWorkflow(OpBaseWorkflow):
             codegen_router = RouterFactory.create_codegen_router(
                 next_agent="verifier",
                 code_gen_agent="coder",
+                invalid_agent="coder",
+                config=self.config,
             )
             workflow.add_conditional_edges(
                 "coder",
                 codegen_router,
                 {
                     "verifier": "verifier",
-                    "conductor": "conductor",
+                    "coder": "coder",
+                    "finish": END,
                 },
             )
             logger.info("CodeChecker disabled, using direct coder -> verifier flow")
 
-        verifier_router = RouterFactory.create_verifier_router_with_conductor(self.config)
+        verifier_router = RouterFactory.create_verifier_router(
+            self.config,
+            failure_agent="coder",
+        )
         workflow.add_conditional_edges(
             "verifier",
             verifier_router,
-            {
-                "conductor": "conductor",
-                "finish": END,
-            },
-        )
-
-        conductor_router = RouterFactory.create_conductor_router(self.config)
-        workflow.add_conditional_edges(
-            "conductor",
-            conductor_router,
             {
                 "coder": "coder",
                 "finish": END,
