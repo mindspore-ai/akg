@@ -71,6 +71,8 @@ namespace {
 
 using akg::alignUpInt64;
 using akg::ceilDivInt64;
+using akg::computeBishengInlineBroadcastSourceStorageBytes;
+using akg::computeBishengLastDimTransposeBufferBytes;
 using akg::computeBishengNpuVectorStorageBytes;
 using akg::computeBishengStrideAlignedStorageBytes;
 using akg::computeBishengStructuredNpuVectorStorageBytes;
@@ -162,10 +164,15 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
   return failure();
 }
 
-static bool setStructuredNPUVectorBufferSizeMark(PatternRewriter &rewriter, Location loc, ArrayRef<int64_t> typeShape,
-                                                 Type elemType, ArrayRef<int64_t> maxShape, Value buffer) {
-  return setBufferSizeMark(rewriter, loc, buffer,
-                           computeBishengStructuredNpuVectorStorageBytes(maxShape, typeShape, elemType));
+static bool setTransposeResultBufferSizeMark(PatternRewriter &rewriter, Location loc, MemRefType resultType,
+                                             Type elemType, ArrayRef<int64_t> resultMaxShape,
+                                             ArrayRef<int64_t> sourceMaxShape, ArrayRef<int64_t> sourceTypeShape,
+                                             ArrayRef<int64_t> perm, Value buffer) {
+  if (resultMaxShape.empty()) return false;
+  int64_t bytes = computeBishengStructuredNpuVectorStorageBytes(resultMaxShape, resultType.getShape(), elemType);
+  int64_t transposeBytes =
+    computeBishengLastDimTransposeBufferBytes(sourceMaxShape, sourceTypeShape, perm, elemType, true);
+  return setBufferSizeMark(rewriter, loc, buffer, std::max(bytes, transposeBytes));
 }
 
 static bool setNPUVectorBufferSizeMark(PatternRewriter &rewriter, Location loc, npuvector::NPUVectorType npuTy,
@@ -595,11 +602,38 @@ static DenseI64ArrayAttr getElementwiseBroadcastAttr(Value lhs, Value rhs, Value
   return *inferredAttr;
 }
 
+static FailureOr<SmallVector<int64_t>> inferResultMaxShapeForBufferMark(Operation *op, MemRefType resultTy) {
+  if (!op || op->getNumResults() == 0) return failure();
+  Type resultType = op->getResult(0).getType();
+  if (auto npuTy = dyn_cast<npuvector::NPUVectorType>(resultType))
+    return inferNPUVectorMaxShapeFromOperands(op, npuTy);
+  if (resultTy.hasStaticShape()) return SmallVector<int64_t>(resultTy.getShape());
+  return failure();
+}
+
+static void markInlineBroadcastOperandBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value operand,
+                                                        MemRefType resultTy, ArrayRef<int64_t> resultMaxShape,
+                                                        Operation *anchor);
+
+static void markInlineBroadcastOperandsBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
+                                                         Value resBuf, Operation *anchor) {
+  auto resultTy = dyn_cast<MemRefType>(resBuf.getType());
+  if (!resultTy) return;
+
+  auto resultMaxShape = inferResultMaxShapeForBufferMark(anchor, resultTy);
+  if (failed(resultMaxShape)) return;
+
+  markInlineBroadcastOperandBufferSizeAtLeast(rewriter, loc, lhs, resultTy, *resultMaxShape, anchor);
+  markInlineBroadcastOperandBufferSizeAtLeast(rewriter, loc, rhs, resultTy, *resultMaxShape, anchor);
+}
+
 template <typename HIVMOp>
-static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf) {
+static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
+                               Operation *anchor = nullptr) {
   DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
 
   if (broadcastAttr && !broadcastAttr.empty()) {
+    markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
     rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                             rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
     return;
@@ -610,16 +644,19 @@ static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc
 
 template <typename HIVMOp>
 struct HIVMElementwiseBinaryCreator {
-  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf) {
-    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf);
+  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
+                     Operation *anchor = nullptr) {
+    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf, anchor);
   }
 };
 
 template <>
 struct HIVMElementwiseBinaryCreator<hivm::VShROp> {
-  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf) {
+  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
+                     Operation *anchor = nullptr) {
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
+      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
       rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                                     rewriter.getBoolAttr(true), rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
       return;
@@ -632,8 +669,8 @@ struct HIVMElementwiseBinaryCreator<hivm::VShROp> {
 
 template <typename HIVMOp>
 static void createHIVMElementwiseBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
-                                          Value resBuf) {
-  HIVMElementwiseBinaryCreator<HIVMOp>::create(rewriter, loc, lhs, rhs, resBuf);
+                                          Value resBuf, Operation *anchor = nullptr) {
+  HIVMElementwiseBinaryCreator<HIVMOp>::create(rewriter, loc, lhs, rhs, resBuf, anchor);
 }
 
 // If this binary op's sole result is the i-th scf.yield operand inside an scf.for, reuse
@@ -725,7 +762,7 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
       }
     }
 
-    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf);
+    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf, op.getOperation());
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1205,6 +1242,7 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
+      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
                                     rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
     } else {
@@ -1315,6 +1353,7 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
+      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
                                     rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
     } else {
@@ -1472,7 +1511,7 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
       }
     }
 
-    createHIVMElementwiseBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf);
+    createHIVMElementwiseBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -2619,6 +2658,146 @@ static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter,
   markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, buffer, anchor, bytes, visited);
 }
 
+static FailureOr<SmallVector<int64_t>> inferInlineBroadcastOperandMaxShape(Value operand, MemRefType resultTy,
+                                                                           ArrayRef<int64_t> resultMaxShape) {
+  auto operandTy = dyn_cast<MemRefType>(operand.getType());
+  if (!operandTy || operandTy.getRank() != resultTy.getRank() ||
+      static_cast<int64_t>(resultMaxShape.size()) != resultTy.getRank())
+    return failure();
+
+  bool hasBroadcastDim = false;
+  SmallVector<int64_t> operandMaxShape;
+  operandMaxShape.reserve(resultMaxShape.size());
+  for (int64_t i = 0; i < resultTy.getRank(); ++i) {
+    if (operandTy.isDynamicDim(i)) {
+      operandMaxShape.push_back(resultMaxShape[static_cast<size_t>(i)]);
+      continue;
+    }
+
+    int64_t operandDim = operandTy.getDimSize(i);
+    int64_t resultMaxDim = std::max<int64_t>(resultMaxShape[static_cast<size_t>(i)], 1);
+    if (operandDim == 1 && resultMaxDim > 1) hasBroadcastDim = true;
+    operandMaxShape.push_back(std::max<int64_t>(operandDim, 1));
+  }
+  if (!hasBroadcastDim) return failure();
+  return operandMaxShape;
+}
+
+static FailureOr<SmallVector<int64_t>> traceExpandShapeMaxShape(memref::ExpandShapeOp expandOp,
+                                                                ArrayRef<int64_t> resultMaxShape) {
+  auto srcTy = dyn_cast<MemRefType>(expandOp.getSrc().getType());
+  auto resultTy = dyn_cast<MemRefType>(expandOp.getResult().getType());
+  if (!srcTy || !resultTy || static_cast<int64_t>(resultMaxShape.size()) != resultTy.getRank()) return failure();
+
+  auto reassoc = expandOp.getReassociationIndices();
+  if (static_cast<int64_t>(reassoc.size()) != srcTy.getRank()) return failure();
+
+  SmallVector<int64_t> srcMaxShape;
+  srcMaxShape.reserve(static_cast<size_t>(srcTy.getRank()));
+  for (int64_t srcDim = 0; srcDim < srcTy.getRank(); ++srcDim) {
+    if (!srcTy.isDynamicDim(srcDim)) {
+      srcMaxShape.push_back(std::max<int64_t>(srcTy.getDimSize(srcDim), 1));
+      continue;
+    }
+
+    int64_t product = 1;
+    for (int64_t resultDim : reassoc[static_cast<size_t>(srcDim)]) {
+      if (resultDim < 0 || resultDim >= static_cast<int64_t>(resultMaxShape.size())) return failure();
+      product = multiplyAndCap(product, std::max<int64_t>(resultMaxShape[static_cast<size_t>(resultDim)], 1));
+    }
+    srcMaxShape.push_back(product);
+  }
+  return srcMaxShape;
+}
+
+static FailureOr<SmallVector<int64_t>> traceCollapseShapeMaxShape(memref::CollapseShapeOp collapseOp,
+                                                                  ArrayRef<int64_t> resultMaxShape) {
+  auto srcTy = dyn_cast<MemRefType>(collapseOp.getSrc().getType());
+  auto resultTy = dyn_cast<MemRefType>(collapseOp.getResult().getType());
+  if (!srcTy || !resultTy || static_cast<int64_t>(resultMaxShape.size()) != resultTy.getRank()) return failure();
+
+  auto reassoc = collapseOp.getReassociationIndices();
+  if (static_cast<int64_t>(reassoc.size()) != resultTy.getRank()) return failure();
+
+  SmallVector<int64_t> srcMaxShape(static_cast<size_t>(srcTy.getRank()), 1);
+  for (int64_t resultDim = 0; resultDim < resultTy.getRank(); ++resultDim) {
+    int64_t staticProduct = 1;
+    int64_t dynamicDim = -1;
+    for (int64_t srcDim : reassoc[static_cast<size_t>(resultDim)]) {
+      if (srcDim < 0 || srcDim >= srcTy.getRank()) return failure();
+      if (srcTy.isDynamicDim(srcDim)) {
+        if (dynamicDim >= 0) return failure();
+        dynamicDim = srcDim;
+        continue;
+      }
+      int64_t dim = std::max<int64_t>(srcTy.getDimSize(srcDim), 1);
+      srcMaxShape[static_cast<size_t>(srcDim)] = dim;
+      staticProduct = multiplyAndCap(staticProduct, dim);
+    }
+    if (dynamicDim >= 0) {
+      int64_t resultMax = std::max<int64_t>(resultMaxShape[static_cast<size_t>(resultDim)], 1);
+      if (staticProduct > 1 && resultMax % staticProduct != 0) return failure();
+      srcMaxShape[static_cast<size_t>(dynamicDim)] =
+        staticProduct > 1 ? std::max<int64_t>(resultMax / staticProduct, 1) : resultMax;
+    }
+  }
+  return srcMaxShape;
+}
+
+static FailureOr<SmallVector<int64_t>> inferInlineBroadcastRootMaxShape(Value operand,
+                                                                        ArrayRef<int64_t> operandMaxShape,
+                                                                        Value &root) {
+  Value current = operand;
+  SmallVector<int64_t> currentMaxShape(operandMaxShape.begin(), operandMaxShape.end());
+  for (int depth = 0; depth < 32; ++depth) {
+    Operation *def = current.getDefiningOp();
+    if (!def) break;
+
+    if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(def)) {
+      auto next = traceExpandShapeMaxShape(expandOp, currentMaxShape);
+      if (failed(next)) return failure();
+      current = expandOp.getSrc();
+      currentMaxShape = *next;
+      continue;
+    }
+    if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(def)) {
+      auto next = traceCollapseShapeMaxShape(collapseOp, currentMaxShape);
+      if (failed(next)) return failure();
+      current = collapseOp.getSrc();
+      currentMaxShape = *next;
+      continue;
+    }
+    if (auto castOp = dyn_cast<memref::CastOp>(def)) {
+      current = castOp.getSource();
+      continue;
+    }
+    break;
+  }
+
+  if (!isRootFromAlloc(current)) return failure();
+  root = current;
+  auto rootTy = dyn_cast<MemRefType>(root.getType());
+  if (!rootTy || rootTy.getRank() != static_cast<int64_t>(currentMaxShape.size())) return failure();
+  return currentMaxShape;
+}
+
+static void markInlineBroadcastOperandBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value operand,
+                                                        MemRefType resultTy, ArrayRef<int64_t> resultMaxShape,
+                                                        Operation *anchor) {
+  auto operandMaxShape = inferInlineBroadcastOperandMaxShape(operand, resultTy, resultMaxShape);
+  if (failed(operandMaxShape)) return;
+
+  Value root;
+  auto rootMaxShape = inferInlineBroadcastRootMaxShape(operand, *operandMaxShape, root);
+  if (failed(rootMaxShape)) return;
+
+  auto rootTy = dyn_cast<MemRefType>(root.getType());
+  if (!rootTy) return;
+  int64_t bytes =
+    computeBishengInlineBroadcastSourceStorageBytes(*rootMaxShape, rootTy.getShape(), rootTy.getElementType());
+  markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, root, anchor, bytes);
+}
+
 static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferReadOp op,
                                                             npuvector::TransferReadOp::Adaptor adaptor, Value source,
                                                             npuvector::NPUVectorType npuVecType,
@@ -3585,12 +3764,15 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
     if (!sourceNpuType || sourceMaxShape.empty()) return;
     int64_t bytes = computeBishengStructuredNpuVectorStorageBytes(sourceMaxShape, sourceNpuType.getShape(),
                                                                   sourceNpuType.getElementType());
+    int64_t transposeBytes = computeBishengLastDimTransposeBufferBytes(
+      sourceMaxShape, sourceNpuType.getShape(), op.getPermutation(), sourceNpuType.getElementType(), false);
+    bytes = std::max(bytes, transposeBytes);
     setBufferSizeMarkAtLeast(rewriter, loc, src, bytes);
   }
 
   static FailureOr<Value> lowerTranspose2Axis(ConversionPatternRewriter &rewriter, Location loc, Value src,
                                               MemRefType srcType, ArrayRef<int64_t> perm, Type elemType,
-                                              ArrayRef<int64_t> resultMaxShape) {
+                                              ArrayRef<int64_t> sourceMaxShape, ArrayRef<int64_t> resultMaxShape) {
     int64_t rank = srcType.getRank();
     SmallVector<int64_t> resultShape(rank);
     for (int64_t i = 0; i < rank; ++i) {
@@ -3606,8 +3788,8 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       }
     }
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType, allocOperands);
-    if (resultMaxShape.empty() || !setStructuredNPUVectorBufferSizeMark(rewriter, loc, resultMemRefType.getShape(),
-                                                                        elemType, resultMaxShape, resultBuf)) {
+    if (!setTransposeResultBufferSizeMark(rewriter, loc, resultMemRefType, elemType, resultMaxShape, sourceMaxShape,
+                                          srcType.getShape(), perm, resultBuf)) {
       propagateBufferSizeMark(rewriter, loc, src, resultBuf);
     }
     rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, src, resultBuf, rewriter.getDenseI64ArrayAttr(perm));
@@ -3643,11 +3825,19 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
         }
       }
       Value newBuf = rewriter.create<memref::AllocOp>(loc, newMemRefType, allocOperands);
-      if (!hasMaxShape || !setStructuredNPUVectorBufferSizeMark(rewriter, loc, newMemRefType.getShape(), elemType,
-                                                                newMaxShape, newBuf)) {
+      SmallVector<int64_t> swapPerm = buildAdjacentSwapPerm(rank, a);
+      if (hasMaxShape) {
+        int64_t sourceBytes = computeBishengStructuredNpuVectorStorageBytes(currentMaxShape, currentType.getShape(),
+                                                                            elemType);
+        int64_t transposeSourceBytes = computeBishengLastDimTransposeBufferBytes(
+          currentMaxShape, currentType.getShape(), swapPerm, elemType, false);
+        setBufferSizeMarkAtLeast(rewriter, loc, currentBuf, std::max(sourceBytes, transposeSourceBytes));
+      }
+      if (!hasMaxShape || !setTransposeResultBufferSizeMark(rewriter, loc, newMemRefType, elemType, newMaxShape,
+                                                            currentMaxShape, currentType.getShape(), swapPerm,
+                                                            newBuf)) {
         propagateBufferSizeMark(rewriter, loc, currentBuf, newBuf);
       }
-      SmallVector<int64_t> swapPerm = buildAdjacentSwapPerm(rank, a);
       rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, currentBuf, newBuf,
                                           rewriter.getDenseI64ArrayAttr(swapPerm));
       currentBuf = newBuf;
@@ -3694,12 +3884,14 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       return success();
     }
 
-    if (succeeded(sourceMaxShape)) {
-      markTransposeSourceBufferSizeAtLeast(rewriter, loc, op, src, *sourceMaxShape);
-    }
-
     if (transposeAxisNum == 2) {
-      auto resultBuf = lowerTranspose2Axis(rewriter, loc, src, srcType, perm, elemType, resultMaxShape);
+      ArrayRef<int64_t> sourceMaxShapeRef;
+      if (succeeded(sourceMaxShape)) {
+        sourceMaxShapeRef = *sourceMaxShape;
+        markTransposeSourceBufferSizeAtLeast(rewriter, loc, op, src, *sourceMaxShape);
+      }
+      auto resultBuf = lowerTranspose2Axis(rewriter, loc, src, srcType, perm, elemType, sourceMaxShapeRef,
+                                           resultMaxShape);
       if (failed(resultBuf)) return failure();
       rewriter.replaceOp(op, *resultBuf);
       return success();
