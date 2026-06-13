@@ -57,10 +57,18 @@ static DepType classifyDepType(const Node *predNode, const Node *targetNode) {
   bool predIsLoad = predNode != nullptr && isa<affine::AffineReadOpInterface>(predNode->op);
   bool targetIsStore = targetNode != nullptr && isa<affine::AffineWriteOpInterface>(targetNode->op);
   bool targetIsLoad = targetNode != nullptr && isa<affine::AffineReadOpInterface>(targetNode->op);
-  if (predIsStore && targetIsLoad) return DepType::WAR;
-  if (predIsLoad && targetIsStore) return DepType::RAW;
-  if (predIsStore && targetIsStore) return DepType::WAW;
-  if (predIsLoad && targetIsLoad) return DepType::RAR;
+  if (predIsStore && targetIsLoad) {
+    return DepType::WAR;
+  }
+  if (predIsLoad && targetIsStore) {
+    return DepType::RAW;
+  }
+  if (predIsStore && targetIsStore) {
+    return DepType::WAW;
+  }
+  if (predIsLoad && targetIsLoad) {
+    return DepType::RAR;
+  }
   return DepType::OTHER;
 }
 
@@ -84,7 +92,9 @@ void TopoScheduler::buildSchedulingState() {
   for (size_t i = 0; i < edges.size(); ++i) {
     const auto &edge = edges[i];
     adjacency[edge.fusedGroup.from].push_back(i);
-    if (edge.depInfo.memrefKind != MemrefKind::Subview) normalNodes.insert(edge.fusedGroup.from);
+    if (edge.depInfo.memrefKind != MemrefKind::Subview) {
+      normalNodes.insert(edge.fusedGroup.from);
+    }
     maxGroupId = std::max({maxGroupId, edge.fusedGroup.from, edge.fusedGroup.to});
   }
   inDegree.assign(std::max<size_t>(numNodes, maxGroupId) + 1, 0);
@@ -94,10 +104,14 @@ void TopoScheduler::buildSchedulingState() {
   for (const auto &[deferredGroupId, mustFirstGroupId] : softDeferConstraints) {
     auto dIt = adjacency.find(deferredGroupId);
     auto mIt = adjacency.find(mustFirstGroupId);
-    if (dIt == adjacency.end() || mIt == adjacency.end()) continue;
+    if (dIt == adjacency.end() || mIt == adjacency.end()) {
+      continue;
+    }
     for (size_t dIdx : dIt->second) {
       for (size_t mIdx : mIt->second) {
-        if (dIdx == mIdx) continue;
+        if (dIdx == mIdx) {
+          continue;
+        }
         pendingPriors[dIdx].insert(mIdx);
       }
     }
@@ -107,9 +121,13 @@ void TopoScheduler::buildSchedulingState() {
 // A deferred edge is ready once every prior in pendingPriors is emitted.
 bool TopoScheduler::priorsSatisfied(size_t edgeIdx) const {
   auto it = pendingPriors.find(edgeIdx);
-  if (it == pendingPriors.end()) return true;
+  if (it == pendingPriors.end()) {
+    return true;
+  }
   for (size_t priorIdx : it->second) {
-    if (!emittedEdges.count(priorIdx)) return false;
+    if (emittedEdges.count(priorIdx) == 0u) {
+      return false;
+    }
   }
   return true;
 }
@@ -122,7 +140,7 @@ void TopoScheduler::commitEdge(size_t edgeIdx) {
   emittedEdges.insert(edgeIdx);
   unsigned toGroup = edge.fusedGroup.to;
   if (toGroup < inDegree.size() && inDegree[toGroup] > 0 && --inDegree[toGroup] == 0) {
-    auto &q = normalNodes.count(toGroup) ? normalQueue : subviewQueue;
+    auto &q = (normalNodes.count(toGroup) != 0u) ? normalQueue : subviewQueue;
     q.push(toGroup);
   }
 }
@@ -157,7 +175,9 @@ void TopoScheduler::releaseDeferred() {
 // sort each by descending (to, from), and hand to tryEmit in order.
 void TopoScheduler::processNode(unsigned node) {
   auto adjIt = adjacency.find(node);
-  if (adjIt == adjacency.end()) return;
+  if (adjIt == adjacency.end()) {
+    return;
+  }
   std::vector<size_t> nonSubview, subview;
   for (size_t idx : adjIt->second) {
     (edges[idx].depInfo.memrefKind == MemrefKind::Subview ? subview : nonSubview).push_back(idx);
@@ -170,8 +190,12 @@ void TopoScheduler::processNode(unsigned node) {
   };
   std::sort(nonSubview.begin(), nonSubview.end(), cmpDesc);
   std::sort(subview.begin(), subview.end(), cmpDesc);
-  for (size_t idx : nonSubview) tryEmit(idx);
-  for (size_t idx : subview) tryEmit(idx);
+  for (size_t idx : nonSubview) {
+    tryEmit(idx);
+  }
+  for (size_t idx : subview) {
+    tryEmit(idx);
+  }
 }
 
 // 1. Build scheduling state (adjacency, in-degree, normalNodes, soft-defer priors).
@@ -184,7 +208,7 @@ std::vector<FusionPlan> TopoScheduler::run() {
   result.reserve(edges.size());
   for (unsigned i = 0; i < inDegree.size(); ++i) {
     if (inDegree[i] == 0) {
-      auto &q = normalNodes.count(i) ? normalQueue : subviewQueue;
+      auto &q = (normalNodes.count(i) != 0u) ? normalQueue : subviewQueue;
       q.push(i);
     }
   }
@@ -197,8 +221,12 @@ std::vector<FusionPlan> TopoScheduler::run() {
       releaseDeferred();
     }
     releaseDeferred();
-    if (hasReadyNodes()) continue;
-    if (pendingDeferred.empty()) continue;
+    if (hasReadyNodes()) {
+      continue;
+    }
+    if (pendingDeferred.empty()) {
+      continue;
+    }
     size_t idx = pendingDeferred.back();
     pendingDeferred.pop_back();
     commitEdge(idx);
@@ -248,7 +276,7 @@ std::vector<FusionPlan> FusionAnalyzer::deduplicateAndClassifyEdges() {
 // Returns the group that should be the target of the next fusion operation.
 GroupPtr FusionAnalyzer::getFusionTargetGroup() {
   for (auto nodeId : topoSortNodeIds) {
-    if (!finished.count(nodeId)) {
+    if (finished.count(nodeId) == 0u) {
       auto g = depGraph.getGroupByNode(nodeId);
       if (g != nullptr) {
         return g;
@@ -302,7 +330,7 @@ std::unordered_map<unsigned, unsigned> FusionAnalyzer::findReachableGroups(unsig
   std::unordered_map<unsigned, unsigned> reachable;  // groupId -> path length
   std::queue<std::pair<unsigned, unsigned>> queue;   // (groupId, pathLength)
   reachable[startGroupId] = 0;
-  queue.push({startGroupId, 0});
+  queue.emplace(startGroupId, 0);
 
   while (!queue.empty()) {
     auto [currentGroup, pathLen] = queue.front();
@@ -314,7 +342,7 @@ std::unordered_map<unsigned, unsigned> FusionAnalyzer::findReachableGroups(unsig
         // If we haven't visited this group or found a shorter path
         if (reachable.find(nextGroup) == reachable.end() || reachable[nextGroup] > pathLen + 1) {
           reachable[nextGroup] = pathLen + 1;
-          queue.push({nextGroup, pathLen + 1});
+          queue.emplace(nextGroup, pathLen + 1);
         }
       }
     }
@@ -392,7 +420,9 @@ void FusionAnalyzer::stitchChainsByGroupId(unsigned srcGroupId, unsigned dstGrou
     }
   }
 
-  if (dstSideWon) *dstSideWon = (dstGroupId == loHead);
+  if (dstSideWon != nullptr) {
+    *dstSideWon = (dstGroupId == loHead);
+  }
 
   unsigned hiTail = hiTailsRef.empty() ? hiHead : *std::max_element(hiTailsRef.begin(), hiTailsRef.end());
   unsigned nextInChain = outgoingTarget(insertPoint);
@@ -457,10 +487,14 @@ bool FusionAnalyzer::hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGrou
 
 // Checks whether a fusion plan represents a subview fusion.
 bool FusionAnalyzer::checkSubviewFusion(unsigned predNodeId, unsigned targetNodeId) {
-  if (predNodeId == UINT_MAX || targetNodeId == UINT_MAX) return false;
+  if (predNodeId == UINT_MAX || targetNodeId == UINT_MAX) {
+    return false;
+  }
   Node *predNode = depGraph.getNode(predNodeId);
   Node *tgtNode = depGraph.getNode(targetNodeId);
-  if (!predNode || !tgtNode) return false;
+  if ((predNode == nullptr) || (tgtNode == nullptr)) {
+    return false;
+  }
 
   auto getMemrefBase = [](Operation *op) -> std::pair<Value, bool> {
     Value memref;
@@ -479,7 +513,9 @@ bool FusionAnalyzer::checkSubviewFusion(unsigned predNodeId, unsigned targetNode
 
   auto [predBase, predSV] = getMemrefBase(predNode->op);
   auto [tgtBase, tgtSV] = getMemrefBase(tgtNode->op);
-  if (!predBase || !tgtBase) return false;
+  if (!predBase || !tgtBase) {
+    return false;
+  }
 
   return predBase == tgtBase && (predSV || tgtSV);
 }
@@ -522,7 +558,7 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
   plan.fusionType = "V";
 
   auto toDepGroups = depGraph.getDependentGroups(toGroupId);
-  if (toDepGroups.count(fromGroupId)) {
+  if (toDepGroups.count(fromGroupId) != 0u) {
     plan.fusionType = "H";
     return;
   }
@@ -541,11 +577,17 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
 bool FusionAnalyzer::findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup, bool *isAncestry) {
   auto oldReachable = findReachableGroups(oldGroup->groupId);
   auto newReachable = findReachableGroups(newGroup->groupId);
-  bool ancestry = oldReachable.count(newGroup->groupId) || newReachable.count(oldGroup->groupId);
-  if (isAncestry) *isAncestry = ancestry;
-  if (ancestry) return false;
+  bool ancestry = (oldReachable.count(newGroup->groupId) != 0u) || (newReachable.count(oldGroup->groupId) != 0u);
+  if (isAncestry != nullptr) {
+    *isAncestry = ancestry;
+  }
+  if (ancestry) {
+    return false;
+  }
   for (const auto &[groupId, _] : oldReachable) {
-    if (newReachable.count(groupId)) return true;
+    if (newReachable.count(groupId) != 0u) {
+      return true;
+    }
   }
   return false;
 }
@@ -596,11 +638,10 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
           softDeferConstraints.emplace_back(oldGroup->groupId, newGroup->groupId);
           fusionPlans.erase(it);
           return true;
-        } else {
-          // oldGroup smaller (or equal) — keep the existing edge; reject the new plan.
-          softDeferConstraints.emplace_back(newGroup->groupId, oldGroup->groupId);
-          return false;
         }
+        // oldGroup smaller (or equal) — keep the existing edge; reject the new plan.
+        softDeferConstraints.emplace_back(newGroup->groupId, oldGroup->groupId);
+        return false;
       }
 
       if (isAncestry) {
@@ -654,7 +695,9 @@ void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sou
 bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
   auto [aSrc, aTgt] = a;
   auto [bSrc, bTgt] = b;
-  if (aSrc == bSrc || aTgt == bTgt) return false;
+  if (aSrc == bSrc || aTgt == bTgt) {
+    return false;
+  }
 
   auto firstConvergence = [this](unsigned x, unsigned y) -> unsigned {
     auto reachX = findReachableGroups(x);
@@ -663,7 +706,9 @@ bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, c
     unsigned bestSum = UINT_MAX;
     for (const auto &[gid, lenX] : reachX) {
       auto it = reachY.find(gid);
-      if (it == reachY.end()) continue;
+      if (it == reachY.end()) {
+        continue;
+      }
       unsigned sum = lenX + it->second;
       if (sum < bestSum) {
         bestSum = sum;
@@ -675,7 +720,9 @@ bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, c
 
   unsigned ca = firstConvergence(aSrc, aTgt);
   unsigned cb = firstConvergence(bSrc, bTgt);
-  if (ca == UINT_MAX || ca != cb) return false;
+  if (ca == UINT_MAX || ca != cb) {
+    return false;
+  }
 
   // Walk g's linear fusion chain to find the immediate predecessor of conv,
   // i.e., the branch of conv that g enters through.
@@ -684,8 +731,12 @@ bool FusionAnalyzer::isConflictingPair(const std::pair<unsigned, unsigned> &a, c
     std::unordered_set<unsigned> seen{cur};
     while (true) {
       unsigned next = outgoingTarget(cur);
-      if (next == conv) return cur;
-      if (next == UINT_MAX || !seen.insert(next).second) return UINT_MAX;
+      if (next == conv) {
+        return cur;
+      }
+      if (next == UINT_MAX || !seen.insert(next).second) {
+        return UINT_MAX;
+      }
       cur = next;
     }
   };
@@ -709,19 +760,25 @@ std::pair<unsigned, unsigned> FusionAnalyzer::findBridgePoint(unsigned sourceId,
     if (next == UINT_MAX || next == targetId || !seen.insert(next).second) {
       return {UINT_MAX, UINT_MAX};
     }
-    if (next > targetId) return {cur, next};
+    if (next > targetId) {
+      return {cur, next};
+    }
     cur = next;
   }
 }
 
 void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId, DependenceInfo &deletedDep) {
-  if (deletedDep.predNodeId == UINT_MAX) return;
+  if (deletedDep.predNodeId == UINT_MAX) {
+    return;
+  }
 
   auto firstReachable = [&](unsigned start, const std::unordered_map<unsigned, unsigned> &reach) {
     unsigned cur = start;
     std::unordered_set<unsigned> seen;
     while (cur != UINT_MAX && seen.insert(cur).second) {
-      if (reach.count(cur)) return cur;
+      if (reach.count(cur)) {
+        return cur;
+      }
       cur = outgoingTarget(cur);
     }
     return UINT_MAX;
@@ -731,19 +788,29 @@ void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId,
     std::unordered_set<unsigned> seen{cur};
     while (true) {
       unsigned next = outgoingTarget(cur);
-      if (next == UINT_MAX) return UINT_MAX;
-      if (next == end) return cur;
-      if (!seen.insert(next).second) return UINT_MAX;
+      if (next == UINT_MAX) {
+        return UINT_MAX;
+      }
+      if (next == end) {
+        return cur;
+      }
+      if (!seen.insert(next).second) {
+        return UINT_MAX;
+      }
       cur = next;
     }
   };
 
   auto targetReach = findReachableGroups(targetId);
   unsigned convergenceId = firstReachable(existingTo, targetReach);
-  if (convergenceId == UINT_MAX) return;
+  if (convergenceId == UINT_MAX) {
+    return;
+  }
 
   unsigned recipientFrom = findChainPredecessor(targetId, convergenceId);
-  if (recipientFrom == UINT_MAX) return;
+  if (recipientFrom == UINT_MAX) {
+    return;
+  }
 
   auto recipientKey = std::make_pair(recipientFrom, convergenceId);
   auto it = groupDependenciesCache.find(recipientKey);
@@ -768,14 +835,20 @@ void FusionAnalyzer::bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge) {
   auto [sourceId, targetId] = hEdge;
   auto sourceGrp = depGraph.getGroup(sourceId);
   auto targetGrp = depGraph.getGroup(targetId);
-  if (sourceGrp == nullptr || targetGrp == nullptr) return;
+  if (sourceGrp == nullptr || targetGrp == nullptr) {
+    return;
+  }
 
   // (1) Find bridge point: first edge X→Y along source's chain where Y > target.
   //     (13,16): 13→14 (14<16, continue) → 14→26 (26>16, bridge!) → bridgeFromId=14, existingTo=26
   auto [bridgeFromId, existingTo] = findBridgePoint(sourceId, targetId);
-  if (bridgeFromId == UINT_MAX) return;
+  if (bridgeFromId == UINT_MAX) {
+    return;
+  }
   auto bridgeFromGrp = depGraph.getGroup(bridgeFromId);
-  if (bridgeFromGrp == nullptr) return;
+  if (bridgeFromGrp == nullptr) {
+    return;
+  }
 
   // (2) Snapshot X→Y's cached dep info, then remove the edge.
   //     (13,16): deletedDep = cache[(14,26)], remove edge 14→26
@@ -823,10 +896,16 @@ void FusionAnalyzer::resolveConflictingDefers(std::vector<std::pair<unsigned, un
   while (changed) {
     changed = false;
     for (size_t i = 0; i < candidates.size() && !changed; ++i) {
-      if (rewritten[i]) continue;
+      if (rewritten[i]) {
+        continue;
+      }
       for (size_t j = i + 1; j < candidates.size(); ++j) {
-        if (rewritten[j]) continue;
-        if (!isConflictingPair(candidates[i], candidates[j])) continue;
+        if (rewritten[j]) {
+          continue;
+        }
+        if (!isConflictingPair(candidates[i], candidates[j])) {
+          continue;
+        }
         size_t pickIdx = (candidates[i].first > candidates[j].first) ? i : j;
         bridgeChainToTarget(candidates[pickIdx]);
         rewritten[pickIdx] = true;
@@ -851,7 +930,9 @@ void FusionAnalyzer::dumpDirectPredecessors(unsigned nodeId, const std::vector<u
 
   llvm::dbgs() << "\n=== DirectPredecessors for nodeId: " << nodeId << " ===\n";
   llvm::dbgs() << "  Target op: ";
-  if (targetNode) targetNode->op->print(llvm::dbgs(), printFlags);
+  if (targetNode != nullptr) {
+    targetNode->op->print(llvm::dbgs(), printFlags);
+  }
   llvm::dbgs() << "\n";
 
   llvm::dbgs() << "  All predecessors (sorted desc, total=" << allPredecessorIds.size() << "):\n";
@@ -860,7 +941,9 @@ void FusionAnalyzer::dumpDirectPredecessors(unsigned nodeId, const std::vector<u
     auto *predNode = depGraph.getNode(predId);
     bool skipped = skipIdx.count(i) > 0;
     llvm::dbgs() << "    [" << i << "] ID: " << predId << (skipped ? " (SKIPPED)" : " (DIRECT)") << ", OP: ";
-    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    if (predNode != nullptr) {
+      predNode->op->print(llvm::dbgs(), printFlags);
+    }
     llvm::dbgs() << "\n";
   }
 
@@ -869,7 +952,9 @@ void FusionAnalyzer::dumpDirectPredecessors(unsigned nodeId, const std::vector<u
     auto *predNode = depGraph.getNode(pred.nodeId);
     llvm::dbgs() << "    ID: " << pred.nodeId << ", MEMREF: " << pred.memref << ", DEPTH: " << pred.loopDepth
                  << ", DepType: " << depTypeToString(pred.depType) << ", OP: ";
-    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    if (predNode != nullptr) {
+      predNode->op->print(llvm::dbgs(), printFlags);
+    }
     llvm::dbgs() << "\n";
   }
 }
@@ -898,7 +983,7 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
     // Build a map from predecessor node ID to all edges (memrefs and loopDepth) from that node
     std::unordered_map<unsigned, std::vector<std::pair<Value, unsigned>>> predToMemrefsAndDepth;
     for (const auto &edge : inEdgesIt->second) {
-      predToMemrefsAndDepth[edge.id].push_back({edge.value, edge.loopDepth});
+      predToMemrefsAndDepth[edge.id].emplace_back(edge.value, edge.loopDepth);
     }
 
     // Get all predecessor IDs
@@ -912,13 +997,13 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
 
     std::unordered_set<size_t> skipIdx;
     for (size_t i = 1; i < allPredecessorIds.size(); ++i) {
-      if (skipIdx.count(i)) {
+      if (skipIdx.count(i) != 0u) {
         continue;
       }
       auto iCandidateID = allPredecessorIds[i];
       // Predecessor nodes are sorted in descending order, so j < i means checking earlier nodes
       for (size_t j = 0; j < i; ++j) {
-        if (skipIdx.count(j)) {
+        if (skipIdx.count(j) != 0u) {
           continue;
         }
         auto jCandidateID = allPredecessorIds[j];
@@ -938,7 +1023,7 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
     auto *targetNode = depGraph.getNode(nodeId);
     std::vector<DirectPredecessor> directPreds;
     for (size_t i = 0; i < allPredecessorIds.size(); ++i) {
-      if (skipIdx.count(i)) {
+      if (skipIdx.count(i) != 0u) {
         continue;
       }
       auto predId = allPredecessorIds[i];
@@ -1020,7 +1105,9 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std:
 
 void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
                                                  const std::vector<unsigned> &sourceGroupIds) {
-  if (sourceGroupIds.empty()) return;
+  if (sourceGroupIds.empty()) {
+    return;
+  }
   auto printFlags = mlir::OpPrintingFlags().skipRegions();
 
   llvm::dbgs() << "\n=== collectFusionSourceGroups for targetGroup: " << targetGroup->groupId << ", " << dependenceType
@@ -1029,14 +1116,20 @@ void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, co
     llvm::dbgs() << "  sourceGroupId=" << sourceGroupId << "\n";
     auto cacheKey = std::make_pair(sourceGroupId, targetGroup->groupId);
     auto cacheIt = groupDependenciesCache.find(cacheKey);
-    if (cacheIt == groupDependenciesCache.end()) continue;
+    if (cacheIt == groupDependenciesCache.end()) {
+      continue;
+    }
     const auto &depInfo = cacheIt->second;
     auto *targetNode = depGraph.getNode(depInfo.targetNodeId);
     auto *predNode = depGraph.getNode(depInfo.predNodeId);
     llvm::dbgs() << "    predNodeId: " << depInfo.predNodeId << " (OP: ";
-    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    if (predNode != nullptr) {
+      predNode->op->print(llvm::dbgs(), printFlags);
+    }
     llvm::dbgs() << ") -> targetNodeId: " << depInfo.targetNodeId << " (OP: ";
-    if (targetNode) targetNode->op->print(llvm::dbgs(), printFlags);
+    if (targetNode != nullptr) {
+      targetNode->op->print(llvm::dbgs(), printFlags);
+    }
     llvm::dbgs() << ")\n";
   }
 }
@@ -1044,7 +1137,9 @@ void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, co
 void FusionAnalyzer::processWarEdges(std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap) {
   while (!finishPlan()) {
     auto targetGroup = getFusionTargetGroup();
-    if (targetGroup == nullptr) break;
+    if (targetGroup == nullptr) {
+      break;
+    }
 
     std::vector<unsigned> warGroupIds;
     std::vector<unsigned> nonWarGroupIds;
@@ -1053,20 +1148,28 @@ void FusionAnalyzer::processWarEdges(std::unordered_map<unsigned, std::vector<un
 
     for (unsigned sourceGroupId : warGroupIds) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
-      if (sourceGroup != nullptr) applyAndFuse(targetGroup, sourceGroup);
+      if (sourceGroup != nullptr) {
+        applyAndFuse(targetGroup, sourceGroup);
+      }
     }
 
-    for (auto targetId : targetGroup->nodesId) finished.insert(targetId);
+    for (auto targetId : targetGroup->nodesId) {
+      finished.insert(targetId);
+    }
   }
 }
 
 bool FusionAnalyzer::hasSubviewRarDep(unsigned targetGroupId,
                                       const std::unordered_map<unsigned, std::vector<unsigned>> &nonWarMap) const {
   auto it = nonWarMap.find(targetGroupId);
-  if (it == nonWarMap.end()) return false;
+  if (it == nonWarMap.end()) {
+    return false;
+  }
   for (unsigned sourceGroupId : it->second) {
     auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroupId, targetGroupId));
-    if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Subview) return true;
+    if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Subview) {
+      return true;
+    }
   }
   return false;
 }
@@ -1098,27 +1201,39 @@ void FusionAnalyzer::processNonWarEdges(const std::unordered_map<unsigned, std::
 
   std::sort(sortedRarEdges.begin(), sortedRarEdges.end(),
             [&](const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
-              if (a.second != b.second) return a.second < b.second;
+              if (a.second != b.second) {
+                return a.second < b.second;
+              }
               int ka = kindRank(a.first, a.second);
               int kb = kindRank(b.first, b.second);
-              if (ka != kb) return ka < kb;
+              if (ka != kb) {
+                return ka < kb;
+              }
               return a.first > b.first;
             });
 
   for (const auto &[sourceGroupId, targetGroupId] : sortedRarEdges) {
     auto targetGroup = depGraph.getGroup(targetGroupId);
-    if (!targetGroup) continue;
+    if (!targetGroup) {
+      continue;
+    }
     auto sourceGroup = depGraph.getGroup(sourceGroupId);
-    if (!sourceGroup) continue;
+    if (!sourceGroup) {
+      continue;
+    }
 
     bool isAncestry = false;
     if (findBackwardIntersection(sourceGroup, targetGroup, &isAncestry)) {
       auto cacheIt = groupDependenciesCache.find(std::make_pair(sourceGroupId, targetGroupId));
-      if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Input) continue;
+      if (cacheIt != groupDependenciesCache.end() && cacheIt->second.memrefKind == MemrefKind::Input) {
+        continue;
+      }
       deferCandidates.emplace_back(sourceGroupId, targetGroupId);
       continue;
     }
-    if (!isAncestry) applyAndFuse(targetGroup, sourceGroup);
+    if (!isAncestry) {
+      applyAndFuse(targetGroup, sourceGroup);
+    }
   }
 }
 

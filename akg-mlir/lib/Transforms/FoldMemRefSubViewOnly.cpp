@@ -73,17 +73,22 @@ void FoldMemRefSubViewOnlyPass::runOnOperation() {
     SmallVector<Operation *> queue{subview};
     while (!queue.empty()) {
       Operation *op = queue.pop_back_val();
-      if (!targetSet.insert(op)) continue;
+      if (!targetSet.insert(op)) {
+        continue;
+      }
       for (Operation *user : op->getUsers()) {
-        if (isReshape(user) || isa<memref::SubViewOp>(user))
+        if (isReshape(user) || isa<memref::SubViewOp>(user)) {
           queue.push_back(user);
-        else
+        } else {
           targetSet.insert(user);
+        }
       }
     }
   });
 
-  if (targetSet.empty()) return;
+  if (targetSet.empty()) {
+    return;
+  }
 
   SmallVector<Operation *> targets(targetSet.begin(), targetSet.end());
   GreedyRewriteConfig config;

@@ -76,7 +76,9 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
  private:
   static void collectIndexOperands(Operation *op, SmallVectorImpl<Value> &out) {
     for (Value v : op->getOperands()) {
-      if (v.getType().isIndex()) out.push_back(v);
+      if (v.getType().isIndex()) {
+        out.push_back(v);
+      }
     }
   }
 
@@ -108,7 +110,9 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     SmallVector<Value> idxOpnds;
     collectIndexOperands(defOp, idxOpnds);
     int n = static_cast<int>(idxOpnds.size());
-    if (n < 2 * rank) return false;
+    if (n < 2 * rank) {
+      return false;
+    }
     for (int i = 0; i < rank; ++i) {
       sizes.push_back(idxOpnds[n - 2 * rank + i]);
     }
@@ -127,19 +131,29 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
     while (cur) {
       auto vt = llvm::dyn_cast<npuvector::NPUVectorType>(cur.getType());
-      if (!vt) return false;
+      if (!vt) {
+        return false;
+      }
 
       int rank = static_cast<int>(vt.getShape().size());
-      if (rank == 0) return true;
+      if (rank == 0) {
+        return true;
+      }
 
       Operation *defOp = cur.getDefiningOp();
-      if (!defOp || !visited.insert(defOp).second) return false;
+      if ((defOp == nullptr) || !visited.insert(defOp).second) {
+        return false;
+      }
 
       if (auto rd = llvm::dyn_cast<npuvector::TransferReadOp>(defOp)) {
-        if (extractFromTransferRead(rd, rank, sizes, maxSizes)) return true;
+        if (extractFromTransferRead(rd, rank, sizes, maxSizes)) {
+          return true;
+        }
       }
-      if (defOp->getDialect() && defOp->getDialect()->getNamespace() == "npuvector") {
-        if (extractFromGenericNpuOp(defOp, rank, sizes, maxSizes)) return true;
+      if ((defOp->getDialect() != nullptr) && defOp->getDialect()->getNamespace() == "npuvector") {
+        if (extractFromGenericNpuOp(defOp, rank, sizes, maxSizes)) {
+          return true;
+        }
         sizes.clear();
         maxSizes.clear();
       }
@@ -190,9 +204,13 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     const Block *parent = forOp->getBlock();
     for (Value initVal : forOp.getInitArgs()) {
       Operation *defOp = initVal.getDefiningOp();
-      if (!defOp) continue;
-      if (defOp->getBlock() != parent) continue;
-      if (!earliest || defOp->isBeforeInBlock(earliest)) {
+      if (defOp == nullptr) {
+        continue;
+      }
+      if (defOp->getBlock() != parent) {
+        continue;
+      }
+      if ((earliest == nullptr) || defOp->isBeforeInBlock(earliest)) {
         earliest = defOp;
       }
     }
@@ -313,7 +331,9 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
   void eliminateIterArgs(func::FuncOp funcOp) {
     SmallVector<scf::ForOp> targets;
     funcOp.walk([&](scf::ForOp forOp) {
-      if (forOp.getInitArgs().empty()) return;
+      if (forOp.getInitArgs().empty()) {
+        return;
+      }
       for (Value v : forOp.getInitArgs()) {
         if (isNpuVectorType(v.getType())) {
           targets.push_back(forOp);
@@ -342,7 +362,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
     // Anchor allocations at the earliest same-block init value producer.
     Operation *anchor = findAllocAnchor(forOp);
-    OpBuilder allocBuilder = anchor ? OpBuilder(anchor) : OpBuilder(forOp);
+    OpBuilder allocBuilder = (anchor != nullptr) ? OpBuilder(anchor) : OpBuilder(forOp);
 
     SmallVector<Value> buffers;
     SmallVector<SmallVector<Value>> allSizes;
@@ -372,7 +392,9 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     ModuleOp module = getOperation();
     SmallVector<func::FuncOp> targetFuncs;
     module.walk([&](func::FuncOp f) { targetFuncs.push_back(f); });
-    for (auto f : targetFuncs) eliminateIterArgs(f);
+    for (auto f : targetFuncs) {
+      eliminateIterArgs(f);
+    }
   }
 };
 

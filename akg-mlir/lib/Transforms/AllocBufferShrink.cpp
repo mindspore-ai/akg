@@ -63,31 +63,48 @@ static bool isAccessOp(Operation *op) {
 // loop operation; else null.
 static Operation *getOwningLoopOp(Value idx) {
   auto blockArg = dyn_cast<BlockArgument>(idx);
-  if (!blockArg) return nullptr;
+  if (!blockArg) {
+    return nullptr;
+  }
   auto *parentOp = blockArg.getOwner()->getParentOp();
-  if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp))
+  if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp)) {
     return forOp.getInductionVar() == blockArg ? parentOp : nullptr;
-  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) return forOp.getInductionVar() == blockArg ? parentOp : nullptr;
+  }
+  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+    return forOp.getInductionVar() == blockArg ? parentOp : nullptr;
+  }
   return nullptr;
 }
 
 static SmallVector<Value> getAccessIndices(Operation *op) {
-  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op))
-    return SmallVector<Value>(loadOp.getIndices().begin(), loadOp.getIndices().end());
-  if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op))
-    return SmallVector<Value>(storeOp.getIndices().begin(), storeOp.getIndices().end());
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-    return SmallVector<Value>(loadOp.getIndices().begin(), loadOp.getIndices().end());
-  if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-    return SmallVector<Value>(storeOp.getIndices().begin(), storeOp.getIndices().end());
+  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+    return {loadOp.getIndices().begin(), loadOp.getIndices().end()};
+  }
+  if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
+    return {storeOp.getIndices().begin(), storeOp.getIndices().end()};
+  }
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    return {loadOp.getIndices().begin(), loadOp.getIndices().end()};
+  }
+  if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+    return {storeOp.getIndices().begin(), storeOp.getIndices().end()};
+  }
   return {};
 }
 
 static Value getAccessMemRef(Operation *op) {
-  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) return loadOp.getMemRef();
-  if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) return storeOp.getMemRef();
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) return loadOp.getMemRef();
-  if (auto storeOp = dyn_cast<memref::StoreOp>(op)) return storeOp.getMemRef();
+  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+    return loadOp.getMemRef();
+  }
+  if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
+    return storeOp.getMemRef();
+  }
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    return loadOp.getMemRef();
+  }
+  if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+    return storeOp.getMemRef();
+  }
   return {};
 }
 
@@ -146,12 +163,16 @@ bool AllocBufferShrinkPass::computeCollapseMapping(MemRefType srcType, ArrayRef<
                                                    ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
   newMapping.assign(rank, kDimAbsorbed);
   for (unsigned d = 0; d < rank; d++) {
-    if (currentMapping[d] == kDimAbsorbed) continue;
+    if (currentMapping[d] == kDimAbsorbed) {
+      continue;
+    }
     int64_t srcDim = currentMapping[d];
 
     for (unsigned g = 0; g < reassociation.size(); g++) {
       const auto &group = reassociation[g];
-      if (llvm::find(group, srcDim) == group.end()) continue;
+      if (llvm::find(group, srcDim) == group.end()) {
+        continue;
+      }
 
       if (group.size() == 1) {
         newMapping[d] = static_cast<int>(g);
@@ -159,13 +180,21 @@ bool AllocBufferShrinkPass::computeCollapseMapping(MemRefType srcType, ArrayRef<
       }
 
       int64_t dimSize = srcType.getDimSize(srcDim);
-      if (ShapedType::isDynamic(dimSize)) return false;
-      if (dimSize == 1) break;
+      if (ShapedType::isDynamic(dimSize)) {
+        return false;
+      }
+      if (dimSize == 1) {
+        break;
+      }
 
       for (int64_t otherDim : group) {
-        if (otherDim == srcDim) continue;
+        if (otherDim == srcDim) {
+          continue;
+        }
         int64_t otherSize = srcType.getDimSize(otherDim);
-        if (ShapedType::isDynamic(otherSize) || otherSize != 1) return false;
+        if (ShapedType::isDynamic(otherSize) || otherSize != 1) {
+          return false;
+        }
       }
       newMapping[d] = static_cast<int>(g);
       break;
@@ -186,9 +215,13 @@ bool AllocBufferShrinkPass::computeExpandMapping(MemRefType resultType, ArrayRef
                                                  ArrayRef<int> currentMapping, SmallVectorImpl<int> &newMapping) {
   newMapping.assign(rank, kDimAbsorbed);
   for (unsigned d = 0; d < rank; d++) {
-    if (currentMapping[d] == kDimAbsorbed) continue;
+    if (currentMapping[d] == kDimAbsorbed) {
+      continue;
+    }
     int64_t srcDim = currentMapping[d];
-    if (srcDim >= static_cast<int64_t>(reassociation.size())) return false;
+    if (srcDim >= static_cast<int64_t>(reassociation.size())) {
+      return false;
+    }
 
     const auto &group = reassociation[srcDim];
     if (group.size() == 1) {
@@ -199,9 +232,13 @@ bool AllocBufferShrinkPass::computeExpandMapping(MemRefType resultType, ArrayRef
     int nonUnitIdx = kDimAbsorbed;
     for (int64_t resultDim : group) {
       int64_t dimSize = resultType.getDimSize(resultDim);
-      if (ShapedType::isDynamic(dimSize)) return false;
+      if (ShapedType::isDynamic(dimSize)) {
+        return false;
+      }
       if (dimSize != 1) {
-        if (nonUnitIdx != kDimAbsorbed) return false;
+        if (nonUnitIdx != kDimAbsorbed) {
+          return false;
+        }
         nonUnitIdx = static_cast<int>(resultDim);
       }
     }
@@ -228,7 +265,9 @@ bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<
     if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
       auto sourceRank = subviewOp.getSourceType().getRank();
       auto targetRank = subviewOp.getType().getRank();
-      if (sourceRank != targetRank || targetRank != rank) return false;
+      if (sourceRank != targetRank || targetRank != rank) {
+        return false;
+      }
       auto strides = subviewOp.getStaticStrides();
       if (!llvm::all_of(strides, [](int64_t s) { return s == 1; })) {
         return false;
@@ -238,14 +277,16 @@ bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<
 
     } else if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(user)) {
       if (!computeCollapseMapping(collapseOp.getSrcType(), collapseOp.getReassociationIndices(), currentMapping,
-                                  newMapping))
+                                  newMapping)) {
         return false;
+      }
       nextValue = collapseOp.getResult();
 
     } else if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(user)) {
       if (!computeExpandMapping(expandOp.getResultType(), expandOp.getReassociationIndices(), currentMapping,
-                                newMapping))
+                                newMapping)) {
         return false;
+      }
       nextValue = expandOp.getResult();
 
     } else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(user)) {
@@ -257,7 +298,9 @@ bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<
     }
 
     viewOps.push_back(user);
-    if (!collectAccessOpsRecursive(nextValue, newMapping)) return false;
+    if (!collectAccessOpsRecursive(nextValue, newMapping)) {
+      return false;
+    }
   }
   return true;
 }
@@ -265,23 +308,31 @@ bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<
 // Update SymShapeAttr inside a memory-space dictionary: shrunk dimensions
 // get their symbolic name replaced with "1".
 Attribute AllocBufferShrinkPass::updateMemSpaceForShrink(Attribute memorySpace) {
-  if (!memorySpace) return memorySpace;
+  if (!memorySpace) {
+    return memorySpace;
+  }
   auto dictAttr = dyn_cast<DictionaryAttr>(memorySpace);
-  if (!dictAttr) return memorySpace;
+  if (!dictAttr) {
+    return memorySpace;
+  }
   auto symShapeAttr = dictAttr.getAs<ArrayAttr>("SymShapeAttr");
-  if (!symShapeAttr || symShapeAttr.size() != rank) return memorySpace;
+  if (!symShapeAttr || symShapeAttr.size() != rank) {
+    return memorySpace;
+  }
   auto *context = &getContext();
 
   SmallVector<Attribute> newSymShapes;
-  for (unsigned d = 0; d < rank; d++)
+  for (unsigned d = 0; d < rank; d++) {
     newSymShapes.push_back(shrinkDims[d] ? StringAttr::get(context, "1") : symShapeAttr[d]);
+  }
 
   SmallVector<NamedAttribute> entries;
   for (auto entry : dictAttr) {
-    if (entry.getName().getValue() == "SymShapeAttr")
+    if (entry.getName().getValue() == "SymShapeAttr") {
       entries.push_back({entry.getName(), ArrayAttr::get(context, newSymShapes)});
-    else
+    } else {
       entries.push_back(entry);
+    }
   }
   return DictionaryAttr::get(context, entries);
 }
@@ -291,9 +342,13 @@ Attribute AllocBufferShrinkPass::updateMemSpaceForShrink(Attribute memorySpace) 
 bool AllocBufferShrinkPass::allAccessMapsAreIdentity() {
   for (auto &info : accessInfos) {
     if (auto loadOp = dyn_cast<affine::AffineLoadOp>(info.op)) {
-      if (!loadOp.getAffineMap().isIdentity()) return false;
+      if (!loadOp.getAffineMap().isIdentity()) {
+        return false;
+      }
     } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(info.op)) {
-      if (!storeOp.getAffineMap().isIdentity()) return false;
+      if (!storeOp.getAffineMap().isIdentity()) {
+        return false;
+      }
     }
   }
   return true;
@@ -309,23 +364,34 @@ Operation *AllocBufferShrinkPass::findCommonLoopForDim(unsigned d) {
 
   for (auto &info : accessInfos) {
     int accessDim = info.dimMapping[d];
-    if (accessDim < 0) continue;
+    if (accessDim < 0) {
+      continue;
+    }
     allAbsorbed = false;
 
     auto indices = getAccessIndices(info.op);
-    if (accessDim >= static_cast<int>(indices.size())) return nullptr;
-    auto *loopOp = getOwningLoopOp(indices[accessDim]);
-    if (!loopOp) return nullptr;
-    if (!commonLoop)
-      commonLoop = loopOp;
-    else if (commonLoop != loopOp)
+    if (accessDim >= static_cast<int>(indices.size())) {
       return nullptr;
+    }
+    auto *loopOp = getOwningLoopOp(indices[accessDim]);
+    if (loopOp == nullptr) {
+      return nullptr;
+    }
+    if (commonLoop == nullptr) {
+      commonLoop = loopOp;
+    } else if (commonLoop != loopOp) {
+      return nullptr;
+    }
   }
 
-  if (allAbsorbed || !commonLoop) return nullptr;
+  if (allAbsorbed || (commonLoop == nullptr)) {
+    return nullptr;
+  }
 
   for (auto &info : accessInfos) {
-    if (!commonLoop->isAncestor(info.op)) return nullptr;
+    if (!commonLoop->isAncestor(info.op)) {
+      return nullptr;
+    }
   }
   return commonLoop;
 }
@@ -338,7 +404,9 @@ void AllocBufferShrinkPass::analyzeShrinkableDims(MemRefType memrefType) {
   dimLoops.assign(rank, nullptr);
 
   for (unsigned d = 0; d < rank; d++) {
-    if (ShapedType::isDynamic(shape[d]) || shape[d] <= 1) continue;
+    if (ShapedType::isDynamic(shape[d]) || shape[d] <= 1) {
+      continue;
+    }
     dimLoops[d] = findCommonLoopForDim(d);
     shrinkDims[d] = (dimLoops[d] != nullptr);
   }
@@ -351,7 +419,9 @@ void AllocBufferShrinkPass::analyzeShrinkableDims(MemRefType memrefType) {
 void AllocBufferShrinkPass::validateSubviewOffsets() {
   for (auto *op : viewOps) {
     auto subviewOp = dyn_cast<memref::SubViewOp>(op);
-    if (!subviewOp) continue;
+    if (!subviewOp) {
+      continue;
+    }
 
     auto offsets = subviewOp.getStaticOffsets();
     auto sizes = subviewOp.getStaticSizes();
@@ -360,13 +430,19 @@ void AllocBufferShrinkPass::validateSubviewOffsets() {
     for (unsigned j = 0; j < rank; j++) {
       bool hasNonZeroOffset = (offsets[j] != 0);
       bool hasPartialSize = (!ShapedType::isDynamic(sizes[j]) && sizes[j] < sourceType.getDimSize(j));
-      if (!hasNonZeroOffset && !hasPartialSize) continue;
+      if (!hasNonZeroOffset && !hasPartialSize) {
+        continue;
+      }
 
       shrinkDims[j] = false;
 
-      if (!dimLoops[j]) continue;
+      if (dimLoops[j] == nullptr) {
+        continue;
+      }
       for (unsigned d = 0; d < rank; d++) {
-        if (shrinkDims[d] && dimLoops[d] && dimLoops[j]->isAncestor(dimLoops[d])) shrinkDims[d] = false;
+        if (shrinkDims[d] && (dimLoops[d] != nullptr) && dimLoops[j]->isAncestor(dimLoops[d])) {
+          shrinkDims[d] = false;
+        }
       }
     }
   }
@@ -384,10 +460,14 @@ memref::AllocOp AllocBufferShrinkPass::createShrunkAlloc(memref::AllocOp allocOp
   for (unsigned d = 0; d < rank; d++) {
     Value oldDynamicSize;
     bool oldIsDynamic = ShapedType::isDynamic(shape[d]);
-    if (oldIsDynamic) oldDynamicSize = oldDynamicSizes[oldDynamicIdx++];
+    if (oldIsDynamic) {
+      oldDynamicSize = oldDynamicSizes[oldDynamicIdx++];
+    }
 
     newShape.push_back(shrinkDims[d] ? 1 : shape[d]);
-    if (oldIsDynamic && !shrinkDims[d]) newDynamicSizes.push_back(oldDynamicSize);
+    if (oldIsDynamic && !shrinkDims[d]) {
+      newDynamicSizes.push_back(oldDynamicSize);
+    }
   }
 
   auto newMemorySpace = updateMemSpaceForShrink(memrefType.getMemorySpace());
@@ -401,13 +481,17 @@ memref::AllocOp AllocBufferShrinkPass::createShrunkAlloc(memref::AllocOp allocOp
 // Rebuild a SubViewOp: shrunk dimensions get their size clamped to 1.
 void AllocBufferShrinkPass::rebuildSubView(memref::SubViewOp subviewOp) {
   Value newSource = replacementMap.lookup(subviewOp.getSource());
-  if (!newSource) return;
+  if (!newSource) {
+    return;
+  }
 
   SmallVector<OpFoldResult> newOffsets = subviewOp.getMixedOffsets();
   SmallVector<OpFoldResult> newSizes = subviewOp.getMixedSizes();
   SmallVector<OpFoldResult> newStrides = subviewOp.getMixedStrides();
   for (unsigned d = 0; d < rank; d++) {
-    if (shrinkDims[d]) newSizes[d] = OpBuilder(subviewOp).getI64IntegerAttr(1);
+    if (shrinkDims[d]) {
+      newSizes[d] = OpBuilder(subviewOp).getI64IntegerAttr(1);
+    }
   }
 
   OpBuilder builder(subviewOp);
@@ -418,7 +502,9 @@ void AllocBufferShrinkPass::rebuildSubView(memref::SubViewOp subviewOp) {
 // Rebuild a CollapseShapeOp on the shrunk source, reusing reassociation indices.
 void AllocBufferShrinkPass::rebuildCollapseShape(memref::CollapseShapeOp collapseOp) {
   Value newSource = replacementMap.lookup(collapseOp.getSrc());
-  if (!newSource) return;
+  if (!newSource) {
+    return;
+  }
 
   OpBuilder builder(collapseOp);
   auto newCollapse =
@@ -430,7 +516,9 @@ void AllocBufferShrinkPass::rebuildCollapseShape(memref::CollapseShapeOp collaps
 // dims are also set to 1.
 void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
   Value newSource = replacementMap.lookup(expandOp.getSrc());
-  if (!newSource) return;
+  if (!newSource) {
+    return;
+  }
 
   auto newSourceType = dyn_cast<MemRefType>(newSource.getType());
   auto oldResultType = expandOp.getResultType();
@@ -440,9 +528,13 @@ void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
   for (unsigned g = 0; g < reassociation.size(); g++) {
     int64_t newSrcSize = newSourceType.getDimSize(g);
     int64_t oldSrcSize = expandOp.getSrcType().getDimSize(g);
-    if (newSrcSize == oldSrcSize) continue;
+    if (newSrcSize == oldSrcSize) {
+      continue;
+    }
     if (newSrcSize == 1) {
-      for (int64_t resultDim : reassociation[g]) newOutputShape[resultDim] = 1;
+      for (int64_t resultDim : reassociation[g]) {
+        newOutputShape[resultDim] = 1;
+      }
     }
   }
 
@@ -458,7 +550,9 @@ void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
 // Rebuild a MemorySpaceCastOp, updating SymShapeAttr for shrunk dims.
 void AllocBufferShrinkPass::rebuildMemorySpaceCast(memref::MemorySpaceCastOp castOp) {
   Value newSource = replacementMap.lookup(castOp.getSource());
-  if (!newSource) return;
+  if (!newSource) {
+    return;
+  }
 
   auto newSourceType = dyn_cast<MemRefType>(newSource.getType());
   auto oldResultType = dyn_cast<MemRefType>(castOp.getResult().getType());
@@ -479,14 +573,15 @@ void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::A
   replacementMap[oldAlloc.getResult()] = newAlloc.getResult();
 
   for (auto *op : viewOps) {
-    if (auto subviewOp = dyn_cast<memref::SubViewOp>(op))
+    if (auto subviewOp = dyn_cast<memref::SubViewOp>(op)) {
       rebuildSubView(subviewOp);
-    else if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(op))
+    } else if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(op)) {
       rebuildCollapseShape(collapseOp);
-    else if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(op))
+    } else if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(op)) {
       rebuildExpandShape(expandOp);
-    else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op))
+    } else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {
       rebuildMemorySpaceCast(castOp);
+    }
   }
 }
 
@@ -498,12 +593,16 @@ void AllocBufferShrinkPass::rewriteAccessOps() {
     SmallVector<Value> oldIndices = getAccessIndices(info.op);
 
     Value newMemref = replacementMap.lookup(oldMemref);
-    if (!newMemref) newMemref = oldMemref;
+    if (!newMemref) {
+      newMemref = oldMemref;
+    }
 
     SmallVector<Value> newIndices(oldIndices);
     for (unsigned d = 0; d < rank; d++) {
       int mapped = info.dimMapping[d];
-      if (shrinkDims[d] && mapped >= 0 && mapped < static_cast<int>(newIndices.size())) newIndices[mapped] = zeroIdx;
+      if (shrinkDims[d] && mapped >= 0 && mapped < static_cast<int>(newIndices.size())) {
+        newIndices[mapped] = zeroIdx;
+      }
     }
 
     OpBuilder builder(info.op);
@@ -526,7 +625,9 @@ void AllocBufferShrinkPass::rewriteAccessOps() {
     }
 
     for (auto namedAttr : info.op->getAttrs()) {
-      if (namedAttr.getName().getValue() != "map") newOp->setAttr(namedAttr.getName(), namedAttr.getValue());
+      if (namedAttr.getName().getValue() != "map") {
+        newOp->setAttr(namedAttr.getName(), namedAttr.getValue());
+      }
     }
     info.op->erase();
   }
@@ -535,9 +636,13 @@ void AllocBufferShrinkPass::rewriteAccessOps() {
 // Erase the old view chain ops (in reverse order) and the alloc if they are dead.
 void AllocBufferShrinkPass::eraseOldOps(memref::AllocOp allocOp) {
   for (auto it = viewOps.rbegin(); it != viewOps.rend(); ++it) {
-    if ((*it)->use_empty()) (*it)->erase();
+    if ((*it)->use_empty()) {
+      (*it)->erase();
+    }
   }
-  if (allocOp->use_empty()) allocOp->erase();
+  if (allocOp->use_empty()) {
+    allocOp->erase();
+  }
 }
 
 // Main per-alloc entry point.  Analyzes one alloc to find shrinkable
@@ -545,16 +650,26 @@ void AllocBufferShrinkPass::eraseOldOps(memref::AllocOp allocOp) {
 bool AllocBufferShrinkPass::processAlloc(memref::AllocOp allocOp) {
   auto memrefType = allocOp.getType();
   rank = memrefType.getRank();
-  if (rank == 0) return false;
+  if (rank == 0) {
+    return false;
+  }
 
   // 1. Collect all access ops and view chain.
   accessInfos.clear();
   viewOps.clear();
   SmallVector<int> identityMapping(rank);
-  for (unsigned i = 0; i < rank; i++) identityMapping[i] = static_cast<int>(i);
-  if (!collectAccessOpsRecursive(allocOp.getResult(), identityMapping)) return false;
-  if (accessInfos.empty()) return false;
-  if (!allAccessMapsAreIdentity()) return false;
+  for (unsigned i = 0; i < rank; i++) {
+    identityMapping[i] = static_cast<int>(i);
+  }
+  if (!collectAccessOpsRecursive(allocOp.getResult(), identityMapping)) {
+    return false;
+  }
+  if (accessInfos.empty()) {
+    return false;
+  }
+  if (!allAccessMapsAreIdentity()) {
+    return false;
+  }
 
   // 2. Determine which dimensions can be shrunk.
   analyzeShrinkableDims(memrefType);
@@ -582,7 +697,9 @@ void AllocBufferShrinkPass::runOnOperation() {
   SmallVector<memref::AllocOp> allocOps;
   getOperation()->walk([&](memref::AllocOp op) { allocOps.push_back(op); });
 
-  for (auto allocOp : allocOps) processAlloc(allocOp);
+  for (auto allocOp : allocOps) {
+    processAlloc(allocOp);
+  }
 }
 
 }  // namespace

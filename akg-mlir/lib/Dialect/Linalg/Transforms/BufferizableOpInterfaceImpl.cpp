@@ -42,11 +42,15 @@ static LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter
   rewriter.setInsertionPoint(op);
 
   // Nothing to do. This op is already bufferized.
-  if (op.hasPureBufferSemantics()) return success();
+  if (op.hasPureBufferSemantics()) {
+    return success();
+  }
 
   // Ensure op has only tensors. Allow mixed tensor-buffer mode on a per-need
   // basis.
-  if (!op.hasPureTensorSemantics()) return op->emitError() << "op does not have pure tensor semantics";
+  if (!op.hasPureTensorSemantics()) {
+    return op->emitError() << "op does not have pure tensor semantics";
+  }
 
   // New input operands for the cloned op.
   SmallVector<Value> newInputBuffers;
@@ -57,7 +61,9 @@ static LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter
       continue;
     }
     FailureOr<Value> buffer = getBuffer(rewriter, opOperand->get(), options);
-    if (failed(buffer)) return failure();
+    if (failed(buffer)) {
+      return failure();
+    }
     newInputBuffers.push_back(*buffer);
   }
 
@@ -66,7 +72,9 @@ static LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter
   for (OpResult opResult : op->getOpResults()) {
     OpOperand *opOperand = op.getDpsInitOperand(opResult.getResultNumber());
     FailureOr<Value> resultBuffer = getBuffer(rewriter, opOperand->get(), options);
-    if (failed(resultBuffer)) return failure();
+    if (failed(resultBuffer)) {
+      return failure();
+    }
     newOutputBuffers.push_back(*resultBuffer);
   }
 

@@ -36,7 +36,9 @@ struct EraseUnusedOperandsAndResults : public impl::EraseUnusedOperandsAndResult
     linalg::populateEraseUnusedOperandsAndResultsPatterns(patterns);
     GreedyRewriteConfig config;
     config.useTopDownTraversal = true;
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config))) signalPassFailure();
+    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config))) {
+      signalPassFailure();
+    }
   }
 };
 

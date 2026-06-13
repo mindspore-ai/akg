@@ -78,13 +78,13 @@ void GenerateSingleAffineParallelPass::generateWithoutLoop() {
   if (topLoop != nullptr) {
     Location loc = topLoop->getLoc();
     OpBuilder b(topLoop);
-    affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
+    auto pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
     AffineMap lowerBoundMap = pointLoop.getLowerBoundMap();
     ValueRange lowerBoundOperands = pointLoop.getLowerBoundOperands();
     AffineMap upperBoundMap = pointLoop.getUpperBoundMap();
     ValueRange upperBoundOperands = pointLoop.getUpperBoundOperands();
 
-    affine::AffineParallelOp parallelLoop = b.create<affine::AffineParallelOp>(
+    auto parallelLoop = b.create<affine::AffineParallelOp>(
       loc, TypeRange(), ArrayRef<arith::AtomicRMWKind>(), llvm::ArrayRef(lowerBoundMap), lowerBoundOperands,
       llvm::ArrayRef(upperBoundMap), upperBoundOperands, llvm::ArrayRef(pointLoop.getStepAsInt()));
     for (auto it = restOp.begin(); it != std::prev(restOp.end()); ++it) {
@@ -100,7 +100,7 @@ void GenerateSingleAffineParallelPass::generateWithLoop(affine::AffineForOp oute
   Location loc = outerLoop.getLoc();
   Operation *topLoop = outerLoop.getOperation();
   OpBuilder b(topLoop);
-  affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
+  auto pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
   pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
                                               topLoop);
   if (forceGen == 1) {
@@ -136,8 +136,7 @@ void GenerateSingleAffineParallelPass::sinkOps(affine::AffineForOp pointLoop) {
   if (toSink.empty()) {
     return;
   }
-  for (auto it = toSink.begin(); it != toSink.end(); ++it) {
-    auto op = *it;
+  for (auto op : toSink) {
     pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), op->getBlock()->getOperations(), op);
   }
 }

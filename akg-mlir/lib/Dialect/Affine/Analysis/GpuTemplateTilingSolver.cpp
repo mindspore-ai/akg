@@ -101,10 +101,10 @@ void GpuTemplateSolver::SolveRedAxesWithoutThreadReduction(std::vector<AxisPtr> 
   int num = axes.size();
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
-    if (redFlags[i]) {
+    if (redFlags[i] != 0) {
       auto a = axes[i];
-      auto fullTile = dynFlags[i] ? tool.getOnePrimeWithIdxUpdate() : a->range.second;
-      if (dynFlags[i]) {
+      auto fullTile = (dynFlags[i] != 0) ? tool.getOnePrimeWithIdxUpdate() : a->range.second;
+      if (dynFlags[i] != 0) {
         auto arg = gpuTool.addRuntimeArgument(fullTile);
         arg.mark = "reduce-small-seq";
         gpuTool.updateRuntimeArgument(arg);
@@ -123,7 +123,7 @@ void GpuTemplateSolver::SolveRedAxesWithoutThreadReduction(std::vector<AxisPtr> 
 void GpuTemplateSolver::SolveAxesLeft(std::vector<AxisPtr> &axes) {
   int num = axes.size();
   for (int i = 0; i < num; i++) {
-    if (axes[i]->mappings.size() == 0) {
+    if (axes[i]->mappings.empty()) {
       auto a = axes[i];
       a->doExtraTile();
       auto tilel0 = a->tryGetConfig(1);
@@ -279,7 +279,7 @@ void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> 
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
-    if (!flags[i]) {
+    if (flags[i] == 0) {
       continue;
     }
 
@@ -291,7 +291,7 @@ void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> 
     auto threadTile = a->tryGetConfig(1);
     threadTile->value = 1;
     std::vector<int> primes;
-    bool isDynamic = dynFlags[i];
+    bool isDynamic = dynFlags[i] != 0;
     if (isDynamic) {
       initPrimes(primes, tool);
     }
@@ -356,7 +356,7 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
-    if (!redFlags[i]) {
+    if (redFlags[i] == 0) {
       continue;
     }
 
@@ -368,7 +368,7 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
 
     // 1. tile & map to blockIdx
     if (gridDimsLeft > 0 && blockNum >= 1) {
-      if (dynFlags[i]) {
+      if (dynFlags[i] != 0) {
         processYDynamicBlock(a, tool, axisMap);
       } else if (len <= blockNum) {
         processYFullBlock(a, len, blockNum, axisMap);
@@ -380,7 +380,7 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
 
     // 2. left length to sequential
     auto seqInnerTile = a->tryGetConfig(0);
-    if (dynFlags[i]) {
+    if (dynFlags[i] != 0) {
       seqInnerTile->value = tool.getOnePrimeWithIdxUpdate();
       auto arg0 = gpuTool.addRuntimeArgument(seqInnerTile->value);
       arg0.mark = "reduce-y-seq";
@@ -397,9 +397,11 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
 void GpuTemplateSolver::collectReduceAxesFlags(const std::vector<AxisPtr> &axes, std::vector<int> &redFlags,
                                                std::vector<int> &dynamicFlags, bool &hasLastUnknownRedAxis) {
   for (size_t i = 0; i < axes.size(); i++) {
-    redFlags[i] = axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) != axes[i]->axisType.end();
-    dynamicFlags[i] = axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axes[i]->axisType.end();
-    if (redFlags[i] && (i == axes.size() - 1) && dynamicFlags[i]) {
+    redFlags[i] = static_cast<int>(axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) !=
+                                   axes[i]->axisType.end());
+    dynamicFlags[i] =
+      static_cast<int>(axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axes[i]->axisType.end());
+    if ((redFlags[i] != 0) && (i == axes.size() - 1) && (dynamicFlags[i] != 0)) {
       hasLastUnknownRedAxis = true;
     }
   }
@@ -408,7 +410,7 @@ void GpuTemplateSolver::collectReduceAxesFlags(const std::vector<AxisPtr> &axes,
 void GpuTemplateSolver::collectReduceAxesOrders(const std::vector<AxisPtr> &axes, const std::vector<int> &dynamicFlags,
                                                 std::vector<int> &processOrder, std::vector<int> &templateOrder) {
   for (size_t i = 0; i < axes.size(); i++) {
-    if (!dynamicFlags[i]) {
+    if (dynamicFlags[i] == 0) {
       templateOrder.push_back(i);
     } else {
       processOrder.push_back(i);
@@ -420,7 +422,7 @@ void GpuTemplateSolver::collectReduceAxesSize(const std::vector<AxisPtr> &axes, 
                                               const std::vector<int> &dynamicFlags, int &reductionSize,
                                               int &parallelSize, bool &hasDynamicRedAxes) {
   for (size_t i = 0; i < axes.size(); i++) {
-    if (redFlags[i]) {
+    if (redFlags[i] != 0) {
       reductionSize *= axes[i]->range.second;
       hasDynamicRedAxes |= dynamicFlags[i];
     } else {

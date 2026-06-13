@@ -100,8 +100,7 @@ void LoadGlobalConfigPass::parseGpuSchedule() {
       for (auto it = axisInfoMap.begin(); it != axisInfoMap.end(); ++it) {
         std::string name = it.key();
         auto infoList = axisInfoMap[name];
-        for (size_t idx = 0; idx < infoList.size(); ++idx) {
-          auto eachInfo = infoList[idx];
+        for (auto eachInfo : infoList) {
           auto axisInfo = AxisInfo(eachInfo["name"], eachInfo["loc"]);
           axisInfo.size = eachInfo["size"];
           axisInfo.constSize = eachInfo["constSize"];

@@ -55,11 +55,8 @@ namespace {
 const size_t kVectorSizeEight = 8;
 
 bool IsTosaReduceOp(Operation *redOp) {
-  if (isa<tosa::ReduceAllOp>(redOp) || isa<tosa::ReduceAnyOp>(redOp) || isa<tosa::ReduceMaxOp>(redOp) ||
-      isa<tosa::ReduceMinOp>(redOp) || isa<tosa::ReduceProdOp>(redOp) || isa<tosa::ReduceSumOp>(redOp)) {
-    return true;
-  }
-  return false;
+  return isa<tosa::ReduceAllOp>(redOp) || isa<tosa::ReduceAnyOp>(redOp) || isa<tosa::ReduceMaxOp>(redOp) ||
+         isa<tosa::ReduceMinOp>(redOp) || isa<tosa::ReduceProdOp>(redOp) || isa<tosa::ReduceSumOp>(redOp);
 }
 
 size_t valueUsageCount(Value v, func::FuncOp funcOp) {
@@ -91,45 +88,77 @@ void findNextRedOp(size_t currIdx, size_t groupNum, const SmallVector<Operation 
 
 static TypedAttr getReduceFloatInit(Operation *op, Type elementTy, PatternRewriter &rewriter) {
   const auto &sem = cast<FloatType>(elementTy).getFloatSemantics();
-  if (isa<tosa::ReduceSumOp>(op)) return rewriter.getFloatAttr(elementTy, 0.0);
-  if (isa<tosa::ReduceProdOp>(op)) return rewriter.getFloatAttr(elementTy, 1.0);
-  if (isa<tosa::ReduceMinOp>(op)) return rewriter.getFloatAttr(elementTy, APFloat::getLargest(sem, false));
-  if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op))
+  if (isa<tosa::ReduceSumOp>(op)) {
+    return rewriter.getFloatAttr(elementTy, 0.0);
+  }
+  if (isa<tosa::ReduceProdOp>(op)) {
+    return rewriter.getFloatAttr(elementTy, 1.0);
+  }
+  if (isa<tosa::ReduceMinOp>(op)) {
+    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(sem, false));
+  }
+  if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op)) {
     return rewriter.getFloatAttr(elementTy, APFloat::getLargest(sem, true));
+  }
   return {};
 }
 
 static TypedAttr getReduceIntInit(Operation *op, Type elementTy, PatternRewriter &rewriter) {
   unsigned width = elementTy.getIntOrFloatBitWidth();
-  if (isa<tosa::ReduceSumOp>(op)) return rewriter.getIntegerAttr(elementTy, 0);
-  if (isa<tosa::ReduceProdOp>(op)) return rewriter.getIntegerAttr(elementTy, 1);
-  if (isa<tosa::ReduceMinOp>(op)) return rewriter.getIntegerAttr(elementTy, APInt::getSignedMaxValue(width));
-  if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op))
+  if (isa<tosa::ReduceSumOp>(op)) {
+    return rewriter.getIntegerAttr(elementTy, 0);
+  }
+  if (isa<tosa::ReduceProdOp>(op)) {
+    return rewriter.getIntegerAttr(elementTy, 1);
+  }
+  if (isa<tosa::ReduceMinOp>(op)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getSignedMaxValue(width));
+  }
+  if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(width));
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1))
+  }
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1))
+  }
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
+  }
   return {};
 }
 
 static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
-  if (isa<FloatType>(elementTy)) return getReduceFloatInit(op, elementTy, rewriter);
-  if (isa<IntegerType>(elementTy)) return getReduceIntInit(op, elementTy, rewriter);
+  if (isa<FloatType>(elementTy)) {
+    return getReduceFloatInit(op, elementTy, rewriter);
+  }
+  if (isa<IntegerType>(elementTy)) {
+    return getReduceIntInit(op, elementTy, rewriter);
+  }
   return {};
 }
 
 static Value getReduceFloatBody(Operation *op, Location loc, ValueRange args, PatternRewriter &rewriter) {
-  if (isa<tosa::ReduceSumOp>(op)) return rewriter.create<arith::AddFOp>(loc, args);
-  if (isa<tosa::ReduceProdOp>(op)) return rewriter.create<arith::MulFOp>(loc, args);
-  if (isa<tosa::ReduceMinOp>(op)) return rewriter.create<arith::MinNumFOp>(loc, args[0], args[1]);
-  if (isa<tosa::ReduceMaxOp>(op)) return rewriter.create<arith::MaxNumFOp>(loc, args[0], args[1]);
-  return Value();
+  if (isa<tosa::ReduceSumOp>(op)) {
+    return rewriter.create<arith::AddFOp>(loc, args);
+  }
+  if (isa<tosa::ReduceProdOp>(op)) {
+    return rewriter.create<arith::MulFOp>(loc, args);
+  }
+  if (isa<tosa::ReduceMinOp>(op)) {
+    return rewriter.create<arith::MinNumFOp>(loc, args[0], args[1]);
+  }
+  if (isa<tosa::ReduceMaxOp>(op)) {
+    return rewriter.create<arith::MaxNumFOp>(loc, args[0], args[1]);
+  }
+  return {};
 }
 
 static Value getReduceIntBody(Operation *op, Location loc, ValueRange args, Type elementTy, PatternRewriter &rewriter) {
-  if (isa<tosa::ReduceSumOp>(op)) return rewriter.create<arith::AddIOp>(loc, args);
-  if (isa<tosa::ReduceProdOp>(op)) return rewriter.create<arith::MulIOp>(loc, args);
+  if (isa<tosa::ReduceSumOp>(op)) {
+    return rewriter.create<arith::AddIOp>(loc, args);
+  }
+  if (isa<tosa::ReduceProdOp>(op)) {
+    return rewriter.create<arith::MulIOp>(loc, args);
+  }
   if (isa<tosa::ReduceMinOp>(op)) {
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
@@ -138,17 +167,25 @@ static Value getReduceIntBody(Operation *op, Location loc, ValueRange args, Type
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
   }
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) return rewriter.create<arith::AndIOp>(loc, args);
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) return rewriter.create<arith::OrIOp>(loc, args);
-  return Value();
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
+    return rewriter.create<arith::AndIOp>(loc, args);
+  }
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
+    return rewriter.create<arith::OrIOp>(loc, args);
+  }
+  return {};
 }
 
 static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange args, Type elementTy,
                                                     PatternRewriter &rewriter) {
   Location loc = op->getLoc();
-  if (isa<FloatType>(elementTy)) return getReduceFloatBody(op, loc, args, rewriter);
-  if (isa<IntegerType>(elementTy)) return getReduceIntBody(op, loc, args, elementTy, rewriter);
-  return Value();
+  if (isa<FloatType>(elementTy)) {
+    return getReduceFloatBody(op, loc, args, rewriter);
+  }
+  if (isa<IntegerType>(elementTy)) {
+    return getReduceIntBody(op, loc, args, elementTy, rewriter);
+  }
+  return {};
 }
 
 bool IntInVector(int i, const SmallVector<int, 8> &redAxes) {

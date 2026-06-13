@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <utility>
+
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
@@ -166,7 +168,7 @@ namespace {
  */
 class ShapeTracer {
  public:
-  explicit ShapeTracer(SmallVector<tensor::CastOp> needFixOps) : needFixOps(needFixOps) {}
+  explicit ShapeTracer(SmallVector<tensor::CastOp> needFixOps) : needFixOps(std::move(needFixOps)) {}
   SmallVector<int64_t> Trace(Value arg) {
     auto rank = cast<ShapedType>(arg.getType()).getRank();
     SmallVector<int64_t> needCastDims(rank, 0);
@@ -175,7 +177,8 @@ class ShapeTracer {
       if (src == arg) {
         (void)GetCastedShape(castOp.getDest().getType(), src.getType(), needCastDims);
         break;
-      } else if (src.getDefiningOp()) {
+      }
+      if (src.getDefiningOp()) {
         // todo(baiji): support more shape reconstruct op like transpose
         if (GoThroughIntermediateNoSideEffectOps(arg, castOp, needCastDims)) {
           break;
