@@ -60,13 +60,15 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
                                            llvm::DenseMap<Value, bool> &valueDepCache,
                                            llvm::DenseSet<Operation *> &visitingOps) {
     auto cacheIt = valueDepCache.find(v);
-    if (cacheIt != valueDepCache.end()) return cacheIt->second;
+    if (cacheIt != valueDepCache.end()) {
+      return cacheIt->second;
+    }
 
     bool depends = false;
 
     if (auto blockArg = dyn_cast<BlockArgument>(v)) {
       Block *ownerBlock = blockArg.getOwner();
-      Operation *parentOp = ownerBlock ? ownerBlock->getParentOp() : nullptr;
+      Operation *parentOp = (ownerBlock != nullptr) ? ownerBlock->getParentOp() : nullptr;
       depends = (parentOp != nullptr && seenAffineForOps.contains(parentOp));
     } else if (auto opResult = dyn_cast<OpResult>(v)) {
       Operation *defOp = opResult.getOwner();
@@ -97,12 +99,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   static bool opDependsOnSeenAffineFors(Operation *op, const llvm::DenseSet<Operation *> &seenAffineForOps,
                                         llvm::DenseMap<Value, bool> &valueDepCache) {
     llvm::DenseSet<Operation *> visitingOps;
-    if (std::any_of(op->getOperands().begin(), op->getOperands().end(), [&](Value operand) {
-          return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
-        })) {
-      return true;
-    }
-    return false;
+    return std::any_of(op->getOperands().begin(), op->getOperands().end(), [&](Value operand) {
+      return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
+    });
   }
 
   static void collectNestedOps(Operation *root, llvm::DenseSet<Operation *> &set) {
@@ -120,7 +119,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       }
     }
 
-    if (!firstAffineFor) {
+    if (firstAffineFor == nullptr) {
       llvm::errs() << "[AKG] HoistLoopIndependentOps: no top-level affine.for found in func " << funcOp.getName()
                    << "\n";
       return;
@@ -137,7 +136,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
       Operation *op = &*it;
 
-      if (op == block.getTerminator()) continue;
+      if (op == block.getTerminator()) {
+        continue;
+      }
 
       // If another top-level affine.for is encountered, include it
       // in the "previous affine.for set" and continue scanning.
@@ -148,7 +149,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
       // For non-affine.for ops: move only if independent of all
       // previously encountered affine.for computations.
-      if (opDependsOnSeenAffineFors(op, seenAffineForOps, valueDepCache)) continue;
+      if (opDependsOnSeenAffineFors(op, seenAffineForOps, valueDepCache)) {
+        continue;
+      }
 
       toMove.push_back(op);
     }
@@ -172,7 +175,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
 
     Operation *defOp = value.getDefiningOp();
-    if (!defOp) {
+    if (defOp == nullptr) {
       return false;
     }
 
@@ -242,11 +245,13 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     for (auto forOp : nestedLoops) {
       for (Operation &op : forOp.getBody()->getOperations()) {
         auto loadOp = dyn_cast<affine::AffineLoadOp>(&op);
-        if (!loadOp) continue;
+        if (!loadOp) {
+          continue;
+        }
 
         Value memref = loadOp.getMemRef();
         Operation *memrefDefOp = memref.getDefiningOp();
-        if (!memrefDefOp || !isa<memref::AllocOp>(memrefDefOp)) {
+        if ((memrefDefOp == nullptr) || !isa<memref::AllocOp>(memrefDefOp)) {
           continue;
         }
 
@@ -273,7 +278,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     Block *block = outermostLoop->getBlock();
     for (auto it = Block::iterator(outermostLoop); it != block->begin(); --it) {
       auto storeOp = dyn_cast<affine::AffineStoreOp>(&*it);
-      if (!storeOp || storeOp.getMemRef() != memref) continue;
+      if (!storeOp || storeOp.getMemRef() != memref) {
+        continue;
+      }
 
       auto memrefType = cast<MemRefType>(memref.getType());
       if (memrefType.getRank() == 0) {
@@ -306,7 +313,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       if (!memrefStillUsed) {
         toErase.push_back(matchedStore.getOperation());
         Operation *memrefDefOp = memref.getDefiningOp();
-        if (memrefDefOp) toErase.push_back(memrefDefOp);
+        if (memrefDefOp != nullptr) {
+          toErase.push_back(memrefDefOp);
+        }
       }
     }
 

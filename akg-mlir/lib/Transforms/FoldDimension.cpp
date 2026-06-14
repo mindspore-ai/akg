@@ -63,11 +63,13 @@ constexpr auto kNoBroadcast = 2;
 
 template <typename T>
 void printVector(const llvm::SmallVector<T> info) {
-  LLVM_DEBUG(llvm::dbgs() << "[");
-  for (auto num : info) {
-    LLVM_DEBUG(llvm::dbgs() << num << ", ");
-  }
-  LLVM_DEBUG(llvm::dbgs() << "]\n");
+  LLVM_DEBUG({
+    llvm::dbgs() << "[";
+    for (auto num : info) {
+      llvm::dbgs() << num << ", ";
+    }
+    llvm::dbgs() << "]\n";
+  });
 }
 
 bool foldDimensionAnalyser::backtrackUpdateTensors(const Value &value, const llvm::SmallVector<int64_t> info) {
@@ -435,7 +437,7 @@ void foldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
       LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported operator '" << op->getName() << "'.\n");
     }
 
-    if (!foldable || this->opFoldableInfo.size() == 0) {
+    if (!foldable || this->opFoldableInfo.empty()) {
       return;
     }
 
@@ -653,12 +655,14 @@ void foldDimensionAnalyser::recordTensorCanFold() {
 
 namespace {
 void populateFoldDimension(func::FuncOp funcOp, llvm::DenseMap<Value, Type> tensorToBeFolded, FuncArgsMap funcArgsMap) {
-  LLVM_DEBUG(llvm::dbgs() << "--------------tensorToBeFolded----------------");
-  for (auto item : tensorToBeFolded) {
-    LLVM_DEBUG(item.first.dump());
-    LLVM_DEBUG(item.second.dump());
-  }
-  LLVM_DEBUG(llvm::dbgs() << "----------------------------------------------");
+  LLVM_DEBUG({
+    llvm::dbgs() << "--------------tensorToBeFolded----------------";
+    for (auto item : tensorToBeFolded) {
+      item.first.dump();
+      item.second.dump();
+    }
+    llvm::dbgs() << "----------------------------------------------";
+  });
   // update func type
   akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -795,7 +799,9 @@ struct FoldDimension : public impl::FoldDimensionBase<FoldDimension> {
   void runOnOperation() override {
     auto funcOp = getOperation();
     auto moduleOp = funcOp->getParentOp();
-    if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) return;
+    if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) {
+      return;
+    }
     auto opTypeAttr = funcOp->getAttrOfType<StringAttr>("OperatorType");
     if (opTypeAttr == nullptr) {
       LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported without attr 'OperatorType'.\n");

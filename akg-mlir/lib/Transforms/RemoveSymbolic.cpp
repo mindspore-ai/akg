@@ -64,7 +64,8 @@ static Type RemoveTypeSymbolic(Type type) {
   // Return the corresponding type based on the original type, preserving memref or tensor
   if (auto memRefType = dyn_cast<MemRefType>(type)) {
     return MemRefType::get(shape, elementType, memRefType.getLayout(), newAttr);
-  } else if (isa<RankedTensorType>(type)) {
+  }
+  if (isa<RankedTensorType>(type)) {
     return RankedTensorType::get(shape, elementType, newAttr);
   }
   return type;
@@ -89,20 +90,24 @@ static void RemoveFuncSymbolic(func::FuncOp &func) {
 static void RemoveGlobalSymbolic(memref::GlobalOp globalOp, OpBuilder &builder) {
   MemRefType oldType = cast<MemRefType>(globalOp.getType());
   Type newType = RemoveTypeSymbolic(oldType);
-  if (oldType == newType) return;
+  if (oldType == newType) {
+    return;
+  }
 
   MemRefType newMemRefType = cast<MemRefType>(newType);
   Attribute initValue = globalOp.getConstantInitValue();
-  ModuleOp module = globalOp->getParentOfType<ModuleOp>();
+  auto module = globalOp->getParentOfType<ModuleOp>();
   SymbolTable symbolTable(module);
 
   Location loc = globalOp.getLoc();
   builder.setInsertionPoint(globalOp);
   StringAttr visibility = globalOp.getSymVisibilityAttr();
-  if (!visibility) visibility = builder.getStringAttr("private");
+  if (!visibility) {
+    visibility = builder.getStringAttr("private");
+  }
   bool isConstant = static_cast<bool>(globalOp.getConstant());
-  memref::GlobalOp newOp = builder.create<memref::GlobalOp>(loc, globalOp.getSymName(), visibility, newMemRefType,
-                                                            initValue, isConstant, globalOp.getAlignmentAttr());
+  auto newOp = builder.create<memref::GlobalOp>(loc, globalOp.getSymName(), visibility, newMemRefType, initValue,
+                                                isConstant, globalOp.getAlignmentAttr());
   symbolTable.erase(globalOp);
   (void)symbolTable.insert(newOp);
   newOp->moveBefore(&module.front());

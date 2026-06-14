@@ -41,11 +41,8 @@ using namespace mlir::mindspore;  // NOLINT(build/namespaces)
 namespace {
 
 bool IsReduceOp(Operation *op) {
-  if (isa<mindspore::ReduceSumOp>(op) || isa<mindspore::ReduceAllOp>(op) || isa<mindspore::ReduceAnyOp>(op) ||
-      isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ReduceMinOp>(op) || isa<mindspore::ReduceProdOp>(op)) {
-    return true;
-  }
-  return false;
+  return isa<mindspore::ReduceSumOp>(op) || isa<mindspore::ReduceAllOp>(op) || isa<mindspore::ReduceAnyOp>(op) ||
+         isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ReduceMinOp>(op) || isa<mindspore::ReduceProdOp>(op);
 }
 
 struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownReductionOps> {
@@ -59,7 +56,7 @@ struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownRedu
       }
       return WalkResult::advance();
     });
-    if (!redOp) {
+    if (redOp == nullptr) {
       return;
     }
 
@@ -69,7 +66,7 @@ struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownRedu
     CommonUtils::getAllNextRelatedOps(redOp, relatedOps, usedValues);
     Operation *curOp = redOp->getNextNode();
     Operation *nextOp = nullptr;
-    while (curOp) {
+    while (curOp != nullptr) {
       bool flag = false;
       if (std::any_of(relatedOps.begin(), relatedOps.end(), [curOp](const Operation *op) { return op == curOp; })) {
         flag = true;

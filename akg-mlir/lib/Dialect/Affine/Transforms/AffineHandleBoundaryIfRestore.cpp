@@ -74,11 +74,11 @@ std::pair<Operation *, Operation *> AffineHandleBoundaryIfRestore::getBoundaryIf
     }
     WalkResult::advance();
   });
-  if (!keepArgs) {
+  if (keepArgs == nullptr) {
     return std::make_pair(nullptr, nullptr);
   }
   Operation *curOp = keepArgs;
-  while (curOp && !isa<scf::IfOp>(curOp)) {
+  while ((curOp != nullptr) && !isa<scf::IfOp>(curOp)) {
     curOp = curOp->getParentOp();
   }
   return std::make_pair(curOp, keepArgs);
@@ -87,7 +87,7 @@ std::pair<Operation *, Operation *> AffineHandleBoundaryIfRestore::getBoundaryIf
 Operation *AffineHandleBoundaryIfRestore::getInnerForOp(Operation *boundaryIf,
                                                         const SmallVector<Value, 8> &relatedVars) {
   Operation *curOp = boundaryIf;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (auto forOp = dyn_cast<scf::ForOp>(curOp)) {
       if (std::any_of(relatedVars.begin(), relatedVars.end(),
                       [&](Value arg) { return arg == forOp.getInductionVar(); })) {
@@ -105,7 +105,7 @@ Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(Operation *funcOp,
   for (auto op : relatedOps) {
     for (auto operand : op->getOperands()) {
       Operation *prev = operand.getDefiningOp();
-      if (prev && isa<affine::AffineApplyOp>(prev)) {
+      if ((prev != nullptr) && isa<affine::AffineApplyOp>(prev)) {
         applyOps.push_back(prev);
       }
     }
@@ -121,14 +121,14 @@ Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(Operation *funcOp,
 }
 
 bool AffineHandleBoundaryIfRestore::isDeeper(Operation *const op1, const Operation *const op2) {
-  if (!op1) {
+  if (op1 == nullptr) {
     return false;
   }
-  if (!op2) {
+  if (op2 == nullptr) {
     return true;
   }
   Operation *curOp = op1;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (curOp == op2) {
       return true;
     }
@@ -171,7 +171,7 @@ Operation *AffineHandleBoundaryIfRestore::createFakeOuterLoop(OpBuilder &builder
   Operation *end = nullptr;
   fakeLoop.walk([&](scf::YieldOp op) { end = op.getOperation(); });
   auto curOp = fakeLoop.getOperation()->getNextNode();
-  while (curOp && !isa<scf::YieldOp>(curOp) && !isa<gpu::ReturnOp>(curOp)) {
+  while ((curOp != nullptr) && !isa<scf::YieldOp>(curOp) && !isa<gpu::ReturnOp>(curOp)) {
     auto next = curOp->getNextNode();
     curOp->moveBefore(end);
     curOp = next;
@@ -186,7 +186,7 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
   m->walk([&](gpu::GPUFuncOp op) { funcOp = op.getOperation(); });
 
   auto [boundaryIf, keepArgs] = getBoundaryIf();
-  if (!boundaryIf) {
+  if (boundaryIf == nullptr) {
     return;
   }
   keepArgs->erase();
@@ -201,7 +201,7 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
   auto innerFor = getInnerForOp(boundaryIf, relatedVars);
   auto innerApply = getInnerApplyOp(funcOp, relatedOps);
   OpBuilder builder(funcOp);
-  if (!innerFor) {
+  if (innerFor == nullptr) {
     innerFor = createFakeOuterLoop(builder, funcOp);
   }
   bool underApply = isDeeper(innerApply, innerFor);

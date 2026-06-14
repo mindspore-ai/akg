@@ -45,8 +45,12 @@ static Value lowerBoundWithAffineMinMax(affine::AffineForOp op, bool isLowerBoun
   Location loc = op.getLoc();
   AffineMap map = isLowerBound ? op.getLowerBoundMap() : op.getUpperBoundMap();
   ValueRange operands = isLowerBound ? op.getLowerBoundOperands() : op.getUpperBoundOperands();
-  if (map.getNumResults() == 0) return nullptr;
-  if (isLowerBound) return rewriter.create<affine::AffineMaxOp>(loc, map, operands).getResult();
+  if (map.getNumResults() == 0) {
+    return nullptr;
+  }
+  if (isLowerBound) {
+    return rewriter.create<affine::AffineMaxOp>(loc, map, operands).getResult();
+  }
   return rewriter.create<affine::AffineMinOp>(loc, map, operands).getResult();
 }
 
@@ -61,7 +65,9 @@ class AffineForToSCFPattern : public OpRewritePattern<affine::AffineForOp> {
     // Compute lower and upper bounds using affine.max / affine.min
     Value lowerBound = lowerBoundWithAffineMinMax(op, /*isLowerBound=*/true, rewriter);
     Value upperBound = lowerBoundWithAffineMinMax(op, /*isLowerBound=*/false, rewriter);
-    if (!lowerBound || !upperBound) return failure();
+    if (!lowerBound || !upperBound) {
+      return failure();
+    }
     Value step = rewriter.create<arith::ConstantIndexOp>(loc, op.getStepAsInt());
 
     // Create scf.for operation
@@ -166,7 +172,9 @@ class ConvertAffineToSCF : public impl::ConvertAffineToSCFBase<ConvertAffineToSC
     nativePatterns.erase(std::remove_if(nativePatterns.begin(), nativePatterns.end(),
                                         [&applyName, &minName, &maxName](const std::unique_ptr<RewritePattern> &p) {
                                           std::optional<OperationName> root = p->getRootKind();
-                                          if (!root) return false;
+                                          if (!root) {
+                                            return false;
+                                          }
                                           return *root == applyName || *root == minName || *root == maxName;
                                         }),
                          nativePatterns.end());

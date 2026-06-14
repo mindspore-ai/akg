@@ -54,12 +54,13 @@ static LogicalResult computeReshapeOutput(ArrayRef<int64_t> higherRankShape, Arr
     int64_t higherRankDim = higherRankShape[i];
     int64_t lowerRankDim = lowerRankShape[j];
 
-    if (lowerRankDim == 1 && higherRankDim > 1)
+    if (lowerRankDim == 1 && higherRankDim > 1) {
       reshapeOutputShape[i] = 1;
-    else if ((lowerRankDim > 1 && higherRankDim == 1) || (lowerRankDim == higherRankDim))
+    } else if ((lowerRankDim > 1 && higherRankDim == 1) || (lowerRankDim == higherRankDim)) {
       reshapeOutputShape[i] = lowerRankDim;
-    else if (higherRankDim != lowerRankDim)
+    } else if (higherRankDim != lowerRankDim) {
       return failure();
+    }
   }
   return success();
 }
@@ -75,7 +76,9 @@ static LogicalResult EqualizeRanks(PatternRewriter &rewriter, Location loc, Valu
   int64_t input1Rank = input1Ty.getRank();
   int64_t input2Rank = input2Ty.getRank();
 
-  if (input1Rank == input2Rank) return success();
+  if (input1Rank == input2Rank) {
+    return success();
+  }
 
   Value higherTensorValue, lowerTensorValue;
   if (input1Rank > input2Rank) {
@@ -91,7 +94,9 @@ static LogicalResult EqualizeRanks(PatternRewriter &rewriter, Location loc, Valu
 
   SmallVector<int64_t, 4> reshapeOutputShape;
 
-  if (computeReshapeOutput(higherRankShape, lowerRankShape, reshapeOutputShape).failed()) return failure();
+  if (computeReshapeOutput(higherRankShape, lowerRankShape, reshapeOutputShape).failed()) {
+    return failure();
+  }
 
   auto reshapeInputType = llvm::cast<RankedTensorType>(lowerTensorValue.getType());
   auto reshapeOutputType =
@@ -129,7 +134,9 @@ LogicalResult reshapeLowerToHigher(PatternRewriter &rewriter, Location loc, Rank
   int64_t input1Rank = input1Ty.getRank();
   int64_t input2Rank = input2Ty.getRank();
 
-  if (input1Rank == input2Rank) return rewriter.notifyMatchFailure(loc, "cannot rewrite as its already correct");
+  if (input1Rank == input2Rank) {
+    return rewriter.notifyMatchFailure(loc, "cannot rewrite as its already correct");
+  }
 
   Value input1Copy = input1;
   Value input2Copy = input2;
@@ -140,8 +147,9 @@ LogicalResult reshapeLowerToHigher(PatternRewriter &rewriter, Location loc, Rank
   // Verify the rank agrees with the output type if the output type is ranked.
   if (outputType) {
     if (outputType.getRank() != llvm::cast<RankedTensorType>(input1Copy.getType()).getRank() ||
-        outputType.getRank() != llvm::cast<RankedTensorType>(input2Copy.getType()).getRank())
+        outputType.getRank() != llvm::cast<RankedTensorType>(input2Copy.getType()).getRank()) {
       return rewriter.notifyMatchFailure(loc, "the reshaped type doesn't agrees with the ranked output type");
+    }
   }
 
   input1 = input1Copy;
@@ -160,10 +168,13 @@ struct ConvertMindsporeOp : public OpRewritePattern<OpTy> {
     Value output = mindsporeBinaryOp.getResult();
 
     auto outputType = dyn_cast<RankedTensorType>(output.getType());
-    if (!outputType) return failure();
-
-    if (reshapeLowerToHigher(rewriter, mindsporeBinaryOp.getLoc(), outputType, input1, input2).failed())
+    if (!outputType) {
       return failure();
+    }
+
+    if (reshapeLowerToHigher(rewriter, mindsporeBinaryOp.getLoc(), outputType, input1, input2).failed()) {
+      return failure();
+    }
 
     rewriter.replaceOpWithNewOp<OpTy>(mindsporeBinaryOp, outputType, input1, input2);
 
@@ -182,7 +193,9 @@ struct ConvertMindsporeOp<mindspore::SelectOp> : public OpRewritePattern<mindspo
     Value output = mindsporeOp.getResult();
 
     auto outputType = dyn_cast<RankedTensorType>(output.getType());
-    if (!outputType) return rewriter.notifyMatchFailure(mindsporeOp, "output not a ranked tensor");
+    if (!outputType) {
+      return rewriter.notifyMatchFailure(mindsporeOp, "output not a ranked tensor");
+    }
 
     // Apply broadcasting to each pair of inputs separately, and chain them as
     // compound as below so that the broadcasting happens all at once.
@@ -192,16 +205,18 @@ struct ConvertMindsporeOp<mindspore::SelectOp> : public OpRewritePattern<mindspo
 
     bool reshaped3 = reshapeLowerToHigher(rewriter, mindsporeOp.getLoc(), outputType, input2, input3).succeeded();
 
-    if (!reshaped1 && !reshaped2 && !reshaped3)
+    if (!reshaped1 && !reshaped2 && !reshaped3) {
       return rewriter.notifyMatchFailure(mindsporeOp, "cannot rewrite as the rank of all operands is already aligned");
+    }
 
     int32_t result1Rank = cast<RankedTensorType>(input1.getType()).getRank();
     int32_t result2Rank = cast<RankedTensorType>(input2.getType()).getRank();
     int32_t result3Rank = cast<RankedTensorType>(input3.getType()).getRank();
     int32_t outputRank = outputType.getRank();
 
-    if ((result1Rank != result2Rank) || (result2Rank != result3Rank) || (result1Rank != outputRank))
+    if ((result1Rank != result2Rank) || (result2Rank != result3Rank) || (result1Rank != outputRank)) {
       return rewriter.notifyMatchFailure(mindsporeOp, "not all ranks are aligned with each other");
+    }
 
     rewriter.replaceOpWithNewOp<mindspore::SelectOp>(mindsporeOp, outputType, input1, input2, input3);
 

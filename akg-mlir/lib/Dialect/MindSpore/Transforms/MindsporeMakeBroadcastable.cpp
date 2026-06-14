@@ -43,9 +43,8 @@ DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
   ShapedType shapedType = cast<ShapedType>(inputType);
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   SmallVector<Attribute> symAttr;
-  for (size_t i = 0; i < typeShapes.size(); i++) {
-    symAttr.emplace_back(StringAttr::get(context, std::to_string(typeShapes[i])));
-  }
+  std::transform(typeShapes.begin(), typeShapes.end(), std::back_inserter(symAttr),
+                 [context](int64_t typeShape) { return StringAttr::get(context, std::to_string(typeShape)); });
 
   SmallVector<NamedAttribute> opSymbol;
   opSymbol.emplace_back(StringAttr::get(context, "input_0"), ArrayAttr::get(context, symAttr));
@@ -83,7 +82,9 @@ struct ConvertMindsporeOp : public OpRewritePattern<OpTy> {
     Value output = msOp.getResult();
 
     auto outputType = dyn_cast<RankedTensorType>(output.getType());
-    if (!outputType) return failure();
+    if (!outputType) {
+      return failure();
+    }
 
     rewriter.setInsertionPoint(msOp);
     createBroadCastOp(rewriter, input1, output);
@@ -104,7 +105,9 @@ struct ConvertMindsporeOp<mindspore::SelectOp> : public OpRewritePattern<mindspo
     Value output = selectOp.getResult();
 
     auto outputType = dyn_cast<RankedTensorType>(output.getType());
-    if (!outputType) return failure();
+    if (!outputType) {
+      return failure();
+    }
 
     rewriter.setInsertionPoint(selectOp);
     createBroadCastOp(rewriter, input1, output);

@@ -41,7 +41,7 @@ constexpr auto kStaticSuffix = ".o";
 constexpr auto kAiCoreStr = "AiCore";
 constexpr auto kMIXStr = "MIX";
 static thread_local aclrtContext thread_local_rt_context{nullptr};
-typedef void (*CallFunc)(uint32_t, void *, void *, void **);
+using CallFunc = void (*)(uint32_t, void *, void *, void **);
 
 uint64_t kDevRegStub = 0xbadbeefULL;
 std::mutex kDevRegStubMutex;
@@ -114,7 +114,7 @@ void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, s
     auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
     kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
   } else {
-    rtError_t ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), NULL,
+    rtError_t ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), nullptr,
                                    (rtStream_t)stream);
     if (ret != RT_ERROR_NONE) {
       LOG(FATAL) << "Call rtKernelLaunch, ret[" << ret << "]";
@@ -195,7 +195,7 @@ struct RuntimeCache {
   std::unordered_map<std::string, std::unique_ptr<AscendKernelRuntime>> cache;
 
   AscendKernelRuntime *GetOrCreate(uint32_t device_id, bool use_mem_pool, void *external_stream) {
-    std::string key = std::to_string(device_id) + "_" + std::to_string(use_mem_pool) + "_" +
+    std::string key = std::to_string(device_id) + "_" + std::to_string(static_cast<int>(use_mem_pool)) + "_" +
                       std::to_string(reinterpret_cast<uintptr_t>(external_stream));
     std::lock_guard<std::mutex> lock(mutex);
     auto it = cache.find(key);
@@ -415,7 +415,9 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
   if (is_dynamic) {
     int64_t offset = 0;
     size_t input_size = input_tensors.size();
-    if (tiling_struct_size > 0) input_size -= 1;
+    if (tiling_struct_size > 0) {
+      input_size -= 1;
+    }
     for (size_t idx = 0; idx < input_size; idx++) {
       auto base = input_tensors[idx];
       auto shape = input_shape_args[idx];
@@ -490,7 +492,7 @@ void AscendKernelRuntime::SyncMemory(void *dst, const void *src, uint64_t size, 
   } else {
     auto ret = MemcpyAsync(dst, src, size, static_cast<int32_t>(ACL_MEMCPY_HOST_TO_DEVICE));
     if (!ret) {
-      LOG(FATAL) << "MemcpyAsync failed, ret[" << GetErrorMsg(ret) << "]";
+      LOG(FATAL) << "MemcpyAsync failed, ret[" << GetErrorMsg(static_cast<uint32_t>(ret)) << "]";
     }
   }
 }
@@ -529,10 +531,14 @@ bool AscendKernelRuntime::SyncStream() {
 }
 
 void AscendKernelRuntime::InitDeviceMemory(const std::vector<BaseDevicePtr> &tensors) {
-  if (!use_mem_pool_) return;
+  if (!use_mem_pool_) {
+    return;
+  }
   for (auto base : tensors) {
     auto tensor = mlir::runtime::AsTensorDevice(base);
-    if (!tensor) continue;
+    if (!tensor) {
+      continue;
+    }
     if (tensor->IsHostTensor()) {
       auto mem_size = tensor->GetDataSize();
       auto device_addr = mem_manager_->MallocMemFromMemPool(mem_size);
@@ -554,7 +560,9 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   // load input data to device
   for (const auto &base : input_tensors) {
     auto tensor = mlir::runtime::AsTensorDevice(base);
-    if (!tensor) continue;
+    if (!tensor) {
+      continue;
+    }
     if (tensor->IsHostTensor()) {
       SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
     }
@@ -566,7 +574,9 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   // get output
   for (const auto &base : input_tensors) {
     auto tensor = mlir::runtime::AsTensorDevice(base);
-    if (!tensor) continue;
+    if (!tensor) {
+      continue;
+    }
     if (tensor->IsOutput() && tensor->IsHostTensor()) {
       SyncDeviceToHost(tensor->GetDataSize(), tensor->GetDeviceAddress(), tensor->GetHostAddress());
     }
@@ -574,7 +584,9 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   // FreeResource
   for (const auto &base : input_tensors) {
     auto tensor = mlir::runtime::AsTensorDevice(base);
-    if (!tensor) continue;
+    if (!tensor) {
+      continue;
+    }
     tensor->SetDeviceAddress(nullptr);
   }
 }

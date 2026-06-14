@@ -48,13 +48,21 @@ struct UIToFPLegalizePattern : public OpRewritePattern<arith::UIToFPOp> {
 
     Type inElemType = inType;
     Type outElemType = outType;
-    if (auto vecIn = dyn_cast<VectorType>(inType)) inElemType = vecIn.getElementType();
-    if (auto vecOut = dyn_cast<VectorType>(outType)) outElemType = vecOut.getElementType();
+    if (auto vecIn = dyn_cast<VectorType>(inType)) {
+      inElemType = vecIn.getElementType();
+    }
+    if (auto vecOut = dyn_cast<VectorType>(outType)) {
+      outElemType = vecOut.getElementType();
+    }
 
     auto intIn = dyn_cast<IntegerType>(inElemType);
-    if (!intIn || intIn.getWidth() != 8) return failure();
+    if (!intIn || intIn.getWidth() != 8) {
+      return failure();
+    }
     auto floatOut = dyn_cast<FloatType>(outElemType);
-    if (!floatOut || !floatOut.isF32()) return failure();
+    if (!floatOut || !floatOut.isF32()) {
+      return failure();
+    }
 
     Type i16Type = IntegerType::get(rewriter.getContext(), 16);
     Type midType = i16Type;
@@ -74,7 +82,9 @@ class VectorLegalizeType : public mlir::vector::impl::VectorLegalizeTypeBase<Vec
     MLIRContext *context = &getContext();
 
     for (auto func : module.getOps<func::FuncOp>()) {
-      if (!func->hasAttr(kVectorFunctionAttr)) continue;
+      if (!func->hasAttr(kVectorFunctionAttr)) {
+        continue;
+      }
 
       RewritePatternSet patterns(context);
       patterns.add<UIToFPLegalizePattern>(context);

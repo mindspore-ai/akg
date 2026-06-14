@@ -15,6 +15,8 @@
  */
 
 #include "akg/Analysis/Model.h"
+
+#include <utility>
 #include "akg/Analysis/BufferAnalysis.h"
 #include "akg/Utils/AnalysisForGpu.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
@@ -200,11 +202,11 @@ Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(
 }
 
 // Implement InitGraph methods
-InitGraph::InitGraph(const std::string &name) : name{name} {}
-InitGraph::InitGraph(const std::string &name, const std::vector<std::shared_ptr<Node>> &nodes,
+InitGraph::InitGraph(std::string name) : name{std::move(name)} {}
+InitGraph::InitGraph(std::string name, const std::vector<std::shared_ptr<Node>> &nodes,
                      const std::vector<std::shared_ptr<Node>> &inputs,
                      const std::vector<std::shared_ptr<Node>> &outputs)
-    : name{name}, nodes_{nodes}, inputs_{inputs}, outputs_{outputs} {}
+    : name{std::move(name)}, nodes_{nodes}, inputs_{inputs}, outputs_{outputs} {}
 
 void InitGraph::setGraphType(const StringAttr &attrs) { graphType = attrs.getValue().str(); }
 

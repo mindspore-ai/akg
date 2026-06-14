@@ -81,7 +81,7 @@ struct VectorizeEmitter {
    * @param LdStGlobalCache pack of original load/store instructions
    * @return std::string new instruction that use vector load/store
    */
-  std::string tryEmitVectorize(std::deque<std::string> LdStGlobalCache) const {
+  [[nodiscard]] std::string tryEmitVectorize(std::deque<std::string> LdStGlobalCache) const {
     if (LdStGlobalCache.size() != vectorizeSize) {
       return "";
     }
@@ -157,7 +157,7 @@ struct VectorizeEmitter {
   // currently we only support vectorize length = 4;
   size_t vectorizeSize = 4;
   size_t maxSplitLen = 4;  // "instruction, dest, (offset), src"
-  std::vector<std::string> splitEachLoadStore(const std::string &line) const {
+  [[nodiscard]] std::vector<std::string> splitEachLoadStore(const std::string &line) const {
     std::vector<std::string> result = splitString(line, ' ');
     // we further remove all irrelevant symbols to get pure "instruction, dest, (offset), src"
     std::vector<std::string> finalResult;
@@ -179,7 +179,7 @@ struct VectorizeEmitter {
     return finalResult;
   }
 
-  std::pair<std::string, int> emitPackDataStr(std::map<int, std::string> srcIndex) const {
+  [[nodiscard]] std::pair<std::string, int> emitPackDataStr(std::map<int, std::string> srcIndex) const {
     std::string delimiter = ", ";
     std::string packDataStr = "{";
     int currSize = -1;
@@ -201,7 +201,7 @@ struct VectorizeEmitter {
     return std::make_pair(packDataStr, firstOffset);
   }
 
-  std::string emitDestStr(const std::string &dest, int firstOffset) const {
+  [[nodiscard]] std::string emitDestStr(const std::string &dest, int firstOffset) const {
     auto destStr = "[" + dest;
     if (firstOffset != 0) {
       destStr += "+" + std::to_string(firstOffset);
@@ -210,7 +210,7 @@ struct VectorizeEmitter {
     return destStr;
   }
 
-  std::string emitInstruction(const std::string &instruction, bool isLoad) const {
+  [[nodiscard]] std::string emitInstruction(const std::string &instruction, bool isLoad) const {
     std::string newInstruction;
     if (ncFlag && isLoad) {
       newInstruction = replaceString(instruction, "global", "global.nc.v4");
@@ -270,9 +270,8 @@ std::string getKernelName(const std::string &line) {
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return match[1].str();
-  } else {
-    return "";
   }
+  return "";
 }
 
 // .param .u64 Fused_BroadcastTo_inplace_assign_builder_15920035459442552540_kernel_param_0,
@@ -282,9 +281,8 @@ std::string getParam(const std::string &line, const std::string &value) {
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return match[1].str();
-  } else {
-    return "";
   }
+  return "";
 }
 
 // ld.param.u64   %rd2, [Fused_Reshape_Cast_Neg_Mul_fusion_18315353371220478878_kernel_param_18];
@@ -294,9 +292,8 @@ std::tuple<std::string, std::string> getRegFromLoadParamGlobal(const std::string
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return std::make_tuple(match[1].str(), match[2].str());
-  } else {
-    return std::make_tuple("", "");
   }
+  return std::make_tuple("", "");
 }
 
 bool containsInstruction(const std::string &line, const std::string &instruction) {
@@ -305,11 +302,11 @@ bool containsInstruction(const std::string &line, const std::string &instruction
 
 void paramsToValues(const std::vector<std::vector<int>> &shapeArgs, std::vector<int> &values) {
   values.clear();
-  for (size_t i = 0; i < shapeArgs.size(); i++) {
+  for (const auto &shapeArg : shapeArgs) {
     values.push_back(kShouldRemove);
     values.push_back(kShouldKeep);  // real pointer
-    for (size_t j = 0; j < shapeArgs[i].size(); j++) {
-      values.push_back(shapeArgs[i][j]);
+    for (size_t j = 0; j < shapeArg.size(); j++) {
+      values.push_back(shapeArg[j]);
     }
   }
 }
@@ -355,7 +352,7 @@ void concatPtx(std::string &result, const std::vector<std::string> &vec, const s
                const std::vector<std::string> &valueStrList) {
   for (size_t idx = 0; idx < vec.size(); idx++) {
     if (posFlags[idx] != -1) {
-      size_t pos = static_cast<size_t>(posFlags[idx]);
+      auto pos = static_cast<size_t>(posFlags[idx]);
       if (pos < valueStrList.size()) {
         (void)result.append(valueStrList[pos]);
       } else {
@@ -465,10 +462,9 @@ bool processStep1(ProcessingState &state, const std::string &line) {
       state.oss << line << "\n";
     }
     return true;
-  } else {
-    state.step = 2;
-    return false;
   }
+  state.step = 2;
+  return false;
 }
 
 // Handle step 2: process param loads and nc flag

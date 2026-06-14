@@ -67,7 +67,7 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
     }
     ArrayAttr axesAttr = builder.getArrayAttr(intAttrs);
     // if has reduction axis
-    if (axesAttr.size() >= 1) {
+    if (!axesAttr.empty()) {
       Operation *yield_op = &genericOp.getRegion().front().getOperations().back();
       Operation *op = yield_op->getOperand(0).getDefiningOp();
       op->setAttr(kReductionAxesStr, axesAttr);

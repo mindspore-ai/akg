@@ -40,7 +40,9 @@ namespace {
 
 static Value getCastedValue(PatternRewriter &rewriter, Value oper, Type toElemTy) {
   ShapedType shapedType = cast<ShapedType>(oper.getType());
-  if (shapedType.getElementType() == toElemTy) return oper;
+  if (shapedType.getElementType() == toElemTy) {
+    return oper;
+  }
 
   auto loc = oper.getLoc();
   auto resultType = RankedTensorType::get(shapedType.getShape(), toElemTy);
@@ -53,7 +55,9 @@ template <typename Op>
 static Operation *createNewOp(PatternRewriter &rewriter, Op subOp, SmallVector<Value> &castedOperands) {
   IRMapping mapper;
   Operation *op = subOp.getOperation();
-  for (const auto &[idx, oper] : llvm::enumerate(op->getOperands())) mapper.map(oper, castedOperands[idx]);
+  for (const auto &[idx, oper] : llvm::enumerate(op->getOperands())) {
+    mapper.map(oper, castedOperands[idx]);
+  }
 
   auto newOp = rewriter.clone(*op, mapper);
   for (const auto &[idx, res] : llvm::enumerate(op->getResults())) {
@@ -93,8 +97,7 @@ static void createI64ElementTypeOp(Op subOp, PatternRewriter &rewriter) {
 
 static bool isUI8ElemType(Operation *op, Type ui8Ty) {
   auto elemTy = getElementTypeOrSelf(op->getResultTypes()[0]);
-  if (elemTy != ui8Ty) return false;
-  return true;
+  return elemTy == ui8Ty;
 }
 
 struct ConvertSubOp : public OpRewritePattern<mindspore::SubOp> {
@@ -102,7 +105,9 @@ struct ConvertSubOp : public OpRewritePattern<mindspore::SubOp> {
 
   LogicalResult matchAndRewrite(mindspore::SubOp subOp, PatternRewriter &rewriter) const override {
     Type ui8Ty = rewriter.getIntegerType(8, false);
-    if (!isUI8ElemType(subOp, ui8Ty)) return failure();
+    if (!isUI8ElemType(subOp, ui8Ty)) {
+      return failure();
+    }
 
     createI64ElementTypeOp(subOp, rewriter);
     return success();

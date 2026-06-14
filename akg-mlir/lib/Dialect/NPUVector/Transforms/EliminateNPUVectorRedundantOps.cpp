@@ -73,7 +73,9 @@ static Value traceMemrefRoot(Value value) {
   Value current = value;
   for (int step = 0; step < 32; ++step) {
     Operation *defOp = current.getDefiningOp();
-    if (!defOp) break;
+    if (defOp == nullptr) {
+      break;
+    }
 
     if (auto subview = dyn_cast<memref::SubViewOp>(defOp)) {
       current = subview.getSource();
@@ -91,9 +93,13 @@ static Value traceMemrefRoot(Value value) {
 }
 
 static bool sameValues(ArrayRef<Value> lhs, ArrayRef<Value> rhs) {
-  if (lhs.size() != rhs.size()) return false;
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
   for (auto [lhsValue, rhsValue] : llvm::zip(lhs, rhs)) {
-    if (lhsValue != rhsValue) return false;
+    if (lhsValue != rhsValue) {
+      return false;
+    }
   }
   return true;
 }
@@ -191,7 +197,9 @@ static void processBlock(Block &block, SmallVectorImpl<Operation *> &toErase) {
     }
 
     for (Region &region : op.getRegions()) {
-      for (Block &nestedBlock : region) processBlock(nestedBlock, toErase);
+      for (Block &nestedBlock : region) {
+        processBlock(nestedBlock, toErase);
+      }
     }
 
     if (mayWriteMemory(&op)) {
@@ -218,9 +226,13 @@ static void eraseWriteOnlyLocalAllocs(func::FuncOp funcOp) {
     }
   });
 
-  for (Operation *write : writesToErase) write->erase();
+  for (Operation *write : writesToErase) {
+    write->erase();
+  }
   for (memref::AllocOp allocOp : allocsToErase) {
-    if (allocOp->use_empty()) allocOp.erase();
+    if (allocOp->use_empty()) {
+      allocOp.erase();
+    }
   }
 }
 
@@ -231,13 +243,17 @@ class EliminateNPUVectorRedundantOpsPass
   EliminateNPUVectorRedundantOpsPass(const EliminateNPUVectorRedundantOpsPass &) = default;
 
   void runOnOperation() override {
-    if (getOperation().isDeclaration()) return;
+    if (getOperation().isDeclaration()) {
+      return;
+    }
 
     SmallVector<Operation *> toErase;
     processBlock(getOperation().getBody().front(), toErase);
 
     for (Operation *op : llvm::reverse(toErase)) {
-      if (op->use_empty()) op->erase();
+      if (op->use_empty()) {
+        op->erase();
+      }
     }
     eraseWriteOnlyLocalAllocs(getOperation());
   }

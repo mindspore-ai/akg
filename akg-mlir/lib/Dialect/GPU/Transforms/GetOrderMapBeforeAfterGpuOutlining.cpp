@@ -70,15 +70,14 @@ Value FindAllocOpForFuncArg(func::FuncOp funcOp, BlockArgument targetArg) {
   });
   if (!targetCopyOp) {
     (void)funcOp.emitError("Error: can't find memref::CopyOp \n");
-    return Value();
+    return {};
   }
   auto prevOp = targetCopyOp.getSource().getDefiningOp();
   if (auto alloc = dyn_cast<memref::AllocOp>(prevOp)) {
     return alloc.getResult();
-  } else {
-    (void)funcOp.emitError("Error: next Op is not memref::AllocOp \n");
   }
-  return Value();
+  (void)funcOp.emitError("Error: next Op is not memref::AllocOp \n");
+  return {};
 }
 
 struct GetOrderMapBeforeAfterGpuOutlining

@@ -696,8 +696,9 @@ void VectorizationState::registerOpVectorReplacement(Operation *replaced, Operat
   assert(opVectorReplacement.count(replaced) == 0 && "already registered");
   opVectorReplacement[replaced] = replacement;
 
-  for (auto resultTuple : llvm::zip(replaced->getResults(), replacement->getResults()))
+  for (auto resultTuple : llvm::zip(replaced->getResults(), replacement->getResults())) {
     registerValueVectorReplacementImpl(std::get<0>(resultTuple), std::get<1>(resultTuple));
+  }
 }
 
 /// Registers the vector replacement of a scalar value. The replacement
@@ -712,10 +713,11 @@ void VectorizationState::registerOpVectorReplacement(Operation *replaced, Operat
 ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
 void VectorizationState::registerValueVectorReplacement(Value replaced, Operation *replacement) {
   assert(replacement->getNumResults() == 1 && "Expected single-result replacement");
-  if (Operation *defOp = replaced.getDefiningOp())
+  if (Operation *defOp = replaced.getDefiningOp()) {
     registerOpVectorReplacement(defOp, replacement);
-  else
+  } else {
     registerValueVectorReplacementImpl(replaced, replacement->getResult(0));
+  }
 }
 
 /// Registers the vector replacement of a block argument (e.g., iter_args).
@@ -807,10 +809,14 @@ static FilterFunctionType isVectorizableLoopPtrFactory(const DenseSet<Operation 
                                                        int fastestVaryingMemRefDimension) {
   return [&parallelLoops, fastestVaryingMemRefDimension](Operation &forOp) {
     auto loop = cast<AffineForOp>(forOp);
-    if (!parallelLoops.contains(loop)) return false;
+    if (!parallelLoops.contains(loop)) {
+      return false;
+    }
     int memRefDim = -1;
     auto vectorizableBody = isVectorizableLoopBody(loop, &memRefDim, vectorTransferPattern());
-    if (!vectorizableBody) return false;
+    if (!vectorizableBody) {
+      return false;
+    }
     return memRefDim == -1 || fastestVaryingMemRefDimension == -1 || memRefDim == fastestVaryingMemRefDimension;
   };
 }
@@ -827,7 +833,9 @@ static VectorType getVectorType(Type scalarTy, const VectorizationStrategy *stra
 /// nullptr, otherwise.
 static arith::ConstantOp vectorizeConstant(arith::ConstantOp constOp, VectorizationState &state) {
   Type scalarTy = constOp.getType();
-  if (!VectorType::isValidElementType(scalarTy)) return nullptr;
+  if (!VectorType::isValidElementType(scalarTy)) {
+    return nullptr;
+  }
 
   auto vecTy = getVectorType(scalarTy, state.strategy);
   auto vecAttr = DenseElementsAttr::get(vecTy, constOp.getValue());
@@ -835,7 +843,9 @@ static arith::ConstantOp vectorizeConstant(arith::ConstantOp constOp, Vectorizat
   OpBuilder::InsertionGuard guard(state.builder);
   Operation *parentOp = state.builder.getInsertionBlock()->getParentOp();
   // Find the innermost vectorized ancestor loop to insert the vector constant.
-  while (parentOp && !state.vecLoopToVecDim.count(parentOp)) parentOp = parentOp->getParentOp();
+  while ((parentOp != nullptr) && (state.vecLoopToVecDim.count(parentOp) == 0u)) {
+    parentOp = parentOp->getParentOp();
+  }
   assert(parentOp && state.vecLoopToVecDim.count(parentOp) && isa<AffineForOp>(parentOp) &&
          "Expected a vectorized for op");
   auto vecForOp = cast<AffineForOp>(parentOp);
@@ -853,7 +863,9 @@ static arith::ConstantOp vectorizeConstant(arith::ConstantOp constOp, Vectorizat
 static arith::ConstantOp createInitialVector(arith::AtomicRMWKind reductionKind, Value oldOperand,
                                              VectorizationState &state) {
   Type scalarTy = oldOperand.getType();
-  if (!VectorType::isValidElementType(scalarTy)) return nullptr;
+  if (!VectorType::isValidElementType(scalarTy)) {
+    return nullptr;
+  }
 
   Attribute valueAttr = getIdentityValueAttr(reductionKind, scalarTy, state.builder, oldOperand.getLoc());
   auto vecTy = getVectorType(scalarTy, state.strategy);
@@ -877,13 +889,17 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
          "supported.");
 
   // Check if we have already created the mask.
-  if (Value mask = state.vecLoopToMask.lookup(vecForOp)) return mask;
+  if (Value mask = state.vecLoopToMask.lookup(vecForOp)) {
+    return mask;
+  }
 
   // If the loop has constant bounds and the original number of iterations is
   // divisible by the vector size then we don't need a mask.
   if (vecForOp.hasConstantBounds()) {
     int64_t originalTripCount = vecForOp.getConstantUpperBound() - vecForOp.getConstantLowerBound();
-    if (originalTripCount % vecForOp.getStepAsInt() == 0) return nullptr;
+    if (originalTripCount % vecForOp.getStepAsInt() == 0) {
+      return nullptr;
+    }
   }
 
   OpBuilder::InsertionGuard guard(state.builder);
@@ -905,16 +921,19 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
   // `affine.min`.
   AffineMap ubMap = vecForOp.getUpperBoundMap();
   Value ub;
-  if (ubMap.getNumResults() == 1)
+  if (ubMap.getNumResults() == 1) {
     ub = state.builder.create<AffineApplyOp>(loc, vecForOp.getUpperBoundMap(), vecForOp.getUpperBoundOperands());
-  else
+  } else {
     ub = state.builder.create<AffineMinOp>(loc, vecForOp.getUpperBoundMap(), vecForOp.getUpperBoundOperands());
+  }
   // Then we compute the number of (original) iterations left in the loop.
   AffineExpr subExpr = state.builder.getAffineDimExpr(0) - state.builder.getAffineDimExpr(1);
   Value itersLeft =
     makeComposedAffineApply(state.builder, loc, AffineMap::get(2, 0, subExpr), {ub, vecForOp.getInductionVar()});
   // If the affine maps were successfully composed then `ub` is unneeded.
-  if (ub.use_empty()) ub.getDefiningOp()->erase();
+  if (ub.use_empty()) {
+    ub.getDefiningOp()->erase();
+  }
   // Finally we create the mask.
   Type maskTy = VectorType::get(state.strategy->vectorSizes, state.builder.getIntegerType(1));
   Value mask = state.builder.create<vector::CreateMaskOp>(loc, maskTy, itersLeft);
@@ -932,11 +951,15 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
 // strategy are considered vector uniforms.
 static bool isUniformDefinition(Value value, const VectorizationStrategy *strategy) {
   AffineForOp forOp = getForInductionVarOwner(value);
-  if (forOp && strategy->loopToVectorDim.count(forOp) == 0) return true;
+  if (forOp && strategy->loopToVectorDim.count(forOp) == 0) {
+    return true;
+  }
 
   for (auto loopToDim : strategy->loopToVectorDim) {
     auto loop = cast<AffineForOp>(loopToDim.first);
-    if (!loop.isDefinedOutsideOfLoop(value)) return false;
+    if (!loop.isDefinedOutsideOfLoop(value)) {
+      return false;
+    }
   }
   return true;
 }
@@ -1000,11 +1023,12 @@ static Value vectorizeOperand(Value operand, VectorizationState &state) {
 
   // Check for unsupported block argument scenarios. A supported block argument
   // should have been vectorized already.
-  if (!operand.getDefiningOp())
+  if (operand.getDefiningOp() == nullptr) {
     LLVM_DEBUG(dbgs() << "-> unsupported block argument\n");
-  else
+  } else {
     // Generic unsupported case.
     LLVM_DEBUG(dbgs() << "-> non-vectorizable\n");
+  }
 
   return nullptr;
 }
@@ -1027,10 +1051,11 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp, VectorizationState &s
   // Compute indices for the transfer op. AffineApplyOp's may be generated.
   SmallVector<Value, 8> indices;
   indices.reserve(memRefType.getRank());
-  if (loadOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank()))
+  if (loadOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
     computeMemoryOpIndices(loadOp, loadOp.getAffineMap(), mapOperands, state, indices);
-  else
+  } else {
     indices.append(mapOperands.begin(), mapOperands.end());
+  }
 
   // Compute permutation map using the information of new vector loops.
   auto permutationMap = makePermutationMap(state.builder.getInsertionBlock(), indices, state.vecLoopToVecDim);
@@ -1058,7 +1083,9 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp, VectorizationState &s
 static Operation *vectorizeAffineStore(AffineStoreOp storeOp, VectorizationState &state) {
   MemRefType memRefType = storeOp.getMemRefType();
   Value vectorValue = vectorizeOperand(storeOp.getValueToStore(), state);
-  if (!vectorValue) return nullptr;
+  if (!vectorValue) {
+    return nullptr;
+  }
 
   // Replace map operands with operands from the vector loop nest.
   SmallVector<Value, 8> mapOperands;
@@ -1067,14 +1094,17 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp, VectorizationState
   // Compute indices for the transfer op. AffineApplyOp's may be generated.
   SmallVector<Value, 8> indices;
   indices.reserve(memRefType.getRank());
-  if (storeOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank()))
+  if (storeOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
     computeMemoryOpIndices(storeOp, storeOp.getAffineMap(), mapOperands, state, indices);
-  else
+  } else {
     indices.append(mapOperands.begin(), mapOperands.end());
+  }
 
   // Compute permutation map using the information of new vector loops.
   auto permutationMap = makePermutationMap(state.builder.getInsertionBlock(), indices, state.vecLoopToVecDim);
-  if (!permutationMap) return nullptr;
+  if (!permutationMap) {
+    return nullptr;
+  }
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ permutationMap: ");
   LLVM_DEBUG(permutationMap.print(dbgs()));
 
@@ -1091,9 +1121,13 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp, VectorizationState
 /// given vectorizable reduction.
 static bool isNeutralElementConst(arith::AtomicRMWKind reductionKind, Value value, VectorizationState &state) {
   Type scalarTy = value.getType();
-  if (!VectorType::isValidElementType(scalarTy)) return false;
+  if (!VectorType::isValidElementType(scalarTy)) {
+    return false;
+  }
   Attribute valueAttr = getIdentityValueAttr(reductionKind, scalarTy, state.builder, value.getLoc());
-  if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(value.getDefiningOp())) return constOp.getValue() == valueAttr;
+  if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(value.getDefiningOp())) {
+    return constOp.getValue() == valueAttr;
+  }
   return false;
 }
 
@@ -1175,8 +1209,9 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   //      result of the loop.
   state.registerOpVectorReplacement(forOp, vecForOp);
   state.registerValueScalarReplacement(forOp.getInductionVar(), vecForOp.getInductionVar());
-  for (auto iterTuple : llvm ::zip(forOp.getRegionIterArgs(), vecForOp.getRegionIterArgs()))
+  for (auto iterTuple : llvm ::zip(forOp.getRegionIterArgs(), vecForOp.getRegionIterArgs())) {
     state.registerBlockArgVectorReplacement(std::get<0>(iterTuple), std::get<1>(iterTuple));
+  }
 
   if (isLoopVecDim) {
     for (unsigned i = 0; i < vecForOp.getNumIterOperands(); ++i) {
@@ -1188,8 +1223,9 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
       // is equal to the neutral element of the reduction.
       Value origInit = forOp.getOperand(forOp.getNumControlOperands() + i);
       Value finalRes = reducedRes;
-      if (!isNeutralElementConst(reductions[i].kind, origInit, state))
+      if (!isNeutralElementConst(reductions[i].kind, origInit, state)) {
         finalRes = arith::getReductionOp(reductions[i].kind, state.builder, reducedRes.getLoc(), reducedRes, origInit);
+      }
       state.registerLoopResultScalarReplacement(forOp.getResult(i), finalRes);
     }
     state.vecLoopToVecDim[vecForOp] = loopToVecDimIt->second;
@@ -1201,7 +1237,9 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
 
   // If this is a reduction loop then we may need to create a mask to filter out
   // garbage in the last iteration.
-  if (isLoopVecDim && forOp.getNumIterOperands() > 0) createMask(vecForOp, state);
+  if (isLoopVecDim && forOp.getNumIterOperands() > 0) {
+    createMask(vecForOp, state);
+  }
 
   return vecForOp;
 }
@@ -1299,15 +1337,29 @@ static Operation *vectorizeOneOperation(Operation *op, VectorizationState &state
   assert(!isa<vector::TransferReadOp>(op) && "vector.transfer_read cannot be further vectorized");
   assert(!isa<vector::TransferWriteOp>(op) && "vector.transfer_write cannot be further vectorized");
 
-  if (auto loadOp = dyn_cast<AffineLoadOp>(op)) return vectorizeAffineLoad(loadOp, state);
-  if (auto storeOp = dyn_cast<AffineStoreOp>(op)) return vectorizeAffineStore(storeOp, state);
-  if (auto ifOp = dyn_cast<AffineIfOp>(op)) return vectorizeAffineIfOp(ifOp, state);
-  if (auto forOp = dyn_cast<AffineForOp>(op)) return vectorizeAffineForOp(forOp, state);
-  if (auto yieldOp = dyn_cast<AffineYieldOp>(op)) return vectorizeAffineYieldOp(yieldOp, state);
-  if (auto constant = dyn_cast<arith::ConstantOp>(op)) return vectorizeConstant(constant, state);
+  if (auto loadOp = dyn_cast<AffineLoadOp>(op)) {
+    return vectorizeAffineLoad(loadOp, state);
+  }
+  if (auto storeOp = dyn_cast<AffineStoreOp>(op)) {
+    return vectorizeAffineStore(storeOp, state);
+  }
+  if (auto ifOp = dyn_cast<AffineIfOp>(op)) {
+    return vectorizeAffineIfOp(ifOp, state);
+  }
+  if (auto forOp = dyn_cast<AffineForOp>(op)) {
+    return vectorizeAffineForOp(forOp, state);
+  }
+  if (auto yieldOp = dyn_cast<AffineYieldOp>(op)) {
+    return vectorizeAffineYieldOp(yieldOp, state);
+  }
+  if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
+    return vectorizeConstant(constant, state);
+  }
 
   // Other ops with regions are not supported.
-  if (op->getNumRegions() != 0) return nullptr;
+  if (op->getNumRegions() != 0) {
+    return nullptr;
+  }
 
   return widenOp(op, state);
 }
@@ -1320,7 +1372,9 @@ static void getMatchedAffineLoopsRec(NestedMatch match, unsigned currentLevel,
                                      std::vector<SmallVector<AffineForOp, 2>> &loops) {
   // Add a new empty level to the output if it doesn't exist already.
   assert(currentLevel <= loops.size() && "Unexpected currentLevel");
-  if (currentLevel == loops.size()) loops.emplace_back();
+  if (currentLevel == loops.size()) {
+    loops.emplace_back();
+  }
 
   // Add current match and recursively visit its children.
   loops[currentLevel].push_back(cast<AffineForOp>(match.getMatchedOperation()));
@@ -1383,14 +1437,18 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> 
     LLVM_DEBUG(dbgs() << "[early-vect]+++++ failed vectorization for: " << rootLoop << "\n");
     // Erase vector loop nest if it was created.
     auto vecRootLoopIt = state.opVectorReplacement.find(rootLoop);
-    if (vecRootLoopIt != state.opVectorReplacement.end()) eraseLoopNest(cast<AffineForOp>(vecRootLoopIt->second));
+    if (vecRootLoopIt != state.opVectorReplacement.end()) {
+      eraseLoopNest(cast<AffineForOp>(vecRootLoopIt->second));
+    }
 
     return failure();
   }
 
   // Replace results of reduction loops with the scalar values computed using
   // `vector.reduce` or similar ops.
-  for (auto resPair : state.loopResultScalarReplacement) resPair.first.replaceAllUsesWith(resPair.second);
+  for (auto resPair : state.loopResultScalarReplacement) {
+    resPair.first.replaceAllUsesWith(resPair.second);
+  }
 
   assert(state.opVectorReplacement.count(rootLoop) == 1 && "Expected vector replacement for loop nest");
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ success vectorizing pattern");
@@ -1500,7 +1558,9 @@ static void vectorizeLoops(Operation *parentOp, const DenseSet<Operation *> &loo
       // vectorization succeeded.
       // TODO(scheduler): if pattern does not apply, report it; alter the cost/benefit.
       // TODO(scheduler): some diagnostics if failure to vectorize occurs.
-      if (succeeded(vectorizeRootMatch(match, strategy))) break;
+      if (succeeded(vectorizeRootMatch(match, strategy))) {
+        break;
+      }
     }
   }
 
@@ -1539,12 +1599,16 @@ void VectorizeAKG::runOnOperation() {
       if (isLoopParallelAKG(loop, &reductions)) {
         parallelLoops.insert(loop);
         // If it's not a reduction loop, adding it to the map is not necessary.
-        if (!reductions.empty()) reductionLoops[loop] = reductions;
+        if (!reductions.empty()) {
+          reductionLoops[loop] = reductions;
+        }
       }
     });
   } else {
     f.walk([&parallelLoops](AffineForOp loop) {
-      if (isLoopParallelAKG(loop)) parallelLoops.insert(loop);
+      if (isLoopParallelAKG(loop)) {
+        parallelLoops.insert(loop);
+      }
     });
   }
 

@@ -95,7 +95,7 @@ struct ReduceOpInfo {
 // post op, it hints that this kernel is post fusion.
 static bool IsPostFusion(Operation *redOp) {
   auto curOp = redOp->getNextNode();
-  while (curOp) {
+  while (curOp != nullptr) {
     if (!isa<memref::StoreOp>(curOp) && !isa<memref::LoadOp>(curOp) && !isa<memref::AllocOp>(curOp) &&
         !isa<memref::DeallocOp>(curOp) && !isa<scf::YieldOp>(curOp)) {
       SmallVector<Operation *, 8> prevOps;
@@ -114,14 +114,14 @@ static bool IsPostFusion(Operation *redOp) {
 static std::tuple<Operation *, Operation *, Operation *> matchReductionStorePatterns(Operation *redOp) {
   Operation *localStore = nullptr, *localLoad = nullptr, *globalStore = nullptr;
   auto curOp = redOp->getNextNode();
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<memref::StoreOp>(curOp) && redOp->getResult(0) == curOp->getOperand(0)) {
       localStore = curOp;
     }
-    if (localStore && isa<memref::LoadOp>(curOp) && localStore->getOperand(1) == curOp->getOperand(0)) {
+    if ((localStore != nullptr) && isa<memref::LoadOp>(curOp) && localStore->getOperand(1) == curOp->getOperand(0)) {
       localLoad = curOp;
     }
-    if (localLoad && isa<memref::StoreOp>(curOp) && localLoad->getResult(0) == curOp->getOperand(0)) {
+    if ((localLoad != nullptr) && isa<memref::StoreOp>(curOp) && localLoad->getResult(0) == curOp->getOperand(0)) {
       globalStore = curOp;
     }
     curOp = curOp->getNextNode();
@@ -150,7 +150,7 @@ static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder
   (void)builder.create<memref::AtomicRMWOp>(loc, res_type, *atomicKind, localLoad->getResult(0), storeOp.getMemref(),
                                             storeOp.getIndices());
 
-  if (globalStore) {
+  if (globalStore != nullptr) {
     globalStore->erase();
   }
   return mlir::success();
@@ -205,25 +205,25 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
         return mlir::failure();
       }
       memref::StoreOp storeOp = dyn_cast<memref::StoreOp>(localStore);
-      if (globalStore) {
+      if (globalStore != nullptr) {
         storeOp = dyn_cast<memref::StoreOp>(globalStore);
       }
       (void)builder.create<memref::AtomicRMWOp>(loc, res_type, *atomicKind, redValue, storeOp.getMemref(),
                                                 storeOp.getIndices());
     } else {
       memref::StoreOp storeOp = dyn_cast<memref::StoreOp>(localStore);
-      if (globalStore) {
+      if (globalStore != nullptr) {
         storeOp = dyn_cast<memref::StoreOp>(globalStore);
       }
       (void)builder.create<memref::StoreOp>(loc, redValue, storeOp.getMemref(), storeOp.getIndices());
     }
-    if (globalStore) {
+    if (globalStore != nullptr) {
       globalStore->erase();
     }
-    if (localLoad) {
+    if (localLoad != nullptr) {
       localLoad->erase();
     }
-    if (localStore) {
+    if (localStore != nullptr) {
       localStore->erase();
     }
   } else {
