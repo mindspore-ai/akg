@@ -18,6 +18,9 @@ if str(PYTHON_ROOT) not in sys.path:
 
 default_workflow = "mathir_coder_workflow"
 # default_workflow = "mathir_multi_kernel_gen_workflow"
+attention_default_workflow = "mathir_multi_kernel_gen_workflow"
+default_attention_dir = "thirdparty/attention_bench/kernelbench"
+ATTENTION_TASK_NAMES = ("flash_attn", "page_attn", "radix_attn")
 
 
 triton_cuda_path = f"{PYTHON_ROOT}/akg_agents/op/config/triton_cuda_mathir_config.yaml"
@@ -113,6 +116,38 @@ def _select_kernelbench_files(level: str, task_indices: Optional[Sequence[int]])
     return selected
 
 
+def _parse_attention_names(raw: str) -> List[str]:
+    value = str(raw).strip()
+    if not value or value.lower() == "all":
+        return list(ATTENTION_TASK_NAMES)
+
+    names: List[str] = []
+    for part in value.split(","):
+        name = part.strip()
+        if not name:
+            continue
+        if name.endswith(".py"):
+            name = name[:-3]
+        names.append(name)
+    return names
+
+
+def _select_attention_files(raw: str, attention_dir: str) -> List[Path]:
+    root = Path(_resolve_path(attention_dir))
+    if not root.exists():
+        raise FileNotFoundError(
+            f"Attention benchmark directory not found: {root}. "
+            "Please initialize akg_agents/thirdparty/attention_bench/kernelbench first."
+        )
+
+    available = {path.stem: path for path in sorted(root.glob("*.py"))}
+    names = _parse_attention_names(raw)
+    missing = [name for name in names if name not in available]
+    if missing:
+        raise FileNotFoundError(f"Missing attention task files in {root}: {missing}")
+    return [available[name] for name in names]
+
+
 def _op_name_from_file(path: Path) -> str:
     return f"aikg_kernelbench_{path.stem}"
 
@@ -141,6 +176,7 @@ def _build_task(
     task_desc: str,
     task_id: str,
     attempt_index: int,
+    bench_type: str,
     base_config: Dict[str, Any],
     args: argparse.Namespace,
 ) -> Any:
@@ -152,7 +188,7 @@ def _build_task(
         op_name=op_name,
         parallel_index=attempt_index,
     )
-    task_config["bench_type"] = "kernelbench"
+    task_config["bench_type"] = bench_type
 
     if args.workflow_timeout is not None:
         task_config["workflow_timeout"] = args.workflow_timeout
@@ -170,7 +206,7 @@ def _build_task(
         framework=args.framework,
         task_type=args.task_type,
         workflow=args.workflow,
-        bench_type="kernelbench",
+        bench_type=bench_type,
     )
 
 
@@ -242,8 +278,11 @@ def _write_report(
     payload = {
         "created_at": datetime.now().isoformat(),
         "settings": {
+            "benchmark": "attention" if getattr(args, "attention", "") else "kernelbench",
             "level": _normalize_level(args.level),
             "tasks": args.tasks,
+            "attention": getattr(args, "attention", ""),
+            "attention_dir": getattr(args, "attention_dir", ""),
             "pass_k": args.pass_k,
             "parallel_num": args.parallel_num,
             "devices": args.devices,
@@ -261,14 +300,14 @@ def _write_report(
     return report_path
 
 
-def _print_summary(summary: Dict[str, Any], report_path: Path) -> None:
+def _print_summary(summary: Dict[str, Any], report_path: Path, benchmark_name: str) -> None:
     total = summary["total_ops"]
     passed = summary["passed_ops"]
     failed = summary["failed_ops"]
     pass_rate = summary["pass_rate"]
 
     print("\n" + "=" * 80)
-    print("KernelBench pass@k summary")
+    print(f"{benchmark_name} pass@k summary")
     print("=" * 80)
     print(f"Passed ops: {passed}/{total}")
     print(f"Failed ops: {failed}/{total}")
@@ -293,17 +332,27 @@ async def run_kernelbench_passk(args: argparse.Namespace) -> Dict[str, Any]:
     from akg_agents.op.config.config_validator import load_config  # type: ignore[reportMissingImports]
     from akg_agents.utils.environment_check import check_env_for_task  # type: ignore[reportMissingImports]
 
-    args.workflow = args.workflow or default_workflow
+    attention_mode = bool(str(args.attention).strip())
+    args.workflow = args.workflow or (attention_default_workflow if attention_mode else default_workflow)
     args.backend = BACKEND_ALIASES.get(str(args.backend).strip().lower(), str(args.backend).strip().lower())
     if args.backend not in CONFIG_BY_BACKEND:
-        raise ValueError(f"Unsupported backend for KernelBench pass@k: {args.backend}")
+        raise ValueError(f"Unsupported backend for pass@k: {args.backend}")
     args.dsl = args.dsl or DSL_BY_BACKEND[args.backend]
     args.arch = args.arch or ARCH_BY_BACKEND[args.backend]
     args.config_path = args.config_path or CONFIG_BY_BACKEND[args.backend]
-    task_indices = _parse_task_indices(args.tasks)
-    task_files = _select_kernelbench_files(args.level, task_indices)
+
+    if attention_mode:
+        bench_type = "attention"
+        task_files = _select_attention_files(args.attention, args.attention_dir)
+        benchmark_name = "Attention"
+    else:
+        bench_type = "kernelbench"
+        task_indices = _parse_task_indices(args.tasks)
+        task_files = _select_kernelbench_files(args.level, task_indices)
+        benchmark_name = "KernelBench"
+
     if not task_files:
-        raise RuntimeError("No KernelBench tasks selected.")
+        raise RuntimeError(f"No {benchmark_name} tasks selected.")
 
     device_ids = [int(item) for item in args.devices.split(",") if item.strip()]
     await register_worker(backend=args.backend, arch=args.arch, device_ids=device_ids)
@@ -315,7 +364,10 @@ async def run_kernelbench_passk(args: argparse.Namespace) -> Dict[str, Any]:
 
     check_env_for_task(args.framework, args.backend, args.dsl, config)
 
-    print(f"Selected {len(task_files)} KernelBench tasks from {_normalize_level(args.level)}")
+    if attention_mode:
+        print(f"Selected {len(task_files)} Attention tasks from {Path(_resolve_path(args.attention_dir))}")
+    else:
+        print(f"Selected {len(task_files)} KernelBench tasks from {_normalize_level(args.level)}")
     print(f"Running pass@{args.pass_k}, parallel_num={args.parallel_num}, devices={device_ids}")
 
     task_pool = TaskPool(max_concurrency=args.parallel_num)
@@ -323,16 +375,21 @@ async def run_kernelbench_passk(args: argparse.Namespace) -> Dict[str, Any]:
 
     for problem_idx, task_file in enumerate(task_files, start=1):
         task_desc = _read_task_desc(task_file)
-        op_name = _op_name_from_file(task_file)
+        op_name = task_file.stem if attention_mode else _op_name_from_file(task_file)
 
         for attempt in range(1, args.pass_k + 1):
-            task_id = f"{_extract_problem_id(task_file)}_attempt{attempt}"
+            task_id = (
+                f"{task_file.stem}_attempt{attempt}"
+                if attention_mode
+                else f"{_extract_problem_id(task_file)}_attempt{attempt}"
+            )
             try:
                 task = _build_task(
                     op_name=op_name,
                     task_desc=task_desc,
                     task_id=task_id,
                     attempt_index=attempt,
+                    bench_type=bench_type,
                     base_config=config,
                     args=args,
                 )
@@ -357,13 +414,13 @@ async def run_kernelbench_passk(args: argparse.Namespace) -> Dict[str, Any]:
     results = init_failures + await task_pool.wait_all()
     summary = _summarize_results(results)
     report_path = _write_report(summary=summary, args=args, config=config)
-    _print_summary(summary, report_path)
+    _print_summary(summary, report_path, benchmark_name)
     return summary
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run KernelBench pass@k with AKG Agents LangGraphTask."
+        description="Run KernelBench or attention pass@k with AKG Agents LangGraphTask."
     )
     parser.add_argument("--level", default="level1", help="KernelBench level, e.g. level1 or 1")
     parser.add_argument(
@@ -371,7 +428,19 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Task ids to run, e.g. '1,2,5-8'. Empty means all tasks in the level.",
     )
-    parser.add_argument("--pass-k", type=int, default=1, help="Attempts per KernelBench task")
+    parser.add_argument(
+        "--attention",
+        nargs="?",
+        const="all",
+        default="",
+        help="Attention tasks to run: all or comma-separated names, e.g. flash_attn,page_attn.",
+    )
+    parser.add_argument(
+        "--attention-dir",
+        default=default_attention_dir,
+        help=f"Attention benchmark task directory. Default: {default_attention_dir}",
+    )
+    parser.add_argument("--pass-k", type=int, default=1, help="Attempts per selected task")
     parser.add_argument("--parallel-num", type=int, default=1, help="Max concurrent attempts")
     parser.add_argument("--devices", default="0", help="Comma-separated local device ids")
     parser.add_argument("--framework", default="torch")
@@ -391,7 +460,14 @@ def parse_args() -> argparse.Namespace:
         help=f"Hardware arch. Default follows --backend ({ARCH_BY_BACKEND[default_backend]}).",
     )
     parser.add_argument("--task-type", default="precision_only", choices=["precision_only", "profile"])
-    parser.add_argument("--workflow", default="", help=f"Workflow name. Default: {default_workflow}")
+    parser.add_argument(
+        "--workflow",
+        default="",
+        help=(
+            f"Workflow name. Default: {default_workflow}; "
+            f"attention mode default: {attention_default_workflow}"
+        ),
+    )
     parser.add_argument("--config-path", default="", help=f"Config YAML path. Default: {default_config_path}")
     parser.add_argument("--output-dir", default="", help="Optional report output directory")
     parser.add_argument("--max-step", type=int, default=None, help="Override workflow max_step")
