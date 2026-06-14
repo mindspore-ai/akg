@@ -6,7 +6,7 @@
 
 - `tl.arange(0, BLOCK_*)` 的逻辑长度应使用编译期常量，通常取 2 的幂；真实尾部用 mask 处理，不要把动态 runtime shape 直接作为 `end`。
 - `tl.load` / `tl.store` 的 pointer、mask、value shape 必须可广播到同一 block shape；mask 必须在内存访问前排除越界地址。
-- Ascend grid 必须是 tuple 且最多 3 维，总 program 数不要超过 `65535`；大 shape 优先使用固定核心数 grid-stride 或连续分块，而不是为每个 tile 启动一个 program。
+- Ascend grid 必须是 tuple 且最多 3 维；当前 910B 运行环境默认开启 `TRITON_ALL_BLOCKS_PARALLEL=1`，允许超大一维逻辑 grid 由后端映射到物理核心循环。大 shape 优先使用 1D flattened grid 或固定核心数 grid-stride；不要为了压低 grid 数而放大每个 program 的 tile。
 - `tl.dot` 适合矩阵/批矩阵 contraction，输入通常为 `(BLOCK_M, BLOCK_K)` 和 `(BLOCK_K, BLOCK_N)`；不要用 `A * B` 冒充矩阵乘。
 - Ascend `tl.dot` 不要传 `allow_tf32` 或 `input_precision`；这些是 CUDA 精度控制语义，Ascend 后端不支持。
 - `tl.zeros`、`tl.full`、`tl.reshape`、`tl.static_range` 等涉及 shape 或循环边界的参数必须是编译期可确定的 literal 或 `tl.constexpr` meta 参数。

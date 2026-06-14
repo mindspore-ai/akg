@@ -111,4 +111,4 @@ def norm_forward(x, eps=1e-5):
 2. **多维索引公式**：`x[b, f, d1, d2]` 在连续内存中的偏移 = `b*F*D1*D2 + f*D1*D2 + d1*D2 + d2`，如果将 D1D2 展平则简化为 `b*F*total_d1d2 + f*total_d1d2 + d1d2`
 3. **2D tile 加载**：用 `[:, None]` 和 `[None, :]` 构造 2D 偏移矩阵，一次 load 获取 `[BLOCK_F, BLOCK_D1D2]` 的数据
 4. **归约沿 axis=0**：`tl.sum(tile, axis=0)` 沿 F 维度归约，保留 D1D2 维度的独立统计量
-5. **grid 规模**：第二维为 `cdiv(D1*D2, BLOCK_SIZE_D1D2)`，对于较大的 D1*D2 可能超过 65535，需要注意 Ascend 的 grid 上限限制
+5. **grid 规模**：第二维为 `cdiv(D1*D2, BLOCK_SIZE_D1D2)`。若逻辑tile数量很大，优先展平成一维grid或使用grid-stride；不要为了减少grid而放大`BLOCK_SIZE_D1D2`导致UB溢出
