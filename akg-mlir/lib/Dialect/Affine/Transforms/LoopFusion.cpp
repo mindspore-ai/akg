@@ -157,11 +157,15 @@ std::optional<int64_t> AKGLoopFusion::getConstantDimIndex(Value dimIndex) {
 SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(Value v) {
   SmallVector<int64_t> dynDims;
   auto st = dyn_cast<ShapedType>(v.getType());
-  if (!st || !st.hasRank()) return dynDims;
+  if (!st || !st.hasRank()) {
+    return dynDims;
+  }
 
   auto shape = st.getShape();
   for (int64_t i = 0; i < static_cast<int64_t>(shape.size()); ++i) {
-    if (shape[i] == ShapedType::kDynamic) dynDims.push_back(i);
+    if (shape[i] == ShapedType::kDynamic) {
+      dynDims.push_back(i);
+    }
   }
   return dynDims;
 }
@@ -180,7 +184,9 @@ void AKGLoopFusion::collectDimOperationsFromLoops(func::FuncOp funcOp,
         Value dimIndexValue = defOp->getOperand(1);
 
         auto constIndex = getConstantDimIndex(dimIndexValue);
-        if (!constIndex.has_value()) return;  // Skip non-constant dimension index
+        if (!constIndex.has_value()) {
+          return;  // Skip non-constant dimension index
+        }
 
         // Get symbolic shape and extract axis key (symbol name only)
         auto symShape = getSymShapeAttrFromValue(source);
@@ -269,10 +275,12 @@ void AKGLoopFusion::replaceDimWithPrimes(func::FuncOp funcOp) {
 
       // if dimVal is BlockArgument, getDefiningOp() is nullptr
       auto *op1 = earliestDim.getDefiningOp();
-      if (!op1) break;
+      if (op1 == nullptr) {
+        break;
+      }
 
       auto *op2 = dimVal.getDefiningOp();
-      if (!op2) {
+      if (op2 == nullptr) {
         earliestDim = dimVal;
         break;
       }
@@ -430,16 +438,22 @@ void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
   llvm::SmallSet<Operation *, 8> reductionLoops;
   if (CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reduction) {
     funcOp.walk([&](Operation *op) {
-      if (!op->hasAttr(kReductionTypeStr)) return;
+      if (!op->hasAttr(kReductionTypeStr)) {
+        return;
+      }
       auto axesAttr = op->getAttrOfType<ArrayAttr>(kReductionAxesStr);
-      if (!axesAttr) return;
+      if (!axesAttr) {
+        return;
+      }
 
       SmallVector<affine::AffineForOp, 4> enclosingLoops;
       affine::getAffineForIVs(*op, &enclosingLoops);
 
       for (auto axis : axesAttr) {
         auto idx = cast<IntegerAttr>(axis).getInt();
-        if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) continue;
+        if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) {
+          continue;
+        }
         auto forOp = enclosingLoops[idx];
         forOp->setAttr(kReductionLoopAttr, builder.getUnitAttr());
         (void)reductionLoops.insert(forOp.getOperation());
@@ -452,7 +466,9 @@ void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
   CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
   for (auto *loop : broadcastLoops) {
     // Skip if this axis is a reduction axis
-    if (reductionLoops.count(loop)) continue;
+    if (reductionLoops.count(loop) != 0u) {
+      continue;
+    }
     loop->setAttr(kBroadcastLoopAttr, builder.getUnitAttr());
   }
 }

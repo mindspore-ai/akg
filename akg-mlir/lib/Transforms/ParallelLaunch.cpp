@@ -126,7 +126,8 @@ void AKGParallelLaunch::identifyFuncs(ModuleOp &moduleOp, LLVM::LLVMFuncOp &main
         if (valStr.str() == kCpuCalcFunc) {
           calculateFuncs.push_back(funcOp);
           break;
-        } else if (valStr.str() == kCpuMainFunc) {
+        }
+        if (valStr.str() == kCpuMainFunc) {
           mainFunc = funcOp;
           break;
         }

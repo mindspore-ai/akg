@@ -20,6 +20,7 @@
 #include <iterator>
 #include <memory>
 #include <unordered_set>
+#include <utility>
 #include "akg/Analysis/AutoTiling.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -64,28 +65,28 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
     this->cacheSizeInKiB = cacheSizeBytes / 1024;
   }
 
-  explicit AKGLoopTiling(const std::string &target, bool useAutoTiling = false) : target(target) {
+  explicit AKGLoopTiling(std::string target, bool useAutoTiling = false) : target(std::move(target)) {
     this->useAutoTiling = useAutoTiling;
   }
 
-  AKGLoopTiling(const std::string &target, bool useAutoTiling, const std::string &tilingMode) : target(target) {
+  AKGLoopTiling(std::string target, bool useAutoTiling, const std::string &tilingMode) : target(std::move(target)) {
     this->useAutoTiling = useAutoTiling;
     this->tilingMode = tilingMode;
   }
 
-  AKGLoopTiling(const std::string &target, const std::string &feature, bool useAutoTiling = false)
-      : target(target), feature(feature) {
+  AKGLoopTiling(std::string target, std::string feature, bool useAutoTiling = false)
+      : target(std::move(target)), feature(std::move(feature)) {
     this->useAutoTiling = useAutoTiling;
   }
 
-  AKGLoopTiling(const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature)
-      : target(target), arch(arch), feature(feature) {
+  AKGLoopTiling(std::string target, bool useAutoTiling, std::string arch, std::string feature)
+      : target(std::move(target)), arch(std::move(arch)), feature(std::move(feature)) {
     this->useAutoTiling = useAutoTiling;
   }
 
-  AKGLoopTiling(const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature,
+  AKGLoopTiling(std::string target, bool useAutoTiling, std::string arch, std::string feature,
                 const SmallVector<unsigned, 6> &inputTileSizes)
-      : target(target), arch(arch), feature(feature), inputTileSizes(inputTileSizes) {
+      : target(std::move(target)), arch(std::move(arch)), feature(std::move(feature)), inputTileSizes(inputTileSizes) {
     this->useAutoTiling = useAutoTiling;
   }
 
@@ -138,7 +139,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   void BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
   void getTileSizes();
   std::string getHardware();
-  bool isDynamicShape() const;
+  [[nodiscard]] bool isDynamicShape() const;
 
   // core tiling function
   void tileEachBand();
@@ -276,7 +277,7 @@ void AKGLoopTiling::constructTiledLoop(affine::AffineForOp rootAffineForOp, unsi
   for (unsigned i = 0; i < width; ++i) {
     OpBuilder b(topLoop);
     // Loop bounds will be set later.
-    affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 0);
+    auto pointLoop = b.create<affine::AffineForOp>(loc, 0, 0);
     pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
                                                 topLoop);
     tiledLoops[width - 1 - i] = pointLoop;
@@ -509,7 +510,7 @@ void AKGLoopTiling::getTileSizes() {
 // ```
 LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<affine::AffineForOp> intraTileLoops,
                                              SmallVectorImpl<affine::AffineForOp> &fullTileLoops) {
-  if (intraTileLoops.size() == 0) {
+  if (intraTileLoops.empty()) {
     return success();
   }
   OpBuilder b(intraTileLoops[0]);
@@ -582,7 +583,7 @@ LogicalResult AKGLoopTiling::createTailBlockForBody(affine::AffineForOp forOp) {
 
 // Updates the upper bound of all users of the trailing block for loop.
 void AKGLoopTiling::updateForOpUsers(affine::AffineForOp forOp, int64_t newSize) {
-  if (!newSize) {
+  if (newSize == 0) {
     return;
   }
   for (OpOperand &use : forOp.getInductionVar().getUses()) {
@@ -642,7 +643,8 @@ LogicalResult AKGLoopTiling::createTailBlock(affine::AffineForOp forOp) {
   AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, origLbMap);
   if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(differenceExpr)) {
     return createTailBlockStatic(forOp, cExpr.getValue());
-  } else if (auto sExpr = llvm::dyn_cast<AffineSymbolExpr>(differenceExpr)) {
+  }
+  if (auto sExpr = llvm::dyn_cast<AffineSymbolExpr>(differenceExpr)) {
     return createTailBlockDynamic(forOp, sExpr);
   }
   return success();
@@ -676,7 +678,7 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, in
   // body block does not need to be inserted.
   // !newDifferenceUbAndLb: If the difference between the upper and lower bounds of the new trailing block is 0, the
   // trailing block does not need to be inserted.
-  if (differenceUbAndLb < origStep && newDifferenceUbAndLb) {
+  if (differenceUbAndLb < origStep && (newDifferenceUbAndLb != 0)) {
     // Only insert the tail tiles.
     forOp.setLowerBoundMap(ubMap);
     forOp.setUpperBoundMap(origUbMap);
@@ -699,7 +701,7 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, in
   // isEqualToBlock: If the upper and lower bounds and steps of the body block and tail block are the same, the tail
   // block does not need to be inserted.
   bool isEqualToBlock = (ubMap == origLbMap) && (origUbMap == ubMap) && (tailSize == origStep);
-  if (differenceUbAndLb < origStep || !newDifferenceUbAndLb || isEqualToBlock) {
+  if (differenceUbAndLb < origStep || (newDifferenceUbAndLb == 0) || isEqualToBlock) {
     return success();
   }
 
@@ -754,7 +756,7 @@ LogicalResult AKGLoopTiling::createTailBlockDynamic(affine::AffineForOp forOp, A
   // Ensure tail block is inserted after forOp in the same parent block, not inside forOp's body
   Block *parentBlock = forOp->getBlock();
   OpBuilder b(parentBlock, std::next(forOp->getIterator()));
-  affine::AffineForOp tailForOp =
+  auto tailForOp =
     b.create<affine::AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
 
   // Add the body for the full tile loop nest.
@@ -783,7 +785,7 @@ LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineFor
     }
     return failure();
   }
-  if (fullTileLoops.size() == 0) {
+  if (fullTileLoops.empty()) {
     return success();
   }
 
@@ -851,7 +853,7 @@ affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<aff
       }
     }
 
-    if (!outerOp || !isa<affine::AffineForOp>(outerOp)) {
+    if ((outerOp == nullptr) || !isa<affine::AffineForOp>(outerOp)) {
       continue;
     }
 
@@ -889,7 +891,7 @@ void AKGLoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &new
   auto it = newTiledLoops.begin();
   unsigned i = 0;
   while (it != newTiledLoops.end()) {
-    if (inequalityForIndex.count(i)) {
+    if (inequalityForIndex.count(i) != 0u) {
       it++;
     } else {
       it = newTiledLoops.erase(it);
@@ -968,8 +970,8 @@ LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineFor
   OpBuilder b(forBody, forBody->begin());
   SmallVector<Operation *, 6> bodyOp;
   // Records all ops in the for loop to facilitate the insertion of if statements.
-  for (auto it = forBody->begin(); it != forBody->end(); ++it) {
-    Operation *op = &*it;
+  for (auto &it : *forBody) {
+    Operation *op = &it;
     if (isa<affine::AffineYieldOp>(op)) {
       continue;
     }
@@ -1095,7 +1097,7 @@ bool AKGLoopTiling::isDynamicShape() const { return akgglobal::ShapeAlignTool::g
 static unsigned getLoopNestingDepth(affine::AffineForOp forOp, func::FuncOp funcOp) {
   unsigned depth = 0;
   Operation *currentOp = forOp.getOperation()->getParentOp();
-  while (currentOp && currentOp != funcOp.getOperation()) {
+  while ((currentOp != nullptr) && currentOp != funcOp.getOperation()) {
     if (isa<affine::AffineForOp>(currentOp)) {
       depth++;
     }
@@ -1136,7 +1138,7 @@ SmallVector<affine::AffineForOp> AKGLoopTiling::collectOutermostTiledLoops(affin
         // Check if it's outermost: no affine.for parent (except possibly funcOp)
         Operation *parentOp = forOp->getParentOp();
         bool isOutermost = true;
-        while (parentOp) {
+        while (parentOp != nullptr) {
           if (isa<affine::AffineForOp>(parentOp)) {
             isOutermost = false;
             break;
@@ -1190,7 +1192,7 @@ SmallVector<AKGLoopTiling::DimensionInfo> AKGLoopTiling::collectDimensionInfos(
     int32_t tailLb = 0, tailUb = 0, tailStep = 0;
 
     Operation *nextOp = fullLoop->getNextNode();
-    if (nextOp && isa<affine::AffineForOp>(nextOp)) {
+    if ((nextOp != nullptr) && isa<affine::AffineForOp>(nextOp)) {
       auto candidateTail = dyn_cast<affine::AffineForOp>(nextOp);
       if (candidateTail.hasConstantBounds() && candidateTail->getParentOp() == fullLoop->getParentOp()) {
         int32_t candidateLb = candidateTail.getConstantLowerBound();
@@ -1266,7 +1268,7 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(af
 
   // Step 3: Select the dimension to map
   DimensionInfo *selectedDim = selectMappingDimension(dimInfos, maxNumBlocks);
-  if (!selectedDim) {
+  if (selectedDim == nullptr) {
     ctx.numKernels = 1;
     return ctx;
   }
@@ -1293,7 +1295,7 @@ affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &bu
   }
 
   // Verify fullLoop is still valid before using it
-  if (!fullLoop.getOperation() || !fullLoop.getOperation()->getBlock()) {
+  if ((fullLoop.getOperation() == nullptr) || (fullLoop.getOperation()->getBlock() == nullptr)) {
     llvm::report_fatal_error("fullLoop is no longer valid in createKernelLoopAndMapFullBlock");
   }
 
@@ -1372,7 +1374,7 @@ void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp
   Operation *insertAfterOp = fullLoop.getOperation();
   Operation *parentOp = fullLoop->getParentOp();
   // First check if fullLoop's direct parent is an ifOp
-  if (parentOp) {
+  if (parentOp != nullptr) {
     if (auto ifOp = dyn_cast<affine::AffineIfOp>(parentOp)) {
       // Found the if that wraps fullLoop, insert tail block after this if
       insertAfterOp = ifOp;
@@ -1381,7 +1383,7 @@ void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp
       // Note: we need to check all parents, even if they're in kernelBody,
       // because ifOp might be in kernelBody but still wrap fullLoop
       Operation *currentOp = parentOp;
-      while (currentOp) {
+      while (currentOp != nullptr) {
         if (auto ifOp = dyn_cast<affine::AffineIfOp>(currentOp)) {
           insertAfterOp = ifOp;
           break;
@@ -1424,7 +1426,7 @@ void AKGLoopTiling::addOuterKernelMappingLoop(affine::AffineForOp bandRootLoop) 
   }
 
   // Verify fullBlock is still valid before using it
-  if (!ctx.fullBlock.getOperation() || !ctx.fullBlock.getOperation()->getBlock()) {
+  if ((ctx.fullBlock.getOperation() == nullptr) || (ctx.fullBlock.getOperation()->getBlock() == nullptr)) {
     return;
   }
 
@@ -1436,7 +1438,7 @@ void AKGLoopTiling::addOuterKernelMappingLoop(affine::AffineForOp bandRootLoop) 
 
   // Create kernel loop and map full block
   // Note: funcOp parameter is not used in createKernelLoopAndMapFullBlock, but kept for API consistency
-  func::FuncOp funcOp = bandRootLoop->getParentOfType<func::FuncOp>();
+  auto funcOp = bandRootLoop->getParentOfType<func::FuncOp>();
   auto kernelLoop = createKernelLoopAndMapFullBlock(builder, funcOp, ctx);
   Value kernelId = kernelLoop.getInductionVar();
 
@@ -1456,7 +1458,7 @@ affine::AffineForOp AKGLoopTiling::findTiledBandRoot(Block *parentBlock, func::F
       // Check if it's outermost and has constant bounds
       Operation *parentOp = forOp->getParentOp();
       bool isOutermost = true;
-      while (parentOp && parentOp != funcOp.getOperation()) {
+      while ((parentOp != nullptr) && parentOp != funcOp.getOperation()) {
         if (isa<affine::AffineForOp>(parentOp)) {
           isOutermost = false;
           break;

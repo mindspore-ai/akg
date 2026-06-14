@@ -16,6 +16,7 @@
 
 #include "akg/Dialect/Affine/Transforms/AffineTailBlockTiling.h"
 
+#include <utility>
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -51,15 +52,14 @@ namespace mlir {
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
-#define DEBUG_TYPE "affine-tail-block-tiling"
-
 using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace mlir {
 
 struct AffineTailBlockTiling : public impl::AffineTailBlockTilingBase<AffineTailBlockTiling> {
   AffineTailBlockTiling() {}
-  AffineTailBlockTiling(const std::string &target, const std::string &feature) : target(target), feature(feature) {}
+  AffineTailBlockTiling(std::string target, std::string feature)
+      : target(std::move(target)), feature(std::move(feature)) {}
 
   void runOnOperation() override;
   LogicalResult tailBlockTiling(func::FuncOp func, affine::AffineForOp rootLoop);
@@ -75,7 +75,7 @@ static int64_t getVectorSize(Operation *cpuOp, const int64_t instructionSetBit =
     if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
       MemRefType memRefType = loadOp.getMemRefType();
       Type elementType = memRefType.getElementType();
-      int64_t elementBit = static_cast<int64_t>(elementType.getIntOrFloatBitWidth());
+      auto elementBit = static_cast<int64_t>(elementType.getIntOrFloatBitWidth());
       vectorSize = std::min(vectorSize, instructionSetBit / elementBit);
     }
   });
@@ -102,7 +102,7 @@ static int64_t getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
 
 // Updates the upper bound of all users of the trailing block for loop.
 static void updateForOpUsers(affine::AffineForOp forOp, int64_t newSize) {
-  if (!newSize) {
+  if (newSize == 0) {
     return;
   }
   for (OpOperand &use : forOp.getInductionVar().getUses()) {
@@ -157,7 +157,7 @@ LogicalResult AffineTailBlockTiling::tailBlockTiling(func::FuncOp func, affine::
   // body block does not need to be inserted.
   // !newDifferenceUbAndLb: If the difference between the upper and lower bounds of the new trailing block is 0, the
   // trailing block does not need to be inserted.
-  if (differenceUbAndLb < vectorSize && newDifferenceUbAndLb) {
+  if (differenceUbAndLb < vectorSize && (newDifferenceUbAndLb != 0)) {
     // Only insert the tail tiles.
     tileLoop.setLowerBoundMap(ubMap);
     tileLoop.setUpperBoundMap(origUbMap);

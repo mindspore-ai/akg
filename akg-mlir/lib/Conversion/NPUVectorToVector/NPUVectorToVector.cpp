@@ -77,9 +77,9 @@ static func::FuncOp findArchFunc(func::FuncOp vfFunc) {
   if (vfFunc->hasAttr("arch")) {
     return vfFunc;
   }
-  ModuleOp module = vfFunc->getParentOfType<ModuleOp>();
+  auto module = vfFunc->getParentOfType<ModuleOp>();
   if (!module) {
-    return func::FuncOp();
+    return {};
   }
   func::FuncOp found;
   module.walk([&](func::CallOp call) {
@@ -180,8 +180,7 @@ static bool isUnitNPUVector(Type t) {
 // register width, otherwise that consumer would mix a vector<1> operand with the
 // laneCount-wide operands and fail verification.
 static bool onlyFeedsBroadcast(Value v) {
-  return !v.use_empty() &&
-         llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
+  return !v.use_empty() && llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
 }
 
 // Convert an `!npuvector` type to a community `vector` type, resolving every
@@ -610,7 +609,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     };
     auto trailingIndices = [&](int64_t srcRank) {
       SmallVector<Value> result(indices.begin(), indices.end());
-      int64_t n = static_cast<int64_t>(result.size());
+      auto n = static_cast<int64_t>(result.size());
       if (srcRank < n) {
         result.erase(result.begin(), result.begin() + (n - srcRank));
       }
@@ -649,9 +648,9 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
         return success();
       }
       int64_t srcRank = sourceRank(rd.getSource());
-      Value res = b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()),
-                                                   trailingIndices(srcRank), permMapForRank(srcRank),
-                                                   remap(rd.getPadding()), mask, inBounds);
+      Value res =
+        b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()), trailingIndices(srcRank),
+                                         permMapForRank(srcRank), remap(rd.getPadding()), mask, inBounds);
       map.map(rd.getResult(), res);
       return success();
     }

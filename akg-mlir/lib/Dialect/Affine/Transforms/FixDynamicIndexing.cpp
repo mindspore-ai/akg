@@ -419,8 +419,7 @@ void FixDynamicIndexingPass::PrepareMemrefDimOp() {
     auto dataFlows = it->second;
     mlir::Value tensorArg = funcOp.getBody().front().getArgument(static_cast<int>(argIdx));
 
-    for (size_t di = 0; di < dataFlows.size(); ++di) {
-      auto df = dataFlows[di];
+    for (auto df : dataFlows) {
       for (auto i : df->srcDataDims) {
         if (IsDynamicDim(tensorArg, i)) {
           df->srcDataMemrefDim = builder.create<memref::DimOp>(funcOp->getLoc(), tensorArg, static_cast<int64_t>(i));
@@ -594,7 +593,7 @@ mlir::Value FixDynamicIndexingPass::getOriginalUpperBound(T storeOp, size_t dim,
       }
     }
   }
-  return mlir::Value();
+  return {};
 }
 
 void FixDynamicIndexingPass::ReplaceInputDimsWithOutput() {
@@ -611,7 +610,7 @@ void FixDynamicIndexingPass::ReplaceInputDimsWithOutput() {
     }
     for (auto df : it.second) {
       mlir::Value newUb;
-      if (df->srcDataMemrefDim && df->srcDataMemrefDim.getDefiningOp() &&
+      if (df->srcDataMemrefDim && (df->srcDataMemrefDim.getDefiningOp() != nullptr) &&
           isa<memref::DimOp>(df->srcDataMemrefDim.getDefiningOp())) {
         newUb = df->srcDataMemrefDim;
       }

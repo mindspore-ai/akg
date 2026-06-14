@@ -83,7 +83,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
  private:
   /// Returns the allocation operation for `value` if it exists.
   /// nullptr otherwise.
-  Operation *getAllocationOp(Value value) const {
+  [[nodiscard]] Operation *getAllocationOp(Value value) const {
     if (Operation *op = value.getDefiningOp()) {
       if (auto effects = dyn_cast<MemoryEffectOpInterface>(op)) {
         if (effects.hasEffect<Allocate>()) {
@@ -96,7 +96,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
 
   /// Returns the deallocation operation for `value` if it exists.
   /// nullptr otherwise.
-  Operation *getDeallocationOp(Value value) const {
+  [[nodiscard]] Operation *getDeallocationOp(Value value) const {
     auto valueUsers = value.getUsers();
     auto it = llvm::find_if(valueUsers, [&](Operation *op) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
@@ -146,12 +146,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
   }
 
   /// Check whether the write effect on `val` can be caused by `op`.
-  static bool doesOpUseVal(Value val, Operation *op) {
-    if (!llvm::is_contained(val.getUsers(), op)) {
-      return false;
-    }
-    return true;
-  }
+  static bool doesOpUseVal(Value val, Operation *op) { return llvm::is_contained(val.getUsers(), op); }
 
   /// Check if an op that lies on one of the paths between `start`
   /// and `end` and satisfies `checkPropertiesOfOperation`. If the start and end
@@ -179,10 +174,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
       // from the parent of `untilOp` to `untilOp`.
       if (fromOpParentRegion != untilOpParentRegion) {
         (void)recur(fromOp, untilOpParentOp);
-        if (checkPropertiesOfOperation(val, untilOpParentOp)) {
-          return true;
-        }
-        return false;
+        return checkPropertiesOfOperation(val, untilOpParentOp);
       }
 
       // Now, assuming that `fromOp` and `untilOp` exist in the same region,
@@ -256,14 +248,14 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
     Operation *lastOpUsingDest = &src.getParentRegion()->back().back();
     Operation *srcDeallocOp = getDeallocationOp(src);
     Operation *destDeallocOp = getDeallocationOp(dest);
-    if (srcDeallocOp) {
+    if (srcDeallocOp != nullptr) {
       (void)opsToErase.insert(srcDeallocOp);
     }
-    if (destDeallocOp) {
+    if (destDeallocOp != nullptr) {
       lastOpUsingDest = destDeallocOp;
     }
     if (!hasInterveningOp(dest, copyOp, lastOpUsingDest, &doesOpUseVal) &&
-        (!doesOpUseVal(dest, lastOpUsingDest) || destDeallocOp)) {
+        (!doesOpUseVal(dest, lastOpUsingDest) || (destDeallocOp != nullptr))) {
       (void)opsToErase.insert(copyOp);
     }
     (void)opsToErase.insert(src.getDefiningOp());

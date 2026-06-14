@@ -23,9 +23,9 @@
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendRun.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
-typedef uint64_t (*TilingFunc)(void *);
-typedef uint64_t (*GetTilingSizeFunc)();
-typedef void (*TorchRunFunc)(char const *, std::function<int()>);
+using TilingFunc = uint64_t (*)(void *);
+using GetTilingSizeFunc = uint64_t (*)();
+using TorchRunFunc = void (*)(const char *, std::function<int()>);
 constexpr auto kTilingMemSize = 1024;
 constexpr auto kTilingSizeFuncName = "_get_tiling_struct_size_function";
 constexpr auto kTilingFuncName = "_tiling_function";
@@ -55,10 +55,10 @@ mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
   void *data_ptr = nullptr;
 
   if (py::isinstance<py::int_>(arg)) {
-    int64_t val = arg.cast<int64_t>();
+    auto val = arg.cast<int64_t>();
     data_ptr = reinterpret_cast<void *>(val);
   } else if (py::isinstance<py::float_>(arg)) {
-    double val = arg.cast<double>();
+    auto val = arg.cast<double>();
     static_assert(sizeof(double) == sizeof(void *), "double size mismatch");
     std::memcpy(&data_ptr, &val, sizeof(void *));
   } else if (py::isinstance<py::bool_>(arg)) {
@@ -75,15 +75,17 @@ void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &
   auto is_tensor_arg = [](const py::handle &h) { return py::hasattr(h, "data_ptr") && py::hasattr(h, "nbytes"); };
   auto is_numpy_arg = [](const py::handle &h) { return py::isinstance<py::buffer>(h) && !py::hasattr(h, "data_ptr"); };
 
-  for (uint16_t i = 0; i < processed_args.size(); i++) {
-    py::tuple tup = processed_args[i].cast<py::tuple>();
-    py::object data = tup[0].cast<py::object>();
+  for (const auto &processed_arg : processed_args) {
+    auto tup = processed_arg.cast<py::tuple>();
+    auto data = tup[0].cast<py::object>();
     bool is_output = tup[1].cast<bool>();
     py::object shape_obj = tup[2];
 
     if (py::isinstance<py::int_>(data) || py::isinstance<py::float_>(data) || py::isinstance<py::bool_>(data)) {
       input.push_back(CreateScalarDevice(data));
-      if (is_dynamic) input_shapes.emplace_back();
+      if (is_dynamic) {
+        input_shapes.emplace_back();
+      }
       continue;
     }
 
@@ -105,7 +107,7 @@ void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &
     }
 
     if (is_dynamic) {
-      py::list shape_list = shape_obj.cast<py::list>();
+      auto shape_list = shape_obj.cast<py::list>();
       std::vector<int64_t> input_shape;
       input_shape.reserve(shape_list.size());
       std::transform(shape_list.begin(), shape_list.end(), std::back_inserter(input_shape),
@@ -125,10 +127,10 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
                     const py::args &args, py::kwargs kwargs) {
   void *external_stream = nullptr;
   if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
-    intptr_t h = kwargs["stream"].cast<intptr_t>();
+    auto h = kwargs["stream"].cast<intptr_t>();
     external_stream = (h == 0) ? reinterpret_cast<void *>(static_cast<uintptr_t>(-1)) : reinterpret_cast<void *>(h);
   }
-  py::list processed_args = kwargs["processed_args"].cast<py::list>();
+  auto processed_args = kwargs["processed_args"].cast<py::list>();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();
 
@@ -166,7 +168,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
         } else {
           void *dev_addr = tensor->GetDeviceAddress();
           void *host_addr = tensor->GetHostAddress();
-          void *eff_addr = (dev_addr ? dev_addr : host_addr);
+          void *eff_addr = ((dev_addr != nullptr) ? dev_addr : host_addr);
           runtimeargs.push_back(eff_addr);
           runtimeargs.push_back(eff_addr);
           runtimeargs.push_back(reinterpret_cast<void *>(offset));
@@ -211,9 +213,10 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
 void *GetPointer(py::object arg) {
   if (py::isinstance<py::int_>(arg)) {
-    int64_t val = arg.cast<int64_t>();
+    auto val = arg.cast<int64_t>();
     return reinterpret_cast<void *>(val);
-  } else if (py::isinstance<py::float_>(arg)) {
+  }
+  if (py::isinstance<py::float_>(arg)) {
     double val = arg.cast<double>();
     return reinterpret_cast<void *>(static_cast<intptr_t>(val));
   } else if (py::isinstance<py::bool_>(arg)) {

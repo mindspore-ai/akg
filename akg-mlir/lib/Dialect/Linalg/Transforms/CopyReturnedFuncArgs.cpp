@@ -48,7 +48,9 @@ class CopyReturnedFuncArgs : public impl::CopyReturnedFuncArgsBase<CopyReturnedF
     if (auto memTy = dyn_cast<MemRefType>(src.getType())) {
       SmallVector<Value> sizes;
       for (unsigned i = 0; i < memTy.getRank(); ++i) {
-        if (memTy.isDynamicDim(i)) sizes.push_back(b.create<memref::DimOp>(loc, src, i));
+        if (memTy.isDynamicDim(i)) {
+          sizes.push_back(b.create<memref::DimOp>(loc, src, i));
+        }
       }
       Value alloc = b.create<memref::AllocOp>(loc, memTy, sizes);
       b.create<linalg::CopyOp>(loc, src, alloc);
@@ -75,13 +77,17 @@ class CopyReturnedFuncArgs : public impl::CopyReturnedFuncArgsBase<CopyReturnedF
         bool fromInsertSliceWithArgSource = false;
         if (auto insertSlice = v.getDefiningOp<tensor::InsertSliceOp>()) {
           Value src = insertSlice.getSource();
-          if (isa<BlockArgument>(src)) fromInsertSliceWithArgSource = true;
+          if (isa<BlockArgument>(src)) {
+            fromInsertSliceWithArgSource = true;
+          }
         }
 
         bool fromExtractSliceWithArgSource = false;
         if (auto extractSlice = v.getDefiningOp<tensor::ExtractSliceOp>()) {
           Value src = extractSlice.getSource();
-          if (isa<BlockArgument>(src)) fromExtractSliceWithArgSource = true;
+          if (isa<BlockArgument>(src)) {
+            fromExtractSliceWithArgSource = true;
+          }
         }
 
         if (it != newOperands.end() || isBlockArgument || fromInsertSliceWithArgSource ||

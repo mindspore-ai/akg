@@ -105,7 +105,7 @@ static void getAdditionalOperandOrder(func::FuncOp funcOp, SetVector<Value> &ope
       continue;
     }
     auto op = operands[idx];
-    if (!op.getDefiningOp()) {
+    if (op.getDefiningOp() == nullptr) {
       continue;
     }
     if (!isa<mlir::arith::SubIOp>(op.getDefiningOp())) {
@@ -165,8 +165,8 @@ static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &o
     }
 
     operands.clear();
-    for (size_t idx = 0; idx < tmpOperands.size(); idx++) {
-      (void)operands.insert(tmpOperands[idx]);
+    for (auto tmpOperand : tmpOperands) {
+      (void)operands.insert(tmpOperand);
     }
   }
 }
@@ -337,7 +337,9 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         mlir::MemRefType memrefType = cast<mlir::MemRefType>(operands[i].getType());
         int64_t offset;
         SmallVector<int64_t> strides;
-        if (failed(getStridesAndOffset(memrefType, strides, offset))) return;
+        if (failed(getStridesAndOffset(memrefType, strides, offset))) {
+          return;
+        }
         std::vector<int> shapeArg;
         shapeArg.push_back(offset);
         std::copy(memrefType.getShape().begin(), memrefType.getShape().end(), std::back_inserter(shapeArg));
@@ -429,7 +431,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
             SymbolTable::getSymbolUses(symbolDefWorklist.pop_back_val())) {
         for (SymbolTable::SymbolUse symbolUse : *symbolUses) {
           StringRef symbolName = cast<FlatSymbolRefAttr>(symbolUse.getSymbolRef()).getValue();
-          if (symbolTable.lookup(symbolName)) {
+          if (symbolTable.lookup(symbolName) != nullptr) {
             continue;
           }
 

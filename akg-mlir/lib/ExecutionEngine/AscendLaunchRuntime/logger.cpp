@@ -15,7 +15,7 @@
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
-void akg_log_init(void) {
+void akg_log_init() {
   if (!google::IsGoogleLoggingInitialized()) {
     google::InitGoogleLogging("akg");
   }

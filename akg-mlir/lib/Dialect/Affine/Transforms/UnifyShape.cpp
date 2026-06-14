@@ -208,8 +208,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         if (indexValue != newIndex) {
           Type type = attr.getType();
           mlir::OpBuilder builder(cop);
-          mlir::arith::ConstantOp newcstOp =
-            builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
+          auto newcstOp = builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
           llvm::dbgs() << DEBUG_TYPE
                        << " - BECAREFULL: memref.dim will be updated, may cause a wrong code? (if fused dim "
                           "are dynamic)\nFrom\n";
@@ -249,10 +248,10 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     return aff;
   }
 
-  SmallVector<int64_t, kVectorSizeFour> getDeletedDim(const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
+  [[nodiscard]] SmallVector<int64_t, kVectorSizeFour> getDeletedDim(
+    const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
     SmallVector<int64_t, kVectorSizeFour> deletedDim;
-    for (unsigned i = 0; i < reshapeMap.size(); ++i) {
-      AffineMap map = reshapeMap[i];
+    for (auto map : reshapeMap) {
       for (unsigned j = 1; j < map.getNumResults(); ++j) {
         int64_t dim = map.getDimPosition(j);
         deletedDim.push_back(dim);
@@ -266,8 +265,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   /// \return true if there is a reshape and one of the element is dynamic,
   ///         eg. true if reshapeMap=[[0, 1], [2]] and shape[0] or shape[1] is dynamic
   ///         eg. false if reshapeMap=[[0, 1], [2]] and only shape[2] is dynamic
-  bool isDynamicReshape(const ArrayRef<int64_t> &shape,
-                        const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
+  [[nodiscard]] bool isDynamicReshape(const ArrayRef<int64_t> &shape,
+                                      const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
     for (auto m : reshapeMap) {
       if (m.getNumResults() > 1) {
         for (unsigned j = 0; j < m.getNumResults(); ++j) {
@@ -311,9 +310,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
 
     result.dynamicReshape = isDynamicReshape(referenceShape, reshapeMap);
 
-    for (unsigned i = 0; i < reshapeMap.size(); ++i) {
+    for (auto map : reshapeMap) {
       SmallVector<Value, kVectorSizeFour> symbolicValue;
-      AffineMap map = reshapeMap[i];
       AffineExpr accessRes = map.getResult(0);
       AffineExpr shapeRes = mlir::getAffineConstantExpr(1, context);
 
@@ -387,7 +385,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
 
     // special case, with memref.expand_shape %alloc [] : memref<f32> into memref<1xf32>
     // need to have similar stuff for collapse_shape???
-    if (reshapeMap.size() == 0) {
+    if (reshapeMap.empty()) {
       if (isa<memref::ExpandShapeOp>(referenceOp)) {
         newAccesExpr.push_back(getAffineConstantExpr(0, context));
       }
@@ -411,29 +409,27 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   }
 
   /// createnewAllocOp
-  mlir::memref::AllocOp createNewAllocOp(mlir::memref::AllocOp allocOp, MemRefType allocType,
-                                         const UnifyShapeInfos &shapeInfo) const {
+  [[nodiscard]] mlir::memref::AllocOp createNewAllocOp(mlir::memref::AllocOp allocOp, MemRefType allocType,
+                                                       const UnifyShapeInfos &shapeInfo) const {
     mlir::OpBuilder builder(allocOp);
     if (!shapeInfo.dynamicReshape) {
-      mlir::memref::AllocOp newAlloc =
-        builder.create<mlir::memref::AllocOp>(allocOp.getLoc(), allocType, allocOp.getDynamicSizes(),
-                                              allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
-      return newAlloc;
-    } else {
-      // 1. Create/compute the right dynamic size from original dynamic variable and new shape mapping
-      SmallVector<Value, kVectorSizeFour> dynamicValue;
-      for (auto shapeMap : shapeInfo.newShapeMap) {
-        mlir::affine::AffineApplyOp applyOp =
-          builder.create<mlir::affine::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
-        dynamicValue.push_back(applyOp.getResult());
-      }
-      // 2. Create the new Alloc Op with the new dynamic size
-      // NB: don't know to what correspond getSymbolOperands()...
-      mlir::memref::AllocOp newAlloc = builder.create<mlir::memref::AllocOp>(
-        allocOp.getLoc(), allocType, dynamicValue, allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
-
+      auto newAlloc = builder.create<mlir::memref::AllocOp>(allocOp.getLoc(), allocType, allocOp.getDynamicSizes(),
+                                                            allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
       return newAlloc;
     }
+    // 1. Create/compute the right dynamic size from original dynamic variable and new shape mapping
+    SmallVector<Value, kVectorSizeFour> dynamicValue;
+    for (auto shapeMap : shapeInfo.newShapeMap) {
+      mlir::affine::AffineApplyOp applyOp =
+        builder.create<mlir::affine::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
+      dynamicValue.push_back(applyOp.getResult());
+    }
+    // 2. Create the new Alloc Op with the new dynamic size
+    // NB: don't know to what correspond getSymbolOperands()...
+    mlir::memref::AllocOp newAlloc = builder.create<mlir::memref::AllocOp>(
+      allocOp.getLoc(), allocType, dynamicValue, allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
+
+    return newAlloc;
   }
 
   /// updateAffineOps update the access functions

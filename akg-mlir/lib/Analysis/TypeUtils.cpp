@@ -50,7 +50,8 @@ Type updateTypeSymbolAttr(Type origin, NamedAttribute &attr) {
   }
   if (auto tensorType = dyn_cast<RankedTensorType>(origin)) {
     return RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(), dict);
-  } else if (auto memRefType = dyn_cast<MemRefType>(origin)) {
+  }
+  if (auto memRefType = dyn_cast<MemRefType>(origin)) {
     return MemRefType::get(memRefType.getShape(), memRefType.getElementType(), memRefType.getLayout(), dict);
   } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(origin)) {
     return UnrankedMemRefType::get(unrankedMemRefType.getElementType(), dict);

@@ -65,8 +65,8 @@ static bool isInnermostAffineForOp(affine::AffineForOp op) {
 
               // Insert all combinations of upper/lower bound results.
               int64_t origLoopStep = nestedForOp.getStepAsInt();
-              for (unsigned i = 0; i < origUbExprs.size(); ++i) {
-                AffineExpr newUb = (origUbExprs[i] - origLbExprs[0]).ceilDiv(origLoopStep);
+              for (auto origUbExpr : origUbExprs) {
+                AffineExpr newUb = (origUbExpr - origLbExprs[0]).ceilDiv(origLoopStep);
                 if (newUb != 1 || newUb.floorDiv(65) == 0) {
                   return WalkResult::interrupt();
                 }

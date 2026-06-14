@@ -106,7 +106,9 @@ static Value createMathOps(Operation *op, ValueRange args, ArrayRef<Type> result
 
 static Value createAddNOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter) {
   auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
-  if (!isa<mindspore::AddNOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::AddNOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   Value add = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, args[0], args[1]);
@@ -118,46 +120,64 @@ static Value createAddNOpBody(Operation *op, ValueRange args, ArrayRef<Type> res
 
 static Value createDivOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
                              Type elementTy) {
-  if (!isa<mindspore::DivOp>(op)) return nullptr;
+  if (!isa<mindspore::DivOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<IntegerType>(elementTy)) return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
-  if (isa<FloatType>(elementTy)) return rewriter.create<arith::DivFOp>(loc, resultTypes, args);
+  if (isa<IntegerType>(elementTy)) {
+    return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
+  }
+  if (isa<FloatType>(elementTy)) {
+    return rewriter.create<arith::DivFOp>(loc, resultTypes, args);
+  }
   return nullptr;
 }
 
 static Value createSqrtOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
                               Type elementTy) {
-  if (!isa<mindspore::SqrtOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::SqrtOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   return rewriter.create<mlir::math::SqrtOp>(loc, resultTypes, args);
 }
 
 static Value createLessOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::LessOp>(op)) return nullptr;
+  if (!isa<mindspore::LessOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<FloatType>(elementTy))
+  if (isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLT, args[0], args[1]);
-  if (elementTy.isSignlessInteger())
+  }
+  if (elementTy.isSignlessInteger()) {
     return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
+  }
   return nullptr;
 }
 
 static Value createLessEqualOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::LessEqualOp>(op)) return nullptr;
+  if (!isa<mindspore::LessEqualOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<FloatType>(elementTy))
+  if (isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLE, args[0], args[1]);
-  if (elementTy.isSignlessInteger())
+  }
+  if (elementTy.isSignlessInteger()) {
     return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, args[0], args[1]);
+  }
   return nullptr;
 }
 
 static Value createIsFiniteOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::IsFiniteOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::IsFiniteOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   Value x = args[0];
@@ -209,19 +229,33 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
                                                          PatternRewriter &rewriter) {
   auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
 
-  if (auto val = createAddNOpBody(op, args, resultTypes, rewriter)) return val;
+  if (auto val = createAddNOpBody(op, args, resultTypes, rewriter)) {
+    return val;
+  }
 
-  if (auto val = createMathOps(op, args, resultTypes, rewriter)) return val;
+  if (auto val = createMathOps(op, args, resultTypes, rewriter)) {
+    return val;
+  }
 
-  if (auto val = createDivOpBody(op, args, resultTypes, rewriter, elementTy)) return val;
+  if (auto val = createDivOpBody(op, args, resultTypes, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createSqrtOpBody(op, args, resultTypes, rewriter, elementTy)) return val;
+  if (auto val = createSqrtOpBody(op, args, resultTypes, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createLessOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createLessOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createLessEqualOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createLessEqualOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createIsFiniteOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createIsFiniteOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
   (void)rewriter.notifyMatchFailure(op, "unhandled op for linalg body calculation for elementwise op");
   return nullptr;
@@ -940,8 +974,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     auto elementTy = inputTy.getElementType();
     int64_t rank = inputTy.getRank();
     Value newShape = op.getNewShapeValue();
-    uint64_t newRankSize = op.getNewRankSize();
-    assert(newRankSize >= (uint64_t)inputTy.getRank());
+    assert(op.getNewRankSize() >= (uint64_t)inputTy.getRank());
 
     // create emptyOp and genericOp
     // genericShape : emptyOp and genericOp's shape

@@ -129,11 +129,11 @@ static bool buildCone(Operation *rootOp, const DenseSet<Operation *> &sliceSet, 
     for (Value r : op->getResults()) {
       for (Operation *u : r.getUsers()) {
         if (op == rootOp) {
-          if (!sliceSet.count(u)) {
+          if (sliceSet.count(u) == 0u) {
             return false;
           }
         } else {
-          if (!cone.count(u)) {
+          if (cone.count(u) == 0u) {
             return false;
           }
         }
@@ -147,10 +147,10 @@ static bool buildCone(Operation *rootOp, const DenseSet<Operation *> &sliceSet, 
         continue;
       }
       Operation *d = v.getDefiningOp();
-      if (!d) {
+      if (d == nullptr) {
         return false;
       }
-      if (cone.count(d)) {
+      if (cone.count(d) != 0u) {
         continue;
       }
       if (isa<linalg::GenericOp>(d)) {
@@ -318,7 +318,7 @@ static Value materializeSliced(Value val, const SliceSpec &slice, const DenseSet
 
   Value result;
   Operation *def = val.getDefiningOp();
-  if (!def || !cone.count(def)) {
+  if ((def == nullptr) || (cone.count(def) == 0u)) {
     // Leaf: extract_slice directly from the function input / constant.
     result = b.create<tensor::ExtractSliceOp>(loc, val, slice.offsets, slice.sizes, slice.strides);
   } else {
@@ -391,7 +391,7 @@ struct HoistTensorSlice : public impl::HoistTensorSliceBase<HoistTensorSlice> {
       // Step 2 (a): `source` is only used by these slices.
       bool allUsersAreSlices = true;
       for (Operation *u : source.getUsers()) {
-        if (!sliceSet.count(u)) {
+        if (sliceSet.count(u) == 0u) {
           allUsersAreSlices = false;
           break;
         }
@@ -402,7 +402,7 @@ struct HoistTensorSlice : public impl::HoistTensorSliceBase<HoistTensorSlice> {
 
       // Step 2 (b): must be produced by a linalg.generic.
       Operation *defOp = source.getDefiningOp();
-      if (!defOp || !isa<linalg::GenericOp>(defOp)) {
+      if ((defOp == nullptr) || !isa<linalg::GenericOp>(defOp)) {
         continue;
       }
 

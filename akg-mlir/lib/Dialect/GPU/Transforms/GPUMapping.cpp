@@ -163,9 +163,9 @@ struct MappingTask {
   int mapDim{0};  // 0 = x, 1 = y, 2 = z, 3+ = Sequential
   int reductionDim{-1};
   bool isDynamicAxis{false};
-  bool isReductionAxis() const { return reductionDim >= 0; }
-  bool isDynamicOuterAxis() const { return problemSize == 1 && isDynamicAxis; }
-  bool needToMap() const { return problemSize > 1 || isDynamicAxis; }
+  [[nodiscard]] bool isReductionAxis() const { return reductionDim >= 0; }
+  [[nodiscard]] bool isDynamicOuterAxis() const { return problemSize == 1 && isDynamicAxis; }
+  [[nodiscard]] bool needToMap() const { return problemSize > 1 || isDynamicAxis; }
   void dump() {
     llvm::dbgs() << "Task : Length = " << problemSize << " MapLevel = " << level << "\n";
     loopVar.dump();
@@ -220,7 +220,7 @@ struct AKGGPUMappingLoops : public impl::AKGGPUMappingBase<AKGGPUMappingLoops> {
   int proposedBlock{1};
 
  private:
-  bool isDynamicShape() const;
+  [[nodiscard]] bool isDynamicShape() const;
 };
 
 struct SCFForToParallelPattern : public RewritePattern {
@@ -256,7 +256,7 @@ bool hasNonZeroConstant(Operation *op) {
   unsigned int flag = 0;
   for (auto operand : op->getOperands()) {
     auto prevOp = operand.getDefiningOp();
-    if (prevOp) {
+    if (prevOp != nullptr) {
       if (isa<arith::AddIOp>(op)) {
         if (isa<arith::ConstantOp>(prevOp)) {
           mlir::Attribute constantValue = prevOp->getAttr("value");
@@ -267,7 +267,7 @@ bool hasNonZeroConstant(Operation *op) {
           }
         }
       }
-      flag |= (hasNonZeroConstant(prevOp) == false ? 0 : 1);
+      flag |= (!hasNonZeroConstant(prevOp) ? 0 : 1);
     }
   }
   return (bool)flag;
@@ -321,17 +321,13 @@ void checkIfOpStatus(scf::IfOp ifOp, bool &shouldKeepIfOp, bool &postFusionMode)
     return;
   }
   postFusionMode = isPostFusionMultiStmt(ifOp.getOperand().getDefiningOp());
-  if (CommonUtils::isIfConditionRelatedToContent(ifOp)) {
-    shouldKeepIfOp = true;
-  } else {
-    shouldKeepIfOp = false;
-  }
+  shouldKeepIfOp = CommonUtils::isIfConditionRelatedToContent(ifOp);
 }
 
 static bool IsAncestorOrEqual(Operation *a, Operation *b) {
   auto blockA = a->getBlock();
   Operation *curOp = b;
-  while (curOp) {
+  while (curOp != nullptr) {
     auto blockB = curOp->getBlock();
     if (blockA == blockB) {
       return true;
@@ -371,7 +367,7 @@ static bool canMoveOpOutOfTarget(Operation *op, Operation *targetOp) {
 static Operation *getOutermostParallelOp(Operation *op) {
   Operation *curOp = op;
   Operation *targetOp = nullptr;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<scf::ParallelOp>(curOp)) {
       targetOp = curOp;
     }
@@ -390,7 +386,7 @@ static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcO
   Operation *outermostSequentialOp = nullptr;
   Operation *curOp = ifOp.getOperation();
   Operation *outermostParallelOp = getOutermostParallelOp(curOp);
-  while (curOp) {
+  while (curOp != nullptr) {
     if (auto parallelOp = dyn_cast<scf::ParallelOp>(curOp)) {
       // we can not move ops out of scf.parallel
       if (parallelOp.getOperation() == outermostParallelOp) {
@@ -418,13 +414,12 @@ static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcO
   }
 
   // does not exist sequential-for
-  if (!outermostSequentialOp) {
+  if (outermostSequentialOp == nullptr) {
     if (funcOp->hasAttr(mlir::akg::utils::kEnableParallelReduce) &&
-        funcOp->getAttrOfType<BoolAttr>(mlir::akg::utils::kEnableParallelReduce).getValue() == false) {
+        !funcOp->getAttrOfType<BoolAttr>(mlir::akg::utils::kEnableParallelReduce).getValue()) {
       return;
-    } else {
-      outermostSequentialOp = ifOp.getOperation();
     }
+    outermostSequentialOp = ifOp.getOperation();
   }
 
   if (!postFusionMode) {
@@ -462,7 +457,7 @@ static void FixForLogicToGpuParallel(Region &region) {
     checkIfOpStatus(ifOp, shouldKeepIfOp, postFusionMode);
     if (!shouldKeepIfOp) {
       Operation *parentOp = ifOp.getOperation()->getParentOp();
-      while (parentOp) {
+      while (parentOp != nullptr) {
         if (isa<scf::IfOp>(parentOp)) {
           break;
         }
@@ -616,8 +611,7 @@ void AKGGPUMappingLoops::updateJsonWithTensorMapping(func::FuncOp funcOp, const 
       std::string dynConfigId;
       std::string symbolPart = tool.getCurrShapeInfo(tid)[dimId];
       int64_t constPart = 1;
-      for (size_t axisId = 0; axisId < relatedAxes.size(); ++axisId) {
-        auto axis = relatedAxes[axisId];
+      for (auto axis : relatedAxes) {
         auto [configId, configSize] = genAxisMappingId(axis);
         if (configId.empty()) {
           continue;
@@ -817,7 +811,7 @@ void AKGGPUMappingLoops::runOnOperation() {
 static int getNestedNum(Operation *op) {
   auto num = 0;
   auto curOp = op->getParentOp();
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<scf::ParallelOp>(curOp)) {
       num++;
     }
@@ -830,7 +824,7 @@ void AKGGPUMappingLoops::createMappingTask(ParallelOp parallelOp) {
   for (auto [loopVar, lowerBoundVar, upperBoundVar, stepVar] : llvm::zip(
          parallelOp.getInductionVars(), parallelOp.getLowerBound(), parallelOp.getUpperBound(), parallelOp.getStep())) {
     size_t dim = getNestedNum(parallelOp.getOperation());
-    bool isReduceAxis = (parallelOp.getOperation()->hasAttr(kReductionLoopAttr)) ? true : false;
+    bool isReduceAxis = parallelOp.getOperation()->hasAttr(kReductionLoopAttr);
     int reductionDim = isReduceAxis ? static_cast<int>(dim) : -1;
     auto lbConst = getMaxIntConst(lowerBoundVar);
     auto ubConst = getMaxIntConst(upperBoundVar);

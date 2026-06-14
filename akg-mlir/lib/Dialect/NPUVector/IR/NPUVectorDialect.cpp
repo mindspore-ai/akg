@@ -75,7 +75,9 @@ void NPUVectorDialect::printType(::mlir::Type type, ::mlir::DialectAsmPrinter &p
   // Note: generatedTypePrinter is defined in NPUVectorOpsTypes.cpp.inc
   // which is included above with GET_TYPEDEF_CLASSES, so it's available here
   // Fallback to generated printer for other types (if any)
-  if (::mlir::succeeded(generatedTypePrinter(type, printer))) return;
+  if (::mlir::succeeded(generatedTypePrinter(type, printer))) {
+    return;
+  }
 }
 
 /// Parse a type registered to this dialect.
@@ -88,10 +90,14 @@ void NPUVectorDialect::printType(::mlir::Type type, ::mlir::DialectAsmPrinter &p
 
   // Parse dimension list: ?x?x or ?x? or just ?
   // parseDimensionList expects format: dim1 x dim2 x ... x elementType
-  if (parser.parseDimensionList(shape, /*allowDynamic=*/true, /*withTrailingX=*/true)) return {};
+  if (parser.parseDimensionList(shape, /*allowDynamic=*/true, /*withTrailingX=*/true)) {
+    return {};
+  }
 
   // Parse element type
-  if (parser.parseType(elementType)) return {};
+  if (parser.parseType(elementType)) {
+    return {};
+  }
 
   return NPUVectorType::get(shape, elementType);
 }

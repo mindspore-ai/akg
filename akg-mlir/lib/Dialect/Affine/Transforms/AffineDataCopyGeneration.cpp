@@ -116,7 +116,9 @@ std::unique_ptr<OperationPass<func::FuncOp>> mlir::affine::createAKGAffineDataCo
 /// and ending with an affine load or store op, or just an affine.for op (which
 /// could have other affine for op's nested within).
 void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &copyNests) {
-  if (block->empty()) return;
+  if (block->empty()) {
+    return;
+  }
 
   uint64_t fastMemCapacityBytes =
     fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * 1024 : fastMemoryCapacity;
@@ -210,20 +212,24 @@ void AffineDataCopyGeneration::runOnOperation() {
   // Clear recorded copy nests.
   copyNests.clear();
 
-  for (auto &block : f) runOnBlock(&block, copyNests);
+  for (auto &block : f) {
+    runOnBlock(&block, copyNests);
+  }
 
   // Promote any single iteration loops in the copy nests and collect
   // load/stores to simplify.
   SmallVector<Operation *, 4> copyOps;
-  for (Operation *nest : copyNests)
+  for (Operation *nest : copyNests) {
     // With a post order walk, the erasure of loops does not affect
     // continuation of the walk or the collection of load/store ops.
     nest->walk([&](Operation *op) {
-      if (auto forOp = dyn_cast<AffineForOp>(op))
+      if (auto forOp = dyn_cast<AffineForOp>(op)) {
         (void)promoteIfSingleIteration(forOp);
-      else if (isa<AffineLoadOp, AffineStoreOp>(op))
+      } else if (isa<AffineLoadOp, AffineStoreOp>(op)) {
         copyOps.push_back(op);
+      }
     });
+  }
 
   // Promoting single iteration loops could lead to simplification of
   // contained load's/store's, and the latter could anyway also be

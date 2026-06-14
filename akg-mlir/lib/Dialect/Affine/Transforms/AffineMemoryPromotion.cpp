@@ -17,6 +17,7 @@
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 
 #include <optional>
+#include <utility>
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/CommandLine.h"
@@ -45,19 +46,19 @@ namespace {
 constexpr auto kPrivateCacheLevel = 5;
 struct AKGMemoryPromotion : public impl::AffineMemoryPromotionBase<AKGMemoryPromotion> {
   AKGMemoryPromotion() {}
-  explicit AKGMemoryPromotion(const std::string &target) : target(target) {}
+  explicit AKGMemoryPromotion(std::string target) : target(std::move(target)) {}
 
   void runOnOperation() override;
   void runOnBlock(Block *block, DenseSet<Operation *> &copyNests, unsigned curDepth);
 
   bool AutoSetPromoteDepth();
-  unsigned AutoSetPromoteSpace() const;
+  [[nodiscard]] unsigned AutoSetPromoteSpace() const;
   void RemoveGlobalTempBuffer();
   bool DirectlyPromoteGlobalTempBuffer();
   Value MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Operation *> &toErase,
                        SmallVector<Operation *> &toReplace) const;
 
-  DenseSet<Operation *> RemoveEmptyCopyNests(const DenseSet<Operation *> &copyNests) const;
+  [[nodiscard]] DenseSet<Operation *> RemoveEmptyCopyNests(const DenseSet<Operation *> &copyNests) const;
 
   std::string target = kTargetCuda;
   Value zeroIndex = nullptr;
@@ -250,7 +251,7 @@ Value AKGMemoryPromotion::MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Ope
       SmallVector<Operation *> gmToFast;
       for (auto store : user->getUsers()) {
         auto memRef = CommonUtils::getStoreMemref(store);
-        if (memRef && memRef.getDefiningOp() &&
+        if (memRef && (memRef.getDefiningOp() != nullptr) &&
             CommonUtils::getCacheLevel(cast<TypedValue<MemRefType>>(memRef)) != kGlobalCache) {
           memDest = memRef;
           gmToFast.push_back(store);
@@ -279,7 +280,7 @@ void AKGMemoryPromotion::RemoveGlobalTempBuffer() {
     SmallVector<Operation *> toErase;
     SmallVector<Operation *> toReplace;
     Value tempFastMem = MemFlowRemoval(tempGm, toErase, toReplace);
-    if (!tempFastMem || !tempFastMem.getDefiningOp()) {
+    if (!tempFastMem || (tempFastMem.getDefiningOp() == nullptr)) {
       continue;
     }
     for (auto user : toErase) {
@@ -301,7 +302,7 @@ void AKGMemoryPromotion::RemoveGlobalTempBuffer() {
       }
 
       auto memRef = CommonUtils::getStoreMemref(user);
-      if (memRef && memRef.getDefiningOp()) {
+      if (memRef && (memRef.getDefiningOp() != nullptr)) {
         memRef.replaceAllUsesWith(tempFastMem);
       }
     }

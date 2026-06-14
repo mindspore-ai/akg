@@ -67,12 +67,16 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
     unsigned dimInMapStart = cast<AffineDimExpr>(expr.value()).getPosition();
     // 1.  Check if this start of the sequence.
     if (dimInMapStart == dimSequenceStart) {
-      if (expr.index() + dimSequence.size() > indexingMap.getNumResults()) return false;
+      if (expr.index() + dimSequence.size() > indexingMap.getNumResults()) {
+        return false;
+      }
       // 1a. Check if sequence is preserved.
       for (const auto &dimInSequence : enumerate(dimSequence)) {
         unsigned dimInMap =
           cast<AffineDimExpr>(indexingMap.getResult(expr.index() + dimInSequence.index())).getPosition();
-        if (dimInMap != dimInSequence.value()) return false;
+        if (dimInMap != dimInSequence.value()) {
+          return false;
+        }
       }
       // Found the sequence. Projected permutation
       // enforces that all AffineDimExprs in the result are unique, so no
@@ -82,7 +86,9 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
     // 2. If position in the expr (which is of type AffineDimExpr) is part
     // of sequence, return false here. This implies the entire sequence does not
     // exist in the indexing map.
-    if (sequenceElements.count(dimInMapStart)) return false;
+    if (sequenceElements.count(dimInMapStart) != 0u) {
+      return false;
+    }
   }
   // 3. No element of sequence found. Return true.
   return true;
@@ -137,7 +143,9 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
   GenericOp genericOp, OpOperand *fusableOperand, ArrayRef<ReassociationIndices> reassociation) {
   // Some basic checks for this fusion to be valid.
-  if (!genericOp.hasPureTensorSemantics() || genericOp.getNumDpsInits() != 1) return {};
+  if (!genericOp.hasPureTensorSemantics() || genericOp.getNumDpsInits() != 1) {
+    return {};
+  }
 
   if (!llvm::all_of(genericOp.getIndexingMapsArray(), [](AffineMap map) { return map.isProjectedPermutation(); })) {
     return {};
@@ -155,20 +163,26 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     assert(!foldedRangeDims.empty() && "unexpected empty reassociation");
 
     // Ignore dims that are not folded.
-    if (foldedRangeDims.size() == 1) continue;
+    if (foldedRangeDims.size() == 1) {
+      continue;
+    }
 
     ReassociationIndices foldedIterationSpaceDims = getDomainReassociation(indexingMap, foldedRangeDims);
 
     // Check that the folded iteration dims do not contain already processed
     // dims.
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); }))
+    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); })) {
       continue;
+    }
 
     // Check that all folded iterator types are all parallel or all reductions.
     utils::IteratorType startIteratorType = iteratorTypes[foldedIterationSpaceDims[0]];
-    if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) continue;
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return iteratorTypes[dim] != startIteratorType; }))
+    if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) {
       continue;
+    }
+    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return iteratorTypes[dim] != startIteratorType; })) {
+      continue;
+    }
 
     // If the folded dimensions correspond to a "reduction" iterator type,
     // the folded dimensions need to be "in-order". Strictly speaking this is
@@ -178,10 +192,14 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
       bool isContiguous = false;
       for (const auto &startDim : llvm::enumerate(reductionDims)) {
         // Move window in `reductionDims` to start of the folded iteration dims.
-        if (startDim.value() != foldedIterationSpaceDims[0]) continue;
+        if (startDim.value() != foldedIterationSpaceDims[0]) {
+          continue;
+        }
         // If sizes doesn't match, trivial not contiguous. This condition should
         // not be hit.
-        if (startDim.index() + foldedIterationSpaceDims.size() > reductionDims.size()) break;
+        if (startDim.index() + foldedIterationSpaceDims.size() > reductionDims.size()) {
+          break;
+        }
         // Check that the contiguity is maintained.
         isContiguous = true;
         isContiguous = !std::any_of(llvm::enumerate(foldedIterationSpaceDims).begin(),
@@ -190,14 +208,17 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
                                     });
         break;
       }
-      if (!isContiguous) continue;
+      if (!isContiguous) {
+        continue;
+      }
     }
 
     // Check that the sequence is preserved in all indexing maps.
     if (llvm::any_of(genericOp.getIndexingMapsArray(), [&](AffineMap indexingMap) {
           return !isDimSequencePreservedV2(indexingMap, foldedIterationSpaceDims);
-        }))
+        })) {
       continue;
+    }
 
     processedIterationDims.insert(foldedIterationSpaceDims.begin(), foldedIterationSpaceDims.end());
     iterationSpaceReassociation.emplace_back(std::move(foldedIterationSpaceDims));
@@ -355,7 +376,7 @@ struct LinalgElementwiseFusionExtPass : public impl::LinalgElementwiseFusionExtB
     grc.useTopDownTraversal = true;
 
     RewritePatternSet patterns(context);
-    DominanceInfo &domInfo = getAnalysis<DominanceInfo>();
+    auto &domInfo = getAnalysis<DominanceInfo>();
     (void)patterns.add<FuseElementwiseOpsExt>(context, controlFn, domInfo);
     // Add the patterns that clean up dead operands and results.
     populateEraseUnusedOperandsAndResultsPatterns(patterns);
