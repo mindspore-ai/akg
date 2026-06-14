@@ -18,7 +18,7 @@ structure:
 
 ## 优化策略 Checklist
 
-- [ ] **块大小选择**: 1024-2048 for element-wise; BLOCK_SIZE < 65536
+- [ ] **块大小选择**: 1024-2048 for element-wise; BLOCK_SIZE/tile 受UB/L0和编译器限制
 - [ ] **Grid 1D 化**: 将 2D grid 改为 1D + 核内循环，降低启动开销
 - [ ] **核内循环**: 无需 for 的场景添加额外循环，编译器自动多级流水
 - [ ] **尝试不同 BLOCK_SIZE**: 在核内循环中平衡并行度和资源占用
@@ -80,4 +80,4 @@ def kernel(ptr, n_iters, TILE: tl.constexpr, MAX_ITERS: tl.constexpr):
 - tl.constexpr 仅在内核参数中使用，host 侧不可用
 - 输出张量用 torch.empty / empty_like（避免 zeros/ones 初始化开销）
 - 标量转换仅 `scalar.to(type)`，禁止 `tl.float16(scalar)`
-- BLOCK_SIZE 必须小于 65536
+- BLOCK_SIZE/`tl.arange`对应单program内tile大小，必须满足UB/L0和编译器限制；不要为了减少grid数量而放大tile
