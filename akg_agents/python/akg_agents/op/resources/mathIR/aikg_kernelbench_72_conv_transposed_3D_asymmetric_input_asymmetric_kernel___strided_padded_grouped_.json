@@ -1,0 +1,225 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "S_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "S_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "S_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "G",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_w",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "定义：\n- 输入 X 形状 (B, C_in, D_in, H_in, W_in) = (8, 32, 12, 24, 48)\n- 权重 W 形状 (C_in, C_out_g, K_d, K_h, K_w) = (32, 8, 3, 5, 7)，其中 C_out_g = C_out / G = 8\n- 超参：stride S=(S_d,S_h,S_w)=(2,2,2), padding P=(P_d,P_h,P_w)=(1,2,3), output_padding OP=(OP_d,OP_h,OP_w)=(1,1,1), groups G=4, C_out=32, C_in_g = C_in / G = 8\n- 输出 Y 形状 (B, C_out, D_out, H_out, W_out) = (8, 32, 24, 48, 96)，其中\n    D_out = (D_in-1)*S_d - 2*P_d + (K_d-1) + OP_d + 1 = 24\n    H_out = (H_in-1)*S_h - 2*P_h + (K_h-1) + OP_h + 1 = 48\n    W_out = (W_in-1)*S_w - 2*P_w + (K_w-1) + OP_w + 1 = 96\n\n对于每个 b ∈ [0, B-1], oc ∈ [0, C_out-1], d ∈ [0, D_out-1], h ∈ [0, H_out-1], w ∈ [0, W_out-1]:\n  令 g = oc // C_out_g  (整数除法), oc_g = oc % C_out_g\n  Y[b, oc, d, h, w] = sum_{ic_g=0}^{C_in_g-1} sum_{kd=0}^{K_d-1} sum_{kh=0}^{K_h-1} sum_{kw=0}^{K_w-1} [\n      ic = g * C_in_g + ic_g   (全局输入通道)\n      num_d = d + P_d - kd\n      num_h = h + P_h - kh\n      num_w = w + P_w - kw\n      i_d = num_d / S_d, i_h = num_h / S_h, i_w = num_w / S_w\n      if num_d、num_h、num_w 分别能被 S_d、S_h、S_w 整除，且 0 ≤ i_d < D_in, 0 ≤ i_h < H_in, 0 ≤ i_w < W_in:\n          X[b, ic, i_d, i_h, i_w] * W[ic, oc_g, kd, kh, kw]\n      else 0\n  ]",
+        "boundary_treatment": "边界处理：\n- 输出尺寸由转置卷积公式决定，包含了 output_padding 带来的额外行/列/深度；output_padding 只影响输出尺寸，不改变反推输入坐标公式。\n- 对于每个输出位置 (d,h,w)，按 num_d=d+P_d-kd、num_h=h+P_h-kh、num_w=w+P_w-kw 反推输入索引；必须满足 numerator 能被 stride 整除，否则该核位置贡献 0。\n- 同时要求 0 ≤ i_d < D_in 等，否则越界贡献 0。\n- output_padding 可能导致部分尾部输出位置对应的输入索引完全越界或非整除，因此那些位置只累加有效贡献；若无有效贡献则为 0（无 bias 时）。\n- 分组限制：每个输出通道 oc 仅与所在组 g 内的输入通道（ic 属于 [g*C_in_g, (g+1)*C_in_g-1]）进行计算，不同组间无交互。\n- PyTorch ConvTranspose3d 公式直接使用原始权重空间索引 W[ic, oc_g, kd, kh, kw]，不要额外写成 K-1-k 翻转。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, B)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "24"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "48"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "96"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic_g",
+              "range": "[0, C_in_g)",
+              "binding": "static",
+              "value": "8",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kd",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (8, 32, 12, 24, 48)",
+            "stride": "442368, 13824, 1152, 48, 1",
+            "address_mapping": "b * 442368 + ic * 13824 + i_d * 1152 + i_h * 48 + i_w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(C_in, C_out_g, K_d, K_h, K_w) = (32, 8, 3, 5, 7)",
+            "stride": "840, 105, 35, 7, 1",
+            "address_mapping": "ic * 840 + oc_g * 105 + kd * 35 + kh * 7 + kw",
+            "unpack_hint": "注意：PyTorch ConvTranspose3d 权重布局为 (C_in, C_out_per_group, K_d, K_h, K_w)，与常规卷积相反；公式直接使用 W[ic, oc_g, kd, kh, kw] 的原始空间索引，不要额外写成 K-1-k 翻转。"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (8, 32, 24, 48, 96)",
+            "stride": "3538944, 110592, 4608, 96, 1",
+            "address_mapping": "b * 3538944 + oc * 110592 + d * 4608 + h * 96 + w"
+          },
+          "S_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[0]"
+          },
+          "S_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[1]"
+          },
+          "S_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[2]"
+          },
+          "P_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[0]"
+          },
+          "P_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[1]"
+          },
+          "P_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[2]"
+          },
+          "OP_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[0]"
+          },
+          "OP_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[1]"
+          },
+          "OP_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[2]"
+          },
+          "G": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.groups"
+          },
+          "K_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.kernel_size[0]"
+          },
+          "K_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.kernel_size[1]"
+          },
+          "K_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.kernel_size[2]"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch eager 模式下的 Model.forward 结果进行数值对拍。重点检查：1) 输出形状是否正确（24,48,96）；2) 边界处理：当 stride 不整除时，贡献为0的项是否正确；3) output_padding 导致的尾部输出位置是否只累加有效贡献；4) groups 分组是否正确，不同组输出是否独立；5) 权重布局为 (C_in, C_out_per_group, K_d, K_h, K_w)，且使用原始空间索引 kd/kh/kw。建议使用完整输入 (8,32,12,24,48) 对拍，容忍值设为 fp32 精度下的 1e-5。也可构造小形状单测（如 B=1, C=4, 小空间尺寸，stride=2, padding=1, output_padding=0）验证边界。"
+      }
+    ]
+  }
+}

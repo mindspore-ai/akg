@@ -1,0 +1,174 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          },
+          {
+            "name": "stride",
+            "kind": "scalar"
+          },
+          {
+            "name": "padding",
+            "kind": "scalar"
+          },
+          {
+            "name": "output_padding",
+            "kind": "scalar"
+          },
+          {
+            "name": "dilation",
+            "kind": "scalar"
+          },
+          {
+            "name": "kernel_size",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Let x be the input tensor of shape (N, C_in, H_in, W_in) with N=8, C_in=64, H_in=1024, W_in=1024. Let weight be the weight tensor of shape (C_in, C_out, kernel_size, kernel_size) with C_out=64, kernel_size=3. The transposed convolution uses stride=1, padding=0, output_padding=0, dilation=1. The output tensor y has shape (N, C_out, H_out, W_out) where H_out = (H_in - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1 = 1026, W_out = 1026 similarly. For n in [0, N-1], oc in [0, C_out-1], h in [0, H_out-1], w in [0, W_out-1]: y[n, oc, h, w] = sum_{ic=0}^{C_in-1} sum_{kh=0}^{kernel_size-1} sum_{kw=0}^{kernel_size-1} weight[ic, oc, kh, kw] * x[n, ic, h - kh, w - kw], where x[n, ic, h - kh, w - kw] is treated as 0 when h - kh < 0 or >= H_in or w - kw < 0 or >= W_in.",
+        "boundary_treatment": "Zero padding is implicitly applied on the input boundaries. When the mapped input index (h-kh, w-kw) falls outside the valid input range [0, H_in-1] x [0, W_in-1], the corresponding x value is zero. No explicit padding of the input tensor. The output spatial size is computed as given by the formula. Since groups=1, all input channels contribute to all output channels. No output cropping or other boundary handling is performed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 1026)",
+              "binding": "static",
+              "value": "1026"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 1026)",
+              "binding": "static",
+              "value": "1026"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(8, 64, 1024, 1024)",
+            "stride": "(67108864, 1048576, 1024, 1)",
+            "address_mapping": "n * 67108864 + ic * 1048576 + h_in * 1024 + w_in"
+          },
+          "weight": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose2d.weight",
+            "layout": "(64, 64, 3, 3)",
+            "stride": "(576, 9, 3, 1)",
+            "address_mapping": "ic * 576 + oc * 9 + kh * 3 + kw"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(8, 64, 1026, 1026)",
+            "stride": "(67371264, 1052676, 1026, 1)",
+            "address_mapping": "n * 67371264 + oc * 1052676 + h * 1026 + w"
+          },
+          "stride": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.stride[0]"
+          },
+          "padding": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.padding[0]"
+          },
+          "output_padding": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.output_padding[0]"
+          },
+          "dilation": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.dilation[0]"
+          },
+          "kernel_size": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.kernel_size[0]"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "8"
+          },
+          "C_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "64"
+          },
+          "H_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1024"
+          },
+          "W_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1024"
+          },
+          "C_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "64"
+          },
+          "H_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1026"
+          },
+          "W_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1026"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch eager 模式下的输出进行数值对拍。重点检查：输出形状是否为 (8, 64, 1026, 1026)；边界位置（如 h=0 或 h=1025）索引映射是否正确，越界填充零是否体现；不同 batch 和通道之间是否独立；数据类型 float32。建议先用小尺寸（如 batch=2, C_in=2, C_out=2, H_in=3, W_in=3, K=2）做冒烟测试，确保边界处理正确，再使用完整尺寸 (8, 64, 1024, 1024) 进行对拍。数值容忍度可设为 1e-5 相对/绝对误差。"
+      }
+    ]
+  }
+}

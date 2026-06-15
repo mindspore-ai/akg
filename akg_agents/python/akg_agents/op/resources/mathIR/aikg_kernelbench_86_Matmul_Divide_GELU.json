@@ -1,0 +1,111 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_divide_fused",
+        "next_expressions": ["gelu_act"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W", "kind": "tensor" },
+          { "name": "B", "kind": "tensor" },
+          { "name": "D_div", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，N=128, I=512；权重 W ∈ R^{O×I}，O=1024；偏置 B ∈ R^{O}；标量 D_div=10.0。先做 nn.Linear: Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W[o,i] + B[o]。再做逐元素除法: Y1[n,o] = Z[n,o] / D_div。融合 GEMM、bias add、scalar division。",
+        "boundary_treatment": "纯 GEMM + 逐元素除法，无空间边界；D_div 为常量 10.0 不为零。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "512", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W(o, i) = W_ptr + o*I + i"
+          },
+          "B": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B(o) = B_ptr + o"
+          },
+          "D_div": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.divisor (10.0)"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_divide_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下的 nn.Linear(512, 1024) 前向再除以 10.0（eval 模式）。精度模式：默认走 tl.dot + fp32 累加器；若使用 tl.dot 输入 fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止隐式 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7 (fp32 FMA)，K = I = 512，ε_total ≈ 1.2e-7 × sqrt(512) ≈ 2.7e-6，留 10x 余量得 rtol_base = atol_base ≈ 3e-5；步骤 2（cuBLAS 参考修正，关键）参考链路含 nn.Linear (走 cuBLAS)，TF32 默认开启，参考误差 ~1e-3，rtol = atol = max(3e-5, 1e-3) = 1e-3；步骤 3（量级修正）不触发（除以 10 反而缩小量级）。最终 rtol = atol = 1e-3，主导因素是步骤 2 的 cuBLAS。结构性检查：(a) 输出 shape = (128, 1024)；(b) bias 在通道维加；(c) divisor=10 全局一致。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuBLAS TF32 主导，非 bug；(ii) 整体差 10× → divisor 没作用或作用顺序错；(iii) 个别行偏移恒定值 → bias 索引错位。"
+      },
+      {
+        "name": "gelu_act",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}。PyTorch 默认 GELU (approximate='none')：Y[n,o] = 0.5 · Y1[n,o] · (1 + erf(Y1[n,o] / √2))。其中 C_half = 0.5，C_sqrt2 = √2 ≈ 1.4142135623730951。逐元素，无 reduction。",
+        "boundary_treatment": "纯逐元素超越函数，对全体实数有定义；无边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_divide_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.nn.functional.gelu(Y1)（默认 approximate='none'，精确 erf 版本）。精度模式：纯逐元素，erf 走 libdevice 大约 1~2 ULP 误差；天然 IEEE fp32 语义；不走 tl.dot。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，纯逐元素无 reduction，取 K=1，ε_total ≈ 1.2e-7，留 10x 余量得 rtol_base = atol_base ≈ 1e-6；步骤 2（cuDNN/cuBLAS 修正）不触发；步骤 3（量级修正）不触发（GELU 不放大量级）。最终 rtol = atol = 1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape = (128, 1024)；(b) erf 在 x≈0 附近 GELU(0) ≈ 0；(c) GELU 对大正数趋近 x、对大负数趋近 0；(d) 不可使用 tanh 近似版本。失败诊断：(i) diff ≈ 几个百分比 → 误用 approximate='tanh'；(ii) sign 翻转 → erf 实现错。"
+      }
+    ]
+  }
+}

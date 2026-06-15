@@ -1,0 +1,146 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_actual_python_binding",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "The task name mentions grouped convolution, but the executable Python binding is authoritative. get_init_inputs() returns [in_channels, out_channels, kernel_size, stride, padding, groups] = [32,32,3,2,1,4]. In Model.__init__(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, groups=1, bias=False), the sixth positional value 4 binds to output_padding, not groups. The ConvTranspose3d constructor inside __init__ does not pass output_padding at all and leaves groups at its default value 1. Therefore the actual reference op is nn.ConvTranspose3d(32, 32, kernel_size=(3,3,3), stride=2, padding=1, groups=1, bias=False, dilation=1, output_padding=0). For X with shape (N,C_in,D_in,H_in,W_in)=(4,32,32,64,128), W with PyTorch ConvTranspose3d layout (C_in,C_out,KD,KH,KW)=(32,32,3,3,3), output Y has shape (4,32,63,127,255). For each n, co, od, oh, ow: Y[n,co,od,oh,ow] = sum_{ci=0}^{31} sum_{kd=0}^{2} sum_{kh=0}^{2} sum_{kw=0}^{2} valid(od,oh,ow,kd,kh,kw) * X[n,ci,id,ih,iw] * W[ci,co,kd,kh,kw], where id_num=od + 1 - kd, ih_num=oh + 1 - kh, iw_num=ow + 1 - kw, id=id_num/2, ih=ih_num/2, iw=iw_num/2. valid is true iff id_num, ih_num, and iw_num are divisible by 2 and 0 <= id < 32, 0 <= ih < 64, 0 <= iw < 128.",
+        "boundary_treatment": "Out-of-domain inverse mappings contribute zero. There is no grouping in the actual executed module even though the local variable is named groups. The ignored sixth positional argument must not change the output shape or channel grouping. output_padding is effectively 0 because it is not forwarded to nn.ConvTranspose3d. bias=False, dilation=1.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 4)",
+              "binding": "static",
+              "value": "4"
+            },
+            {
+              "symbol": "co",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "od",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "oh",
+              "range": "[0, 127)",
+              "binding": "static",
+              "value": "127"
+            },
+            {
+              "symbol": "ow",
+              "range": "[0, 255)",
+              "binding": "static",
+              "value": "255"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ci",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kd",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (4, 32, 32, 64, 128)",
+            "stride": "(8388608, 262144, 8192, 128, 1)",
+            "address_mapping": "addr_X(n,ci,id,ih,iw) = X_ptr + n*8388608 + ci*262144 + id*8192 + ih*128 + iw"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(C_in, C_out, KD, KH, KW) = (32, 32, 3, 3, 3)",
+            "stride": "(864, 27, 9, 3, 1)",
+            "address_mapping": "addr_W(ci,co,kd,kh,kw) = W_ptr + ci*864 + co*27 + kd*9 + kh*3 + kw",
+            "unpack_hint": "ConvTranspose3d weight layout is (in_channels, out_channels // groups, KD, KH, KW). Since actual groups=1, the second dimension is all C_out=32. Do not permute as if this were grouped with groups=4."
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (4, 32, 63, 127, 255)",
+            "stride": "(65288160, 2040255, 32385, 255, 1)",
+            "address_mapping": "addr_Y(n,co,od,oh,ow) = Y_ptr + n*65288160 + co*2040255 + od*32385 + oh*255 + ow"
+          },
+          "stride": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "Model.__init__ positional arg 4 -> stride = 2"
+          },
+          "padding": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "Model.__init__ positional arg 5 -> padding = 1"
+          },
+          "ignored_output_padding_arg": {
+            "binding_kind": "ignored_init_argument",
+            "code_binding": "Model.__init__ positional arg 6 -> output_padding = 4, but this value is not passed into nn.ConvTranspose3d"
+          },
+          "groups": {
+            "binding_kind": "default_scalar_parameter",
+            "code_binding": "nn.ConvTranspose3d groups default = 1 in the actual constructor call"
+          },
+          "dilation": {
+            "binding_kind": "default_scalar_parameter",
+            "code_binding": "nn.ConvTranspose3d dilation default = 1"
+          },
+          "bias": {
+            "binding_kind": "default_scalar_parameter",
+            "code_binding": "bias=False"
+          }
+        },
+        "lowering_contract": "Use the executable Python call semantics, not the benchmark name or local variable names. Treat actual groups as 1. The reduction K axis is C_in*KD*KH*KW = 32*27 = 864, not C_in_per_group*KD*KH*KW. If using tl.static_range, pass K_TOTAL=864 and K tile bounds as tl.constexpr meta values; do not compute K_TOTAL from runtime tensor values inside @triton.jit and then use it as a static_range end. Mask all inverse-mapped input coordinates and divisibility checks before tl.load. Keep stride=2, padding=1, dilation=1 as scalar constexpr values, not Python tuples inside kernel arithmetic.",
+        "TDD_requirement": "Compare against the provided Model exactly as written. A smoke test should instantiate Model(32,32,3,2,1,4) and confirm that framework_model.conv_transpose3d.groups == 1 and output shape is (4,32,63,127,255). Then verify numerical equality for the full input."
+      }
+    ]
+  }
+}

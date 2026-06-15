@@ -1,0 +1,75 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "prod_reduction",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{N×D1×D2}，其中 N=16, D1=256, D2=256。沿维度 dim=1 做乘积规约，输出张量 Y ∈ ℝ^{N×D2} 定义为：Y[n, w] = ∏_{d=0}^{D1-1} X[n, d, w]，其中 n∈[0,N-1], d∈[0,D1-1], w∈[0,D2-1]。",
+        "boundary_treatment": "该算子为简单的规约操作，沿着 dim=1 顺序遍历所有元素做累乘，不涉及任何边界填充或越界访问。输入张量为连续内存，规约在单一维度上进行。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, D2)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "d",
+              "range": "[0, D1)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "prod",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D1, D2) = (16, 256, 256)",
+            "stride": "(D1*D2, D2, 1) = (65536, 256, 1)",
+            "address_mapping": "addr_X(n, d, w) = X_ptr + n*(D1*D2) + d*D2 + w"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D2) = (16, 256)",
+            "stride": "(D2, 1) = (256, 1)",
+            "address_mapping": "addr_Y(n, w) = Y_ptr + n*D2 + w"
+          }
+        },
+        "TDD_requirement": "验证输出形状为 (16, 256)；用小随机输入与 torch.prod(x, dim=1) 对拍；检查数值一致性（注意数值精度）。"
+      }
+    ]
+  }
+}

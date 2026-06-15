@@ -1,0 +1,65 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_relu_divide_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" },
+          { "name": "divisor", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "GEMM 接 ReLU 接除常数的融合：输入 X ∈ R^{N×I} (N=128, I=1024)，权重 W_gemm ∈ R^{O×I} (O=512)，偏置 B_gemm ∈ R^{O}，divisor=2.0。先 GEMM: Z1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i]。再 ReLU: Z2[n,o] = max(0, Z1[n,o])。再除以常数: Y[n,o] = Z2[n,o] / divisor。",
+        "boundary_treatment": "全连接对完整 I=1024 求和；逐元素 ReLU 与除法无边界；divisor 为浮点标量；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "divisor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.divisor (2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(1024, 512) 接 torch.relu 接 / 2.0（eval 模式）。精度模式：tl.dot + fp32 输入必须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32；手写 FMA + fp32 累加为 IEEE。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = I = 1024，ε_total ≈ 1.2e-7 * sqrt(1024) ≈ 3.8e-6，10x 余量 rtol_base = atol_base = 4e-5；步骤 2（cuBLAS 参考修正，关键）参考含 nn.Linear，cuBLAS+TF32 引入 ~1e-3 误差，强制 rtol = atol = max(4e-5, 1e-3) = 1e-3；步骤 3（量级修正）除法对绝对/相对误差影响乘 0.5，不放大误差。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,512)；(b) ReLU 保证 Y >= 0；(c) 验证 weight 布局 (O=512, I=1024)；(d) 验证 bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 → cuBLAS TF32 正常；(ii) 出现负值 → ReLU 漏；(iii) 数值偏 2 倍 → 漏除以 divisor 或 divisor 误为 1。"
+      }
+    ]
+  }
+}

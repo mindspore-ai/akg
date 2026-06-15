@@ -1,0 +1,378 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d_fused",
+        "next_expressions": [
+          "groupnorm"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}, 权重 W_conv ∈ R^{C_out×C_in×K_d×K_h×K_w}, 偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。输出 D_out=14, H_out=W_out=30。Y1[n,c_o,d,h,w] = B_conv[c_o] + Σ_{c_i} Σ_{k_d} Σ_{k_h} Σ_{k_w} X[n,c_i,d+k_d,h+k_h,w+k_w] · W_conv[c_o,c_i,k_d,k_h,k_w]。本题 N=128, C_in=3, C_out=16, D_in=16, H_in=W_in=32, K=3。",
+        "boundary_treatment": "padding=0 → 卷积窗口完整落在输入；bias 加在 c_o 维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 3, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (49152, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d_in, h_in, w_in) = X_ptr + n*49152 + c_i*16384 + d_in*1024 + h_in*32 + w_in"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_d, K_h, K_w) = (16, 3, 3, 3, 3)",
+            "stride": "(C_in*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (81, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_d, k_h, k_w) = W_conv_ptr + c_o*81 + c_i*27 + k_d*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d, h, w) = Y1_ptr + n*201600 + c_o*12600 + d*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv3d(3,16,kernel_size=3) eval forward。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_in·K^3=3·27=81，ε_total ≈ 1.2e-7·sqrt(81)·10 ≈ 1.1e-5；步骤 2，参考 nn.Conv3d → cuDNN TF32，rtol=atol=max(1.1e-5, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) shape=(128,16,14,30,30)；(b) padding=0 时空间维 = (D - K + 1)；(c) 单通道单样本对拍。失败诊断：(i) 1e-4~1e-3 误差 + shape 正确 → cuDNN TF32，放宽；(ii) 远超 → W (C_out,C_in) 对调；(iii) 通道偏移 → bias 错位。\n【子表达式自测容忍度】Conv/ConvTranspose 与 PyTorch cuDNN/TF32 参考对拍时，正确的 shape/layout/边界实现也可能出现 1e-3 量级绝对误差；Conv3d+activation 或长归约链路可到约 6e-3。子表达式 smoke test 请使用 torch.allclose(rtol=5e-3, atol=5e-3)（必要时 6e-3），不要用单一 max_abs < 1e-3 拦截正确实现；最终 verifier 仍做端到端判定。",
+        "lowering_contract": {
+          "preferred_schedule": "For small static Conv2d/Conv3d with small C_in and C_out, compute a tile of flattened output positions and a vector of output channels. Prefer a packed-weight (K_total, C_out) outer-product loop with fp32 accumulators; create the packed weight once in ModelNew.__init__. If the expression also has a min/sum/mean over producer positions, compute each producer tile once and reduce it instead of recomputing Conv per final scalar.",
+          "suggested_tile": {
+            "preferred_variant": "small_static_outer_product",
+            "BLOCK_M": 32,
+            "BLOCK_C": 16,
+            "K_TOTAL": 81,
+            "C_OUT": 16
+          },
+          "forbidden_lowerings": [
+            "Repack or transpose convolution weights inside forward on every call.",
+            "Use original ConvNd weight strides after passing a packed (K_total, C_out) weight tensor.",
+            "Launch one program per final scalar while recomputing the full convolution reduction.",
+            "Treat K_total as a non-power-of-two tl.arange tile bound without padding/masking."
+          ]
+        }
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": [
+          "min_clamp_dropout_fused"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C×D×H×W}, num_groups=G=8, C_g=C/G=2, gamma, beta ∈ R^{C}, eps=1e-5。对每个 (n, g)，组内索引集合 I_g = {g·C_g, …, (g+1)·C_g-1}，组内空间元素总数 M = C_g·D·H·W = 2·14·30·30 = 25200。均值 μ_{n,g} = (1/M) · Σ_{c∈I_g} Σ_{d,h,w} Y1[n,c,d,h,w]；方差 σ²_{n,g} = (1/M) · Σ_{c∈I_g} Σ_{d,h,w} (Y1[n,c,d,h,w]-μ_{n,g})²。输出 Y2[n,c,d,h,w] = gamma[c]·(Y1[n,c,d,h,w]-μ_{n,g})/sqrt(σ²_{n,g}+eps) + beta[c]，其中 g=⌊c/C_g⌋。本题 N=128, C=16, D=14, H=W=30, G=8, C_g=2。",
+        "boundary_treatment": "G=8 整除 C=16；组内 reduction 在 C_g·D·H·W 个元素上做；eps 加在 sqrt 内；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k_c",
+              "range": "[0, C_g)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "14",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "30",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "30",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_fused.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 14, 30, 30)",
+            "stride": "(201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*201600 + c*12600 + d*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.norm.weight",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.norm.bias",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.norm.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 14, 30, 30)",
+            "stride": "(201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*201600 + c*12600 + d*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.GroupNorm(num_groups=8, num_channels=16, eps=1e-5) eval 作用于上游 Y1。精度模式：手写 FMA + fp32 累加器，IEEE fp32；rsqrt 约 1 ULP。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_g·D·H·W=2·14·30·30=25200，ε_total ≈ 1.2e-7·sqrt(25200)·10 ≈ 1.9e-4，取 rtol_base=atol_base=3e-4；步骤 2，nn.GroupNorm 不走 cuDNN/cuBLAS 大核，单算子 ATen 实现，不触发 1e-3；步骤 3，归一化后量级 ~O(1)，不触发；最终单 expression rtol=atol=3e-4，整链路（上游 cuDNN）rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) shape 不变；(b) 每个 (n,g) 上 mean(Y2)≈0, var(Y2)≈gamma²；(c) eps 在 sqrt 内；(d) gamma/beta 按 c 索引；(e) G 整除 C；(f) 小尺寸 (2,4,4,4,4) 手算对拍。失败诊断：(i) NaN → eps 漏；(ii) 每组偏移 → 均值/beta 错；(iii) 倍数偏差 → 错除以 D·H·W 而非 C_g·D·H·W。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Normalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      },
+      {
+        "name": "min_clamp_dropout_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          },
+          {
+            "name": "min_value",
+            "kind": "scalar"
+          },
+          {
+            "name": "max_value",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C×D×H×W}, min_value=0.0, max_value=1.0。步骤 1 torch.min(Y2, torch.tensor(min_value))：M[n,c,d,h,w] = min(Y2[n,c,d,h,w], min_value) （元素级二元 min，相当于 -ReLU(-x+min) 的截断为 ≤ min_value）。步骤 2 torch.clamp(M, min=min_value, max=max_value)：Y[n,c,d,h,w] = min(max(M[n,c,d,h,w], min_value), max_value)。步骤 3 self.dropout(.)：在 eval 模式下 nn.Dropout 是恒等映射，不改变值。注意：M ≤ min_value=0, clamp 到 [0,1] 后必然 = 0（因 max(M, 0) = 0），所以本题 Y 在 eval 模式下恒为 0。但形式化按 PyTorch 链路实现以保证一致。本题 N=128, C=16, D=14, H=W=30。融合 3 步纯逐元素 epilogue。",
+        "boundary_treatment": "eval 模式下 Dropout 视为恒等；逐元素 min/clamp 无空间边界；min 与 max 都作用于标量阈值。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 14, 30, 30)",
+            "stride": "(201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*201600 + c*12600 + d*900 + h*30 + w"
+          },
+          "min_value": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "全局 min_value (0.0)"
+          },
+          "max_value": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "全局 max_value (1.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, D, H, W) = (128, 16, 14, 30, 30)",
+            "stride": "(201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*201600 + c*12600 + d*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍（建议在 model.eval() 模式下，避免 dropout 随机性）。参考实现为 torch.min(Y2, torch.tensor(0.0)) → torch.clamp(.,min=0.0,max=1.0) → self.dropout(.)，eval 模式。精度模式：纯比较型逐元素，IEEE fp32 bitwise。rtol/atol 推导：步骤 1，ε_op=0（全比较），取下限 rtol_base=atol_base=1e-6；步骤 2，不触发；步骤 3，不触发。最终单 expression rtol=atol=1e-6（实质 bitwise，本题在 eval 模式下 Y 恒为 0），整链路含上游 cuDNN 时 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) shape 不变 (128,16,14,30,30)；(b) 所有 Y[n,c,d,h,w]=0（因 min(.,0)≤0 后 clamp(.,0,1)=0，是本题特定数学性质）；(c) 必须在 eval 模式跑（否则 dropout 随机置 0、缩放 1/(1-p)）；(d) 小尺寸验证 min-then-clamp 退化为 0。失败诊断：(i) Y 不全为 0 → min(a, b) 实现错或 clamp 顺序错；(ii) 训练模式下随机非零 → 未 .eval()；(iii) shape 改变 → 误用 reduction 而非 elementwise min。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。"
+      }
+    ]
+  }
+}

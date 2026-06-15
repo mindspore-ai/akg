@@ -1,0 +1,66 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "sigmoid",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = 1 / (1 + exp(-X[i, j])); i ∈ [0, N), j ∈ [0, D)",
+        "boundary_treatment": "逐元素操作，无边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "offset = i * 393216 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "offset = i * 393216 + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size = 4096"
+          },
+          "D": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "dim = 393216"
+          }
+        },
+        "TDD_requirement": "验证输出与 PyTorch 的 torch.sigmoid 结果一致。需测试小形状（如 2x3 和 3x4）以及完整形状 (4096, 393216)，确保无越界。容忍值可设为 1e-6。"
+      }
+    ]
+  }
+}

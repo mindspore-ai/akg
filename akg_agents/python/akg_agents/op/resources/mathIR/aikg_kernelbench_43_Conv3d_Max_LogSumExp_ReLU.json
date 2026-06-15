@@ -1,0 +1,260 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d_maxpool_logsumexp_relu_single_kernel_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "conv_stride",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_padding",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_dilation",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_groups",
+            "kind": "scalar"
+          },
+          {
+            "name": "pool_kernel",
+            "kind": "scalar"
+          },
+          {
+            "name": "pool_stride",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Input X has shape (N,C_in,D_in,H_in,W_in)=(128,3,16,32,32). W_conv has shape (C_out,C_in,Kd,Kh,Kw)=(16,3,3,3,3). B_conv has shape (C_out)=(16). Conv3d uses stride=1, padding=1, dilation=1, groups=1, so the logical convolution output has shape (128,16,16,32,32). The final output has shape (N,1,D_p,H_p,W_p)=(128,1,8,16,16). For each final output coordinate (n,d_p,h_p,w_p), define the logical convolution value for output channel c_o and pool offset (delta_d,delta_h,delta_w) as Conv(n,c_o,2*d_p+delta_d,2*h_p+delta_h,2*w_p+delta_w) = B_conv[c_o] + sum_{c_i=0..2} sum_{k_d=0..2} sum_{k_h=0..2} sum_{k_w=0..2} X_padded[n,c_i,2*d_p+delta_d+k_d-1,2*h_p+delta_h+k_h-1,2*w_p+delta_w+k_w-1] * W_conv[c_o,c_i,k_d,k_h,k_w], where out-of-bound X indices contribute 0. Then P(n,c_o,d_p,h_p,w_p) = max_{delta_d,delta_h,delta_w in {0,1}} Conv(n,c_o,2*d_p+delta_d,2*h_p+delta_h,2*w_p+delta_w). Let M(n,d_p,h_p,w_p) = max_{c_o=0..15} P(n,c_o,d_p,h_p,w_p). Let L(n,0,d_p,h_p,w_p) = M + log(sum_{c_o=0..15} exp(P(n,c_o,d_p,h_p,w_p)-M)). The final result is Y[n,0,d_p,h_p,w_p] = max(L(n,0,d_p,h_p,w_p), 0). This expression is semantically equivalent to torch.nn.Conv3d(...), torch.nn.MaxPool3d(kernel_size=2,stride=2), torch.logsumexp(dim=1,keepdim=True), and torch.relu, but Y_conv and P are logical values and should not be materialized by an optimized fused lowering.",
+        "boundary_treatment": "Conv3d uses one-element zero padding on D/H/W. Invalid X coordinates in the convolution sum contribute 0. MaxPool3d uses kernel=2, stride=2, padding=0; because the logical convolution spatial shape is (16,32,32), every pooling window is fully inside the logical convolution output. LogSumExp reduces exactly C_out=16 channels and must use subtract-max stabilization. ReLU clamps negative LogSumExp values to 0. The output keeps the reduced channel dimension, so C=1.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0,N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "d_p",
+              "range": "[0,D_p)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "h_p",
+              "range": "[0,H_p)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "w_p",
+              "range": "[0,W_p)",
+              "binding": "static",
+              "value": "16"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_o",
+              "range": "[0,C_out)",
+              "binding": "static",
+              "value": "16",
+              "reduction_type": "stable_logsumexp_after_pool_max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "delta_d",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "pool_max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "delta_h",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "pool_max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "delta_w",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "pool_max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "c_i",
+              "range": "[0,C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "conv_sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0,Kd)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "conv_sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0,Kh)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "conv_sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0,Kw)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "conv_sum",
+              "accumulator_precision": "tf32_or_fp32"
+            }
+          ],
+          "nested_reduction_order": [
+            "For each (n,d_p,h_p,w_p,c_o,delta_d,delta_h,delta_w), compute Conv by summing over (c_i,k_d,k_h,k_w).",
+            "For each (n,d_p,h_p,w_p,c_o), reduce the 8 Conv values over (delta_d,delta_h,delta_w) with max.",
+            "For each (n,d_p,h_p,w_p), reduce the 16 pooled channel values with stable logsumexp.",
+            "Apply ReLU and store one scalar Y[n,0,d_p,h_p,w_p]."
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N,C_in,D_in,H_in,W_in)=(128,3,16,32,32)",
+            "stride": "(49152,16384,1024,32,1)",
+            "address_mapping": "addr_X(n,c_i,d,h,w)=X_ptr+n*49152+c_i*16384+d*1024+h*32+w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out,C_in,Kd,Kh,Kw)=(16,3,3,3,3)",
+            "stride": "(81,27,9,3,1)",
+            "address_mapping": "addr_W_conv(c_o,c_i,k_d,k_h,k_w)=W_ptr+c_o*81+c_i*27+k_d*9+k_h*3+k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out)=(16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o)=B_ptr+c_o"
+          },
+          "conv_stride": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.stride = (1,1,1)"
+          },
+          "conv_padding": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.padding = (1,1,1)"
+          },
+          "conv_dilation": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.dilation = (1,1,1)"
+          },
+          "conv_groups": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.groups = 1"
+          },
+          "pool_kernel": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.maxpool.kernel_size = (2,2,2)"
+          },
+          "pool_stride": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.maxpool.stride = (2,2,2)"
+          },
+          "Y_conv": {
+            "binding_kind": "logical_intermediate_not_materialized",
+            "code_binding": "none; logical Conv3d value only",
+            "layout": "(N,C_out,D_o,H_o,W_o)=(128,16,16,32,32)",
+            "stride": "(262144,16384,1024,32,1)",
+            "address_mapping": "logical addr_Y_conv(n,c_o,d,h,w)=n*262144+c_o*16384+d*1024+h*32+w"
+          },
+          "P_pool": {
+            "binding_kind": "logical_intermediate_not_materialized",
+            "code_binding": "none; logical MaxPool3d value only",
+            "layout": "(N,C_out,D_p,H_p,W_p)=(128,16,8,16,16)",
+            "stride": "(32768,2048,256,16,1)",
+            "address_mapping": "logical addr_P_pool(n,c_o,d_p,h_p,w_p)=n*32768+c_o*2048+d_p*256+h_p*16+w_p"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N,1,D_p,H_p,W_p)=(128,1,8,16,16)",
+            "stride": "(2048,2048,256,16,1)",
+            "address_mapping": "addr_Y(n,0,d_p,h_p,w_p)=Y_ptr+n*2048+d_p*256+h_p*16+w_p"
+          }
+        },
+        "lowering_contract": {
+          "target": "full_triton_single_kernel_preferred",
+          "must_fuse": [
+            "Conv3d",
+            "MaxPool3d",
+            "LogSumExp",
+            "ReLU"
+          ],
+          "must_not_materialize": [
+            "Y_conv",
+            "P_pool"
+          ],
+          "preferred_schedule": "Map one Triton program to a block of final output positions (n,d_p,h_p,w_p). Expand each final position into 8 logical convolution positions from the 2x2x2 pool window and keep C_out=16 vectorized. For this small static K_total=81/C_out=16 case, use the MathIR-selected small_static_outer_product variant: prepack W_conv in ModelNew.__init__ as a contiguous (K_TOTAL,C_out) parameter or buffer, optionally padded to 128 rows for storage alignment, and pass that stored packed tensor from forward. Do not call permute/view/contiguous on W_conv inside forward. A packed W pointer must use packed indexing packed_W[k_idx,c_o] = W_packed_ptr + k_idx*C_out + c_o; do not pass or apply the original W_conv strides to the packed pointer. In the kernel, use a tl.static_range(K_TOTAL) outer-product loop acc += x_val[:, None] * w_row[None, :]. Do not lower this expression with a tl.dot/BLOCK_K tile; the K padding is storage padding, not a dot reduction tile. Keep BLOCK_M mapped to real final outputs, avoid materializing Y_conv/P_pool, reduce the 8 pool positions with max, reduce the 16 channels with stable logsumexp, apply ReLU, and store Y.",
+          "suggested_tile": {
+            "BLOCK_M": 64,
+            "BLOCK_POS": 512,
+            "BLOCK_C": 16,
+            "K_TOTAL": 81,
+            "K_PADDED_FOR_WEIGHT_STORAGE": 128,
+            "WINDOW": 8,
+            "preferred_variant": "small_static_outer_product",
+            "num_warps": 4,
+            "num_stages": 2
+          },
+          "forbidden_lowerings": [
+            "Use cuDNN or torch.nn.functional.conv3d when a full Triton implementation is requested.",
+            "Write the full Y_conv tensor with shape (128,16,16,32,32).",
+            "Write the pooled tensor P_pool with shape (128,16,8,16,16).",
+            "Launch separate kernels for Conv3d, MaxPool3d, LogSumExp, and ReLU.",
+            "Use scalar one-program-per-output Conv3d without multi-output tiling, tl.dot, or small-static-K outer-product.",
+            "Use a tl.dot/BLOCK_K tile for this expression after MathIR selects small_static_outer_product; K padding is storage padding, not a dot tile.",
+            "Pass W_packed but index it with original W_conv strides; packed tensors need their own packed address mapping.",
+            "Use unstable log(sum(exp(x))) without subtracting the channel maximum."
+          ]
+        },
+        "TDD_requirement": "Reference is torch.nn.Conv3d(3,16,kernel_size=3,stride=1,padding=1,bias=True) followed by torch.nn.MaxPool3d(kernel_size=2,stride=2), torch.logsumexp(dim=1,keepdim=True), and torch.relu. Verify output shape (128,1,8,16,16), keepdim=True, exact pool window mapping, zero-padding Conv3d boundary behavior, bias over C_out=16, and non-negative final output. Because the fused Triton lowering may use tl.dot TF32 for fp32 convolution on Ampere, use the same tolerance policy as the end-to-end benchmark verifier (relative-error limit around 0.02) or explicitly align TF32 settings. Performance tests should reject implementations that materialize Y_conv/P_pool or split the chain, because the intended speedup comes from avoiding those global-memory round trips and kernel launches."
+      }
+    ]
+  }
+}

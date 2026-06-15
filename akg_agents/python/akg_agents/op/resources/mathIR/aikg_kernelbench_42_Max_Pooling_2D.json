@@ -1,0 +1,119 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "maxpool2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "输入 X ∈ ℝ^{32×64×512×512}，池化超参：K=4, S=1, P=1, D=1。定义 X_pad 为在 H,W 维两侧各填充 P 层 -∞ 的张量，尺寸 (32,64,514,514)：X_pad[n,c,i,j] = X[n,c,i-1,j-1] for 1≤i≤512,1≤j≤512 else -∞。输出 Y ∈ ℝ^{32×64×511×511}：Y[n,c,h,w] = max_{kh=0}^{3} max_{kw=0}^{3} X_pad[n,c, h+kh, w+kw] (0≤n<32,0≤c<64,0≤h<511,0≤w<511)。",
+        "boundary_treatment": "通过将输入 X 在 H,W 维每侧填充 P=1 层 -∞（对应 MLIR 中 0xFF800000），得到 X_pad 尺寸 (32,64,514,514)。池化窗口在 X_pad 上滑动，输出位置 (h,w) 的窗口覆盖 X_pad 索引 h+kh, w+kw (kh,kw=0…3)。由于填充为 -∞，任何超出原始输入范围的元素不影响 max 结果（除非输入全为 -∞），因此无需额外的越界检查或 mask。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "511"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "511"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "kh",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "4",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "4",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "base + 16777216 * n + 262144 * c + 512 * h + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H_out, W_out)",
+            "stride": "(16711744, 261121, 511, 1)",
+            "address_mapping": "base + 16711744 * n + 261121 * c + 511 * h + w"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.dilation"
+          }
+        },
+        "TDD_requirement": "对拍参考：PyTorch eager 模式执行结果。重点检查输出 shape (32,64,511,511) 是否正确；边界 padding 使用 -inf 后，最大池化在边缘处是否得到正确的最大值（不引入填充值）。建议小 shape 冒烟：例如 input (2,2,6,6) kernel=3 stride=2 padding=1 dilation=1，手工计算边界值。全尺寸对拍时输入用固定种子，数值应完全一致（fp32）。"
+      }
+    ]
+  }
+}

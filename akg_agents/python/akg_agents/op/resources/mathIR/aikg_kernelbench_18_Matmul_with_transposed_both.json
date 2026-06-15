@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[m,n] = Σ_{k=0}^{K-1} A[k,m] * B[n,k], 其中 m ∈ [0, M-1], n ∈ [0, N-1], k ∈ [0, K-1], M=2048, K=8192, N=4096",
+        "boundary_treatment": "所有下标均在有效范围内，无填充或越界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "m",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "2048"
+            },
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "8192",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(K, M)",
+            "stride": "(M, 1)",
+            "address_mapping": "k * M + m"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(N, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "n * K + k"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "m * N + n"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "M = 2048"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "N = 4096"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "K = 8192"
+          }
+        },
+        "TDD_requirement": "以 PyTorch eager 执行 torch.matmul(A.T, B.T) 的结果作为参考；重点检查输出形状 (M, N)、索引对应关系、归约轴 K 的求和正确性；建议用小型形状 (M=2, K=3, N=4) 做冒烟测试，再用给定完整形状对拍，容忍精度误差 1e-5。"
+      }
+    ]
+  }
+}

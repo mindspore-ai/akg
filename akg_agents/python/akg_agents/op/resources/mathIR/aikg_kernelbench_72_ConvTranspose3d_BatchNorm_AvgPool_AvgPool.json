@@ -1,0 +1,413 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": [
+          "batchnorm3d_eval"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_deconv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_deconv",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "【ConvTranspose lowering 约束】转置卷积必须使用反向索引：in_pos=(out_pos + padding - kernel_offset)/stride，且仅当能整除并落在输入范围内时贡献；不要写成普通卷积的 out_pos*stride - padding + kernel_offset。设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=0, dilation=1, groups=1。输出 D_out = (D_in-1)*S - 2P + K_d + OP = (32-1)*2 - 2 + 3 + 0 = 63，H_out = W_out = 63。Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，三者必须均能被 S 整除且落在合法输入范围内。本题 N=128, C_in=3, C_out=16, D_in=H_in=W_in=32, K_d=K_h=K_w=3。",
+        "boundary_treatment": "仅当由输出位置反推得到的 (d_i, h_i, w_i) 均为整数且落在 [0,32)^3 内时才参与累加；其它情况下该项无贡献。output_padding=0，因此无尺寸额外补充。\n【ConvTranspose lowering 约束】转置卷积必须使用反向索引：in_pos=(out_pos + padding - kernel_offset)/stride，且仅当能整除并落在输入范围内时贡献；不要写成普通卷积的 out_pos*stride - padding + kernel_offset。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d_o",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "63"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 3, 32, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (98304, 32768, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*98304 + c_i*32768 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (3, 16, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (432, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*432 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ 转置卷积 3D 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 16, 63, 63, 63)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (4000752, 250047, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*4000752 + c_o*250047 + d_o*3969 + h_o*63 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(3,16,3,stride=2,padding=1) 前向，eval 模式。精度模式：核心是 conv-transpose 3D 累加，未走 tl.dot 时为手写 FMA + fp32 累加器，IEEE fp32 语义；若走 tl.dot + fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导：步骤 1 ε_op = 1.2e-7，K = C_in × K_d × K_h × K_w = 3×3×3×3 = 81，ε_total ≈ 1.2e-7 × sqrt(81) ≈ 1.08e-6，留 10x = 1.1e-5；步骤 2（关键）参考含 nn.ConvTranspose3d 走 cuDNN，A100 TF32 默认开，rtol = atol = max(1.1e-5, 1e-3) = 1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导是步骤 2。结构性检查：(a) Y1 shape = (128, 16, 63, 63, 63)，验证 (D_in-1)*S-2P+K = 63 公式；(b) weight 解包顺序 (C_in, C_out, K_d, K_h, K_w)；(c) 边界点 (d_o, h_o, w_o) ∈ {0, 62} 单独对拍。失败诊断：(i) 误差 ~1e-4~1e-3 + 参考含 cuDNN → TF32 主导，不是 bug；(ii) 误差极大 → weight 解包对调前两维；(iii) 边缘错而中心对 → 反推索引整除条件错。\n【子表达式自测容忍度】Conv/ConvTranspose 与 PyTorch cuDNN/TF32 参考对拍时，正确的 shape/layout/边界实现也可能出现 1e-3 量级绝对误差；Conv3d+activation 或长归约链路可到约 6e-3。子表达式 smoke test 请使用 torch.allclose(rtol=5e-3, atol=5e-3)（必要时 6e-3），不要用单一 max_abs < 1e-3 拦截正确实现；最终 verifier 仍做端到端判定。",
+        "lowering_contract": {
+          "preferred_schedule": "ConvTranspose lowering must use inverse output-to-input indexing: in_pos=(out_pos + padding - kernel_offset)/stride only when divisible; invalid or non-integer positions contribute zero. PyTorch ConvTranspose weight layout is (C_in, C_out/groups, ...), not Conv weight layout. Use a tile over multiple output positions/channels and keep the scale/bias/add epilogue fused when declared.",
+          "suggested_tile": {
+            "preferred_variant": "convtranspose_inverse_index_tile",
+            "BLOCK_M": 32,
+            "BLOCK_C": 16
+          },
+          "forbidden_lowerings": [
+            "Use forward-convolution coordinate in_pos = out_pos * stride - padding + kernel_offset.",
+            "Swap the first two dimensions of ConvTranspose weight.",
+            "Ignore output_padding when deriving output shape.",
+            "Count kernel offsets that do not divide evenly by stride."
+          ]
+        }
+      },
+      {
+        "name": "batchnorm3d_eval",
+        "next_expressions": [
+          "avgpool3d_twice_fused"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。BatchNorm3d 在 eval 模式下使用 running stats: Y2[n,c,d,h,w] = gamma[c] · (Y1[n,c,d,h,w] - running_mean[c]) / sqrt(running_var[c] + eps) + beta[c]，逐元素操作（除了沿通道维的统计量）。本题 N=128, C=16, D=H=W=63, eps=1e-5。",
+        "boundary_treatment": "BatchNorm 在 eval 模式下使用 running_mean/running_var，无运行时统计；逐元素操作；running_var + eps > 0 严格成立。\n【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "63"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "n_bn",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "d_bn",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "h_bn",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "w_bn",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 63, 63, 63)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1) = (4000752, 250047, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*4000752 + c*250047 + d*3969 + h*63 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.batch_norm.weight",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.batch_norm.bias",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.batch_norm.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.batchnorm3d_eval.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 63, 63, 63)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1) = (4000752, 250047, 3969, 63, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*4000752 + c*250047 + d*3969 + h*63 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.BatchNorm3d(16) eval 模式作用于 Y1。精度模式：逐元素 FMA，IEEE fp32 语义。容忍值推导：步骤 1 ε_op = 1.2e-7，K=1（无 reduction），ε_total = 1.2e-7，留 10x = 1.2e-6；步骤 2（关键）参考含 BatchNorm，cuDNN BN 走 fp32 但底层走 cuDNN/cuBLAS，rtol = atol = max(1.2e-6, 1e-3) = 1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导是步骤 2 BatchNorm 的 cuDNN 修正。结构性检查：(a) shape 保持 (128, 16, 63, 63, 63)；(b) 必须使用 running_mean/running_var 而非 batch stats（eval 模式）；(c) eps 加在 sqrt 内。失败诊断：(i) 误差 ~1e-4~1e-3 → BN cuDNN 主导，不是 bug；(ii) 大误差且整体偏移 → 错用 batch 实时统计；(iii) eps 位置错 → 出现 NaN 当 running_var=0。\n【BatchNorm 自测要求】参考实现保持模型默认 training=True，不要调用 eval()；按当前输入计算 batch mean/var（unbiased=False），不要读取 running_mean/running_var 作为输出统计源。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "BatchNorm in this verifier is a training-mode normalization stage. Compute per-channel batch statistics over N and spatial axes with fp32 tl.sum; then apply affine and any declared cheap elementwise/pool consumer. Do not use running_mean/running_var as output statistics.\nNormalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use running_mean/running_var for BatchNorm output when source verifier runs training mode.",
+            "Call model.eval() in the self-test reference for this BatchNorm expression.",
+            "Use tl.dot for BatchNorm mean/variance statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      },
+      {
+        "name": "avgpool3d_twice_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对 Y2 ∈ R^{N×C×D×H×W} = R^{128×16×63×63×63} 连续做两次 AvgPool3d(kernel=2, stride=2)。第一次池化产生 P1[n,c,d1,h1,w1] = (1/8) Σ_{δ_d,δ_h,δ_w∈[0,2)} Y2[n,c,2*d1+δ_d,2*h1+δ_h,2*w1+δ_w]，覆盖到 d1∈[0,31), h1∈[0,31), w1∈[0,31) 的输出（PyTorch AvgPool3d 不带 ceil_mode 默认 floor 模式，63//2 = 31）。第二次池化产生 Y[n,c,d2,h2,w2] = (1/8) Σ_{δ_d,δ_h,δ_w∈[0,2)} P1[n,c,2*d2+δ_d,2*h2+δ_h,2*w2+δ_w]，覆盖到 d2∈[0,15), h2∈[0,15), w2∈[0,15)（31//2 = 15）。融合表示总等效于 4×4×4 窗口的非重叠区域均值，但内部累加分两阶段，由于 (1/8)·(1/8) ≠ (1/64) 在数值上的实际相同因子，公式精度上等价。",
+        "boundary_treatment": "PyTorch 默认 ceil_mode=False。第一次池化输出尺寸 = floor((63-2)/2)+1 = 31；第二次 floor((31-2)/2)+1 = 15。即 D=63 的 1 个尾 voxel 被丢弃，D=31 的 1 个尾 voxel 也被丢弃。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d2",
+              "range": "[0, D2)",
+              "binding": "static",
+              "value": "15"
+            },
+            {
+              "symbol": "h2",
+              "range": "[0, H2)",
+              "binding": "static",
+              "value": "15"
+            },
+            {
+              "symbol": "w2",
+              "range": "[0, W2)",
+              "binding": "static",
+              "value": "15"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "δ1_d",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ1_h",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ1_w",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ2_d",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ2_h",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ2_w",
+              "range": "[0, 2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.batchnorm3d_eval.output",
+            "layout": "(N, C, D, H, W) = (128, 16, 63, 63, 63)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1) = (4000752, 250047, 3969, 63, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*4000752 + c*250047 + d*3969 + h*63 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, D2, H2, W2) = (128, 16, 15, 15, 15)",
+            "stride": "(C*D2*H2*W2, D2*H2*W2, H2*W2, W2, 1) = (54000, 3375, 225, 15, 1)",
+            "address_mapping": "addr_Y(n, c, d2, h2, w2) = Y_ptr + n*54000 + c*3375 + d2*225 + h2*15 + w2"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.AvgPool3d(kernel_size=2) 连续作用两次于 Y2。精度模式：sum + 除以常数，未走 tl.dot，IEEE fp32 语义。容忍值推导：步骤 1 ε_op = 1.2e-7，K = 4×4×4 = 64（两阶段池化共 64 元素），ε_total ≈ 1.2e-7 × sqrt(64) = 9.6e-7，留 10x = 1e-5；步骤 2 不触发，AvgPool 不走 cuDNN/cuBLAS；步骤 3 不触发；但因上游 Y2 已经过 BatchNorm，其参考含 cuDNN，最终 rtol = atol = max(1e-5, 1e-3) = 1e-3。最终 **rtol = atol = 1e-3**，主导因素是步骤 2（来自上游 BN 的传播）。结构性检查：(a) 输出 shape = (128, 16, 15, 15, 15)；(b) 验证两次池化等价于单次 stride=2、kernel=2 二级；(c) 检查 ceil_mode=False (PyTorch 默认)。失败诊断：(i) shape 不对 → ceil_mode 错配；(ii) 值差固定倍率 → 是否多除/少除 (1/8)；(iii) 误差 ~1e-4~1e-3 → 上游 BN 传播，不是 bug。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。\n【两级 AvgPool3d 形状检查】第一次 AvgPool3d 输出中间张量 P1 的空间形状是 (31,31,31)，第二次输出 Y 的空间形状才是 (15,15,15)；子表达式自测不要把第一阶段误断言成最终形状。"
+      }
+    ]
+  }
+}

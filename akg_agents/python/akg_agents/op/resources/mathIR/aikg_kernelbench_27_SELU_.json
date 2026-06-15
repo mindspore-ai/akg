@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "selu_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "alpha",
+            "kind": "scalar"
+          },
+          {
+            "name": "scale",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[i, j] = scale * (max(0, x[i, j]) + alpha * (exp(min(0, x[i, j])) - 1)), 其中 alpha = 1.6732632423543772, scale = 1.0507009873554805",
+        "boundary_treatment": "SELU 为逐元素激活函数，无边界填充或裁剪。输入输出形状一致，各元素独立计算，无越界问题。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "alpha": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "SELU 内建 alpha = 1.6732632423543772"
+          },
+          "scale": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "SELU 内建 scale = 1.0507009873554805"
+          }
+        },
+        "TDD_requirement": "数值对拍参考 PyTorch eager 的 torch.selu(x)。检查输出与输入形状一致，均为 (4096, 393216)，dtype 为 float32。需要验证逐元素精度，尤其关注接近 0 的区域以及极大极小值。建议先用小形状如 (2, 3) 冒烟，再用完整 (4096, 393216) 对拍。FP32 下容忍值建议 1e-5。"
+      }
+    ]
+  }
+}

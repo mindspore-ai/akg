@@ -1,0 +1,274 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear",
+        "next_expressions": [
+          "group_norm"
+        ],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          },
+          {
+            "name": "bias",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "linear_out",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "linear_out[n, o] = bias[o] + sum_{i=0}^{8191} x[n, i] * weight[o, i]",
+        "boundary_treatment": "无特殊边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 1024)",
+              "binding": "static",
+              "value": "1024"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 8192)",
+              "binding": "static",
+              "value": "8192"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 8192)",
+              "binding": "static",
+              "value": "8192",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "linear_out": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear.output",
+            "layout": "(N, O)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + o"
+          },
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + i"
+          },
+          "weight": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I)",
+            "stride": "[8192, 1]",
+            "address_mapping": "o * 8192 + i"
+          },
+          "bias": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O,)",
+            "stride": "[1]",
+            "address_mapping": "o"
+          }
+        },
+        "TDD_requirement": "需验证矩阵乘法与偏置添加的正确性。重点检查输入形状 (1024,8192)，权重形状 (8192,8192) 的乘法，累加顺序，以及偏置广播。建议小 shape 如 (2,3) 输入和 (5,3) 权重冒烟测试，再完整对拍。fp32 累加容忍 1e-5。"
+      },
+      {
+        "name": "group_norm",
+        "next_expressions": [
+          "hardtanh"
+        ],
+        "consumes": [
+          {
+            "name": "linear_out",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "num_groups",
+            "kind": "scalar"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "group_norm_out",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设 G = num_groups, C = 8192, Cg = C // G = 512。将 linear_out 重塑为 (N, G, Cg) 视图：X3[n, g, r] = linear_out[n, g*Cg + r]。对 n in [0,N), g in [0,G): mu[n,g] = (1/Cg) * sum_{r=0}^{Cg-1} X3[n,g,r]; var[n,g] = (1/Cg) * sum_{r=0}^{Cg-1} (X3[n,g,r] - mu[n,g])^2。则 group_norm_out[n, g*Cg + c] = gamma[g*Cg + c] * (X3[n,g,c] - mu[n,g]) / sqrt(var[n,g] + eps) + beta[g*Cg + c]。",
+        "boundary_treatment": "C 必须能被 num_groups 整除；此处 C=8192, G=16 整除。eps=1e-5 防止除零。无其他边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 1024)",
+              "binding": "static",
+              "value": "1024"
+            },
+            {
+              "symbol": "g",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "r",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "r",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp64"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "group_norm_out": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.group_norm.output",
+            "layout": "(N, C)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + c"
+          },
+          "linear_out": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear.output",
+            "layout": "(N, C)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C,)",
+            "stride": "[1]",
+            "address_mapping": "c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C,)",
+            "stride": "[1]",
+            "address_mapping": "c"
+          },
+          "num_groups": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.group_norm.num_groups"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1e-5"
+          }
+        },
+        "TDD_requirement": "需验证分组归一化计算正确性，包括均值、方差、归一化、仿射。重点检查分组数 16，每组通道 512 的划分，eps=1e-5 处理，gamma 和 beta 应用顺序。均值和方差归约在组内通道维进行，需验证归约轴和除数的正确性（使用有偏方差）。f32 均值和 f64 方差精度需满足对拍容忍 1e-4（考虑到 f64 中间计算）。建议小 shape: batch=2, C=4, G=2 冒烟，再完整对拍。"
+      },
+      {
+        "name": "hardtanh",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "group_norm_out",
+            "kind": "tensor"
+          },
+          {
+            "name": "min_val",
+            "kind": "scalar"
+          },
+          {
+            "name": "max_val",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "output[n, c] = clamp(group_norm_out[n, c], min_val, max_val) = min(max(group_norm_out[n, c], min_val), max_val)",
+        "boundary_treatment": "无特殊边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 1024)",
+              "binding": "static",
+              "value": "1024"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 8192)",
+              "binding": "static",
+              "value": "8192"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "output": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + c"
+          },
+          "group_norm_out": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.group_norm.output",
+            "layout": "(N, C)",
+            "stride": "[8192, 1]",
+            "address_mapping": "n * 8192 + c"
+          },
+          "min_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.min_val"
+          },
+          "max_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.max_val"
+          }
+        },
+        "TDD_requirement": "需验证夹紧操作的正确性，重点检查边界值 -2.0 和 2.0 处的行为（包含边界）。建议小 shape 测试各种值（包括小于、等于、大于边界），再完整对拍。无特殊数值容忍，按 1e-7 精度。"
+      }
+    ]
+  }
+}

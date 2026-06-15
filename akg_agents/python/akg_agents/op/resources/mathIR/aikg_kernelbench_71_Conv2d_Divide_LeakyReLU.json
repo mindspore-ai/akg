@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_divide_leakyrelu_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" },
+          { "name": "divisor", "kind": "scalar" },
+          { "name": "neg_slope", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，卷积权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}，无 padding、stride=1、dilation=1、groups=1。先做 conv2d: Z[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,h+k_h,w+k_w] · W_conv[c_o,c_i,k_h,k_w]。再除以常数 divisor: U[n,c_o,h,w] = Z[n,c_o,h,w] / divisor。最后做 LeakyReLU: Y[n,c_o,h,w] = U>0 ? U : neg_slope·U。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3, divisor=2, neg_slope=0.01，H_out=W_out=H_in-K_h+1=30。",
+        "boundary_treatment": "无 padding，因此 h ∈ [0, H_out)、w ∈ [0, W_out)；遍历 k_h, k_w 时 h+k_h ∈ [0, H_in)、w+k_w ∈ [0, W_in) 始终合法；divide 和 LeakyReLU 为逐元素操作，无边界问题；divisor=2 严格不为零。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*(C_in*H_in*W_in) + c_i*(H_in*W_in) + h_i*W_in + w_i"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*(C_in*K_h*K_w) + c_i*(K_h*K_w) + k_h*K_w + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "divisor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.divisor (= 2)"
+          },
+          "neg_slope": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "F.leaky_relu negative_slope = 0.01"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c_o, h, w) = Y_ptr + n*(C_out*H_out*W_out) + c_o*(H_out*W_out) + h*W_out + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下构造的 nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3) 前向，再做 x / 2.0，再做 F.leaky_relu(x, negative_slope=0.01)，eval 模式。精度模式：核心是 conv2d 累加，未走 tl.dot 时手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若走 tl.dot + fp32 输入必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = C_in × K_h × K_w = 3×3×3 = 27，ε_total ≈ 1.2e-7 × sqrt(27) ≈ 6.2e-7，留 10x 余量得 rtol_base = atol_base ≈ 6.2e-6；步骤 2（cuDNN 参考修正，关键）参考链路含 nn.Conv2d 走 cuDNN，A100 默认 TF32，rtol = max(6.2e-6, 1e-3) = 1e-3，atol 同理 = 1e-3；步骤 3（量级修正）不触发，没有 sum-after-abs/exp 链路。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuDNN TF32。结构性检查：(a) 输出 shape 必须为 (128, 16, 30, 30)；(b) divide 后符号保留；(c) LeakyReLU 验证 negative_slope=0.01 (即 x<0 时 y/x ≈ 0.01)；(d) 不出现 NaN/Inf。失败诊断：(i) 误差 ~1e-4~1e-3 + 参考含 cuDNN → 这是 TF32 主导的预期范围，不是 kernel bug，直接放宽 tolerance；(ii) 误差极大 → conv 索引方向写反或 weight 未按 (C_out, C_in, K_h, K_w) 解包；(iii) 负值未被衰减 → LeakyReLU negative_slope 缺失；(iv) 整体偏大/偏小 2 倍 → divisor 未生效或在错误阶段除。"
+      }
+    ]
+  }
+}

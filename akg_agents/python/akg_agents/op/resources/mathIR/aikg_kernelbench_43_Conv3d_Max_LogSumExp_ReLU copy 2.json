@@ -1,0 +1,278 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d_bias_library_or_implicit_gemm",
+        "next_expressions": [
+          "maxpool3d_channel_logsumexp_relu_fused"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "conv_stride",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_padding",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_dilation",
+            "kind": "scalar"
+          },
+          {
+            "name": "conv_groups",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y_conv",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Semantic formula: X has shape (N,C_in,D_in,H_in,W_in)=(128,3,16,32,32). W_conv has shape (C_out,C_in,Kd,Kh,Kw)=(16,3,3,3,3). B_conv has shape (C_out)=(16). With stride=1, padding=1, dilation=1, groups=1, D_o=16,H_o=32,W_o=32. Y_conv[n,c_o,d_o,h_o,w_o] = B_conv[c_o] + sum_{c_i=0..2} sum_{k_d=0..2} sum_{k_h=0..2} sum_{k_w=0..2} X[n,c_i,d_o+k_d-1,h_o+k_h-1,w_o+k_w-1] * W_conv[c_o,c_i,k_d,k_h,k_w], where out-of-bound X indices contribute 0. Performance-lowering contract for the code generator: this expression is a heavyweight Conv3d+bias stage and must not be translated literally into one Triton program per output element. Preferred lowering is framework/vendor Conv3d (cuDNN) when library calls are allowed. If Triton-only code is required, lower this as an implicit-GEMM Conv3d template with M=N*D_o*H_o*W_o=2097152, Ncol=C_out=16, K=C_in*Kd*Kh*Kw=81, using tiled tl.dot over BLOCK_M x BLOCK_K and BLOCK_K x BLOCK_N tiles. Suggested tile family: BLOCK_M in {32,64}, BLOCK_N=16, BLOCK_K in {32,64}, num_warps=4, num_stages=3. Forbidden lowerings: BLOCK_O=1 scalar Conv3d, one program per single output element, dynamic hot-path loops over C_in/Kd/Kh/Kw, or any naive Conv3d replacement that does not use a tiled library-like template.",
+        "boundary_treatment": "Zero padding of one element is applied on D/H/W. Only input coordinates 0<=d<D_in, 0<=h<H_in, 0<=w<W_in contribute; invalid coordinates contribute 0. The performance contract in formula is part of the semantic intent for downstream codegen: preserve PyTorch Conv3d semantics while avoiding scalar-per-output lowering.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0,N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0,C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d_o",
+              "range": "[0,D_o)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0,H_o)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0,W_o)",
+              "binding": "static",
+              "value": "32"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0,C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0,Kd)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0,Kh)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "tf32_or_fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0,Kw)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "tf32_or_fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N,C_in,D_in,H_in,W_in)=(128,3,16,32,32)",
+            "stride": "(49152,16384,1024,32,1)",
+            "address_mapping": "addr_X(n,c_i,d,h,w)=X_ptr+n*49152+c_i*16384+d*1024+h*32+w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out,C_in,Kd,Kh,Kw)=(16,3,3,3,3)",
+            "stride": "(81,27,9,3,1)",
+            "address_mapping": "addr_W_conv(c_o,c_i,k_d,k_h,k_w)=W_ptr+c_o*81+c_i*27+k_d*9+k_h*3+k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out)=(16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o)=B_ptr+c_o"
+          },
+          "conv_stride": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.stride = (1,1,1)"
+          },
+          "conv_padding": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.padding = (1,1,1)"
+          },
+          "conv_dilation": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.dilation = (1,1,1)"
+          },
+          "conv_groups": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.conv.groups = 1"
+          },
+          "Y_conv": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_bias_library_or_implicit_gemm.output",
+            "layout": "(N,C_out,D_o,H_o,W_o)=(128,16,16,32,32)",
+            "stride": "(262144,16384,1024,32,1)",
+            "address_mapping": "addr_Y_conv(n,c_o,d,h,w)=Y_conv_ptr+n*262144+c_o*16384+d*1024+h*32+w"
+          }
+        },
+        "TDD_requirement": "Reference is torch.nn.Conv3d(3,16,kernel_size=3,stride=1,padding=1,bias=True) in eval mode. Verify shape (128,16,16,32,32), zero-padding boundary handling, and bias over C_out. Because cuDNN may use TF32 on A100, the test should either align both sides to TF32 or use tolerance no tighter than about rtol=atol=2e-3 for this stage. Also reject generated code that implements this stage as BLOCK_O=1 scalar Conv3d, because such code may pass correctness but is known to be the performance failure mode for this task."
+      },
+      {
+        "name": "maxpool3d_channel_logsumexp_relu_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "pool_kernel",
+            "kind": "scalar"
+          },
+          {
+            "name": "pool_stride",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Semantic formula: for each final output coordinate (n,d_p,h_p,w_p), first compute P[n,c,d_p,h_p,w_p] = max_{delta_d,delta_h,delta_w in [0,2)} Y_conv[n,c,2*d_p+delta_d,2*h_p+delta_h,2*w_p+delta_w]. Then compute stable channel logsumexp L[n,0,d_p,h_p,w_p] = M + log(sum_{c=0..15} exp(P[n,c,d_p,h_p,w_p]-M)), where M=max_{c=0..15} P[n,c,d_p,h_p,w_p]. Final output Y[n,0,d_p,h_p,w_p] = max(L[n,0,d_p,h_p,w_p],0). Performance-lowering contract for the code generator: this expression intentionally fuses MaxPool3d, channel LogSumExp keepdim=True, and ReLU. Generate one Triton post-processing kernel over final output elements; do not materialize the intermediate pooled tensor P/Y_pool with shape (128,16,8,16,16). Each program should handle a block of final output positions, e.g. BLOCK_ELEMS in {128,256}; for each position vectorize over C_out=16 and pool window volume=8, reduce the 8 pool values with max per channel, reduce the 16 pooled channel values with stable logsumexp, apply ReLU, and store Y. Forbidden lowerings: standalone MaxPool3d kernel followed by standalone LogSumExp/ReLU kernel, any large intermediate Y_pool write/read, or unstable log(sum(exp(x))) without subtracting max.",
+        "boundary_treatment": "MaxPool3d uses kernel=2,stride=2,padding=0. The input spatial shape (16,32,32) is exactly divisible by 2, so every pooling window is fully inside Y_conv. LogSumExp covers the complete channel range C_out=16 and must use subtract-max for numerical stability. ReLU clamps negative L values to 0. The fused implementation should preserve keepdim=True, so output channel dimension is 1.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0,N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "d_p",
+              "range": "[0,D_p)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "h_p",
+              "range": "[0,H_p)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "w_p",
+              "range": "[0,W_p)",
+              "binding": "static",
+              "value": "16"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "delta_d",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "delta_h",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "delta_w",
+              "range": "[0,2)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "c",
+              "range": "[0,C_out)",
+              "binding": "static",
+              "value": "16",
+              "reduction_type": "logsumexp",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y_conv": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_bias_library_or_implicit_gemm.output",
+            "layout": "(N,C_out,D_o,H_o,W_o)=(128,16,16,32,32)",
+            "stride": "(262144,16384,1024,32,1)",
+            "address_mapping": "addr_Y_conv(n,c,d,h,w)=Y_conv_ptr+n*262144+c*16384+d*1024+h*32+w"
+          },
+          "pool_kernel": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.maxpool.kernel_size = (2,2,2)"
+          },
+          "pool_stride": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.maxpool.stride = (2,2,2)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N,1,D_p,H_p,W_p)=(128,1,8,16,16)",
+            "stride": "(2048,2048,256,16,1)",
+            "address_mapping": "addr_Y(n,0,d_p,h_p,w_p)=Y_ptr+n*2048+d_p*256+h_p*16+w_p"
+          }
+        },
+        "TDD_requirement": "Reference is torch.max_pool3d(Y_conv,kernel_size=2,stride=2) followed by torch.logsumexp(..., dim=1, keepdim=True) and torch.relu. Verify output shape (128,1,8,16,16), exact pooling window mapping, keepdim=True, stable logsumexp, and non-negative final output. Suggested tolerance rtol=atol=1e-5 for this post-processing stage when Y_conv inputs are identical. Also reject generated code that writes a materialized Y_pool tensor or splits this stage into two post-processing kernels, because that is the known avoidable memory/launch overhead."
+      }
+    ]
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_relu_fused",
+        "next_expressions": ["group_norm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，bias=False。stride=S=1, padding=P=0, output_padding=0, dilation=1, groups=1。输出 D_out=(D_in-1)*S - 2P + K_d = (8-1)*1 - 0 + 3 = 10，H_out = W_out = (16-1)*1 + 3 = 18。先做转置卷积：Z[n,c_o,d_o,h_o,w_o] = Σ_{c_i=0}^{C_in-1} Σ_{k_d,k_h,k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i = d_o - k_d, h_i = h_o - k_h, w_i = w_o - k_w（S=1, P=0），仅当 d_i∈[0,D_in), h_i∈[0,H_in), w_i∈[0,W_in) 时项有效。然后 ReLU：Y1[n,c_o,d_o,h_o,w_o] = max(0, Z[n,c_o,d_o,h_o,w_o])。融合 conv_transpose 与 ReLU。本题 N=16, C_in=64, C_out=128, D_in=8, H_in=W_in=16, K=3, S=1, P=0。",
+        "boundary_treatment": "ConvTranspose3d S=1 P=0 时无整除约束，仅需 (d_o-k_d) ∈ [0,D_in)、(h_o-k_h) ∈ [0,H_in)、(w_o-k_w) ∈ [0,W_in)；ReLU 逐元素无边界；bias=False 无需偏置项。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "128" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "10" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "18" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "18" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "64", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 64, 8, 16, 16)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (131072, 2048, 256, 16, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*131072 + c_i*2048 + d_i*256 + h_i*16 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (64, 128, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (3456, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*3456 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose3d 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, ...) 顺序相反。解包须 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。注意本题 bias=False，self.conv_transpose.bias 为 None。"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_relu_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 128, 10, 18, 18)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (414720, 3240, 324, 18, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*414720 + c_o*3240 + d_o*324 + h_o*18 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：在 torch.manual_seed(0) 下构造 nn.ConvTranspose3d(64, 128, 3, bias=False) 接 nn.ReLU()（eval 模式）。精度模式：手写 FMA + fp32 累加器为天然 IEEE fp32；若走 tl.dot + fp32 输入须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = C_in*K^3 = 64*27 = 1728，ε_total ≈ 1.2e-7 * sqrt(1728) ≈ 5e-6，10x 余量 rtol_base = atol_base = 5e-5；步骤 2（cuDNN 参考修正，关键）参考含 nn.ConvTranspose3d，cuDNN+TF32 引入 ~1e-3 误差，强制 rtol = atol = max(5e-5, 1e-3) = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(16,128,10,18,18)，验证 D_out=10, H_out=W_out=18；(b) 验证 weight 解包 (C_in=64, C_out=128, K_d=K_h=K_w=3) 不可对调前两维；(c) ReLU 输出非负，原始负值应为 0；(d) bias=False 时不应访问 self.conv_transpose.bias。失败诊断：(i) diff ~1e-4~1e-3 → cuDNN TF32 正常；(ii) diff ≫ 1e-3 → 八成权重 (C_in,C_out) 解包反；(iii) 出现负值 → ReLU 漏；(iv) shape 错位 → S=1 P=0 时 D_out 误算成 D_in 或 D_in+K-1+something。"
+      },
+      {
+        "name": "group_norm",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "GroupNorm: Y1 ∈ R^{N×C×D×H×W}，G=groups=8，C_g=C/G=16；gamma, beta ∈ R^{C}，eps=1e-5(默认)。每个 (n,g)，组内索引 I_g={g*C_g..(g+1)*C_g-1}，组内元素总数 M = C_g*D*H*W = 16*10*18*18 = 51840。μ_{n,g} = (1/M) Σ_{c∈I_g} Σ_{d,h,w} Y1[n,c,d,h,w]；σ²_{n,g} = (1/M) Σ_{c∈I_g} Σ_{d,h,w} (Y1[n,c,d,h,w] - μ_{n,g})²。Y[n,c,d,h,w] = gamma[c] * (Y1[n,c,d,h,w] - μ_{n,g(c)}) / sqrt(σ²_{n,g(c)} + eps) + beta[c]，g(c)=c//C_g。本题 N=16, C=128, G=8, C_g=16, D=10, H=W=18。",
+        "boundary_treatment": "组内规约对完整 (C_g, D, H, W) 区域；G=8 整除 C=128；eval 模式使用当前输入统计量。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "128" },
+            { "symbol": "d", "range": "[0, D)", "binding": "static", "value": "10" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "18" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "18" }
+          ],
+          "reduction": [
+            { "symbol": "c_k", "range": "[0, C_g)", "binding": "static", "value": "16", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "d_k", "range": "[0, D)", "binding": "static", "value": "10", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "h_k", "range": "[0, H)", "binding": "static", "value": "18", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w_k", "range": "[0, W)", "binding": "static", "value": "18", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_relu_fused.output",
+            "layout": "(N, C, D, H, W) = (16, 128, 10, 18, 18)",
+            "stride": "(414720, 3240, 324, 18, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*414720 + c*3240 + d*324 + h*18 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, D, H, W) = (16, 128, 10, 18, 18)",
+            "stride": "(414720, 3240, 324, 18, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*414720 + c*3240 + d*324 + h*18 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：nn.GroupNorm(num_groups=8, num_channels=128)（eps=1e-5，eval 模式），作用于上游 Y1。精度模式：手写 FMA + fp32 累加器，IEEE 语义；建议 Welford 单遍以避免大 K 数值漂移。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = 16*10*18*18 = 51840，ε_total ≈ 1.2e-7 * sqrt(51840) ≈ 2.7e-5，10x 余量 rtol_base ≈ atol_base ≈ 3e-4；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）输出归一化后量级 O(1)，不触发。最终 rtol = atol = 1e-3（取保守，避免上游 ReLU 输出含零导致方差较小情况下的相对误差放大），主导因素是步骤 1。结构性检查：(a) 输出 shape 不变；(b) 同 (n,g) 内可验证输出在去 affine 之后近似 0 均值单位方差；(c) eps 加在 sqrt 内；(d) 组划分 g(c) = c // C_g 而非 c % G。失败诊断：(i) NaN 集中在某 (n,g) → 该组方差极小（ReLU 全 0），eps 写错位置；(ii) 数值整体偏移 → gamma/beta 索引错；(iii) Welford vs 两遍均值差异 → 取舍累计顺序。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_channel_min_fused",
+        "next_expressions": ["double_tanh"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，卷积权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。输出 H_out=H_in-K+1=30, W_out=30。中间 Z ∈ R^{N×C_out×H_out×W_out}: Z[n,c_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i} Σ_{k_h} Σ_{k_w} X[n,c_i,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_h,k_w]。然后沿 dim=1 (channel) 取最小值 keepdim=True，输出 Y1 ∈ R^{N×1×H_out×W_out}: Y1[n,0,h_o,w_o] = min_{c_o ∈ [0, C_out)} Z[n,c_o,h_o,w_o]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3, H_out=W_out=30。融合 Conv2d 与 channel-min reduction。",
+        "boundary_treatment": "padding=0，无空间越界；torch.min(., dim=1, keepdim=True)[0] 取 values；min 沿完整 [0, C_out) 范围 reduction；keepdim=True 保持 size=1 通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16", "reduction_type": "min", "accumulator_precision": "fp32" },
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_channel_min_fused.output",
+            "layout": "(N, 1, H_out, W_out) = (128, 1, 30, 30)",
+            "stride": "(H_out*W_out, H_out*W_out, W_out, 1) = (900, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, 0, h, w) = Y1_ptr + n*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.Conv2d(3, 16, kernel_size=3) 后 torch.min(_, dim=1, keepdim=True)[0] eval。精度模式：Conv 用 fp32 累加 IEEE 语义；min 纯比较型无浮点误差；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_in*K_h*K_w=27，ε_total≈1.2e-7*sqrt(27)≈6.2e-7，10x 余量 rtol_base=atol_base=7e-6；min reduction 不增加误差；步骤 2 参考含 nn.Conv2d 走 cuDNN，A100 默认 TF32，强制 rtol=atol=max(7e-6, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,1,30,30) keepdim；(b) torch.min(., dim=1, keepdim=True)[0] 取 values；(c) Y1 等于 channel 方向最小值；(d) min 与 Conv 的融合不应改变最终数值（min 是 monotone over 累加器选择，与 cuDNN TF32 噪声叠加可能让 argmin 跳变，但取 values 仍在容差内）。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 预期；(ii) shape (128,30,30) → keepdim 未保留；(iii) shape (128,16,30,30) → min 未生效；(iv) 拿到 indices → 误用 [1]。"
+      },
+      {
+        "name": "double_tanh",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×1×H×W}。先做一次 tanh: M[n,0,h,w]=tanh(Y1[n,0,h,w])；再做一次 tanh: Y[n,0,h,w]=tanh(M[n,0,h,w])=tanh(tanh(Y1[n,0,h,w]))。两次 tanh 是逐元素映射，可合成单一 mapping x → tanh(tanh(x))。本题 N=128, H=W=30。",
+        "boundary_treatment": "纯逐元素映射；tanh 对全体实数定义良好且单调有界 |·|<1；两次 tanh 后 |Y|<tanh(1)≈0.7616。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "30" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_channel_min_fused.output",
+            "layout": "(N, 1, H, W) = (128, 1, 30, 30)",
+            "stride": "(H*W, H*W, W, 1) = (900, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, 0, h, w) = Y1_ptr + n*900 + h*30 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1, H, W) = (128, 1, 30, 30)",
+            "stride": "(H*W, H*W, W, 1) = (900, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, 0, h, w) = Y_ptr + n*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.tanh(torch.tanh(Y1))。精度模式：纯逐元素调用 libdevice tanh ~1 ULP；fp32 IEEE 语义。容忍值推导分三步：步骤 1 ε_op=1.2e-7，无 reduction K=1，ε_total=1.2e-7，10x 余量 rtol_base=atol_base=1.2e-6；考虑两次 tanh 复合 ULP 误差，放宽到 1e-6；步骤 2 不触发；步骤 3 不触发（|Y|<1）。最终 **rtol = atol = 1e-6**，主导因素步骤 1 + 超越函数 ULP（实际从上游 1e-3 噪声经 tanh 收缩为更小误差）。结构性检查：(a) 输出 shape=(128,1,30,30)；(b) 所有 Y ∈ (-tanh(1), tanh(1)) ≈ (-0.762, 0.762)；(c) tanh(0)=0、tanh(tanh(0))=0 验证；(d) 单调性 sign(Y) == sign(Y1)。失败诊断：(i) Y 超出 (-1,1) → tanh 实现错；(ii) shape 错 → 检查 keepdim 透传；(iii) 与 PyTorch 差 1 ULP → libdevice 实现差异，预期。"
+      }
+    ]
+  }
+}

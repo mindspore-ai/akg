@@ -1,0 +1,101 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": ["sigmoid_scale_residual_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "全连接：X ∈ R^{N×I} (N=128, I=1024)，W_gemm ∈ R^{O×I} (O=512)，B_gemm ∈ R^{O}。Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i]。",
+        "boundary_treatment": "完整 reduction I=1024；bias 加在 O 维；eval 无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(1024, 512)（eval 模式）。精度模式：tl.dot + fp32 输入须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32；手写 FMA + fp32 累加为 IEEE。容忍值推导：步骤 1 ε_op=1.2e-7，K=I=1024，ε_total ≈ 1.2e-7 * sqrt(1024) = 3.84e-6，10x 余量 base = 4e-5；步骤 2（cuBLAS 修正，关键）参考 nn.Linear 强制 rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导步骤 2 cuBLAS TF32。结构性检查：(a) shape=(128,512)；(b) weight (O=512, I=1024) 非转置；(c) bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 cuBLAS 正常；(ii) 转置 → W 形状反；(iii) 偏 bias → 索引错。"
+      },
+      {
+        "name": "sigmoid_scale_residual_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "scaling_factor", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "融合 sigmoid + scaling + residual add 三个逐元素操作：保留 original = Y1[n,o]；计算 S[n,o] = sigmoid(Y1[n,o]) = 1 / (1 + exp(-Y1[n,o]))；乘 scaling: T[n,o] = scaling_factor * S[n,o]；最后残差加：Y[n,o] = T[n,o] + original = scaling_factor * sigmoid(Y1[n,o]) + Y1[n,o]。本题 scaling_factor=2.0，shape=(128,512)。",
+        "boundary_treatment": "纯逐元素；sigmoid 全实数稳定；输出量级 = |Y1 + 2*sigmoid(Y1)| ≤ |Y1| + 2。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          },
+          "scaling_factor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：original = Y1; Y = torch.sigmoid(Y1) * 2.0 + original（eval 模式）。精度模式：纯逐元素 IEEE fp32；sigmoid 调 libdevice ~1 ULP。容忍值推导：步骤 1 ε_op=1.2e-7，K=1，base=1e-6；步骤 2 不触发；步骤 3 不触发。最终 rtol=atol=1e-6，主导步骤 1。结构性检查：(a) shape=(128,512)；(b) Y[n,o] = sigmoid(Y1)*2 + Y1，单元素验证 Y1=0 时 Y=1, Y1→+∞ 时 Y→Y1+2, Y1→-∞ 时 Y→Y1+0；(c) original 必须保留 Y1 值，不能被 sigmoid 覆盖。失败诊断：(i) 偏 sigmoid*scaling → 漏 residual add；(ii) 数值差 Y1 量级 → original 引用错（被 sigmoid 覆盖）；(iii) 偏 scaling 倍 → scaling_factor 误为 1。"
+      }
+    ]
+  }
+}

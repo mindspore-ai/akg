@@ -1,0 +1,115 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_sub1_tanh_sub2_fused",
+        "next_expressions": ["avgpool2d"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" },
+          { "name": "sub1", "kind": "scalar" },
+          { "name": "sub2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}, N=128, C_in=3, H_in=W_in=32。Conv2d 权重 W_conv ∈ R^{C_out×C_in×K×K} (C_out=16, K=3), 偏置 B_conv ∈ R^{C_out}, stride=1, padding=0。输出空间尺寸 H_out=W_out=H_in-K+1=30。先计算卷积：Z[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K-1} Σ_{k_w=0}^{K-1} X[n,c_i,h+k_h,w+k_w]·W_conv[c_o,c_i,k_h,k_w]。再做 Y1[n,c_o,h,w] = tanh(Z[n,c_o,h,w] - sub1) - sub2, 其中 sub1=0.5, sub2=0.2。该 expression 融合 conv2d、首个减法、tanh、二次减法。",
+        "boundary_treatment": "Conv2d valid 模式，padding=0，输出 H_out=W_out=30；逐元素减法与 tanh 无边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K, K) = (16, 3, 3, 3)",
+            "stride": "(C_in*K*K, K*K, K, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "sub1": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.subtract1_value (= 0.5)"
+          },
+          "sub2": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.subtract2_value (= 0.2)"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_sub1_tanh_sub2_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h, w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv2d(3,16,3) 前向后接 -0.5 → torch.tanh → -0.2，eval 模式。精度模式：含 conv 阶段，若 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'，禁用默认 TF32；tanh 是逐元素超越函数 (~1 ULP)。容忍值三步：步骤 1 ε_op=1.2e-7, K=C_in·K·K=27，ε_total≈1.2e-7·sqrt(27)≈6.2e-7，rtol_base=atol_base=6.2e-6；步骤 2（cuDNN 修正，关键）参考 nn.Conv2d 走 cuDNN+TF32，rtol=atol=max(6.2e-6, 1e-3)=1e-3；步骤 3 不触发，tanh 后量级 ≤1。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,16,30,30) 等于 H_in-K+1=30；(b) tanh 之后量级 ≤1，减 0.2 后 Y1 ∈ [-1.2, 0.8]；(c) bias 加在 c_o 维。失败诊断：(i) diff 1e-4~1e-3 → cuDNN TF32 正常；(ii) 整体偏移 0.2 倍数 → sub2 顺序或数值取错；(iii) 边界行/列异常 → 卷积索引 h+k_h, w+k_w 越界。"
+      },
+      {
+        "name": "avgpool2d",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_out×W_out}, N=128, C_out=16, H_out=W_out=30。AvgPool2d kernel_size=2, stride=2 (默认 stride=kernel_size), padding=0。输出 H_p=W_p=H_out/2=15。Y[n,c,h,w] = (1/(K_p·K_p)) · Σ_{δ_h=0}^{K_p-1} Σ_{δ_w=0}^{K_p-1} Y1[n,c,h·K_p+δ_h, w·K_p+δ_w], 其中 K_p=2。",
+        "boundary_treatment": "AvgPool2d 在完整 2×2 窗口上取平均；30 能被 2 整除，无残余边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_p)", "binding": "static", "value": "15" },
+            { "symbol": "w", "range": "[0, W_p)", "binding": "static", "value": "15" }
+          ],
+          "reduction": [
+            { "symbol": "δ_h", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "δ_w", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_sub1_tanh_sub2_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h_in, w_in) = Y1_ptr + n*14400 + c*900 + h_in*30 + w_in"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_p, W_p) = (128, 16, 15, 15)",
+            "stride": "(C_out*H_p*W_p, H_p*W_p, W_p, 1) = (3600, 225, 15, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*3600 + c*225 + h*15 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.AvgPool2d(kernel_size=2) 作用于上游 Y1，eval 模式。精度模式：手写 FMA + fp32 累加器，4 个元素平均，天然 IEEE fp32。容忍值三步：步骤 1 ε_op=1.2e-7, K=K_p·K_p=4，ε_total≈1.2e-7·sqrt(4)=2.4e-7，rtol_base=atol_base=2.4e-6；步骤 2 不触发，AvgPool 不走 cuDNN GEMM 路径；步骤 3 不触发，上游被 tanh-0.2 限制在 [-1.2, 0.8]。最终 **rtol = atol = 1e-6**（纯逐元素+小 K reduction）。结构性检查：(a) shape=(128,16,15,15)；(b) 输出范围与上游一致量级；(c) 验证除数为 4。失败诊断：(i) 整体偏小/大 4 倍 → 除以了 16 或 1；(ii) 边界元素错误 → stride 默认值未生效。"
+      }
+    ]
+  }
+}

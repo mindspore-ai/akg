@@ -1,0 +1,322 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_batchnorm_gelu_fused",
+        "next_expressions": [
+          "groupnorm"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_gemm",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_gemm",
+            "kind": "tensor"
+          },
+          {
+            "name": "BN_gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "BN_beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "BN_eps",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_half",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_sqrt2",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。输入 X ∈ R^{N×I}，N=128, I=512。Linear 权重 W_gemm ∈ R^{O×I}, O=1024，偏置 B_gemm ∈ R^{O}。当前 verifier 未调用 model.eval()，因此 BatchNorm1d 使用 training=True 的当前 batch 统计量，running_mean/running_var 不参与输出。先计算 Z[n,o] = Σ_{i=0}^{I-1} X[n,i]·W_gemm[o,i] + B_gemm[o]。再对每个输出通道 o 沿 batch 维归约：μ[o]=(1/N)·Σ_{n=0}^{N-1} Z[n,o]，σ²[o]=(1/N)·Σ_{n=0}^{N-1}(Z[n,o]-μ[o])²（unbiased=False）。BN 输出 U[n,o] = BN_gamma[o] · (Z[n,o] - μ[o]) / sqrt(σ²[o] + BN_eps) + BN_beta[o]。最后 GELU（PyTorch 默认精确 erf 版本）：Y1[n,o] = C_half · U[n,o] · (1 + erf(U[n,o] / C_sqrt2))。",
+        "boundary_treatment": "全连接无空间边界；BatchNorm1d 在 training=True 下沿 batch 维计算每通道统计量，方差使用 unbiased=False；BN_eps 在 sqrt 内；GELU 对全体实数有定义。\n【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "1024"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, I)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "n_bn",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*512 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*512 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "BN_gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.batch_norm.weight",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_BN_gamma(o) = BN_gamma_ptr + o"
+          },
+          "BN_beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.batch_norm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_BN_beta(o) = BN_beta_ptr + o"
+          },
+          "BN_eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.batch_norm.eps (默认 1e-5)"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_batchnorm_gelu_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*1024 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为在 torch.manual_seed(0) 下构造的 nn.Linear(512,1024) -> nn.BatchNorm1d(1024) -> F.gelu 串行，model.eval() 强制 BN 使用 running stats。精度模式：含 GEMM，可能走 tl.dot；若使用 tl.dot 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7（fp32 FMA），K=I=512，ε_total≈1.2e-7·sqrt(512)≈2.7e-6，留 10x 余量得 rtol_base=atol_base=3e-5。步骤 2（cuDNN/cuBLAS 修正，关键）参考链路含 nn.Linear（cuBLAS）与 nn.BatchNorm1d，强制 rtol=atol=max(3e-5,1e-3)=1e-3。步骤 3（量级修正）BN 之后量级 ~ O(1)，GELU 单调有界且无 abs/exp 后聚合，不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2 的 cuBLAS+BN。结构性检查：(a) 输出 shape=(128,1024)；(b) BN 必须 eval()，否则 running stats 不被使用；(c) GELU 使用精确 erf；(d) 校验当 BN_gamma=1, BN_beta=0, BN_mean=0, BN_var=1-eps 时 BN 近似恒等。失败诊断：(i) diff 1e-4~1e-3 + 参考含 cuBLAS+BN → 预期范围，不是 bug；(ii) 偏差与样本无关但与 o 相关 → BN 参数索引错位；(iii) 在 |U|>3 处偏差大 → GELU 用 tanh 近似而非 erf 版本。\n【BatchNorm 自测要求】参考实现保持模型默认 training=True，不要调用 eval()；按当前输入计算 batch mean/var（unbiased=False），不要读取 running_mean/running_var 作为输出统计源。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Use a tiled tl.dot GEMM for Linear/Matmul producer and fuse only cheap declared epilogues on the accumulator. PyTorch nn.Linear weight layout is (O, I); load the B tile as W[o, i] with output features on columns and reduction i on rows.\nBatchNorm in this verifier is a training-mode normalization stage. Compute per-channel batch statistics over N and spatial axes with fp32 tl.sum; then apply affine and any declared cheap elementwise/pool consumer. Do not use running_mean/running_var as output statistics.",
+          "suggested_tile": {
+            "preferred_variant": "linear_tl_dot_epilogue",
+            "BLOCK_M": 32,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "O": 1024,
+            "I": 512
+          },
+          "forbidden_lowerings": [
+            "Manual tl.static_range over BLOCK_K with a[:, k] or b[k, :] tensor indexing.",
+            "Treat original Linear weight pointer as contiguous (I, O) without explicitly packing/transposing it.",
+            "Use non-power-of-two tl.arange tile extents such as O=20 or I=10 directly.",
+            "Fuse a training-mode BatchNorm into a single GEMM epilogue without computing batch statistics over N.",
+            "Use running_mean/running_var for BatchNorm output when source verifier runs training mode.",
+            "Call model.eval() in the self-test reference for this BatchNorm expression.",
+            "Use tl.dot for BatchNorm mean/variance statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula."
+          ]
+        }
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": [
+          "channel_mean_relu_fused"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "GN_gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "GN_beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "GN_eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "输入 Y1 ∈ R^{N×O}，N=128, O=1024。GroupNorm 参数：num_groups G=8，每组通道数 C_g=O/G=128；affine γ=GN_gamma ∈ R^{O}, β=GN_beta ∈ R^{O}；eps=1e-5。对每个 (n, g)，组内索引集合 I_g={g·C_g,...,(g+1)·C_g-1}。μ_{n,g}=(1/C_g)·Σ_{c∈I_g} Y1[n,c]；σ²_{n,g}=(1/C_g)·Σ_{c∈I_g}(Y1[n,c]-μ_{n,g})²。输出 Y2 ∈ R^{N×O}: 对 c∈I_g, Y2[n,c]=GN_gamma[c]·(Y1[n,c]-μ_{n,g})/sqrt(σ²_{n,g}+GN_eps)+GN_beta[c]。",
+        "boundary_treatment": "组内 reduction；G=8 整除 O=1024，分组完整无残余；σ²+eps>0 保证 sqrt 有效。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "1024"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, C_g)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_batchnorm_gelu_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, c) = Y1_ptr + n*1024 + c"
+          },
+          "GN_gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_GN_gamma(c) = GN_gamma_ptr + c"
+          },
+          "GN_beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_GN_beta(c) = GN_beta_ptr + c"
+          },
+          "GN_eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y2(n, c) = Y2_ptr + n*1024 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.GroupNorm(num_groups=8, num_channels=1024) 应用于 Y1，使用当前输入统计量（GroupNorm 训练/推断均如此）。精度模式：纯 reduction + 逐元素，无 tl.dot；fp32 FMA + fp32 累加器，IEEE 语义。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_g=128（mean+var 都对 128 元素 reduce），ε_total≈1.2e-7·sqrt(128)≈1.4e-6，留 10x 余量得 rtol_base=atol_base=1.5e-5。步骤 2（cuDNN 修正）GroupNorm 在 PyTorch 中走 ATen 而非 cuDNN，不强制提升；保持 1.5e-5。步骤 3（量级修正）归一化后量级 ~O(1)，不触发。最终 **rtol=atol=2e-5**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,1024)；(b) 每个 (n,g) 组内归一化后均值≈0、方差≈1（在 affine 之前）；(c) num_groups=8 整除 O=1024；(d) eps 在 sqrt 内。失败诊断：(i) 输出整体方差异常 → 分组索引或 mean/var 公式错；(ii) 与 PyTorch 差异随 c 周期性 → gamma/beta 索引错；(iii) 部分元素 NaN → eps 漏加或顺序错。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Normalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      },
+      {
+        "name": "channel_mean_relu_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "输入 Y2 ∈ R^{N×O}，N=128, O=1024。先沿 channel 维 (dim=1) 求均值并 keepdim: M[n,0]=(1/O)·Σ_{c=0}^{O-1} Y2[n,c]，得 M ∈ R^{N×1}。再做 ReLU: Y[n,0]=max(M[n,0], 0)，输出 Y ∈ R^{N×1}。融合 mean reduction + relu。",
+        "boundary_treatment": "完整 [0,O) channel 维 reduction；ReLU 是逐元素 max(·,0)，无边界问题；keepdim=True 保留 size=1 维。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "1024",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y2(n, c) = Y2_ptr + n*1024 + c"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.mean(Y2, dim=1, keepdim=True) 后接 torch.relu。精度模式：fp32 FMA + fp32 累加器，无 tl.dot，IEEE 语义。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=O=1024，ε_total≈1.2e-7·sqrt(1024)=3.84e-6，留 10x 余量得 rtol_base=atol_base=4e-5。步骤 2（cuDNN 修正）mean/relu 都不走 cuDNN，不触发。步骤 3（量级修正）上游 GroupNorm 输出近似均值 0、方差 1，mean 之后量级 ≪1，不触发。最终 **rtol=atol=5e-5**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,1)，keepdim=True；(b) 所有元素 ≥0；(c) 除以 O=1024 因子正确。失败诊断：(i) shape=(128,) → keepdim 丢失；(ii) 出现负值 → ReLU 未生效；(iii) 数值偏小固定倍数 → 除数错误。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。\n【近零 ReLU 数值】mean 后接 ReLU 的输出可能在 0 附近出现 1e-8 级符号/舍入差异；生成时用 fp32 累加并最终 tl.maximum(mean, 0.0)，自测以 allclose 判断近零等价。"
+      }
+    ]
+  }
+}

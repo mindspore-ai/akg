@@ -1,0 +1,84 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "triplet_margin_loss_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "anchor",
+            "kind": "tensor"
+          },
+          {
+            "name": "positive",
+            "kind": "tensor"
+          },
+          {
+            "name": "negative",
+            "kind": "tensor"
+          },
+          {
+            "name": "margin",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "loss",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Let `anchor`, `positive`, `negative` ∈ ℝ^{32768 × 8192} be the input tensors. Let `margin` ∈ ℝ be a scalar (margin = 1.0). For each i = 0,…,32767: d_ap_i = ‖anchor[i] − positive[i]‖₂; d_an_i = ‖anchor[i] − negative[i]‖₂; ℓ_i = max(d_ap_i − d_an_i + margin, 0). The output is: loss = (1/32768) ∑_{i=0}^{32767} ℓ_i (reduction='mean', p=2).",
+        "boundary_treatment": "Input tensors have fixed dimensions M=32768 > 0, D=8192 > 0, so no empty-tensor edge case. The max(·,0) operation is standard. If M were 0, loss would be 0 by PyTorch convention, but here M is non-zero so mean is well-defined.",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "anchor": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.anchor",
+            "layout": "(32768, 8192)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + j"
+          },
+          "positive": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.positive",
+            "layout": "(32768, 8192)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + j"
+          },
+          "negative": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.negative",
+            "layout": "(32768, 8192)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + j"
+          },
+          "margin": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.loss_fn.margin"
+          },
+          "loss": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "0"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch eager 的 TripletMarginLoss(margin=1.0, p=2, reduction='mean') 作为数值参考。建议使用小 batch (如 M=4, D=8) 进行冒烟测试，验证距离计算、max、均值归约的正确性。同时测试完整尺寸 M=32768, D=8192 的对拍，确保无异常。注意检查 fp32 下相对误差容忍（建议 1e-5）。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_add_fused",
+        "next_expressions": ["swish_tanh_gelu_hardtanh_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" },
+          { "name": "A_add", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Z", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}, N=128, I=1024。权重 W_gemm ∈ R^{O×I}, O=512；偏置 B_gemm ∈ R^{O}；可学习张量 A_add ∈ R^{O}（与 nn.Linear 输出的最后一维广播）。先计算线性映射并加偏置：Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o] + A_add[o]。本题 N=128, I=1024, O=512。",
+        "boundary_treatment": "全连接，无空间边界处理；A_add 沿 batch 维广播；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "A_add": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.add_value",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_A_add(o) = A_add_ptr + o"
+          },
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_add_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024, 512) 的前向 + self.add_value，eval 模式。精度模式：本 expression 是 GEMM，可走 tl.dot；若使用 tl.dot + fp32 输入必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32；手写 FMA + fp32 累加器天然 IEEE fp32。容忍值推导：步骤 1 ε_op=1.2e-7, K=I=1024, ε_total ≈ 1.2e-7*sqrt(1024)=3.84e-6, 10x 余量后 rtol_base=atol_base=4e-5；步骤 2（cuBLAS 修正，关键）nn.Linear 走 cuBLAS，A100 默认 TF32，rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,512)；(b) W_gemm layout (O, I)；(c) add_value 沿 batch 广播。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuBLAS TF32，不是 bug；(ii) shape=(128,1024) → matmul 维度错；(iii) 数值整体偏移 → A_add 广播错误。"
+      },
+      {
+        "name": "swish_tanh_gelu_hardtanh_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Z", "kind": "tensor" },
+          { "name": "min_val", "kind": "scalar" },
+          { "name": "max_val", "kind": "scalar" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Z ∈ R^{N×O}, N=128, O=512。链式逐元素：(1) Swish: S[n,o] = sigmoid(Z[n,o]) · Z[n,o] = Z / (1 + exp(-Z)) · Z。(2) Tanh: T[n,o] = tanh(S[n,o])，由于 Swish 输出可达 ±∞ 但 tanh 限到 (-1,1)。(3) GELU 精确 erf: G[n,o] = C_half · T[n,o] · (1 + erf(T[n,o] / C_sqrt2))。(4) Hardtanh: Y[n,o] = min(max(G[n,o], min_val), max_val)。本题 min_val=-1, max_val=1。注意 GELU 后 ∈ [-0.158, 0.841]（因 T ∈ (-1, 1)），Hardtanh 实际不会截断。",
+        "boundary_treatment": "纯逐元素链；sigmoid、tanh、erf 全域有定义；Hardtanh 截断到 [-1, 1]，但本链的实际范围 [-0.158, 0.841] 不触发裁剪边界；无 reduction。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_add_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*512 + o"
+          },
+          "min_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "F.hardtanh 的 min_val (= -1)"
+          },
+          "max_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "F.hardtanh 的 max_val (= 1)"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5 (GELU)"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.sigmoid(Z) * Z → torch.tanh → F.gelu → F.hardtanh(., -1, 1)，eval 模式。精度模式：纯逐元素，sigmoid/tanh/erf 调用 libdevice ~1 ULP，IEEE fp32 语义。容忍值推导：步骤 1 ε_op=1.2e-7, K=1, rtol_base=atol_base=1e-6；步骤 2 不触发；步骤 3 不触发，Hardtanh 输出 ∈ [-1, 1] 量级。但上游 Z 含 cuBLAS ~1e-3 误差，最终 rtol=atol=max(1e-6, 1e-3)=1e-3。主导因素是上游 cuBLAS 累积。结构性检查：(a) 输出 shape=(128,512)；(b) 所有 Y 元素 ∈ [-1, 1]；(c) 验证激活顺序：Swish 必须先于 Tanh（Swish 输出可超 [-1,1]，Tanh 后再截到 (-1,1)）。失败诊断：(i) Y 超出 [-1, 1] → Hardtanh 未生效；(ii) 数值与参考差异恒定 → 激活顺序写错；(iii) 误差与 Z 同量级 → 上游 cuBLAS 主导，不是 bug。"
+      }
+    ]
+  }
+}

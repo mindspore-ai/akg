@@ -1,0 +1,101 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_fused",
+        "next_expressions": ["scale_residual_add_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Z", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}, N=128, I=64。权重 W_gemm ∈ R^{O×I}, O=128。bias B_gemm ∈ R^{O}。计算 Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]。该 expression 是 PyTorch nn.Linear 的标准矩阵乘加 bias。",
+        "boundary_treatment": "全连接，无空间边界；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "64", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 64)",
+            "stride": "(I, 1) = (64, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*64 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (128, 64)",
+            "stride": "(I, 1) = (64, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*64 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_fused.output",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*128 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 self.matmul(x)（eval 模式）。精度模式：手写 FMA + fp32 累加器，天然 IEEE fp32；若 codegen 走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=I=64，ε_total≈1.2e-7×sqrt(64)=9.6e-7，留 10x 得 1e-5；步骤 2 参考含 nn.Linear 走 cuBLAS，A100 默认开 TF32，rtol=atol=max(1e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) shape=(128,128)；(b) bias 在通道维加；(c) reduction 维度 I=64。冒烟：(2,4,8)。失败诊断：(i) diff 1e-3 → cuBLAS 预期；(ii) 整列偏 → bias 索引错；(iii) 转置错误 → W shape 与代码 (out_features, in_features) 一致。"
+      },
+      {
+        "name": "scale_residual_add_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Z", "kind": "tensor" },
+          { "name": "S_scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 Z ∈ R^{N×O} (N=128, O=128)，scale S_scale=0.5。代码逻辑：original_x = Z.clone().detach()；x = Z * S_scale；Y = x + original_x = Z*S_scale + Z = Z*(1 + S_scale)。等价地 Y[n,o] = Z[n,o] · (1.0 + S_scale) = Z[n,o] · 1.5。逐元素乘 + 加残差，已合并为单次乘法。",
+        "boundary_treatment": "纯逐元素，无边界；clone().detach() 在数值上仅复制不破坏计算图；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "128" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_fused.output",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*128 + o"
+          },
+          "S_scale": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (0.5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*128 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 original_x = z.clone().detach(); y = z*0.5 + original_x，等价于 z*1.5。精度模式：纯逐元素 mul/add，天然 IEEE fp32 语义。容忍值推导分三步：步骤 1 ε_op=1.2e-7，无 reduction，ε_total≈1.2e-7，留 10x 得 rtol_base=atol_base=1e-6；步骤 2 不触发（无 cuDNN/cuBLAS 参考；上游 matmul 在前一个 expression）；步骤 3 不触发。最终 **rtol = atol = 1e-6**，主导因素是步骤 1。结构性检查：(a) shape=(128,128)；(b) 等价等式 Y = Z*1.5 必须成立；(c) clone().detach() 不影响数值。冒烟：(2,4)。失败诊断：(i) 量级偏差固定倍数 → scale 取错或顺序错；(ii) 数值出现重复加 → 没用 original 直接用 Z*scale + Z*scale。"
+      }
+    ]
+  }
+}

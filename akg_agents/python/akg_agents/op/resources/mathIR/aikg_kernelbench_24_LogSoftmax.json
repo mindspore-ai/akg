@@ -1,0 +1,91 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "log_softmax",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对于 b ∈ [0, N-1], c ∈ [0, C-1]：\nM_b = max_{k} X_{b,k}\nL_b = log(∑_{k} exp(X_{b,k} - M_b))\nY_{b,c} = X_{b,c} - M_b - L_b\n其中 N=4096, C=393216，dim=1 指定沿第二维归约。",
+        "boundary_treatment": "沿 dim=1 维（C维）计算 LogSoftmax。为数值稳定，先计算每行的最大值 M_b = max_c X_{b,c}，然后计算 L_b = log(∑_c exp(X_{b,c} - M_b))，最终输出 Y_{b,c} = X_{b,c} - M_b - L_b。该方式避免了 exp 溢出。无 padding 或边界越界，但需注意当 C=1 时 L_b = M_b，输出全为 0。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k_max",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "393216",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_lse",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "393216",
+              "reduction_type": "logsumexp",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C)",
+            "stride": "(C, 1)",
+            "address_mapping": "b * C + c"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C)",
+            "stride": "(C, 1)",
+            "address_mapping": "b * C + c"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 4096"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 393216"
+          }
+        },
+        "TDD_requirement": "需要对拍 torch.nn.functional.log_softmax(x, dim=self.dim)；重点检查 dim=1 归约正确性、数值稳定性（max 和 logsumexp 顺序），以及不同 batch 独立计算的一致性；建议用小 shape (2,3) 冒烟验证边界和输出全 0 情况，再用中等规模 (4,1024) 验证精度，容忍值 1e-5；最后用完整 shape (4096,393216) 对拍。"
+      }
+    ]
+  }
+}

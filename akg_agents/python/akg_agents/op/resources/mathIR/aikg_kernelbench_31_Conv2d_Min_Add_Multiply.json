@@ -1,0 +1,120 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": ["min_biasadd_scale_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，卷积权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。输出 H_out = H_in - K_h + 1 = 32 - 3 + 1 = 30，同理 W_out = 30。Y1 ∈ R^{N×C_out×H_out×W_out} 定义为：Y1[n,c_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3。",
+        "boundary_treatment": "padding=0 无越界；卷积窗口在 [0,H_in)×[0,W_in) 完整覆盖；bias 加在通道维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*14400 + c_o*900 + h_o*30 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为在 torch.manual_seed(0) 下构造的 nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3) 的前向结果（eval 模式）。精度模式：本 expression 是 conv 累加，未走 tl.dot 时为手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 决定走 tl.dot + fp32 输入，必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止使用默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = C_in × K_h × K_w = 3×3×3 = 27，ε_total ≈ 1.2e-7 × sqrt(27) ≈ 6.2e-7，留 10x 余量得 rtol_base = atol_base = 7e-6；步骤 2（cuDNN 参考修正，关键）参考是 nn.Conv2d，走 cuDNN，A100 默认开 TF32，参考自身有 ~1e-3 截断误差，rtol = max(7e-6, 1e-3) = 1e-3，atol 同理 = 1e-3；步骤 3（量级修正）不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuDNN TF32。结构性检查：(a) 输出 shape 必须为 (128,16,30,30)；(b) bias 在通道维加法正确；(c) padding=0 边界正确。冒烟输入：先用 (2,3,8,8) 跑 atol/rtol 校验，再用 (128,3,32,32) 完整对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuDNN TF32 主导的预期范围，不是 kernel bug；(ii) shape 异常 → 检查 padding/stride 配置；(iii) 整通道偏差 → bias 索引错。"
+      },
+      {
+        "name": "min_biasadd_scale_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "B_bias", "kind": "tensor" },
+          { "name": "C_const", "kind": "scalar" },
+          { "name": "S_scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_out×W_out}，bias B_bias ∈ R^{C_out×1×1}，常数 C_const=0.5，scale S_scale=2.0。输出 Y ∈ R^{N×C_out×H_out×W_out}：Y[n,c,h,w] = (min(Y1[n,c,h,w], C_const) + B_bias[c,0,0]) · S_scale。逐元素运算融合 elementwise-min、加偏置、乘缩放。",
+        "boundary_treatment": "全部为逐元素操作；min 是与常量比较，无边界问题；B_bias 沿 (h,w) 广播；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "B_bias": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_bias(c, 0, 0) = B_bias_ptr + c"
+          },
+          "C_const": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.constant_value (0.5)"
+          },
+          "S_scale": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.min(Y1, torch.tensor(0.5)) + self.bias，再乘 2.0。精度模式：纯逐元素，手写 FMA + fp32，天然 IEEE fp32 语义，不走 tl.dot。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，无 reduction（K=1），ε_total ≈ 1.2e-7，留 10x 余量得 rtol_base = atol_base = 1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发。最终 **rtol = atol = 1e-6**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) 所有输出元素满足 Y ≤ (0.5 + B_bias[c]) · 2；(c) bias 广播正确，沿 (n,h,w) 复制。冒烟输入：用 (2,16,4,4) 小输入验证 min/add/mul 顺序。失败诊断：(i) 结果整体偏移恒定 → bias 索引错位或 scale 取错；(ii) min 失效 → 比较顺序错或常量取错；(iii) 量级偏差 2x → scaling_factor 漏乘或乘多次。"
+      }
+    ]
+  }
+}

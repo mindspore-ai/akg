@@ -1,0 +1,122 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ R^{N×C_in×D_in×H_in×W_in}，权重张量 W ∈ R^{C_in×C_out×K_d×K_h×K_w}。转置卷积参数：stride=(S_d,S_h,S_w)=(1,1,1)，padding=(P_d,P_h,P_w)=(0,0,0)，output_padding=(OP_d,OP_h,OP_w)=(0,0,0)，dilation=1。输出 Y ∈ R^{N×C_out×D_out×H_out×W_out}，其中 D_out = (D_in - 1)*S_d - 2*P_d + (K_d - 1) + OP_d + 1 = 66，H_out = (H_in - 1)*S_h - 2*P_h + (K_h - 1) + OP_h + 1 = 68，W_out = (W_in - 1)*S_w - 2*P_w + (K_w - 1) + OP_w + 1 = 68。对每个输出元素 (n,c_o,d_o,h_o,w_o)，计算公式为：Y[n,c_o,d_o,h_o,w_o] = Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} 1_V(d_o,h_o,w_o,k_d,k_h,k_w) · X[n,c_i,i_d,i_h,i_w] · W[c_i,c_o,k_d,k_h,k_w]。其中逆映射输入坐标：i_d = (d_o + P_d - k_d) / S_d = d_o - k_d，i_h = (h_o + P_h - k_h) / S_h = h_o - k_h，i_w = (w_o + P_w - k_w) / S_w = w_o - k_w。有效指示函数 1_V 的条件 V 为：((i_d >= 0) AND (i_d < D_in))，((i_h >= 0) AND (i_h < H_in))，((i_w >= 0) AND (i_w < W_in)) 且除法整除条件自然满足（S=1）。不满足条件时该项贡献为0。",
+        "boundary_treatment": "ConvTranspose3d 的边界处理采用 implicit zero padding：仅当由输出位置和核位置反推出的输入坐标 (i_d, i_h, i_w) 分别落在 [0, D_in-1]、[0, H_in-1]、[0, W_in-1] 范围内时，该乘加项参与求和；否则该项视为0。由于 stride=1, padding=0，输入坐标直接为输出坐标减核偏移，因此边界由核尺寸自然决定。output_padding=0 不增加额外求和项。 实现时使用向量 mask: load(..., mask=mask_valid, other=0.0)，避免 Python if 分支与链式比较。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "d_o",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "66"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "68"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "68"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 32, 64, 64, 64)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (32*64*64*64, 64*64*64, 64*64, 64, 1)",
+            "address_mapping": "addr_X(n, c_i, d, h, w) = X_ptr + n*(C_in*D_in*H_in*W_in) + c_i*(D_in*H_in*W_in) + d*(H_in*W_in) + h*W_in + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (32, 64, 3, 5, 5)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (64*3*5*5, 3*5*5, 5*5, 5, 1)",
+            "address_mapping": "addr_W(c_i, c_o, k_d, k_h, k_w) = W_ptr + c_i*(C_out*K_d*K_h*K_w) + c_o*(K_d*K_h*K_w) + k_d*(K_h*K_w) + k_h*K_w + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为：(c_in, c_out, k_d, k_h, k_w) = self.conv_transpose3d.weight.shape；切勿误写成 (c_out, c_in, ...) = self.conv_transpose3d.weight.shape。"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 64, 66, 68, 68)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (64*66*68*68, 66*68*68, 68*68, 68, 1)",
+            "address_mapping": "addr_Y(n, c_o, d_o, h_o, w_o) = Y_ptr + n*(C_out*D_out*H_out*W_out) + c_o*(D_out*H_out*W_out) + d_o*(H_out*W_out) + h_o*W_out + w_o"
+          }
+        },
+        "lowering_contract": "Lower as implicit-GEMM ConvTranspose3d with M=N*D_out*H_out*W_out, N=C_out=64, and K=C_in*K_d*K_h*K_w=32*3*5*5=2400. Because K_TOTAL and loop bounds are static, pass K_TOTAL/K_d/K_h/K_w and padded loop limits as tl.constexpr meta parameters if using tl.static_range; do not compute K_TOTAL inside @triton.jit and then use it as static_range end. Weight layout is ConvTranspose3d (ci,co,kd,kh,kw). Mask inverse-mapped input coordinates before tl.load and use other=0.0.",
+        "TDD_requirement": "用给定输入形状 (16,32,64,64,64) 和权重形状 (32,64,3,5,5) 运行 nn.ConvTranspose3d (stride=1, padding=0, output_padding=0, groups=1, bias=False) 得到输出；验证输出 shape = (16,64,66,68,68)；选取若干个输出位置手动计算逆映射输入坐标并求和加权乘积，确保数值一致；重点验证边界处输出位置（如 d_o=0, h_o=0, w_o=0 和靠近 D_out-1 等）的 zero padding 行为是否正确。"
+      }
+    ]
+  }
+}

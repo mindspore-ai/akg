@@ -1,0 +1,281 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": [
+          "groupnorm"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_gemm",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_gemm",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, 权重 W_gemm ∈ R^{O×I}, 偏置 B_gemm ∈ R^{O}。线性映射输出 Y1 ∈ R^{N×O}: Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i]。本题 N=128, I=512, O=256。",
+        "boundary_treatment": "全连接 GEMM，无空间边界处理；reduction 在完整的 I=512 维上累加；bias 加在输出通道维 o。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, I)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (256, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 256)",
+            "stride": "(O, 1) = (256, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(512, 256) 的 forward 输出（eval 模式）。精度模式：若手写 FMA + fp32 累加器则天然 IEEE fp32 语义；若 codegen 走 tl.dot 必须显式声明 input_precision='ieee' 或 'tf32x3' 避免默认 TF32。rtol/atol 推导：步骤 1，ε_op=1.2e-7（fp32 FMA），K=I=512，ε_total ≈ 1.2e-7·sqrt(512)·10 ≈ 2.7e-5；步骤 2，参考是 nn.Linear，走 cuBLAS 默认 TF32，rtol=atol=max(2.7e-5, 1e-3)=1e-3；步骤 3，无 sum-after-min/abs 链路，不触发量级修正。最终 rtol=atol=1e-3，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,256)；(b) bias 在 o 维加且唯一；(c) 单独跑 (2,4)→(2,8) 小尺寸手算对拍。失败诊断：(i) 1e-4~1e-3 误差且 shape 正确 → cuBLAS TF32 主导，放宽 tolerance；(ii) 远超 1e-3 → 检查 W_gemm 转置（PyTorch 存的是 (O,I) 而非 (I,O)）；(iii) 整列偏移 → bias 索引错位。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Use a tiled tl.dot GEMM for Linear/Matmul producer and fuse only cheap declared epilogues on the accumulator. PyTorch nn.Linear weight layout is (O, I); load the B tile as W[o, i] with output features on columns and reduction i on rows.",
+          "suggested_tile": {
+            "preferred_variant": "linear_tl_dot_epilogue",
+            "BLOCK_M": 32,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "O": 256,
+            "I": 512
+          },
+          "forbidden_lowerings": [
+            "Manual tl.static_range over BLOCK_K with a[:, k] or b[k, :] tensor indexing.",
+            "Treat original Linear weight pointer as contiguous (I, O) without explicitly packing/transposing it.",
+            "Use non-power-of-two tl.arange tile extents such as O=20 or I=10 directly.",
+            "Fuse a training-mode BatchNorm into a single GEMM epilogue without computing batch statistics over N."
+          ]
+        }
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": [
+          "min_biasadd_fused"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}, num_groups=G=8, 每组通道数 C_g=O/G=32, 可学习参数 gamma, beta ∈ R^{O}, eps=1e-5。对每个 (n, g)，定义组内索引 I_g = {g·C_g, …, (g+1)·C_g-1}。均值 μ_{n,g} = (1/C_g)·Σ_{k=0}^{C_g-1} Y1[n, g·C_g+k]；方差 σ²_{n,g} = (1/C_g)·Σ_{k=0}^{C_g-1} (Y1[n, g·C_g+k]-μ_{n,g})²。输出 Y2 ∈ R^{N×O}: 对任意 o，设 g=⌊o/C_g⌋，Y2[n,o] = gamma[o]·(Y1[n,o]-μ_{n,g})/sqrt(σ²_{n,g}+eps) + beta[o]。本题 N=128, O=256, G=8, C_g=32。",
+        "boundary_treatment": "组内 reduction 仅遍历 C_g=32 个通道，无空间维；G=8 整除 O=256，分组完整；eps 添加在 sqrt 之前避免除零。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, C_g)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 256)",
+            "stride": "(O, 1) = (256, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(O) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(o) = gamma_ptr + o"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(O) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(o) = beta_ptr + o"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, O) = (128, 256)",
+            "stride": "(O, 1) = (256, 1)",
+            "address_mapping": "addr_Y2(n, o) = Y2_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.GroupNorm(num_groups=8, num_channels=256, eps=1e-5) 在 eval 模式下作用于上游 Y1。精度模式：未走 tl.dot，手写 FMA + fp32 累加器，IEEE fp32 语义；rsqrt 是逐元素超越，约 1 ULP 误差。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_g=32，ε_total ≈ 1.2e-7·sqrt(32)·10 ≈ 6.8e-6，取 rtol_base=atol_base=1e-5；步骤 2，nn.GroupNorm 不走 cuDNN/cuBLAS，不触发；步骤 3，组内 sum 之后做归一化、量级与输入相当，不触发。最终 rtol=atol=1e-5，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,256)；(b) 每组 (n,g) 上 mean(Y2)≈0, var(Y2)≈gamma²；(c) eps 放在 sqrt 内；(d) gamma/beta 按通道维 o 索引；(e) 小尺寸 (4,16) 手算对拍。失败诊断：(i) NaN → 缺 eps 或方差为负；(ii) 每组整体偏移 → 均值或 beta 索引错；(iii) 量级整体偏大或偏小 → gamma 索引错或除以了错误的 C_g。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Normalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      },
+      {
+        "name": "min_biasadd_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_extra",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×O}。先沿 dim=1 取最小并 keepdim：M[n,0] = min_{o=0}^{O-1} Y2[n,o]，得 M ∈ R^{N×1}。PyTorch 中 M.shape=(N,1)，与 bias B_extra.shape=(1, O, 1, 1) 相加时按右侧对齐广播：M 视为 (N,1,1,1) 右对齐升至 (N,1,1,1)，B_extra=(1,O,1,1) 广播得最终 Y ∈ R^{N×O×1×1}：Y[n,c,0,0] = M[n,0] + B_extra[0,c,0,0]。本题 N=128, O=256。融合 channel min reduction 与 bias 广播加法。",
+        "boundary_treatment": "min 对完整 O=256 通道做 reduction；广播规则严格按 PyTorch 右对齐；无越界。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "min",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, O) = (128, 256)",
+            "stride": "(O, 1) = (256, 1)",
+            "address_mapping": "addr_Y2(n, o) = Y2_ptr + n*O + o"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(1, O, 1, 1) = (1, 256, 1, 1)",
+            "stride": "(O, 1, 1, 1) = (256, 1, 1, 1)",
+            "address_mapping": "addr_B_extra(0, c, 0, 0) = B_extra_ptr + c"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O, 1, 1) = (128, 256, 1, 1)",
+            "stride": "(O, 1, 1, 1) = (256, 1, 1, 1)",
+            "address_mapping": "addr_Y(n, c, 0, 0) = Y_ptr + n*O + c"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.min(Y2, dim=1, keepdim=True)[0] + self.bias，eval 模式。精度模式：min 是纯比较型，无浮点累加误差；广播加法是逐元素 FMA，IEEE fp32。rtol/atol 推导：步骤 1，纯比较型 + 单次加法，ε_op≈1.2e-7，K=1，ε_total≈1.2e-6，取 rtol_base=atol_base=1e-6；步骤 2，不走 cuDNN/cuBLAS，不触发；步骤 3，min 之后量级与输入相近，不触发。最终 rtol=atol=1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,256,1,1) 而非 (128,1)，因为 (N,1) 与 (1,O,1,1) 广播后变成 (N,O,1,1)；(b) torch.min 取 [0] 是 values；(c) 每个 (n,c) 上 Y[n,c,0,0] ≥ min(Y2) + min(B_extra) 是合理范围；(d) 小尺寸 (4,16) + bias (1,16,1,1) 验证广播。失败诊断：(i) shape 变成 (128,1) → keepdim 没保留或没正确广播；(ii) 不同 c 上的 Y[n,c,0,0]-Y[n,0,0,0] 不等于 B_extra[c]-B_extra[0] → bias 没按 c 维加；(iii) 部分元素错误 → torch.min 取了 indices 而非 values。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。"
+      }
+    ]
+  }
+}

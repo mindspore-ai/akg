@@ -1,0 +1,146 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_fused",
+        "next_expressions": ["batchnorm_biasadd_divide_swish_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Z", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}, N=128, I=1024。权重 W_gemm ∈ R^{O×I}, O=512；偏置 B_gemm ∈ R^{O}。Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]。本题 N=128, I=1024, O=512。",
+        "boundary_treatment": "全连接，无空间边界处理；bias 加在输出通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024, 512) 的前向，eval 模式。精度模式：GEMM，手写 FMA + fp32 累加器或 tl.dot；若 tl.dot + fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导：步骤 1 ε_op=1.2e-7, K=I=1024, ε_total ≈ 3.84e-6, 10x 余量后 rtol_base=atol_base=4e-5；步骤 2（cuBLAS 修正，关键）nn.Linear 走 cuBLAS TF32，rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,512)；(b) W_gemm layout (O, I)；(c) bias 加在通道维。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuBLAS TF32，不是 bug；(ii) shape=(128,1024) → matmul 维度错。"
+      },
+      {
+        "name": "batchnorm_biasadd_divide_swish_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Z", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "mean_r", "kind": "tensor" },
+          { "name": "var_r", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" },
+          { "name": "divide_val", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Z ∈ R^{N×O}, N=128, O=512。BatchNorm1d 在 eval 模式下使用 running statistics: BN[n,o] = gamma[o] · (Z[n,o] - mean_r[o]) / sqrt(var_r[o] + eps) + beta[o]，其中 gamma, beta, mean_r, var_r ∈ R^{O}, eps=1e-5。然后加上可学习偏置 B_extra ∈ R^{1}（标量广播）：A[n,o] = BN[n,o] + B_extra[0]。再除以 divide_val: D[n,o] = A[n,o] / divide_val (= 1.0)。最后 Swish: Y[n,o] = D[n,o] · sigmoid(D[n,o])。本题 N=128, O=512, divide_val=1.0。",
+        "boundary_treatment": "BatchNorm eval 模式使用 running_mean/running_var；逐元素 + 通道广播；sigmoid 全域有定义。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Z(n, o) = Z_ptr + n*512 + o"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(o) = gamma_ptr + o"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(o) = beta_ptr + o"
+          },
+          "mean_r": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_mean",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_mean_r(o) = mean_r_ptr + o"
+          },
+          "var_r": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_var",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_var_r(o) = var_r_ptr + o"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(1) = (1)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_extra(0) = B_extra_ptr"
+          },
+          "divide_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.divide_value (= 1.0)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (默认 1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 self.bn(Z) → + self.bias → / 1.0 → * sigmoid(.)，eval 模式（使用 running_mean/running_var）。精度模式：纯逐元素 + 通道广播，sigmoid ~1 ULP libdevice，IEEE fp32 语义。容忍值推导：步骤 1 ε_op=1.2e-7, K=1, rtol_base=atol_base=1e-6；步骤 2（cuDNN/cuBLAS 修正，关键）参考链路含 BatchNorm（torch.nn.BatchNorm1d eval 模式下虽不走 cuDNN 但视为参考依赖），按规则 BatchNorm 强制 rtol=atol=max(1e-6, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 BatchNorm 参考。注意上游 Z 已含 cuBLAS ~1e-3 误差。结构性检查：(a) 输出 shape=(128,512)；(b) BatchNorm 必须使用 running_mean/running_var（eval 模式）；(c) B_extra shape=(1,) 标量广播；(d) Swish 实现 x*sigmoid(x)；(e) divide_val=1.0 不会改变数值但代码需要正确。失败诊断：(i) BatchNorm 输出 mean/var 偏离 → 使用 batch stats 而非 running stats（应 eval 模式）；(ii) 整体偏移恒定 → B_extra 索引错；(iii) 数值与参考差异较大 → eps 加在 sqrt 内 vs 外的位置错。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_bias_scale_sigmoid_fused",
+        "next_expressions": ["group_norm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" },
+          { "name": "S_extra", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，卷积权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，conv 偏置 B_conv ∈ R^{C_out}，额外可学习 bias B_extra ∈ R^{C_out×1×1}，scale S_extra ∈ R^{C_out×1×1}。stride=1, padding=0, dilation=1, groups=1。输出 H_out=W_out=H_in-K+1=30。先 Conv2d: Z[n,c_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i} Σ_{k_h} Σ_{k_w} X[n,c_i,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_h,k_w]。然后逐元素 Y1[n,c_o,h_o,w_o] = sigmoid( (Z[n,c_o,h_o,w_o] + B_extra[c_o,0,0]) · S_extra[c_o,0,0] )，其中 sigmoid(t)=1/(1+exp(-t))。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3, H_out=W_out=30。融合 Conv2d+bias-add+scale+sigmoid。",
+        "boundary_treatment": "padding=0，无空间越界；sigmoid 对所有实数有定义；B_extra/S_extra 沿 N/H/W 维 broadcast。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_extra(c_o, 0, 0) = B_extra_ptr + c_o"
+          },
+          "S_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.scale",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_S_extra(c_o, 0, 0) = S_extra_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_bias_scale_sigmoid_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*14400 + c_o*900 + h_o*30 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.Conv2d(3,16,3) + (+self.bias) + (*self.scale) + torch.sigmoid eval。精度模式：手写 FMA + fp32 累加器为 IEEE fp32 语义；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'；sigmoid/exp 走 libdevice ~1 ULP。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_in*K_h*K_w=27，ε_total≈1.2e-7*sqrt(27)≈6.2e-7，10x 余量 rtol_base=atol_base=7e-6；步骤 2 参考含 nn.Conv2d 走 cuDNN，A100 默认 TF32，强制 rtol=atol=max(7e-6, 1e-3)=1e-3；步骤 3 不触发（sigmoid 输出 [0,1]）。最终 **rtol = atol = 1e-3**，主导因素步骤 2。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) 所有 Y1 ∈ (0,1)；(c) B_extra/S_extra 沿 N/H/W broadcast；(d) sigmoid(0)=0.5。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 预期；(ii) Y1 超出 (0,1) → sigmoid 计算错；(iii) 通道整体偏移 → B_extra 或 S_extra 索引错位。"
+      },
+      {
+        "name": "group_norm",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "num_groups", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C×H×W}，GroupNorm 把 C 通道分成 G 组，每组 C_g=C/G。本题 N=128, C=16, G=8, C_g=2, H=W=30。可学习 gamma ∈ R^{C}, beta ∈ R^{C}, eps=1e-5。对每个 (n, g) 计算组内均值 μ[n,g]=(1/(C_g·H·W))·Σ_{c∈I_g}Σ_{h,w} Y1[n,c,h,w]，方差 σ²[n,g]=(1/(C_g·H·W))·Σ_{c∈I_g}Σ_{h,w} (Y1[n,c,h,w]-μ[n,g])²。输出 Y[n,c,h,w] = gamma[c] · (Y1[n,c,h,w] - μ[n,g]) / sqrt(σ²[n,g] + eps) + beta[c]，其中 c∈I_g={g·C_g, ..., (g+1)·C_g-1}。",
+        "boundary_treatment": "组内 (C_g, H, W) 完整 reduction；eps 加在 sqrt 内防止除零；G=8 整除 C=16，分组完整；nn.GroupNorm 默认 affine=True。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "k_c", "range": "[0, C_g)", "binding": "static", "value": "2", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, H)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, W)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_bias_scale_sigmoid_fused.output",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(C*H*W, H*W, W, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "num_groups": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.group_norm.num_groups (= 8)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(C*H*W, H*W, W, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.GroupNorm(num_groups=8, num_channels=16) eval 前向。精度模式：mean/var 用 fp32 累加；rsqrt ~1 ULP。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_g*H*W=2*30*30=1800，ε_total≈1.2e-7*sqrt(1800)≈5.1e-6，10x 余量 rtol_base=atol_base=6e-5；步骤 2 不触发；步骤 3 不触发。最终 **rtol = atol = 1e-3**（涵盖 var 公式差异 + 上游 cuDNN TF32 噪声传播）。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) 每组 (n,g) 输出均值≈0、方差≈γ²；(c) eps 加在 sqrt 内；(d) G=8 整除 C=16；(e) γ/β 沿通道维生效。失败诊断：(i) NaN/inf → 未加 eps；(ii) 跨组串扰 → reduction 包含错误通道；(iii) 与 PyTorch 偏差 1e-4~1e-3 → 上游噪声 + var 数值方法差异，预期。"
+      }
+    ]
+  }
+}

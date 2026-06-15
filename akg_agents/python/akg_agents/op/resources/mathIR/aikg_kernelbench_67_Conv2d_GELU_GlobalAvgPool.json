@@ -1,0 +1,151 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": ["gelu"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "Conv2d：X ∈ R^{N×C_in×H_in×W_in}，权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，bias B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1。H_conv = H_in - K_h + 1 = 32-3+1 = 30, W_conv = 30。Y1[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i,k_h,k_w} X[n,c_i,h+k_h,w+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, K=3, H_in=W_in=32。",
+        "boundary_treatment": "padding=0 输出空间窗口完整覆盖；bias 加在通道；eval 无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_conv)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_conv)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h, w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Conv2d(3, 16, 3)（eval 模式）。精度模式：手写 FMA + fp32 累加 IEEE；若 tl.dot 走 fp32 须声明 input_precision='ieee' 或 'tf32x3'。容忍值推导：步骤 1 ε_op=1.2e-7，K=27，base ≈ 6e-6；步骤 2 cuDNN 参考强制 rtol=atol=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素步骤 2 cuDNN TF32。结构性检查：(a) shape=(128,16,30,30)；(b) weight (C_out, C_in, K, K)；(c) bias 在通道维。失败诊断：(i) diff 1e-4~1e-3 → cuDNN 正常；(ii) shape 错 → padding/stride 误算。"
+      },
+      {
+        "name": "gelu",
+        "next_expressions": ["global_avg_pool"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "GELU 精确 erf 形式：Y2[n,c,h,w] = 0.5 * Y1[n,c,h,w] * (1 + erf(Y1[n,c,h,w] / sqrt(2)))。逐元素映射。本题 shape=(128,16,30,30)。",
+        "boundary_treatment": "纯逐元素无边界；erf 全实数稳定。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_conv)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_conv)", "binding": "static", "value": "30" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gelu.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.nn.functional.gelu(Y1)（默认 approximate='none' = 精确 erf, eval 模式）。精度模式：逐元素 IEEE fp32；erf 调 libdevice ~1-2 ULP。容忍值推导：步骤 1 ε_op=1.2e-7，K=1，base=1e-6；步骤 2 不触发；步骤 3 不触发。最终 rtol=atol=1e-6，主导步骤 1。结构性检查：(a) shape 不变；(b) Y1>=0 时 Y2 接近 Y1；(c) 验证默认 approximate='none' 而非 'tanh'。失败诊断：(i) 偏差 ~1e-4 → 误用 tanh 近似；(ii) 大负值未衰减 → 用了 ReLU。"
+      },
+      {
+        "name": "global_avg_pool",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "Global Average Pooling 沿空间维 (H, W) 求均值并 squeeze 到 2D：M[n,c,0,0] = (1/(H_conv*W_conv)) Σ_{h=0}^{H_conv-1} Σ_{w=0}^{W_conv-1} Y2[n,c,h,w]，然后 squeeze(-1).squeeze(-1) 得 Y[n,c] = M[n,c,0,0]。本题输出 shape=(128, 16)。",
+        "boundary_treatment": "完整空间 reduction (H*W=900)，无边界；squeeze 仅移除 size=1 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" }
+          ],
+          "reduction": [
+            { "symbol": "h", "range": "[0, H_conv)", "binding": "static", "value": "30", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w", "range": "[0, W_conv)", "binding": "static", "value": "30", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gelu.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out) = (128, 16)",
+            "stride": "(C_out, 1) = (16, 1)",
+            "address_mapping": "addr_Y(n, c) = Y_ptr + n*16 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.nn.functional.adaptive_avg_pool2d(Y2, 1).squeeze(-1).squeeze(-1)（eval 模式）。精度模式：手写 FMA + fp32 累加 IEEE。容忍值推导：步骤 1 ε_op=1.2e-7，K=H*W=900，ε_total ≈ 1.2e-7 * 30 ≈ 3.6e-6，10x 余量 base ≈ 4e-5；步骤 2 不触发；步骤 3 不触发，GELU 输出量级 O(1)，均值量级 O(1)。最终 rtol=atol=1e-4（保守），主导步骤 1。结构性检查：(a) 输出 shape=(128,16) 而非 (128,16,1,1)；(b) 均值除以 900 正确；(c) squeeze 仅移除 size=1 维。失败诊断：(i) shape (128,16,1,1) → squeeze 漏；(ii) 偏 900 倍 → 漏除；(iii) sum 错 dim → 误把 N 当作 reduction 维。"
+      }
+    ]
+  }
+}

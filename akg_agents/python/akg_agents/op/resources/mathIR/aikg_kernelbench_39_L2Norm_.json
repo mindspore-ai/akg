@@ -1,0 +1,67 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "l2_norm",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = X[i, j] / sqrt( sum_{k=0}^{65535-1} X[i, k]^2 ), where i = 0..32768-1, j = 0..65535-1",
+        "boundary_treatment": "No explicit zero-handling; for zero-norm input, result contains inf or nan due to division by zero. The operation assumes inputs are such that norm is non-zero under default float32 precision.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 65535)",
+              "binding": "static",
+              "value": "65535"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, 65535)",
+              "binding": "static",
+              "value": "65535",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(32768, 65535)",
+            "stride": "[65535, 1]",
+            "address_mapping": "i * 65535 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(32768, 65535)",
+            "stride": "[65535, 1]",
+            "address_mapping": "i * 65535 + j"
+          }
+        },
+        "TDD_requirement": "需要对拍验证 L2 归一化结果与 PyTorch eager 模式输出一致。重点检查沿 dim=1 的平方和归约是否正确，除法广播是否符合预期，以及零范数时的 inf/nan 行为。建议先用小形状 (batch=2, dim=3) 冒烟，再用完整形状 (32768, 65535) 对拍，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

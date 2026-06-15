@@ -1,0 +1,182 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": ["logsumexp"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "全连接：X ∈ R^{N×I} (N=128, I=1024)，W_gemm ∈ R^{O×I} (O=512)，B_gemm ∈ R^{O}。Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i]。",
+        "boundary_treatment": "全连接对完整 I=1024 求和；bias 加在输出维 O；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(1024, 512)（eval 模式）。精度模式：tl.dot + fp32 输入必须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = 1024，ε_total ≈ 1.2e-7 * sqrt(1024) = 3.84e-6，10x 余量得 base = 4e-5；步骤 2（cuBLAS 修正，关键）参考含 nn.Linear，强制 rtol = atol = max(4e-5, 1e-3) = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素步骤 2。结构性检查：(a) 输出 shape=(128,512)；(b) 验证 weight (O, I) 顺序；(c) bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 → cuBLAS TF32 正常；(ii) 转置错位 → weight 转置；(iii) 偏 bias 量级 → 漏 bias。"
+      },
+      {
+        "name": "logsumexp",
+        "next_expressions": ["leaky_relu_chain"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "沿 dim=1 做 LogSumExp 并 keepdim=True：先求 max_n = max_{o∈[0,O)} Y1[n,o]，再 Y2[n,0] = max_n + log( Σ_{o=0}^{O-1} exp(Y1[n,o] - max_n) )。输出 shape=(N, 1)=(128, 1)。该 expression 是单纯沿 O 维的 reduction。",
+        "boundary_treatment": "logsumexp 通过减去 max 保证数值稳定（避免 exp 溢出）；reduction 对完整 O=512；输出 keepdim 保留 1 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.logsumexp.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y2(n, 0) = Y2_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.logsumexp(Y1, dim=1, keepdim=True)（eval 模式）。精度模式：手写 FMA + fp32 累加，需要先扫描求 max（数值稳定），再 sum(exp(x-max))，再 log。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = O = 512，ε_total ≈ 1.2e-7 * sqrt(512) ≈ 2.7e-6，10x 余量 rtol_base = atol_base = 3e-5；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）触发，sum 后做 log 量级约 ≈ log(O) + max ≈ 6.2 + |max|，但 log 缩量级；保守 rtol = atol = 1e-4。最终 rtol = atol = 1e-4，主导因素是步骤 1 + 步骤 3。结构性检查：(a) 输出 shape=(128,1)；(b) Y2[n,0] >= max(Y1[n,:])；(c) 单元素退化时 Y2 = Y1。失败诊断：(i) exp 溢出 NaN → 漏减 max；(ii) shape 变 (128,) → keepdim 漏；(iii) 数值偏移恒定 → log 输入未含 exp(0)=1 项（漏减 max 时的对消）。"
+      },
+      {
+        "name": "leaky_relu_chain",
+        "next_expressions": ["gelu_chain"],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "negative_slope", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y3", "kind": "tensor" }
+        ],
+        "formula": "两次连续 LeakyReLU(negative_slope=0.01) 的逐元素融合：先 Z[n,0] = Y2[n,0] if Y2[n,0]>0 else 0.01*Y2[n,0]；再 Y3[n,0] = Z[n,0] if Z[n,0]>0 else 0.01*Z[n,0]。由于第一次 LeakyReLU 后正值保持正、负值变更小但仍负（如 -1 → -0.01），第二次再缩 0.01。整体效果：Y3 = Y2 if Y2>0 else 0.0001*Y2。",
+        "boundary_treatment": "纯逐元素操作；LeakyReLU 对全实数稳定；两个 LeakyReLU 可合并为一个等价的负斜率 0.01²=0.0001 的 LeakyReLU。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.logsumexp.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y2(n, 0) = Y2_ptr + n"
+          },
+          "negative_slope": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "0.01"
+          },
+          "Y3": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.leaky_relu_chain.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y3(n, 0) = Y3_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.nn.functional.leaky_relu(torch.nn.functional.leaky_relu(Y2, 0.01), 0.01)（eval 模式）。精度模式：纯逐元素 IEEE fp32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K=1，base = 1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape 与输入相同；(b) Y2 >= 0 时 Y3 = Y2；(c) Y2 < 0 时 Y3 = 0.0001*Y2（即两次 0.01 缩放）。失败诊断：(i) 整体偏 0.01 倍 → 只做了一次 LeakyReLU；(ii) 负值偏移 → 负斜率写错。"
+      },
+      {
+        "name": "gelu_chain",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y3", "kind": "tensor" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "两次连续 GELU 的逐元素融合：定义 g(x) = 0.5 * x * (1 + erf(x / sqrt(2)))（PyTorch 默认精确 erf）。先 Z[n,0] = g(Y3[n,0])；再 Y[n,0] = g(Z[n,0])。输出形状不变 (128, 1)。",
+        "boundary_treatment": "纯逐元素 GELU；erf 由 libdevice 提供，对全实数稳定，约 1-2 ULP；输出量级 |Y| ≤ |Y3|（GELU 是 ≤ identity 的近似）。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y3": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.leaky_relu_chain.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y3(n, 0) = Y3_ptr + n"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.nn.functional.gelu(torch.nn.functional.gelu(Y3))（默认 'none' approximate=精确 erf, eval 模式）。精度模式：纯逐元素 IEEE fp32；erf 调用 libdevice 约 1-2 ULP。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K=1，base = 1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，GELU 输出量级与输入接近。最终 rtol = atol = 1e-5（考虑两次 erf 串行约 2-4 ULP 累积），主导因素是步骤 1。结构性检查：(a) 输出 shape 不变；(b) Y3>=0 时 Y 接近 Y3、负值快速衰减；(c) 验证 GELU 默认是精确 erf 而非 tanh 近似。失败诊断：(i) 数值整体偏小约 0.5 倍 → 只做一次 GELU；(ii) 大负值未衰减 → 用了 ReLU 而非 GELU；(iii) 选错 approximate='tanh' → 与 PyTorch 默认有 ~1e-4 差。"
+      }
+    ]
+  }
+}

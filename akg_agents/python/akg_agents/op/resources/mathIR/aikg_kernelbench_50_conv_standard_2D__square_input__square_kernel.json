@@ -1,0 +1,149 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "b",
+            "kind": "tensor"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "KH",
+            "kind": "scalar"
+          },
+          {
+            "name": "KW",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "给定输入 X 形状为 (N, C_in, H, W)，卷积核 W 形状为 (C_out, C_in, KH, KW)，偏置 b 形状为 (C_out)，步长 S=4，填充 P=2。输出 Y 形状为 (N, C_out, H_out, W_out)，其中 H_out = floor((H + 2*P - KH) / S) + 1 = 55，W_out = floor((W + 2*P - KW) / S) + 1 = 55。对于任意 n ∈ [0, N), oc ∈ [0, C_out), oh ∈ [0, H_out), ow ∈ [0, W_out)：\n  Y[n, oc, oh, ow] = b[oc] + Σ_{ic=0}^{C_in-1} Σ_{kh=0}^{KH-1} Σ_{kw=0}^{KW-1} W[oc, ic, kh, kw] * X_pad[n, ic, oh*S + kh - P, ow*S + kw - P]\n其中 X_pad 是 X 在 H 和 W 两维各填充 P 个零的结果，即 X_pad[n, ic, h, w] = X[n, ic, h-P, w-P] 当 h ∈ [P, H+P) 且 w ∈ [P, W+P)，否则为 0。",
+        "boundary_treatment": "使用零填充（zero padding），超出输入范围的索引对应的 X_pad 值取 0。输出尺寸严格按照上述公式计算，当计算涉及边界时，自动应用零填充。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "256"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "96"
+            },
+            {
+              "symbol": "oh",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "55"
+            },
+            {
+              "symbol": "ow",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "55"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, KH)",
+              "binding": "static",
+              "value": "11",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, KW)",
+              "binding": "static",
+              "value": "11",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W)",
+            "stride": "(150528, 50176, 224, 1)",
+            "address_mapping": "offset(n, c, h, w) = n * 150528 + c * 50176 + h * 224 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1.weight",
+            "layout": "(C_out, C_in, KH, KW)",
+            "stride": "(363, 121, 11, 1)",
+            "address_mapping": "offset(oc, ic, kh, kw) = oc * 363 + ic * 121 + kh * 11 + kw"
+          },
+          "b": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1.bias",
+            "layout": "(C_out)",
+            "stride": "(1)",
+            "address_mapping": "offset(oc) = oc"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "(290400, 3025, 55, 1)",
+            "address_mapping": "offset(n, oc, oh, ow) = n * 290400 + oc * 3025 + oh * 55 + ow"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1.stride[0] (value 4)"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1.padding[0] (value 2)"
+          },
+          "KH": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1.kernel_size[0] (value 11)"
+          },
+          "KW": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1.kernel_size[1] (value 11)"
+          }
+        },
+        "TDD_requirement": "需要对拍数值。参考实现：torch.nn.functional.conv2d(x, weight, bias=bias, stride=4, padding=2)。检查输出形状是否为(256,96,55,55)。边界处理：验证padding=2的零填充行为，特别是图像边缘像素。重点检查输入通道、输出通道、batch等维度的正确性。建议使用小shape如(N=1, C_in=3, H=8, W=8)配合随机权重进行数值对拍，容忍绝对误差1e-5，相对误差1e-4。完整输入用(256,3,224,224)对拍，确保累加顺序不影响最终结果（fp32精度足够）。"
+      }
+    ]
+  }
+}

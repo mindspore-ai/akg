@@ -1,0 +1,116 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["clamp_divide_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，转置 3D 卷积权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=0, dilation=1。输出尺寸 D_out=(D_in-1)*S - 2P + K_d + OP = 15*2 - 2 + 3 = 31, H_out=W_out=(H_in-1)*S - 2P + K_h + OP = 31*2 - 2 + 3 = 63。Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当三者均整除且落入合法范围时项有效。本题 N=16, C_in=32, C_out=16, D_in=16, H_in=W_in=32, K_d=K_h=K_w=3, S=2, P=1, OP=0, D_out=31, H_out=W_out=63。",
+        "boundary_treatment": "ConvT3d 仅在反推 (d_i,h_i,w_i) 为整数且落在合法范围 [0,D_in)×[0,H_in)×[0,W_in) 内时累加；padding=1, output_padding=0；bias 加在通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "31" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "63" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "63" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 32, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (524288, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d, h, w) = X_ptr + n*524288 + c_i*16384 + d*1024 + h*32 + w"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (32, 16, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (432, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*432 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose3d 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 16, 31, 63, 63)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (1968048, 123003, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d, h, w) = Y1_ptr + n*1968048 + c_o*123003 + d*3969 + h*63 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(32, 16, kernel_size=3, stride=2, padding=1) 的前向，eval 模式。精度模式：手写 FMA + fp32 累加器，IEEE fp32；若 tl.dot + fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导：步骤 1 ε_op=1.2e-7, K=C_in*K_d*K_h*K_w=32*3*3*3=864, ε_total ≈ 1.2e-7*sqrt(864)=3.53e-6, 10x 余量后 rtol_base=atol_base=4e-5；步骤 2（cuDNN 修正，关键）参考 nn.ConvTranspose3d 走 cuDNN TF32，rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(16,16,31,63,63)；(b) 输出尺寸 D_out=31, H_out=W_out=63 验证 (H_in-1)*S - 2P + K = 63；(c) weight (32, 16, 3, 3, 3) 不可对调前两维；(d) padding=1 反推索引整除。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuDNN TF32，不是 bug；(ii) shape 错 → 检查 stride/padding/output_padding；(iii) 数值完全不对 → weight 前两维对调。"
+      },
+      {
+        "name": "clamp_divide_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "min_val", "kind": "scalar" },
+          { "name": "divisor", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×D_out×H_out×W_out}，min_val=-1.0, divisor=2.0。先做 clamp 仅下界: C[n,c,d,h,w] = max(Y1[n,c,d,h,w], min_val)。再除以 divisor: Y[n,c,d,h,w] = C[n,c,d,h,w] / divisor。本题 N=16, C_out=16, D_out=31, H_out=W_out=63。",
+        "boundary_treatment": "纯逐元素；clamp 仅下界 -1.0（上界默认无穷大）；除以非零标量 2.0。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d", "range": "[0, D_out)", "binding": "static", "value": "31" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "63" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "63" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 16, 31, 63, 63)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (1968048, 123003, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*1968048 + c*123003 + d*3969 + h*63 + w"
+          },
+          "min_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.min_value (= -1.0)"
+          },
+          "divisor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.divisor (= 2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 16, 31, 63, 63)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (1968048, 123003, 3969, 63, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*1968048 + c*123003 + d*3969 + h*63 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.clamp(Y1, min=-1.0) 然后 / 2.0，eval 模式。精度模式：纯逐元素，clamp 是比较 + 选择，除以常数是单次浮点除法，IEEE fp32 语义。容忍值推导：步骤 1 ε_op=1.2e-7, K=1, rtol_base=atol_base=1e-6；步骤 2 不触发；步骤 3 不触发。但上游 Y1 含 cuDNN ~1e-3 误差，最终 rtol=atol=max(1e-6, 1e-3)=1e-3。主导因素是上游 cuDNN 累积。结构性检查：(a) 输出 shape=(16,16,31,63,63)；(b) 所有 Y 元素 ≥ -1.0/2.0=-0.5；(c) 验证 clamp 只有下界 -1.0，无上界；(d) 验证除以 2.0。失败诊断：(i) Y 出现 < -0.5 → clamp 未生效；(ii) 整体偏移 2x → 没除以 divisor；(iii) 误差与 Y1 同量级 → 上游 cuDNN 主导。"
+      }
+    ]
+  }
+}

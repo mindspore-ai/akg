@@ -1,0 +1,106 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, oc, h_out, w_out] = Σ_{ic=0}^{63} Σ_{kh=0}^{4} Σ_{kw=0}^{6} X[n, ic, h_out + kh, w_out + kw] * W[oc, ic, kh, kw]",
+        "boundary_treatment": "Valid convolution (padding=0, stride=1, dilation=1). Since H_out = 512 - 5 + 1 = 508, W_out = 256 - 7 + 1 = 250, the input indices h_in = h_out + kh and w_in = w_out + kw are always within [0, 511] and [0, 255] respectively. No padding or boundary clipping is needed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "h_out",
+              "range": "[0, 508)",
+              "binding": "static",
+              "value": "508"
+            },
+            {
+              "symbol": "w_out",
+              "range": "[0, 250)",
+              "binding": "static",
+              "value": "250"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 5)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 7)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N=8, C_in=64, H_in=512, W_in=256)",
+            "stride": "(8388608, 131072, 256, 1)",
+            "address_mapping": "n * 8388608 + ic * 131072 + h * 256 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C_out=128, C_in=64, K_h=5, K_w=7)",
+            "stride": "(2240, 35, 7, 1)",
+            "address_mapping": "oc * 2240 + ic * 35 + kh * 7 + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N=8, C_out=128, H_out=508, W_out=250)",
+            "stride": "(16256000, 127000, 250, 1)",
+            "address_mapping": "n * 16256000 + oc * 127000 + h_out * 250 + w_out"
+          }
+        },
+        "TDD_requirement": "需要对拍 PyTorch 的 nn.Conv2d 在相同参数（in_channels=64, out_channels=128, kernel_size=(5,7), stride=(1,1), padding=(0,0), dilation=(1,1), groups=1, bias=False）下的输出。重点检查输出 shape (8,128,508,250) 是否正确，边界无越界访问，使用 float32 精度，推荐容忍值 1e-5。建议先用小 batch 和小尺寸（如 batch=1, in_channels=3, out_channels=5, H=16, W=16, kernel=3x3）做冒烟测试，再用完整输入尺寸对拍。"
+      }
+    ]
+  }
+}

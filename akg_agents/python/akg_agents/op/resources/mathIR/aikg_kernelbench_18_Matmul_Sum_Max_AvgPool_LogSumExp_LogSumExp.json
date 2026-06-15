@@ -1,0 +1,100 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_sum_fused",
+        "next_expressions": ["trailing_reductions_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_lin", "kind": "tensor" },
+          { "name": "B_lin", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，线性层权重 W_lin ∈ R^{O×I}，偏置 B_lin ∈ R^{O}。先做线性映射 Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_lin[o,i] + B_lin[o]，再沿 dim=1 求和并 keepdim=True 得到 Y1 ∈ R^{N×1}: Y1[n,0] = Σ_{o=0}^{O-1} Z[n,o]。代数上可融合为 Y1[n,0] = (Σ_{o=0}^{O-1} B_lin[o]) + Σ_{i=0}^{I-1} X[n,i] · (Σ_{o=0}^{O-1} W_lin[o,i])。本题 N=128, I=10, O=5。",
+        "boundary_treatment": "全连接 + sum，无空间边界；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "5", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (5, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W_lin(o, i) = W_lin_ptr + o*10 + i"
+          },
+          "B_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (5)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_lin(o) = B_lin_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_sum_fused.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y1(n, 0) = Y1_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 self.linear(x) 后 torch.sum(_, dim=1, keepdim=True)。精度模式：手写 FMA + fp32 累加器为 IEEE fp32 语义；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=O*I=5*10=50，ε_total≈1.2e-7*sqrt(50)≈8.5e-7，10x 余量 rtol_base=atol_base=9e-6；步骤 2 参考含 nn.Linear 走 cuBLAS，A100 默认 TF32，强制 rtol=atol=max(9e-6, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素步骤 2 的 cuBLAS TF32 参考修正。结构性检查：(a) 输出 shape=(128,1) keepdim；(b) bias 加在 O 维；(c) 单独验证 Linear 输出 (N,O) 再 sum dim=1。失败诊断：(i) diff≈1e-4~1e-3 → cuBLAS TF32 预期，非 bug；(ii) shape (128,) → keepdim 未保留；(iii) 整体偏移恒定 → bias 求和错位。"
+      },
+      {
+        "name": "trailing_reductions_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×1}。依次沿 dim=1 做单元素 reduction：(1) max(dim=1, keepdim=True)：因 dim=1 大小为 1，max[n,0]=Y1[n,0]；(2) mean(dim=1, keepdim=True)：mean[n,0]=Y1[n,0]（单元素均值=自身）；(3) logsumexp(dim=1, keepdim=True)：lse[n,0]=log(exp(Y1[n,0]))=Y1[n,0]（单元素 LSE=自身，无数值噪声）；(4) logsumexp(dim=1, keepdim=True)：再次=自身。代数上整条链路 Y[n,0]=Y1[n,0]，但要精确实现 logsumexp 的减最大值稳定形式：lse(x)=max + log(Σ exp(x - max))。本题 N=128，输出 Y ∈ R^{N×1}=(128,1)。",
+        "boundary_treatment": "每一步 reduction 维度都是 size=1，单元素 reduction 数学上等价于恒等映射；保留 keepdim 以维持 (N,1) 输出形状；logsumexp 必须使用减最大值稳定形式。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "r1", "range": "[0, 1)", "binding": "static", "value": "1", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "r2", "range": "[0, 1)", "binding": "static", "value": "1", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "r3", "range": "[0, 1)", "binding": "static", "value": "1", "reduction_type": "logsumexp", "accumulator_precision": "fp32" },
+            { "symbol": "r4", "range": "[0, 1)", "binding": "static", "value": "1", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_sum_fused.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y1(n, 0) = Y1_ptr + n"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：依次 torch.max(_, dim=1, keepdim=True)[0]、torch.mean(_, dim=1, keepdim=True)、torch.logsumexp(_, dim=1, keepdim=True)、torch.logsumexp(_, dim=1, keepdim=True)，全部对 (128,1) 输入。精度模式：所有单元素 reduction 在数学上为恒等映射，但 logsumexp 必须实现为 max + log(Σ exp(x - max)) 的稳定形式以保证大输入下不溢出；exp/log 走 libdevice 约 1 ULP。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=1+1+1+1=4，ε_total≈1.2e-7*sqrt(4)=2.4e-7，10x 余量 rtol_base=atol_base=3e-6；步骤 2 不触发；步骤 3 不触发（量级与上游一致）；考虑 exp/log 复合 ULP 余量略放宽到 1e-5。最终 **rtol = atol = 1e-5**，主导因素步骤 1+超越函数复合 ULP。结构性检查：(a) 输出 shape=(128,1)；(b) 对 Y1∈ℝ^{N×1} 整条链路结果应数值上等于 Y1（验证 logsumexp 减最大值正确）；(c) 大输入测试 Y1=1e3 不出现 inf；(d) 单元素 LSE 减最大值后 exp(0)=1，log(1)=0，加回 max 还原值。失败诊断：(i) 大输入 inf/NaN → logsumexp 未减最大值；(ii) shape 错为 (128,) → keepdim 未保留；(iii) 与 PyTorch 微小偏差 → 期望，超越函数 ULP。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "leaky_relu",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "negative_slope",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[b, d] = x[b, d] if x[b, d] >= 0 else negative_slope * x[b, d]",
+        "boundary_treatment": "无边界条件；LeakyReLU 为逐元素操作，对任意形状输入适用。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "offset = b * 393216 + d"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "offset = b * 393216 + d"
+          },
+          "negative_slope": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.negative_slope"
+          }
+        },
+        "TDD_requirement": "需验证数值正确性，以 PyTorch torch.nn.functional.leaky_relu 为参考；重点检查输入包含正数、负数和零的情况；可使用小形状（如 (2,3)）冒烟测试，并使用 (4096, 393216) 完整输入对拍；容忍值建议 atol=1e-5。"
+      }
+    ]
+  }
+}

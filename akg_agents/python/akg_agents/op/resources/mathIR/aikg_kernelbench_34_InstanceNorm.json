@@ -1,0 +1,149 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "instance_norm2d_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          },
+          {
+            "name": "C",
+            "kind": "scalar"
+          },
+          {
+            "name": "H",
+            "kind": "scalar"
+          },
+          {
+            "name": "W",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对于每个 n in [0, N-1], c in [0, C-1], h in [0, H-1], w in [0, W-1]：\nμ_{n,c} = (1/(H*W)) * Σ_{h'=0}^{H-1} Σ_{w'=0}^{W-1} X_{n,c,h',w'}\nσ²_{n,c} = (1/(H*W)) * Σ_{h'=0}^{H-1} Σ_{w'=0}^{W-1} (X_{n,c,h',w'} - μ_{n,c})²\nY_{n,c,h,w} = γ_c * (X_{n,c,h,w} - μ_{n,c}) / √(σ²_{n,c} + ε) + β_c\n其中 γ 和 β 是每个通道的可学习仿射参数，ε = 1e-5，均值和方差在空间维度 H 和 W 上计算，使用有偏估计（除以 H*W）。",
+        "boundary_treatment": "计算均值和方差时覆盖所有 H 和 W 位置（h' 从 0 到 H-1，w' 从 0 到 W-1），无 padding 或越界处理。分母加上 ε 防止除零。输入张量必须满足 C 维度等于 γ/β 的长度。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "112"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "h'",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "w'",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(C*H*W, H*W, W, 1)",
+            "address_mapping": "addr = n*(C*H*W) + c*(H*W) + h*W + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.inorm.weight",
+            "layout": "(C,)",
+            "stride": "(1,)",
+            "address_mapping": "addr = c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.inorm.bias",
+            "layout": "(C,)",
+            "stride": "(1,)",
+            "address_mapping": "addr = c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "eps=1e-5"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W)",
+            "stride": "(C*H*W, H*W, W, 1)",
+            "address_mapping": "addr = n*(C*H*W) + c*(H*W) + h*W + w"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "N=112"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "C=64"
+          },
+          "H": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "H=512"
+          },
+          "W": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "W=512"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch 的 torch.nn.InstanceNorm2d 在 eval 模式下的输出进行数值对拍。重点检查：各种形状（小批量如 N=2, C=4, H=8, W=8 至完整输入 N=112, C=64, H=512, W=512），确保均值和方差计算使用有偏估计（除以 H*W），ε 取 1e-5，仿射参数使用默认初始化或自定义随机值。验证边界无偏移，空间维度正确归约。建议容忍值：fp32 下绝对误差不超过 1e-5。"
+      }
+    ]
+  }
+}

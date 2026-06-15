@@ -1,0 +1,120 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, oc, d, h, w] = ∑_{ic=0}^{2} ∑_{k_d=0}^{2} ∑_{k_h=0}^{4} ∑_{k_w=0}^{6} X[n, ic, d + k_d, h + k_h, w + k_w] * W[oc, ic, k_d, k_h, k_w], 其中 n∈[0,8), oc∈[0,64), d∈[0,14), h∈[0,124), w∈[0,122)。",
+        "boundary_treatment": "输入无 padding，所有下标访问均在有效范围内。输出尺寸由 valid 卷积决定：D_out = D_in - K_d + 1 = 16 - 3 + 1 = 14，H_out = 128 - 5 + 1 = 124，W_out = 128 - 7 + 1 = 122。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 14)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 124)",
+              "binding": "static",
+              "value": "124"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 122)",
+              "binding": "static",
+              "value": "122"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, 5)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, 7)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in)",
+            "stride": "786432, 262144, 16384, 128, 1",
+            "address_mapping": "offset + 786432 * n + 262144 * ic + 16384 * d + 128 * h + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv3d.weight",
+            "layout": "(C_out, C_in, K_d, K_h, K_w)",
+            "stride": "315, 105, 35, 7, 1",
+            "address_mapping": "offset + 315 * oc + 105 * ic + 35 * k_d + 7 * k_h + k_w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out)",
+            "stride": "13554688, 211792, 15128, 122, 1",
+            "address_mapping": "offset + 13554688 * n + 211792 * oc + 15128 * d + 122 * h + w"
+          }
+        },
+        "TDD_requirement": "数值对拍参考 PyTorch eager 模式输出；重点检查输出 shape（非对称 kernel 下 D_out=14, H_out=124, W_out=122 是否正确）、无 padding 边界下空间尺寸收缩是否正确、dtype（float32）和 layout（NCDHW）；建议用 batch=1、更小空间尺寸（如深度=4，高=8，宽=8）进行冒烟测试，再用完整输入 (8,3,16,128,128) 对拍；容忍误差：fp32 下 ulp<2。"
+      }
+    ]
+  }
+}

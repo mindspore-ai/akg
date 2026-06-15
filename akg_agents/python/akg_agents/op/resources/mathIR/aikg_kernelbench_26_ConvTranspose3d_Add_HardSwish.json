@@ -1,0 +1,114 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["add_and_self_hardswish_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 D_out=H_out=W_out = (D_in-1)*S - 2*P + K + OP = (16-1)*2 - 2 + 3 + 1 = 32。输出 Y1 ∈ R^{N×C_out×D_out×H_out×W_out}: Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当三者均能被 S 整除且 d_i∈[0,D_in), h_i∈[0,H_in), w_i∈[0,W_in) 时项有效。本题 N=128, C_in=32, C_out=64, D_in=H_in=W_in=16, K_d=K_h=K_w=3, S=2, P=1, OP=1, D_out=H_out=W_out=32。",
+        "boundary_treatment": "ConvTranspose3d 仅在反推索引 (d_i,h_i,w_i) 为整数且落在合法范围内时累加；output_padding=1 使输出空间各维度额外加 1；bias 加在通道维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "32" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "32" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "32" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 32, 16, 16, 16)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (131072, 4096, 256, 16, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*131072 + c_i*4096 + d_i*256 + h_i*16 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (32, 64, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (1728, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*1728 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 64, 32, 32, 32)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (2097152, 32768, 1024, 32, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*2097152 + c_o*32768 + d_o*1024 + h_o*32 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(32, 64, 3, stride=2, padding=1, output_padding=1).eval() 前向。精度模式：手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若用 tl.dot+fp32 必须声明 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7（fp32 FMA），K=C_in*K_d*K_h*K_w=32*27=864，ε_total≈1.2e-7*sqrt(864)≈3.5e-6，10x 余量后 rtol_base=atol_base=4e-5；步骤 2（cuDNN 修正，关键）参考是 nn.ConvTranspose3d 走 cuDNN，A100 默认 TF32，rtol=atol=max(4e-5,1e-3)=1e-3；步骤 3 不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,64,32,32,32)，等于 (D_in-1)*S - 2P + K + OP=32；(b) 验证 weight 解包顺序 (C_in=32, C_out=64, 3, 3, 3) 不可对调；(c) bias 加在通道维；(d) 边界点 d_o/h_o/w_o ∈ {0,1,30,31} 反推索引整除性单独对拍。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 预期；(ii) diff≫1e-3 → weight 前两维对调；(iii) 边界偏差 → 整除/合法性条件错；(iv) 通道恒定偏移 → bias 索引错。"
+      },
+      {
+        "name": "add_and_self_hardswish_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "A", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设上游 Y1 ∈ R^{N×C_out×D_out×H_out×W_out}，add_input 张量 A ∈ R^{N×C_out×D_out×H_out×W_out}（与 Y1 形状一致）。先做加法 Z = Y1 + A，再做 x*hardswish(x) 即 Y = Z * Z * relu6(Z+3) / 6。展开：Y[n,c,d,h,w] = (Y1[n,c,d,h,w] + A[n,c,d,h,w])^2 * min(max(Y1[n,c,d,h,w] + A[n,c,d,h,w] + 3, 0), 6) / 6。本题 N=128, C_out=64, D_out=H_out=W_out=32。该 expression 融合了残差加法、HardSwish 和最终的元素乘。",
+        "boundary_treatment": "全部为逐元素操作，A 形状与 Y1 完全一致无需广播；HardSwish 定义域为全实数，relu6 内部 min/max 已处理边界；无越界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "d", "range": "[0, D_out)", "binding": "static", "value": "32" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "32" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "32" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 64, 32, 32, 32)",
+            "stride": "(2097152, 32768, 1024, 32, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*2097152 + c*32768 + d*1024 + h*32 + w"
+          },
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.add_input",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 64, 32, 32, 32)",
+            "stride": "(2097152, 32768, 1024, 32, 1)",
+            "address_mapping": "addr_A(n, c, d, h, w) = A_ptr + n*2097152 + c*32768 + d*1024 + h*32 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 64, 32, 32, 32)",
+            "stride": "(2097152, 32768, 1024, 32, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*2097152 + c*32768 + d*1024 + h*32 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 z = Y1 + add_input; out = z * torch.nn.functional.hardswish(z)，eval 模式。精度模式：纯逐元素，IEEE fp32 即可，无 tl.dot。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，无 reduction 取 K=1，ε_total≈1.2e-7，10x 余量后 rtol_base=atol_base=1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，但需注意输入是上游 Y1，故 atol 应被上游放宽影响，整体仍以本 expression 独立判定 1e-6。最终 **rtol=atol=1e-6**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,64,32,32,32) 与 add_input 一致；(b) 当 z<=-3 时 Y=0；(c) 当 z>=3 时 Y=z*z；(d) z 在 [-3,3] 区间应满足 Y=z*z*(z+3)/6。失败诊断：(i) 多了一份 z 或少一份 z → 写成 hardswish(z) 而非 z*hardswish(z)；(ii) relu6 区间错 → 检查 +3 与 /6 顺序；(iii) shape 不匹配 → add_input 维度顺序错。"
+      }
+    ]
+  }
+}

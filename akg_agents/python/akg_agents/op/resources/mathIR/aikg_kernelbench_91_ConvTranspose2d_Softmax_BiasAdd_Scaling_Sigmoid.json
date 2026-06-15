@@ -1,0 +1,156 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_fused",
+        "next_expressions": ["softmax_channel"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出尺寸 H_out=W_out=(H_in-1)*S - 2P + K + OP = 15*2 - 2 + 4 + 1 = 33。输出 Y1 ∈ R^{N×C_out×H_out×W_out}: Y1[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，其中 h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当二者均能被 S 整除且 h_i∈[0,H_in), w_i∈[0,W_in) 时项有效。本题 N=128, C_in=32, C_out=64, H_in=W_in=16, K_h=K_w=4, S=2, P=1, OP=1, H_out=W_out=33。",
+        "boundary_treatment": "仅当反推索引为整数且落在合法范围 [0,H_in)×[0,W_in) 内时累加；output_padding=1 使输出额外加 1 行 1 列；bias 加在通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "33" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "33" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 32, 16, 16)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (8192, 256, 16, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*8192 + c_i*256 + h_i*16 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (32, 64, 4, 4)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (1024, 16, 4, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*1024 + c_o*16 + k_h*4 + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (69696, 1089, 33, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*69696 + c_o*1089 + h_o*33 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose2d(32, 64, 4, stride=2, padding=1, output_padding=1) 的前向，eval 模式。精度模式：手写 FMA + fp32 累加器，IEEE fp32 语义；若 codegen 走 tl.dot + fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in*K_h*K_w=32*4*4=512，ε_total ≈ 1.2e-7*sqrt(512)=2.7e-6，10x 余量后 rtol_base=atol_base=3e-5；步骤 2（cuDNN 修正，关键）参考 nn.ConvTranspose2d 走 cuDNN，A100 默认 TF32，rtol=atol=max(3e-5, 1e-3)=1e-3；步骤 3（量级修正）不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,64,33,33)，等于 (H_in-1)*S - 2P + K + OP = 33；(b) 验证 output_padding=1 对输出尺寸的贡献；(c) weight 解包顺序 (32, 64, 4, 4) 不可对调前两维。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuDNN TF32 主导，不是 bug；(ii) shape=(128,64,32,32) → 漏了 output_padding=1；(iii) 数值完全不对 → weight (C_in, C_out) 对调。"
+      },
+      {
+        "name": "softmax_channel",
+        "next_expressions": ["bias_scale_sigmoid_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "对 Y1 ∈ R^{N×C_out×H_out×W_out} 沿 channel 维 (dim=1) 做 softmax，数值稳定地 Y2[n,c,h,w] = exp(Y1[n,c,h,w] - M[n,h,w]) / Σ_{c'=0}^{C_out-1} exp(Y1[n,c',h,w] - M[n,h,w])，其中 M[n,h,w] = max_{c'} Y1[n,c',h,w]。本题 N=128, C_out=64, H_out=W_out=33。该 expression 需要两阶段 reduction（先 max，后 sumexp），输出与输入同 shape。",
+        "boundary_treatment": "Softmax 是数值稳定的两阶段 reduction（max 减去再 exp 归一化），输出每个 (n,h,w) 位置 channel 维行和=1，无边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "33" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "33" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_r", "range": "[0, C_out)", "binding": "static", "value": "64", "reduction_type": "softmax", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (69696, 1089, 33, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*69696 + c*1089 + h*33 + w"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_channel.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (69696, 1089, 33, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*69696 + c*1089 + h*33 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.softmax(Y1, dim=1)，eval 模式。精度模式：未走 tl.dot，先 max 后 exp 后 sum 累加器均用 fp32，IEEE fp32 语义。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_out=64，ε_total ≈ 1.2e-7*sqrt(64)=9.6e-7，10x 余量后 rtol_base=atol_base=1e-5；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）由于 softmax 输出 ∈ [0,1] 且行和=1，量级 ≤ 1，不触发。最终 rtol=atol=1e-5，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,64,33,33)；(b) 对每个 (n,h,w) 验证 Σ_c Y2 = 1.0 ± 1e-5；(c) 所有 Y2 元素 ∈ [0,1]；(d) 验证使用 max-减法的数值稳定版本（无 max 减则大值时 exp 溢出）。失败诊断：(i) 某些 (n,h,w) 行和远离 1 → 求和维选错或 exp 溢出；(ii) 出现 NaN/Inf → 未做 max 减法导致 exp 溢出。"
+      },
+      {
+        "name": "bias_scale_sigmoid_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" },
+          { "name": "scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C_out×H_out×W_out}，可学习偏置 B_extra ∈ R^{C_out×1×1}，scaling_factor=scale=2.0。先做 bias 加（按 PyTorch 广播将 B_extra 沿 N,H,W 维复制）：A[n,c,h,w] = Y2[n,c,h,w] + B_extra[c,0,0]。再乘以 scale: B[n,c,h,w] = scale · A[n,c,h,w]。最后 sigmoid: Y[n,c,h,w] = 1 / (1 + exp(-B[n,c,h,w]))。本题 N=128, C_out=64, H_out=W_out=33, scale=2.0。",
+        "boundary_treatment": "纯逐元素 + 通道广播；sigmoid 全域有定义；无边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "33" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "33" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_channel.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (69696, 1089, 33, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*69696 + c*1089 + h*33 + w"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (64, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_extra(c, 0, 0) = B_extra_ptr + c"
+          },
+          "scale": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (69696, 1089, 33, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*69696 + c*1089 + h*33 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 (Y2 + self.bias) * scaling_factor 然后 torch.sigmoid，eval 模式。精度模式：纯逐元素，sigmoid libdevice ~1 ULP 误差，IEEE fp32 语义。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=1，10x 余量后 rtol_base=atol_base=1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，sigmoid 输出 ∈ (0,1)。最终 rtol=atol=1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,64,33,33)；(b) 所有 Y 元素 ∈ (0,1)；(c) 验证 bias 广播在通道维；(d) 验证 scaling_factor=2.0 被正确应用。失败诊断：(i) 数值整体偏移 → bias 广播错误；(ii) 偏移恒定倍数 → scaling_factor 没乘或乘错位置；(iii) 出现负数或 >1 → sigmoid 没生效或顺序错。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_bias_fused",
+        "next_expressions": ["clamp_scale_clamp_divide_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}，额外 bias B_extra ∈ R^{C_out×1×1}，stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 H_out=W_out=(H_in-1)*S - 2*P + K + OP = (32-1)*2 - 2 + 3 + 1 = 64。先做 ConvTranspose2d: Z[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，其中 h_i = (h_o+P-k_h)/S, w_i = (w_o+P-k_w)/S，仅当二者均能被 S 整除且 h_i∈[0,H_in), w_i∈[0,W_in) 时项有效。再加上 B_extra (按通道广播)：Y1[n,c_o,h_o,w_o] = Z[n,c_o,h_o,w_o] + B_extra[c_o,0,0]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K=3, S=2, P=1, OP=1, H_out=W_out=64。该 expression 融合 ConvTranspose2d 自带 bias 与额外 bias 的广播加。",
+        "boundary_treatment": "ConvTranspose2d 仅在反推索引 (h_i,w_i) 为整数且落在合法范围 [0,H_in)×[0,W_in) 内时累加；output_padding=1 使输出空间额外加 1 行 1 列；ConvTranspose 内置 bias 与外部 B_extra 都加在通道维；广播将 B_extra 的 (C_out,1,1) 沿 N、H、W 复制；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "64" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*(C_in*H_in*W_in) + c_i*(H_in*W_in) + h_i*W_in + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (3, 16, 3, 3)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (144, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*(C_out*K_h*K_w) + c_o*(K_h*K_w) + k_h*K_w + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_extra(c_o, 0, 0) = B_extra_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_bias_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 64, 64)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (65536, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*(C_out*H_out*W_out) + c_o*(H_out*W_out) + h_o*W_out + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为在 torch.manual_seed(0) 下构造 nn.ConvTranspose2d(3,16,3,stride=2,padding=1,output_padding=1) 接 + self.bias，eval 模式。精度模式：单纯的 conv-transpose 累加 + 一次广播加法，未走 tl.dot 时手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 走 tl.dot + fp32 输入必须声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = C_in × K_h × K_w = 3×3×3 = 27，ε_total ≈ 1.2e-7 × sqrt(27) ≈ 6.2e-7，留 10x 余量得 rtol_base = atol_base = 6.2e-6；步骤 2（cuDNN 参考修正，关键）参考含 nn.ConvTranspose2d 走 cuDNN，A100 默认开 TF32，rtol = max(6.2e-6, 1e-3) = 1e-3，atol 同理 = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape 必须 (128,16,64,64) = (H_in-1)*S - 2P + K + OP = 64；(b) 验证 output_padding=1 对输出维度贡献；(c) weight 解包顺序 (C_in=3, C_out=16, 3, 3) 切勿对调前两维；(d) bias 加在通道维。冒烟输入：先用 (2,3,4,4) 验证小尺寸，再 (128,3,32,32) 完整对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 且 shape 正确 → cuDNN TF32 预期，不是 bug；(ii) diff ≫ 1e-3 → 八成是 weight 解包 (C_in, C_out) 对调；(iii) 仅边界偏差 → 反推索引整除/范围错；(iv) 某通道整体偏移 → bias 索引错位。"
+      },
+      {
+        "name": "clamp_scale_clamp_divide_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "C_min", "kind": "scalar" },
+          { "name": "C_max", "kind": "scalar" },
+          { "name": "scaling_factor", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_out×W_out}。先做第一次 clamp：A = clamp(Y1, C_min, C_max) = min(max(Y1, C_min), C_max)。然后乘缩放：B = A · scaling_factor。再做第二次 clamp：D = clamp(B, C_min, C_max)。最后除以缩放：Y[n,c,h,w] = D[n,c,h,w] / scaling_factor。即逐元素计算 Y[n,c,h,w] = clamp(clamp(Y1[n,c,h,w], 0, 1) · s, 0, 1) / s，其中 s = scaling_factor = 2.0，C_min=0, C_max=1。等价于先把 Y1 钳到 [0,1]，再钳到 [0, 1/s]，最后还原（除以 s）。本题 N=128, C_out=16, H_out=W_out=64。该 expression 融合两次 clamp、一次乘、一次除。",
+        "boundary_treatment": "纯逐元素操作，clamp 对所有实数定义良好；scaling_factor=2.0 不为零，除法安全；无空间边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "64" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_bias_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 64, 64)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (65536, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          },
+          "C_min": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.0"
+          },
+          "C_max": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1.0"
+          },
+          "scaling_factor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (=2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 64, 64)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (65536, 4096, 64, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为对上游 Y1 顺序执行 torch.clamp(.,0,1) → ·scaling_factor → torch.clamp(.,0,1) → /scaling_factor，eval 模式。精度模式：纯逐元素 clamp/乘/除，无 reduction，无 tl.dot，IEEE fp32 单 op 误差极低。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K=1，每元素经过 4 步 op（clamp/乘/clamp/除），累积约 4×ε_op ≈ 5e-7，留 10x 余量得 rtol_base = atol_base = 5e-6；步骤 2（cuDNN 修正）不触发，此 expression 不涉及 cuDNN/cuBLAS；步骤 3（量级修正）不触发，clamp 后输出有界 ≤ 1。最终 rtol = atol = 1e-5，主导因素是步骤 1。结构性检查：(a) 输出 shape (128,16,64,64) 与上游一致；(b) Y 的取值范围在 [0, 1/scaling_factor] = [0, 0.5] 内；(c) 中间步 1 之后值在 [0,1]，中间步 3 之后值在 [0,1]，最后除 s 后 ≤ 1/s。冒烟输入：(2,16,4,4) 用人工设定 Y1（含负数、>1、中间值各样本）验证 clamp 顺序与饱和。失败诊断：(i) 输出 > 0.5 → 缺少第二次 clamp 或 clamp 上限写错；(ii) 输出有负值 → 第一次 clamp 缺失或 min/max 写反；(iii) 整体放大 scaling_factor 倍 → 漏除一次；(iv) 整体缩小 → 多除一次。"
+      }
+    ]
+  }
+}

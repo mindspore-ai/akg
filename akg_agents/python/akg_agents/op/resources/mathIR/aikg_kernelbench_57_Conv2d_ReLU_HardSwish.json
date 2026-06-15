@@ -1,0 +1,122 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": ["relu_hardswish_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，conv 权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。Conv2d 默认 stride=1, padding=0, dilation=1, groups=1。输出 H_out=H_in-K_h+1=30, W_out=W_in-K_w+1=30。输出 Y1 ∈ R^{N×C_out×H_out×W_out}: Y1[n,c_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n, c_i, h_o+k_h, w_o+k_w] · W_conv[c_o, c_i, k_h, k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3。",
+        "boundary_treatment": "valid conv，padding=0；h_o ∈ [0, H_out)、w_o ∈ [0, W_out) 保证 h_o+k_h<H_in、w_o+k_w<W_in，无需额外掩码；bias 加在 c_o 通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*(C_in*H_in*W_in) + c_i*(H_in*W_in) + h*W_in + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*(C_in*K_h*K_w) + c_i*(K_h*K_w) + k_h*K_w + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*(C_out*H_out*W_out) + c_o*(H_out*W_out) + h_o*W_out + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv2d(3, 16, 3) 前向（eval 模式）。精度模式：conv 累加，若手写 FMA + fp32 累加器为 IEEE fp32 语义；若用 tl.dot 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in·K_h·K_w=3·3·3=27，ε_total≈1.2e-7·sqrt(27)≈6.2e-7，留 10x 余量得 rtol_base=atol_base=7e-6；步骤 2（cuDNN 修正，关键）参考是 nn.Conv2d 走 cuDNN，A100 默认 TF32 有 ~1e-3 截断误差，rtol=atol=max(7e-6, 1e-3)=1e-3；步骤 3（量级修正）不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,16,30,30)，等于 (H_in - K_h + 1)；(b) Conv2d weight 布局为 (C_out, C_in, K_h, K_w)，与 ConvTranspose 顺序不同；(c) bias 加在 c_o 维。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 主导，非 bug；(ii) shape 错 → 误用 padding；(iii) 通道整体偏移恒定值 → bias 索引错。"
+      },
+      {
+        "name": "relu_hardswish_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "C_three", "kind": "scalar" },
+          { "name": "C_six", "kind": "scalar" },
+          { "name": "C_zero", "kind": "scalar" },
+          { "name": "C_one", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_out×W_out}。先做 ReLU: R = max(Y1, 0)。再做 HardSwish (按代码字面实现): Y = R · clamp((R+3)/6, 0, 1)。注意：由于上游 ReLU 已保证 R≥0，(R+3)/6≥0.5 始终>0；当 R≥3 时 clamp 返回 1，Y=R；当 0≤R<3 时 clamp 返回 (R+3)/6，Y = R·(R+3)/6。逐元素。本题 N=128, C_out=16, H_out=W_out=30。",
+        "boundary_treatment": "纯逐元素激活，对全体实数有定义；clamp 严格落在 [0,1]；无空间边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          },
+          "C_three": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 3.0"
+          },
+          "C_six": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 6.0"
+          },
+          "C_zero": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.0"
+          },
+          "C_one": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1.0"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.relu(Y1) 接 x = x * torch.clamp((x+3)/6, 0, 1) 的串联（eval 模式，与源代码字面一致）。精度模式：纯逐元素，无 reduction，无 tl.dot；手写 FMA / 标量算式即可，IEEE fp32 语义。容忍值推导三步：步骤 1（基础公式）纯逐元素 ε_op=1.2e-7，无 reduction，ε_total≈1.2e-7，留 10x 余量得 rtol_base=atol_base=1.2e-6，安全取 1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，输出非负。最终 **rtol=atol=1e-6**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) Y≥0 必须成立（因为 R≥0 且 clamp 因子≥0）；(c) 当 R≥3 时 Y=R；当 R=0 时 Y=0。失败诊断：(i) Y 出现负值 → ReLU 未应用或 clamp 阈值错；(ii) 整体小一定倍数 → 漏乘 R；(iii) 与官方 hardswish 公式不一致也是预期的，因为源代码先 ReLU 再用此特定 hardswish-like 算式。"
+      }
+    ]
+  }
+}

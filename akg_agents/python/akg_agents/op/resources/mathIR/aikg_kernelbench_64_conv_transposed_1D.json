@@ -1,0 +1,160 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose1d_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          },
+          {
+            "name": "G",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given input X of shape (N, C_in, L_in) and weight W of shape (C_in, C_out, K), the transposed 1D convolution with stride S=1, padding P=0, dilation D=1, output_padding OP=0, groups G=1 produces output Y of shape (N, C_out, L_out) where L_out = (L_in - 1)*S - 2*P + D*(K-1) + OP + 1 = 65538. For n in [0, N), o in [0, C_out), l in [0, L_out): Y[n,o,l] = sum_{i=0}^{C_in-1} sum_{k=0}^{K-1} W[i,o,K-1-k] * X[n,i,l+k-(K-1)], treating out-of-range X indices as zero. In other words, define W'[o,i,k] = W[i,o,K-1-k] and X_pad by padding X with K-1 zeros on both ends; then Y is the standard 1D convolution of W' over X_pad with stride S=1 and padding 0.",
+        "boundary_treatment": "Out-of-bound accesses to X (when l+k-(K-1) < 0 or >= L_in) result in zero contribution (implicit zero-padding). The input X is effectively padded with K-1=2 zeros on each side of the length dimension before the convolution. No further output clipping is performed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "l",
+              "range": "[0, L_out)",
+              "binding": "static",
+              "value": "65538"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, L_in)",
+            "stride": "(8388608, 65536, 1)",
+            "address_mapping": "addr = n * 8388608 + i * 65536 + l"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d_transpose.weight",
+            "layout": "(C_in, C_out, K)",
+            "stride": "(384, 3, 1)",
+            "address_mapping": "addr = i * 384 + o * 3 + k"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, L_out)",
+            "stride": "(8388864, 65538, 1)",
+            "address_mapping": "addr = n * 8388864 + o * 65538 + l"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.padding"
+          },
+          "OP": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.output_padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.dilation"
+          },
+          "G": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.groups"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 64"
+          },
+          "C_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 128"
+          },
+          "C_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 128"
+          },
+          "L_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 65536"
+          },
+          "L_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 65538"
+          }
+        },
+        "TDD_requirement": "需要对拍，参考 PyTorch eager 模式下的 Model.forward() 输出。重点检查：输出形状应为 (64,128,65538)；边界处理（两端隐式零填充）是否正确；权重转置与翻转逻辑是否与 ConvTranspose1d 标准行为一致。建议用较小形状 (batch=2, in_ch=4, out_ch=8, len=10, K=3) 冒烟，再用 (64,128,65536) 完整对拍。由于浮点累加顺序差异，绝对误差容忍 1e-5。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "cross_entropy_loss",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "predictions",
+            "kind": "tensor"
+          },
+          {
+            "name": "targets",
+            "kind": "index"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          },
+          {
+            "name": "C",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "loss",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "loss = -(1/N) * Σ_{i=0}^{N-1} ( predictions[i, targets[i]] - log( Σ_{c=0}^{C-1} exp(predictions[i, c]) ) )",
+        "boundary_treatment": "假定所有 targets 值在 [0, C-1] 区间内，无越界。无 ignore_index，所有样本均参与损失计算。若 N=0 或 C=0 公式未定义，但本场景中 N>0, C>0。",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "logsumexp",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "predictions": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(N, C)",
+            "stride": "(C, 1)",
+            "address_mapping": "i * C + c"
+          },
+          "targets": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(N,)",
+            "stride": "(1,)",
+            "address_mapping": "i"
+          },
+          "loss": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "0"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 32768"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 4096"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch torch.nn.functional.cross_entropy 数值对拍。重点检查 shape、边界、索引、reduction='mean' 语义。先用小 shape (2,3) 手动计算验证，再用完整输入 (32768,4096) 对拍。容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

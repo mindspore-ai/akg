@@ -1,0 +1,86 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_tril_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i][j] = (j <= i) ? sum_{k=0}^{N-1} A[i][k] * B[k][j] : 0",
+        "boundary_treatment": "输出C为下三角矩阵：当列索引j大于行索引i时，对应元素强制置零；当j <= i时，元素为 A 和 B 的内积。由于输入A和B本身为上三角为零的下三角矩阵，k的有效范围自动限制在 [j, i] 区间内，超出该范围的乘积项均为零。该实现等价于先进行完整矩阵乘法 S = A @ B，再对 S 应用 tril 掩码。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(N, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "i * N + j"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(N, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "i * N + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "i * N + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "M = 4096"
+          }
+        },
+        "TDD_requirement": "需对拍 PyTorch eager 结果。重点验证：1) 矩阵乘法正确性；2) 下三角掩码正确性，特别是对角线及上三角元素是否为精确零；3) 不同 shape（小 shape 如 N=4,8）的冒烟测试，确保索引边界条件无误；4) 对完整 N=4096 输入进行对拍，容忍浮点累积误差，上三角位置要求绝对误差 < 1e-7。注意内存布局为行优先连续，stride 为 (N, 1)。"
+      }
+    ]
+  }
+}
