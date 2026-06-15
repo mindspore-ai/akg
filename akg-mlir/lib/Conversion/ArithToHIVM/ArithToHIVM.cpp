@@ -295,7 +295,9 @@ static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, L
 static bool isScalarType(Type type) { return isa<IntegerType, FloatType, IndexType>(type); }
 
 static bool requiresVectorRhsForHIVMLowering(Operation *user) {
-  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp>(user);
+  // arith.divf keeps scalar broadcast as a vector operand instead of folding to the scalar.
+  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp,
+             arith::DivFOp>(user);
 }
 
 static bool isVectorOrNPUVectorLike(Type type) { return isa<VectorType, npuvector::NPUVectorType>(type); }
