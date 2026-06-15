@@ -9,7 +9,7 @@ add_mlir_pdll_library(TorchToMfusePDLLIncGen
   TorchPrimToMfuse.pdll
 )
 
-file(GLOB TORCH_TO_MFUSE_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
+file(GLOB TORCH_TO_MFUSE_SRC CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
 
 add_mlir_conversion_library(MFusionConversionTorchToMfuse
   ${TORCH_TO_MFUSE_SRC}

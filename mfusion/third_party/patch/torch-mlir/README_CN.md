@@ -191,6 +191,27 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 - `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td`
 - `lib/Dialect/Torch/IR/TorchOps.cpp`
 
+### 008-canonicalize-aten-permute-negative-dims.patch
+
+**描述：**
+让 `aten.permute` 在使用负维度索引时既能通过 verifier，又能在 canonicalization 阶段被规范化为正维度写法，避免后续转换流程处理负维度时出错。
+
+**问题：**
+在 mfusion 的转换流程中，`aten.permute` 可能携带负维度索引（例如 rank 4 的张量使用 `-2` 作为维度索引）。这里真正的“unknown 维度”应当由“不是编译期常量”来表示，而不是把常量 `-1` 特判成 unknown；否则 verifier 会错误地跳过合法的负维度语义，或者在负维度还未归一化时直接报出 `observed invalid index in permutation (-2)` 之类的错误。即使后续有 canonicalize，也无法保证一定先于 verifier 执行。
+
+**解决方案：**
+
+1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中，为 `AtenPermuteOp` 增加 `hasCanonicalizer` 方法。
+2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中同时修改 verifier 和 canonicalizer：
+   - 在 `AtenPermuteOp::verify()` 中，保留 `!fromIsSet` 作为“unknown 维度”的判断；对编译期常量维度则先执行 `toPositiveDim(from, outRank)`，再进行范围检查、重复维度检查以及输入/输出 shape 一致性校验，使 `-1`、`-2` 这类合法负维度写法能够被正确接受。
+   - 新增 `AtenPermuteOp::getCanonicalizationPatterns`，当 `dims` 是常量整数列表时，将其中的负维度统一转换为正维度，并重建 `PrimListConstructOp` 与新的 `aten.permute`。
+   - 这样处理后，IR 创建阶段不会因为负维度提前失败，后续 canonicalize 也能把常量负维度稳定收敛为统一形式。
+
+**修改的文件：**
+
+- `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td`
+- `lib/Dialect/Torch/IR/TorchOps.cpp`
+
 ## 应用顺序
 
 这些补丁应按数字顺序应用（001 → 002 → ...）。

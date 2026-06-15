@@ -39,6 +39,27 @@ static constexpr llvm::StringRef kIsDynamic = "mfusion.is_dynamic";
 /// Value type: StringAttr
 static constexpr llvm::StringRef kCopiedSubgraph = "mfusion.copied_subgraph";
 
+/// Generic DVM fusion region group id (StringAttr). Adjacent split areas with the same id and
+/// member role are merged by FuseTagBarrierByGroupId.
+static constexpr llvm::StringRef kDvmFuseGroup = "mfusion.dvm_fuse_group";
+
+/// Role within a fusion region: member (split-merge) or affinity (tag only, no merge hub).
+/// Value type: StringAttr
+static constexpr llvm::StringRef kDvmFuseRole = "mfusion.dvm_fuse_role";
+
+/// Optional pattern kind for debugging (e.g. "layer_norm").
+static constexpr llvm::StringRef kDvmFuseKind = "mfusion.dvm_fuse_kind";
+
+static constexpr llvm::StringRef kDvmFuseRoleMember = "member";
+static constexpr llvm::StringRef kDvmFuseRoleAffinity = "affinity";
+
+/// Legacy unit tags (still read by split for backward compatibility).
+static constexpr llvm::StringRef kLayerNormDvm = "mfusion.layer_norm_dvm";
+static constexpr llvm::StringRef kLayerNormDvmAffinity = "mfusion.layer_norm_dvm_affinity";
+
+/// Synthetic group id used when merging areas that only carry kLayerNormDvm.
+static constexpr llvm::StringRef kLegacyLayerNormDvmGroup = "legacy.layer_norm_dvm";
+
 }  // namespace mfusion_attrs
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_OUTLINING_FUSIONATTRIBUTES_H
