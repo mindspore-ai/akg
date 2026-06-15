@@ -1,0 +1,68 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "min_reduce_dim1",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{N×D1×D2}，其中 N=128, D1=4096, D2=4095，get_init_inputs() 返回 dim=1。forward 返回 torch.min(x, dim=1)[0]，因此只输出最小值，不输出索引。输出张量 Y ∈ ℝ^{N×D2}，dtype 为 torch.float32，定义为：Y[n,j] = min_{i∈[0,D1)} X[n,i,j]，输出 shape 为 (128,4095)。",
+        "boundary_treatment": "无 padding 或空间边界扩展；归约操作遍历完整合法索引 i ∈ [0,4096)。按输出列分块时，所有 load/store 地址必须使用全局列索引 j_global，tail 列用 mask；无效 lane 对 min 使用 +inf。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 4095)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "min",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D1, D2) = (128, 4096, 4095)",
+            "stride": "(D1*D2, D2, 1) = (16773120, 4095, 1)",
+            "address_mapping": "addr_X(n, i, j) = X_ptr + n*16773120 + i*4095 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D2) = (128, 4095)",
+            "stride": "(D2, 1) = (4095, 1)",
+            "address_mapping": "addr_Y(n, j) = Y_ptr + n*4095 + j"
+          }
+        },
+        "lowering_contract": "This is a large min-value reduction over D1=4096. Return only float32 minimum values, not indices. A practical lowering should map programs over (batch n, output-column block j), reduce across i with tl.min or manual chunked minima, and use +inf for invalid lanes. Avoid one scalar output per program with a long serial loop if it risks timeout; process multiple columns per program and keep global j addressing correct.",
+        "TDD_requirement": "验证输出形状为 (128,4095)；与 PyTorch 的 torch.min(x, dim=1)[0] 对拍，对随机输入比较每个 (n,j) 位置的最小值是否正确；重点测试边界 i=0 和 i=4095 的值，并确认没有返回 indices。"
+      }
+    ]
+  }
+}

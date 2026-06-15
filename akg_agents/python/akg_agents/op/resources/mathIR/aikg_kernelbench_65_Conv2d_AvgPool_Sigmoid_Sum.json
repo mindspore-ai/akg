@@ -1,0 +1,289 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": [
+          "avgpool_sigmoid_fused"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Conv2d：X ∈ R^{N×C_in×H_in×W_in}，权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。H_conv = H_in - K_h + 1 = 32-3+1 = 30, W_conv = 30。Y1[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,h+k_h,w+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3。",
+        "boundary_treatment": "padding=0 时无填充；输出 spatial 范围 [0,H_conv)×[0,W_conv) 覆盖完整滑窗；bias 加在通道维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_conv)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_conv)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_conv*W_conv, H_conv*W_conv, W_conv, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h, w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Conv2d(3, 16, 3)（eval 模式）。精度模式：手写 FMA + fp32 累加 IEEE；若 tl.dot + fp32 输入必须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = C_in*K*K = 3*9 = 27，ε_total ≈ 1.2e-7 * sqrt(27) ≈ 6.2e-7，10x 余量 base ≈ 6e-6；步骤 2（cuDNN 修正，关键）参考含 nn.Conv2d，cuDNN+TF32 引入 ~1e-3 误差，强制 rtol = atol = max(6e-6, 1e-3) = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,16,30,30)，验证 H_conv=H_in-K+1=30；(b) 验证 weight (C_out, C_in, K_h, K_w) 顺序；(c) bias 加在通道维。失败诊断：(i) diff 1e-4~1e-3 → cuDNN TF32 正常；(ii) shape 错位 → padding/stride 误算；(iii) 通道偏移 → bias 索引错。\n【子表达式自测容忍度】Conv/ConvTranspose 与 PyTorch cuDNN/TF32 参考对拍时，正确的 shape/layout/边界实现也可能出现 1e-3 量级绝对误差；Conv3d+activation 或长归约链路可到约 6e-3。子表达式 smoke test 请使用 torch.allclose(rtol=5e-3, atol=5e-3)（必要时 6e-3），不要用单一 max_abs < 1e-3 拦截正确实现；最终 verifier 仍做端到端判定。",
+        "lowering_contract": {
+          "preferred_schedule": "For small static Conv2d/Conv3d with small C_in and C_out, compute a tile of flattened output positions and a vector of output channels. Prefer a packed-weight (K_total, C_out) outer-product loop with fp32 accumulators; create the packed weight once in ModelNew.__init__. If the expression also has a min/sum/mean over producer positions, compute each producer tile once and reduce it instead of recomputing Conv per final scalar.",
+          "suggested_tile": {
+            "preferred_variant": "small_static_outer_product",
+            "BLOCK_M": 32,
+            "BLOCK_C": 16,
+            "K_TOTAL": 27,
+            "C_OUT": 16
+          },
+          "forbidden_lowerings": [
+            "Repack or transpose convolution weights inside forward on every call.",
+            "Use original ConvNd weight strides after passing a packed (K_total, C_out) weight tensor.",
+            "Launch one program per final scalar while recomputing the full convolution reduction.",
+            "Treat K_total as a non-power-of-two tl.arange tile bound without padding/masking."
+          ]
+        }
+      },
+      {
+        "name": "avgpool_sigmoid_fused",
+        "next_expressions": [
+          "spatial_channel_sum"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "融合 2x2 AvgPool2d (kernel=2, stride=2 默认) 与逐元素 Sigmoid：先 P[n,c,h,w] = (1/(K_p*K_p)) Σ_{δ_h=0}^{K_p-1} Σ_{δ_w=0}^{K_p-1} Y1[n,c,h*S_p+δ_h, w*S_p+δ_w]，其中 K_p=2, S_p=2，输出 H_pool = (H_conv - K_p) / S_p + 1 = (30-2)/2+1 = 15，W_pool = 15。再 Y2[n,c,h,w] = sigmoid(P[n,c,h,w]) = 1 / (1 + exp(-P[n,c,h,w]))。",
+        "boundary_treatment": "AvgPool2d 完整覆盖（30/2=15 整除），无残余边界；sigmoid 全实数稳定。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_pool)",
+              "binding": "static",
+              "value": "15"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_pool)",
+              "binding": "static",
+              "value": "15"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "δ_h",
+              "range": "[0, K_p)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "δ_w",
+              "range": "[0, K_p)",
+              "binding": "static",
+              "value": "2",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_conv, W_conv) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h_in, w_in) = Y1_ptr + n*14400 + c*900 + h_in*30 + w_in"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.avgpool_sigmoid_fused.output",
+            "layout": "(N, C_out, H_pool, W_pool) = (128, 16, 15, 15)",
+            "stride": "(C_out*H_pool*W_pool, H_pool*W_pool, W_pool, 1) = (3600, 225, 15, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*3600 + c*225 + h*15 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：nn.AvgPool2d(2) 接 torch.sigmoid（eval 模式）。精度模式：手写 FMA + fp32 累加；sigmoid 调 libdevice 约 1 ULP。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = K_p*K_p = 4，ε_total ≈ 1.2e-7 * 2 ≈ 2.4e-7，10x 余量 base = 2.4e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，sigmoid 输出 ∈(0,1)。最终 rtol = atol = 1e-5（取保守整数），主导因素步骤 1。结构性检查：(a) 输出 shape=(128,16,15,15)；(b) Y2 元素 ∈ (0,1)；(c) 验证 stride=2 默认 (PyTorch AvgPool2d 默认 stride=kernel)。失败诊断：(i) 输出大于 1 → sigmoid 实现错；(ii) shape (128,16,28,28) → stride 误为 1；(iii) 偏 4 倍 → AvgPool 漏除 K*K。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。"
+      },
+      {
+        "name": "spatial_channel_sum",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "沿 dim=[1,2,3] (通道+空间) 求和：Y[n] = Σ_{c=0}^{C_out-1} Σ_{h=0}^{H_pool-1} Σ_{w=0}^{W_pool-1} Y2[n,c,h,w]。输出 shape=(N,)=(128,)。",
+        "boundary_treatment": "完整 reduction 在 (C_out, H_pool, W_pool) 上，无边界处理；总元素数 K_total = 16*15*15 = 3600。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_pool)",
+              "binding": "static",
+              "value": "15",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_pool)",
+              "binding": "static",
+              "value": "15",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.avgpool_sigmoid_fused.output",
+            "layout": "(N, C_out, H_pool, W_pool) = (128, 16, 15, 15)",
+            "stride": "(3600, 225, 15, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*3600 + c*225 + h*15 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_Y(n) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.sum(Y2, dim=[1,2,3])（eval 模式）。精度模式：手写 FMA + fp32 累加 IEEE。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = 16*15*15 = 3600，ε_total ≈ 1.2e-7 * sqrt(3600) ≈ 7.2e-6，10x 余量 base ≈ 7e-5；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）触发：上游 sigmoid 后元素 ∈(0,1)，求和量级 |Y| 可达 3600 量级（满和），需要 ε_op × K × |output| = 1.2e-7 × 3600 × 3600 ≈ 1.5e-0... 太保守。实际 sigmoid 输出均值约 0.5，所以 |Y| ≈ 1800；相对误差 ε_op × K ≈ 1.2e-7 × 3600 ≈ 4.3e-4（相对量级），用 atol = ε_op × K × |y| ≈ 1.2e-7 × 3600 × 1800 ≈ 7.8e-1 过保守，改用 sqrt(K) 已合适。最终 rtol = atol = 1e-4，主导因素步骤 1。结构性检查：(a) 输出 shape=(128,)；(b) 每个 Y[n] ∈ (0, 3600)（sigmoid 正性保证）；(c) 顺序累加方向不变。失败诊断：(i) shape (128,1,1,1) → keepdim 误设；(ii) 数值偏 16 倍 → 漏通道求和；(iii) 误用 mean → 偏 3600 倍小。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,273 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": [
+          "batchnorm2d_scale_fused"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，卷积权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}，stride=1, padding=0, dilation=1, groups=1。Y1[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,h+k_h,w+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3, H_out=W_out=H_in-K_h+1=30。",
+        "boundary_treatment": "无 padding，h ∈ [0, 30)、w ∈ [0, 30)；h+k_h ∈ [0, 32)、w+k_w ∈ [0, 32) 始终合法。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*3072 + c_i*1024 + h_i*32 + w_i"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h, w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.Conv2d(3,16,3) 的前向，eval 模式。精度模式：核心是 conv 累加，未走 tl.dot 时手写 FMA + fp32 累加器，IEEE fp32 语义；走 tl.dot + fp32 需 input_precision='ieee' 或 'tf32x3'。容忍值推导：步骤 1 ε_op = 1.2e-7，K = 3×3×3 = 27，ε_total ≈ 6.2e-7，留 10x = 6.2e-6；步骤 2（关键）参考含 nn.Conv2d → cuDNN/TF32，rtol = atol = max(6.2e-6, 1e-3) = 1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuDNN TF32。结构性检查：(a) shape=(128,16,30,30)；(b) bias 加在通道维。失败诊断：(i) 误差 ~1e-4~1e-3 → TF32 主导；(ii) weight 解包反序 → 大误差；(iii) 通道整体偏移 → bias 索引错。\n【子表达式自测容忍度】Conv/ConvTranspose 与 PyTorch cuDNN/TF32 参考对拍时，正确的 shape/layout/边界实现也可能出现 1e-3 量级绝对误差；Conv3d+activation 或长归约链路可到约 6e-3。子表达式 smoke test 请使用 torch.allclose(rtol=5e-3, atol=5e-3)（必要时 6e-3），不要用单一 max_abs < 1e-3 拦截正确实现；最终 verifier 仍做端到端判定。",
+        "lowering_contract": {
+          "preferred_schedule": "For small static Conv2d/Conv3d with small C_in and C_out, compute a tile of flattened output positions and a vector of output channels. Prefer a packed-weight (K_total, C_out) outer-product loop with fp32 accumulators; create the packed weight once in ModelNew.__init__. If the expression also has a min/sum/mean over producer positions, compute each producer tile once and reduce it instead of recomputing Conv per final scalar.",
+          "suggested_tile": {
+            "preferred_variant": "small_static_outer_product",
+            "BLOCK_M": 32,
+            "BLOCK_C": 16,
+            "K_TOTAL": 27,
+            "C_OUT": 16
+          },
+          "forbidden_lowerings": [
+            "Repack or transpose convolution weights inside forward on every call.",
+            "Use original ConvNd weight strides after passing a packed (K_total, C_out) weight tensor.",
+            "Launch one program per final scalar while recomputing the full convolution reduction.",
+            "Treat K_total as a non-power-of-two tl.arange tile bound without padding/masking."
+          ]
+        }
+      },
+      {
+        "name": "batchnorm2d_scale_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          },
+          {
+            "name": "scaling_factor",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。BatchNorm2d eval 模式: Z[n,c,h,w] = gamma[c] · (Y1[n,c,h,w] - running_mean[c]) / sqrt(running_var[c] + eps) + beta[c]。再做 scaling: Y[n,c,h,w] = Z[n,c,h,w] · scaling_factor。本题 N=128, C=16, H=W=30, eps=1e-5, scaling_factor=2.0。融合 BatchNorm 和逐元素乘法。",
+        "boundary_treatment": "BatchNorm 在 eval 模式下使用 running stats；逐元素操作；running_var + eps > 0。\n【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "n_bn",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "h_bn",
+              "range": "[0, 30)",
+              "binding": "static",
+              "value": "30",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "w_bn",
+              "range": "[0, 30)",
+              "binding": "static",
+              "value": "30",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (默认 1e-5)"
+          },
+          "scaling_factor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (= 2.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.BatchNorm2d(16) eval 模式 + 乘以 scaling_factor=2.0。精度模式：逐元素 FMA，IEEE fp32 语义。容忍值推导：步骤 1 ε_op = 1.2e-7，K=1，ε_total = 1.2e-7，留 10x = 1.2e-6；步骤 2（关键）参考含 BatchNorm，cuDNN BN，rtol = atol = max(1.2e-6, 1e-3) = 1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导是步骤 2 BatchNorm 的 cuDNN 修正。结构性检查：(a) shape 保持 (128,16,30,30)；(b) 必须使用 running_mean/running_var（eval 模式）；(c) scaling_factor 必须在 BN 之后；(d) eps 加在 sqrt 内。失败诊断：(i) 误差 ~1e-4~1e-3 → BN cuDNN 主导，不是 bug；(ii) 全部值差 2 倍 → scaling 位置或缺失；(iii) NaN → eps 缺失且 running_var 含 0。\n【BatchNorm 自测要求】参考实现保持模型默认 training=True，不要调用 eval()；按当前输入计算 batch mean/var（unbiased=False），不要读取 running_mean/running_var 作为输出统计源。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "BatchNorm in this verifier is a training-mode normalization stage. Compute per-channel batch statistics over N and spatial axes with fp32 tl.sum; then apply affine and any declared cheap elementwise/pool consumer. Do not use running_mean/running_var as output statistics.\nNormalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use running_mean/running_var for BatchNorm output when source verifier runs training mode.",
+            "Call model.eval() in the self-test reference for this BatchNorm expression.",
+            "Use tl.dot for BatchNorm mean/variance statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      }
+    ]
+  }
+}

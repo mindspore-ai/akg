@@ -1,0 +1,78 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i,j] = ∑_{k=0}^{31} A[i,k] * B[k,j], where i ∈ [0, 32768), j ∈ [0, 32768).",
+        "boundary_treatment": "No boundary conditions; all indices are within valid ranges. The loops directly cover all output elements without padding or masking.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(32768, 32)",
+            "stride": "(32, 1)",
+            "address_mapping": "i * 32 + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(32, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "k * 32768 + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          }
+        },
+        "TDD_requirement": "需要对拍矩阵乘法结果，参考实现为 PyTorch torch.matmul。重点检查形状 (32768,32768) 的输出与输入 (32768,32) 和 (32,32768) 的数值正确性。建议使用小形状冒烟测试（如 M=4,K=2,N=4）验证索引和累加逻辑；完整输入对拍使用给定尺寸。注意累加精度为 fp32，容忍适量浮点误差。"
+      }
+    ]
+  }
+}

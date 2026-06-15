@@ -1,0 +1,95 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "rms_normalization",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "C",
+            "kind": "scalar"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n,c,d1,d2] = X[n,c,d1,d2] / sqrt( (1/C) * sum_{k=0}^{C-1} X[n,k,d1,d2]^2 + eps )",
+        "boundary_treatment": "无特殊边界处理。eps > 0 避免了除零错误。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "112"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "d1",
+              "range": "[0, D1)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "d2",
+              "range": "[0, D2)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(112, 64, 512, 512)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "offset + n*16777216 + c*262144 + d1*512 + d2"
+          },
+          "C": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.num_features"
+          },
+          "eps": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.eps"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(112, 64, 512, 512)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "offset + n*16777216 + c*262144 + d1*512 + d2"
+          }
+        },
+        "TDD_requirement": "以 PyTorch 的 RMSNorm 实现为参考，检查输出数值。重点验证特征维度归约的正确性（dim=1）、eps 的数值稳定性、广播除法。建议用小形状 (2, 4, 3, 3) 冒烟测试，全尺寸 (112, 64, 512, 512) 对拍，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

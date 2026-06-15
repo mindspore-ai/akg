@@ -1,0 +1,184 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "depthwise_conv2d",
+        "next_expressions": [
+          "pointwise_conv2d"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_depthwise",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y1[n,c,h,w] = Σ_{r=0}^{2} Σ_{s=0}^{2} pad(X)[n, c, h+r, w+s] * W_depthwise[c, 0, r, s], where pad(X) is zero-padded X with 1-pixel padding on both H and W dimensions, and out-of-bound indices yield 0.",
+        "boundary_treatment": "Zero-padding of size 1 on each side of H and W. For any h+r or w+s that maps outside [0,511] original input, the value is treated as 0. The output spatial shape remains 512x512.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "r",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "s",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "16777216, 262144, 512, 1",
+            "address_mapping": "addr(n,c,h,w) = n*16777216 + c*262144 + h*512 + w"
+          },
+          "W_depthwise": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.depthwise.weight",
+            "layout": "(64, 1, 3, 3)",
+            "stride": "9, 9, 3, 1",
+            "address_mapping": "addr(c, i, kh, kw) = c*9 + i*9 + kh*3 + kw"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.depthwise_conv2d.output",
+            "layout": "(16, 64, 512, 512)",
+            "stride": "16777216, 262144, 512, 1",
+            "address_mapping": "addr(n,c,h,w) = n*16777216 + c*262144 + h*512 + w"
+          }
+        },
+        "TDD_requirement": "验证 depthwise 卷积的正确性：检查 groups=in_channels 时各通道独立卷积，核对零填充边界处理（padding=1, stride=1, dilation=1），输出尺寸应与输入相同。建议使用小尺寸（如 N=1,C=3,H=5,W=5）比对 PyTorch 结果，再使用完整尺寸 (16,64,512,512) 进行精度对拍，允许 fp32 舍入误差。"
+      },
+      {
+        "name": "pointwise_conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_pointwise",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y2[n,o,h,w] = Σ_{c=0}^{63} Y1[n,c,h,w] * W_pointwise[o,c,0,0]",
+        "boundary_treatment": "No padding. All indices are within valid range. Output spatial shape equals input shape (512x512).",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.depthwise_conv2d.output",
+            "layout": "(16, 64, 512, 512)",
+            "stride": "16777216, 262144, 512, 1",
+            "address_mapping": "addr(n,c,h,w) = n*16777216 + c*262144 + h*512 + w"
+          },
+          "W_pointwise": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.pointwise.weight",
+            "layout": "(128, 64, 1, 1)",
+            "stride": "64, 1, 1, 1",
+            "address_mapping": "addr(o, c, kh, kw) = o*64 + c*1 + kh*1 + kw"
+          },
+          "Y2": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(16, 128, 512, 512)",
+            "stride": "33554432, 262144, 512, 1",
+            "address_mapping": "addr(n,o,h,w) = n*33554432 + o*262144 + h*512 + w"
+          }
+        },
+        "TDD_requirement": "验证 1x1 点卷积的正确性：本质为通道全连接，核对无填充、无偏置，输出尺寸与输入相同。建议使用小尺寸（如 N=1,C_in=3,C_out=5,H=4,W=4）比对 PyTorch 结果，再使用完整尺寸对拍，允许 fp32 舍入误差。"
+      }
+    ]
+  }
+}

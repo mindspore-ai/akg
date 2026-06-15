@@ -1,0 +1,155 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_fused",
+        "next_expressions": ["maxpool2d_hardtanh_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入张量 X ∈ R^{N×C_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。输出 Y1 ∈ R^{N×C_out×H_deconv×W_deconv} 定义为：Y1[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid(n,c_i,h_o,w_o,k_h,k_w) · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]。其中 h_i = (h_o + P_h - k_h) / S_h，w_i = (w_o + P_w - k_w) / S_w，只有当 (h_o + P_h - k_h) 能被 S_h 整除、(w_o + P_w - k_w) 能被 S_w 整除且 h_i∈[0,H_in), w_i∈[0,W_in) 时该项有效。对本题，N=128, C_in=32, C_out=64, H_in=W_in=16, K_h=K_w=4, S_h=S_w=2, P_h=P_w=1，因此 H_deconv=W_deconv=(16-1)*2-2*1+4=32。",
+        "boundary_treatment": "仅当由输出位置反推得到的输入索引 (h_i,w_i) 为整数且落在输入合法范围内时参与累加；否则该乘加项视为无贡献。输出边界由 ConvTranspose2d 的 stride=2, padding=1 决定。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "h_o", "range": "[0, H_deconv)", "binding": "static", "value": "32" },
+            { "symbol": "w_o", "range": "[0, W_deconv)", "binding": "static", "value": "32" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 32, 16, 16)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (8192, 256, 16, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*(C_in*H_in*W_in) + c_i*(H_in*W_in) + h_i*W_in + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (32, 64, 4, 4)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (1024, 16, 4, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*(C_out*K_h*K_w) + c_o*(K_h*K_w) + k_h*K_w + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_deconv, W_deconv) = (128, 64, 32, 32)",
+            "stride": "(C_out*H_deconv*W_deconv, H_deconv*W_deconv, W_deconv, 1) = (65536, 1024, 32, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*(C_out*H_deconv*W_deconv) + c_o*(H_deconv*W_deconv) + h_o*W_deconv + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为在 torch.manual_seed(0) 下构造的 nn.ConvTranspose2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1) 的前向结果（eval 模式）。精度模式：本 expression 是单纯的 conv-transpose 累加，未走 tl.dot 时为手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 决定走 tl.dot + fp32 输入，必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止使用默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = C_in × K_h × K_w = 32×4×4 = 512，ε_total ≈ 1.2e-7 × sqrt(512) ≈ 2.7e-6，留 10x 余量得 rtol_base = atol_base = 3e-5；步骤 2（cuDNN 参考修正，关键）参考是 nn.ConvTranspose2d，走 cuDNN，A100 默认开 TF32，参考自身有 ~1e-3 截断误差，rtol = max(3e-5, 1e-3) = 1e-3，atol 同理 = 1e-3；步骤 3（量级修正）不触发，因为没有 sum-after-min/abs 链路。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuDNN TF32。结构性检查：(a) 输出 shape 必须为 (128,64,32,32)，等于 (H_in-1)*S - 2P + K = 32；(b) 重点验证 stride=2 padding=1 下由输出反推得到的 (h_i,w_i) 整数可达性，遍历 h_o ∈ {0, 1, 30, 31} 的边界点单独对拍；(c) 验证 bias 是否被加在通道维。冒烟输入：先用 (2,32,4,4) 跑 atol/rtol 校验，再用 (128,32,16,16) 完整对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 且 shape 正确 → 这是 cuDNN TF32 主导的预期范围，不是 kernel bug，直接放宽 tolerance 即可；(ii) diff ≫ 1e-3 且数值整体不对 → 八成是 weight 解包把 (C_in, C_out) 对调成 (C_out, C_in)；(iii) 仅边界行/列偏差 → 反推索引整除条件或 h_i∈[0,H_in) 判定错；(iv) 某些通道整体偏移恒定值 → bias 索引错位。"
+      },
+      {
+        "name": "maxpool2d_hardtanh_fused",
+        "next_expressions": ["spatial_mean_tanh_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "H_min", "kind": "scalar" },
+          { "name": "H_max", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_deconv×W_deconv}，先进行 2×2、stride=2 的最大池化，再做 Hardtanh 截断。定义池化结果 P ∈ R^{N×C_out×H_pool×W_pool}，其中 P[n,c,h,w] = max { Y1[n,c,h*S_pool+δ_h,w*S_pool+δ_w] | 0≤δ_h<K_pool, 0≤δ_w<K_pool }。随后输出 Y2 ∈ R^{N×C_out×H_pool×W_pool} 为 Y2[n,c,h,w] = min(max(P[n,c,h,w], H_min), H_max)。对本题，K_pool=2, S_pool=2, H_min=-1, H_max=1，且 H_pool=W_pool=16。该 expression 融合了 maxpool 与逐元素 hardtanh。",
+        "boundary_treatment": "池化仅在合法 2×2 窗口上取最大值；本题输入空间大小为 32×32，kernel=2, stride=2，窗口整齐覆盖，无额外残余边界。Hardtanh 为逐元素裁剪，无额外边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "h", "range": "[0, H_pool)", "binding": "static", "value": "16" },
+            { "symbol": "w", "range": "[0, W_pool)", "binding": "static", "value": "16" }
+          ],
+          "reduction": [
+            { "symbol": "δ_h", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δ_w", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_deconv, W_deconv) = (128, 64, 32, 32)",
+            "stride": "(C_out*H_deconv*W_deconv, H_deconv*W_deconv, W_deconv, 1) = (65536, 1024, 32, 1)",
+            "address_mapping": "addr_Y1(n, c, h_in, w_in) = Y1_ptr + n*(C_out*H_deconv*W_deconv) + c*(H_deconv*W_deconv) + h_in*W_deconv + w_in"
+          },
+          "H_min": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.min_val"
+          },
+          "H_max": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.max_val"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.maxpool2d_hardtanh_fused.output",
+            "layout": "(N, C_out, H_pool, W_pool) = (128, 64, 16, 16)",
+            "stride": "(C_out*H_pool*W_pool, H_pool*W_pool, W_pool, 1) = (16384, 256, 16, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*(C_out*H_pool*W_pool) + c*(H_pool*W_pool) + h*W_pool + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.MaxPool2d(kernel_size=2, stride=2) 接 nn.Hardtanh(min_val=-1, max_val=1) 串行作用于上游 Y1 的结果（eval 模式）。精度模式：reduction 类型是 max（纯比较型），不涉及浮点累加误差；Hardtanh 是逐元素 min/max 截断，同样不引入舍入误差。因此 IEEE fp32 语义即可，不使用 tl.dot。容忍值推导分三步：步骤 1（基础公式）纯比较型 reduction 单 op 误差 ε_op = 0，K 不适用，取下限 rtol_base = atol_base = 1e-6；步骤 2（cuDNN 修正）不触发，MaxPool/Hardtanh 都不走 cuDNN/cuBLAS；步骤 3（量级修正）不触发，没有 sum/mean。最终 **rtol = atol = 1e-6**（实质上应当 bitwise 一致），主导因素是步骤 1。结构性检查：(a) 输出 shape 必须为 (128,64,16,16)；(b) 所有输出元素必须满足 H_min ≤ Y2 ≤ H_max（即落在 [-1, 1] 内）；(c) 对每个 (n,c,h,w)，Y2 必须等于上游 Y1 在 2×2 窗口上的最大值经 Hardtanh 截断后的值。冒烟输入：先用 (2,64,4,4) 验证最大值选择和裁剪，再完整跑 (128,64,32,32) 上游 Y1。失败诊断：(i) 部分元素超出 [-1,1] → Hardtanh 未生效或 min/max 顺序写反；(ii) 与 PyTorch 偶发不一致集中在边界元素 → 池化窗口越界，应检查 h*S_pool+δ_h 是否 < H_deconv；(iii) 全部输出与 PyTorch 等差恒定值 → Hardtanh 阈值参数取错。"
+      },
+      {
+        "name": "spatial_mean_tanh_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y3", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C_out×H_pool×W_pool}。先对空间维做全局平均，得到 M ∈ R^{N×C_out×1×1}，其中 M[n,c,0,0] = (1 / (H_pool·W_pool)) · Σ_{h=0}^{H_pool-1} Σ_{w=0}^{W_pool-1} Y2[n,c,h,w]。随后做逐元素 tanh，得到最终输出 Y3 ∈ R^{N×C_out×1×1}：Y3[n,c,0,0] = tanh(M[n,c,0,0])。该 expression 融合了 spatial mean reduction 与 tanh。",
+        "boundary_treatment": "空间均值对完整的 H_pool×W_pool 区域做 reduction，无额外边界问题；tanh 为逐元素映射，无额外边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "h", "range": "[0, H_pool)", "binding": "static", "value": "16", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w", "range": "[0, W_pool)", "binding": "static", "value": "16", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.maxpool2d_hardtanh_fused.output",
+            "layout": "(N, C_out, H_pool, W_pool) = (128, 64, 16, 16)",
+            "stride": "(C_out*H_pool*W_pool, H_pool*W_pool, W_pool, 1) = (16384, 256, 16, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*(C_out*H_pool*W_pool) + c*(H_pool*W_pool) + h*W_pool + w"
+          },
+          "Y3": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, 1, 1) = (128, 64, 1, 1)",
+            "stride": "(C_out, 1, 1, 1) = (64, 1, 1, 1)",
+            "address_mapping": "addr_Y3(n, c, 0, 0) = Y3_ptr + n*C_out + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.mean(Y2, dim=(2,3), keepdim=True) 后接 torch.tanh，eval 模式。精度模式：未使用 tl.dot，手写 FMA + fp32 累加器，天然 IEEE fp32 语义；tanh 调用 libdevice，是逐元素超越函数，约 1 ULP 误差，可忽略。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = H_pool × W_pool = 16×16 = 256，ε_total ≈ 1.2e-7 × sqrt(256) = 1.92e-6，留 10x 余量得 rtol_base = atol_base = 2e-5；步骤 2（cuDNN 修正）不触发，torch.mean/torch.tanh 都不走 cuDNN；步骤 3（量级修正）不触发，因为上游 Y2 已被 Hardtanh 限制在 [-1,1]，mean 之后量级 ≤ 1，符号也不集中。最终 **rtol = atol = 2e-5**，主导因素是步骤 1。结构性检查：(a) keepdim=True 输出 shape 必须为 (128,64,1,1)；(b) 所有 Y3 元素必须落在 (-1, 1)（tanh 单调有界）；(c) 单独验证 torch.mean 中间值与 PyTorch reduction 一致后再叠加 tanh。冒烟输入：(2,64,4,4) 小输入 + 完整 (128,64,16,16)。失败诊断：(i) shape 变成 (128,64) 而非 (128,64,1,1) → keepdim 未保留；(ii) tanh 结果超出 (-1,1) → 累加器顺序或除法位置出错；(iii) 均值数值整体偏大 / 偏小固定倍数 → 除以 H_pool*W_pool 的因子写错（错写成只除一个维度）。"
+      }
+    ]
+  }
+}

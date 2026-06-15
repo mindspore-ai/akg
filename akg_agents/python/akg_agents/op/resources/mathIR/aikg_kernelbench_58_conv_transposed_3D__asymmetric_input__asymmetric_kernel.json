@@ -1,0 +1,217 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "s_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "s_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "s_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "p_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "p_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "p_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "dil_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "dil_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "dil_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "op_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "op_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "op_w",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对于 n ∈ [0,16), j ∈ [0,16), d ∈ [0,18), h ∈ [0,36), w ∈ [0,70)：\n令 num_d = d + p_d - k_d * dil_d, num_h = h + p_h - k_h * dil_h, num_w = w + p_w - k_w * dil_w。若 num_d、num_h、num_w 分别能被 s_d、s_h、s_w 整除，则 in_d = num_d / s_d, in_h = num_h / s_h, in_w = num_w / s_w。\nY[n,j,d,h,w] = ∑_{c=0}^{31} ∑_{k_d=0}^{2} ∑_{k_h=0}^{4} ∑_{k_w=0}^{6} valid(d,h,w,k_d,k_h,k_w) * W[c,j,k_d,k_h,k_w] * X[n, c, in_d, in_h, in_w]\n其中 valid 为：num_d % s_d == 0、num_h % s_h == 0、num_w % s_w == 0，且 0 ≤ in_d < 16, 0 ≤ in_h < 32, 0 ≤ in_w < 64。本例中 s_d=s_h=s_w=1; p_d=p_h=p_w=0; dil_d=dil_h=dil_w=1; op_d=op_h=op_w=0，因此 in_d=d-k_d, in_h=h-k_h, in_w=w-k_w。output_padding 仅影响输出形状尺寸，不改变反推输入坐标公式。",
+        "boundary_treatment": "隐式零填充：对于每个输出位置(d,h,w)和每个卷积核坐标(k_d,k_h,k_w)，按 ConvTranspose 反推输入索引：num_d = d + p_d - k_d*dil_d, num_h = h + p_h - k_h*dil_h, num_w = w + p_w - k_w*dil_w；只有当这些 numerator 可被对应 stride 整除，且 in_d=num_d/s_d、in_h=num_h/s_h、in_w=num_w/s_w 分别落在 [0,16)、[0,32)、[0,64) 内时，对应输入元素才参与乘加；否则该项贡献为0。由于本例 stride=1,dilation=1,padding=0，实际 in_d=d-k_d、in_h=h-k_h、in_w=w-k_w，靠近输出前边界时会出现负索引，靠近后边界时可能超过输入上界，均按 0 贡献处理。输出形状 D_out = (16-1)*1 - 2*0 + 1*(3-1) + 0 + 1 = 18，H_out=36，W_out=70。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 18)",
+              "binding": "static",
+              "value": "18"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 36)",
+              "binding": "static",
+              "value": "36"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 70)",
+              "binding": "static",
+              "value": "70"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, 5)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, 7)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(16, 32, 16, 32, 64)",
+            "stride": "[1048576, 32768, 2048, 64, 1]",
+            "address_mapping": "offset(n,c,d,h,w) = 1048576*n + 32768*c + 2048*d + 64*h + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(32, 16, 3, 5, 7)",
+            "stride": "[1680, 105, 35, 7, 1]",
+            "address_mapping": "offset(c,j,kd,kh,kw) = 1680*c + 105*j + 35*kd + 7*kh + kw",
+            "unpack_hint": "ConvTranspose3d的weight形状为(in_channels, out_channels, Kd, Kh, Kw)，与普通Conv3d的(out_channels, in_channels, Kd, Kh, Kw)顺序相反。公式直接使用 W[c,j,k_d,k_h,k_w] 的原始空间索引；不要额外写成 K-1-k 翻转。"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(16, 16, 18, 36, 70)",
+            "stride": "[725760, 45360, 2520, 70, 1]",
+            "address_mapping": "offset(n,j,d,h,w) = 725760*n + 45360*j + 2520*d + 70*h + w"
+          },
+          "s_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[0]"
+          },
+          "s_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[1]"
+          },
+          "s_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[2]"
+          },
+          "p_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[0]"
+          },
+          "p_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[1]"
+          },
+          "p_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[2]"
+          },
+          "dil_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.dilation[0]"
+          },
+          "dil_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.dilation[1]"
+          },
+          "dil_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.dilation[2]"
+          },
+          "op_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[0]"
+          },
+          "op_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[1]"
+          },
+          "op_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[2]"
+          }
+        },
+        "TDD_requirement": "需要对拍PyTorch eager模式输出（Model.forward()）。数值对比容差 atol=1e-5, rtol=1e-5。重点检查输出形状 (16,16,18,36,70) 的正确性，以及边界位置（如d=0,17; h=0,35; w=0,69）和内部位置数值。建议先使用小shape（如batch=1, in_channels=2, out_channels=2, 输入尺寸和kernel均缩小）进行冒烟测试，再使用完整shape对拍。需验证非对称kernel (3,5,7) 下的索引映射、隐式零填充行为，以及默认stride=1,dilation=1,padding=0时计算正确性。"
+      }
+    ]
+  }
+}

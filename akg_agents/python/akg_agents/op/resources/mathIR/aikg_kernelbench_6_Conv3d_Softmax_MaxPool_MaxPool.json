@@ -1,0 +1,158 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d_fused",
+        "next_expressions": ["softmax_channel"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，3D 卷积权重 W_conv ∈ R^{C_out×C_in×K_d×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。无 padding、stride=1、dilation=1、groups=1。输出 Y1 ∈ R^{N×C_out×D1×H1×W1}: Y1[n,c_o,d_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,d_o+k_d,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_d,k_h,k_w]。本题 N=128, C_in=3, C_out=16, D_in=16, H_in=W_in=32, K_d=K_h=K_w=3, 故 D1=D_in-K_d+1=14, H1=W1=30。",
+        "boundary_treatment": "Conv3d 在 valid 模式下不发生越界（输出尺寸 = 输入尺寸 - K + 1）；bias 加在通道维 c_o；eval 模式无随机性；累加顺序按 (c_i,k_d,k_h,k_w) 任意展开但全部需累计。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d_o", "range": "[0, D1)", "binding": "static", "value": "14" },
+            { "symbol": "h_o", "range": "[0, H1)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W1)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 3, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (49152, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d, h, w) = X_ptr + n*(C_in*D_in*H_in*W_in) + c_i*(D_in*H_in*W_in) + d*(H_in*W_in) + h*W_in + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_d, K_h, K_w) = (16, 3, 3, 3, 3)",
+            "stride": "(C_in*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (81, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_d, k_h, k_w) = W_conv_ptr + c_o*(C_in*K_d*K_h*K_w) + c_i*(K_d*K_h*K_w) + k_d*(K_h*K_w) + k_h*K_w + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_fused.output",
+            "layout": "(N, C_out, D1, H1, W1) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D1*H1*W1, D1*H1*W1, H1*W1, W1, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d, h, w) = Y1_ptr + n*(C_out*D1*H1*W1) + c_o*(D1*H1*W1) + d*(H1*W1) + h*W1 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下构造的 nn.Conv3d(in_channels=3, out_channels=16, kernel_size=3) 前向（eval 模式，self.conv(x)）。精度模式：本 expression 是单纯 Conv3d 累加，未走 tl.dot 时为手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 走 tl.dot + fp32 输入，必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = C_in × K_d × K_h × K_w = 3×3×3×3 = 81，ε_total ≈ 1.2e-7 × sqrt(81) = 1.08e-6，留 10x 余量得 rtol_base = atol_base = 1.1e-5；步骤 2（cuDNN 参考修正，关键）参考是 nn.Conv3d 走 cuDNN，A100 默认开 TF32，参考自身有 ~1e-3 截断，强制 rtol = atol = max(1.1e-5, 1e-3) = 1e-3；步骤 3（量级修正）不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape 必须为 (128,16,14,30,30)，等于 (D_in-K+1, H_in-K+1, W_in-K+1)；(b) weight 解包顺序为 (C_out=16, C_in=3, K_d=3, K_h=3, K_w=3)；(c) bias 加在通道维。冒烟输入：先 (2,3,4,6,6) 验证 → 完整 (128,3,16,32,32) 对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 且 shape 正确 → 这是 cuDNN TF32 主导的预期范围，不是 bug；(ii) diff ≫ 1e-3 → weight (C_out,C_in) 解包顺序或 D/H/W 索引计算错；(iii) 某些通道整体偏移恒定值 → bias 索引错位；(iv) 边界平面偏差 → d_o+k_d / h_o+k_h / w_o+k_w 越界检查。"
+      },
+      {
+        "name": "softmax_channel",
+        "next_expressions": ["maxpool3d_two_stage_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×D1×H1×W1}，沿 dim=1（通道维）做数值稳定 softmax：对每个固定 (n,d,h,w)，先取最大值 M[n,d,h,w] = max_{c=0}^{C_out-1} Y1[n,c,d,h,w]；再 S[n,d,h,w] = Σ_{c=0}^{C_out-1} exp(Y1[n,c,d,h,w] - M[n,d,h,w])；最后 Y2[n,c,d,h,w] = exp(Y1[n,c,d,h,w] - M[n,d,h,w]) / S[n,d,h,w]。本题 N=128, C_out=16, D1=14, H1=W1=30。Y2 与 Y1 同形。",
+        "boundary_treatment": "softmax 沿 channel 维 reduction，对每个 (n,d,h,w) 独立做最大值减法和 exp 求和；输出元素严格落在 (0,1)，每个 (n,d,h,w) 切片上 Σ_c Y2 = 1；eval 模式无随机性；不存在空 reduction（C_out=16>0）。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "d", "range": "[0, D1)", "binding": "static", "value": "14" },
+            { "symbol": "h", "range": "[0, H1)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W1)", "binding": "static", "value": "30" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" }
+          ],
+          "reduction": [
+            { "symbol": "c_r", "range": "[0, C_out)", "binding": "static", "value": "16", "reduction_type": "softmax", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_fused.output",
+            "layout": "(N, C_out, D1, H1, W1) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D1*H1*W1, D1*H1*W1, H1*W1, W1, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*(C_out*D1*H1*W1) + c*(D1*H1*W1) + d*(H1*W1) + h*W1 + w"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_channel.output",
+            "layout": "(N, C_out, D1, H1, W1) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D1*H1*W1, D1*H1*W1, H1*W1, W1, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*(C_out*D1*H1*W1) + c*(D1*H1*W1) + d*(H1*W1) + h*W1 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.softmax(Y1, dim=1)（eval 模式），上游 Y1 来自 Conv3d。精度模式：softmax 内部 exp/除法都是逐元素超越函数，必须使用 fp32 累加器做 max 和 sum reduction（accumulator_precision='fp32'）；不走 tl.dot。容忍值推导三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32），K = C_out = 16（softmax 内部 sum 的 trip count），ε_total ≈ 1.2e-7 × sqrt(16) = 4.8e-7，加上 exp 的 ~1 ULP 误差，留 10x 余量得 rtol_base = atol_base ≈ 5e-6；步骤 2（cuDNN 修正）不触发，torch.softmax 不走 cuDNN；步骤 3（量级修正）输出在 (0,1)，分母 S 可能很小但 PyTorch 与 kernel 都做数值稳定（减 max），不放大；最终 **rtol = atol = 1e-5**（保留 2x 安全裕度），主导因素是步骤 1 加 exp 超越函数 ULP。结构性检查：(a) 输出 shape 与输入完全一致 (128,16,14,30,30)；(b) 每个 (n,d,h,w) 上 Σ_c Y2 必须等于 1（误差 < 1e-5）；(c) 所有元素严格在 (0,1) 内；(d) 减 max 步骤不可省略，否则 exp 上溢。冒烟输入：先 (2,16,2,4,4) 验证逐切片 softmax 求和=1，再完整尺寸对拍。失败诊断：(i) 行和偏离 1（如 ≈0.999/1.001）→ exp 的 ULP 误差，正常；(ii) 行和严重偏离或 NaN → max 减法漏掉导致 exp 上溢，或 reduction 维写错；(iii) 全部输出 = 1/C_out 均匀分布 → 减 max 后未减得 Y1 原值，公式写成 exp(0)；(iv) 仅个别位置异常 → 索引计算或 (n,d,h,w) 切片范围错。"
+      },
+      {
+        "name": "maxpool3d_two_stage_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "K_pool", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C_out×D1×H1×W1}。第一阶段 3D 最大池化（kernel_size=K_pool=2, stride=K_pool=2, no padding）: P[n,c,d',h',w'] = max{Y2[n,c,d'*2+δd1, h'*2+δh1, w'*2+δw1] | 0≤δd1<2, 0≤δh1<2, 0≤δw1<2}，得 P ∈ R^{N×C_out×D2×H2×W2}，其中 D2=⌊D1/2⌋=7, H2=W2=⌊30/2⌋=15。第二阶段相同的 MaxPool3d(2): Y[n,c,d'',h'',w''] = max{P[n,c,d''*2+δd2, h''*2+δh2, w''*2+δw2] | 0≤δd2<2, 0≤δh2<2, 0≤δw2<2}，得 Y ∈ R^{N×C_out×D3×H3×W3}，其中 D3=⌊D2/2⌋=3, H3=W3=⌊H2/2⌋=7。等价于在 Y2 上以 (4,4,4) 窗口、stride=(4,4,4) 取 max，但因为 D1=14 不是 4 的倍数（floor 截断），第一阶段截掉 d=14 这条不存在的范围；以 H1=W1=30 同理，第二阶段 floor(15/2)=7 时 h'=14 不存在，等价于每条空间维只取前 28 个像素分 7 块。本题 N=128, C_out=16。",
+        "boundary_treatment": "两阶段 MaxPool3d 均使用 floor 输出尺寸（PyTorch 默认 ceil_mode=False），不补 padding，越界采样不发生。等价合并窗口（4,4,4）+ stride=(4,4,4) 仅在 D1,H1,W1 都是 4 的倍数时与两阶段恒等；这里 D1=14, H1=W1=30 都不是 4 的倍数，必须严格按两阶段 floor 划分，不可直接合成一阶段。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d3", "range": "[0, D3)", "binding": "static", "value": "3" },
+            { "symbol": "h3", "range": "[0, H3)", "binding": "static", "value": "7" },
+            { "symbol": "w3", "range": "[0, W3)", "binding": "static", "value": "7" }
+          ],
+          "reduction": [
+            { "symbol": "δd1", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δh1", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δw1", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δd2", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δh2", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δw2", "range": "[0, K_pool)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_channel.output",
+            "layout": "(N, C_out, D1, H1, W1) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D1*H1*W1, D1*H1*W1, H1*W1, W1, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*(C_out*D1*H1*W1) + c*(D1*H1*W1) + d*(H1*W1) + h*W1 + w"
+          },
+          "K_pool": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.pool1.kernel_size (亦等于 self.pool2.kernel_size) = 2"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D3, H3, W3) = (128, 16, 3, 7, 7)",
+            "stride": "(C_out*D3*H3*W3, D3*H3*W3, H3*W3, W3, 1) = (2352, 147, 49, 7, 1)",
+            "address_mapping": "addr_Y(n, c, d3, h3, w3) = Y_ptr + n*(C_out*D3*H3*W3) + c*(D3*H3*W3) + d3*(H3*W3) + h3*W3 + w3"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.MaxPool3d(2) 串联 nn.MaxPool3d(2)（eval 模式），即 self.pool2(self.pool1(Y2))。精度模式：reduction 类型纯比较型 (max)，不涉及浮点累加误差；逐元素无超越函数。IEEE fp32 语义，不使用 tl.dot。容忍值推导三步：步骤 1（基础公式）纯比较型 reduction ε_op = 0，K 不适用，取下限 rtol_base = atol_base = 1e-6；步骤 2（cuDNN 修正）不触发，MaxPool3d 走自身内核（即便 cuDNN 版本，max 比较仍是 bitwise）；步骤 3（量级修正）不触发。最终 **rtol = atol = 1e-6**（实质上 bitwise 一致），主导因素是步骤 1。结构性检查：(a) 输出 shape 必须为 (128,16,3,7,7)；(b) 任意 Y[n,c,d3,h3,w3] 必须等于 Y2 在 (d3*4:d3*4+4, h3*4:h3*4+4, w3*4:w3*4+4) 窗口的最大值，前提是该窗口在两阶段 floor 划分内合法（注意 D1=14, H1=W1=30 不是 4 的倍数，两阶段不可合成一阶段，必须严格分两步）；(c) Softmax 上游使 Y2 ∈ (0,1)，因此 Y 必然 ∈ (0,1)；(d) 不可使用 ceil_mode。冒烟输入：(2,16,4,6,6)（避开 14/30 非整除）→ 完整 (128,16,14,30,30) 对拍。失败诊断：(i) diff = 0 在中间但边界 d=14 对应输出位错 → 把两阶段合并 (4,4,4) stride=(4,4,4) 处理，未按两阶段 floor 截断；(ii) 全错 → 池化窗口偏移或 stride 计算错；(iii) 输出超 (0,1) → max 比较被替换成 sum；(iv) shape 错 → ceil_mode 误开。"
+      }
+    ]
+  }
+}

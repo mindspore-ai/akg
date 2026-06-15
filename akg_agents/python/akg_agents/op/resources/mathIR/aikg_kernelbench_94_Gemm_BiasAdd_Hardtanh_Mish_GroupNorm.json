@@ -1,0 +1,142 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_biasadd_hardtanh_mish_fused",
+        "next_expressions": ["groupnorm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" },
+          { "name": "min_val", "kind": "scalar" },
+          { "name": "max_val", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y_mish", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}，其中 N=128, I=512。权重 W_gemm ∈ R^{O×I} (O=1024)，偏置 B_gemm, B_extra ∈ R^{O}。设 total_bias = B_gemm + B_extra。先计算线性映射 Z1 ∈ R^{N×O}: Z1[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o] + B_extra[o]。然后做 Hardtanh 激活：Z2[n,o] = clamp(Z1[n,o]; min_val=-1, max_val=1) = max(min(Z1[n,o], 1), -1)。最后做 Mish 激活：Y_mish[n,o] = Z2[n,o] · tanh( log(1 + exp(Z2[n,o])) )。该 expression 融合了 GEMM、双偏置加法、Hardtanh 与 Mish。",
+        "boundary_treatment": "全连接及逐元素激活，无空间边界处理；Hardtanh 在 [-1,1] 截断，Mish 定义域为全体实数，均无越界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "512", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n * 512 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o * 512 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_extra(o) = B_extra_ptr + o"
+          },
+          "min_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.min_val (默认 -1.0)"
+          },
+          "max_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.hardtanh.max_val (默认 1.0)"
+          },
+          "Y_mish": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_biasadd_hardtanh_mish_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y_mish(n, o) = Y_mish_ptr + n * 1024 + o"
+          }
+        },
+        "TDD_requirement": "用小尺寸（如 batch=2, in=4, out=8）验证 GEMM+双偏置；再单独对拍 Hardtanh、Mish 数值；最后与整个融合块的 PyTorch 等价计算对比，检查输出 shape=(128,1024) 以及边界值、饱和区（±1 附近）的正确性。"
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y_mish", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "num_groups", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y_final", "kind": "tensor" }
+        ],
+        "formula": "输入 Y_mish ∈ R^{N×C}，其中 N=128, C=1024。GroupNorm 参数：num_groups=G=32，每组通道数 C_g = C/G = 32；可学习参数 gamma ∈ R^{C}，beta ∈ R^{C}；稳定项 eps = 1e-5。\n对每个样本 n∈[0,N-1] 和组 g∈[0,G-1]，定义组内索引集合 I_g = {g·C_g, …, (g+1)·C_g-1}。计算组内均值：μ_{n,g} = (1/C_g) · Σ_{c∈I_g} Y_mish[n,c]；组内方差（有偏）：σ²_{n,g} = (1/C_g) · Σ_{c∈I_g} (Y_mish[n,c] - μ_{n,g})²。\n最终输出 Y_final ∈ R^{N×C}：对任意 c∈I_g，Y_final[n,c] = gamma[c] · (Y_mish[n,c] - μ_{n,g}) / √(σ²_{n,g} + ε) + beta[c]。",
+        "boundary_treatment": "该算子在组内做规约与归一化，无空间边界处理；num_groups=32 整除 C=1024，分组完整无残余。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "k", "range": "[0, C_g)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y_mish": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_biasadd_hardtanh_mish_fused.output",
+            "layout": "(N, C) = (128, 1024)",
+            "stride": "(C, 1) = (1024, 1)",
+            "address_mapping": "addr_Y_mish(n, c) = Y_mish_ptr + n * 1024 + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.groupnorm.weight",
+            "layout": "(C) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.groupnorm.bias",
+            "layout": "(C) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "num_groups": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.groupnorm.num_groups (get_init_inputs 提供 32)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.groupnorm.eps (默认 1e-5)"
+          },
+          "Y_final": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C) = (128, 1024)",
+            "stride": "(C, 1) = (1024, 1)",
+            "address_mapping": "addr_Y_final(n, c) = Y_final_ptr + n * 1024 + c"
+          }
+        },
+        "TDD_requirement": "验证 GroupNorm 在 eval 模式下使用当前输入的统计量（非 running stats）；检查输出 shape=(128,1024)；用小批量手工计算单组均值/方差与 PyTorch nn.GroupNorm 对拍；确认 eps=1e-5 添加在 sqrt 之前；检查 affine 是否生效。"
+      }
+    ]
+  }
+}

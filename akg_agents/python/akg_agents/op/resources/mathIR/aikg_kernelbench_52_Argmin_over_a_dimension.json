@@ -1,0 +1,68 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "argmin_dim1",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{B×D1×D2}，其中 B=128, D1=4096, D2=4095，get_init_inputs() 返回 dim=1。输出 Y ∈ ℤ^{B×D2}，dtype 为 torch.int64，定义为：Y[b,j] = argmin_{i∈[0,D1)} X[b,i,j]。即对每个 batch b 和最后一维索引 j，在维度 1 上找到最小值第一次出现的索引 i，并删除 dim=1，输出 shape 为 (128,4095)。",
+        "boundary_treatment": "argmin 遍历完整 i ∈ [0,4096) 归约域，不涉及 padding 或空间越界。若同一 (b,j) 下有多个相等最小值，返回最小 i。实现按列分块时必须用全局列索引 j_global = block_start + local_j 参与 load/store，tail 列用 mask 处理；无效 lane 使用 +inf。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 4095)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "argmin",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(B, D1, D2) = (128, 4096, 4095)",
+            "stride": "(D1*D2, D2, 1) = (16773120, 4095, 1)",
+            "address_mapping": "addr_X(b, i, j) = X_ptr + b*16773120 + i*4095 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, D2) = (128, 4095), dtype=torch.int64",
+            "stride": "(D2, 1) = (4095, 1)",
+            "address_mapping": "addr_Y(b, j) = Y_ptr + b*4095 + j"
+          }
+        },
+        "lowering_contract": "This is a large strided-column argmin over D1=4096. Map programs over (batch b, output-column block j), accumulate best value and best i for each global j, and store int64 indices. Use +inf for invalid min lanes, maintain first-index tie break, and do not return min values. If using tl.argmin on chunks, combine chunk-local minima with global indices explicitly.",
+        "TDD_requirement": "使用小尺寸输入（如 B=2, D1=4, D2=3）与 torch.argmin(x, dim=1) 对拍，验证输出形状为 (2,3) 且数值一致；在真实静态 shape (128,4096,4095) 上验证输出 shape 为 (128,4095)、dtype 为 int64；测试包含重复最小值的情况，确保返回第一个出现的索引；测试边界情况如 D1=1 时输出全0。"
+      }
+    ]
+  }
+}

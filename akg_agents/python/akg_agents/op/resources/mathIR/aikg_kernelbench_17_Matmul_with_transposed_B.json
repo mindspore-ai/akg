@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_with_transposed_B",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i, j] = Σ_{k=0}^{K-1} A[i, k] * B[j, k],  for i ∈ [0, M), j ∈ [0, N), where M=2048, K=8192, N=4096.",
+        "boundary_treatment": "无边界处理，要求 A.shape[1] == B.shape[1] (即 K 维度相等)。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "2048"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "8192",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(N, K)",
+            "stride": "(8192, 1)",
+            "address_mapping": "j * 8192 + k"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(4096, 1)",
+            "address_mapping": "i * 4096 + j"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "2048"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "8192"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "4096"
+          }
+        },
+        "TDD_requirement": "需要对拍 PyTorch 的 torch.matmul(A, B.T) 结果。重点检查输出形状 (M,N) 为 (2048,4096)，累加维度 K 为 8192，以及 fp32 累加精度。建议先用小 shape (M=2, K=3, N=4) 冒烟测试，再用完整输入对拍，容忍误差 1e-5。"
+      }
+    ]
+  }
+}

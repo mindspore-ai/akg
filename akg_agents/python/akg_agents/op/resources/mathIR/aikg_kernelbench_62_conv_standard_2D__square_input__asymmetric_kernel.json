@@ -1,0 +1,106 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "O",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "O[n, oc, oh, ow] = sum_{ic=0}^{C_in-1} sum_{kh=0}^{kH-1} sum_{kw=0}^{kW-1} X[n, ic, oh+kh, ow+kw] * W[oc, ic, kh, kw], for n in [0, N), oc in [0, C_out), oh in [0, H_out), ow in [0, W_out), where N=8, C_in=32, H=512, W=512, C_out=64, kH=5, kW=9, H_out=508, W_out=504.",
+        "boundary_treatment": "Valid convolution without padding. Output spatial dimensions: H_out = H - kH + 1 = 508, W_out = W - kW + 1 = 504. Accesses to input X are within bounds because loop indices oh and ow are constrained such that oh+kh < H and ow+kw < W.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "oh",
+              "range": "[0, 508)",
+              "binding": "static",
+              "value": "508"
+            },
+            {
+              "symbol": "ow",
+              "range": "[0, 504)",
+              "binding": "static",
+              "value": "504"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 5)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 9)",
+              "binding": "static",
+              "value": "9",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W)",
+            "stride": "(8388608, 262144, 512, 1)",
+            "address_mapping": "8388608*n + 262144*c_in + 512*h + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C_out, C_in, kH, kW)",
+            "stride": "(1440, 45, 9, 1)",
+            "address_mapping": "1440*c_out + 45*c_in + 9*kh + kw"
+          },
+          "O": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "(16386048, 256032, 504, 1)",
+            "address_mapping": "16386048*n + 256032*c_out + 504*h_out + w_out"
+          }
+        },
+        "TDD_requirement": "数值对拍：使用PyTorch eager结果作为参考。重点检查输出形状(8,64,508,504)是否正确，边界处理无padding是否导致正确裁剪。建议先用小形状如(batch=1, inch=2, outch=3, H=7, W=9, kH=3, kW=3)做冒烟测试，再用完整输入对拍。注意检查输入的连续布局，确保索引计算正确。"
+      }
+    ]
+  }
+}

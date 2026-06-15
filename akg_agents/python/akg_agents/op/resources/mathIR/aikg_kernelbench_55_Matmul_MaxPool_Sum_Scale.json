@@ -1,0 +1,103 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_maxpool_fused",
+        "next_expressions": ["row_sum_scale_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "P", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, N=128, I=10。Linear 权重 W_gemm ∈ R^{O×I} (O=5), 偏置 B_gemm ∈ R^{O}。先 GEMM: Z[n,o] = Σ_{i=0}^{I-1} X[n,i]·W_gemm[o,i] + B_gemm[o]，得 Z ∈ R^{N×O}。然后通过 unsqueeze(1) 视为 (N,1,O)，再 MaxPool1d(kernel_size=2, stride=2 默认) 作用在最后一维：对每个 n 输出 ⌊O/K_p⌋ = ⌊5/2⌋ = 2 个最大值；P_raw[n,0,j] = max(Z[n,2j], Z[n,2j+1])，j∈[0,2)。squeeze(1) 后得 P ∈ R^{N×O_p}, O_p=2。该 expression 融合 GEMM 和 MaxPool1d (含 unsqueeze/squeeze)。",
+        "boundary_treatment": "MaxPool1d kernel=2 stride=2 默认，输入 O=5 不能被 2 整除：(5-2)/2 + 1 = 2 个完整窗口，残余 1 个元素 (Z[n,4]) 被丢弃 (PyTorch 默认 ceil_mode=False)。unsqueeze(1)/squeeze(1) 是 view 操作不引入新元素。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "j", "range": "[0, O_p)", "binding": "static", "value": "2" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "δ", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (5, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*10 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (5)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "P": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_maxpool_fused.output",
+            "layout": "(N, O_p) = (128, 2)",
+            "stride": "(O_p, 1) = (2, 1)",
+            "address_mapping": "addr_P(n, j) = P_ptr + n*2 + j"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(10,5) → unsqueeze(1) → nn.MaxPool1d(2) → squeeze(1)，eval 模式。精度模式：含 GEMM 阶段，tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'；MaxPool 是纯比较，不引入舍入误差。容忍值三步：步骤 1 ε_op=1.2e-7, K=I=10 (GEMM 主导, max 不贡献误差), ε_total≈1.2e-7·sqrt(10)≈3.8e-7, rtol_base=atol_base=3.8e-6；步骤 2（cuBLAS 修正）参考 nn.Linear 走 cuBLAS+TF32, rtol=atol=max(3.8e-6, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,2)，验证 ⌊5/2⌋=2 (向下取整, 丢 1 个元素)；(b) MaxPool1d kernel=2 stride=2 默认；(c) bias 在 o 维。失败诊断：(i) diff 1e-4~1e-3 → cuBLAS TF32 正常；(ii) shape=(128,3) → ceil_mode=True；(iii) shape=(128,1,2) → squeeze 未执行。"
+      },
+      {
+        "name": "row_sum_scale_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "P", "kind": "tensor" },
+          { "name": "S_scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 P ∈ R^{N×O_p}, N=128, O_p=2。沿 dim=1 求和: T[n] = Σ_{j=0}^{O_p-1} P[n,j]，得 T ∈ R^{N}。再乘 scale_factor: Y[n] = T[n] · S_scale, S_scale=0.5。该 expression 融合 sum reduction 与逐元素 scaling。",
+        "boundary_treatment": "sum reduction 覆盖完整 [0,O_p)；torch.sum(dim=1) 不保留维度；scaling 是纯逐元素。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "j", "range": "[0, O_p)", "binding": "static", "value": "2", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "P": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_maxpool_fused.output",
+            "layout": "(N, O_p) = (128, 2)",
+            "stride": "(O_p, 1) = (2, 1)",
+            "address_mapping": "addr_P(n, j) = P_ptr + n*2 + j"
+          },
+          "S_scale": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scale_factor (= 0.5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_Y(n) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.sum(P, dim=1) * 0.5，eval 模式。精度模式：手写 FMA + fp32 累加；天然 IEEE fp32。容忍值三步：步骤 1 ε_op=1.2e-7, K=O_p=2, ε_total≈1.7e-7, rtol_base=atol_base=1.7e-6；步骤 2 不触发；步骤 3 不触发。最终 **rtol = atol = 1e-6**。结构性检查：(a) shape=(128,)；(b) torch.sum 不保留维度；(c) scale=0.5。失败诊断：(i) shape=(128,1) → keepdim 误开；(ii) 整体偏 2 倍 → scale 写成 1.0 或忘乘。"
+      }
+    ]
+  }
+}

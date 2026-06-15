@@ -1,0 +1,108 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["channel_softmax_sigmoid_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}, N=16, C_in=32, D_in=16, H_in=W_in=32。ConvTranspose3d 权重 W_deconv ∈ R^{C_in×C_out×K×K×K} (C_out=64, K=3), 偏置 B_deconv ∈ R^{C_out}, stride=S=2, padding=P=1, output_padding=OP=1, dilation=1。输出 D_o=(D_in-1)*S - 2P + K + OP = 32, 同理 H_o=W_o=64。Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i,k_d,k_h,k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w], 其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当三者均能被 S 整除且分别落在 [0,D_in)×[0,H_in)×[0,W_in) 时有效。",
+        "boundary_treatment": "仅当反推输入索引为整数且落在合法范围内时累加；output_padding=1 使输出空间额外加 1 行/列/层；bias 加在通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "d_o", "range": "[0, D_o)", "binding": "static", "value": "32" },
+            { "symbol": "h_o", "range": "[0, H_o)", "binding": "static", "value": "64" },
+            { "symbol": "w_o", "range": "[0, W_o)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 32, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (524288, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n,c_i,d_i,h_i,w_i) = X_ptr + n*524288 + c_i*16384 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K, K, K) = (32, 64, 3, 3, 3)",
+            "stride": "(C_out*K*K*K, K*K*K, K*K, K, 1) = (1728, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i,c_o,k_d,k_h,k_w) = W_deconv_ptr + c_i*1728 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose3d 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_o, H_o, W_o) = (16, 64, 32, 64, 64)",
+            "stride": "(C_out*D_o*H_o*W_o, D_o*H_o*W_o, H_o*W_o, W_o, 1) = (8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n,c_o,d_o,h_o,w_o) = Y1_ptr + n*8388608 + c_o*131072 + d_o*4096 + h_o*64 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(32,64,3,stride=2,padding=1,output_padding=1) 前向，eval 模式。精度模式：含 conv-transpose 阶段，tl.dot+fp32 时声明 input_precision='ieee' 或 'tf32x3'。容忍值三步：步骤 1 ε_op=1.2e-7, K=C_in·K^3=32·27=864，ε_total≈1.2e-7·sqrt(864)≈3.5e-6，rtol_base=atol_base=3.5e-5；步骤 2（cuDNN 修正）参考 nn.ConvTranspose3d 走 cuDNN+TF32，rtol=atol=max(3.5e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(16,64,32,64,64)，验证 D_o=(D_in-1)*S-2P+K+OP=32, H_o=W_o=64；(b) weight 解包顺序 (C_in,C_out,K,K,K)；(c) bias 在 c_o 维。失败诊断：(i) 数值整体不对 → 八成是 weight 解包把 (C_in,C_out) 对调；(ii) 边界层异常 → 反推索引整除/范围错；(iii) diff 1e-4~1e-3 → cuDNN TF32 正常。"
+      },
+      {
+        "name": "channel_softmax_sigmoid_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设 Y1 ∈ R^{N×C_out×D_o×H_o×W_o}, N=16, C_out=64, D_o=32, H_o=W_o=64。先沿 channel 维 (dim=1) 做数值稳定 Softmax：对每个 (n,d,h,w)，m[n,d,h,w] = max_{c=0..C_out-1} Y1[n,c,d,h,w]；Z[n,c,d,h,w] = exp(Y1[n,c,d,h,w] - m[n,d,h,w]); s[n,d,h,w] = Σ_{c} Z[n,c,d,h,w]; P[n,c,d,h,w] = Z[n,c,d,h,w] / s[n,d,h,w]。然后做 sigmoid: Y[n,c,d,h,w] = 1/(1+exp(-P[n,c,d,h,w]))。该 expression 融合 channel-wise softmax 与逐元素 sigmoid。",
+        "boundary_treatment": "Softmax 沿完整 [0,C_out) 通道做 reduction，需先减最大值数值稳定；sigmoid 逐元素无边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "d", "range": "[0, D_o)", "binding": "static", "value": "32" },
+            { "symbol": "h", "range": "[0, H_o)", "binding": "static", "value": "64" },
+            { "symbol": "w", "range": "[0, W_o)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_r", "range": "[0, C_out)", "binding": "static", "value": "64", "reduction_type": "softmax", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_o, H_o, W_o) = (16, 64, 32, 64, 64)",
+            "stride": "(8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n,c,d,h,w) = Y1_ptr + n*8388608 + c*131072 + d*4096 + h*64 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_o, H_o, W_o) = (16, 64, 32, 64, 64)",
+            "stride": "(8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y(n,c,d,h,w) = Y_ptr + n*8388608 + c*131072 + d*4096 + h*64 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.Softmax(dim=1)(Y1) 后接 torch.sigmoid，eval 模式。精度模式：softmax 包含 max-reduce + exp + sum-reduce + div，逐元素 sigmoid 含 exp；天然 IEEE fp32。容忍值三步：步骤 1 ε_op=1.2e-7, K=C_out=64, ε_total≈1.2e-7·sqrt(64)=9.6e-7，rtol_base=atol_base=9.6e-6；步骤 2 不触发，softmax/sigmoid 不走 cuDNN GEMM；步骤 3（量级修正）softmax 输出 ∈(0,1) 总和=1, sigmoid 输出 ∈(0.5, 0.732)（输入 ∈(0,1)），量级 ≤1，不触发。最终 **rtol = atol = 1e-5**，主导因素是步骤 1。结构性检查：(a) shape 与 Y1 一致；(b) Σ_c P[n,c,d,h,w] = 1 (softmax 行和)；(c) Y ∈ (sigmoid(0), sigmoid(1)) ≈ (0.5, 0.731)；(d) 数值稳定 (先减 max)。失败诊断：(i) softmax 行和 ≠ 1 → reduction 错；(ii) Y NaN → 未减 max；(iii) Y ∈ (0,0.5) → softmax 后忘加 sigmoid 或 sigmoid 输入符号反。"
+      }
+    ]
+  }
+}

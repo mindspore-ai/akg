@@ -1,0 +1,70 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_subtract_multiply_relu_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_lin", "kind": "tensor" },
+          { "name": "B_lin", "kind": "tensor" },
+          { "name": "sub_val", "kind": "scalar" },
+          { "name": "mul_val", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×F_in}，nn.Linear 权重 W_lin ∈ R^{F_out×F_in}，偏置 B_lin ∈ R^{F_out}。融合 matmul + bias + 减 + 乘 + ReLU 为单 expression（matmul+epilogue 是天然融合模式）。前向定义：Z[n,f_o] = B_lin[f_o] + Σ_{f_i=0}^{F_in-1} X[n,f_i] · W_lin[f_o,f_i]；E[n,f_o] = (Z[n,f_o] - sub_val) · mul_val；Y[n,f_o] = max(E[n,f_o], 0)。其中 sub_val=2.0, mul_val=1.5。本题 N=128, F_in=10, F_out=5。Y ∈ R^{N×F_out}。",
+        "boundary_treatment": "纯 matmul + 逐元素 epilogue，无越界、无 padding；ReLU 对负值截 0；eval 模式无随机性；线性层 weight 布局为 (F_out, F_in)（PyTorch nn.Linear 内部存储顺序）。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "f_o", "range": "[0, F_out)", "binding": "static", "value": "5" }
+          ],
+          "reduction": [
+            { "symbol": "f_i", "range": "[0, F_in)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, F_in) = (128, 10)",
+            "stride": "(F_in, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, f_i) = X_ptr + n*F_in + f_i"
+          },
+          "W_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(F_out, F_in) = (5, 10)",
+            "stride": "(F_in, 1) = (10, 1)",
+            "address_mapping": "addr_W_lin(f_o, f_i) = W_lin_ptr + f_o*F_in + f_i"
+          },
+          "B_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(F_out) = (5)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_lin(f_o) = B_lin_ptr + f_o"
+          },
+          "sub_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.subtract_value = 2.0"
+          },
+          "mul_val": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.multiply_value = 1.5"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, F_out) = (128, 5)",
+            "stride": "(F_out, 1) = (5, 1)",
+            "address_mapping": "addr_Y(n, f_o) = Y_ptr + n*F_out + f_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(10, 5) 的前向 self.linear(x)，再 (· - 2.0) * 1.5，最后 torch.relu（eval 模式）。精度模式：matmul 可能走 tl.dot 或手写 FMA：若手写 FMA + fp32 累加器，天然 IEEE fp32；若走 tl.dot + fp32 输入，必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32（K=10 极小，TF32 误差被放大相对显著）。容忍值三步：步骤 1（基础公式）ε_op=1.2e-7（fp32 FMA），K=F_in=10，ε_total ≈ 1.2e-7 × sqrt(10) ≈ 3.8e-7，留 10x 余量得 rtol_base=atol_base ≈ 4e-6；步骤 2（cuBLAS 参考修正，关键）参考是 nn.Linear，调用 torch.matmul 在小尺寸下可能走 cuBLAS（也可能走 ATen 内核），A100 默认 TF32 开启，参考自身有 ~1e-3 截断误差，强制 rtol=atol=max(4e-6, 1e-3) = 1e-3；步骤 3（量级修正）不触发，ReLU 截断不放大量级。最终 **rtol=atol=1e-3**，主导因素步骤 2 cuBLAS TF32（尽管 K=10 小，仍按 nn.Linear/matmul 规则强制 1e-3）。结构性检查：(a) 输出 shape (128,5)；(b) weight 顺序 (F_out=5, F_in=10)，不可对调；(c) bias 沿 F_out 维加；(d) 验证 (z - 2.0) * 1.5 顺序而非 (z*1.5 - 2.0)（数学不等价）；(e) 输出元素必非负（ReLU）。冒烟：(2,10) 小输入手算 W·x+b → 减 2 → 乘 1.5 → max(.,0) → 完整 (128,10) 对拍。失败诊断：(i) 误差 ≈ 1e-4~1e-3 → cuBLAS TF32 主导，预期；(ii) 误差 ≫ 1e-3 且整体不对 → weight (F_out,F_in) 解包顺序对调；(iii) 输出整体偏移恒定 → bias 错位或 sub_val/mul_val 数值取错；(iv) 输出含负值 → ReLU 漏掉；(v) 整体放大 1.5x 后不减 2 → 顺序 (Z-sub)*mul 与 Z*mul-sub*mul 实际等价，但要保证 sub_val 是先做减法的 sub_val 而不是 sub_val·mul_val。"
+      }
+    ]
+  }
+}

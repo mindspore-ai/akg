@@ -1,0 +1,182 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "qk_scale_softmax",
+        "next_expressions": [
+          "value_weighted_sum"
+        ],
+        "consumes": [
+          {
+            "name": "Q",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "attn_weights",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "attn_weights[b,h,i,j] = softmax_j( (1/sqrt(D)) * sum_{k=0}^{D-1} Q[b,h,i,k] * K[b,h,j,k] ), where D=1024, softmax_j denotes softmax over the j dimension",
+        "boundary_treatment": "softmax along j dimension with no mask (is_causal=False, attn_mask=None). D > 0, S >= 1. Standard softmax: subtract max for numerical stability before exp and normalize.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, B)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, S)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "1024",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, S)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "softmax",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Q": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.Q",
+            "layout": "(B, H, S, D)",
+            "stride": "(H*S*D, S*D, D, 1)",
+            "address_mapping": "b*H*S*D + h*S*D + i*D + k"
+          },
+          "K": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.K",
+            "layout": "(B, H, S, D)",
+            "stride": "(H*S*D, S*D, D, 1)",
+            "address_mapping": "b*H*S*D + h*S*D + j*D + k"
+          },
+          "attn_weights": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.qk_scale_softmax.output",
+            "layout": "(B, H, S, S)",
+            "stride": "(H*S*S, S*S, S, 1)",
+            "address_mapping": "b*H*S*S + h*S*S + i*S + j"
+          },
+          "D": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "embedding_dimension, i.e., Q.shape[-1], which equals 1024 in the given inputs"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch eager 中 torch.matmul(Q, K.transpose(-2, -1)) * (1/sqrt(D)) 后再接 softmax 作为参考实现对拍。验证形状 (B, H, S, S) 及数值。重点检查 S=512 时 softmax 数值稳定性。建议小形状 (1,1,3,4) 和完整形状 (32,32,512,1024) 对拍，容忍误差 1e-5 (fp32)。"
+      },
+      {
+        "name": "value_weighted_sum",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "attn_weights",
+            "kind": "tensor"
+          },
+          {
+            "name": "V",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "out",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "out[b,h,i,k] = sum_{j=0}^{S-1} attn_weights[b,h,i,j] * V[b,h,j,k]",
+        "boundary_treatment": "sum over j dimension from 0 to S-1, no masking. S >= 1.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, B)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, S)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "1024"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "j",
+              "range": "[0, S)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "attn_weights": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.qk_scale_softmax.output",
+            "layout": "(B, H, S, S)",
+            "stride": "(H*S*S, S*S, S, 1)",
+            "address_mapping": "b*H*S*S + h*S*S + i*S + j"
+          },
+          "V": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.V",
+            "layout": "(B, H, S, D)",
+            "stride": "(H*S*D, S*D, D, 1)",
+            "address_mapping": "b*H*S*D + h*S*D + j*D + k"
+          },
+          "out": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, H, S, D)",
+            "stride": "(H*S*D, S*D, D, 1)",
+            "address_mapping": "b*H*S*D + h*S*D + i*D + k"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch eager 中 torch.matmul(attn_weights, V) 作为参考实现对拍。验证输出形状 (B, H, S, D) 及数值。建议小形状和完整形状对拍，容忍误差 1e-5 (fp32)。"
+      }
+    ]
+  }
+}

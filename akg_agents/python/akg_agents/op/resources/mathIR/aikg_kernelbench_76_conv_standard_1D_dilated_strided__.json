@@ -1,0 +1,116 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "stride",
+            "kind": "scalar"
+          },
+          {
+            "name": "dilation",
+            "kind": "scalar"
+          },
+          {
+            "name": "kernel_size",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[b, oc, l_out] = sum_{ic=0}^{C_in-1} sum_{k=0}^{K-1} X[b, ic, l_out * S + k * D] * W[oc, ic, k], where S=stride=3, D=dilation=4, K=kernel_size=3, C_in=64, L=524280, L_out=floor((L - D*(K-1) - 1)/S + 1)=174758, for b in [0,63], oc in [0,127], l_out in [0,174757].",
+        "boundary_treatment": "No padding is used. The output length L_out is computed such that the maximum input index accessed, (L_out-1)*S + (K-1)*D = 174757*3 + 2*4 = 524279, is within the input range [0, 524279]. Hence no out-of-bound access occurs, and no implicit padding or clamping is needed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "l_out",
+              "range": "[0, 174758)",
+              "binding": "static",
+              "value": "174758"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(B, C_in, L)",
+            "stride": "(33553920, 524280, 1)",
+            "address_mapping": "b * 33553920 + ic * 524280 + l"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d.weight",
+            "layout": "(C_out, C_in, K)",
+            "stride": "(192, 3, 1)",
+            "address_mapping": "oc * 192 + ic * 3 + k"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, C_out, L_out)",
+            "stride": "(22369024, 174758, 1)",
+            "address_mapping": "b * 22369024 + oc * 174758 + l_out"
+          },
+          "stride": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d.stride"
+          },
+          "dilation": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d.dilation"
+          },
+          "kernel_size": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d.kernel_size"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch nn.Conv1d 在 eval 模式下结果数值对拍。重点检查：输出形状 (64,128,174758)、stride=3/dilation=4 下的空间索引计算、无 padding 边界正确性、float32 累加精度。建议小形状冒烟（例如 batch=2, in_ch=4, out_ch=6, length=20, kernel=3, stride=2, dilation=2）验证索引逻辑，再用给定完整形状对拍，容忍差异在 1e-5 以内。"
+      }
+    ]
+  }
+}

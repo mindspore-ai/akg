@@ -1,0 +1,181 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": ["groupnorm_tanh_hardswish_residual_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y_conv", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，Conv2d 权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}，偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。输出 Y_conv ∈ R^{N×C_out×H_out×W_out}: Y_conv[n,c_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K_h=K_w=3, H_out=W_out=30。",
+        "boundary_treatment": "stride=1 padding=0，输出尺寸 H_out=H_in-K_h+1=30, W_out=W_in-K_w+1=30；输入索引 (h_o+k_h, w_o+k_w) 必落在合法范围内，无 mask；bias 加在通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h, w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y_conv": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y_conv(n, c_o, h_o, w_o) = Y_conv_ptr + n*14400 + c_o*900 + h_o*30 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv2d(3, 16, kernel_size=3) 的前向，eval 模式。精度模式：手写 FMA + fp32 累加器，IEEE fp32；若 tl.dot + fp32 输入必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in*K_h*K_w=3*3*3=27，ε_total ≈ 1.2e-7*sqrt(27)=6.2e-7，10x 余量后 rtol_base=atol_base=1e-5；步骤 2（cuDNN 修正，关键）参考 nn.Conv2d 走 cuDNN，A100 默认 TF32，rtol=atol=max(1e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) weight layout (C_out, C_in, K_h, K_w)；(c) bias 加在通道维。注意：因为 Y_conv 既作为 GroupNorm 输入，也参与后续 residual add，需要保留供下游使用。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuDNN TF32 主导，不是 bug；(ii) shape 错 → 检查 padding/stride。"
+      },
+      {
+        "name": "groupnorm_tanh_hardswish_residual_fused",
+        "next_expressions": ["logsumexp_channel"],
+        "consumes": [
+          { "name": "Y_conv", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "num_groups", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" },
+          { "name": "C3", "kind": "scalar" },
+          { "name": "C6", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y_res", "kind": "tensor" }
+        ],
+        "formula": "输入 Y_conv ∈ R^{N×C_out×H_out×W_out}，GroupNorm 参数：num_groups=G=8，每组通道数 C_g=C_out/G=2；可学习参数 gamma ∈ R^{C_out}, beta ∈ R^{C_out}；稳定项 eps=1e-5。先做 GroupNorm：对每个 (n,g) 在通道子集 I_g={g*C_g,...,(g+1)*C_g-1} 与空间维 H_out×W_out 上联合规约，得 μ_{n,g} = (1/(C_g*H_out*W_out)) Σ_{c∈I_g} Σ_{h,w} Y_conv[n,c,h,w]，σ²_{n,g} = (1/(C_g*H_out*W_out)) Σ_{c∈I_g} Σ_{h,w} (Y_conv[n,c,h,w] - μ_{n,g})²。GN[n,c,h,w] = gamma[c] · (Y_conv[n,c,h,w] - μ_{n,g(c)}) / sqrt(σ²_{n,g(c)} + eps) + beta[c]，其中 g(c) = ⌊c/C_g⌋。然后 Tanh: T = tanh(GN)。然后 HardSwish: HS[n,c,h,w] = T[n,c,h,w] · max(0, min(6, T[n,c,h,w]+C3)) / C6，其中 C3=3, C6=6。最后 residual add: Y_res[n,c,h,w] = Y_conv[n,c,h,w] + HS[n,c,h,w]。本题 N=128, C_out=16, G=8, C_g=2, H_out=W_out=30。",
+        "boundary_treatment": "GroupNorm 组内规约维度 = C_g*H_out*W_out = 2*30*30=1800；num_groups=8 整除 C_out=16，分组无残余；Tanh ∈ (-1,1)；HardSwish 中 clamp 限定 T+3 ∈ [0,6]，由于 T ∈ (-1,1)，T+3 ∈ (2,4) 实际不会触发 clamp 边界；residual add 是逐元素与上游 Y_conv 相加；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "k_c", "range": "[0, C_g)", "binding": "static", "value": "2", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, H_out)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, W_out)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y_conv": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y_conv(n, c, h, w) = Y_conv_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "num_groups": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.group_norm.num_groups (= 8)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "C3": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 3.0 (HardSwish offset)"
+          },
+          "C6": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 6.0 (HardSwish divisor / relu6 上界)"
+          },
+          "Y_res": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm_tanh_hardswish_residual_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y_res(n, c, h, w) = Y_res_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 x_conv 经 nn.GroupNorm(8, 16, eps=1e-5) → nn.Tanh() → nn.Hardswish() → 加上 x_conv，eval 模式。精度模式：未走 tl.dot，GroupNorm 的均值/方差用 fp32 累加器；Tanh/HardSwish 逐元素，tanh ~1 ULP libdevice 误差，HardSwish 是分段线性。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_g*H_out*W_out=2*30*30=1800，ε_total ≈ 1.2e-7*sqrt(1800)=5.1e-6，10x 余量后 rtol_base=atol_base=5e-5；步骤 2（cuDNN 修正）GroupNorm 不走 cuDNN/cuBLAS（PyTorch 内置 fused norm），不触发；步骤 3（量级修正）不触发，残差量级与 Y_conv 同量级。但因为本 pipeline 的输入 Y_conv 来自上游 cuDNN Conv2d（已有 ~1e-3 误差），最终 rtol=atol=max(5e-5, 1e-3)=1e-3。主导因素是上游 cuDNN TF32 累积。结构性检查：(a) 输出 shape=(128,16,30,30)；(b) GroupNorm 对每个 (n,g) 在 C_g*H*W 上做 reduction；(c) Tanh 后 ∈ (-1,1)；(d) HardSwish 实现 x·relu6(x+3)/6；(e) residual 加的是 Y_conv 不是 GroupNorm 输入。失败诊断：(i) 总误差与 Y_conv 同量级 → 上游 cuDNN 主导，不是 bug；(ii) 部分通道偏移 → gamma/beta 索引错；(iii) GroupNorm 输出方差 != 1 → 组归一化维度选错。"
+      },
+      {
+        "name": "logsumexp_channel",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y_res", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y_res ∈ R^{N×C_out×H_out×W_out}，沿 channel 维 (dim=1) 做 logsumexp 且 keepdim=True。数值稳定形式：M[n,h,w] = max_{c} Y_res[n,c,h,w]，Y[n,0,h,w] = M[n,h,w] + log(Σ_{c=0}^{C_out-1} exp(Y_res[n,c,h,w] - M[n,h,w]))。输出 Y ∈ R^{N×1×H_out×W_out}，本题 N=128, C_out=16, H_out=W_out=30。",
+        "boundary_treatment": "数值稳定的两阶段 reduction（先 max，后 sumexp）；keepdim=True 保留 channel 维为 1。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y_res": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm_tanh_hardswish_residual_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y_res(n, c, h, w) = Y_res_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1, H_out, W_out) = (128, 1, 30, 30)",
+            "stride": "(H_out*W_out, H_out*W_out, W_out, 1) = (900, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, 0, h, w) = Y_ptr + n*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.logsumexp(Y_res, dim=1, keepdim=True)，eval 模式。精度模式：未走 tl.dot，使用 max-减法稳定累加，IEEE fp32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_out=16，ε_total ≈ 1.2e-7*sqrt(16)=4.8e-7，10x 余量后 rtol_base=atol_base=5e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）logsumexp 输出 ≈ max + log(C_out) 量级 O(1)~O(10)，不触发严重放大。但上游 Y_res 已含 cuDNN ~1e-3 噪声，最终 rtol=atol=max(5e-6, 1e-3)=1e-3。主导因素是上游 cuDNN 累积误差。结构性检查：(a) 输出 shape=(128,1,30,30)，keepdim=True；(b) 验证 Y ≥ max(Y_res, dim=1)；(c) 验证 Y ≤ max(Y_res, dim=1) + log(C_out)；(d) 必须使用 max-减法稳定累加。失败诊断：(i) shape=(128,30,30) → keepdim 未保留；(ii) NaN/Inf → 未做 max 减法；(iii) Y < max 或 > max+log(C_out) → reduction 维度选错。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "hardsigmoid",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[i, j] = clamp((x[i, j] + 3) / 6, 0, 1)",
+        "boundary_treatment": "对于每个元素 (i,j)，先计算 x[i,j]+3，除以 6，然后通过 clamp 限制在 [0,1]：若 x[i,j]+3 < 0 则输出 0；若 x[i,j]+3 > 6 则输出 1；其余输出 (x[i,j]+3)/6。无 padding、无 stride 等复杂边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch 的 torch.nn.functional.hardsigmoid 作为参考实现进行数值对拍；重点检查 shape 一致性、dtype fp32、边界值（x << -3, x >> 3）以及线性区间的计算精度；建议先使用小 shape（如 (2,3)）冒烟，再用完整输入 (4096, 393216) 对拍；容忍误差可设 atol=1e-5。"
+      }
+    ]
+  }
+}

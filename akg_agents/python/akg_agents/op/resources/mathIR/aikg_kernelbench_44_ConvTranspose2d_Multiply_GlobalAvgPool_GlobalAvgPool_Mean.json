@@ -1,0 +1,109 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_fused",
+        "next_expressions": ["multiply_global_avg_pool_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×C_in×H_in×W_in}, N=128, C_in=3, H_in=W_in=32。ConvTranspose2d 权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}, C_out=16, K_h=K_w=3；偏置 B_deconv ∈ R^{C_out}；stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 H_out=W_out=(H_in-1)*S-2P+K+OP=31*2-2+3+1=64。Y1 ∈ R^{N×C_out×H_out×W_out}=(128,16,64,64): Y1[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当二者均能被 S 整除且 h_i,w_i ∈[0,H_in)×[0,W_in) 时项有效。",
+        "boundary_treatment": "ConvTranspose2d 仅在反推索引为整数且落在合法范围内时累加；output_padding=1 使输出空间加 1 行 1 列；bias 加在 C_out 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "64" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n,c_i,h_i,w_i) = X_ptr + n*3072 + c_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (3, 16, 3, 3)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (144, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i,c_o,k_h,k_w) = W_deconv_ptr + c_i*144 + c_o*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose2d 权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 64, 64)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (65536, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n,c_o,h_o,w_o) = Y1_ptr + n*65536 + c_o*4096 + h_o*64 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考为 torch.manual_seed(0) 下 nn.ConvTranspose2d(3,16,3,stride=2,padding=1,output_padding=1) eval。精度模式：含 ConvTranspose（cuDNN）；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in·K_h·K_w=27，ε_total≈1.2e-7·sqrt(27)≈6.2e-7，留 10x 余量得 rtol_base=atol_base=7e-6。步骤 2（cuDNN 修正，关键）nn.ConvTranspose2d → cuDNN+TF32，强制 rtol=atol=max(7e-6,1e-3)=1e-3。步骤 3 不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,16,64,64)，H_out=(32-1)*2-2+3+1=64；(b) weight 解包 (C_in,C_out,K_h,K_w)；(c) bias 加在 C_out 维。失败诊断：(i) diff 1e-4~1e-3 + cuDNN → 预期范围；(ii) 输出尺寸 63 → output_padding 漏；(iii) 主体数值错 → weight 前两维对调。"
+      },
+      {
+        "name": "multiply_global_avg_pool_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "M_mul", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 Y1 ∈ R^{N×C_out×H_out×W_out}=(128,16,64,64)，乘数 M_mul=0.5。先乘以 multiplier：Z[n,c,h,w]=Y1[n,c,h,w]·M_mul。再做空间全局平均 (第 1 次 mean dim=[2,3] keepdim=True)：M1[n,c,0,0]=(1/(H_out·W_out))·Σ_{h,w} Z[n,c,h,w]。再做一次空间均值 (第 2 次 mean dim=[2,3] keepdim=True)，由于 M1 空间维已经是 1×1，等价于恒等：Y[n,c,0,0]=M1[n,c,0,0]。融合三步为单一空间均值 (Y1 标量乘 0.5 + 空间均值)：Y[n,c,0,0]=M_mul·(1/(H_out·W_out))·Σ_{h=0}^{H_out-1} Σ_{w=0}^{W_out-1} Y1[n,c,h,w]。输出 Y ∈ R^{N×C_out×1×1}=(128,16,1,1)。",
+        "boundary_treatment": "完整 H_out×W_out=64×64 空间均值，无边界残余；第二次 mean 在 1×1 空间维上是恒等映射（数学上 mean of singleton = itself）；scalar 乘法对所有元素一致。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" }
+          ],
+          "reduction": [
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "64", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "64", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 64, 64)",
+            "stride": "(65536, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n,c,h,w) = Y1_ptr + n*65536 + c*4096 + h*64 + w"
+          },
+          "M_mul": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.multiplier (Python float 0.5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, 1, 1) = (128, 16, 1, 1)",
+            "stride": "(C_out, 1, 1, 1) = (16, 1, 1, 1)",
+            "address_mapping": "addr_Y(n,c,0,0) = Y_ptr + n*16 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考为 Y1*0.5 → torch.mean(.,dim=[2,3],keepdim=True) → torch.mean(.,dim=[2,3],keepdim=True)（第二次是 noop）。精度模式：纯 reduction + scalar 乘，fp32 FMA + fp32 累加器，IEEE 语义。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=H_out·W_out=4096，ε_total≈1.2e-7·sqrt(4096)=7.7e-6，留 10x 余量得 rtol_base=atol_base=8e-5。步骤 2 不触发。步骤 3 不触发（mean 后量级 ~O(1)）。最终 **rtol=atol=1e-4**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,16,1,1)（两次 keepdim 后仍为 (.,.,1,1)）；(b) 除数 1/(64·64)=1/4096；(c) 验证乘 0.5 后整体减半。失败诊断：(i) shape (128,16) → keepdim 丢失；(ii) 整体放大 2 倍 → multiplier 写为 2.0；(iii) 偏小固定倍数 → 除数错误（如只除了一个空间维）。"
+      }
+    ]
+  }
+}

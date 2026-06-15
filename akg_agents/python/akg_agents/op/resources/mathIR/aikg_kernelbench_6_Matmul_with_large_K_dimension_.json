@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i, j] = sum_{k=0}^{K-1} A[i, k] * B[k, j] for i in [0, M), j in [0, N)",
+        "boundary_treatment": "No boundary conditions; standard dense matrix multiplication.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "256"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "524288",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "i * K + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "k * N + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "i * N + j"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "M = 256"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "K = 524288"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "N = 256"
+          }
+        },
+        "TDD_requirement": "需要对矩阵乘法结果进行数值对拍，参考实现为PyTorch eager的torch.matmul。重点检查M=256, N=256, K=524288的边界、累加精度(fp32)。建议使用较小的M,N,K（如M=2,N=3,K=4）进行冒烟测试，再用完整尺寸进行对拍。容忍值建议：1e-5相对误差。"
+      }
+    ]
+  }
+}

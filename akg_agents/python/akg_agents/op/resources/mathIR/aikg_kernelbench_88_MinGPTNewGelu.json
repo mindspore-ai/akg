@@ -1,0 +1,82 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gelu_tanh_approx",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "alpha",
+            "kind": "scalar"
+          },
+          {
+            "name": "beta",
+            "kind": "scalar"
+          },
+          {
+            "name": "gamma",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[i][j] = alpha * x[i][j] * (1 + tanh(beta * (x[i][j] + gamma * x[i][j]^3))), where alpha=0.5, beta=√(2/π), gamma=0.044715",
+        "boundary_treatment": "No boundary conditions; pure element-wise operation.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "8192"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "8192"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + j"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(8192, 1)",
+            "address_mapping": "i * 8192 + j"
+          },
+          "alpha": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "beta": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 √(2/π) ≈ 0.79788456"
+          },
+          "gamma": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.044715"
+          }
+        },
+        "TDD_requirement": "对拍参考：PyTorch 的 torch.nn.GELU(approximate='tanh') 或直接实现上述公式。重点检查 shape (8192, 8192) 下每个元素数值误差不超过 1e-6。建议先用小 shape (3, 4) 冒烟测试，然后用完整 (8192, 8192) 输入进行对拍。"
+      }
+    ]
+  }
+}

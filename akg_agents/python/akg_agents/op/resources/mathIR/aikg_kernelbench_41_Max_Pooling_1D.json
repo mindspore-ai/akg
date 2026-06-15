@@ -1,0 +1,121 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "maxpool1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Let X be input tensor of shape (N, C, L) with N=64, C=192, L=65536. Let K=8 (kernel_size), S=1 (stride), P=4 (padding), D=3 (dilation). Define padded tensor X_pad of shape (N, C, L+2P) such that X_pad[n,c,i] = X[n,c,i-P] if P ≤ i < L+P else -∞. Then for n ∈ [0,N), c ∈ [0,C), o ∈ [0,L_out) where L_out = floor((L + 2P - D*(K-1) - 1)/S + 1) = 65523, the output Y is computed as: Y[n,c,o] = max_{k=0}^{K-1} X_pad[n,c, o*S + k*D].",
+        "boundary_treatment": "Padding: P=4 padded by -∞ on both sides along L dimension. For indices i < P or i ≥ L+P in X_pad, value is -∞, so max ignores those positions. Output length L_out computed by floor((L + 2P - D*(K-1) - 1)/S + 1). Stride S=1, dilation D=3. No explicit masking needed; the -∞ padding handles out-of-bound window elements.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "192"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, L_out)",
+              "binding": "static",
+              "value": "65523"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "8",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, L)",
+            "stride": "(C*L, L, 1)",
+            "address_mapping": "addr = n * (C*L) + c * L + l"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, L_out)",
+            "stride": "(C*L_out, L_out, 1)",
+            "address_mapping": "addr = n * (C*L_out) + c * L_out + o"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.dilation"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 64 (batch_size)"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 192 (num_features)"
+          },
+          "L": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 65536 (sequence_length)"
+          },
+          "L_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "计算输出长度 65523"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch 的 torch.nn.MaxPool1d 作为参考实现，参数相同（kernel_size=8, stride=1, padding=4, dilation=3），对相同随机输入进行推理，对比输出数值和形状。重点检查：输出形状 64×192×65523 是否正确；边界位置的最大值（padding 为 -∞）是否与参考一致；dilation=3 时的索引计算是否无误。建议用小 shape（如 batch=2, channel=3, L=16）冒烟测试，再用完整 (64,192,65536) 对拍，max 操作容忍误差为 0。"
+      }
+    ]
+  }
+}

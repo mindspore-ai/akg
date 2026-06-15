@@ -1,0 +1,81 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "hinge_loss",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "P",
+            "kind": "tensor"
+          },
+          {
+            "name": "T",
+            "kind": "tensor"
+          },
+          {
+            "name": "margin",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "L",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "L = mean_{i=0}^{32767} mean_{j=0}^{32767} max(0, margin - P_{i,j} * T_j), where margin=1.",
+        "boundary_treatment": "No boundary issues; element-wise operations and full reduction over all elements without padding or masking.",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "P": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          },
+          "T": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(32768,)",
+            "stride": "(1,)",
+            "address_mapping": "j"
+          },
+          "margin": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1.0"
+          },
+          "L": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "0"
+          }
+        },
+        "TDD_requirement": "需要对拍参考实现 torch.mean(torch.clamp(1 - predictions * targets, min=0))。重点检查：广播语义（predictions (32768,32768) 与 targets (32768,) 广播），clamp 边界 (min=0)，reduction 为均值（是否除以 N*M）。建议先用小 shape 如 predictions (2,3) 和 targets (3,) 冒烟，再用完整 (32768,32768) 对拍。由于 fp32 累加大量元素，容忍值建议 atol=1e-3, rtol=1e-3，或根据对拍结果调整。"
+      }
+    ]
+  }
+}

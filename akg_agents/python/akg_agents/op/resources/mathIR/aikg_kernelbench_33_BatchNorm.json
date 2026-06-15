@@ -1,0 +1,138 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "batchnorm2d_training_forward",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "The reference module is nn.BatchNorm2d(num_features=64) and is never switched to eval(), so PyTorch uses training-mode batch statistics for the forward output. Let X have shape (N,C,H,W)=(64,64,512,512), gamma=weight with shape (64), beta=bias with shape (64), and eps=1e-5. For each channel c, M=N*H*W=64*512*512. mean[c] = (1/M) * sum_{rn=0}^{63} sum_{rh=0}^{511} sum_{rw=0}^{511} X[rn,c,rh,rw]. var[c] = (1/M) * sum_{rn=0}^{63} sum_{rh=0}^{511} sum_{rw=0}^{511} (X[rn,c,rh,rw] - mean[c])^2. PyTorch BatchNorm2d training forward normalizes with the biased variance above. For every output element: Y[n,c,h,w] = gamma[c] * (X[n,c,h,w] - mean[c]) / sqrt(var[c] + eps) + beta[c]. With default initialization gamma[c]=1 and beta[c]=0, but implementations should still bind the affine parameters correctly.",
+        "boundary_treatment": "No spatial padding or boundary extension is used. The reduction domain for each channel is exactly all elements over N,H,W. eps is added inside sqrt to avoid division by zero. running_mean and running_var are buffers updated by PyTorch during training, but they are not the statistics used to compute this forward output. Do not call eval() and do not implement inference-mode BatchNorm for this task.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "rn",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "rh",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "rw",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W) = (64, 64, 512, 512)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "addr_X(n,c,h,w) = X_ptr + n*16777216 + c*262144 + h*512 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(C) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(C) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps = 1e-5"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W) = (64, 64, 512, 512)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "addr_Y(n,c,h,w) = Y_ptr + n*16777216 + c*262144 + h*512 + w"
+          },
+          "running_mean": {
+            "binding_kind": "ignored_buffer_for_forward_value",
+            "code_binding": "self.bn.running_mean",
+            "layout": "(C) = (64)",
+            "note": "Updated by PyTorch training BatchNorm but not used to compute the forward output."
+          },
+          "running_var": {
+            "binding_kind": "ignored_buffer_for_forward_value",
+            "code_binding": "self.bn.running_var",
+            "layout": "(C) = (64)",
+            "note": "Updated by PyTorch training BatchNorm but not used to compute the forward output."
+          }
+        },
+        "lowering_contract": "Implement training-mode BatchNorm2d. A correct Triton lowering needs at least a per-channel reduction over N*H*W for mean and variance, then an elementwise affine normalization pass. Do not use running_mean/running_var for output. Do not set the module to eval().",
+        "TDD_requirement": "Compare against torch.nn.BatchNorm2d(num_features=64) in its default training mode on input shape (64,64,512,512). Check that output shape equals input shape and that each channel has been normalized using current-batch statistics over N,H,W. A small-shape smoke test should include N>1 and H*W>1 to catch accidental inference-mode implementations."
+      }
+    ]
+  }
+}

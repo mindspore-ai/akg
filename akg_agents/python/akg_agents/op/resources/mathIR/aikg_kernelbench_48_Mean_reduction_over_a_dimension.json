@@ -1,0 +1,75 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "mean_reduction",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, m] = (1 / 4096) * sum_{d=0}^{4095} X[n, d, m]",
+        "boundary_treatment": "Reduction along dimension 1 (dim=1). Input shape (128, 4096, 4095). No padding. If reduction dimension size is 0, output is NaN.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "m",
+              "range": "[0, 4095)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "d",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(128, 4096, 4095)",
+            "stride": "(16773120, 4095, 1)",
+            "address_mapping": "n * 16773120 + d * 4095 + m"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(128, 4095)",
+            "stride": "(4095, 1)",
+            "address_mapping": "n * 4095 + m"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "对拍 PyTorch eager 模式下的 torch.mean(x, dim=1)。重点检查输出形状 (128, 4095)、归约轴 dim=1 是否正确，累积和除法精度。建议用形状 (2,3,4) 冒烟，再用完整形状 (128,4096,4095) 对拍，fp32 容忍值 1e-5。"
+      }
+    ]
+  }
+}

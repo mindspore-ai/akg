@@ -1,0 +1,99 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "depthwise_conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{N×C×H_in×W_in}，其中 N=32, C=128, H_in=128, W_in=256。真实任务的 Model.__init__ 虽接收 out_channels 和 groups 参数，但实际构造为 nn.Conv2d(in_channels, in_channels, (3,7), stride=(1,1), padding=(0,0), dilation=(1,1), groups=in_channels, bias=False)，因此 out_channels=C=128 且 groups=C。权重 W ∈ ℝ^{C×1×K_h×K_w}，shape 为 (128,1,3,7)。输出 Y ∈ ℝ^{32×128×126×250}，其中 H_out=floor((128-1*(3-1)-1)/1+1)=126，W_out=floor((256-1*(7-1)-1)/1+1)=250。Depthwise 语义为：Y[n,c,ho,wo] = sum_{kh=0}^{2} sum_{kw=0}^{6} X[n,c,ho+kh,wo+kw] * W[c,0,kh,kw]。每个输出通道 c 只依赖同一个输入通道 c，不跨通道求和。",
+        "boundary_treatment": "padding=0、stride=1、dilation=1，输出范围已保证 ho+kh ∈ [0,127] 且 wo+kw ∈ [0,255]。实现仍应对 tail output tile 做 mask，避免越界 store；若使用通用模板处理边界，X load mask 为 0<=hi<128 且 0<=wi<256。不要把 depthwise 权重当作 dense Conv2d 的 (C_out,C_in,Kh,Kw) 或 ConvTranspose 权重布局。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0, 126)",
+              "binding": "static",
+              "value": "126"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0, 250)",
+              "binding": "static",
+              "value": "250"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, 7)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H_in, W_in) = (32, 128, 128, 256)",
+            "stride": "(C*H_in*W_in, H_in*W_in, W_in, 1) = (4194304, 32768, 256, 1)",
+            "address_mapping": "addr_X(n,c,hi,wi) = X_ptr + n*4194304 + c*32768 + hi*256 + wi"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C, 1, K_h, K_w) = (128, 1, 3, 7)",
+            "stride": "(1*K_h*K_w, K_h*K_w, K_w, 1) = (21, 21, 7, 1)",
+            "address_mapping": "addr_W(c, 0, kh, kw) = W_ptr + c*21 + kh*7 + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H_out, W_out) = (32, 128, 126, 250)",
+            "stride": "(C*H_out*W_out, H_out*W_out, W_out, 1) = (4032000, 31500, 250, 1)",
+            "address_mapping": "addr_Y(n,c,ho,wo) = Y_ptr + n*4032000 + c*31500 + ho*250 + wo"
+          }
+        },
+        "lowering_contract": "This is depthwise Conv2d, not dense Conv2d. Do not use a dense K=C*Kh*Kw contraction over all input channels for each output channel. Lower by mapping output elements over (n,c,ho,wo) and reducing only Kh*Kw=21 values for the same c, or tile multiple spatial positions for the same channel. Weight layout is (C,1,Kh,Kw); output channels equal input channels. Because C=128 and spatial output is large, use output tiling and masks; avoid illegal memory access by bounding n,c,ho,wo and any generic hi/wi loads.",
+        "TDD_requirement": "用小尺寸对比，如 N=1, C=2, H_in=4, W_in=8, kernel=(3,3) 手动计算输出；验证真实输出 shape 为 (32,128,126,250)；与 PyTorch nn.Conv2d(in_channels, in_channels, (3,7), groups=in_channels, bias=False) 对比数值，确认每个通道只使用本通道输入和 W[c,0,:,:]。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_global_avg_pool_fused",
+        "next_expressions": ["biasadd_logsumexp_sum_mul_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×C_in×H_in×W_in}, N=128, C_in=3, H_in=W_in=32。ConvTranspose2d 权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}，stride=S=1, padding=P=0, output_padding=OP=0, dilation=1, groups=1, C_out=16, K_h=K_w=3。中间 deconv 输出空间尺寸 H_d=W_d=(H_in-1)*S - 2P + K + OP = 31 - 0 + 3 + 0 = 34。该 expression 融合 ConvTranspose2d 与对空间维 (H,W) 的全局平均池化。完整 deconv 输出 Z[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid(n,c_i,h_o,w_o,k_h,k_w) · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，h_i=(h_o+P-k_h)/S=h_o-k_h, w_i=w_o-k_w（S=1, P=0 时无整除条件，只需 h_i,w_i∈[0,H_in)×[0,W_in)）。GlobalAvgPool: Y1[n,c_o,0,0] = (1/(H_d·W_d))·Σ_{h_o=0}^{H_d-1} Σ_{w_o=0}^{W_d-1} Z[n,c_o,h_o,w_o]，keepdim=True 输出 Y1 ∈ R^{N×C_out×1×1}=(128,16,1,1)。",
+        "boundary_treatment": "ConvTranspose2d 在 S=1, P=0 时无整除越界，但 h_i=h_o-k_h ∈[0,H_in), w_i=w_o-k_w ∈[0,W_in) 仍需检查（即 h_o≥k_h 且 h_o-k_h<H_in），构成有效贡献集合；空间平均覆盖全部 H_d×W_d 区域无残余。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" }
+          ],
+          "reduction": [
+            { "symbol": "h_o", "range": "[0, H_d)", "binding": "static", "value": "34", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w_o", "range": "[0, W_d)", "binding": "static", "value": "34", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*3072 + c_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (3, 16, 3, 3)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (144, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*144 + c_o*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose2d 权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_global_avg_pool_fused.output",
+            "layout": "(N, C_out, 1, 1) = (128, 16, 1, 1)",
+            "stride": "(C_out, 1, 1, 1) = (16, 1, 1, 1)",
+            "address_mapping": "addr_Y1(n, c_o, 0, 0) = Y1_ptr + n*16 + c_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose2d(3,16,3) 默认 stride=1, padding=0, output_padding=0，eval 模式；接 torch.mean(.,dim=(2,3),keepdim=True)。精度模式：含 ConvTranspose（cuDNN），fp32 FMA + fp32 累加器；若走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in·K_h·K_w·H_d·W_d=3·3·3·34·34=31212，ε_total≈1.2e-7·sqrt(31212)≈2.1e-5，留 10x 余量得 rtol_base=atol_base=2.1e-4。步骤 2（cuDNN 修正）参考含 nn.ConvTranspose2d → cuDNN，强制 rtol=atol=max(2.1e-4,1e-3)=1e-3。步骤 3（量级修正）global avg pool 后量级 ~O(1)，不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,16,1,1)；(b) Deconv 输出尺寸 H_d=(H_in-1)*S-2P+K+OP=34；(c) weight 解包 (C_in,C_out,K_h,K_w) 顺序；(d) 除数 1/(H_d·W_d)=1/1156 正确。失败诊断：(i) diff 1e-4~1e-3 + 参考 cuDNN → 预期范围，不是 bug；(ii) 输出整体放大/缩小固定倍数 → 除数错；(iii) 通道间偏移恒定 → bias 索引错；(iv) 主体数值差异大 → weight 前两维对调。"
+      },
+      {
+        "name": "biasadd_logsumexp_sum_mul_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" },
+          { "name": "M_scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 Y1 ∈ R^{N×C_out×1×1}=(128,16,1,1)，可学习 bias B_extra ∈ R^{C_out×1×1}=(16,1,1)。先 bias 加：U[n,c,0,0]=Y1[n,c,0,0]+B_extra[c,0,0]，得 U ∈ R^{N×C_out×1×1}。再沿 channel 维 (dim=1) 做 LogSumExp 并 keepdim: L[n,0,0,0]=max_c U[n,c,0,0] + log(Σ_{c=0}^{C_out-1} exp(U[n,c,0,0] - max_c U[n,c,0,0]))（数值稳定形式：必须先减最大值再 exp 再 log）。再沿 (dim=2, dim=3) 求和（在 1×1 空间上等于自身）：S[n,0]=L[n,0,0,0]（注意 torch.sum 不 keepdim 后 dim=(2,3) 被压扁，shape 变 (128,1)）。最后乘以 M_scale=10.0：Y[n,0]=S[n,0]·M_scale，输出 Y ∈ R^{N×1}=(128,1)。",
+        "boundary_treatment": "LogSumExp 必须先减最大值保证 exp 不溢出；空间维 H=W=1 时 sum(dim=(2,3)) 等价恒等，但 shape 仍要从 (128,1,1,1) 压成 (128,1)；channel reduction 覆盖完整 [0,C_out)。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_global_avg_pool_fused.output",
+            "layout": "(N, C_out, 1, 1) = (128, 16, 1, 1)",
+            "stride": "(C_out, 1, 1, 1) = (16, 1, 1, 1)",
+            "address_mapping": "addr_Y1(n, c, 0, 0) = Y1_ptr + n*16 + c"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_extra(c, 0, 0) = B_extra_ptr + c"
+          },
+          "M_scale": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 10.0"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 (Y1 + self.bias) 后 torch.logsumexp(.,dim=1,keepdim=True) 后 torch.sum(.,dim=(2,3)) 后 *10。精度模式：纯 reduction + 逐元素，fp32 FMA + fp32 累加器，IEEE 语义；LogSumExp 必须先减最大值（即先对 c 维求 max，再 exp(U-max)，再 log，再加回 max）。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_out=16，ε_total≈1.2e-7·sqrt(16)=4.8e-7，留 10x 余量得 rtol_base=atol_base=5e-6。步骤 2（cuDNN 修正）不触发。步骤 3（量级修正）LogSumExp 含 exp，量级可能略放大；但 C_out=16 小，且做了 max-subtract 稳定化，不显著触发。最终 **rtol=atol=1e-5**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,1)；(b) 必须 max-subtract 稳定化 logsumexp，否则可能 inf；(c) bias 广播 (16,1,1) -> (128,16,1,1) 仅复制 N 维；(d) 乘以 10 不影响 shape。失败诊断：(i) 出现 inf/NaN → 没减最大值；(ii) 输出整体偏移 → bias 索引错；(iii) 数值放大 16 倍 → 把 logsumexp 写成了 sum(exp())+log 但中间没规范化；(iv) shape (128,1,1,1) → torch.sum(dim=(2,3)) 后没正确去掉两维。"
+      }
+    ]
+  }
+}

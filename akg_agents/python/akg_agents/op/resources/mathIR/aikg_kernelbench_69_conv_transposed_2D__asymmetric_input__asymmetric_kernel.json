@@ -1,0 +1,108 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{N×C_in×H_in×W_in}，权重张量 W ∈ ℝ^{C_in×C_out×K_h×K_w}（groups=1, bias=False）。真实任务为 nn.ConvTranspose2d(in_channels=64, out_channels=128, kernel_size=(3,5), stride=(1,1), padding=(0,0), output_padding=(0,0), dilation=(1,1), bias=False)，输入 shape 为 (N,C_in,H_in,W_in)=(64,64,128,256)，权重 shape 为 (64,128,3,5)。输出 Y ∈ ℝ^{64×128×130×260}。输出尺寸公式为 H_out=(128-1)*1-0+(3-1)*1+0+1=130，W_out=(256-1)*1-0+(5-1)*1+0+1=260。对每个输出索引 (n,co,ho,wo)：Y[n,co,ho,wo] = sum_{ci=0}^{63} sum_{kh=0}^{2} sum_{kw=0}^{4} valid(ho,wo,kh,kw) * X[n,ci,ih,iw] * W[ci,co,kh,kw]，其中 ih=ho-kh, iw=wo-kw。valid 为 0<=ih<128 且 0<=iw<256；不满足时该项贡献为 0。",
+        "boundary_treatment": "ConvTranspose2d 使用逆映射的 implicit zero contribution。stride=1、padding=0、dilation=1，因此无需整除判断，只有 ih=ho-kh、iw=wo-kw 落在输入合法范围内时才 load X，否则以 0 贡献。tail M/N/K、输出边界和输入反推边界都必须用 mask 或 boundary_check 处理，不能越界 load 后再修正。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0, 130)",
+              "binding": "static",
+              "value": "130"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0, 260)",
+              "binding": "static",
+              "value": "260"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, 5)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (64, 64, 128, 256)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (2097152, 32768, 256, 1)",
+            "address_mapping": "addr_X(n, ci, ih, iw) = X_ptr + n*2097152 + ci*32768 + ih*256 + iw"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose2d.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (64, 128, 3, 5)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (1920, 15, 5, 1)",
+            "address_mapping": "addr_W(ci, co, kh, kw) = W_ptr + ci*1920 + co*15 + kh*5 + kw",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为：(c_in, c_out, k_h, k_w) = self.conv_transpose2d.weight.shape；切勿误写成 (c_out, c_in, ...) = self.conv_transpose2d.weight.shape。"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (64, 128, 130, 260)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (4326400, 33800, 260, 1)",
+            "address_mapping": "addr_Y(n, co, ho, wo) = Y_ptr + n*4326400 + co*33800 + ho*260 + wo"
+          }
+        },
+        "lowering_contract": "Lower as an implicit-GEMM transposed convolution with M=N*H_out*W_out=64*130*260, N=C_out=128, K=C_in*K_h*K_w=64*3*5. K_TOTAL=960 and all static dimensions used by tl.static_range/tl.arange/tl.zeros shapes must be host/meta constexpr values, not values computed as tensors inside @triton.jit. A tile should cover multiple output positions and multiple output channels; mask inverse-mapped input coordinates before tl.load. Weight layout is ConvTranspose2d layout (ci,co,kh,kw), not Conv2d layout.",
+        "TDD_requirement": "对拍 PyTorch 的 nn.ConvTranspose2d(in_channels=64, out_channels=128, kernel_size=(3,5), bias=False) 在输入 shape (64,64,128,256) 上的输出；验证输出 shape 为 (64,128,130,260)；针对小尺寸手工计算边界处几个元素并与 eager 模式对拍，确保逆映射条件、权重布局和归约正确。"
+      }
+    ]
+  }
+}

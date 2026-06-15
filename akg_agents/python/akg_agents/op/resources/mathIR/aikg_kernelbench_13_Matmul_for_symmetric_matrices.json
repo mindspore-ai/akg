@@ -1,0 +1,86 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i,j] = sum_{k=0}^{N-1} A[i,k] * B[k,j]，其中 i,j,k ∈ [0, N-1]，N 为矩阵维度",
+        "boundary_treatment": "无边界处理，所有索引均在有效范围 [0, N-1] 内，无需 padding 或 mask。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(N, N)",
+            "stride": "(sA0, sA1)",
+            "address_mapping": "i * sA0 + j * sA1"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(N, N)",
+            "stride": "(sB0, sB1)",
+            "address_mapping": "i * sB0 + j * sB1"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, N)",
+            "stride": "(4096, 1)",
+            "address_mapping": "i * 4096 + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 4096"
+          }
+        },
+        "TDD_requirement": "需对拍参考实现 torch.matmul。重点验证输出 C 与 PyTorch eager 结果数值一致（建议容忍值 1e-5）。使用小 shape（如 N=4,8）冒烟测试，确认索引顺序、归约维度正确；再用 N=4096 完整输入对拍。无需考虑对称性带来的优化。"
+      }
+    ]
+  }
+}

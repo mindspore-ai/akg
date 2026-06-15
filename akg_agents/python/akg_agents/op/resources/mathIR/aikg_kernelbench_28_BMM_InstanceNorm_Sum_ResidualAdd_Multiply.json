@@ -1,0 +1,147 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_bmm",
+        "next_expressions": ["instance_norm_per_sample"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_lin", "kind": "tensor" },
+          { "name": "B_lin", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Z1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，线性层权重 W_lin ∈ R^{O×I}，偏置 B_lin ∈ R^{O}。计算 Z1 ∈ R^{N×O}：Z1[n,o] = B_lin[o] + Σ_{i=0}^{I-1} X[n,i] · W_lin[o,i]。本题 N=128, I=64, O=128。该 expression 即一次普通线性映射 (BMM 在源代码中等价于 nn.Linear 的命名)。",
+        "boundary_treatment": "纯矩阵乘，无空间边界；reduction 沿完整 [0,I) 进行。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "64", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 64)",
+            "stride": "(I, 1) = (64, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*64 + i"
+          },
+          "W_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bmm.weight",
+            "layout": "(O, I) = (128, 64)",
+            "stride": "(I, 1) = (64, 1)",
+            "address_mapping": "addr_W_lin(o, i) = W_lin_ptr + o*64 + i"
+          },
+          "B_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bmm.bias",
+            "layout": "(O) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_lin(o) = B_lin_ptr + o"
+          },
+          "Z1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_bmm.output",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z1(n, o) = Z1_ptr + n*128 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(64,128) 的 eager 前向。精度模式：手写 FMA + fp32 累加器，IEEE fp32；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=I=64，ε_total≈1.2e-7*8=9.6e-7，10x 余量后 rtol_base=atol_base=1e-5；步骤 2（cuBLAS 修正，关键）参考是 nn.Linear 走 cuBLAS，A100 TF32，rtol=atol=max(1e-5,1e-3)=1e-3；步骤 3 不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,128)；(b) bias 加在 O 维。失败诊断：(i) diff~1e-3 → cuBLAS TF32 预期；(ii) 行列错位 → weight 维度顺序 (O,I) 不可对调。"
+      },
+      {
+        "name": "instance_norm_per_sample",
+        "next_expressions": ["add_then_mul_with_y"],
+        "consumes": [
+          { "name": "Z1", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Z2", "kind": "tensor" }
+        ],
+        "formula": "Z1 ∈ R^{N×O} 经过 .unsqueeze(1).unsqueeze(1) 视为 (N,1,1,O) 的 4D 张量送入 nn.InstanceNorm2d(num_features=O, eps, momentum, affine=False, track_running_stats=False)。InstanceNorm2d 对每个 (n, c) 在空间维 (H,W) 上独立做归一化，由于 C=1, H=1, W=O，等价于：对每个样本 n 在 O 个元素上独立归一化。设 μ_n = (1/O) Σ_{o=0}^{O-1} Z1[n,o]，σ²_n = (1/O) Σ_{o=0}^{O-1} (Z1[n,o]-μ_n)²（有偏方差，nn.InstanceNorm2d 默认 use_biased_var=True）。输出 Z2 ∈ R^{N×O}：Z2[n,o] = (Z1[n,o] - μ_n) / sqrt(σ²_n + ε)，affine=False 不乘 γ 不加 β。最后 .squeeze(1).squeeze(1) 还原回 (N,O)。本题 N=128, O=128，eps=1e-5。",
+        "boundary_treatment": "由于 C=1、H=1、W=O，InstanceNorm 对每个样本 n 的 O 个元素做归一化；reduction 范围完整无边界；eps 保证除零安全。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "k_o", "range": "[0, O)", "binding": "static", "value": "128", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Z1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_bmm.output",
+            "layout": "(N, O) = (128, 128) [外部视图通过 unsqueeze 转为 (N,1,1,O)，物理布局未变]",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z1(n, o) = Z1_ptr + n*128 + o"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.instance_norm.eps (默认 1e-5)"
+          },
+          "Z2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.instance_norm_per_sample.output",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z2(n, o) = Z2_ptr + n*128 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.InstanceNorm2d(num_features=128, eps=1e-5, affine=False, track_running_stats=False) 作用于 Z1.unsqueeze(1).unsqueeze(1) 后 squeeze 回 (N,O)。eval 模式下 affine=False、track_running_stats=False 仍使用当前 batch 统计。精度模式：mean/var/sqrt 是逐元素加 reduction，IEEE fp32，无 tl.dot。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=O=128，ε_total≈1.2e-7*sqrt(128)≈1.36e-6，10x 余量后 rtol_base=atol_base=2e-5；步骤 2 不触发，InstanceNorm 不走 cuDNN；步骤 3（量级修正）归一化后量级 O(1)，无 ≫1 风险。最终 **rtol=atol=2e-5**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,128)；(b) 对每个 n，Σ_o Z2[n,o]/O≈0、Σ_o Z2[n,o]²/O≈1（归一化属性）；(c) sqrt 在 eps 加和之后；(d) affine=False 不应使用 γ,β。失败诊断：(i) 输出量级 ≫1 → eps 加在 sqrt 之外；(ii) 均值非 0 → 减 μ 与除 σ 顺序写错；(iii) 单方差异 → 用了无偏估计而非 nn.InstanceNorm2d 默认有偏估计。"
+      },
+      {
+        "name": "add_then_mul_with_y",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Z2", "kind": "tensor" },
+          { "name": "Y_in", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设上游 Z2 ∈ R^{N×O}，输入张量 Y_in ∈ R^{N×O}。先做 add：T[n,o] = Z2[n,o] + Y_in[n,o]；再做 multiply：Y[n,o] = T[n,o] · Y_in[n,o] = (Z2[n,o] + Y_in[n,o]) · Y_in[n,o]。本题 N=128, O=128。该 expression 融合残差加法和逐元素乘。",
+        "boundary_treatment": "纯逐元素，无广播无边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "128" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Z2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.instance_norm_per_sample.output",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Z2(n, o) = Z2_ptr + n*128 + o"
+          },
+          "Y_in": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.y",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Y_in(n, o) = Y_in_ptr + n*128 + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 128)",
+            "stride": "(O, 1) = (128, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*128 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 t = Z2 + y; out = t * y，eval 模式。精度模式：纯逐元素 fp32 加乘，IEEE fp32，无 tl.dot。容忍值推导分三步：步骤 1 ε_op=1.2e-7，无 reduction，ε_total≈1.2e-7，10x 余量后 rtol_base=atol_base=1e-6；步骤 2 不触发；步骤 3 不触发。最终 **rtol=atol=1e-6**，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,128)；(b) Y_in 同时参与 add 和 mul，必须读取两次；(c) 验证当 Y_in=0 时 Y=0。失败诊断：(i) Y_in 仅参与一次 → 漏掉 add 或 mul；(ii) 顺序错（先 mul 再 add） → 输出与参考不一致。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "kl_div_batchmean_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "P",
+            "kind": "tensor"
+          },
+          {
+            "name": "T",
+            "kind": "tensor"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          },
+          {
+            "name": "C",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "L",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "L = (1/N) * sum_{i=0}^{N-1} sum_{j=0}^{C-1} T_{i,j} * (log(T_{i,j}) - log(P_{i,j}))",
+        "boundary_treatment": "假设输入概率不含严格零值（softmax 输出为正），因此 log 运算安全。若实际出现零值，0 * log(0) 可能导致 NaN，需添加 epsilon 处理。除以 N 要求 N>0，本例 N=16384>0。无其他边界情况。",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16384",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "16384",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "P": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(16384, 16384)",
+            "stride": "(16384, 1)",
+            "address_mapping": "addr(i,j) = i * 16384 + j"
+          },
+          "T": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(16384, 16384)",
+            "stride": "(16384, 1)",
+            "address_mapping": "addr(i,j) = i * 16384 + j"
+          },
+          "L": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "直接取值"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 16384（batch_size）"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 16384（num_classes）"
+          }
+        },
+        "TDD_requirement": "与 PyTorch eager 的 KLDivLoss(batchmean) 结果进行数值对拍。重点检查：（1）输入概率接近 0 时的数值稳定性，确认是否出现 NaN；（2）reduction 语义的正确性，确保除以 batch_size 而非总元素数；（3）softmax 预处理引入的精度损失。建议使用小规模（如 N=2, C=3）做冒烟测试，再使用完整规模 N=16384, C=16384 对拍，允许相对误差 1e-5。"
+      }
+    ]
+  }
+}

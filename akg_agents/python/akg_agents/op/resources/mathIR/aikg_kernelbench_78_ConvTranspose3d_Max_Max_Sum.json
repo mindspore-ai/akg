@@ -1,0 +1,150 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["maxpool3d_cascade_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}, 权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}, bias B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=0, dilation=1。输出空间 D_out=H_out=W_out=(16-1)*2 - 2 + 3 = 31。Y1 ∈ R^{N×C_out×D_out×H_out×W_out}: Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i} Σ_{k_d} Σ_{k_h} Σ_{k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w], 其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当三者均能被 S 整除且分别在合法范围内时有效。本题 N=16, C_in=8, C_out=16, D_in=16, H_in=W_in=32, K=3, S=2, P=1, D_out=H_out=W_out=31。",
+        "boundary_treatment": "stride=2 → 反推索引必须 S 整除；padding=1 → 输出边缘部分位置只有部分 (k_d,k_h,k_w) 项有效；d_i,h_i,w_i 必须落在 [0,D_in), [0,H_in), [0,W_in)；bias 加在 c_o；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "31" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "31" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "31" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "8", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 8, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (131072, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*131072 + c_i*16384 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (8, 16, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (432, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*432 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 16, 31, 31, 31)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (476656, 29791, 961, 31, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*476656 + c_o*29791 + d_o*961 + h_o*31 + w_o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(8,16,kernel_size=3, stride=2, padding=1) 的 eval forward。精度模式：手写 FMA + fp32 累加器为 IEEE fp32；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_in·K^3=8·27=216，ε_total ≈ 1.2e-7·sqrt(216)·10 ≈ 1.8e-5；步骤 2，参考含 nn.ConvTranspose3d → cuDNN TF32，rtol=atol=max(1.8e-5, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) shape=(16,16,31,31,31)，等于 (D_in-1)*S-2P+K=31；(b) stride=2 + padding=1 下反推索引整除性单独验证；(c) weight 解包顺序 (C_in,C_out,K,K,K)。失败诊断：(i) 误差 ~1e-3 + shape 正确 → cuDNN TF32 主导，放宽；(ii) 远超 1e-3 → weight 前两维对调；(iii) 边界行偏差 → 反推索引整除条件错；(iv) 通道偏移恒定 → bias 索引错。"
+      },
+      {
+        "name": "maxpool3d_cascade_fused",
+        "next_expressions": ["channel_sum"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C×D1×H1×W1}, D1=H1=W1=31。第一次 MaxPool3d(kernel_size=2, stride=2): P1[n,c,d,h,w] = max_{δ_d, δ_h, δ_w ∈ [0,2)} Y1[n,c, d*2+δ_d, h*2+δ_h, w*2+δ_w]，输出空间 D2 = ⌊(31)/2⌋ = 15。第二次 MaxPool3d(kernel_size=3, stride=3): Y2[n,c,d,h,w] = max_{δ_d, δ_h, δ_w ∈ [0,3)} P1[n,c, d*3+δ_d, h*3+δ_h, w*3+δ_w]，输出空间 D3 = ⌊15/3⌋ = 5。融合为等价的 6×6×6 窗口在原始 D=H=W=31 上以 stride 6 取最大值（注意：第一次池化窗口 2, stride 2；第二次窗口 3, stride 3 → 复合等价于 stride=6 + window=6×6×6 仅扫过 5×5×5 个不重叠 6³ 块）。即 Y2[n,c,d,h,w] = max_{α∈[0,6), β∈[0,6), γ∈[0,6)} Y1[n,c, d*6+α, h*6+β, w*6+γ]，其中 d,h,w∈[0,5)。本题 N=16, C=16, D3=H3=W3=5。",
+        "boundary_treatment": "第一次池化窗口 (2,2,2) stride=2 整齐覆盖 D=30 部分，剩余 1 个元素被丢弃（floor 除）；第二次 (3,3,3) stride=3 覆盖 15 整齐；合并的 (6,6,6) stride=6 仅扫过 [0, 30) 整齐 5 个块，原始 D=31 的最后一个切片被丢弃。索引必须满足 d*6+α<31。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "16" },
+            { "symbol": "d", "range": "[0, D3)", "binding": "static", "value": "5" },
+            { "symbol": "h", "range": "[0, H3)", "binding": "static", "value": "5" },
+            { "symbol": "w", "range": "[0, W3)", "binding": "static", "value": "5" }
+          ],
+          "reduction": [
+            { "symbol": "α", "range": "[0, 6)", "binding": "static", "value": "6", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "β", "range": "[0, 6)", "binding": "static", "value": "6", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "γ", "range": "[0, 6)", "binding": "static", "value": "6", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C, D1, H1, W1) = (16, 16, 31, 31, 31)",
+            "stride": "(C*D1*H1*W1, D1*H1*W1, H1*W1, W1, 1) = (476656, 29791, 961, 31, 1)",
+            "address_mapping": "addr_Y1(n, c, d_in, h_in, w_in) = Y1_ptr + n*476656 + c*29791 + d_in*961 + h_in*31 + w_in"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.maxpool3d_cascade_fused.output",
+            "layout": "(N, C, D3, H3, W3) = (16, 16, 5, 5, 5)",
+            "stride": "(C*D3*H3*W3, D3*H3*W3, H3*W3, W3, 1) = (2000, 125, 25, 5, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*2000 + c*125 + d*25 + h*5 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.MaxPool3d(kernel_size=2) 接 nn.MaxPool3d(kernel_size=3) 串行作用于上游 Y1。精度模式：max 是纯比较型，无浮点累加误差，IEEE fp32 bitwise。rtol/atol 推导：步骤 1，ε_op=0（比较型），取下限 rtol_base=atol_base=1e-6；步骤 2，MaxPool 不走 cuDNN reduction kernel 通常，不触发；步骤 3，不触发。最终 rtol=atol=1e-6（实质 bitwise）。主导因素是步骤 1。结构性检查：(a) 输出 shape=(16,16,5,5,5)；(b) 每个 Y2[n,c,d,h,w] 等于原 6×6×6 窗口最大值；(c) 验证第一次 MaxPool 输出 floor(31/2)=15 而非 ceil；(d) 第二次 MaxPool 输出 floor(15/3)=5。失败诊断：(i) 部分元素 < 真实窗口最大值 → 索引错或窗口越界；(ii) shape=(16,16,6,6,6) → 第一次池化输出尺寸算错（误用 ceil）；(iii) 全部元素都偏小 → reduction 起始值过大或循环漏。"
+      },
+      {
+        "name": "channel_sum",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C×D3×H3×W3}。沿 dim=1 求和并 keepdim：Y[n,0,d,h,w] = Σ_{c=0}^{C-1} Y2[n,c,d,h,w]，得 Y ∈ R^{N×1×D3×H3×W3}。本题 N=16, C=16, D3=H3=W3=5。",
+        "boundary_treatment": "在完整 C=16 通道维上 reduction；keepdim=True 保留 size=1 维；无空间边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "d", "range": "[0, D3)", "binding": "static", "value": "5" },
+            { "symbol": "h", "range": "[0, H3)", "binding": "static", "value": "5" },
+            { "symbol": "w", "range": "[0, W3)", "binding": "static", "value": "5" }
+          ],
+          "reduction": [
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "16", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.maxpool3d_cascade_fused.output",
+            "layout": "(N, C, D3, H3, W3) = (16, 16, 5, 5, 5)",
+            "stride": "(C*D3*H3*W3, D3*H3*W3, H3*W3, W3, 1) = (2000, 125, 25, 5, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*2000 + c*125 + d*25 + h*5 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1, D3, H3, W3) = (16, 1, 5, 5, 5)",
+            "stride": "(D3*H3*W3, D3*H3*W3, H3*W3, W3, 1) = (125, 125, 25, 5, 1)",
+            "address_mapping": "addr_Y(n, 0, d, h, w) = Y_ptr + n*125 + d*25 + h*5 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.sum(Y2, dim=1, keepdim=True)。精度模式：手写 FMA + fp32 累加器，IEEE fp32。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C=16，ε_total ≈ 1.2e-7·sqrt(16)·10 ≈ 4.8e-6，取 rtol_base=atol_base=1e-5；步骤 2，不走 cuDNN/cuBLAS（torch.sum 是 ATen reduction），不触发；步骤 3，sum 之后量级 ≤ K·|max|，若上游量级 ~1 则输出 ~16，不超过 |output|·ε_op·K 即 ~1.9e-6，仍 <1e-5；最终 rtol=atol=1e-5。但因整链路含 cuDNN，整链路对拍仍需 rtol=atol=1e-3；本 expression 单独对拍可用 1e-5。主导因素是步骤 1。结构性检查：(a) 输出 shape=(16,1,5,5,5)；(b) keepdim=True 保留维 1；(c) 小尺寸 (2,4,2,2,2) 手算对拍；(d) 单元素 Y[n,0,d,h,w] 等于通道维加总。失败诊断：(i) shape=(16,5,5,5) → keepdim 没保留；(ii) 量级偏小 K 倍 → 误用 mean；(iii) NaN → 累加器初值非 0。"
+      }
+    ]
+  }
+}
