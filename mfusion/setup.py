@@ -14,6 +14,7 @@
 
 """Setup script for MFUSE MLIR Python package."""
 
+import filecmp
 import os
 import shutil
 import subprocess
@@ -46,6 +47,78 @@ def _write_commit_id_file(target_dir: Path, repo_root: Path) -> None:
 
 class CMakeBuild(build_ext):
     """Custom build command to compile C++ extensions."""
+
+    @staticmethod
+    def _is_enabled(env_name, default):
+        """Return whether an on/off style environment variable is enabled."""
+        return os.environ.get(env_name, default).upper() not in ("0", "OFF", "FALSE", "NO")
+
+    @staticmethod
+    def _is_elf(path):
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as f:
+            return f.read(4) == b"\x7fELF"
+
+    @staticmethod
+    def _find_strip_tool():
+        for env_name in ("CMAKE_STRIP", "STRIP"):
+            strip_tool = os.environ.get(env_name)
+            if strip_tool:
+                return strip_tool
+        cross_compile = os.environ.get("CROSS_COMPILE", "")
+        return shutil.which(f"{cross_compile}strip")
+
+    @staticmethod
+    def _remove_duplicate_capi_library(mlir_libs_dir):
+        """Remove the unversioned aggregate CAPI library when it duplicates the versioned one."""
+        lib_name = "libMFusionAggregateCAPI.so"
+        unversioned_lib = mlir_libs_dir / lib_name
+        versioned_libs = sorted(mlir_libs_dir.glob(f"{lib_name}.*"))
+        if not unversioned_lib.exists() or not versioned_libs:
+            return
+
+        if unversioned_lib.is_symlink():
+            unversioned_lib.unlink()
+            print(f"Removed duplicate CAPI library: {unversioned_lib}")
+            return
+
+        duplicate_lib = next(
+            (
+                versioned_lib
+                for versioned_lib in versioned_libs
+                if filecmp.cmp(unversioned_lib, versioned_lib, shallow=False)
+            ),
+            None,
+        )
+        if duplicate_lib:
+            unversioned_lib.unlink()
+            print(f"Removed duplicate CAPI library: {unversioned_lib}")
+            return
+
+        versioned_lib_names = ", ".join(versioned_lib.name for versioned_lib in versioned_libs)
+        print(
+            "Warning: keeping libMFusionAggregateCAPI.so because it differs from "
+            f"versioned libraries: {versioned_lib_names}"
+        )
+
+    def _strip_release_binaries(self, mlir_libs_dir, build_type):
+        """Strip ELF binaries in release builds to reduce wheel size."""
+        if build_type.lower() != "release" or not self._is_enabled("MFUSION_STRIP", "ON"):
+            return
+
+        strip_tool = self._find_strip_tool()
+        if not strip_tool:
+            print("Warning: strip tool not found; skipping release binary stripping")
+            return
+
+        for binary in sorted(mlir_libs_dir.rglob("*")):
+            if not self._is_elf(binary):
+                continue
+            before_size = binary.stat().st_size
+            subprocess.check_call([strip_tool, "--strip-unneeded", str(binary)])
+            after_size = binary.stat().st_size
+            print(f"Stripped {binary}: {before_size} -> {after_size} bytes")
 
     def run(self):
         """Build C++ extensions using CMake."""
@@ -114,6 +187,10 @@ class CMakeBuild(build_ext):
             print(f"Copied mfusion-opt to {mfusion_opt_dst}")
         else:
             print(f"Warning: mfusion-opt not found at {mfusion_opt_src}")
+
+        mlir_libs_dir = target_dir / "_mlir_libs"
+        self._remove_duplicate_capi_library(mlir_libs_dir)
+        self._strip_release_binaries(mlir_libs_dir, build_type)
 
 
 class BuildPyWithExt(build_py):
