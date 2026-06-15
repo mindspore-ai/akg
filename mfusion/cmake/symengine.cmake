@@ -2,8 +2,8 @@ if(NOT COMMAND akg_add_pkg)
     include(${CMAKE_CURRENT_LIST_DIR}/utils.cmake)
 endif()
 
-set(SYMENGINE_URL "https://gitee.com/mirrors/SymEngine/repository/archive/v0.11.2.tar.gz")
-set(SYMENGIN_SHA256 "b944dd331ba0d9ee1f1411912937e111ed7039e71264c9791b0de7e543a32ee6")
+set(SYMENGINE_URL "https://gitee.com/mirrors/SymEngine/repository/archive/v0.14.0.tar.gz")
+set(SYMENGIN_SHA256 "2885e21a8498fa4d13584b1a10367608452338d9a5f12f58e8e7504c35763b03")
 
 set(SYMENGINE_CMAKE_OPTIONS
     -DHAVE_SYMENGINE_NOEXCEPT:BOOL=OFF
@@ -21,7 +21,7 @@ set(SYMENGINE_CMAKE_OPTIONS
 )
 
 akg_add_pkg(symengine
-        VER 0.11.2
+        VER 0.14.0
         URL ${SYMENGINE_URL}
         SHA256 ${SYMENGIN_SHA256}
         LIBS symengine

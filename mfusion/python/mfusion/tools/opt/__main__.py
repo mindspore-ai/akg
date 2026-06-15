@@ -26,6 +26,8 @@ import os
 import subprocess
 import sys
 
+from mfusion import __commit_id__, __version__
+
 
 def _get_builtin_tool(exe_name: str) -> str:
     this_path = os.path.dirname(__file__)
@@ -36,6 +38,9 @@ def _get_builtin_tool(exe_name: str) -> str:
 def main(args=None):
     if args is None:
         args = sys.argv[1:]
+    if args == ["--version"]:
+        print(f"mfusion {__version__} (commit {__commit_id__})")
+        return 0
     exe = _get_builtin_tool("mfusion-opt")
     return subprocess.call(args=[exe] + args)
 
