@@ -27,6 +27,7 @@ akg_add_pkg(torch_mlir
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/005-fix-compilation-errors.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/006-disable-aten-fold-constant.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/007-disable-adaptive-avg-pool2d-canonicalizer.patch
+    PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/008-canonicalize-aten-permute-negative-dims.patch
 )
 
 set(TORCHMLIR_SOURCE_DIR ${torch_mlir_DIRPATH})

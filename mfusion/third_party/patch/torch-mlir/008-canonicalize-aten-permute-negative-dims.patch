@@ -1,0 +1,67 @@
+diff --git a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+--- a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
++++ b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+@@ -8714,6 +8714,7 @@ def Torch_AtenPermuteOp : Torch_Op<"aten.permute", [
+     }
+   }];
+   let hasVerifier = 1;
++  let hasCanonicalizer = 1;
+ }
+ 
+ def Torch_AtenMovedimIntOp : Torch_Op<"aten.movedim.int", [
+diff --git a/lib/Dialect/Torch/IR/TorchOps.cpp b/lib/Dialect/Torch/IR/TorchOps.cpp
+--- a/lib/Dialect/Torch/IR/TorchOps.cpp
++++ b/lib/Dialect/Torch/IR/TorchOps.cpp
+@@ -5294,10 +5294,7 @@ LogicalResult AtenPermuteOp::verify() {
+       continue;
+     }
+ 
+-    // if 'from' is the unkwown index, continue.
+-    if (from == -1) {
+-      continue;
+-    }
++    from = toPositiveDim(from, outRank);
+ 
+     if (!isValidDim(from, outRank)) {
+       return emitError("observed invalid index in permutation (")
+@@ -5327,6 +5324,40 @@ LogicalResult AtenPermuteOp::verify() {
+   return success();
+ }
+ 
++void AtenPermuteOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
++                                                MLIRContext *context) {
++  patterns.add(+[](AtenPermuteOp op,
++                   PatternRewriter &rewriter) -> LogicalResult {
++    auto selfType = dyn_cast<ValueTensorType>(op.getSelf().getType());
++    if (!selfType || !selfType.hasSizes())
++      return failure();
++
++    SmallVector<int64_t> dims;
++    if (!matchPattern(op.getDims(), m_TorchListOfConstantInts(dims)))
++      return failure();
++
++    int64_t rank = selfType.getSizes().size();
++    bool changed = false;
++    SmallVector<Value> normalizedDims;
++    normalizedDims.reserve(dims.size());
++    for (int64_t dim : dims) {
++      int64_t normalized = dim < 0 ? dim + rank : dim;
++      changed |= normalized != dim;
++      normalizedDims.push_back(
++          rewriter.create<Torch::ConstantIntOp>(op.getLoc(), normalized));
++    }
++
++    if (!changed)
++      return failure();
++
++    Value dimsList = rewriter.create<Torch::PrimListConstructOp>(
++        op.getLoc(), op.getDims().getType(), normalizedDims);
++    rewriter.replaceOpWithNewOp<AtenPermuteOp>(op, op.getType(), op.getSelf(),
++                                               dimsList);
++    return success();
++  });
++}
++
+ //===----------------------------------------------------------------------===//
+ // PrimsConvertElementTypeOp
+ //===----------------------------------------------------------------------===//

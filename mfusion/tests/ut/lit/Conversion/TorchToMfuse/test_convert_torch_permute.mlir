@@ -64,3 +64,16 @@ func.func @convert_permute_non_const_dims(%input: !torch.vtensor<[2,3,4],f32>, %
   %permute = torch.aten.permute %input, %dims : !torch.vtensor<[2,3,4],f32>, !torch.list<int> -> !torch.vtensor<[?,?,?],f32>
   return %permute : !torch.vtensor<[?,?,?],f32>
 }
+
+// Test with negative dimensions
+// CHECK-LABEL: func.func @convert_permute_with_negative_dims
+// CHECK: %[[PERMUTE5:.*]] = mfuse.permute %{{.*}}, [0, 2, 1]
+// CHECK-NOT: torch.aten.permute
+func.func @convert_permute_with_negative_dims(%input: !torch.vtensor<[2,3,4],f32>) -> !torch.vtensor<[2,4,3],f32> {
+  %c0 = torch.constant.int 0
+  %c_neg1 = torch.constant.int -1
+  %c_neg2 = torch.constant.int -2
+  %dims = torch.prim.ListConstruct %c0, %c_neg1, %c_neg2 : (!torch.int, !torch.int, !torch.int) -> !torch.list<int>
+  %permute = torch.aten.permute %input, %dims : !torch.vtensor<[2,3,4],f32>, !torch.list<int> -> !torch.vtensor<[2,4,3],f32>
+  return %permute : !torch.vtensor<[2,4,3],f32>
+}
