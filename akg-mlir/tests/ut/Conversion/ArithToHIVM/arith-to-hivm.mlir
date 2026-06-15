@@ -99,9 +99,10 @@ func.func @test_vdiv_npuvector_scalar_dynamic(%arg0 : memref<?xf32>, %arg1 : mem
   // CHECK: %[[CST8:.*]] = arith.constant 8.000000e+00 : f32
   // CHECK: %[[UB0:.*]] = memref.alloc(%{{.*}}) : memref<?xf32>
   // CHECK: hivm.hir.load
-  // CHECK-NOT: hivm.hir.vbrc
+  // CHECK: %[[UB_BRC:.*]] = memref.alloc(%{{.*}}) : memref<?xf32>
+  // CHECK: hivm.hir.vbrc ins(%[[CST8]] : f32) outs(%[[UB_BRC]] : memref<?xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc(%{{.*}}) : memref<?xf32>
-  // CHECK: hivm.hir.vdiv ins(%[[UB0]], %[[CST8]] : memref<?xf32>, f32) outs(%[[UB_OUT]] : memref<?xf32>)
+  // CHECK: hivm.hir.vdiv ins(%[[UB0]], %[[UB_BRC]] : memref<?xf32>, memref<?xf32>) outs(%[[UB_OUT]] : memref<?xf32>)
   %c0 = arith.constant 0 : index
   %c4096 = arith.constant 4096 : index
   %pad = arith.constant 0.000000e+00 : f32
