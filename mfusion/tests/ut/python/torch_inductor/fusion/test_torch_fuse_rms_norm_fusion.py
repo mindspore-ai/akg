@@ -567,10 +567,12 @@ def test_torch_fuse_rms_norm_reciprocal_sqrt_equivalent():
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
         checker.error or "expected reciprocal(sqrt) path to fuse to npu_rms_norm"
     )
-    assert not checker.check_text_contains("torch.aten.sqrt"), "sqrt should be consumed by fusion"
-    assert not checker.check_text_contains("torch.aten.reciprocal"), (
-        "reciprocal should be canonicalized/fused away"
-    )
+    assert not checker.check_text_contains(
+        "torch.aten.sqrt"
+    ), "sqrt should be consumed by fusion"
+    assert not checker.check_text_contains(
+        "torch.aten.reciprocal"
+    ), "reciprocal should be canonicalized/fused away"
 
 
 # pow(add, -0.5) is equivalent to rsqrt(add) for positive add.
@@ -607,9 +609,13 @@ def test_torch_fuse_rms_norm_pow_neg_half_equivalent():
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
         checker.error or "Expected npu_rms_norm for pow(,-0.5) scale"
     )
-    assert not checker.check_text_contains("torch.aten.rsqrt"), "rsqrt should not appear"
+    assert not checker.check_text_contains(
+        "torch.aten.rsqrt"
+    ), "rsqrt should not appear"
     # Variance path still uses pow(x,2); inverse-scale pow is fused away.
-    assert result.count("torch.aten.pow.Tensor_Scalar") == 0, "all pow.Tensor_Scalar should be fused"
+    assert (
+        result.count("torch.aten.pow.Tensor_Scalar") == 0
+    ), "all pow.Tensor_Scalar should be fused"
 
 
 # mean.dim(mul(x,x)) instead of mean.dim(pow(x,2))
@@ -643,7 +649,9 @@ def test_torch_fuse_rms_norm_mul_xx_variance():
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
         checker.error or "Expected npu_rms_norm for mean(mul(x,x)) variance"
     )
-    assert not checker.check_text_contains("torch.aten.pow.Tensor_Scalar"), "pow should not appear"
+    assert not checker.check_text_contains(
+        "torch.aten.pow.Tensor_Scalar"
+    ), "pow should not appear"
     assert result.count("torch.aten.mul.Tensor") == 0, "mul ops should be fused away"
 
 
@@ -681,6 +689,57 @@ def test_torch_fuse_rms_norm_div_ones_over_sqrt():
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
         checker.error or "Expected npu_rms_norm for div(ones_like(sqrt),sqrt) scale"
     )
-    assert not checker.check_text_contains("torch.aten.ones_like"), "ones_like should be fused"
-    assert not checker.check_text_contains("torch.aten.div.Tensor"), "div should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.ones_like"
+    ), "ones_like should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.div.Tensor"
+    ), "div should be fused"
     assert not checker.check_text_contains("torch.aten.sqrt"), "sqrt should be fused"
+
+
+# Check that we do NOT fuse when x and gamma types mismatch for npu_rms_norm
+MLIR_RMS_NORM_NO_FUSE_TYPE_MISMATCH = textwrap.dedent(
+    """
+module {
+  func.func @main(%x_f32: !torch.vtensor<[2,4],f32>, %gamma_bf16: !torch.vtensor<[2,4],bf16>) -> !torch.vtensor<[2,4],f32> attributes {torch.assume_strict_symbolic_shapes} {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %pow = torch.aten.pow.Tensor_Scalar %x_f32, %int2 : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %rsqrt = torch.aten.rsqrt %add : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x_f32, %rsqrt : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma_bf16 : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],bf16> -> !torch.vtensor<[2,4],f32>
+    return %out : !torch.vtensor<[2,4],f32>
+  }
+}
+"""
+)
+
+
+def test_torch_fuse_rms_norm_no_fuse_type_mismatch():
+    """RmsNorm should NOT fuse when x and gamma types mismatch for npu_rms_norm."""
+    result = fuse_and_optimize(MLIR_RMS_NORM_NO_FUSE_TYPE_MISMATCH)
+    checker = MlirChecker.parse_torch_module(result)
+    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
+        checker.error
+        or "Should NOT fuse when x and gamma types mismatch for npu_rms_norm"
+    )
+    assert checker.check_text_contains(
+        "torch.aten.pow.Tensor_Scalar"
+    ), "pow should remain"
+    # this mean.dim will be decomposed into sum+div
+    assert checker.check_text_contains(
+        "torch.aten.sum.dim_IntList"
+    ) and checker.check_text_contains(
+        "torch.aten.div.Scalar"
+    ), "mean should remain unfused, and decomposed as decomposed sum+div"
+    assert checker.check_text_contains("torch.aten.add.Scalar"), "add should remain"
+    assert checker.check_text_contains("torch.aten.rsqrt"), "rsqrt should remain"
+    assert checker.check_text_contains("torch.aten.mul.Tensor"), "mul ops should remain"
