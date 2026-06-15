@@ -72,7 +72,7 @@ namespace {
 /// inner levels if necessary to determine at what depth copies need to be
 /// placed so that the allocated buffers fit within the memory capacity
 /// provided.
-// TODO(scheduler): We currently can't generate copies correctly when stores
+// We currently can't generate copies correctly when stores
 // are strided. Check for strided stores.
 struct AffineDataCopyGeneration : public affine::impl::AKGAffineDataCopyGenerationBase<AffineDataCopyGeneration> {
   AffineDataCopyGeneration() = default;
@@ -144,13 +144,13 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
     // If you hit a non-copy for loop, we will split there.
     if ((forOp = dyn_cast<AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
       // Perform the copying up unti this 'for' op first.
-      (void)affineDataCopyGenerate(/*begin=*/curBegin, /*end=*/it, copyOptions,
-                                   /*filterMemRef=*/std::nullopt, copyNests);
+      (void)affineDataCopyGenerate(/* begin= */ curBegin, /* end= */ it, copyOptions,
+                                   /* filterMemRef= */ std::nullopt, copyNests);
 
       // Returns true if the footprint is known to exceed capacity.
       auto exceedsCapacity = [&](AffineForOp forOp) {
         std::optional<int64_t> footprint = getMemoryFootprintBytes(forOp,
-                                                                   /*memorySpace=*/0);
+                                                                   /* memorySpace= */ 0);
         return (footprint.has_value() && static_cast<uint64_t>(*footprint) > fastMemCapacityBytes);
       };
 
@@ -174,8 +174,8 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
         // Inner loop copies have their own scope - we don't thus update
         // consumed capacity. The footprint check above guarantees this inner
         // loop's footprint fits.
-        (void)affineDataCopyGenerate(/*begin=*/it, /*end=*/std::next(it), copyOptions,
-                                     /*filterMemRef=*/std::nullopt, copyNests);
+        (void)affineDataCopyGenerate(/* begin= */ it, /* end= */ std::next(it), copyOptions,
+                                     /* filterMemRef= */ std::nullopt, copyNests);
       }
       // Get to the next load or store op after 'forOp'.
       curBegin = std::find_if(std::next(it), block->end(), [&](Operation &op) {
@@ -194,9 +194,9 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
     // Can't be a terminator because it would have been skipped above.
     assert(!curBegin->hasTrait<OpTrait::IsTerminator>() && "can't be a terminator");
     // Exclude the affine.yield - hence, the std::prev.
-    (void)affineDataCopyGenerate(/*begin=*/curBegin,
-                                 /*end=*/std::prev(block->end()), copyOptions,
-                                 /*filterMemRef=*/std::nullopt, copyNests);
+    (void)affineDataCopyGenerate(/* begin= */ curBegin,
+                                 /* end= */ std::prev(block->end()), copyOptions,
+                                 /* filterMemRef= */ std::nullopt, copyNests);
   }
 }
 

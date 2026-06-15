@@ -89,10 +89,12 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
   }
 
   bool accessSameLocation(Operation *op1, Operation *op2) const {
-    SmallVector<Value, 4> vals1, vals2;
+    SmallVector<Value, 4> vals1;
+    SmallVector<Value, 4> vals2;
     if (isa<affine::AffineStoreOp, affine::AffineLoadOp>(op1) &&
         isa<affine::AffineStoreOp, affine::AffineLoadOp>(op2)) {
-      AffineMap map1, map2;
+      AffineMap map1;
+      AffineMap map2;
       CommonUtils::getUnifiedAffineAccess(op1, map1, vals1);
       CommonUtils::getUnifiedAffineAccess(op2, map2, vals2);
       if (!map1 || !map2 || map1 != map2) {

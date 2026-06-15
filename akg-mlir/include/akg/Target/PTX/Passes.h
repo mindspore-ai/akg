@@ -21,12 +21,10 @@
 #include <memory>
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Module.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace gpu {
-class GPUModuleOp;
-}
 
 /// Convert kernel functions in GPU dialect to PTX
 std::unique_ptr<OperationPass<gpu::GPUModuleOp>> createSerializeToPTXPass(

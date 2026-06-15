@@ -107,7 +107,6 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   if (options.enableAutoStorageAlign) {
     pm.nest<func::FuncOp>().addPass(hivm::createMarkStrideAlignPass());
   }
-  // pm.nest<func::FuncOp>().addPass(memref::createFoldAllocReshapePass());
   pm.nest<func::FuncOp>().addPass(hivm::createEnableStrideAlignPass());
 
   // Decompose {vconcat} after stride alignment
@@ -172,7 +171,7 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   pm.nest<func::FuncOp>().addPass(hivm::createLiftLowestStridePass());
   // Optimizations that relies on scope should be done after this point. Inline
   // all `scope.scope` ops.
-  pm.addPass(scope::createInlineScopePass(InlineScopeOptions{/*forceInline=*/true}));
+  pm.addPass(scope::createInlineScopePass(InlineScopeOptions{/* forceInline= */ true}));
   pm.addPass(hivm::createEnableHIVMCCompatiblePrintPass());
   pm.addPass(annotation::createAnnotationLoweringPass());
   pm.nest<func::FuncOp>().addPass(hivm::createMarkDisableLoadPass());

@@ -17,16 +17,13 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_AFFINEDATACOPYGENERATION_H_
 #include <limits>
 #include <memory>
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
 
-namespace func {
-class FuncOp;
-}  // namespace func
-
 namespace affine {
-class AffineForOp;
 
 /// Performs packing (or explicit copying) of accessed memref regions into
 /// buffers in the specified faster memory space through either pointwise copies

@@ -14,16 +14,12 @@
  * limitations under the License.
  */
 //===- AffineAnalysis.cpp - Affine structures analysis routines -----------===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
-//
 // This file implements miscellaneous analysis routines for affine structures
 // (expressions, maps, sets), and other utilities relying on such analysis.
-//
 //===----------------------------------------------------------------------===//
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
@@ -59,6 +55,22 @@ using presburger::IntegerPolyhedron;
 using presburger::IntegerRelation;
 using presburger::PresburgerSpace;
 using presburger::VarKind;
+
+static constexpr unsigned kDepDepthIncrement = 1;
+static constexpr int64_t kConstraintCoeffZero = 0;
+static constexpr int64_t kConstraintCoeffOne = 1;
+static constexpr int64_t kConstraintCoeffNegOne = -1;
+static constexpr unsigned kConstantColOffset = 1;
+static constexpr unsigned kZeroDimCount = 0;
+static constexpr unsigned kZeroSymbolCount = 0;
+static constexpr unsigned kSingleDimCount = 1;
+static constexpr unsigned kSingleMapResult = 1;
+static constexpr int64_t kSingleIterationCount = 1;
+static constexpr int64_t kZeroAffineExpr = 0;
+static constexpr unsigned kStartPos = 0;
+static constexpr unsigned kEmptyVarCount = 0;
+static constexpr unsigned kFirstResultIndex = 0;
+static constexpr unsigned kLastIndexOffset = 1;
 
 Value getSourceMemRef(Value memrefVal, bool *hasSubView, memref::SubViewOp *firstSubView) {
   if (hasSubView != nullptr) {
@@ -158,14 +170,13 @@ bool isLoopMemoryParallelAKG(AffineForOp forOp) {
 
     return WalkResult::advance();
   });
-
   // Stop early if the loop has unknown ops with side effects.
   if (walkResult.wasInterrupted()) {
     return false;
   }
 
   // Dep check depth would be number of enclosing loops + 1.
-  unsigned depth = getNestingDepth(forOp) + 1;
+  unsigned depth = getNestingDepth(forOp) + kDepDepthIncrement;
 
   // Check dependences between all pairs of ops in 'loadAndStoreOps'.
   for (auto *srcOp : loadAndStoreOps) {
@@ -186,10 +197,9 @@ bool isLoopMemoryParallelAKG(AffineForOp forOp) {
 /// treats them as not preventing parallelization.
 bool isLoopParallelAKG(AffineForOp forOp, SmallVectorImpl<LoopReduction> *parallelReductions) {
   unsigned numIterArgs = forOp.getNumIterOperands();
-
   // Loop is not parallel if it has SSA loop-carried dependences and reduction
   // detection is not requested.
-  if (numIterArgs > 0 && (parallelReductions == nullptr)) {
+  if (numIterArgs > kEmptyVarCount && (parallelReductions == nullptr)) {
     return false;
   }
 
@@ -252,12 +262,13 @@ static Block *getCommonBlockInAffineScope(Operation *opA, Operation *opB) {
   };
 
   // Find the closest common block.
-  SmallVector<Block *, 4> srcAncestorBlocks, dstAncestorBlocks;
+  SmallVector<Block *, 4> srcAncestorBlocks;
+  SmallVector<Block *, 4> dstAncestorBlocks;
   getChainOfAncestorBlocks(opA, srcAncestorBlocks);
   getChainOfAncestorBlocks(opB, dstAncestorBlocks);
 
   Block *commonBlock = nullptr;
-  for (int i = srcAncestorBlocks.size() - 1, j = dstAncestorBlocks.size() - 1;
+  for (int i = srcAncestorBlocks.size() - kLastIndexOffset, j = dstAncestorBlocks.size() - kLastIndexOffset;
        i >= 0 && j >= 0 && srcAncestorBlocks[i] == dstAncestorBlocks[j]; i--, j--) {
     commonBlock = srcAncestorBlocks[i];
   }
@@ -301,11 +312,11 @@ static void addOrderingConstraints(const FlatAffineValueConstraints &srcDomain,
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain);
   unsigned numCommonLoopConstraints = std::min(numCommonLoops, loopDepth);
   for (unsigned i = 0; i < numCommonLoopConstraints; ++i) {
-    std::fill(eq.begin(), eq.end(), 0);
-    eq[i] = -1;
-    eq[i + numSrcDims] = 1;
-    if (i == loopDepth - 1) {
-      eq[numCols - 1] = -1;
+    std::fill(eq.begin(), eq.end(), kConstraintCoeffZero);
+    eq[i] = kConstraintCoeffNegOne;
+    eq[i + numSrcDims] = kConstraintCoeffOne;
+    if (i == loopDepth - kDepDepthIncrement) {
+      eq[numCols - kConstantColOffset] = kConstraintCoeffNegOne;
       dependenceDomain->addInequality(eq);
     } else {
       dependenceDomain->addEquality(eq);
@@ -324,15 +335,15 @@ static void computeDirectionVector(const FlatAffineValueConstraints &srcDomain,
   // Find the number of common loops shared by src and dst accesses.
   SmallVector<AffineForOp, 4> commonLoops;
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain, &commonLoops);
-  if (numCommonLoops == 0) {
+  if (numCommonLoops == kEmptyVarCount) {
     return;
   }
   // Compute direction vectors for requested loop depth.
   unsigned numIdsToEliminate = dependenceDomain->getNumVars();
   // Add new variables to 'dependenceDomain' to represent the direction
   // constraints for each shared loop.
-  dependenceDomain->insertVar(VarKind::SetDim, /*pos=*/0,
-                              /*num=*/numCommonLoops);
+  dependenceDomain->insertVar(VarKind::SetDim, /* pos= */ kStartPos,
+                              /* num= */ numCommonLoops);
 
   // Add equality constraints for each common loop, setting newly introduced
   // variable at column 'j' to the 'dst' IV minus the 'src IV.
@@ -342,10 +353,10 @@ static void computeDirectionVector(const FlatAffineValueConstraints &srcDomain,
   // Constraint variables format:
   // [num-common-loops][num-src-dim-ids][num-dst-dim-ids][num-symbols][constant]
   for (unsigned j = 0; j < numCommonLoops; ++j) {
-    std::fill(eq.begin(), eq.end(), 0);
-    eq[j] = 1;
-    eq[j + numCommonLoops] = 1;
-    eq[j + numCommonLoops + numSrcDims] = -1;
+    std::fill(eq.begin(), eq.end(), kConstraintCoeffZero);
+    eq[j] = kConstraintCoeffOne;
+    eq[j + numCommonLoops] = kConstraintCoeffOne;
+    eq[j + numCommonLoops + numSrcDims] = kConstraintCoeffNegOne;
     dependenceDomain->addEquality(eq);
   }
 
@@ -406,7 +417,7 @@ LogicalResult AKGMemRefAccess::getAccessRelation(IntegerRelation &rel) const {
   domainRel.mergeLocalVars(rel);
   rel.append(domainRel);
 
-  rel.convertVarKind(VarKind::SetDim, 0, accessValueMap.getNumDims() + inserts, VarKind::Domain);
+  rel.convertVarKind(VarKind::SetDim, kStartPos, accessValueMap.getNumDims() + inserts, VarKind::Domain);
 
   return success();
 }
@@ -457,7 +468,6 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 // If a dependence exists, returns in 'dependenceComponents' a direction
 // vector for the dependence, with a component for each loop IV in loops
 // common to both accesses (see Dependence in AffineAnalysis.h for details).
-//
 // The memref access dependence check is comprised of the following steps:
 // *) Build access relation for each access. An access relation maps elements
 //    of an iteration domain to the element(s) of an array domain accessed by
@@ -469,14 +479,10 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //    location.
 // *) Add ordering constraints for `srcAccess` to be accessed before
 //    `dstAccess`.
-//
 // This method builds a constraint system with the following column format:
-//
 //  [src-dim-variables, dst-dim-variables, symbols, constant]
-//
 // For example, given the following MLIR code with "source" and "destination"
 // accesses to the same memref label, and symbols %M, %N, %K:
-//
 //   affine.for %i0 = 0 to 100 {
 //     affine.for %i1 = 0 to 50 {
 //       %a0 = affine.apply
@@ -485,7 +491,6 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //       store %v0, %m[%a0#0, %a0#1] : memref<4x4xf32>
 //     }
 //   }
-//
 //   affine.for %i2 = 0 to 100 {
 //     affine.for %i3 = 0 to 50 {
 //       %a1 = affine.apply
@@ -494,9 +499,7 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //       %v1 = load %m[%a1#0, %a1#1] : memref<4x4xf32>
 //     }
 //   }
-//
 // The access relation for `srcAccess` would be the following:
-//
 //   [src_dim0, src_dim1, mem_dim0, mem_dim1,  %N,   %M,  const]
 //       2        -4       -1         0         1     0     0     = 0
 //       0         3        0        -1         0    -1     0     = 0
@@ -504,9 +507,7 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //      -1         0        0         0         0     0     100  >= 0
 //       0         1        0         0         0     0     0    >= 0
 //       0        -1        0         0         0     0     50   >= 0
-//
 //  The access relation for `dstAccess` would be the following:
-//
 //   [dst_dim0, dst_dim1, mem_dim0, mem_dim1,  %M,   %K,  const]
 //       7         9       -1         0        -1     0     0     = 0
 //       0         11       0        -1         0    -1     0     = 0
@@ -514,12 +515,9 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //      -1         0        0         0         0     0     100  >= 0
 //       0         1        0         0         0     0     0    >= 0
 //       0        -1        0         0         0     0     50   >= 0
-//
 //  The equalities in the above relations correspond to the access maps while
 //  the inequalities corresspond to the iteration domain constraints.
-//
 // The dependence relation formed:
-//
 //   [src_dim0, src_dim1, dst_dim0, dst_dim1,  %M,   %N,   %K,  const]
 //      2         -4        -7        -9        1     1     0     0    = 0
 //      0          3         0        -11      -1     0     1     0    = 0
@@ -531,8 +529,6 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //       0         0        -1         0        0     0     0     100  >= 0
 //       0         0         0         1        0     0     0     0    >= 0
 //       0         0         0        -1        0     0     0     50   >= 0
-//
-//
 DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess,
                                                 unsigned loopDepth, FlatAffineValueConstraints *dependenceConstraints,
                                                 SmallVector<DependenceComponent, 2> *dependenceComponents,
@@ -564,7 +560,8 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
 
   // Create access relation from each MemRefAccess.
   PresburgerSpace space = PresburgerSpace::getRelationSpace();
-  IntegerRelation srcRel(space), dstRel(space);
+  IntegerRelation srcRel(space);
+  IntegerRelation dstRel(space);
   if (failed(srcAccess.getAccessRelation(srcRel))) {
     return DependenceResult::Failure;
   }
@@ -581,7 +578,7 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
   // Note: this check is skipped if 'allowRAR' is true, because RAR deps
   // can exist irrespective of lexicographic ordering b/w src and dst.
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain);
-  assert(loopDepth <= numCommonLoops + 1);
+  assert(loopDepth <= numCommonLoops + kDepDepthIncrement);
   if (checkSrcBeforeDst && !allowRAR && loopDepth > numCommonLoops &&
       !srcAppearsBeforeDstInAncestralBlock(srcAccess, dstAccess)) {
     return DependenceResult::NoDependence;
@@ -601,7 +598,7 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
     srcRel.resetIds();
   }
   dstRel.mergeAndCompose(srcRel);
-  dstRel.convertVarKind(VarKind::Domain, 0, dstRel.getNumDomainVars(), VarKind::Range, 0);
+  dstRel.convertVarKind(VarKind::Domain, kStartPos, dstRel.getNumDomainVars(), VarKind::Range, kStartPos);
   IntegerPolyhedron dependenceDomain(dstRel);
 
   // Add 'src' happens before 'dst' ordering constraints.
@@ -658,7 +655,7 @@ AKGMemRefAccess::AKGMemRefAccess(Operation *loadOrStoreOpInst) {
 static LogicalResult addMissingLoopIVBounds(SmallPtrSet<Value, 8> &ivs, FlatAffineValueConstraints *cst) {
   for (unsigned i = 0, e = cst->getNumDimVars(); i < e; ++i) {
     auto value = cst->getValue(i);
-    if (ivs.count(value) == 0) {
+    if (!ivs.contains(value)) {
       assert(isAffineForInductionVar(value));
       auto loop = getForInductionVarOwner(value);
       if (failed(cst->addAffineForOpDomain(loop))) {
@@ -671,13 +668,13 @@ static LogicalResult addMissingLoopIVBounds(SmallPtrSet<Value, 8> &ivs, FlatAffi
 
 static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceState,
                                               FlatAffineValueConstraints &sliceUnionCst) {
-  if (sliceUnionCst.getNumDimAndSymbolVars() == 0) {
+  if (sliceUnionCst.getNumDimAndSymbolVars() == kEmptyVarCount) {
     // Initialize 'sliceUnionCst' with the bounds computed in previous step.
     if (failed(tmpSliceState.getAsConstraints(&sliceUnionCst))) {
       LLVM_DEBUG(llvm::dbgs() << "Unable to compute slice bound constraints\n");
       return failure();
     }
-    assert(sliceUnionCst.getNumDimAndSymbolVars() > 0);
+    assert(sliceUnionCst.getNumDimAndSymbolVars() > kEmptyVarCount);
     return success();
   }
 
@@ -701,7 +698,7 @@ static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceSta
       tmpSliceIVs.insert(tmpSliceCst.getValue(k));
     }
 
-    sliceUnionCst.mergeAndAlignVarsWithOther(/*offset=*/0, &tmpSliceCst);
+    sliceUnionCst.mergeAndAlignVarsWithOther(/* offset= */ kStartPos, &tmpSliceCst);
 
     // Post-constraint var alignment: add loop IV bounds missing after
     // var alignment to constraint systems. This can occur if one constraint
@@ -716,7 +713,7 @@ static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceSta
     }
   }
   // Compute union bounding box of 'sliceUnionCst' and 'tmpSliceCst'.
-  if (sliceUnionCst.getNumLocalVars() > 0 || tmpSliceCst.getNumLocalVars() > 0 ||
+  if (sliceUnionCst.getNumLocalVars() > kEmptyVarCount || tmpSliceCst.getNumLocalVars() > kEmptyVarCount ||
       failed(sliceUnionCst.unionBoundingBox(tmpSliceCst))) {
     LLVM_DEBUG(llvm::dbgs() << "Unable to compute union bounding box of slice bounds\n");
     return failure();
@@ -745,10 +742,10 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
   bool readReadAccesses = isa<AffineReadOpInterface>(srcAccess.opInst) && isa<AffineReadOpInterface>(dstAccess.opInst);
   FlatAffineValueConstraints dependenceConstraints;
   // Check dependence between 'srcAccess' and 'dstAccess'.
-  DependenceResult result = checkMemrefAccessDependenceAKG(srcAccess, dstAccess, /*loopDepth=*/numCommonLoops + 1,
-                                                           &dependenceConstraints, /*dependenceComponents=*/nullptr,
-                                                           /*allowRAR=*/readReadAccesses, /*checkSrcBeforeDst=*/false);
-
+  DependenceResult result =
+    checkMemrefAccessDependenceAKG(srcAccess, dstAccess, /* loopDepth= */ numCommonLoops + kDepDepthIncrement,
+                                   &dependenceConstraints, /* dependenceComponents= */ nullptr,
+                                   /* allowRAR= */ readReadAccesses, /* checkSrcBeforeDst= */ false);
   if (result.value == DependenceResult::Failure) {
     LLVM_DEBUG(llvm::dbgs() << "Dependence check failed\n");
     return failure();
@@ -794,14 +791,14 @@ bool loopBoundsMatch(AffineForOp a, AffineForOp b) {
 static bool sliceLevelIsFullLoopRange(const ComputationSliceState &slice, unsigned i, AffineForOp loop) {
   AffineMap lbMap = slice.lbs[i];
   AffineMap ubMap = slice.ubs[i];
-  if (!lbMap || !ubMap || lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) {
+  if (!lbMap || !ubMap || lbMap.getNumResults() != kSingleMapResult || ubMap.getNumResults() != kSingleMapResult) {
     return false;
   }
   if (!loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) {
     return false;
   }
-  auto lbConst = dyn_cast<AffineConstantExpr>(lbMap.getResult(0));
-  auto ubConst = dyn_cast<AffineConstantExpr>(ubMap.getResult(0));
+  auto lbConst = dyn_cast<AffineConstantExpr>(lbMap.getResult(kFirstResultIndex));
+  auto ubConst = dyn_cast<AffineConstantExpr>(ubMap.getResult(kFirstResultIndex));
   if (!lbConst || !ubConst) {
     return false;
   }
@@ -819,7 +816,7 @@ static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &num
   size_t insertPos = std::min<size_t>(numDims, ops.size());
   ops.insert(ops.begin() + insertPos, v);
   unsigned idx = numDims;
-  numDims += 1;
+  ++numDims;
   return idx;
 }
 
@@ -830,7 +827,6 @@ static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &num
 // dependence pair, but fuseLoops clones only the slice and erases the producer nest —
 // so any sibling work in that loop body OUTSIDE the gating if (e.g. an unconditional load/
 // store on a separate memref) is silently dropped at the non-pinned iterations.
-//
 // For each slice level whose IV is constrained by a gating AffineIfOp on src's parent
 // chain, this checks the enclosing producer loop's body for ops that (a) are not on src's
 // path and (b) are not nested under any of those gating ifs. If such "outside-the-gating"
@@ -855,11 +851,11 @@ static bool sliceLevelAlreadyAtFullRange(const ComputationSliceState &slice, uns
                                          int64_t loopUb) {
   AffineMap lbMap = slice.lbs[k];
   AffineMap ubMap = slice.ubs[k];
-  if (!lbMap || !ubMap || lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) {
+  if (!lbMap || !ubMap || lbMap.getNumResults() != kSingleMapResult || ubMap.getNumResults() != kSingleMapResult) {
     return false;
   }
-  auto lbC = dyn_cast<AffineConstantExpr>(lbMap.getResult(0));
-  auto ubC = dyn_cast<AffineConstantExpr>(ubMap.getResult(0));
+  auto lbC = dyn_cast<AffineConstantExpr>(lbMap.getResult(kFirstResultIndex));
+  auto ubC = dyn_cast<AffineConstantExpr>(ubMap.getResult(kFirstResultIndex));
   return lbC && ubC && lbC.getValue() == loopLb && ubC.getValue() == loopUb;
 }
 
@@ -920,10 +916,8 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
     if (!loop || !loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) {
       continue;
     }
-
     int64_t loopLb = loop.getConstantLowerBound();
     int64_t loopUb = loop.getConstantUpperBound();
-
     if (sliceLevelAlreadyAtFullRange(slice, k, loopLb, loopUb)) {
       continue;
     }
@@ -938,8 +932,10 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
     }
 
     MLIRContext *ctx = loop->getContext();
-    slice.lbs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(loopLb, ctx));
-    slice.ubs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(loopUb, ctx));
+    slice.lbs[k] = AffineMap::get(/* dimCount= */ kZeroDimCount, /* symbolCount= */ kZeroSymbolCount,
+                                  getAffineConstantExpr(loopLb, ctx));
+    slice.ubs[k] = AffineMap::get(/* dimCount= */ kZeroDimCount, /* symbolCount= */ kZeroSymbolCount,
+                                  getAffineConstantExpr(loopUb, ctx));
     slice.lbOperands[k].clear();
     slice.ubOperands[k].clear();
   }
@@ -1039,7 +1035,6 @@ static AffineForOp findMatchingSiblingLoop(Block::iterator searchStart, Block *s
 // the next level. Skips candidates whose body writes into a memref that opsA
 // writes (mediator state) or opsB reads (consumer-visible state) — those would
 // corrupt fused semantics.
-//
 // Returns the chain on success, empty vector on failure. Shared by both
 // slice-IV extension (backward) and receiver extension (forward).
 static SmallVector<AffineForOp, 4> findOpsASiblingChain(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
@@ -1114,8 +1109,8 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
   if (!parentLoop) {
     return false;
   }
-  if (currentNumIVs > 0) {
-    AffineForOp lastIVLoop = getForInductionVarOwner(slice.ivs[currentNumIVs - 1]);
+  if (currentNumIVs > kEmptyVarCount) {
+    AffineForOp lastIVLoop = getForInductionVarOwner(slice.ivs[currentNumIVs - kLastIndexOffset]);
     if (lastIVLoop != parentLoop) {
       return false;
     }
@@ -1130,15 +1125,15 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
   // avoids the const-cast trap of going through ArrayRef<AffineForOp>::operator[] (which
   // returns const T& and would discard qualifiers on OpState::getContext()).
   MLIRContext *ctx = opsA.front()->getContext();
-  AffineExpr d0 = getAffineDimExpr(0, ctx);
+  AffineExpr d0 = getAffineDimExpr(kFirstResultIndex, ctx);
   for (unsigned d = currentNumIVs; d < loopDepth; ++d) {
     AffineForOp srcLoop = extLoops[d - currentNumIVs];
     AffineForOp partnerLoop = partnerLoops[d];
     int64_t step = srcLoop.getStepAsInt();
 
     slice.ivs.push_back(srcLoop.getInductionVar());
-    slice.lbs.push_back(AffineMap::get(/*dimCount=*/1, /*symCount=*/0, d0));
-    slice.ubs.push_back(AffineMap::get(/*dimCount=*/1, /*symCount=*/0, d0 + step));
+    slice.lbs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0));
+    slice.ubs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0 + step));
     SmallVector<Value, 4> operands{partnerLoop.getInductionVar()};
     slice.lbOperands.push_back(operands);
     slice.ubOperands.push_back(operands);
@@ -1152,7 +1147,6 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
 // the receiver chain — without these matched siblings, target-block selection
 // would index past the end of the receiver nest. partnerLoops are the deep opsB
 // loops the siblings match against.
-//
 // Subsequent alignSliceWithPartnerLoops couples slice.ivs[d] (opsB IV) with the
 // appended sibling's IV at single-point bounds — yielding the same merge-point
 // shape as the backward-mode extension produces, just from the other direction.
@@ -1195,12 +1189,12 @@ static bool sliceHasInnerFor(const ComputationSliceState &slice, unsigned numSli
   for (unsigned i = 0; i < numSliceLoopIVs; ++i) {
     AffineMap lb = slice.lbs[i];
     AffineMap ub = slice.ubs[i];
-    if (!lb || !ub || lb.getNumResults() != 1 || ub.getNumResults() != 1) {
+    if (!lb || !ub || lb.getNumResults() != kSingleMapResult || ub.getNumResults() != kSingleMapResult) {
       return true;
     }
-    AffineExpr diff = ub.getResult(0) - lb.getResult(0);
+    AffineExpr diff = ub.getResult(kFirstResultIndex) - lb.getResult(kFirstResultIndex);
     auto cst = dyn_cast<AffineConstantExpr>(diff);
-    if (!cst || cst.getValue() != 1) {
+    if (!cst || cst.getValue() != kSingleIterationCount) {
       return true;
     }
   }
@@ -1222,7 +1216,8 @@ static void addMemrefConflictCandidates(ArrayRef<Operation *> clonedOps, Block *
     return;
   }
 
-  DenseSet<Value> clonedWrites, clonedReads;
+  DenseSet<Value> clonedWrites;
+  DenseSet<Value> clonedReads;
   clonedRoot->walk([&](Operation *nested) {
     if (auto w = dyn_cast<AffineWriteOpInterface>(nested)) {
       clonedWrites.insert(getSourceMemRef(w.getMemRef()));
@@ -1329,7 +1324,7 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
                                             ComputationSliceState *sliceUnion) {
   // Standard dependence-based approach.
   FlatAffineValueConstraints sliceUnionCst;
-  assert(sliceUnionCst.getNumDimAndSymbolVars() == 0);
+  assert(sliceUnionCst.getNumDimAndSymbolVars() == kEmptyVarCount);
   std::vector<std::pair<Operation *, Operation *>> dependentOpPairs;
   for (auto *i : opsA) {
     AKGMemRefAccess srcAccess(i);
@@ -1337,14 +1332,13 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
       return failed(processOpPairForSliceUnion(srcAccess, i, j, loopDepth, numCommonLoops, isBackwardSlice,
                                                sliceUnionCst, dependentOpPairs));
     });
-
     if (hasFailure) {
       return SliceComputationResult::GenericFailure;
     }
   }
 
   // Empty union.
-  if (sliceUnionCst.getNumDimAndSymbolVars() == 0) {
+  if (sliceUnionCst.getNumDimAndSymbolVars() == kEmptyVarCount) {
     return SliceComputationResult::GenericFailure;
   }
 
@@ -1393,7 +1387,7 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   sliceUnion->ubs.resize(numSliceLoopIVs, AffineMap());
 
   // Get slice bounds from slice union constraints 'sliceUnionCst'.
-  sliceUnionCst.getSliceBounds(/*offset=*/0, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs,
+  sliceUnionCst.getSliceBounds(/* offset= */ kStartPos, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs,
                                &sliceUnion->ubs);
 
   // Add slice bound operands of union.
@@ -1425,7 +1419,6 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   // consumer body sits at depth K+N: the matched src sibling becomes the merge point and
   // pre-spine ops (the write and its siblings) replicate at the outer dst level — same
   // execution count they had in src — instead of being smeared across dst's inner range.
-  //
   // Match against partnerLoops (always opsB-side, deep). In backward partnerLoops ==
   // surroundingLoops; in forward (shallow opsA) the function exits via the IV-continuity
   // check anyway — the depth lift in that direction is handled above by
@@ -1442,7 +1435,7 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   // - Otherwise the cloned body carries leftover inner fors; fall back to
   //   start/end of the surrounding body so the new fors don't get stranded
   //   parallel to siblings in the middle of flat producer/consumer chains.
-  Block *targetBlock = surroundingLoops[loopDepth - 1].getBody();
+  Block *targetBlock = surroundingLoops[loopDepth - kDepDepthIncrement].getBody();
   auto fallbackPoint = isBackwardSlice ? targetBlock->begin() : std::prev(targetBlock->end());
   if (sliceHasInnerFor(*sliceUnion, numSliceLoopIVs)) {
     sliceUnion->insertPoint = fallbackPoint;
@@ -1474,17 +1467,19 @@ bool AKGMemRefAccess::isStore() const { return isa<AffineWriteOpInterface>(opIns
 /// operands. The equality of access functions + operands is checked by
 /// subtracting fully composed value maps, and then simplifying the difference
 /// using the expression flattener.
-/// TODO(scheduler): this does not account for aliasing of memrefs.
+/// This does not account for aliasing of memrefs.
 bool AKGMemRefAccess::operator==(const AKGMemRefAccess &rhs) const {
   if (memref != rhs.memref) {
     return false;
   }
 
-  AffineValueMap diff, thisMap, rhsMap;
+  AffineValueMap diff;
+  AffineValueMap thisMap;
+  AffineValueMap rhsMap;
   getAccessMap(&thisMap);
   rhs.getAccessMap(&rhsMap);
   AffineValueMap::difference(thisMap, rhsMap, &diff);
-  return llvm::all_of(diff.getAffineMap().getResults(), [](AffineExpr e) { return e == 0; });
+  return llvm::all_of(diff.getAffineMap().getResults(), [](AffineExpr e) { return e == kZeroAffineExpr; });
 }
 
 }  // namespace affine

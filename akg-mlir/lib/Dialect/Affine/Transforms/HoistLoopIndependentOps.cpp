@@ -199,7 +199,6 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
     for (auto enclosingFor : allEnclosingLoops) {
       Value iv = enclosingFor.getInductionVar();
-
       // Check if memref depends on loop IV
       if (valueDependsOnIV(memref, iv)) {
         return false;

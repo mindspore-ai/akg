@@ -18,11 +18,10 @@
 #define AKG_DIALECT_NPUVECTOR_TRANSFORMS_ELIMSCFITERARGS_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
-
 namespace npuvector {
 
 std::unique_ptr<OperationPass<ModuleOp>> createElimScfIterArgsPass();

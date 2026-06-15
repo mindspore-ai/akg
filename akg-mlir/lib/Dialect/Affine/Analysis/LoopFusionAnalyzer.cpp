@@ -178,7 +178,8 @@ void TopoScheduler::processNode(unsigned node) {
   if (adjIt == adjacency.end()) {
     return;
   }
-  std::vector<size_t> nonSubview, subview;
+  std::vector<size_t> nonSubview;
+  std::vector<size_t> subview;
   for (size_t idx : adjIt->second) {
     (edges[idx].depInfo.memrefKind == MemrefKind::Subview ? subview : nonSubview).push_back(idx);
   }
@@ -352,7 +353,6 @@ std::unordered_map<unsigned, unsigned> FusionAnalyzer::findReachableGroups(unsig
 
 // Finds all terminal nodes (nodes with no outgoing edges) in paths starting from srcGroupId in fusePlans.
 // These terminal nodes represent the last nodes in different paths from srcGroupId.
-//
 // Example:
 // Assume fusePlans contains the following edges:
 //   - 33 -> 38
@@ -375,7 +375,6 @@ std::vector<unsigned> FusionAnalyzer::findLastNodesInPath(unsigned srcGroupId) {
       std::any_of(fusionPlans.begin(), fusionPlans.end(), [groupId, &reachable](const FusionPlan &plan) {
         return plan.fusedGroup.from == groupId && reachable.find(plan.fusedGroup.to) != reachable.end();
       });
-
     // If this node has no outgoing edges in the path, it's a last node
     if (!hasOutgoing) {
       lastNodes.push_back(groupId);
@@ -387,17 +386,14 @@ std::vector<unsigned> FusionAnalyzer::findLastNodesInPath(unsigned srcGroupId) {
 
 // Stitches two independent fusion chains into a single monotonically-increasing
 // chain ordered by groupId. Caller guarantees srcGroupId != dstGroupId.
-//
 // Let LO be the side with the smaller head groupId, HI the other. Pick
 // insertPoint = max{g ∈ reach(loHead) : g < hiHead}. Splice HI's chain into
 // LO's chain at insertPoint:
 //   - add insertPoint → hiHead         (inherits depInfo from origCacheKey)
 //   - replace insertPoint → nextInChain with hiTail → nextInChain
 //                                       (inherits depInfo from the erased edge)
-//
 // origCacheKey is the (from, to) of the RAR/multi-out edge that triggered this
 // stitch — its depInfo carries forward onto Bridge 1, the new cross-chain edge.
-//
 // dstSideWon matches the caller: true ⇒ oldPlan's `to` should be redirected
 // to dstGroupId; false ⇒ to srcGroupId.
 void FusionAnalyzer::stitchChainsByGroupId(unsigned srcGroupId, unsigned dstGroupId,
@@ -447,27 +443,28 @@ void FusionAnalyzer::stitchChainsByGroupId(unsigned srcGroupId, unsigned dstGrou
 
   // Bridge 2: replace existing insertPoint → nextInChain with hiTail → nextInChain.
   // Inherit depInfo from the erased edge (e.g. 27→28 inherits from 23→28).
-  if (nextInChain != UINT_MAX) {
-    auto erasedCacheKey = std::make_pair(insertPoint, nextInChain);
-    fusionPlans.erase(std::remove_if(fusionPlans.begin(), fusionPlans.end(),
-                                     [insertPoint, nextInChain](const FusionPlan &p) {
-                                       return p.fusedGroup.from == insertPoint && p.fusedGroup.to == nextInChain;
-                                     }),
-                      fusionPlans.end());
-    if (hiTail != nextInChain) {
-      auto htGrp = depGraph.getGroup(hiTail);
-      auto nxtGrp = depGraph.getGroup(nextInChain);
-      if (htGrp != nullptr && nxtGrp != nullptr) {
-        FusionPlan bridge2;
-        bridge2.fusedGroup = FuseEdge(hiTail, nextInChain);
-        bridge2.fusedBand = FuseEdge(htGrp->rootId, nxtGrp->rootId);
-        auto newCacheKey = std::make_pair(hiTail, nextInChain);
-        if (groupDependenciesCache.find(erasedCacheKey) != groupDependenciesCache.end() &&
-            groupDependenciesCache.find(newCacheKey) == groupDependenciesCache.end()) {
-          groupDependenciesCache[newCacheKey] = groupDependenciesCache[erasedCacheKey];
-        }
-        addFusionPlan(bridge2);
+  if (nextInChain == UINT_MAX) {
+    return;
+  }
+  auto erasedCacheKey = std::make_pair(insertPoint, nextInChain);
+  fusionPlans.erase(std::remove_if(fusionPlans.begin(), fusionPlans.end(),
+                                   [insertPoint, nextInChain](const FusionPlan &p) {
+                                     return p.fusedGroup.from == insertPoint && p.fusedGroup.to == nextInChain;
+                                   }),
+                    fusionPlans.end());
+  if (hiTail != nextInChain) {
+    auto htGrp = depGraph.getGroup(hiTail);
+    auto nxtGrp = depGraph.getGroup(nextInChain);
+    if (htGrp != nullptr && nxtGrp != nullptr) {
+      FusionPlan bridge2;
+      bridge2.fusedGroup = FuseEdge(hiTail, nextInChain);
+      bridge2.fusedBand = FuseEdge(htGrp->rootId, nxtGrp->rootId);
+      auto newCacheKey = std::make_pair(hiTail, nextInChain);
+      if (groupDependenciesCache.find(erasedCacheKey) != groupDependenciesCache.end() &&
+          groupDependenciesCache.find(newCacheKey) == groupDependenciesCache.end()) {
+        groupDependenciesCache[newCacheKey] = groupDependenciesCache[erasedCacheKey];
       }
+      addFusionPlan(bridge2);
     }
   }
 }
@@ -618,59 +615,58 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 
   for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
     auto &oldPlan = *it;
-    bool multiOut = oldPlan.fusedGroup.from == fusePlan.fusedGroup.from;
+    if (oldPlan.fusedGroup.from != fusePlan.fusedGroup.from) {
+      continue;
+    }
 
-    if (multiOut) {
-      auto oldGroup = depGraph.getGroup(oldPlan.fusedGroup.to);
-      auto newGroup = depGraph.getGroup(fusePlan.fusedGroup.to);
+    auto oldGroup = depGraph.getGroup(oldPlan.fusedGroup.to);
+    auto newGroup = depGraph.getGroup(fusePlan.fusedGroup.to);
+    if (oldGroup == nullptr || newGroup == nullptr) {
+      continue;
+    }
 
-      if (oldGroup == nullptr || newGroup == nullptr) {
-        continue;
+    // Check if backward intersection points exist
+    bool isAncestry = false;
+    if (findBackwardIntersection(oldGroup, newGroup, &isAncestry)) {
+      // Keep smaller-groupId target edge, delete larger-groupId one; softDefer(deferred=larger, mustFirst=smaller).
+      // deferred = larger-groupId side, mustFirst = smaller-groupId side.
+      if (newGroup->groupId < oldGroup->groupId) {
+        // newGroup smaller — drop the existing A->oldGroup edge; caller will add A->newGroup.
+        softDeferConstraints.emplace_back(oldGroup->groupId, newGroup->groupId);
+        fusionPlans.erase(it);
+        return true;
       }
-
-      // Check if backward intersection points exist
-      bool isAncestry = false;
-      if (findBackwardIntersection(oldGroup, newGroup, &isAncestry)) {
-        // Keep smaller-groupId target edge, delete larger-groupId one; softDefer(deferred=larger, mustFirst=smaller).
-        // deferred = larger-groupId side, mustFirst = smaller-groupId side.
-        if (newGroup->groupId < oldGroup->groupId) {
-          // newGroup smaller — drop the existing A->oldGroup edge; caller will add A->newGroup.
-          softDeferConstraints.emplace_back(oldGroup->groupId, newGroup->groupId);
-          fusionPlans.erase(it);
-          return true;
-        }
-        // oldGroup smaller (or equal) — keep the existing edge; reject the new plan.
-        softDeferConstraints.emplace_back(newGroup->groupId, oldGroup->groupId);
-        return false;
-      }
-
-      if (isAncestry) {
-        return false;
-      }
-
-      // No backward intersection points. Stitch the two chains by groupId; smaller
-      // groupId is the inner (src) side, larger is the outer (dst) side, matching
-      // loHead/hiHead normalization inside stitchChainsByGroupId.
-      GroupPtr srcGroup = (oldGroup->groupId < newGroup->groupId) ? oldGroup : newGroup;
-      GroupPtr dstGroup = (oldGroup->groupId < newGroup->groupId) ? newGroup : oldGroup;
-
-      unsigned oldFrom = oldPlan.fusedGroup.from;
-      unsigned oldTo = oldPlan.fusedGroup.to;
-      unsigned newFrom = fusePlan.fusedGroup.from;
-      unsigned newTo = fusePlan.fusedGroup.to;
-
-      // stitchChainsByGroupId always inserts at least loHead→hiHead when src≠dst,
-      // so we never need a separate "direct fuse" fallback. Redirect oldPlan onto
-      // the chosen side unconditionally. Pass the original fusePlan key so Bridge 1's
-      // depInfo can be inherited directly from it.
-      bool dstSideWon = false;
-      stitchChainsByGroupId(srcGroup->groupId, dstGroup->groupId, std::make_pair(newFrom, newTo), &dstSideWon);
-
-      unsigned newToId = dstSideWon ? dstGroup->groupId : srcGroup->groupId;
-      unsigned newToBandId = dstSideWon ? dstGroup->rootId : srcGroup->rootId;
-      updateFusionPlanByGroup(oldFrom, oldTo, newToId, newToBandId);
+      // oldGroup smaller (or equal) — keep the existing edge; reject the new plan.
+      softDeferConstraints.emplace_back(newGroup->groupId, oldGroup->groupId);
       return false;
     }
+
+    if (isAncestry) {
+      return false;
+    }
+
+    // No backward intersection points. Stitch the two chains by groupId; smaller
+    // groupId is the inner (src) side, larger is the outer (dst) side, matching
+    // loHead/hiHead normalization inside stitchChainsByGroupId.
+    GroupPtr srcGroup = (oldGroup->groupId < newGroup->groupId) ? oldGroup : newGroup;
+    GroupPtr dstGroup = (oldGroup->groupId < newGroup->groupId) ? newGroup : oldGroup;
+
+    unsigned oldFrom = oldPlan.fusedGroup.from;
+    unsigned oldTo = oldPlan.fusedGroup.to;
+    unsigned newFrom = fusePlan.fusedGroup.from;
+    unsigned newTo = fusePlan.fusedGroup.to;
+
+    // stitchChainsByGroupId always inserts at least loHead→hiHead when src≠dst,
+    // so we never need a separate "direct fuse" fallback. Redirect oldPlan onto
+    // the chosen side unconditionally. Pass the original fusePlan key so Bridge 1's
+    // depInfo can be inherited directly from it.
+    bool dstSideWon = false;
+    stitchChainsByGroupId(srcGroup->groupId, dstGroup->groupId, std::make_pair(newFrom, newTo), &dstSideWon);
+
+    unsigned newToId = dstSideWon ? dstGroup->groupId : srcGroup->groupId;
+    unsigned newToBandId = dstSideWon ? dstGroup->rootId : srcGroup->rootId;
+    updateFusionPlanByGroup(oldFrom, oldTo, newToId, newToBandId);
+    return false;
   }
   return true;
 }
@@ -823,7 +819,6 @@ void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId,
 // walk source's chain, find first edge X→Y where Y > target, redirect X→Y to X→target.
 // Propagate deleted X→Y dep info to the recipient edge at the convergence point,
 // and inherit (source, target) RAR cache for the new bridge edge.
-//
 // Example (13,16) : source chain 13→14→26→27→28, target chain 16→25→28.
 //   (1) bridgeFromId=14, existingTo=26 (26>16)
 //   (2) snapshot cache[(14,26)] as deletedDep, remove edge 14→26
@@ -889,6 +884,20 @@ void FusionAnalyzer::bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge) {
 // conflicting pair, rewrite the one with larger source groupId as an H fusion edge,
 // and re-scan (each rewrite mutates fusionPlans, which may dissolve/expose conflicts).
 // Survivors → softDeferConstraints.
+size_t FusionAnalyzer::findConflictingCandidate(const std::vector<std::pair<unsigned, unsigned>> &candidates,
+                                                const std::vector<bool> &rewritten, size_t startIdx) {
+  for (size_t j = startIdx + 1; j < candidates.size(); ++j) {
+    if (rewritten[j]) {
+      continue;
+    }
+    if (!isConflictingPair(candidates[startIdx], candidates[j])) {
+      continue;
+    }
+    return (candidates[startIdx].first > candidates[j].first) ? startIdx : j;
+  }
+  return candidates.size();
+}
+
 void FusionAnalyzer::resolveConflictingDefers(std::vector<std::pair<unsigned, unsigned>> &candidates) {
   std::vector<bool> rewritten(candidates.size(), false);
 
@@ -899,19 +908,13 @@ void FusionAnalyzer::resolveConflictingDefers(std::vector<std::pair<unsigned, un
       if (rewritten[i]) {
         continue;
       }
-      for (size_t j = i + 1; j < candidates.size(); ++j) {
-        if (rewritten[j]) {
-          continue;
-        }
-        if (!isConflictingPair(candidates[i], candidates[j])) {
-          continue;
-        }
-        size_t pickIdx = (candidates[i].first > candidates[j].first) ? i : j;
-        bridgeChainToTarget(candidates[pickIdx]);
-        rewritten[pickIdx] = true;
-        changed = true;
-        break;
+      size_t pickIdx = findConflictingCandidate(candidates, rewritten, i);
+      if (pickIdx == candidates.size()) {
+        continue;
       }
+      bridgeChainToTarget(candidates[pickIdx]);
+      rewritten[pickIdx] = true;
+      changed = true;
     }
   }
 

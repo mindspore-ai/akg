@@ -120,13 +120,11 @@ struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp
   LogicalResult matchAndRewrite(affine::AffineLoadOp loadOp, PatternRewriter &rewriter) const override {
     Value memref = loadOp.getMemRef();
     auto memrefType = dyn_cast<MemRefType>(memref.getType());
-
     if (!memrefType || !isa<BFloat16Type>(memrefType.getElementType())) {
       return failure();  // Not a bf16 memref, skip
     }
 
     Value loadedValue = loadOp.getResult();
-
     // Check if all uses are only affine.store or arith::ExtFOp
     // If so, we don't need to convert (store will handle it, or ExtFOp already exists)
     if (!llvm::any_of(loadedValue.getUses(), [](OpOperand &use) {
@@ -384,7 +382,7 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
   TypeConverter typeConverter;
 };
 
-class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<LegalizeTypeForAscendPass> {
+class LegalizeTypeForAscend : public impl::LegalizeTypeForAscendBase<LegalizeTypeForAscend> {
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     MLIRContext *context = &getContext();
@@ -423,6 +421,6 @@ class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<Legaliz
 
 }  // namespace
 std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass() {
-  return std::make_unique<LegalizeTypeForAscendPass>();
+  return std::make_unique<LegalizeTypeForAscend>();
 }
 }  // namespace mlir

@@ -16,7 +16,7 @@
 
 #include <sys/syscall.h>
 #include <unistd.h>
-#include <string.h>
+#include <string>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/ProfileMgr.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
@@ -27,8 +27,7 @@ bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
   LOG(INFO) << "Start to profile";
 
   int32_t current_device = -1;
-  aclError ret = aclrtGetDevice(&current_device);
-
+  int ret = aclrtGetDevice(&current_device);
   if (ret != ACL_SUCCESS || current_device != static_cast<int32_t>(device_id)) {
     ret = aclrtSetDevice(device_id);
     if (ret != ACL_SUCCESS) {
@@ -56,13 +55,13 @@ bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
     return false;
   }
 
-  char *profile_dir = std::getenv("PROFILING_DIR");
-  if (profile_dir == nullptr) {
+  std::string profile_dir(std::getenv("PROFILING_DIR") ? std::getenv("PROFILING_DIR") : "");
+  if (profile_dir.empty()) {
     LOG(ERROR) << "Environment PROFILING_DIR not set";
     return false;
   }
 
-  ret = aclprofInit(profile_dir, strlen(profile_dir));
+  ret = aclprofInit(profile_dir.c_str(), profile_dir.length());
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "aclprofInit failed, ret = " << ret;
     return false;
@@ -88,7 +87,7 @@ bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
 
 bool ProfileMgr::StopProfiling() {
   LOG(INFO) << "End to profile";
-  aclError ret = aclprofStop(acl_config_);
+  int ret = aclprofStop(acl_config_);
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "aclprofDestroyConfig failed, ret = " << ret;
     return false;

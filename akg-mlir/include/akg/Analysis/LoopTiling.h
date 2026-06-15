@@ -21,22 +21,16 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
 using llvm::DenseMap;
 using llvm::SmallVector;
 
 namespace mlir {
-class Value;
-class OpBuilder;
-namespace func {
-class FuncOp;
-}  // namespace func
-namespace scf {
-class ForOp;
-}  // namespace scf
-
 namespace autotiling {
 
 struct TilingMetadata {
@@ -58,8 +52,7 @@ struct TilingMetadata {
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape = false);
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
-                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
-                                    TilingMetadata *metadata);
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape, TilingMetadata *metadata);
 
 // Get the selected tiling strategy index (default: 0)
 int64_t getSelectedTilingStrategyIndex();

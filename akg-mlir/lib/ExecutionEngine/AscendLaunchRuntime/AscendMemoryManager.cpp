@@ -27,34 +27,34 @@ size_t GetCommonAlignSize(size_t input_size) {
 }
 
 uint64_t GetDefaultDeviceMemSize() {
-  size_t free = 0;
+  size_t freeSize = 0;
   size_t total = 0;
-  aclError ret = aclrtGetMemInfo(ACL_HBM_MEM, &free, &total);
+  int ret = aclrtGetMemInfo(ACL_HBM_MEM, &freeSize, &total);
   if (ret != ACL_SUCCESS) {
     LOG(FATAL) << "Get Device HBM memory size failed, ret = " << ret << ", total = " << total;
   }
   if (total == 0) {
-    ret = aclrtGetMemInfo(ACL_DDR_MEM, &free, &total);
+    ret = aclrtGetMemInfo(ACL_DDR_MEM, &freeSize, &total);
     if (ret != ACL_SUCCESS) {
       LOG(FATAL) << "Get Device DDR memory size failed, ret = " << ret << ", total = " << total;
     }
   }
   uint64_t by_total = total * 15 / 16;
-  uint64_t by_free = free * 8 / 10;
+  uint64_t by_free = freeSize * 8 / 10;
   uint64_t want = std::min<uint64_t>(by_free, by_total);
   constexpr uint64_t kMinAlloc = 256ULL << 20;
   if (want < kMinAlloc) {
     want = kMinAlloc;
   }
   want = GetCommonAlignSize(want);
-  LOG(INFO) << "HBM total=" << total << " free=" << free << " alloc=" << want;
+  LOG(INFO) << "HBM total=" << total << " free=" << freeSize << " alloc=" << want;
   return want;
 }
 }  // namespace
 
 void AscendMemoryManager::MallocDeviceMemory() {
   device_mem_size_ = GetDefaultDeviceMemSize();
-  aclError ret;
+  int ret;
   auto max_retry = 3;
   for (auto i = 0; i < max_retry; ++i) {
     ret = aclrtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, ACL_MEM_MALLOC_HUGE_FIRST);
