@@ -32,12 +32,12 @@ namespace mlir {
 using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace {
-class ConvertFusionToMemVecPass : public impl::ConvertFusionToMemVecBase<ConvertFusionToMemVecPass> {
+class FusionToMemVecPass : public impl::ConvertFusionToMemVecBase<FusionToMemVecPass> {
   void runOnOperation() override;
 };
 }  // namespace
 
-void ConvertFusionToMemVecPass::runOnOperation() {
+void FusionToMemVecPass::runOnOperation() {
   MLIRContext *context = &getContext();
   ConversionTarget target(*context);
   target.addLegalDialect<memref::MemRefDialect>();
@@ -53,4 +53,4 @@ void ConvertFusionToMemVecPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<>> mlir::createLowerFusionPass() { return std::make_unique<ConvertFusionToMemVecPass>(); }
+std::unique_ptr<OperationPass<>> mlir::createLowerFusionPass() { return std::make_unique<FusionToMemVecPass>(); }

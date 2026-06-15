@@ -111,7 +111,6 @@ std::optional<SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFromValue(
     }
     return std::nullopt;
   };
-
   // Case 1: Direct type has SymShapeAttr
   if (auto symShape = getSymShape(source.getType())) {
     return symShape;
@@ -363,7 +362,6 @@ void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
     // Apply node alias resolution to get the actual current node IDs
     auto actualSrcId = codegenerator.getAliasId(plan.fusedBand.from);
     auto actualDstId = codegenerator.getAliasId(plan.fusedBand.to);
-
     // Skip if source node has been fused into destination (alias exists)
     if (actualSrcId == actualDstId) {
       continue;
@@ -375,7 +373,6 @@ void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
       auto &futurePlan = analyzer.fusionPlans[j];
       auto futureSrcId = codegenerator.getAliasId(futurePlan.fusedBand.from);
       auto futureDstId = codegenerator.getAliasId(futurePlan.fusedBand.to);
-
       // Check for bidirectional conflict: current (src->dst) conflicts with future (dst->src)
       if ((actualSrcId == futureDstId && actualDstId == futureSrcId) ||
           (actualSrcId == futureSrcId && actualDstId == futureDstId)) {

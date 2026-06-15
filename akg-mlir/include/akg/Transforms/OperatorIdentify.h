@@ -18,12 +18,10 @@
 #define TRANSFORMS_OPERATORIDENTIFY_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGOperatorIdentifyPass();
 

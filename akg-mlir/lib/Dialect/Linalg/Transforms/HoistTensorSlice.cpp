@@ -89,7 +89,6 @@ static bool isFuncLeaf(Value v, func::FuncOp func) {
 /// Build the cone of linalg.generic ops from `rootOp` upward until hitting
 /// leaves (func args / constants). Populates `cone`. Returns false if any of
 /// the hoisting preconditions is violated.
-///
 /// Preconditions:
 ///  - rootOp and every op in the cone is a linalg.generic with exactly one
 ///    dps init. Reduction iterators are allowed .
@@ -118,7 +117,7 @@ static bool buildCone(Operation *rootOp, const DenseSet<Operation *> &sliceSet, 
     // Every indexing map must be a projected permutation so that
     // computeOperandSlice's iter-space reasoning is valid.
     for (AffineMap m : gen.getIndexingMapsArray()) {
-      if (!m.isProjectedPermutation(/*allowZeroInResults=*/true)) {
+      if (!m.isProjectedPermutation(/* allowZeroInResults= */ true)) {
         return false;
       }
     }
@@ -183,10 +182,8 @@ static SmallVector<OpFoldResult> computeIterSpaceExtents(linalg::GenericOp op, O
     for (OpOperand &opnd : op->getOpOperands()) {
       AffineMap m = op.getMatchingIndexingMap(&opnd);
       for (unsigned d = 0; d < m.getNumResults() && !sizeVal; ++d) {
-        if (auto dimE = dyn_cast<AffineDimExpr>(m.getResult(d))) {
-          if (dimE.getPosition() == it) {
-            sizeVal = b.createOrFold<tensor::DimOp>(loc, opnd.get(), d);
-          }
+        if (auto dimE = dyn_cast<AffineDimExpr>(m.getResult(d)); dimE && dimE.getPosition() == it) {
+          sizeVal = b.createOrFold<tensor::DimOp>(loc, opnd.get(), d);
         }
       }
       if (sizeVal) {
@@ -202,7 +199,6 @@ static SmallVector<OpFoldResult> computeIterSpaceExtents(linalg::GenericOp op, O
 /// Given a linalg.generic `op`, the slice on its (single) output, and one of
 /// its input operands, compute the corresponding slice on that input by
 /// propagating through the indexing maps.
-///
 /// REDUCE: iter-dims that do NOT appear in the output map (i.e. reduction
 /// dims) are kept at their full extent, so the upstream input is sliced only
 /// along parallel dims and never along reduction dims.
@@ -340,10 +336,8 @@ static Value materializeSliced(Value val, const SliceSpec &slice, const DenseSet
 
     SmallVector<Value> dynSizes;
     for (size_t i = 0; i < newShape.size(); ++i) {
-      if (ShapedType::isDynamic(newShape[i])) {
-        if (auto v = dyn_cast<Value>(slice.sizes[i])) {
-          dynSizes.push_back(v);
-        }
+      if (ShapedType::isDynamic(newShape[i]) && isa<Value>(slice.sizes[i])) {
+        dynSizes.push_back(cast<Value>(slice.sizes[i]));
       }
     }
 

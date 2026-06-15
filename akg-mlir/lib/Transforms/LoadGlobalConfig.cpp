@@ -43,17 +43,17 @@ constexpr auto kAxisInfoMap = "axisInfoMap";
 constexpr auto kLoopStructure = "loopStructure";
 
 // ===----------------------------------------------------------------------===//
-// LoadGlobalConfigPass
+// LoadGlobalConfig
 // Users may inject some custom configs during lowering pipelines for performance
 // considerations. This pass receives user configs as json file and convertes
 // supported custom configs into global vars.
 // E.g. run pipeline with option `global-config-file=custom_config.json`
 // ===----------------------------------------------------------------------===//
 
-class LoadGlobalConfigPass : public impl::LoadGlobalConfigBase<LoadGlobalConfigPass> {
+class LoadGlobalConfig : public impl::LoadGlobalConfigBase<LoadGlobalConfig> {
  public:
-  LoadGlobalConfigPass() {}
-  explicit LoadGlobalConfigPass(const std::string &jsonFileName) { fileName = jsonFileName; }
+  LoadGlobalConfig() {}
+  explicit LoadGlobalConfig(const std::string &jsonFileName) { fileName = jsonFileName; }
   void runOnOperation() override;
   void loadFileToGlobal();
 
@@ -63,7 +63,7 @@ class LoadGlobalConfigPass : public impl::LoadGlobalConfigBase<LoadGlobalConfigP
   void parseGpuSchedule();
 };
 
-void LoadGlobalConfigPass::parseShapeInfo() {
+void LoadGlobalConfig::parseShapeInfo() {
   if (rawJson.contains(kHostShapes)) {
     std::map<size_t, ShapeInfo> init;
     for (size_t i = 0; i < rawJson.at(kHostShapes).size(); ++i) {
@@ -87,7 +87,7 @@ void LoadGlobalConfigPass::parseShapeInfo() {
   }
 }
 
-void LoadGlobalConfigPass::parseGpuSchedule() {
+void LoadGlobalConfig::parseGpuSchedule() {
   if (rawJson.contains(kGpuSchedules)) {
     auto gpuSchedules = rawJson.at(kGpuSchedules);
     if (gpuSchedules.contains(kAxisRootName)) {
@@ -121,13 +121,13 @@ void LoadGlobalConfigPass::parseGpuSchedule() {
   }
 }
 
-void LoadGlobalConfigPass::loadFileToGlobal() {
-  rawJson = DirUtils::checkAndReadJson(fileName);
+void LoadGlobalConfig::loadFileToGlobal() {
+  rawJson = IOHelper::checkAndReadJson(fileName);
   parseShapeInfo();
   parseGpuSchedule();
 }
 
-void LoadGlobalConfigPass::runOnOperation() {
+void LoadGlobalConfig::runOnOperation() {
   if (fileName.empty()) {
     return;
   }
@@ -135,8 +135,8 @@ void LoadGlobalConfigPass::runOnOperation() {
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createLoadGlobalConfigPass() { return std::make_unique<LoadGlobalConfigPass>(); }
+std::unique_ptr<Pass> mlir::createLoadGlobalConfigPass() { return std::make_unique<LoadGlobalConfig>(); }
 
 std::unique_ptr<Pass> mlir::createLoadGlobalConfigPass(const std::string &fileName) {
-  return std::make_unique<LoadGlobalConfigPass>(fileName);
+  return std::make_unique<LoadGlobalConfig>(fileName);
 }

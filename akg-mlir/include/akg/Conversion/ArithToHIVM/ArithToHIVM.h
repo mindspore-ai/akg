@@ -18,11 +18,11 @@
 #define AKG_CONVERSION_ARITHTOHIVM_ARITHTOHIVM_H
 
 #include <memory>
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class LLVMTypeConverter;
-class RewritePatternSet;
-class Pass;
 
 #define GEN_PASS_DECL_CONVERTARITHTOHIVM
 #include "akg/Conversion/Passes.h.inc"

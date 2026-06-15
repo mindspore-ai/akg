@@ -303,9 +303,10 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
   return success();
 }
 template <typename SrcOp>
-class ReduceConverterPattern : public RewritePattern {
+class TosaMultiReduceToLinalgPattern : public RewritePattern {
  public:
-  explicit ReduceConverterPattern(MLIRContext *context) : RewritePattern(SrcOp::getOperationName(), 1, context) {}
+  explicit TosaMultiReduceToLinalgPattern(MLIRContext *context)
+      : RewritePattern(SrcOp::getOperationName(), 1, context) {}
 
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const final {
     return reduceMatchAndRewriteHelper(op, rewriter);
@@ -318,12 +319,12 @@ struct TosaMultiReduceToLinalg : public impl::TosaMultiReduceToLinalgBase<TosaMu
     func::FuncOp funcOp = getOperation();
     MLIRContext *context = funcOp.getContext();
     RewritePatternSet patterns(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceAllOp>>(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceAnyOp>>(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceMaxOp>>(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceMinOp>>(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceProdOp>>(context);
-    (void)patterns.insert<ReduceConverterPattern<tosa::ReduceSumOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceAllOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceAnyOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceMaxOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceMinOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceProdOp>>(context);
+    (void)patterns.insert<TosaMultiReduceToLinalgPattern<tosa::ReduceSumOp>>(context);
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       signalPassFailure();
     }

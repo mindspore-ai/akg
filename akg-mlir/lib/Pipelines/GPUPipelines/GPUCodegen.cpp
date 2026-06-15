@@ -42,9 +42,7 @@ void createGpuCodegenPipeline(OpPassManager &pm, const GPUCodegenPipelineOptions
   pm.addPass(createConvertControlFlowToLLVMPass());
   pm.addPass(createConvertGpuOpsToNVVMOps());
   pm.addPass(createConvertMathToLLVMPass());
-  // pm.addPass(createConvertLinalgToLLVMPass());
   pm.addPass(createConvertMathToLLVMPass());
-  // pm.addPass(createMemRefToLLVMConversionPass());
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
 
   mlir::MLIRContext tmp_context;

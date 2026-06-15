@@ -549,7 +549,8 @@ LogicalResult TransposeOp::verify() {
 // StoreOp
 // ===----------------------------------------------------------------------=== //
 ::mlir::ParseResult StoreOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
-  OpAsmParser::UnresolvedOperand valueInfo, memrefInfo;
+  OpAsmParser::UnresolvedOperand valueInfo;
+  OpAsmParser::UnresolvedOperand memrefInfo;
   SmallVector<OpAsmParser::UnresolvedOperand, 8> indexInfo;
   if (parser.parseOperand(valueInfo) || parser.parseComma() || parser.parseOperand(memrefInfo) ||
       parser.parseOperandList(indexInfo, OpAsmParser::Delimiter::Square)) {

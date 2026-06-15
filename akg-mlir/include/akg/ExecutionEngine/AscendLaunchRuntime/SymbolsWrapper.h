@@ -37,8 +37,8 @@ namespace runtime {
 
 // load function ptr use dlopen and dlsym.
 #define LOAD_FUNCTION_PTR(func_name)                                                        \
-  func_name = reinterpret_cast<func_name##Func>(dlsym(handle_ptr, #func_name));             \
-  if (func_name == nullptr) {                                                               \
+  this->func_name = reinterpret_cast<func_name##Func>(dlsym(handle_ptr, #func_name));       \
+  if (this->func_name == nullptr) {                                                         \
     LOG(ERROR) << "load func (" << #func_name << ") from (" << library_path << ") failed!"; \
     UnLoadLibraries();                                                                      \
     return false;                                                                           \

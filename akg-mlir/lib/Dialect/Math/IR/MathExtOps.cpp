@@ -83,7 +83,8 @@ void mlir::mathExt::MathExtDialect::initialize() {
 // ===----------------------------------------------------------------------===//
 
 OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
-  const uint64_t width64 = 64, width32 = 32;
+  const uint64_t width64 = 64;
+  const uint64_t width32 = 32;
   return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:
@@ -100,7 +101,8 @@ OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
 // AcosOp folder
 // ===----------------------------------------------------------------------===//
 OpFoldResult mathExt::AcosOp::fold(FoldAdaptor adaptor) {
-  const uint64_t width64 = 64, width32 = 32;
+  const uint64_t width64 = 64;
+  const uint64_t width32 = 32;
   return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:

@@ -296,8 +296,8 @@ static bool isScalarType(Type type) { return isa<IntegerType, FloatType, IndexTy
 
 static bool requiresVectorRhsForHIVMLowering(Operation *user) {
   // arith.divf keeps scalar broadcast as a vector operand instead of folding to the scalar.
-  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp,
-             arith::DivFOp>(user);
+  return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp, arith::DivFOp>(
+    user);
 }
 
 static bool isVectorOrNPUVectorLike(Type type) { return isa<VectorType, npuvector::NPUVectorType>(type); }
@@ -668,7 +668,6 @@ static FailureOr<DenseI64ArrayAttr> inferElementwiseBroadcastAttr(Value lhs, Val
     }
     return success();
   };
-
   if (failed(collectFromOperand(lhs)) || failed(collectFromOperand(rhs))) {
     return failure();
   }
@@ -729,7 +728,6 @@ template <typename HIVMOp>
 static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
                                Operation *anchor = nullptr) {
   DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
-
   if (broadcastAttr && !broadcastAttr.empty()) {
     markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
     rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
@@ -949,13 +947,12 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     SmallVector<Value> allocOperands;
     if (memRefType.getNumDynamicDims() > 0) {
       for (int i = 0; i < memRefType.getRank(); ++i) {
-        if (memRefType.isDynamicDim(i)) {
-          auto dimVal = getMemRefDimValue(srcMemRef, i);
-          if (failed(dimVal)) {
-            return failure();
-          }
-          allocOperands.push_back(*dimVal);
+        if (!memRefType.isDynamicDim(i)) continue;
+        auto dimVal = getMemRefDimValue(srcMemRef, i);
+        if (failed(dimVal)) {
+          return failure();
         }
+        allocOperands.push_back(*dimVal);
       }
     }
     hivm::RoundMode rounding = selectRoundMode(op);
@@ -2219,7 +2216,6 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value source = adaptor.getSource();
-
     if (isa<VectorType>(source.getType())) {
       return rewriter.notifyMatchFailure(op, "vector broadcast not supported");
     }
@@ -2333,7 +2329,6 @@ struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferRea
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value source = adaptor.getSource();
-
     if (!isa<MemRefType>(source.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref source");
     }
@@ -2387,7 +2382,6 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
 
     Value dataToWrite = adaptor.getVector();
     Value dest = adaptor.getSource();
-
     if (!isa<MemRefType>(dest.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref destination");
     }
@@ -2429,7 +2423,6 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
 
     auto destMemRefType = cast<MemRefType>(slicedDest.getType());
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
-
     // Align ranks between source data and destination slice.
     if (dataMemRefType.getRank() != destMemRefType.getRank()) {
       // Collapse source data to scalar if it has higher rank (e.g., memref<1> to memref<>).
@@ -2463,7 +2456,6 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
 
     auto valType = dyn_cast<MemRefType>(valToStore.getType());
     auto memRefType = dyn_cast<MemRefType>(memref.getType());
-
     if (!valType || !memRefType) {
       return failure();
     }
@@ -2612,7 +2604,6 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
 
     Type resultType = op.getResult().getType();
     bool isPartial = static_cast<int64_t>(reduceDims.size()) < rank;
-
     if (isPartial) {
       return rewritePartialMemRefReductionCollapse(op, rewriter, loc, srcMemRefType, elemType, resultBuf, reduceDimSet,
                                                    rank);
@@ -2757,6 +2748,18 @@ static Value traceMemRefToRoot(Value v, int maxSteps = 32) {
     }
   }
   return current;
+}
+
+static Value traceDataToWriteRoot(Value dataToWrite) {
+  auto forOp = dataToWrite.getDefiningOp<scf::ForOp>();
+  if (forOp) {
+    for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
+      if (forOp.getResult(i) == dataToWrite) {
+        return traceMemRefToRoot(forOp.getInitArgs()[i]);
+      }
+    }
+  }
+  return traceMemRefToRoot(dataToWrite);
 }
 
 static bool isRootFromAlloc(Value root) {
@@ -3059,7 +3062,6 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value source = adaptor.getSource();
-
     if (!isa<MemRefType>(source.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref source");
     }
@@ -3605,7 +3607,6 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
   };
   const bool destDominates = dominatesInsertPoint(domInfo, dest, insertPt);
   const bool indicesAvailable = indexAvailable(offsets) && indexAvailable(sizes) && indexAvailable(strides);
-
   if (destDominates && indicesAvailable) {
     return fuseTransferWriteOnProducerSide(op, loc, dest, actualBuf, allocDef, insertPt, resultMemType, offsets, sizes,
                                            strides, rewriter);
@@ -3624,20 +3625,9 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
 
     Value dataToWrite = adaptor.getVector();
     Value dest = adaptor.getSource();
-
     // No-op when data and dest share the same alloc root (for results: map through init args).
     if (isa<MemRefType>(dataToWrite.getType()) && isa<MemRefType>(dest.getType())) {
-      Value dataRoot = dataToWrite;
-      if (auto forOp = dataToWrite.getDefiningOp<scf::ForOp>()) {
-        for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
-          if (forOp.getResult(i) == dataToWrite) {
-            dataRoot = traceMemRefToRoot(forOp.getInitArgs()[i]);
-            break;
-          }
-        }
-      } else {
-        dataRoot = traceMemRefToRoot(dataToWrite);
-      }
+      Value dataRoot = traceDataToWriteRoot(dataToWrite);
       Value destRoot = traceMemRefToRoot(dest);
       if (dataRoot == destRoot && isRootFromAlloc(destRoot)) {
         rewriter.eraseOp(op);
@@ -3892,9 +3882,8 @@ static LogicalResult allocBroadcastBuffer(npuvector::BroadcastOp op, Location lo
   if (memRefType.getNumDynamicDims() > 0 && !dynSizes.empty()) {
     if (static_cast<int64_t>(dynSizes.size()) == npuVecType.getRank()) {
       for (int64_t i = 0; i < npuVecType.getRank(); ++i) {
-        if (memRefType.isDynamicDim(i)) {
-          allocOperands.push_back(dynSizes[static_cast<unsigned>(i)]);
-        }
+        if (!memRefType.isDynamicDim(i)) continue;
+        allocOperands.push_back(dynSizes[static_cast<unsigned>(i)]);
       }
     } else {
       allocOperands.assign(dynSizes.begin(), dynSizes.end());
@@ -3952,7 +3941,6 @@ static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, 
   auto srcMemTy = cast<MemRefType>(source.getType());
   int64_t srcRank = srcMemTy.getRank();
   int64_t dstRank = dstMemTy.getRank();
-
   if (srcRank > dstRank) {
     return rewriter.notifyMatchFailure(op, "npuvector.broadcast: source memref rank exceeds destination");
   }
@@ -4231,7 +4219,6 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value src = adaptor.getVector();
-
     if (!isa<MemRefType>(src.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref source");
     }

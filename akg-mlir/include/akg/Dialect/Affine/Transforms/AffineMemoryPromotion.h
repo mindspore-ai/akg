@@ -19,12 +19,10 @@
 
 #include <memory>
 #include <string>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createAffineMemoryPromotionPass(const std::string &target);
 std::unique_ptr<OperationPass<func::FuncOp>> createAffineMemoryPromotionPass();

@@ -108,9 +108,9 @@ struct DynamicDataFlow {
 };
 using DynamicDataFlowPtr = std::shared_ptr<DynamicDataFlow>;
 
-class FixDynamicIndexingPass : public impl::FixDynamicIndexingBase<FixDynamicIndexingPass> {
+class FixDynamicIndexing : public impl::FixDynamicIndexingBase<FixDynamicIndexing> {
  public:
-  FixDynamicIndexingPass() {}
+  FixDynamicIndexing() {}
 
   void runOnOperation() override;
 
@@ -130,6 +130,8 @@ class FixDynamicIndexingPass : public impl::FixDynamicIndexingBase<FixDynamicInd
  private:
   void CollectNeedFixArgsMapFromAttr();
   void CollectNeedFixArgsMapFromGlobalMap();
+  void CollectOutputDynamicDims(size_t tensorIdx);
+  void CollectInputNeedFixDims(size_t tensorIdx);
   bool createIfOpWithVectorType(vector::LoadOp loadOp, mlir::Value buffer, DynamicDataFlowPtr df);
   template <typename T>
   void createIfOpWithIndexType(T loadOp, mlir::Value buffer, DynamicDataFlowPtr df) const;
@@ -148,7 +150,7 @@ class FixDynamicIndexingPass : public impl::FixDynamicIndexingBase<FixDynamicInd
 
 // Lower the affine.load/store to memref.load/store for if-inserting
 // todo(baiji): move this into a single pass?
-void FixDynamicIndexingPass::AffineMemrefLowerPass() {
+void FixDynamicIndexing::AffineMemrefLowerPass() {
   func::FuncOp funcOp = getOperation();
   OpBuilder builder(funcOp);
   SmallVector<Operation *> toErase;
@@ -194,8 +196,8 @@ void FixDynamicIndexingPass::AffineMemrefLowerPass() {
 }
 
 // Trace the `No.argIdx` func arg's dimension indexing during reassociation
-void FixDynamicIndexingPass::UpdateFixIndex(size_t argIdx, SmallVector<ReassociationIndices, 4> reassociation,
-                                            bool reversed) {
+void FixDynamicIndexing::UpdateFixIndex(size_t argIdx, SmallVector<ReassociationIndices, 4> reassociation,
+                                        bool reversed) {
   std::set<size_t> needFixIdx;
   auto it = argumentDataFlows.find(argIdx);
   if (it == argumentDataFlows.end()) {
@@ -241,7 +243,7 @@ void FixDynamicIndexingPass::UpdateFixIndex(size_t argIdx, SmallVector<Reassocia
   }
 }
 
-void FixDynamicIndexingPass::GetMemUserAndFixIndex(size_t argIdx, Operation *op, SmallVector<Operation *> &memrefOps) {
+void FixDynamicIndexing::GetMemUserAndFixIndex(size_t argIdx, Operation *op, SmallVector<Operation *> &memrefOps) {
   if (argumentDataFlows.find(argIdx) == argumentDataFlows.end()) {
     return;
   }
@@ -271,7 +273,7 @@ void FixDynamicIndexingPass::GetMemUserAndFixIndex(size_t argIdx, Operation *op,
   }
 }
 
-void FixDynamicIndexingPass::CollectNeedFixArgsMapFromAttr() {
+void FixDynamicIndexing::CollectNeedFixArgsMapFromAttr() {
   func::FuncOp funcOp = getOperation();
   auto array = dyn_cast<ArrayAttr>(funcOp->getAttr(kNeedFix));
   if (!array) {
@@ -298,30 +300,38 @@ void FixDynamicIndexingPass::CollectNeedFixArgsMapFromAttr() {
   (void)funcOp->removeAttr(kNeedFix);
 }
 
-void FixDynamicIndexingPass::CollectNeedFixArgsMapFromGlobalMap() {
-  ShapeAlignTool &tool = ShapeAlignTool::getInstance();
+void FixDynamicIndexing::CollectOutputDynamicDims(size_t tensorIdx) {
   func::FuncOp funcOp = getOperation();
-  for (size_t tensorIdx = 0; tensorIdx < tool.getFuncArgSizes(); ++tensorIdx) {
-    if (tool.isOutput(tensorIdx)) {
-      mlir::Value tensorArg = funcOp.getBody().front().getArgument(tensorIdx);
-      auto currShape = tool.getCurrShapeInfo(tensorIdx);
-      for (size_t dim = 0; dim < currShape.size(); ++dim) {
-        if (IsDynamicDim(tensorArg, dim)) {
-          argumentDataFlows[tensorIdx].push_back(std::make_shared<DynamicDataFlow>(tensorIdx, dim, dim));
-        }
-      }
-    } else {
-      auto needFixAt = tool.getNeedFixIndice(tensorIdx);
-      for (size_t dim = 0; dim < needFixAt.size(); ++dim) {
-        if (needFixAt[dim] != 0) {
-          argumentDataFlows[tensorIdx].push_back(std::make_shared<DynamicDataFlow>(tensorIdx, dim, dim));
-        }
-      }
+  mlir::Value tensorArg = funcOp.getBody().front().getArgument(tensorIdx);
+  auto currShape = ShapeAlignTool::getInstance().getCurrShapeInfo(tensorIdx);
+  for (size_t dim = 0; dim < currShape.size(); ++dim) {
+    if (IsDynamicDim(tensorArg, dim)) {
+      argumentDataFlows[tensorIdx].push_back(std::make_shared<DynamicDataFlow>(tensorIdx, dim, dim));
     }
   }
 }
 
-void FixDynamicIndexingPass::CollectNeedFixArgsMap() {
+void FixDynamicIndexing::CollectInputNeedFixDims(size_t tensorIdx) {
+  auto needFixAt = ShapeAlignTool::getInstance().getNeedFixIndice(tensorIdx);
+  for (size_t dim = 0; dim < needFixAt.size(); ++dim) {
+    if (needFixAt[dim] != 0) {
+      argumentDataFlows[tensorIdx].push_back(std::make_shared<DynamicDataFlow>(tensorIdx, dim, dim));
+    }
+  }
+}
+
+void FixDynamicIndexing::CollectNeedFixArgsMapFromGlobalMap() {
+  ShapeAlignTool &tool = ShapeAlignTool::getInstance();
+  for (size_t tensorIdx = 0; tensorIdx < tool.getFuncArgSizes(); ++tensorIdx) {
+    if (tool.isOutput(tensorIdx)) {
+      CollectOutputDynamicDims(tensorIdx);
+    } else {
+      CollectInputNeedFixDims(tensorIdx);
+    }
+  }
+}
+
+void FixDynamicIndexing::CollectNeedFixArgsMap() {
   func::FuncOp funcOp = getOperation();
   if (funcOp->hasAttr(kNeedFix)) {
     CollectNeedFixArgsMapFromAttr();
@@ -330,7 +340,7 @@ void FixDynamicIndexingPass::CollectNeedFixArgsMap() {
   }
 }
 
-void FixDynamicIndexingPass::CollectReductionRelatedOps() {
+void FixDynamicIndexing::CollectReductionRelatedOps() {
   redInputs.clear();
   redOutputs.clear();
   SmallVector<mlir::Value> redArgs;
@@ -375,7 +385,7 @@ void FixDynamicIndexingPass::CollectReductionRelatedOps() {
   }
 }
 
-void FixDynamicIndexingPass::CollectNeedFixMemrefs() {
+void FixDynamicIndexing::CollectNeedFixMemrefs() {
   func::FuncOp funcOp = getOperation();
   ShapeAlignTool &tool = ShapeAlignTool::getInstance();
 
@@ -406,7 +416,7 @@ void FixDynamicIndexingPass::CollectNeedFixMemrefs() {
   }
 }
 
-void FixDynamicIndexingPass::PrepareMemrefDimOp() {
+void FixDynamicIndexing::PrepareMemrefDimOp() {
   func::FuncOp funcOp = getOperation();
   OpBuilder builder(funcOp);
   builder.setInsertionPointToStart(&(funcOp.getBody().front()));
@@ -443,8 +453,7 @@ void FixDynamicIndexingPass::PrepareMemrefDimOp() {
  * %3 = memref.load %expand_shape[%arg4, %arg5, %2] : memref<4096x1x?xf32>
  */
 template <typename T, typename M>
-affine::AffineIfOp FixDynamicIndexingPass::createAffineIfOp(T loadOp, const DynamicDataFlowPtr &df,
-                                                            M resultTypes) const {
+affine::AffineIfOp FixDynamicIndexing::createAffineIfOp(T loadOp, const DynamicDataFlowPtr &df, M resultTypes) const {
   auto loadIndices = loadOp.getIndices();
   if (loadIndices.size() <= df->destDataDim) {
     llvm::errs() << "The value of destDataDim exceeds the upper limit of the indices.\n";
@@ -467,7 +476,7 @@ affine::AffineIfOp FixDynamicIndexingPass::createAffineIfOp(T loadOp, const Dyna
 }
 
 template <typename T>
-void FixDynamicIndexingPass::createIfOpWithIndexType(T loadOp, mlir::Value buffer, DynamicDataFlowPtr df) const {
+void FixDynamicIndexing::createIfOpWithIndexType(T loadOp, mlir::Value buffer, DynamicDataFlowPtr df) const {
   if (!IsDynamicDim(buffer, df->destDataDim)) {
     return;
   }
@@ -503,8 +512,7 @@ void FixDynamicIndexingPass::createIfOpWithIndexType(T loadOp, mlir::Value buffe
   loadOp.getIndicesMutable().assign(newLoadIndices);
 }
 
-bool FixDynamicIndexingPass::createIfOpWithVectorType(vector::LoadOp loadOp, mlir::Value buffer,
-                                                      DynamicDataFlowPtr df) {
+bool FixDynamicIndexing::createIfOpWithVectorType(vector::LoadOp loadOp, mlir::Value buffer, DynamicDataFlowPtr df) {
   if (!IsDynamicDim(buffer, df->destDataDim)) {
     return false;
   }
@@ -547,7 +555,7 @@ bool FixDynamicIndexingPass::createIfOpWithVectorType(vector::LoadOp loadOp, mli
   return true;
 }
 
-void FixDynamicIndexingPass::InsertIfOpAndFixIndex() {
+void FixDynamicIndexing::InsertIfOpAndFixIndex() {
   SmallSet<Operation *, 8> eraseOp;
   for (auto it : inputsFixPlan) {
     // todo(baiji): Temp buffer may use StoreOp, need to support later.
@@ -573,7 +581,7 @@ void FixDynamicIndexingPass::InsertIfOpAndFixIndex() {
 }
 
 template <typename T>
-mlir::Value FixDynamicIndexingPass::getOriginalUpperBound(T storeOp, size_t dim, SmallVector<Operation *> allFors) {
+mlir::Value FixDynamicIndexing::getOriginalUpperBound(T storeOp, size_t dim, SmallVector<Operation *> allFors) {
   auto indices = storeOp.getIndices();
   assert(dim < indices.size());
   auto loopVar = indices[dim];
@@ -596,7 +604,7 @@ mlir::Value FixDynamicIndexingPass::getOriginalUpperBound(T storeOp, size_t dim,
   return {};
 }
 
-void FixDynamicIndexingPass::ReplaceInputDimsWithOutput() {
+void FixDynamicIndexing::ReplaceInputDimsWithOutput() {
   SmallVector<Operation *> allFors;
   getOperation()->walk([&](Operation *op) {
     if (!isa<affine::AffineForOp>(op)) {
@@ -634,7 +642,7 @@ void FixDynamicIndexingPass::ReplaceInputDimsWithOutput() {
   }
 }
 
-void FixDynamicIndexingPass::runOnOperation() {
+void FixDynamicIndexing::runOnOperation() {
   std::vector<SmallVector<affine::AffineForOp, 6>> bands;
   getTileableBands(getOperation(), &bands);
   std::string target{kTargetCpu};
@@ -663,5 +671,5 @@ void FixDynamicIndexingPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createFixDynamicIndexingPass() {
-  return std::make_unique<FixDynamicIndexingPass>();
+  return std::make_unique<FixDynamicIndexing>();
 }

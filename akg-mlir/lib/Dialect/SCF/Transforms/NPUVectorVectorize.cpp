@@ -86,8 +86,8 @@
 
 namespace mlir {
 namespace scf {
-#define GEN_PASS_DECL_NPUVECTORVECTORIZEPASS
-#define GEN_PASS_DEF_NPUVECTORVECTORIZEPASS
+#define GEN_PASS_DECL_NPUVECTORVECTORIZE
+#define GEN_PASS_DEF_NPUVECTORVECTORIZE
 #include "akg/Dialect/SCF/Passes.h.inc"
 }  // namespace scf
 }  // namespace mlir
@@ -304,7 +304,6 @@ static bool shouldCloneScalarOp(Operation &op, LoopVectorizationCtx &ctx) {
 static int64_t computeStaticVectorSize(scf::ForOp loop, int64_t maxStep) {
   auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
   auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-
   if (ubConst && lbConst) {
     int64_t tripCount = ubConst.value() - lbConst.value();
     return std::min(tripCount, maxStep);
@@ -326,7 +325,7 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
   SmallVector<Value, 3> operands{upperBound, lowerBound, maxStepValue};
   SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
                                       getAffineDimExpr(2, context)};
-  AffineMap minMap = AffineMap::get(/*dimCount=*/3, /*symbolCount=*/0, minExprs, context);
+  AffineMap minMap = AffineMap::get(/* dimCount= */ 3, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -462,7 +461,6 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
     }
     neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
                                                             ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
-
   } else {
     auto vecAttr = DenseElementsAttr::get(vecType, neutralAttr);
     neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
@@ -532,6 +530,28 @@ static Value createAffineSub(OpBuilder &builder, Location loc, Value lhs, Value 
 static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Value upperBound, Value lowerBound,
                                            int64_t alignment);
 
+static bool collectReductionNeutralVecs(LoopVectorizationCtx &ctx, Location loc, SmallVectorImpl<Value> &neutralVecs) {
+  ctx.reductionKinds.clear();
+  ctx.origInits.clear();
+  for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
+    auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
+    if (!kind) {
+      return false;
+    }
+
+    ctx.reductionKinds.push_back(*kind);
+    ctx.origInits.push_back(ctx.scalarLoop.getInitArgs()[idx]);
+
+    Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
+    Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
+    if (!neutralVec) {
+      return false;
+    }
+    neutralVecs.push_back(neutralVec);
+  }
+  return true;
+}
+
 static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   Location loc = ctx.scalarLoop.getLoc();
 
@@ -550,23 +570,8 @@ static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   SmallVector<Value> neutralVecs;
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
     if (!ctx.scalarLoop.getInitArgs().empty()) {
-      ctx.reductionKinds.clear();
-      ctx.origInits.clear();
-      for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
-        auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
-        if (!kind) {
-          return nullptr;
-        }
-
-        ctx.reductionKinds.push_back(*kind);
-        ctx.origInits.push_back(ctx.scalarLoop.getInitArgs()[idx]);
-
-        Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
-        Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
-        if (!neutralVec) {
-          return nullptr;
-        }
-        neutralVecs.push_back(neutralVec);
+      if (!collectReductionNeutralVecs(ctx, loc, neutralVecs)) {
+        return nullptr;
       }
     }
   }
@@ -630,7 +635,7 @@ static std::optional<int64_t> tryConstantIndex(Value indexValue) {
 static Value createAffineBinaryApply(OpBuilder &builder, Location loc, Value lhs, Value rhs, AffineExpr expr) {
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 2> operands{lhs, rhs};
-  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, expr, context);
+  AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, expr, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
@@ -650,7 +655,7 @@ static Value createAffineMinWithConstant(OpBuilder &builder, Location loc, Value
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 1> operands{value};
   SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
-  AffineMap minMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, minExprs, context);
+  AffineMap minMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -658,7 +663,7 @@ static Value createAffineMax(OpBuilder &builder, Location loc, Value lhs, Value 
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 2> operands{lhs, rhs};
   SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
-  AffineMap maxMap = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, maxExprs, context);
+  AffineMap maxMap = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -666,7 +671,7 @@ static Value createAffineMaxWithConstant(OpBuilder &builder, Location loc, Value
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 1> operands{value};
   SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
-  AffineMap maxMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, maxExprs, context);
+  AffineMap maxMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -677,7 +682,7 @@ static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Val
   AffineExpr alignedTripCount = tripCount.floorDiv(alignment) * alignment;
   AffineExpr alignedUpperBound = alignedTripCount + getAffineDimExpr(1, context);
   SmallVector<Value, 2> operands{upperBound, lowerBound};
-  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, alignedUpperBound, context);
+  AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, alignedUpperBound, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
@@ -1535,6 +1540,18 @@ static Value vectorizeArithOp(Operation *op, LoopVectorizationCtx &ctx) {
   return vecResult;
 }
 
+static int64_t findDestDimForGlobalCtxAxis(llvm::ArrayRef<int> resultDimToCtxAxis, int64_t dstRank, int globalCtxAxis) {
+  if (static_cast<size_t>(dstRank) != resultDimToCtxAxis.size()) {
+    return -1;
+  }
+  for (int64_t resultDim = 0; resultDim < dstRank; ++resultDim) {
+    if (resultDimToCtxAxis[static_cast<unsigned>(resultDim)] == globalCtxAxis) {
+      return resultDim;
+    }
+  }
+  return -1;
+}
+
 static bool resolveBroadcastSrcToDestAxes(Value sourceVal, const LoopVectorizationCtx &ctx,
                                           llvm::ArrayRef<int> resultDimToCtxAxis, int64_t dstRank,
                                           SmallVectorImpl<int64_t> &outAxes) {
@@ -1572,15 +1589,7 @@ static bool resolveBroadcastSrcToDestAxes(Value sourceVal, const LoopVectorizati
 
     int64_t destDim = -1;
     if (!resultDimToCtxAxis.empty()) {
-      if (static_cast<size_t>(dstRank) != resultDimToCtxAxis.size()) {
-        return false;
-      }
-      for (int64_t resultDim = 0; resultDim < dstRank; ++resultDim) {
-        if (resultDimToCtxAxis[static_cast<unsigned>(resultDim)] == globalCtxAxis) {
-          destDim = resultDim;
-          break;
-        }
-      }
+      destDim = findDestDimForGlobalCtxAxis(resultDimToCtxAxis, dstRank, globalCtxAxis);
     } else {
       const auto axisUnsigned = static_cast<unsigned>(globalCtxAxis);
       if (axisUnsigned < ctxOff) {
@@ -2032,7 +2041,10 @@ static bool decomposeAffineOneDimension(AffineExpr affineExpr, int64_t &coeffici
     return false;
   }
   if (binaryExpr.getKind() == AffineExprKind::Add) {
-    int64_t leftCoeff = 0, leftConst = 0, rightCoeff = 0, rightConst = 0;
+    int64_t leftCoeff = 0;
+    int64_t leftConst = 0;
+    int64_t rightCoeff = 0;
+    int64_t rightConst = 0;
     if (!decomposeAffineBinaryChildren(binaryExpr.getLHS(), binaryExpr.getRHS(), leftCoeff, leftConst, rightCoeff,
                                        rightConst)) {
       return false;
@@ -2042,7 +2054,10 @@ static bool decomposeAffineOneDimension(AffineExpr affineExpr, int64_t &coeffici
     return true;
   }
   if (binaryExpr.getKind() == AffineExprKind::Mul) {
-    int64_t leftCoeff = 0, leftConst = 0, rightCoeff = 0, rightConst = 0;
+    int64_t leftCoeff = 0;
+    int64_t leftConst = 0;
+    int64_t rightCoeff = 0;
+    int64_t rightConst = 0;
     if (!decomposeAffineBinaryChildren(binaryExpr.getLHS(), binaryExpr.getRHS(), leftCoeff, leftConst, rightCoeff,
                                        rightConst)) {
       return false;
@@ -2285,7 +2300,8 @@ static bool tryRecognizeIVDependentSlice(Value condition, Value inductionVar, Co
       affineApplyOp.getDimOperands().size() != 1 || affineApplyOp.getDimOperands()[0] != inductionVar) {
     return false;
   }
-  int64_t coeff = 0, offset = 0;
+  int64_t coeff = 0;
+  int64_t offset = 0;
   if (!decomposeAffineOneDimension(affineMap.getResult(0), coeff, offset)) {
     return false;
   }
@@ -2427,7 +2443,6 @@ static IvDependentIfRewrite rewriteIvDependentIfSlices(scf::IfOp ifOp, LoopVecto
   }
   return IvDependentIfRewrite::None;
 }
-
 static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   Location loc = ifOp.getLoc();
   Value condition = ifOp.getCondition();
@@ -2435,7 +2450,6 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   bool hasResults = ifOp.getNumResults() > 0;
 
   Value dependentIV = resolveIfDependentIV(condition, ctx);
-
   if (dependentIV) {
     IvDependentIfRewrite ivRewrite =
       rewriteIvDependentIfSlices(ifOp, ctx, loc, dependentIV, condition, hasElse, hasResults);
@@ -2532,9 +2546,7 @@ static LogicalResult handleArithOrMathOp(Operation &op, LoopVectorizationCtx &ct
   if (!vecValue) {
     return failure();
   }
-
   ctx.valueMapping.map(op.getResult(0), vecValue);
-
   return success();
 }
 
@@ -2634,7 +2646,6 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
 static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorizationCtx &ctx) {
   int64_t nestedMaxStep = -1;
   VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
-
   if (nestedMode == VectorizationMode::None || nestedMaxStep <= 0) {
     cloneScalarOp(*nestedForOp.getOperation(), ctx);
     return success();
@@ -2785,7 +2796,6 @@ static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx) 
       return failure();
     }
   }
-
   Operation *originalTerminator = block->getTerminator();
   if (auto originalYieldOp = dyn_cast<scf::YieldOp>(originalTerminator)) {
     SmallVector<Value> vecYieldOperands;
@@ -3075,25 +3085,28 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
   }
 }
 
+static Value findMappedNonIterArg(LoopVectorizationCtx &tailCtx, Operation *defOp, Value iterArg) {
+  for (Value operand : defOp->getOperands()) {
+    if (operand == iterArg) continue;
+    Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
+    if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
+      return mappedValue;
+    }
+  }
+  return {};
+}
+
 static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx &ctx, unsigned resultIdx) {
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
   if (resultIdx >= scalarYield.getNumOperands()) {
     return {};
   }
   Value scalarYieldValue = scalarYield.getOperand(resultIdx);
-
   if (auto defOp = scalarYieldValue.getDefiningOp()) {
     if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
             arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp)) {
       Value iterArg = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
-      for (Value operand : defOp->getOperands()) {
-        if (operand != iterArg) {
-          Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
-          if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
-            return mappedValue;
-          }
-        }
-      }
+      return findMappedNonIterArg(tailCtx, defOp, iterArg);
     }
   }
 
@@ -3696,8 +3709,8 @@ static void processLoop(LoopVectorizationCtx &ctx) {
 
 static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, Location loc) {
   Value maxStepConst = builder.create<arith::ConstantIndexOp>(loc, 1);
-  LoopVectorizationCtx ctx(builder, /*actualStep*/ 1, /*vfVal*/ nullptr, maxStepConst, VectorizationMode::Elementwise,
-                           scf::ForOp(), nullptr);
+  LoopVectorizationCtx ctx(builder, /* actualStep */ 1, /* vfVal */ nullptr, maxStepConst,
+                           VectorizationMode::Elementwise, scf::ForOp(), nullptr);
   ctx.localDim = 0;
   ctx.vf1FuncLevelNoAnchor = true;
   return ctx;
@@ -3918,10 +3931,10 @@ static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder 
   processLoop(ctx);
 }
 
-class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBase<NPUVectorVectorizePass> {
+class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVectorVectorize> {
  public:
-  NPUVectorVectorizePass() = default;
-  NPUVectorVectorizePass(const NPUVectorVectorizePass &) = default;
+  NPUVectorVectorize() = default;
+  NPUVectorVectorize(const NPUVectorVectorize &) = default;
 
   [[nodiscard]] StringRef getArgument() const override { return "npuvector-vectorize"; }
 
@@ -3990,5 +4003,5 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::scf::createNPUVectorVectorizePass() {
-  return std::make_unique<NPUVectorVectorizePass>();
+  return std::make_unique<NPUVectorVectorize>();
 }
