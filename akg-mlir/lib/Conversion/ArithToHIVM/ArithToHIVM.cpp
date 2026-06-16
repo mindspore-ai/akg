@@ -4026,6 +4026,18 @@ static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemR
     return false;
   }
 
+  if (npuVecType.hasDynamicShape()) {
+    for (Operation *user : broadcastVal.getUsers()) {
+      if (isa<annotation::MarkOp>(user) || user->getNumOperands() != 2) {
+        continue;
+      }
+      Value other = user->getOperand(0) == broadcastVal ? user->getOperand(1) : user->getOperand(0);
+      if (isScalarType(other.getType()) || isScalarBroadcast(other)) {
+        return false;
+      }
+    }
+  }
+
   Value vbrcSrc;
   DenseI64ArrayAttr broadcastDimsAttr;
   if (failed(
