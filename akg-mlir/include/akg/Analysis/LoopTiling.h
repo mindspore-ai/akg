@@ -17,6 +17,8 @@
 #ifndef AKG_ANALYSIS_LOOPTILING_H_
 #define AKG_ANALYSIS_LOOPTILING_H_
 
+#include <vector>
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/Builders.h"
@@ -37,6 +39,17 @@ class ForOp;
 
 namespace autotiling {
 
+struct TilingMetadata {
+  std::vector<SmallVector<unsigned, 6>> bandTileSizes;
+  std::vector<SmallVector<int, 6>> bandConstraintMaxs;
+
+  bool empty() const { return bandTileSizes.empty() && bandConstraintMaxs.empty(); }
+  void clear() {
+    bandTileSizes.clear();
+    bandConstraintMaxs.clear();
+  }
+};
+
 // Create tiling functions for a kernel
 // originalKernel: the input IR function
 // builder: OpBuilder for creating operations
@@ -44,6 +57,9 @@ namespace autotiling {
 // isStaticShape: if true, create empty tiling function (equivalent to bands.empty())
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape = false);
+LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
+                                    TilingMetadata *metadata);
 
 // Get the selected tiling strategy index (default: 0)
 int64_t getSelectedTilingStrategyIndex();
@@ -53,6 +69,8 @@ int64_t getSelectedTilingStrategyIndex();
 // builder: OpBuilder for creating operations
 // isStaticShape: if true, calculate tile sizes using auto-tiling and create tileSizeValues directly
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape = false);
+LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape,
+                                        const TilingMetadata *metadata);
 
 }  // namespace autotiling
 }  // namespace mlir

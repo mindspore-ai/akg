@@ -121,6 +121,7 @@ static void setTilingKeyAndDataArgAttrs(func::FuncOp func, unsigned keyIdx, unsi
 struct TilingInfo {
   func::FuncOp hostTilingFunc;
   DenseMap<int64_t, func::FuncOp> perCaseTilingFuncs;
+  DenseMap<int64_t, mlir::autotiling::TilingMetadata> perCaseTilingMetadata;
   DenseMap<int64_t, func::FuncOp> tilingKey2Kernel;
   bool isStaticShape = false;
 
@@ -130,12 +131,22 @@ struct TilingInfo {
   [[nodiscard]] func::FuncOp getHostTilingFunc() const { return hostTilingFunc; }
 
   void setPerCaseTilingFunc(int64_t key, func::FuncOp f) { perCaseTilingFuncs[key] = f; }
+  void setPerCaseTilingMetadata(int64_t key, mlir::autotiling::TilingMetadata metadata) {
+    perCaseTilingMetadata[key] = std::move(metadata);
+  }
   [[nodiscard]] func::FuncOp getPerCaseTilingFunc(int64_t key) const {
     auto it = perCaseTilingFuncs.find(key);
     if (it == perCaseTilingFuncs.end()) {
       return {};
     }
     return it->second;
+  }
+  const mlir::autotiling::TilingMetadata *getPerCaseTilingMetadata(int64_t key) const {
+    auto it = perCaseTilingMetadata.find(key);
+    if (it == perCaseTilingMetadata.end() || it->second.empty()) {
+      return nullptr;
+    }
+    return &it->second;
   }
 
   [[nodiscard]] SmallVector<int64_t> getAllKeys() const {
@@ -189,6 +200,7 @@ struct TilingInfo {
     }
 
     perCaseTilingFuncs.clear();
+    perCaseTilingMetadata.clear();
     tilingKey2Kernel.clear();
   }
 };
@@ -256,14 +268,18 @@ class TilingBase {
     }
 
     llvm::DenseMap<int64_t, mlir::func::FuncOp> tilingFuncMap;
+    mlir::autotiling::TilingMetadata tilingMetadata;
     if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap,
-                                                       tilingInfo_.isStaticShape))) {
+                                                       tilingInfo_.isStaticShape, &tilingMetadata))) {
       return failure();
     }
     for (const auto &it : tilingFuncMap) {
       int64_t key = it.getFirst();
       mlir::func::FuncOp f = it.getSecond();
       tilingInfo_.setPerCaseTilingFunc(key, f);
+    }
+    if (!tilingMetadata.empty()) {
+      tilingInfo_.setPerCaseTilingMetadata(0, std::move(tilingMetadata));
     }
 
     if (failed(computeTilingStructSizeFromTilingFuncs(builder, tilingFuncMap))) {
@@ -788,7 +804,8 @@ class TilingBase {
     for (const auto &it : tilingInfo_.getTilingKey2KernelMap()) {
       int64_t key = it.getFirst();
       mlir::func::FuncOp f = it.getSecond();
-      if (failed(mlir::autotiling::applyTilingFromTilingFunc(f, builder, tilingInfo_.isStaticShape))) {
+      const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
+      if (failed(mlir::autotiling::applyTilingFromTilingFunc(f, builder, tilingInfo_.isStaticShape, metadata))) {
         return failure();
       }
 
