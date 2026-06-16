@@ -2682,6 +2682,21 @@ static int64_t computeTransposeSearchCandidatePeak(const NpuBandContext &ctx, co
   return std::max<int64_t>(vectorBytes, transposeBytes);
 }
 
+static void emitAlignedTransposeMinTileExceedsUb(const NpuBandContext &ctx, ArrayRef<size_t> searchAxisOrder,
+                                                 ArrayRef<int64_t> axisAlignSize,
+                                                 ArrayRef<int64_t> axisMaxTileSize, ArrayRef<int64_t> tiles,
+                                                 int64_t ubLimitBytes, int64_t peak) {
+  llvm::errs() << "[TilingStrategy] chooseAlignedTransposeTiles: boundary-1 "
+                  "(min tile exceeds UB)\n";
+  llvm::errs() << "  ubLimitBytes = " << ubLimitBytes << "\n";
+  llvm::errs() << "  peak(minTile) = " << peak << "\n";
+  for (size_t i = 0; i < searchAxisOrder.size(); ++i) {
+    llvm::errs() << "    axis[" << searchAxisOrder[i] << "] extent=" << ctx.extents[searchAxisOrder[i]]
+                 << " axisAlignSize=" << axisAlignSize[i] << " axisMaxTileSize=" << axisMaxTileSize[i]
+                 << " finalTile=" << tiles[i] << "\n";
+  }
+}
+
 // Greedy transpose tile selection.
 //
 // Replaces the previous DFS over per-axis candidate sets. The new algorithm
@@ -2750,23 +2765,49 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
 
   int64_t peak = peakOf(tiles);
   if (peak > ubLimitBytes) {
-    // Path A: shrink innermost only.
-    while (peak > ubLimitBytes && tiles[n - 1] > axisAlignSize[n - 1]) {
-      tiles[n - 1] -= axisAlignSize[n - 1];
-      peak = peakOf(tiles);
+    // Path A: shrink innermost only. The byte footprint is monotonic for
+    // aligned candidates, but the stride-align predicate can have holes when a
+    // candidate crosses the full-extent/static-dim boundary. If that happens,
+    // fall back to the old descending scan to preserve exact tile selection.
+    int64_t align = axisAlignSize[n - 1];
+    int64_t highCell = std::max<int64_t>(axisMaxTileSize[n - 1] / align, 1);
+    int64_t low = 1;
+    int64_t high = highCell - 1;  // full aligned tile was checked above and does not fit.
+    int64_t bestCell = 1;
+    bool useLinearScan = peak == static_cast<int64_t>(LLONG_MAX);
+
+    while (!useLinearScan && low <= high) {
+      int64_t cell = low + (high - low) / 2;
+      tiles[n - 1] = cell * align;
+      int64_t candidatePeak = peakOf(tiles);
+      if (candidatePeak == static_cast<int64_t>(LLONG_MAX)) {
+        useLinearScan = true;
+        break;
+      }
+      if (candidatePeak <= ubLimitBytes) {
+        bestCell = cell;
+        low = cell + 1;
+      } else {
+        high = cell - 1;
+      }
     }
+
+    if (useLinearScan) {
+      tiles[n - 1] = axisMaxTileSize[n - 1];
+      peak = peakOf(tiles);
+      while (peak > ubLimitBytes && tiles[n - 1] > align) {
+        tiles[n - 1] -= align;
+        peak = peakOf(tiles);
+      }
+    } else {
+      tiles[n - 1] = bestCell * align;
+    }
+    peak = peakOf(tiles);
     if (peak > ubLimitBytes) {
       // Boundary 1: even the minimum aligned tile exceeds the UB model. Keep it
       // to preserve transpose alignment instead of falling back to generic.
-      llvm::errs() << "[TilingStrategy] chooseAlignedTransposeTiles: boundary-1 "
-                      "(min tile exceeds UB)\n";
-      llvm::errs() << "  ubLimitBytes = " << ubLimitBytes << "\n";
-      llvm::errs() << "  peak(minTile) = " << peak << "\n";
-      for (size_t i = 0; i < n; ++i) {
-        llvm::errs() << "    axis[" << searchAxisOrder[i] << "] extent=" << ctx.extents[searchAxisOrder[i]]
-                     << " axisAlignSize=" << axisAlignSize[i] << " axisMaxTileSize=" << axisMaxTileSize[i]
-                     << " finalTile=" << tiles[i] << "\n";
-      }
+      emitAlignedTransposeMinTileExceedsUb(ctx, searchAxisOrder, axisAlignSize, axisMaxTileSize, tiles, ubLimitBytes,
+                                           peak);
     }
   } else {
     // Path B: walk from second-innermost outward, try lifting each tile to

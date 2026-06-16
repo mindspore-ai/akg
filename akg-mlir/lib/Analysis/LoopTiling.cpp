@@ -86,7 +86,7 @@ static constexpr int64_t kDefaultNpuCoreNum = 48;
 
 // Main tiling functions
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
-                                             bool isStaticShape);
+                                             bool isStaticShape, TilingMetadata *metadata = nullptr);
 static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling,
                                                 std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
                                                 std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
@@ -185,7 +185,8 @@ static LogicalResult prepareTileMetadataForApply(func::FuncOp originalKernel, Op
                                                  std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
                                                  std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
                                                  std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues);
+                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                 const TilingMetadata *metadata = nullptr);
 static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel, OpBuilder &builder, size_t bandIdx,
                                                     ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
                                                     ArrayRef<unsigned> tileSizesInt, int64_t &nextNodeId);
@@ -859,6 +860,29 @@ static void collectRepresentativeBands(ArrayRef<LeafBranchBandPlan> plans,
   }
 }
 
+static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
+                                const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs) {
+  llvm::dbgs() << "=== All Band Tile Sizes ===\n";
+  for (size_t i = 0; i < allBandTileSizes.size(); ++i) {
+    llvm::dbgs() << "Band " << i << " tile sizes: [";
+    for (size_t j = 0; j < allBandTileSizes[i].size(); ++j) {
+      if (j > 0) {
+        llvm::dbgs() << ", ";
+      }
+      if (allBandTileSizes[i][j] == static_cast<unsigned>(-1)) {
+        int constraintMax = (i < allBandConstraintMaxs.size() && j < allBandConstraintMaxs[i].size())
+                              ? allBandConstraintMaxs[i][j]
+                              : 0;
+        llvm::dbgs() << "dynamic(max=" << constraintMax << ")";
+      } else {
+        llvm::dbgs() << allBandTileSizes[i][j];
+      }
+    }
+    llvm::dbgs() << "]\n";
+  }
+  llvm::dbgs() << "==========================\n";
+}
+
 static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling,
                                                 std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
                                                 std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
@@ -941,23 +965,7 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
     allBandConstraintMaxs.push_back(bandConstraintMaxs);
   }
 
-  // Print all band tile sizes with constraint max info
-  llvm::errs() << "=== All Band Tile Sizes ===\n";
-  for (size_t i = 0; i < allBandTileSizes.size(); ++i) {
-    llvm::errs() << "Band " << i << " tile sizes: [";
-    for (size_t j = 0; j < allBandTileSizes[i].size(); ++j) {
-      if (j > 0) {
-        llvm::errs() << ", ";
-      }
-      if (allBandTileSizes[i][j] == static_cast<unsigned>(-1)) {
-        llvm::errs() << "dynamic(max=" << allBandConstraintMaxs[i][j] << ")";
-      } else {
-        llvm::errs() << allBandTileSizes[i][j];
-      }
-    }
-    llvm::errs() << "]\n";
-  }
-  llvm::errs() << "==========================\n";
+  logAllBandTileSizes(allBandTileSizes, allBandConstraintMaxs);
 
   return success();
 }
@@ -2859,11 +2867,14 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 
 // Create default tiling function
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
-                                             bool isStaticShape = false) {
+                                             bool isStaticShape, TilingMetadata *metadata) {
   auto *mlirCtx = builder.getContext();
   auto loc = originalKernel.getLoc();
   auto origTy = originalKernel.getFunctionType();
   int64_t tilingStructMemrefSize = 1;
+  if (metadata) {
+    metadata->clear();
+  }
 
   std::vector<LeafBranchBandPlan> leafBranchPlans;
   bool hasUnsupportedTreeShape = false;
@@ -2888,6 +2899,10 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
       if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
                                             levelToTile))) {
         return failure();
+      }
+      if (metadata) {
+        metadata->bandTileSizes = allBandTileSizes;
+        metadata->bandConstraintMaxs = allBandConstraintMaxs;
       }
 
       tilingStructMemrefSize = std::accumulate(allBandTileSizes.begin(), allBandTileSizes.end(), int64_t{0},
@@ -2939,8 +2954,14 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
 // Public interface functions
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape) {
+  return createTilingFunctions(originalKernel, builder, out, isStaticShape, nullptr);
+}
+
+LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
+                                    TilingMetadata *metadata) {
   func::FuncOp tilingFunc;
-  if (failed(createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape))) {
+  if (failed(createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape, metadata))) {
     return failure();
   }
   out[0] = tilingFunc;
@@ -3208,12 +3229,36 @@ static LogicalResult prepareTileMetadataForApply(func::FuncOp originalKernel, Op
                                                  std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
                                                  std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
                                                  std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues) {
-  // Always calculate tile sizes first to get unsigned values (with constraint max for dynamic axes)
-  size_t levelToTile = 0;
-  if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizesInt, allBandConstraintMaxs,
-                                        levelToTile))) {
-    return failure();
+                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                 const TilingMetadata *metadata) {
+  bool usedCachedMetadata = false;
+  if (!isStaticShape && metadata && !metadata->empty()) {
+    if (metadata->bandTileSizes.size() == bandsToUse.size() &&
+        metadata->bandConstraintMaxs.size() == bandsToUse.size()) {
+      usedCachedMetadata = true;
+      for (size_t bandIdx = 0; bandIdx < bandsToUse.size(); ++bandIdx) {
+        size_t bandSize = bandsToUse[bandIdx].size();
+        if (bandSize == 0 || metadata->bandTileSizes[bandIdx].empty() ||
+            metadata->bandTileSizes[bandIdx].size() % bandSize != 0 ||
+            metadata->bandTileSizes[bandIdx].size() != metadata->bandConstraintMaxs[bandIdx].size()) {
+          usedCachedMetadata = false;
+          break;
+        }
+      }
+      if (usedCachedMetadata) {
+        allBandTileSizesInt = metadata->bandTileSizes;
+        allBandConstraintMaxs = metadata->bandConstraintMaxs;
+      }
+    }
+  }
+
+  if (!usedCachedMetadata) {
+    // Always calculate tile sizes first to get unsigned values (with constraint max for dynamic axes)
+    size_t levelToTile = 0;
+    if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizesInt, allBandConstraintMaxs,
+                                          levelToTile))) {
+      return failure();
+    }
   }
 
   // Then prepare Value representations based on shape type.
@@ -3439,6 +3484,11 @@ static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &build
 }
 
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape) {
+  return applyTilingFromTilingFunc(originalKernel, builder, isStaticShape, nullptr);
+}
+
+LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape,
+                                        const TilingMetadata *metadata) {
   auto loc = originalKernel.getLoc();
 
   std::vector<LeafBranchBandPlan> leafBranchPlans;
@@ -3469,7 +3519,7 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
   std::vector<SmallVector<Value, 6>> allTileSizeValues;
   if (failed(prepareTileMetadataForApply(originalKernel, builder, loc, isStaticShape, bandsToUse, allBandTileSizesInt,
-                                         allBandConstraintMaxs, allTileSizeValues))) {
+                                         allBandConstraintMaxs, allTileSizeValues, metadata))) {
     return failure();
   }
 
