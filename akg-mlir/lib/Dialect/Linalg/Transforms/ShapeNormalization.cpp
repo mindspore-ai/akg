@@ -915,9 +915,8 @@ struct ShapeNormalState {
     }
   }
 
-  SmallVector<Operation *> reshapeWithMemref(Value newRet, const SmallVector<std::string> &inputSymshape,
-                                             const SmallVector<std::string> &targetSymShape, Type elementType,
-                                             PatternRewriter &rewriter, Location loc) {
+  SmallVector<Operation *> reshapeWithMemref(Value newRet, const SmallVector<std::string> &targetSymShape,
+                                             Type elementType, PatternRewriter &rewriter, Location loc) {
     SmallVector<Operation *> ops;
     SmallVector<int64_t> targetSizes = getAxesSizes(targetSymShape);
     auto rank = static_cast<int64_t>(targetSymShape.size());
@@ -958,7 +957,7 @@ struct ShapeNormalState {
       auto storeOp = rewriter.create<memref::StoreOp>(loc, dimVal, shapeMemref, ValueRange{indexCst});
       entryMaterializedOps.insert(storeOp);
     }
-    Type targetRetType = manager.updateSymbolicShape(MemRefType::get(targetSizes, elementType), inputSymshape);
+    Type targetRetType = manager.updateSymbolicShape(MemRefType::get(targetSizes, elementType), targetSymShape);
     auto reshapeOp = rewriter.create<memref::ReshapeOp>(loc, targetRetType, newRet, shapeMemref);
     entryMaterializedOps.insert(reshapeOp);
     ops.push_back(reshapeOp);
@@ -1095,7 +1094,7 @@ struct ShapeNormalState {
 
     auto unifyResult = unifyAxesGroupsToFinest(inputSymshape, targetSymShape);
     if (!unifyResult.success) {
-      return reshapeWithMemref(newRet, inputSymshape, targetSymShape, elementType, rewriter, loc);
+      return reshapeWithMemref(newRet, targetSymShape, elementType, rewriter, loc);
     }
 
     SmallVector<std::string> finestAxes = unifyResult.finestAxes;
