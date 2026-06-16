@@ -79,7 +79,6 @@ constexpr auto kVectorAttr = "vector";
 constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
-constexpr auto kBlockDimSize = 40;
 constexpr auto kTransposeLoopAttr = "transpose";
 constexpr auto kVectorFunctionAttr = "hivm.vector_function";
 constexpr auto kNoInlineAttr = "no_inline";
