@@ -223,8 +223,8 @@ def _build_compile_cmd(input_file, output_file, block_dim,
         compile_cmd.append("-enable-hivm-compile")
     if enable_auto_multi_buffer:
         compile_cmd.append("-enable-auto-multi-buffer")
-    if enable_bin_relocation:
-        compile_cmd.append("-enable-bin-relocation")
+    if not enable_bin_relocation:
+        compile_cmd.append("-enable-bin-relocation=false")
     if dump_ir:
         compile_cmd.append("-mlir-print-ir-after-all")
 
