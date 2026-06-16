@@ -2635,6 +2635,12 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
   });
 }
 
+static void applySkipTilingFallback(func::FuncOp funcOp, OpBuilder &builder) {
+  clearAllBroadcastLoopAttrs(funcOp);
+  markInnermostLoopsWithVectorAttr(funcOp, builder);
+  funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(1));
+}
+
 // Set hacc.block_dim attribute to funcOp based on outermost tiled loop's upper bound
 static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder) {
   if (funcOp->hasAttr(kBlockDimAttr)) {
@@ -2760,6 +2766,17 @@ static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRe
   return f;
 }
 
+static void createTilingFuncReturn(func::FuncOp tilingFunc, bool writeDummyTilingData) {
+  auto loc = tilingFunc.getLoc();
+  OpBuilder b(&tilingFunc.getBody().front(), tilingFunc.getBody().front().end());
+  if (writeDummyTilingData) {
+    Value idx = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value val = b.create<arith::ConstantIntOp>(loc, 1, b.getI64Type());
+    b.create<memref::StoreOp>(loc, val, tilingFunc.getArgument(tilingFunc.getNumArguments() - 1), ValueRange{idx});
+  }
+  b.create<func::ReturnOp>(loc);
+}
+
 // Helper: Store tile sizes to memref
 static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
                                             ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
@@ -2869,7 +2886,6 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
                                              bool isStaticShape, TilingMetadata *metadata) {
   auto *mlirCtx = builder.getContext();
-  auto loc = originalKernel.getLoc();
   auto origTy = originalKernel.getFunctionType();
   int64_t tilingStructMemrefSize = 1;
   if (metadata) {
@@ -2883,12 +2899,13 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   }
   std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
+  bool skipTiling = hasUnsupportedTreeShape || leafBranchPlans.size() > 1;
 
   // Step 1: Dynamic-shape path computes tile metadata to derive tiling struct size.
   std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
   std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
   if (!isStaticShape) {
-    if (!hasUnsupportedTreeShape) {
+    if (!skipTiling) {
       if (!leafBranchPlans.empty()) {
         preprocessLoopAttrsForTileCalculation(originalKernel, leafBranchPlans.front());
       }
@@ -2927,8 +2944,7 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
 
   // Step 4: Static-shape or no-band path doesn't need memref store in create stage.
   if (isStaticShape || bandsToUse.empty()) {
-    OpBuilder b(&f.getBody().front(), f.getBody().front().end());
-    b.create<func::ReturnOp>(loc);
+    createTilingFuncReturn(f, !isStaticShape);
     tilingFunc = f;
     return success();
   }
@@ -3193,11 +3209,9 @@ static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel,
     return failure();
   }
 
-  // Unsupported tree shape keeps stage-1 skip behavior.
-  if (hasUnsupportedTreeShape) {
-    clearAllBroadcastLoopAttrs(originalKernel);
-    markInnermostLoopsWithVectorAttr(originalKernel, builder);
-    originalKernel->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(1));
+  // Unsupported shapes and multiple top-level bands keep stage-1 skip behavior.
+  if (hasUnsupportedTreeShape || leafBranchPlans.size() > 1) {
+    applySkipTilingFallback(originalKernel, builder);
     shouldReturnEarly = true;
     return success();
   }
@@ -3212,10 +3226,8 @@ static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel,
       return failure();
     }
 
-    if (hasUnsupportedTreeShape) {
-      clearAllBroadcastLoopAttrs(originalKernel);
-      markInnermostLoopsWithVectorAttr(originalKernel, builder);
-      originalKernel->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(1));
+    if (hasUnsupportedTreeShape || leafBranchPlans.size() > 1) {
+      applySkipTilingFallback(originalKernel, builder);
       shouldReturnEarly = true;
       return success();
     }
