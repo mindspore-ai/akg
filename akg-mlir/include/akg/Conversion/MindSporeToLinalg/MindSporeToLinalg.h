@@ -19,13 +19,11 @@
 #define AKG_CONVERSION_MINDSPORETOLINALG_MINDSPORETOLINALG_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class RewritePatternSet;
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgPass();
 

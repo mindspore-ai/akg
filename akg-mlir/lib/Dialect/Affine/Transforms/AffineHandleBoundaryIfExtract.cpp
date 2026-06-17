@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"

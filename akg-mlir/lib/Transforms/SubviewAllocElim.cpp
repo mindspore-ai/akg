@@ -177,7 +177,6 @@ struct SourceInfo {
 static SourceInfo traceStoreSource(affine::AffineStoreOp storeOp) {
   SourceInfo info;
   Value storeVal = storeOp.getValueToStore();
-
   // Case 1: stored value is directly from an affine.load.
   if (auto loadOp = storeVal.getDefiningOp<affine::AffineLoadOp>()) {
     info.sourceLoad = loadOp;
@@ -337,7 +336,6 @@ static bool isValidSubviewForPartition(memref::SubViewOp subviewOp, MemRefType a
   auto offsets = subviewOp.getStaticOffsets();
   auto sizes = subviewOp.getStaticSizes();
   auto strides = subviewOp.getStaticStrides();
-
   if (!llvm::all_of(strides, [](int64_t s) { return s == 1; })) {
     return false;
   }
@@ -418,7 +416,7 @@ bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
   // Sort partitions by offset.
   llvm::sort(partitions, [](const Partition &a, const Partition &b) { return a.offset < b.offset; });
 
-  // TODO(hujiahui): discontinuous scenes
+  // Discontinuous scenes
   // Verify contiguous coverage: offsets must be [0, s0, s0+s1, ...] summing to axisDim.
   int64_t expectedOffset = 0;
   for (auto &p : partitions) {
@@ -493,52 +491,79 @@ std::optional<TransposeInfo> SubviewAllocElimPass::detectTransposePattern(ArrayR
   return info;
 }
 
-// Apply a CollapseShapeOp to the current expression list, delinearizing each
-// collapsed group. Returns false if any dimension is dynamic.
-static bool applyCollapseShapeToExprs(memref::CollapseShapeOp cs, SmallVectorImpl<AffineExpr> &exprs) {
+static bool delinearizeCollapseGroup(memref::CollapseShapeOp cs, unsigned groupIdx, AffineExpr remaining,
+                                     SmallVectorImpl<AffineExpr> &newExprs) {
   auto reassoc = cs.getReassociationIndices();
   auto srcType = cs.getSrcType();
-  SmallVector<AffineExpr> newExprs(srcType.getRank());
+  const auto &group = reassoc[groupIdx];
+  for (int i = group.size() - 1; i >= 0; i--) {
+    int64_t dimSize = srcType.getDimSize(group[i]);
+    if (ShapedType::isDynamic(dimSize)) {
+      return false;
+    }
+    if (i == 0) {
+      newExprs[group[i]] = remaining;
+    } else {
+      newExprs[group[i]] = remaining % dimSize;
+      remaining = remaining.floorDiv(dimSize);
+    }
+  }
+  return true;
+}
+
+static bool applyCollapseShapeToExprs(memref::CollapseShapeOp cs, SmallVectorImpl<AffineExpr> &exprs) {
+  auto reassoc = cs.getReassociationIndices();
+  SmallVector<AffineExpr> newExprs(cs.getSrcType().getRank());
   unsigned resultDim = 0;
-  for (const auto &group : reassoc) {
-    AffineExpr remaining = exprs[resultDim++];
-    for (int i = group.size() - 1; i >= 0; i--) {
-      int64_t dimSize = srcType.getDimSize(group[i]);
-      if (ShapedType::isDynamic(dimSize)) {
-        return false;
-      }
-      if (i == 0) {
-        newExprs[group[i]] = remaining;
-      } else {
-        newExprs[group[i]] = remaining % dimSize;
-        remaining = remaining.floorDiv(dimSize);
-      }
+  for (unsigned k = 0; k < reassoc.size(); k++) {
+    if (!delinearizeCollapseGroup(cs, k, exprs[resultDim++], newExprs)) {
+      return false;
     }
   }
   exprs = newExprs;
   return true;
 }
 
-// Apply an ExpandShapeOp to the current expression list, linearizing each
-// expanded group. Returns false if any dimension is dynamic.
-static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+static bool computeExpandStride(memref::ExpandShapeOp es, unsigned k, unsigned i, int64_t &stride) {
   auto reassoc = es.getReassociationIndices();
   auto resultType = es.getResultType();
+  const auto &group = reassoc[k];
+  stride = 1;
+  for (unsigned j = i + 1; j < group.size(); j++) {
+    int64_t dimSize = resultType.getDimSize(group[j]);
+    if (ShapedType::isDynamic(dimSize)) {
+      return false;
+    }
+    stride *= dimSize;
+  }
+  return true;
+}
+
+// Apply an ExpandShapeOp to the current expression list, linearizing each
+// expanded group. Returns false if any dimension is dynamic.
+static AffineExpr computeCombinedExprForGroup(memref::ExpandShapeOp es, unsigned k,
+                                              const ArrayRef<ReassociationIndices> &reassoc,
+                                              const SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+  const auto &group = reassoc[k];
+  AffineExpr combined = getAffineConstantExpr(0, ctx);
+  for (unsigned i = 0; i < group.size(); i++) {
+    int64_t stride;
+    if (!computeExpandStride(es, k, i, stride)) {
+      return AffineExpr();
+    }
+    combined = combined + exprs[group[i]] * stride;
+  }
+  return combined;
+}
+
+static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+  auto reassoc = es.getReassociationIndices();
   unsigned srcRank = es.getSrcType().getRank();
   SmallVector<AffineExpr> newExprs(srcRank);
   for (unsigned k = 0; k < reassoc.size(); k++) {
-    const auto &group = reassoc[k];
-    AffineExpr combined = getAffineConstantExpr(0, ctx);
-    for (unsigned i = 0; i < group.size(); i++) {
-      int64_t stride = 1;
-      for (unsigned j = i + 1; j < group.size(); j++) {
-        int64_t dimSize = resultType.getDimSize(group[j]);
-        if (ShapedType::isDynamic(dimSize)) {
-          return false;
-        }
-        stride *= dimSize;
-      }
-      combined = combined + exprs[group[i]] * stride;
+    AffineExpr combined = computeCombinedExprForGroup(es, k, reassoc, exprs, ctx);
+    if (!combined) {
+      return false;
     }
     newExprs[k] = combined;
   }
@@ -747,7 +772,6 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
 
   const Partition &part = partitions[partIdx];
   bool isLastPartition = (partIdx == partitions.size() - 1);
-
   // Fast path: last partition + full coverage → no if needed, directly emit values.
   if (isLastPartition && isFullCoverage) {
     return buildPartitionValues(b, loc, part, loads);

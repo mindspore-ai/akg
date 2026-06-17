@@ -25,11 +25,10 @@
 #define AKG_CONVERSION_ARITHTOLINALG_ARITHTOLINALG_H
 
 #include <memory>
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
-
-class RewritePatternSet;
-class Pass;
 
 #define GEN_PASS_DECL_CONVERTARITHTOLINALG
 #include "akg/Conversion/Passes.h.inc"

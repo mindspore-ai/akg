@@ -88,7 +88,7 @@ static int64_t getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
   if (lbMapDim != ubMap.getNumDims() || lbMapSymbol != ubMap.getNumSymbols()) {
     return -1;
   }
-  // TODO(scheduler): extend this to handle multiple result maps.
+  // Extend this to handle multiple result maps.
   if (lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) {
     return -1;
   }

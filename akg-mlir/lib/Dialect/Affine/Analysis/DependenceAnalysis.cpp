@@ -79,8 +79,8 @@ int MemRefDependenceGraph::getNodeId(const Operation *op) {
 // Update the op in the graph node.
 // This command is used to delete the current op after it is cloned.
 void MemRefDependenceGraph::updateNodeOp(const Operation *oldOp, Operation *newOp) {
-  auto it = std::find_if(nodes.begin(), nodes.end(),
-                         [oldOp](const auto &idAndNode) { return idAndNode.second.op == oldOp; });
+  auto it =
+    std::find_if(nodes.begin(), nodes.end(), [oldOp](const auto &idAndNode) { return idAndNode.second.op == oldOp; });
   if (it != nodes.end()) {
     it->second.op = newOp;
   }
@@ -243,7 +243,7 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
     affine::AKGMemRefAccess dstAccess(dstOp);
     for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
       affine::FlatAffineValueConstraints dependenceConstraints;
-      // TODO(scheduler): Cache dependence analysis results, check cache here.
+      // Cache dependence analysis results, check cache here.
       affine::DependenceResult result =
         affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
       if (result.value == affine::DependenceResult::HasDependence) {
@@ -260,6 +260,38 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
       if (result.value == affine::DependenceResult::HasDependence) {
         return true;
       }
+    }
+  }
+  return false;
+}
+
+static unsigned computeDependenceDepthForPair(Operation *srcOpInst, Operation *dstOpInst, unsigned effectiveDepth) {
+  unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
+  for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
+    affine::MemRefAccess srcAcc(srcOpInst);
+    affine::MemRefAccess dstAcc(dstOpInst);
+    affine::DependenceResult result = affine::checkMemrefAccessDependence(srcAcc, dstAcc, d);
+    if (affine::hasDependence(result)) {
+      return std::min(effectiveDepth, d - 1);
+    }
+  }
+  return effectiveDepth;
+}
+
+static unsigned computeMinDependenceDepthForSrc(Operation *srcOpInst, const SmallVector<Operation *, 4> &targetOps,
+                                                unsigned effectiveDepth) {
+  for (unsigned j = 0, e = targetOps.size(); j < e; ++j) {
+    effectiveDepth = computeDependenceDepthForPair(srcOpInst, targetOps[j], effectiveDepth);
+  }
+  return effectiveDepth;
+}
+
+static bool isAnyOpReferencingIV(const SmallVectorImpl<Operation *> &targetOps, Value iv) {
+  for (Operation *op : targetOps) {
+    if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      if (llvm::is_contained(loadOp.getMapOperands(), iv)) return true;
+    } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      if (llvm::is_contained(storeOp.getMapOperands(), iv)) return true;
     }
   }
   return false;
@@ -292,17 +324,8 @@ unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) 
   unsigned effectiveDepth = UINT_MAX;
   for (unsigned d = 0; d < loopDepth; ++d) {
     Value iv = surroundingLoops[d].getInductionVar();
-    for (Operation *op : targetOps) {
-      bool referenced = false;
-      if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
-        referenced = llvm::is_contained(loadOp.getMapOperands(), iv);
-      } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-        referenced = llvm::is_contained(storeOp.getMapOperands(), iv);
-      }
-      if (referenced) {
-        effectiveDepth = d + 1;
-        break;
-      }
+    if (isAnyOpReferencingIV(targetOps, iv)) {
+      effectiveDepth = d + 1;
     }
   }
 
@@ -313,20 +336,7 @@ unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) 
   // Check dependences on all pairs of ops in 'targetOps' and store the
   // minimum loop depth at which a dependence is satisfied.
   for (unsigned i = 0, e = targetOps.size(); i < e; ++i) {
-    Operation *srcOpInst = targetOps[i];
-    for (unsigned j = 0; j < e; ++j) {
-      Operation *dstOpInst = targetOps[j];
-      unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
-      for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
-        affine::MemRefAccess srcAcc(srcOpInst);
-        affine::MemRefAccess dstAcc(dstOpInst);
-        affine::DependenceResult result = affine::checkMemrefAccessDependence(srcAcc, dstAcc, d);
-        if (affine::hasDependence(result)) {
-          effectiveDepth = std::min(effectiveDepth, d - 1);
-          break;
-        }
-      }
-    }
+    effectiveDepth = computeMinDependenceDepthForSrc(targetOps[i], targetOps, effectiveDepth);
   }
 
   return effectiveDepth;
@@ -477,7 +487,7 @@ bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned
 // Initializes the dependence graph based on operations in 'f'.
 // Returns true on success, false otherwise.
 // Initializes the data dependence graph by walking operations in `block`.
-// TODO(scheduler): Add support for taking a Block arg to construct the
+// Add support for taking a Block arg to construct the
 // dependence graph at a different depth.
 bool MemRefDependenceGraph::init() {
   // Map from a memref to the set of ids of the nodes that have ops accessing

@@ -378,7 +378,8 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
   LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op, int64_t padScalarValue,
                                             Value &tosaTensor, const Type dtype,
                                             const llvm::ArrayRef<int64_t> dshape) const {
-    uint32_t width32 = 32, width64 = 64;
+    uint32_t width32 = 32;
+    uint32_t width64 = 64;
     if (isa<FloatType>(dtype)) {
       auto floatValue = static_cast<float>(padScalarValue);
       tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, dshape).value();

@@ -320,14 +320,14 @@ bool BufferAnalysis::IsBlockAfter(Block *afterBlock, Block *beforeBlock) const {
   assert(afterBlock != nullptr && beforeBlock != nullptr);
   mlir::Region *region = beforeBlock->getParent();
   assert(region != nullptr);
+  bool foundBefore = false;
   for (auto it = region->begin(); it != region->end(); ++it) {
     if (&*it == beforeBlock) {
-      for (++it; it != region->end(); ++it) {
-        if (&*it == afterBlock) {
-          return true;
-        }
-      }
-      break;
+      foundBefore = true;
+      continue;
+    }
+    if (foundBefore && &*it == afterBlock) {
+      return true;
     }
   }
   return false;
@@ -712,10 +712,23 @@ void BufferAnalysis::printLiveRanges() const {
   llvm::outs() << "=====================================================\n\n";
 }
 
+static void printValueList(const char *label, const SmallVector<Value> &values) {
+  if (values.empty()) {
+    return;
+  }
+  llvm::outs() << "      " << label << ": ";
+  for (size_t j = 0; j < values.size(); ++j) {
+    if (j > 0) {
+      llvm::outs() << ", ";
+    }
+    values[j].print(llvm::outs());
+  }
+  llvm::outs() << "\n";
+}
+
 void BufferAnalysis::printBufferAnalysisInfo() const {
   llvm::outs() << "\n================== Buffer Analysis ==================\n\n";
 
-  // Print linear operations with gen/kill info
   llvm::outs() << "--- Linear Operations ---\n";
   for (size_t i = 0; i < linearOperation.size(); ++i) {
     const auto &opInfo = linearOperation[i];
@@ -725,32 +738,11 @@ void BufferAnalysis::printBufferAnalysisInfo() const {
     }
     llvm::outs() << "\n";
 
-    // Print gen/kill info for this operation
     auto it = genKillMap.find(opInfo.get());
     if (it != genKillMap.end()) {
       const auto &genKill = it->second;
-
-      if (!genKill.gen.empty()) {
-        llvm::outs() << "      GEN: ";
-        for (size_t j = 0; j < genKill.gen.size(); ++j) {
-          if (j > 0) {
-            llvm::outs() << ", ";
-          }
-          genKill.gen[j].print(llvm::outs());
-        }
-        llvm::outs() << "\n";
-      }
-
-      if (!genKill.kill.empty()) {
-        llvm::outs() << "      KILL: ";
-        for (size_t j = 0; j < genKill.kill.size(); ++j) {
-          if (j > 0) {
-            llvm::outs() << ", ";
-          }
-          genKill.kill[j].print(llvm::outs());
-        }
-        llvm::outs() << "\n";
-      }
+      printValueList("GEN", genKill.gen);
+      printValueList("KILL", genKill.kill);
     }
   }
   llvm::outs() << "\n";

@@ -53,10 +53,10 @@ using namespace akg;   // NOLINT(build/namespaces)
 namespace {
 // To prevent repeated data reading or unnecessary branch judgment, extract the statements that are lifted or sunk in
 // MergeFusionOp to the corresponding for loop, thereby improving operator performance.
-class ExtractIfOpPass : public impl::ExtractIfOpBase<ExtractIfOpPass> {
+class ExtractIfOp : public impl::ExtractIfOpBase<ExtractIfOp> {
  public:
-  ExtractIfOpPass() {}
-  explicit ExtractIfOpPass(std::string target) : target(std::move(target)) {}
+  ExtractIfOp() {}
+  explicit ExtractIfOp(std::string target) : target(std::move(target)) {}
 
   void runOnBlock(Block *block);
   void runOnOperation() override;
@@ -102,7 +102,7 @@ static uint64_t isInConstantEqualityRange(IntegerSet set) {
   return static_cast<uint64_t>(needRetained);
 }
 
-Operation *ExtractIfOpPass::getInsertPoint(mlir::Operation *op, bool isForward) {
+Operation *ExtractIfOp::getInsertPoint(mlir::Operation *op, bool isForward) {
   Operation *innerOp = nullptr;
   for (auto operand : op->getOperands()) {
     SmallVector<Operation *, 8> opAxes;
@@ -164,7 +164,7 @@ Operation *ExtractIfOpPass::getInsertPoint(mlir::Operation *op, bool isForward) 
   return CommonUtils::getInnerOrOuterOp(dependentInnerOp, innerOp, isForward);
 }
 
-void ExtractIfOpPass::removeUselessIf(affine::AffineIfOp ifOp) const {
+void ExtractIfOp::removeUselessIf(affine::AffineIfOp ifOp) const {
   // If the then block is empty or the if condition is invalid, delete the if statement.
   if (isa<affine::AffineYieldOp>(ifOp.getThenRegion().front().front()) || !CommonUtils::isInRange(ifOp)) {
     ifOp.erase();
@@ -184,7 +184,7 @@ void ExtractIfOpPass::removeUselessIf(affine::AffineIfOp ifOp) const {
   }
 }
 
-bool ExtractIfOpPass::extractIfOpPrejudgment(affine::AffineIfOp ifOp) const {
+bool ExtractIfOp::extractIfOpPrejudgment(affine::AffineIfOp ifOp) const {
   // If the then block is empty or the if condition is invalid, delete the if statement.
   if (isa<affine::AffineYieldOp>(ifOp.getThenRegion().front().front())) {
     ifOp.erase();
@@ -209,7 +209,7 @@ bool ExtractIfOpPass::extractIfOpPrejudgment(affine::AffineIfOp ifOp) const {
   return false;
 }
 
-void ExtractIfOpPass::extractIfOp(affine::AffineIfOp ifOp) {
+void ExtractIfOp::extractIfOp(affine::AffineIfOp ifOp) {
   if (extractIfOpPrejudgment(ifOp)) {
     return;
   }
@@ -272,7 +272,7 @@ void ExtractIfOpPass::extractIfOp(affine::AffineIfOp ifOp) {
   }
 }
 
-void ExtractIfOpPass::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
+void ExtractIfOp::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
   // Obtains the position where the forward fusion operator needs to be inserted.
   Operation *outermostOp = nullptr;
   Operation *innermostOp = nullptr;
@@ -347,7 +347,7 @@ void ExtractIfOpPass::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
   ifOp.erase();
 }
 
-void ExtractIfOpPass::runOnBlock(Block *block) {
+void ExtractIfOp::runOnBlock(Block *block) {
   block->walk([&](affine::AffineIfOp ifOp) { removeUselessIf(ifOp); });
   // build dependence graph
   dependenceGraph = MemRefDependenceGraph(block);
@@ -358,7 +358,7 @@ void ExtractIfOpPass::runOnBlock(Block *block) {
   block->walk([&](affine::AffineIfOp ifOp) { extractIfOp(ifOp); });
 }
 
-void ExtractIfOpPass::runOnOperation() {
+void ExtractIfOp::runOnOperation() {
   func::FuncOp funcOp = getOperation();
   for (Region &region : funcOp->getRegions()) {
     for (Block &block : region.getBlocks()) {
@@ -375,10 +375,8 @@ void ExtractIfOpPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createExtractIfOpPass() {
-  return std::make_unique<ExtractIfOpPass>();
-}
+std::unique_ptr<OperationPass<func::FuncOp>> mlir::createExtractIfOpPass() { return std::make_unique<ExtractIfOp>(); }
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createExtractIfOpPass(const std::string &target) {
-  return std::make_unique<ExtractIfOpPass>(target);
+  return std::make_unique<ExtractIfOp>(target);
 }

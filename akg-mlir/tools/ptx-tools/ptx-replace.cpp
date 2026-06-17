@@ -221,13 +221,31 @@ struct VectorizeEmitter {
   }
 };
 
+std::vector<int> parseRow(const std::string &rowStr) {
+  std::istringstream issRow(rowStr);
+  std::vector<int> row;
+  std::string num;
+
+  while (std::getline(issRow, num, ',')) {
+    if (!num.empty() && num.front() == '[') {
+      (void)num.erase(num.begin());
+    }
+    try {
+      row.push_back(std::stoi(num));
+    } catch (...) {
+      std::cerr << "convert to int error, numStr is " << num << std::endl;
+    }
+  }
+
+  return row;
+}
+
 std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) {
   std::ifstream infile(filename);
   std::string line;
   std::string fileContent;
   std::vector<std::vector<int>> result;
 
-  // Read the entire file content
   while (std::getline(infile, line)) {
     fileContent += line;
   }
@@ -237,23 +255,7 @@ std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) 
 
   while (std::getline(iss, val, '[')) {
     if (std::getline(iss, val, ']')) {
-      std::istringstream issRow(val);
-      std::vector<int> row;
-      std::string num;
-
-      while (std::getline(issRow, num, ',')) {
-        // Remove any leading '['
-        if (!num.empty() && num.front() == '[') {
-          (void)num.erase(num.begin());
-        }
-        try {
-          row.push_back(std::stoi(num));
-        } catch (...) {
-          // Skip invalid numbers
-          std::cerr << "convert to int error, numStr is " << num << std::endl;
-        }
-      }
-
+      std::vector<int> row = parseRow(val);
       if (!row.empty()) {
         result.push_back(row);
       }
@@ -439,49 +441,59 @@ void processStep0(ProcessingState &state, const std::string &line) {
 
 // Handle step 1: process .param lines
 bool processStep1(ProcessingState &state, const std::string &line) {
-  if (containsInstruction(line, ".param")) {
-    std::string numStr = getParam(line, state.kernelName);
-    if (!numStr.empty()) {
-      try {
-        int num = std::stoi(numStr);
-        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] == kShouldKeep) {
-          state.currentTensor++;
-          std::string processedLine = line;
-          if (state.currentTensor == state.totalTensorNums) {
-            size_t pos = processedLine.find(",");
-            if (pos != std::string::npos) {
-              processedLine.erase(pos, 1);
-            }
-          }
-          state.oss << processedLine << "\n";
-        }
-      } catch (const std::exception &) {
-        state.oss << line << "\n";
-      }
-    } else {
-      state.oss << line << "\n";
-    }
+  if (!containsInstruction(line, ".param")) {
+    state.step = 2;
+    return false;
+  }
+
+  std::string numStr = getParam(line, state.kernelName);
+  if (numStr.empty()) {
+    state.oss << line << "\n";
     return true;
   }
-  state.step = 2;
+
+  try {
+    int num = std::stoi(numStr);
+    if (num < 0 || num >= static_cast<int>(state.valueList.size()) || state.valueList[num] != kShouldKeep) {
+      return true;
+    }
+    state.currentTensor++;
+    std::string processedLine = line;
+    if (state.currentTensor == state.totalTensorNums) {
+      size_t pos = processedLine.find(",");
+      if (pos != std::string::npos) {
+        processedLine.erase(pos, 1);
+      }
+    }
+    state.oss << processedLine << "\n";
+  } catch (const std::exception &) {
+    state.oss << line << "\n";
+  }
+  return true;
+}
+
+bool tryReplaceParamLoad(ProcessingState &state, const std::string &reg, const std::string &numStr) {
+  try {
+    int num = std::stoi(numStr);
+    if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] != kShouldKeep) {
+      state.oss << "\tmov.u64 " << reg << ", REPLACEMARK" << num << ";\n";
+      return true;
+    }
+  } catch (const std::exception &) {
+    std::cerr << "convert to int error, numStr is " << numStr << std::endl;
+  }
   return false;
 }
 
 // Handle step 2: process param loads and nc flag
 bool processStep2(ProcessingState &state, const std::string &line) {
   if (containsInstruction(line, state.kernelName)) {
-    std::string reg, numStr;
+    std::string reg;
+    std::string numStr;
     std::tie(reg, numStr) = getRegFromLoadParamGlobal(line, state.kernelName);
     if (!reg.empty() && !numStr.empty()) {
-      try {
-        int num = std::stoi(numStr);
-        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] != kShouldKeep) {
-          state.oss << "\tmov.u64 " << reg << ", REPLACEMARK" << num << ";\n";
-          return true;
-        }
-      } catch (const std::exception &) {
-        // Fall through to default handling
-        std::cerr << "convert to int error, numStr is " << numStr << std::endl;
+      if (tryReplaceParamLoad(state, reg, numStr)) {
+        return true;
       }
     }
   }

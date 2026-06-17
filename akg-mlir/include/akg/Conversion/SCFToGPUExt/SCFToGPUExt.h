@@ -14,45 +14,36 @@
  * limitations under the License.
  */
 //===- SCFToGPU.h - Convert loop nests to GPU kernels -----------*- C++ -*-===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 #ifndef AKG_CONVERSION_SCFTOGPUEXT_SCFTOGPUEXT_H_
 #define AKG_CONVERSION_SCFTOGPUEXT_SCFTOGPUEXT_H_
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
-class ConversionTarget;
-struct LogicalResult;
-class MLIRContext;
-class Value;
-class Operation;
-class RewritePatternSet;
-
-namespace affine {
-class AffineForOp;
-}  // namespace affine
-
-namespace scf {
-class ForOp;
-}  // namespace scf
 
 /// Convert a perfect affine loop nest with the outermost loop identified by
 /// `forOp` into a gpu::Launch operation.  Map `numBlockDims` outer loops to
 /// GPU blocks and `numThreadDims` to GPU threads.  The bounds of the loops that
 /// are mapped should be independent of the induction variables of the other
 /// mapped loops.
-///
 /// No check on the size of the block or grid, or on the validity of
 /// parallelization is performed, it is under the responsibility of the caller
 /// to strip-mine the loops and to perform the dependence analysis before
 /// calling the conversion.
 
-// TODO(scheduler): Consider removing this in favor of affine.for -> affine.parallel
+// Consider removing this in favor of affine.for -> affine.parallel
 // detection followed by an affine.parallel -> scf.parallel -> gpu.launch
 // conversion
 LogicalResult convertAffineLoopNestToGPULaunch(affine::AffineForOp forOp, unsigned numBlockDims,

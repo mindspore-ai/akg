@@ -272,7 +272,6 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 
     auto srcLayout = srcType.getLayout();
     auto destLayout = destType.getLayout();
-
     if (!srcLayout && !destLayout) {
       return true;
     }

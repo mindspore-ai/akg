@@ -20,10 +20,6 @@
 #include <memory>
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-class Pass;
-}  // namespace mlir
-
 #ifndef GEN_PASS_DECL_COPYELISION
 #define GEN_PASS_DECL_COPYELISION
 #include "akg/Transforms/Passes.h.inc"

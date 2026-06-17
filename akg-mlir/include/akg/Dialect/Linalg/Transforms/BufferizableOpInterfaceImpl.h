@@ -17,8 +17,9 @@
 #ifndef AKG_DIALECT_LINALG_TRANSFORMS_BUFFERIZABLEOPINTERFACEIMPL_H_
 #define AKG_DIALECT_LINALG_TRANSFORMS_BUFFERIZABLEOPINTERFACEIMPL_H_
 
+#include "mlir/IR/DialectRegistry.h"
+
 namespace mlir {
-class DialectRegistry;
 
 namespace linalgExt {
 void registerBufferizableOpInterfaceExternalModels(DialectRegistry &registry);

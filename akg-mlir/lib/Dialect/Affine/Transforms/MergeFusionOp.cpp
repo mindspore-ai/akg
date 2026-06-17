@@ -55,10 +55,10 @@ namespace {
 
 // Move all operators between two for loops up or down to the innermost for loop and add if statements
 // to ensure the correctness of the result, so that the subsequent pass can be enabled correctly.
-class MergeFusionOpPass : public impl::MergeFusionOpBase<MergeFusionOpPass> {
+class MergeFusionOp : public impl::MergeFusionOpBase<MergeFusionOp> {
  public:
-  MergeFusionOpPass() {}
-  explicit MergeFusionOpPass(std::string target) : target(std::move(target)) {}
+  MergeFusionOp() {}
+  explicit MergeFusionOp(std::string target) : target(std::move(target)) {}
 
   void runOnOperation() override;
 
@@ -78,7 +78,7 @@ class MergeFusionOpPass : public impl::MergeFusionOpBase<MergeFusionOpPass> {
 
 }  // namespace
 
-void MergeFusionOpPass::clearFusionOp() {
+void MergeFusionOp::clearFusionOp() {
   forwardFusionOp.clear();
   backwardFusionOp.clear();
   forwardBetweenLoops.clear();
@@ -126,7 +126,7 @@ static void insertUniqueValue(SmallVectorImpl<affine::AffineForOp> *loopA, Small
 }
 
 // Get all operators between any two ops and record them in a global variable.
-void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp after) {
+void MergeFusionOp::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp after) {
   clearFusionOp();
   if (beforeBlock->findAncestorOpInBlock(*after.getOperation()) == nullptr) {
     return;
@@ -136,7 +136,7 @@ void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineF
     // block, no Op can be inserted before affine::AffineYieldOp.
     // The current solution only handles non-affine::AffineForOp between two loops, so affine::AffineForOp needs to
     // be skipped. If the inner for loop is an ancestor of the current operator, it means that the current operator
-    // is not between the two for loops. TODO(scheduler): isSeparatedByForLoop
+    // is not between the two for loops. isSeparatedByForLoop
     if (isa<affine::AffineYieldOp, affine::AffineForOp, arith::ConstantOp, memref::AllocOp, memref::DeallocOp,
             memref::CopyOp, memref::DimOp, func::ReturnOp>(op) ||
         op == after.getOperation() || after.getBody()->findAncestorOpInBlock(*op) != nullptr) {
@@ -175,7 +175,7 @@ void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineF
   });
 }
 
-affine::AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const bool isBackward) {
+affine::AffineIfOp MergeFusionOp::createAffineIfOp(OpBuilder &builder, const bool isBackward) {
   SmallVector<affine::AffineForOp, 4> loops = isBackward ? backwardBetweenLoops : forwardBetweenLoops;
   if (loops.empty()) {
     return nullptr;
@@ -217,7 +217,7 @@ affine::AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const
   return builder.create<affine::AffineIfOp>(loops[0]->getLoc(), ifCondSet, setOperands, false);
 }
 
-void MergeFusionOpPass::createIfThenBlock(Operation *op) {
+void MergeFusionOp::createIfThenBlock(Operation *op) {
   OpBuilder builder(op);
   auto body = dyn_cast<affine::AffineForOp>(op).getBody();
   if (!forwardFusionOp.empty()) {
@@ -253,7 +253,7 @@ void MergeFusionOpPass::createIfThenBlock(Operation *op) {
   }
 }
 
-void MergeFusionOpPass::runOnOperation() {
+void MergeFusionOp::runOnOperation() {
   std::vector<SmallVector<affine::AffineForOp, 6>> bands;
   auto funcOp = getOperation();
   getAllAffineFor(funcOp, &bands);
@@ -313,9 +313,9 @@ void MergeFusionOpPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMergeFusionOpPass() {
-  return std::make_unique<MergeFusionOpPass>();
+  return std::make_unique<MergeFusionOp>();
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMergeFusionOpPass(const std::string &target) {
-  return std::make_unique<MergeFusionOpPass>(target);
+  return std::make_unique<MergeFusionOp>(target);
 }

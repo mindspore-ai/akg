@@ -18,12 +18,10 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_AFFINEREDUCTIONANNOTATION_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 namespace affine {
 
 std::unique_ptr<OperationPass<func::FuncOp>> createAffineReductionAnnotationPass();

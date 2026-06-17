@@ -119,7 +119,6 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
   OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, funcOp.getContext());
 
   auto template_func = module->getOps<func::FuncOp>().begin();
-
   if ((*template_func).empty()) {
     llvm::errs() << "No templated function in templated file: " << filePath << "\n";
     return failure();
@@ -186,7 +185,6 @@ void LinalgTemplatedPass::runOnOperation() {
       templateLinalgOp(linalgOp, insertedFunc);
       return WalkResult::advance();
     });
-
     if (funcWalkResult.wasInterrupted()) {
       return signalPassFailure();
     }

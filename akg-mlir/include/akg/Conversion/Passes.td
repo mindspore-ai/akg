@@ -150,7 +150,7 @@ def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
     This pass only deal with openmp dialect, while MLIR's convert-openmp-to-llvm
     also converts func, arith, memref and other related dialects.
   }];
-  let constructor = "mlir::createPureOpenMPToLLVMPass()";
+  let constructor = "mlir::createPureOpenMPToLLVM()";
 }
 
 //===----------------------------------------------------------------------===//
