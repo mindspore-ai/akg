@@ -18,11 +18,10 @@
 #define AKG_TRANSFORMS_FUNCOUTLINING_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class Pass;
-class ModuleOp;
 constexpr const char *kCpuMainFunc = "akg_main_kernel_func";
 constexpr const char *kCpuCalcFunc = "akg_calculate_kernel_func";
 constexpr const char *kFuncType = "FuncType";

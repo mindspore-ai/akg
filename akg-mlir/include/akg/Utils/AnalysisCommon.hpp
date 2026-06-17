@@ -84,17 +84,60 @@ constexpr auto kVectorFunctionAttr = "hivm.vector_function";
 constexpr auto kNoInlineAttr = "no_inline";
 constexpr auto kMultiVecLoopAttr = "multi_vec_loop";
 
-const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039,
-                                          100000049, 100000073, 100000079, 100000081, 100000091};
-const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171,
-                                              100000177, 100000181, 100000183, 100000187, 100000189};
+constexpr int64_t kInvalidConstraintValue = -1;
+constexpr int kInvalidNodeId = -1;
+constexpr int64_t kDimIdConstraintValue = 0;
+constexpr unsigned kReduceLhsOperandIdx = 0;
+constexpr unsigned kReduceRhsOperandIdx = 1;
+constexpr unsigned kAffineYieldOperandIdx = 0;
+constexpr unsigned kAffineMapFirstResultIdx = 0;
+constexpr unsigned kMinStoreOperands = 2;
+constexpr unsigned kStoreMemrefOperandIdx = 1;
+constexpr unsigned kOpFirstResultIdx = 0;
+
+constexpr unsigned kPrimeStep0 = 100000007;
+constexpr unsigned kPrimeStep1 = 100000009;
+constexpr unsigned kPrimeStep2 = 100000033;
+constexpr unsigned kPrimeStep3 = 100000037;
+constexpr unsigned kPrimeStep4 = 100000039;
+constexpr unsigned kPrimeStep5 = 100000049;
+constexpr unsigned kPrimeStep6 = 100000073;
+constexpr unsigned kPrimeStep7 = 100000079;
+constexpr unsigned kPrimeStep8 = 100000081;
+constexpr unsigned kPrimeStep9 = 100000091;
+constexpr unsigned kPrimeTailStep0 = 100000153;
+constexpr unsigned kPrimeTailStep1 = 100000157;
+constexpr unsigned kPrimeTailStep2 = 100000163;
+constexpr unsigned kPrimeTailStep3 = 100000169;
+constexpr unsigned kPrimeTailStep4 = 100000171;
+constexpr unsigned kPrimeTailStep5 = 100000177;
+constexpr unsigned kPrimeTailStep6 = 100000181;
+constexpr unsigned kPrimeTailStep7 = 100000183;
+constexpr unsigned kPrimeTailStep8 = 100000187;
+constexpr unsigned kPrimeTailStep9 = 100000189;
+
+const std::vector<unsigned> primeSteps = {kPrimeStep0, kPrimeStep1, kPrimeStep2, kPrimeStep3, kPrimeStep4,
+                                          kPrimeStep5, kPrimeStep6, kPrimeStep7, kPrimeStep8, kPrimeStep9};
+const std::vector<unsigned> primeTailSteps = {kPrimeTailStep0, kPrimeTailStep1, kPrimeTailStep2, kPrimeTailStep3,
+                                              kPrimeTailStep4, kPrimeTailStep5, kPrimeTailStep6, kPrimeTailStep7,
+                                              kPrimeTailStep8, kPrimeTailStep9};
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduction, Matmul, Conv };
-const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
-                                                                  {3, "Reshape"}, {4, "Transpose"},   {5, "Reduction"},
-                                                                  {6, "Matmul"},  {7, "Conv"}};
+const std::unordered_map<int, std::string> operatorTemplateMap = {
+  {static_cast<int>(OperatorTemplate::Default), "Default"},
+  {static_cast<int>(OperatorTemplate::Elementwise), "Elementwise"},
+  {static_cast<int>(OperatorTemplate::Broadcast), "Broadcast"},
+  {static_cast<int>(OperatorTemplate::Reshape), "Reshape"},
+  {static_cast<int>(OperatorTemplate::Transpose), "Transpose"},
+  {static_cast<int>(OperatorTemplate::Reduction), "Reduction"},
+  {static_cast<int>(OperatorTemplate::Matmul), "Matmul"},
+  {static_cast<int>(OperatorTemplate::Conv), "Conv"}};
 
 enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
-const std::unordered_map<int, std::string> reduceDirectionMap = {{0, "unknown"}, {1, "x"}, {2, "y"}, {3, "all"}};
+const std::unordered_map<int, std::string> reduceDirectionMap = {
+  {static_cast<int>(ReduceDirection::UNKNOWN), "unknown"},
+  {static_cast<int>(ReduceDirection::X), "x"},
+  {static_cast<int>(ReduceDirection::Y), "y"},
+  {static_cast<int>(ReduceDirection::ALL), "all"}};
 
 const std::unordered_map<std::string, int> cpuInstructionSetMap = {{kNEONInstructionSet, kVectorize128Bit},
                                                                    {kSSEInstructionSet, kVectorize128Bit},
@@ -146,9 +189,9 @@ class CommonUtils {
   CommonUtils() = default;
   // Determines whether a value is in the upper and lower bounds of the loop.
   static bool isInForUbAndLb(affine::AffineForOp forOp, int64_t constraintValue) {
-    // TODO(akg-dev): getResults().size() > 0
-    auto ubMap = forOp.getUpperBoundMap().getResult(0);
-    auto lbMap = forOp.getLowerBoundMap().getResult(0);
+    // getResults().size() > 0
+    auto ubMap = forOp.getUpperBoundMap().getResult(kAffineMapFirstResultIdx);
+    auto lbMap = forOp.getLowerBoundMap().getResult(kAffineMapFirstResultIdx);
     if (!llvm::isa<AffineConstantExpr>(ubMap) || !llvm::isa<AffineConstantExpr>(lbMap)) {
       return true;
     }
@@ -163,15 +206,15 @@ class CommonUtils {
   // Obtains the constant variable in the if condition.
   static void getConstraintValues(IntegerSet set, SmallVector<int64_t, 4> &constraintValues) {
     for (auto constraint : set.getConstraints()) {
-      int64_t constraintValue = -1;
-      // TODO(akg-dev): if condition type is other
+      int64_t constraintValue = kInvalidConstraintValue;
+      // If condition type is other
       if (constraint.getKind() == AffineExprKind::Add) {
         AffineBinaryOpExpr binaryExpr = llvm::cast<AffineBinaryOpExpr>(constraint);
         if (llvm::isa<AffineConstantExpr>(binaryExpr.getRHS())) {
           constraintValue = llvm::dyn_cast<AffineConstantExpr>(binaryExpr.getRHS()).getValue();
         }
       } else if (constraint.getKind() == AffineExprKind::DimId) {
-        constraintValue = 0;
+        constraintValue = kDimIdConstraintValue;
       } else {
         constraintValues.clear();
         return;
@@ -183,6 +226,20 @@ class CommonUtils {
 
   // Checks whether the constants in the if condition are within the upper and lower bounds of the corresponding for
   // loop.
+  static bool checkIfOperandInRange(Value value, int64_t constraintValue) {
+    auto blockArg = dyn_cast<BlockArgument>(value);
+    if (!blockArg || !isa<IndexType>(blockArg.getType())) {
+      return true;
+    }
+    Block *block = blockArg.getOwner();
+    Operation *parentOp = block->getParentOp();
+    auto forOp = dyn_cast<affine::AffineForOp>(parentOp);
+    if (!forOp) {
+      return true;
+    }
+    return isInForUbAndLb(forOp, constraintValue);
+  }
+
   static bool isInRange(Operation *op) {
     if (!isa<affine::AffineIfOp>(op)) {
       return true;
@@ -198,16 +255,8 @@ class CommonUtils {
     assert(constraintValues.size() == ifOps.size());
     int64_t i = 0;
     for (auto value : ifOps) {
-      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-        if (isa<IndexType>(blockArg.getType())) {
-          Block *block = blockArg.getOwner();
-          Operation *parentOp = block->getParentOp();
-          if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp)) {
-            if (!isInForUbAndLb(forOp, constraintValues[i])) {
-              return false;
-            }
-          }
-        }
+      if (!checkIfOperandInRange(value, constraintValues[i])) {
+        return false;
       }
       ++i;
     }
@@ -226,7 +275,8 @@ class CommonUtils {
     };
 
     // Find the closest common block including those in AffineIf.
-    SmallVector<Block *, 4> srcAncestorBlocks, dstAncestorBlocks;
+    SmallVector<Block *, 4> srcAncestorBlocks;
+    SmallVector<Block *, 4> dstAncestorBlocks;
     getAllAncestorBlocks(opA, srcAncestorBlocks);
     getAllAncestorBlocks(opB, dstAncestorBlocks);
 
@@ -272,7 +322,7 @@ class CommonUtils {
       llvm::errs() << "Unable to recognize attribute " << kOperatorTypeStr << ".\n";
       return opType;
     }
-    // TODO(akg-dev): multi band
+    // Multi band
     auto opTypeStr = dyn_cast<StringAttr>(op->getAttr(kOperatorTypeStr)).getValue().str();
     for (auto it = operatorTemplateMap.begin(); it != operatorTemplateMap.end(); ++it) {
       if (it->second == opTypeStr) {
@@ -305,8 +355,8 @@ class CommonUtils {
     if (!reduceOp->hasAttr(kReductionAxesStr)) {
       return nullptr;
     }
-    auto lhsOp = reduceOp->getOperands()[0].getDefiningOp();
-    auto rhsOp = reduceOp->getOperands()[1].getDefiningOp();
+    auto lhsOp = reduceOp->getOperands()[kReduceLhsOperandIdx].getDefiningOp();
+    auto rhsOp = reduceOp->getOperands()[kReduceRhsOperandIdx].getDefiningOp();
     if (!isa<affine::AffineLoadOp>(lhsOp) && !isa<affine::AffineLoadOp>(rhsOp)) {
       return nullptr;
     } else if (!isa<affine::AffineLoadOp>(lhsOp) && isa<affine::AffineLoadOp>(rhsOp)) {
@@ -325,7 +375,7 @@ class CommonUtils {
     } else if (lhsIndices.size() < rhsIndices.size()) {
       return lhsLoadOp;
     } else {
-      // TODO(akg-dev): keep_dim is true
+      // keep_dim is true
       return nullptr;
     }
   }
@@ -345,7 +395,7 @@ class CommonUtils {
     }
 
     int nodeId = dependenceGraph.getNodeId(initLoadOp);
-    if (nodeId == -1) {
+    if (nodeId == kInvalidNodeId) {
       return initStoreOp;
     }
     llvm::DenseSet<unsigned> dependentIds;
@@ -389,7 +439,9 @@ class CommonUtils {
           }
         }
       } else if (auto affineIf = dyn_cast<affine::AffineIfOp>(parentOp)) {
-        affineIf.walk([&](affine::AffineYieldOp yieldOp) { collectRelatedAxes(yieldOp.getOperands()[0], axes); });
+        affineIf.walk([&](affine::AffineYieldOp yieldOp) {
+          collectRelatedAxes(yieldOp.getOperands()[kAffineYieldOperandIdx], axes);
+        });
       } else {
         for (auto operand : parentOp->getOperands()) {
           collectRelatedAxes(operand, axes);
@@ -458,8 +510,8 @@ class CommonUtils {
       for (unsigned i = 0; i < numSyms; ++i) {
         symReplacements.push_back(getAffineDimExpr(numDims + i, map.getContext()));
       }
-      map = map.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
-                                      /*numResultDims=*/numDims + numSyms, /*numResultSyms=*/0);
+      map = map.replaceDimsAndSymbols(/* dimReplacements= */ {}, symReplacements,
+                                      /* numResultDims= */ numDims + numSyms, /* numResultSyms= */ 0);
     }
 
     // Simplify and canonicalize.
@@ -475,11 +527,11 @@ class CommonUtils {
       llvm::errs() << "can only get memref from AffineStore or memref::StoreOp.\n";
       return Value();
     }
-    if (storeOp->getNumOperands() < 2) {
+    if (storeOp->getNumOperands() < kMinStoreOperands) {
       llvm::errs() << "store op has insufficient operands when querying memref.\n";
       return Value();
     }
-    Value memref = storeOp->getOperand(1);
+    Value memref = storeOp->getOperand(kStoreMemrefOperandIdx);
     if (!memref || !isa<BaseMemRefType>(memref.getType())) {
       return Value();
     }
@@ -677,8 +729,8 @@ class CommonUtils {
       if (!redOp) {
         return;
       }
-      auto redDest = redOp->getOperands()[1];
-      auto redSrc = redOp->getOperands()[0];
+      auto redDest = redOp->getOperands()[kReduceRhsOperandIdx];
+      auto redSrc = redOp->getOperands()[kReduceLhsOperandIdx];
       auto indexDest = getGlobalIndices(funcOp, redDest);
       auto indexSrc = getGlobalIndices(funcOp, redSrc);
 
@@ -910,7 +962,8 @@ class CommonUtils {
       return true;
     }
 
-    ParallelOpSet set0, set1;
+    ParallelOpSet set0;
+    ParallelOpSet set1;
     // 1.first in the Then-region, collect all the operands;
     getRegionOperandsCollection(IfOp, set0);
     // 2.collect all the defining Op and related Operands, until access the boundary or the first ForOp;
@@ -921,7 +974,7 @@ class CommonUtils {
 
   static void getAllPreviousRelatedOps(mlir::Operation *op, SmallVector<Operation *, 8> &prevOps) {
     mlir::Block *containingBlock = op->getBlock();
-    // TODO(yanzhi): avoid duplicate op in vector
+    // Avoid duplicate op in vector
     for (auto operand : op->getOperands()) {
       if (auto prevOp = operand.getDefiningOp()) {
         if (prevOp->getBlock() == containingBlock) {
@@ -956,7 +1009,7 @@ class CommonUtils {
     for (auto operand : op->getOperands()) {
       usedValues.push_back(operand);
     }
-    usedValues.push_back(op->getResult(0));
+    usedValues.push_back(op->getResult(kOpFirstResultIdx));
     Operation *curOp = op->getPrevNode();
     while (curOp) {
       if (!isa<scf::YieldOp>(curOp)) {

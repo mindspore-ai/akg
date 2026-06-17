@@ -18,21 +18,20 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_SIMPLIFYSHAPE_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
-}  // namespace mlir
 
 #define GEN_PASS_DECL_SIMPLIFYSHAPE
 #include "akg/Dialect/Affine/Passes.h.inc"
 
-namespace mlir {
 /// Create a pass that removes dimension 1 shape.
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> createSimplifyShapePass();
+std::unique_ptr<OperationPass<ModuleOp>> createSimplifyShapePass();
 
 /// Create a pass that removes dimension 1 shape.
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> createSimplifyShapePass(bool keepArg);
+std::unique_ptr<OperationPass<ModuleOp>> createSimplifyShapePass(bool keepArg);
+
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_SIMPLIFYSHAPE_H_

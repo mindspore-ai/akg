@@ -18,12 +18,12 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_AFFINEHANDLEBOUNDARYIFRESTORE_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
 
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> createAffineHandleBoundaryIfRestore();
+std::unique_ptr<OperationPass<ModuleOp>> createAffineHandleBoundaryIfRestore();
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_AFFINEHANDLEBOUNDARYIFRESTORE_H_

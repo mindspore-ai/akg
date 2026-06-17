@@ -30,7 +30,6 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class Pass;
 #ifndef GEN_PASS_DECL_FUNCTOLLVMEXT
 #define GEN_PASS_DECL_FUNCTOLLVMEXT
 #include "mlir/Conversion/Passes.h.inc"

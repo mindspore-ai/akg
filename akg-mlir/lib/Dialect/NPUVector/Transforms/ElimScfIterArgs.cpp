@@ -48,7 +48,6 @@ namespace {
 
 // =============================================================================
 // Pass: ElimScfIterArgs
-//
 // This pass rewrites every scf.for whose iter_args contain values of
 // NPUVectorType. The rewrite removes those iter_args and replaces them with
 // in-memory traffic through memref buffers:
@@ -59,7 +58,6 @@ namespace {
 //     cloned unchanged. Each yielded NPUVector is written back to its buffer.
 //   * After the loop, the final buffer contents are loaded and used as the
 //     replacements for the original loop results.
-//
 // =============================================================================
 class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimScfIterArgs> {
  public:
@@ -90,7 +88,6 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     SmallVector<Value> idxOpnds;
     collectIndexOperands(rd, idxOpnds);
     int n = static_cast<int>(idxOpnds.size());
-
     if (n >= 2 * rank) {
       sizes.clear();
       for (int i = 0; i < rank; ++i) {

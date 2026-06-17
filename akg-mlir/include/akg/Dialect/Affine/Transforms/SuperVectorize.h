@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 //===--------------- SuperVectorize.h - vectorize op ------------*- C++ -*-===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 
 #ifndef AKG_DIALECT_AFFINE_TRANSFORMS_SUPERVECTORIZE_H_
@@ -59,10 +57,8 @@ struct VectorizationState {
 
   /// Registers the vector replacement of a scalar operation and its result
   /// values. Both operations must have the same number of results.
-  ///
   /// This utility is used to register the replacement for the vast majority of
   /// the vectorized operations.
-  ///
   /// Example:
   ///   * 'replaced': %0 = arith.addf %1, %2 : f32
   ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
@@ -70,11 +66,9 @@ struct VectorizationState {
 
   /// Registers the vector replacement of a scalar value. The replacement
   /// operation should have a single result, which replaces the scalar value.
-  ///
   /// This utility is used to register the vector replacement of block arguments
   /// and operation results which are not directly vectorized (i.e., their
   /// scalar version still exists after vectorization), like uniforms.
-  ///
   /// Example:
   ///   * 'replaced': block argument or operation outside of the vectorized
   ///     loop.
@@ -82,7 +76,6 @@ struct VectorizationState {
   void registerValueVectorReplacement(Value replaced, Operation *replacement);
 
   /// Registers the vector replacement of a block argument (e.g., iter_args).
-  ///
   /// Example:
   ///   * 'replaced': 'iter_arg' block argument.
   ///   * 'replacement': vectorized 'iter_arg' block argument.
@@ -91,11 +84,9 @@ struct VectorizationState {
   /// Registers the scalar replacement of a scalar value. 'replacement' must be
   /// scalar. Both values must be block arguments. Operation results should be
   /// replaced using the 'registerOp*' utilitites.
-  ///
   /// This utility is used to register the replacement of block arguments
   /// that are within the loop to be vectorized and will continue being scalar
   /// within the vector loop.
-  ///
   /// Example:
   ///   * 'replaced': induction variable of a loop to be vectorized.
   ///   * 'replacement': new induction variable in the new vector loop.
@@ -103,10 +94,8 @@ struct VectorizationState {
 
   /// Registers the scalar replacement of a scalar result returned from a
   /// reduction loop. 'replacement' must be scalar.
-  ///
   /// This utility is used to register the replacement for scalar results of
   /// vectorized reduction loops with iter_args.
-  ///
   /// Example 2:
   ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
   ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into

@@ -112,7 +112,9 @@ static bool IsPostFusion(Operation *redOp) {
 
 // Match the fixed pattern for reduction stores.
 static std::tuple<Operation *, Operation *, Operation *> matchReductionStorePatterns(Operation *redOp) {
-  Operation *localStore = nullptr, *localLoad = nullptr, *globalStore = nullptr;
+  Operation *localStore = nullptr;
+  Operation *localLoad = nullptr;
+  Operation *globalStore = nullptr;
   auto curOp = redOp->getNextNode();
   while (curOp != nullptr) {
     if (isa<memref::StoreOp>(curOp) && redOp->getResult(0) == curOp->getOperand(0)) {
@@ -135,7 +137,9 @@ static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder
   auto loc = redInfo.op->getLoc();
   builder.setInsertionPoint(redInfo.op);
 
-  Operation *localStore = nullptr, *localLoad = nullptr, *globalStore = nullptr;
+  Operation *localStore = nullptr;
+  Operation *localLoad = nullptr;
+  Operation *globalStore = nullptr;
   std::tie(localStore, localLoad, globalStore) = matchReductionStorePatterns(redInfo.op);
   builder.setInsertionPointAfter(globalStore);
 
@@ -191,7 +195,9 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
   // gpu.all_reduce has already done. so no need to add scf.if here
   bool isPostFusion = IsPostFusion(redInfo.op);
 
-  Operation *localStore = nullptr, *localLoad = nullptr, *globalStore = nullptr;
+  Operation *localStore = nullptr;
+  Operation *localLoad = nullptr;
+  Operation *globalStore = nullptr;
   std::tie(localStore, localLoad, globalStore) = matchReductionStorePatterns(redInfo.op);
 
   if (!isPostFusion) {

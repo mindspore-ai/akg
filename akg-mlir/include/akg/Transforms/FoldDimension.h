@@ -21,12 +21,10 @@
 #include <string>
 #include <utility>
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createFoldDimensionPass();
 
@@ -35,10 +33,10 @@ using TensorInfoMap = llvm::DenseMap<Value, std::pair<std::pair<llvm::SmallDense
 
 using FuncArgsMap = llvm::DenseMap<Value, llvm::SmallVector<int64_t>>;
 
-class foldDimensionAnalyser {
+class FoldDimensionAnalyser {
  public:
-  foldDimensionAnalyser() {}
-  ~foldDimensionAnalyser() = default;
+  FoldDimensionAnalyser() {}
+  ~FoldDimensionAnalyser() = default;
 
   void analyseFoldDimension(const func::FuncOp funcOp);
   void recordFuncArgs(func::FuncOp funcOp);
@@ -70,6 +68,7 @@ class foldDimensionAnalyser {
   void analyseSymbolicBroadcastOp(const ShapedType ty0, const ShapedType ty1);
   void analyseTensorCastOp(Operation *op);
   void analyseElemwiseBroadcastOp(Operation *op);
+  void analyseStaticBroadcastOp(const ShapedType ty0, const ShapedType ty1);
   void analyseBroadcastToOp(Operation *op);
   void analyseReduceOp(Operation *op);
   void analyseReshapeOp(Operation *op);

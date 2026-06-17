@@ -94,7 +94,9 @@ void GatherOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult GatherOp::parse(OpAsmParser &parser, OperationState &result) {
-  Type dataType, indicesType, outputType;
+  Type dataType;
+  Type indicesType;
+  Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
   if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
@@ -127,7 +129,9 @@ void UnsortedSegmentSumOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult UnsortedSegmentSumOp::parse(OpAsmParser &parser, OperationState &result) {
-  Type dataType, indicesType, outputType;
+  Type dataType;
+  Type indicesType;
+  Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
   if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
@@ -188,8 +192,11 @@ static LogicalResult verifyOperationAttrs(OpAsmParser &parser, OperationState &r
 static ParseResult parseCommonStructuredOpParts(OpAsmParser &parser, OperationState &result,
                                                 SmallVectorImpl<Type> &inputTypes, SmallVectorImpl<Type> &outputTypes,
                                                 bool addOperandSegmentSizes = true) {
-  SMLoc attrsLoc, inputsOperandsLoc, outputsOperandsLoc;
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputsOperands, outputsOperands;
+  SMLoc attrsLoc;
+  SMLoc inputsOperandsLoc;
+  SMLoc outputsOperandsLoc;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputsOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> outputsOperands;
 
   if (succeeded(parser.parseOptionalLess())) {
     if (parser.parseAttribute(result.propertiesAttr) || parser.parseGreater()) {
@@ -334,7 +341,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
       // Convert IteratorType enums into the string representation. This is
       // needed, because tests still use the old format when 'iterator_types'
       // attribute is represented as an array of strings.
-      // TODO(scheduler): Remove this conversion once tests are fixed.
+      // Remove this conversion once tests are fixed.
       SmallVector<Attribute> iteratorTypeNames =
         llvm::to_vector(llvm::map_range(iteratorTypes, [&](utils::IteratorType t) -> Attribute {
           return StringAttr::get(getContext(), stringifyIteratorType(t));
@@ -392,7 +399,7 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   // Convert array of string into an array of IteratyType enums. This is needed,
   // because tests still use the old format when 'iterator_types' attribute is
   // represented as an array of strings.
-  // TODO(scheduler): Remove this conversion once tests are fixed.
+  // Remove this conversion once tests are fixed.
   ArrayAttr iteratorTypes = cast<ArrayAttr>(result.attributes.get(getIteratorTypesAttrName(result.name)));
 
   SmallVector<Attribute> iteratorTypeAttrs;
@@ -408,7 +415,8 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   result.attributes.set(getIteratorTypesAttrName(result.name), parser.getBuilder().getArrayAttr(iteratorTypeAttrs));
 
   // Parsing is shared with named ops, except for the region.
-  SmallVector<Type, 1> inputTypes, outputTypes;
+  SmallVector<Type, 1> inputTypes;
+  SmallVector<Type, 1> outputTypes;
   if (parseCommonStructuredOpParts(parser, result, inputTypes, outputTypes)) {
     return failure();
   }
@@ -428,7 +436,7 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
 
   // Generic ops may specify that a subset of its outputs are tensors. Such
   // outputs are specified in the result type.
-  // TODO(scheduler): may need to move output parsing before region parsing.
+  // May need to move output parsing before region parsing.
   // Need to wait for declarative assembly resolution to decide.
   SmallVector<Type, 1> outputTensorsTypes;
   if (parseNamedStructuredOpResults(parser, outputTensorsTypes)) {

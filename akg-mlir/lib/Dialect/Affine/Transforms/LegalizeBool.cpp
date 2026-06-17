@@ -17,8 +17,6 @@
 #include <algorithm>
 #include <iterator>
 
-#include "akg/Dialect/Affine/Passes.h"
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -92,7 +90,8 @@ Value castBitBinaryOperandToResultTy(Location loc, Type resTy, Value v, OpBuilde
 void updateFunctionType(func::FuncOp func) {
   OpBuilder b(func);
   FunctionType old = func.getFunctionType();
-  SmallVector<Type, 4> in, out;
+  SmallVector<Type, 4> in;
+  SmallVector<Type, 4> out;
   std::transform(old.getInputs().begin(), old.getInputs().end(), std::back_inserter(in), convertI1ElemToI8);
   std::transform(old.getResults().begin(), old.getResults().end(), std::back_inserter(out), convertI1ElemToI8);
   FunctionType neu = b.getFunctionType(in, out);
@@ -122,7 +121,8 @@ struct MemRefReshapePattern final : public OpRewritePattern<OpTy> {
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &) const override {
     Value src = MemRefViewSrc::src(op);
     Value res = op.getResult();
-    auto st = dyn_cast<MemRefType>(src.getType()), dt = dyn_cast<MemRefType>(res.getType());
+    auto st = dyn_cast<MemRefType>(src.getType());
+    auto dt = dyn_cast<MemRefType>(res.getType());
     if (!st || !dt || dt.getElementType() == st.getElementType()) {
       return failure();
     }
@@ -202,8 +202,10 @@ struct ArithIntBinaryPattern final : public OpRewritePattern<OpTy> {
     if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
       return failure();
     }
-    Value lhs = o->getOperand(0), rhs = o->getOperand(1);
-    Type lt = lhs.getType(), rt = rhs.getType();
+    Value lhs = o->getOperand(0);
+    Value rhs = o->getOperand(1);
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
     if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
       return failure();
     }
@@ -228,8 +230,10 @@ struct ArithBitBinaryPattern final : public OpRewritePattern<OpTy> {
     if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
       return failure();
     }
-    Value lhs = o->getOperand(0), rhs = o->getOperand(1);
-    Type lt = lhs.getType(), rt = rhs.getType();
+    Value lhs = o->getOperand(0);
+    Value rhs = o->getOperand(1);
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
     Type resTy = o->getResult(0).getType();
     if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
       return failure();
@@ -258,8 +262,10 @@ struct ArithCmplPattern final : public OpRewritePattern<OpTy> {
     if (op->getNumOperands() != 2) {
       return failure();
     }
-    Value lhs = op.getLhs(), rhs = op.getRhs();
-    Type lt = lhs.getType(), rt = rhs.getType();
+    Value lhs = op.getLhs();
+    Value rhs = op.getRhs();
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
     if (lt == rt) {
       return failure();
     }
@@ -295,7 +301,8 @@ struct MemRefStorePattern final : public OpRewritePattern<memref::StoreOp> {
     if (!m) {
       return failure();
     }
-    Type want = m.getElementType(), vt = op.getValueToStore().getType();
+    Type want = m.getElementType();
+    Type vt = op.getValueToStore().getType();
     if (vt == want) {
       return failure();
     }
@@ -378,6 +385,8 @@ struct LegalizeBoolPass : public impl::LegalizeBoolBase<LegalizeBoolPass> {
 }  // namespace affine
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createLegalizeBoolPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeBoolPass() {
   return std::make_unique<affine::LegalizeBoolPass>();
 }
+}  // namespace mlir

@@ -30,8 +30,8 @@
 
 namespace mlir {
 namespace npuvector {
-#define GEN_PASS_DECL_ELIMINATENPUVECTORREDUNDANTOPSPASS
-#define GEN_PASS_DEF_ELIMINATENPUVECTORREDUNDANTOPSPASS
+#define GEN_PASS_DECL_ELIMINATENPUVECTORREDUNDANTOPS
+#define GEN_PASS_DEF_ELIMINATENPUVECTORREDUNDANTOPS
 #include "akg/Dialect/NPUVector/Passes.h.inc"
 
 namespace {
@@ -236,11 +236,11 @@ static void eraseWriteOnlyLocalAllocs(func::FuncOp funcOp) {
   }
 }
 
-class EliminateNPUVectorRedundantOpsPass
-    : public npuvector::impl::EliminateNPUVectorRedundantOpsPassBase<EliminateNPUVectorRedundantOpsPass> {
+class EliminateNPUVectorRedundantOps
+    : public npuvector::impl::EliminateNPUVectorRedundantOpsBase<EliminateNPUVectorRedundantOps> {
  public:
-  EliminateNPUVectorRedundantOpsPass() = default;
-  EliminateNPUVectorRedundantOpsPass(const EliminateNPUVectorRedundantOpsPass &) = default;
+  EliminateNPUVectorRedundantOps() = default;
+  EliminateNPUVectorRedundantOps(const EliminateNPUVectorRedundantOps &) = default;
 
   void runOnOperation() override {
     if (getOperation().isDeclaration()) {
@@ -262,7 +262,7 @@ class EliminateNPUVectorRedundantOpsPass
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createEliminateNPUVectorRedundantOpsPass() {
-  return std::make_unique<EliminateNPUVectorRedundantOpsPass>();
+  return std::make_unique<EliminateNPUVectorRedundantOps>();
 }
 
 }  // namespace npuvector

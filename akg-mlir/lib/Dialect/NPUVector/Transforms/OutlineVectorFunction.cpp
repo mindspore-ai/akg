@@ -580,7 +580,6 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
   // =========================================================================
   // Step 1.5: Convert vf return values into output memref params
-  //
   // Subsequent passes cannot handle vf functions that return npuvector or
   // scalar float values.  We drop the results and route each returned value
   // through an extra UB memref output parameter:
@@ -664,7 +663,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     Type elemType = info.elemType;
     Value padding = b.create<arith::ConstantOp>(loc, elemType, b.getZeroAttr(elemType));
-    SmallVector<Value> sizes, maxSizes;
+    SmallVector<Value> sizes;
+    SmallVector<Value> maxSizes;
     ArrayRef<int64_t> bufShape = info.ubType.getShape();
     sizes.reserve(info.logicalShape.size());
     maxSizes.reserve(bufShape.size());
@@ -947,7 +947,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     auto wIt = argToWrite.find(argIdx);
     copyVecType = mlir::npuvector::NPUVectorType::get(ubShape, elemType);
     bool dynamicCopy = false;
-    SmallVector<Value> origDyn, origMax;
+    SmallVector<Value> origDyn;
+    SmallVector<Value> origMax;
     Type origVecType;
     if (rIt != argToRead.end()) {
       origVecType = rIt->second.getResult().getType();
@@ -1047,7 +1048,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
 
     Type copyVecType;
-    SmallVector<Value> dynSizes, maxSizes;
+    SmallVector<Value> dynSizes;
+    SmallVector<Value> maxSizes;
     resolveGmUbCopyTileParams(callOp, kernelFunc, builder, loc, i, argToRead, argToWrite, ubShape, elemType,
                               copyVecType, dynSizes, maxSizes);
     auto ubRank = static_cast<unsigned>(ubBufShape.size());
@@ -1295,7 +1297,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
     int64_t kUbAlignment = *kUbAlignmentOr;
     SmallVector<int64_t> alignedShape = alignUbShape(logicalShape, kUbAlignment);
-    SmallVector<Value> sizes, maxSizes;
+    SmallVector<Value> sizes;
+    SmallVector<Value> maxSizes;
     sizes.reserve(logicalShape.size());
     maxSizes.reserve(alignedShape.size());
     for (size_t i = 0; i < logicalShape.size(); ++i) {

@@ -18,11 +18,10 @@
 #define AKG_DIALECT_VECTOR_TRANSFORMS_VECTORLEGALIZETYPE_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
-
 namespace vector {
 
 std::unique_ptr<OperationPass<ModuleOp>> createVectorLegalizeTypePass();

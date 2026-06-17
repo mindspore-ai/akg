@@ -241,10 +241,10 @@ func::FuncOp tryToRewriteCPUParallelLaunchOp(const func::FuncOp &mainFunc, scf::
 }  // namespace mlir
 
 namespace {
-class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
+class FuncOutlining : public impl::AKGFuncOutliningBase<FuncOutlining> {
  public:
-  AKGFuncOutlining() {}
-  AKGFuncOutlining(bool mindSpore, bool outlining) : isOutlining(outlining), isMindSpore(mindSpore) {}
+  FuncOutlining() {}
+  FuncOutlining(bool mindSpore, bool outlining) : isOutlining(outlining), isMindSpore(mindSpore) {}
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<memref::MemRefDialect>();
     registry.insert<arith::ArithDialect>();
@@ -285,7 +285,7 @@ class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
 };
 }  // namespace
 
-void AKGFuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
+void FuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
   for (func::FuncOp funcOp : module.getOps<func::FuncOp>()) {
     // try to find the func, which only the one scf.Parallel
     funcOp->walk([&](scf::ParallelOp parallelOp) {
@@ -304,9 +304,9 @@ void AKGFuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncO
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass() {
-  return std::make_unique<AKGFuncOutlining>();
+  return std::make_unique<FuncOutlining>();
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining) {
-  return std::make_unique<AKGFuncOutlining>(isMindSpore, isOutlining);
+  return std::make_unique<FuncOutlining>(isMindSpore, isOutlining);
 }
