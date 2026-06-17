@@ -881,6 +881,7 @@ constexpr int64_t kUbGuardReserveKb = 64;
 constexpr unsigned kNpuTargetBlocks = 48;
 constexpr int64_t kNpuFallbackUbSizeInBytes = kNpuFallbackUbSizeKb * kBytesPerKb;
 constexpr unsigned kNpuMinInnerTileSize = 512;
+constexpr int64_t kDynamicUnknownExtentForAlignment = 2;
 constexpr int64_t kDefaultTypeBits = 32;
 constexpr int64_t kBitsPerByte = 8;
 constexpr int64_t kUbAlignBytes = 32;
@@ -1810,7 +1811,9 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
   ctx.smallestTypeBits = ub.smallestTypeBits;
 
   for (const auto &axis : bandAxes) {
-    ctx.extents.push_back((axis && axis->range.second > 0) ? axis->range.second : 1);
+    bool hasDynamicExtent = !axis || isDynamicAxis(axis) || !axis->hasConstantBounds();
+    ctx.extents.push_back(hasDynamicExtent ? kDynamicUnknownExtentForAlignment
+                                           : std::max<int64_t>(axis->range.second, 1));
     ctx.hasDynamicAxis |= isDynamicAxis(axis);
     ctx.hasReduction |= isReductionAxis(axis);
   }
@@ -2015,8 +2018,10 @@ int64_t computeReserveBytes(const NpuBandContext &ctx, const VectorLiveReserve &
   for (size_t axisIdx : reserve.axisOrder) {
     int64_t tile = axisIdx < axisTiles.size() ? axisTiles[axisIdx] : 1;
     int64_t extent = axisIdx < ctx.extents.size() ? ctx.extents[axisIdx] : tile;
+    bool axisHasRuntimeExtent = axisIdx >= ctx.axes.size() || !ctx.axes[axisIdx] || isDynamicAxis(ctx.axes[axisIdx]) ||
+                                !ctx.axes[axisIdx]->hasConstantBounds();
     shape.push_back(std::max<int64_t>(tile, 1));
-    staticDims.push_back(static_cast<char>(tile >= extent));
+    staticDims.push_back(static_cast<char>(!axisHasRuntimeExtent && tile >= extent));
   }
   return computeBishengStrideAlignedStorageBytes(shape, staticDims, reserve.alignDims, reserve.elementBits);
 }
@@ -3073,6 +3078,206 @@ void preserveDegeneratePrefixTransposeAxes(const NpuBandContext &ctx, BandTilePl
   }
 }
 
+bool hasAxisAttr(const AxisPtr &axis, StringRef attrName) {
+  Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
+  return (loopOp != nullptr) && loopOp->hasAttr(attrName);
+}
+
+bool hasRuntimeExtent(const AxisPtr &axis) { return !axis || isDynamicAxis(axis) || !axis->hasConstantBounds(); }
+
+std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
+  for (size_t i = 0; i < ctx.axes.size(); ++i) {
+    if (isTransposeAxis(ctx.axes[i])) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<size_t> findReduceYVectorTargetAxis(const NpuBandContext &ctx) {
+  if (!isInnermostAxisReduceY(ctx) || ctx.axes.size() < 2) {
+    return std::nullopt;
+  }
+  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 2; i >= 0; --i) {
+    size_t axisIdx = static_cast<size_t>(i);
+    if (!isReductionAxis(ctx.axes[axisIdx])) {
+      return axisIdx;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<size_t> findDefaultVectorTargetAxis(const NpuBandContext &ctx) {
+  if (ctx.axes.empty()) {
+    return std::nullopt;
+  }
+  size_t innermost = ctx.axes.size() - 1;
+  if (isReductionAxis(ctx.axes[innermost])) {
+    if (isInnermostAxisReduceY(ctx)) {
+      return findReduceYVectorTargetAxis(ctx);
+    }
+    return innermost;
+  }
+
+  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 1; i >= 0; --i) {
+    size_t axisIdx = static_cast<size_t>(i);
+    if (!hasAxisAttr(ctx.axes[axisIdx], kNotInnerDimensionBroadcastLoopAttr)) {
+      return axisIdx;
+    }
+  }
+  return std::nullopt;
+}
+
+int64_t getAxisSearchUpper(const NpuBandContext &ctx, size_t axisIdx) {
+  if (axisIdx >= ctx.axes.size() || hasRuntimeExtent(ctx.axes[axisIdx])) {
+    int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+    return std::max<int64_t>(ctx.vectorUbCapacityElems, alignUnit);
+  }
+  int64_t extent = axisIdx < ctx.extents.size() ? ctx.extents[axisIdx] : 1;
+  return std::max<int64_t>(extent, 1);
+}
+
+void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  plan.outerTiles.assign(ctx.axes.size(), 1);
+  plan.innerTiles.assign(ctx.axes.size(), 1);
+  plan.multiVecAxisMask.assign(ctx.axes.size(), false);
+  plan.usesMultiVecScheme = false;
+
+  for (size_t i = 0; i < ctx.axes.size(); ++i) {
+    const AxisPtr &axis = ctx.axes[i];
+    if (isReductionAxis(axis)) {
+      continue;
+    }
+    plan.outerTiles[i] = hasRuntimeExtent(axis) ? static_cast<unsigned>(UINT_MAX)
+                                                : saturateToTileValue(std::max<int64_t>(ctx.extents[i], 1));
+  }
+}
+
+int64_t findMaxFittingTransposeTargetTile(const NpuBandContext &ctx, const BandTilePlan &plan,
+                                          ArrayRef<size_t> searchAxisOrder, size_t targetAxis,
+                                          int64_t ubLimitBytes) {
+  auto targetPosIt = llvm::find(searchAxisOrder, targetAxis);
+  if (targetPosIt == searchAxisOrder.end()) {
+    return 1;
+  }
+  size_t targetPos = static_cast<size_t>(targetPosIt - searchAxisOrder.begin());
+
+  SmallVector<int64_t, 6> axisAlignSize;
+  SmallVector<int64_t, 6> axisMaxTileSize;
+  SmallVector<int64_t, 6> searchShape;
+  axisAlignSize.reserve(searchAxisOrder.size());
+  axisMaxTileSize.reserve(searchAxisOrder.size());
+  searchShape.reserve(searchAxisOrder.size());
+
+  for (size_t axisIdx : searchAxisOrder) {
+    int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+    int64_t maxTile = (axisIdx == targetAxis) ? alignUpInt64(getAxisSearchUpper(ctx, axisIdx), alignUnit) : alignUnit;
+    axisAlignSize.push_back(alignUnit);
+    axisMaxTileSize.push_back(std::max<int64_t>(maxTile, alignUnit));
+    searchShape.push_back(alignUnit);
+  }
+
+  int64_t targetAlign = axisAlignSize[targetPos];
+  int64_t upperTile = axisMaxTileSize[targetPos];
+  auto peakOf = [&](int64_t targetTile) {
+    searchShape[targetPos] = std::max<int64_t>(targetTile, targetAlign);
+    return computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
+  };
+
+  int64_t peak = peakOf(upperTile);
+  if (peak <= ubLimitBytes) {
+    return upperTile;
+  }
+
+  int64_t highCell = std::max<int64_t>(upperTile / targetAlign, 1);
+  int64_t low = 1;
+  int64_t high = highCell - 1;
+  int64_t bestCell = 1;
+  bool useLinearScan = peak == static_cast<int64_t>(LLONG_MAX);
+
+  while (!useLinearScan && low <= high) {
+    int64_t cell = low + (high - low) / 2;
+    int64_t candidate = cell * targetAlign;
+    int64_t candidatePeak = peakOf(candidate);
+    if (candidatePeak == static_cast<int64_t>(LLONG_MAX)) {
+      useLinearScan = true;
+      break;
+    }
+    if (candidatePeak <= ubLimitBytes) {
+      bestCell = cell;
+      low = cell + 1;
+    } else {
+      high = cell - 1;
+    }
+  }
+
+  if (useLinearScan) {
+    searchShape[targetPos] = upperTile;
+    peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
+    while (peak > ubLimitBytes && searchShape[targetPos] > targetAlign) {
+      searchShape[targetPos] -= targetAlign;
+      peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
+    }
+  } else {
+    searchShape[targetPos] = bestCell * targetAlign;
+    peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
+  }
+
+  if (peak > ubLimitBytes) {
+    emitAlignedTransposeMinTileExceedsUb(ctx, searchAxisOrder, axisAlignSize, axisMaxTileSize, searchShape,
+                                         ubLimitBytes, peak);
+  }
+  return std::max<int64_t>(searchShape[targetPos], targetAlign);
+}
+
+bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  std::optional<size_t> outermostTransposeIdx = findOutermostTransposeAxis(ctx);
+  if (!ctx.hasDynamicAxis || !outermostTransposeIdx || ctx.axes.size() < 2) {
+    return false;
+  }
+
+  NpuBandContext transposeCtx = ctx;
+  int64_t elemBytes =
+    std::max<int64_t>(ceilDivInt64(std::max<int64_t>(transposeCtx.transposeElementBits, 1), kBitsPerByte), 1);
+  transposeCtx.axesAlignUnits.back() =
+    std::lcm(transposeCtx.axesAlignUnits.back(), std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
+
+  initDynamicSingleAxisPlan(transposeCtx, plan);
+
+  SmallVector<size_t, 6> searchAxisOrder;
+  for (size_t i = *outermostTransposeIdx; i < transposeCtx.axes.size(); ++i) {
+    searchAxisOrder.push_back(i);
+    plan.innerTiles[i] =
+      saturateToTileValue(i < transposeCtx.axesAlignUnits.size() ? transposeCtx.axesAlignUnits[i] : 1);
+  }
+
+  size_t targetAxis = searchAxisOrder.back();
+  int64_t targetTile =
+    findMaxFittingTransposeTargetTile(transposeCtx, plan, searchAxisOrder, targetAxis, getVectorUbBytes(transposeCtx));
+  plan.innerTiles[targetAxis] = saturateToTileValue(targetTile);
+  return true;
+}
+
+bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (!ctx.hasDynamicAxis || ctx.axes.empty()) {
+    return false;
+  }
+  if (findOutermostTransposeAxis(ctx)) {
+    return tryBuildDynamicTransposeSingleAxisPlan(ctx, plan);
+  }
+
+  std::optional<size_t> targetAxis = findDefaultVectorTargetAxis(ctx);
+  if (!targetAxis) {
+    return false;
+  }
+
+  initDynamicSingleAxisPlan(ctx, plan);
+  SmallVector<int64_t, 6> axisTiles(ctx.axes.size(), 1);
+  int64_t tile = findMaxFittingTile(ctx, axisTiles, *targetAxis, getAxisSearchUpper(ctx, *targetAxis));
+  plan.innerTiles[*targetAxis] = saturateToTileValue(tile);
+  return true;
+}
+
 // Attach `kMultiVecLoopAttr` to the original (un-tiled) loop ops of axes that
 // participate in multi-dim vectorization. `copySemanticLoopAttrsToPointLoop`
 // later carries the marker to the resulting point loops, which is what the
@@ -3521,7 +3726,8 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     NpuBandContext bandCtx = buildNpuBandContext(npuGraph, bandIdx, bandAxes);
     BandTilePlan bandPlan;
     bool matched = tryBuildTransposePlan(bandCtx, bandPlan) || tryBuildReductionSuffixPlan(bandCtx, bandPlan) ||
-                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) || tryBuildElementwisePlan(bandCtx, bandPlan);
+                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) || tryBuildElementwisePlan(bandCtx, bandPlan) ||
+                   tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
