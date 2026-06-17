@@ -31,6 +31,7 @@ else()
         set(LLVM_CMAKE_OPTIONS
             -DLLVM_BUILD_EXAMPLES=OFF
             -DLLVM_ENABLE_PROJECTS=mlir;clang;openmp
+            -DLLVM_TARGETS_TO_BUILD=host;Native;NVPTX
             -DLLVM_ENABLE_RUNTIMES=compiler-rt
             -DLLVM_OPTIMIZED_TABLEGEN=ON
             -DLLVM_ENABLE_OCAMLDOC=OFF
