@@ -18,21 +18,18 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_FIXREDUCEINIT_H
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
-}  // namespace mlir
 
 #ifndef GEN_PASS_DECL_WORKAROUNDFIXREDUCEINITIALIZATION
 #define GEN_PASS_DECL_WORKAROUNDFIXREDUCEINITIALIZATION
 #include "akg/Dialect/Affine/Passes.h.inc"
 #endif
 
-namespace mlir {
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> createWorkaroundFixReduceInitializationPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createWorkaroundFixReduceInitializationPass();
+
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_FIXREDUCEINIT_H

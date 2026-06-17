@@ -67,7 +67,7 @@ void RemoveRedundantLoops::runOnOperation() {
   SmallVector<affine::AffineForOp, 8> redundantLoops;
   func->walk([&](affine::AffineForOp forOp) {
     // skipped for now
-    // TODO(scheduler): %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
+    // %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
     if (!forOp.getResults().empty()) {
       return;
     }

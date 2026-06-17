@@ -18,13 +18,10 @@
 #define AKG_DIALECT_NPUVECTOR_TRANSFORMS_ELIMINATENPUVECTORREDUNDANTOPS_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
-
 namespace npuvector {
 std::unique_ptr<OperationPass<func::FuncOp>> createEliminateNPUVectorRedundantOpsPass();
 }  // namespace npuvector

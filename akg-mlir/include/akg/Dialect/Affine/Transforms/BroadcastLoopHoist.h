@@ -18,14 +18,12 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_BROADCASTLOOPHOIST_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
-std::unique_ptr<mlir::OperationPass<func::FuncOp>> createBroadcastLoopHoistPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createBroadcastLoopHoistPass();
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_BROADCASTLOOPHOIST_H_

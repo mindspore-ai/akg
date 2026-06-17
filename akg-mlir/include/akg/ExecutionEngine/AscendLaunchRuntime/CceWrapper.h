@@ -53,41 +53,41 @@ class CceWrapper : public SymbolsWrapper {
   void *runtime_handle_{nullptr};
 
  public:
-  using aclrtSetCurrentContextFunc = aclError (*)(aclrtContext);
-  using aclrtGetDeviceCountFunc = aclError (*)(uint32_t *);
-  using aclrtGetCurrentContextFunc = aclError (*)(aclrtContext *);
-  using aclrtCreateStreamWithConfigFunc = aclError (*)(aclrtStream *, uint32_t, uint32_t);
-  using aclrtMemcpyAsyncFunc = aclError (*)(void *, size_t, const void *, size_t, aclrtMemcpyKind, aclrtStream);
-  using aclrtGetMemInfoFunc = aclError (*)(aclrtMemAttr, size_t *, size_t *);
-  using aclrtSetDeviceFunc = aclError (*)(int32_t);
-  using aclrtCreateContextFunc = aclError (*)(aclrtContext *, int32_t);
-  using aclrtCreateStreamFunc = aclError (*)(aclrtStream *);
-  using aclrtMallocHostFunc = aclError (*)(void **, size_t);
-  using aclrtMallocFunc = aclError (*)(void **, size_t, aclrtMemMallocPolicy);
-  using aclrtMemcpyFunc = aclError (*)(void *, size_t, const void *, size_t, aclrtMemcpyKind);
-  using aclrtSynchronizeStreamFunc = aclError (*)(aclrtStream);
-  using aclrtFreeFunc = aclError (*)(void *);
-  using aclrtFreeHostFunc = aclError (*)(void *);
-  using aclrtDestroyStreamFunc = aclError (*)(aclrtStream);
-  using aclrtDestroyContextFunc = aclError (*)(aclrtContext);
-  using aclrtResetDeviceFunc = aclError (*)(int32_t);
-  using aclrtGetDeviceFunc = aclError (*)(int32_t *);
-  using aclprofInitFunc = aclError (*)(const char *, size_t);
-  using aclprofStartFunc = aclError (*)(const aclprofConfig *);
-  using aclprofStopFunc = aclError (*)(const aclprofConfig *);
-  using aclprofFinalizeFunc = aclError (*)();
+  using aclrtSetCurrentContextFunc = int (*)(aclrtContext);
+  using aclrtGetDeviceCountFunc = int (*)(uint32_t *);
+  using aclrtGetCurrentContextFunc = int (*)(aclrtContext *);
+  using aclrtCreateStreamWithConfigFunc = int (*)(aclrtStream *, uint32_t, uint32_t);
+  using aclrtMemcpyAsyncFunc = int (*)(void *, size_t, const void *, size_t, aclrtMemcpyKind, aclrtStream);
+  using aclrtGetMemInfoFunc = int (*)(aclrtMemAttr, size_t *, size_t *);
+  using aclrtSetDeviceFunc = int (*)(int32_t);
+  using aclrtCreateContextFunc = int (*)(aclrtContext *, int32_t);
+  using aclrtCreateStreamFunc = int (*)(aclrtStream *);
+  using aclrtMallocHostFunc = int (*)(void **, size_t);
+  using aclrtMallocFunc = int (*)(void **, size_t, aclrtMemMallocPolicy);
+  using aclrtMemcpyFunc = int (*)(void *, size_t, const void *, size_t, aclrtMemcpyKind);
+  using aclrtSynchronizeStreamFunc = int (*)(aclrtStream);
+  using aclrtFreeFunc = int (*)(void *);
+  using aclrtFreeHostFunc = int (*)(void *);
+  using aclrtDestroyStreamFunc = int (*)(aclrtStream);
+  using aclrtDestroyContextFunc = int (*)(aclrtContext);
+  using aclrtResetDeviceFunc = int (*)(int32_t);
+  using aclrtGetDeviceFunc = int (*)(int32_t *);
+  using aclprofInitFunc = int (*)(const char *, size_t);
+  using aclprofStartFunc = int (*)(const aclprofConfig *);
+  using aclprofStopFunc = int (*)(const aclprofConfig *);
+  using aclprofFinalizeFunc = int (*)();
   using aclprofCreateConfigFunc = aclprofConfig *(*)(uint32_t *, uint32_t, aclprofAicoreMetrics,
                                                      const aclprofAicoreEvents *, uint64_t);
-  using aclprofDestroyConfigFunc = aclError (*)(const aclprofConfig *);
+  using aclprofDestroyConfigFunc = int (*)(const aclprofConfig *);
 
-  using rtGetC2cCtrlAddrFunc = rtError_t (*)(uint64_t *, uint32_t *);
-  using rtConfigureCallFunc = rtError_t (*)(uint32_t, rtSmDesc_t *, rtStream_t);
-  using rtDevBinaryRegisterFunc = rtError_t (*)(const rtDevBinary_t *, void **);
-  using rtDevBinaryUnRegisterFunc = rtError_t (*)(void *);
-  using rtFunctionRegisterFunc = rtError_t (*)(void *, const void *, const char_t *, const void *, uint32_t);
-  using rtKernelLaunchFunc = rtError_t (*)(const void *, uint32_t, void *, uint32_t, rtSmDesc_t *, rtStream_t);
-  using rtLaunchFunc = rtError_t (*)(const void *);
-  using rtSetupArgumentFunc = rtError_t (*)(const void *, uint32_t, uint32_t);
+  using rtGetC2cCtrlAddrFunc = int (*)(uint64_t *, uint32_t *);
+  using rtConfigureCallFunc = int (*)(uint32_t, rtSmDesc_t *, rtStream_t);
+  using rtDevBinaryRegisterFunc = int (*)(const rtDevBinary_t *, void **);
+  using rtDevBinaryUnRegisterFunc = int (*)(void *);
+  using rtFunctionRegisterFunc = int (*)(void *, const void *, const char *, const void *, uint32_t);
+  using rtKernelLaunchFunc = int (*)(const void *, uint32_t, void *, uint32_t, rtSmDesc_t *, rtStream_t);
+  using rtLaunchFunc = int (*)(const void *);
+  using rtSetupArgumentFunc = int (*)(const void *, uint32_t, uint32_t);
 
   // kernel launch
   DEFINE_FUNC_PTR(aclrtSetCurrentContext);

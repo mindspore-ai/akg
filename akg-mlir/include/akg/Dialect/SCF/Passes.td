@@ -39,7 +39,7 @@ def PrimeNumReplaceForDynamicShape
   let description = "Replace unknown mapping axes to prime and restore them later.";
 }
 
-def NPUVectorVectorizePass : Pass<"npuvector-vectorize", "mlir::func::FuncOp"> {
+def NPUVectorVectorize : Pass<"npuvector-vectorize", "mlir::func::FuncOp"> {
   let summary = "SCF vectorization pass using NPUVector dialect with dynamic shape support";
   let description = [{
     Vectorizes scf.for loops using NPUVector dialect, supporting dynamic shapes.

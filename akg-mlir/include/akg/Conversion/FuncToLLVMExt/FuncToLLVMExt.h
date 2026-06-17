@@ -14,35 +14,27 @@
  * limitations under the License.
  */
 //===- ConvertFuncToLLVM.h - Convert Func to LLVM ---------------*- C++ -*-===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
-//
 // Provides a set of conversion patterns from the Func dialect to the LLVM IR
 // dialect.
-//
 //===----------------------------------------------------------------------===//
 
 #ifndef AKG_CONVERSION_FUNCTOLLVMEXT_CONVERTFUNCTOLLVMEXT_H
 #define AKG_CONVERSION_FUNCTOLLVMEXT_CONVERTFUNCTOLLVMEXT_H
 
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
-
-namespace LLVM {
-class LLVMFuncOp;
-}  // namespace LLVM
-
-class ConversionPatternRewriter;
-class DialectRegistry;
-class LLVMTypeConverter;
-class RewritePatternSet;
-class SymbolTable;
 
 /// Convert input FunctionOpInterface operation to LLVMFuncOp by using the
 /// provided LLVMTypeConverter. Return failure if failed to so.
@@ -60,7 +52,6 @@ void populateFuncToLLVMExtFuncOpConversionPattern(LLVMTypeConverter &converter, 
 /// conversion patterns capture the LLVMTypeConverter and the LowerToLLVMOptions
 /// by reference meaning the references have to remain alive during the entire
 /// pattern lifetime.
-///
 /// The `symbolTable` parameter can be used to speed up function lookups in the
 /// module. It's good to provide it, but only if we know that the patterns will
 /// be applied to a single module and the symbols referenced by the symbol table

@@ -30,22 +30,22 @@ constexpr auto kTilingMemSize = 1024;
 constexpr auto kTilingSizeFuncName = "_get_tiling_struct_size_function";
 constexpr auto kTilingFuncName = "_tiling_function";
 
-class TilingMemory {
+class AscendLaunchTilingMemory {
  public:
-  TilingMemory() = default;
+  AscendLaunchTilingMemory() = default;
   std::unique_ptr<int64_t[]> tiling_host;
-  static TilingMemory *GetInstance();
+  static AscendLaunchTilingMemory *GetInstance();
 
  private:
-  static std::shared_ptr<TilingMemory> tiling_memory_singleton_;
+  static std::shared_ptr<AscendLaunchTilingMemory> tiling_memory_singleton_;
 };
 
-std::shared_ptr<TilingMemory> TilingMemory::tiling_memory_singleton_ = nullptr;
+std::shared_ptr<AscendLaunchTilingMemory> AscendLaunchTilingMemory::tiling_memory_singleton_ = nullptr;
 
-TilingMemory *TilingMemory::GetInstance() {
+AscendLaunchTilingMemory *AscendLaunchTilingMemory::GetInstance() {
   static std::once_flag tiling_mem_once;
   std::call_once(tiling_mem_once, []() {
-    tiling_memory_singleton_.reset(new TilingMemory());
+    tiling_memory_singleton_.reset(new AscendLaunchTilingMemory());
     tiling_memory_singleton_.get()->tiling_host.reset(new int64_t[kTilingMemSize]);
   });
   return tiling_memory_singleton_.get();
@@ -123,6 +123,77 @@ void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &
   }
 }
 
+void ProcessTilingInputArg(mlir::runtime::BaseDevicePtr base, const std::vector<int64_t> &shape, int64_t offset,
+                           std::vector<void *> &runtimeargs) {
+  auto tensor = mlir::runtime::AsTensorDevice(base);
+  if (!tensor) {
+    runtimeargs.push_back(mlir::runtime::GetScalarValuePtr(base));
+    return;
+  }
+  void *dev_addr = tensor->GetDeviceAddress();
+  void *host_addr = tensor->GetHostAddress();
+  void *eff_addr = ((dev_addr != nullptr) ? dev_addr : host_addr);
+  runtimeargs.push_back(eff_addr);
+  runtimeargs.push_back(eff_addr);
+  runtimeargs.push_back(reinterpret_cast<void *>(offset));
+  int64_t size = 1;
+  for (auto dim : shape) {
+    runtimeargs.push_back(reinterpret_cast<void *>(dim));
+    size *= dim;
+  }
+  for (auto &dim : shape) {
+    int64_t stride = size / dim;
+    runtimeargs.push_back(reinterpret_cast<void *>(stride));
+    size = stride;
+  }
+}
+
+static void processTilingWithSize(const std::string &kernel_name, void *handle,
+                                  std::vector<mlir::runtime::BaseDevicePtr> &input,
+                                  const std::vector<std::vector<int64_t>> &input_shapes, int64_t &tiling_key,
+                                  uint64_t tiling_size, std::vector<void *> &runtimeargs) {
+  int64_t offset = 0;
+  std::string tiling_func_name = kernel_name + kTilingFuncName;
+  void *tiling_func = dlsym(handle, tiling_func_name.c_str());
+  CHECK(tiling_func != nullptr) << "dlsym failed, symbol: " << tiling_func_name << " error:" << dlerror();
+  auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);
+
+  for (size_t idx = 0; idx < input.size(); idx++) {
+    ProcessTilingInputArg(input[idx], input_shapes[idx], offset, runtimeargs);
+  }
+  DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key << ", offset: " << offset
+             << ", tiling_size: " << tiling_size;
+  runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
+  runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+  runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+  runtimeargs.push_back(reinterpret_cast<void *>(offset));
+  runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));
+  runtimeargs.push_back(reinterpret_cast<void *>(1));
+  tiling_func_ptr((void *)(runtimeargs.data()));
+  for (uint64_t i = 0; i < tiling_size; i++) {
+    DLOG(INFO) << "tiling data[" << i << "]: " << (AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i];
+  }
+  input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
+    AscendLaunchTilingMemory::GetInstance()->tiling_host.get(), nullptr, tiling_size * sizeof(int64_t), false));
+}
+
+void ProcessDynamicTiling(const std::string &path, const std::string &kernel_name,
+                          std::vector<mlir::runtime::BaseDevicePtr> &input,
+                          const std::vector<std::vector<int64_t>> &input_shapes, int64_t &tiling_key,
+                          uint64_t &tiling_size, std::vector<void *> &runtimeargs) {
+  std::string so_path = path + "/lib" + kernel_name + ".so";
+  void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
+
+  std::string tiling_size_func_name = kernel_name + kTilingSizeFuncName;
+  void *tiling_size_func = dlsym(handle, tiling_size_func_name.c_str());
+  CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
+  tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
+  if (tiling_size > 0) {
+    processTilingWithSize(kernel_name, handle, input, input_shapes, tiling_key, tiling_size, runtimeargs);
+  }
+}
+
 void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic, bool use_mem_pool,
                     const py::args &args, py::kwargs kwargs) {
   void *external_stream = nullptr;
@@ -141,72 +212,14 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
-    std::string so_path = path + "/lib" + kernel_name + ".so";
-    void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
-    CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
-
-    std::string tiling_size_func_name = kernel_name + kTilingSizeFuncName;
-
-    void *tiling_size_func = dlsym(handle, tiling_size_func_name.c_str());
-    CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
-    tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
-
-    if (tiling_size > 0) {
-      int64_t offset = 0;
-      std::string tiling_func_name = kernel_name + kTilingFuncName;
-      void *tiling_func = dlsym(handle, tiling_func_name.c_str());
-      CHECK(tiling_func != nullptr) << "dlsym failed, symbol: " << tiling_func_name << " error:" << dlerror();
-      auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);
-
-      for (size_t idx = 0; idx < input.size(); idx++) {
-        auto base = input[idx];
-        auto shape = input_shapes[idx];
-
-        auto tensor = mlir::runtime::AsTensorDevice(base);
-        if (!tensor) {
-          runtimeargs.push_back(mlir::runtime::GetScalarValuePtr(base));
-        } else {
-          void *dev_addr = tensor->GetDeviceAddress();
-          void *host_addr = tensor->GetHostAddress();
-          void *eff_addr = ((dev_addr != nullptr) ? dev_addr : host_addr);
-          runtimeargs.push_back(eff_addr);
-          runtimeargs.push_back(eff_addr);
-          runtimeargs.push_back(reinterpret_cast<void *>(offset));
-          int64_t size = 1;
-          for (auto dim : shape) {
-            runtimeargs.push_back(reinterpret_cast<void *>(dim));
-            size *= dim;
-          }
-
-          for (auto &dim : shape) {
-            int64_t stride = size / dim;
-            runtimeargs.push_back(reinterpret_cast<void *>(stride));
-            size = stride;
-          }
-        }
-      }
-      DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key << ", offset: " << offset
-                 << ", tiling_size: " << tiling_size;
-      runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-      runtimeargs.push_back(reinterpret_cast<void *>(TilingMemory::GetInstance()->tiling_host.get()));
-      runtimeargs.push_back(reinterpret_cast<void *>(TilingMemory::GetInstance()->tiling_host.get()));
-      runtimeargs.push_back(reinterpret_cast<void *>(offset));
-      runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));
-      runtimeargs.push_back(reinterpret_cast<void *>(1));
-      tiling_func_ptr((void *)(runtimeargs.data()));
-      for (uint64_t i = 0; i < tiling_size; i++) {
-        DLOG(INFO) << "tiling data[" << i << "]: " << (TilingMemory::GetInstance()->tiling_host.get())[i];
-      }
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(TilingMemory::GetInstance()->tiling_host.get(),
-                                                                    nullptr, tiling_size * sizeof(int64_t), false));
-    }
+    ProcessDynamicTiling(path, kernel_name, input, input_shapes, tiling_key, tiling_size, runtimeargs);
   }
   for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
     DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
   }
 
   auto *kernel_runtime =
-    mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
+    mlir::runtime::AscendLaunchRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
   kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_size);
   return;
 }
@@ -260,8 +273,8 @@ std::vector<void *> InitKernelArgs(const py::args &args, uint64_t tiling_func = 
     int64_t tiling_key;
     int64_t offset = 0;
     runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-    runtimeargs.push_back(reinterpret_cast<void *>(TilingMemory::GetInstance()->tiling_host.get()));
-    runtimeargs.push_back(reinterpret_cast<void *>(TilingMemory::GetInstance()->tiling_host.get()));
+    runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+    runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
     runtimeargs.push_back(reinterpret_cast<void *>(offset));
     runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));
     runtimeargs.push_back(reinterpret_cast<void *>(1));
@@ -270,8 +283,8 @@ std::vector<void *> InitKernelArgs(const py::args &args, uint64_t tiling_func = 
     runtimeargs.resize(runtimeargs.size() - 6);
     runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));
     for (uint64_t i = 0; i < tiling_size; i++) {
-      DLOG(INFO) << "tiling data[" << i << "]: " << (TilingMemory::GetInstance()->tiling_host.get())[i];
-      runtimeargs.push_back(reinterpret_cast<void *>((TilingMemory::GetInstance()->tiling_host.get())[i]));
+      DLOG(INFO) << "tiling data[" << i << "]: " << (AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i];
+      runtimeargs.push_back(reinterpret_cast<void *>((AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i]));
     }
   }
   return runtimeargs;

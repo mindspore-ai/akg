@@ -98,9 +98,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 // collapsed to allow for fusion with the a producer that is an expand_shape
 // operation. If all dimensions created by expansion can be collapsed in the
 // iteration space then the reshape is defunct.
-//
 // Example:
-//
 // ```mlir
 // #map = affine_map<(d0, d1) -> (d0, d1)>
 // %1 = tensor.expand_shape %0 [[0, 1]] : tensor<?xf32> into tensor<?x4xf32>
@@ -110,9 +108,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     iterator_types = ["parallel" ,"parallel"]}
 //     ins(%1 : tensor<?x4xf32>) outs(%2 : tensor<?x4xf32>) {.. }
 // ```
-//
 // can be fused by collapsing the dimensions of the iteration space.
-//
 // ```mlir
 // #map = affine_map<(d0) -> (d0)>
 // %2 = tensor.empty [..] : tensor<?xf32>
@@ -122,9 +118,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     ins(%1 : tensor<?xf32>) outs(%2 : tensor<?xf32>) {.. }
 // %4 = tensor.expand_shape %3 [[0, 1]] : tensor<?xf32> into tensor<?x4xf32>
 // ```
-//
 // In the following example,
-//
 // ```mlir
 // #map0 = affine_map<(d0, d1) -> (d0, d1)>
 // #map1 = affine_map<(d0, d1) -> (d1, d0)>
@@ -135,7 +129,6 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     iterator_types = ["parallel" ,"parallel"]}
 //     ins(%1 : tensor<?x4xf32>) outs(%2 : tensor<4x?xf32>) {.. }
 // ```
-//
 // the reshape cannot be fused with the generic op by collapsing the op
 // dimensions since the indexing maps will have to contain mods and divs
 // to preserve the accesses pattern. When no dimensions of the iteration
@@ -174,7 +167,6 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); })) {
       continue;
     }
-
     // Check that all folded iterator types are all parallel or all reductions.
     utils::IteratorType startIteratorType = iteratorTypes[foldedIterationSpaceDims[0]];
     if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) {
@@ -341,7 +333,7 @@ class FuseElementwiseOpsExt : public OpRewritePattern<GenericOp> {
           (void)TryingtToPreserveOrderInSimplePattern0(fusedOp, producer, domInfo);
         }
         // final check: whether fusedOp dominates all producer's users
-        // TODO(scheduler): Order-preserving, make fusedOp dominates all of the producer's users.
+        // Order-preserving, make fusedOp dominates all of the producer's users.
         if (!checkFusedOpDominateAllProducerUsers(fusedOp, producer, domInfo)) {
           return success();
         }

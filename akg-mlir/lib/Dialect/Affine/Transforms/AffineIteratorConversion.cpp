@@ -108,7 +108,8 @@ static Operation *findReduceArithOp(Operation *root) {
 // Find the accumulator load: the operand of the arith op whose indices
 // do not reference the reduction loop's induction variable.
 static affine::AffineLoadOp getAccumulatorLoad(affine::AffineForOp reduceLoop, Operation *arithOp) {
-  Value lhs = arithOp->getOperand(0), rhs = arithOp->getOperand(1);
+  Value lhs = arithOp->getOperand(0);
+  Value rhs = arithOp->getOperand(1);
   Value iv = reduceLoop.getInductionVar();
   affine::AffineLoadOp result;
   reduceLoop.walk([&](affine::AffineLoadOp op) {
@@ -133,11 +134,11 @@ static arith::ConstantOp resolveInitConstant(affine::AffineStoreOp initStore) {
   if (auto loadOp = dyn_cast<affine::AffineLoadOp>(defOp)) {
     Value memref = loadOp.getMemRef();
     for (auto it = Block::reverse_iterator(loadOp.getOperation()); it != loadOp->getBlock()->rend(); ++it) {
-      if (auto store = dyn_cast<affine::AffineStoreOp>(&*it)) {
-        if (store.getMemRef() == memref) {
-          return dyn_cast<arith::ConstantOp>(store.getValue().getDefiningOp());
-        }
+      auto store = dyn_cast<affine::AffineStoreOp>(&*it);
+      if (!store || store.getMemRef() != memref) {
+        continue;
       }
+      return dyn_cast<arith::ConstantOp>(store.getValue().getDefiningOp());
     }
   }
   return nullptr;
@@ -169,11 +170,11 @@ static affine::AffineStoreOp findInitStore(Operation *band, Operation *reduceLoo
   }
   if (Block *block = reduceLoop->getBlock()) {
     for (auto it = Block::reverse_iterator(reduceLoop); it != block->rend(); ++it) {
-      if (auto store = dyn_cast<affine::AffineStoreOp>(&*it)) {
-        if (store.getMemRef() == accumMemRef) {
-          return store;
-        }
+      auto store = dyn_cast<affine::AffineStoreOp>(&*it);
+      if (!store || store.getMemRef() != accumMemRef) {
+        continue;
       }
+      return store;
     }
   }
   return nullptr;
@@ -219,10 +220,11 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
       Operation *cur = &*it++;
       // Stop at the post-loop store that writes the reduction result back to
       // the accumulator; loads after it read the result, not the init value.
-      if (auto store = dyn_cast<affine::AffineStoreOp>(cur)) {
-        if (store.getMemRef() == memref && !store->getAttr(kReductionInitAttr)) {
-          break;
-        }
+      auto store = dyn_cast<affine::AffineStoreOp>(cur);
+      if (store && store.getMemRef() == memref && !store->getAttr(kReductionInitAttr)) {
+        break;
+      }
+      if (store) {
         continue;
       }
       auto loadOp = dyn_cast<affine::AffineLoadOp>(cur);

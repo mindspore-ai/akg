@@ -18,19 +18,14 @@
 #define AKG_DIALECT_GPU_TRANSFORMS_GPUKERNELOUTLININGEXT_H_
 
 #include <memory>
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Target/TargetMachine.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Pass/Pass.h"
 
-namespace llvm {
-class TargetMachine;
-class LLVMContext;
-class Module;
-}  // namespace llvm
-
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 /// Replaces `gpu.launch` with `gpu.launch_func` by moving the region into
 /// a separate kernel function.

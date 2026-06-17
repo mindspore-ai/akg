@@ -413,7 +413,8 @@ static std::optional<WawShrink> detectWawShrink(const AccessInfo &sa, const Perf
     return std::nullopt;
   }
   int64_t off = sa.dims[diffDim].offset;
-  int64_t aLo = nestA.lo[axis], aHi = nestA.hi[axis];
+  int64_t aLo = nestA.lo[axis];
+  int64_t aHi = nestA.hi[axis];
   Interval dead = intervalFor(sb.dims[diffDim], nestB);
   int64_t deadLo = dead.lo - off;
   int64_t deadHi = dead.hi - off;
@@ -438,7 +439,6 @@ static SmallVector<Interval, 4> buildDeadRegion(const AccessInfo &sa, const Perf
 // ===---------------------------------------------------------------------=== //
 // Interval-based axis split (consumer slice + producer mirror)
 // ===---------------------------------------------------------------------=== //
-//
 // Both transforms: pick the first axis whose collector yields non-empty split
 // points and call `splitLoopAtPoints`. They differ only in the collector —
 // the consumer-slice variant finds producer write boundaries falling inside
@@ -587,7 +587,6 @@ static bool runAxisSplit(SmallVectorImpl<LoopInfo> &loops, Collect collect) {
 // ===---------------------------------------------------------------------=== //
 // Producer shrink by consumer use
 // ===---------------------------------------------------------------------=== //
-//
 // For each single-store producer (address `iv + offset`), shrink its bound on
 // that axis to the union bbox of subsequent loads. Bail if the live region
 // can't be bounded from visible reads: later loop unanalyzable, re-writes the
@@ -619,7 +618,6 @@ static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size
 // ===---------------------------------------------------------------------=== //
 // Strided-consumer producer split
 // ===---------------------------------------------------------------------=== //
-//
 // If a stride-1 producer writes `[0, N)` on some axis and every consumer
 // reads via the same stride `s > 1` with offsets mod s covering {0..s-1},
 // clone the producer into `s` copies each iterating `[0, N/s)` and writing
@@ -684,7 +682,6 @@ static void stridedSplitTransform(LoopInfo &L, int axis, int64_t stride, int64_t
 // ===---------------------------------------------------------------------=== //
 // Post-split cleanup
 // ===---------------------------------------------------------------------=== //
-//
 // Two kinds of post-split residue: loops with non-zero lower bound, and
 // loops with trip count 1. `normalizeNonZeroLb` folds `iv + lb` into user
 // maps (avoiding the `affine.apply` MLIR's stock normalize would emit);
@@ -762,14 +759,12 @@ static bool normalizeNonZeroLb(affine::AffineForOp forOp) {
 // Rewrites top-level affine loop nests so producer/consumer pairs become
 // structurally fusable. Each top-level loop becomes a `LoopInfo` (perfect
 // nest + analyzed loads/stores); the stages below run in order:
-//
 //   WAW shrink:              drop stores fully overwritten later.
 //   Consumer slice split:    split a consumer at producer write boundaries.
 //   Producer mirror split:   mirror those boundaries onto the producer.
 //   Producer shrink:         shrink producer bound to union bbox of later loads.
 //   Strided producer split:  clone producer into `s` copies for stride-`s` consumers.
 //   Post-split cleanup:      fold non-zero lower bounds, promote singleton loops.
-//
 // Each transforming stage re-`gather()`s a fresh `loops` snapshot before
 // running. The cleanup stages walk the IR directly.
 

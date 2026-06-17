@@ -20,15 +20,13 @@
 #include <memory>
 #include <string>
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 using llvm::SmallVector;
 using llvm::SmallVectorImpl;
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass();
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling);

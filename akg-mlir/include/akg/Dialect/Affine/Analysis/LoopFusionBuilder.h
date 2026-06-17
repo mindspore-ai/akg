@@ -86,6 +86,8 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
                             bool hasLoadsForBaseMemref);
   void addMultipleLoadEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                             llvm::SmallVector<unsigned> &loadNodeIds);
+  void collectForNodeLoadIds(Operation *loadOpInst, Value memref, llvm::SmallVector<unsigned> &loadNodeIds);
+  void collectDepGroupsForNode(unsigned nodeId, unsigned groupId, std::unordered_set<unsigned> &depGroups);
 };
 
 struct FusionLoopNestInfo {

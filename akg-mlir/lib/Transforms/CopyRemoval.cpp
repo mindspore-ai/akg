@@ -75,7 +75,7 @@ namespace {
 /// 2) There should not be any write operations on `source` and `destination`
 /// after copy op.
 
-// TODO(scheduler): Modifying the common code of the community
+// Modifying the common code of the community
 struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
  public:
   void runOnOperation() override;

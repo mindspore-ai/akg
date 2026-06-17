@@ -19,16 +19,16 @@
 #define AKG_CONVERSION_PUREOPENMPTOLLVM_PUREOPENMPTOLLVM_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class RewritePatternSet;
-class ModuleOp;
 #ifndef GEN_PASS_DECL_PUREOPENMPTOLLVM
 #define GEN_PASS_DECL_PUREOPENMPTOLLVM
 #include "akg/Conversion/Passes.h.inc"
 #endif
-std::unique_ptr<OperationPass<ModuleOp>> createPureOpenMPToLLVMPass();
+std::unique_ptr<OperationPass<ModuleOp>> createPureOpenMPToLLVM();
 
 }  // namespace mlir
 

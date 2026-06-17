@@ -132,6 +132,8 @@ struct FusionAnalyzer {
   void propagateDeletedDep(unsigned existingTo, unsigned targetId, DependenceInfo &deletedDep);
   bool isConflictingPair(const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b);
   void bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge);
+  size_t findConflictingCandidate(const std::vector<std::pair<unsigned, unsigned>> &candidates,
+                                  const std::vector<bool> &rewritten, size_t startIdx);
   void resolveConflictingDefers(std::vector<std::pair<unsigned, unsigned>> &candidates);
 
   // Precomputation

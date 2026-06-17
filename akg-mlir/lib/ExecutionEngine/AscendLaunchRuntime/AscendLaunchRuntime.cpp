@@ -114,8 +114,8 @@ void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, s
     auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
     kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
   } else {
-    rtError_t ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), nullptr,
-                                   (rtStream_t)stream);
+    int ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), nullptr,
+                             (rtStream_t)stream);
     if (ret != RT_ERROR_NONE) {
       LOG(FATAL) << "Call rtKernelLaunch, ret[" << ret << "]";
     }
@@ -192,9 +192,9 @@ BlockDimCache &GetBlockDimCache() {
 
 struct RuntimeCache {
   std::mutex mutex;
-  std::unordered_map<std::string, std::unique_ptr<AscendKernelRuntime>> cache;
+  std::unordered_map<std::string, std::unique_ptr<AscendLaunchRuntime>> cache;
 
-  AscendKernelRuntime *GetOrCreate(uint32_t device_id, bool use_mem_pool, void *external_stream) {
+  AscendLaunchRuntime *GetOrCreate(uint32_t device_id, bool use_mem_pool, void *external_stream) {
     std::string key = std::to_string(device_id) + "_" + std::to_string(static_cast<int>(use_mem_pool)) + "_" +
                       std::to_string(reinterpret_cast<uintptr_t>(external_stream));
     std::lock_guard<std::mutex> lock(mutex);
@@ -202,8 +202,8 @@ struct RuntimeCache {
     if (it != cache.end()) {
       return it->second.get();
     }
-    auto rt = std::make_unique<AscendKernelRuntime>(device_id, use_mem_pool, external_stream);
-    AscendKernelRuntime *ptr = rt.get();
+    auto rt = std::make_unique<AscendLaunchRuntime>(device_id, use_mem_pool, external_stream);
+    AscendLaunchRuntime *ptr = rt.get();
     cache[key] = std::move(rt);
     return ptr;
   }
@@ -216,12 +216,12 @@ RuntimeCache &GetRuntimeCache() {
 
 }  // namespace
 
-AscendKernelRuntime *AscendKernelRuntime::GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool,
+AscendLaunchRuntime *AscendLaunchRuntime::GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool,
                                                              void *external_stream) {
   return GetRuntimeCache().GetOrCreate(device_id, use_mem_pool, external_stream);
 }
 
-AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream) {
+AscendLaunchRuntime::AscendLaunchRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream) {
   set_device_id(device_id);
   use_mem_pool_ = use_mem_pool;
   if (external_stream != nullptr) {
@@ -234,7 +234,7 @@ AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, 
   }
 }
 
-void AscendKernelRuntime::SetContext() {
+void AscendLaunchRuntime::SetContext() {
   if (rt_context_ == nullptr) {
     return;
   }
@@ -248,7 +248,7 @@ void AscendKernelRuntime::SetContext() {
   }
 }
 
-void AscendKernelRuntime::SetCurrentContext() {
+void AscendLaunchRuntime::SetCurrentContext() {
   if (rt_context_ == nullptr) {
     return;
   }
@@ -258,7 +258,7 @@ void AscendKernelRuntime::SetCurrentContext() {
   }
 }
 
-void AscendKernelRuntime::ReleaseDeviceRes() {
+void AscendLaunchRuntime::ReleaseDeviceRes() {
   DLOG(INFO) << "Ascend finalize start";
   if (!initialized_) {
     return;
@@ -283,7 +283,7 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
   DLOG(INFO) << "Ascend finalize end";
 }
 
-bool AscendKernelRuntime::Init() {
+bool AscendLaunchRuntime::Init() {
   if (initialized_) {
     if (owns_stream_) {
       SetCurrentContext();
@@ -305,7 +305,7 @@ bool AscendKernelRuntime::Init() {
   return ret;
 }
 
-void AscendKernelRuntime::CreateContext() {
+void AscendLaunchRuntime::CreateContext() {
   if (rt_context_ == nullptr) {
     auto ret = aclrtCreateContext(&rt_context_, device_id_);
     if (ret != ACL_SUCCESS) {
@@ -315,7 +315,7 @@ void AscendKernelRuntime::CreateContext() {
   SetCurrentContext();
 }
 
-bool AscendKernelRuntime::InitDevice() {
+bool AscendLaunchRuntime::InitDevice() {
   DLOG(INFO) << "InitDevice: " << device_id_;
 
   if (!owns_stream_) {
@@ -356,12 +356,12 @@ bool AscendKernelRuntime::InitDevice() {
   return true;
 }
 
-AscendKernelRuntime::~AscendKernelRuntime() {
+AscendLaunchRuntime::~AscendLaunchRuntime() {
   ReleaseDeviceRes();
   UnLoadKernelFunc();
 }
 
-bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
+bool AscendLaunchRuntime::ResetDevice(uint32_t device_id) {
   SetCurrentContext();
   int32_t ret;
   if (stream_ != nullptr && owns_stream_) {
@@ -388,13 +388,13 @@ inline unsigned int UlongToUint(uint64_t u) {
   return static_cast<unsigned int>(u);
 }
 
-void *AscendKernelRuntime::GetKernelFunc(const std::string &path, const std::string &kernel_name,
+void *AscendLaunchRuntime::GetKernelFunc(const std::string &path, const std::string &kernel_name,
                                          const std::string &func_name, bool is_dynamic) {
   void *func = GetKernelFuncCache().Get(path, kernel_name, func_name, is_dynamic);
   return func;
 }
 
-bool AscendKernelRuntime::UnLoadKernelFunc() {
+bool AscendLaunchRuntime::UnLoadKernelFunc() {
   if (cce_handle_ != nullptr) {
     if (dlclose(cce_handle_) != 0) {
       return false;
@@ -404,7 +404,7 @@ bool AscendKernelRuntime::UnLoadKernelFunc() {
   return true;
 }
 
-bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
+bool AscendLaunchRuntime::Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
                               const std::vector<BaseDevicePtr> &input_tensors,
                               const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                               int64_t tiling_struct_size) {
@@ -467,21 +467,21 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
   return true;
 }
 
-bool AscendKernelRuntime::SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr) {
+bool AscendLaunchRuntime::SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr) {
   CHECK_NOTNULL(host_ptr);
   DLOG(INFO) << "SyncDeviceToHost: " << size << " bytes from " << device_ptr << "(device) to " << host_ptr << "(host)";
   SyncMemory(host_ptr, device_ptr, size, ACL_MEMCPY_DEVICE_TO_HOST);
   return true;
 }
 
-bool AscendKernelRuntime::SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr) {
+bool AscendLaunchRuntime::SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr) {
   CHECK_NOTNULL(host_ptr);
   DLOG(INFO) << "SyncHostToDevice: " << size << " bytes from " << host_ptr << "(host) to " << device_ptr << "(device)";
   SyncMemory(device_ptr, host_ptr, size, ACL_MEMCPY_HOST_TO_DEVICE);
   return true;
 }
 
-void AscendKernelRuntime::SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind) {
+void AscendLaunchRuntime::SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind) {
   SetContext();
   // Only apply asynchronous copy in Pynative && RT_MEMCPY_HOST_TO_DEVICE mode
   if (kind != ACL_MEMCPY_HOST_TO_DEVICE) {
@@ -497,7 +497,7 @@ void AscendKernelRuntime::SyncMemory(void *dst, const void *src, uint64_t size, 
   }
 }
 
-bool AscendKernelRuntime::MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) {
+bool AscendLaunchRuntime::MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) {
   SetCurrentContext();
   if (stream_ == nullptr) {
     LOG(FATAL) << "MemcpyAsync failed. stream_ is nullptr";
@@ -516,7 +516,7 @@ bool AscendKernelRuntime::MemcpyAsync(void *dst, const void *src, uint64_t size,
   return true;
 }
 
-bool AscendKernelRuntime::SyncStream() {
+bool AscendLaunchRuntime::SyncStream() {
   SetCurrentContext();
   if (stream_ == nullptr) {
     LOG(FATAL) << "SyncStream failed. stream_ is nullptr";
@@ -530,7 +530,7 @@ bool AscendKernelRuntime::SyncStream() {
   return true;
 }
 
-void AscendKernelRuntime::InitDeviceMemory(const std::vector<BaseDevicePtr> &tensors) {
+void AscendLaunchRuntime::InitDeviceMemory(const std::vector<BaseDevicePtr> &tensors) {
   if (!use_mem_pool_) {
     return;
   }
@@ -547,7 +547,7 @@ void AscendKernelRuntime::InitDeviceMemory(const std::vector<BaseDevicePtr> &ten
   }
 }
 
-void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
+void AscendLaunchRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
                                     const std::vector<BaseDevicePtr> &input_tensors,
                                     const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                                     int64_t tiling_struct_size) {

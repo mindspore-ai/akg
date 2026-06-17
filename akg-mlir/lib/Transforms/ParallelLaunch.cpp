@@ -56,10 +56,10 @@ using namespace mlir::scf;   // NOLINT(build/namespaces)
 using namespace mlir::CPU;   // NOLINT(build/namespaces)
 
 namespace {
-class AKGParallelLaunch : public impl::AKGParallelLaunchBase<AKGParallelLaunch> {
+class ParallelLaunch : public impl::AKGParallelLaunchBase<ParallelLaunch> {
  public:
-  AKGParallelLaunch() {}
-  AKGParallelLaunch(bool isMindSpore, bool isOutlining) : isMindSpore(isMindSpore), isOutlining(isOutlining) {}
+  ParallelLaunch() {}
+  ParallelLaunch(bool isMindSpore, bool isOutlining) : isMindSpore(isMindSpore), isOutlining(isOutlining) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<cf::ControlFlowDialect>();
@@ -92,8 +92,8 @@ class AKGParallelLaunch : public impl::AKGParallelLaunchBase<AKGParallelLaunch> 
 };
 }  // namespace
 
-void AKGParallelLaunch::addFuncConversion(LLVM::LLVMFuncOp &mainFunc,
-                                          SmallVector<LLVM::LLVMFuncOp> &calculateFuncs) const {
+void ParallelLaunch::addFuncConversion(LLVM::LLVMFuncOp &mainFunc,
+                                       SmallVector<LLVM::LLVMFuncOp> &calculateFuncs) const {
   SmallVector<CPU::ParallelLaunchOp> CPUParallelLaunchOps;
   mainFunc.walk([&](CPU::ParallelLaunchOp op) { CPUParallelLaunchOps.push_back(op); });
 
@@ -115,8 +115,8 @@ void AKGParallelLaunch::addFuncConversion(LLVM::LLVMFuncOp &mainFunc,
   return;
 }
 
-void AKGParallelLaunch::identifyFuncs(ModuleOp &moduleOp, LLVM::LLVMFuncOp &mainFunc,
-                                      SmallVector<LLVM::LLVMFuncOp> &calculateFuncs) {
+void ParallelLaunch::identifyFuncs(ModuleOp &moduleOp, LLVM::LLVMFuncOp &mainFunc,
+                                   SmallVector<LLVM::LLVMFuncOp> &calculateFuncs) {
   for (LLVM::LLVMFuncOp funcOp : moduleOp.getOps<LLVM::LLVMFuncOp>()) {
     auto attrs = funcOp.getOperation()->getAttrs();
     for (auto attr : attrs) {
@@ -137,9 +137,9 @@ void AKGParallelLaunch::identifyFuncs(ModuleOp &moduleOp, LLVM::LLVMFuncOp &main
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGParallelLaunchPass() {
-  return std::make_unique<AKGParallelLaunch>();
+  return std::make_unique<ParallelLaunch>();
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGParallelLaunchPass(bool isMindSpore, bool isOutlining) {
-  return std::make_unique<AKGParallelLaunch>(isMindSpore, isOutlining);
+  return std::make_unique<ParallelLaunch>(isMindSpore, isOutlining);
 }

@@ -152,7 +152,6 @@ struct AllocBufferShrinkPass : public AllocBufferShrinkBase<AllocBufferShrinkPas
 };
 
 // Compute dimension mapping through a collapse_shape.
-//
 // collapse_shape merges groups of source dimensions into single result
 // dimensions.  For each alloc dim that currently maps to a source dim:
 //   - Singleton group {d}        → 1-to-1 mapping to group index.
@@ -204,7 +203,6 @@ bool AllocBufferShrinkPass::computeCollapseMapping(MemRefType srcType, ArrayRef<
 }
 
 // Compute dimension mapping through an expand_shape.
-//
 // expand_shape splits each source dimension into a group of result dimensions.
 // For each alloc dim that currently maps to a source dim:
 //   - Singleton group {r}              → 1-to-1 mapping.
@@ -249,7 +247,6 @@ bool AllocBufferShrinkPass::computeExpandMapping(MemRefType resultType, ArrayRef
 
 // Recursively trace through view-like ops to collect terminal access ops
 // (with their dimension mappings) and intermediate view ops.
-//
 // Supported view ops: SubViewOp (same-rank, unit-stride), CollapseShapeOp,
 // ExpandShapeOp, MemorySpaceCastOp.  Returns false on unsupported users.
 bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<int> currentMapping) {
@@ -274,25 +271,21 @@ bool AllocBufferShrinkPass::collectAccessOpsRecursive(Value memref, SmallVector<
       }
       newMapping = SmallVector<int>(currentMapping);
       nextValue = subviewOp.getResult();
-
     } else if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(user)) {
       if (!computeCollapseMapping(collapseOp.getSrcType(), collapseOp.getReassociationIndices(), currentMapping,
                                   newMapping)) {
         return false;
       }
       nextValue = collapseOp.getResult();
-
     } else if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(user)) {
       if (!computeExpandMapping(expandOp.getResultType(), expandOp.getReassociationIndices(), currentMapping,
                                 newMapping)) {
         return false;
       }
       nextValue = expandOp.getResult();
-
     } else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(user)) {
       newMapping = SmallVector<int>(currentMapping);
       nextValue = castOp.getResult();
-
     } else {
       return false;
     }

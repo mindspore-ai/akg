@@ -222,6 +222,10 @@ class MindBuilder {
 
   void handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                       SmallVector<std::string> &operandNames);
+  void handleConcatOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+                            SmallVector<std::string> &operandNames);
+  void handleDefaultOperand(const OpBuilder &builder, const OpNode &opNode, size_t inputIdx,
+                            SmallVector<Value> &operands, SmallVector<std::string> &operandNames);
 
   void handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
 };
@@ -305,7 +309,7 @@ MindBuilder MindConverter::initBuilder() {
 }
 
 void MindConverter::parseJson() {
-  this->rawJson = DirUtils::checkAndReadJson(this->inputFileName);
+  this->rawJson = IOHelper::checkAndReadJson(this->inputFileName);
   parseInput();
   parseOp();
   parseOutput();
@@ -781,46 +785,56 @@ void MindBuilder::handleStridedSliceOperands(const OpBuilder &builder, const OpN
   }
 }
 
+void MindBuilder::handleConcatOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+                                       SmallVector<std::string> &operandNames) {
+  assert(opNode.inputDesc.size() == 1);
+  for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
+    for (size_t j = 0; j < opNode.inputDesc[i].size(); j++) {
+      if (isIndex1DAttrAsInput(opNode.opName, j)) {
+        continue;
+      }
+      nlohmann::json currInput = opNode.inputDesc[i][j];
+      operandNames.push_back(currInput.at(kTensorName));
+      if (this->operandList.count(operandNames[j]) == 0) {
+        SmallVector<int64_t> shape = currInput.at(kShape);
+        assert(shape.size() != 0);
+        SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
+        convertConstOperand(operandNames[j], shape, value, currInput.at(kDataType), builder);
+      }
+      (void)operands.emplace_back(this->operandList[operandNames[j]]);
+    }
+  }
+}
+
+void MindBuilder::handleDefaultOperand(const OpBuilder &builder, const OpNode &opNode, size_t inputIdx,
+                                       SmallVector<Value> &operands, SmallVector<std::string> &operandNames) {
+  nlohmann::json currInput = opNode.inputDesc[inputIdx][0];
+  operandNames.push_back(currInput.at(kTensorName));
+  if (this->operandList.count(operandNames[inputIdx]) == 0) {
+    SmallVector<int64_t> shape = currInput.at(kShape);
+    assert(shape.size() != 0);
+    SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
+    std::string dataType = currInput.at(kDataType);
+    if (dataType == "uint8") {
+      dataType = "int8";
+    }
+    convertConstOperand(operandNames[inputIdx], shape, value, dataType, builder);
+  }
+  (void)operands.emplace_back(this->operandList[operandNames[inputIdx]]);
+}
+
 void MindBuilder::handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                                  SmallVector<std::string> &operandNames) {
   if (opNode.opName == "Concat") {
-    assert(opNode.inputDesc.size() == 1);
-    for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
-      for (size_t j = 0; j < opNode.inputDesc[i].size(); j++) {
-        if (isIndex1DAttrAsInput(opNode.opName, j)) {
-          continue;  // Input Index1D represents an attribute, e.g. newshape attr in reshape op
-        }
-        nlohmann::json currInput = opNode.inputDesc[i][j];
-        operandNames.push_back(currInput.at(kTensorName));
-        if (this->operandList.count(operandNames[j]) == 0) {  // const input
-          SmallVector<int64_t> shape = currInput.at(kShape);
-          assert(shape.size() != 0);
-          SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
-          convertConstOperand(operandNames[j], shape, value, currInput.at(kDataType), builder);
-        }
-        (void)operands.emplace_back(this->operandList[operandNames[j]]);
-      }
-    }
+    handleConcatOperands(builder, opNode, operands, operandNames);
   } else if (opNode.opName == "StridedSlice" && !isStridedSliceWithAttr(opNode)) {
     handleStridedSliceOperands(builder, opNode, operands, operandNames);
   } else {
     for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
       if (isIndex1DAttrAsInput(opNode.opName, i)) {
-        continue;  // Input Index1D represents an attribute, e.g. newshape attr in reshape op
+        continue;
       }
-      nlohmann::json currInput = opNode.inputDesc[i][0];
-      operandNames.push_back(currInput.at(kTensorName));
-      if (this->operandList.count(operandNames[i]) == 0) {  // const input
-        SmallVector<int64_t> shape = currInput.at(kShape);
-        assert(shape.size() != 0);
-        SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
-        std::string dataType = currInput.at(kDataType);
-        if (dataType == "uint8") {
-          dataType = "int8";
-        }
-        convertConstOperand(operandNames[i], shape, value, dataType, builder);
-      }
-      (void)operands.emplace_back(this->operandList[operandNames[i]]);
+      handleDefaultOperand(builder, opNode, i, operands, operandNames);
     }
   }
 }
@@ -1026,7 +1040,9 @@ void MindBuilder::convertStridedSliceOp(OpBuilder builder, OpNode opNode, SmallV
   constexpr auto kEndIdx = 2;
   constexpr auto kStridesIdx = 3;
   MLIRContext *context = builder.getContext();
-  SmallVector<int64_t> start, end, strides;
+  SmallVector<int64_t> start;
+  SmallVector<int64_t> end;
+  SmallVector<int64_t> strides;
   if (isStridedSliceWithAttr(opNode)) {
     constexpr auto kBegin = "begin";
     start = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kBegin);
@@ -1397,7 +1413,7 @@ mlir::FloatType MindBuilder::getFloatType(const std::string &dtype, OpBuilder bu
     return builder.getBF16Type();
   }
   llvm::report_fatal_error(
-      llvm::StringRef("Error occurs when converting json to mlir: input float type is not supported"));
+    llvm::StringRef("Error occurs when converting json to mlir: input float type is not supported"));
   return builder.getF32Type();
 }
 
@@ -1428,7 +1444,7 @@ mlir::IntegerType MindBuilder::getIntType(const std::string &dtype, OpBuilder bu
     return builder.getI64Type();
   }
   llvm::report_fatal_error(
-      llvm::StringRef("Error occurs when converting json to mlir: input integar type is not supported"));
+    llvm::StringRef("Error occurs when converting json to mlir: input integar type is not supported"));
   return builder.getI32Type();
 }
 }  // namespace

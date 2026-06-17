@@ -135,10 +135,9 @@ int getPos(mlir::Value value) {
   return v;
 }
 
-class ReplaceUnknownDimsToOutputDimPass
-    : public impl::ReplaceUnknownDimsToOutputDimBase<ReplaceUnknownDimsToOutputDimPass> {
+class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDimBase<ReplaceUnknownDimsToOutputDim> {
  public:
-  ReplaceUnknownDimsToOutputDimPass() {}
+  ReplaceUnknownDimsToOutputDim() {}
 
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
@@ -169,7 +168,8 @@ class ReplaceUnknownDimsToOutputDimPass
       auto argIdx = getArgIdx(funcOp, dyn_cast<BlockArgument>(firstDim->getOperands()[0]));
       auto symbol = tool.getCurrShapeInfo(argIdx)[pos];
       auto outSymbol = getOutputSymbol(dict, symbol);
-      int outPos = -1, outArgIdx = -1;
+      int outPos = -1;
+      int outArgIdx = -1;
       std::tie(outArgIdx, outPos) = getOutputFromSymbol(outSymbol, tool.getDeviceShapesList());
       auto output = funcOp.getBody().front().getArgument(outArgIdx);
       // 2. replace those memref.dim to output dim
@@ -188,5 +188,5 @@ class ReplaceUnknownDimsToOutputDimPass
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createReplaceUnknownDimsToOutputDimPass() {
-  return std::make_unique<ReplaceUnknownDimsToOutputDimPass>();
+  return std::make_unique<ReplaceUnknownDimsToOutputDim>();
 }

@@ -115,7 +115,7 @@ struct EnableTosaBroadCastOp : public OpRewritePattern<OpTy> {
     // ignore implicit broadcast, cast inputs' shape to out's shape directly. Note that this will generate incorrect
     // code, which needs to be corrected in the following pass.
     if (ignoreImplicitBroadcast) {
-      // TODO(scheduler): different rank
+      // Different rank
       if (lhsNeedInsertBroadCastOrCast) {
         SmallVector<int64_t> lhsNeedCastDims(rank, 0);
         Type newType = GetCastedShape(output.getType(), input1.getType(), lhsNeedCastDims);
@@ -164,11 +164,12 @@ namespace {
  *            ...
  *          }
  *        `%cast_0` shows there is a shape-cast from "s1" to "s23" and that is the `dim1` of `%0`
- *        The ShapeTracer will trace `dim1` of `%0` all the way to func arguments and returns `dim0` of `%arg1`
+ *        The MakeDynamicBroadcastableTracer will trace `dim1` of `%0` all the way to func arguments and returns `dim0`
+ * of `%arg1`
  */
-class ShapeTracer {
+class MakeDynamicBroadcastableTracer {
  public:
-  explicit ShapeTracer(SmallVector<tensor::CastOp> needFixOps) : needFixOps(std::move(needFixOps)) {}
+  explicit MakeDynamicBroadcastableTracer(SmallVector<tensor::CastOp> needFixOps) : needFixOps(std::move(needFixOps)) {}
   SmallVector<int64_t> Trace(Value arg) {
     auto rank = cast<ShapedType>(arg.getType()).getRank();
     SmallVector<int64_t> needCastDims(rank, 0);
@@ -273,7 +274,7 @@ struct MakeDynamicBroadcastable : public impl::MakeDynamicBroadcastableBase<Make
       return;
     }
     ShapeAlignTool &tool = ShapeAlignTool::getInstance();
-    ShapeTracer tracer(needFixOps);
+    MakeDynamicBroadcastableTracer tracer(needFixOps);
     for (size_t argIdx = 0; argIdx < funcOp.getBody().front().getArguments().size(); ++argIdx) {
       auto arg = funcOp.getBody().front().getArgument(argIdx);
       auto needCastDims = tracer.Trace(arg);
