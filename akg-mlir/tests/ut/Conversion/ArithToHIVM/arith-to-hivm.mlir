@@ -186,6 +186,37 @@ func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs(%arg0 : memref<?x102
   return
 }
 
+// -----
+
+// Dynamic ?x32: vector broadcast must not fold when paired with scalar broadcast,
+// so elementwise output alloc can take dynamic dims from the VBrc buffer.
+func.func @test_dynamic_dual_broadcast_reduction_addf(%arg0: memref<64x128xf16>, %arg1: memref<32xf16>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @test_dynamic_dual_broadcast_reduction_addf
+  // CHECK: %[[C8:.*]] = arith.constant 8 : index
+  // CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f16
+  // CHECK-NOT: hivm.hir.vbrc ins(%[[ZERO]] : f16)
+  // CHECK: %[[VAL_BRC:.*]] = memref.alloc(%[[C8]]) : memref<?x32xf16>
+  // CHECK: hivm.hir.vbrc
+  // CHECK: %[[OUT:.*]] = memref.alloc(%[[C8]]) : memref<?x32xf16>
+  // CHECK: hivm.hir.vadd ins(%[[VAL_BRC]], %[[ZERO]] : memref<?x32xf16>, f16) outs(%[[OUT]] : memref<?x32xf16>)
+  // CHECK: hivm.hir.vreduce
+  %c8 = arith.constant 8 : index
+  %c32 = arith.constant 32 : index
+  %c1 = arith.constant 1 : index
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.000000e+00 : f16
+  %cst_f32 = arith.constant 0.000000e+00 : f32
+  %small = npuvector.transfer_read %arg0[%c0, %c0] [%c1] [%c1], %cst : memref<64x128xf16>, !npuvector<1xf16>
+  %wide = npuvector.extf %small {round_mode = #hivm.round_mode<round>} : !npuvector<1xf16> to !npuvector<1xf32>
+  %val_f16 = npuvector.truncf %wide {round_mode = #hivm.round_mode<round>} : !npuvector<1xf32> to !npuvector<1xf16>
+  %val = npuvector.broadcast %val_f16[%c8, %c32] [%c8, %c32] : !npuvector<1xf16> to !npuvector<?x32xf16>
+  %init = npuvector.broadcast %cst[%c8, %c32] [%c8, %c32] : f16 to !npuvector<?x32xf16>
+  %sum = arith.addf %val, %init {reduction_axes = [1 : index], reduction_type = "x"} : !npuvector<?x32xf16>
+  %red = npuvector.reduction <add>, %sum {reduction_dims = array<i64: 1>} : !npuvector<?x32xf16> into !npuvector<?xf16>
+  npuvector.transfer_write %red, %arg1[%c0] : !npuvector<?xf16>, memref<32xf16>
+  return
+}
+
 // CHECK-LABEL: func.func @test_transfer_write_alloc_root_offset_after_truncf
 // CHECK-SAME: %{{.*}}: memref<?xf32>, %[[BASE:.*]]: index, %[[SIZE:.*]]: index
 func.func @test_transfer_write_alloc_root_offset_after_truncf(%arg0: memref<?xf32>, %arg1: index, %arg2: index) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
