@@ -15,9 +15,11 @@
  */
 
 #include <cstddef>
+#include <cmath>
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <limits>
 #include <vector>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -134,12 +136,62 @@ bool isRankZeroTensor(Type type) {
   return tensorType && tensorType.getRank() == 0;
 }
 
+bool hasScalarMarker(Type type) {
+  auto rankedType = dyn_cast<RankedTensorType>(type);
+  if (!rankedType) {
+    return false;
+  }
+
+  auto dictAttr = dyn_cast_or_null<DictionaryAttr>(rankedType.getEncoding());
+  return dictAttr && dictAttr.contains(mfuse::kScalarMarkerAttr);
+}
+
+bool isFiniteScalarConstant(DenseElementsAttr denseAttr) {
+  Type elementType = denseAttr.getElementType();
+  if (!isa<FloatType>(elementType)) {
+    return true;
+  }
+  auto value = *denseAttr.getValues<APFloat>().begin();
+  return !value.isNaN() && !value.isInfinity();
+}
+
+// Keep DVM clusters aligned with the runtime scalar API surface in dvm.h.
+// f64/i64 scalar constants are allowed only when convert-mfuse-to-dvm can
+// safely normalize them to f32/i32; bool scalar constants are not supported.
+bool isDvmSupportedScalarConstant(ConstantOp op) {
+  auto rankedType = dyn_cast<RankedTensorType>(op.getResult().getType());
+  if (!rankedType || rankedType.getRank() != 0 || !hasScalarMarker(rankedType)) {
+    return false;
+  }
+
+  auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValueAttr());
+  if (!denseAttr || denseAttr.getNumElements() != 1 || !isFiniteScalarConstant(denseAttr)) {
+    return false;
+  }
+
+  Type elementType = rankedType.getElementType();
+  if (elementType.isF32() || elementType.isF16() || elementType.isBF16() || elementType.isInteger(32)) {
+    return true;
+  }
+  if (elementType.isF64()) {
+    double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
+    constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
+    return std::isfinite(value) && value >= -kMaxFloat && value <= kMaxFloat;
+  }
+  if (elementType.isInteger(64)) {
+    int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
+    return value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max();
+  }
+
+  return false;
+}
+
 bool isSafeRankZeroProducer(Operation *op) {
   if (op == nullptr) {
     return false;
   }
-  if (isa<ConstantOp>(op)) {
-    return true;
+  if (auto constOp = dyn_cast<ConstantOp>(op)) {
+    return isDvmSupportedScalarConstant(constOp);
   }
   if (isa<FullOp, CastOp>(op)) {
     return !llvm::any_of(op->getOperands(), [](Value operand) {
@@ -150,6 +202,13 @@ bool isSafeRankZeroProducer(Operation *op) {
     });
   }
   return false;
+}
+
+bool isDvmSupportedScalarOperand(Value operand) {
+  if (!hasScalarMarker(operand.getType())) {
+    return true;
+  }
+  return isSafeRankZeroProducer(operand.getDefiningOp());
 }
 
 bool hasUnsupportedRankZeroTensorOperand(Operation *op) {
@@ -205,11 +264,13 @@ class DvmSupportChecker {
   bool checkFormat(Operation *op) const { return true; }
 
   void initializeCheckFunc() {
-    auto inputSameType = [](Operation *op) { return isElementTypesConsistent(op); };
+    auto compareInputSupported = [](Operation *op) { return compareInputCheck(op); };
     auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
     auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
+    auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
+    auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
     auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
     auto fullOpCheck = [](Operation *op) { return fullCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
@@ -219,12 +280,12 @@ class DvmSupportChecker {
     // reduce sum op
     checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    checkFunc_["mfuse.eq"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.ne"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.gt"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.ge"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.lt"] = {compareCheck, inputSameType};
-    checkFunc_["mfuse.le"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.eq"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.ne"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.gt"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.ge"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.lt"] = {compareCheck, compareInputSupported};
+    checkFunc_["mfuse.le"] = {compareCheck, compareInputSupported};
     checkFunc_["mfuse.is_finite"] = {compareCheck, isFiniteOpCheckFunc};
     // select op
     checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
@@ -237,6 +298,9 @@ class DvmSupportChecker {
     checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.neg"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.logical_and"] = {boolOpCheck, boolTensorInputCheck};
+    checkFunc_["mfuse.logical_or"] = {boolOpCheck, boolTensorInputCheck};
+    checkFunc_["mfuse.logical_not"] = {boolOpCheck, boolTensorInputCheck};
     // Should add Assign check. There is no corresponding op in aten.
     checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
     checkFunc_["mfuse.full"] = {fullOpCheck};
@@ -310,6 +374,25 @@ class DvmSupportChecker {
   static bool intOpCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     return outputType && isFloatIntType(outputType);
+  }
+
+  static bool boolOpCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isBoolType(outputType);
+  }
+
+  static bool boolTensorInputCheckFunc(Operation *op) {
+    for (Value operand : op->getOperands()) {
+      Type operandType = operand.getType();
+      if (hasScalarMarker(operandType) || isRankZeroTensor(operandType) || !isa<TensorType>(operandType)) {
+        return false;
+      }
+      Type inputType = getElementType(operandType);
+      if (!inputType || !isBoolType(inputType)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static bool fullCheckFunc(Operation *op) {
@@ -549,21 +632,6 @@ class DvmSupportChecker {
     return true;
   }
 
-  static bool hasScalarMarker(mlir::Type type) {
-    auto rankedType = mlir::dyn_cast<mlir::RankedTensorType>(type);
-    if (!rankedType) {
-      return false;
-    }
-
-    mlir::Attribute encoding = rankedType.getEncoding();
-    if (!encoding) {
-      return false;
-    }
-
-    auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
-    return dictAttr && dictAttr.contains(mlir::mfuse::kScalarMarkerAttr);
-  }
-
   /// Check input types
   static bool inputCheck(Operation *op, const std::vector<size_t> &inputsToCheck) {
     Type outputType = getElementType(op->getResult(0).getType());
@@ -585,6 +653,9 @@ class DvmSupportChecker {
       Value operand = op->getOperand(idx);
       Type operandType = operand.getType();
       if (hasScalarMarker(operandType)) {
+        if (!isDvmSupportedScalarOperand(operand)) {
+          return false;
+        }
         continue;
       }
       // Skip tensor type check for non-tensor inputs
@@ -623,6 +694,9 @@ class DvmSupportChecker {
       }
       auto inputType = op->getOperand(idx).getType();
       if (hasScalarMarker(inputType)) {
+        if (!isDvmSupportedScalarOperand(op->getOperand(idx))) {
+          return false;
+        }
         continue;
       }
       Type inputElemType = getElementType(inputType);
@@ -633,27 +707,20 @@ class DvmSupportChecker {
     return true;
   }
 
-  /// Check if element types are consistent
-  static bool isElementTypesConsistent(Operation *op) {
-    if (op->getNumOperands() <= 1) {
+  static bool compareInputCheck(Operation *op) {
+    if (op->getNumOperands() != 2) {
+      return false;
+    }
+    Value rhs = op->getOperand(1);
+    if (!isRankZeroTensor(rhs.getType()) && !hasScalarMarker(rhs.getType())) {
       return true;
     }
-
-    Type firstElemType = getElementType(op->getOperand(0).getType());
-    if (!firstElemType) {
-      return false;  // Can't check without element type
-    }
-
-    for (size_t i = 1; i < op->getNumOperands(); ++i) {
-      Type elemType = getElementType(op->getOperand(i).getType());
-      if (!elemType || elemType != firstElemType) {
-        return false;
-      }
-    }
-    return true;
+    return isDvmSupportedScalarOperand(rhs);
   }
 
   static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
+
+  static bool isBoolType(Type type) { return type.isInteger(1); }
 
   /// Check if output type is float/int type
   static bool isFloatIntType(Type type) { return isFloatType(type) || type.isInteger(32); }

@@ -8,5 +8,7 @@ add_mlir_library(MFusionAnalysis
   MLIRIR
   MLIRSupport
   MLIRFuncDialect
+  MLIRMfuseDialect
+  MLIRMfuseUtils
   mfusion::symengine
 )

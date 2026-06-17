@@ -27,7 +27,7 @@ def TorchFusion : Pass<"torch-fusion", "::mlir::ModuleOp"> {
   let summary = "Torch dialect fusion pipeline (RoPE etc.) before Convert Torch to Mfuse";
   let description = [{
     Runs a sequence of fusion passes on Torch IR before convert-torch-to-mfuse.
-    Currently includes torch-fuse-rope; more passes can be added for future extension.
+    Currently includes torch-fuse-rms-norm, torch-merge-mean-var, and torch-fuse-rope.
   }];
   let constructor = "mlir::createTorchFusionPass()";
   let dependentDialects = [
@@ -40,6 +40,7 @@ def TorchFuseRoPE : Pass<"torch-fuse-rope", "::mlir::ModuleOp"> {
   let description = [{
     Matches the RoPE pattern on Torch IR (slice/neg/cat + mul.Tensor + add.Tensor)
     and replaces it with a single torch.operator "torch.npu.npu_rotary_mul"(x, cos, sin).
+    Skips fusion when the RoPE input x has bf16 element type to avoid ACL numeric drift.
     Runs before convert-torch-to-mfuse.
   }];
   let constructor = "mlir::createTorchFuseRoPEPass()";
@@ -56,6 +57,19 @@ def TorchFuseRmsNorm : Pass<"torch-fuse-rms-norm", "::mlir::ModuleOp"> {
     Runs before convert-torch-to-mfuse.
   }];
   let constructor = "mlir::createTorchFuseRmsNormPass()";
+  let dependentDialects = [
+    "::mlir::torch::Torch::TorchDialect"
+  ];
+}
+
+def TorchMergeMeanVar : Pass<"torch-merge-mean-var", "::mlir::ModuleOp"> {
+  let summary = "Merge mean.dim + var.correction into var_mean.correction on Torch dialect";
+  let description = [{
+    When torch.aten.mean.dim and torch.aten.var.correction share the same input tensor,
+    reduction dimensions, and keepdim flag, replace them with a single
+    torch.aten.var_mean.correction op. Runs before convert-torch-to-mfuse.
+  }];
+  let constructor = "mlir::createTorchMergeMeanVarPass()";
   let dependentDialects = [
     "::mlir::torch::Torch::TorchDialect"
   ];

@@ -312,21 +312,32 @@ bool SplitModel::runOnePattern(const FusePatternPtr &pattern) {
 }
 
 void SplitModel::runFusePatterns() {
-  // Run each pattern
-  for (auto &[pattern, enable] : patterns_) {
-    if (!enable) {
-      continue;
+  // runOnePattern merges at most one adjacent area per area per pass; chained
+  // merges (e.g. tag_barrier pulling tagged prologue into LN body)
+  // and cross-pattern enablement need multiple rounds. Cap at 8; exit early when
+  // no pattern fuses anything in a full round.
+  constexpr int kMaxFusionRounds = 8;
+  for (int round = 0; round < kMaxFusionRounds; ++round) {
+    bool fused = false;
+    for (auto &[pattern, enable] : patterns_) {
+      if (!enable) {
+        continue;
+      }
+      MLOG(DEBUG) << "Run pattern " << pattern->name() << " round " << round;
+      if (runOnePattern(pattern)) {
+        fused = true;
+      }
     }
-    MLOG(DEBUG) << "Run pattern " << pattern->name();
-    runOnePattern(pattern);
-  }
 
-  // Remove fused areas
-  for (auto iter = areas_.begin(); iter != areas_.end();) {
-    if (!(*iter)->isAlive()) {
-      iter = areas_.erase(iter);
-    } else {
-      ++iter;
+    for (auto iter = areas_.begin(); iter != areas_.end();) {
+      if (!(*iter)->isAlive()) {
+        iter = areas_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+    if (!fused) {
+      break;
     }
   }
 }

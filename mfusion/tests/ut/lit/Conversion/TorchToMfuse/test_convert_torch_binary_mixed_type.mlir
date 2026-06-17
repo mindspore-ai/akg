@@ -47,7 +47,7 @@ func.func @main_div_rank0_float(%arg0: !torch.vtensor<[80,204,204],f32>, %arg1: 
 }
 
 // CHECK-LABEL: func.func @main_maximum
-// CHECK: mfuse.maximum
+// CHECK: mfuse.maximum {{.*}} : (tensor<2x4xf16>, tensor<2x4xf32>) -> tensor<2x4xf32>
 // CHECK-NOT: torch.aten.maximum
 func.func @main_maximum(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> attributes {torch.assume_strict_symbolic_shapes} {
   %0 = torch.aten.maximum %arg0, %arg1 : !torch.vtensor<[2,4],f16>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
@@ -55,7 +55,7 @@ func.func @main_maximum(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vtensor<
 }
 
 // CHECK-LABEL: func.func @main_minimum
-// CHECK: mfuse.minimum
+// CHECK: mfuse.minimum {{.*}} : (tensor<2x4xf16>, tensor<2x4xf32>) -> tensor<2x4xf32>
 // CHECK-NOT: torch.aten.minimum
 func.func @main_minimum(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> attributes {torch.assume_strict_symbolic_shapes} {
   %0 = torch.aten.minimum %arg0, %arg1 : !torch.vtensor<[2,4],f16>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
@@ -124,6 +124,38 @@ func.func @main_logical_and(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vten
 func.func @main_logical_or(%arg0: !torch.vtensor<[2,4],f16>, %arg1: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],i1> attributes {torch.assume_strict_symbolic_shapes} {
   %0 = torch.aten.logical_or %arg0, %arg1 : !torch.vtensor<[2,4],f16>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],i1>
   return %0 : !torch.vtensor<[2,4],i1>
+}
+
+// CHECK-LABEL: func.func @main_bitwise_and_bool
+// CHECK: mfuse.logical_and
+// CHECK-NOT: torch.aten.bitwise_and.Tensor
+func.func @main_bitwise_and_bool(%arg0: !torch.vtensor<[2,4],i1>, %arg1: !torch.vtensor<[2,4],i1>) -> !torch.vtensor<[2,4],i1> attributes {torch.assume_strict_symbolic_shapes} {
+  %0 = torch.aten.bitwise_and.Tensor %arg0, %arg1 : !torch.vtensor<[2,4],i1>, !torch.vtensor<[2,4],i1> -> !torch.vtensor<[2,4],i1>
+  return %0 : !torch.vtensor<[2,4],i1>
+}
+
+// CHECK-LABEL: func.func @main_bitwise_or_bool
+// CHECK: mfuse.logical_or
+// CHECK-NOT: torch.aten.bitwise_or.Tensor
+func.func @main_bitwise_or_bool(%arg0: !torch.vtensor<[2,4],i1>, %arg1: !torch.vtensor<[2,4],i1>) -> !torch.vtensor<[2,4],i1> attributes {torch.assume_strict_symbolic_shapes} {
+  %0 = torch.aten.bitwise_or.Tensor %arg0, %arg1 : !torch.vtensor<[2,4],i1>, !torch.vtensor<[2,4],i1> -> !torch.vtensor<[2,4],i1>
+  return %0 : !torch.vtensor<[2,4],i1>
+}
+
+// CHECK-LABEL: func.func @main_bitwise_not_bool
+// CHECK: mfuse.logical_not
+// CHECK-NOT: torch.aten.bitwise_not
+func.func @main_bitwise_not_bool(%arg0: !torch.vtensor<[2,4],i1>) -> !torch.vtensor<[2,4],i1> attributes {torch.assume_strict_symbolic_shapes} {
+  %0 = torch.aten.bitwise_not %arg0 : !torch.vtensor<[2,4],i1> -> !torch.vtensor<[2,4],i1>
+  return %0 : !torch.vtensor<[2,4],i1>
+}
+
+// CHECK-LABEL: func.func @main_bitwise_or_int
+// CHECK: torch.aten.bitwise_or.Tensor
+// CHECK-NOT: mfuse.logical_or
+func.func @main_bitwise_or_int(%arg0: !torch.vtensor<[2,4],si32>, %arg1: !torch.vtensor<[2,4],si32>) -> !torch.vtensor<[2,4],si32> attributes {torch.assume_strict_symbolic_shapes} {
+  %0 = torch.aten.bitwise_or.Tensor %arg0, %arg1 : !torch.vtensor<[2,4],si32>, !torch.vtensor<[2,4],si32> -> !torch.vtensor<[2,4],si32>
+  return %0 : !torch.vtensor<[2,4],si32>
 }
 
 // CHECK-LABEL: func.func @main_pow

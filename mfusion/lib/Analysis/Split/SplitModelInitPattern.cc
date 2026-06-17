@@ -20,6 +20,7 @@
 #include <numeric>
 #include "llvm/Support/Debug.h"
 #include "mfusion/Analysis/Split/FusePattern.h"
+#include "mfusion/Analysis/Split/FuseTagBarrier.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 #define DEBUG_TYPE "split"
@@ -330,10 +331,9 @@ class FuseAllReduceBwd : public FusePattern {
 
  protected:
   bool check(const AreaPtr &area) override {
-    static constexpr llvm::StringLiteral kAllReduceOpName = "mfuse.allreduce";
     auto nodes = area->nodes();
     return std::any_of(nodes.begin(), nodes.end(), [](const auto &node) {
-      return node->op() && node->op()->getName().getStringRef() == kAllReduceOpName;
+      return node->op() && node->op()->getName().getStringRef() == "mfuse.allreduce";
     });
   }
 
@@ -379,6 +379,8 @@ void DVMSplitModel::initFusePatterns() {
   addPattern(FuseElemwiseBroadcastBwd::createDepthMatcher(ascend::kBroadcastFusionDepth), true);
   addPattern(FuseElemwiseBroadcastBwd::createWidthMatcher(ascend::kBroadcastFusionDepth), true);
   addPattern(std::make_shared<dvm::FuseReduceBwd>(), true);
+  addPattern(createDvmFuseGroupTagBarrier(FuseDirection::FORWARD), true);
+  addPattern(createDvmFuseGroupTagBarrier(FuseDirection::BACKWARD), true);
   addPattern(std::make_shared<ascend::FuseElemAny>(), true);
   addPattern(std::make_shared<ascend::FuseSlice>(), true);
   // To be enabled by config in the future.
