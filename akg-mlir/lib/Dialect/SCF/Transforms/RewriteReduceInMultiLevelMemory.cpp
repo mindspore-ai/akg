@@ -99,8 +99,11 @@ Value createInitialValue(Operation *op, mlir::Location loc, OpBuilder &builder) 
 // Try to match this pattern in sequential reduction loop:
 static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation *> matchReductionRelatedOps(
   Operation *funcOp, Operation *redOp) {
-  Operation *allocLocalA = nullptr, *initLoadLocalA = nullptr, *initStoreLocalA = nullptr, *loadLocalA = nullptr,
-            *storeLocalA = nullptr;
+  Operation *allocLocalA = nullptr;
+  Operation *initLoadLocalA = nullptr;
+  Operation *initStoreLocalA = nullptr;
+  Operation *loadLocalA = nullptr;
+  Operation *storeLocalA = nullptr;
   Value localA = redOp->getOperands()[1];
   loadLocalA = localA.getDefiningOp();
   storeLocalA = *(redOp->getUsers().begin());
@@ -197,8 +200,11 @@ struct RewriteReduceInMultiLevelMemory
         continue;
       }
 
-      Operation *allocLocalA = nullptr, *initLoadLocalA = nullptr, *initStoreLocalA = nullptr, *loadLocalA = nullptr,
-                *storeLocalA = nullptr;
+      Operation *allocLocalA = nullptr;
+      Operation *initLoadLocalA = nullptr;
+      Operation *initStoreLocalA = nullptr;
+      Operation *loadLocalA = nullptr;
+      Operation *storeLocalA = nullptr;
       std::tie(allocLocalA, initLoadLocalA, initStoreLocalA, loadLocalA, storeLocalA) =
         matchReductionRelatedOps(funcOp, redOp);
 

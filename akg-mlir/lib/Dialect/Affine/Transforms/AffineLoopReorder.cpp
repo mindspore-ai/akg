@@ -20,7 +20,6 @@
 #include <string>
 #include <vector>
 
-#include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -131,7 +130,6 @@ void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *
 
 void AffineLoopReorder::runOnOperation() {
   auto funcOp = getOperation();
-
   if (!funcOp->hasAttr("OperatorType") ||
       dyn_cast<StringAttr>(funcOp->getAttr("OperatorType")).getValue().str() != "Reduce") {
     return;

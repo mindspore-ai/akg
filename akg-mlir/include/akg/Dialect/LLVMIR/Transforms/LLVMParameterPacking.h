@@ -18,9 +18,9 @@
 #define AKG_DIALECT_LLVMIR_TRANSFORMS_LLVMPARAMETERPACKING_H_
 
 #include <memory>
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class Pass;
 namespace LLVM {
 // Creates a pass that packs pointer parameters to pointer arrays
 std::unique_ptr<Pass> createParameterPackingPass();

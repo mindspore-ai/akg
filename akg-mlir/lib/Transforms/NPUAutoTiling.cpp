@@ -391,7 +391,6 @@ class TilingBase {
   void copyAttrsForDeviceFromHost(func::FuncOp host, func::FuncOp device) {
     for (auto &na : host->getAttrs()) {
       auto name = na.getName().strref();
-
       if (name == "hacc.function_kind" || name == "hacc.host_func_type" || name == "hacc.tiling_function" ||
           name == "mindspore_kernel") {
         continue;
@@ -637,7 +636,8 @@ class TilingBase {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(originalKernel_);
 
-    SmallVector<Type> devInputs, devResults;
+    SmallVector<Type> devInputs;
+    SmallVector<Type> devResults;
     if (failed(collectDeviceSignature(originalKernel_, devInputs, devResults, key))) {
       return failure();
     }
@@ -727,7 +727,8 @@ class TilingBase {
   // Flatten kTilingKey (ptr) / kTilingStruct (memref) into trailing i64 args on a device kernel.
   LogicalResult flattenTilingArgsForDeviceKernel(func::FuncOp f, MLIRContext *ctx, Type i64Ty, unsigned sz,
                                                  StringAttr katName) {
-    int keyIdx = -1, structIdx = -1;
+    int keyIdx = -1;
+    int structIdx = -1;
     if (failed(findTilingKeyStructIndices(f, katName, keyIdx, structIdx))) {
       return failure();
     }
@@ -944,10 +945,8 @@ class TilingBase {
     }
 
     auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
-
     for (BlockArgument arg : entry->getArguments()) {
       unsigned argIdx = arg.getArgNumber();
-
       if (!argAttrArray || argIdx >= argAttrArray.size()) {
         continue;
       }

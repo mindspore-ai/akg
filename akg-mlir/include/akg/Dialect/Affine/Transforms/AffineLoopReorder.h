@@ -18,14 +18,12 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_AFFINELOOPREORDER_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
-std::unique_ptr<mlir::OperationPass<func::FuncOp>> createAffineLoopReorderPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createAffineLoopReorderPass();
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_AFFINELOOPREORDER_H_

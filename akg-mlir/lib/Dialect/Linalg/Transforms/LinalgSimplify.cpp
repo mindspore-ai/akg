@@ -116,9 +116,9 @@ static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *f
   }
 }
 
-class ElementwiseOpOperandSimplify : public OpRewritePattern<GenericOp> {
+class LinalgSimplifyPattern : public OpRewritePattern<GenericOp> {
  public:
-  ElementwiseOpOperandSimplify(MLIRContext *context, ControlFusionFn fun, PatternBenefit benefit = 1)
+  LinalgSimplifyPattern(MLIRContext *context, ControlFusionFn fun, PatternBenefit benefit = 1)
       : OpRewritePattern<GenericOp>(context, benefit), controlFn(std::move(fun)) {}
   LogicalResult matchAndRewrite(GenericOp genericOp, PatternRewriter &rewriter) const override {
     for (OpOperand &opOperand : genericOp->getOpOperands()) {
@@ -137,7 +137,7 @@ class ElementwiseOpOperandSimplify : public OpRewritePattern<GenericOp> {
 void mlir::populateElementwiseOpsSimplify(RewritePatternSet &patterns,
                                           const ControlFusionFn &controlElementwiseOpsFusion) {
   auto *context = patterns.getContext();
-  (void)patterns.add<ElementwiseOpOperandSimplify>(context, controlElementwiseOpsFusion);
+  (void)patterns.add<LinalgSimplifyPattern>(context, controlElementwiseOpsFusion);
 }
 
 namespace {

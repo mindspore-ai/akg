@@ -215,8 +215,11 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
     if (hasFail != 0) {
       return;
     }
-    gpu::GPUFuncOp newGpuFunc;
-    getOperation()->walk([&](gpu::GPUFuncOp gpuFunc) { newGpuFunc = gpuFunc; });
+    gpu::GPUFuncOp newGpuFunc = [&]() {
+      gpu::GPUFuncOp result;
+      getOperation()->walk([&](gpu::GPUFuncOp gpuFunc) { result = gpuFunc; });
+      return result;
+    }();
     if (!newGpuFunc) {
       llvm::report_fatal_error(llvm::StringRef("Error during promote temp buffer: no gpu func."));
     }

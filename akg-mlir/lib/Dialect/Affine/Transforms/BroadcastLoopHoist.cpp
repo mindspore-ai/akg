@@ -15,7 +15,6 @@
  */
 
 #include "akg/Dialect/Affine/Transforms/BroadcastLoopHoist.h"
-#include "akg/Dialect/Affine/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -96,8 +95,11 @@ static int getNumLevelsToHoist(affine::AffineForOp broadcastLoop) {
   Value broadcastIV = broadcastLoop.getInductionVar();
 
   // Find a store operation within the broadcast loop.
-  affine::AffineStoreOp targetStore;
-  broadcastLoop.walk([&](affine::AffineStoreOp storeOp) { targetStore = storeOp; });
+  affine::AffineStoreOp targetStore = [&]() {
+    affine::AffineStoreOp result;
+    broadcastLoop.walk([&](affine::AffineStoreOp storeOp) { result = storeOp; });
+    return result;
+  }();
 
   if (!targetStore) {
     return 0;
@@ -237,7 +239,6 @@ bool BroadcastLoopHoist::hoistBroadcastLoops(func::FuncOp funcOp) {
 
   return changed;
 }
-
 void BroadcastLoopHoist::runOnOperation() {
   auto funcOp = getOperation();
 

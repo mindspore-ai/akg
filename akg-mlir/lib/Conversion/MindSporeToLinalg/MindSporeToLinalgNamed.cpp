@@ -358,6 +358,23 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t
   return success();
 }
 
+static void advanceDimsUntilEqual(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape, unsigned &currLhsDim,
+                                  unsigned &currRhsDim, int64_t &lhsSize, int64_t &rhsSize) {
+  while (lhsSize != rhsSize && currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
+    if (lhsSize < rhsSize) {
+      currLhsDim++;
+      if (currLhsDim < lhsShape.size()) {
+        lhsSize *= lhsShape[currLhsDim];
+      }
+    } else {
+      currRhsDim++;
+      if (currRhsDim < rhsShape.size()) {
+        rhsSize *= rhsShape[currRhsDim];
+      }
+    }
+  }
+}
+
 static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape,
                                   SmallVector<int64_t> &intermediateShape, bool isDynamic) {
   if (isDynamic) {
@@ -370,23 +387,12 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
     return true;
   }
 
-  unsigned currLhsDim = 0, currRhsDim = 0;
+  unsigned currLhsDim = 0;
+  unsigned currRhsDim = 0;
   while (currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
     int64_t rhsSize = rhsShape[currRhsDim];
     int64_t lhsSize = lhsShape[currLhsDim];
-    while (lhsSize != rhsSize && currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
-      if (lhsSize < rhsSize) {
-        currLhsDim++;
-        if (currLhsDim < lhsShape.size()) {
-          lhsSize *= lhsShape[currLhsDim];
-        }
-      } else {
-        currRhsDim++;
-        if (currRhsDim < rhsShape.size()) {
-          rhsSize *= rhsShape[currRhsDim];
-        }
-      }
-    }
+    advanceDimsUntilEqual(lhsShape, rhsShape, currLhsDim, currRhsDim, lhsSize, rhsSize);
     if (lhsSize == rhsSize) {
       intermediateShape.push_back(lhsSize);
     }
@@ -411,10 +417,19 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
   return true;
 }
 
+static void collapseTrailingOneDims(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape,
+                                    SmallVector<ReassociationExprs, 4> &reassociationMap, unsigned &currSrcDim,
+                                    unsigned currDstDim) {
+  if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
+    while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
+      reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
+    }
+  }
+}
+
 static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape,
                                                ArrayRef<int64_t> dstShape,
                                                SmallVector<ReassociationExprs, 4> &reassociationMap, bool isDynamic) {
-  // If the shape is dynamic, create a map for collapsing into one dimension.
   if (isDynamic) {
     SmallVector<AffineExpr, 2> exprs;
     for (int i = 0, s = srcShape.size(); i < s; ++i) {
@@ -430,7 +445,8 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
   }
 
   reassociationMap.resize(dstShape.size());
-  unsigned currSrcDim = 0, currDstDim = 0;
+  unsigned currSrcDim = 0;
+  unsigned currDstDim = 0;
   while (currSrcDim < srcShape.size() && currDstDim < dstShape.size()) {
     int64_t dstSize = dstShape[currDstDim];
     int64_t srcSize = srcShape[currSrcDim];
@@ -440,13 +456,7 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
     }
     if (srcSize == dstSize) {
       reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
-      // If the next dim in collapsedShape is not 1, treat subsequent dims in
-      // expandedShape which are 1 to be collapsed.
-      if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
-        while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
-          reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
-        }
-      }
+      collapseTrailingOneDims(rewriter, srcShape, dstShape, reassociationMap, currSrcDim, currDstDim);
     }
     currDstDim++;
   }
@@ -461,9 +471,7 @@ Value createCollapse(PatternRewriter &rewriter, Location loc, ShapedType resultT
   if (resultTy == operandTy) {
     return operand;
   }
-
   bool isDynamic = !operandTy.hasStaticShape();
-
   if (isDynamic && resultTy.getRank() != 1) {
     (void)rewriter.notifyMatchFailure(loc, "Cannot collapse dynamic dims to more than one dimension");
     return {};
@@ -489,9 +497,7 @@ Value createExpand(PatternRewriter &rewriter, Location loc, ShapedType resultTy,
   if (resultTy == operandTy) {
     return operand;
   }
-
   bool isDynamic = !operandTy.hasStaticShape();
-
   if (isDynamic && operandTy.getRank() != 1) {
     (void)rewriter.notifyMatchFailure(loc, "Cannot expand dynamic dims from more than one dimension");
     return {};
@@ -561,7 +567,8 @@ static DenseI64ArrayAttr computeDiffShape(mindspore::BroadcastToOp brcOp) {
   auto outputShapeSize = outputShape.size();
 
   SmallVector<int64_t> dim;
-  size_t inIdx = 0, outIdx = 0;
+  size_t inIdx = 0;
+  size_t outIdx = 0;
   while (inIdx < inputShapeSize && outIdx < outputShapeSize) {
     if (outputShape[outIdx] == inputShape[inIdx]) {
       outIdx++;

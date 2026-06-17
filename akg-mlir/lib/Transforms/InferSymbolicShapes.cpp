@@ -161,7 +161,7 @@ static SymEngine::Expression GetBroadCastDim(const SymEngine::Expression &lhs, c
                                : ((rhs == constOneExpr) ? lhs : analysis.getNewSymbolicDimExpr());
 }
 
-// TODO(scheduler): To handle complex expressions, the parameters will be changed to SymEngine::Expression.
+// To handle complex expressions, the parameters will be changed to SymEngine::Expression.
 static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llvm::SmallVector<std::string> &longShape,
                                                                        const llvm::SmallVector<std::string> &shortShape,
                                                                        const llvm::ArrayRef<int64_t> &res) {
@@ -185,7 +185,8 @@ static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llv
   llvm::SmallVector<std::string> resShape;
   uint64_t longRank = longShape.size();
   uint64_t shortRank = shortShape.size();
-  uint64_t shortIdx = 0, longIdx = 0;
+  uint64_t shortIdx = 0;
+  uint64_t longIdx = 0;
   while (longIdx < longRank && shortIdx < shortRank) {
     (void)resShape.emplace_back(res[longIdx] == ShapedType::kDynamic ? longShape[longIdx]
                                                                      : std::to_string(res[longIdx]));
@@ -237,18 +238,25 @@ struct PropagateMemRefAllocOp : public OpRewritePattern<memref::AllocOp> {
     }
     int64_t ctr = 0;
     for (int64_t i = 0, e = op.getType().getRank(); i < e; ++i) {
-      if (op.getType().isDynamicDim(i)) {
-        auto dim = op.getDynamicSizes()[ctr++];
-        if (auto dimOp = dyn_cast<memref::DimOp>(dim.getDefiningOp())) {
-          if (auto cop = dyn_cast<arith::ConstantOp>(dimOp.getIndex().getDefiningOp())) {
-            if (auto attr = dyn_cast<IntegerAttr>(cop.getValue())) {
-              std::optional<llvm::SmallVector<std::string>> srcSymShape =
-                analysis.getSymbolicShape(dimOp.getSource().getType());
-              (*symShape)[i] = (*srcSymShape)[attr.getInt()];
-            }
-          }
-        }
+      if (!op.getType().isDynamicDim(i)) {
+        continue;
       }
+      auto dim = op.getDynamicSizes()[ctr++];
+      auto dimOp = dyn_cast<memref::DimOp>(dim.getDefiningOp());
+      if (!dimOp) {
+        continue;
+      }
+      auto cop = dyn_cast<arith::ConstantOp>(dimOp.getIndex().getDefiningOp());
+      if (!cop) {
+        continue;
+      }
+      auto attr = dyn_cast<IntegerAttr>(cop.getValue());
+      if (!attr) {
+        continue;
+      }
+      std::optional<llvm::SmallVector<std::string>> srcSymShape =
+        analysis.getSymbolicShape(dimOp.getSource().getType());
+      (*symShape)[i] = (*srcSymShape)[attr.getInt()];
     }
     resVal.setType(analysis.updateSymbolicShape(resVal.getType(), *symShape));
     return success();
@@ -478,7 +486,6 @@ struct PropagateMemRefReshapeOp : public OpRewritePattern<memref::ReshapeOp> {
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
     Value shapeVal = op.getShape();
     Value resVal = op.getResult();
-
     if (analysis.hasSymbolicShape(resVal.getType())) {
       return success();
     }
@@ -589,26 +596,19 @@ struct PropagateMemRefSubviewOp : public OpRewritePattern<memref::SubViewOp> {
     // For dynamic dimensions, inherit the symbolic shape from source
     // For static dimensions, use the static size
     for (int64_t i = 0; i < resultType.getRank(); ++i) {
-      if (resultType.isDynamicDim(i)) {
-        // Dynamic dimension - check if size is statically specified
-        int64_t size = staticSizes[i];
-        if (size != ShapedType::kDynamic) {
-          // Static size specified in subview operation
-          resSymShape.push_back(std::to_string(size));
-        } else {
-          // Dynamic size - inherit symbolic shape from source dimension i
-          // Subview creates a view, so the dimension's symbolic shape should
-          // be inherited from the source, even though the actual size may differ
-          if (i < static_cast<int64_t>(srcSymShape->size())) {
-            resSymShape.push_back((*srcSymShape)[i]);
-          } else {
-            // Fallback: create new symbolic dim if source doesn't have enough dimensions
-            resSymShape.push_back(analysis.newSymbolicDim());
-          }
-        }
-      } else {
-        // Static dimension - use the static size from result type
+      if (!resultType.isDynamicDim(i)) {
         resSymShape.push_back(std::to_string(resultType.getDimSize(i)));
+        continue;
+      }
+      int64_t size = staticSizes[i];
+      if (size != ShapedType::kDynamic) {
+        resSymShape.push_back(std::to_string(size));
+        continue;
+      }
+      if (i < static_cast<int64_t>(srcSymShape->size())) {
+        resSymShape.push_back((*srcSymShape)[i]);
+      } else {
+        resSymShape.push_back(analysis.newSymbolicDim());
       }
     }
 
@@ -812,7 +812,8 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     std::string intermediateShape =
       std::accumulate((*opndShape).begin(), (*opndShape).end(), std::string("1"),
                       [](const std::string &a, const std::string &b) { return a + "*" + b; });
-    uint dimIdx = 0, inferDim = 0;
+    uint dimIdx = 0;
+    uint inferDim = 0;
     for (auto sym : *resShape) {
       if (cast<ShapedType>(resVal.getType()).getShape()[dimIdx] == ShapedType::kDynamic) {
         inferDim = dimIdx;

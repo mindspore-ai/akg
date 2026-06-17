@@ -497,7 +497,6 @@ static LogicalResult handleCollapseReturn(Value oldResVal, Value outArg, SmallVe
   }
 
   Value src = collapseOp.getSrc();
-
   if (llvm::is_contained(origReturnValues, src) || llvm::is_contained(newReturnValues, src)) {
     return rewriteSrcOutCollapseToOutView(collapseOp, outArg);
   }
@@ -513,7 +512,6 @@ static LogicalResult handleExpandReturn(Value oldResVal, Value outArg, SmallVect
   }
 
   Value src = expandOp.getSrc();
-
   if (llvm::is_contained(origReturnValues, src) || llvm::is_contained(newReturnValues, src)) {
     return rewriteSrcOutExpandOpToOutView(expandOp, outArg);
   }
@@ -529,7 +527,6 @@ static LogicalResult handleReshapeReturn(Value oldResVal, Value outArg, SmallVec
   }
 
   Value src = reshapeOp.getSource();
-
   if (llvm::is_contained(origReturnValues, src) || llvm::is_contained(newReturnValues, src)) {
     return rewriteSrcOutReshapeOpToOutView(reshapeOp, outArg);
   }
@@ -783,7 +780,6 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
 
   unsigned origNumInputs = origInputs.size();
   unsigned origNumResults = origResults.size();
-
   if (origNumResults == 0) {
     setHaccIOArgAttrs(func, origNumInputs, /*nOutputs=*/0, builder);
     return success();
@@ -892,7 +888,6 @@ struct AddOutParameter : public mlir::impl::AddOutParameterBase<AddOutParameter>
       }
       return false;
     });
-
     if (it != funcs.end()) {
       signalPassFailure();
       return;

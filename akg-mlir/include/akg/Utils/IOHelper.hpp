@@ -25,9 +25,9 @@
 #include "llvm/Support/FileUtilities.h"
 
 namespace mlir {
-class DirUtils {
+class IOHelper {
  public:
-  DirUtils() = default;
+  IOHelper() = default;
   static void CheckOrCreateDirectory(const std::string &file_str) {
     llvm::ErrorOr<bool> result = llvm::sys::fs::exists(file_str);
     if (result) {      // If the check was successful

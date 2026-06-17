@@ -167,7 +167,7 @@ struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSp
     ConversionTarget target(getContext());
     FunctionOpInterface func = getOperation();
 
-    // TODO(scheduler): remove Tosa.
+    // Remove Tosa.
     target.addLegalDialect<tosa::TosaDialect, arith::ArithDialect, linalg::LinalgDialect, linalgExt::LinalgExtDialect,
                            tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();

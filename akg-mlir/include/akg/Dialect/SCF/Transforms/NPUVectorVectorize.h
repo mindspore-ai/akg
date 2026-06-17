@@ -18,13 +18,10 @@
 #define AKG_DIALECT_SCF_TRANSFORMS_NPUVECTORVECTORIZE_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
-
 namespace scf {
 /// Creates the NPUVector vectorization pass.
 /// Processes scf.for loops using NPUVector dialect with dynamic shape support.

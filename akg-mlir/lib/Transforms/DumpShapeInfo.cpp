@@ -53,7 +53,7 @@ constexpr auto kRuntimeVarsMark = "mark";
 constexpr auto kKernelNameAttrKey = "sym_name";
 
 // ===----------------------------------------------------------------------===//
-// DumpShapeInfoPass
+// DumpShapeInfo
 // AKG may reconstruct the inputs' and outputs' shapes during optimization
 // passes like FoldDimension, UnifyShape and that lead to imcompactble shapes
 // and strides between host-side and device-side.
@@ -64,10 +64,10 @@ constexpr auto kKernelNameAttrKey = "sym_name";
 // This pass will dump shape info into `kernel_name_shape_info.json` file.
 // ===----------------------------------------------------------------------===//
 
-class DumpShapeInfoPass : public impl::DumpShapeInfoBase<DumpShapeInfoPass> {
+class DumpShapeInfo : public impl::DumpShapeInfoBase<DumpShapeInfo> {
  public:
-  DumpShapeInfoPass() {}
-  explicit DumpShapeInfoPass(const std::string &jsonFileName) { fileName = jsonFileName; }
+  DumpShapeInfo() {}
+  explicit DumpShapeInfo(const std::string &jsonFileName) { fileName = jsonFileName; }
   void runOnOperation() override;
   bool save(const std::string &res);
   std::string getAkgKernelName();
@@ -78,10 +78,13 @@ class DumpShapeInfoPass : public impl::DumpShapeInfoBase<DumpShapeInfoPass> {
   void dumpGpuSchedule(json &jsonResults) const;
 };
 
-std::string DumpShapeInfoPass::getAkgKernelName() {
+std::string DumpShapeInfo::getAkgKernelName() {
   std::string defaultName = "akg_kernel";
-  func::FuncOp funcOp;
-  getOperation()->walk([&](func::FuncOp op) { funcOp = op; });
+  func::FuncOp funcOp = [&]() {
+    func::FuncOp result;
+    getOperation()->walk([&](func::FuncOp op) { result = op; });
+    return result;
+  }();
   if (!funcOp) {
     return defaultName;
   }
@@ -95,12 +98,12 @@ std::string DumpShapeInfoPass::getAkgKernelName() {
   return defaultName;
 }
 
-bool DumpShapeInfoPass::save(const std::string &res) {
+bool DumpShapeInfo::save(const std::string &res) {
   if (res.empty()) {
     llvm::errs() << "Save json failed: string empty.\n";
     return false;
   }
-  (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
+  (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
   if (!fileName.empty()) {
     std::string search = ".info";
     std::string replacement = "_shape_info.json";
@@ -124,7 +127,7 @@ bool DumpShapeInfoPass::save(const std::string &res) {
   return true;
 }
 
-void DumpShapeInfoPass::runOnOperation() {
+void DumpShapeInfo::runOnOperation() {
   json jsonResults;
   ShapeAlignTool &tool = ShapeAlignTool::getInstance();
   jsonResults[kHostShapes] = tool.getHostShapesList();
@@ -136,7 +139,7 @@ void DumpShapeInfoPass::runOnOperation() {
 }
 }  // end anonymous namespace
 
-void DumpShapeInfoPass::dumpGpuRuntimeVars(json &jsonResults) const {
+void DumpShapeInfo::dumpGpuRuntimeVars(json &jsonResults) const {
   std::vector<json> temp;
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (auto it : gpuTool.getRuntimeVars()) {
@@ -152,7 +155,7 @@ void DumpShapeInfoPass::dumpGpuRuntimeVars(json &jsonResults) const {
   }
   jsonResults[kRuntimeVars] = temp;
 }
-void DumpShapeInfoPass::dumpGpuSupportInfo(json &jsonResults) {
+void DumpShapeInfo::dumpGpuSupportInfo(json &jsonResults) {
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   std::string opType{"Unknown"};
   getOperation()->walk([&](func::FuncOp funcOp) {
@@ -172,7 +175,7 @@ void DumpShapeInfoPass::dumpGpuSupportInfo(json &jsonResults) {
   jsonResults["SupportInfo"] = dynAlgo;
 }
 
-void DumpShapeInfoPass::dumpGpuSchedule(json &jsonResults) const {
+void DumpShapeInfo::dumpGpuSchedule(json &jsonResults) const {
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   json gpuSchedules;
   gpuSchedules["scheduleSize"] = gpuTool.scheduleSize();
@@ -199,8 +202,8 @@ void DumpShapeInfoPass::dumpGpuSchedule(json &jsonResults) const {
   jsonResults["gpuSchedules"] = gpuSchedules;
 }
 
-std::unique_ptr<Pass> mlir::createDumpShapeInfoPass() { return std::make_unique<DumpShapeInfoPass>(); }
+std::unique_ptr<Pass> mlir::createDumpShapeInfoPass() { return std::make_unique<DumpShapeInfo>(); }
 
 std::unique_ptr<Pass> mlir::createDumpShapeInfoPass(const std::string &fileName) {
-  return std::make_unique<DumpShapeInfoPass>(fileName);
+  return std::make_unique<DumpShapeInfo>(fileName);
 }

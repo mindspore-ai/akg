@@ -24,22 +24,11 @@
 #include <vector>
 #include <functional>
 #include "akg/Analysis/Config.h"
-
-namespace mlir {
-namespace affine {
-class AffineForOp;
-}  // namespace affine
-}  // namespace mlir
-
-namespace mlir {
-namespace scf {
-class ForOp;
-}  // namespace scf
-}  // namespace mlir
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
 namespace autotiling {
-// Use types from mlir::autotiling namespace
 using mlir::autotiling::ConfigPos;
 using mlir::autotiling::ConfigPtr;
 using mlir::autotiling::Constraint;

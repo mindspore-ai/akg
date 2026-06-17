@@ -14,16 +14,12 @@
  * limitations under the License.
  */
 //===- SuperVectorize.cpp - Vectorize Pass Impl ---------------------------===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
-//
 // This file implements vectorization of loops, operations and data types to
 // a target-independent, n-D super-vector abstraction.
-//
 //===----------------------------------------------------------------------===//
 
 #include "akg/Dialect/Affine/Transforms/SuperVectorize.h"
@@ -57,12 +53,10 @@ using namespace mlir;    // NOLINT(build/namespaces)
 using namespace affine;  // NOLINT(build/namespaces)
 using namespace vector;  // NOLINT(build/namespaces)
 
-///
 /// Implements a high-level vectorization strategy on a Function.
 /// The abstraction used is that of super-vectors, which provide a single,
 /// compact, representation in the vector types, information that is expected
 /// to reduce the impact of the phase ordering problem
-///
 /// Vector granularity:
 /// ===================
 /// This pass is designed to perform vectorization at a super-vector
@@ -74,7 +68,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// efficiently implement a set of high-level primitives" is not necessarily an
 /// integer multiple of actual hardware registers. We leave details of this
 /// distinction unspecified for now.
-///
 /// Some may prefer the terminology a "tile of HW vectors". In this case, one
 /// should note that super-vectors implement an "always full tile" abstraction.
 /// They guarantee no partial-tile separation is necessary by relying on a
@@ -82,7 +75,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// copy-reshape operations is also responsible for performing layout
 /// transposition if necessary. In the general case this will require a scoped
 /// allocation in some notional local memory.
-///
 /// Whatever the mental model one prefers to use for this abstraction, the key
 /// point is that we burn into a single, compact, representation in the vector
 /// types, information that is expected to reduce the impact of the phase
@@ -101,13 +93,11 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// concern by way of opacity to subsequent passes. This has the effect of
 /// encapsulating and propagating vectorization constraints down the list of
 /// passes until we are ready to lower further.
-///
 /// For a particular target, a notion of minimal n-d vector size will be
 /// specified and vectorization targets a multiple of those. In the following
 /// paragraph, let "k ." represent "a multiple of", to be understood as a
 /// multiple in the same dimension (e.g. vector<16 x k . 128> summarizes
 /// vector<16 x 128>, vector<16 x 256>, vector<16 x 1024>, etc).
-///
 /// Some non-exhaustive notable super-vector sizes of interest include:
 ///   - CPU: vector<k . HW_vector_size>,
 ///          vector<k' . core_count x k . HW_vector_size>,
@@ -116,11 +106,9 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///          vector<k . warp_size x float2>,
 ///          vector<k . warp_size x float4>,
 ///          vector<k . warp_size x 4 x 4x 4> (for tensor_core sizes).
-///
 /// Loops and operations are emitted that operate on those super-vector shapes.
 /// Subsequent lowering passes will materialize to actual HW vector sizes. These
 /// passes are expected to be (gradually) more target-specific.
-///
 /// At a high level, a vectorized load in a loop will resemble:
 /// ```mlir
 ///   affine.for %i = ? to ? step ? {
@@ -141,13 +129,11 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   3. a mix of both, e.g. based on a model.
 /// In the future, these operations will expose a contract to constrain the
 /// search on vectorization patterns and sizes.
-///
 /// Occurrence of super-vectorization in the compiler flow:
 /// =======================================================
 /// This is an active area of investigation. We start with 2 remarks to position
 /// super-vectorization in the context of existing ongoing work: LLVM VPLAN
 /// and LLVM SLP Vectorizer.
-///
 /// LLVM VPLAN:
 /// -----------
 /// The astute reader may have noticed that in the limit, super-vectorization
@@ -165,7 +151,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// although it is reasonable to expect that mixing a bit of outer loop and
 /// inner loop vectorization + unrolling will provide interesting choices to
 /// MLIR.
-///
 /// LLVM SLP Vectorizer:
 /// --------------------
 /// Super-vectorization however is not meant to be usable in a similar fashion
@@ -179,7 +164,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// innermost loop, control-flow dependent patterns that super-vectorization may
 /// not be able to capture easily. In other words, super-vectorization does not
 /// aim at replacing the SLP vectorizer and the two solutions are complementary.
-///
 /// Ongoing investigations:
 /// -----------------------
 /// We discuss the following *early* places where super-vectorization is
@@ -203,7 +187,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///    information that supports vectorization does not need to be supplied by a
 ///    higher level of abstraction. Traditional dependence analysis is available
 ///    in MLIR and will be used to drive vectorization and cost models.
-///
 /// Let's pause here and remark that applying super-vectorization as described
 /// in 1. and 2. presents clear opportunities and risks:
 ///   - the opportunity is that vectorization is burned in the type system and
@@ -226,7 +209,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   demonstrated previously.
 /// Bottom-line is we do not yet have good answers for the above but aim at
 /// making it easy to answer such questions.
-///
 /// Back to our listing, the last places where early super-vectorization makes
 /// sense are:
 /// 3. right after polyhedral-style scheduling: PLUTO-style algorithms are known
@@ -240,7 +222,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///    probably the most promising places because applying tiling achieves a
 ///    separation of concerns that allows rescheduling to worry less about
 ///    locality and more about parallelism and distribution (e.g. min-fuse).
-///
 /// At these levels the risk-reward looks different: on one hand we probably
 /// lost a good deal of language/user/library-level annotation; on the other
 /// hand we gained parallelism and locality through scheduling and tiling.
@@ -249,14 +230,11 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// consequences. It is too early to place bets on what will win but we expect
 /// super-vectorization to be the right abstraction to allow exploring at all
 /// these levels. And again, search is our friend.
-///
 /// Lastly, we mention it again here:
 /// 6. as a MLIR-based alternative to VPLAN.
-///
 /// Lowering, unrolling, pipelining:
 /// ================================
-/// TODO(scheduler): point to the proper places.
-///
+/// Point to the proper places.
 /// Algorithm:
 /// ==========
 /// The algorithm proceeds in a few steps:
@@ -267,7 +245,7 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///     reduction, vectorizable, ...) as well as b. all contiguous load/store
 ///     operations along a specified minor dimension (not necessarily the
 ///     fastest varying) ;
-///  2. analyzing those patterns for profitability (TODO(scheduler): and
+///  2. analyzing those patterns for profitability (and
 ///     interference);
 ///  3. then, for each pattern in order:
 ///    a. applying iterative rewriting of the loops and all their nested
@@ -286,10 +264,10 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///         * Uniform operands (only induction variables of loops not mapped to
 ///           a vector dimension, or operands defined outside of the loop nest
 ///           for now) are broadcasted to a vector.
-///           TODO(scheduler): Support more uniform cases.
+///           Support more uniform cases.
 ///         * Affine for operations with 'iter_args' are vectorized by
 ///           vectorizing their 'iter_args' operands and results.
-///           TODO(scheduler): Support more complex loops with divergent lbs and/or ubs.
+///           Support more complex loops with divergent lbs and/or ubs.
 ///         * The remaining operations in the loop nest are vectorized by
 ///           widening their scalar types to vector types.
 ///    b. if everything under the root AffineForOp in the current pattern
@@ -302,7 +280,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///       re-verify that the pattern is still vectorizable. This is expected to
 ///       make cost models more difficult to write and is subject to improvement
 ///       in the future.
-///
 /// Choice of loop transformation to support the algorithm:
 /// =======================================================
 /// The choice of loop transformation to apply for coarsening vectorized loops
@@ -313,7 +290,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///     %a = affine.load %A[%i] : memref<?xf32>
 ///   }
 /// ```
-///
 /// Traditionally, one would vectorize late (after scheduling, tiling,
 /// memory promotion etc) say after stripmining (and potentially unrolling in
 /// the case of LLVM's SLP vectorizer):
@@ -324,7 +300,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///     }
 ///   }
 /// ```
-///
 /// Instead, we seek to vectorize early and freeze vector types before
 /// scheduling, so we want to generate a pattern that resembles:
 /// ```mlir
@@ -332,7 +307,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///     %v_a = vector.transfer_read %A[%i] : memref<?xf32>, vector<128xf32>
 ///   }
 /// ```
-///
 /// i. simply dividing the lower / upper bounds by 128 creates issues
 ///    when representing expressions such as ii + 1 because now we only
 ///    have access to original values that have been divided. Additional
@@ -344,7 +318,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 /// As a consequence, we choose to represent the coarsening using the loop
 /// step for now and reevaluate in the future. Note that we can renormalize
 /// loop steps later if/when we have evidence that they are problematic.
-///
 /// For the simple strawman example above, vectorizing for a 1-D vector
 /// abstraction of size 128 returns code similar to:
 /// ```mlir
@@ -352,7 +325,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///     %v_a = vector.transfer_read %A[%i] : memref<?xf32>, vector<128xf32>
 ///   }
 /// ```
-///
 /// Unsupported cases, extensions, and work in progress (help welcome :-) ):
 /// ========================================================================
 ///   1. lowering to concrete vector types for various HW;
@@ -365,7 +337,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   6. cost-models, heuristics and search;
 ///   7. Op implementation, extensions and implication on memref views;
 ///   8. many TODOs left around.
-///
 /// Examples:
 /// =========
 /// Consider the following Function:
@@ -408,12 +379,10 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   return %res : f32
 /// }
 /// ```
-///
 /// The -affine-super-vectorize pass with the following arguments:
 /// ```
 /// -affine-super-vectorize="virtual-vector-size=256 test-fastest-varying=0"
 /// ```
-///
 /// produces this standard innermost-loop vectorized code:
 /// ```mlir
 /// func @vector_add_2d(%arg0 : index, %arg1 : index) -> f32 {
@@ -462,13 +431,11 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   return %9 : f32
 /// }
 /// ```
-///
 /// The -affine-super-vectorize pass with the following arguments:
 /// ```
 /// -affine-super-vectorize="virtual-vector-size=32,256 \
 ///                          test-fastest-varying=1,0"
 /// ```
-///
 /// produces this more interesting mixed outer-innermost-loop vectorized code:
 /// ```mlir
 /// func @vector_add_2d(%arg0 : index, %arg1 : index) -> f32 {
@@ -517,28 +484,23 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   return %9 : f32
 /// }
 /// ```
-///
 /// Of course, much more intricate n-D imperfectly-nested patterns can be
 /// vectorized too and specified in a fully declarative fashion.
-///
 /// Reduction:
 /// ==========
 /// Vectorizing reduction loops along the reduction dimension is supported if:
 /// - the reduction kind is supported,
 /// - the vectorization is 1-D, and
 /// - the step size of the loop equals to one.
-///
 /// Comparing to the non-vector-dimension case, two additional things are done
 /// during vectorization of such loops:
 /// - The resulting vector returned from the loop is reduced to a scalar using
 ///   `vector.reduce`.
 /// - In some cases a mask is applied to the vector yielded at the end of the
 ///   loop to prevent garbage values from being written to the accumulator.
-///
 /// Reduction vectorization is switched off by default, it can be enabled by
 /// passing a map from loops to reductions to utility functions, or by passing
 /// `vectorize-reductions=true` to the vectorization pass.
-///
 /// Consider the following example:
 /// ```mlir
 /// func @vecred(%in: memref<512xf32>) -> f32 {
@@ -552,7 +514,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   return %sum : f32
 /// }
 /// ```
-///
 /// The -affine-super-vectorize pass with the following arguments:
 /// ```
 /// -affine-super-vectorize="virtual-vector-size=128 test-fastest-varying=0 \
@@ -582,7 +543,6 @@ using namespace vector;  // NOLINT(build/namespaces)
 ///   return %1 : f32
 /// }
 /// ```
-///
 /// Note that because of loop misalignment we needed to apply a mask to prevent
 /// last 12 elements from affecting the final result. The mask is full of ones
 /// in every iteration except for the last one, in which it has the form
@@ -656,8 +616,7 @@ static void vectorizeLoopIfProfitable(Operation *loop, unsigned depthInPattern, 
 /// When coupled with a pattern that looks for the fastest varying dimension in
 /// load/store MemRefs, this creates a generic vectorization strategy that works
 /// for any loop in a hierarchy (outermost, innermost or intermediate).
-///
-/// TODO(scheduler): In the future we should additionally increase the power of the
+/// In the future we should additionally increase the power of the
 /// profitability analysis along 3 directions:
 ///   1. account for loop extents (both static and parametric + annotations);
 ///   2. account for data layout permutations;
@@ -675,14 +634,12 @@ static LogicalResult analyzeProfitability(ArrayRef<NestedMatch> matches, unsigne
   return success();
 }
 
-///// end TODO(scheduler): Hoist to a VectorizationStrategy.cpp when appropriate /////
+///// end Hoist to a VectorizationStrategy.cpp when appropriate /////
 
 /// Registers the vector replacement of a scalar operation and its result
 /// values. Both operations must have the same number of results.
-///
 /// This utility is used to register the replacement for the vast majority of
 /// the vectorized operations.
-///
 /// Example:
 ///   * 'replaced': %0 = arith.addf %1, %2 : f32
 ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
@@ -703,11 +660,9 @@ void VectorizationState::registerOpVectorReplacement(Operation *replaced, Operat
 
 /// Registers the vector replacement of a scalar value. The replacement
 /// operation should have a single result, which replaces the scalar value.
-///
 /// This utility is used to register the vector replacement of block arguments
 /// and operation results which are not directly vectorized (i.e., their
 /// scalar version still exists after vectorization), like uniforms.
-///
 /// Example:
 ///   * 'replaced': block argument or operation outside of the vectorized loop.
 ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
@@ -721,7 +676,6 @@ void VectorizationState::registerValueVectorReplacement(Value replaced, Operatio
 }
 
 /// Registers the vector replacement of a block argument (e.g., iter_args).
-///
 /// Example:
 ///   * 'replaced': 'iter_arg' block argument.
 ///   * 'replacement': vectorized 'iter_arg' block argument.
@@ -738,11 +692,9 @@ void VectorizationState::registerValueVectorReplacementImpl(Value replaced, Valu
 /// Registers the scalar replacement of a scalar value. 'replacement' must be
 /// scalar. Both values must be block arguments. Operation results should be
 /// replaced using the 'registerOp*' utilitites.
-///
 /// This utility is used to register the replacement of block arguments
 /// that are within the loop to be vectorized and will continue being scalar
 /// within the vector loop.
-///
 /// Example:
 ///   * 'replaced': induction variable of a loop to be vectorized.
 ///   * 'replacement': new induction variable in the new vector loop.
@@ -752,10 +704,8 @@ void VectorizationState::registerValueScalarReplacement(BlockArgument replaced, 
 
 /// Registers the scalar replacement of a scalar result returned from a
 /// reduction loop. 'replacement' must be scalar.
-///
 /// This utility is used to register the replacement for scalar results of
 /// vectorized reduction loops with iter_args.
-///
 /// Example 2:
 ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
 ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into f32
@@ -909,7 +859,6 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
   // the number of meaningful elements (i.e. the length of the prefix of 1s).
   // To compute the number of meaningful elements we subtract the current value
   // of the iteration variable from the upper bound of the loop. Example:
-  //
   //     // 500 is the upper bound of the loop
   //     #map = affine_map<(d0) -> (500 - d0)>
   //     %elems_left = affine.apply #map(%iv)
@@ -946,7 +895,7 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
 
 /// Returns true if the provided value is vector uniform given the vectorization
 /// strategy.
-// TODO(scheduler): For now, only values that are induction variables of loops not in
+// For now, only values that are induction variables of loops not in
 // `loopToVectorDim` or invariants to all the loops in the vectorization
 // strategy are considered vector uniforms.
 static bool isUniformDefinition(Value value, const VectorizationStrategy *strategy) {
@@ -989,11 +938,9 @@ static Operation *vectorizeUniform(Value uniformVal, VectorizationState &state) 
 /// In particular this logic captures some of the use cases where definitions
 /// that are not scoped under the current pattern are needed to vectorize.
 /// One such example is top level function constants that need to be splatted.
-///
 /// Returns an operand that has been vectorized to match `state`'s strategy if
 /// vectorization is possible with the above logic. Returns nullptr otherwise.
-///
-/// TODO(scheduler): handle more complex cases.
+/// Handle more complex cases.
 static Value vectorizeOperand(Value operand, VectorizationState &state) {
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ vectorize operand: " << operand);
   // If this value is already vectorized, we are done.
@@ -1141,8 +1088,7 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   const VectorizationStrategy &strategy = *state.strategy;
   auto loopToVecDimIt = strategy.loopToVectorDim.find(forOp);
   bool isLoopVecDim = loopToVecDimIt != strategy.loopToVectorDim.end();
-
-  // TODO(scheduler): Vectorization of reduction loops is not supported for non-unit steps.
+  // Vectorization of reduction loops is not supported for non-unit steps.
   if (isLoopVecDim && forOp.getNumIterOperands() > 0 && forOp.getStep() != 1) {
     LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ unsupported step size for reduction loop: " << forOp.getStep() << "\n");
     return nullptr;
@@ -1194,7 +1140,7 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
                                         // the proper terminator will be added during vectorization.
                                       });
 
-  // TODO(scheduler): A vector replacement will also be added in the future when
+  // A vector replacement will also be added in the future when
   // vectorization of linear ops is supported.
   // Register loop-related replacements:
   //   1) The new vectorized loop is registered as vector replacement of the
@@ -1274,9 +1220,9 @@ static Operation *widenOp(Operation *op, VectorizationState &state) {
   }
 
   // Create a clone of the op with the proper operands and return types.
-  // TODO(scheduler): The following assumes there is always an op with a fixed
+  // The following assumes there is always an op with a fixed
   // name that works both in scalar mode and vector mode.
-  // TODO(scheduler): Is it worth considering an Operation.clone operation which
+  // Is it worth considering an Operation.clone operation which
   // changes the type so we can promote an Operation with less boilerplate?
   Operation *vecOp =
     state.builder.create(op->getLoc(), op->getName().getIdentifier(), vectorOperands, vectorTypes, op->getAttrs());
@@ -1295,12 +1241,10 @@ static Operation *vectorizeAffineYieldOp(AffineYieldOp yieldOp, VectorizationSta
   // If there is a mask for this loop then we must prevent garbage values from
   // being added to the accumulator by inserting `select` operations, for
   // example:
-  //
   //   %val_masked = select %mask, %val, %neutralCst : vector<128xi1>,
   //   vector<128xf32>
   //   %res = arith.addf %acc, %val_masked : vector<128xf32>
   //   affine.yield %res : vector<128xf32>
-  //
   if (Value mask = state.vecLoopToMask.lookup(newParentOp)) {
     state.builder.setInsertionPoint(newYieldOp);
     for (unsigned i = 0; i < newYieldOp->getNumOperands(); ++i) {
@@ -1329,7 +1273,7 @@ static Operation *vectorizeAffineYieldOp(AffineYieldOp yieldOp, VectorizationSta
 /// describes how a particular operation vectorizes. For now we implement the
 /// case distinction here. Returns a vectorized form of an operation or
 /// nullptr if vectorization fails.
-// TODO(scheduler): consider adding a trait to Op to describe how it gets vectorized.
+// Consider adding a trait to Op to describe how it gets vectorized.
 // Maybe some Ops are not vectorizable or require some tricky logic, we cannot
 // do one-off logic here; ideally it would be TableGen'd.
 static Operation *vectorizeOneOperation(Operation *op, VectorizationState &state) {
@@ -1407,7 +1351,7 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> 
   // pattern matching, from profitability analysis, from application.
   // As a consequence we must check that each root pattern is still
   // vectorizable. If a pattern is not vectorizable anymore, we just skip it.
-  // TODO(scheduler): implement a non-greedy profitability analysis that keeps only
+  // Implement a non-greedy profitability analysis that keeps only
   // non-intersecting patterns.
   if (!isVectorizableLoopBody(rootLoop, vectorTransferPattern())) {
     LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ loop is not vectorizable");
@@ -1443,7 +1387,6 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> 
 
     return failure();
   }
-
   // Replace results of reduction loops with the scalar values computed using
   // `vector.reduce` or similar ops.
   for (auto resPair : state.loopResultScalarReplacement) {
@@ -1547,7 +1490,7 @@ static void vectorizeLoops(Operation *parentOp, const DenseSet<Operation *> &loo
   for (auto &intersectingMatches : intersectionBuckets) {
     for (NestedMatch &match : intersectingMatches) {
       VectorizationStrategy strategy;
-      // TODO(scheduler): depending on profitability, elect to reduce the vector size.
+      // Depending on profitability, elect to reduce the vector size.
       strategy.vectorSizes.assign(vectorSizes.begin(), vectorSizes.end());
       strategy.reductionLoops = reductionLoops;
       if (failed(analyzeProfitability(match.getMatchedChildren(), 1, patternDepth, &strategy))) {
@@ -1556,8 +1499,8 @@ static void vectorizeLoops(Operation *parentOp, const DenseSet<Operation *> &loo
       vectorizeLoopIfProfitable(match.getMatchedOperation(), 0, patternDepth, &strategy);
       // Vectorize match. Skip the rest of intersecting matches in the bucket if
       // vectorization succeeded.
-      // TODO(scheduler): if pattern does not apply, report it; alter the cost/benefit.
-      // TODO(scheduler): some diagnostics if failure to vectorize occurs.
+      // If pattern does not apply, report it; alter the cost/benefit.
+      // Some diagnostics if failure to vectorize occurs.
       if (succeeded(vectorizeRootMatch(match, strategy))) {
         break;
       }

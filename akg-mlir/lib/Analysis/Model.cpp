@@ -294,29 +294,35 @@ GraphTemplate ModelGraph::AnalyzeTransposeGraph() {
   return rwRank.size() == 1 ? GraphTemplate::PURE_ELEM : GraphTemplate::BROADCAST_OP;
 }
 
+static void setOperatorTypeForNonTranspose(func::FuncOp funcOp, GraphTemplate graphTemplate) {
+  OpBuilder builder(funcOp->getContext());
+  if (graphTemplate == GraphTemplate::BROADCAST_OP) {
+    Attribute opType = builder.getStringAttr("Broadcast");
+    funcOp->setAttr(kOperatorTypeStr, opType);
+  } else if (graphTemplate == GraphTemplate::PURE_ELEM) {
+    Attribute opType = builder.getStringAttr("Elementwise");
+    funcOp->setAttr(kOperatorTypeStr, opType);
+  }
+}
+
 void ModelGraph::AnalyzeGraphTemplate() {
-  if (graphTemplate == GraphTemplate::DEFAULT) {
-    if (graphType == "Reduce") {
-      graphTemplate = GraphTemplate::REDUCTION;
-    } else if (graphType == "Transpose") {
-      graphTemplate = AnalyzeTransposeGraph();
-      if (graphTemplate != GraphTemplate::TRANSPOSE_OP) {
-        OpBuilder builder(funcOp->getContext());
-        if (graphTemplate == GraphTemplate::BROADCAST_OP) {
-          Attribute opType = builder.getStringAttr("Broadcast");
-          funcOp->setAttr(kOperatorTypeStr, opType);
-        } else if (graphTemplate == GraphTemplate::PURE_ELEM) {
-          Attribute opType = builder.getStringAttr("Elementwise");
-          funcOp->setAttr(kOperatorTypeStr, opType);
-        }
-      }
-    } else if (graphType == "Broadcast" || graphType == "Reshape") {
-      graphTemplate = GraphTemplate::BROADCAST_OP;
-    } else if (graphType == "Elementwise") {
-      graphTemplate = GraphTemplate::PURE_ELEM;
-    } else {
-      llvm::errs() << "Get Unknown graph type: " << graphType << "\n";
+  if (graphTemplate != GraphTemplate::DEFAULT) {
+    llvm::outs() << "ModelGraph Template : " << ShowGraphTemplate() << "\n";
+    return;
+  }
+  if (graphType == "Reduce") {
+    graphTemplate = GraphTemplate::REDUCTION;
+  } else if (graphType == "Transpose") {
+    graphTemplate = AnalyzeTransposeGraph();
+    if (graphTemplate != GraphTemplate::TRANSPOSE_OP) {
+      setOperatorTypeForNonTranspose(dyn_cast<func::FuncOp>(funcOp), graphTemplate);
     }
+  } else if (graphType == "Broadcast" || graphType == "Reshape") {
+    graphTemplate = GraphTemplate::BROADCAST_OP;
+  } else if (graphType == "Elementwise") {
+    graphTemplate = GraphTemplate::PURE_ELEM;
+  } else {
+    llvm::errs() << "Get Unknown graph type: " << graphType << "\n";
   }
   llvm::outs() << "ModelGraph Template : " << ShowGraphTemplate() << "\n";
 }

@@ -45,14 +45,14 @@ constexpr int kNum512 = 512;
 constexpr int kNum1024 = 1024;
 constexpr int kMaxThreadsNum = 1024;
 
-// GpuTemplateSolver is used to solve gpu backend fused-reduction ops tiling params, supports
+// GpuTemplateTilingSolver is used to solve gpu backend fused-reduction ops tiling params, supports
 // both static/dynamic shape cases. Inside this class, we provide diverse algorithms to ensure
 // the performance in runtime. when some of shapes are unknown in compile time, we pass corresponding
 // marks for runtime decisions. And those unknown axes are set with prime numbers to pass by mlir passes
 // limitations.
-class GpuTemplateSolver {
+class GpuTemplateTilingSolver {
  public:
-  GpuTemplateSolver() = default;
+  GpuTemplateTilingSolver() = default;
 
   // Compute static shape reduction-X proper tiling values
   static std::tuple<int, int> getProperRedConfigsX(int reductionSize, bool useAtmoicReturn);

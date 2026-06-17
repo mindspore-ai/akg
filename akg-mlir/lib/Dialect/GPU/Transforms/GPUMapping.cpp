@@ -114,7 +114,7 @@ static constexpr int kNumHardwareIds = 3;
 /// Computed the hardware id to use for a given mapping level. Will
 /// assign x,y and z hardware ids for the first 3 dimensions and use
 /// sequential after.
-/// TODO(scheduler): Make this use x for the inner-most loop that is
+/// Make this use x for the inner-most loop that is
 /// distributed to map to x, the next innermost to y and the next innermost to
 /// z.
 static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
@@ -252,20 +252,22 @@ struct SCFForToParallelPattern : public RewritePattern {
   }
 };
 
+static bool isNonZeroConstantOp(Operation *op) {
+  if (!isa<arith::ConstantOp>(op)) {
+    return false;
+  }
+  mlir::Attribute constantValue = op->getAttr("value");
+  auto intAttr = dyn_cast<mlir::IntegerAttr>(constantValue);
+  return intAttr && intAttr.getInt() != 0;
+}
+
 bool hasNonZeroConstant(Operation *op) {
   unsigned int flag = 0;
   for (auto operand : op->getOperands()) {
     auto prevOp = operand.getDefiningOp();
     if (prevOp != nullptr) {
-      if (isa<arith::AddIOp>(op)) {
-        if (isa<arith::ConstantOp>(prevOp)) {
-          mlir::Attribute constantValue = prevOp->getAttr("value");
-          if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constantValue)) {
-            if (intAttr.getInt() != 0) {
-              return true;
-            }
-          }
-        }
+      if (isa<arith::AddIOp>(op) && isNonZeroConstantOp(prevOp)) {
+        return true;
       }
       flag |= (!hasNonZeroConstant(prevOp) ? 0 : 1);
     }
@@ -280,13 +282,8 @@ bool isPostFusionSingleStmt(Operation *op) {
       return false;
     }
     auto right = op->getOperand(1).getDefiningOp();
-    if (isa<arith::ConstantOp>(right)) {
-      mlir::Attribute constantValue = right->getAttr("value");
-      if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constantValue)) {
-        if (intAttr.getInt() != 0) {
-          return true;
-        }
-      }
+    if (isNonZeroConstantOp(right)) {
+      return true;
     }
     auto left = op->getOperand(0).getDefiningOp();
     return hasNonZeroConstant(left);
@@ -397,11 +394,12 @@ static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcO
       }
       bool canMove = true;
       for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
-        if (!isa<scf::YieldOp>(op)) {
-          if (!canMoveOpOutOfTarget(&op, curOp)) {
-            canMove = false;
-            break;
-          }
+        if (isa<scf::YieldOp>(op)) {
+          continue;
+        }
+        if (!canMoveOpOutOfTarget(&op, curOp)) {
+          canMove = false;
+          break;
         }
       }
       if (canMove) {
@@ -692,7 +690,7 @@ bool AKGGPUMappingLoops::saveMappingResultToJson() {
     llvm::report_fatal_error(llvm::StringRef("Infer config failed."));
   }
   auto kernelName = getAkgKernelName();
-  (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
+  (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
   std::string output_filename = "./akg_kernel_meta/" + kernelName + ".json";
   if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
         OS << res;

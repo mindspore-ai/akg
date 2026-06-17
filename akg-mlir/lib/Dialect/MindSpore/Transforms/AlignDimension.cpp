@@ -68,19 +68,18 @@ static LogicalResult computeReshapeOutput(ArrayRef<int64_t> higherRankShape, Arr
 static LogicalResult EqualizeRanks(PatternRewriter &rewriter, Location loc, Value &input1, Value &input2) {
   auto input1Ty = llvm::dyn_cast<RankedTensorType>(input1.getType());
   auto input2Ty = llvm::dyn_cast<RankedTensorType>(input2.getType());
-
   if (!input1Ty || !input2Ty) {
     return failure();
   }
 
   int64_t input1Rank = input1Ty.getRank();
   int64_t input2Rank = input2Ty.getRank();
-
   if (input1Rank == input2Rank) {
     return success();
   }
 
-  Value higherTensorValue, lowerTensorValue;
+  Value higherTensorValue;
+  Value lowerTensorValue;
   if (input1Rank > input2Rank) {
     higherTensorValue = input1;
     lowerTensorValue = input2;
@@ -126,14 +125,12 @@ LogicalResult reshapeLowerToHigher(PatternRewriter &rewriter, Location loc, Rank
                                    Value &input2) {
   auto input1Ty = dyn_cast<RankedTensorType>(input1.getType());
   auto input2Ty = dyn_cast<RankedTensorType>(input2.getType());
-
   if (!input1Ty || !input2Ty) {
     return rewriter.notifyMatchFailure(loc, "input not a ranked tensor");
   }
 
   int64_t input1Rank = input1Ty.getRank();
   int64_t input2Rank = input2Ty.getRank();
-
   if (input1Rank == input2Rank) {
     return rewriter.notifyMatchFailure(loc, "cannot rewrite as its already correct");
   }
@@ -202,9 +199,7 @@ struct ConvertMindsporeOp<mindspore::SelectOp> : public OpRewritePattern<mindspo
     bool reshaped1 = reshapeLowerToHigher(rewriter, mindsporeOp.getLoc(), outputType, input1, input2).succeeded();
 
     bool reshaped2 = reshapeLowerToHigher(rewriter, mindsporeOp.getLoc(), outputType, input1, input3).succeeded();
-
     bool reshaped3 = reshapeLowerToHigher(rewriter, mindsporeOp.getLoc(), outputType, input2, input3).succeeded();
-
     if (!reshaped1 && !reshaped2 && !reshaped3) {
       return rewriter.notifyMatchFailure(mindsporeOp, "cannot rewrite as the rank of all operands is already aligned");
     }
@@ -213,7 +208,6 @@ struct ConvertMindsporeOp<mindspore::SelectOp> : public OpRewritePattern<mindspo
     int32_t result2Rank = cast<RankedTensorType>(input2.getType()).getRank();
     int32_t result3Rank = cast<RankedTensorType>(input3.getType()).getRank();
     int32_t outputRank = outputType.getRank();
-
     if ((result1Rank != result2Rank) || (result2Rank != result3Rank) || (result1Rank != outputRank)) {
       return rewriter.notifyMatchFailure(mindsporeOp, "not all ranks are aligned with each other");
     }

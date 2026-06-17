@@ -18,23 +18,22 @@
 #define AKG_DIALECT_AFFINE_TRANSFORMS_UNIFYSHAPE_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
-}  // namespace mlir
 
 #ifndef GEN_PASS_DECL_UNIFYSHAPE
 #define GEN_PASS_DECL_UNIFYSHAPE
 #include "akg/Dialect/Affine/Passes.h.inc"
 #endif
 
-namespace mlir {
 /// Create a pass that removes reshape.
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> createUnifyShapePass();
+std::unique_ptr<OperationPass<ModuleOp>> createUnifyShapePass();
 
 /// Create a pass that removes reshape.
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> createUnifyShapePass(bool allowNonPolyhedralAccess, bool keepArg);
+std::unique_ptr<OperationPass<ModuleOp>> createUnifyShapePass(bool allowNonPolyhedralAccess, bool keepArg);
+
 }  // namespace mlir
 
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_UNIFYSHAPE_H_
