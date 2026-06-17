@@ -430,6 +430,40 @@ class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnM
   std::string kernelGenerator_;
 };
 
+/// Converts mfuse.aclnn.var -> torch.aten.var.correction, materializing attributes as inputs.
+class ConvertMfuseAclnnVar : public mlir::OpConversionPattern<mlir::mfuse::AclnnVarOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnVarOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value self = adaptor.getSelf();
+
+    SmallVector<Value, 4> dimValues;
+    for (auto dimAttr : op.getDim()) {
+      if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(dimAttr)) {
+        dimValues.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), intAttr.getInt()));
+      } else {
+        return rewriter.notifyMatchFailure(op, "dim attribute contains non-integer value");
+      }
+    }
+    auto listType = TorchD::ListType::get(rewriter.getContext(), TorchD::IntType::get(rewriter.getContext()));
+    Value dimList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, dimValues);
+
+    Value correction = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), op.getCorrection());
+    Value keepdim = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), op.getKeepdim());
+
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+    }
+
+    mlir::SmallVector<mlir::Value> operands = {self, dimList, correction, keepdim};
+    rewriter.replaceOpWithNewOp<TorchD::AtenVarCorrectionOp>(op, resultType, operands);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.aclnn.var_mean -> torch.aten.var_mean.correction, materializing attributes as inputs.
 class ConvertMfuseAclnnVarMean : public mlir::OpConversionPattern<mlir::mfuse::AclnnVarMeanOp> {
  public:
@@ -495,6 +529,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   patterns.add<ConvertMfuseAclnnMm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);
+  patterns.add<ConvertMfuseAclnnVar>(converter, context);
   patterns.add<ConvertMfuseAclnnVarMean>(converter, context);
 }
 

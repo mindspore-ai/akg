@@ -24,6 +24,7 @@ include "mlir/Pass/PassBase.td"
 //===----------------------------------------------------------------------===//
 
 include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPasses.td"
+include "mfusion/Dialect/Mfuse/Transforms/HighLevelOpt/Passes.td"
 
 //===----------------------------------------------------------------------===//
 // Decompose pass

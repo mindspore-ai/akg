@@ -4,12 +4,12 @@ module {
   // Decomposition pattern aligned with inductor/mfuse lowering (e.g. ResNet-style BN on NCHW).
   func.func @fuse_batch_norm_nchw(%x: tensor<4x16x32x32xf32>, %mean: tensor<16xf32>, %var: tensor<16xf32>,
       %gamma: tensor<16xf32>, %beta: tensor<16xf32>) -> tensor<4x16x32x32xf32> {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %one = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %one = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
-    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %mbc = mfuse.reshape %mean : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %ibc = mfuse.reshape %ivs : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %gbc = mfuse.reshape %gamma : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -29,12 +29,12 @@ module {
     %var = mfuse.constant dense<4.000000e+00> : tensor<16xf32>
     %gamma = mfuse.constant dense<2.000000e+00> : tensor<16xf32>
     %beta = mfuse.constant dense<5.000000e-01> : tensor<16xf32>
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %one = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %one = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
-    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %mbc = mfuse.reshape %mean : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %ibc = mfuse.reshape %ivs : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %gbc = mfuse.reshape %gamma : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -53,18 +53,18 @@ module {
   func.func @fuse_batch_norm_mixed_stats_source_negative(
       %x: tensor<4x16x32x32xf32>, %gamma: tensor<16xf32>, %beta: tensor<16xf32>) -> tensor<4x16x32x32xf32> {
     %mean = mfuse.constant dense<1.000000e+00> : tensor<16xf32>
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f32, {is_scalar = ""}>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f64, {is_scalar = ""}>
     %sum = mfuse.reduce_sum %x {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %meanForVar = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %meanForVar = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %meanBcVar = mfuse.reshape %meanForVar : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %xcVar = mfuse.sub %x, %meanBcVar : (tensor<4x16x32x32xf32>, tensor<16x1x1xf32>) -> tensor<4x16x32x32xf32>
     %sq = mfuse.mul %xcVar, %xcVar : (tensor<4x16x32x32xf32>, tensor<4x16x32x32xf32>) -> tensor<4x16x32x32xf32>
     %sumVar = mfuse.reduce_sum %sq {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
     %ivBc = mfuse.reshape %iv : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -85,12 +85,12 @@ module {
   func.func @fuse_batch_norm_large_eps_negative(
       %x: tensor<4x16x32x32xf32>, %mean: tensor<16xf32>, %var: tensor<16xf32>,
       %gamma: tensor<16xf32>, %beta: tensor<16xf32>) -> tensor<4x16x32x32xf32> {
-    %eps = mfuse.constant dense<1.00000000E-1> : tensor<f32, {is_scalar = ""}>
-    %one = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %eps = mfuse.constant dense<1.00000000E-1> : tensor<f64, {is_scalar = ""}>
+    %one = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
-    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %ivs = mfuse.mul %iv, %one : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %mbc = mfuse.reshape %mean : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %ibc = mfuse.reshape %ivs : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %gbc = mfuse.reshape %gamma : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -108,8 +108,8 @@ module {
   func.func @fuse_batch_norm_dynamic_rank1_negative(
       %x: tensor<4x16x32x32xf32>, %mean: tensor<?xf32>, %var: tensor<?xf32>,
       %gamma: tensor<?xf32>, %beta: tensor<?xf32>) -> tensor<4x16x32x32xf32> {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %vpe = mfuse.add %var, %eps : (tensor<?xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<?xf32>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %vpe = mfuse.add %var, %eps : (tensor<?xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<?xf32>
     %sv = mfuse.sqrt %vpe : (tensor<?xf32>) -> tensor<?xf32>
     %iv = mfuse.reciprocal %sv : (tensor<?xf32>) -> tensor<?xf32>
     %mbc = mfuse.reshape %mean : (tensor<?xf32>) -> tensor<16x1x1xf32>
@@ -128,18 +128,18 @@ module {
 
   func.func @fuse_batch_norm_with_ex_var_semantics(
       %x: tensor<4x16x32x32xf32>, %gamma: tensor<16xf32>, %beta: tensor<16xf32>) -> tensor<4x16x32x32xf32> {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f32, {is_scalar = ""}>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f64, {is_scalar = ""}>
     %sum = mfuse.reduce_sum %x {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %mean = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %mean = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %meanBcVar = mfuse.reshape %mean : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %xcVar = mfuse.sub %x, %meanBcVar : (tensor<4x16x32x32xf32>, tensor<16x1x1xf32>) -> tensor<4x16x32x32xf32>
     %sq = mfuse.mul %xcVar, %xcVar : (tensor<4x16x32x32xf32>, tensor<4x16x32x32xf32>) -> tensor<4x16x32x32xf32>
     %sumVar = mfuse.reduce_sum %sq {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
     %ivBc = mfuse.reshape %iv : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -159,18 +159,18 @@ module {
   func.func @fuse_batch_norm_addbeta_multi_user_positive(
       %x: tensor<4x16x32x32xf32>, %gamma: tensor<16xf32>, %beta: tensor<16xf32>)
       -> (tensor<4x16x32x32xf32>, tensor<4x16x32x32xf32>) {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f32, {is_scalar = ""}>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %invNhw = mfuse.constant dense<2.44140625E-4> : tensor<f64, {is_scalar = ""}>
     %sum = mfuse.reduce_sum %x {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %mean = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %mean = mfuse.mul %sum, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %meanBcVar = mfuse.reshape %mean : (tensor<16xf32>) -> tensor<16x1x1xf32>
     %xcVar = mfuse.sub %x, %meanBcVar : (tensor<4x16x32x32xf32>, tensor<16x1x1xf32>) -> tensor<4x16x32x32xf32>
     %sq = mfuse.mul %xcVar, %xcVar : (tensor<4x16x32x32xf32>, tensor<4x16x32x32xf32>) -> tensor<4x16x32x32xf32>
     %sumVar = mfuse.reduce_sum %sq {dimensions = [0, 2, 3], keepdim = false}
       : (tensor<4x16x32x32xf32>) -> tensor<16xf32>
-    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
-    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<16xf32>
+    %var = mfuse.mul %sumVar, %invNhw : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
+    %vpe = mfuse.add %var, %eps : (tensor<16xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<16xf32>
     %sv = mfuse.sqrt %vpe : (tensor<16xf32>) -> tensor<16xf32>
     %iv = mfuse.reciprocal %sv : (tensor<16xf32>) -> tensor<16xf32>
     %ivBc = mfuse.reshape %iv : (tensor<16xf32>) -> tensor<16x1x1xf32>
@@ -190,15 +190,15 @@ module {
   // LayerNorm-like negative case #1:
   func.func @layer_norm_like_last_dim_negative(
       %x: tensor<4x8xf32>, %gamma: tensor<8xf32>, %beta: tensor<8xf32>) -> tensor<4x8xf32> {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %invHidden = mfuse.constant dense<1.25000000E-1> : tensor<f32, {is_scalar = ""}>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %invHidden = mfuse.constant dense<1.25000000E-1> : tensor<f64, {is_scalar = ""}>
     %sum = mfuse.reduce_sum %x {dimensions = [1], keepdim = true} : (tensor<4x8xf32>) -> tensor<4x1xf32>
-    %mean = mfuse.mul %sum, %invHidden : (tensor<4x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x1xf32>
+    %mean = mfuse.mul %sum, %invHidden : (tensor<4x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x1xf32>
     %xc = mfuse.sub %x, %mean : (tensor<4x8xf32>, tensor<4x1xf32>) -> tensor<4x8xf32>
     %sq = mfuse.mul %xc, %xc : (tensor<4x8xf32>, tensor<4x8xf32>) -> tensor<4x8xf32>
     %sumVar = mfuse.reduce_sum %sq {dimensions = [1], keepdim = true} : (tensor<4x8xf32>) -> tensor<4x1xf32>
-    %var = mfuse.mul %sumVar, %invHidden : (tensor<4x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x1xf32>
-    %vpe = mfuse.add %var, %eps : (tensor<4x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<4x1xf32>
+    %var = mfuse.mul %sumVar, %invHidden : (tensor<4x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x1xf32>
+    %vpe = mfuse.add %var, %eps : (tensor<4x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x1xf32>
     %sv = mfuse.sqrt %vpe : (tensor<4x1xf32>) -> tensor<4x1xf32>
     %iv = mfuse.reciprocal %sv : (tensor<4x1xf32>) -> tensor<4x1xf32>
     %n0 = mfuse.mul %xc, %iv : (tensor<4x8xf32>, tensor<4x1xf32>) -> tensor<4x8xf32>
@@ -215,19 +215,19 @@ module {
   // LayerNorm-like negative case #2:
   func.func @layer_norm_like_c_axis_negative(
       %x: tensor<4x16x32x32xf32>, %gamma: tensor<16xf32>, %beta: tensor<16xf32>) -> tensor<4x16x32x32xf32> {
-    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
-    %invC = mfuse.constant dense<6.25000000E-2> : tensor<f32, {is_scalar = ""}>
+    %eps = mfuse.constant dense<9.99999974E-6> : tensor<f64, {is_scalar = ""}>
+    %invC = mfuse.constant dense<6.25000000E-2> : tensor<f64, {is_scalar = ""}>
     %sum = mfuse.reduce_sum %x {dimensions = [1], keepdim = true}
       : (tensor<4x16x32x32xf32>) -> tensor<4x1x32x32xf32>
-    %mean = mfuse.mul %sum, %invC : (tensor<4x1x32x32xf32>, tensor<f32, {is_scalar = ""}>)
+    %mean = mfuse.mul %sum, %invC : (tensor<4x1x32x32xf32>, tensor<f64, {is_scalar = ""}>)
       -> tensor<4x1x32x32xf32>
     %xc = mfuse.sub %x, %mean : (tensor<4x16x32x32xf32>, tensor<4x1x32x32xf32>) -> tensor<4x16x32x32xf32>
     %sq = mfuse.mul %xc, %xc : (tensor<4x16x32x32xf32>, tensor<4x16x32x32xf32>) -> tensor<4x16x32x32xf32>
     %sumVar = mfuse.reduce_sum %sq {dimensions = [1], keepdim = true}
       : (tensor<4x16x32x32xf32>) -> tensor<4x1x32x32xf32>
-    %var = mfuse.mul %sumVar, %invC : (tensor<4x1x32x32xf32>, tensor<f32, {is_scalar = ""}>)
+    %var = mfuse.mul %sumVar, %invC : (tensor<4x1x32x32xf32>, tensor<f64, {is_scalar = ""}>)
       -> tensor<4x1x32x32xf32>
-    %vpe = mfuse.add %var, %eps : (tensor<4x1x32x32xf32>, tensor<f32, {is_scalar = ""}>)
+    %vpe = mfuse.add %var, %eps : (tensor<4x1x32x32xf32>, tensor<f64, {is_scalar = ""}>)
       -> tensor<4x1x32x32xf32>
     %sv = mfuse.sqrt %vpe : (tensor<4x1x32x32xf32>) -> tensor<4x1x32x32xf32>
     %iv = mfuse.reciprocal %sv : (tensor<4x1x32x32xf32>) -> tensor<4x1x32x32xf32>

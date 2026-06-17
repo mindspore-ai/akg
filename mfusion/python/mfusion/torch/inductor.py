@@ -131,13 +131,32 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     )
 
     runner.run(
+        pipeline=(
+            'builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION op-list=aclnnvar}, canonicalize)'
+        ),
+        stage="Decompose aclnn.var for DVM (before reduce_mean)",
+    )
+
+    runner.run(
         pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
         stage="Decompose complex ops to meta ops",
     )
 
     runner.run(
+        pipeline="builtin.module(fuse-layer-norm-dvm,canonicalize)",
+        stage="Tag LayerNorm subgraphs for DVM",
+    )
+    runner.run(
         pipeline=f"builtin.module(func.func(mfuse-{kernel_generator}-cluster),canonicalize)",
         stage=f"Mfuse {kernel_generator} Clustering",
+    )
+
+    runner.run(
+        pipeline=(
+            "builtin.module(mfuse-promote-binary-ops,mfuse-reorder-ops,"
+            "mfuse-raise-reduction-precision,canonicalize)"
+        ),
+        stage="Mfuse Type and Precision Optimization",
     )
 
     runner.run(

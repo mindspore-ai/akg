@@ -5,22 +5,22 @@ module {
   // fused region so DVM can see the mean-style reduce neighborhood.
   // CHECK-LABEL: func.func @test_reduce_bwd_suffix_dims_div_scalar
   // CHECK-SAME: %[[ARG0:.*]]: tensor<1x16x7x7xf32>
-  // CHECK: %[[CST:.*]] = mfuse.constant dense<4.900000e+01> : tensor<f32, {is_scalar = ""}>
+  // CHECK: %[[CST:.*]] = mfuse.constant dense<4.900000e+01> : tensor<f64, {is_scalar = ""}>
   // CHECK: %[[FUSED:.*]] = mfuse.fused %[[ARG0]], %[[CST]] {fusion_type = "dvm"}
-  // CHECK-SAME: : (tensor<1x16x7x7xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
-  // CHECK: ^bb0(%[[IN0:.*]]: tensor<1x16x7x7xf32>, %[[IN1:.*]]: tensor<f32, {is_scalar = ""}>):
+  // CHECK-SAME: : (tensor<1x16x7x7xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<1x16x7x7xf32>, %[[IN1:.*]]: tensor<f64, {is_scalar = ""}>):
   // CHECK: %[[ABS:.*]] = mfuse.abs %[[IN0]] : (tensor<1x16x7x7xf32>) -> tensor<1x16x7x7xf32>
   // CHECK: %[[REDUCE:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [3, 2], keepdim = true} : (tensor<1x16x7x7xf32>) -> tensor<1x16x1x1xf32>
-  // CHECK: %[[DIV:.*]] = mfuse.div %[[REDUCE]], %[[IN1]] : (tensor<1x16x1x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
+  // CHECK: %[[DIV:.*]] = mfuse.div %[[REDUCE]], %[[IN1]] : (tensor<1x16x1x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
   // CHECK: mfuse.yield %[[DIV]] : tensor<1x16x1x1xf32>
   // CHECK: return %[[FUSED]] : tensor<1x16x1x1xf32>
   func.func @test_reduce_bwd_suffix_dims_div_scalar(%arg0: tensor<1x16x7x7xf32>) -> tensor<1x16x1x1xf32> {
-    %c49 = mfuse.constant dense<4.900000e+01> : tensor<f32, {is_scalar = ""}>
-    %0 = mfuse.fused %arg0, %c49 {fusion_type = "dvm"} : (tensor<1x16x7x7xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<1x16x1x1xf32> {
-    ^bb0(%arg1: tensor<1x16x7x7xf32>, %arg2: tensor<f32, {is_scalar = ""}>):
+    %c49 = mfuse.constant dense<4.900000e+01> : tensor<f64, {is_scalar = ""}>
+    %0 = mfuse.fused %arg0, %c49 {fusion_type = "dvm"} : (tensor<1x16x7x7xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<1x16x1x1xf32> {
+    ^bb0(%arg1: tensor<1x16x7x7xf32>, %arg2: tensor<f64, {is_scalar = ""}>):
       %1 = mfuse.abs %arg1 : (tensor<1x16x7x7xf32>) -> tensor<1x16x7x7xf32>
       %2 = mfuse.reduce_sum %1 {dimensions = [3, 2], keepdim = true} : (tensor<1x16x7x7xf32>) -> tensor<1x16x1x1xf32>
-      %3 = mfuse.div %2, %arg2 : (tensor<1x16x1x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
+      %3 = mfuse.div %2, %arg2 : (tensor<1x16x1x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<1x16x1x1xf32>
       mfuse.yield %3 : tensor<1x16x1x1xf32>
     }
     return %0 : tensor<1x16x1x1xf32>
@@ -29,25 +29,25 @@ module {
   // Broadcast-style post-reduce chains should stay fused with the reduce.
   // CHECK-LABEL: func.func @test_reduce_bwd_broadcast_div_add_chain
   // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4xf32>, %[[ARG1:.*]]: tensor<2x4xf32>
-  // CHECK: %[[CST:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f32, {is_scalar = ""}>
+  // CHECK: %[[CST:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
   // CHECK: %[[FUSED:.*]] = mfuse.fused %[[ARG0]], %[[ARG1]], %[[CST]] {fusion_type = "dvm"}
-  // CHECK-SAME: : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4xf32>
-  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>, %[[IN1:.*]]: tensor<2x4xf32>, %[[IN2:.*]]: tensor<f32, {is_scalar = ""}>):
+  // CHECK-SAME: : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x4xf32>
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>, %[[IN1:.*]]: tensor<2x4xf32>, %[[IN2:.*]]: tensor<f64, {is_scalar = ""}>):
   // CHECK: %[[ABS:.*]] = mfuse.abs %[[IN0]] : (tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: %[[REDUCE:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
   // CHECK: %[[BCAST:.*]] = mfuse.broadcast_to %[[REDUCE]] : (tensor<2x1xf32>) -> tensor<2x4xf32>
-  // CHECK: %[[DIV:.*]] = mfuse.div %[[BCAST]], %[[IN2]] : (tensor<2x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4xf32>
+  // CHECK: %[[DIV:.*]] = mfuse.div %[[BCAST]], %[[IN2]] : (tensor<2x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x4xf32>
   // CHECK: %[[ADD:.*]] = mfuse.add %[[DIV]], %[[IN1]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: mfuse.yield %[[ADD]] : tensor<2x4xf32>
   // CHECK: return %[[FUSED]] : tensor<2x4xf32>
   func.func @test_reduce_bwd_broadcast_div_add_chain(%arg0: tensor<2x4xf32>, %arg1: tensor<2x4xf32>) -> tensor<2x4xf32> {
-    %c2 = mfuse.constant dense<2.000000e+00> : tensor<f32, {is_scalar = ""}>
-    %0 = mfuse.fused %arg0, %arg1, %c2 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4xf32> {
-    ^bb0(%arg2: tensor<2x4xf32>, %arg3: tensor<2x4xf32>, %arg4: tensor<f32, {is_scalar = ""}>):
+    %c2 = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %0 = mfuse.fused %arg0, %arg1, %c2 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x4xf32> {
+    ^bb0(%arg2: tensor<2x4xf32>, %arg3: tensor<2x4xf32>, %arg4: tensor<f64, {is_scalar = ""}>):
       %1 = mfuse.abs %arg2 : (tensor<2x4xf32>) -> tensor<2x4xf32>
       %2 = mfuse.reduce_sum %1 {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
       %3 = mfuse.broadcast_to %2 : (tensor<2x1xf32>) -> tensor<2x4xf32>
-      %4 = mfuse.div %3, %arg4 : (tensor<2x4xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4xf32>
+      %4 = mfuse.div %3, %arg4 : (tensor<2x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x4xf32>
       %5 = mfuse.add %4, %arg3 : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
       mfuse.yield %5 : tensor<2x4xf32>
     }
@@ -58,13 +58,13 @@ module {
   // outputs should stay fused so mfusion can hand them to DVM spec codegen.
   // CHECK-LABEL: func.func @test_reduce_bwd_layernorm_style_multi_output
   // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4xf32>, %[[ARG1:.*]]: tensor<2x1xf32>
-  // CHECK: %[[CST:.*]] = mfuse.constant dense<4.000000e+00> : tensor<f32, {is_scalar = ""}>
+  // CHECK: %[[CST:.*]] = mfuse.constant dense<4.000000e+00> : tensor<f64, {is_scalar = ""}>
   // CHECK: %[[FUSED:.*]]:2 = mfuse.fused %[[ARG0]], %[[ARG1]], %[[CST]] {fusion_type = "dvm"}
-  // CHECK-SAME: : (tensor<2x4xf32>, tensor<2x1xf32>, tensor<f32, {is_scalar = ""}>) -> (tensor<2x4xf32>, tensor<2x4xf32>)
-  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>, %[[IN1:.*]]: tensor<2x1xf32>, %[[IN2:.*]]: tensor<f32, {is_scalar = ""}>):
+  // CHECK-SAME: : (tensor<2x4xf32>, tensor<2x1xf32>, tensor<f64, {is_scalar = ""}>) -> (tensor<2x4xf32>, tensor<2x4xf32>)
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<2x4xf32>, %[[IN1:.*]]: tensor<2x1xf32>, %[[IN2:.*]]: tensor<f64, {is_scalar = ""}>):
   // CHECK: %[[ABS:.*]] = mfuse.abs %[[IN0]] : (tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: %[[REDUCE:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
-  // CHECK: %[[DIV1:.*]] = mfuse.div %[[REDUCE]], %[[IN2]] : (tensor<2x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x1xf32>
+  // CHECK: %[[DIV1:.*]] = mfuse.div %[[REDUCE]], %[[IN2]] : (tensor<2x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x1xf32>
   // CHECK: %[[BCAST1:.*]] = mfuse.broadcast_to %[[DIV1]] : (tensor<2x1xf32>) -> tensor<2x4xf32>
   // CHECK: %[[SUB:.*]] = mfuse.sub %[[IN0]], %[[BCAST1]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: %[[BCAST2:.*]] = mfuse.broadcast_to %[[IN1]] : (tensor<2x1xf32>) -> tensor<2x4xf32>
@@ -73,12 +73,12 @@ module {
   // CHECK: return %[[FUSED]]#0, %[[FUSED]]#1 : tensor<2x4xf32>, tensor<2x4xf32>
   func.func @test_reduce_bwd_layernorm_style_multi_output(%arg0: tensor<2x4xf32>, %arg1: tensor<2x1xf32>)
       -> (tensor<2x4xf32>, tensor<2x4xf32>) {
-    %c4 = mfuse.constant dense<4.000000e+00> : tensor<f32, {is_scalar = ""}>
-    %0:2 = mfuse.fused %arg0, %arg1, %c4 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x1xf32>, tensor<f32, {is_scalar = ""}>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
-    ^bb0(%arg2: tensor<2x4xf32>, %arg3: tensor<2x1xf32>, %arg4: tensor<f32, {is_scalar = ""}>):
+    %c4 = mfuse.constant dense<4.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %0:2 = mfuse.fused %arg0, %arg1, %c4 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x1xf32>, tensor<f64, {is_scalar = ""}>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
+    ^bb0(%arg2: tensor<2x4xf32>, %arg3: tensor<2x1xf32>, %arg4: tensor<f64, {is_scalar = ""}>):
       %1 = mfuse.abs %arg2 : (tensor<2x4xf32>) -> tensor<2x4xf32>
       %2 = mfuse.reduce_sum %1 {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
-      %3 = mfuse.div %2, %arg4 : (tensor<2x1xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x1xf32>
+      %3 = mfuse.div %2, %arg4 : (tensor<2x1xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<2x1xf32>
       %4 = mfuse.broadcast_to %3 : (tensor<2x1xf32>) -> tensor<2x4xf32>
       %5 = mfuse.sub %arg2, %4 : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
       %6 = mfuse.broadcast_to %arg3 : (tensor<2x1xf32>) -> tensor<2x4xf32>

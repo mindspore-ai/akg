@@ -462,6 +462,32 @@ def Mfuse_AclnnTanhOp : Mfuse_Op<"aclnn.tanh", [
   }];
 }
 
+def Mfuse_AclnnVarOp : Mfuse_Op<"aclnn.var", [Pure]> {
+  let summary = "The aclnnVar operation";
+  let description = [{
+    Operation for computing variance of a tensor with Bessel correction.
+    Accepts input tensor, dimension list, correction factor, and keepdim flag.
+    Returns variance as a single result.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    I64ArrayAttr:$dim,
+    I64Attr:$correction,
+    I1Attr:$keepdim
+  );
+
+  let results = (outs
+    AnyRankedTensor:$varianceOut
+  );
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $self attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_AclnnVarMeanOp : Mfuse_Op<"aclnn.var_mean", [Pure]> {
   let summary = "The aclnnVarMean operation";
   let description = [{
