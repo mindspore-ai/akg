@@ -14,8 +14,13 @@ add_mlir_library(AKGMLIRAnalysis
   ${AKG_MLIR_SOURCE_DIR}/akg/Analysis
   ${SYMENGINE_INCLUDE_DIRS}/
 
+  DEPENDS
+  AKGAffinePasses
+
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
+  AKGAffinePasses
+  BiShengIRHACCDialect
   MLIRAffineDialect
   MLIRAnalysis
   MLIRBufferizationTransforms
@@ -24,7 +29,6 @@ add_mlir_library(AKGMLIRAnalysis
   MLIRSCFDialect
   MLIRShapeDialect
   MLIRTensorDialect
-  BiShengIRHACCDialect
 )
 
 
