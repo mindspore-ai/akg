@@ -1893,19 +1893,6 @@ size_t computeBroadcastSuffixStart(const NpuBandContext &ctx, int64_t tileBudget
   return bestStart;
 }
 
-int64_t chooseBiasedTileSizeForTileCount(int64_t extent, int64_t tileCount) {
-  constexpr int64_t kTileSizeBiasNumerator = 2;
-  constexpr int64_t kTileSizeBiasDenominator = 3;
-  constexpr int64_t kTwoTileCount = 2;
-  if (extent <= 1 || tileCount <= 1) {
-    return extent;
-  }
-  int64_t low = ceilDivInt64(extent, tileCount);
-  int64_t high = (tileCount == kTwoTileCount) ? (extent - 1) : (ceilDivInt64(extent, tileCount - 1) - 1);
-  high = std::max<int64_t>(high, low);
-  return std::clamp(low + (high - low) * kTileSizeBiasNumerator / kTileSizeBiasDenominator, int64_t{1}, extent);
-}
-
 static SmallVector<int64_t, 16> collectAlignAwareTileCandidates(int64_t extent, int64_t alignUnit) {
   SmallVector<int64_t, 16> candidates;
   extent = std::max<int64_t>(extent, 1);
