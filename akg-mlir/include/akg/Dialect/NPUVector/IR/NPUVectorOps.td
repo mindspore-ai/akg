@@ -187,8 +187,9 @@ def NPUVector_ReductionOp :
     When `reduction_dims` is absent or empty, **all** dimensions are folded and the result
     is a scalar (backward-compatible with the previous full-reduction semantics).
 
-    When `reduction_dims` lists a subset of dimensions, only those axes are collapsed and
-    the result is a lower-rank `!npuvector` retaining the non-reduced dimensions.
+    When `reduction_dims` is present, only those axes are collapsed and the result is a
+    lower-rank `!npuvector` retaining the non-reduced dimensions. Reducing every source
+    dimension explicitly produces a rank-0 `!npuvector`.
 
     Example:
 
@@ -197,7 +198,7 @@ def NPUVector_ReductionOp :
     %1 = npuvector.reduction <add>, %0 : !npuvector<?xf32> into f32
 
     // Partial reduction — fold only dim 1:
-    %2 = npuvector.reduction <add>, %v {reduction_dims = [1]}
+    %2 = npuvector.reduction <add>, %v {reduction_dims = array<i64: 1>}
            : !npuvector<?x?xf32> into !npuvector<?xf32>
     ```
   }];
@@ -207,9 +208,7 @@ def NPUVector_ReductionOp :
     }
     bool isPartialReduction() {
       auto dims = getReductionDims();
-      if (!dims) return false;
-      auto srcType = getSourceVectorType();
-      return static_cast<int64_t>(dims->size()) < srcType.getRank();
+      return dims && !dims->empty() && ::llvm::isa<NPUVectorType>(getDest().getType());
     }
   }];
   let builders = [
