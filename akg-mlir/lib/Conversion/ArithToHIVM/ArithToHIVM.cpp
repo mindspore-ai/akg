@@ -880,6 +880,15 @@ static bool isVcSupportedFloatCastPair(Type inType, Type outType) {
          (outType.isF16() || outType.isBF16() || outType.isF32() || outType.isF64());
 }
 
+static hivm::RoundModeAttr getHIVMVCastRoundMode(Operation *op, PatternRewriter &rewriter,
+                                                 hivm::RoundMode defaultMode) {
+  auto roundMode = op->getAttrOfType<hivm::RoundModeAttr>(hivm::RoundModeAttr::getMnemonic());
+  if (!roundMode) {
+    roundMode = rewriter.getAttr<hivm::RoundModeAttr>(defaultMode);
+  }
+  return roundMode;
+}
+
 template <typename CastOp>
 struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
   using OpConversionPattern<CastOp>::OpConversionPattern;
@@ -955,8 +964,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
         allocOperands.push_back(*dimVal);
       }
     }
-    hivm::RoundMode rounding = selectRoundMode(op);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
+    auto roundMode = getHIVMVCastRoundMode(op.getOperation(), rewriter, selectRoundMode(op));
     auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
       if (setNPUVectorResultBufferSizeMark(rewriter, loc, op.getOperation(), buffer, markElemType)) {
         return true;
@@ -969,30 +977,30 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
       setCastBufferSizeMark(midBuf, rewriter.getF16Type());
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundMode, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundMode, hivm::TypeFnAttr{});
     } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(32)) {
       auto i8MemRefType = MemRefType::get(shape, rewriter.getI8Type());
       Value i8Buf = rewriter.create<memref::AllocOp>(loc, i8MemRefType, allocOperands);
       setCastBufferSizeMark(i8Buf, rewriter.getI8Type());
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, i8Buf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, i8Buf, roundMode, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, i8Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, i8Buf, resBuf, roundMode, hivm::TypeFnAttr{});
     } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
       auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
       setCastBufferSizeMark(f32Buf, rewriter.getF32Type());
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundMode, hivm::TypeFnAttr{});
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundMode, hivm::TypeFnAttr{});
     } else {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundMode, hivm::TypeFnAttr{});
     }
 
     rewriter.replaceOp(op, resBuf);
@@ -1093,8 +1101,7 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
         allocOperands.push_back(*dimVal);
       }
     }
-    hivm::RoundMode rounding = selectRoundMode(op);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
+    auto roundMode = getHIVMVCastRoundMode(op.getOperation(), rewriter, selectRoundMode(op));
     auto maxShape = inferNPUVectorMaxShapeFromOperands(op.getOperation(), npuVectorType);
     auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
       if (succeeded(maxShape) &&
@@ -1111,7 +1118,7 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     for (Type stepElem : getCastElementChain(op, srcElemType, elemType, rewriter)) {
       resBuf = rewriter.create<memref::AllocOp>(loc, MemRefType::get(shape, stepElem), allocOperands);
       setCastBufferSizeMark(resBuf, stepElem);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, cur, resBuf, roundingAttr, hivm::TypeFnAttr{});
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, cur, resBuf, roundMode, hivm::TypeFnAttr{});
       cur = resBuf;
     }
 
@@ -2492,6 +2499,12 @@ static LogicalResult rewritePartialMemRefReductionCollapse(npuvector::ReductionO
     }
   }
   auto collapsedType = MemRefType::get(collapsedShape, elemType);
+  if (collapsedShape.empty()) {
+    Value collapsed =
+      rewriter.create<memref::CollapseShapeOp>(loc, collapsedType, resultBuf, ArrayRef<ReassociationIndices>{});
+    rewriter.replaceOp(op, collapsed);
+    return success();
+  }
 
   SmallVector<ReassociationIndices> reassoc;
   for (int64_t i = 0; i < rank; ++i) {
@@ -2603,7 +2616,7 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
                                      rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
     Type resultType = op.getResult().getType();
-    bool isPartial = static_cast<int64_t>(reduceDims.size()) < rank;
+    bool isPartial = isa<npuvector::NPUVectorType>(resultType);
     if (isPartial) {
       return rewritePartialMemRefReductionCollapse(op, rewriter, loc, srcMemRefType, elemType, resultBuf, reduceDimSet,
                                                    rank);
@@ -3142,33 +3155,26 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
   }
 };
 
-static LogicalResult rewriteNPUVectorTransferWriteRank0(npuvector::TransferWriteOp op,
-                                                        npuvector::TransferWriteOp::Adaptor adaptor, Location loc,
-                                                        Value dataToWrite, Value dest, MemRefType dataMemRefType,
-                                                        MemRefType destMemRefType,
-                                                        ConversionPatternRewriter &rewriter) {
-  int64_t dataRank = dataMemRefType.getRank();
-  if (dataRank == 0) {
-    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, dest);
-    rewriter.eraseOp(op);
-    return success();
+static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(npuvector::TransferWriteOp op, Location loc,
+                                                               Value dataToWrite, Value dest, MemRefType dataMemRefType,
+                                                               MemRefType destMemRefType,
+                                                               ConversionPatternRewriter &rewriter) {
+  if (dataMemRefType.getRank() != 1 || destMemRefType.getRank() != 0) {
+    return rewriter.notifyMatchFailure(op, "unsupported transfer_write rank mismatch");
   }
-  if (dataRank == 1) {
-    OpFoldResult offset = rewriter.getIndexAttr(0);
-    SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
-    SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
-    auto dataType = MemRefType::get({1}, dataMemRefType.getElementType());
-    Value castedData = dataToWrite;
-    if (dataMemRefType != dataType) {
-      castedData = rewriter.create<memref::ReinterpretCastOp>(loc, dataType, dataToWrite, offset, sizes, strides);
-    }
-    auto destType = MemRefType::get({1}, destMemRefType.getElementType());
-    Value castedDest = rewriter.create<memref::ReinterpretCastOp>(loc, destType, dest, offset, sizes, strides);
-    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, castedData, castedDest);
-    rewriter.eraseOp(op);
-    return success();
+  OpFoldResult offset = rewriter.getIndexAttr(0);
+  SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
+  SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
+  auto dataType = MemRefType::get({1}, dataMemRefType.getElementType());
+  Value castedData = dataToWrite;
+  if (dataMemRefType != dataType) {
+    castedData = rewriter.create<memref::ReinterpretCastOp>(loc, dataType, dataToWrite, offset, sizes, strides);
   }
-  return rewriter.notifyMatchFailure(op, "unsupported rank-0 destination");
+  auto destType = MemRefType::get({1}, destMemRefType.getElementType());
+  Value castedDest = rewriter.create<memref::ReinterpretCastOp>(loc, destType, dest, offset, sizes, strides);
+  rewriter.create<hivm::StoreOp>(loc, TypeRange{}, castedData, castedDest);
+  rewriter.eraseOp(op);
+  return success();
 }
 
 static LogicalResult buildNPUVectorTransferWriteSizesStrides(Value dataToWrite, MemRefType dataMemRefType,
@@ -3648,15 +3654,20 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     int64_t memRefRank = destMemRefType.getRank();
     int64_t dataRank = dataMemRefType.getRank();
 
-    if (memRefRank == 0) {
-      return rewriteNPUVectorTransferWriteRank0(op, adaptor, loc, dataToWrite, dest, dataMemRefType, destMemRefType,
-                                                rewriter);
-    }
-
     Value destRoot = traceMemRefToRoot(dest);
     const bool destIsAllocRoot = isRootFromAlloc(destRoot);
 
-    SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
+    // Preserve the historical rank-1 vector-to-scalar write. Equal-rank
+    // transfers, including rank-0, use the common subview/fusion path below.
+    if (dataRank > memRefRank) {
+      return rewriteNPUVectorTransferWriteRankMismatch(op, loc, dataToWrite, dest, dataMemRefType, destMemRefType,
+                                                       rewriter);
+    }
+
+    // Rank-0 accesses have no memref coordinates. Ignore any tile/VF metadata
+    // carried in indices and let the common path operate on empty ranges.
+    SmallVector<OpFoldResult> offsets;
+    if (memRefRank != 0) offsets = getAsOpFoldResult(adaptor.getIndices());
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
 

@@ -64,10 +64,10 @@ void NPUVectorDialect::printAttribute(Attribute attr, DialectAsmPrinter &printer
 
 /// Print a type registered to this dialect.
 void NPUVectorDialect::printType(::mlir::Type type, ::mlir::DialectAsmPrinter &printer) const {
-  // Custom print for NPUVectorType to use !npuvector<...> format (without type name)
+  // Print the dialect type body. MLIR selects the outer spelling, so rank-0
+  // bodies such as `f32` canonicalize to `!npuvector.f32`, while shaped bodies
+  // such as `128xf32` canonicalize to `!npuvector<128xf32>`.
   if (auto npuVectorType = ::mlir::dyn_cast<NPUVectorType>(type)) {
-    // Print only the type parameters, not the mnemonic
-    // The dialect namespace (!npuvector.) will be added by the caller
     npuVectorType.print(printer);
     return;
   }
@@ -83,7 +83,7 @@ void NPUVectorDialect::printType(::mlir::Type type, ::mlir::DialectAsmPrinter &p
 /// Parse a type registered to this dialect.
 ::mlir::Type NPUVectorDialect::parseType(::mlir::DialectAsmParser &parser) const {
   // When parseType is called, the parser is already positioned at the type
-  // parameters (e.g., ?xf32 for !npuvector<?xf32>, without the < and >)
+  // body (e.g., f32 for !npuvector.f32 or ?xf32 for !npuvector<?xf32>).
   // Parse dimension list and element type directly
   SmallVector<int64_t> shape;
   Type elementType;
