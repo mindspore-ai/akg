@@ -89,8 +89,8 @@ Type NPUVectorType::parse(AsmParser &parser) {
 }
 
 void NPUVectorType::print(AsmPrinter &printer) const {
-  // Print only the content inside <>, not the <> themselves
-  // The outer <> will be added by printDialectSymbol
+  // Print only the dialect type body. The generic MLIR printer adds the
+  // dialect namespace and chooses dot or angle-bracket syntax.
   auto shape = getShape();
   for (unsigned i = 0, e = shape.size(); i < e; ++i) {
     if (i > 0) {
@@ -102,6 +102,8 @@ void NPUVectorType::print(AsmPrinter &printer) const {
       printer << shape[i];
     }
   }
-  printer << "x";
+  if (!shape.empty()) {
+    printer << "x";
+  }
   printer.printType(getElementType());
 }
