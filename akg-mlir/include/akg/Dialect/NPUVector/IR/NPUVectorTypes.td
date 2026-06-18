@@ -66,6 +66,9 @@ def NPUVector_Type : TypeDef<NPUVector_Dialect, "Vector",
 
     // A 1D vector with dynamic dimension
     npuvector.npuvector<?xf32>
+
+    // A rank-0 vector
+    npuvector.npuvector<f32>
     ```
   }];
 
