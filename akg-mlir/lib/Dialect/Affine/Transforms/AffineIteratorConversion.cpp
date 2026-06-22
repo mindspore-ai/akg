@@ -184,10 +184,55 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
                                                affine::AffineLoadOp loadOp, affine::AffineStoreOp storeOp,
                                                arith::ConstantOp initVal) {
   IRRewriter rewriter(ctx->getContext());
+
+  // If the reduction body (load/arith/store) is wrapped in an affine.if without
+  // an else region, yielding storeOp.getValue() directly at the loop tail would
+  // violate dominance (the value is defined inside the if region). Restructure
+  // the affine.if so it produces the reduction value:
+  //   then -> yields the arith result;
+  //   else -> yields the iter_arg unchanged (predicate false ==> accumulator preserved).
+  auto storeIf = dyn_cast<affine::AffineIfOp>(storeOp->getParentOp());
+
   auto newLoop = cast<affine::AffineForOp>(*loop.replaceWithAdditionalYields(
     rewriter, initVal.getResult(),
     /*replaceInitOperandUsesInLoop=*/false,
-    [&](OpBuilder &, Location, ArrayRef<BlockArgument>) { return SmallVector<Value>{storeOp.getValue()}; }));
+    [&](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
+      if (!storeIf) {
+        return SmallVector<Value>{storeOp.getValue()};
+      }
+      Type resultType = storeOp.getValue().getType();
+      OpBuilder::InsertionGuard guard(nested);
+      nested.setInsertionPoint(storeIf);
+
+      // Build a result-producing affine.if.
+      auto newIf = nested.create<affine::AffineIfOp>(
+        storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
+        storeIf->getOperands(), /*withElseRegion=*/true);
+
+      Block *oldThen = storeIf.getThenBlock();
+      Block *newThen = newIf.getThenBlock();
+      Block *newElse = newIf.getElseBlock();
+
+      // Move all ops from the old then block into the new then block.
+      newThen->getOperations().splice(newThen->end(), oldThen->getOperations());
+
+      // Drop any pre-existing terminators
+      while (!newThen->empty() && newThen->back().hasTrait<OpTrait::IsTerminator>()) {
+        newThen->back().erase();
+      }
+      while (!newElse->empty() && newElse->back().hasTrait<OpTrait::IsTerminator>()) {
+        newElse->back().erase();
+      }
+
+      // Then-branch yields the arith result; else-branch yields the iter_arg
+      OpBuilder thenBuilder(newThen, newThen->end());
+      thenBuilder.create<affine::AffineYieldOp>(loc, ValueRange{storeOp.getValue()});
+      OpBuilder elseBuilder(newElse, newElse->end());
+      elseBuilder.create<affine::AffineYieldOp>(loc, ValueRange{newBBArgs.back()});
+
+      storeIf.erase();
+      return SmallVector<Value>{newIf.getResult(0)};
+    }));
   newLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
   loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(),
                                        [&](OpOperand &use) { return newLoop->isProperAncestor(use.getOwner()); });
