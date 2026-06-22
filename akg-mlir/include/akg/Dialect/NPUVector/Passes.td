@@ -19,7 +19,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def EliminateNPUVectorRedundantOpsPass
+def EliminateNPUVectorRedundantOps
     : Pass<"eliminate-npuvector-redundant-ops", "mlir::func::FuncOp"> {
   let summary = "Eliminate semantically redundant NPUVector reads and seed reads";
   let description = [{

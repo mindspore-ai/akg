@@ -77,9 +77,9 @@ static func::FuncOp findArchFunc(func::FuncOp vfFunc) {
   if (vfFunc->hasAttr("arch")) {
     return vfFunc;
   }
-  ModuleOp module = vfFunc->getParentOfType<ModuleOp>();
+  auto module = vfFunc->getParentOfType<ModuleOp>();
   if (!module) {
-    return func::FuncOp();
+    return {};
   }
   func::FuncOp found;
   module.walk([&](func::CallOp call) {
@@ -118,7 +118,6 @@ static unsigned elemByteWidth(Type elemType) {
 // narrowest type instead would overflow the wider registers, e.g. a kernel
 // mixing i8 (1B) and f32 (4B) on a 256B register would pick 256 lanes and blow
 // the f32 register up to 256*4 = 1024B (4x over budget -> stack overflow).
-//
 // With a 256B register this yields the Step 3 expectation:
 //   pure f32 kernel -> 64 lanes;  pure f16 kernel -> 128 lanes.
 //   mixed f32+i8   -> 64 lanes (f32=256B, i8=64B, both within budget).
@@ -180,8 +179,7 @@ static bool isUnitNPUVector(Type t) {
 // register width, otherwise that consumer would mix a vector<1> operand with the
 // laneCount-wide operands and fail verification.
 static bool onlyFeedsBroadcast(Value v) {
-  return !v.use_empty() &&
-         llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
+  return !v.use_empty() && llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
 }
 
 // Convert an `!npuvector` type to a community `vector` type, resolving every
@@ -213,10 +211,10 @@ static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind ki
         return b.getFloatAttr(elemType, 1.0);
       case CK::MINNUMF:
       case CK::MINIMUMF:
-        return FloatAttr::get(elemType, APFloat::getInf(sem, /*Negative=*/false));
+        return FloatAttr::get(elemType, APFloat::getInf(sem, /* Negative= */ false));
       case CK::MAXNUMF:
       case CK::MAXIMUMF:
-        return FloatAttr::get(elemType, APFloat::getInf(sem, /*Negative=*/true));
+        return FloatAttr::get(elemType, APFloat::getInf(sem, /* Negative= */ true));
       default:
         return b.getFloatAttr(elemType, 0.0);
     }
@@ -269,7 +267,7 @@ struct TransferReadLowering : public OpConversionPattern<npuv::TransferReadOp> {
     auto inBounds = rewriter.getBoolArrayAttr(SmallVector<bool>(vecType.getRank(), true));
     auto newRead = rewriter.create<vector::TransferReadOp>(op.getLoc(), vecType, adaptor.getSource(),
                                                            adaptor.getIndices(), permMap, adaptor.getPadding(),
-                                                           /*mask=*/Value(), inBounds);
+                                                           /* mask= */ Value(), inBounds);
     rewriter.replaceOp(op, newRead.getResult());
     return success();
   }
@@ -408,7 +406,7 @@ struct SelectLowering : public OpConversionPattern<npuv::SelectOp> {
 
 struct ElementwiseRetypeLowering : public ConversionPattern {
   ElementwiseRetypeLowering(const TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /*benefit=*/0, ctx) {}
+      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /* benefit= */ 0, ctx) {}
 
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                                 ConversionPatternRewriter &rewriter) const override {
@@ -454,10 +452,10 @@ struct ElementwiseRetypeLowering : public ConversionPattern {
 // Pass
 // ===========================================================================
 
-class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVectorPass> {
+class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> {
  public:
-  NPUVectorToVectorPass() = default;
-  NPUVectorToVectorPass(const NPUVectorToVectorPass &) = default;
+  NPUVectorToVector() = default;
+  NPUVectorToVector(const NPUVectorToVector &) = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, math::MathDialect, npuv::NPUVectorDialect, vector::VectorDialect,
@@ -467,7 +465,6 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
   // -------------------------------------------------------------------------
   // Tiling path: 1-D dynamic elementwise kernels are split into a register
   // width loop, e.g. for f32 (256B register, 64 lanes):
-  //
   //   scf.for %iv = 0 to %len step 64 {
   //     %n    = minsi (%len - %iv), 64
   //     %mask = vector.create_mask %n : vector<64xi1>
@@ -610,7 +607,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     };
     auto trailingIndices = [&](int64_t srcRank) {
       SmallVector<Value> result(indices.begin(), indices.end());
-      int64_t n = static_cast<int64_t>(result.size());
+      auto n = static_cast<int64_t>(result.size());
       if (srcRank < n) {
         result.erase(result.begin(), result.begin() + (n - srcRank));
       }
@@ -644,20 +641,20 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
         auto unitPermMap = b.getMultiDimIdentityMap(unitVecTy.getRank());
         auto unitInBounds = b.getBoolArrayAttr(SmallVector<bool>(unitVecTy.getRank(), true));
         Value res = b.create<vector::TransferReadOp>(loc, unitVecTy, remap(rd.getSource()), unitIndices, unitPermMap,
-                                                     remap(rd.getPadding()), /*mask=*/Value(), unitInBounds);
+                                                     remap(rd.getPadding()), /* mask= */ Value(), unitInBounds);
         map.map(rd.getResult(), res);
         return success();
       }
       int64_t srcRank = sourceRank(rd.getSource());
-      Value res = b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()),
-                                                   trailingIndices(srcRank), permMapForRank(srcRank),
-                                                   remap(rd.getPadding()), mask, inBounds);
+      Value res =
+        b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()), trailingIndices(srcRank),
+                                         permMapForRank(srcRank), remap(rd.getPadding()), mask, inBounds);
       map.map(rd.getResult(), res);
       return success();
     }
     if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
       int64_t srcRank = sourceRank(wr.getSource());
-      b.create<vector::TransferWriteOp>(loc, /*resultType=*/Type(), remap(wr.getVector()), remap(wr.getSource()),
+      b.create<vector::TransferWriteOp>(loc, /* resultType= */ Type(), remap(wr.getVector()), remap(wr.getSource()),
                                         trailingIndices(srcRank), permMapForRank(srcRank), mask, inBounds);
       return success();
     }
@@ -1136,9 +1133,9 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     Value vecAcc = loops[0].getResult(0);
     OpBuilder post(redOp);
     auto rank0Ty = VectorType::get({}, scalarElem);
-    auto rank0Map = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, post.getContext());
+    auto rank0Map = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, post.getContext());
     Value seedVec = post.create<vector::TransferReadOp>(loc, rank0Ty, accBuf, ValueRange{c0}, rank0Map, idScalar,
-                                                        /*mask=*/Value(), post.getBoolArrayAttr({}));
+                                                        /* mask= */ Value(), post.getBoolArrayAttr({}));
     Value seed = post.create<vector::ExtractElementOp>(loc, seedVec);
     SmallVector<bool> reductionMask(1, true);
     Value result = post.create<vector::MultiDimReductionOp>(loc, vecAcc, seed, reductionMask, kind);
@@ -1149,7 +1146,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     auto out1Ty = VectorType::get({1}, scalarElem);
     Value bcast = post.create<vector::BroadcastOp>(loc, out1Ty, result);
     Value oneMask = post.create<vector::CreateMaskOp>(loc, VectorType::get({1}, post.getI1Type()), ValueRange{c1});
-    post.create<vector::TransferWriteOp>(loc, /*resultType=*/Type(), bcast, accBuf, ValueRange{c0},
+    post.create<vector::TransferWriteOp>(loc, /* resultType= */ Type(), bcast, accBuf, ValueRange{c0},
                                          post.getMultiDimIdentityMap(1), oneMask, post.getBoolArrayAttr({true}));
 
     // Drop the original scalar store: the broadcast + transfer_write above is now
@@ -1247,7 +1244,5 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
 
 }  // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> createNPUVectorToVectorPass() {
-  return std::make_unique<NPUVectorToVectorPass>();
-}
+std::unique_ptr<OperationPass<ModuleOp>> createNPUVectorToVectorPass() { return std::make_unique<NPUVectorToVector>(); }
 }  // namespace mlir

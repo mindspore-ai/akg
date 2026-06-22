@@ -105,7 +105,7 @@ static void getAdditionalOperandOrder(func::FuncOp funcOp, SetVector<Value> &ope
       continue;
     }
     auto op = operands[idx];
-    if (!op.getDefiningOp()) {
+    if (op.getDefiningOp() == nullptr) {
       continue;
     }
     if (!isa<mlir::arith::SubIOp>(op.getDefiningOp())) {
@@ -123,51 +123,54 @@ static void getAdditionalOperandOrder(func::FuncOp funcOp, SetVector<Value> &ope
   }
 }
 
+static void matchOperandIndex(Value v, size_t funcIdx, SetVector<Value> &operands,
+                              SmallVector<int, kVectorInitSize8> &mapResult) {
+  for (size_t idx = 0; idx < operands.size(); idx++) {
+    if (v != operands[idx]) {
+      continue;
+    }
+    mapResult[idx] = static_cast<int>(funcIdx);
+    break;
+  }
+}
+
 static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &operands) {
-  if (auto funcOp = launchOp->getParentOfType<func::FuncOp>()) {
-    auto funcArguments = funcOp.getArguments();
-    SmallVector<int, kVectorInitSize8> mapResult(operands.size(), -1);
-    initOperandOrder(funcOp, operands, mapResult);
+  auto funcOp = launchOp->getParentOfType<func::FuncOp>();
+  if (!funcOp) {
+    return;
+  }
+  auto funcArguments = funcOp.getArguments();
+  SmallVector<int, kVectorInitSize8> mapResult(operands.size(), -1);
+  initOperandOrder(funcOp, operands, mapResult);
 
-    for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
-      if (idxIsInVector(funcIdx, mapResult)) {
-        continue;
-      }
-      mlir::Value v = Value();
-      // try to match patterns for mapping from operand to argument
-      GpuCommonUtils::findAllocOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
-      GpuCommonUtils::findExpandShapeOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
-      // cannot find any operand match to func arguments
-      // scenarios 1: lack of pattern match, need to add more;
-      // scenarios 2: this operand is from temp buffer, which may erase by promote-temp-buffer pass
-      if (!v) {
-        continue;
-      }
-
-      for (size_t idx = 0; idx < operands.size(); idx++) {
-        if (v != operands[idx]) {
-          continue;
-        }
-        mapResult[idx] = static_cast<int>(funcIdx);
-        break;
-      }
+  for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
+    if (idxIsInVector(funcIdx, mapResult)) {
+      continue;
+    }
+    mlir::Value v = Value();
+    GpuCommonUtils::findAllocOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
+    GpuCommonUtils::findExpandShapeOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
+    if (!v) {
+      continue;
     }
 
-    std::map<int, int> additionalArgs;
-    getAdditionalOperandOrder(funcOp, operands, mapResult, additionalArgs);
-    SmallVector<Value, kVectorInitSize8> tmpOperands(funcArguments);
-    for (size_t i = 0; i < operands.size(); i++) {
-      if (mapResult[i] >= 0) {
-        tmpOperands[mapResult[i]] = operands[i];
-      } else if (mapResult[i] == -1 && additionalArgs.find(mapResult[i]) == additionalArgs.end()) {
-        tmpOperands.push_back(operands[i]);
-      }
-    }
+    matchOperandIndex(v, funcIdx, operands, mapResult);
+  }
 
-    operands.clear();
-    for (size_t idx = 0; idx < tmpOperands.size(); idx++) {
-      (void)operands.insert(tmpOperands[idx]);
+  std::map<int, int> additionalArgs;
+  getAdditionalOperandOrder(funcOp, operands, mapResult, additionalArgs);
+  SmallVector<Value, kVectorInitSize8> tmpOperands(funcArguments);
+  for (size_t i = 0; i < operands.size(); i++) {
+    if (mapResult[i] >= 0) {
+      tmpOperands[mapResult[i]] = operands[i];
+    } else if (mapResult[i] == -1 && additionalArgs.find(mapResult[i]) == additionalArgs.end()) {
+      tmpOperands.push_back(operands[i]);
     }
+  }
+
+  operands.clear();
+  for (auto tmpOperand : tmpOperands) {
+    (void)operands.insert(tmpOperand);
   }
 }
 
@@ -258,15 +261,15 @@ namespace {
 /// The gpu.modules are intended to be compiled to a cubin blob independently in
 /// a separate pass. The external functions can then be annotated with the
 /// symbol of the cubin accessor function.
-class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOutliningExt> {
+class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutliningExt> {
  public:
-  explicit GpuKernelOutliningExt(StringRef dlStr) {
+  explicit KernelOutliningExt(StringRef dlStr) {
     if (!dlStr.empty() && !dataLayoutStr.hasValue()) {
       dataLayoutStr = dlStr.str();
     }
   }
 
-  GpuKernelOutliningExt(const GpuKernelOutliningExt &other)
+  KernelOutliningExt(const KernelOutliningExt &other)
       : GpuKernelOutliningExtBase(other), dataLayoutSpec(other.dataLayoutSpec) {
     // cppcheck-suppress useInitializationList
     dataLayoutStr = other.dataLayoutStr.getValue();
@@ -290,8 +293,11 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
   }
 
   void doShapeAlign() {
-    func::FuncOp mainFunc;
-    getOperation()->walk([&](func::FuncOp op) { mainFunc = op; });
+    func::FuncOp mainFunc = [&]() {
+      func::FuncOp result;
+      getOperation()->walk([&](func::FuncOp op) { result = op; });
+      return result;
+    }();
     ShapeAlignTool &tool = ShapeAlignTool::getInstance();
     auto mainFuncArgSizes = tool.getFuncArgSizes();
     if (!mainFunc || mainFuncArgSizes == 0) {
@@ -337,7 +343,9 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         mlir::MemRefType memrefType = cast<mlir::MemRefType>(operands[i].getType());
         int64_t offset;
         SmallVector<int64_t> strides;
-        if (failed(getStridesAndOffset(memrefType, strides, offset))) return;
+        if (failed(getStridesAndOffset(memrefType, strides, offset))) {
+          return;
+        }
         std::vector<int> shapeArg;
         shapeArg.push_back(offset);
         std::copy(memrefType.getShape().begin(), memrefType.getShape().end(), std::back_inserter(shapeArg));
@@ -355,7 +363,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
       }
       return WalkResult::advance();
     });
-    (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
+    (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
     std::string output_filename = "./akg_kernel_meta/" + kernelName + "_shape_arg.txt";
     if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
           OS << j.dump();
@@ -429,7 +437,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
             SymbolTable::getSymbolUses(symbolDefWorklist.pop_back_val())) {
         for (SymbolTable::SymbolUse symbolUse : *symbolUses) {
           StringRef symbolName = cast<FlatSymbolRefAttr>(symbolUse.getSymbolRef()).getValue();
-          if (symbolTable.lookup(symbolName)) {
+          if (symbolTable.lookup(symbolName) != nullptr) {
             continue;
           }
 
@@ -453,5 +461,5 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
 }  // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>> mlir::createGpuKernelOutliningExt(StringRef dataLayoutStr) {
-  return std::make_unique<GpuKernelOutliningExt>(dataLayoutStr);
+  return std::make_unique<KernelOutliningExt>(dataLayoutStr);
 }

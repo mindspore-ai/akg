@@ -98,7 +98,7 @@ void AKGLoopParallelize::runOnOperation() {
     band->walk([&](affine::AffineForOp forOp) { smallLoop[forOp] = true; });
   }
 
-  // TODO(scheduler): tiling reduction axis to support parallelism for reduce op
+  // Tiling reduction axis to support parallelism for reduce op
 
   // The walker proceeds in pre-order to process the outer loops first
   // and control the number of outer parallel loops.

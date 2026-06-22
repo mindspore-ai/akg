@@ -13,6 +13,7 @@
 # limitations under the License.
 """Module for kernel test and profiling"""
 import os
+import sys
 import argparse
 import json
 import logging
@@ -24,10 +25,10 @@ import distutils
 import numpy as np
 
 from akg import MlirDriver
-from ..utils.composite_op_helper import compare_tensor, gen_json_data
-from ..utils.result_analysis import get_compare_tolerance
-from ..utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
-                                      run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
+from akg.utils.composite_op_helper import compare_tensor, gen_json_data
+from akg.utils.result_analysis import get_compare_tolerance
+from akg.utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
+                                        run_torch_mlir_to_linalg_on_tensors, get_named_op_str)
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
@@ -121,23 +122,14 @@ def _is_matmul_op(desc):
     return False
 
 
-def run_a_kernel(desc,
-                 file_path,
-                 backend=None,
-                 profiling_trails=0,
-                 static_desc=None,
-                 clear_tmp=False,
-                 dump_ir=False,
-                 mlir_timing=False,
-                 replace_dso=False,
-                 repo_path="",
-                 enable_loop_fusion=True):
+def run_a_kernel(desc, file_path, compile_args, static_desc=None):
     """function to run a single kernel"""
     is_dyn_shape = static_desc is not None
+    backend = compile_args.backend
     if not backend:
         backend = _auto_get_target(desc)
 
-    if backend == "ascend" and enable_loop_fusion and _is_matmul_op(desc):
+    if backend == "ascend" and compile_args.akg_fusion and _is_matmul_op(desc):
         raise RuntimeError("MatMul is not supported on ascend backend with akg fusion")
 
     kernel_name = _get_kernel_name(desc)
@@ -152,12 +144,12 @@ def run_a_kernel(desc,
                              backend=backend,
                              llvm_tools_dir=os.getenv("LLVM_HOME", ""),
                              dynamic_shape=is_dyn_shape,
-                             dump_ir=dump_ir,
-                             mlir_timing=mlir_timing,
-                             repo_path=repo_path,
-                             profiling_trails=profiling_trails,
+                             dump_ir=compile_args.dump_ir,
+                             mlir_timing=compile_args.mlir_timing,
+                             repo_path=compile_args.repo_path,
+                             profiling_trails=compile_args.prof_trails,
                              runtime_provider="MLIR",
-                             enable_loop_fusion=enable_loop_fusion,
+                             enable_loop_fusion=compile_args.akg_fusion,
                              arch=arch)
 
     mlir_driver.compile()
@@ -167,7 +159,7 @@ def run_a_kernel(desc,
         expect[idx] = d.astype(np.float32) if d.dtype.name == "bfloat16" else d
     compare_results(kernel_name, desc, input_for_mod, output_indexes, expect)
 
-    if clear_tmp:
+    if compile_args.clear_tmp:
         _clear_tmp_dirs(kernel_name)
 
 
@@ -247,17 +239,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
 
         try:
             logging.info("Start running %s", kernel_name)
-            run_a_kernel(desc,
-                         str(input_file),
-                         backend=compile_args.backend,
-                         profiling_trails=compile_args.prof_trails,
-                         static_desc=static_desc,
-                         clear_tmp=compile_args.clear_tmp,
-                         dump_ir=compile_args.dump_ir,
-                         mlir_timing=compile_args.mlir_timing,
-                         replace_dso=compile_args.replace_dso,
-                         repo_path=compile_args.repo_path,
-                         enable_loop_fusion=compile_args.akg_fusion)
+            run_a_kernel(desc, str(input_file), compile_args, static_desc=static_desc)
         except ValueError as e:
             logging.error("run %s get an error, error message: %s", kernel_name, e)
             if run_res is not None and run_idx is not None:
@@ -379,4 +361,8 @@ def main(args=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, ValueError) as e:
+        logging.error("Unexpected error: %s", e)
+        sys.exit(1)

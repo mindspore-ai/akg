@@ -14,17 +14,13 @@
  * limitations under the License.
  */
 //===- AffineAnalysis.h - analyses for affine structures --------*- C++ -*-===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
-//
 // This header file defines prototypes for methods that perform analysis
 // involving affine structures (AffineExprStorage, AffineMap, IntegerSet, etc.)
 // and other IR structures that in turn use these.
-//
 //===----------------------------------------------------------------------===//
 
 #ifndef AKG_DIALECT_AFFINE_ANALYSIS_AFFINEANALYSIS_H
@@ -34,20 +30,18 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Analysis/Presburger/IntegerRelation.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/AffineStructures.h"
 #include "mlir/Dialect/Affine/Analysis/Utils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/IR/AffineValueMap.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir {
-class Operation;
 
 namespace affine {
-class AffineApplyOp;
-class AffineForOp;
-class AffineValueMap;
-class FlatAffineRelation;
-class FlatAffineValueConstraints;
 
 /// Returns true if `forOp' is a parallel loop. If `parallelReductions` is
 /// provided, populates it with descriptors of the parallelizable reductions and
@@ -93,22 +87,18 @@ struct AKGMemRefAccess {
   /// elements of an iteration domain to the element(s) of an array domain
   /// accessed by that iteration of the associated statement through some array
   /// reference. For example, given the MLIR code:
-  ///
   /// affine.for %i0 = 0 to 10 {
   ///   affine.for %i1 = 0 to 10 {
   ///     %a = affine.load %arr[%i0 + %i1, %i0 + 2 * %i1] : memref<100x100xf32>
   ///   }
   /// }
-  ///
   /// The access relation, assuming that the memory locations for %arr are
   /// represented as %m0, %m1 would be:
-  ///
   ///   (%i0, %i1) -> (%m0, %m1)
   ///   %m0 = %i0 + %i1
   ///   %m1 = %i0 + 2 * %i1
   ///   0  <= %i0 < 10
   ///   0  <= %i1 < 10
-  ///
   /// Returns failure for yet unimplemented/unsupported cases (see docs of
   /// mlir::getIndexSet and mlir::getRelationFromMap for these cases).
   // LogicalResult getAccessRelation(FlatAffineRelation &accessRel) const;
@@ -123,7 +113,7 @@ struct AKGMemRefAccess {
   /// operands). The equality of access functions + operands is checked by
   /// subtracting fully composed value maps, and then simplifying the difference
   /// using the expression flattener.
-  /// TODO(scheduler): this does not account for aliasing of memrefs.
+  /// This does not account for aliasing of memrefs.
   bool operator==(const AKGMemRefAccess &rhs) const;
   bool operator!=(const AKGMemRefAccess &rhs) const { return !(*this == rhs); }
 };

@@ -71,20 +71,14 @@ std::string getLambdaName(const StringRef funcName) {
   return str + std::to_string(cnt++);
 }
 
-static bool isSinkOps(Operation *op) {
-  if (isa<memref::AllocOp>(op)) {
-    return false;
-  }
-
-  return true;
-}
+static bool isSinkOps(Operation *op) { return !isa<memref::AllocOp>(op); }
 
 static bool getSunkOps(Operation *op, const SetVector<Value> sinkCandidatesOps, SetVector<Operation *> &toBeSunk,
                        llvm::SmallPtrSetImpl<Value> &availableValues) {
   if (toBeSunk.count(op) != 0) {
     return true;
   }
-  if (isSinkOps(op) == 0) {
+  if (!isSinkOps(op)) {
     return false;
   }
 
@@ -93,7 +87,7 @@ static bool getSunkOps(Operation *op, const SetVector<Value> sinkCandidatesOps, 
       continue;
     }
     auto defOp = opnd.getDefiningOp();
-    if (!defOp) {
+    if (defOp == nullptr) {
       continue;
     }
     if ((!getSunkOps(defOp, sinkCandidatesOps, toBeSunk, availableValues)) && sinkCandidatesOps.count(opnd) == 0) {
@@ -114,7 +108,7 @@ void tryToSinkOps(Region &parallelRegion) {
   llvm::SmallPtrSet<Value, 4> availableValues;
   for (auto opnd : sinkCandidatesOps) {
     Operation *op = opnd.getDefiningOp();
-    if (!op) {
+    if (op == nullptr) {
       continue;
     }
     (void)getSunkOps(op, sinkCandidatesOps, toBeSunk, availableValues);
@@ -168,7 +162,7 @@ static func::FuncOp parallelRegionOutLiningImpl(const func::FuncOp &mainFunc, Op
   }
   (void)lambdaFuncAttrs.emplace_back(NamedAttribute(StringAttr::get(outLiningOp->getContext(), kFuncType),
                                                     StringAttr::get(outLiningOp->getContext(), kCpuCalcFunc)));
-  if (origParallelUpperBoundDefOp) {
+  if (origParallelUpperBoundDefOp != nullptr) {
     if (auto constantOp = dyn_cast<arith::ConstantOp>(origParallelUpperBoundDefOp)) {
       auto val = cast<IntegerAttr>(constantOp.getValue()).getInt();
       auto attr = NamedAttribute(StringAttr::get(lambdaFunc->getContext(), kUpperBound),
@@ -218,7 +212,7 @@ func::FuncOp tryToRewriteCPUParallelLaunchOp(const func::FuncOp &mainFunc, scf::
   OpBuilder builder(parallelOp);
   // try to add scf.if for helper
   Value trueCond = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-  scf::IfOp ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, trueCond, false);
+  auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, trueCond, false);
   Block *ifThenBlock = &ifOp.getThenRegion().getBlocks().front();
   // move parallel region into ifThenBlock
   parallelOp->moveBefore(ifThenBlock, ifThenBlock->begin());
@@ -247,10 +241,10 @@ func::FuncOp tryToRewriteCPUParallelLaunchOp(const func::FuncOp &mainFunc, scf::
 }  // namespace mlir
 
 namespace {
-class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
+class FuncOutlining : public impl::AKGFuncOutliningBase<FuncOutlining> {
  public:
-  AKGFuncOutlining() {}
-  AKGFuncOutlining(bool mindSpore, bool outlining) : isOutlining(outlining), isMindSpore(mindSpore) {}
+  FuncOutlining() {}
+  FuncOutlining(bool mindSpore, bool outlining) : isOutlining(outlining), isMindSpore(mindSpore) {}
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<memref::MemRefDialect>();
     registry.insert<arith::ArithDialect>();
@@ -291,7 +285,7 @@ class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
 };
 }  // namespace
 
-void AKGFuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
+void FuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
   for (func::FuncOp funcOp : module.getOps<func::FuncOp>()) {
     // try to find the func, which only the one scf.Parallel
     funcOp->walk([&](scf::ParallelOp parallelOp) {
@@ -310,9 +304,9 @@ void AKGFuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncO
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass() {
-  return std::make_unique<AKGFuncOutlining>();
+  return std::make_unique<FuncOutlining>();
 }
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining) {
-  return std::make_unique<AKGFuncOutlining>(isMindSpore, isOutlining);
+  return std::make_unique<FuncOutlining>(isMindSpore, isOutlining);
 }

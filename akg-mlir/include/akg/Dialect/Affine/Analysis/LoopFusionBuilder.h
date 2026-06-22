@@ -86,6 +86,8 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
                             bool hasLoadsForBaseMemref);
   void addMultipleLoadEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                             llvm::SmallVector<unsigned> &loadNodeIds);
+  void collectForNodeLoadIds(Operation *loadOpInst, Value memref, llvm::SmallVector<unsigned> &loadNodeIds);
+  void collectDepGroupsForNode(unsigned nodeId, unsigned groupId, std::unordered_set<unsigned> &depGroups);
 };
 
 struct FusionLoopNestInfo {
@@ -212,6 +214,14 @@ struct FusionCodeGenHelper {
 
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, 4> &strategyOpsA);
+
+  bool trySubviewFuse(unsigned srcGroupId, unsigned dstGroupId, const FusionAccessInfo &accessInfo,
+                      FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, const FusionPlan &plan);
+  affine::FusionStrategy getFusionStrategy(const FusionPlan &plan) const;
+  void applySliceFusion(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+                        FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, bool keepSrcDst,
+                        affine::ComputationSliceState &bestSlice, const FusionAccessInfo &accessInfo,
+                        unsigned srcGroupId, unsigned dstGroupId);
 
   // Records alias, erases the fused-away loop, and updates plan.depInfo (refreshes
   // alias target node's loads/stores and replaces erased node refs in depInfo).

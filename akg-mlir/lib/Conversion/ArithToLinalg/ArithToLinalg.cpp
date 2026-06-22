@@ -50,10 +50,14 @@ struct ElementwiseOpToLinalgUnary : OpRewritePattern<UnaryOp> {
   using OpRewritePattern<UnaryOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(UnaryOp op, PatternRewriter &rewriter) const final {
-    if (!operateOnTensors(op)) return failure();
+    if (!operateOnTensors(op)) {
+      return failure();
+    }
     Value inner = op.getOperand();
     SmallVector<Value> dsts;
-    if (failed(tensor::getOrCreateDestinations(rewriter, op.getLoc(), op, dsts))) return failure();
+    if (failed(tensor::getOrCreateDestinations(rewriter, op.getLoc(), op, dsts))) {
+      return failure();
+    }
     auto unaryAttr = rewriter.getAttr<linalg::UnaryFnAttr>(linalgFn);
     auto fnAttr = rewriter.getNamedAttr("fun", unaryAttr);
     rewriter.replaceOpWithNewOp<linalg::ElemwiseUnaryOp>(op, ValueRange{inner}, ValueRange{dsts}, ArrayRef{fnAttr});
@@ -66,11 +70,15 @@ struct ElementwiseOpToLinalgBinary : OpRewritePattern<BinaryOp> {
   using OpRewritePattern<BinaryOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(BinaryOp op, PatternRewriter &rewriter) const final {
-    if (!operateOnTensors(op)) return failure();
+    if (!operateOnTensors(op)) {
+      return failure();
+    }
     Value lhs = op.getLhs();
     Value rhs = op.getRhs();
     SmallVector<Value> dsts;
-    if (failed(tensor::getOrCreateDestinations(rewriter, op.getLoc(), op, dsts))) return failure();
+    if (failed(tensor::getOrCreateDestinations(rewriter, op.getLoc(), op, dsts))) {
+      return failure();
+    }
     auto binaryAttr = rewriter.getAttr<linalg::BinaryFnAttr>(linalgFn);
     auto fnAttr = rewriter.getNamedAttr("fun", binaryAttr);
     rewriter.replaceOpWithNewOp<linalg::ElemwiseBinaryOp>(op, ValueRange{lhs, rhs}, ValueRange{dsts}, ArrayRef{fnAttr});
@@ -119,8 +127,7 @@ void ConvertArithToLinalgPass::runOnOperation() {
   target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>([](Operation *op) {
     if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
       auto denseAttr = dyn_cast<DenseIntOrFPElementsAttr>(constantOp.getValue());
-      if (denseAttr && denseAttr.isSplat()) return false;
-      return true;
+      return !(denseAttr && denseAttr.isSplat());
     }
     return !operateOnTensors(op);
   });

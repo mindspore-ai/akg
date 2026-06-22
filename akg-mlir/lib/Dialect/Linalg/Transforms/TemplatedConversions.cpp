@@ -76,7 +76,7 @@ struct LinalgTemplatedPass : public impl::LinalgTemplatedBase<LinalgTemplatedPas
 
 FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
   auto opName = linalgOp->getName().getStringRef();
-  if (!op2file.count(opName.lower())) {
+  if (op2file.count(opName.lower()) == 0u) {
     return failure();
   }
 
@@ -92,7 +92,7 @@ FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
     }
   }
 
-  auto filePath = this->templatePath == ""
+  auto filePath = this->templatePath.empty()
                     ? "./" + op2file[opName.lower()]
                     : this->templatePath + "/" + op2file[opName.lower()] + type_postfix + ".mlir";
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr = llvm::MemoryBuffer::getFileOrSTDIN(filePath);
@@ -119,7 +119,6 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
   OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, funcOp.getContext());
 
   auto template_func = module->getOps<func::FuncOp>().begin();
-
   if ((*template_func).empty()) {
     llvm::errs() << "No templated function in templated file: " << filePath << "\n";
     return failure();
@@ -153,8 +152,8 @@ void LinalgTemplatedPass::templateLinalgOp(LinalgOp linalgOp, func::FuncOp &inse
   SmallVector<NamedAttribute> attrs;
   attrs.emplace_back(NamedAttribute(StringAttr::get(builder.getContext(), TemplateFuncAttrName), fn));
 
-  TemplateOp templateOp = builder.create<TemplateOp>(linalgOp.getLoc(), types, inputOperands, outputOperands,
-                                                     indexingMaps, iterators, nullptr, attrs);
+  auto templateOp = builder.create<TemplateOp>(linalgOp.getLoc(), types, inputOperands, outputOperands, indexingMaps,
+                                               iterators, nullptr, attrs);
 
   templateOp.getRegion().getBlocks().splice(templateOp.getRegion().begin(), linalgOp->getRegion(0).getBlocks());
 
@@ -186,7 +185,6 @@ void LinalgTemplatedPass::runOnOperation() {
       templateLinalgOp(linalgOp, insertedFunc);
       return WalkResult::advance();
     });
-
     if (funcWalkResult.wasInterrupted()) {
       return signalPassFailure();
     }

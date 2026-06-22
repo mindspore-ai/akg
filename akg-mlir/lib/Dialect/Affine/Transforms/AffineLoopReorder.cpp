@@ -20,7 +20,6 @@
 #include <string>
 #include <vector>
 
-#include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -93,7 +92,7 @@ bool AffineLoopReorder::needToReorder(const std::vector<int> &nums) {
 
 bool AffineLoopReorder::isInsideIn(Operation *const op0, const Operation *const op1) {
   Operation *curOp = op0;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<affine::AffineForOp>(curOp)) {
       if (curOp == op1) {
         return true;
@@ -131,7 +130,6 @@ void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *
 
 void AffineLoopReorder::runOnOperation() {
   auto funcOp = getOperation();
-
   if (!funcOp->hasAttr("OperatorType") ||
       dyn_cast<StringAttr>(funcOp->getAttr("OperatorType")).getValue().str() != "Reduce") {
     return;
@@ -144,8 +142,8 @@ void AffineLoopReorder::runOnOperation() {
   // Get the order and check the validations
   auto order = GpuScheduleTool::getInstance().getUpdatedOrder();
   auto start = 0;
-  if (order.size() == 0) {
-    if (newOrder.size() == 0) {
+  if (order.empty()) {
+    if (newOrder.empty()) {
       return;
     }
     if (newOrder.size() != opList.size()) {
@@ -165,7 +163,7 @@ void AffineLoopReorder::runOnOperation() {
       start = 1;
     }
   }
-  if (order.size() == 0 || !needToReorder(order)) {
+  if (order.empty() || !needToReorder(order)) {
     return;
   }
 

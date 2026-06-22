@@ -275,7 +275,7 @@ static void modifyFuncOpToUseBarePtrCallingConv(ConversionPatternRewriter &rewri
     // Replace barePtr with a placeholder (undef), promote barePtr to a ranked
     // or unranked memref descriptor and replace placeholder with the last
     // instruction of the memref descriptor.
-    // TODO(scheduler): The placeholder is needed to avoid replacing barePtr uses in the
+    // The placeholder is needed to avoid replacing barePtr uses in the
     // MemRef descriptor instructions. We may want to have a utility in the
     // rewriter to properly handle this use case.
     auto placeholder = rewriter.create<LLVM::UndefOp>(loc, typeConverter.convertType(memrefTy));
@@ -703,7 +703,7 @@ class ConvertFuncToLLVMExtPass : public impl::FuncToLLVMExtBase<ConvertFuncToLLV
     RewritePatternSet patterns(&getContext());
     populateFuncToLLVMExtConversionPatterns(typeConverter, patterns, symbolTable);
 
-    // TODO(https://github.com/llvm/llvm-project/issues/70982): Remove these in
+    // Remove these in
     // favor of their dedicated conversion passes.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);

@@ -36,9 +36,15 @@ bool CloneNewTensorEmpty(linalg::GenericOp op, PatternRewriter &rewriter) {
   bool needUpdate = false;
   for (Value dst : op.getDpsInits()) {
     auto dstDefiningOp = dst.getDefiningOp();
-    if (!dstDefiningOp) continue;
-    if (!isa<TensorType>(dst.getType())) continue;
-    if (std::distance(dst.use_begin(), dst.use_end()) <= 1) continue;
+    if (dstDefiningOp == nullptr) {
+      continue;
+    }
+    if (!isa<TensorType>(dst.getType())) {
+      continue;
+    }
+    if (std::distance(dst.use_begin(), dst.use_end()) <= 1) {
+      continue;
+    }
     if (isa<tensor::EmptyOp>(dstDefiningOp)) {
       // Clone the tensor.empty operation before the linalg.generic
       rewriter.setInsertionPoint(op);

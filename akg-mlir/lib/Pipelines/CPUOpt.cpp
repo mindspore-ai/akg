@@ -175,7 +175,7 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(LLVM::createParameterPackingPass(options.outliningPlatform == "MindSpore"));
   pm.addPass(createAKGParallelLaunchPass(options.outliningPlatform == "MindSpore", options.cpuOutlining));
   if (!options.cpuOutlining) {
-    pm.addPass(createPureOpenMPToLLVMPass());
+    pm.addPass(createPureOpenMPToLLVM());
   }
 
   pm.addPass(createReconcileUnrealizedCastsPass());

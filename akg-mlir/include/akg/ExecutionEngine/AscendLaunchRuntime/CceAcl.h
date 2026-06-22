@@ -63,10 +63,6 @@
 #define ACL_PROF_FWK_SCHEDULE_L1 0x01000000ULL
 #define ACL_PROF_TASK_TIME_L2 0x2000ULL
 
-#ifndef char_t
-typedef char char_t;
-#endif
-
 static const int ACL_SUCCESS = 0;
 static const int ACL_ERROR_NONE = 0;
 
@@ -173,8 +169,6 @@ static const int32_t ACL_ERROR_RT_SOCKET_CLOSE = 507901;          // hdc disconn
 
 typedef void *aclrtStream;
 typedef void *aclrtContext;
-typedef int aclError;
-typedef int rtError_t;
 typedef void *rtStream_t;
 
 typedef enum aclrtMemcpyKind {
@@ -261,47 +255,47 @@ typedef struct tagRtSmCtrl {
   uint8_t reserved[3];
 } rtSmDesc_t;
 
-aclError aclrtSetCurrentContext(aclrtContext context);
-aclError aclrtGetDeviceCount(uint32_t *count);
-aclError aclrtGetCurrentContext(aclrtContext *context);
-aclError aclrtCreateStreamWithConfig(aclrtStream *stream, uint32_t priority, uint32_t flag);
-aclError aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind,
-                          aclrtStream stream);
-aclError aclrtGetMemInfo(aclrtMemAttr attr, size_t *free, size_t *total);
-aclError aclrtSetDevice(int32_t deviceId);
-aclError aclrtCreateContext(aclrtContext *context, int32_t deviceId);
-aclError aclrtCreateStream(aclrtStream *stream);
-aclError aclrtMallocHost(void **hostPtr, size_t size);
-aclError aclrtMalloc(void **devPtr, size_t size, aclrtMemMallocPolicy policy);
-aclError aclrtMemcpy(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind);
-aclError aclrtSynchronizeStream(aclrtStream stream);
-aclError aclrtFree(void *devPtr);
-aclError aclrtFreeHost(void *hostPtr);
-aclError aclrtDestroyStream(aclrtStream stream);
-aclError aclrtDestroyContext(aclrtContext context);
-aclError aclrtResetDevice(int32_t deviceId);
-aclError aclrtGetDevice(int32_t *deviceId);
+int aclrtSetCurrentContext(aclrtContext context);
+int aclrtGetDeviceCount(uint32_t *count);
+int aclrtGetCurrentContext(aclrtContext *context);
+int aclrtCreateStreamWithConfig(aclrtStream *stream, uint32_t priority, uint32_t flag);
+int aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind,
+                     aclrtStream stream);
+int aclrtGetMemInfo(aclrtMemAttr attr, size_t *freeSize, size_t *total);
+int aclrtSetDevice(int32_t deviceId);
+int aclrtCreateContext(aclrtContext *context, int32_t deviceId);
+int aclrtCreateStream(aclrtStream *stream);
+int aclrtMallocHost(void **hostPtr, size_t size);
+int aclrtMalloc(void **devPtr, size_t size, aclrtMemMallocPolicy policy);
+int aclrtMemcpy(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind);
+int aclrtSynchronizeStream(aclrtStream stream);
+int aclrtFree(void *devPtr);
+int aclrtFreeHost(void *hostPtr);
+int aclrtDestroyStream(aclrtStream stream);
+int aclrtDestroyContext(aclrtContext context);
+int aclrtResetDevice(int32_t deviceId);
+int aclrtGetDevice(int32_t *deviceId);
 
 // profiling
-aclError aclprofInit(const char *profilerResultPath, size_t length);
-aclError aclprofStart(const aclprofConfig *profilerConfig);
-aclError aclprofStop(const aclprofConfig *profilerConfig);
-aclError aclprofFinalize();
+int aclprofInit(const char *profilerResultPath, size_t length);
+int aclprofStart(const aclprofConfig *profilerConfig);
+int aclprofStop(const aclprofConfig *profilerConfig);
+int aclprofFinalize();
 aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums, aclprofAicoreMetrics aicoreMetrics,
                                    const aclprofAicoreEvents *aicoreEvents, uint64_t dataTypeConfig);
-aclError aclprofDestroyConfig(const aclprofConfig *profilerConfig);
+int aclprofDestroyConfig(const aclprofConfig *profilerConfig);
 
 extern "C" {
-rtError_t rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len);
-rtError_t rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc = nullptr, rtStream_t stm = nullptr);
-rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **hdl);
-rtError_t rtDevBinaryUnRegister(void *hdl);
-rtError_t rtFunctionRegister(void *binHandle, const void *stubFunc, const char_t *stubName, const void *kernelInfoExt,
-                             uint32_t funcMode);
-rtError_t rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t argsSize, rtSmDesc_t *smDesc,
-                         rtStream_t stm);
-rtError_t rtLaunch(const void *stubFunc);
-rtError_t rtSetupArgument(const void *args, uint32_t size, uint32_t offset);
+int rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len);
+int rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc = nullptr, rtStream_t stm = nullptr);
+int rtDevBinaryRegister(const rtDevBinary_t *bin, void **hdl);
+int rtDevBinaryUnRegister(void *hdl);
+int rtFunctionRegister(void *binHandle, const void *stubFunc, const char *stubName, const void *kernelInfoExt,
+                       uint32_t funcMode);
+int rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t argsSize, rtSmDesc_t *smDesc,
+                   rtStream_t stm);
+int rtLaunch(const void *stubFunc);
+int rtSetupArgument(const void *args, uint32_t size, uint32_t offset);
 }
 
 #endif  // AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_CCEACL_H_

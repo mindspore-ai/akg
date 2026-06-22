@@ -15,21 +15,13 @@
  */
 
 // ===- UnifyShape.cc - Remove expand/collapse shape ops -------------------=== //
-//
 // This file implements the transformation passes to remove expand/collapse
 // shapes operations.
-//
 // ===----------------------------------------------------------------------=== //
 
 #include "akg/Dialect/Affine/Transforms/UnifyShape.h"
 
-namespace mlir {
-#ifndef GEN_PASS_DEF_UNIFYSHAPE
-#define GEN_PASS_DEF_UNIFYSHAPE
-#include "akg/Dialect/Affine/Passes.h.inc"
-#endif
-}  // namespace mlir
-
+#include <algorithm>
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -37,7 +29,12 @@ namespace mlir {
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-
+namespace mlir {
+#ifndef GEN_PASS_DEF_UNIFYSHAPE
+#define GEN_PASS_DEF_UNIFYSHAPE
+#include "akg/Dialect/Affine/Passes.h.inc"
+#endif
+}  // namespace mlir
 #define DEBUG_TYPE "unify-shape"
 
 namespace mlir {
@@ -54,15 +51,15 @@ struct UnifyShapeInfos {
   llvm::MapVector<AffineMap, SmallVector<Value, kVectorSizeFour>> newShapeMap;
 };
 
-class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
+class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
  public:
-  UnifyShapePass() = default;
-  UnifyShapePass(const UnifyShapePass &pass) = default;
-  UnifyShapePass(const bool allowNonPolyhedralAccess, const bool keepArg) {
+  UnifyShape() = default;
+  UnifyShape(const UnifyShape &pass) = default;
+  UnifyShape(const bool allowNonPolyhedralAccess, const bool keepArg) {
     this->allowNonPolyhedralAccess = allowNonPolyhedralAccess;
     this->keepArgsShape = keepArg;
   }
-  explicit UnifyShapePass(const UnifyShapeOptions &options) : UnifyShapeBase(options) {}
+  explicit UnifyShape(const UnifyShapeOptions &options) : UnifyShapeBase(options) {}
 
   void argsFindAndEraseCascadeShapeOps(Value arg, Operation *userOp) {
     LLVM_DEBUG({
@@ -123,7 +120,6 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         // We seek to handle "cascade" expand/collapse, that is, for instance:
         // %collapse_shape = memref.collapse_shape %arg0 [[0, 1], [2]] : memref<X> into memref<Y>
         // %expand_shape = memref.expand_shape %collapse_shape [[0, 1], [2, 3]] : memref<Y> into memref<Z>
-        //
         // We could think of calling argsFindAndEraseExpandAndCollapseShapeOps recursively but this poses
         // some issues:
         // * At this point, userOp is NOT yet deleted (and we can't do it yet otherwise it will cause issues).
@@ -131,7 +127,6 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         // cause to fall into the else section. However, for now it is not yet clear
         // what other cases of multiple uses can occur, other than cases of "cascade". Therefore
         // it is not clear whether cascade must be handled in the else condition of this function.
-        //
         // For now, we therefore use a call a separate function that is similar but
         // that does not check whether there is only one use
         argsFindAndEraseCascadeShapeOps(arg, userOp);
@@ -208,8 +203,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         if (indexValue != newIndex) {
           Type type = attr.getType();
           mlir::OpBuilder builder(cop);
-          mlir::arith::ConstantOp newcstOp =
-            builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
+          auto newcstOp = builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
           llvm::dbgs() << DEBUG_TYPE
                        << " - BECAREFULL: memref.dim will be updated, may cause a wrong code? (if fused dim "
                           "are dynamic)\nFrom\n";
@@ -249,10 +243,10 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     return aff;
   }
 
-  SmallVector<int64_t, kVectorSizeFour> getDeletedDim(const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
+  [[nodiscard]] SmallVector<int64_t, kVectorSizeFour> getDeletedDim(
+    const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
     SmallVector<int64_t, kVectorSizeFour> deletedDim;
-    for (unsigned i = 0; i < reshapeMap.size(); ++i) {
-      AffineMap map = reshapeMap[i];
+    for (auto map : reshapeMap) {
       for (unsigned j = 1; j < map.getNumResults(); ++j) {
         int64_t dim = map.getDimPosition(j);
         deletedDim.push_back(dim);
@@ -266,8 +260,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   /// \return true if there is a reshape and one of the element is dynamic,
   ///         eg. true if reshapeMap=[[0, 1], [2]] and shape[0] or shape[1] is dynamic
   ///         eg. false if reshapeMap=[[0, 1], [2]] and only shape[2] is dynamic
-  bool isDynamicReshape(const ArrayRef<int64_t> &shape,
-                        const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
+  [[nodiscard]] bool isDynamicReshape(const ArrayRef<int64_t> &shape,
+                                      const SmallVector<AffineMap, kVectorSizeFour> &reshapeMap) const {
     for (auto m : reshapeMap) {
       if (m.getNumResults() > 1) {
         for (unsigned j = 0; j < m.getNumResults(); ++j) {
@@ -280,6 +274,92 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       }
     }
     return false;
+  }
+
+  bool processDynamicDim(unsigned j, int64_t dim, Operation *referenceOp, MemRefType referenceType,
+                         MLIRContext *context, unsigned &nbSymbolExpr, AffineExpr &accessRes, AffineExpr &shapeRes,
+                         SmallVector<Value, kVectorSizeFour> &symbolicValue, UnifyShapeInfos &result) {
+    if (j > 0 && !this->allowNonPolyhedralAccess) {
+      LLVM_DEBUG({
+        llvm::dbgs() << DEBUG_TYPE
+                     << " allow-non-polyhedral-access=false prevent removing an operation that will imply "
+                        "potential non polyhedral access function\n";
+      });
+      result.skip = true;
+      return false;
+    }
+    // Note: we cannot create a memref::DimOp, to retrieve the dynamic/symbolic shape
+    // Because there the value of this index will be updated by a bigger value
+    // Since the dimension are expand/collapse... (and only keep the smaller number of dimension)
+    if (auto allocOp = dyn_cast<memref::AllocOp>(referenceOp)) {
+      // For memory referenceType is the MemRefType of allocOp
+      unsigned dynIndex = referenceType.getDynamicDimIndex(dim);
+      auto dynamicVar = allocOp.getDynamicSizes()[dynIndex];
+      symbolicValue.push_back(dynamicVar);
+      if (j > 0) {
+        accessRes = accessRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
+      }
+      shapeRes = shapeRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
+      nbSymbolExpr++;
+    } else if (isa<memref::ExpandShapeOp>(referenceOp)) {
+      if (j > 0) {
+        // If there is dynamic dimension that are not the outermost dim to expand not ok
+        // example:
+        // NOT OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<1024x?xf16>
+        // OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<?x1024xf16>
+        // OK memref.expand_shape [[0, 1], 2] : memref<?x?xf16> into memref<?x1024x?xf16>
+        llvm::errs() << DEBUG_TYPE
+                     << " WARNING -- ExpandShapeOp - cannot compute new AffineMap Access function "
+                        "because of "
+                        "unknown dynamic/symbolic shape\n";
+        result.skip = true;
+        return false;
+      }
+    } else {  // referenceOp is not a  AllocOp or ExpandShapeOp
+      llvm::errs() << DEBUG_TYPE << " getNewAffineMapResults- WARNING!!! This case may never happen\n";
+      llvm::dbgs() << DEBUG_TYPE
+                   << " WARNING -- cannot compute new AffineMap Access function because of unknown "
+                      "dynamic/symbolic shape\n";
+      result.skip = true;
+      return false;
+    }
+    return true;
+  }
+
+  bool processMapEntry(AffineMap map, Operation *referenceOp, MemRefType referenceType, MLIRContext *context,
+                       unsigned &nbSymbolExpr, SmallVector<AffineExpr, kVectorSizeFour> &newAccesExpr,
+                       UnifyShapeInfos &result) {
+    SmallVector<Value, kVectorSizeFour> symbolicValue;
+    AffineExpr accessRes = map.getResult(0);
+    AffineExpr shapeRes = mlir::getAffineConstantExpr(1, context);
+    auto referenceShape = referenceType.getShape();
+
+    for (unsigned j = 0; j < map.getNumResults(); ++j) {
+      int64_t dim = map.getDimPosition(j);
+      if (j > 0) {
+        result.deletedDim.push_back(dim);
+      }
+      auto upperbound = referenceShape[dim];
+      if (::mlir::ShapedType::isDynamic(upperbound)) {
+        if (!processDynamicDim(j, dim, referenceOp, referenceType, context, nbSymbolExpr, accessRes, shapeRes,
+                               symbolicValue, result)) {
+          return false;
+        }
+      } else {  // if (::mlir::ShapedType::isDynamic(upperbound))
+        if (j > 0) {
+          accessRes = accessRes * upperbound;
+        }
+        shapeRes = shapeRes * upperbound;
+      }
+      if (j > 0) {
+        accessRes = accessRes + map.getResult(j);
+      }
+    }
+    newAccesExpr.push_back(accessRes);
+
+    SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
+    result.newShapeMap[newShapeMap[0]] = symbolicValue;
+    return true;
   }
 
   /// Compute the new access function + new shape with corresponding dynamic dim if necessary
@@ -311,83 +391,15 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
 
     result.dynamicReshape = isDynamicReshape(referenceShape, reshapeMap);
 
-    for (unsigned i = 0; i < reshapeMap.size(); ++i) {
-      SmallVector<Value, kVectorSizeFour> symbolicValue;
-      AffineMap map = reshapeMap[i];
-      AffineExpr accessRes = map.getResult(0);
-      AffineExpr shapeRes = mlir::getAffineConstantExpr(1, context);
-
-      for (unsigned j = 0; j < map.getNumResults(); ++j) {
-        int64_t dim = map.getDimPosition(j);
-        if (j > 0) {
-          result.deletedDim.push_back(dim);
-        }
-        auto upperbound = referenceShape[dim];
-        if (::mlir::ShapedType::isDynamic(upperbound)) {
-          if (j > 0 && !this->allowNonPolyhedralAccess) {
-            LLVM_DEBUG({
-              llvm::dbgs() << DEBUG_TYPE
-                           << " allow-non-polyhedral-access=false prevent removing an operation that will imply "
-                              "potential non polyhedral access function\n";
-            });
-            result.skip = true;
-            return result;
-          }
-          // Note: we cannot create a memref::DimOp, to retrieve the dynamic/symbolic shape
-          // Because there the value of this index will be updated by a bigger value
-          // Since the dimension are expand/collapse... (and only keep the smaller number of dimension)
-          if (memref::AllocOp allocOp = dyn_cast<memref::AllocOp>(referenceOp)) {
-            // For memory referenceType is the MemRefType of allocOp
-            unsigned dynIndex = referenceType.getDynamicDimIndex(dim);
-            auto dynamicVar = allocOp.getDynamicSizes()[dynIndex];
-            symbolicValue.push_back(dynamicVar);
-
-            if (j > 0) {
-              accessRes = accessRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
-            }
-            shapeRes = shapeRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
-            nbSymbolExpr++;
-          } else if (isa<memref::ExpandShapeOp>(referenceOp)) {
-            if (j > 0) {
-              // If there is dynamic dimension that are not the outermost dim to expand not ok
-              // example:
-              // NOT OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<1024x?xf16>
-              // OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<?x1024xf16>
-              // OK memref.expand_shape [[0, 1], 2] : memref<?x?xf16> into memref<?x1024x?xf16>
-              llvm::errs() << DEBUG_TYPE
-                           << " WARNING -- ExpandShapeOp - cannot compute new AffineMap Access function "
-                              "because of "
-                              "unknown dynamic/symbolic shape\n";
-              result.skip = true;
-              return result;
-            }
-          } else {  // referenceOp is not a  AllocOp or ExpandShapeOp
-            llvm::errs() << DEBUG_TYPE << " getNewAffineMapResults- WARNING!!! This case may never happen\n";
-            llvm::dbgs() << DEBUG_TYPE
-                         << " WARNING -- cannot compute new AffineMap Access function because of unknown "
-                            "dynamic/symbolic shape\n";
-            result.skip = true;
-            return result;
-          }
-        } else {  // if (::mlir::ShapedType::isDynamic(upperbound))
-          if (j > 0) {
-            accessRes = accessRes * upperbound;
-          }
-          shapeRes = shapeRes * upperbound;
-        }
-        if (j > 0) {
-          accessRes = accessRes + map.getResult(j);
-        }
-      }
-      newAccesExpr.push_back(accessRes);
-
-      SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
-      result.newShapeMap[newShapeMap[0]] = symbolicValue;
+    if (!std::all_of(reshapeMap.begin(), reshapeMap.end(), [&](AffineMap map) {
+          return processMapEntry(map, referenceOp, referenceType, context, nbSymbolExpr, newAccesExpr, result);
+        })) {
+      return result;
     }
 
     // special case, with memref.expand_shape %alloc [] : memref<f32> into memref<1xf32>
     // need to have similar stuff for collapse_shape???
-    if (reshapeMap.size() == 0) {
+    if (reshapeMap.empty()) {
       if (isa<memref::ExpandShapeOp>(referenceOp)) {
         newAccesExpr.push_back(getAffineConstantExpr(0, context));
       }
@@ -411,29 +423,27 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   }
 
   /// createnewAllocOp
-  mlir::memref::AllocOp createNewAllocOp(mlir::memref::AllocOp allocOp, MemRefType allocType,
-                                         const UnifyShapeInfos &shapeInfo) const {
+  [[nodiscard]] mlir::memref::AllocOp createNewAllocOp(mlir::memref::AllocOp allocOp, MemRefType allocType,
+                                                       const UnifyShapeInfos &shapeInfo) const {
     mlir::OpBuilder builder(allocOp);
     if (!shapeInfo.dynamicReshape) {
-      mlir::memref::AllocOp newAlloc =
-        builder.create<mlir::memref::AllocOp>(allocOp.getLoc(), allocType, allocOp.getDynamicSizes(),
-                                              allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
-      return newAlloc;
-    } else {
-      // 1. Create/compute the right dynamic size from original dynamic variable and new shape mapping
-      SmallVector<Value, kVectorSizeFour> dynamicValue;
-      for (auto shapeMap : shapeInfo.newShapeMap) {
-        mlir::affine::AffineApplyOp applyOp =
-          builder.create<mlir::affine::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
-        dynamicValue.push_back(applyOp.getResult());
-      }
-      // 2. Create the new Alloc Op with the new dynamic size
-      // NB: don't know to what correspond getSymbolOperands()...
-      mlir::memref::AllocOp newAlloc = builder.create<mlir::memref::AllocOp>(
-        allocOp.getLoc(), allocType, dynamicValue, allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
-
+      auto newAlloc = builder.create<mlir::memref::AllocOp>(allocOp.getLoc(), allocType, allocOp.getDynamicSizes(),
+                                                            allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
       return newAlloc;
     }
+    // 1. Create/compute the right dynamic size from original dynamic variable and new shape mapping
+    SmallVector<Value, kVectorSizeFour> dynamicValue;
+    for (auto shapeMap : shapeInfo.newShapeMap) {
+      mlir::affine::AffineApplyOp applyOp =
+        builder.create<mlir::affine::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
+      dynamicValue.push_back(applyOp.getResult());
+    }
+    // 2. Create the new Alloc Op with the new dynamic size
+    // NB: don't know to what correspond getSymbolOperands()...
+    mlir::memref::AllocOp newAlloc = builder.create<mlir::memref::AllocOp>(
+      allocOp.getLoc(), allocType, dynamicValue, allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
+
+    return newAlloc;
   }
 
   /// updateAffineOps update the access functions
@@ -486,6 +496,34 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     }
   }
 
+  void updateFuncArgTypeForBlockArg(BlockArgument barg, Value target, const MemRefType &newmemreftype) {
+    Block *owner = barg.getOwner();
+    Operation *pop = owner->getParentOp();
+    if (mlir::func::FuncOp fop = dyn_cast<mlir::func::FuncOp>(pop)) {
+      FunctionType functionType = fop.getFunctionType();
+      SmallVector<Type, kVectorSizeEight> newArgTypes;
+      SmallVector<Type, kVectorSizeFour> resultTypes;
+      FunctionType newFuncType;
+      resultTypes = llvm::to_vector<4>(functionType.getResults());
+
+      assert(resultTypes.empty() &&
+             "Function result must be empty due to the call of "
+             "-buffer-results-to-out-params pass");
+
+      for (BlockArgument &bbarg : fop.getArguments()) {
+        if (bbarg != barg) {
+          newArgTypes.push_back(bbarg.getType());
+          continue;
+        }
+        target.setType(newmemreftype);
+        newArgTypes.push_back(target.getType());
+      }
+
+      newFuncType = FunctionType::get(&getContext(), newArgTypes, resultTypes);
+      fop.setType(newFuncType);
+    }
+  }
+
   /// In case an copy op is imply in a reshape,
   /// check if the reshape concern the source of the copy
   /// if so, try to update the target shape of the copy
@@ -512,38 +550,12 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         return false;
       }
 
-      // Handle BlockArguments
       if (BlockArgument barg = dyn_cast<BlockArgument>(target)) {
         if (keepArgsShape) {
           llvm::dbgs() << DEBUG_TYPE << " WARNING -- keepArgsShape=true, cannot update argument function shape\n";
           return false;
         }
-
-        Block *owner = barg.getOwner();
-        Operation *pop = owner->getParentOp();
-        if (mlir::func::FuncOp fop = dyn_cast<mlir::func::FuncOp>(pop)) {
-          FunctionType functionType = fop.getFunctionType();
-          SmallVector<Type, kVectorSizeEight> newArgTypes;
-          SmallVector<Type, kVectorSizeFour> resultTypes;
-          FunctionType newFuncType;
-          resultTypes = llvm::to_vector<4>(functionType.getResults());
-
-          assert(resultTypes.empty() &&
-                 "Function result must be empty due to the call of "
-                 "-buffer-results-to-out-params pass");
-
-          for (BlockArgument &bbarg : fop.getArguments()) {
-            if (bbarg == barg) {
-              target.setType(newmemreftype);
-              newArgTypes.push_back(target.getType());
-            } else {
-              newArgTypes.push_back(bbarg.getType());
-            }
-          }
-
-          newFuncType = FunctionType::get(&getContext(), newArgTypes, resultTypes);
-          fop.setType(newFuncType);
-        }
+        updateFuncArgTypeForBlockArg(barg, target, newmemreftype);
       } else if (mlir::memref::AllocOp oldAllocOp = dyn_cast_or_null<mlir::memref::AllocOp>(targetOp)) {
         mlir::memref::AllocOp newAlloc = createNewAllocOp(oldAllocOp, newmemreftype, unifyShapeInfos);
         // There is only one use which is for the concerned memcopy.
@@ -580,7 +592,6 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     // for i, 0 a00
     //     for j, 0 a01
     //         d[i, j] = b[i, j]
-    //
     // -->
     // a = alloc() : memref<a0 x type>
     // for i, 0 a0
@@ -671,7 +682,6 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     // b = collapse_shape a [[0, 1]]: memref<a0 x type>
     // for i, 0 a0
     //     d[i] = b[i]
-    //
     // -->
     // a = alloc() : memref<a0 x type>
     // for i, 0 a00
@@ -770,7 +780,6 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   /// WARNING: It can modify the function argument
   ///          BUT do not try to search for his caller to update them !!!
   /// option keepArgsShape = true not well manage and really guarantee to keep them
-  ///
   /// Except for the BlockArgment, the strategy of UnifyShape will be to keep the
   /// smaller number shape and update the access function.
   /// The new access functions will become something like [a * sizeof(b) + b]
@@ -781,11 +790,9 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
   /// it may result to an undecidable decision
   /// Moreover if modify the affine.for loop (even just the bound), will result to modify
   /// by side effect the access function of all other variable present in the loop
-  ///
   /// Another strategy can be to keep the bigger possible shape and still update the access function.
   /// The new access function will then become something like [a floordiv sizeof(b), a mod sizeof(b)]
   /// This kind of access function is not really affine friendly, and it is recommended to avoid it
-  ///
   /// For Dynamic shape,
   /// Some restriction will be required
   ///   relation with taking dim, will remove function updateDim???
@@ -821,10 +828,10 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
 }  // namespace mlir
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createUnifyShapePass() {
-  return std::make_unique<mlir::UnifyShapePass>();
+  return std::make_unique<mlir::UnifyShape>();
 }
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createUnifyShapePass(bool allowNonPolyhedralAccess,
                                                                                 bool keepArg = false) {
-  return std::make_unique<mlir::UnifyShapePass>(allowNonPolyhedralAccess, keepArg);
+  return std::make_unique<mlir::UnifyShape>(allowNonPolyhedralAccess, keepArg);
 }

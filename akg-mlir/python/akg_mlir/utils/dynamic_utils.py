@@ -48,6 +48,40 @@ def _get_symbol_expr_value(symbol_map, sym_expr):
     return accum_value
 
 
+def _parse_shape_info_file(shape_info_file, host_shape):
+    """Parse shape info json file and build symbol_map."""
+    with open(shape_info_file, "r", encoding="utf-8") as f:
+        shape_map = json.loads(f.read())
+
+    symbol_map = {}
+    for var in shape_map.get(RUNTIME_VARS, {}):
+        symbol_map[var.get(RUNTIME_VARS_PRIME)] = var
+
+    if shape_map.get(HOST_SHAPES) is None:
+        raise RuntimeError(f"host_shape not found in {shape_info_file}")
+    if shape_map.get(DEVICE_SHAPES) is None:
+        raise RuntimeError(f"device_shape not found in {shape_info_file}")
+    if len(shape_map.get(HOST_SHAPES)) != len(host_shape):
+        raise ValueError(f"Host' real shape and symbolic shape ranks not equal:"
+                         f"{len(host_shape)} vs {len(shape_map.get(HOST_SHAPES))}")
+
+    for real_sh, sym_host in zip(host_shape, shape_map.get(HOST_SHAPES)):
+        for idx, sym_h in enumerate(sym_host):
+            symbol_map[sym_h] = real_sh[idx]
+
+    return symbol_map, shape_map
+
+
+def _resolve_device_shapes(shape_map, symbol_map):
+    """Resolve symbolic device shapes to concrete values."""
+    device_shape = []
+    for sym_device in shape_map.get(DEVICE_SHAPES):
+        for sym_d in (sym_d for sym_d in sym_device if "*" in sym_d):
+            symbol_map[sym_d] = _get_symbol_expr_value(symbol_map, sym_d)
+        device_shape.append(tuple(int(sym_d) if sym_d.isdigit() else symbol_map[sym_d] for sym_d in sym_device))
+    return device_shape, symbol_map
+
+
 def get_device_shape(input_for_mod, kernel_name, is_dyn_shape, cur_dir=""):
     """
     Generate tensor shapes on the devivce
@@ -81,29 +115,9 @@ def get_device_shape(input_for_mod, kernel_name, is_dyn_shape, cur_dir=""):
             str(shape_info_file))
         return host_shape, {}, {}
 
-    device_shape = []
-    with open(shape_info_file, "r", encoding="utf-8") as f:
-        shape_map = json.loads(f.read())
-        for var in shape_map.get(RUNTIME_VARS, {}):
-            symbol_map[var.get(RUNTIME_VARS_PRIME)] = var
-        if shape_map.get(HOST_SHAPES) is None:
-            raise RuntimeError(f"host_shape not found in {shape_info_file}")
-        if shape_map.get(DEVICE_SHAPES) is None:
-            raise RuntimeError(f"device_shape not found in {shape_info_file}")
-        if len(shape_map.get(HOST_SHAPES)) != len(host_shape):
-            raise ValueError(f"Host' real shape and symbolic shape ranks not equal:"
-                             f"{len(host_shape)} vs {len(shape_map.get(HOST_SHAPES))}")
-        # 1. map the symbol of host to real static shape
-        for real_sh, sym_host in zip(host_shape, shape_map.get(HOST_SHAPES)):
-            for idx, sym_h in enumerate(sym_host):
-                symbol_map[sym_h] = real_sh[idx]
+    symbol_map, shape_map = _parse_shape_info_file(shape_info_file, host_shape)
+    device_shape, symbol_map = _resolve_device_shapes(shape_map, symbol_map)
 
-        # 2. generate new device shapes based on the symbol_map
-        for sym_device in shape_map.get(DEVICE_SHAPES):
-            for sym_d in (sym_d for sym_d in sym_device if "*" in sym_d):
-                # map the symbol expr of device to real static shape like s0x1024xs1
-                symbol_map[sym_d] = _get_symbol_expr_value(symbol_map, sym_d)
-            device_shape.append(tuple(int(sym_d) if sym_d.isdigit() else symbol_map[sym_d] for sym_d in sym_device))
     logging.info("Host shape: %s Device shape %s, symbol_map = %s",
                  str(host_shape), str(device_shape), str(symbol_map))
     return device_shape, symbol_map, shape_map.get(SUPPORT_INFO, {})
@@ -334,7 +348,8 @@ class DynamicTilingSolver:
             self._update_static_map(map_key, -1)
         return True
 
-    def _find_factor_relations(self, map_res, product_var, related_values, int_keys):
+    @staticmethod
+    def _find_factor_relations(map_res, product_var, related_values, int_keys):
         """Find factor relations for map_res among int_keys."""
         for k in int_keys:
             if k != map_res and k % map_res == 0:
@@ -359,7 +374,8 @@ class DynamicTilingSolver:
         int_keys = [k for k in self.symbol_map.keys() if isinstance(k, int) and k > 1]
         for map_key, map_res in self.dyn_map.items():
             if isinstance(map_res, list) and len(map_res) == 2:
-                self._process_list_map_res(map_key, map_res, axis_length_left, product_var)
+                if not self._process_list_map_res(map_key, map_res, axis_length_left, product_var):
+                    logging.debug("symbol_part and const_part are valid and both in symbol_map")
                 continue
             if not ("Idx" in map_key or "Seq" in map_key):
                 continue

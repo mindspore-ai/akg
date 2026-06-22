@@ -49,6 +49,15 @@ bool IdxIsInVector(size_t funcIdx, SmallVector<int, 8> mapResult) {
   return std::any_of(mapResult.begin(), mapResult.end(), [&](int idx) { return idx == static_cast<int>(funcIdx); });
 }
 
+void UpdateMapResultForAlloc(Value alloc, ValueRange operands, SmallVector<int, 8> &mapResult, size_t funcIdx) {
+  for (size_t idx = 0; idx < operands.size(); idx++) {
+    if (alloc == operands[idx]) {
+      mapResult[idx] = static_cast<int>(funcIdx);
+      break;
+    }
+  }
+}
+
 bool isPermutation(const SmallVector<int, 8> vec) {
   llvm::SmallSet<int, 8> elemSet;
   size_t len = vec.size();
@@ -70,15 +79,24 @@ Value FindAllocOpForFuncArg(func::FuncOp funcOp, BlockArgument targetArg) {
   });
   if (!targetCopyOp) {
     (void)funcOp.emitError("Error: can't find memref::CopyOp \n");
-    return Value();
+    return {};
   }
   auto prevOp = targetCopyOp.getSource().getDefiningOp();
   if (auto alloc = dyn_cast<memref::AllocOp>(prevOp)) {
     return alloc.getResult();
-  } else {
-    (void)funcOp.emitError("Error: next Op is not memref::AllocOp \n");
   }
-  return Value();
+  (void)funcOp.emitError("Error: next Op is not memref::AllocOp \n");
+  return {};
+}
+
+static void matchOperandIndex(Value v, ArrayRef<BlockArgument> funcArguments, SmallVector<int, 8> &mapResult,
+                              size_t idx) {
+  for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
+    if (funcArguments[funcIdx] == v) {
+      mapResult[idx] = funcIdx;
+      return;
+    }
+  }
 }
 
 struct GetOrderMapBeforeAfterGpuOutlining
@@ -92,8 +110,11 @@ struct GetOrderMapBeforeAfterGpuOutlining
     auto funcArguments = funcOp.getArguments();
     SmallVector<int, 8> mapResult(funcArguments.size(), -1);
 
-    gpu::LaunchFuncOp launchFuncOp;
-    funcOp.walk([&](gpu::LaunchFuncOp op) { launchFuncOp = op; });
+    gpu::LaunchFuncOp launchFuncOp = [&]() {
+      gpu::LaunchFuncOp result;
+      funcOp.walk([&](gpu::LaunchFuncOp op) { result = op; });
+      return result;
+    }();
     if (!launchFuncOp) {
       return;
     }
@@ -103,12 +124,7 @@ struct GetOrderMapBeforeAfterGpuOutlining
       return;
     }
     for (size_t idx = 0; idx < operands.size(); idx++) {
-      for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
-        if (funcArguments[funcIdx] == operands[idx]) {
-          mapResult[idx] = funcIdx;
-          break;
-        }
-      }
+      matchOperandIndex(operands[idx], funcArguments, mapResult, idx);
     }
     for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
       if (!IdxIsInVector(funcIdx, mapResult)) {
@@ -116,12 +132,7 @@ struct GetOrderMapBeforeAfterGpuOutlining
         if (!alloc) {
           continue;
         }
-        for (size_t idx = 0; idx < operands.size(); idx++) {
-          if (alloc == operands[idx]) {
-            mapResult[idx] = static_cast<int>(funcIdx);
-            break;
-          }
-        }
+        UpdateMapResultForAlloc(alloc, operands, mapResult, funcIdx);
       }
     }
 

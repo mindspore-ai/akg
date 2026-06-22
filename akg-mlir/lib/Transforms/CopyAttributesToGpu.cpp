@@ -61,7 +61,7 @@ void CopyAttributesToGpuPass::runOnOperation() {
       funcOp = op;
     }
   });
-  if (funcOp && gpuFuncOp) {
+  if ((funcOp != nullptr) && (gpuFuncOp != nullptr)) {
     auto attrs = funcOp->getAttrs();
     for (auto attr : attrs) {
       auto keyStr = dyn_cast<StringAttr>(attr.getName()).getValue().str();

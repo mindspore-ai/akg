@@ -27,6 +27,8 @@
 #include "akg/Transforms/CopyRemoval.h"
 #include "akg/Transforms/NPUAutoTiling.h"
 #include "akg/Transforms/AddOutParameter.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
@@ -48,10 +50,6 @@ std::unique_ptr<OperationPass<ModuleOp>> createAKGFuncOutliningPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining);
 std::unique_ptr<OperationPass<ModuleOp>> createAKGParallelLaunchPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAKGParallelLaunchPass(bool isMindSpore, bool isOutlining);
-
-namespace func {
-class FuncOp;
-}  // namespace func
 
 /// Generate the code for registering transforms passes.
 #ifndef GEN_PASS_REGISTRATION

@@ -108,8 +108,8 @@ class MindBuilder {
   std::map<std::string, std::string> mindTypeMap;
   std::map<std::string, Value> operandList;
   std::map<std::string, nlohmann::json> funcAttributes;
-  typedef void (MindBuilder::*pFunc)(OpBuilder, OpNode, SmallVector<Type>, SmallVector<Type>, SmallVector<Value>,
-                                     SmallVector<NamedAttribute>);
+  using pFunc = void (MindBuilder::*)(OpBuilder, OpNode, SmallVector<Type>, SmallVector<Type>, SmallVector<Value>,
+                                      SmallVector<NamedAttribute>);
   std::map<std::string, pFunc> mindOpFactory;
   // attrInputOpList defines the category where ops can input their attr as the second input (with type 1D index)
   SmallVector<std::string> attrInputOpList = {"Reshape",   "BroadcastTo", "ReduceMax", "ReduceMin",
@@ -128,14 +128,14 @@ class MindBuilder {
   bool isStridedSliceWithAttr(OpNode &opNode) const;
 
   // helper functions
-  mlir::FloatType getFloatType(const std::string &, OpBuilder) const;
-  mlir::IntegerType getIntType(const std::string &, OpBuilder) const;
-  SmallVector<int64_t> enableDynamicShape(
+  [[nodiscard]] mlir::FloatType getFloatType(const std::string &, OpBuilder) const;
+  [[nodiscard]] mlir::IntegerType getIntType(const std::string &, OpBuilder) const;
+  [[nodiscard]] SmallVector<int64_t> enableDynamicShape(
     SmallVector<int64_t>) const;  // replace dymShape -1 with minimum value of int64_t
   SmallVector<SmallVector<int64_t>> enableDynamicShape(SmallVector<SmallVector<int64_t>>);
   DenseElementsAttr buildDenseElementsAttr(OpBuilder builder, SmallVector<double>, RankedTensorType, std::string);
   RankedTensorType buildRankedTensorType(SmallVector<int64_t>, std::string, OpBuilder);
-  NamedAttribute createMindsporeAttribute(OpBuilder, nlohmann::json) const;
+  [[nodiscard]] NamedAttribute createMindsporeAttribute(OpBuilder, nlohmann::json) const;
   std::optional<DictionaryAttr> addOpSymShapeAttr(nlohmann::json inputDesc, nlohmann::json outputDesc,
                                                   MLIRContext *context) const;
   SmallVector<NamedAttribute> addFuncSymShapeAttr(SmallVector<NamedAttribute> attrs, SmallVector<ValueNode> inputNodes,
@@ -149,8 +149,8 @@ class MindBuilder {
                            const std::string &attrName) const;  // get one attr from json
   template <typename AttrType>
   AttrType getAttrFromJson(const nlohmann::json &jsonAttr, const std::string &attrName, AttrType defaultValue) const;
-  SmallVector<int64_t> getValueFromJson(nlohmann::json json) const;
-  bool isConstInput(const nlohmann::json node) const;
+  [[nodiscard]] SmallVector<int64_t> getValueFromJson(nlohmann::json json) const;
+  [[nodiscard]] bool isConstInput(const nlohmann::json node) const;
   SmallVector<double> getConstInputValue(const nlohmann::json inputDesc, const std::string &opName);
 
   void handleStridedSliceOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
@@ -222,6 +222,10 @@ class MindBuilder {
 
   void handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                       SmallVector<std::string> &operandNames);
+  void handleConcatOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+                            SmallVector<std::string> &operandNames);
+  void handleDefaultOperand(const OpBuilder &builder, const OpNode &opNode, size_t inputIdx,
+                            SmallVector<Value> &operands, SmallVector<std::string> &operandNames);
 
   void handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
 };
@@ -255,7 +259,7 @@ MindBuilder::MindBuilder(const std::string &moduleName, const SmallVector<ValueN
                          const SmallVector<OpNode> &opNodes, const SmallVector<ValueNode> &outputNodes,
                          const std::map<std::string, nlohmann::json> &funcAttributes)
     : mlirModule(nullptr) {
-  if (moduleName == "") {
+  if (moduleName.empty()) {
     this->moduleName = "main";
   } else {
     this->moduleName = moduleName;
@@ -268,11 +272,7 @@ MindBuilder::MindBuilder(const std::string &moduleName, const SmallVector<ValueN
 
 SmallVector<int64_t> MindBuilder::enableDynamicShape(SmallVector<int64_t> oriShapes) const {
   SmallVector<int64_t> shapes = oriShapes;
-  for (size_t i = 0; i < shapes.size(); i++) {
-    if (shapes[i] == -1) {
-      shapes[i] = ShapedType::kDynamic;
-    }
-  }
+  std::replace(shapes.begin(), shapes.end(), static_cast<int64_t>(-1), ShapedType::kDynamic);
   return shapes;
 }
 
@@ -309,7 +309,7 @@ MindBuilder MindConverter::initBuilder() {
 }
 
 void MindConverter::parseJson() {
-  this->rawJson = DirUtils::checkAndReadJson(this->inputFileName);
+  this->rawJson = IOHelper::checkAndReadJson(this->inputFileName);
   parseInput();
   parseOp();
   parseOutput();
@@ -522,8 +522,9 @@ NamedAttribute MindBuilder::createMindsporeAttribute(OpBuilder builder, nlohmann
   std::string msAttrName = attr.at(kName);
   if (attr.at(kDataType) == "bool") {
     bool value = attr.at(kValue);
-    return NamedAttribute(StringAttr::get(context, msAttrName), BoolAttr::get(context, value));
-  } else if (attr.at(kDataType) == "str") {
+    return {StringAttr::get(context, msAttrName), BoolAttr::get(context, value)};
+  }
+  if (attr.at(kDataType) == "str") {
     std::string value = attr.at(kValue);
     return NamedAttribute(StringAttr::get(context, msAttrName), StringAttr::get(context, value));
   } else if (attr.at(kDataType) == "listInt") {
@@ -559,7 +560,7 @@ SmallVector<NamedAttribute> MindBuilder::addFuncSymShapeAttr(SmallVector<NamedAt
                                                              MLIRContext *context) const {
   SmallVector<NamedAttribute> fSymbol;
   for (size_t i = 0; i < inputNodes.size(); i++) {
-    if (inputNodes[i].symShape.size() != 0) {
+    if (!inputNodes[i].symShape.empty()) {
       llvm::SmallVector<Attribute> symAttr;
       for (auto symbol : inputNodes[i].symShape) {
         (void)symAttr.emplace_back(StringAttr::get(context, symbol));
@@ -569,7 +570,7 @@ SmallVector<NamedAttribute> MindBuilder::addFuncSymShapeAttr(SmallVector<NamedAt
     }
   }
   for (size_t i = 0; i < outputNodes.size(); i++) {
-    if (outputNodes[i].symShape.size() != 0) {
+    if (!outputNodes[i].symShape.empty()) {
       llvm::SmallVector<Attribute> symAttr;
       for (auto symbol : outputNodes[i].symShape) {
         (void)symAttr.emplace_back(StringAttr::get(context, symbol));
@@ -578,7 +579,7 @@ SmallVector<NamedAttribute> MindBuilder::addFuncSymShapeAttr(SmallVector<NamedAt
                                  ArrayAttr::get(context, symAttr));
     }
   }
-  if (fSymbol.size() != 0) {
+  if (!fSymbol.empty()) {
     (void)attrs.emplace_back(StringAttr::get(context, getFrontendSymbolAttrName()),
                              DictionaryAttr::get(context, ArrayRef<NamedAttribute>(fSymbol)));
   }
@@ -595,14 +596,12 @@ void MindBuilder::convertToMLIR() {
   }
   SmallVector<Type> inputs;
   SmallVector<Type> outputs;
-  for (size_t i = 0; i < this->inputNodes.size(); i++) {
-    Type temp =
-      buildRankedTensorType(enableDynamicShape(this->inputNodes[i].shape), this->inputNodes[i].dataType, builder);
+  for (auto &inputNode : this->inputNodes) {
+    Type temp = buildRankedTensorType(enableDynamicShape(inputNode.shape), inputNode.dataType, builder);
     (void)inputs.emplace_back(temp);
   }
-  for (size_t i = 0; i < this->outputNodes.size(); i++) {
-    Type temp =
-      buildRankedTensorType(enableDynamicShape(this->outputNodes[i].shape), this->outputNodes[i].dataType, builder);
+  for (auto &outputNode : this->outputNodes) {
+    Type temp = buildRankedTensorType(enableDynamicShape(outputNode.shape), outputNode.dataType, builder);
     (void)outputs.emplace_back(temp);
   }
   builder.setInsertionPointToStart(&this->mlirModule->getRegion(0).front());
@@ -619,7 +618,7 @@ void MindBuilder::convertToMLIR() {
   (void)funcAttrs.emplace_back(NamedAttribute(
     StringAttr::get(context, kArch), StringAttr::get(context, this->funcAttributes[kArch].get<std::string>())));
 
-  func::FuncOp function = builder.create<func::FuncOp>(UnknownLoc::get(context), this->moduleName, funcTy, funcAttrs);
+  auto function = builder.create<func::FuncOp>(UnknownLoc::get(context), this->moduleName, funcTy, funcAttrs);
   Block *entryBody = function.addEntryBlock();
   // set insert point in the function block
   builder.setInsertionPointToStart(entryBody);
@@ -632,18 +631,15 @@ void MindBuilder::convertToMLIR() {
   }
   // create return op
   SmallVector<Value> outputOperands;
-  for (size_t i = 0; i < this->outputNodes.size(); i++) {
-    (void)outputOperands.emplace_back(this->operandList[this->outputNodes[i].tensorName]);
+  for (auto &outputNode : this->outputNodes) {
+    (void)outputOperands.emplace_back(this->operandList[outputNode.tensorName]);
   }
 
   (void)builder.create<func::ReturnOp>(UnknownLoc::get(context), outputOperands);
 }
 
 bool MindBuilder::isIndex1DAttrAsInput(std::string opName, int64_t inputIdx) {
-  if ((llvm::is_contained(this->attrInputOpList, opName)) && inputIdx == 1) {
-    return true;
-  }
-  return false;
+  return (llvm::is_contained(this->attrInputOpList, opName)) && inputIdx == 1;
 }
 
 template <typename AttrType>
@@ -698,7 +694,7 @@ std::optional<DictionaryAttr> MindBuilder::addOpSymShapeAttr(nlohmann::json inpu
       for (auto symbol : inputDesc[i][0].at(kSymbolicShape).get<SmallVector<std::string>>()) {
         (void)symAttr.emplace_back(StringAttr::get(context, symbol));
       }
-      if (symAttr.size() != 0) {
+      if (!symAttr.empty()) {
         (void)opSymbol.emplace_back(StringAttr::get(context, "input_" + std::to_string(i)),
                                     ArrayAttr::get(context, symAttr));
       }
@@ -710,13 +706,13 @@ std::optional<DictionaryAttr> MindBuilder::addOpSymShapeAttr(nlohmann::json inpu
       for (auto symbol : outputDesc[i].at(kSymbolicShape).get<SmallVector<std::string>>()) {
         (void)symAttr.emplace_back(StringAttr::get(context, symbol));
       }
-      if (symAttr.size() != 0) {
+      if (!symAttr.empty()) {
         (void)opSymbol.emplace_back(StringAttr::get(context, "output_" + std::to_string(i)),
                                     ArrayAttr::get(context, symAttr));
       }
     }
   }
-  if (opSymbol.size()) {
+  if (!opSymbol.empty()) {
     return DictionaryAttr::get(context, ArrayRef<NamedAttribute>(opSymbol));
   }
   return std::nullopt;
@@ -726,7 +722,7 @@ bool MindBuilder::isStridedSliceWithAttr(OpNode &opNode) const { return opNode.i
 
 void MindBuilder::handleStridedSliceOpInput(const OpBuilder &builder, OpNode &opNode,
                                             SmallVector<Type> &opInputTesnors) {
-  constexpr auto kStridedSliceInputNum4 = 4;
+  [[maybe_unused]] constexpr auto kStridedSliceInputNum4 = 4;
   assert(opNode.inputDesc.size() == kStridedSliceInputNum4);
   // we only take the first input as the StrideSlice operands, the remain inpus we treat as attrs;
   std::string opInputType = opNode.inputDesc[0][0].at(kDataType);
@@ -739,10 +735,10 @@ void MindBuilder::handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallV
   // special handle
   if (opNode.opName == "Concat") {
     assert(opNode.inputDesc.size() == 1);
-    for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
-      for (size_t j = 0; j < opNode.inputDesc[i].size(); j++) {
-        std::string inputType = opNode.inputDesc[i][j].at(kDataType);
-        SmallVector<int64_t> inputShape = opNode.inputDesc[i][j].at(kShape);
+    for (auto &i : opNode.inputDesc) {
+      for (size_t j = 0; j < i.size(); j++) {
+        std::string inputType = i[j].at(kDataType);
+        SmallVector<int64_t> inputShape = i[j].at(kShape);
         Type temp = buildRankedTensorType(enableDynamicShape(inputShape), inputType, builder);
         (void)inputTys.emplace_back(temp);
       }
@@ -750,12 +746,12 @@ void MindBuilder::handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallV
   } else if (opNode.opName == "StridedSlice" && !isStridedSliceWithAttr(opNode)) {
     handleStridedSliceOpInput(builder, opNode, inputTys);
   } else {
-    for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
-      std::string inputType = opNode.inputDesc[i][0].at(kDataType);
+    for (auto &i : opNode.inputDesc) {
+      std::string inputType = i[0].at(kDataType);
       if (inputType == "uint8") {
         inputType = "int8";
       }
-      SmallVector<int64_t> inputShape = opNode.inputDesc[i][0].at(kShape);
+      SmallVector<int64_t> inputShape = i[0].at(kShape);
       Type temp = buildRankedTensorType(enableDynamicShape(inputShape), inputType, builder);
       (void)inputTys.emplace_back(temp);
     }
@@ -789,46 +785,56 @@ void MindBuilder::handleStridedSliceOperands(const OpBuilder &builder, const OpN
   }
 }
 
+void MindBuilder::handleConcatOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+                                       SmallVector<std::string> &operandNames) {
+  assert(opNode.inputDesc.size() == 1);
+  for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
+    for (size_t j = 0; j < opNode.inputDesc[i].size(); j++) {
+      if (isIndex1DAttrAsInput(opNode.opName, j)) {
+        continue;
+      }
+      nlohmann::json currInput = opNode.inputDesc[i][j];
+      operandNames.push_back(currInput.at(kTensorName));
+      if (this->operandList.count(operandNames[j]) == 0) {
+        SmallVector<int64_t> shape = currInput.at(kShape);
+        assert(shape.size() != 0);
+        SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
+        convertConstOperand(operandNames[j], shape, value, currInput.at(kDataType), builder);
+      }
+      (void)operands.emplace_back(this->operandList[operandNames[j]]);
+    }
+  }
+}
+
+void MindBuilder::handleDefaultOperand(const OpBuilder &builder, const OpNode &opNode, size_t inputIdx,
+                                       SmallVector<Value> &operands, SmallVector<std::string> &operandNames) {
+  nlohmann::json currInput = opNode.inputDesc[inputIdx][0];
+  operandNames.push_back(currInput.at(kTensorName));
+  if (this->operandList.count(operandNames[inputIdx]) == 0) {
+    SmallVector<int64_t> shape = currInput.at(kShape);
+    assert(shape.size() != 0);
+    SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
+    std::string dataType = currInput.at(kDataType);
+    if (dataType == "uint8") {
+      dataType = "int8";
+    }
+    convertConstOperand(operandNames[inputIdx], shape, value, dataType, builder);
+  }
+  (void)operands.emplace_back(this->operandList[operandNames[inputIdx]]);
+}
+
 void MindBuilder::handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                                  SmallVector<std::string> &operandNames) {
   if (opNode.opName == "Concat") {
-    assert(opNode.inputDesc.size() == 1);
-    for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
-      for (size_t j = 0; j < opNode.inputDesc[i].size(); j++) {
-        if (isIndex1DAttrAsInput(opNode.opName, j)) {
-          continue;  // Input Index1D represents an attribute, e.g. newshape attr in reshape op
-        }
-        nlohmann::json currInput = opNode.inputDesc[i][j];
-        operandNames.push_back(currInput.at(kTensorName));
-        if (this->operandList.count(operandNames[j]) == 0) {  // const input
-          SmallVector<int64_t> shape = currInput.at(kShape);
-          assert(shape.size() != 0);
-          SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
-          convertConstOperand(operandNames[j], shape, value, currInput.at(kDataType), builder);
-        }
-        (void)operands.emplace_back(this->operandList[operandNames[j]]);
-      }
-    }
+    handleConcatOperands(builder, opNode, operands, operandNames);
   } else if (opNode.opName == "StridedSlice" && !isStridedSliceWithAttr(opNode)) {
     handleStridedSliceOperands(builder, opNode, operands, operandNames);
   } else {
     for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
       if (isIndex1DAttrAsInput(opNode.opName, i)) {
-        continue;  // Input Index1D represents an attribute, e.g. newshape attr in reshape op
+        continue;
       }
-      nlohmann::json currInput = opNode.inputDesc[i][0];
-      operandNames.push_back(currInput.at(kTensorName));
-      if (this->operandList.count(operandNames[i]) == 0) {  // const input
-        SmallVector<int64_t> shape = currInput.at(kShape);
-        assert(shape.size() != 0);
-        SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
-        std::string dataType = currInput.at(kDataType);
-        if (dataType == "uint8") {
-          dataType = "int8";
-        }
-        convertConstOperand(operandNames[i], shape, value, dataType, builder);
-      }
-      (void)operands.emplace_back(this->operandList[operandNames[i]]);
+      handleDefaultOperand(builder, opNode, i, operands, operandNames);
     }
   }
 }
@@ -840,12 +846,12 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
   SmallVector<Type> outputTys;
   handleOpInput(builder, opNode, inputTys);
 
-  for (size_t i = 0; i < opNode.outputDesc.size(); i++) {
-    std::string dtype = opNode.outputDesc[i].at(kDataType);
+  for (auto &i : opNode.outputDesc) {
+    std::string dtype = i.at(kDataType);
     if (dtype == "uint8") {
       dtype = "int8";
     }
-    llvm::SmallVector<int64_t> shape = opNode.outputDesc[i].at(kShape);
+    llvm::SmallVector<int64_t> shape = i.at(kShape);
     Type temp = buildRankedTensorType(enableDynamicShape(shape), dtype, builder);
     (void)outputTys.emplace_back(temp);
   }
@@ -866,12 +872,12 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
   for (auto attr : opNode.attrs) {
     (void)msAttrs.emplace_back(createMindsporeAttribute(builder, attr));
   }
-  if (msAttrs.size() != 0) {
+  if (!msAttrs.empty()) {
     (void)allAttrs.emplace_back(StringAttr::get(context, "ms_attr"),
                                 DictionaryAttr::get(context, ArrayRef<NamedAttribute>(msAttrs)));
   }
   // append ptr address
-  if (opNode.ptrAddress != "") {
+  if (!opNode.ptrAddress.empty()) {
     (void)allAttrs.emplace_back(
       NamedAttribute(StringAttr::get(context, kPtrAddress), StringAttr::get(context, opNode.ptrAddress)));
   }
@@ -1034,7 +1040,9 @@ void MindBuilder::convertStridedSliceOp(OpBuilder builder, OpNode opNode, SmallV
   constexpr auto kEndIdx = 2;
   constexpr auto kStridesIdx = 3;
   MLIRContext *context = builder.getContext();
-  SmallVector<int64_t> start, end, strides;
+  SmallVector<int64_t> start;
+  SmallVector<int64_t> end;
+  SmallVector<int64_t> strides;
   if (isStridedSliceWithAttr(opNode)) {
     constexpr auto kBegin = "begin";
     start = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kBegin);
@@ -1140,7 +1148,7 @@ void MindBuilder::convertBroadcastToOp(OpBuilder builder, OpNode opNode, SmallVe
     newShape = cast<ShapedType>(outputTys[0]).getShape();
   }
 
-  if (newShape.size() == 0) {
+  if (newShape.empty()) {
     newShape = {1};
     emitWarning(UnknownLoc::get(context)) << "cannot find newshape in BroadcastToOp, take default value 1\n";
   }
@@ -1387,48 +1395,57 @@ DenseElementsAttr MindBuilder::buildDenseElementsAttr(OpBuilder builder, SmallVe
     }
     DenseElementsAttr attr = DenseElementsAttr::get(AttrType, ArrayRef<Attribute>(values));
     return attr;
-  } else {
-    llvm::report_fatal_error(llvm::StringRef("Error occurs when converting json to mlir: data type is not supported"));
   }
+  llvm::report_fatal_error(llvm::StringRef("Error occurs when converting json to mlir: data type is not supported"));
 }  // namespace
 
 mlir::FloatType MindBuilder::getFloatType(const std::string &dtype, OpBuilder builder) const {
   if (dtype == "float16") {
     return builder.getF16Type();
-  } else if (dtype == "float32") {
-    return builder.getF32Type();
-  } else if (dtype == "float64") {
-    return builder.getF64Type();
-  } else if (dtype == "bfloat16") {
-    return builder.getBF16Type();
-  } else {
-    llvm::report_fatal_error(
-      llvm::StringRef("Error occurs when converting json to mlir: input float type is not supported"));
   }
+  if (dtype == "float32") {
+    return builder.getF32Type();
+  }
+  if (dtype == "float64") {
+    return builder.getF64Type();
+  }
+  if (dtype == "bfloat16") {
+    return builder.getBF16Type();
+  }
+  llvm::report_fatal_error(
+    llvm::StringRef("Error occurs when converting json to mlir: input float type is not supported"));
+  return builder.getF32Type();
 }
 
 mlir::IntegerType MindBuilder::getIntType(const std::string &dtype, OpBuilder builder) const {
   constexpr auto kIntegerSize8 = 8;
   if (dtype == "bool") {
     return builder.getI1Type();
-  } else if (dtype == "int1") {
-    return builder.getI1Type();
-  } else if (dtype == "int8") {
-    return builder.getI8Type();
-  } else if (dtype == "uint8") {
-    return builder.getIntegerType(kIntegerSize8, false);
-  } else if (dtype == "sint8") {
-    return builder.getIntegerType(kIntegerSize8, true);
-  } else if (dtype == "int16") {
-    return builder.getI16Type();
-  } else if (dtype == "int32") {
-    return builder.getI32Type();
-  } else if (dtype == "int64") {
-    return builder.getI64Type();
-  } else {
-    llvm::report_fatal_error(
-      llvm::StringRef("Error occurs when converting json to mlir: input integar type is not supported"));
   }
+  if (dtype == "int1") {
+    return builder.getI1Type();
+  }
+  if (dtype == "int8") {
+    return builder.getI8Type();
+  }
+  if (dtype == "uint8") {
+    return builder.getIntegerType(kIntegerSize8, false);
+  }
+  if (dtype == "sint8") {
+    return builder.getIntegerType(kIntegerSize8, true);
+  }
+  if (dtype == "int16") {
+    return builder.getI16Type();
+  }
+  if (dtype == "int32") {
+    return builder.getI32Type();
+  }
+  if (dtype == "int64") {
+    return builder.getI64Type();
+  }
+  llvm::report_fatal_error(
+    llvm::StringRef("Error occurs when converting json to mlir: input integar type is not supported"));
+  return builder.getI32Type();
 }
 }  // namespace
 }  // namespace mlir
@@ -1443,7 +1460,7 @@ mlir::Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, M
   (void)context->getOrLoadDialect<tensor::TensorDialect>();
 
   MindConverter msConverter;
-  if (jsonName != "") {
+  if (!jsonName.empty()) {
     msConverter.inputFileName = jsonName;
   } else {
     llvm::report_fatal_error(llvm::StringRef("Error occurs when converting json to mlir: Please input a json file"));
@@ -1456,7 +1473,7 @@ mlir::Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, M
   mlirBuilder.initMindTypeMap();
   mlirBuilder.convertToMLIR();
 
-  if (outputName != "") {
+  if (!outputName.empty()) {
     std::error_code EC;
     llvm::raw_fd_ostream dataFile(outputName, EC);
     mlirBuilder.mlirModule->print(dataFile);

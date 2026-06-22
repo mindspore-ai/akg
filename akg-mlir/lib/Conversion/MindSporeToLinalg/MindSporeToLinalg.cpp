@@ -53,11 +53,108 @@ namespace mlir {
 #endif
 
 namespace {
+// Affine map: number of symbols when no symbols are used
+static constexpr unsigned kAffineNoSymbols = 0;
+
+// Dynamic dimension sentinel value (-1 indicates unknown dimension size)
+static constexpr int64_t kDynamicDimSentinel = -1;
+
+// Negative axis threshold: axis values < 0 count from the end of the shape
+static constexpr int64_t kNegativeAxisThreshold = 0;
+
+// Tile/Broadcast: each input dimension expands to 2 generic dimensions (multiple + original)
+static constexpr unsigned kTileDimsPerInputDim = 2;
+
+// AddN: accumulation starts from index 2 (after the first pair is added)
+static constexpr uint64_t kAddNAccumStartIndex = 2;
+
+// IEEE 754: number of sign bits in floating point representation
+static constexpr unsigned kSignBitCount = 1;
+
+// Boolean type bit width
+static constexpr unsigned kBoolBitWidth = 1;
+
+// Identity value for inverse hyperbolic functions (asinh: sqrt(x^2+1), acosh: sqrt(x^2-1))
+static constexpr double kFloatIdentityValue = 1.0;
+
+// 1D tensor rank
+static constexpr int64_t k1DRank = 1;
+
+// 1D slice size for UnsortedSegmentSum
+static constexpr int64_t k1DSliceSize = 1;
+
+// First dimension index (0-based)
+static constexpr int64_t kFirstDimIndex = 0;
+
+// Broadcast: unit dimension size for prepending extra dimensions
+static constexpr int64_t kBroadcastUnitDimSize = 1;
+
+// Broadcast: default multiple when target shape dimension is dynamic
+static constexpr int64_t kBroadcastDefaultMultiple = 1;
+
+// Reduce: additive identity initial value (integer)
+static constexpr int64_t kReduceAdditiveInitInt = 0;
+
+// Reduce: additive identity initial value (float)
+static constexpr double kReduceAdditiveInitFloat = 0.0;
+
+// Reduce: multiplicative identity initial value (integer)
+static constexpr int64_t kReduceMultiplicativeInitInt = 1;
+
+// Reduce: multiplicative identity initial value (float)
+static constexpr double kReduceMultiplicativeInitFloat = 1.0;
+
+// Shape product accumulation initial value (multiplicative identity)
+static constexpr int64_t kShapeProductInit = 1;
+
+// Default batch dimensions value (no batching)
+static constexpr uint64_t kDefaultBatchDims = 0;
+
+// Zero index constant for tensor dimension operations
+static constexpr int64_t kZeroIndex = 0;
+
+// One index constant for tensor dimension operations
+static constexpr int64_t kOneIndex = 1;
+
+// Reassociation: second dimension group start index (after first collapsed group)
+static constexpr int64_t kReassocSecondGroupStart = 1;
+
+// Last dimension offset from rank (rank - 1 gives last dimension index)
+static constexpr int64_t kLastDimOffset = 1;
+
+// Unit dimension size (dimension of size 1, used for shape comparisons)
+static constexpr int64_t kUnitDimSize = 1;
+
+// APInt zero initialization value
+static constexpr uint64_t kAPIntZeroInit = 0;
+
+// Transpose flag: not transposed
+static constexpr int kTransposeDisabled = 0;
+
+// Transpose flag: transposed
+static constexpr int kTransposeEnabled = 1;
+
+// MatMul: number of non-batch axes (M and N dimensions)
+static constexpr size_t kMatmulNonBatchAxisNum = 2;
+
+// MatMul: rank of a standard matrix multiplication
+static constexpr size_t kMatmulRank = 2;
+
+// MatMul: rank of a batched matrix multiplication
+static constexpr size_t kBatchMatmulRank = 3;
+
+// Broadcast: offset to select the original (non-broadcast) dimension within a broadcast pair
+static constexpr int64_t kBroadcastOrigDimOffset = 1;
+
+// Expected number of results for elementwise operations
+static constexpr unsigned kElementwiseResultCount = 1;
+
 static Value createAsinhOp(Operation *op, const ValueRange args, ArrayRef<Type> resultTypes,
                            PatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto mulOp = rewriter.create<mlir::arith::MulFOp>(loc, resultTypes, args[0], args[0]);
-  auto constOp = rewriter.create<mlir::arith::ConstantOp>(loc, rewriter.getFloatAttr(resultTypes[0], 1.0));
+  auto constOp =
+    rewriter.create<mlir::arith::ConstantOp>(loc, rewriter.getFloatAttr(resultTypes[0], kFloatIdentityValue));
   auto addOp = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, constOp.getResult(), mulOp.getResult());
   auto sqrtOp = rewriter.create<mlir::math::SqrtOp>(loc, resultTypes, addOp.getResult());
   auto add2Op = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, args[0], sqrtOp.getResult());
@@ -69,7 +166,8 @@ static Value createAcoshOp(Operation *op, const ValueRange args, ArrayRef<Type> 
                            PatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto mulOp = rewriter.create<mlir::arith::MulFOp>(loc, resultTypes, args[0], args[0]);
-  auto constOp = rewriter.create<mlir::arith::ConstantOp>(loc, rewriter.getFloatAttr(resultTypes[0], 1.0));
+  auto constOp =
+    rewriter.create<mlir::arith::ConstantOp>(loc, rewriter.getFloatAttr(resultTypes[0], kFloatIdentityValue));
   auto subOp = rewriter.create<mlir::arith::SubFOp>(loc, resultTypes, mulOp.getResult(), constOp.getResult());
   auto sqrtOp = rewriter.create<mlir::math::SqrtOp>(loc, resultTypes, subOp.getResult());
   auto addOp = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, args[0], sqrtOp.getResult());
@@ -106,11 +204,13 @@ static Value createMathOps(Operation *op, ValueRange args, ArrayRef<Type> result
 
 static Value createAddNOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter) {
   auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
-  if (!isa<mindspore::AddNOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::AddNOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   Value add = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, args[0], args[1]);
-  for (uint64_t i = 2; i < args.size(); i++) {
+  for (uint64_t i = kAddNAccumStartIndex; i < args.size(); i++) {
     add = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, add, args[i]);
   }
   return add;
@@ -118,46 +218,64 @@ static Value createAddNOpBody(Operation *op, ValueRange args, ArrayRef<Type> res
 
 static Value createDivOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
                              Type elementTy) {
-  if (!isa<mindspore::DivOp>(op)) return nullptr;
+  if (!isa<mindspore::DivOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<IntegerType>(elementTy)) return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
-  if (isa<FloatType>(elementTy)) return rewriter.create<arith::DivFOp>(loc, resultTypes, args);
+  if (isa<IntegerType>(elementTy)) {
+    return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
+  }
+  if (isa<FloatType>(elementTy)) {
+    return rewriter.create<arith::DivFOp>(loc, resultTypes, args);
+  }
   return nullptr;
 }
 
 static Value createSqrtOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
                               Type elementTy) {
-  if (!isa<mindspore::SqrtOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::SqrtOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   return rewriter.create<mlir::math::SqrtOp>(loc, resultTypes, args);
 }
 
 static Value createLessOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::LessOp>(op)) return nullptr;
+  if (!isa<mindspore::LessOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<FloatType>(elementTy))
+  if (isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLT, args[0], args[1]);
-  if (elementTy.isSignlessInteger())
+  }
+  if (elementTy.isSignlessInteger()) {
     return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
+  }
   return nullptr;
 }
 
 static Value createLessEqualOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::LessEqualOp>(op)) return nullptr;
+  if (!isa<mindspore::LessEqualOp>(op)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
-  if (isa<FloatType>(elementTy))
+  if (isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLE, args[0], args[1]);
-  if (elementTy.isSignlessInteger())
+  }
+  if (elementTy.isSignlessInteger()) {
     return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, args[0], args[1]);
+  }
   return nullptr;
 }
 
 static Value createIsFiniteOpBody(Operation *op, ValueRange args, PatternRewriter &rewriter, Type elementTy) {
-  if (!isa<mindspore::IsFiniteOp>(op) || !isa<FloatType>(elementTy)) return nullptr;
+  if (!isa<mindspore::IsFiniteOp>(op) || !isa<FloatType>(elementTy)) {
+    return nullptr;
+  }
 
   Location loc = op->getLoc();
   Value x = args[0];
@@ -166,18 +284,17 @@ static Value createIsFiniteOpBody(Operation *op, ValueRange args, PatternRewrite
   unsigned bitWidth = floatTy.getWidth();
   auto intTy = rewriter.getIntegerType(bitWidth);
   Value xBits = rewriter.create<arith::BitcastOp>(loc, intTy, x);
-  APInt signMask(bitWidth, 0);
-  signMask.setBit(bitWidth - 1);
+  APInt signMask(bitWidth, kAPIntZeroInit);
+  signMask.setBit(bitWidth - kSignBitCount);
   APInt signMaskInv = ~signMask;
   Value signMaskInvC = rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(intTy, signMaskInv));
   Value absBits = rewriter.create<arith::AndIOp>(loc, xBits, signMaskInvC);
   unsigned mantissaBits = floatTy.getFPMantissaWidth();
-  unsigned exponentBits = bitWidth - mantissaBits - 1;
-  APInt mantissaMask(bitWidth, 0);
+  unsigned exponentBits = bitWidth - mantissaBits - kSignBitCount;
+  APInt mantissaMask(bitWidth, kAPIntZeroInit);
   mantissaMask.setLowBits(mantissaBits);
-  APInt exponentMask(bitWidth, 0);
+  APInt exponentMask(bitWidth, kAPIntZeroInit);
   exponentMask.setBits(mantissaBits, mantissaBits + exponentBits);
-  // APInt allExponentOnes = exponentMask;
 
   Value mantissaMaskC = rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(intTy, mantissaMask));
   Value exponentMaskC = rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(intTy, exponentMask));
@@ -190,7 +307,7 @@ static Value createIsFiniteOpBody(Operation *op, ValueRange args, PatternRewrite
   auto isExponentAllOnes =
     rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, exponentBitsV, exponentAllOnesC);
 
-  APInt zeroMant(bitWidth, 0);
+  APInt zeroMant(bitWidth, kAPIntZeroInit);
   Value zeroMantC = rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(intTy, zeroMant));
   auto isMantissaZero = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, mantissaBitsV, zeroMantC);
 
@@ -209,19 +326,33 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
                                                          PatternRewriter &rewriter) {
   auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
 
-  if (auto val = createAddNOpBody(op, args, resultTypes, rewriter)) return val;
+  if (auto val = createAddNOpBody(op, args, resultTypes, rewriter)) {
+    return val;
+  }
 
-  if (auto val = createMathOps(op, args, resultTypes, rewriter)) return val;
+  if (auto val = createMathOps(op, args, resultTypes, rewriter)) {
+    return val;
+  }
 
-  if (auto val = createDivOpBody(op, args, resultTypes, rewriter, elementTy)) return val;
+  if (auto val = createDivOpBody(op, args, resultTypes, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createSqrtOpBody(op, args, resultTypes, rewriter, elementTy)) return val;
+  if (auto val = createSqrtOpBody(op, args, resultTypes, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createLessOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createLessOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createLessEqualOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createLessEqualOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
-  if (auto val = createIsFiniteOpBody(op, args, rewriter, elementTy)) return val;
+  if (auto val = createIsFiniteOpBody(op, args, rewriter, elementTy)) {
+    return val;
+  }
 
   (void)rewriter.notifyMatchFailure(op, "unhandled op for linalg body calculation for elementwise op");
   return nullptr;
@@ -230,7 +361,8 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
 static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, PatternRewriter &rewriter) {
   auto loc = operation->getLoc();
 
-  assert(operation->getNumResults() == 1 && "All MindSpore elementwise ops should only return a single result.");
+  assert(operation->getNumResults() == kElementwiseResultCount &&
+         "All MindSpore elementwise ops should only return a single result.");
 
   auto results = operation->getResults();
   auto resultTy = dyn_cast<ShapedType>(operation->getResult(0).getType());
@@ -307,7 +439,7 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
 
     operands.push_back(operand);
     indexingMaps.push_back(AffineMap::get(
-      /*dimCount=*/rank, /*symbolCount=*/0, affineExprs, rewriter.getContext()));
+      /* dimCount= */ rank, /* symbolCount= */ kAffineNoSymbols, affineExprs, rewriter.getContext()));
   }
 
   indexingMaps.append(operation->getNumResults(), rewriter.getMultiDimIdentityMap(rank));
@@ -388,15 +520,15 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
     auto outputRank = cast<ShapedType>(output.getType()).getRank();
     // axis
     int64_t axis = op.getAxisAttr().getInt();
-    if (axis < 0) {
+    if (axis < kNegativeAxisThreshold) {
       axis += cast<ShapedType>(data.getType()).getRank();
     }
     // batchDims
-    uint64_t batchDims = 0;
+    uint64_t batchDims = kDefaultBatchDims;
     if (op.getBatchDims() != std::nullopt) {
       batchDims = *op.getBatchDims();
     }
-    if (batchDims != 0) {
+    if (batchDims != kDefaultBatchDims) {
       return rewriter.notifyMatchFailure(op, "BatchDims != 0 may not be expressed on linalg.generic");
     }
     // create outs emptyTensor
@@ -412,7 +544,7 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
     for (int i = 0; i < indicesRank; i++) {
       affineExprs.push_back(rewriter.getAffineDimExpr(axis + i));
     }
-    auto indicesMap = AffineMap::get(outputRank, 0, affineExprs, rewriter.getContext());
+    auto indicesMap = AffineMap::get(outputRank, kAffineNoSymbols, affineExprs, rewriter.getContext());
     auto outputMap = rewriter.getMultiDimIdentityMap(outputRank);
     SmallVector<AffineMap> indexingMaps({indicesMap, outputMap});
 
@@ -453,59 +585,61 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
     auto outputElementTy = outputTy.getElementType();
     auto zeroAttrEType = rewriter.getZeroAttr(outputElementTy);
     auto zeroEType = rewriter.create<arith::ConstantOp>(loc, zeroAttrEType);
-    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, kZeroIndex);
+    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, kOneIndex);
     auto indicesTy = dyn_cast<TensorType>(op.getSegmentIds().getType());
     auto dataTy = dyn_cast<TensorType>(op.getX().getType());
     // Collapse acc and data reductiondims on 1D for tiling purpose.
     // We collapse index dimensions to improve pipelining opportunities.
     Value collapsedData;
     // if there is no need to collapse indices  Dims nor reduction dims
-    if (indicesTy.getRank() == 1 && dataTy.getRank() - indicesTy.getRank() <= 1) {
+    if (indicesTy.getRank() == k1DRank && dataTy.getRank() - indicesTy.getRank() <= k1DRank) {
       collapsedData = op.getX();
     } else {
       //  Collapse indices dims
       SmallVector<ReassociationIndices> dataReassociationMap;
-      dataReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(0, indicesTy.getRank()))});
+      dataReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(kFirstDimIndex, indicesTy.getRank()))});
       // Collapse reduction dims
       dataReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(indicesTy.getRank(), dataTy.getRank()))});
       collapsedData = rewriter.create<tensor::CollapseShapeOp>(loc, op.getX(), dataReassociationMap);
     }
     Value collapsedIndex;
-    if (indicesTy.getRank() == 1) {
+    if (indicesTy.getRank() == k1DRank) {
       collapsedIndex = op.getSegmentIds();
     } else {
       SmallVector<ReassociationIndices> indexReassociationMap;
-      indexReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(0, indicesTy.getRank()))});
+      indexReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(kFirstDimIndex, indicesTy.getRank()))});
       collapsedIndex = rewriter.create<tensor::CollapseShapeOp>(loc, op.getSegmentIds(), indexReassociationMap);
     }
     auto collapsedDataTy = cast<RankedTensorType>(collapsedData.getType());
-    auto uniqSize = SmallVector<int64_t>({1});
-    ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
+    auto uniqSize = SmallVector<int64_t>({k1DSliceSize});
+    ArrayRef<int64_t> sliceShape = outputTy.getRank() == k1DRank ? uniqSize : collapsedDataTy.getShape().take_back();
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, outputTy, ValueRange{});
     Value zeroTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{zeroEType}, ValueRange{emptyTensor}).result();
     Value collapsedResult;
-    if (dataTy.getRank() - indicesTy.getRank() <= 1) {
+    if (dataTy.getRank() - indicesTy.getRank() <= k1DRank) {
       collapsedResult = zeroTensor;
     } else {
       auto collapsedAccShape = llvm::to_vector(outputTy.getShape().take_front());
       collapsedAccShape.push_back(sliceShape[0]);
       auto collapsedAccTy = cast<RankedTensorType>(outputTy.clone(collapsedAccShape));
-      SmallVector<ReassociationIndices> accReassociationMap{{0}};
+      SmallVector<ReassociationIndices> accReassociationMap{{kFirstDimIndex}};
       // Associate reductionDims
-      accReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(1, outputTy.getRank()))});
+      accReassociationMap.push_back(
+        {llvm::to_vector(llvm::seq<int64_t>(kReassocSecondGroupStart, outputTy.getRank()))});
       collapsedResult = rewriter.create<tensor::CollapseShapeOp>(loc, collapsedAccTy, zeroTensor, accReassociationMap);
     }
     SmallVector<Value> lbs({zeroICst});
     SmallVector<Value> steps({oneICst});
-    SmallVector<Value> ubs({rewriter.createOrFold<tensor::DimOp>(loc, collapsedIndex, 0)});
+    SmallVector<Value> ubs({rewriter.createOrFold<tensor::DimOp>(loc, collapsedIndex, kFirstDimIndex)});
 
     // Acc/Data slice is 1 for the index dimension followed by the rest of the acc size
     SmallVector<Value> sliceSizes{oneICst};
-    SmallVector<Value> accOffsets(1, zeroICst);
-    SmallVector<Value> accStrides(1, oneICst);
-    if (outputTy.getRank() != 1) {
-      auto sliceSize = rewriter.createOrFold<tensor::DimOp>(loc, collapsedData, collapsedDataTy.getRank() - 1);
+    SmallVector<Value> accOffsets(k1DSliceSize, zeroICst);
+    SmallVector<Value> accStrides(k1DSliceSize, oneICst);
+    if (outputTy.getRank() != k1DRank) {
+      auto sliceSize =
+        rewriter.createOrFold<tensor::DimOp>(loc, collapsedData, collapsedDataTy.getRank() - kLastDimOffset);
       sliceSizes.push_back(sliceSize);
       accOffsets.push_back(zeroICst);
       accStrides.push_back(oneICst);
@@ -515,12 +649,13 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
                                   sliceSizes, accStrides, accOffsets);
     // expand addOp back to result Shape
     Value expandAdd;
-    if (dataTy.getRank() - indicesTy.getRank() <= 1) {
+    if (dataTy.getRank() - indicesTy.getRank() <= k1DRank) {
       expandAdd = loops.results.front();
     } else {
-      SmallVector<ReassociationIndices> accReassociationMap{{0}};
+      SmallVector<ReassociationIndices> accReassociationMap{{kFirstDimIndex}};
       // Associate reductionDims
-      accReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(1, outputTy.getRank()))});
+      accReassociationMap.push_back(
+        {llvm::to_vector(llvm::seq<int64_t>(kReassocSecondGroupStart, outputTy.getRank()))});
       expandAdd = rewriter.create<tensor::ExpandShapeOp>(loc, outputTy, loops.results.front(), accReassociationMap);
     }
     rewriter.replaceOp(op, {expandAdd});
@@ -532,11 +667,11 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
                                  Value collapsedResult, Value collapsedIndex, SmallVectorImpl<Value> &sliceSizes,
                                  SmallVectorImpl<Value> &accStrides, SmallVectorImpl<Value> &accOffsets) const {
     auto outputTy = cast<RankedTensorType>(op.getType());
-    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, kZeroIndex);
+    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, kOneIndex);
     auto collapsedDataTy = cast<RankedTensorType>(collapsedData.getType());
-    auto uniqSize = SmallVector<int64_t>({1});
-    ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
+    auto uniqSize = SmallVector<int64_t>({k1DSliceSize});
+    ArrayRef<int64_t> sliceShape = outputTy.getRank() == k1DRank ? uniqSize : collapsedDataTy.getShape().take_back();
     auto sliceTy = cast<RankedTensorType>(outputTy.clone(sliceShape));
     SmallVector<Value> dataOffsets(collapsedDataTy.getRank(), zeroICst);
     SmallVector<Value> dataStrides(collapsedDataTy.getRank(), oneICst);
@@ -566,9 +701,10 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
         llvm::to_vector(llvm::map_range(accStrides, toOpFoldResult)));
       // create an elementwise generic adding extracted acc and data
       // we do not generate tosa::AddOp as they generate expensive allocs
-      SmallVector<AffineMap> indexingMaps = {rewriter.getMultiDimIdentityMap(1), rewriter.getMultiDimIdentityMap(1)};
+      SmallVector<AffineMap> indexingMaps = {rewriter.getMultiDimIdentityMap(k1DRank),
+                                             rewriter.getMultiDimIdentityMap(k1DRank)};
 
-      auto iteratorTypes = mlir::tosa::getNParallelLoopsAttrs(1);
+      auto iteratorTypes = mlir::tosa::getNParallelLoopsAttrs(k1DRank);
       auto addOp =
         rewriter
           .create<linalg::GenericOp>(
@@ -596,11 +732,11 @@ class MindsporeSpecificOpConverter : public OpConversionPattern<sourceOp> {
     Location loc = op.getLoc();
     // mindspore::GatherOp
     if (mindspore::GatherOp gatherOp = dyn_cast<mindspore::GatherOp>(op.getOperation())) {
-      uint64_t batchDims = 0;
+      uint64_t batchDims = kDefaultBatchDims;
       if (gatherOp.getBatchDims() != std::nullopt) {
         batchDims = *gatherOp.getBatchDims();
       }
-      if (batchDims != 0) {
+      if (batchDims != kDefaultBatchDims) {
         return rewriter.notifyMatchFailure(op, "BatchDims != 0 is unsupported temporarily");
       }
     }
@@ -634,13 +770,13 @@ class MindsporeSpecificOpConverter : public OpConversionPattern<sourceOp> {
 
 static TypedAttr createIntInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
   if (isa<mindspore::ReduceSumOp>(op)) {
-    return rewriter.getIntegerAttr(elementTy, 0);
+    return rewriter.getIntegerAttr(elementTy, kReduceAdditiveInitInt);
   }
   if (isa<mindspore::ReduceAnyOp>(op)) {
-    return rewriter.getIntegerAttr(elementTy, 0);
+    return rewriter.getIntegerAttr(elementTy, kReduceAdditiveInitInt);
   }
   if (isa<mindspore::ReduceProdOp>(op)) {
-    return rewriter.getIntegerAttr(elementTy, 1);
+    return rewriter.getIntegerAttr(elementTy, kReduceMultiplicativeInitInt);
   }
   if (isa<mindspore::ReduceMinOp>(op)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMaxValue(elementTy.getIntOrFloatBitWidth()));
@@ -653,10 +789,10 @@ static TypedAttr createIntInitValue(Operation *op, const Type elementTy, Pattern
 
 static TypedAttr createFloatInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
   if (isa<mindspore::ReduceSumOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.getFloatAttr(elementTy, 0.0);
+    return rewriter.getFloatAttr(elementTy, kReduceAdditiveInitFloat);
   }
   if (isa<mindspore::ReduceProdOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.getFloatAttr(elementTy, 1.0);
+    return rewriter.getFloatAttr(elementTy, kReduceMultiplicativeInitFloat);
   }
   if (isa<mindspore::ReduceMinOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), false));
@@ -671,11 +807,11 @@ static TypedAttr createFloatInitValue(Operation *op, const Type elementTy, Patte
 }
 
 static TypedAttr createInitValueForReduce(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
-  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
+  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(kBoolBitWidth));
   }
-  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
+  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getZero(kBoolBitWidth));
   }
   if (isa<FloatType>(elementTy)) {
     return createFloatInitValue(op, elementTy, rewriter);
@@ -727,11 +863,11 @@ static Value createFloatCombiner(Operation *op, ValueRange args, OpBuilder &rewr
 
 static Value createCombinerForReduce(Operation *op, ValueRange args, const Type elementTy, OpBuilder &rewriter) {
   Location loc = op->getLoc();
-  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(1)) {
+  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::AndIOp>(loc, args);
   }
 
-  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
+  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::OrIOp>(loc, args);
   }
 
@@ -747,7 +883,7 @@ static Value createCombinerForReduce(Operation *op, ValueRange args, const Type 
 static bool isRedundantReduce(SmallVector<int64_t> axes, const ShapedType inputTy) {
   bool is_redundant_reduce = true;
   for (int64_t i = 0; i < inputTy.getRank(); i++) {
-    if (llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != 1) {
+    if (llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != kUnitDimSize) {
       is_redundant_reduce = false;
     }
   }
@@ -757,7 +893,7 @@ static bool isRedundantReduce(SmallVector<int64_t> axes, const ShapedType inputT
 static bool isAllReduce(SmallVector<int64_t> axes, const ShapedType inputTy) {
   bool is_all_reduce = true;
   for (int64_t i = 0; i < inputTy.getRank(); i++) {
-    if (!llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != 1) {
+    if (!llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != kUnitDimSize) {
       is_all_reduce = false;
     }
   }
@@ -829,13 +965,13 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     SmallVector<int64_t, 2> genericShape;
     for (int i = 0; i < rank; i++) {
       int64_t dim = multiples[i];
-      genericShape.push_back(dim == -1 ? ShapedType::kDynamic : dim);
+      genericShape.push_back(dim == kDynamicDimSentinel ? ShapedType::kDynamic : dim);
       genericShape.push_back(inputShape[i]);
     }
 
     SmallVector<Value> dynDims;
     for (int i = 0; i < inputTy.getRank(); i++) {
-      if (inputTy.isDynamicDim(i) || multiples[i] == -1) {
+      if (inputTy.isDynamicDim(i) || multiples[i] == kDynamicDimSentinel) {
         dynDims.push_back(rewriter.create<tensor::DimOp>(loc, input, i));
       }
     }
@@ -846,10 +982,10 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     SmallVector<AffineExpr, 4> dimExprs;
     dimExprs.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      const uint32_t indexThreshold = 2;
-      dimExprs.push_back(rewriter.getAffineDimExpr(i * indexThreshold + 1));
+      dimExprs.push_back(rewriter.getAffineDimExpr(i * kTileDimsPerInputDim + kBroadcastOrigDimOffset));
     }
-    auto readAffineMap = AffineMap::get(/*dimCount=*/rank * 2, /*symbolCount=*/0, dimExprs, rewriter.getContext());
+    auto readAffineMap = AffineMap::get(/* dimCount= */ rank * kTileDimsPerInputDim,
+                                        /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
 
     SmallVector<AffineMap, 2> affineMaps = {readAffineMap, rewriter.getMultiDimIdentityMap(genericShape.size())};
 
@@ -877,7 +1013,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     Value input = op.getInput();
     auto inputTy = cast<ShapedType>(input.getType());
     auto inputElementTy = inputTy.getElementType();
-    assert(inputTy.getRank() > 0);
+    assert(inputTy.getRank() > kFirstDimIndex);
     uint64_t newRankSize = op.getNewRankSize();
     assert(newRankSize >= (uint64_t)inputTy.getRank());
 
@@ -900,8 +1036,8 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     }
     // 2.If additional dimensions exist, then insert reshapeOp
     uint64_t extraDimSize = newRankSize - (uint64_t)inputTy.getRank();
-    if (extraDimSize > 0) {
-      llvm::SmallVector<int64_t> newInputShape(extraDimSize, 1);
+    if (extraDimSize > kFirstDimIndex) {
+      llvm::SmallVector<int64_t> newInputShape(extraDimSize, kBroadcastUnitDimSize);
       (void)std::transform(inputTy.getShape().begin(), inputTy.getShape().end(), std::back_inserter(newInputShape),
                            [](const int64_t &dim) { return dim; });
       NamedAttribute reshapeAttr = NamedAttribute(StringAttr::get(context, "new_shape"),
@@ -916,7 +1052,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     for (uint64_t i = 0; i < newRankSize; i++) {
       // If the value of the target shape in the dimension is -1, the value of the output shape in the
       // dimension is the value of the corresponding input shape in the dimension.
-      int64_t multiple = (newShape[i] == -1) ? 1 : newShape[i] / inputShape[i];
+      int64_t multiple = (newShape[i] == kDynamicDimSentinel) ? kBroadcastDefaultMultiple : newShape[i] / inputShape[i];
       (void)multiples.emplace_back(multiple);
     }
     NamedAttribute multiplesAttr = NamedAttribute(StringAttr::get(context, "multiples"),
@@ -940,8 +1076,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     auto elementTy = inputTy.getElementType();
     int64_t rank = inputTy.getRank();
     Value newShape = op.getNewShapeValue();
-    uint64_t newRankSize = op.getNewRankSize();
-    assert(newRankSize >= (uint64_t)inputTy.getRank());
+    assert(op.getNewRankSize() >= (uint64_t)inputTy.getRank());
 
     // create emptyOp and genericOp
     // genericShape : emptyOp and genericOp's shape
@@ -965,7 +1100,8 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
 
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(op.getLoc(), genericShape, elementTy, dynDims);
     // We needs to map the input shape to the non-broadcasted dimensions.
-    auto readAffineMap = AffineMap::get(/*dimCount=*/dimIndices, /*symbolCount=*/0, dimExprs, rewriter.getContext());
+    auto readAffineMap =
+      AffineMap::get(/* dimCount= */ dimIndices, /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
     assert((int64_t)genericShape.size() == dimIndices);
     SmallVector<AffineMap, 2> affineMaps = {readAffineMap, rewriter.getMultiDimIdentityMap(genericShape.size())};
 
@@ -993,7 +1129,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
                               SmallVector<int64_t, 2> &collapseShape,
                               SmallVector<ReassociationIndices, 4> &reassociationMap,
                               SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
-    assert(inputDimSize == 1);
+    assert(inputDimSize == kUnitDimSize);
     genericShape.push_back(inputDimSize);
     collapseShape.push_back(inputDimSize);
     ReassociationIndices indices({dimIndices});
@@ -1017,9 +1153,9 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
                                                   rewriter.create<arith::ConstantIndexOp>(loc, outDimSize), dimVal);
     dynDims.push_back(multi);
     dynDims.push_back(dimVal);
-    ReassociationIndices indices({dimIndices, dimIndices + 1});
+    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
     reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + 1));
+    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
     dimIndices += 2;
     needCastOp = true;
   }
@@ -1041,13 +1177,13 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
                                              SmallVector<int64_t, 2> &collapseShape,
                                              SmallVector<ReassociationIndices, 4> &reassociationMap,
                                              SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
-    assert(inputDimSize >= 1 && inputDimSize < outDimSize);
+    assert(inputDimSize >= kUnitDimSize && inputDimSize < outDimSize);
     genericShape.push_back(outDimSize / inputDimSize);
     genericShape.push_back(inputDimSize);
     collapseShape.push_back(outDimSize);
-    ReassociationIndices indices({dimIndices, dimIndices + 1});
+    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
     reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + 1));
+    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
     dimIndices += 2;
   }
 
@@ -1062,9 +1198,9 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     collapseShape.push_back(ShapedType::kDynamic);
     Value multi = rewriter.create<shape::GetExtentOp>(loc, newShape, dim);
     dynDims.push_back(multi);
-    ReassociationIndices indices({dimIndices, dimIndices + 1});
+    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
     reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + 1));
+    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
     dimIndices += 2;
   }
 
@@ -1082,9 +1218,9 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     multi = rewriter.create<arith::DivSIOp>(loc, rewriter.getIndexType(), multi,
                                             rewriter.create<arith::ConstantIndexOp>(loc, inputDimSize));
     dynDims.push_back(multi);
-    ReassociationIndices indices({dimIndices, dimIndices + 1});
+    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
     reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + 1));
+    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
     dimIndices += 2;
   }
 
@@ -1122,9 +1258,9 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     multi = rewriter.create<arith::DivSIOp>(loc, rewriter.getIndexType(), multi, dimVal);
     dynDims.push_back(multi);
     dynDims.push_back(dimVal);
-    ReassociationIndices indices({dimIndices, dimIndices + 1});
+    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
     reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + 1));
+    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
     dimIndices += 2;
   }
 
@@ -1139,12 +1275,12 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     int64_t outDimSize = resultShape[dim];
     int64_t inputDimSize = inputShape[dim];
 
-    if (outDimSize == 1) {
+    if (outDimSize == kUnitDimSize) {
       handleOutDimOne(rewriter, inputDimSize, genericShape, collapseShape, reassociationMap, dimExprs, dimIndices);
       return;
     }
 
-    if (outDimSize > 1) {
+    if (outDimSize > kUnitDimSize) {
       if (inputDimSize == ShapedType::kDynamic) {
         handleOutDimGreaterInputDynamic(loc, input, dim, rewriter, outDimSize, inputShape, genericShape, collapseShape,
                                         reassociationMap, dynDims, dimExprs, dimIndices, needCastOp);
@@ -1160,12 +1296,12 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
       return;
     }
 
-    if (inputDimSize == 1) {
+    if (inputDimSize == kUnitDimSize) {
       handleDynamicOutInputOne(loc, newShape, dim, rewriter, inputDimSize, genericShape, collapseShape,
                                reassociationMap, dynDims, dimExprs, dimIndices);
       return;
     }
-    if (inputDimSize > 1) {
+    if (inputDimSize > kUnitDimSize) {
       handleDynamicOutInputGreater(loc, newShape, inputShape, dim, rewriter, inputDimSize, genericShape, collapseShape,
                                    reassociationMap, dynDims, dimExprs, dimIndices);
       return;
@@ -1231,9 +1367,9 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
       process = "cpu";
       emitWarning(op->getParentOp()->getLoc()) << " Cannot find processing type (cpu or cuda). Default is cpu. \n";
     }
-    if (is_all_reduce && (inputTy.getRank() != 1) && (process == "cpu")) {
-      int64_t total_size =
-        std::accumulate(inputTy.getShape().begin(), inputTy.getShape().end(), 1, std::multiplies<int64_t>());
+    if (is_all_reduce && (inputTy.getRank() != k1DRank) && (process == "cpu")) {
+      int64_t total_size = std::accumulate(inputTy.getShape().begin(), inputTy.getShape().end(), kShapeProductInit,
+                                           std::multiplies<int64_t>());
       Type collapseTy = RankedTensorType::get(total_size, resultTy.getElementType(), encoding);
       SmallVector<ReassociationExprs> collapse_map = {};
       ReassociationExprs expand_strategy;
@@ -1244,7 +1380,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
       auto collapseOp = rewriter.create<tensor::CollapseShapeOp>(loc, collapseTy, opnd, collapse_map);
       opnd = collapseOp.getResult();
       inputTy = cast<RankedTensorType>(opnd.getType());
-      axes = {0};
+      axes = {kFirstDimIndex};
     }
 
     SmallVector<int64_t> reduceOutShape = inferReduceOutShape(axes, inputTy);
@@ -1295,13 +1431,14 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
     }
     int64_t expandInputRank = cast<ShapedType>(initTensor.getType()).getRank();
     int64_t expandOutputRank = resultTy.getRank();
-    if (keep_dims && (expandInputRank != 0)) {  // keepdims, dim >= 1 after reduce, expand to output
-                                                // shape
+    if (keep_dims && (expandInputRank != kFirstDimIndex)) {  // keepdims, dim >= 1 after reduce, expand to output
+                                                             // shape
       SmallVector<ReassociationExprs> reassociation_map =
         getExpandMap(axes, expandInputRank, expandOutputRank, rewriter);
       auto expandOp = rewriter.create<tensor::ExpandShapeOp>(loc, resultTy, opnd, reassociation_map);
       rewriter.replaceOp(op, expandOp.getResult());
-    } else if (expandInputRank == 0) {  // dim = 0 after reduce, expand to output shape. e.g. f32->1xf32, f32->1x1xf32
+    } else if (expandInputRank ==
+               kFirstDimIndex) {  // dim = 0 after reduce, expand to output shape. e.g. f32->1xf32, f32->1x1xf32
       SmallVector<ReassociationExprs> reassociation_map = {};
       auto expandOp = rewriter.create<tensor::ExpandShapeOp>(loc, resultTy, opnd, reassociation_map);
       rewriter.replaceOp(op, expandOp.getResult());
@@ -1332,7 +1469,7 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
     auto output = op->getResult(0);
     auto outputTy = cast<ShapedType>(output.getType());
     auto outputRank = outputTy.getShape().size();
-    const size_t nonBatchAxisNum = 2;
+    const size_t nonBatchAxisNum = kMatmulNonBatchAxisNum;
     size_t batchNum = outputRank - nonBatchAxisNum;
     // If transposeA is true, inputA shape is [K,M] or [B,K,M], else is [M,K] or [B,M,K]
     auto locMInInput = int(batchNum) + int(transposeA);
@@ -1356,7 +1493,7 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
     }
 
     if (!secondOperandTy.hasRank() || secondOperandTy.isDynamicDim(static_cast<unsigned int>(locNInInput))) {
-      dynDims[batchNum + 1] = rewriter.create<tensor::DimOp>(loc, op->getOperand(1), locNInInput);
+      dynDims[batchNum + kOneIndex] = rewriter.create<tensor::DimOp>(loc, op->getOperand(1), locNInInput);
     }
 
     SmallVector<Value> filteredDims = mlir::tosa::condenseValues(dynDims);
@@ -1372,10 +1509,8 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
       return rewriter.notifyMatchFailure(op, "TransposeA is not supported yet in linalg matmul/batchmatmul ops");
     }
 
-    constexpr auto kMatmulRank = 2;
-    constexpr auto kBatchMatmulRank = 3;
     switch (int(transposeB)) {
-      case 0:
+      case kTransposeDisabled:
         switch (outputRank) {
           case kMatmulRank:
             return ReplaceMatMulOp<linalg::MatmulOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
@@ -1384,7 +1519,7 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
           default:
             return failure();
         }
-      case 1:
+      case kTransposeEnabled:
         switch (outputRank) {
           case kMatmulRank:
             return ReplaceMatMulOp<linalg::MatmulTransposeBOp>(mindsporeOp, adaptor, rewriter, zeroTensor);

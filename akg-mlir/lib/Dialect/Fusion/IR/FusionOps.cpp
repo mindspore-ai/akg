@@ -29,9 +29,9 @@ struct Wrapper {
   static Wrapper stride(int64_t v) { return (ShapedType::isDynamic(v)) ? Wrapper{true, 0} : Wrapper{false, v}; }
   static Wrapper offset(int64_t v) { return (ShapedType::isDynamic(v)) ? Wrapper{true, 0} : Wrapper{false, v}; }
   static Wrapper size(int64_t v) { return (ShapedType::isDynamic(v)) ? Wrapper{true, 0} : Wrapper{false, v}; }
-  int64_t asOffset() const { return saturated ? ShapedType::kDynamic : v; }
-  int64_t asSize() const { return saturated ? ShapedType::kDynamic : v; }
-  int64_t asStride() const { return saturated ? ShapedType::kDynamic : v; }
+  [[nodiscard]] int64_t asOffset() const { return saturated ? ShapedType::kDynamic : v; }
+  [[nodiscard]] int64_t asSize() const { return saturated ? ShapedType::kDynamic : v; }
+  [[nodiscard]] int64_t asStride() const { return saturated ? ShapedType::kDynamic : v; }
   bool operator==(const Wrapper &other) const {
     return (saturated && other.saturated) || (!saturated && !other.saturated && v == other.v);
   }
@@ -289,7 +289,7 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
   if (succeeded(memref::foldMemRefCast(*this))) {
     return getResult();
   }
-  return OpFoldResult();
+  return {};
 }
 
 // ===----------------------------------------------------------------------=== //
@@ -375,7 +375,7 @@ OpFoldResult MultiLoadOp::fold(FoldAdaptor) {
   if (succeeded(memref::foldMemRefCast(*this))) {
     return getResult();
   }
-  return OpFoldResult();
+  return {};
 }
 
 // ===----------------------------------------------------------------------=== //
@@ -524,7 +524,7 @@ LogicalResult TransposeOp::verify() {
   }
   // Verify transposition array.
   auto transpAttr = getTransp().getValue();
-  int64_t size = (int64_t)transpAttr.size();
+  auto size = (int64_t)transpAttr.size();
   if (rank != size) {
     return emitOpError("transposition length mismatch: ") << size;
   }
@@ -549,7 +549,8 @@ LogicalResult TransposeOp::verify() {
 // StoreOp
 // ===----------------------------------------------------------------------=== //
 ::mlir::ParseResult StoreOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
-  OpAsmParser::UnresolvedOperand valueInfo, memrefInfo;
+  OpAsmParser::UnresolvedOperand valueInfo;
+  OpAsmParser::UnresolvedOperand memrefInfo;
   SmallVector<OpAsmParser::UnresolvedOperand, 8> indexInfo;
   if (parser.parseOperand(valueInfo) || parser.parseComma() || parser.parseOperand(memrefInfo) ||
       parser.parseOperandList(indexInfo, OpAsmParser::Delimiter::Square)) {

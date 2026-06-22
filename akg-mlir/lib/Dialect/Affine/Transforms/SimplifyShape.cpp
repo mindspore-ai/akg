@@ -56,7 +56,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
   explicit SimplifyShapePass(const bool keepArg) { this->keepArgsShape = keepArg; }
   explicit SimplifyShapePass(const SimplifyShapeOptions &options) : SimplifyShapeBase(options) {}
 
-  SimplifiedShapeInfos getSimplifiedShapeInfos(const MemRefType &mrtype) const {
+  [[nodiscard]] SimplifiedShapeInfos getSimplifiedShapeInfos(const MemRefType &mrtype) const {
     MemRefType newmrtype = mrtype;
     ArrayRef<int64_t> shape = mrtype.getShape();
     SmallVector<int64_t, kVectorSizeFour> todelete;
@@ -105,8 +105,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
         if (indexValue != newIndex) {
           Type type = attr.getType();
           mlir::OpBuilder builder(cop);
-          mlir::arith::ConstantOp newcstOp =
-            builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
+          auto newcstOp = builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
           dimOp->replaceUsesOfWith(idx, newcstOp.getResult());
         }
       } else {
@@ -121,8 +120,9 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
   }
 
   template <typename T>
-  T updateReassociationMaps(T shapeOp, const SmallVector<int64_t, kVectorSizeFour> &todelete, MemRefType resultShape,
-                            Value operand) const {
+  [[nodiscard]] [[nodiscard]] T updateReassociationMaps(T shapeOp,
+                                                        const SmallVector<int64_t, kVectorSizeFour> &todelete,
+                                                        MemRefType resultShape, Value operand) const {
     SmallVector<SmallVector<int64_t, kVectorSizeTwo>, kVectorSizeFour> oldShapeOpIndices =
       shapeOp.getReassociationIndices();
     SmallVector<SmallVector<int64_t, kVectorSizeTwo>, kVectorSizeFour> newShapeOpIndices;
@@ -181,7 +181,8 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     reshapeOp.erase();
   }
 
-  AffineMap getSimplifiedAffineMap(AffineMap am, const SmallVector<int64_t, kVectorSizeFour> &todelete) const {
+  [[nodiscard]] AffineMap getSimplifiedAffineMap(AffineMap am,
+                                                 const SmallVector<int64_t, kVectorSizeFour> &todelete) const {
     AffineMap updatedAffineMap = am;
 
     if (!todelete.empty()) {
@@ -314,14 +315,13 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
       auto loc = oldOp->getLoc();
       mlir::OpBuilder builder(oldOp);
       if (mlir::memref::AllocOp allocop = dyn_cast<mlir::memref::AllocOp>(oldOp)) {
-        mlir::memref::AllocOp newalloc = builder.create<mlir::memref::AllocOp>(
-          loc, resultSimplifyType, allocop.getDynamicSizes(), allocop.getSymbolOperands(), allocop.getAlignmentAttr());
+        auto newalloc = builder.create<mlir::memref::AllocOp>(loc, resultSimplifyType, allocop.getDynamicSizes(),
+                                                              allocop.getSymbolOperands(), allocop.getAlignmentAttr());
         allocop->replaceAllUsesWith(newalloc);
         allocop.erase();
       }
       if (mlir::memref::GetGlobalOp getglobalop = dyn_cast<mlir::memref::GetGlobalOp>(oldOp)) {
-        mlir::memref::GetGlobalOp newop =
-          builder.create<mlir::memref::GetGlobalOp>(loc, resultSimplifyType, getglobalop.getName());
+        auto newop = builder.create<mlir::memref::GetGlobalOp>(loc, resultSimplifyType, getglobalop.getName());
         getglobalop->replaceAllUsesWith(newop);
         getglobalop.erase();
       }
@@ -351,7 +351,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
           auto loc = globalop.getLoc();
           mlir::OpBuilder builder(globalop);
-          mlir::memref::GlobalOp newop =
+          auto newop =
             builder.create<mlir::memref::GlobalOp>(loc, globalop.getSymName(), builder.getStringAttr("private"),
                                                    resultSimplifyType, reshapedElementsAttr, true, IntegerAttr());
 

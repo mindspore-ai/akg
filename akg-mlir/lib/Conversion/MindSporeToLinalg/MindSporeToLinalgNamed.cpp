@@ -44,8 +44,7 @@ static std::set<std::string> linalgBinarySet = {"mindspore.add", "mindspore.mul"
 bool isIntegerType(Operation *op) {
   Type type = op->getResultTypes()[0];
   auto elemTy = getElementTypeOrSelf(type);
-  if (isa<IntegerType>(elemTy)) return true;
-  return false;
+  return isa<IntegerType>(elemTy);
 }
 
 static linalg::UnaryFn getLinalgUnaryKind(Operation *op) {
@@ -77,10 +76,10 @@ static linalg::BinaryFn getLinalgBinaryKind(Operation *op) {
 static Attribute getOperationKindAttribute(Operation *op) {
   std::string opName = op->getName().getStringRef().str();
   Attribute attr;
-  if (linalgUnarySet.count(opName) || (opName == "mindspore.abs" && !isIntegerType(op))) {
+  if ((linalgUnarySet.count(opName) != 0u) || (opName == "mindspore.abs" && !isIntegerType(op))) {
     linalg::UnaryFn kind = getLinalgUnaryKind(op);
     attr = linalg::UnaryFnAttr::get(op->getContext(), kind);
-  } else if (linalgBinarySet.count(opName)) {
+  } else if (linalgBinarySet.count(opName) != 0u) {
     linalg::BinaryFn kind = getLinalgBinaryKind(op);
     attr = linalg::BinaryFnAttr::get(op->getContext(), kind);
   }
@@ -137,9 +136,9 @@ static Operation *createElemwiseOp(Operation *op, Value emptyTensor, SmallVector
   std::string opName = op->getName().getStringRef().str();
   Operation *namedOp = nullptr;
   auto src = op->getOperands();
-  if (linalgUnarySet.count(opName)) {
+  if (linalgUnarySet.count(opName) != 0u) {
     namedOp = rewriter.create<linalg::ElemwiseUnaryOp>(loc, src, emptyTensor, attrs);
-  } else if (linalgBinarySet.count(opName)) {
+  } else if (linalgBinarySet.count(opName) != 0u) {
     namedOp = rewriter.create<linalg::ElemwiseBinaryOp>(loc, src, emptyTensor, attrs);
   }
   return namedOp;
@@ -209,28 +208,45 @@ static LogicalResult invMatchAndRewriteHelper(Operation *op, PatternRewriter &re
 static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
     if (intTy.isInteger(1)) {
-      if (isa<mindspore::ReduceAllOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getAllOnes(1));
-      if (isa<mindspore::ReduceAnyOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getZero(1));
+      if (isa<mindspore::ReduceAllOp>(op)) {
+        return rewriter.getIntegerAttr(intTy, APInt::getAllOnes(1));
+      }
+      if (isa<mindspore::ReduceAnyOp>(op)) {
+        return rewriter.getIntegerAttr(intTy, APInt::getZero(1));
+      }
     }
   }
 
   if (auto floatTy = dyn_cast<FloatType>(elementTy)) {
-    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.getFloatAttr(floatTy, 0.0);
-    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.getFloatAttr(floatTy, 1.0);
-    if (isa<mindspore::ReduceMinOp>(op))
+    if (isa<mindspore::ReduceSumOp>(op)) {
+      return rewriter.getFloatAttr(floatTy, 0.0);
+    }
+    if (isa<mindspore::ReduceProdOp>(op)) {
+      return rewriter.getFloatAttr(floatTy, 1.0);
+    }
+    if (isa<mindspore::ReduceMinOp>(op)) {
       return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/false));
-    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op))
+    }
+    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op)) {
       return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/true));
+    }
     return {};
   }
 
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
     unsigned bitWidth = intTy.getIntOrFloatBitWidth();
-    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.getIntegerAttr(intTy, 0);
-    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.getIntegerAttr(intTy, 1);
-    if (isa<mindspore::ReduceMinOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getSignedMaxValue(bitWidth));
-    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op))
+    if (isa<mindspore::ReduceSumOp>(op)) {
+      return rewriter.getIntegerAttr(intTy, 0);
+    }
+    if (isa<mindspore::ReduceProdOp>(op)) {
+      return rewriter.getIntegerAttr(intTy, 1);
+    }
+    if (isa<mindspore::ReduceMinOp>(op)) {
+      return rewriter.getIntegerAttr(intTy, APInt::getSignedMaxValue(bitWidth));
+    }
+    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op)) {
       return rewriter.getIntegerAttr(intTy, APInt::getSignedMinValue(bitWidth));
+    }
     return {};
   }
 
@@ -245,24 +261,40 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
 
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
     if (intTy.isInteger(1)) {
-      if (isa<mindspore::ReduceAllOp>(op)) return rewriter.create<arith::AndIOp>(loc, args);
-      if (isa<mindspore::ReduceAnyOp>(op)) return rewriter.create<arith::OrIOp>(loc, args);
+      if (isa<mindspore::ReduceAllOp>(op)) {
+        return rewriter.create<arith::AndIOp>(loc, args);
+      }
+      if (isa<mindspore::ReduceAnyOp>(op)) {
+        return rewriter.create<arith::OrIOp>(loc, args);
+      }
     }
   }
 
   if (auto floatTy = dyn_cast<FloatType>(elementTy)) {
     (void)floatTy;
-    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.create<arith::AddFOp>(loc, args);
-    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.create<arith::MulFOp>(loc, args);
-    if (isa<mindspore::ReduceMinOp>(op)) return rewriter.create<arith::MinimumFOp>(loc, args[0], args[1]);
-    if (isa<mindspore::ReduceMaxOp>(op)) return rewriter.create<arith::MaximumFOp>(loc, args[0], args[1]);
+    if (isa<mindspore::ReduceSumOp>(op)) {
+      return rewriter.create<arith::AddFOp>(loc, args);
+    }
+    if (isa<mindspore::ReduceProdOp>(op)) {
+      return rewriter.create<arith::MulFOp>(loc, args);
+    }
+    if (isa<mindspore::ReduceMinOp>(op)) {
+      return rewriter.create<arith::MinimumFOp>(loc, args[0], args[1]);
+    }
+    if (isa<mindspore::ReduceMaxOp>(op)) {
+      return rewriter.create<arith::MaximumFOp>(loc, args[0], args[1]);
+    }
     return {};
   }
 
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
     (void)intTy;
-    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.create<arith::AddIOp>(loc, args);
-    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.create<arith::MulIOp>(loc, args);
+    if (isa<mindspore::ReduceSumOp>(op)) {
+      return rewriter.create<arith::AddIOp>(loc, args);
+    }
+    if (isa<mindspore::ReduceProdOp>(op)) {
+      return rewriter.create<arith::MulIOp>(loc, args);
+    }
     if (isa<mindspore::ReduceMinOp>(op)) {
       auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
       return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
@@ -299,7 +331,9 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t
   // First fill the output buffer with the init value.
   auto emptyTensor = rewriter.create<tensor::EmptyOp>(loc, reduceShape, elementTy, dynDims).getResult();
   auto fillValueAttr = createInitialValueForReduceOp(op, elementTy, rewriter);
-  if (!fillValueAttr) return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
+  if (!fillValueAttr) {
+    return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
+  }
 
   auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
   auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
@@ -308,16 +342,37 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t
   auto reduceOp = rewriter.create<linalg::ReduceOp>(
     loc, input, filledTensor, axes, [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
       auto result = createLinalgBodyCalculationForReduceOp(op, blockArgs, elementTy, rewriter);
-      if (result) didEncounterError = true;
+      if (result) {
+        didEncounterError = true;
+      }
 
       nestedBuilder.create<linalg::YieldOp>(nestedLoc, result);
     });
 
-  if (!didEncounterError) return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
+  if (!didEncounterError) {
+    return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
+  }
 
   auto expandShapeOp = createExpandShapeOp(op, rewriter, reduceOp.getResult(0), op->getResult(0), axes);
   rewriter.replaceOp(op, expandShapeOp);
   return success();
+}
+
+static void advanceDimsUntilEqual(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape, unsigned &currLhsDim,
+                                  unsigned &currRhsDim, int64_t &lhsSize, int64_t &rhsSize) {
+  while (lhsSize != rhsSize && currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
+    if (lhsSize < rhsSize) {
+      currLhsDim++;
+      if (currLhsDim < lhsShape.size()) {
+        lhsSize *= lhsShape[currLhsDim];
+      }
+    } else {
+      currRhsDim++;
+      if (currRhsDim < rhsShape.size()) {
+        rhsSize *= rhsShape[currRhsDim];
+      }
+    }
+  }
 }
 
 static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape,
@@ -332,23 +387,12 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
     return true;
   }
 
-  unsigned currLhsDim = 0, currRhsDim = 0;
+  unsigned currLhsDim = 0;
+  unsigned currRhsDim = 0;
   while (currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
     int64_t rhsSize = rhsShape[currRhsDim];
     int64_t lhsSize = lhsShape[currLhsDim];
-    while (lhsSize != rhsSize && currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
-      if (lhsSize < rhsSize) {
-        currLhsDim++;
-        if (currLhsDim < lhsShape.size()) {
-          lhsSize *= lhsShape[currLhsDim];
-        }
-      } else {
-        currRhsDim++;
-        if (currRhsDim < rhsShape.size()) {
-          rhsSize *= rhsShape[currRhsDim];
-        }
-      }
-    }
+    advanceDimsUntilEqual(lhsShape, rhsShape, currLhsDim, currRhsDim, lhsSize, rhsSize);
     if (lhsSize == rhsSize) {
       intermediateShape.push_back(lhsSize);
     }
@@ -373,13 +417,24 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
   return true;
 }
 
+static void collapseTrailingOneDims(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape,
+                                    SmallVector<ReassociationExprs, 4> &reassociationMap, unsigned &currSrcDim,
+                                    unsigned currDstDim) {
+  if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
+    while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
+      reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
+    }
+  }
+}
+
 static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape,
                                                ArrayRef<int64_t> dstShape,
                                                SmallVector<ReassociationExprs, 4> &reassociationMap, bool isDynamic) {
-  // If the shape is dynamic, create a map for collapsing into one dimension.
   if (isDynamic) {
     SmallVector<AffineExpr, 2> exprs;
-    for (int i = 0, s = srcShape.size(); i < s; ++i) exprs.push_back(rewriter.getAffineDimExpr(i));
+    for (int i = 0, s = srcShape.size(); i < s; ++i) {
+      exprs.push_back(rewriter.getAffineDimExpr(i));
+    }
     reassociationMap = {exprs};
     return true;
   }
@@ -390,7 +445,8 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
   }
 
   reassociationMap.resize(dstShape.size());
-  unsigned currSrcDim = 0, currDstDim = 0;
+  unsigned currSrcDim = 0;
+  unsigned currDstDim = 0;
   while (currSrcDim < srcShape.size() && currDstDim < dstShape.size()) {
     int64_t dstSize = dstShape[currDstDim];
     int64_t srcSize = srcShape[currSrcDim];
@@ -400,13 +456,7 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
     }
     if (srcSize == dstSize) {
       reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
-      // If the next dim in collapsedShape is not 1, treat subsequent dims in
-      // expandedShape which are 1 to be collapsed.
-      if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
-        while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
-          reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
-        }
-      }
+      collapseTrailingOneDims(rewriter, srcShape, dstShape, reassociationMap, currSrcDim, currDstDim);
     }
     currDstDim++;
   }
@@ -418,10 +468,10 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
 
 Value createCollapse(PatternRewriter &rewriter, Location loc, ShapedType resultTy, Value operand) {
   ShapedType operandTy = cast<ShapedType>(operand.getType());
-  if (resultTy == operandTy) return operand;
-
+  if (resultTy == operandTy) {
+    return operand;
+  }
   bool isDynamic = !operandTy.hasStaticShape();
-
   if (isDynamic && resultTy.getRank() != 1) {
     (void)rewriter.notifyMatchFailure(loc, "Cannot collapse dynamic dims to more than one dimension");
     return {};
@@ -444,10 +494,10 @@ Value createCollapse(PatternRewriter &rewriter, Location loc, ShapedType resultT
 
 Value createExpand(PatternRewriter &rewriter, Location loc, ShapedType resultTy, Value operand) {
   ShapedType operandTy = cast<ShapedType>(operand.getType());
-  if (resultTy == operandTy) return operand;
-
+  if (resultTy == operandTy) {
+    return operand;
+  }
   bool isDynamic = !operandTy.hasStaticShape();
-
   if (isDynamic && operandTy.getRank() != 1) {
     (void)rewriter.notifyMatchFailure(loc, "Cannot expand dynamic dims from more than one dimension");
     return {};
@@ -484,10 +534,14 @@ static LogicalResult reshapeMatchAndRewriteHelper(mindspore::ReshapeOp reshape, 
   auto intermediateTy = RankedTensorType::get(intermediateShape, reshape.getType().getElementType());
 
   Value collapse = createCollapse(rewriter, reshape.getLoc(), intermediateTy, reshape.getInput());
-  if (!collapse) return failure();
+  if (!collapse) {
+    return failure();
+  }
 
   Value expand = createExpand(rewriter, reshape.getLoc(), resultTy, collapse);
-  if (!expand) return failure();
+  if (!expand) {
+    return failure();
+  }
 
   rewriter.replaceOp(reshape, expand);
   return success();
@@ -513,15 +567,20 @@ static DenseI64ArrayAttr computeDiffShape(mindspore::BroadcastToOp brcOp) {
   auto outputShapeSize = outputShape.size();
 
   SmallVector<int64_t> dim;
-  size_t inIdx = 0, outIdx = 0;
+  size_t inIdx = 0;
+  size_t outIdx = 0;
   while (inIdx < inputShapeSize && outIdx < outputShapeSize) {
     if (outputShape[outIdx] == inputShape[inIdx]) {
       outIdx++;
       inIdx++;
     } else {
       size_t tmpIdx = inIdx;
-      while (tmpIdx < inputShapeSize && inputShape[tmpIdx] == 1) tmpIdx++;
-      if (tmpIdx >= inputShapeSize) continue;
+      while (tmpIdx < inputShapeSize && inputShape[tmpIdx] == 1) {
+        tmpIdx++;
+      }
+      if (tmpIdx >= inputShapeSize) {
+        continue;
+      }
       if (inputShape[tmpIdx] == outputShape[outIdx]) {
         inIdx = tmpIdx + 1;
       }
@@ -529,7 +588,9 @@ static DenseI64ArrayAttr computeDiffShape(mindspore::BroadcastToOp brcOp) {
       outIdx++;
     }
   }
-  while (outIdx < outputShapeSize) dim.push_back(outIdx++);
+  while (outIdx < outputShapeSize) {
+    dim.push_back(outIdx++);
+  }
 
   auto dimension = DenseI64ArrayAttr::get(brcOp.getContext(), ArrayRef<int64_t>(dim));
   return dimension;
@@ -560,10 +621,11 @@ static DenseI64ArrayAttr computeDimension(mindspore::BroadcastToOp brcOp) {
   auto outputShape = cast<ShapedType>(output.getType()).getShape();
 
   DenseI64ArrayAttr dimension;
-  if (intputShapeAttr.getValue().size() == outputShape.size())
+  if (intputShapeAttr.getValue().size() == outputShape.size()) {
     dimension = computeSameShape(brcOp);
-  else
+  } else {
     dimension = computeDiffShape(brcOp);
+  }
   return dimension;
 }
 
@@ -574,24 +636,35 @@ static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
     if (isa<mindspore::AddOp, mindspore::MulOp, mindspore::SubOp, mindspore::DivOp, mindspore::PowOp,
             mindspore::MaximumOp, mindspore::MinimumOp, mindspore::EqualOp, mindspore::GreaterOp,
             mindspore::GreaterEqualOp, mindspore::LogicalAndOp, mindspore::LogicalOrOp, mindspore::SelectOp,
-            LLVM::ReturnOp>(op))
+            LLVM::ReturnOp>(op)) {
       msOps.push_back(op);
+    }
   });
   for (auto msOp : msOps) {
     if (isa<LLVM::ReturnOp>(msOp)) {
-      if (msOp->getNumOperands() == 0) continue;
+      if (msOp->getNumOperands() == 0) {
+        continue;
+      }
       auto oper0 = msOp->getOperand(0);
-      if (oper0.getDefiningOp() == brcOp) return oper0;
+      if (oper0.getDefiningOp() == brcOp) {
+        return oper0;
+      }
       continue;
     }
 
-    if (msOp->getNumOperands() < 2) continue;
+    if (msOp->getNumOperands() < 2) {
+      continue;
+    }
 
     auto oper0 = msOp->getOperand(0);
     auto oper1 = msOp->getOperand(1);
 
-    if (oper0.getDefiningOp() == brcOp) return oper1;
-    if (oper1.getDefiningOp() == brcOp) return oper0;
+    if (oper0.getDefiningOp() == brcOp) {
+      return oper1;
+    }
+    if (oper1.getDefiningOp() == brcOp) {
+      return oper0;
+    }
   }
   return brcOp.getOutput();
 }
@@ -608,7 +681,9 @@ static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brc
 
   Value dynRef = getDynamicRankTensor(brcOp);
   ShapedType dynRefTy;
-  if (auto st = dyn_cast<ShapedType>(dynRef.getType())) dynRefTy = st;
+  if (auto st = dyn_cast<ShapedType>(dynRef.getType())) {
+    dynRefTy = st;
+  }
 
   if (!dynRefTy || dynRefTy.getRank() == 0 || dynRefTy.getRank() != resultTy.getRank()) {
     dynRef = output;

@@ -63,14 +63,16 @@ constexpr auto kNoBroadcast = 2;
 
 template <typename T>
 void printVector(const llvm::SmallVector<T> info) {
-  LLVM_DEBUG(llvm::dbgs() << "[");
-  for (auto num : info) {
-    LLVM_DEBUG(llvm::dbgs() << num << ", ");
-  }
-  LLVM_DEBUG(llvm::dbgs() << "]\n");
+  LLVM_DEBUG({
+    llvm::dbgs() << "[";
+    for (auto num : info) {
+      llvm::dbgs() << num << ", ";
+    }
+    llvm::dbgs() << "]\n";
+  });
 }
 
-bool foldDimensionAnalyser::backtrackUpdateTensors(const Value &value, const llvm::SmallVector<int64_t> info) {
+bool FoldDimensionAnalyser::backtrackUpdateTensors(const Value &value, const llvm::SmallVector<int64_t> info) {
   std::queue<Value> updateList;
   llvm::DenseMap<Value, bool> visited;
   updateList.push(value);
@@ -100,7 +102,7 @@ bool foldDimensionAnalyser::backtrackUpdateTensors(const Value &value, const llv
   return true;
 }
 
-void foldDimensionAnalyser::addOrUpdateTensorInfo(Operation *op) {
+void FoldDimensionAnalyser::addOrUpdateTensorInfo(Operation *op) {
   llvm::SmallVector<int64_t> resInfo = opFoldableInfo;
   llvm::SmallDenseSet<Value> visitedInputs;
   llvm::SmallDenseSet<Value> firstVisitInputs;
@@ -155,7 +157,7 @@ void foldDimensionAnalyser::addOrUpdateTensorInfo(Operation *op) {
                                       std::make_pair(seqResInfo, op->getName().getStringRef().str()));
 }
 
-void foldDimensionAnalyser::analyseElementwiseOp(Operation *op) {
+void FoldDimensionAnalyser::analyseElementwiseOp(Operation *op) {
   if (isa<mindspore::ConstOp>(op) || isa<tosa::ConstOp>(op)) {
     return;
   }
@@ -168,7 +170,7 @@ void foldDimensionAnalyser::analyseElementwiseOp(Operation *op) {
   opFoldableInfo.resize(resRank, 0);
 }
 
-void foldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, const ShapedType ty1) {
+void FoldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, const ShapedType ty1) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   auto symbolShape0 = analysis.getSymbolicShape(ty0);
   auto symbolShape1 = analysis.getSymbolicShape(ty1);
@@ -205,7 +207,7 @@ void foldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, con
   }
 }
 
-void foldDimensionAnalyser::analyseTensorCastOp(Operation *op) {
+void FoldDimensionAnalyser::analyseTensorCastOp(Operation *op) {
   auto input = op->getOperand(0);
   auto ty0 = dyn_cast<ShapedType>(input.getType());
   auto res = op->getResult(0);
@@ -221,7 +223,29 @@ void foldDimensionAnalyser::analyseTensorCastOp(Operation *op) {
   analyseSymbolicBroadcastOp(ty0, ty1);
 }
 
-void foldDimensionAnalyser::analyseElemwiseBroadcastOp(Operation *op) {
+void FoldDimensionAnalyser::analyseStaticBroadcastOp(const ShapedType ty0, const ShapedType ty1) {
+  auto shape0 = ty0.getShape();
+  auto shape1 = ty1.getShape();
+  auto inputRank = shape0.size();
+  opFoldableInfo.reserve(inputRank);
+  auto curStatus = 0;
+  auto foldedIndex = 0;
+  for (size_t i = 0; i < inputRank; i++) {
+    auto prevStatus = kNoBroadcast;
+    if (shape0[i] < shape1[i]) {
+      prevStatus = kLeftBroadcast;
+    } else if (shape0[i] > shape1[i]) {
+      prevStatus = kRightBroadcast;
+    }
+    if ((i > 0) && (curStatus != prevStatus)) {
+      foldedIndex++;
+    }
+    (void)opFoldableInfo.emplace_back(foldedIndex);
+    curStatus = prevStatus;
+  }
+}
+
+void FoldDimensionAnalyser::analyseElemwiseBroadcastOp(Operation *op) {
   assert(op->getNumOperands() == kBroadcastInputNum);
 
   auto ty0 = dyn_cast<ShapedType>(op->getOperand(0).getType());
@@ -232,53 +256,31 @@ void foldDimensionAnalyser::analyseElemwiseBroadcastOp(Operation *op) {
   auto isInput1Const = llvm::all_of(shape1, [](int64_t dim) -> bool { return dim == 1; });
   if (isInput0Const || isInput1Const) {
     auto inputRank = isInput0Const ? shape1.size() : shape0.size();
-    // pure 1 broadcast: (1) * (2,3) = (2,3) or (2,3) * (1,1) = (2,3)
     opFoldableInfo.resize(inputRank, 0);
-  } else if (shape0.size() != shape1.size()) {
-    // todo(zuohe): not support different rank broadcast
-    // (2,3,4) * (2,3) = (2,3,4)
+    return;
+  }
+  if (shape0.size() != shape1.size()) {
     foldable = false;
     LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported broadcast between different ranks in '" << op->getName()
                             << "'.\n");
     return;
-  } else {
-    assert(shape0.size() == shape1.size());
-    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-    if (analysis.hasSymbolicShape(ty0) || analysis.hasSymbolicShape(ty1)) {
-      if (!(analysis.hasSymbolicShape(ty0) && analysis.hasSymbolicShape(ty1))) {
-        foldable = false;
-        LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE
-                                   "] Unsupported when only one of 2 inputs has symbolic shape while dynamic shape in '"
-                                << op->getName() << "'.\n");
-      }
-      analyseSymbolicBroadcastOp(ty0, ty1);
-    } else {
-      // (2,3,4) * (2,3,1) = (2,3,4)
-      auto inputRank = shape0.size();
-      opFoldableInfo.reserve(inputRank);
-      auto prevStatus = 0;
-      auto curStatus = 0;
-      auto foldedIndex = 0;
-      // when the broadcast status changes, the folding status should change
-      for (size_t i = 0; i < inputRank; i++) {
-        if (shape0[i] < shape1[i]) {
-          prevStatus = kLeftBroadcast;
-        } else if (shape0[i] > shape1[i]) {
-          prevStatus = kRightBroadcast;
-        } else {
-          prevStatus = kNoBroadcast;
-        }
-        if ((i > 0) && (curStatus != prevStatus)) {
-          foldedIndex++;
-        }
-        (void)opFoldableInfo.emplace_back(foldedIndex);
-        curStatus = prevStatus;
-      }
-    }
   }
+  assert(shape0.size() == shape1.size());
+  SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+  if (analysis.hasSymbolicShape(ty0) || analysis.hasSymbolicShape(ty1)) {
+    if (!(analysis.hasSymbolicShape(ty0) && analysis.hasSymbolicShape(ty1))) {
+      foldable = false;
+      LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE
+                                 "] Unsupported when only one of 2 inputs has symbolic shape while dynamic shape in '"
+                              << op->getName() << "'.\n");
+    }
+    analyseSymbolicBroadcastOp(ty0, ty1);
+    return;
+  }
+  analyseStaticBroadcastOp(ty0, ty1);
 }
 
-void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
+void FoldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
   assert(op->getNumOperands() == 1);
 
   auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
@@ -315,7 +317,7 @@ void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
   }
 }
 
-void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
+void FoldDimensionAnalyser::analyseReduceOp(Operation *op) {
   auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
   auto inputRank = inputTy.getRank();
   auto res = op->getResult(0);
@@ -357,7 +359,7 @@ void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
   }
 }
 
-void foldDimensionAnalyser::analyseReshapeOp(Operation *op) {
+void FoldDimensionAnalyser::analyseReshapeOp(Operation *op) {
   auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
 
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -392,7 +394,7 @@ void foldDimensionAnalyser::analyseReshapeOp(Operation *op) {
   tensorInfoMap[res] = std::make_pair(std::make_pair(parents, emptyChildren), std::make_pair(foldableInfo, "Reshape"));
 }
 
-bool foldDimensionAnalyser::checkBroadcast(Operation *op) const {
+bool FoldDimensionAnalyser::checkBroadcast(Operation *op) const {
   bool isBroadcast = false;
   assert(op->getNumResults() == 1 && "Elementwise ops should only return one result.");
   auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
@@ -409,7 +411,7 @@ bool foldDimensionAnalyser::checkBroadcast(Operation *op) const {
   return isBroadcast;
 }
 
-void foldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
+void FoldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
   funcOp->walk([&](Operation *op) {
     this->opFoldableInfo.clear();
 
@@ -435,7 +437,7 @@ void foldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
       LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported operator '" << op->getName() << "'.\n");
     }
 
-    if (!foldable || this->opFoldableInfo.size() == 0) {
+    if (!foldable || this->opFoldableInfo.empty()) {
       return;
     }
 
@@ -443,7 +445,7 @@ void foldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
   });
 }
 
-llvm::SmallVector<int64_t> foldDimensionAnalyser::getNormalizedFlattenShape(const Value &value) {
+llvm::SmallVector<int64_t> FoldDimensionAnalyser::getNormalizedFlattenShape(const Value &value) {
   // get the normalized flattened shape before reshape, to be compared with the shape after reshape
   auto info = tensorInfoMap[value].second.first;
   LLVM_DEBUG(value.getType().dump());
@@ -455,16 +457,13 @@ llvm::SmallVector<int64_t> foldDimensionAnalyser::getNormalizedFlattenShape(cons
   for (size_t i = 0; i < rank; i++) {
     if (i == 0) {
       currentDim = shape[0];
+    } else if (info[i] == info[i - 1]) {
+      currentDim *= shape[i];
+    } else if (currentDim != 1) {
+      (void)normalizedShape.emplace_back(currentDim);
+      currentDim = shape[i];
     } else {
-      // consecutive axes can be folded
-      if (info[i] == info[i - 1]) {
-        currentDim *= shape[i];
-      } else {
-        if (currentDim != 1) {
-          (void)normalizedShape.emplace_back(currentDim);
-        }
-        currentDim = shape[i];
-      }
+      currentDim = shape[i];
     }
     if (i == rank - 1 && currentDim != 1) {
       (void)normalizedShape.emplace_back(currentDim);
@@ -473,7 +472,7 @@ llvm::SmallVector<int64_t> foldDimensionAnalyser::getNormalizedFlattenShape(cons
   return normalizedShape;
 }
 
-void foldDimensionAnalyser::recordFuncArgs(func::FuncOp funcOp) {
+void FoldDimensionAnalyser::recordFuncArgs(func::FuncOp funcOp) {
   // if func args get folded, their needFixIndex and DeviceShape need to be updated
   // record all func args, and their new needFixIndex and Shape while recordTensorToBeFolded
   akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
@@ -484,7 +483,7 @@ void foldDimensionAnalyser::recordFuncArgs(func::FuncOp funcOp) {
   }
 }
 
-void foldDimensionAnalyser::updatefuncArgsMap(const Value &input, const llvm::SmallVector<int64_t> foldableInfo) {
+void FoldDimensionAnalyser::updatefuncArgsMap(const Value &input, const llvm::SmallVector<int64_t> foldableInfo) {
   auto it = funcArgsMap.find(input);
   if (it == funcArgsMap.end()) {
     return;
@@ -511,7 +510,7 @@ void foldDimensionAnalyser::updatefuncArgsMap(const Value &input, const llvm::Sm
   it->second = newNeedFixIndices;
 }
 
-void foldDimensionAnalyser::getFoldedTypeWithSymbol(SymbolicShapeAnalysis &analysis, const ShapedType inputTy,
+void FoldDimensionAnalyser::getFoldedTypeWithSymbol(SymbolicShapeAnalysis &analysis, const ShapedType inputTy,
                                                     const llvm::SmallVector<int64_t> foldableInfo,
                                                     llvm::SmallVector<int64_t> *flattenedShape,
                                                     llvm::SmallVector<std::string> *flattenedSymbolShape) const {
@@ -523,23 +522,20 @@ void foldDimensionAnalyser::getFoldedTypeWithSymbol(SymbolicShapeAnalysis &analy
   for (size_t i = 0; i < inputRank; i++) {
     if (i == 0) {
       currentSymbol = symbolShape[0];
+    } else if (foldableInfo[i] != foldableInfo[i - 1]) {
+      (void)flattenedShape->emplace_back(currentDim);
+      (void)flattenedSymbolShape->emplace_back(currentSymbol);
+      currentDim = shape[i];
+      currentSymbol = symbolShape[i];
     } else {
-      // consecutive axes can be folded
-      if (foldableInfo[i] == foldableInfo[i - 1]) {
-        if (!inputTy.isDynamicDim(static_cast<unsigned int>(i)) && currentDim != ShapedType::kDynamic) {
-          currentDim *= shape[i];
-        } else {
-          currentDim = ShapedType::kDynamic;
-        }
-        currentSymbol += "*" + symbolShape[i];
-        SymEngine::Expression expr(currentSymbol);
-        currentSymbol = analysis.getSymbolicDimFromExpression(expr);
+      if (!inputTy.isDynamicDim(static_cast<unsigned int>(i)) && currentDim != ShapedType::kDynamic) {
+        currentDim *= shape[i];
       } else {
-        (void)flattenedShape->emplace_back(currentDim);
-        (void)flattenedSymbolShape->emplace_back(currentSymbol);
-        currentDim = shape[i];
-        currentSymbol = symbolShape[i];
+        currentDim = ShapedType::kDynamic;
       }
+      currentSymbol += "*" + symbolShape[i];
+      SymEngine::Expression expr(currentSymbol);
+      currentSymbol = analysis.getSymbolicDimFromExpression(expr);
     }
     if (i == inputRank - 1) {
       (void)flattenedShape->emplace_back(currentDim);
@@ -548,7 +544,7 @@ void foldDimensionAnalyser::getFoldedTypeWithSymbol(SymbolicShapeAnalysis &analy
   }
 }
 
-void foldDimensionAnalyser::getFoldedType(const ShapedType inputTy, const llvm::SmallVector<int64_t> foldableInfo,
+void FoldDimensionAnalyser::getFoldedType(const ShapedType inputTy, const llvm::SmallVector<int64_t> foldableInfo,
                                           llvm::SmallVector<int64_t> *flattenedShape,
                                           llvm::SmallVector<int64_t> *normalizedShapeAfter) const {
   auto shape = inputTy.getShape();
@@ -557,17 +553,14 @@ void foldDimensionAnalyser::getFoldedType(const ShapedType inputTy, const llvm::
   for (size_t i = 0; i < inputRank; i++) {
     if (i == 0) {
       currentDim = shape[0];
+    } else if (foldableInfo[i] == foldableInfo[i - 1]) {
+      currentDim *= shape[i];
     } else {
-      // consecutive axes can be folded
-      if (foldableInfo[i] == foldableInfo[i - 1]) {
-        currentDim *= shape[i];
-      } else {
-        (void)flattenedShape->emplace_back(currentDim);
-        if (currentDim != 1) {
-          (void)normalizedShapeAfter->emplace_back(currentDim);
-        }
-        currentDim = shape[i];
+      (void)flattenedShape->emplace_back(currentDim);
+      if (currentDim != 1) {
+        (void)normalizedShapeAfter->emplace_back(currentDim);
       }
+      currentDim = shape[i];
     }
     if (i == inputRank - 1) {
       (void)flattenedShape->emplace_back(currentDim);
@@ -578,7 +571,7 @@ void foldDimensionAnalyser::getFoldedType(const ShapedType inputTy, const llvm::
   }
 }
 
-void foldDimensionAnalyser::recordTensorCanFold() {
+void FoldDimensionAnalyser::recordTensorCanFold() {
   LLVM_DEBUG(llvm::dbgs() << "============MAP=========== \n");
   for (auto pair : tensorInfoMap) {
     LLVM_DEBUG(llvm::dbgs() << "key:");
@@ -653,12 +646,14 @@ void foldDimensionAnalyser::recordTensorCanFold() {
 
 namespace {
 void populateFoldDimension(func::FuncOp funcOp, llvm::DenseMap<Value, Type> tensorToBeFolded, FuncArgsMap funcArgsMap) {
-  LLVM_DEBUG(llvm::dbgs() << "--------------tensorToBeFolded----------------");
-  for (auto item : tensorToBeFolded) {
-    LLVM_DEBUG(item.first.dump());
-    LLVM_DEBUG(item.second.dump());
-  }
-  LLVM_DEBUG(llvm::dbgs() << "----------------------------------------------");
+  LLVM_DEBUG({
+    llvm::dbgs() << "--------------tensorToBeFolded----------------";
+    for (auto item : tensorToBeFolded) {
+      item.first.dump();
+      item.second.dump();
+    }
+    llvm::dbgs() << "----------------------------------------------";
+  });
   // update func type
   akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -795,7 +790,9 @@ struct FoldDimension : public impl::FoldDimensionBase<FoldDimension> {
   void runOnOperation() override {
     auto funcOp = getOperation();
     auto moduleOp = funcOp->getParentOp();
-    if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) return;
+    if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) {
+      return;
+    }
     auto opTypeAttr = funcOp->getAttrOfType<StringAttr>("OperatorType");
     if (opTypeAttr == nullptr) {
       LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported without attr 'OperatorType'.\n");
@@ -808,7 +805,7 @@ struct FoldDimension : public impl::FoldDimensionBase<FoldDimension> {
       return;
     }
     // analyse and collect foldable information
-    foldDimensionAnalyser analyser;
+    FoldDimensionAnalyser analyser;
     analyser.analyseFoldDimension(funcOp);
     // Not to fold if has unsupported operator types, different rank broadcast and reduce ops
     if (!analyser.foldable) {

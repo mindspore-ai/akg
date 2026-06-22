@@ -67,12 +67,16 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
     unsigned dimInMapStart = cast<AffineDimExpr>(expr.value()).getPosition();
     // 1.  Check if this start of the sequence.
     if (dimInMapStart == dimSequenceStart) {
-      if (expr.index() + dimSequence.size() > indexingMap.getNumResults()) return false;
+      if (expr.index() + dimSequence.size() > indexingMap.getNumResults()) {
+        return false;
+      }
       // 1a. Check if sequence is preserved.
       for (const auto &dimInSequence : enumerate(dimSequence)) {
         unsigned dimInMap =
           cast<AffineDimExpr>(indexingMap.getResult(expr.index() + dimInSequence.index())).getPosition();
-        if (dimInMap != dimInSequence.value()) return false;
+        if (dimInMap != dimInSequence.value()) {
+          return false;
+        }
       }
       // Found the sequence. Projected permutation
       // enforces that all AffineDimExprs in the result are unique, so no
@@ -82,7 +86,9 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
     // 2. If position in the expr (which is of type AffineDimExpr) is part
     // of sequence, return false here. This implies the entire sequence does not
     // exist in the indexing map.
-    if (sequenceElements.count(dimInMapStart)) return false;
+    if (sequenceElements.count(dimInMapStart) != 0u) {
+      return false;
+    }
   }
   // 3. No element of sequence found. Return true.
   return true;
@@ -92,9 +98,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 // collapsed to allow for fusion with the a producer that is an expand_shape
 // operation. If all dimensions created by expansion can be collapsed in the
 // iteration space then the reshape is defunct.
-//
 // Example:
-//
 // ```mlir
 // #map = affine_map<(d0, d1) -> (d0, d1)>
 // %1 = tensor.expand_shape %0 [[0, 1]] : tensor<?xf32> into tensor<?x4xf32>
@@ -104,9 +108,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     iterator_types = ["parallel" ,"parallel"]}
 //     ins(%1 : tensor<?x4xf32>) outs(%2 : tensor<?x4xf32>) {.. }
 // ```
-//
 // can be fused by collapsing the dimensions of the iteration space.
-//
 // ```mlir
 // #map = affine_map<(d0) -> (d0)>
 // %2 = tensor.empty [..] : tensor<?xf32>
@@ -116,9 +118,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     ins(%1 : tensor<?xf32>) outs(%2 : tensor<?xf32>) {.. }
 // %4 = tensor.expand_shape %3 [[0, 1]] : tensor<?xf32> into tensor<?x4xf32>
 // ```
-//
 // In the following example,
-//
 // ```mlir
 // #map0 = affine_map<(d0, d1) -> (d0, d1)>
 // #map1 = affine_map<(d0, d1) -> (d1, d0)>
@@ -129,7 +129,6 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 //     iterator_types = ["parallel" ,"parallel"]}
 //     ins(%1 : tensor<?x4xf32>) outs(%2 : tensor<4x?xf32>) {.. }
 // ```
-//
 // the reshape cannot be fused with the generic op by collapsing the op
 // dimensions since the indexing maps will have to contain mods and divs
 // to preserve the accesses pattern. When no dimensions of the iteration
@@ -137,7 +136,9 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
   GenericOp genericOp, OpOperand *fusableOperand, ArrayRef<ReassociationIndices> reassociation) {
   // Some basic checks for this fusion to be valid.
-  if (!genericOp.hasPureTensorSemantics() || genericOp.getNumDpsInits() != 1) return {};
+  if (!genericOp.hasPureTensorSemantics() || genericOp.getNumDpsInits() != 1) {
+    return {};
+  }
 
   if (!llvm::all_of(genericOp.getIndexingMapsArray(), [](AffineMap map) { return map.isProjectedPermutation(); })) {
     return {};
@@ -155,20 +156,25 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     assert(!foldedRangeDims.empty() && "unexpected empty reassociation");
 
     // Ignore dims that are not folded.
-    if (foldedRangeDims.size() == 1) continue;
+    if (foldedRangeDims.size() == 1) {
+      continue;
+    }
 
     ReassociationIndices foldedIterationSpaceDims = getDomainReassociation(indexingMap, foldedRangeDims);
 
     // Check that the folded iteration dims do not contain already processed
     // dims.
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); }))
+    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); })) {
       continue;
-
+    }
     // Check that all folded iterator types are all parallel or all reductions.
     utils::IteratorType startIteratorType = iteratorTypes[foldedIterationSpaceDims[0]];
-    if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) continue;
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return iteratorTypes[dim] != startIteratorType; }))
+    if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) {
       continue;
+    }
+    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return iteratorTypes[dim] != startIteratorType; })) {
+      continue;
+    }
 
     // If the folded dimensions correspond to a "reduction" iterator type,
     // the folded dimensions need to be "in-order". Strictly speaking this is
@@ -178,10 +184,14 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
       bool isContiguous = false;
       for (const auto &startDim : llvm::enumerate(reductionDims)) {
         // Move window in `reductionDims` to start of the folded iteration dims.
-        if (startDim.value() != foldedIterationSpaceDims[0]) continue;
+        if (startDim.value() != foldedIterationSpaceDims[0]) {
+          continue;
+        }
         // If sizes doesn't match, trivial not contiguous. This condition should
         // not be hit.
-        if (startDim.index() + foldedIterationSpaceDims.size() > reductionDims.size()) break;
+        if (startDim.index() + foldedIterationSpaceDims.size() > reductionDims.size()) {
+          break;
+        }
         // Check that the contiguity is maintained.
         isContiguous = true;
         isContiguous = !std::any_of(llvm::enumerate(foldedIterationSpaceDims).begin(),
@@ -190,14 +200,17 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
                                     });
         break;
       }
-      if (!isContiguous) continue;
+      if (!isContiguous) {
+        continue;
+      }
     }
 
     // Check that the sequence is preserved in all indexing maps.
     if (llvm::any_of(genericOp.getIndexingMapsArray(), [&](AffineMap indexingMap) {
           return !isDimSequencePreservedV2(indexingMap, foldedIterationSpaceDims);
-        }))
+        })) {
       continue;
+    }
 
     processedIterationDims.insert(foldedIterationSpaceDims.begin(), foldedIterationSpaceDims.end());
     iterationSpaceReassociation.emplace_back(std::move(foldedIterationSpaceDims));
@@ -320,7 +333,7 @@ class FuseElementwiseOpsExt : public OpRewritePattern<GenericOp> {
           (void)TryingtToPreserveOrderInSimplePattern0(fusedOp, producer, domInfo);
         }
         // final check: whether fusedOp dominates all producer's users
-        // TODO(scheduler): Order-preserving, make fusedOp dominates all of the producer's users.
+        // Order-preserving, make fusedOp dominates all of the producer's users.
         if (!checkFusedOpDominateAllProducerUsers(fusedOp, producer, domInfo)) {
           return success();
         }
@@ -355,7 +368,7 @@ struct LinalgElementwiseFusionExtPass : public impl::LinalgElementwiseFusionExtB
     grc.useTopDownTraversal = true;
 
     RewritePatternSet patterns(context);
-    DominanceInfo &domInfo = getAnalysis<DominanceInfo>();
+    auto &domInfo = getAnalysis<DominanceInfo>();
     (void)patterns.add<FuseElementwiseOpsExt>(context, controlFn, domInfo);
     // Add the patterns that clean up dead operands and results.
     populateEraseUnusedOperandsAndResultsPatterns(patterns);

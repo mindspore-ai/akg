@@ -104,7 +104,7 @@ class FusionStoreOpLowering : public OpRewritePattern<fusion::StoreOp> {
   using OpRewritePattern<fusion::StoreOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(fusion::StoreOp op, PatternRewriter &rewriter) const override {
     if (!isa<VectorType>(op.getValueToStore().getType())) {
-      auto memStore =
+      [[maybe_unused]] auto memStore =
         rewriter.create<memref::StoreOp>(op.getLoc(), op.getValueToStore(), op.getMemRef(), op.getIndices());
       assert(memStore->getResults().size() == 0 && "memRef.store should no need results");
 

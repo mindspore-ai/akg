@@ -26,11 +26,9 @@
 #include "akg/Analysis/Axis.h"
 #include "akg/Analysis/Config.h"
 #include "akg/Analysis/Model.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 namespace autotiling {
 
 using Rule = std::function<std::deque<int>(const AxisPtr &, std::vector<int> &)>;

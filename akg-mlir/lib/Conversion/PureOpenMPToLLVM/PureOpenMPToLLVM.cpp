@@ -45,14 +45,14 @@ namespace mlir {
 using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace {
-class PureOpenMPToLLVMPass : public impl::PureOpenMPToLLVMBase<PureOpenMPToLLVMPass> {
+class PureOpenMPToLLVM : public impl::PureOpenMPToLLVMBase<PureOpenMPToLLVM> {
  public:
-  PureOpenMPToLLVMPass() = default;
+  PureOpenMPToLLVM() = default;
   void runOnOperation() override;
 };
 }  // namespace
 
-void PureOpenMPToLLVMPass::runOnOperation() {
+void PureOpenMPToLLVM::runOnOperation() {
   // Convert to OpenMP operations with LLVM IR dialect
   RewritePatternSet patterns(&getContext());
   LLVMTypeConverter converter(&getContext());
@@ -67,6 +67,6 @@ void PureOpenMPToLLVMPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createPureOpenMPToLLVMPass() {
-  return std::make_unique<PureOpenMPToLLVMPass>();
+std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createPureOpenMPToLLVM() {
+  return std::make_unique<PureOpenMPToLLVM>();
 }
