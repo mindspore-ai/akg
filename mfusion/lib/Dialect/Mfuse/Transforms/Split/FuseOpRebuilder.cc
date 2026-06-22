@@ -193,6 +193,7 @@ void Rebuilder::createFusedOpForGroup(const SmallVector<Operation *> &groupOps,
   for (Operation *op : groupOps) {
     mainBuilder.clone(*op, mapping);
   }
+  setFullOpsDeviceToNpu(fusedOp);
   SmallVector<Value> yieldVals;
   std::transform(groupOutputs.begin(), groupOutputs.end(), std::back_inserter(yieldVals),
                  [&mapping](Value v) { return mapping.lookup(v); });
