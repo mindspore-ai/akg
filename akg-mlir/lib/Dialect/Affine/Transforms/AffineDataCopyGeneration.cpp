@@ -72,7 +72,7 @@ namespace {
 /// inner levels if necessary to determine at what depth copies need to be
 /// placed so that the allocated buffers fit within the memory capacity
 /// provided.
-// TODO(scheduler): We currently can't generate copies correctly when stores
+// We currently can't generate copies correctly when stores
 // are strided. Check for strided stores.
 struct AffineDataCopyGeneration : public affine::impl::AKGAffineDataCopyGenerationBase<AffineDataCopyGeneration> {
   AffineDataCopyGeneration() = default;
@@ -116,7 +116,9 @@ std::unique_ptr<OperationPass<func::FuncOp>> mlir::affine::createAKGAffineDataCo
 /// and ending with an affine load or store op, or just an affine.for op (which
 /// could have other affine for op's nested within).
 void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &copyNests) {
-  if (block->empty()) return;
+  if (block->empty()) {
+    return;
+  }
 
   uint64_t fastMemCapacityBytes =
     fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * 1024 : fastMemoryCapacity;
@@ -142,13 +144,13 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
     // If you hit a non-copy for loop, we will split there.
     if ((forOp = dyn_cast<AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
       // Perform the copying up unti this 'for' op first.
-      (void)affineDataCopyGenerate(/*begin=*/curBegin, /*end=*/it, copyOptions,
-                                   /*filterMemRef=*/std::nullopt, copyNests);
+      (void)affineDataCopyGenerate(/* begin= */ curBegin, /* end= */ it, copyOptions,
+                                   /* filterMemRef= */ std::nullopt, copyNests);
 
       // Returns true if the footprint is known to exceed capacity.
       auto exceedsCapacity = [&](AffineForOp forOp) {
         std::optional<int64_t> footprint = getMemoryFootprintBytes(forOp,
-                                                                   /*memorySpace=*/0);
+                                                                   /* memorySpace= */ 0);
         return (footprint.has_value() && static_cast<uint64_t>(*footprint) > fastMemCapacityBytes);
       };
 
@@ -172,8 +174,8 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
         // Inner loop copies have their own scope - we don't thus update
         // consumed capacity. The footprint check above guarantees this inner
         // loop's footprint fits.
-        (void)affineDataCopyGenerate(/*begin=*/it, /*end=*/std::next(it), copyOptions,
-                                     /*filterMemRef=*/std::nullopt, copyNests);
+        (void)affineDataCopyGenerate(/* begin= */ it, /* end= */ std::next(it), copyOptions,
+                                     /* filterMemRef= */ std::nullopt, copyNests);
       }
       // Get to the next load or store op after 'forOp'.
       curBegin = std::find_if(std::next(it), block->end(), [&](Operation &op) {
@@ -192,9 +194,9 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
     // Can't be a terminator because it would have been skipped above.
     assert(!curBegin->hasTrait<OpTrait::IsTerminator>() && "can't be a terminator");
     // Exclude the affine.yield - hence, the std::prev.
-    (void)affineDataCopyGenerate(/*begin=*/curBegin,
-                                 /*end=*/std::prev(block->end()), copyOptions,
-                                 /*filterMemRef=*/std::nullopt, copyNests);
+    (void)affineDataCopyGenerate(/* begin= */ curBegin,
+                                 /* end= */ std::prev(block->end()), copyOptions,
+                                 /* filterMemRef= */ std::nullopt, copyNests);
   }
 }
 
@@ -210,20 +212,24 @@ void AffineDataCopyGeneration::runOnOperation() {
   // Clear recorded copy nests.
   copyNests.clear();
 
-  for (auto &block : f) runOnBlock(&block, copyNests);
+  for (auto &block : f) {
+    runOnBlock(&block, copyNests);
+  }
 
   // Promote any single iteration loops in the copy nests and collect
   // load/stores to simplify.
   SmallVector<Operation *, 4> copyOps;
-  for (Operation *nest : copyNests)
+  for (Operation *nest : copyNests) {
     // With a post order walk, the erasure of loops does not affect
     // continuation of the walk or the collection of load/store ops.
     nest->walk([&](Operation *op) {
-      if (auto forOp = dyn_cast<AffineForOp>(op))
+      if (auto forOp = dyn_cast<AffineForOp>(op)) {
         (void)promoteIfSingleIteration(forOp);
-      else if (isa<AffineLoadOp, AffineStoreOp>(op))
+      } else if (isa<AffineLoadOp, AffineStoreOp>(op)) {
         copyOps.push_back(op);
+      }
     });
+  }
 
   // Promoting single iteration loops could lead to simplification of
   // contained load's/store's, and the latter could anyway also be

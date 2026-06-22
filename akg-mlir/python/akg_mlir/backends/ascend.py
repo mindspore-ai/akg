@@ -21,7 +21,6 @@ import json
 import logging
 import subprocess
 import numpy as np
-import acl
 
 flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
@@ -30,6 +29,11 @@ sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 from akg.ascend_launch import akg_ascend_run
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
+
+
+REG_BASED_ARCH_PREFIXES = ("Ascend910_95", "Ascend950DT", "Ascend950PR")
+# Matches device func attrs like: hacc.block_dim = 40 : i64
+_BLOCK_DIM_MLIR_RE = re.compile(r"hacc\.block_dim\s*=\s*(\d+)\s*:\s*i64")
 
 
 def write_code(js_dict, fname):
@@ -44,10 +48,6 @@ def write_code(js_dict, fname):
         os.remove(fname)
     with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), "w") as f:
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
-
-
-# Matches device func attrs like: hacc.block_dim = 40 : i64
-_BLOCK_DIM_MLIR_RE = re.compile(r"hacc\.block_dim\s*=\s*(\d+)\s*:\s*i64")
 
 
 def get_block_dim_from_mlir(mlir_path):
@@ -127,9 +127,6 @@ def akg_opt(
         mlir_timing: Whether to print every pass time
         dump_ir_path: Path to dump log file (optional)
 
-    Returns:
-        subprocess.CompletedProcess result
-
     Raises:
         RuntimeError: If akg-opt execution fails
     """
@@ -144,7 +141,11 @@ def akg_opt(
     if not enable_loop_fusion:
         options.append("enable-loop-fusion=false")
     if not arch:
-        arch = acl.get_soc_name()
+        try:
+            import acl  # pylint: disable=import-outside-toplevel
+            arch = acl.get_soc_name()
+        except ImportError as err:
+            raise ImportError("Please run 'source set_env.sh' in the CANN installation path.") from err
     options.append(f"arch={arch}")
 
     if options:
@@ -165,7 +166,6 @@ def akg_opt(
             with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), "a") as f:
                 f.write(result.stderr)
         logging.debug("akg-opt pipeline success")
-        return result
     except subprocess.CalledProcessError as e:
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
@@ -198,6 +198,59 @@ def check_ascend_compile(output_file):
     ) from None
 
 
+def _is_reg_based_arch(arch):
+    return isinstance(arch, str) and any(arch.startswith(p) for p in REG_BASED_ARCH_PREFIXES)
+
+
+def _build_compile_cmd(input_file, output_file, block_dim,
+                       enable_hfusion_compile, enable_hivm_compile,
+                       enable_auto_multi_buffer, enable_bin_relocation,
+                       dump_ir, arch):
+    """Build bishengir-compile command list."""
+    compile_cmd = [
+        "bishengir-compile",
+        input_file,
+        "-o",
+        output_file,
+        f"-block-dim={block_dim}"
+    ]
+
+    if enable_hfusion_compile:
+        compile_cmd.append("-enable-hfusion-compile")
+    else:
+        compile_cmd.append("-disable-hivm-tensor-compile")
+    if enable_hivm_compile:
+        compile_cmd.append("-enable-hivm-compile")
+    if enable_auto_multi_buffer:
+        compile_cmd.append("-enable-auto-multi-buffer")
+    if not enable_bin_relocation:
+        compile_cmd.append("-enable-bin-relocation=false")
+    if dump_ir:
+        compile_cmd.append("-mlir-print-ir-after-all")
+
+    if _is_reg_based_arch(arch):
+        compile_cmd.append(f"-target={arch}")
+    else:
+        compile_cmd.append("-disable-auto-cv-work-space-manage")
+
+    return compile_cmd
+
+
+def _write_dump_ir(dump_ir_path, content):
+    """Write content to dump_ir log file."""
+    with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
+        f.write(content)
+
+
+def _handle_dump_ir(result, dump_ir, dump_ir_path, output_file):
+    """Handle dump_ir output after successful compile."""
+    if not dump_ir:
+        return
+    if not dump_ir_path:
+        dump_ir_path = pathlib.Path(output_file).with_suffix(".log")
+    _write_dump_ir(dump_ir_path, result.stderr)
+
+
 def bisheng_compile(input_file,
                     output_file,
                     enable_hfusion_compile=False,
@@ -224,33 +277,12 @@ def bisheng_compile(input_file,
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    compile_cmd = [
-        "bishengir-compile",
-        input_file,
-        "-o",
-        output_file,
-        f"-block-dim={block_dim}"
-    ]
-
-    if enable_hfusion_compile:
-        compile_cmd.append("-enable-hfusion-compile")
-    else:
-        compile_cmd.append("-disable-hivm-tensor-compile")
-    if enable_hivm_compile:
-        compile_cmd.append("-enable-hivm-compile")
-    if enable_auto_multi_buffer:
-        compile_cmd.append("-enable-auto-multi-buffer")
-    if enable_bin_relocation:
-        compile_cmd.append("-enable-bin-relocation")
-    if dump_ir:
-        compile_cmd.append("-mlir-print-ir-after-all")
-
-    if isinstance(arch, str) and (
-        arch.startswith("Ascend910_95") or arch.startswith("Ascend950DT") or arch.startswith("Ascend950PR")
-    ):
-        compile_cmd.append(f"-target={arch}")
-    else:
-        compile_cmd.append("-disable-auto-cv-work-space-manage")
+    compile_cmd = _build_compile_cmd(
+        input_file, output_file, block_dim,
+        enable_hfusion_compile, enable_hivm_compile,
+        enable_auto_multi_buffer, enable_bin_relocation,
+        dump_ir, arch
+    )
 
     logging.debug("exec command: %s", compile_cmd)
     try:
@@ -261,17 +293,10 @@ def bisheng_compile(input_file,
             text=True,
             check=True,
         )
-        if dump_ir:
-            if not dump_ir_path:
-                dump_ir_path = pathlib.Path(output_file).with_suffix(".log")
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
-                f.write(result.stderr)
+        _handle_dump_ir(result, dump_ir, dump_ir_path, output_file)
         check_ascend_compile(output_file)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-        if dump_ir and dump_ir_path:
-            with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT, 0o644), "a") as f:
-                f.write(str(e))
         raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
     logging.debug("generate ascend binary success")
 
@@ -357,12 +382,8 @@ def _build_output_idx_set(output_indexes, data_len):
 
 def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
     """Process numpy array: bf16, float16, contiguous, shape.
-    Returns (processed_d, is_bf16, shape). May modify data[data_idx] in place.
+    Returns (processed_d, shape). May modify data[data_idx] in place.
     """
-    is_bf16 = d.dtype.name == "bfloat16"
-    if is_bf16 and not is_output:
-        d = d.astype(np.float32)
-        data[data_idx] = d
     if d.dtype == np.float16 or (hasattr(d.dtype, 'char') and d.dtype.char in ('e', 'E')):
         d = d.view(np.uint16)
     if not is_output and not d.flags.c_contiguous:
@@ -373,14 +394,7 @@ def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
         shape = list(s) if isinstance(s, (tuple, list)) else []
     else:
         shape = list(d.shape)
-    return (d, is_bf16, shape)
-
-
-def _process_tensor_arg(d):
-    """Process tensor (non-numpy): is_bf16, shape. Returns (is_bf16, shape)."""
-    is_bf16 = hasattr(d, 'dtype') and str(d.dtype) == 'torch.bfloat16'
-    shape = list(d.shape) if hasattr(d, 'shape') else []
-    return (is_bf16, shape)
+    return (d, shape)
 
 
 def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_dir=""):
@@ -401,10 +415,10 @@ def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, work_d
 
         is_output = data_idx in output_idx_set
         if isinstance(d, np.ndarray):
-            d, is_bf16, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
+            d, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
         else:
-            is_bf16, shape = _process_tensor_arg(d)
-        result.append((d, is_output, is_bf16, shape))
+            shape = list(d.shape) if hasattr(d, 'shape') else []
+        result.append((d, is_output, shape))
     return result
 
 

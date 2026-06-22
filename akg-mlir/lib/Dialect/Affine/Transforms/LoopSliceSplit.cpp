@@ -53,24 +53,26 @@ namespace {
 
 struct Interval {
   int64_t lo, hi;
-  bool valid() const { return lo < hi; }
-  bool equals(const Interval &o) const { return lo == o.lo && hi == o.hi; }
-  bool contains(const Interval &o) const { return o.lo >= lo && o.hi <= hi; }
+  [[nodiscard]] bool valid() const { return lo < hi; }
+  [[nodiscard]] bool equals(const Interval &o) const { return lo == o.lo && hi == o.hi; }
+  [[nodiscard]] bool contains(const Interval &o) const { return o.lo >= lo && o.hi <= hi; }
 };
 
 struct AccessDim {
   // sum_i (stride_i * iv[axis_i]) + offset. Empty contribs = pure constant.
   SmallVector<std::pair<int, int64_t>, 2> contribs;
   int64_t offset = 0;
-  bool isConst() const { return contribs.empty(); }
+  [[nodiscard]] bool isConst() const { return contribs.empty(); }
   // Single contributing axis iff the dim is exactly `iv[axis] + offset`; else -1.
-  int affineAxis() const { return (contribs.size() == 1 && contribs[0].second == 1) ? contribs[0].first : -1; }
+  [[nodiscard]] int affineAxis() const {
+    return (contribs.size() == 1 && contribs[0].second == 1) ? contribs[0].first : -1;
+  }
 };
 
 struct PerfectNest {
   SmallVector<affine::AffineForOp, 4> loops;
   SmallVector<int64_t, 4> lo, hi;
-  int axisOf(Value v) const {
+  [[nodiscard]] int axisOf(Value v) const {
     for (size_t i = 0; i < loops.size(); ++i) {
       affine::AffineForOp f = loops[i];
       if (f.getInductionVar() == v) {
@@ -247,7 +249,7 @@ static bool accessTouches(const AccessInfo &a, Value memref, ArrayRef<Interval> 
   }
   for (size_t d = 0; d < a.dims.size(); ++d) {
     Interval ia = intervalFor(a.dims[d], nest);
-    if (!(ia.lo < ref[d].hi && ref[d].lo < ia.hi)) {
+    if (ia.lo >= ref[d].hi || ref[d].lo >= ia.hi) {
       return false;
     }
   }
@@ -411,7 +413,8 @@ static std::optional<WawShrink> detectWawShrink(const AccessInfo &sa, const Perf
     return std::nullopt;
   }
   int64_t off = sa.dims[diffDim].offset;
-  int64_t aLo = nestA.lo[axis], aHi = nestA.hi[axis];
+  int64_t aLo = nestA.lo[axis];
+  int64_t aHi = nestA.hi[axis];
   Interval dead = intervalFor(sb.dims[diffDim], nestB);
   int64_t deadLo = dead.lo - off;
   int64_t deadHi = dead.hi - off;
@@ -436,7 +439,6 @@ static SmallVector<Interval, 4> buildDeadRegion(const AccessInfo &sa, const Perf
 // ===---------------------------------------------------------------------=== //
 // Interval-based axis split (consumer slice + producer mirror)
 // ===---------------------------------------------------------------------=== //
-//
 // Both transforms: pick the first axis whose collector yields non-empty split
 // points and call `splitLoopAtPoints`. They differ only in the collector —
 // the consumer-slice variant finds producer write boundaries falling inside
@@ -585,7 +587,6 @@ static bool runAxisSplit(SmallVectorImpl<LoopInfo> &loops, Collect collect) {
 // ===---------------------------------------------------------------------=== //
 // Producer shrink by consumer use
 // ===---------------------------------------------------------------------=== //
-//
 // For each single-store producer (address `iv + offset`), shrink its bound on
 // that axis to the union bbox of subsequent loads. Bail if the live region
 // can't be bounded from visible reads: later loop unanalyzable, re-writes the
@@ -606,7 +607,7 @@ static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size
     if (rst.contains(rld)) {
       continue;
     }
-    if (!(rld.lo < rst.hi && rst.lo < rld.hi)) {
+    if (rld.lo >= rst.hi || rst.lo >= rld.hi) {
       return DimRel::Disjoint;
     }
     return DimRel::Partial;
@@ -617,7 +618,6 @@ static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size
 // ===---------------------------------------------------------------------=== //
 // Strided-consumer producer split
 // ===---------------------------------------------------------------------=== //
-//
 // If a stride-1 producer writes `[0, N)` on some axis and every consumer
 // reads via the same stride `s > 1` with offsets mod s covering {0..s-1},
 // clone the producer into `s` copies each iterating `[0, N/s)` and writing
@@ -682,7 +682,6 @@ static void stridedSplitTransform(LoopInfo &L, int axis, int64_t stride, int64_t
 // ===---------------------------------------------------------------------=== //
 // Post-split cleanup
 // ===---------------------------------------------------------------------=== //
-//
 // Two kinds of post-split residue: loops with non-zero lower bound, and
 // loops with trip count 1. `normalizeNonZeroLb` folds `iv + lb` into user
 // maps (avoiding the `affine.apply` MLIR's stock normalize would emit);
@@ -760,14 +759,12 @@ static bool normalizeNonZeroLb(affine::AffineForOp forOp) {
 // Rewrites top-level affine loop nests so producer/consumer pairs become
 // structurally fusable. Each top-level loop becomes a `LoopInfo` (perfect
 // nest + analyzed loads/stores); the stages below run in order:
-//
 //   WAW shrink:              drop stores fully overwritten later.
 //   Consumer slice split:    split a consumer at producer write boundaries.
 //   Producer mirror split:   mirror those boundaries onto the producer.
 //   Producer shrink:         shrink producer bound to union bbox of later loads.
 //   Strided producer split:  clone producer into `s` copies for stride-`s` consumers.
 //   Post-split cleanup:      fold non-zero lower bounds, promote singleton loops.
-//
 // Each transforming stage re-`gather()`s a fresh `loops` snapshot before
 // running. The cleanup stages walk the IR directly.
 
@@ -840,7 +837,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
     }
   }
 
-  bool isWawDeadRegionBlocked(size_t i, size_t j, Value memref, ArrayRef<Interval> dead) const {
+  [[nodiscard]] bool isWawDeadRegionBlocked(size_t i, size_t j, Value memref, ArrayRef<Interval> dead) const {
     for (size_t k = i + 1; k < j; ++k) {
       if (!loops[k].ok) {
         if (loopHasAccessTo(loops[k].root, memref)) {
@@ -1008,8 +1005,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
 
   // Collect stride / offset-mod classes of consumer loads on dim `d` in loops
   // after `i`. Returns nullopt if any consumer disqualifies the split.
-  std::optional<StrideScan> scanConsumerStride(size_t i, const AccessInfo &st, size_t d,
-                                               const PerfectNest &stNest) const {
+  [[nodiscard]] std::optional<StrideScan> scanConsumerStride(size_t i, const AccessInfo &st, size_t d,
+                                                             const PerfectNest &stNest) const {
     StrideScan sc;
     for (size_t j = i + 1; j < loops.size(); ++j) {
       if (!loops[j].ok) {

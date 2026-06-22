@@ -161,7 +161,7 @@ void packParamsDynamicShape(LLVM::LLVMFuncOp &funcOp) {
     // deal with ptr inputs
     // we drop the first ptr for each tensor input as we will not need it in
     // the future and load the second which is the address of the tensor data.
-    unsigned int nullArgIdx = (unsigned int)paramsIdx[i];
+    auto nullArgIdx = (unsigned int)paramsIdx[i];
     auto nullPtrType = block.getArgument(nullArgIdx).getType();
     auto loc = builder.getUnknownLoc();
     auto nullOp = builder.create<mlir::LLVM::ZeroOp>(loc, nullPtrType);

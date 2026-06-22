@@ -47,7 +47,7 @@ namespace {
 
 void cloneAndReplaceOps(const SmallVector<Operation *, 8> &ops, OpBuilder &builder) {
   for (Operation *op : ops) {
-    if (op) {
+    if (op != nullptr) {
       Operation *clonedOp = builder.clone(*op);
       op->replaceAllUsesWith(clonedOp);
       op->erase();
@@ -99,8 +99,11 @@ Value createInitialValue(Operation *op, mlir::Location loc, OpBuilder &builder) 
 // Try to match this pattern in sequential reduction loop:
 static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation *> matchReductionRelatedOps(
   Operation *funcOp, Operation *redOp) {
-  Operation *allocLocalA = nullptr, *initLoadLocalA = nullptr, *initStoreLocalA = nullptr, *loadLocalA = nullptr,
-            *storeLocalA = nullptr;
+  Operation *allocLocalA = nullptr;
+  Operation *initLoadLocalA = nullptr;
+  Operation *initStoreLocalA = nullptr;
+  Operation *loadLocalA = nullptr;
+  Operation *storeLocalA = nullptr;
   Value localA = redOp->getOperands()[1];
   loadLocalA = localA.getDefiningOp();
   storeLocalA = *(redOp->getUsers().begin());
@@ -113,7 +116,8 @@ static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation 
     return WalkResult::advance();
   });
   initLoadLocalA = initStoreLocalA->getOperand(0).getDefiningOp();
-  if (!allocLocalA || !initLoadLocalA || !initStoreLocalA || !loadLocalA || !storeLocalA) {
+  if ((allocLocalA == nullptr) || (initLoadLocalA == nullptr) || (initStoreLocalA == nullptr) ||
+      (loadLocalA == nullptr) || (storeLocalA == nullptr)) {
     (void)redOp->emitError("matchReductionRelatedOps cannot match all ops, plz check this pattern.");
   }
   return std::make_tuple(allocLocalA, initLoadLocalA, initStoreLocalA, loadLocalA, storeLocalA);
@@ -131,7 +135,7 @@ static void removeInitOuput(Operation *funcOp, mlir::Value v) {
 static Operation *getOutermostSeqLoop(Operation *redOp) {
   Operation *outerSeqReduceLoop = nullptr;
   auto curOp = redOp;
-  while (curOp) {
+  while (curOp != nullptr) {
     if (isa<scf::ParallelOp>(curOp) && curOp->getAttr(kReductionLoopAttr)) {
       if (gpu::GpuAttrUtils::getProcessorFromParallelOp(curOp) == gpu::Processor::Sequential) {
         outerSeqReduceLoop = curOp;
@@ -148,7 +152,7 @@ static Operation *getPostLoadLocal(Operation *outerSeqReduceLoop, memref::LoadOp
   Operation *loadLocalAPost = nullptr;
   auto curOp = outerSeqReduceLoop->getNextNode();
 
-  while (curOp) {
+  while (curOp != nullptr) {
     if (auto op = dyn_cast<memref::LoadOp>(curOp)) {
       if (op.getMemref() == loadLocalAOp.getMemref() && op.getIndices() == loadLocalAOp.getIndices()) {
         loadLocalAPost = curOp;
@@ -192,12 +196,15 @@ struct RewriteReduceInMultiLevelMemory
 
     for (auto redOp : redOps) {
       Operation *outerSeqReduceLoop = getOutermostSeqLoop(redOp);
-      if (!outerSeqReduceLoop) {
+      if (outerSeqReduceLoop == nullptr) {
         continue;
       }
 
-      Operation *allocLocalA = nullptr, *initLoadLocalA = nullptr, *initStoreLocalA = nullptr, *loadLocalA = nullptr,
-                *storeLocalA = nullptr;
+      Operation *allocLocalA = nullptr;
+      Operation *initLoadLocalA = nullptr;
+      Operation *initStoreLocalA = nullptr;
+      Operation *loadLocalA = nullptr;
+      Operation *storeLocalA = nullptr;
       std::tie(allocLocalA, initLoadLocalA, initStoreLocalA, loadLocalA, storeLocalA) =
         matchReductionRelatedOps(funcOp, redOp);
 
@@ -237,7 +244,7 @@ struct RewriteReduceInMultiLevelMemory
       auto loadLocalAOp = dyn_cast<memref::LoadOp>(loadLocalA);
       Operation *loadLocalAPost = getPostLoadLocal(outerSeqReduceLoop, loadLocalAOp);
 
-      if (!loadLocalAPost) {
+      if (loadLocalAPost == nullptr) {
         (void)funcOp->emitError(
           "memref.load in thread-level for reduction op does not exist, please check the .mlir file.");
         signalPassFailure();

@@ -14,7 +14,6 @@
 # ============================================================================
 
 """AKG-MLIR Driver for MindSpore."""
-import argparse
 import hashlib
 import json
 import logging
@@ -835,25 +834,3 @@ class MlirDriver:
         with os.fdopen(os.open(out_file, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
             for line in static_kernel_str:
                 f.write(line)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run akg-mlir End to End")
-    parser.add_argument("-f", type=str, help="Run single file.")
-    parser.add_argument("-o", type=str, help="output dir.", default="")
-    parser.add_argument("-akg-tools-dir", type=str, help="akg-mlir tools build dir.", default="")
-    parser.add_argument("-llvm-tools-dir", type=str, help="llvm tools build dir", default="")
-    parser.add_argument("-bisheng-tools-dir", type=str, help="bisheng cpp tools build dir", default="")
-    parser.add_argument("-d", "--dynamic-shape", type=bool, help="Specifies dynamic shape or not", default=False)
-    args = parser.parse_args()
-    logging.info(args)
-
-    driver = MlirDriver(
-        kernel_name='',
-        input_file=args.f,
-        output_dir=args.o,
-        akg_tools_dir=args.akg_tools_dir,
-        llvm_tools_dir=args.llvm_tools_dir,
-        dynamic_shape=args.dynamic_shape,
-    )
-    driver.compile()

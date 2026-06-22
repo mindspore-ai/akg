@@ -17,13 +17,12 @@
 #define AKG_DIALECT_MINDSPORE_TRANSFORMS_REMOVEREDUNDANTREDUCE_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 std::unique_ptr<OperationPass<func::FuncOp>> createRemoveRedundantReducePass();
 }  // namespace mlir
+
 #endif  // AKG_DIALECT_MINDSPORE_TRANSFORMS_REMOVEREDUNDANTREDUCE_H_

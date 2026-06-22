@@ -72,7 +72,7 @@ static int getIntConst(mlir::Value value) {
 static Value getReplacedGpuIter(Operation *primeOp, gpu::LaunchOp gpuLaunch, Operation *mainFunc) {
   auto primeConst = dyn_cast<mlir::arith::ConstantOp>(primeOp);
   if (!primeConst) {
-    return Value();
+    return {};
   }
 
   auto replacedPrime = getIntConst(primeConst);
@@ -97,7 +97,7 @@ static Value getReplacedGpuIter(Operation *primeOp, gpu::LaunchOp gpuLaunch, Ope
     }
   }
 
-  return Value();
+  return {};
 }
 
 // PrimeNumReplace finds the unknown shape op, and create a new keep args op with `PrimeReplace` attr.

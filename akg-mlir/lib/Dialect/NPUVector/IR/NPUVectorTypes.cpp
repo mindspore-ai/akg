@@ -65,33 +65,45 @@ Type NPUVectorType::parse(AsmParser &parser) {
   SmallVector<int64_t> shape;
   Type elementType;
 
-  if (parser.parseLess()) return Type();
+  if (parser.parseLess()) {
+    return {};
+  }
 
   // Parse shape dimensions - similar to tensor/memref dimension parsing
   // Format: dim1 x dim2 x ... x elementType
   // Use parseDimensionList for proper dimension parsing with dynamic support
-  if (parser.parseDimensionList(shape, /*allowDynamic=*/true, /*withTrailingX=*/true)) return Type();
+  if (parser.parseDimensionList(shape, /*allowDynamic=*/true, /*withTrailingX=*/true)) {
+    return {};
+  }
 
   // Parse element type
-  if (parser.parseType(elementType)) return Type();
+  if (parser.parseType(elementType)) {
+    return {};
+  }
 
-  if (parser.parseGreater()) return Type();
+  if (parser.parseGreater()) {
+    return {};
+  }
 
   return NPUVectorType::get(shape, elementType);
 }
 
 void NPUVectorType::print(AsmPrinter &printer) const {
-  // Print only the content inside <>, not the <> themselves
-  // The outer <> will be added by printDialectSymbol
+  // Print only the dialect type body. The generic MLIR printer adds the
+  // dialect namespace and chooses dot or angle-bracket syntax.
   auto shape = getShape();
   for (unsigned i = 0, e = shape.size(); i < e; ++i) {
-    if (i > 0) printer << "x";
+    if (i > 0) {
+      printer << "x";
+    }
     if (ShapedType::isDynamic(shape[i])) {
       printer << "?";
     } else {
       printer << shape[i];
     }
   }
-  printer << "x";
+  if (!shape.empty()) {
+    printer << "x";
+  }
   printer.printType(getElementType());
 }

@@ -78,7 +78,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
  private:
   /// Returns the allocation operation for `value` if it exists.
   /// nullptr otherwise.
-  Operation *getAllocationOp(const Value &value) const {
+  [[nodiscard]] Operation *getAllocationOp(const Value &value) const {
     if (Operation *op = value.getDefiningOp()) {
       if (auto effects = dyn_cast<MemoryEffectOpInterface>(op)) {
         if (effects.hasEffect<MemoryEffects::Allocate>()) {
@@ -91,7 +91,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 
   /// Returns the deallocation operation for `value` if it exists.
   /// nullptr otherwise.
-  Operation *getDeallocationOp(const Value &value) const {
+  [[nodiscard]] Operation *getDeallocationOp(const Value &value) const {
     auto valueUsers = value.getUsers();
     auto it = llvm::find_if(valueUsers, [&](Operation *op) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
@@ -141,12 +141,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   }
 
   /// Check whether the write effect on `val` can be caused by `op`.
-  static bool doesOpUseVal(const Value &val, Operation *op) {
-    if (!llvm::is_contained(val.getUsers(), op)) {
-      return false;
-    }
-    return true;
-  }
+  static bool doesOpUseVal(const Value &val, Operation *op) { return llvm::is_contained(val.getUsers(), op); }
 
   /// Check if an op that lies on one of the paths between `start`
   /// and `end` and satisfies `checkPropertiesOfOperation`. If the start and end
@@ -174,10 +169,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       // from the parent of `untilOp` to `untilOp`.
       if (fromOpParentRegion != untilOpParentRegion) {
         (void)recur(fromOp, untilOpParentOp);
-        if (checkPropertiesOfOperation(val, untilOpParentOp)) {
-          return true;
-        }
-        return false;
+        return checkPropertiesOfOperation(val, untilOpParentOp);
       }
 
       // Now, assuming that `fromOp` and `untilOp` exist in the same region,
@@ -242,13 +234,13 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     Operation *lastOpUsingSrc = lastOpOfCurrentRegion;
 
     // If `srcDeallocOp` is not null, `lastOpUsingSrc` will be `srcDeallocOp`.
-    if (srcDeallocOp) {
+    if (srcDeallocOp != nullptr) {
       lastOpUsingSrc = srcDeallocOp;
     }
     Operation *firstOpUsingDest = &dest.getParentRegion()->front().front();
 
     // If `destDefOp` is not null, `firstOpUsingDest` will be `destDefOp`.
-    if (destDefOp) {
+    if (destDefOp != nullptr) {
       firstOpUsingDest = destDefOp;
     }
 
@@ -262,14 +254,11 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(src, lastOpUsingSrc);
     bool isDestReadAfter =
       hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(dest, lastOpUsingSrc);
-    if (isDestReadBefore || (isSrcWriteAfter && (isDestReadAfter || isDestWriteAfter)) ||
-        (isSrcReadAfter && isDestWriteAfter)) {
-      return false;
-    }
-    return true;
+    return !(isDestReadBefore || (isSrcWriteAfter && (isDestReadAfter || isDestWriteAfter)) ||
+             (isSrcReadAfter && isDestWriteAfter));
   }
 
-  bool isMemRefTypesCompatible(Value src, Value dest) const {
+  [[nodiscard]] bool isMemRefTypesCompatible(Value src, Value dest) const {
     auto srcType = dyn_cast<MemRefType>(src.getType());
     auto destType = dyn_cast<MemRefType>(dest.getType());
     if (!destType || !srcType) {
@@ -283,7 +272,6 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 
     auto srcLayout = srcType.getLayout();
     auto destLayout = destType.getLayout();
-
     if (!srcLayout && !destLayout) {
       return true;
     }
@@ -327,14 +315,14 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     // lead to occurrences of `src` after `srcDeallocOp`, which is semantically
     // incorrect.
     (void)opsToErase.insert(copyOp);
-    if (destDefOp) {
+    if (destDefOp != nullptr) {
       (void)opsToErase.insert(destDefOp);
     }
-    if (srcDeallocOp && (hasInterveningOp(dest, srcDeallocOp, lastOpOfCurrentRegion, &doesOpUseVal) ||
-                         doesOpUseVal(dest, lastOpOfCurrentRegion))) {
+    if ((srcDeallocOp != nullptr) && (hasInterveningOp(dest, srcDeallocOp, lastOpOfCurrentRegion, &doesOpUseVal) ||
+                                      doesOpUseVal(dest, lastOpOfCurrentRegion))) {
       (void)opsToErase.insert(srcDeallocOp);
     }
-    if (destDeallocOp) {
+    if (destDeallocOp != nullptr) {
       (void)opsToErase.insert(destDeallocOp);
     }
 
@@ -353,11 +341,11 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     Value dest = copyOp.getTarget();
     Operation *lastOpUsingDest = &src.getParentRegion()->back().back();
     Operation *destDeallocOp = getDeallocationOp(dest);
-    if (destDeallocOp) {
+    if (destDeallocOp != nullptr) {
       lastOpUsingDest = destDeallocOp;
     }
     if (!hasInterveningOp(dest, copyOp, lastOpUsingDest, &doesOpUseVal) &&
-        (!doesOpUseVal(dest, lastOpUsingDest) || destDeallocOp)) {
+        (!doesOpUseVal(dest, lastOpUsingDest) || (destDeallocOp != nullptr))) {
       (void)opsToErase.insert(copyOp);
     }
   }

@@ -79,7 +79,8 @@ struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBuff
             (void)keptResultValue.emplace_back(dyn_cast<linalg::CopyOp>(returnInputOp).getInputs()[0]);
           }
           continue;
-        } else if (isa<bufferization::ToMemrefOp>(returnInputOp)) {
+        }
+        if (isa<bufferization::ToMemrefOp>(returnInputOp)) {
           auto memrefInputOp = returnInputOp->getOperands()[0].getDefiningOp();
           if (isa<linalg::CopyOp>(memrefInputOp)) {
             (void)erasedResultIndices.set(static_cast<unsigned int>(index));
@@ -94,7 +95,7 @@ struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBuff
       }
     });
 
-    if (targetCopyOps.size() == 0) {
+    if (targetCopyOps.empty()) {
       return;
     }
     // Cpu only: Erase CopyOp's output from func types/attrs/args

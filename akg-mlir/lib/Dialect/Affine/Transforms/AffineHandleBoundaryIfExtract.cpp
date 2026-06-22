@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -59,10 +58,10 @@ struct AffineHandleBoundaryIfExtract : public impl::AffineHandleBoundaryIfExtrac
 };
 
 bool AffineHandleBoundaryIfExtract::isBoundaryIf(Operation *outerIfOp) {
-  if (outerIfOp->getPrevNode()) {
+  if (outerIfOp->getPrevNode() != nullptr) {
     return false;
   }
-  if (outerIfOp->getNextNode() && !isa<affine::AffineYieldOp>(outerIfOp->getNextNode())) {
+  if ((outerIfOp->getNextNode() != nullptr) && !isa<affine::AffineYieldOp>(outerIfOp->getNextNode())) {
     return false;
   }
   if (!isa<affine::AffineForOp>(outerIfOp->getParentOp())) {
@@ -92,7 +91,7 @@ void AffineHandleBoundaryIfExtract::runOnOperation() {
     }
     return WalkResult::advance();
   });
-  if (!outerIfOp) {
+  if (outerIfOp == nullptr) {
     return;
   }
   OpBuilder builder(funcOp);

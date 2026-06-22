@@ -175,4 +175,14 @@ def HoistTensorSlice : Pass<"hoist-tensor-slice", "func::FuncOp"> {
   let dependentDialects = [];
 }
 
+def LegalizeIntWidth : Pass<"linalg-legalize-int-width", "func::FuncOp"> {
+  let summary = "Narrow wide integer compares/selects/bitwise ops to the element type when value-exact";
+  let constructor = "mlir::createLegalizeIntWidthPass()";
+  let dependentDialects = [
+    "affine::AffineDialect",
+    "arith::ArithDialect",
+    "linalg::LinalgDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES

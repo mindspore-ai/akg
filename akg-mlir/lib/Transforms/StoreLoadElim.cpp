@@ -89,22 +89,30 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
   }
 
   bool accessSameLocation(Operation *op1, Operation *op2) const {
-    SmallVector<Value, 4> vals1, vals2;
+    SmallVector<Value, 4> vals1;
+    SmallVector<Value, 4> vals2;
     if (isa<affine::AffineStoreOp, affine::AffineLoadOp>(op1) &&
         isa<affine::AffineStoreOp, affine::AffineLoadOp>(op2)) {
-      AffineMap map1, map2;
+      AffineMap map1;
+      AffineMap map2;
       CommonUtils::getUnifiedAffineAccess(op1, map1, vals1);
       CommonUtils::getUnifiedAffineAccess(op2, map2, vals2);
-      if (!map1 || !map2 || map1 != map2) return false;
+      if (!map1 || !map2 || map1 != map2) {
+        return false;
+      }
     } else if (isa<memref::StoreOp, memref::LoadOp>(op1) && isa<memref::StoreOp, memref::LoadOp>(op2)) {
       llvm::append_range(vals1, CommonUtils::getStoreLoadIndices(op1));
       llvm::append_range(vals2, CommonUtils::getStoreLoadIndices(op2));
     } else {
       return false;
     }
-    if (vals1.size() != vals2.size()) return false;
+    if (vals1.size() != vals2.size()) {
+      return false;
+    }
     for (size_t i = 0; i < vals1.size(); ++i) {
-      if (vals1[i] != vals2[i]) return false;
+      if (vals1[i] != vals2[i]) {
+        return false;
+      }
     }
     return true;
   }
@@ -117,7 +125,9 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
     auto storeBlock = storeOp->getBlock();
     auto loadBlock = loadOp->getBlock();
     for (auto otherStore : otherStores) {
-      if (!accessSameLocation(otherStore, loadOp)) continue;
+      if (!accessSameLocation(otherStore, loadOp)) {
+        continue;
+      }
       auto otherBlock = otherStore->getBlock();
       if (otherBlock == storeBlock && loadBlock == storeBlock) {
         if (storeOp->isBeforeInBlock(otherStore) && otherStore->isBeforeInBlock(loadOp)) {
@@ -135,7 +145,7 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
     auto memref = CommonUtils::getStoreMemref(storeOp);
     // check if the memref is valid and the type is correct
     if (!memref || !isa<MemRefType>(memref.getType())) {
-      return SmallVector<Operation *>();
+      return {};
     }
 
     // Partition users into other stores vs. candidate loads.
@@ -157,13 +167,18 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
       auto storeBlock = storeOp->getBlock();
       auto loadBlock = loadOp->getBlock();
       bool inDiffBranch = (storeBlock != loadBlock);
-      bool isNestBranch = inDiffBranch && (storeBlock->getParent() && loadBlock->getParent() &&
-                                           storeBlock->getParent()->isAncestor(loadBlock->getParent()));
+      bool isNestBranch =
+        inDiffBranch && ((storeBlock->getParent() != nullptr) && (loadBlock->getParent() != nullptr) &&
+                         storeBlock->getParent()->isAncestor(loadBlock->getParent()));
       bool isSameBranchWAR = !isNestBranch && !inDiffBranch && loadOp->isBeforeInBlock(storeOp);
 
-      bool canEliminate = !(inDiffBranch && !isNestBranch) && !isSameBranchWAR && accessSameLocation(storeOp, loadOp);
-      if (!canEliminate) continue;
-      if (hasInterveningStore(storeOp, loadOp, otherStores)) continue;
+      bool canEliminate = (!inDiffBranch || isNestBranch) && !isSameBranchWAR && accessSameLocation(storeOp, loadOp);
+      if (!canEliminate) {
+        continue;
+      }
+      if (hasInterveningStore(storeOp, loadOp, otherStores)) {
+        continue;
+      }
       elimLoads.push_back(loadOp);
     }
     return elimLoads;
@@ -171,7 +186,7 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
 };
 
 void StoreLoadElimPass::runOnOperation() {
-  DominanceInfo &domInfo = getAnalysis<DominanceInfo>();
+  auto &domInfo = getAnalysis<DominanceInfo>();
   SmallVector<Operation *> toElimLoads;
   // Avoid processing the same load multiple times
   llvm::DenseSet<Operation *> processedLoads;
@@ -216,7 +231,9 @@ void StoreLoadElimPass::runOnOperation() {
   // is dead — erase those stores and the allocation.
   for (auto memref : affectedMemrefs) {
     auto memrefOp = memref.getDefiningOp();
-    if (!memrefOp) continue;  // function arg / global buffer
+    if (memrefOp == nullptr) {
+      continue;  // function arg / global buffer
+    }
     SmallVector<Operation *> storesToErase;
     bool onlyStores = true;
     for (auto user : memref.getUsers()) {
@@ -227,7 +244,9 @@ void StoreLoadElimPass::runOnOperation() {
         break;
       }
     }
-    if (!onlyStores) continue;
+    if (!onlyStores) {
+      continue;
+    }
     for (auto storeOp : storesToErase) {
       storeOp->erase();
     }

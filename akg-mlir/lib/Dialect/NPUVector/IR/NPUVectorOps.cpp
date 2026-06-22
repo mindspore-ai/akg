@@ -36,8 +36,9 @@ using namespace mlir::npuvector;  // NOLINT(build/namespaces)
 //===----------------------------------------------------------------------===//
 
 void TransferReadOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>> &effects) {
-  if (llvm::isa<MemRefType>(getShapedType()))
+  if (llvm::isa<MemRefType>(getShapedType())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable(), SideEffects::DefaultResource::get());
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -45,8 +46,9 @@ void TransferReadOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<Memo
 //===----------------------------------------------------------------------===//
 
 void TransferWriteOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>> &effects) {
-  if (llvm::isa<MemRefType>(getShapedType()))
+  if (llvm::isa<MemRefType>(getShapedType())) {
     effects.emplace_back(MemoryEffects::Write::get(), &getSourceMutable(), SideEffects::DefaultResource::get());
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -54,7 +56,9 @@ void TransferWriteOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<Mem
 //===----------------------------------------------------------------------===//
 
 OpFoldResult BroadcastOp::fold(FoldAdaptor) {
-  if (getSource().getType() == getResult().getType()) return getSource();
+  if (getSource().getType() == getResult().getType()) {
+    return getSource();
+  }
   return {};
 }
 

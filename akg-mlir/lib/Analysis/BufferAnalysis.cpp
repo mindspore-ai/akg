@@ -53,7 +53,9 @@ static std::optional<int64_t> getStaticTotalSize(ArrayRef<int64_t> shapes) {
 /// Check if an operation defines an alloc-like operation.
 static bool isDefiningOpAllocLike(Value value) {
   auto defOp = value.getDefiningOp();
-  if (!defOp) return false;
+  if (defOp == nullptr) {
+    return false;
+  }
   return isa<memref::AllocOp, memref::AllocaOp>(defOp);
 }
 
@@ -219,7 +221,7 @@ SetVector<Value> BufferAnalysis::GetAliasBuffers(Value aliasBuffer) {
 void BufferAnalysis::MaterializeScalarResults(OpInfo *opInfo, const ValueRange &results) {
   SmallVector<Value> scalarResults;
   std::copy_if(results.begin(), results.end(), std::back_inserter(scalarResults),
-               [this](Value result) { return isScalarTrackedValue(result); });
+               [](Value result) { return isScalarTrackedValue(result); });
   if (scalarResults.empty()) {
     return;
   }
@@ -302,8 +304,12 @@ void BufferAnalysis::UpdateOpKillInfo(OpInfo *opInfo, Value operand, Liveness li
 }
 
 bool BufferAnalysis::isParentOpDominate(Operation *op1, Operation *op2) const {
-  if (op1 == nullptr || op2 == nullptr) return false;
-  if (op2->getParentOp() == nullptr || op1->getParentOp() == nullptr) return false;
+  if (op1 == nullptr || op2 == nullptr) {
+    return false;
+  }
+  if (op2->getParentOp() == nullptr || op1->getParentOp() == nullptr) {
+    return false;
+  }
   return op2->getParentOp()->isAncestor(op1->getParentOp());
 }
 
@@ -314,14 +320,14 @@ bool BufferAnalysis::IsBlockAfter(Block *afterBlock, Block *beforeBlock) const {
   assert(afterBlock != nullptr && beforeBlock != nullptr);
   mlir::Region *region = beforeBlock->getParent();
   assert(region != nullptr);
+  bool foundBefore = false;
   for (auto it = region->begin(); it != region->end(); ++it) {
     if (&*it == beforeBlock) {
-      for (++it; it != region->end(); ++it) {
-        if (&*it == afterBlock) {
-          return true;
-        }
-      }
-      break;
+      foundBefore = true;
+      continue;
+    }
+    if (foundBefore && &*it == afterBlock) {
+      return true;
     }
   }
   return false;
@@ -375,7 +381,9 @@ SmallVector<Value> BufferAnalysis::GetLiveBuffersInLoopImpl(ForOpType loopOp, Li
     aliasBuffers.insert(operand);
     for (auto Buffer : aliasBuffers) {
       auto iter = buffer2status.find(Buffer);
-      if (iter != buffer2status.end()) allocBeforeLoopBuffers.push_back(Buffer);
+      if (iter != buffer2status.end()) {
+        allocBeforeLoopBuffers.push_back(Buffer);
+      }
     }
   }
   return allocBeforeLoopBuffers;
@@ -530,7 +538,8 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
       // Recursive control flow - affine.for
       RecursiveForOpImpl(affineForOp, live);
       return WalkResult::skip();
-    } else if (auto affineIfOp = dyn_cast<mlir::affine::AffineIfOp>(op)) {
+    }
+    if (auto affineIfOp = dyn_cast<mlir::affine::AffineIfOp>(op)) {
       // Recursive control flow - affine.if
       RecursiveIfOpImpl<mlir::affine::AffineIfOp, mlir::affine::AffineYieldOp>(affineIfOp, live);
       return WalkResult::skip();
@@ -635,8 +644,8 @@ int64_t BufferAnalysis::getExtraBufferSizeByFactor(Operation *op) const {
 
 void BufferAnalysis::GenerateBufferLife() {
   int scopeTime = 0;
-  for (size_t i = 0; i < linearOperation.size(); ++i) {
-    auto it = genKillMap.find(linearOperation[i].get());
+  for (const auto &i : linearOperation) {
+    auto it = genKillMap.find(i.get());
     if (it == genKillMap.end()) {
       scopeTime++;
       continue;
@@ -694,7 +703,7 @@ void BufferAnalysis::printLiveRanges() const {
                  << "\n";
 
     // Print operation if available
-    if (liveRange.op) {
+    if (liveRange.op != nullptr) {
       llvm::outs() << "  Operation: ";
       liveRange.op->print(llvm::outs(), OpPrintingFlags().skipRegions());
       llvm::outs() << "\n";
@@ -703,41 +712,37 @@ void BufferAnalysis::printLiveRanges() const {
   llvm::outs() << "=====================================================\n\n";
 }
 
+static void printValueList(const char *label, const SmallVector<Value> &values) {
+  if (values.empty()) {
+    return;
+  }
+  llvm::outs() << "      " << label << ": ";
+  for (size_t j = 0; j < values.size(); ++j) {
+    if (j > 0) {
+      llvm::outs() << ", ";
+    }
+    values[j].print(llvm::outs());
+  }
+  llvm::outs() << "\n";
+}
+
 void BufferAnalysis::printBufferAnalysisInfo() const {
   llvm::outs() << "\n================== Buffer Analysis ==================\n\n";
 
-  // Print linear operations with gen/kill info
   llvm::outs() << "--- Linear Operations ---\n";
   for (size_t i = 0; i < linearOperation.size(); ++i) {
     const auto &opInfo = linearOperation[i];
     llvm::outs() << "[" << i << "] ";
-    if (opInfo->operation) {
+    if (opInfo->operation != nullptr) {
       opInfo->operation->print(llvm::outs(), OpPrintingFlags().skipRegions());
     }
     llvm::outs() << "\n";
 
-    // Print gen/kill info for this operation
     auto it = genKillMap.find(opInfo.get());
     if (it != genKillMap.end()) {
       const auto &genKill = it->second;
-
-      if (!genKill.gen.empty()) {
-        llvm::outs() << "      GEN: ";
-        for (size_t j = 0; j < genKill.gen.size(); ++j) {
-          if (j > 0) llvm::outs() << ", ";
-          genKill.gen[j].print(llvm::outs());
-        }
-        llvm::outs() << "\n";
-      }
-
-      if (!genKill.kill.empty()) {
-        llvm::outs() << "      KILL: ";
-        for (size_t j = 0; j < genKill.kill.size(); ++j) {
-          if (j > 0) llvm::outs() << ", ";
-          genKill.kill[j].print(llvm::outs());
-        }
-        llvm::outs() << "\n";
-      }
+      printValueList("GEN", genKill.gen);
+      printValueList("KILL", genKill.kill);
     }
   }
   llvm::outs() << "\n";
@@ -780,8 +785,10 @@ void BufferAnalysis::gatherDataTypeWeights() {
   smallestTypeBits = std::numeric_limits<uint32_t>::max();
 
   for (auto &[buffer, info] : bufferInfos) {
-    if (!info.elementType.isIntOrFloat()) continue;
-    uint32_t typeBits = static_cast<uint32_t>(info.elementType.getIntOrFloatBitWidth());
+    if (!info.elementType.isIntOrFloat()) {
+      continue;
+    }
+    auto typeBits = static_cast<uint32_t>(info.elementType.getIntOrFloatBitWidth());
     dataTypeWeightMap[buffer] = typeBits;
     smallestTypeBits = std::min(smallestTypeBits, typeBits);
   }

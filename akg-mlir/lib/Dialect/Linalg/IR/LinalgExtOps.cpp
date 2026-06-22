@@ -94,7 +94,9 @@ void GatherOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult GatherOp::parse(OpAsmParser &parser, OperationState &result) {
-  Type dataType, indicesType, outputType;
+  Type dataType;
+  Type indicesType;
+  Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
   if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
@@ -127,7 +129,9 @@ void UnsortedSegmentSumOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult UnsortedSegmentSumOp::parse(OpAsmParser &parser, OperationState &result) {
-  Type dataType, indicesType, outputType;
+  Type dataType;
+  Type indicesType;
+  Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
   if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
@@ -149,7 +153,9 @@ void UnsortedSegmentSumOp::getEffects(SmallVectorImpl<SideEffects::EffectInstanc
 // TemplateOps
 //===----------------------------------------------------------------------===//
 static ParseResult parseNamedStructuredOpResults(OpAsmParser &parser, SmallVectorImpl<Type> &resultTypes) {
-  if (parser.parseOptionalArrowTypeList(resultTypes)) return failure();
+  if (parser.parseOptionalArrowTypeList(resultTypes)) {
+    return failure();
+  }
   return success();
 }
 static void addOperandSegmentSizesAttr(OpAsmParser &parser, OperationState &result, size_t numInputs,
@@ -166,13 +172,18 @@ static void addOperandSegmentSizesAttr(OpAsmParser &parser, OperationState &resu
 }
 
 static LogicalResult verifyOperationAttrs(OpAsmParser &parser, OperationState &result, SMLoc attrsLoc) {
-  if (result.propertiesAttr) return success();
+  if (result.propertiesAttr) {
+    return success();
+  }
   std::optional<RegisteredOperationName> info = result.name.getRegisteredInfo();
-  if (!info) return success();
+  if (!info) {
+    return success();
+  }
   if (failed(info->verifyInherentAttrs(result.attributes, [&]() {
         return parser.emitError(attrsLoc) << "'" << result.name.getStringRef() << "' op ";
-      })))
+      }))) {
     return failure();
+  }
   return success();
 }
 
@@ -181,49 +192,69 @@ static LogicalResult verifyOperationAttrs(OpAsmParser &parser, OperationState &r
 static ParseResult parseCommonStructuredOpParts(OpAsmParser &parser, OperationState &result,
                                                 SmallVectorImpl<Type> &inputTypes, SmallVectorImpl<Type> &outputTypes,
                                                 bool addOperandSegmentSizes = true) {
-  SMLoc attrsLoc, inputsOperandsLoc, outputsOperandsLoc;
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputsOperands, outputsOperands;
+  SMLoc attrsLoc;
+  SMLoc inputsOperandsLoc;
+  SMLoc outputsOperandsLoc;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputsOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> outputsOperands;
 
   if (succeeded(parser.parseOptionalLess())) {
-    if (parser.parseAttribute(result.propertiesAttr) || parser.parseGreater()) return failure();
+    if (parser.parseAttribute(result.propertiesAttr) || parser.parseGreater()) {
+      return failure();
+    }
   }
   attrsLoc = parser.getCurrentLocation();
-  if (parser.parseOptionalAttrDict(result.attributes)) return failure();
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
 
   if (succeeded(parser.parseOptionalKeyword("ins"))) {
-    if (parser.parseLParen()) return failure();
+    if (parser.parseLParen()) {
+      return failure();
+    }
 
     inputsOperandsLoc = parser.getCurrentLocation();
-    if (parser.parseOperandList(inputsOperands) || parser.parseColonTypeList(inputTypes) || parser.parseRParen())
+    if (parser.parseOperandList(inputsOperands) || parser.parseColonTypeList(inputTypes) || parser.parseRParen()) {
       return failure();
+    }
   }
 
   if (succeeded(parser.parseOptionalKeyword("outs"))) {
     outputsOperandsLoc = parser.getCurrentLocation();
     if (parser.parseLParen() || parser.parseOperandList(outputsOperands) || parser.parseColonTypeList(outputTypes) ||
-        parser.parseRParen())
+        parser.parseRParen()) {
       return failure();
+    }
   }
 
   if (parser.resolveOperands(inputsOperands, inputTypes, inputsOperandsLoc, result.operands) ||
-      parser.resolveOperands(outputsOperands, outputTypes, outputsOperandsLoc, result.operands))
+      parser.resolveOperands(outputsOperands, outputTypes, outputsOperandsLoc, result.operands)) {
     return failure();
+  }
 
   if (addOperandSegmentSizes) {
     addOperandSegmentSizesAttr(parser, result, inputsOperands.size(), outputsOperands.size());
   }
-  if (failed(verifyOperationAttrs(parser, result, attrsLoc))) return failure();
+  if (failed(verifyOperationAttrs(parser, result, attrsLoc))) {
+    return failure();
+  }
   return success();
 }
 
 static void printNamedStructuredOpResults(OpAsmPrinter &p, TypeRange resultTypes) {
-  if (resultTypes.empty()) return;
+  if (resultTypes.empty()) {
+    return;
+  }
   p.printOptionalArrowTypeList(resultTypes);
 }
 
 static void printCommonStructuredOpParts(OpAsmPrinter &p, ValueRange inputs, ValueRange outputs) {
-  if (!inputs.empty()) p << " ins(" << inputs << " : " << inputs.getTypes() << ")";
-  if (!outputs.empty()) p << " outs(" << outputs << " : " << outputs.getTypes() << ")";
+  if (!inputs.empty()) {
+    p << " ins(" << inputs << " : " << inputs.getTypes() << ")";
+  }
+  if (!outputs.empty()) {
+    p << " outs(" << outputs << " : " << outputs.getTypes() << ")";
+  }
 }
 
 void TemplateOp::getAsmBlockArgumentNames(Region &region, OpAsmSetValueNameFn setNameFn) { return; }
@@ -234,7 +265,9 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange res
                        ArrayRef<NamedAttribute> attributes) {
   build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps, iteratorTypes, doc, libraryCall);
   result.addAttributes(attributes);
-  if (!bodyBuild) return;
+  if (!bodyBuild) {
+    return;
+  }
 
   SmallVector<Type, 4> blockArgTypes;
   SmallVector<Location, 4> blockArgLocs;
@@ -308,7 +341,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
       // Convert IteratorType enums into the string representation. This is
       // needed, because tests still use the old format when 'iterator_types'
       // attribute is represented as an array of strings.
-      // TODO(scheduler): Remove this conversion once tests are fixed.
+      // Remove this conversion once tests are fixed.
       SmallVector<Attribute> iteratorTypeNames =
         llvm::to_vector(llvm::map_range(iteratorTypes, [&](utils::IteratorType t) -> Attribute {
           return StringAttr::get(getContext(), stringifyIteratorType(t));
@@ -332,7 +365,9 @@ void TemplateOp::print(OpAsmPrinter &p) {
 
   bool hasExtraAttrs = false;
   for (NamedAttribute n : (*this)->getAttrs()) {
-    if ((hasExtraAttrs = !genericAttrNamesSet.contains(n.getName().strref()))) break;
+    if ((hasExtraAttrs = !genericAttrNamesSet.contains(n.getName().strref()))) {
+      break;
+    }
   }
   if (hasExtraAttrs) {
     p << " attrs = ";
@@ -356,44 +391,57 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   // The name is unimportant as we will overwrite result.attributes.
   // The core linalg traits must contain the information necessary to pass the
   // verifier.
-  if (parser.parseAttribute(dictAttr, "_", result.attributes)) return failure();
+  if (parser.parseAttribute(dictAttr, "_", result.attributes)) {
+    return failure();
+  }
   result.attributes.assign(dictAttr.getValue().begin(), dictAttr.getValue().end());
 
   // Convert array of string into an array of IteratyType enums. This is needed,
   // because tests still use the old format when 'iterator_types' attribute is
   // represented as an array of strings.
-  // TODO(scheduler): Remove this conversion once tests are fixed.
+  // Remove this conversion once tests are fixed.
   ArrayAttr iteratorTypes = cast<ArrayAttr>(result.attributes.get(getIteratorTypesAttrName(result.name)));
 
   SmallVector<Attribute> iteratorTypeAttrs;
 
   for (StringRef s : iteratorTypes.getAsValueRange<StringAttr>()) {
     auto maybeIteratorType = utils::symbolizeIteratorType(s);
-    if (!maybeIteratorType.has_value())
+    if (!maybeIteratorType.has_value()) {
       return parser.emitError(parser.getCurrentLocation()) << "unexpected iterator_type (" << s << ")";
+    }
 
     iteratorTypeAttrs.push_back(IteratorTypeAttr::get(parser.getContext(), maybeIteratorType.value()));
   }
   result.attributes.set(getIteratorTypesAttrName(result.name), parser.getBuilder().getArrayAttr(iteratorTypeAttrs));
 
   // Parsing is shared with named ops, except for the region.
-  SmallVector<Type, 1> inputTypes, outputTypes;
-  if (parseCommonStructuredOpParts(parser, result, inputTypes, outputTypes)) return failure();
+  SmallVector<Type, 1> inputTypes;
+  SmallVector<Type, 1> outputTypes;
+  if (parseCommonStructuredOpParts(parser, result, inputTypes, outputTypes)) {
+    return failure();
+  }
 
   // Optional attributes may be added.
-  if (succeeded(parser.parseOptionalKeyword("attrs")))
-    if (failed(parser.parseEqual()) || failed(parser.parseOptionalAttrDict(result.attributes))) return failure();
+  if (succeeded(parser.parseOptionalKeyword("attrs"))) {
+    if (failed(parser.parseEqual()) || failed(parser.parseOptionalAttrDict(result.attributes))) {
+      return failure();
+    }
+  }
 
   std::unique_ptr<Region> region = std::make_unique<Region>();
-  if (parser.parseRegion(*region, {})) return failure();
+  if (parser.parseRegion(*region, {})) {
+    return failure();
+  }
   result.addRegion(std::move(region));
 
   // Generic ops may specify that a subset of its outputs are tensors. Such
   // outputs are specified in the result type.
-  // TODO(scheduler): may need to move output parsing before region parsing.
+  // May need to move output parsing before region parsing.
   // Need to wait for declarative assembly resolution to decide.
   SmallVector<Type, 1> outputTensorsTypes;
-  if (parseNamedStructuredOpResults(parser, outputTensorsTypes)) return failure();
+  if (parseNamedStructuredOpResults(parser, outputTensorsTypes)) {
+    return failure();
+  }
   result.addTypes(outputTensorsTypes);
 
   return success();

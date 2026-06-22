@@ -22,5 +22,5 @@
 int main(int argc, char **argv) {
   mlir::registerToPTXTranslation();
 
-  return failed(mlir::mlirTranslateMain(argc, argv, "Akg Translation Testing Tool"));
+  return static_cast<int>(failed(mlir::mlirTranslateMain(argc, argv, "Akg Translation Testing Tool")));
 }

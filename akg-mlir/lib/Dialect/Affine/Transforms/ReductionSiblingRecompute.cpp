@@ -51,7 +51,8 @@ namespace {
 // Collects nested affine.for ops from op up to (not including) outerLoop, outermost first.
 static SmallVector<affine::AffineForOp> getNestedLoopChain(Operation *op, Operation *outerLoop) {
   SmallVector<affine::AffineForOp> chain;
-  for (Operation *parent = op->getParentOp(); parent && parent != outerLoop; parent = parent->getParentOp()) {
+  for (Operation *parent = op->getParentOp(); (parent != nullptr) && parent != outerLoop;
+       parent = parent->getParentOp()) {
     if (auto forOp = dyn_cast<affine::AffineForOp>(parent)) {
       chain.push_back(forOp);
     }
@@ -69,7 +70,9 @@ static bool sameLoopBounds(affine::AffineForOp a, affine::AffineForOp b) {
 
 static Value traceToAlloc(Value memref) {
   while (memref) {
-    if (memref.getDefiningOp<memref::AllocOp>()) return memref;
+    if (memref.getDefiningOp<memref::AllocOp>()) {
+      return memref;
+    }
     if (auto *defOp = memref.getDefiningOp()) {
       if (auto viewOp = dyn_cast<ViewLikeOpInterface>(defOp)) {
         memref = viewOp.getViewSource();
@@ -126,7 +129,7 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
 
   // Returns true if op is safe to clone (no regions; loads optional; otherwise memory-effect free).
   static bool isSupportedCloneOp(Operation *op, bool allowLoads = true) {
-    if (!op || op->getNumRegions() != 0) {
+    if ((op == nullptr) || op->getNumRegions() != 0) {
       return false;
     }
     if (allowLoads && isa<affine::AffineLoadOp, memref::LoadOp>(op)) {
@@ -227,12 +230,12 @@ SmallVector<Value> ReductionSiblingRecomputePass::remapIndices(ValueRange indice
 // Finds the dominating store in the same block that writes the same location as loadOp (local alloc only).
 // Scans backward past loads and stores to different memrefs, since local allocs cannot alias.
 Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp) {
-  if (!loadOp || !loadOp->getBlock() || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
+  if ((loadOp == nullptr) || (loadOp->getBlock() == nullptr) || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
     return nullptr;
   }
   Value targetMemref = loadOp->getOperand(0);
 
-  for (Operation *cursor = loadOp->getPrevNode(); cursor; cursor = cursor->getPrevNode()) {
+  for (Operation *cursor = loadOp->getPrevNode(); cursor != nullptr; cursor = cursor->getPrevNode()) {
     if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor)) {
       if (sameAccessInBlock(cursor, loadOp)) {
         return cursor;
@@ -384,7 +387,7 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   auto guard = llvm::make_scope_exit([&] { visitingValues.erase(value); });
 
   Operation *defOp = value.getDefiningOp();
-  if (!defOp || !isSupportedCloneOp(defOp)) {
+  if ((defOp == nullptr) || !isSupportedCloneOp(defOp)) {
     return {};
   }
 
@@ -561,9 +564,13 @@ void ReductionSiblingRecomputePass::eraseDeadLocalStores(const llvm::DenseSet<Va
 // Uses a worklist to avoid use-after-free when sibling operands share defining ops
 // (e.g., erasing one operand's chain can free the defining op of another operand).
 void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
-  if (!val) return;
+  if (!val) {
+    return;
+  }
   auto *startOp = val.getDefiningOp();
-  if (!startOp) return;
+  if (startOp == nullptr) {
+    return;
+  }
 
   SmallVector<Operation *> worklist;
   llvm::SmallPtrSet<Operation *, 16> erased;
@@ -571,12 +578,16 @@ void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
 
   while (!worklist.empty()) {
     Operation *defOp = worklist.pop_back_val();
-    if (erased.count(defOp) || !defOp->use_empty()) continue;
-    if (!isMemoryEffectFree(defOp) && !isa<affine::AffineLoadOp, memref::LoadOp>(defOp)) continue;
+    if ((erased.count(defOp) != 0u) || !defOp->use_empty()) {
+      continue;
+    }
+    if (!isMemoryEffectFree(defOp) && !isa<affine::AffineLoadOp, memref::LoadOp>(defOp)) {
+      continue;
+    }
 
     for (Value operand : defOp->getOperands()) {
       if (auto *inputOp = operand.getDefiningOp()) {
-        if (!erased.count(inputOp)) {
+        if (erased.count(inputOp) == 0u) {
           worklist.push_back(inputOp);
         }
       }
@@ -593,7 +604,9 @@ void ReductionSiblingRecomputePass::eraseDeadLoops(func::FuncOp func) {
   func.walk([&](affine::AffineForOp forOp) {
     bool hasSideEffect = false;
     forOp.walk([&](Operation *inner) -> WalkResult {
-      if (inner == forOp.getOperation()) return WalkResult::advance();
+      if (inner == forOp.getOperation()) {
+        return WalkResult::advance();
+      }
       if (isa<affine::AffineStoreOp, memref::StoreOp>(inner)) {
         hasSideEffect = true;
         return WalkResult::interrupt();
@@ -658,7 +671,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
   if (!toErase.empty()) {
     llvm::SmallPtrSet<Operation *, 4> seen;
     for (Operation *op : toErase) {
-      if (op && seen.insert(op).second) {
+      if ((op != nullptr) && seen.insert(op).second) {
         op->erase();
       }
     }

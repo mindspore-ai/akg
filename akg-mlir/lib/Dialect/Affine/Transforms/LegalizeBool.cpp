@@ -17,8 +17,6 @@
 #include <algorithm>
 #include <iterator>
 
-#include "akg/Dialect/Affine/Passes.h"
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -44,22 +42,32 @@ namespace affine {
 namespace {
 
 Type convertI1ElemToI8(Type type) {
-  if (!getElementTypeOrSelf(type).isInteger(1)) return type;
+  if (!getElementTypeOrSelf(type).isInteger(1)) {
+    return type;
+  }
   MLIRContext *ctx = type.getContext();
   Type i8 = IntegerType::get(ctx, 8);
-  if (type.isInteger(1)) return i8;
-  if (auto m = dyn_cast<MemRefType>(type)) return MemRefType::get(m.getShape(), i8, m.getLayout(), m.getMemorySpace());
+  if (type.isInteger(1)) {
+    return i8;
+  }
+  if (auto m = dyn_cast<MemRefType>(type)) {
+    return MemRefType::get(m.getShape(), i8, m.getLayout(), m.getMemorySpace());
+  }
   return type;
 }
 
 Value createI1ToI8ScalarCast(Location loc, Value v, OpBuilder &b) {
-  if (!v.getType().isInteger(1)) return v;
+  if (!v.getType().isInteger(1)) {
+    return v;
+  }
   Value f = b.create<arith::UIToFPOp>(loc, b.getF16Type(), v);
   return b.create<arith::FPToUIOp>(loc, b.getI8Type(), f);
 }
 
 Value createI8ToI1ScalarCast(Location loc, Value v, OpBuilder &b) {
-  if (!v.getType().isInteger(8)) return v;
+  if (!v.getType().isInteger(8)) {
+    return v;
+  }
   Value z = b.create<arith::ConstantOp>(loc, FloatAttr::get(b.getF16Type(), 0.0));
   Value f = b.create<arith::UIToFPOp>(loc, b.getF16Type(), v);
   return b.create<arith::CmpFOp>(loc, arith::CmpFPredicate::ONE, f, z);
@@ -67,24 +75,37 @@ Value createI8ToI1ScalarCast(Location loc, Value v, OpBuilder &b) {
 
 Value castBitBinaryOperandToResultTy(Location loc, Type resTy, Value v, OpBuilder &b) {
   Type t = v.getType();
-  if (t == resTy) return v;
-  if (resTy.isInteger(8) && t.isInteger(1)) return b.create<arith::ExtUIOp>(loc, resTy, v).getResult();
-  if (resTy.isInteger(1) && t.isInteger(8)) return createI8ToI1ScalarCast(loc, v, b);
+  if (t == resTy) {
+    return v;
+  }
+  if (resTy.isInteger(8) && t.isInteger(1)) {
+    return b.create<arith::ExtUIOp>(loc, resTy, v).getResult();
+  }
+  if (resTy.isInteger(1) && t.isInteger(8)) {
+    return createI8ToI1ScalarCast(loc, v, b);
+  }
   return v;
 }
 
 void updateFunctionType(func::FuncOp func) {
   OpBuilder b(func);
   FunctionType old = func.getFunctionType();
-  SmallVector<Type, 4> in, out;
+  SmallVector<Type, 4> in;
+  SmallVector<Type, 4> out;
   std::transform(old.getInputs().begin(), old.getInputs().end(), std::back_inserter(in), convertI1ElemToI8);
   std::transform(old.getResults().begin(), old.getResults().end(), std::back_inserter(out), convertI1ElemToI8);
   FunctionType neu = b.getFunctionType(in, out);
-  if (neu == old) return;
+  if (neu == old) {
+    return;
+  }
   func.setType(neu);
-  if (func.empty()) return;
+  if (func.empty()) {
+    return;
+  }
   Block &e = func.getBody().front();
-  for (unsigned i = 0; i < func.getNumArguments(); ++i) e.getArgument(i).setType(in[i]);
+  for (unsigned i = 0; i < func.getNumArguments(); ++i) {
+    e.getArgument(i).setType(in[i]);
+  }
 }
 
 struct MemRefViewSrc {
@@ -100,8 +121,11 @@ struct MemRefReshapePattern final : public OpRewritePattern<OpTy> {
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &) const override {
     Value src = MemRefViewSrc::src(op);
     Value res = op.getResult();
-    auto st = dyn_cast<MemRefType>(src.getType()), dt = dyn_cast<MemRefType>(res.getType());
-    if (!st || !dt || dt.getElementType() == st.getElementType()) return failure();
+    auto st = dyn_cast<MemRefType>(src.getType());
+    auto dt = dyn_cast<MemRefType>(res.getType());
+    if (!st || !dt || dt.getElementType() == st.getElementType()) {
+      return failure();
+    }
     res.setType(MemRefType::get(dt.getShape(), st.getElementType(), dt.getLayout(), dt.getMemorySpace()));
     return success();
   }
@@ -113,7 +137,9 @@ struct ArithSelectPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &b) const override {
     Value c = op.getCondition();
-    if (!c.getType().isInteger(8)) return failure();
+    if (!c.getType().isInteger(8)) {
+      return failure();
+    }
     b.setInsertionPoint(op);
     op->setOperand(0, createI8ToI1ScalarCast(op.getLoc(), c, b));
     return success();
@@ -173,10 +199,16 @@ struct ArithIntBinaryPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &r) const override {
     Operation *o = op.getOperation();
-    if (o->getNumOperands() != 2 || o->getNumResults() != 1) return failure();
-    Value lhs = o->getOperand(0), rhs = o->getOperand(1);
-    Type lt = lhs.getType(), rt = rhs.getType();
-    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) return failure();
+    if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
+      return failure();
+    }
+    Value lhs = o->getOperand(0);
+    Value rhs = o->getOperand(1);
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
+    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
+      return failure();
+    }
     r.setInsertionPoint(o);
     Location loc = o->getLoc();
     Type i8ty = r.getI8Type();
@@ -195,12 +227,20 @@ struct ArithBitBinaryPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &r) const override {
     Operation *o = op.getOperation();
-    if (o->getNumOperands() != 2 || o->getNumResults() != 1) return failure();
-    Value lhs = o->getOperand(0), rhs = o->getOperand(1);
-    Type lt = lhs.getType(), rt = rhs.getType();
+    if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
+      return failure();
+    }
+    Value lhs = o->getOperand(0);
+    Value rhs = o->getOperand(1);
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
     Type resTy = o->getResult(0).getType();
-    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) return failure();
-    if (lt == rt && rt == resTy) return failure();
+    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
+      return failure();
+    }
+    if (lt == rt && rt == resTy) {
+      return failure();
+    }
     r.setInsertionPoint(o);
     Location loc = o->getLoc();
     Value l8 = castBitBinaryOperandToResultTy(loc, resTy, lhs, r);
@@ -219,10 +259,16 @@ struct ArithCmplPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &b) const override {
     b.setInsertionPoint(op);
-    if (op->getNumOperands() != 2) return failure();
-    Value lhs = op.getLhs(), rhs = op.getRhs();
-    Type lt = lhs.getType(), rt = rhs.getType();
-    if (lt == rt) return failure();
+    if (op->getNumOperands() != 2) {
+      return failure();
+    }
+    Value lhs = op.getLhs();
+    Value rhs = op.getRhs();
+    Type lt = lhs.getType();
+    Type rt = rhs.getType();
+    if (lt == rt) {
+      return failure();
+    }
     Location loc = op.getLoc();
     if (lt.isInteger(8) && rt.isInteger(1)) {
       op->setOperand(1, createI1ToI8ScalarCast(loc, rhs, b));
@@ -240,7 +286,9 @@ struct MemRefLoadPattern final : public OpRewritePattern<memref::LoadOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(memref::LoadOp op, PatternRewriter &) const override {
     auto m = dyn_cast<MemRefType>(op.getMemRef().getType());
-    if (!m || op.getType() == m.getElementType()) return failure();
+    if (!m || op.getType() == m.getElementType()) {
+      return failure();
+    }
     op.getResult().setType(m.getElementType());
     return success();
   }
@@ -250,9 +298,14 @@ struct MemRefStorePattern final : public OpRewritePattern<memref::StoreOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(memref::StoreOp op, PatternRewriter &b) const override {
     auto m = dyn_cast<MemRefType>(op.getMemRef().getType());
-    if (!m) return failure();
-    Type want = m.getElementType(), vt = op.getValueToStore().getType();
-    if (vt == want) return failure();
+    if (!m) {
+      return failure();
+    }
+    Type want = m.getElementType();
+    Type vt = op.getValueToStore().getType();
+    if (vt == want) {
+      return failure();
+    }
     b.setInsertionPoint(op);
     if (vt.isInteger(1) && want.isInteger(8)) {
       op->setOperand(0, createI1ToI8ScalarCast(op.getLoc(), op.getValueToStore(), b));
@@ -269,14 +322,18 @@ struct MemRefStorePattern final : public OpRewritePattern<memref::StoreOp> {
 struct ReturnPattern final : public OpRewritePattern<func::ReturnOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(func::ReturnOp op, PatternRewriter &b) const override {
-    func::FuncOp callee = op->getParentOfType<func::FuncOp>();
-    if (!callee) return failure();
+    auto callee = op->getParentOfType<func::FuncOp>();
+    if (!callee) {
+      return failure();
+    }
     b.setInsertionPoint(op);
     bool any = false;
     for (auto [i, use] : llvm::enumerate(op->getOpOperands())) {
       Type want = callee.getFunctionType().getResult(i);
       Value cur = use.get();
-      if (cur.getType() == want) continue;
+      if (cur.getType() == want) {
+        continue;
+      }
       Value v;
       if (cur.getType().isInteger(1) && want.isInteger(8)) {
         v = createI1ToI8ScalarCast(op.getLoc(), cur, b);
@@ -297,7 +354,9 @@ struct LegalizeBoolPass : public impl::LegalizeBoolBase<LegalizeBoolPass> {
   void runOnOperation() override {
     func::FuncOp fn = getOperation();
     updateFunctionType(fn);
-    if (fn.empty()) return;
+    if (fn.empty()) {
+      return;
+    }
 
     MLIRContext *ctx = &getContext();
     RewritePatternSet p(ctx);
@@ -316,7 +375,9 @@ struct LegalizeBoolPass : public impl::LegalizeBoolBase<LegalizeBoolPass> {
 
     GreedyRewriteConfig cfg;
     cfg.useTopDownTraversal = true;
-    if (failed(applyPatternsAndFoldGreedily(fn, std::move(p), cfg))) signalPassFailure();
+    if (failed(applyPatternsAndFoldGreedily(fn, std::move(p), cfg))) {
+      signalPassFailure();
+    }
   }
 };
 
@@ -324,6 +385,8 @@ struct LegalizeBoolPass : public impl::LegalizeBoolBase<LegalizeBoolPass> {
 }  // namespace affine
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createLegalizeBoolPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeBoolPass() {
   return std::make_unique<affine::LegalizeBoolPass>();
 }
+}  // namespace mlir

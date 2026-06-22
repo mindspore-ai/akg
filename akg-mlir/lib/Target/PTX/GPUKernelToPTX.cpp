@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <utility>
+
 #include "akg/Target/PTX/Passes.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -97,18 +99,18 @@ static void addOptimizationPasses(llvm::FunctionPassManager &fPM, llvm::ModulePa
   mPM.addPass(llvm::AlwaysInlinerPass());
 }
 
-class SerializeToPTX : public PassWrapper<SerializeToPTX, OperationPass<gpu::GPUModuleOp>> {
+class GPUKernelToPTX : public PassWrapper<GPUKernelToPTX, OperationPass<gpu::GPUModuleOp>> {
  public:
   // cppcheck-suppress unknownMacro
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SerializeToPTX)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(GPUKernelToPTX)
 
-  SerializeToPTX(unsigned opt, const std::string &libdeviceFile, const std::string &triple, const std::string &chip,
-                 const std::string &features, std::string &targetISA)
+  GPUKernelToPTX(unsigned opt, std::string libdeviceFile, std::string triple, std::string chip, std::string features,
+                 std::string &targetISA)
       : optLevelAsInt(opt),
-        libdeviceFile(libdeviceFile),
-        triple(triple),
-        chip(chip),
-        features(features),
+        libdeviceFile(std::move(libdeviceFile)),
+        triple(std::move(triple)),
+        chip(std::move(chip)),
+        features(std::move(features)),
         targetISA(targetISA) {}
 
   void runOnOperation() override;
@@ -137,7 +139,7 @@ class SerializeToPTX : public PassWrapper<SerializeToPTX, OperationPass<gpu::GPU
   std::string &targetISA;
 };
 
-void SerializeToPTX::runOnOperation() {
+void GPUKernelToPTX::runOnOperation() {
   llvm::LLVMContext llvmContext;
   std::unique_ptr<llvm::Module> llvmModule = translateToLLVMIR(llvmContext);
 
@@ -157,19 +159,19 @@ void SerializeToPTX::runOnOperation() {
   translateToISA(*llvmModule, *targetMachine);
 }
 
-std::unique_ptr<llvm::TargetMachine> SerializeToPTX::createTargetMachine() {
+std::unique_ptr<llvm::TargetMachine> GPUKernelToPTX::createTargetMachine() {
   const Location loc = getOperation().getLoc();
   std::string error;
   const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, error);
 
-  if (!target) {
+  if (target == nullptr) {
     (void)emitError(loc, Twine("failed to lookup target: ") + error);
     return {};
   }
 
   llvm::TargetMachine *machine =
     target->createTargetMachine(triple, chip, features, {}, {}, std::nullopt, LLVMCodeGenOpt(optLevelAsInt));
-  if (!machine) {
+  if (machine == nullptr) {
     (void)emitError(loc, "failed to create target machine");
     return {};
   }
@@ -177,7 +179,7 @@ std::unique_ptr<llvm::TargetMachine> SerializeToPTX::createTargetMachine() {
   return std::unique_ptr<llvm::TargetMachine>{machine};
 }
 
-void SerializeToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachine &targetMachine) {
+void GPUKernelToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachine &targetMachine) {
   llvmModule.setDataLayout(targetMachine.createDataLayout());
 
   llvm::raw_string_ostream stream(targetISA);
@@ -219,12 +221,12 @@ void SerializeToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
   (void)codegenPasses.run(llvmModule);
 }
 
-std::unique_ptr<llvm::Module> SerializeToPTX::translateToLLVMIR(llvm::LLVMContext &llvmContext) {
+std::unique_ptr<llvm::Module> GPUKernelToPTX::translateToLLVMIR(llvm::LLVMContext &llvmContext) {
   return translateModuleToLLVMIR(getOperation(), llvmContext, "LLVMDialectModule");
 }
 
-LogicalResult SerializeToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVMContext &llvmContext) {
-  if (libdeviceFile == "") {
+LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVMContext &llvmContext) {
+  if (libdeviceFile.empty()) {
     llvm::errs() << "Fatal: unable to locate libdevice.10.bc\n";
     return failure();
   }
@@ -282,5 +284,5 @@ LogicalResult SerializeToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
 std::unique_ptr<OperationPass<gpu::GPUModuleOp>> mlir::createSerializeToPTXPass(
   unsigned optLevel, const std::string &libdeviceFile, const std::string &triple, const std::string &chip,
   const std::string &features, std::string &targetISA) {
-  return std::make_unique<SerializeToPTX>(optLevel, libdeviceFile, triple, chip, features, targetISA);
+  return std::make_unique<GPUKernelToPTX>(optLevel, libdeviceFile, triple, chip, features, targetISA);
 }

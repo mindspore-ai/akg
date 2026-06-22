@@ -42,51 +42,46 @@ using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
 
 namespace {
-template <typename SourceOp>
-class RemoveRedundantReduceOp : public OpRewritePattern<SourceOp> {
- public:
-  using OpRewritePattern<SourceOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SourceOp mindsporeOp, PatternRewriter &rewriter) const override {
-    Operation *op = mindsporeOp;
-    Value opnd = op->getOperand(0);
-    auto inputTy = cast<ShapedType>(opnd.getType());
-    llvm::ArrayRef<int64_t> axesAttr = dyn_cast<DenseI64ArrayAttr>(op->getAttr("axis"));
-    llvm::SmallVector<int64_t> axes;
-    (void)std::transform(axesAttr.begin(), axesAttr.end(), std::back_inserter(axes), [](int64_t axis) { return axis; });
-    bool keepDims = false;
-    if (op->getAttr("keepdims")) {
-      keepDims = dyn_cast<BoolAttr>(op->getAttr("keepdims")).getValue();
-    }
-    bool isRedundantReduce = true;
-    for (int64_t i = 0; i < inputTy.getRank(); i++) {
-      if (llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != 1) {
-        isRedundantReduce = false;
-      }
-    }
-    if (isRedundantReduce) {
-      if (keepDims) {
-        rewriter.replaceOp(op, opnd);
-        return success();
-      }
-    }
-    return success();
-  }
-};
-
-}  // namespace
-
-namespace {
 struct RemoveRedundantReduce : public impl::RemoveRedundantReduceBase<RemoveRedundantReduce> {
- public:
+  template <typename SourceOp>
+  struct RedundantReducePattern : public OpRewritePattern<SourceOp> {
+    using OpRewritePattern<SourceOp>::OpRewritePattern;
+
+    LogicalResult matchAndRewrite(SourceOp mindsporeOp, PatternRewriter &rewriter) const override {
+      Operation *op = mindsporeOp;
+      Value opnd = op->getOperand(0);
+      auto inputTy = cast<ShapedType>(opnd.getType());
+      llvm::ArrayRef<int64_t> axesAttr = dyn_cast<DenseI64ArrayAttr>(op->getAttr("axis"));
+      llvm::SmallVector<int64_t> axes;
+      (void)std::transform(axesAttr.begin(), axesAttr.end(), std::back_inserter(axes),
+                           [](int64_t axis) { return axis; });
+      bool keepDims = false;
+      if (op->getAttr("keepdims")) {
+        keepDims = dyn_cast<BoolAttr>(op->getAttr("keepdims")).getValue();
+      }
+      bool isRedundantReduce = true;
+      for (int64_t i = 0; i < inputTy.getRank(); i++) {
+        if (llvm::is_contained(axes, i) && (inputTy.getShape()[i]) != 1) {
+          isRedundantReduce = false;
+        }
+      }
+      if (isRedundantReduce) {
+        if (keepDims) {
+          rewriter.replaceOp(op, opnd);
+          return success();
+        }
+      }
+      return success();
+    }
+  };
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    (void)
-      patterns.add<RemoveRedundantReduceOp<mindspore::ReduceSumOp>, RemoveRedundantReduceOp<mindspore::ReduceAllOp>,
-                   RemoveRedundantReduceOp<mindspore::ReduceAnyOp>, RemoveRedundantReduceOp<mindspore::ReduceMaxOp>,
-                   RemoveRedundantReduceOp<mindspore::ReduceMinOp>, RemoveRedundantReduceOp<mindspore::ReduceProdOp>>(
-        patterns.getContext());
+    (void)patterns.add<RedundantReducePattern<mindspore::ReduceSumOp>, RedundantReducePattern<mindspore::ReduceAllOp>,
+                       RedundantReducePattern<mindspore::ReduceAnyOp>, RedundantReducePattern<mindspore::ReduceMaxOp>,
+                       RedundantReducePattern<mindspore::ReduceMinOp>, RedundantReducePattern<mindspore::ReduceProdOp>>(
+      patterns.getContext());
     GreedyRewriteConfig grc;
     grc.useTopDownTraversal = true;
     func::FuncOp func = getOperation();

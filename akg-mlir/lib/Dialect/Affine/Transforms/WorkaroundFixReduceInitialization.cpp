@@ -53,11 +53,11 @@ namespace mlir {
 static constexpr const int kExpectedNbStore = 2;
 static constexpr const int kExpectedNBUsage = 3;
 
-class WorkaroundFixReduceInitializationPass
-    : public mlir::impl::WorkaroundFixReduceInitializationBase<WorkaroundFixReduceInitializationPass> {
+class WorkaroundFixReduceInitialization
+    : public mlir::impl::WorkaroundFixReduceInitializationBase<WorkaroundFixReduceInitialization> {
  public:
-  WorkaroundFixReduceInitializationPass() = default;
-  WorkaroundFixReduceInitializationPass(const WorkaroundFixReduceInitializationPass &pass) = default;
+  WorkaroundFixReduceInitialization() = default;
+  WorkaroundFixReduceInitialization(const WorkaroundFixReduceInitialization &pass) = default;
 
  private:
   void findReduceValue(func::FuncOp fop);
@@ -75,7 +75,7 @@ class WorkaroundFixReduceInitializationPass
 
 /// If the ReduceValue has not exactly 3 usage, 2 store and 1 load,
 /// findReduceValue will not find it as a ReduceValue...
-void WorkaroundFixReduceInitializationPass::findReduceValue(func::FuncOp funcOp) {
+void WorkaroundFixReduceInitialization::findReduceValue(func::FuncOp funcOp) {
   llvm::MapVector<mlir::Value, SmallVector<mlir::Operation *, kExpectedNBUsage>> reduceCandidate;
 
   funcOp.walk([&](affine::AffineStoreOp storeOp) {
@@ -139,14 +139,14 @@ void WorkaroundFixReduceInitializationPass::findReduceValue(func::FuncOp funcOp)
 
 static constexpr const int kDestination = 2;
 
-void WorkaroundFixReduceInitializationPass::moveInitializationOp() {
+void WorkaroundFixReduceInitialization::moveInitializationOp() {
   for (auto r : this->reduceValue) {
     mlir::Operation *initOp = r.second[0]->getParentOp();
     initOp->moveBefore(r.second[kDestination]);
   }
 }
 
-void WorkaroundFixReduceInitializationPass::runOnOperation() {
+void WorkaroundFixReduceInitialization::runOnOperation() {
   func::FuncOp funcOp = getOperation();
   if (funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr) {
     LLVM_DEBUG({ llvm::dbgs() << DEBUG_TYPE << " - reduce FuncOp\n"; });
@@ -159,5 +159,5 @@ void WorkaroundFixReduceInitializationPass::runOnOperation() {
 }  // namespace mlir
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createWorkaroundFixReduceInitializationPass() {
-  return std::make_unique<mlir::WorkaroundFixReduceInitializationPass>();
+  return std::make_unique<mlir::WorkaroundFixReduceInitialization>();
 }

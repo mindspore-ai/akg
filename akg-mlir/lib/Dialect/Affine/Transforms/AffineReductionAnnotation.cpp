@@ -87,7 +87,7 @@ static std::optional<int64_t> getLoadRankFromValue(Value v) {
 
 static Operation *getParentAffineLoop(Operation *op) {
   Operation *current = op->getParentOp();
-  while (current) {
+  while (current != nullptr) {
     if (isa<affine::AffineForOp>(current)) {
       return current;
     }
@@ -128,7 +128,7 @@ bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
   if (op->getNumOperands() != 2 || op->getNumResults() != 1) {
     return false;
   }
-  if (!getParentAffineLoop(op)) {
+  if (getParentAffineLoop(op) == nullptr) {
     return false;
   }
   affine::AffineStoreOp storeOp = getStoreOpFromResult(op);
@@ -148,24 +148,32 @@ bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
   return checkReductionRankCondition(*aRank, *bRank, outRank);
 }
 
+static bool isSizeOneAffineForOp(Operation *op) {
+  auto forOp = dyn_cast<affine::AffineForOp>(op);
+  if (!forOp) {
+    return false;
+  }
+  if (!forOp.hasConstantBounds()) {
+    return false;
+  }
+  int64_t lb = forOp.getConstantLowerBound();
+  int64_t ub = forOp.getConstantUpperBound();
+  return (ub - lb == 1);
+}
+
+static void collectLoopInfo(Operation *curOp, SmallVector<bool, 8> &redFlags, SmallVector<bool, 8> &sizeOneFlags) {
+  if (isa<affine::AffineForOp>(curOp)) {
+    bool isSizeOne = isSizeOneAffineForOp(curOp);
+    redFlags.push_back(curOp->hasAttr(kReductionLoopAttr));
+    sizeOneFlags.push_back(isSizeOne);
+  }
+}
+
 static void collectLoopReductionFlags(Operation *redOp, SmallVector<bool, 8> &redFlags,
                                       SmallVector<bool, 8> &sizeOneFlags) {
   Operation *curOp = redOp;
-  while (curOp) {
-    if (isa<affine::AffineForOp>(curOp)) {
-      bool isSizeOne = false;
-      if (auto forOp = dyn_cast<affine::AffineForOp>(curOp)) {
-        if (forOp.hasConstantBounds()) {
-          int64_t lb = forOp.getConstantLowerBound();
-          int64_t ub = forOp.getConstantUpperBound();
-          if (ub - lb == 1) {
-            isSizeOne = true;
-          }
-        }
-      }
-      redFlags.push_back(curOp->hasAttr(kReductionLoopAttr));
-      sizeOneFlags.push_back(isSizeOne);
-    }
+  while (curOp != nullptr) {
+    collectLoopInfo(curOp, redFlags, sizeOneFlags);
     curOp = curOp->getParentOp();
   }
   std::reverse(redFlags.begin(), redFlags.end());

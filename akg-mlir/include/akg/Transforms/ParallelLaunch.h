@@ -18,12 +18,8 @@
 #define AKG_TRANSFORMS_PARALLELLAUNCH_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-
-namespace mlir {
-class Pass;
-class ModuleOp;
-}  // namespace mlir
 
 static constexpr const char *kParallelLaunchFunc = "AKGBackendParallelLaunch";
 namespace mlir {

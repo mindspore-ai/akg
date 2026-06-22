@@ -108,7 +108,6 @@ void generateFusedElementwiseOpRegion(RewriterBase &rewriter, CONSUMEROP fusedOp
   auto producerYieldOp = cast<linalg::YieldOp>(producerBlock.getTerminator());
   unsigned producerResultNumber = cast<OpResult>(fusedOperand->get()).getResultNumber();
   Value replacement = mapper.lookupOrDefault(producerYieldOp.getOperand(producerResultNumber));
-
   if (replacement == producerYieldOp.getOperand(producerResultNumber)) {
     if (auto bb = dyn_cast<BlockArgument>(replacement)) {
       assert(bb.getOwner() != &producerBlock && "yielded block argument must have been mapped");

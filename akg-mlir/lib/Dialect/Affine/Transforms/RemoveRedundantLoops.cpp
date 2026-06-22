@@ -67,7 +67,7 @@ void RemoveRedundantLoops::runOnOperation() {
   SmallVector<affine::AffineForOp, 8> redundantLoops;
   func->walk([&](affine::AffineForOp forOp) {
     // skipped for now
-    // TODO(scheduler): %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
+    // %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
     if (!forOp.getResults().empty()) {
       return;
     }
@@ -82,15 +82,14 @@ void RemoveRedundantLoops::runOnOperation() {
     }
   });
 
-  for (size_t i = 0; i < redundantLoops.size(); ++i) {
-    auto forOp = redundantLoops[i];
+  for (auto forOp : redundantLoops) {
     affine::AffineForOp dependentOp = nullptr;
     for (auto value : forOp.getOperation()->getOperands()) {
       if (auto blockArg = dyn_cast<BlockArgument>(value)) {
         if (isa<IndexType>(blockArg.getType())) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
-          if (parentOp && isa<affine::AffineForOp>(parentOp)) {
+          if ((parentOp != nullptr) && isa<affine::AffineForOp>(parentOp)) {
             dependentOp = dyn_cast<affine::AffineForOp>(parentOp);
           }
         }

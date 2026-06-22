@@ -24,6 +24,7 @@
 #include <sstream>
 #include <optional>
 #include <functional>
+#include <utility>
 
 #include "akg/Utils/AnalysisForGpu.hpp"
 #include "akg/Analysis/Config.h"
@@ -79,7 +80,7 @@ Axis::Axis(size_t bandIdx, size_t axisIdx, mlir::scf::ForOp scfLoop) : bandIdx(b
   this->initConfigs();
 }
 
-Axis::Axis(const std::string &name) : name(name) {}
+Axis::Axis(std::string name) : name(std::move(name)) {}
 
 void Axis::forEachAxisTopDown(const std::function<void(AxisPtr)> &fn) const {
   std::deque<AxisPtr> stack;
@@ -219,7 +220,9 @@ ConfigPtr Axis::tryGetConfig(int pos, const std::string &configType) {
 mlir::Operation *Axis::getLoopOperation() const { return loop.get(); }
 
 bool Axis::hasConstantLowerBound() const {
-  if (!loop) return false;
+  if (!loop) {
+    return false;
+  }
   if (auto affineFor = mlir::dyn_cast<affine::AffineForOp>(loop.get())) {
     return affineFor.hasConstantLowerBound();
   }
@@ -230,7 +233,9 @@ bool Axis::hasConstantLowerBound() const {
 }
 
 bool Axis::hasConstantUpperBound() const {
-  if (!loop) return false;
+  if (!loop) {
+    return false;
+  }
   if (auto affineFor = mlir::dyn_cast<affine::AffineForOp>(loop.get())) {
     return affineFor.hasConstantUpperBound();
   }
@@ -243,7 +248,9 @@ bool Axis::hasConstantUpperBound() const {
 bool Axis::hasConstantBounds() const { return hasConstantLowerBound() && hasConstantUpperBound(); }
 
 int64_t Axis::getConstantLowerBound() const {
-  if (!loop) return 0;
+  if (!loop) {
+    return 0;
+  }
   if (auto affineFor = mlir::dyn_cast<affine::AffineForOp>(loop.get())) {
     return affineFor.getConstantLowerBound();
   }
@@ -255,7 +262,9 @@ int64_t Axis::getConstantLowerBound() const {
 }
 
 int64_t Axis::getConstantUpperBound() const {
-  if (!loop) return 0;
+  if (!loop) {
+    return 0;
+  }
   if (auto affineFor = mlir::dyn_cast<affine::AffineForOp>(loop.get())) {
     return affineFor.getConstantUpperBound();
   }
@@ -267,7 +276,9 @@ int64_t Axis::getConstantUpperBound() const {
 }
 
 mlir::Value Axis::getLowerBound() const {
-  if (!loop) return nullptr;
+  if (!loop) {
+    return nullptr;
+  }
   // AffineForOp bounds are AffineMap, not Value, so return nullptr for affine loops
   if (mlir::isa<affine::AffineForOp>(loop.get())) {
     return nullptr;
@@ -279,7 +290,9 @@ mlir::Value Axis::getLowerBound() const {
 }
 
 mlir::Value Axis::getUpperBound() const {
-  if (!loop) return nullptr;
+  if (!loop) {
+    return nullptr;
+  }
   // AffineForOp bounds are AffineMap, not Value, so return nullptr for affine loops
   if (mlir::isa<affine::AffineForOp>(loop.get())) {
     return nullptr;
@@ -291,7 +304,9 @@ mlir::Value Axis::getUpperBound() const {
 }
 
 mlir::Value Axis::getInductionVar() const {
-  if (!loop) return nullptr;
+  if (!loop) {
+    return nullptr;
+  }
   if (auto affineFor = mlir::dyn_cast<affine::AffineForOp>(loop.get())) {
     return affineFor.getInductionVar();
   }
@@ -302,7 +317,9 @@ mlir::Value Axis::getInductionVar() const {
 }
 
 mlir::Value Axis::getStep() const {
-  if (!loop) return nullptr;
+  if (!loop) {
+    return nullptr;
+  }
   // AffineForOp step is APInt, not Value, so return nullptr for affine loops
   if (mlir::isa<affine::AffineForOp>(loop.get())) {
     return nullptr;

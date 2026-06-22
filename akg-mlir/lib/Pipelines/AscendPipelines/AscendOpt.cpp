@@ -107,7 +107,6 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   if (options.enableAutoStorageAlign) {
     pm.nest<func::FuncOp>().addPass(hivm::createMarkStrideAlignPass());
   }
-  // pm.nest<func::FuncOp>().addPass(memref::createFoldAllocReshapePass());
   pm.nest<func::FuncOp>().addPass(hivm::createEnableStrideAlignPass());
 
   // Decompose {vconcat} after stride alignment
@@ -172,7 +171,7 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   pm.nest<func::FuncOp>().addPass(hivm::createLiftLowestStridePass());
   // Optimizations that relies on scope should be done after this point. Inline
   // all `scope.scope` ops.
-  pm.addPass(scope::createInlineScopePass(InlineScopeOptions{/*forceInline=*/true}));
+  pm.addPass(scope::createInlineScopePass(InlineScopeOptions{/* forceInline= */ true}));
   pm.addPass(hivm::createEnableHIVMCCompatiblePrintPass());
   pm.addPass(annotation::createAnnotationLoweringPass());
   pm.nest<func::FuncOp>().addPass(hivm::createMarkDisableLoadPass());
@@ -202,6 +201,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
   nestedFunctionPM.addPass(tosa::createTosaToLinalg());
   // Erase unused linalg.generic operands/results before bufferization.
   nestedFunctionPM.addPass(createEraseUnusedOperandsAndResultsPass());
+  // Narrow wide integer ops (compares, selects, bitwise) back to the element type where it is value-exact.
+  nestedFunctionPM.addPass(createLegalizeIntWidthPass());
 
   if (options.enableLoopFusion) {
     pm.addPass(createDecomposeTensorPass());

@@ -18,10 +18,10 @@
 #define AKG_DIALECT_LINALG_TRANSFORMS_SHAPENORMALIZATION_H_
 
 #include <memory>
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
 
 std::unique_ptr<OperationPass<ModuleOp>> createShapeNormalizationPass();
 }  // namespace mlir

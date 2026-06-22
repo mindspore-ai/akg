@@ -1,5 +1,5 @@
 /**
- * Copyright 2023-2026 Huawei Technologies Co., Ltd
+ * Copyright 2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef AKG_DIALECT_AFFINE_TRANSFORMS_REMOVEREDUNDANTLOOPS_H_
-#define AKG_DIALECT_AFFINE_TRANSFORMS_REMOVEREDUNDANTLOOPS_H_
+#ifndef AKG_DIALECT_LINALG_TRANSFORMS_LEGALIZEINTWIDTH_H_
+#define AKG_DIALECT_LINALG_TRANSFORMS_LEGALIZEINTWIDTH_H_
 
 #include <memory>
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace func {
+class FuncOp;
+}  // namespace func
 
-std::unique_ptr<OperationPass<func::FuncOp>> createRemoveRedundantLoopsPass();
-
+/// Narrows wide integer elementwise ops back to their original type when
+/// value-exact. Covers cmpi, select, and bitwise ops on extsi/extui
+/// extensions and round-trippable constants.
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeIntWidthPass();
 }  // namespace mlir
-
-#endif  // AKG_DIALECT_AFFINE_TRANSFORMS_REMOVEREDUNDANTLOOPS_H_
+#endif  // AKG_DIALECT_LINALG_TRANSFORMS_LEGALIZEINTWIDTH_H_

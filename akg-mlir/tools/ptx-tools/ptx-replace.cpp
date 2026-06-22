@@ -81,7 +81,7 @@ struct VectorizeEmitter {
    * @param LdStGlobalCache pack of original load/store instructions
    * @return std::string new instruction that use vector load/store
    */
-  std::string tryEmitVectorize(std::deque<std::string> LdStGlobalCache) const {
+  [[nodiscard]] std::string tryEmitVectorize(std::deque<std::string> LdStGlobalCache) const {
     if (LdStGlobalCache.size() != vectorizeSize) {
       return "";
     }
@@ -157,7 +157,7 @@ struct VectorizeEmitter {
   // currently we only support vectorize length = 4;
   size_t vectorizeSize = 4;
   size_t maxSplitLen = 4;  // "instruction, dest, (offset), src"
-  std::vector<std::string> splitEachLoadStore(const std::string &line) const {
+  [[nodiscard]] std::vector<std::string> splitEachLoadStore(const std::string &line) const {
     std::vector<std::string> result = splitString(line, ' ');
     // we further remove all irrelevant symbols to get pure "instruction, dest, (offset), src"
     std::vector<std::string> finalResult;
@@ -179,7 +179,7 @@ struct VectorizeEmitter {
     return finalResult;
   }
 
-  std::pair<std::string, int> emitPackDataStr(std::map<int, std::string> srcIndex) const {
+  [[nodiscard]] std::pair<std::string, int> emitPackDataStr(std::map<int, std::string> srcIndex) const {
     std::string delimiter = ", ";
     std::string packDataStr = "{";
     int currSize = -1;
@@ -201,7 +201,7 @@ struct VectorizeEmitter {
     return std::make_pair(packDataStr, firstOffset);
   }
 
-  std::string emitDestStr(const std::string &dest, int firstOffset) const {
+  [[nodiscard]] std::string emitDestStr(const std::string &dest, int firstOffset) const {
     auto destStr = "[" + dest;
     if (firstOffset != 0) {
       destStr += "+" + std::to_string(firstOffset);
@@ -210,7 +210,7 @@ struct VectorizeEmitter {
     return destStr;
   }
 
-  std::string emitInstruction(const std::string &instruction, bool isLoad) const {
+  [[nodiscard]] std::string emitInstruction(const std::string &instruction, bool isLoad) const {
     std::string newInstruction;
     if (ncFlag && isLoad) {
       newInstruction = replaceString(instruction, "global", "global.nc.v4");
@@ -221,13 +221,31 @@ struct VectorizeEmitter {
   }
 };
 
+std::vector<int> parseRow(const std::string &rowStr) {
+  std::istringstream issRow(rowStr);
+  std::vector<int> row;
+  std::string num;
+
+  while (std::getline(issRow, num, ',')) {
+    if (!num.empty() && num.front() == '[') {
+      (void)num.erase(num.begin());
+    }
+    try {
+      row.push_back(std::stoi(num));
+    } catch (...) {
+      std::cerr << "convert to int error, numStr is " << num << std::endl;
+    }
+  }
+
+  return row;
+}
+
 std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) {
   std::ifstream infile(filename);
   std::string line;
   std::string fileContent;
   std::vector<std::vector<int>> result;
 
-  // Read the entire file content
   while (std::getline(infile, line)) {
     fileContent += line;
   }
@@ -237,23 +255,7 @@ std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) 
 
   while (std::getline(iss, val, '[')) {
     if (std::getline(iss, val, ']')) {
-      std::istringstream issRow(val);
-      std::vector<int> row;
-      std::string num;
-
-      while (std::getline(issRow, num, ',')) {
-        // Remove any leading '['
-        if (!num.empty() && num.front() == '[') {
-          (void)num.erase(num.begin());
-        }
-        try {
-          row.push_back(std::stoi(num));
-        } catch (...) {
-          // Skip invalid numbers
-          std::cerr << "convert to int error, numStr is " << num << std::endl;
-        }
-      }
-
+      std::vector<int> row = parseRow(val);
       if (!row.empty()) {
         result.push_back(row);
       }
@@ -270,9 +272,8 @@ std::string getKernelName(const std::string &line) {
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return match[1].str();
-  } else {
-    return "";
   }
+  return "";
 }
 
 // .param .u64 Fused_BroadcastTo_inplace_assign_builder_15920035459442552540_kernel_param_0,
@@ -282,9 +283,8 @@ std::string getParam(const std::string &line, const std::string &value) {
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return match[1].str();
-  } else {
-    return "";
   }
+  return "";
 }
 
 // ld.param.u64   %rd2, [Fused_Reshape_Cast_Neg_Mul_fusion_18315353371220478878_kernel_param_18];
@@ -294,9 +294,8 @@ std::tuple<std::string, std::string> getRegFromLoadParamGlobal(const std::string
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
     return std::make_tuple(match[1].str(), match[2].str());
-  } else {
-    return std::make_tuple("", "");
   }
+  return std::make_tuple("", "");
 }
 
 bool containsInstruction(const std::string &line, const std::string &instruction) {
@@ -305,11 +304,11 @@ bool containsInstruction(const std::string &line, const std::string &instruction
 
 void paramsToValues(const std::vector<std::vector<int>> &shapeArgs, std::vector<int> &values) {
   values.clear();
-  for (size_t i = 0; i < shapeArgs.size(); i++) {
+  for (const auto &shapeArg : shapeArgs) {
     values.push_back(kShouldRemove);
     values.push_back(kShouldKeep);  // real pointer
-    for (size_t j = 0; j < shapeArgs[i].size(); j++) {
-      values.push_back(shapeArgs[i][j]);
+    for (size_t j = 0; j < shapeArg.size(); j++) {
+      values.push_back(shapeArg[j]);
     }
   }
 }
@@ -355,7 +354,7 @@ void concatPtx(std::string &result, const std::vector<std::string> &vec, const s
                const std::vector<std::string> &valueStrList) {
   for (size_t idx = 0; idx < vec.size(); idx++) {
     if (posFlags[idx] != -1) {
-      size_t pos = static_cast<size_t>(posFlags[idx]);
+      auto pos = static_cast<size_t>(posFlags[idx]);
       if (pos < valueStrList.size()) {
         (void)result.append(valueStrList[pos]);
       } else {
@@ -442,50 +441,59 @@ void processStep0(ProcessingState &state, const std::string &line) {
 
 // Handle step 1: process .param lines
 bool processStep1(ProcessingState &state, const std::string &line) {
-  if (containsInstruction(line, ".param")) {
-    std::string numStr = getParam(line, state.kernelName);
-    if (!numStr.empty()) {
-      try {
-        int num = std::stoi(numStr);
-        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] == kShouldKeep) {
-          state.currentTensor++;
-          std::string processedLine = line;
-          if (state.currentTensor == state.totalTensorNums) {
-            size_t pos = processedLine.find(",");
-            if (pos != std::string::npos) {
-              processedLine.erase(pos, 1);
-            }
-          }
-          state.oss << processedLine << "\n";
-        }
-      } catch (const std::exception &) {
-        state.oss << line << "\n";
-      }
-    } else {
-      state.oss << line << "\n";
-    }
-    return true;
-  } else {
+  if (!containsInstruction(line, ".param")) {
     state.step = 2;
     return false;
   }
+
+  std::string numStr = getParam(line, state.kernelName);
+  if (numStr.empty()) {
+    state.oss << line << "\n";
+    return true;
+  }
+
+  try {
+    int num = std::stoi(numStr);
+    if (num < 0 || num >= static_cast<int>(state.valueList.size()) || state.valueList[num] != kShouldKeep) {
+      return true;
+    }
+    state.currentTensor++;
+    std::string processedLine = line;
+    if (state.currentTensor == state.totalTensorNums) {
+      size_t pos = processedLine.find(",");
+      if (pos != std::string::npos) {
+        processedLine.erase(pos, 1);
+      }
+    }
+    state.oss << processedLine << "\n";
+  } catch (const std::exception &) {
+    state.oss << line << "\n";
+  }
+  return true;
+}
+
+bool tryReplaceParamLoad(ProcessingState &state, const std::string &reg, const std::string &numStr) {
+  try {
+    int num = std::stoi(numStr);
+    if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] != kShouldKeep) {
+      state.oss << "\tmov.u64 " << reg << ", REPLACEMARK" << num << ";\n";
+      return true;
+    }
+  } catch (const std::exception &) {
+    std::cerr << "convert to int error, numStr is " << numStr << std::endl;
+  }
+  return false;
 }
 
 // Handle step 2: process param loads and nc flag
 bool processStep2(ProcessingState &state, const std::string &line) {
   if (containsInstruction(line, state.kernelName)) {
-    std::string reg, numStr;
+    std::string reg;
+    std::string numStr;
     std::tie(reg, numStr) = getRegFromLoadParamGlobal(line, state.kernelName);
     if (!reg.empty() && !numStr.empty()) {
-      try {
-        int num = std::stoi(numStr);
-        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] != kShouldKeep) {
-          state.oss << "\tmov.u64 " << reg << ", REPLACEMARK" << num << ";\n";
-          return true;
-        }
-      } catch (const std::exception &) {
-        // Fall through to default handling
-        std::cerr << "convert to int error, numStr is " << numStr << std::endl;
+      if (tryReplaceParamLoad(state, reg, numStr)) {
+        return true;
       }
     }
   }

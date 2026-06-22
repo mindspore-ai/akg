@@ -81,9 +81,8 @@ using NodePtr = std::shared_ptr<Node>;
 
 class InitGraph {
  public:
-  InitGraph(const std::string &, const std::vector<NodePtr> &, const std::vector<NodePtr> &,
-            const std::vector<NodePtr> &);
-  explicit InitGraph(const std::string &);
+  InitGraph(std::string, const std::vector<NodePtr> &, const std::vector<NodePtr> &, const std::vector<NodePtr> &);
+  explicit InitGraph(std::string);
   InitGraph() = default;
   virtual ~InitGraph() = default;
 

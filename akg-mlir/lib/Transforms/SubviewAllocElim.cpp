@@ -67,23 +67,31 @@ static bool isLoadOp(Operation *op) { return isa<affine::AffineLoadOp, memref::L
 static bool isStoreOp(Operation *op) { return isa<affine::AffineStoreOp, memref::StoreOp>(op); }
 
 static Value getLoadResult(Operation *op) {
-  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) return loadOp.getResult();
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) return loadOp.getResult();
+  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+    return loadOp.getResult();
+  }
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    return loadOp.getResult();
+  }
   return {};
 }
 
 static SmallVector<Value> getLoadIndices(Operation *op) {
-  if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op))
-    return SmallVector<Value>(affineLoad.getIndices().begin(), affineLoad.getIndices().end());
-  if (auto memrefLoad = dyn_cast<memref::LoadOp>(op))
-    return SmallVector<Value>(memrefLoad.getIndices().begin(), memrefLoad.getIndices().end());
+  if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
+    return {affineLoad.getIndices().begin(), affineLoad.getIndices().end()};
+  }
+  if (auto memrefLoad = dyn_cast<memref::LoadOp>(op)) {
+    return {memrefLoad.getIndices().begin(), memrefLoad.getIndices().end()};
+  }
   return {};
 }
 
 // Check whether a value is used as a return operand in the function.
 static bool isReturnedValue(Value val) {
   for (auto *user : val.getUsers()) {
-    if (isa<func::ReturnOp>(user)) return true;
+    if (isa<func::ReturnOp>(user)) {
+      return true;
+    }
   }
   return false;
 }
@@ -91,11 +99,21 @@ static bool isReturnedValue(Value val) {
 // Try to get the "next value" in a view chain from a user op.
 // Returns the result Value if the user is a supported view-chain op, or null otherwise.
 static Value getViewChainNext(Operation *user) {
-  if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(user)) return collapseOp.getResult();
-  if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(user)) return expandOp.getResult();
-  if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(user)) return castOp.getResult();
-  if (auto castOp = dyn_cast<memref::CastOp>(user)) return castOp.getResult();
-  if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) return subviewOp.getResult();
+  if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(user)) {
+    return collapseOp.getResult();
+  }
+  if (auto expandOp = dyn_cast<memref::ExpandShapeOp>(user)) {
+    return expandOp.getResult();
+  }
+  if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(user)) {
+    return castOp.getResult();
+  }
+  if (auto castOp = dyn_cast<memref::CastOp>(user)) {
+    return castOp.getResult();
+  }
+  if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+    return subviewOp.getResult();
+  }
   return {};
 }
 
@@ -107,11 +125,17 @@ static bool isAllocReturned(memref::AllocOp allocOp) {
 
   while (!worklist.empty()) {
     Value val = worklist.pop_back_val();
-    if (!visited.insert(val).second) continue;
-    if (isReturnedValue(val)) return true;
+    if (!visited.insert(val).second) {
+      continue;
+    }
+    if (isReturnedValue(val)) {
+      return true;
+    }
     for (auto *user : val.getUsers()) {
       Value next = getViewChainNext(user);
-      if (next) worklist.push_back(next);
+      if (next) {
+        worklist.push_back(next);
+      }
     }
   }
   return false;
@@ -124,11 +148,17 @@ static bool collectStoresFromSubview(Value memref, SmallVectorImpl<Operation *> 
       storeOps.push_back(user);
       continue;
     }
-    if (isLoadOp(user) || isa<func::ReturnOp>(user)) continue;
+    if (isLoadOp(user) || isa<func::ReturnOp>(user)) {
+      continue;
+    }
 
     Value next = getViewChainNext(user);
-    if (!next) return false;
-    if (!collectStoresFromSubview(next, storeOps)) return false;
+    if (!next) {
+      return false;
+    }
+    if (!collectStoresFromSubview(next, storeOps)) {
+      return false;
+    }
   }
   return true;
 }
@@ -147,7 +177,6 @@ struct SourceInfo {
 static SourceInfo traceStoreSource(affine::AffineStoreOp storeOp) {
   SourceInfo info;
   Value storeVal = storeOp.getValueToStore();
-
   // Case 1: stored value is directly from an affine.load.
   if (auto loadOp = storeVal.getDefiningOp<affine::AffineLoadOp>()) {
     info.sourceLoad = loadOp;
@@ -159,7 +188,9 @@ static SourceInfo traceStoreSource(affine::AffineStoreOp storeOp) {
   // Collect all ops in the if-block that contribute to the stored value.
   auto *parentBlock = storeOp->getBlock();
   for (auto &op : *parentBlock) {
-    if (&op == storeOp.getOperation()) break;
+    if (&op == storeOp.getOperation()) {
+      break;
+    }
     if (op.isBeforeInBlock(storeOp)) {
       info.computeOps.push_back(&op);
     }
@@ -173,8 +204,10 @@ static bool valueDominates(Value val, Operation *op) {
   if (auto *defOp = val.getDefiningOp()) {
     // Walk up from op to find defOp's block in the ancestor chain.
     Operation *cur = op;
-    while (cur) {
-      if (cur->getBlock() == defOp->getBlock()) return defOp->isBeforeInBlock(cur);
+    while (cur != nullptr) {
+      if (cur->getBlock() == defOp->getBlock()) {
+        return defOp->isBeforeInBlock(cur);
+      }
       cur = cur->getParentOp();
     }
     return false;
@@ -182,7 +215,9 @@ static bool valueDominates(Value val, Operation *op) {
   // Block argument: dominates everything nested inside its parent op.
   Block *argBlock = cast<BlockArgument>(val).getOwner();
   Operation *parentOp = argBlock->getParentOp();
-  if (!parentOp) return true;  // Function argument, always dominates.
+  if (parentOp == nullptr) {
+    return true;  // Function argument, always dominates.
+  }
   return parentOp->isProperAncestor(op);
 }
 
@@ -193,9 +228,13 @@ static bool allExternalOperandsDominate(ArrayRef<Operation *> ops, Operation *in
   for (auto *op : ops) {
     for (Value operand : op->getOperands()) {
       if (auto *defOp = operand.getDefiningOp()) {
-        if (opSet.count(defOp)) continue;
+        if (opSet.count(defOp) != 0u) {
+          continue;
+        }
       }
-      if (!valueDominates(operand, insertionPt)) return false;
+      if (!valueDominates(operand, insertionPt)) {
+        return false;
+      }
     }
   }
   return true;
@@ -234,6 +273,7 @@ struct SubviewAllocElimPass : public SubviewAllocElimBase<SubviewAllocElimPass> 
   // Analysis
   bool processAlloc(memref::AllocOp allocOp);
   bool processSimpleAlloc(memref::AllocOp allocOp);
+  SmallVector<Operation *> replaceLoadsWithSource(const SmallVector<Operation *> &directLoads, SourceInfo &srcInfo);
   bool processTransposeAlloc(memref::AllocOp allocOp);
   bool analyzeAxisPartition(memref::AllocOp allocOp);
   std::optional<TransposeInfo> detectTransposePattern(ArrayRef<Operation *> stores, Value allocResult);
@@ -268,14 +308,22 @@ bool SubviewAllocElimPass::collectUsersRecursive(Value memref) {
       continue;
     }
 
-    if (isa<func::ReturnOp>(user)) continue;
+    if (isa<func::ReturnOp>(user)) {
+      continue;
+    }
 
-    if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) subviewOps.push_back(subviewOp);
+    if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+      subviewOps.push_back(subviewOp);
+    }
     Value nextValue = getViewChainNext(user);
-    if (!nextValue) return false;
+    if (!nextValue) {
+      return false;
+    }
 
     viewOps.push_back(user);
-    if (!collectUsersRecursive(nextValue)) return false;
+    if (!collectUsersRecursive(nextValue)) {
+      return false;
+    }
   }
   return true;
 }
@@ -288,15 +336,22 @@ static bool isValidSubviewForPartition(memref::SubViewOp subviewOp, MemRefType a
   auto offsets = subviewOp.getStaticOffsets();
   auto sizes = subviewOp.getStaticSizes();
   auto strides = subviewOp.getStaticStrides();
-
   if (!llvm::all_of(strides, [](int64_t s) { return s == 1; })) {
     return false;
   }
-  if (ShapedType::isDynamic(offsets[partitionAxis]) || ShapedType::isDynamic(sizes[partitionAxis])) return false;
+  if (ShapedType::isDynamic(offsets[partitionAxis]) || ShapedType::isDynamic(sizes[partitionAxis])) {
+    return false;
+  }
   for (unsigned d = 0; d < rank; d++) {
-    if (static_cast<int>(d) == partitionAxis) continue;
-    if (offsets[d] != 0) return false;
-    if (sizes[d] != allocType.getDimSize(d) && !ShapedType::isDynamic(sizes[d])) return false;
+    if (static_cast<int>(d) == partitionAxis) {
+      continue;
+    }
+    if (offsets[d] != 0) {
+      return false;
+    }
+    if (sizes[d] != allocType.getDimSize(d) && !ShapedType::isDynamic(sizes[d])) {
+      return false;
+    }
   }
   return true;
 }
@@ -306,7 +361,9 @@ static bool isValidSubviewForPartition(memref::SubViewOp subviewOp, MemRefType a
 bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
   auto allocType = allocOp.getType();
   unsigned rank = allocType.getRank();
-  if (subviewOps.empty() || rank == 0) return false;
+  if (subviewOps.empty() || rank == 0) {
+    return false;
+  }
 
   // Find the partition axis: the one dimension where subviews differ in offset/size.
   partitionAxis = -1;
@@ -315,26 +372,36 @@ bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
     for (auto subviewOp : subviewOps) {
       auto offsets = subviewOp.getStaticOffsets();
       auto sizes = subviewOp.getStaticSizes();
-      if (offsets.size() != rank || sizes.size() != rank) return false;
+      if (offsets.size() != rank || sizes.size() != rank) {
+        return false;
+      }
       if (offsets[d] != 0 || sizes[d] != allocType.getDimSize(d)) {
         differs = true;
       }
     }
     if (differs) {
       // multiple axes differ: not a simple partition
-      if (partitionAxis != -1) return false;
+      if (partitionAxis != -1) {
+        return false;
+      }
       partitionAxis = static_cast<int>(d);
     }
   }
 
-  if (partitionAxis < 0) return false;
+  if (partitionAxis < 0) {
+    return false;
+  }
   int64_t axisDim = allocType.getDimSize(partitionAxis);
-  if (ShapedType::isDynamic(axisDim)) return false;
+  if (ShapedType::isDynamic(axisDim)) {
+    return false;
+  }
 
   // Collect partitions and verify they cover the axis completely.
   partitions.clear();
   for (auto subviewOp : subviewOps) {
-    if (!isValidSubviewForPartition(subviewOp, allocType, rank, partitionAxis)) return false;
+    if (!isValidSubviewForPartition(subviewOp, allocType, rank, partitionAxis)) {
+      return false;
+    }
 
     auto offsets = subviewOp.getStaticOffsets();
     auto sizes = subviewOp.getStaticSizes();
@@ -349,11 +416,13 @@ bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
   // Sort partitions by offset.
   llvm::sort(partitions, [](const Partition &a, const Partition &b) { return a.offset < b.offset; });
 
-  // TODO(hujiahui): discontinuous scenes
+  // Discontinuous scenes
   // Verify contiguous coverage: offsets must be [0, s0, s0+s1, ...] summing to axisDim.
   int64_t expectedOffset = 0;
   for (auto &p : partitions) {
-    if (p.offset != expectedOffset) return false;
+    if (p.offset != expectedOffset) {
+      return false;
+    }
     expectedOffset += p.size;
   }
   return true;
@@ -362,20 +431,30 @@ bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
 // Detect if stores to an alloc are transposed copies from a source memref.
 std::optional<TransposeInfo> SubviewAllocElimPass::detectTransposePattern(ArrayRef<Operation *> stores,
                                                                           Value allocResult) {
-  if (stores.empty()) return std::nullopt;
+  if (stores.empty()) {
+    return std::nullopt;
+  }
 
   TransposeInfo info;
   for (auto *op : stores) {
     auto storeOp = dyn_cast<affine::AffineStoreOp>(op);
-    if (!storeOp || storeOp.getMemRef() != allocResult) return std::nullopt;
-    if (!storeOp.getAffineMap().isIdentity()) return std::nullopt;
+    if (!storeOp || storeOp.getMemRef() != allocResult) {
+      return std::nullopt;
+    }
+    if (!storeOp.getAffineMap().isIdentity()) {
+      return std::nullopt;
+    }
 
     auto sourceLoad = storeOp.getValueToStore().getDefiningOp<affine::AffineLoadOp>();
-    if (!sourceLoad || !sourceLoad.getAffineMap().isIdentity()) return std::nullopt;
+    if (!sourceLoad || !sourceLoad.getAffineMap().isIdentity()) {
+      return std::nullopt;
+    }
 
     auto storeIndices = storeOp.getIndices();
     auto loadIndices = sourceLoad.getIndices();
-    if (storeIndices.size() != loadIndices.size()) return std::nullopt;
+    if (storeIndices.size() != loadIndices.size()) {
+      return std::nullopt;
+    }
 
     unsigned rank = storeIndices.size();
     SmallVector<unsigned> perm(rank);
@@ -389,11 +468,15 @@ std::optional<TransposeInfo> SubviewAllocElimPass::detectTransposePattern(ArrayR
           break;
         }
       }
-      if (!found || !seen.insert(perm[j]).second) return std::nullopt;
+      if (!found || !seen.insert(perm[j]).second) {
+        return std::nullopt;
+      }
     }
 
     if (info.sourceMemref) {
-      if (info.sourceMemref != sourceLoad.getMemRef() || info.storePerm != perm) return std::nullopt;
+      if (info.sourceMemref != sourceLoad.getMemRef() || info.storePerm != perm) {
+        return std::nullopt;
+      }
     } else {
       info.sourceMemref = sourceLoad.getMemRef();
       info.storePerm = perm;
@@ -402,52 +485,85 @@ std::optional<TransposeInfo> SubviewAllocElimPass::detectTransposePattern(ArrayR
 
   unsigned rank = info.storePerm.size();
   info.inversePerm.resize(rank);
-  for (unsigned j = 0; j < rank; j++) info.inversePerm[info.storePerm[j]] = j;
+  for (unsigned j = 0; j < rank; j++) {
+    info.inversePerm[info.storePerm[j]] = j;
+  }
   return info;
 }
 
-// Apply a CollapseShapeOp to the current expression list, delinearizing each
-// collapsed group. Returns false if any dimension is dynamic.
-static bool applyCollapseShapeToExprs(memref::CollapseShapeOp cs, SmallVectorImpl<AffineExpr> &exprs) {
+static bool delinearizeCollapseGroup(memref::CollapseShapeOp cs, unsigned groupIdx, AffineExpr remaining,
+                                     SmallVectorImpl<AffineExpr> &newExprs) {
   auto reassoc = cs.getReassociationIndices();
   auto srcType = cs.getSrcType();
-  SmallVector<AffineExpr> newExprs(srcType.getRank());
+  const auto &group = reassoc[groupIdx];
+  for (int i = group.size() - 1; i >= 0; i--) {
+    int64_t dimSize = srcType.getDimSize(group[i]);
+    if (ShapedType::isDynamic(dimSize)) {
+      return false;
+    }
+    if (i == 0) {
+      newExprs[group[i]] = remaining;
+    } else {
+      newExprs[group[i]] = remaining % dimSize;
+      remaining = remaining.floorDiv(dimSize);
+    }
+  }
+  return true;
+}
+
+static bool applyCollapseShapeToExprs(memref::CollapseShapeOp cs, SmallVectorImpl<AffineExpr> &exprs) {
+  auto reassoc = cs.getReassociationIndices();
+  SmallVector<AffineExpr> newExprs(cs.getSrcType().getRank());
   unsigned resultDim = 0;
-  for (const auto &group : reassoc) {
-    AffineExpr remaining = exprs[resultDim++];
-    for (int i = group.size() - 1; i >= 0; i--) {
-      int64_t dimSize = srcType.getDimSize(group[i]);
-      if (ShapedType::isDynamic(dimSize)) return false;
-      if (i == 0) {
-        newExprs[group[i]] = remaining;
-      } else {
-        newExprs[group[i]] = remaining % dimSize;
-        remaining = remaining.floorDiv(dimSize);
-      }
+  for (unsigned k = 0; k < reassoc.size(); k++) {
+    if (!delinearizeCollapseGroup(cs, k, exprs[resultDim++], newExprs)) {
+      return false;
     }
   }
   exprs = newExprs;
   return true;
 }
 
-// Apply an ExpandShapeOp to the current expression list, linearizing each
-// expanded group. Returns false if any dimension is dynamic.
-static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+static bool computeExpandStride(memref::ExpandShapeOp es, unsigned k, unsigned i, int64_t &stride) {
   auto reassoc = es.getReassociationIndices();
   auto resultType = es.getResultType();
+  const auto &group = reassoc[k];
+  stride = 1;
+  for (unsigned j = i + 1; j < group.size(); j++) {
+    int64_t dimSize = resultType.getDimSize(group[j]);
+    if (ShapedType::isDynamic(dimSize)) {
+      return false;
+    }
+    stride *= dimSize;
+  }
+  return true;
+}
+
+// Apply an ExpandShapeOp to the current expression list, linearizing each
+// expanded group. Returns false if any dimension is dynamic.
+static AffineExpr computeCombinedExprForGroup(memref::ExpandShapeOp es, unsigned k,
+                                              const ArrayRef<ReassociationIndices> &reassoc,
+                                              const SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+  const auto &group = reassoc[k];
+  AffineExpr combined = getAffineConstantExpr(0, ctx);
+  for (unsigned i = 0; i < group.size(); i++) {
+    int64_t stride;
+    if (!computeExpandStride(es, k, i, stride)) {
+      return AffineExpr();
+    }
+    combined = combined + exprs[group[i]] * stride;
+  }
+  return combined;
+}
+
+static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
+  auto reassoc = es.getReassociationIndices();
   unsigned srcRank = es.getSrcType().getRank();
   SmallVector<AffineExpr> newExprs(srcRank);
   for (unsigned k = 0; k < reassoc.size(); k++) {
-    const auto &group = reassoc[k];
-    AffineExpr combined = getAffineConstantExpr(0, ctx);
-    for (unsigned i = 0; i < group.size(); i++) {
-      int64_t stride = 1;
-      for (unsigned j = i + 1; j < group.size(); j++) {
-        int64_t dimSize = resultType.getDimSize(group[j]);
-        if (ShapedType::isDynamic(dimSize)) return false;
-        stride *= dimSize;
-      }
-      combined = combined + exprs[group[i]] * stride;
+    AffineExpr combined = computeCombinedExprForGroup(es, k, reassoc, exprs, ctx);
+    if (!combined) {
+      return false;
     }
     newExprs[k] = combined;
   }
@@ -459,7 +575,9 @@ static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<Af
 // building an AffineMap that maps (load indices) → (alloc indices).
 AffineMap SubviewAllocElimPass::buildViewChainToAllocMap(Value loadMemref, Value allocResult) {
   auto *ctx = &getContext();
-  if (affine::getSourceMemRef(loadMemref) != allocResult) return AffineMap();
+  if (affine::getSourceMemRef(loadMemref) != allocResult) {
+    return {};
+  }
 
   SmallVector<Operation *> chain;
   for (Value cur = loadMemref; cur != allocResult;) {
@@ -470,33 +588,47 @@ AffineMap SubviewAllocElimPass::buildViewChainToAllocMap(Value loadMemref, Value
 
   unsigned loadRank = cast<MemRefType>(loadMemref.getType()).getRank();
   SmallVector<AffineExpr> exprs;
-  for (unsigned i = 0; i < loadRank; i++) exprs.push_back(getAffineDimExpr(i, ctx));
+  for (unsigned i = 0; i < loadRank; i++) {
+    exprs.push_back(getAffineDimExpr(i, ctx));
+  }
 
   for (auto *op : chain) {
-    if (isa<memref::MemorySpaceCastOp>(op)) continue;
+    if (isa<memref::MemorySpaceCastOp>(op)) {
+      continue;
+    }
 
     if (auto sv = dyn_cast<memref::SubViewOp>(op)) {
       auto offsets = sv.getStaticOffsets();
       auto strides = sv.getStaticStrides();
-      if (offsets.size() != exprs.size()) return AffineMap();
+      if (offsets.size() != exprs.size()) {
+        return {};
+      }
       for (unsigned i = 0; i < exprs.size(); i++) {
-        if (strides[i] != 1) return AffineMap();
-        if (offsets[i] != 0) exprs[i] = exprs[i] + offsets[i];
+        if (strides[i] != 1) {
+          return {};
+        }
+        if (offsets[i] != 0) {
+          exprs[i] = exprs[i] + offsets[i];
+        }
       }
       continue;
     }
 
     if (auto cs = dyn_cast<memref::CollapseShapeOp>(op)) {
-      if (!applyCollapseShapeToExprs(cs, exprs)) return AffineMap();
+      if (!applyCollapseShapeToExprs(cs, exprs)) {
+        return {};
+      }
       continue;
     }
 
     if (auto es = dyn_cast<memref::ExpandShapeOp>(op)) {
-      if (!applyExpandShapeToExprs(es, exprs, ctx)) return AffineMap();
+      if (!applyExpandShapeToExprs(es, exprs, ctx)) {
+        return {};
+      }
       continue;
     }
 
-    return AffineMap();
+    return {};
   }
 
   return AffineMap::get(loadRank, 0, exprs, ctx);
@@ -507,16 +639,22 @@ AffineMap SubviewAllocElimPass::buildViewChainToAllocMap(Value loadMemref, Value
 // Returns false if the pattern is not recognized.
 bool SubviewAllocElimPass::tracePartitionStores(Partition &partition) {
   SmallVector<Operation *> storeOps;
-  if (!collectStoresFromSubview(partition.subviewOp.getResult(), storeOps)) return false;
+  if (!collectStoresFromSubview(partition.subviewOp.getResult(), storeOps)) {
+    return false;
+  }
 
   for (auto *op : storeOps) {
     auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
-    if (!affineStore) return false;
+    if (!affineStore) {
+      return false;
+    }
     partition.stores.push_back(affineStore);
 
     // Check if the store is inside an affine.if.
     if (auto ifOp = dyn_cast<affine::AffineIfOp>(affineStore->getParentOp())) {
-      if (partition.guardIfOp && partition.guardIfOp != ifOp) return false;  // conflicting guards
+      if (partition.guardIfOp && partition.guardIfOp != ifOp) {
+        return false;  // conflicting guards
+      }
       partition.guardIfOp = ifOp;
     }
   }
@@ -528,8 +666,12 @@ InitInfo SubviewAllocElimPass::findAllocInitialization(memref::AllocOp allocOp) 
   InitInfo info;
   for (auto *op : directStores) {
     auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
-    if (!affineStore) continue;
-    if (affineStore.getMemRef() != allocOp.getResult()) continue;
+    if (!affineStore) {
+      continue;
+    }
+    if (affineStore.getMemRef() != allocOp.getResult()) {
+      continue;
+    }
     Value val = affineStore.getValueToStore();
     if (auto constOp = val.getDefiningOp<arith::ConstantOp>()) {
       info.hasInit = true;
@@ -551,7 +693,9 @@ Value SubviewAllocElimPass::cloneComputationIntoBlock(OpBuilder &builder, Locati
 
 Value SubviewAllocElimPass::buildPartitionValue(OpBuilder &builder, Location loc, const Partition &partition,
                                                 Operation *loadOp, IRMapping &mapping) {
-  if (partition.stores.empty()) return Value();
+  if (partition.stores.empty()) {
+    return {};
+  }
 
   // When the partition has a non-zero offset, the original store was executed with
   // the loop IV in [0, partition.size). But in the replacement context, the IV is
@@ -574,11 +718,14 @@ Value SubviewAllocElimPass::buildPartitionValue(OpBuilder &builder, Location loc
 
   // Verify external operands dominate the load site before cloning.
   SmallVector<Operation *> opsToCheck;
-  if (srcInfo.sourceLoad)
+  if (srcInfo.sourceLoad) {
     opsToCheck.push_back(srcInfo.sourceLoad.getOperation());
-  else
+  } else {
     opsToCheck.assign(srcInfo.computeOps.begin(), srcInfo.computeOps.end());
-  if (!allExternalOperandsDominate(opsToCheck, loadOp)) return Value();
+  }
+  if (!allExternalOperandsDominate(opsToCheck, loadOp)) {
+    return {};
+  }
 
   if (srcInfo.sourceLoad) {
     auto newLoad = builder.clone(*srcInfo.sourceLoad.getOperation(), mapping);
@@ -590,7 +737,7 @@ Value SubviewAllocElimPass::buildPartitionValue(OpBuilder &builder, Location loc
     return cloneComputationIntoBlock(builder, loc, srcInfo.computeOps, srcInfo.finalValue, mapping);
   }
 
-  return Value();
+  return {};
 }
 
 // Build partition values for all loads in a group from a single partition.
@@ -600,7 +747,9 @@ SmallVector<Value> SubviewAllocElimPass::buildPartitionValues(OpBuilder &b, Loca
   for (auto *loadOp : loads) {
     IRMapping mapping;
     Value val = buildPartitionValue(b, loc, part, loadOp, mapping);
-    if (!val) return {};
+    if (!val) {
+      return {};
+    }
     vals.push_back(val);
   }
   return vals;
@@ -615,15 +764,18 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
 
   // Base case: past all partitions — return init values or fail.
   if (partIdx >= partitions.size()) {
-    if (initInfo.hasInit) return SmallVector<Value>(numLoads, initInfo.initValue);
+    if (initInfo.hasInit) {
+      return SmallVector<Value>(numLoads, initInfo.initValue);
+    }
     return {};
   }
 
   const Partition &part = partitions[partIdx];
   bool isLastPartition = (partIdx == partitions.size() - 1);
-
   // Fast path: last partition + full coverage → no if needed, directly emit values.
-  if (isLastPartition && isFullCoverage) return buildPartitionValues(b, loc, part, loads);
+  if (isLastPartition && isFullCoverage) {
+    return buildPartitionValues(b, loc, part, loads);
+  }
 
   // Build condition: partAxisIdx <= partition.offset + partition.size - 1
   int64_t boundary = part.offset + part.size - 1;
@@ -635,7 +787,9 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
   // Then block: values from the current partition.
   OpBuilder thenBuilder = OpBuilder::atBlockBegin(ifOp.getThenBlock());
   SmallVector<Value> thenVals = buildPartitionValues(thenBuilder, loc, part, loads);
-  if (thenVals.empty()) return {};
+  if (thenVals.empty()) {
+    return {};
+  }
   thenBuilder.create<affine::AffineYieldOp>(loc, thenVals);
 
   // Else block: next partition or init value.
@@ -643,22 +797,30 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
     OpBuilder elseBuilder = OpBuilder::atBlockBegin(ifOp.getElseBlock());
     SmallVector<Value> elseVals;
     if (isLastPartition && !isFullCoverage) {
-      if (!initInfo.hasInit) return {};
+      if (!initInfo.hasInit) {
+        return {};
+      }
       elseVals.assign(numLoads, initInfo.initValue);
     } else {
       elseVals = buildNestedIf(elseBuilder, loc, partIdx + 1, loads, resultTypes, partAxisIdx, isFullCoverage);
-      if (elseVals.empty()) return {};
+      if (elseVals.empty()) {
+        return {};
+      }
     }
     elseBuilder.create<affine::AffineYieldOp>(loc, elseVals);
   }
 
   SmallVector<Value> results;
-  for (unsigned i = 0; i < numLoads; i++) results.push_back(ifOp.getResult(i));
+  for (unsigned i = 0; i < numLoads; i++) {
+    results.push_back(ifOp.getResult(i));
+  }
   return results;
 }
 
 bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
-  if (directLoads.empty()) return false;
+  if (directLoads.empty()) {
+    return false;
+  }
 
   // Compute whether partitions fully cover the partition axis.
   auto allocType = allocOp.getType();
@@ -678,7 +840,9 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
   SmallVector<LoadGroup> groups;
   for (auto *loadOp : directLoads) {
     SmallVector<Value> indices = getLoadIndices(loadOp);
-    if (static_cast<int>(indices.size()) <= partitionAxis) continue;
+    if (static_cast<int>(indices.size()) <= partitionAxis) {
+      continue;
+    }
     Value partIdx = indices[partitionAxis];
     Block *block = loadOp->getBlock();
 
@@ -694,19 +858,24 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
   SmallVector<Operation *> toErase;
   for (auto &group : groups) {
     Operation *firstLoad = group.loads[0];
-    for (auto *l : group.loads)
-      if (l->isBeforeInBlock(firstLoad)) firstLoad = l;
+    for (auto *l : group.loads) {
+      if (l->isBeforeInBlock(firstLoad)) {
+        firstLoad = l;
+      }
+    }
 
     OpBuilder builder(firstLoad);
     auto loc = firstLoad->getLoc();
 
     SmallVector<Type> resultTypes;
     llvm::transform(group.loads, std::back_inserter(resultTypes),
-                    [this](Operation *l) { return getLoadResult(l).getType(); });
+                    [](Operation *l) { return getLoadResult(l).getType(); });
 
     SmallVector<Value> replacements =
       buildNestedIf(builder, loc, 0, group.loads, resultTypes, group.partAxisIdx, isFullCoverage);
-    if (replacements.size() != group.loads.size()) continue;
+    if (replacements.size() != group.loads.size()) {
+      continue;
+    }
 
     for (unsigned i = 0; i < group.loads.size(); i++) {
       getLoadResult(group.loads[i]).replaceAllUsesWith(replacements[i]);
@@ -715,7 +884,9 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
   }
 
   for (auto *op : toErase) {
-    if (op->use_empty()) op->erase();
+    if (op->use_empty()) {
+      op->erase();
+    }
   }
   return !toErase.empty();
 }
@@ -723,14 +894,18 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
 // Forcibly erase store ops and clean up their stored values' defining ops if dead.
 static void eraseStoresWithDefs(ArrayRef<Operation *> allStores, DenseSet<Operation *> &erased) {
   for (auto *op : allStores) {
-    if (erased.count(op)) continue;
+    if (erased.count(op) != 0u) {
+      continue;
+    }
     Value storedVal;
-    if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) storedVal = affineStore.getValueToStore();
+    if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
+      storedVal = affineStore.getValueToStore();
+    }
     erased.insert(op);
     op->erase();
     if (storedVal) {
       if (auto *defOp = storedVal.getDefiningOp()) {
-        if (!erased.count(defOp) && isOpTriviallyDead(defOp)) {
+        if ((erased.count(defOp) == 0u) && isOpTriviallyDead(defOp)) {
           erased.insert(defOp);
           defOp->erase();
         }
@@ -742,14 +917,22 @@ static void eraseStoresWithDefs(ArrayRef<Operation *> allStores, DenseSet<Operat
 // Clean up guard affine.if blocks after their stores have been removed.
 static void cleanupGuardIfs(const SetVector<affine::AffineIfOp> &guardIfs, DenseSet<Operation *> &erased) {
   for (auto ifOp : guardIfs) {
-    if (erased.count(ifOp.getOperation())) continue;
+    if (erased.count(ifOp.getOperation()) != 0u) {
+      continue;
+    }
     for (auto &region : ifOp->getRegions()) {
-      if (region.empty()) continue;
+      if (region.empty()) {
+        continue;
+      }
       auto &block = region.front();
       SmallVector<Operation *> deadOps;
       for (auto it = block.rbegin(); it != block.rend(); ++it) {
-        if (isa<affine::AffineYieldOp>(&*it)) continue;
-        if (isOpTriviallyDead(&*it) && !erased.count(&*it)) deadOps.push_back(&*it);
+        if (isa<affine::AffineYieldOp>(&*it)) {
+          continue;
+        }
+        if (isOpTriviallyDead(&*it) && (erased.count(&*it) == 0u)) {
+          deadOps.push_back(&*it);
+        }
       }
       for (auto *op : deadOps) {
         erased.insert(op);
@@ -776,10 +959,14 @@ void SubviewAllocElimPass::eraseDeadOps(memref::AllocOp allocOp) {
   SetVector<affine::AffineIfOp> guardIfs;
   for (auto &part : partitions) {
     llvm::transform(part.stores, std::back_inserter(allStores), [](auto storeOp) { return storeOp.getOperation(); });
-    if (part.guardIfOp) guardIfs.insert(part.guardIfOp);
+    if (part.guardIfOp) {
+      guardIfs.insert(part.guardIfOp);
+    }
   }
   for (auto *op : directStores) {
-    if (auto ifOp = dyn_cast<affine::AffineIfOp>(op->getParentOp())) guardIfs.insert(ifOp);
+    if (auto ifOp = dyn_cast<affine::AffineIfOp>(op->getParentOp())) {
+      guardIfs.insert(ifOp);
+    }
   }
 
   // Step 2: Forcibly erase all stores (Write effect prevents isOpTriviallyDead).
@@ -790,70 +977,35 @@ void SubviewAllocElimPass::eraseDeadOps(memref::AllocOp allocOp) {
 
   // Step 4: Remove view chain ops in reverse order, then subviews.
   for (auto it = viewOps.rbegin(); it != viewOps.rend(); ++it) {
-    if (!erased.count(*it) && isOpTriviallyDead(*it)) {
+    if ((erased.count(*it) == 0u) && isOpTriviallyDead(*it)) {
       erased.insert(*it);
       (*it)->erase();
     }
   }
   for (auto svOp : subviewOps) {
-    if (!erased.count(svOp.getOperation()) && isOpTriviallyDead(svOp)) {
+    if ((erased.count(svOp.getOperation()) == 0u) && isOpTriviallyDead(svOp)) {
       erased.insert(svOp.getOperation());
       svOp->erase();
     }
   }
 
   // Step 5: Remove the alloc itself.
-  if (isOpTriviallyDead(allocOp)) allocOp->erase();
+  if (isOpTriviallyDead(allocOp)) {
+    allocOp->erase();
+  }
 }
 
 // Handle allocs with no subview partitions: forward store values directly to loads.
 // Pattern: alloc is written by stores inside affine.if guards, and read by loads
 // elsewhere. Replace each load by cloning the computation from the store source.
-bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
-  if (!subviewOps.empty() || directStores.empty() || directLoads.empty()) return false;
-
-  // Skip trivial store-load pairs where all stores and loads are in the same block.
-  // These are simple local temporaries (e.g., reduction results stored then immediately
-  // loaded). Cloning their source computation (which may include entire loops) is
-  // wasteful and produces redundant code. Let mem2reg handle these instead.
-  bool allSameBlock = llvm::all_of(directStores, [&](Operation *store) {
-    return llvm::all_of(directLoads, [&](Operation *load) { return store->getBlock() == load->getBlock(); });
-  });
-  if (allSameBlock) return false;
-
-  // All stores must be affine.store with traceable sources.
-  SmallVector<affine::AffineStoreOp> stores;
-  for (auto *op : directStores) {
-    auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
-    if (!affineStore) return false;
-    stores.push_back(affineStore);
-  }
-
-  // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
-  Value templateVal = stores[0].getValueToStore();
-  auto storeDiffersFromTemplate = [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; };
-  if (llvm::any_of(stores, storeDiffersFromTemplate)) return false;
-
-  // Use the first store as source template (all stores write the same computation).
-  SourceInfo srcInfo = traceStoreSource(stores[0]);
-  if (!srcInfo.sourceLoad && srcInfo.computeOps.empty()) return false;
-
-  // Verify all external operands of the source computation dominate every load site.
-  // If any load is unreachable, we cannot safely erase the stores, so bail out entirely.
-  SmallVector<Operation *> opsToCheck;
-  if (srcInfo.sourceLoad)
-    opsToCheck.push_back(srcInfo.sourceLoad.getOperation());
-  else
-    opsToCheck = srcInfo.computeOps;
-  if (llvm::any_of(directLoads, [&](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
-    return false;
-  }
-
-  // Replace each load with a clone of the store source computation.
+SmallVector<Operation *> SubviewAllocElimPass::replaceLoadsWithSource(const SmallVector<Operation *> &directLoads,
+                                                                      SourceInfo &srcInfo) {
   SmallVector<Operation *> toErase;
   for (auto *loadOp : directLoads) {
     Value loadResult = getLoadResult(loadOp);
-    if (!loadResult) continue;
+    if (!loadResult) {
+      continue;
+    }
 
     OpBuilder builder(loadOp);
     IRMapping mapping;
@@ -865,16 +1017,76 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
       replacement =
         cloneComputationIntoBlock(builder, loadOp->getLoc(), srcInfo.computeOps, srcInfo.finalValue, mapping);
     }
-    if (!replacement) continue;
+    if (!replacement) {
+      continue;
+    }
 
     loadResult.replaceAllUsesWith(replacement);
     toErase.push_back(loadOp);
   }
+  return toErase;
+}
 
-  for (auto *op : toErase) {
-    if (op->use_empty()) op->erase();
+bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
+  if (!subviewOps.empty() || directStores.empty() || directLoads.empty()) {
+    return false;
   }
-  if (toErase.empty()) return false;
+
+  // Skip trivial store-load pairs where all stores and loads are in the same block.
+  // These are simple local temporaries (e.g., reduction results stored then immediately
+  // loaded). Cloning their source computation (which may include entire loops) is
+  // wasteful and produces redundant code. Let mem2reg handle these instead.
+  bool allSameBlock = llvm::all_of(directStores, [&](Operation *store) {
+    return llvm::all_of(directLoads, [&](Operation *load) { return store->getBlock() == load->getBlock(); });
+  });
+  if (allSameBlock) {
+    return false;
+  }
+
+  // All stores must be affine.store with traceable sources.
+  SmallVector<affine::AffineStoreOp> stores;
+  for (auto *op : directStores) {
+    auto affineStore = dyn_cast<affine::AffineStoreOp>(op);
+    if (!affineStore) {
+      return false;
+    }
+    stores.push_back(affineStore);
+  }
+
+  // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
+  Value templateVal = stores[0].getValueToStore();
+  if (llvm::any_of(stores, [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; })) {
+    return false;
+  }
+
+  // Use the first store as source template (all stores write the same computation).
+  SourceInfo srcInfo = traceStoreSource(stores[0]);
+  if (!srcInfo.sourceLoad && srcInfo.computeOps.empty()) {
+    return false;
+  }
+
+  // Verify all external operands of the source computation dominate every load site.
+  // If any load is unreachable, we cannot safely erase the stores, so bail out entirely.
+  SmallVector<Operation *> opsToCheck;
+  if (srcInfo.sourceLoad) {
+    opsToCheck.push_back(srcInfo.sourceLoad.getOperation());
+  } else {
+    opsToCheck = srcInfo.computeOps;
+  }
+  if (llvm::any_of(directLoads, [&](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
+    return false;
+  }
+
+  // Replace each load with a clone of the store source computation.
+  auto toErase = replaceLoadsWithSource(directLoads, srcInfo);
+  for (auto *op : toErase) {
+    if (op->use_empty()) {
+      op->erase();
+    }
+  }
+  if (toErase.empty()) {
+    return false;
+  }
 
   eraseDeadOps(allocOp);
   return true;
@@ -886,12 +1098,18 @@ static bool validateTransposeStoresAndLoads(ArrayRef<Operation *> stores, ArrayR
                                             Value allocResult) {
   for (auto *op : stores) {
     auto storeOp = dyn_cast<affine::AffineStoreOp>(op);
-    if (!storeOp || storeOp.getMemRef() != allocResult) return false;
+    if (!storeOp || storeOp.getMemRef() != allocResult) {
+      return false;
+    }
   }
   for (auto *op : loads) {
     auto loadOp = dyn_cast<affine::AffineLoadOp>(op);
-    if (!loadOp || loadOp.getMemRef() == allocResult) return false;
-    if (!loadOp.getAffineMap().isIdentity()) return false;
+    if (!loadOp || loadOp.getMemRef() == allocResult) {
+      return false;
+    }
+    if (!loadOp.getAffineMap().isIdentity()) {
+      return false;
+    }
   }
   return true;
 }
@@ -900,11 +1118,17 @@ static bool validateTransposeStoresAndLoads(ArrayRef<Operation *> stores, ArrayR
 // read only through a view chain (collapse/expand/subview). Replace view-chain loads
 // with direct loads from the source memref using a composed AffineMap.
 bool SubviewAllocElimPass::processTransposeAlloc(memref::AllocOp allocOp) {
-  if (subviewOps.empty() || directStores.empty() || directLoads.empty()) return false;
-  if (!validateTransposeStoresAndLoads(directStores, directLoads, allocOp.getResult())) return false;
+  if (subviewOps.empty() || directStores.empty() || directLoads.empty()) {
+    return false;
+  }
+  if (!validateTransposeStoresAndLoads(directStores, directLoads, allocOp.getResult())) {
+    return false;
+  }
 
   auto transposeInfo = detectTransposePattern(directStores, allocOp.getResult());
-  if (!transposeInfo) return false;
+  if (!transposeInfo) {
+    return false;
+  }
 
   unsigned allocRank = allocOp.getType().getRank();
   auto *ctx = &getContext();
@@ -915,14 +1139,20 @@ bool SubviewAllocElimPass::processTransposeAlloc(memref::AllocOp allocOp) {
     auto affineLoad = cast<affine::AffineLoadOp>(op);
 
     AffineMap viewMap = buildViewChainToAllocMap(affineLoad.getMemRef(), allocOp.getResult());
-    if (!viewMap || viewMap.getNumResults() != allocRank) return false;
+    if (!viewMap || viewMap.getNumResults() != allocRank) {
+      return false;
+    }
 
     // Compose: source[k] = alloc[inversePerm[k]]
     SmallVector<AffineExpr> sourceExprs(allocRank);
-    for (unsigned k = 0; k < allocRank; k++) sourceExprs[k] = viewMap.getResult(transposeInfo->inversePerm[k]);
+    for (unsigned k = 0; k < allocRank; k++) {
+      sourceExprs[k] = viewMap.getResult(transposeInfo->inversePerm[k]);
+    }
     AffineMap sourceMap = AffineMap::get(viewMap.getNumDims(), 0, sourceExprs, ctx);
 
-    if (!valueDominates(transposeInfo->sourceMemref, op)) return false;
+    if (!valueDominates(transposeInfo->sourceMemref, op)) {
+      return false;
+    }
 
     OpBuilder builder(op);
     auto newLoad = builder.create<affine::AffineLoadOp>(op->getLoc(), transposeInfo->sourceMemref, sourceMap,
@@ -931,9 +1161,14 @@ bool SubviewAllocElimPass::processTransposeAlloc(memref::AllocOp allocOp) {
     toErase.push_back(op);
   }
 
-  if (toErase.empty()) return false;
-  for (auto *op : toErase)
-    if (op->use_empty()) op->erase();
+  if (toErase.empty()) {
+    return false;
+  }
+  for (auto *op : toErase) {
+    if (op->use_empty()) {
+      op->erase();
+    }
+  }
 
   // Reuse eraseDeadOps: it erases directStores, view chain ops, subviews, and the alloc.
   eraseDeadOps(allocOp);
@@ -942,34 +1177,44 @@ bool SubviewAllocElimPass::processTransposeAlloc(memref::AllocOp allocOp) {
 
 bool SubviewAllocElimPass::processAlloc(memref::AllocOp allocOp) {
   // Skip if the alloc (or any alias) is returned.
-  if (isAllocReturned(allocOp)) return false;
+  if (isAllocReturned(allocOp)) {
+    return false;
+  }
 
   // Collect all users of the alloc through view chains.
   subviewOps.clear();
   directLoads.clear();
   directStores.clear();
   viewOps.clear();
-  if (!collectUsersRecursive(allocOp.getResult())) return false;
+  if (!collectUsersRecursive(allocOp.getResult())) {
+    return false;
+  }
 
   // Analyze subview partitions.
   partitionAxis = -1;
   partitions.clear();
   if (!analyzeAxisPartition(allocOp)) {
     // No subview partitions — try transpose buffer elimination, then simple forwarding.
-    if (processTransposeAlloc(allocOp)) return true;
+    if (processTransposeAlloc(allocOp)) {
+      return true;
+    }
     return processSimpleAlloc(allocOp);
   }
 
   // Trace store sources for each partition.
   for (auto &part : partitions) {
-    if (!tracePartitionStores(part)) return false;
+    if (!tracePartitionStores(part)) {
+      return false;
+    }
   }
 
   // Find initialization info (e.g., store 0 to alloc).
   initInfo = findAllocInitialization(allocOp);
 
   // Replace all direct loads from the alloc.
-  if (!replaceLoads(allocOp)) return false;
+  if (!replaceLoads(allocOp)) {
+    return false;
+  }
 
   // Clean up dead ops left behind after load replacement.
   eraseDeadOps(allocOp);
@@ -979,17 +1224,25 @@ bool SubviewAllocElimPass::processAlloc(memref::AllocOp allocOp) {
 void SubviewAllocElimPass::runOnOperation() {
   // Early exit if no subview ops exist in the operation.
   auto walkResult = getOperation()->walk([](memref::SubViewOp) { return WalkResult::interrupt(); });
-  if (!walkResult.wasInterrupted()) return;
+  if (!walkResult.wasInterrupted()) {
+    return;
+  }
 
   // Only collect non-returned allocs that have subview users (potential candidates).
   // This avoids repeatedly processing returned allocs and trivial temporaries.
   SmallVector<memref::AllocOp> allocOps;
   getOperation()->walk([&](memref::AllocOp op) {
-    if (!isAllocReturned(op)) allocOps.push_back(op);
+    if (!isAllocReturned(op)) {
+      allocOps.push_back(op);
+    }
   });
-  if (allocOps.empty()) return;
+  if (allocOps.empty()) {
+    return;
+  }
 
-  for (auto allocOp : allocOps) processAlloc(allocOp);
+  for (auto allocOp : allocOps) {
+    processAlloc(allocOp);
+  }
 }
 
 }  // end anonymous namespace

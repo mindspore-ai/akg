@@ -84,7 +84,7 @@ struct ForceConvertAffineForToAffineParallel
   ForceConvertAffineForToAffineParallel() = default;
   explicit ForceConvertAffineForToAffineParallel(const std::string &matchOpType) { this->matchOpType = matchOpType; }
 
-  StringRef getArgument() const final { return "force-convert-affine-for-to-affine-parallel"; }
+  [[nodiscard]] StringRef getArgument() const final { return "force-convert-affine-for-to-affine-parallel"; }
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
     MLIRContext *context = funcOp.getContext();

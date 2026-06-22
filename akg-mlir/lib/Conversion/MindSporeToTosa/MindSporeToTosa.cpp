@@ -189,7 +189,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
 
     // create one tosa.reduce operation for each axis
     for (int64_t i = 0; i < adaptor.getAxisAttr().size(); i++) {
-      int64_t axis = (int64_t)adaptor.getAxisAttr()[i];
+      auto axis = (int64_t)adaptor.getAxisAttr()[i];
       reduce_output_shape[axis] = 1;
       auto reduce_inter_tensor = RankedTensorType::get(reduce_output_shape, resultElementTy);
       llvm::SmallVector<NamedAttribute> attrs_once;
@@ -378,9 +378,10 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
   LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op, int64_t padScalarValue,
                                             Value &tosaTensor, const Type dtype,
                                             const llvm::ArrayRef<int64_t> dshape) const {
-    uint32_t width32 = 32, width64 = 64;
+    uint32_t width32 = 32;
+    uint32_t width64 = 64;
     if (isa<FloatType>(dtype)) {
-      float floatValue = static_cast<float>(padScalarValue);
+      auto floatValue = static_cast<float>(padScalarValue);
       tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, dshape).value();
     } else if (auto intType = dyn_cast<IntegerType>(dtype)) {
       auto w = intType.getWidth();
@@ -390,7 +391,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
 
       if (w == width32) {
         if (isInvalidRange<int32_t>(padScalarValue)) {
-          int32_t dVal = static_cast<int32_t>(padScalarValue);
+          auto dVal = static_cast<int32_t>(padScalarValue);
           tosaTensor = getConstTensor<int32_t>(rewriter, op, {dVal}, dshape).value();
         } else {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
@@ -401,7 +402,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
         if (!isInvalidRange<int64_t>(padScalarValue)) {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
         }
-        int64_t dVal = static_cast<int64_t>(padScalarValue);
+        auto dVal = static_cast<int64_t>(padScalarValue);
         tosaTensor = getConstTensor<int64_t>(rewriter, op, {dVal}, dshape).value();
       }
     }

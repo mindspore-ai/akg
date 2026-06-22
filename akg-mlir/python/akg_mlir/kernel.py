@@ -56,7 +56,8 @@ class Kernel:
 
     def get_launcher(self, block_dim, lib_path):
         """Bind launch to ``lib_path`` (absolute path to ``.o`` / ``lib*.so``). Caller must supply it
-        when the kernel was loaded from cache and never ran :meth:`compile` in this process."""
+        when the kernel was loaded from cache and never ran :meth:`compile` in this process.
+        """
         if not lib_path:
             raise ValueError("lib_path is required (path to compiled Ascend binary)")
         if self.dynamic:
@@ -99,7 +100,7 @@ class Kernel:
         binary_file = os.path.join(work_dir, kernel_bin_name)
 
         if need_compile:
-            Kernel._write_mlir(input_mlir, input_file)
+            self._write_mlir(input_mlir, input_file)
 
             dump_ir_path = os.path.join(work_dir, f"{self.kernel_name}.log") if debug else None
             try:
@@ -119,7 +120,7 @@ class Kernel:
                 ) from compile_err
 
         meta_json_path = os.path.join(work_dir, f"{self.kernel_name}.json")
-        block_dim = Kernel.get_block_dim(meta_json_path)
+        block_dim = self.get_block_dim(meta_json_path)
 
         self.launcher = self.get_launcher(block_dim, binary_file)
 

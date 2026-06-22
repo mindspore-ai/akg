@@ -46,8 +46,8 @@
 //   4. Finalization
 //      ├── Elementwise: inline or loop-based transformation
 //      └── Reduction: vector reduction + tail processing + init value merging
-//   5. Phase 2 (same pass tail): VF=1 sweep — single fictional LoopVectorizationCtx (step=max=1, Elementwise,
-//      no scf.for anchor, vf1FuncLevelNoAnchor) over the whole func for remaining scalar memref.load chains.
+//   5. Phase 2 (same pass tail): rank-0 sweep — fictional LoopVectorizationCtx instances (Elementwise, no scf.for
+//      anchor, vf1FuncLevelNoAnchor) over remaining scalar memref.load chains and store-rooted reduction consumers.
 //===----------------------------------------------------------------------===//
 
 #include <algorithm>
@@ -86,8 +86,8 @@
 
 namespace mlir {
 namespace scf {
-#define GEN_PASS_DECL_NPUVECTORVECTORIZEPASS
-#define GEN_PASS_DEF_NPUVECTORVECTORIZEPASS
+#define GEN_PASS_DECL_NPUVECTORVECTORIZE
+#define GEN_PASS_DEF_NPUVECTORVECTORIZE
 #include "akg/Dialect/SCF/Passes.h.inc"
 }  // namespace scf
 }  // namespace mlir
@@ -159,43 +159,49 @@ struct LoopVectorizationCtx {
         allMaxStepValues({maxVal}),
         vectorizationAxis(vecAxis) {}
 
-  int64_t getRank() const { return allVectorSizes.size(); }
+  [[nodiscard]] int64_t getRank() const { return allVectorSizes.size(); }
 
-  bool isDynamic() const {
+  [[nodiscard]] bool isDynamic() const {
     return llvm::any_of(allVectorSizeValues, [](Value v) { return v != nullptr; });
   }
 
-  int64_t getActualStep() const { return allVectorSizes.back(); }
-  Value getVectorSizeValue() const { return allVectorSizeValues.back(); }
-  Value getMaxStepValue() const { return allMaxStepValues.back(); }
+  [[nodiscard]] int64_t getActualStep() const { return allVectorSizes.back(); }
+  [[nodiscard]] Value getVectorSizeValue() const { return allVectorSizeValues.back(); }
+  [[nodiscard]] Value getMaxStepValue() const { return allMaxStepValues.back(); }
 
   Value getVectorizationAxis() {
     if (vectorizationAxis && (mode == VectorizationMode::ReductionY || mode == VectorizationMode::Broadcast)) {
       return vectorizationAxis;
     }
-    if (!scalarLoop.getOperation()) return Value();
+    if (scalarLoop.getOperation() == nullptr) {
+      return {};
+    }
     return scalarLoop.getInductionVar();
   }
 
-  npuvector::NPUVectorType getVectorType(Type elemType) const {
+  [[nodiscard]] npuvector::NPUVectorType getVectorType(Type elemType) const {
     SmallVector<int64_t> shape;
     for (unsigned i = 0; i < allVectorSizes.size(); ++i) {
-      if (allVectorSizeValues[i])
+      if (allVectorSizeValues[i]) {
         shape.push_back(ShapedType::kDynamic);
-      else
+      } else {
         shape.push_back(allVectorSizes[i]);
+      }
     }
     return npuvector::NPUVectorType::get(shape, elemType);
   }
 
-  int getVectorDimForIV(Value iv) const {
+  [[nodiscard]] int getVectorDimForIV(Value iv) const {
     for (auto &[op, dim] : allLoopToVectorDim) {
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        if (forOp.getInductionVar() == iv) return static_cast<int>(dim);
+        if (forOp.getInductionVar() == iv) {
+          return static_cast<int>(dim);
+        }
       }
     }
-    if (vectorizationAxis && iv == vectorizationAxis && vectorAxisVectorDim)
+    if (vectorizationAxis && iv == vectorizationAxis && vectorAxisVectorDim) {
       return static_cast<int>(*vectorAxisVectorDim);
+    }
     return -1;
   }
 
@@ -208,9 +214,11 @@ struct LoopVectorizationCtx {
     child.parent = &parentCtx;
 
     SmallVector<std::pair<Operation *, unsigned>> ancestorLoops;
-    for (Operation *p = childLoop->getParentOp(); p; p = p->getParentOp()) {
+    for (Operation *p = childLoop->getParentOp(); p != nullptr; p = p->getParentOp()) {
       auto it = parentCtx.allLoopToVectorDim.find(p);
-      if (it != parentCtx.allLoopToVectorDim.end()) ancestorLoops.push_back({it->first, it->second});
+      if (it != parentCtx.allLoopToVectorDim.end()) {
+        ancestorLoops.push_back({it->first, it->second});
+      }
     }
     llvm::sort(ancestorLoops,
                [](const auto &pairLeft, const auto &pairRight) { return pairLeft.second < pairRight.second; });
@@ -221,13 +229,15 @@ struct LoopVectorizationCtx {
       parentDimToLocalDim[parentDim] = lDim;
       child.allVectorSizes.push_back(parentCtx.allVectorSizes[parentDim]);
       int64_t maxStepInt = parentCtx.allVectorSizes[parentDim];
-      if (auto cst = parentCtx.allMaxStepValues[parentDim].getDefiningOp<arith::ConstantIndexOp>())
+      if (auto cst = parentCtx.allMaxStepValues[parentDim].getDefiningOp<arith::ConstantIndexOp>()) {
         maxStepInt = cst.value();
+      }
       child.allMaxStepValues.push_back(
         parentCtx.builder.create<arith::ConstantIndexOp>(childLoop.getLoc(), maxStepInt));
       Value vfVal = nullptr;
-      if (parentCtx.allVectorSizeValues[parentDim])
+      if (parentCtx.allVectorSizeValues[parentDim]) {
         vfVal = parentCtx.valueMapping.lookupOrDefault(parentCtx.allVectorSizeValues[parentDim]);
+      }
       child.allVectorSizeValues.push_back(vfVal);
       child.allLoopToVectorDim[loop] = lDim;
     }
@@ -251,9 +261,13 @@ struct LoopVectorizationCtx {
       }
     }
 
-    for (const auto &kv : parentCtx.valueMapping.getValueMap()) child.valueMapping.map(kv.first, kv.second);
+    for (const auto &kv : parentCtx.valueMapping.getValueMap()) {
+      child.valueMapping.map(kv.first, kv.second);
+    }
 
-    for (const auto &kv : parentCtx.valueDimOrder) child.valueDimOrder[kv.first] = kv.second;
+    for (const auto &kv : parentCtx.valueDimOrder) {
+      child.valueDimOrder[kv.first] = kv.second;
+    }
 
     return child;
   }
@@ -267,6 +281,7 @@ static void ensureReductionYield(LoopVectorizationCtx &ctx);
 static LogicalResult vectorizeOneOp(Operation &op, LoopVectorizationCtx &ctx);
 static void processLoop(LoopVectorizationCtx &ctx);
 static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSsaValue);
+static npuvector::NPUVectorType buildPartialReductionType(npuvector::NPUVectorType srcType, unsigned reductionDim);
 
 static bool hasVectorizationAttr(Operation *op) {
   return op->hasAttr(kVectorAttr) || op->hasAttr(kBroadcastLoopAttr) || op->hasAttr(kReductionXLoopAttr) ||
@@ -290,7 +305,6 @@ static bool shouldCloneScalarOp(Operation &op, LoopVectorizationCtx &ctx) {
 static int64_t computeStaticVectorSize(scf::ForOp loop, int64_t maxStep) {
   auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
   auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-
   if (ubConst && lbConst) {
     int64_t tripCount = ubConst.value() - lbConst.value();
     return std::min(tripCount, maxStep);
@@ -303,7 +317,7 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
                                       const IRMapping *valueMapping = nullptr) {
   Value upperBound = loop.getUpperBound();
   Value lowerBound = loop.getLowerBound();
-  if (valueMapping) {
+  if (valueMapping != nullptr) {
     upperBound = valueMapping->lookupOrDefault(upperBound);
     lowerBound = valueMapping->lookupOrDefault(lowerBound);
   }
@@ -312,44 +326,52 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
   SmallVector<Value, 3> operands{upperBound, lowerBound, maxStepValue};
   SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
                                       getAffineDimExpr(2, context)};
-  AffineMap minMap = AffineMap::get(/*dimCount=*/3, /*symbolCount=*/0, minExprs, context);
+  AffineMap minMap = AffineMap::get(/* dimCount= */ 3, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
 static VectorizationMode getVectorizationMode(scf::ForOp loop, int64_t &maxStepFromAttr) {
   if (loop->hasAttr(kReductionXLoopAttr)) {
     auto attr = loop->getAttrOfType<IntegerAttr>(kReductionXLoopAttr);
-    if (!attr) return VectorizationMode::None;
+    if (!attr) {
+      return VectorizationMode::None;
+    }
     maxStepFromAttr = attr.getInt();
     return VectorizationMode::ReductionX;
   }
 
   if (loop->hasAttr(kReductionYLoopAttr)) {
-    if (auto attr = loop->getAttrOfType<IntegerAttr>(kReductionYLoopAttr))
+    if (auto attr = loop->getAttrOfType<IntegerAttr>(kReductionYLoopAttr)) {
       maxStepFromAttr = attr.getInt();
-    else
+    } else {
       maxStepFromAttr = kVectorSize;
+    }
     return VectorizationMode::ReductionY;
   }
 
   if (loop->hasAttr(kReductionAllLoopAttr)) {
     auto attr = loop->getAttrOfType<IntegerAttr>(kReductionAllLoopAttr);
-    if (!attr) return VectorizationMode::None;
+    if (!attr) {
+      return VectorizationMode::None;
+    }
     maxStepFromAttr = attr.getInt();
     return VectorizationMode::ReductionX;
   }
 
   if (loop->hasAttr(kBroadcastLoopAttr)) {
-    if (auto attr = loop->getAttrOfType<IntegerAttr>(kBroadcastLoopAttr))
+    if (auto attr = loop->getAttrOfType<IntegerAttr>(kBroadcastLoopAttr)) {
       maxStepFromAttr = attr.getInt();
-    else
+    } else {
       maxStepFromAttr = kVectorSize;
+    }
     return VectorizationMode::Broadcast;
   }
 
   if (loop->hasAttr(kVectorAttr)) {
     auto attr = loop->getAttrOfType<IntegerAttr>(kVectorAttr);
-    if (!attr) return VectorizationMode::None;
+    if (!attr) {
+      return VectorizationMode::None;
+    }
     maxStepFromAttr = attr.getInt();
     return VectorizationMode::Elementwise;
   }
@@ -373,12 +395,15 @@ static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
 
 /// True when `defOp` is a binary op whose lhs/rhs references the reduction carry (`iter_arg`).
 static bool binaryReductionUsesIterArg(Operation *defOp, Value iterArg) {
-  return defOp && defOp->getNumOperands() >= 2 && (defOp->getOperand(0) == iterArg || defOp->getOperand(1) == iterArg);
+  return (defOp != nullptr) && defOp->getNumOperands() >= 2 &&
+         (defOp->getOperand(0) == iterArg || defOp->getOperand(1) == iterArg);
 }
 
 /// Maps yield-defining binary arith op to `AtomicRMWKind` when it uses `iterArg` as one combine input.
 static std::optional<arith::AtomicRMWKind> matchYieldDefToReductionKind(Operation *defOp, Value iterArg) {
-  if (!binaryReductionUsesIterArg(defOp, iterArg)) return std::nullopt;
+  if (!binaryReductionUsesIterArg(defOp, iterArg)) {
+    return std::nullopt;
+  }
 
   return llvm::TypeSwitch<Operation *, std::optional<arith::AtomicRMWKind>>(defOp)
     .Case([](arith::AddFOp) { return arith::AtomicRMWKind::addf; })
@@ -406,7 +431,7 @@ static std::optional<arith::AtomicRMWKind> detectReductionKindForOperand(scf::Fo
 
   Value yieldValue = yieldOp.getOperand(resultIndex);
   Operation *defOp = yieldValue.getDefiningOp();
-  if (!defOp) {
+  if (defOp == nullptr) {
     return std::nullopt;
   }
 
@@ -429,15 +454,14 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
     SmallVector<Value> maxSizes;
     for (unsigned i = 0; i < ctx.allVectorSizes.size(); ++i) {
       maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[i]));
-      if (ctx.allVectorSizeValues[i])
+      if (ctx.allVectorSizeValues[i]) {
         dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[i]));
-      else
+      } else {
         dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[i]));
+      }
     }
     neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
-                                                            ValueRange(maxSizes),
-                                                            ctx.builder.getDenseI64ArrayAttr({}));
-
+                                                            ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
   } else {
     auto vecAttr = DenseElementsAttr::get(vecType, neutralAttr);
     neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
@@ -445,8 +469,9 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
 
   SmallVector<int> dimOrder;
   dimOrder.reserve(ctx.allVectorSizes.size());
-  for (unsigned axisIdx = 0; axisIdx < ctx.allVectorSizes.size(); ++axisIdx)
+  for (unsigned axisIdx = 0; axisIdx < ctx.allVectorSizes.size(); ++axisIdx) {
     dimOrder.push_back(static_cast<int>(axisIdx));
+  }
   ctx.valueDimOrder[neutralVec] = std::move(dimOrder);
   return neutralVec;
 }
@@ -506,6 +531,28 @@ static Value createAffineSub(OpBuilder &builder, Location loc, Value lhs, Value 
 static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Value upperBound, Value lowerBound,
                                            int64_t alignment);
 
+static bool collectReductionNeutralVecs(LoopVectorizationCtx &ctx, Location loc, SmallVectorImpl<Value> &neutralVecs) {
+  ctx.reductionKinds.clear();
+  ctx.origInits.clear();
+  for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
+    auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
+    if (!kind) {
+      return false;
+    }
+
+    ctx.reductionKinds.push_back(*kind);
+    ctx.origInits.push_back(ctx.scalarLoop.getInitArgs()[idx]);
+
+    Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
+    Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
+    if (!neutralVec) {
+      return false;
+    }
+    neutralVecs.push_back(neutralVec);
+  }
+  return true;
+}
+
 static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   Location loc = ctx.scalarLoop.getLoc();
 
@@ -524,19 +571,8 @@ static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
   SmallVector<Value> neutralVecs;
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
     if (!ctx.scalarLoop.getInitArgs().empty()) {
-      ctx.reductionKinds.clear();
-      ctx.origInits.clear();
-      for (unsigned idx = 0; idx < ctx.scalarLoop.getNumRegionIterArgs(); ++idx) {
-        auto kind = detectReductionKindForOperand(ctx.scalarLoop, idx);
-        if (!kind) return nullptr;
-
-        ctx.reductionKinds.push_back(*kind);
-        ctx.origInits.push_back(ctx.scalarLoop.getInitArgs()[idx]);
-
-        Type elemType = ctx.scalarLoop.getRegionIterArgs()[idx].getType();
-        Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
-        if (!neutralVec) return nullptr;
-        neutralVecs.push_back(neutralVec);
+      if (!collectReductionNeutralVecs(ctx, loc, neutralVecs)) {
+        return nullptr;
       }
     }
   }
@@ -583,10 +619,16 @@ static scf::ForOp createEmptyVectorizedLoop(LoopVectorizationCtx &ctx) {
 }
 
 static std::optional<int64_t> tryConstantIndex(Value indexValue) {
-  if (auto constantIndexOp = indexValue.getDefiningOp<arith::ConstantIndexOp>()) return constantIndexOp.value();
+  if (auto constantIndexOp = indexValue.getDefiningOp<arith::ConstantIndexOp>()) {
+    return constantIndexOp.value();
+  }
   if (auto constantOp = indexValue.getDefiningOp<arith::ConstantOp>()) {
-    if (!indexValue.getType().isIndex()) return std::nullopt;
-    if (auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) return integerAttr.getValue().getSExtValue();
+    if (!indexValue.getType().isIndex()) {
+      return std::nullopt;
+    }
+    if (auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+      return integerAttr.getValue().getSExtValue();
+    }
   }
   return std::nullopt;
 }
@@ -594,7 +636,7 @@ static std::optional<int64_t> tryConstantIndex(Value indexValue) {
 static Value createAffineBinaryApply(OpBuilder &builder, Location loc, Value lhs, Value rhs, AffineExpr expr) {
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 2> operands{lhs, rhs};
-  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, expr, context);
+  AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, expr, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
@@ -614,7 +656,7 @@ static Value createAffineMinWithConstant(OpBuilder &builder, Location loc, Value
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 1> operands{value};
   SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
-  AffineMap minMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, minExprs, context);
+  AffineMap minMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -622,7 +664,7 @@ static Value createAffineMax(OpBuilder &builder, Location loc, Value lhs, Value 
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 2> operands{lhs, rhs};
   SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
-  AffineMap maxMap = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, maxExprs, context);
+  AffineMap maxMap = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -630,7 +672,7 @@ static Value createAffineMaxWithConstant(OpBuilder &builder, Location loc, Value
   MLIRContext *context = builder.getContext();
   SmallVector<Value, 1> operands{value};
   SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
-  AffineMap maxMap = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, maxExprs, context);
+  AffineMap maxMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -641,35 +683,47 @@ static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Val
   AffineExpr alignedTripCount = tripCount.floorDiv(alignment) * alignment;
   AffineExpr alignedUpperBound = alignedTripCount + getAffineDimExpr(1, context);
   SmallVector<Value, 2> operands{upperBound, lowerBound};
-  AffineMap map = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, alignedUpperBound, context);
+  AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, alignedUpperBound, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
 static bool gatherVectorDynExtents(Value vectorVal, SmallVectorImpl<Value> &outExtents) {
   Operation *defOp = vectorVal.getDefiningOp();
-  if (!defOp) return false;
+  if (defOp == nullptr) {
+    return false;
+  }
 
   if (auto readOp = mlir::dyn_cast<npuvector::TransferReadOp>(defOp)) {
     auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vectorVal.getType());
-    if (!nvt) return false;
+    if (!nvt) {
+      return false;
+    }
     npuvector::TransferReadOp::Adaptor readAdaptor(readOp);
     ValueRange dynSizes = readAdaptor.getDynamicSizes();
-    if (static_cast<int64_t>(dynSizes.size()) != static_cast<int64_t>(nvt.getRank())) return false;
+    if (static_cast<int64_t>(dynSizes.size()) != static_cast<int64_t>(nvt.getRank())) {
+      return false;
+    }
     outExtents.assign(dynSizes.begin(), dynSizes.end());
     return true;
   }
 
   if (auto transposeOp = mlir::dyn_cast<npuvector::TransposeOp>(defOp)) {
     SmallVector<Value> innerExtents;
-    if (!gatherVectorDynExtents(transposeOp.getVector(), innerExtents)) return false;
+    if (!gatherVectorDynExtents(transposeOp.getVector(), innerExtents)) {
+      return false;
+    }
     ArrayRef<int64_t> perm = transposeOp.getPermutation();
     auto resultNvt = mlir::dyn_cast<npuvector::NPUVectorType>(vectorVal.getType());
-    if (!resultNvt || perm.size() != static_cast<size_t>(resultNvt.getRank())) return false;
-    const unsigned rank = static_cast<unsigned>(resultNvt.getRank());
+    if (!resultNvt || perm.size() != static_cast<size_t>(resultNvt.getRank())) {
+      return false;
+    }
+    const auto rank = static_cast<unsigned>(resultNvt.getRank());
     outExtents.resize(rank);
     for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
       const int64_t srcDim = perm[resultDim];
-      if (srcDim < 0 || static_cast<size_t>(srcDim) >= innerExtents.size()) return false;
+      if (srcDim < 0 || static_cast<size_t>(srcDim) >= innerExtents.size()) {
+        return false;
+      }
       outExtents[resultDim] = innerExtents[static_cast<unsigned>(srcDim)];
     }
     return true;
@@ -684,34 +738,47 @@ static std::optional<unsigned> matchExtentValueToCtxAxis(Value extent, const Loo
   for (unsigned axisIdx = 0; axisIdx < ctx.allVectorSizes.size(); ++axisIdx) {
     if (ctx.allVectorSizeValues[axisIdx]) {
       Value refLen = ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[axisIdx]);
-      if (mappedExt == refLen || extent == refLen) hits.push_back(axisIdx);
+      if (mappedExt == refLen || extent == refLen) {
+        hits.push_back(axisIdx);
+      }
     } else {
       const std::optional<int64_t> extentAsConstant = tryConstantIndex(mappedExt);
-      if (extentAsConstant && static_cast<int64_t>(ctx.allVectorSizes[axisIdx]) == *extentAsConstant)
+      if (extentAsConstant && static_cast<int64_t>(ctx.allVectorSizes[axisIdx]) == *extentAsConstant) {
         hits.push_back(axisIdx);
+      }
     }
   }
-  if (hits.size() != 1) return std::nullopt;
+  if (hits.size() != 1) {
+    return std::nullopt;
+  }
   return hits.front();
 }
 
 static void reconcileValueDimOrderWithTileExtents(Value loadedVector, SmallVector<int> &sortedDims,
                                                   const LoopVectorizationCtx &ctx) {
   SmallVector<Value> perDimExtents;
-  if (!gatherVectorDynExtents(loadedVector, perDimExtents)) return;
-  if (perDimExtents.size() != sortedDims.size()) return;
+  if (!gatherVectorDynExtents(loadedVector, perDimExtents)) {
+    return;
+  }
+  if (perDimExtents.size() != sortedDims.size()) {
+    return;
+  }
 
   SmallVector<int> fromExtents;
   fromExtents.reserve(perDimExtents.size());
   llvm::SmallDenseSet<unsigned> usedAxes;
   for (Value ext : perDimExtents) {
     std::optional<unsigned> axisOpt = matchExtentValueToCtxAxis(ext, ctx);
-    if (!axisOpt || !usedAxes.insert(*axisOpt).second) return;
+    if (!axisOpt || !usedAxes.insert(*axisOpt).second) {
+      return;
+    }
     fromExtents.push_back(static_cast<int>(*axisOpt));
   }
 
-  if (sortedDims.size() == fromExtents.size() && std::equal(sortedDims.begin(), sortedDims.end(), fromExtents.begin()))
+  if (sortedDims.size() == fromExtents.size() &&
+      std::equal(sortedDims.begin(), sortedDims.end(), fromExtents.begin())) {
     return;
+  }
   sortedDims = std::move(fromExtents);
 }
 
@@ -720,39 +787,51 @@ static void collectVectorAxes(const LoopVectorizationCtx &ctx, SmallVectorImpl<s
   DenseSet<Value> seen;
   for (auto &[op, dim] : ctx.allLoopToVectorDim) {
     auto forOp = dyn_cast<scf::ForOp>(op);
-    if (!forOp || !seen.insert(forOp.getInductionVar()).second) continue;
+    if (!forOp || !seen.insert(forOp.getInductionVar()).second) {
+      continue;
+    }
     axes.push_back({forOp.getInductionVar(), static_cast<int>(dim)});
   }
-  if (ctx.vectorizationAxis && ctx.vectorAxisVectorDim && seen.insert(ctx.vectorizationAxis).second)
+  if (ctx.vectorizationAxis && ctx.vectorAxisVectorDim && seen.insert(ctx.vectorizationAxis).second) {
     axes.push_back({ctx.vectorizationAxis, static_cast<int>(*ctx.vectorAxisVectorDim)});
+  }
   llvm::sort(axes, [](const auto &lhs, const auto &rhs) { return lhs.second < rhs.second; });
 }
 
 static bool affineExprCoeffForIndex(AffineExpr expr, ArrayRef<int64_t> operandCoeffs, unsigned numDims,
                                     int64_t &coeff) {
   coeff = 0;
-  if (isa<AffineConstantExpr>(expr)) return true;
+  if (isa<AffineConstantExpr>(expr)) {
+    return true;
+  }
   if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
     unsigned pos = dimExpr.getPosition();
-    if (pos >= operandCoeffs.size()) return false;
+    if (pos >= operandCoeffs.size()) {
+      return false;
+    }
     coeff = operandCoeffs[pos];
     return true;
   }
   if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr)) {
     unsigned pos = numDims + symbolExpr.getPosition();
-    if (pos >= operandCoeffs.size()) return false;
+    if (pos >= operandCoeffs.size()) {
+      return false;
+    }
     coeff = operandCoeffs[pos];
     return true;
   }
 
   auto binaryExpr = dyn_cast<AffineBinaryOpExpr>(expr);
-  if (!binaryExpr) return false;
+  if (!binaryExpr) {
+    return false;
+  }
 
   int64_t lhsCoeff = 0;
   int64_t rhsCoeff = 0;
   if (!affineExprCoeffForIndex(binaryExpr.getLHS(), operandCoeffs, numDims, lhsCoeff) ||
-      !affineExprCoeffForIndex(binaryExpr.getRHS(), operandCoeffs, numDims, rhsCoeff))
+      !affineExprCoeffForIndex(binaryExpr.getRHS(), operandCoeffs, numDims, rhsCoeff)) {
     return false;
+  }
 
   switch (binaryExpr.getKind()) {
     case AffineExprKind::Add:
@@ -777,14 +856,17 @@ static bool indexCoeffForVectorAxis(Value index, Value vectorAxis, int64_t &coef
   }
 
   Operation *definingOp = index.getDefiningOp();
-  if (!definingOp) return true;
+  if (definingOp == nullptr) {
+    return true;
+  }
 
   if (auto addOp = dyn_cast<arith::AddIOp>(definingOp)) {
     int64_t lhsCoeff = 0;
     int64_t rhsCoeff = 0;
     if (!indexCoeffForVectorAxis(addOp.getLhs(), vectorAxis, lhsCoeff) ||
-        !indexCoeffForVectorAxis(addOp.getRhs(), vectorAxis, rhsCoeff))
+        !indexCoeffForVectorAxis(addOp.getRhs(), vectorAxis, rhsCoeff)) {
       return false;
+    }
     coeff = lhsCoeff + rhsCoeff;
     return true;
   }
@@ -792,8 +874,9 @@ static bool indexCoeffForVectorAxis(Value index, Value vectorAxis, int64_t &coef
     int64_t lhsCoeff = 0;
     int64_t rhsCoeff = 0;
     if (!indexCoeffForVectorAxis(subOp.getLhs(), vectorAxis, lhsCoeff) ||
-        !indexCoeffForVectorAxis(subOp.getRhs(), vectorAxis, rhsCoeff))
+        !indexCoeffForVectorAxis(subOp.getRhs(), vectorAxis, rhsCoeff)) {
       return false;
+    }
     coeff = lhsCoeff - rhsCoeff;
     return true;
   }
@@ -802,7 +885,9 @@ static bool indexCoeffForVectorAxis(Value index, Value vectorAxis, int64_t &coef
     operandCoeffs.reserve(affineApplyOp.getMapOperands().size());
     for (Value operand : affineApplyOp.getMapOperands()) {
       int64_t operandCoeff = 0;
-      if (!indexCoeffForVectorAxis(operand, vectorAxis, operandCoeff)) return false;
+      if (!indexCoeffForVectorAxis(operand, vectorAxis, operandCoeff)) {
+        return false;
+      }
       operandCoeffs.push_back(operandCoeff);
     }
     return affineExprCoeffForIndex(affineApplyOp.getAffineMap().getResult(0), operandCoeffs,
@@ -814,16 +899,24 @@ static bool indexCoeffForVectorAxis(Value index, Value vectorAxis, int64_t &coef
 
 static int getVectorDimForIndex(Value index, const LoopVectorizationCtx &ctx) {
   int directDim = ctx.getVectorDimForIV(index);
-  if (directDim >= 0) return directDim;
+  if (directDim >= 0) {
+    return directDim;
+  }
 
   SmallVector<std::pair<Value, int>> axes;
   collectVectorAxes(ctx, axes);
   int matchedDim = -1;
   for (auto [axis, dim] : axes) {
     int64_t coeff = 0;
-    if (!indexCoeffForVectorAxis(index, axis, coeff)) return -1;
-    if (coeff == 0) continue;
-    if (coeff != 1 || matchedDim >= 0) return -1;
+    if (!indexCoeffForVectorAxis(index, axis, coeff)) {
+      return -1;
+    }
+    if (coeff == 0) {
+      continue;
+    }
+    if (coeff != 1 || matchedDim >= 0) {
+      return -1;
+    }
     matchedDim = dim;
   }
   return matchedDim;
@@ -836,19 +929,31 @@ static void collectLoadIndexVectorDims(memref::LoadOp loadOp, const LoopVectoriz
   for (Value idx : loadOp.getIndices()) {
     int dim = getVectorDimForIndex(idx, ctx);
     indexToDim.push_back(dim);
-    if (dim >= 0) activeInAppearOrder.push_back(dim);
+    if (dim >= 0) {
+      activeInAppearOrder.push_back(dim);
+    }
   }
 }
 
 static bool loadIndicesAreLoopInvariant(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
-  if (ctx.vf1FuncLevelNoAnchor) return false;
-  if (!ctx.scalarLoop.getOperation()) return false;
+  if (ctx.vf1FuncLevelNoAnchor) {
+    return false;
+  }
+  if (ctx.scalarLoop.getOperation() == nullptr) {
+    return false;
+  }
   Value vecAxis = ctx.getVectorizationAxis();
   Value mappedVecAxis = ctx.valueMapping.lookupOrDefault(vecAxis);
   for (Value idx : loadOp.getIndices()) {
-    if (getVectorDimForIndex(idx, ctx) >= 0) return false;
-    if (idx == vecAxis || idx == mappedVecAxis) return false;
-    if (idx.getParentBlock() == ctx.scalarLoop.getBody()) return false;
+    if (getVectorDimForIndex(idx, ctx) >= 0) {
+      return false;
+    }
+    if (idx == vecAxis || idx == mappedVecAxis) {
+      return false;
+    }
+    if (idx.getParentBlock() == ctx.scalarLoop.getBody()) {
+      return false;
+    }
   }
   return true;
 }
@@ -866,21 +971,12 @@ static Value vectorizeLoadSubRankZero(memref::LoadOp loadOp, LoopVectorizationCt
     return ctx.builder.create<memref::LoadOp>(loc, mappedMemRef, indices);
   }
 
-  npuvector::NPUVectorType readVecType = npuvector::NPUVectorType::get({ctx.allVectorSizes[0]}, elemType);
+  npuvector::NPUVectorType readVecType = npuvector::NPUVectorType::get({}, elemType);
   Value padding = ctx.builder.create<arith::ConstantOp>(loc, ctx.builder.getZeroAttr(elemType));
-  SmallVector<Value> dynamicSizes;
-  SmallVector<Value> maxSizes;
-  maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[0]));
-  dynamicSizes.push_back(ctx.allVectorSizeValues[0]
-                           ? ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[0])
-                           : ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[0]));
-  auto transferRead =
-    ctx.builder.create<npuvector::TransferReadOp>(loc, readVecType, mappedMemRef, ValueRange(indices), padding, Value(),
-                                                  ValueRange(dynamicSizes), ValueRange(maxSizes));
+  auto transferRead = ctx.builder.create<npuvector::TransferReadOp>(loc, readVecType, mappedMemRef, ValueRange(indices),
+                                                                    padding, Value(), ValueRange(), ValueRange());
   Value result = transferRead.getResult();
-  SmallVector<int> axisPerResultDim = {0};
-  reconcileValueDimOrderWithTileExtents(result, axisPerResultDim, ctx);
-  ctx.valueDimOrder[result] = axisPerResultDim;
+  ctx.valueDimOrder[result] = SmallVector<int>();
   return result;
 }
 
@@ -908,7 +1004,9 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
   collectLoadIndexVectorDims(loadOp, ctx, indexToDim, activeInAppearOrder);
 
   const unsigned subRank = activeInAppearOrder.size();
-  if (subRank == 0) return vectorizeLoadSubRankZero(loadOp, ctx, mappedMemRef, elemType, loc);
+  if (subRank == 0) {
+    return vectorizeLoadSubRankZero(loadOp, ctx, mappedMemRef, elemType, loc);
+  }
 
   SmallVector<int> sortedDims(activeInAppearOrder);
   llvm::sort(sortedDims);
@@ -939,10 +1037,11 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
   for (unsigned k = 0; k < subRank; ++k) {
     int gid = activeInAppearOrder[k];
     maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[gid]));
-    if (ctx.allVectorSizeValues[gid])
+    if (ctx.allVectorSizeValues[gid]) {
       dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[gid]));
-    else
+    } else {
       dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[gid]));
+    }
   }
 
   auto transferRead =
@@ -957,7 +1056,9 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
       int targetGlobal = sortedDims[i];
       unsigned j = 0;
       for (; j < subRank; ++j) {
-        if (activeInAppearOrder[j] == targetGlobal) break;
+        if (activeInAppearOrder[j] == targetGlobal) {
+          break;
+        }
       }
       transposePerm[i] = static_cast<int64_t>(j);
     }
@@ -969,10 +1070,13 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
   // comes from operand dim transposePerm[r] (see gatherVectorDynExtents on TransposeOp).
   SmallVector<int> axisPerResultDim(subRank);
   if (analyzedTranspose) {
-    for (unsigned r = 0; r < subRank; ++r)
+    for (unsigned r = 0; r < subRank; ++r) {
       axisPerResultDim[r] = activeInAppearOrder[static_cast<unsigned>(transposePerm[r])];
+    }
   } else {
-    for (unsigned k = 0; k < subRank; ++k) axisPerResultDim[k] = activeInAppearOrder[k];
+    for (unsigned k = 0; k < subRank; ++k) {
+      axisPerResultDim[k] = activeInAppearOrder[k];
+    }
   }
   reconcileValueDimOrderWithTileExtents(result, axisPerResultDim, ctx);
   ctx.valueDimOrder[result] = axisPerResultDim;
@@ -983,13 +1087,15 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
 static LogicalResult buildStoreTargetTypeForDimOrder(memref::StoreOp storeOp, ArrayRef<int> storeDimOrder,
                                                      LoopVectorizationCtx &ctx, npuvector::NPUVectorType &outTy,
                                                      SmallVectorImpl<int> &outResultDimToCtxAxis) {
-  const unsigned ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
+  const auto ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
   Type elemType = storeOp.getMemRefType().getElementType();
   SmallVector<int64_t> brShape;
   brShape.reserve(storeDimOrder.size());
   for (int ax : storeDimOrder) {
-    if (ax < 0 || static_cast<unsigned>(ax) >= ctxRank) return failure();
-    const unsigned uax = static_cast<unsigned>(ax);
+    if (ax < 0 || static_cast<unsigned>(ax) >= ctxRank) {
+      return failure();
+    }
+    const auto uax = static_cast<unsigned>(ax);
     brShape.push_back(ctx.allVectorSizeValues[uax] ? ShapedType::kDynamic : ctx.allVectorSizes[uax]);
   }
   outTy = npuvector::NPUVectorType::get(brShape, elemType);
@@ -999,7 +1105,9 @@ static LogicalResult buildStoreTargetTypeForDimOrder(memref::StoreOp storeOp, Ar
 
 static bool ensureBroadcastStoreValue(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, ArrayRef<int> storeDimOrder,
                                       Value storeValue, Value &vectorValue) {
-  if (vectorValue && mlir::isa<npuvector::NPUVectorType>(vectorValue.getType())) return true;
+  if (vectorValue && mlir::isa<npuvector::NPUVectorType>(vectorValue.getType())) {
+    return true;
+  }
   vectorValue = Value();
   Value valueToBcast = ctx.valueMapping.lookupOrDefault(storeValue);
   if (storeDimOrder.empty()) {
@@ -1025,7 +1133,9 @@ static bool validateMultiDimStoreValueAxes(memref::StoreOp storeOp, LoopVectoriz
                                            int64_t vecRank, ArrayRef<int> storeDimOrder,
                                            SmallVector<int> &valueDimOrdOut) {
   const bool hadDimOrderForValue = ctx.valueDimOrder.count(vectorValue) != 0;
-  if (hadDimOrderForValue) valueDimOrdOut = ctx.valueDimOrder[vectorValue];
+  if (hadDimOrderForValue) {
+    valueDimOrdOut = ctx.valueDimOrder[vectorValue];
+  }
   if (!hadDimOrderForValue || valueDimOrdOut.empty()) {
     storeOp.emitError(
       "npuvector-vectorize: multi-index / multi-rank store requires non-empty "
@@ -1050,13 +1160,19 @@ static bool validateMultiDimStoreValueAxes(memref::StoreOp storeOp, LoopVectoriz
 static bool intersectStoreAxesWithValueAxes(memref::StoreOp storeOp, ArrayRef<int> storeDimOrder,
                                             ArrayRef<int> valueDimOrd, SmallVector<int> &intersectOut) {
   llvm::DenseSet<int> valueAxisSet;
-  for (int axisIdx : valueDimOrd) valueAxisSet.insert(axisIdx);
+  for (int axisIdx : valueDimOrd) {
+    valueAxisSet.insert(axisIdx);
+  }
   llvm::DenseSet<int> seenIntersectAxis;
   intersectOut.clear();
   intersectOut.reserve(valueDimOrd.size());
   for (int axisIdx : storeDimOrder) {
-    if (valueAxisSet.find(axisIdx) == valueAxisSet.end()) continue;
-    if (!seenIntersectAxis.insert(axisIdx).second) continue;
+    if (valueAxisSet.find(axisIdx) == valueAxisSet.end()) {
+      continue;
+    }
+    if (!seenIntersectAxis.insert(axisIdx).second) {
+      continue;
+    }
     intersectOut.push_back(axisIdx);
   }
   if (intersectOut.size() != valueDimOrd.size()) {
@@ -1071,7 +1187,9 @@ static bool intersectStoreAxesWithValueAxes(memref::StoreOp storeOp, ArrayRef<in
 static bool transposeStoreVectorIfAxesDiffer(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
                                              ArrayRef<int> valueDimOrd, ArrayRef<int> intersectStoreDimOrder,
                                              Value &vectorValue) {
-  if (valueDimOrd == intersectStoreDimOrder) return true;
+  if (valueDimOrd == intersectStoreDimOrder) {
+    return true;
+  }
   SmallVector<int64_t> perm(intersectStoreDimOrder.size());
   for (unsigned rowIdx = 0; rowIdx < intersectStoreDimOrder.size(); ++rowIdx) {
     bool matched = false;
@@ -1097,7 +1215,9 @@ static bool transposeStoreVectorIfAxesDiffer(memref::StoreOp storeOp, LoopVector
 static bool rankLiftStoreVectorIfExtraIndices(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
                                               ArrayRef<int> storeDimOrder, ArrayRef<int> intersectStoreDimOrder,
                                               Value &vectorValue) {
-  if (storeDimOrder.size() <= intersectStoreDimOrder.size()) return true;
+  if (storeDimOrder.size() <= intersectStoreDimOrder.size()) {
+    return true;
+  }
   npuvector::NPUVectorType targetTy;
   SmallVector<int> resultDimToCtxAxis;
   if (failed(buildStoreTargetTypeForDimOrder(storeOp, storeDimOrder, ctx, targetTy, resultDimToCtxAxis))) {
@@ -1118,16 +1238,25 @@ static bool rankLiftStoreVectorIfExtraIndices(memref::StoreOp storeOp, LoopVecto
 static bool reorderStoreVectorForIndices(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
                                          ArrayRef<int> storeDimOrder, Value &vectorValue) {
   auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
-  if (!npuVecType) return true;
+  if (!npuVecType) {
+    return true;
+  }
   const int64_t vecRank = npuVecType.getRank();
-  if (!(vecRank > 1 || storeDimOrder.size() > 1)) return true;
+  if (vecRank <= 1 && storeDimOrder.size() <= 1) {
+    return true;
+  }
 
   SmallVector<int> valueDimOrd;
-  if (!validateMultiDimStoreValueAxes(storeOp, ctx, vectorValue, vecRank, storeDimOrder, valueDimOrd)) return false;
-  SmallVector<int> intersectStoreDimOrder;
-  if (!intersectStoreAxesWithValueAxes(storeOp, storeDimOrder, valueDimOrd, intersectStoreDimOrder)) return false;
-  if (!transposeStoreVectorIfAxesDiffer(storeOp, ctx, loc, valueDimOrd, intersectStoreDimOrder, vectorValue))
+  if (!validateMultiDimStoreValueAxes(storeOp, ctx, vectorValue, vecRank, storeDimOrder, valueDimOrd)) {
     return false;
+  }
+  SmallVector<int> intersectStoreDimOrder;
+  if (!intersectStoreAxesWithValueAxes(storeOp, storeDimOrder, valueDimOrd, intersectStoreDimOrder)) {
+    return false;
+  }
+  if (!transposeStoreVectorIfAxesDiffer(storeOp, ctx, loc, valueDimOrd, intersectStoreDimOrder, vectorValue)) {
+    return false;
+  }
   return rankLiftStoreVectorIfExtraIndices(storeOp, ctx, loc, storeDimOrder, intersectStoreDimOrder, vectorValue);
 }
 
@@ -1137,22 +1266,29 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
   SmallVector<int> storeDimOrder;
   for (Value idx : storeOp.getIndices()) {
     int dim = getVectorDimForIndex(idx, ctx);
-    if (dim >= 0) storeDimOrder.push_back(dim);
+    if (dim >= 0) {
+      storeDimOrder.push_back(dim);
+    }
   }
 
   Value storeValue = storeOp.getValue();
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
-  if (!ensureBroadcastStoreValue(storeOp, ctx, storeDimOrder, storeValue, vectorValue)) return;
+  if (!ensureBroadcastStoreValue(storeOp, ctx, storeDimOrder, storeValue, vectorValue)) {
+    return;
+  }
 
   SmallVector<Value> indices;
   indices.reserve(storeOp.getIndices().size());
   std::transform(storeOp.getIndices().begin(), storeOp.getIndices().end(), std::back_inserter(indices),
                  [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
 
-  if (!mlir::isa<npuvector::NPUVectorType>(vectorValue.getType()))
+  if (!mlir::isa<npuvector::NPUVectorType>(vectorValue.getType())) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
+  }
 
-  if (!reorderStoreVectorForIndices(storeOp, ctx, loc, storeDimOrder, vectorValue)) return;
+  if (!reorderStoreVectorForIndices(storeOp, ctx, loc, storeDimOrder, vectorValue)) {
+    return;
+  }
 
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
@@ -1181,8 +1317,10 @@ static bool pickHighestRankNpuVecType(const SmallVectorImpl<Value> &vecOperands,
   int64_t bestRank = -1;
   for (Value vo : vecOperands) {
     auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vo.getType());
-    if (!nvt) continue;
-    int64_t r = static_cast<int64_t>(nvt.getRank());
+    if (!nvt) {
+      continue;
+    }
+    auto r = static_cast<int64_t>(nvt.getRank());
     if (r > bestRank) {
       bestRank = r;
       outRefVecType = nvt;
@@ -1200,19 +1338,26 @@ static bool lookupPeerBroadcastAxes(Operation *arithOp, LoopVectorizationCtx &ct
                                     npuvector::NPUVectorType &refVecType, SmallVectorImpl<int> &outAxes) {
   outAxes.clear();
   const unsigned refRank = static_cast<unsigned>(refVecType.getRank());
+  if (refRank == 0) {
+    return true;
+  }
 
   llvm::SmallDenseSet<int> unionAxes;
   bool hasCompleteOrders = true;
   for (Value operand : vecOperands) {
     auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(operand.getType());
-    if (!nvt) continue;
+    if (!nvt) {
+      continue;
+    }
     auto it = ctx.valueDimOrder.find(operand);
     if (it == ctx.valueDimOrder.end() || it->second.size() != static_cast<unsigned>(nvt.getRank())) {
       hasCompleteOrders = false;
       break;
     }
     for (int axis : it->second) {
-      if (axis < 0 || static_cast<unsigned>(axis) >= ctx.allVectorSizes.size()) return false;
+      if (axis < 0 || static_cast<unsigned>(axis) >= ctx.allVectorSizes.size()) {
+        return false;
+      }
       unionAxes.insert(axis);
     }
   }
@@ -1228,10 +1373,14 @@ static bool lookupPeerBroadcastAxes(Operation *arithOp, LoopVectorizationCtx &ct
   }
 
   for (unsigned j = 0, e = vecOperands.size(); j < e; ++j) {
-    if (isScalarSlotOperand(j, scalarIndices)) continue;
+    if (isScalarSlotOperand(j, scalarIndices)) {
+      continue;
+    }
     Value vo = vecOperands[j];
     auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vo.getType());
-    if (!nvt || static_cast<unsigned>(nvt.getRank()) != refRank) continue;
+    if (!nvt || static_cast<unsigned>(nvt.getRank()) != refRank) {
+      continue;
+    }
     auto it = ctx.valueDimOrder.find(vo);
     if (it != ctx.valueDimOrder.end() && it->second.size() == refRank) {
       outAxes.assign(it->second.begin(), it->second.end());
@@ -1250,7 +1399,9 @@ static bool broadcastScalarSlotsToRef(SmallVectorImpl<Value> &vecOperands,
   npuvector::NPUVectorType target = haveRefVec ? refVecType : npuvector::NPUVectorType{};
   for (unsigned idx : scalarIndices) {
     Value broadcasted = vectorizeBroadcastScalar(vecOperands[idx], ctx, target, broadcastCtxAxes);
-    if (!broadcasted) return false;
+    if (!broadcasted) {
+      return false;
+    }
     vecOperands[idx] = broadcasted;
   }
   return true;
@@ -1258,14 +1409,20 @@ static bool broadcastScalarSlotsToRef(SmallVectorImpl<Value> &vecOperands,
 
 static bool alignOperandRanksToRef(SmallVectorImpl<Value> &vecOperands, npuvector::NPUVectorType refVecType,
                                    llvm::ArrayRef<int> broadcastCtxAxes, LoopVectorizationCtx &ctx) {
-  for (unsigned i = 0, e = vecOperands.size(); i != e; ++i) {
-    auto cur = mlir::dyn_cast<npuvector::NPUVectorType>(vecOperands[i].getType());
-    if (!cur) continue;
+  for (auto &vecOperand : vecOperands) {
+    auto cur = mlir::dyn_cast<npuvector::NPUVectorType>(vecOperand.getType());
+    if (!cur) {
+      continue;
+    }
     auto want = npuvector::NPUVectorType::get(refVecType.getShape(), cur.getElementType());
-    if (want == cur) continue;
-    Value aligned = vectorizeBroadcastScalar(vecOperands[i], ctx, refVecType, broadcastCtxAxes);
-    if (!aligned) return false;
-    vecOperands[i] = aligned;
+    if (want == cur) {
+      continue;
+    }
+    Value aligned = vectorizeBroadcastScalar(vecOperand, ctx, refVecType, broadcastCtxAxes);
+    if (!aligned) {
+      return false;
+    }
+    vecOperand = aligned;
   }
   return true;
 }
@@ -1296,20 +1453,30 @@ static void propagateValueDimOrderToFirstOperandWithOrder(LoopVectorizationCtx &
   auto resultNvt = mlir::dyn_cast<npuvector::NPUVectorType>(result.getType());
   const unsigned expectRank = resultNvt ? static_cast<unsigned>(resultNvt.getRank()) : 0;
   for (Value vo : vecOperands) {
-    if (!mlir::isa<npuvector::NPUVectorType>(vo.getType())) continue;
+    if (!mlir::isa<npuvector::NPUVectorType>(vo.getType())) {
+      continue;
+    }
     auto ordIter = ctx.valueDimOrder.find(vo);
-    if (ordIter == ctx.valueDimOrder.end()) continue;
+    if (ordIter == ctx.valueDimOrder.end()) {
+      continue;
+    }
     // Copy before operator[](result): inserting 'result' may rehash DenseMap and invalidate ordIter / references.
     SmallVector<int> orderCopy = ordIter->second;
-    if (orderCopy.empty()) continue;
-    if (expectRank != 0 && orderCopy.size() != expectRank) continue;
+    if (orderCopy.empty()) {
+      continue;
+    }
+    if (expectRank != 0 && orderCopy.size() != expectRank) {
+      continue;
+    }
     ctx.valueDimOrder[result] = std::move(orderCopy);
     break;
   }
 }
 
 static void reportVectorizeArithOpFailure(Operation *op, llvm::StringRef reason, const LoopVectorizationCtx &ctx) {
-  if (!ctx.vf1FuncLevelNoAnchor) return;
+  if (!ctx.vf1FuncLevelNoAnchor) {
+    return;
+  }
   emitError(op->getLoc()) << "npuvector-vectorize: vectorizeArithOp failed on '" << op->getName() << "': " << reason;
 }
 
@@ -1353,11 +1520,12 @@ static Value vectorizeArithOp(Operation *op, LoopVectorizationCtx &ctx) {
   }
 
   Operation *vecOp = createRenamedOrSameNameVecArith(op, loc, vecOperands, vecResultTypes, ctx);
-  if (!vecOp || vecOp->getNumResults() == 0) {
+  if ((vecOp == nullptr) || vecOp->getNumResults() == 0) {
     reportVectorizeArithOpFailure(op,
-                                  !vecOp ? "createRenamedOrSameNameVecArith returned null (unsupported op or "
-                                           "invalid vector operands/result types for this named op)"
-                                         : "createRenamedOrSameNameVecArith produced op with zero results",
+                                  (vecOp == nullptr)
+                                    ? "createRenamedOrSameNameVecArith returned null (unsupported op or "
+                                      "invalid vector operands/result types for this named op)"
+                                    : "createRenamedOrSameNameVecArith produced op with zero results",
                                   ctx);
     return nullptr;
   }
@@ -1367,47 +1535,73 @@ static Value vectorizeArithOp(Operation *op, LoopVectorizationCtx &ctx) {
   return vecResult;
 }
 
+static int64_t findDestDimForGlobalCtxAxis(llvm::ArrayRef<int> resultDimToCtxAxis, int64_t dstRank, int globalCtxAxis) {
+  if (static_cast<size_t>(dstRank) != resultDimToCtxAxis.size()) {
+    return -1;
+  }
+  for (int64_t resultDim = 0; resultDim < dstRank; ++resultDim) {
+    if (resultDimToCtxAxis[static_cast<unsigned>(resultDim)] == globalCtxAxis) {
+      return resultDim;
+    }
+  }
+  return -1;
+}
+
 static bool resolveBroadcastSrcToDestAxes(Value sourceVal, const LoopVectorizationCtx &ctx,
                                           llvm::ArrayRef<int> resultDimToCtxAxis, int64_t dstRank,
                                           SmallVectorImpl<int64_t> &outAxes) {
   outAxes.clear();
   auto srcNvt = mlir::dyn_cast<npuvector::NPUVectorType>(sourceVal.getType());
-  if (!srcNvt) return false;
-  const int64_t srcRank = static_cast<int64_t>(srcNvt.getRank());
-  if (srcRank <= 0 || srcRank >= dstRank) return false;
+  if (!srcNvt) {
+    return false;
+  }
+  const auto srcRank = static_cast<int64_t>(srcNvt.getRank());
+  if (srcRank <= 0 || srcRank >= dstRank) {
+    return false;
+  }
 
   auto orderIter = ctx.valueDimOrder.find(sourceVal);
-  if (orderIter == ctx.valueDimOrder.end()) return false;
+  if (orderIter == ctx.valueDimOrder.end()) {
+    return false;
+  }
   const SmallVector<int> &srcDimToGlobalAxis = orderIter->second;
-  if (static_cast<int64_t>(srcDimToGlobalAxis.size()) != srcRank) return false;
+  if (static_cast<int64_t>(srcDimToGlobalAxis.size()) != srcRank) {
+    return false;
+  }
 
-  const unsigned ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
-  if (dstRank > static_cast<int64_t>(ctxRank)) return false;
+  const auto ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
+  if (dstRank > static_cast<int64_t>(ctxRank)) {
+    return false;
+  }
   const unsigned ctxOff = ctxRank - static_cast<unsigned>(dstRank);
 
   llvm::SmallDenseSet<int64_t> usedDestDim;
   for (int64_t srcDim = 0; srcDim < srcRank; ++srcDim) {
     const int globalCtxAxis = srcDimToGlobalAxis[static_cast<unsigned>(srcDim)];
-    if (globalCtxAxis < 0 || static_cast<unsigned>(globalCtxAxis) >= ctxRank) return false;
+    if (globalCtxAxis < 0 || static_cast<unsigned>(globalCtxAxis) >= ctxRank) {
+      return false;
+    }
 
     int64_t destDim = -1;
     if (!resultDimToCtxAxis.empty()) {
-      if (static_cast<size_t>(dstRank) != resultDimToCtxAxis.size()) return false;
-      for (int64_t resultDim = 0; resultDim < dstRank; ++resultDim) {
-        if (resultDimToCtxAxis[static_cast<unsigned>(resultDim)] == globalCtxAxis) {
-          destDim = resultDim;
-          break;
-        }
-      }
+      destDim = findDestDimForGlobalCtxAxis(resultDimToCtxAxis, dstRank, globalCtxAxis);
     } else {
-      const unsigned axisUnsigned = static_cast<unsigned>(globalCtxAxis);
-      if (axisUnsigned < ctxOff) return false;
+      const auto axisUnsigned = static_cast<unsigned>(globalCtxAxis);
+      if (axisUnsigned < ctxOff) {
+        return false;
+      }
       const unsigned relative = axisUnsigned - ctxOff;
-      if (relative >= static_cast<unsigned>(dstRank)) return false;
+      if (relative >= static_cast<unsigned>(dstRank)) {
+        return false;
+      }
       destDim = static_cast<int64_t>(relative);
     }
-    if (destDim < 0) return false;
-    if (!usedDestDim.insert(destDim).second) return false;
+    if (destDim < 0) {
+      return false;
+    }
+    if (!usedDestDim.insert(destDim).second) {
+      return false;
+    }
     outAxes.push_back(destDim);
   }
   return static_cast<int64_t>(outAxes.size()) == srcRank;
@@ -1421,12 +1615,15 @@ static bool gatherBroadcastExtentOperands(Location loc, LoopVectorizationCtx &ct
   maxSizes.reserve(outRank);
   for (unsigned i = 0; i < outRank; ++i) {
     unsigned axisIdx = resultDimToCtxAxis.empty() ? (ctxOff + i) : static_cast<unsigned>(resultDimToCtxAxis[i]);
-    if (!resultDimToCtxAxis.empty() && axisIdx >= ctxRank) return false;
+    if (!resultDimToCtxAxis.empty() && axisIdx >= ctxRank) {
+      return false;
+    }
     maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[axisIdx]));
-    if (ctx.allVectorSizeValues[axisIdx])
+    if (ctx.allVectorSizeValues[axisIdx]) {
       dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[axisIdx]));
-    else
+    } else {
       dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[axisIdx]));
+    }
   }
   return true;
 }
@@ -1435,7 +1632,9 @@ static bool resolveRankLiftBroadcastAxes(Location loc, Value scalarVal, LoopVect
                                          llvm::ArrayRef<int> resultDimToCtxAxis, int64_t srcRank, int64_t dstRank,
                                          SmallVectorImpl<int64_t> &dimAxes) {
   mergeAncestorValueDimOrderMissingKeys(ctx);
-  if (resolveBroadcastSrcToDestAxes(scalarVal, ctx, resultDimToCtxAxis, dstRank, dimAxes)) return true;
+  if (resolveBroadcastSrcToDestAxes(scalarVal, ctx, resultDimToCtxAxis, dstRank, dimAxes)) {
+    return true;
+  }
   if (Operation *defOp = scalarVal.getDefiningOp()) {
     emitError(defOp->getLoc()) << "npuvector-vectorize: cannot infer npuvector.broadcast `dimension` for rank lift ("
                                << srcRank << "D -> " << dstRank
@@ -1453,15 +1652,18 @@ static bool resolveRankLiftBroadcastAxes(Location loc, Value scalarVal, LoopVect
 static Value vectorizeBroadcastScalar(Value scalarVal, LoopVectorizationCtx &ctx, npuvector::NPUVectorType targetType,
                                       llvm::ArrayRef<int> resultDimToCtxAxis) {
   Type elemType;
-  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType()))
+  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType())) {
     elemType = nvt.getElementType();
-  else
+  } else {
     elemType = scalarVal.getType();
+  }
 
   if (mlir::isa<npuvector::NPUVectorType>(scalarVal.getType())) {
     if (targetType) {
       auto want = npuvector::NPUVectorType::get(targetType.getShape(), elemType);
-      if (want == scalarVal.getType()) return scalarVal;
+      if (want == scalarVal.getType()) {
+        return scalarVal;
+      }
     } else {
       return scalarVal;
     }
@@ -1472,24 +1674,31 @@ static Value vectorizeBroadcastScalar(Value scalarVal, LoopVectorizationCtx &ctx
   npuvector::NPUVectorType vecType =
     targetType ? npuvector::NPUVectorType::get(targetType.getShape(), elemType) : ctx.getVectorType(elemType);
 
-  const unsigned outRank = static_cast<unsigned>(vecType.getRank());
-  const unsigned ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
-  if (outRank > ctxRank) return Value();
-  if (!resultDimToCtxAxis.empty() && resultDimToCtxAxis.size() != outRank) return Value();
+  const auto outRank = static_cast<unsigned>(vecType.getRank());
+  const auto ctxRank = static_cast<unsigned>(ctx.allVectorSizes.size());
+  if (outRank > ctxRank) {
+    return {};
+  }
+  if (!resultDimToCtxAxis.empty() && resultDimToCtxAxis.size() != outRank) {
+    return {};
+  }
 
   SmallVector<Value> dynamicSizes;
   SmallVector<Value> maxSizes;
-  if (!gatherBroadcastExtentOperands(loc, ctx, outRank, ctxRank, resultDimToCtxAxis, dynamicSizes, maxSizes))
-    return Value();
+  if (!gatherBroadcastExtentOperands(loc, ctx, outRank, ctxRank, resultDimToCtxAxis, dynamicSizes, maxSizes)) {
+    return {};
+  }
 
-  const int64_t dstRank = static_cast<int64_t>(vecType.getRank());
+  const auto dstRank = static_cast<int64_t>(vecType.getRank());
   int64_t srcRank = 0;
-  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType()))
+  if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(scalarVal.getType())) {
     srcRank = static_cast<int64_t>(nvt.getRank());
+  }
   SmallVector<int64_t> dimAxes;
   if (srcRank > 0 && srcRank < dstRank &&
-      !resolveRankLiftBroadcastAxes(loc, scalarVal, ctx, resultDimToCtxAxis, srcRank, dstRank, dimAxes))
-    return Value();
+      !resolveRankLiftBroadcastAxes(loc, scalarVal, ctx, resultDimToCtxAxis, srcRank, dstRank, dimAxes)) {
+    return {};
+  }
 
   DenseI64ArrayAttr dimAttr = ctx.builder.getDenseI64ArrayAttr(dimAxes);
   auto broadcast = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, scalarVal, ValueRange(dynamicSizes),
@@ -1505,7 +1714,9 @@ static void cloneScalarOp(Operation &op, LoopVectorizationCtx &ctx) {
   OpBuilder::InsertionGuard guard(ctx.builder);
 
   IRMapping mapper;
-  for (const auto &kv : ctx.valueMapping.getValueMap()) mapper.map(kv.first, kv.second);
+  for (const auto &kv : ctx.valueMapping.getValueMap()) {
+    mapper.map(kv.first, kv.second);
+  }
 
   Operation *clonedOp = ctx.builder.clone(op, mapper);
 
@@ -1516,8 +1727,9 @@ static void cloneScalarOp(Operation &op, LoopVectorizationCtx &ctx) {
     clonedOp->setOperand(idx, mappedValue);
   }
 
-  for (unsigned i = 0, e = op.getNumResults(); i != e; ++i)
+  for (unsigned i = 0, e = op.getNumResults(); i != e; ++i) {
     ctx.valueMapping.map(op.getResult(i), clonedOp->getResult(i));
+  }
 }
 
 static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx);
@@ -1529,7 +1741,9 @@ static int64_t signedDivEuclidean(int64_t numerator, int64_t denominator, Signed
   const int64_t quotient = numerator / denominator;
   const int64_t remainder = numerator % denominator;
   if (kind == SignedEuclideanDivKind::FloorTowardNegInfinity) {
-    if (remainder != 0 && ((remainder > 0) != (denominator > 0))) return quotient - 1;
+    if (remainder != 0 && ((remainder > 0) != (denominator > 0))) {
+      return quotient - 1;
+    }
   } else if (remainder != 0 && ((remainder > 0) == (denominator > 0))) {
     return quotient + 1;
   }
@@ -1560,8 +1774,12 @@ static void markCompareSliceFullLineUnconstrained(CompareSliceBounds &result) {
 }
 
 static void clampNonnegativeBounds(CompareSliceBounds &bounds) {
-  if (!bounds.recognized || bounds.predicateEmptyOnIntegers) return;
-  if (bounds.hasFiniteLowerInclusive && bounds.lowerInclusive < 0) bounds.lowerInclusive = 0;
+  if (!bounds.recognized || bounds.predicateEmptyOnIntegers) {
+    return;
+  }
+  if (bounds.hasFiniteLowerInclusive && bounds.lowerInclusive < 0) {
+    bounds.lowerInclusive = 0;
+  }
   if (bounds.hasFiniteLowerInclusive && bounds.hasFiniteUpperExclusive &&
       bounds.lowerInclusive >= bounds.upperExclusive) {
     bounds.predicateEmptyOnIntegers = true;
@@ -1696,34 +1914,39 @@ static CompareSliceBounds fillZeroCoefficientCompare(arith::CmpIPredicate effect
   const int64_t lhsConstant = b;
   switch (effectivePredicate) {
     case arith::CmpIPredicate::eq:
-      if (lhsConstant == R)
+      if (lhsConstant == R) {
         markCompareSliceFullLineUnconstrained(result);
-      else
+      } else {
         markCompareSliceEmptyOnIntegers(result);
+      }
       return result;
     case arith::CmpIPredicate::slt:
-      if (lhsConstant < R)
+      if (lhsConstant < R) {
         markCompareSliceFullLineUnconstrained(result);
-      else
+      } else {
         markCompareSliceEmptyOnIntegers(result);
+      }
       return result;
     case arith::CmpIPredicate::sle:
-      if (lhsConstant <= R)
+      if (lhsConstant <= R) {
         markCompareSliceFullLineUnconstrained(result);
-      else
+      } else {
         markCompareSliceEmptyOnIntegers(result);
+      }
       return result;
     case arith::CmpIPredicate::sgt:
-      if (lhsConstant > R)
+      if (lhsConstant > R) {
         markCompareSliceFullLineUnconstrained(result);
-      else
+      } else {
         markCompareSliceEmptyOnIntegers(result);
+      }
       return result;
     case arith::CmpIPredicate::sge:
-      if (lhsConstant >= R)
+      if (lhsConstant >= R) {
         markCompareSliceFullLineUnconstrained(result);
-      else
+      } else {
         markCompareSliceEmptyOnIntegers(result);
+      }
       return result;
     default:
       return result;
@@ -1739,7 +1962,9 @@ static CompareSliceBounds deriveLinearCompareBounds(arith::CmpIPredicate origina
   result.hasFiniteLowerInclusive = false;
   result.hasFiniteUpperExclusive = false;
 
-  if (originalPredicate == arith::CmpIPredicate::ne) return result;
+  if (originalPredicate == arith::CmpIPredicate::ne) {
+    return result;
+  }
 
   arith::CmpIPredicate effectivePredicate = originalPredicate;
   const int64_t a = linearCoefficientOfInductionVar;
@@ -1748,7 +1973,9 @@ static CompareSliceBounds deriveLinearCompareBounds(arith::CmpIPredicate origina
 
   if (originalPredicate == arith::CmpIPredicate::ult || originalPredicate == arith::CmpIPredicate::ule ||
       originalPredicate == arith::CmpIPredicate::ugt || originalPredicate == arith::CmpIPredicate::uge) {
-    if (a < 0 || b < 0 || R < 0) return result;
+    if (a < 0 || b < 0 || R < 0) {
+      return result;
+    }
     switch (originalPredicate) {
       case arith::CmpIPredicate::uge:
         effectivePredicate = arith::CmpIPredicate::sge;
@@ -1770,9 +1997,13 @@ static CompareSliceBounds deriveLinearCompareBounds(arith::CmpIPredicate origina
   const int64_t K = R - b;
   const int64_t kMin = std::numeric_limits<int64_t>::min();
   const int64_t kMax = std::numeric_limits<int64_t>::max();
-  if (a == -1 && (K == kMin || K == kMax)) return result;
+  if (a == -1 && (K == kMin || K == kMax)) {
+    return result;
+  }
 
-  if (a == 0) return fillZeroCoefficientCompare(effectivePredicate, b, R);
+  if (a == 0) {
+    return fillZeroCoefficientCompare(effectivePredicate, b, R);
+  }
 
   dispatchNonzeroCompare(effectivePredicate, a, K, kMin, kMax, result);
   return result;
@@ -1794,27 +2025,41 @@ static bool decomposeAffineOneDimension(AffineExpr affineExpr, int64_t &coeffici
     return true;
   }
   if (auto dimExpr = dyn_cast<AffineDimExpr>(affineExpr)) {
-    if (dimExpr.getPosition() != 0) return false;
+    if (dimExpr.getPosition() != 0) {
+      return false;
+    }
     coefficientOfDim0 = 1;
     return true;
   }
   auto binaryExpr = dyn_cast<AffineBinaryOpExpr>(affineExpr);
-  if (!binaryExpr) return false;
+  if (!binaryExpr) {
+    return false;
+  }
   if (binaryExpr.getKind() == AffineExprKind::Add) {
-    int64_t leftCoeff = 0, leftConst = 0, rightCoeff = 0, rightConst = 0;
+    int64_t leftCoeff = 0;
+    int64_t leftConst = 0;
+    int64_t rightCoeff = 0;
+    int64_t rightConst = 0;
     if (!decomposeAffineBinaryChildren(binaryExpr.getLHS(), binaryExpr.getRHS(), leftCoeff, leftConst, rightCoeff,
-                                       rightConst))
+                                       rightConst)) {
       return false;
+    }
     coefficientOfDim0 = leftCoeff + rightCoeff;
     constantOffset = leftConst + rightConst;
     return true;
   }
   if (binaryExpr.getKind() == AffineExprKind::Mul) {
-    int64_t leftCoeff = 0, leftConst = 0, rightCoeff = 0, rightConst = 0;
+    int64_t leftCoeff = 0;
+    int64_t leftConst = 0;
+    int64_t rightCoeff = 0;
+    int64_t rightConst = 0;
     if (!decomposeAffineBinaryChildren(binaryExpr.getLHS(), binaryExpr.getRHS(), leftCoeff, leftConst, rightCoeff,
-                                       rightConst))
+                                       rightConst)) {
       return false;
-    if (leftCoeff != 0 && rightCoeff != 0) return false;
+    }
+    if (leftCoeff != 0 && rightCoeff != 0) {
+      return false;
+    }
     coefficientOfDim0 = leftCoeff * rightConst + rightCoeff * leftConst;
     constantOffset = leftConst * rightConst;
     return true;
@@ -1828,10 +2073,16 @@ static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSs
   worklist.push_back(conditionSsaValue);
   while (!worklist.empty()) {
     Value current = worklist.pop_back_val();
-    if (current == targetSsaValue) return true;
-    if (!visited.insert(current).second) continue;
+    if (current == targetSsaValue) {
+      return true;
+    }
+    if (!visited.insert(current).second) {
+      continue;
+    }
     Operation *definingOp = current.getDefiningOp();
-    if (!definingOp) continue;
+    if (definingOp == nullptr) {
+      continue;
+    }
     worklist.insert(worklist.end(), definingOp->operand_begin(), definingOp->operand_end());
   }
   return false;
@@ -1840,7 +2091,9 @@ static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSs
 static LogicalResult vectorizeRegionBodyOnly(Region &region, LoopVectorizationCtx &ctx) {
   Block *block = &region.front();
   for (Operation &op : block->without_terminator()) {
-    if (failed(vectorizeOneOp(op, ctx))) return failure();
+    if (failed(vectorizeOneOp(op, ctx))) {
+      return failure();
+    }
   }
   return success();
 }
@@ -1861,14 +2114,16 @@ static bool emitIfSlice(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc,
   OpBuilder &opBuilder = ctx.builder;
   int sliceAxisDimI = ctx.getVectorDimForIV(inductionVar);
   unsigned dimForTileOnSliceAxis;
-  if (sliceAxisDimI >= 0)
+  if (sliceAxisDimI >= 0) {
     dimForTileOnSliceAxis = static_cast<unsigned>(sliceAxisDimI);
-  else if (!ctx.allVectorSizeValues.empty())
+  } else if (!ctx.allVectorSizeValues.empty()) {
     dimForTileOnSliceAxis = static_cast<unsigned>(ctx.allVectorSizeValues.size() - 1U);
-  else
+  } else {
     return false;
-  if (dimForTileOnSliceAxis >= ctx.allVectorSizeValues.size() || dimForTileOnSliceAxis >= ctx.allVectorSizes.size())
+  }
+  if (dimForTileOnSliceAxis >= ctx.allVectorSizeValues.size() || dimForTileOnSliceAxis >= ctx.allVectorSizes.size()) {
     return false;
+  }
 
   Value tileLowerBoundOnVectorAxis = ctx.valueMapping.lookupOrDefault(inductionVar);
   Value vectorExtentAlongAxisForThisTile;
@@ -1928,28 +2183,34 @@ static bool emitIfSliceWithElse(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Locat
   OpBuilder &b = ctx.builder;
   int axisDimI = ctx.getVectorDimForIV(inductionVar);
   unsigned dTile;
-  if (axisDimI >= 0)
+  if (axisDimI >= 0) {
     dTile = static_cast<unsigned>(axisDimI);
-  else if (!ctx.allVectorSizeValues.empty())
+  } else if (!ctx.allVectorSizeValues.empty()) {
     dTile = static_cast<unsigned>(ctx.allVectorSizeValues.size() - 1U);
-  else
+  } else {
     return false;
-  if (dTile >= ctx.allVectorSizeValues.size() || dTile >= ctx.allVectorSizes.size()) return false;
+  }
+  if (dTile >= ctx.allVectorSizeValues.size() || dTile >= ctx.allVectorSizes.size()) {
+    return false;
+  }
 
   Value tileLb = ctx.valueMapping.lookupOrDefault(inductionVar);
   Value tileVF;
-  if (ctx.allVectorSizeValues[dTile])
+  if (ctx.allVectorSizeValues[dTile]) {
     tileVF = ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[dTile]);
-  else
+  } else {
     tileVF = b.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[dTile]);
+  }
   Value tileUb = createAffineAdd(b, loc, tileLb, tileVF);
 
   Value thenSliceLb = tileLb;
-  if (sliceBounds.hasFiniteLowerInclusive)
+  if (sliceBounds.hasFiniteLowerInclusive) {
     thenSliceLb = createAffineMaxWithConstant(b, loc, tileLb, sliceBounds.lowerInclusive);
+  }
   Value thenSliceUb = tileUb;
-  if (sliceBounds.hasFiniteUpperExclusive)
+  if (sliceBounds.hasFiniteUpperExclusive) {
     thenSliceUb = createAffineMinWithConstant(b, loc, tileUb, sliceBounds.upperExclusive);
+  }
   thenSliceUb = createAffineMax(b, loc, thenSliceUb, thenSliceLb);
   Value thenLen = createAffineSub(b, loc, thenSliceUb, thenSliceLb);
 
@@ -2018,28 +2279,42 @@ static bool emitIfSliceWithElse(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Locat
 
 static bool tryRecognizeIVDependentSlice(Value condition, Value inductionVar, CompareSliceBounds &sliceBounds) {
   auto compareIntegerOp = condition.getDefiningOp<arith::CmpIOp>();
-  if (!compareIntegerOp) return false;
+  if (!compareIntegerOp) {
+    return false;
+  }
   auto rhsConst = tryConstantIndex(compareIntegerOp.getRhs());
-  if (!rhsConst) return false;
+  if (!rhsConst) {
+    return false;
+  }
   auto affineApplyOp = compareIntegerOp.getLhs().getDefiningOp<affine::AffineApplyOp>();
-  if (!affineApplyOp) return false;
+  if (!affineApplyOp) {
+    return false;
+  }
   AffineMap affineMap = affineApplyOp.getAffineMap();
   if (affineMap.getNumDims() != 1 || affineMap.getNumSymbols() != 0 || affineMap.getNumResults() != 1 ||
-      affineApplyOp.getDimOperands().size() != 1 || affineApplyOp.getDimOperands()[0] != inductionVar)
+      affineApplyOp.getDimOperands().size() != 1 || affineApplyOp.getDimOperands()[0] != inductionVar) {
     return false;
-  int64_t coeff = 0, offset = 0;
-  if (!decomposeAffineOneDimension(affineMap.getResult(0), coeff, offset)) return false;
+  }
+  int64_t coeff = 0;
+  int64_t offset = 0;
+  if (!decomposeAffineOneDimension(affineMap.getResult(0), coeff, offset)) {
+    return false;
+  }
   sliceBounds = deriveLinearCompareBounds(compareIntegerOp.getPredicate(), coeff, offset, *rhsConst);
   return sliceBounds.recognized;
 }
 
 static memref::StoreOp findUniqueStoreConsumer(scf::IfOp ifOp) {
-  if (ifOp.getNumResults() != 1) return nullptr;
+  if (ifOp.getNumResults() != 1) {
+    return nullptr;
+  }
   Value result = ifOp.getResult(0);
   memref::StoreOp consumer = nullptr;
   for (Operation *user : result.getUsers()) {
     auto store = dyn_cast<memref::StoreOp>(user);
-    if (!store || consumer) return nullptr;
+    if (!store || consumer) {
+      return nullptr;
+    }
     consumer = store;
   }
   return consumer;
@@ -2092,15 +2367,20 @@ static bool emitIfWithElseAndStoreNoSlice(scf::IfOp ifOp, LoopVectorizationCtx &
 
 static Value resolveIfDependentIV(Value condition, LoopVectorizationCtx &ctx) {
   Value currentIV = ctx.scalarLoop.getInductionVar();
-  if (hasVectorizationAttr(ctx.scalarLoop.getOperation()) && definitionGraphContainsValue(condition, currentIV))
+  if (hasVectorizationAttr(ctx.scalarLoop.getOperation()) && definitionGraphContainsValue(condition, currentIV)) {
     return currentIV;
+  }
   for (auto &[loopOp, dimIgnored] : ctx.allLoopToVectorDim) {
     (void)dimIgnored;
     auto ancestorFor = dyn_cast<scf::ForOp>(loopOp);
-    if (!ancestorFor || ancestorFor == ctx.scalarLoop) continue;
-    if (definitionGraphContainsValue(condition, ancestorFor.getInductionVar())) return ancestorFor.getInductionVar();
+    if (!ancestorFor || ancestorFor == ctx.scalarLoop) {
+      continue;
+    }
+    if (definitionGraphContainsValue(condition, ancestorFor.getInductionVar())) {
+      return ancestorFor.getInductionVar();
+    }
   }
-  return Value();
+  return {};
 }
 
 static Value vectorizeIfElseWithVectorResults(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc,
@@ -2137,20 +2417,27 @@ static IvDependentIfRewrite rewriteIvDependentIfSlices(scf::IfOp ifOp, LoopVecto
                                                        Value dependentIV, Value condition, bool hasElse,
                                                        bool hasResults) {
   CompareSliceBounds sliceBounds{};
-  if (!tryRecognizeIVDependentSlice(condition, dependentIV, sliceBounds)) return IvDependentIfRewrite::None;
+  if (!tryRecognizeIVDependentSlice(condition, dependentIV, sliceBounds)) {
+    return IvDependentIfRewrite::None;
+  }
   if (hasElse && hasResults) {
     memref::StoreOp consumer = findUniqueStoreConsumer(ifOp);
-    if (!consumer) return IvDependentIfRewrite::Failed;
-    if (!emitIfSliceWithElse(ifOp, ctx, loc, dependentIV, sliceBounds, consumer)) return IvDependentIfRewrite::Failed;
+    if (!consumer) {
+      return IvDependentIfRewrite::Failed;
+    }
+    if (!emitIfSliceWithElse(ifOp, ctx, loc, dependentIV, sliceBounds, consumer)) {
+      return IvDependentIfRewrite::Failed;
+    }
     return IvDependentIfRewrite::Finished;
   }
   if (!hasElse && !hasResults) {
-    if (!emitIfSlice(ifOp, ctx, loc, dependentIV, sliceBounds)) return IvDependentIfRewrite::Failed;
+    if (!emitIfSlice(ifOp, ctx, loc, dependentIV, sliceBounds)) {
+      return IvDependentIfRewrite::Failed;
+    }
     return IvDependentIfRewrite::Finished;
   }
   return IvDependentIfRewrite::None;
 }
-
 static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   Location loc = ifOp.getLoc();
   Value condition = ifOp.getCondition();
@@ -2158,12 +2445,15 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   bool hasResults = ifOp.getNumResults() > 0;
 
   Value dependentIV = resolveIfDependentIV(condition, ctx);
-
   if (dependentIV) {
     IvDependentIfRewrite ivRewrite =
       rewriteIvDependentIfSlices(ifOp, ctx, loc, dependentIV, condition, hasElse, hasResults);
-    if (ivRewrite == IvDependentIfRewrite::Failed) return nullptr;
-    if (ivRewrite == IvDependentIfRewrite::Finished) return Value();
+    if (ivRewrite == IvDependentIfRewrite::Failed) {
+      return nullptr;
+    }
+    if (ivRewrite == IvDependentIfRewrite::Finished) {
+      return {};
+    }
   }
 
   // Non-IV-dependent + else + results: prefer `transfer_write` absorption (no npuvector if
@@ -2171,14 +2461,20 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   // `scf.if` that yields npuvector (e.g. tail `if` feeding `npuvector.broadcast` on the result).
   if (hasElse && hasResults && !dependentIV) {
     Value vecCondition = ctx.valueMapping.lookupOrNull(condition);
-    if (!vecCondition) vecCondition = condition;
+    if (!vecCondition) {
+      vecCondition = condition;
+    }
     if (memref::StoreOp consumer = findUniqueStoreConsumer(ifOp)) {
-      if (emitIfWithElseAndStoreNoSlice(ifOp, ctx, loc, vecCondition, consumer)) return Value();
+      if (emitIfWithElseAndStoreNoSlice(ifOp, ctx, loc, vecCondition, consumer)) {
+        return {};
+      }
     }
     return vectorizeIfElseWithVectorResults(ifOp, ctx, loc, vecCondition);
   }
 
-  if (hasElse || hasResults) return nullptr;
+  if (hasElse || hasResults) {
+    return nullptr;
+  }
 
   Value vecCondition = ctx.valueMapping.lookupOrNull(condition);
   if (!vecCondition) {
@@ -2199,7 +2495,7 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
 
   ctx.builder.setInsertionPointAfter(vecIfOp);
 
-  return Value();
+  return {};
 }
 
 static LogicalResult handleConstantOp(arith::ConstantOp constOp, LoopVectorizationCtx &ctx) {
@@ -2208,7 +2504,9 @@ static LogicalResult handleConstantOp(arith::ConstantOp constOp, LoopVectorizati
 }
 
 static bool allOperandsNonNpuVector(Operation &op, LoopVectorizationCtx &ctx) {
-  if (op.getNumOperands() == 0) return false;
+  if (op.getNumOperands() == 0) {
+    return false;
+  }
   return llvm::all_of(op.getOperands(), [&](Value opnd) {
     Value v = ctx.valueMapping.lookupOrDefault(opnd);
     return !mlir::isa<npuvector::NPUVectorType>(v.getType());
@@ -2243,9 +2541,7 @@ static LogicalResult handleArithOrMathOp(Operation &op, LoopVectorizationCtx &ct
   if (!vecValue) {
     return failure();
   }
-
   ctx.valueMapping.map(op.getResult(0), vecValue);
-
   return success();
 }
 
@@ -2254,7 +2550,9 @@ static LogicalResult handleIfOp(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
 
   if (!vecIfResult && ifOp.getNumResults() > 0) {
     memref::StoreOp consumer = findUniqueStoreConsumer(ifOp);
-    if (consumer && ctx.absorbedOps.contains(consumer.getOperation())) return success();
+    if (consumer && ctx.absorbedOps.contains(consumer.getOperation())) {
+      return success();
+    }
     return failure();
   }
 
@@ -2291,15 +2589,18 @@ static void updateNestedLoopOperands(scf::ForOp nestedForOp, LoopVectorizationCt
 
 static void mergeChildValueDimOrderIntoParent(const LoopVectorizationCtx &child, LoopVectorizationCtx &parentCtx) {
   for (const auto &kv : child.valueDimOrder) {
-    if (parentCtx.valueDimOrder.find(kv.first) == parentCtx.valueDimOrder.end())
+    if (parentCtx.valueDimOrder.find(kv.first) == parentCtx.valueDimOrder.end()) {
       parentCtx.valueDimOrder[kv.first] = kv.second;
+    }
   }
 }
 
 static void mergeAncestorValueDimOrderMissingKeys(LoopVectorizationCtx &ctx) {
-  for (LoopVectorizationCtx *ancestor = ctx.parent; ancestor; ancestor = ancestor->parent) {
+  for (LoopVectorizationCtx *ancestor = ctx.parent; ancestor != nullptr; ancestor = ancestor->parent) {
     for (const auto &kv : ancestor->valueDimOrder) {
-      if (ctx.valueDimOrder.find(kv.first) == ctx.valueDimOrder.end()) ctx.valueDimOrder[kv.first] = kv.second;
+      if (ctx.valueDimOrder.find(kv.first) == ctx.valueDimOrder.end()) {
+        ctx.valueDimOrder[kv.first] = kv.second;
+      }
     }
   }
 }
@@ -2307,10 +2608,14 @@ static void mergeAncestorValueDimOrderMissingKeys(LoopVectorizationCtx &ctx) {
 static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationCtx &parentCtx) {
   if (child.mode == VectorizationMode::Elementwise) {
     for (const auto &kv : child.valueMapping.getValueMap()) {
-      if (!parentCtx.valueMapping.lookupOrNull(kv.first)) parentCtx.valueMapping.map(kv.first, kv.second);
+      if (!parentCtx.valueMapping.lookupOrNull(kv.first)) {
+        parentCtx.valueMapping.map(kv.first, kv.second);
+      }
     }
     mergeChildValueDimOrderIntoParent(child, parentCtx);
-    for (const auto &kv : child.allocBypass) parentCtx.allocBypass[kv.first] = kv.second;
+    for (const auto &kv : child.allocBypass) {
+      parentCtx.allocBypass[kv.first] = kv.second;
+    }
     return;
   }
 
@@ -2325,7 +2630,9 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
       // finalizeReductionY / finalize may `replaceAllUsesWith(scalarResult, vecResult)` before
       // parent walks remaining ops; users then hold vecResult directly. Parent lookup must resolve
       // vecResult as well (IRMapping only had scalarResult -> vecResult as key).
-      if (!parentCtx.valueMapping.lookupOrNull(vecResult)) parentCtx.valueMapping.map(vecResult, vecResult);
+      if (!parentCtx.valueMapping.lookupOrNull(vecResult)) {
+        parentCtx.valueMapping.map(vecResult, vecResult);
+      }
     }
     mergeChildValueDimOrderIntoParent(child, parentCtx);
   }
@@ -2334,7 +2641,6 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
 static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorizationCtx &ctx) {
   int64_t nestedMaxStep = -1;
   VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
-
   if (nestedMode == VectorizationMode::None || nestedMaxStep <= 0) {
     cloneScalarOp(*nestedForOp.getOperation(), ctx);
     return success();
@@ -2389,14 +2695,18 @@ static LogicalResult vectorizeMemrefLoadLike(memref::LoadOp loadOp, LoopVectoriz
   Value memRef = loadOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
   auto bypassIt = ctx.allocBypass.find(mappedMemRef);
-  if (bypassIt == ctx.allocBypass.end()) bypassIt = ctx.allocBypass.find(memRef);
+  if (bypassIt == ctx.allocBypass.end()) {
+    bypassIt = ctx.allocBypass.find(memRef);
+  }
   if (bypassIt != ctx.allocBypass.end() && bypassIt->second) {
     ctx.valueMapping.map(loadOp.getResult(), bypassIt->second);
     return success();
   }
 
   Value vecValue = vectorizeLoad(loadOp, ctx);
-  if (!vecValue) return failure();
+  if (!vecValue) {
+    return failure();
+  }
   ctx.valueMapping.map(loadOp.getResult(), vecValue);
   return success();
 }
@@ -2405,18 +2715,24 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
   auto bypassIt = ctx.allocBypass.find(mappedMemRef);
-  if (bypassIt == ctx.allocBypass.end()) bypassIt = ctx.allocBypass.find(memRef);
+  if (bypassIt == ctx.allocBypass.end()) {
+    bypassIt = ctx.allocBypass.find(memRef);
+  }
   if (bypassIt != ctx.allocBypass.end()) {
     Value storeValue = storeOp.getValue();
     Value vecVal = ctx.valueMapping.lookupOrNull(storeValue);
-    if (vecVal) bypassIt->second = vecVal;
+    if (vecVal) {
+      bypassIt->second = vecVal;
+    }
     return success();
   }
 
   if (!ctx.vf1FuncLevelNoAnchor) {
     bool hasVectorDim =
       llvm::any_of(storeOp.getIndices(), [&](Value idx) { return getVectorDimForIndex(idx, ctx) >= 0; });
-    if (!hasVectorDim) {
+    Value mappedStoreValue = ctx.valueMapping.lookupOrNull(storeOp.getValue());
+    bool hasMappedVectorValue = mappedStoreValue && mlir::isa<npuvector::NPUVectorType>(mappedStoreValue.getType());
+    if (!hasVectorDim && !hasMappedVectorValue) {
       cloneScalarOp(*storeOp.getOperation(), ctx);
       return success();
     }
@@ -2427,13 +2743,21 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
 }
 
 static LogicalResult vectorizeOneOp(Operation &op, LoopVectorizationCtx &ctx) {
-  if (ctx.absorbedOps.contains(&op)) return success();
+  if (ctx.absorbedOps.contains(&op)) {
+    return success();
+  }
 
-  if (auto allocOp = dyn_cast<memref::AllocOp>(&op)) return vectorizeAllocTileBypass(allocOp, op, ctx);
+  if (auto allocOp = dyn_cast<memref::AllocOp>(&op)) {
+    return vectorizeAllocTileBypass(allocOp, op, ctx);
+  }
 
-  if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) return vectorizeMemrefLoadLike(loadOp, ctx);
+  if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+    return vectorizeMemrefLoadLike(loadOp, ctx);
+  }
 
-  if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) return vectorizeMemrefStoreLike(storeOp, ctx);
+  if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+    return vectorizeMemrefStoreLike(storeOp, ctx);
+  }
 
   if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
     return handleConstantOp(constOp, ctx);
@@ -2469,7 +2793,6 @@ static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx) 
       return failure();
     }
   }
-
   Operation *originalTerminator = block->getTerminator();
   if (auto originalYieldOp = dyn_cast<scf::YieldOp>(originalTerminator)) {
     SmallVector<Value> vecYieldOperands;
@@ -2490,7 +2813,7 @@ static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx) 
     }
 
     Block *currentBlock = ctx.builder.getInsertionBlock();
-    if (!currentBlock) {
+    if (currentBlock == nullptr) {
       return failure();
     }
 
@@ -2514,11 +2837,13 @@ static LogicalResult vectorizeLoopBody(LoopVectorizationCtx &ctx) {
     ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(), ctx.vecLoop.getInductionVar());
   }
 
-  if (!ctx.allLoopToVectorDim.count(ctx.scalarLoop)) {
+  if (ctx.allLoopToVectorDim.count(ctx.scalarLoop) == 0u) {
     const bool innerIvIsScalarForNestedVecAxis =
       (ctx.mode == VectorizationMode::ReductionY || ctx.mode == VectorizationMode::Broadcast) &&
       ctx.vectorizationAxis && ctx.vectorizationAxis != ctx.scalarLoop.getInductionVar();
-    if (!innerIvIsScalarForNestedVecAxis) ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+    if (!innerIvIsScalarForNestedVecAxis) {
+      ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+    }
   }
 
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
@@ -2541,7 +2866,7 @@ static LogicalResult vectorizeLoopBody(LoopVectorizationCtx &ctx) {
   SmallVector<scf::ForOp> nestedLoopsToErase;
 
   for (Operation *op : opsToVectorize) {
-    if (!op || op->getBlock() == nullptr) {
+    if ((op == nullptr) || op->getBlock() == nullptr) {
       continue;
     }
 
@@ -2567,10 +2892,16 @@ static LogicalResult vectorizeLoopBody(LoopVectorizationCtx &ctx) {
 }
 
 static void ensureReductionYield(LoopVectorizationCtx &ctx) {
-  if (!ctx.vecLoop || !ctx.scalarLoop.getInitArgs().empty()) return;
-  if (ctx.mode != VectorizationMode::ReductionX && ctx.mode != VectorizationMode::ReductionY) return;
+  if (!ctx.vecLoop || !ctx.scalarLoop.getInitArgs().empty()) {
+    return;
+  }
+  if (ctx.mode != VectorizationMode::ReductionX && ctx.mode != VectorizationMode::ReductionY) {
+    return;
+  }
   Block *body = ctx.vecLoop.getBody();
-  if (!body->empty() && isa<scf::YieldOp>(body->back())) return;
+  if (!body->empty() && isa<scf::YieldOp>(body->back())) {
+    return;
+  }
   ctx.builder.setInsertionPointToEnd(body);
   ctx.builder.create<scf::YieldOp>(ctx.vecLoop.getLoc());
 }
@@ -2585,7 +2916,7 @@ static void finalizeElementwise(LoopVectorizationCtx &ctx) {
 
   Operation *parent = ctx.scalarLoop->getParentOp();
   bool isNested = false;
-  while (parent) {
+  while (parent != nullptr) {
     if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
       if (hasVectorizationAttr(parentFor)) {
         isNested = true;
@@ -2719,9 +3050,11 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
 
       Value tailVecRes = tailRead.getResult();
       auto tailReadNvt = mlir::cast<npuvector::NPUVectorType>(tailVecRes.getType());
-      const unsigned tailVecRank = static_cast<unsigned>(tailReadNvt.getRank());
+      const auto tailVecRank = static_cast<unsigned>(tailReadNvt.getRank());
       SmallVector<int> tailAxisOrder(tailVecRank);
-      for (unsigned axisNum = 0; axisNum < tailVecRank; ++axisNum) tailAxisOrder[axisNum] = static_cast<int>(axisNum);
+      for (unsigned axisNum = 0; axisNum < tailVecRank; ++axisNum) {
+        tailAxisOrder[axisNum] = static_cast<int>(axisNum);
+      }
       reconcileValueDimOrderWithTileExtents(tailVecRes, tailAxisOrder, tailCtx);
       tailCtx.valueDimOrder[tailVecRes] = std::move(tailAxisOrder);
       tailCtx.valueMapping.map(loadOp.getResult(), tailVecRes);
@@ -2731,7 +3064,9 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
     bool isIndexConst = tailLoadOp && llvm::any_of(tailLoadOp.getIndices(), [&](Value idx) {
                           return op.getNumResults() > 0 && op.getResult(0) == idx;
                         });
-    if (isIndexConst) continue;
+    if (isIndexConst) {
+      continue;
+    }
 
     if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
       Value scalarConst = tailCtx.builder.create<arith::ConstantOp>(constOp.getLoc(), constOp.getValue());
@@ -2747,30 +3082,35 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
   }
 }
 
+static Value findMappedNonIterArg(LoopVectorizationCtx &tailCtx, Operation *defOp, Value iterArg) {
+  for (Value operand : defOp->getOperands()) {
+    if (operand == iterArg) continue;
+    Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
+    if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
+      return mappedValue;
+    }
+  }
+  return {};
+}
+
 static Value findValueToReduce(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx &ctx, unsigned resultIdx) {
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
-  if (resultIdx >= scalarYield.getNumOperands()) return Value();
+  if (resultIdx >= scalarYield.getNumOperands()) {
+    return {};
+  }
   Value scalarYieldValue = scalarYield.getOperand(resultIdx);
-
   if (auto defOp = scalarYieldValue.getDefiningOp()) {
     if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
             arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp)) {
       Value iterArg = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
-      for (Value operand : defOp->getOperands()) {
-        if (operand != iterArg) {
-          Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
-          if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
-            return mappedValue;
-          }
-        }
-      }
+      return findMappedNonIterArg(tailCtx, defOp, iterArg);
     }
   }
 
-  return Value();
+  return {};
 }
 
-static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value vecLoopUb, Value tailSize, Type elemType,
+static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value vecLoopUb, Value tailSize,
                               vector::CombiningKind combiningKind, arith::AtomicRMWKind laneKind, unsigned resultIdx) {
   Location loc = ctx.vecLoop.getLoc();
 
@@ -2787,7 +3127,9 @@ static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value ve
   LoopVectorizationCtx tailCtx(ctx.builder, tailActualStep, tailVectorSizeValue, ctx.getMaxStepValue(), ctx.mode,
                                ctx.scalarLoop);
   tailCtx.parent = &ctx;
-  for (const auto &kv : ctx.valueDimOrder) tailCtx.valueDimOrder[kv.first] = kv.second;
+  for (const auto &kv : ctx.valueDimOrder) {
+    tailCtx.valueDimOrder[kv.first] = kv.second;
+  }
   vectorizeTailOps(tailCtx, ctx, vecLoopUb, tailSize);
 
   Value valueToReduce = findValueToReduce(tailCtx, ctx, resultIdx);
@@ -2795,8 +3137,12 @@ static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value ve
     llvm_unreachable("Failed to find value to reduce in tail block");
   }
 
-  auto tailReductionOp = tailCtx.builder.create<npuvector::ReductionOp>(loc, combiningKind, valueToReduce, Value(),
-                                                                        arith::FastMathFlags::none);
+  auto tailVecType = mlir::cast<npuvector::NPUVectorType>(valueToReduce.getType());
+  unsigned reductionDim = tailVecType.getRank() - 1;
+  auto tailReducedType = buildPartialReductionType(tailVecType, reductionDim);
+  auto tailReductionOp = tailCtx.builder.create<npuvector::ReductionOp>(
+    loc, tailReducedType, combiningKind, valueToReduce, Value(),
+    tailCtx.builder.getDenseI64ArrayAttr({static_cast<int64_t>(reductionDim)}), arith::FastMathFlags::none);
   Value tailReduced = tailReductionOp.getDest();
 
   return combineReductionResults(tailCtx.builder, loc, reduced, tailReduced, laneKind);
@@ -2804,9 +3150,11 @@ static Value processTailBlock(LoopVectorizationCtx &ctx, Value reduced, Value ve
 
 /// True if any ancestor `scf.for` (walking from `loop`'s parent) carries a vectorization attr.
 static bool parentHasTaggedVectorLoop(scf::ForOp loop) {
-  for (Operation *parent = loop->getParentOp(); parent; parent = parent->getParentOp()) {
+  for (Operation *parent = loop->getParentOp(); parent != nullptr; parent = parent->getParentOp()) {
     if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
-      if (hasVectorizationAttr(parentFor)) return true;
+      if (hasVectorizationAttr(parentFor)) {
+        return true;
+      }
     }
   }
   return false;
@@ -2850,11 +3198,17 @@ static void finalizeReductionY(LoopVectorizationCtx &ctx) {
 
   for (auto [vecRes, yieldVal] : llvm::zip(ctx.vecLoop.getResults(), vecYieldVals)) {
     auto outNvt = mlir::dyn_cast<npuvector::NPUVectorType>(vecRes.getType());
-    if (!outNvt) continue;
+    if (!outNvt) {
+      continue;
+    }
     auto ordIter = ctx.valueDimOrder.find(yieldVal);
-    if (ordIter == ctx.valueDimOrder.end() || ordIter->second.empty()) continue;
-    const unsigned wantRank = static_cast<unsigned>(outNvt.getRank());
-    if (ordIter->second.size() != wantRank) continue;
+    if (ordIter == ctx.valueDimOrder.end() || ordIter->second.empty()) {
+      continue;
+    }
+    const auto wantRank = static_cast<unsigned>(outNvt.getRank());
+    if (ordIter->second.size() != wantRank) {
+      continue;
+    }
     ctx.valueDimOrder[vecRes] = ordIter->second;
   }
 
@@ -2874,7 +3228,9 @@ static npuvector::NPUVectorType buildPartialReductionType(npuvector::NPUVectorTy
   auto srcShape = srcType.getShape();
   SmallVector<int64_t> resultShape;
   for (unsigned i = 0; i < srcShape.size(); ++i) {
-    if (i != reductionDim) resultShape.push_back(srcShape[i]);
+    if (i != reductionDim) {
+      resultShape.push_back(srcShape[i]);
+    }
   }
   return npuvector::NPUVectorType::get(resultShape, srcType.getElementType());
 }
@@ -2883,7 +3239,9 @@ static void vectorizeOpsForMultiDimTailCtx(scf::ForOp scalarLoop, LoopVectorizat
                                            memref::LoadOp &tailLoadOpOut) {
   tailLoadOpOut = nullptr;
   for (Operation &op : scalarLoop.getBody()->without_terminator()) {
-    if (isReductionOp(op)) continue;
+    if (isReductionOp(op)) {
+      continue;
+    }
     if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
       vectorizeStore(storeOp, tailCtx);
       continue;
@@ -2891,13 +3249,17 @@ static void vectorizeOpsForMultiDimTailCtx(scf::ForOp scalarLoop, LoopVectorizat
     if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
       tailLoadOpOut = loadOp;
       Value vecValue = vectorizeLoad(loadOp, tailCtx);
-      if (vecValue) tailCtx.valueMapping.map(loadOp.getResult(), vecValue);
+      if (vecValue) {
+        tailCtx.valueMapping.map(loadOp.getResult(), vecValue);
+      }
       continue;
     }
     bool isIndexConst = tailLoadOpOut && llvm::any_of(tailLoadOpOut.getIndices(), [&](Value idx) {
                           return op.getNumResults() > 0 && op.getResult(0) == idx;
                         });
-    if (isIndexConst) continue;
+    if (isIndexConst) {
+      continue;
+    }
     if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
       Value val = tailCtx.builder.create<arith::ConstantOp>(constOp.getLoc(), constOp.getValue());
       tailCtx.valueMapping.map(constOp.getResult(), val);
@@ -2905,7 +3267,9 @@ static void vectorizeOpsForMultiDimTailCtx(scf::ForOp scalarLoop, LoopVectorizat
       cloneScalarOp(op, tailCtx);
     } else if (op.getDialect()->getNamespace() == "arith" || op.getDialect()->getNamespace() == "math") {
       Value vecValue = vectorizeArithOp(&op, tailCtx);
-      if (vecValue && op.getNumResults() > 0) tailCtx.valueMapping.map(op.getResult(0), vecValue);
+      if (vecValue && op.getNumResults() > 0) {
+        tailCtx.valueMapping.map(op.getResult(0), vecValue);
+      }
     }
   }
 }
@@ -2916,15 +3280,21 @@ static Value mergeMainReducedWithTail(Location loc, LoopVectorizationCtx &ctx, L
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
   Value scalarYieldVal = scalarYield.getOperand(resultIdx);
   Operation *defOp = scalarYieldVal.getDefiningOp();
-  if (!defOp || !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
-                     arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp))
+  if ((defOp == nullptr) ||
+      !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp, arith::MulIOp,
+           arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp>(defOp)) {
     return mainReduced;
+  }
 
   Value iterArgN = ctx.scalarLoop.getRegionIterArgs()[resultIdx];
   for (Value operand : defOp->getOperands()) {
-    if (operand == iterArgN) continue;
+    if (operand == iterArgN) {
+      continue;
+    }
     Value mapped = tailCtx.valueMapping.lookupOrNull(operand);
-    if (!mapped || !mlir::isa<npuvector::NPUVectorType>(mapped.getType())) continue;
+    if (!mapped || !mlir::isa<npuvector::NPUVectorType>(mapped.getType())) {
+      continue;
+    }
 
     auto tailVecType = mlir::cast<npuvector::NPUVectorType>(mapped.getType());
     auto tailReducedType = buildPartialReductionType(tailVecType, tailVecType.getRank() - 1);
@@ -2988,15 +3358,25 @@ static Value processMultiDimTailBlock(LoopVectorizationCtx &ctx, LoopVectorizati
 
   LoopVectorizationCtx tailCtx(ctx.builder, tailVecSizes, tailVecSizeValues, tailMaxSteps,
                                VectorizationMode::ReductionX, ctx.scalarLoop);
-  for (auto &[op, dim] : ctx.allLoopToVectorDim) tailCtx.allLoopToVectorDim[op] = dim;
+  for (auto &[op, dim] : ctx.allLoopToVectorDim) {
+    tailCtx.allLoopToVectorDim[op] = dim;
+  }
 
-  for (const auto &kv : parentCtx.valueMapping.getValueMap()) tailCtx.valueMapping.map(kv.first, kv.second);
-  for (const auto &kv : ctx.valueMapping.getValueMap()) tailCtx.valueMapping.map(kv.first, kv.second);
+  for (const auto &kv : parentCtx.valueMapping.getValueMap()) {
+    tailCtx.valueMapping.map(kv.first, kv.second);
+  }
+  for (const auto &kv : ctx.valueMapping.getValueMap()) {
+    tailCtx.valueMapping.map(kv.first, kv.second);
+  }
   tailCtx.valueMapping.map(ctx.scalarLoop.getInductionVar(), vecLoopUb);
 
   tailCtx.parent = &ctx;
-  for (const auto &kv : parentCtx.valueDimOrder) tailCtx.valueDimOrder[kv.first] = kv.second;
-  for (const auto &kv : ctx.valueDimOrder) tailCtx.valueDimOrder[kv.first] = kv.second;
+  for (const auto &kv : parentCtx.valueDimOrder) {
+    tailCtx.valueDimOrder[kv.first] = kv.second;
+  }
+  for (const auto &kv : ctx.valueDimOrder) {
+    tailCtx.valueDimOrder[kv.first] = kv.second;
+  }
 
   memref::LoadOp tailLoadOp = nullptr;
   vectorizeOpsForMultiDimTailCtx(ctx.scalarLoop, tailCtx, tailLoadOp);
@@ -3005,13 +3385,17 @@ static Value processMultiDimTailBlock(LoopVectorizationCtx &ctx, LoopVectorizati
 }
 
 static LogicalResult inlineVectorize(LoopVectorizationCtx &ctx) {
-  if (!ctx.parent) ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  if (ctx.parent == nullptr) {
+    ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  }
 
-  if (!ctx.allLoopToVectorDim.count(ctx.scalarLoop)) ctx.allLoopToVectorDim[ctx.scalarLoop] = ctx.localDim;
+  if (ctx.allLoopToVectorDim.count(ctx.scalarLoop) == 0u) {
+    ctx.allLoopToVectorDim[ctx.scalarLoop] = ctx.localDim;
+  }
 
   Value iv = ctx.scalarLoop.getInductionVar();
-  Value lb =
-    ctx.parent ? ctx.valueMapping.lookupOrDefault(ctx.scalarLoop.getLowerBound()) : ctx.scalarLoop.getLowerBound();
+  Value lb = (ctx.parent != nullptr) ? ctx.valueMapping.lookupOrDefault(ctx.scalarLoop.getLowerBound())
+                                     : ctx.scalarLoop.getLowerBound();
   ctx.valueMapping.map(iv, lb);
 
   Block *body = ctx.scalarLoop.getBody();
@@ -3023,30 +3407,35 @@ static LogicalResult inlineVectorize(LoopVectorizationCtx &ctx) {
 
   SmallVector<scf::ForOp> nestedLoopsToErase;
   for (Operation *op : opsToVec) {
-    if (!op || op->getBlock() == nullptr) continue;
+    if ((op == nullptr) || op->getBlock() == nullptr) {
+      continue;
+    }
     if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
       int64_t nm = -1;
-      if (getVectorizationMode(nestedFor, nm) != VectorizationMode::None) nestedLoopsToErase.push_back(nestedFor);
+      if (getVectorizationMode(nestedFor, nm) != VectorizationMode::None) {
+        nestedLoopsToErase.push_back(nestedFor);
+      }
     }
-    if (failed(vectorizeOneOp(*op, ctx))) return failure();
+    if (failed(vectorizeOneOp(*op, ctx))) {
+      return failure();
+    }
   }
 
   // Probe: nestedLoop.erase disabled (see vectorizeLoopBody); re-enable after bisect.
   (void)nestedLoopsToErase;
 
-  if (!ctx.parent) {
+  if (ctx.parent == nullptr) {
     ctx.scalarLoop.erase();
   }
   return success();
 }
 
 static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Value reduced, Value vecLoopUb,
-                                     Type elemType, bool isMultiDim, unsigned reductionDim,
-                                     vector::CombiningKind combKind, unsigned resultIdx,
-                                     arith::AtomicRMWKind laneKind) {
+                                     bool isMultiDim, unsigned reductionDim, vector::CombiningKind combKind,
+                                     unsigned resultIdx, arith::AtomicRMWKind laneKind) {
   Value originalUb = ctx.scalarLoop.getUpperBound();
   Value finalResult = reduced;
-  LoopVectorizationCtx &parentOrSelf = ctx.parent ? *ctx.parent : ctx;
+  LoopVectorizationCtx &parentOrSelf = (ctx.parent != nullptr) ? *ctx.parent : ctx;
 
   std::optional<int64_t> origUbOpt = tryConstantIndex(originalUb);
   std::optional<int64_t> lbTailOpt = tryConstantIndex(ctx.scalarLoop.getLowerBound());
@@ -3056,10 +3445,9 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
     int64_t remainder = tripCount % reductionStep;
     if (remainder != 0) {
       Value tailSize = ctx.builder.create<arith::ConstantIndexOp>(loc, remainder);
-      finalResult = isMultiDim
-                      ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, tailSize, reductionDim,
-                                                 combKind, resultIdx, laneKind)
-                      : processTailBlock(ctx, reduced, vecLoopUb, tailSize, elemType, combKind, laneKind, resultIdx);
+      finalResult = isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, tailSize, reductionDim,
+                                                          combKind, resultIdx, laneKind)
+                               : processTailBlock(ctx, reduced, vecLoopUb, tailSize, combKind, laneKind, resultIdx);
     }
     return finalResult;
   }
@@ -3073,15 +3461,13 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
   Value c0 = ctx.builder.create<arith::ConstantIndexOp>(loc, 0);
   Value needTail = ctx.builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, remainder, c0);
 
-  Type ifResultType = isMultiDim ? reduced.getType() : TypeRange{elemType}.front();
-  auto ifOp = ctx.builder.create<scf::IfOp>(loc, TypeRange{ifResultType}, needTail, true);
+  auto ifOp = ctx.builder.create<scf::IfOp>(loc, TypeRange{reduced.getType()}, needTail, true);
   {
     OpBuilder::InsertionGuard guard(ctx.builder);
     ctx.builder.setInsertionPointToStart(ifOp.thenBlock());
-    Value tailResult =
-      isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, remainder, reductionDim, combKind,
-                                            resultIdx, laneKind)
-                 : processTailBlock(ctx, reduced, vecLoopUb, remainder, elemType, combKind, laneKind, resultIdx);
+    Value tailResult = isMultiDim ? processMultiDimTailBlock(ctx, parentOrSelf, reduced, vecLoopUb, remainder,
+                                                             reductionDim, combKind, resultIdx, laneKind)
+                                  : processTailBlock(ctx, reduced, vecLoopUb, remainder, combKind, laneKind, resultIdx);
     ctx.builder.create<scf::YieldOp>(loc, tailResult);
   }
   {
@@ -3094,10 +3480,14 @@ static Value applyReductionXTripTail(Location loc, LoopVectorizationCtx &ctx, Va
 
 static void mergeReductionXOriginalInit(Location loc, LoopVectorizationCtx &ctx, bool isMultiDim, unsigned totalRank,
                                         Value &finalResult, unsigned laneIdx) {
-  if (laneIdx >= ctx.reductionKinds.size() || laneIdx >= ctx.origInits.size()) return;
+  if (laneIdx >= ctx.reductionKinds.size() || laneIdx >= ctx.origInits.size()) {
+    return;
+  }
   arith::AtomicRMWKind laneKind = ctx.reductionKinds[laneIdx];
   Value laneOrig = ctx.origInits[laneIdx];
-  if (isNeutralElement(laneKind, laneOrig, ctx.builder)) return;
+  if (isNeutralElement(laneKind, laneOrig, ctx.builder)) {
+    return;
+  }
   if (isMultiDim) {
     unsigned ancestorRank = totalRank - 1;
     if (ancestorRank > 0) {
@@ -3108,47 +3498,69 @@ static void mergeReductionXOriginalInit(Location loc, LoopVectorizationCtx &ctx,
       LoopVectorizationCtx ancCtx(ctx.builder, ancVecSizes, ancVecSizeValues, ancMaxSteps,
                                   VectorizationMode::Elementwise, ctx.scalarLoop);
       ancCtx.parent = &ctx;
-      for (const auto &kv : ctx.valueMapping.getValueMap()) ancCtx.valueMapping.map(kv.first, kv.second);
-      for (const auto &kv : ctx.valueDimOrder) ancCtx.valueDimOrder[kv.first] = kv.second;
+      for (const auto &kv : ctx.valueMapping.getValueMap()) {
+        ancCtx.valueMapping.map(kv.first, kv.second);
+      }
+      for (const auto &kv : ctx.valueDimOrder) {
+        ancCtx.valueDimOrder[kv.first] = kv.second;
+      }
       Value initBroadcast = vectorizeBroadcastScalar(laneOrig, ancCtx);
-      if (initBroadcast) finalResult = combineReductionResults(ctx.builder, loc, finalResult, initBroadcast, laneKind);
+      if (initBroadcast) {
+        finalResult = combineReductionResults(ctx.builder, loc, finalResult, initBroadcast, laneKind);
+      }
     } else {
       finalResult = combineReductionResults(ctx.builder, loc, finalResult, laneOrig, laneKind);
     }
   } else {
-    finalResult = combineReductionResults(ctx.builder, loc, finalResult, laneOrig, laneKind);
+    auto resultType = mlir::dyn_cast<npuvector::NPUVectorType>(finalResult.getType());
+    Value initBroadcast = resultType ? vectorizeBroadcastScalar(laneOrig, ctx, resultType) : Value();
+    if (initBroadcast) {
+      finalResult = combineReductionResults(ctx.builder, loc, finalResult, initBroadcast, laneKind);
+    }
   }
 }
 
 static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, ArrayRef<Value> finalResults) {
-  if (ctx.parent) {
+  if (ctx.parent != nullptr) {
     for (auto [scalarResult, finalResult] : llvm::zip(ctx.scalarLoop.getResults(), finalResults)) {
       ctx.parent->valueMapping.map(scalarResult, finalResult);
       if (auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(finalResult.getType())) {
         if (nvt.getRank() > 0) {
           SmallVector<int> parentDimOrder;
           for (auto &[loop, localDim] : ctx.allLoopToVectorDim) {
-            if (loop == ctx.scalarLoop.getOperation()) continue;
+            if (loop == ctx.scalarLoop.getOperation()) {
+              continue;
+            }
             auto pit = ctx.parent->allLoopToVectorDim.find(loop);
-            if (pit != ctx.parent->allLoopToVectorDim.end()) parentDimOrder.push_back(static_cast<int>(pit->second));
+            if (pit != ctx.parent->allLoopToVectorDim.end()) {
+              parentDimOrder.push_back(static_cast<int>(pit->second));
+            }
           }
           llvm::sort(parentDimOrder);
-          if (parentDimOrder.size() == nvt.getRank()) ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
+          if (parentDimOrder.size() == nvt.getRank()) {
+            ctx.parent->valueDimOrder[finalResult] = parentDimOrder;
+          }
         }
       }
     }
   } else {
     for (auto [scalarResult, finalResult] : llvm::zip(ctx.scalarLoop.getResults(), finalResults)) {
-      if (!scalarResult.use_empty()) scalarResult.replaceAllUsesWith(finalResult);
+      if (!scalarResult.use_empty()) {
+        scalarResult.replaceAllUsesWith(finalResult);
+      }
     }
     ctx.scalarLoop.erase();
   }
 }
 
 static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
-  if (!ctx.parent) ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  if (ctx.parent == nullptr) {
+    ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  }
   ctx.vecLoop = createEmptyVectorizedLoop(ctx);
-  if (!ctx.vecLoop) return failure();
+  if (!ctx.vecLoop) {
+    return failure();
+  }
   if (failed(vectorizeLoopBody(ctx))) {
     ctx.vecLoop.erase();
     return failure();
@@ -3157,19 +3569,24 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
   Location loc = ctx.vecLoop.getLoc();
   auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
   const unsigned numResults = scalarYield.getNumOperands();
-  if (numResults == 0 || numResults != ctx.vecLoop.getNumResults() || numResults != ctx.reductionKinds.size())
+  if (numResults == 0 || numResults != ctx.vecLoop.getNumResults() || numResults != ctx.reductionKinds.size()) {
     return failure();
+  }
 
   SmallVector<Value> vecYieldVals;
   vecYieldVals.reserve(numResults);
   for (unsigned idx = 0; idx < numResults; ++idx) {
     Value mapped = ctx.valueMapping.lookupOrNull(scalarYield.getOperand(idx));
-    if (!mapped) return failure();
+    if (!mapped) {
+      return failure();
+    }
     vecYieldVals.push_back(mapped);
   }
 
   Block *body = ctx.vecLoop.getBody();
-  if (!body->empty() && isa<scf::YieldOp>(body->back())) body->back().erase();
+  if (!body->empty() && isa<scf::YieldOp>(body->back())) {
+    body->back().erase();
+  }
   ctx.builder.setInsertionPointToEnd(body);
   ctx.builder.create<scf::YieldOp>(loc, vecYieldVals);
   ctx.builder.setInsertionPointAfter(ctx.vecLoop);
@@ -3182,28 +3599,20 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
     vector::CombiningKind combKind = convertToCombiningKind(laneKind);
     Value vectorAcc = ctx.vecLoop.getResult(idx);
     auto fullVecType = mlir::cast<npuvector::NPUVectorType>(vectorAcc.getType());
-    Type elemType = fullVecType.getElementType();
     const unsigned totalRank = fullVecType.getRank();
 
     const bool isMultiDim = totalRank > 1;
     const unsigned reductionDim = totalRank - 1;
 
-    Value reduced;
-    if (isMultiDim) {
-      auto reducedVecType = buildPartialReductionType(fullVecType, reductionDim);
-      auto reductionOp = ctx.builder.create<npuvector::ReductionOp>(
-        loc, reducedVecType, combKind, vectorAcc, Value(),
-        ctx.builder.getDenseI64ArrayAttr({static_cast<int64_t>(reductionDim)}), arith::FastMathFlags::none);
-      reduced = reductionOp.getDest();
-    } else {
-      auto reductionOp =
-        ctx.builder.create<npuvector::ReductionOp>(loc, combKind, vectorAcc, Value(), arith::FastMathFlags::none);
-      reduced = reductionOp.getDest();
-    }
+    auto reducedVecType = buildPartialReductionType(fullVecType, reductionDim);
+    auto reductionOp = ctx.builder.create<npuvector::ReductionOp>(
+      loc, reducedVecType, combKind, vectorAcc, Value(),
+      ctx.builder.getDenseI64ArrayAttr({static_cast<int64_t>(reductionDim)}), arith::FastMathFlags::none);
+    Value reduced = reductionOp.getDest();
 
     Value vecLoopUb = ctx.vecLoop.getUpperBound();
-    Value finalResult = applyReductionXTripTail(loc, ctx, reduced, vecLoopUb, elemType, isMultiDim, reductionDim,
-                                                combKind, idx, laneKind);
+    Value finalResult =
+      applyReductionXTripTail(loc, ctx, reduced, vecLoopUb, isMultiDim, reductionDim, combKind, idx, laneKind);
 
     mergeReductionXOriginalInit(loc, ctx, isMultiDim, totalRank, finalResult, idx);
     finalResults.push_back(finalResult);
@@ -3216,18 +3625,25 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
 
 static LogicalResult reductionYVectorize(LoopVectorizationCtx &ctx) {
   const bool innerIvIsScalar = ctx.vectorizationAxis && ctx.vectorizationAxis != ctx.scalarLoop.getInductionVar();
-  if (!innerIvIsScalar) ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+  if (!innerIvIsScalar) {
+    ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+  }
 
   if (ctx.vectorizationAxis) {
     Value outerIVMapping = ctx.valueMapping.lookupOrDefault(ctx.vectorizationAxis);
-    if (outerIVMapping && outerIVMapping != ctx.vectorizationAxis)
+    if (outerIVMapping && outerIVMapping != ctx.vectorizationAxis) {
       ctx.valueMapping.map(ctx.vectorizationAxis, outerIVMapping);
+    }
   }
 
-  if (!ctx.builder.getInsertionBlock()) ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  if (ctx.builder.getInsertionBlock() == nullptr) {
+    ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  }
 
   ctx.vecLoop = createEmptyVectorizedLoop(ctx);
-  if (!ctx.vecLoop) return failure();
+  if (!ctx.vecLoop) {
+    return failure();
+  }
   if (failed(vectorizeLoopBody(ctx))) {
     ctx.vecLoop.erase();
     return failure();
@@ -3238,18 +3654,25 @@ static LogicalResult reductionYVectorize(LoopVectorizationCtx &ctx) {
 
 static LogicalResult broadcastVectorize(LoopVectorizationCtx &ctx) {
   const bool innerIvIsScalar = ctx.vectorizationAxis && ctx.vectorizationAxis != ctx.scalarLoop.getInductionVar();
-  if (!innerIvIsScalar) ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+  if (!innerIvIsScalar) {
+    ctx.allLoopToVectorDim[ctx.scalarLoop] = 0;
+  }
 
   if (ctx.vectorizationAxis) {
     Value outerIVMapping = ctx.valueMapping.lookupOrDefault(ctx.vectorizationAxis);
-    if (outerIVMapping && outerIVMapping != ctx.vectorizationAxis)
+    if (outerIVMapping && outerIVMapping != ctx.vectorizationAxis) {
       ctx.valueMapping.map(ctx.vectorizationAxis, outerIVMapping);
+    }
   }
 
-  if (!ctx.builder.getInsertionBlock()) ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  if (ctx.builder.getInsertionBlock() == nullptr) {
+    ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  }
 
   ctx.vecLoop = createEmptyVectorizedLoop(ctx);
-  if (!ctx.vecLoop) return failure();
+  if (!ctx.vecLoop) {
+    return failure();
+  }
   if (failed(vectorizeLoopBody(ctx))) {
     ctx.vecLoop.erase();
     return failure();
@@ -3279,40 +3702,165 @@ static void processLoop(LoopVectorizationCtx &ctx) {
 
 static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, Location loc) {
   Value maxStepConst = builder.create<arith::ConstantIndexOp>(loc, 1);
-  LoopVectorizationCtx ctx(builder, /*actualStep*/ 1, /*vfVal*/ nullptr, maxStepConst, VectorizationMode::Elementwise,
-                           scf::ForOp(), nullptr);
+  LoopVectorizationCtx ctx(builder, /* actualStep */ 1, /* vfVal */ nullptr, maxStepConst,
+                           VectorizationMode::Elementwise, scf::ForOp(), nullptr);
   ctx.localDim = 0;
   ctx.vf1FuncLevelNoAnchor = true;
   return ctx;
 }
 
-static void expandVF1ForwardClosure(memref::LoadOp root, DenseSet<Operation *> &closure) {
-  closure.clear();
-  SmallVector<Operation *> stack;
-  stack.push_back(root);
-  while (!stack.empty()) {
-    Operation *op = stack.pop_back_val();
-    if (!closure.insert(op).second) continue;
+struct VF1LoopLane {
+  scf::ForOp loop;
+  unsigned index;
+  npuvector::NPUVectorType type;
+};
 
-    for (Value res : op->getResults()) {
-      for (Operation *user : res.getUsers()) {
-        if (llvm::any_of(user->getResults(), [](Value v) { return mlir::isa<npuvector::NPUVectorType>(v.getType()); }))
-          continue;
-        if (mlir::isa<scf::YieldOp>(user)) continue;
-        stack.push_back(user);
-      }
+static LogicalResult recordVF1LoopLane(scf::ForOp loop, unsigned index, SmallVectorImpl<VF1LoopLane> &loopLanes,
+                                       SmallVectorImpl<Value> &valuesToVisit) {
+  if (loop == nullptr || index >= loop.getNumRegionIterArgs() || index >= loop.getNumResults()) {
+    return failure();
+  }
+
+  Type laneType = loop.getRegionIterArgs()[index].getType();
+  npuvector::NPUVectorType vecType;
+  if (auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(laneType)) {
+    if (npuVecType.getRank() != 0) {
+      return failure();
+    }
+    vecType = npuVecType;
+  } else {
+    if (laneType.isIndex() || mlir::isa<ShapedType>(laneType)) {
+      return failure();
+    }
+    vecType = npuvector::NPUVectorType::get({}, laneType);
+  }
+
+  if (llvm::none_of(loopLanes, [&](const VF1LoopLane &lane) { return lane.loop == loop && lane.index == index; })) {
+    loopLanes.push_back({loop, index, vecType});
+  }
+  valuesToVisit.push_back(loop.getRegionIterArgs()[index]);
+  valuesToVisit.push_back(loop.getResult(index));
+  return success();
+}
+
+static LogicalResult followVF1YieldLane(scf::YieldOp yieldOp, Value value, SmallVectorImpl<VF1LoopLane> &loopLanes,
+                                        SmallVectorImpl<Value> &valuesToVisit) {
+  auto loop = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+  if (loop == nullptr) {
+    return success();
+  }
+  for (auto [index, operand] : llvm::enumerate(yieldOp.getOperands())) {
+    if (operand == value && failed(recordVF1LoopLane(loop, index, loopLanes, valuesToVisit))) {
+      return failure();
     }
   }
+  return success();
+}
+
+static LogicalResult followVF1ForInitLane(scf::ForOp loop, Value value, SmallVectorImpl<VF1LoopLane> &loopLanes,
+                                          SmallVectorImpl<Value> &valuesToVisit) {
+  bool found = false;
+  for (auto [index, init] : llvm::enumerate(loop.getInitArgs())) {
+    if (init != value) {
+      continue;
+    }
+    found = true;
+    if (failed(recordVF1LoopLane(loop, index, loopLanes, valuesToVisit))) {
+      return failure();
+    }
+  }
+  return found ? success() : failure();
+}
+
+static LogicalResult expandVF1ForwardClosure(memref::LoadOp root, DenseSet<Operation *> &closure,
+                                             SmallVectorImpl<VF1LoopLane> &loopLanes) {
+  closure.clear();
+  loopLanes.clear();
+  DenseSet<Value> visitedValues;
+  SmallVector<Operation *> opsToVisit{root};
+  SmallVector<Value> valuesToVisit;
+  while (!opsToVisit.empty() || !valuesToVisit.empty()) {
+    if (!valuesToVisit.empty()) {
+      Value value = valuesToVisit.pop_back_val();
+      if (!visitedValues.insert(value).second) {
+        continue;
+      }
+      for (Operation *user : value.getUsers()) {
+        if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+          // Continue the VF1 closure through a loop-carried SSA lane.
+          if (failed(followVF1YieldLane(yieldOp, value, loopLanes, valuesToVisit))) {
+            return failure();
+          }
+          continue;
+        }
+        if (auto loop = dyn_cast<scf::ForOp>(user)) {
+          // Enter a loop-carried SSA lane from its init operand.
+          if (failed(followVF1ForInitLane(loop, value, loopLanes, valuesToVisit))) {
+            return failure();
+          }
+          continue;
+        }
+        if (llvm::any_of(user->getResults(),
+                         [](Value result) { return mlir::isa<npuvector::NPUVectorType>(result.getType()); })) {
+          continue;
+        }
+        opsToVisit.push_back(user);
+      }
+      continue;
+    }
+
+    Operation *op = opsToVisit.pop_back_val();
+    if (!closure.insert(op).second) {
+      continue;
+    }
+    valuesToVisit.append(op->result_begin(), op->result_end());
+  }
+  return success();
+}
+
+static LogicalResult promoteVF1LoopLanes(SmallVectorImpl<VF1LoopLane> &loopLanes,
+                                         const DenseSet<Operation *> &closure) {
+  for (VF1LoopLane &lane : loopLanes) {
+    Value init = lane.loop.getInitArgs()[lane.index];
+    auto initVecType = mlir::dyn_cast<npuvector::NPUVectorType>(init.getType());
+    if (initVecType && initVecType != lane.type) {
+      return failure();
+    }
+    if (!initVecType && init.getType() != lane.type.getElementType()) {
+      return failure();
+    }
+  }
+
+  for (VF1LoopLane &lane : loopLanes) {
+    lane.loop.getRegionIterArgs()[lane.index].setType(lane.type);
+    lane.loop.getResult(lane.index).setType(lane.type);
+  }
+
+  for (VF1LoopLane &lane : loopLanes) {
+    Value init = lane.loop.getInitArgs()[lane.index];
+    Operation *initDef = init.getDefiningOp();
+    if (!mlir::isa<npuvector::NPUVectorType>(init.getType()) && (initDef == nullptr || !closure.contains(initDef))) {
+      OpBuilder builder(lane.loop);
+      init = builder.create<npuvector::BroadcastOp>(lane.loop.getLoc(), lane.type, init, ValueRange{}, ValueRange{},
+                                                    builder.getDenseI64ArrayAttr({}));
+    }
+    lane.loop.getInitArgsMutable()[lane.index].set(init);
+  }
+  return success();
 }
 
 static LogicalResult topoSortVF1Closure(const DenseSet<Operation *> &closureSet,
                                         SmallVectorImpl<Operation *> &topoOut) {
   DenseMap<Operation *, unsigned> indegree;
-  for (Operation *op : closureSet) indegree[op] = 0;
+  for (Operation *op : closureSet) {
+    indegree[op] = 0;
+  }
   for (Operation *op : closureSet) {
     for (Value operand : op->getOperands()) {
       Operation *def = operand.getDefiningOp();
-      if (def && closureSet.contains(def)) indegree[op]++;
+      if ((def != nullptr) && closureSet.contains(def)) {
+        indegree[op]++;
+      }
     }
   }
 
@@ -3327,13 +3875,19 @@ static LogicalResult topoSortVF1Closure(const DenseSet<Operation *> &closureSet,
     topoOut.push_back(op);
     for (Value res : op->getResults()) {
       for (Operation *user : res.getUsers()) {
-        if (!closureSet.contains(user)) continue;
-        if (--indegree[user] == 0) ready.push_back(user);
+        if (!closureSet.contains(user)) {
+          continue;
+        }
+        if (--indegree[user] == 0) {
+          ready.push_back(user);
+        }
       }
     }
   }
 
-  if (topoOut.size() != closureSet.size()) return failure();
+  if (topoOut.size() != closureSet.size()) {
+    return failure();
+  }
   return success();
 }
 
@@ -3341,10 +3895,18 @@ enum class Vf1ChainPromotionResult { Promoted, Skipped, FatalError };
 
 static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
   DenseSet<Operation *> closure;
-  expandVF1ForwardClosure(rootLoad, closure);
+  SmallVector<VF1LoopLane> loopLanes;
+  if (failed(expandVF1ForwardClosure(rootLoad, closure, loopLanes))) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
 
   SmallVector<Operation *> topo;
-  if (failed(topoSortVF1Closure(closure, topo))) return Vf1ChainPromotionResult::Skipped;
+  if (failed(topoSortVF1Closure(closure, topo))) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+  if (failed(promoteVF1LoopLanes(loopLanes, closure))) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
 
   OpBuilder builder(rootLoad);
   LoopVectorizationCtx ctx = createVF1SweepCtx(builder, rootLoad.getLoc());
@@ -3391,57 +3953,151 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
     }
 
     Value vecVal = vectorizeArithOp(op, ctx);
-    if (!vecVal) return Vf1ChainPromotionResult::FatalError;
+    if (!vecVal) {
+      return Vf1ChainPromotionResult::FatalError;
+    }
     op->getResult(0).replaceAllUsesWith(vecVal);
     op->erase();
   }
   return Vf1ChainPromotionResult::Promoted;
 }
 
-static Vf1ChainPromotionResult tryPromoteVF1Store(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
-  if (storeOp.getIndices().empty()) return Vf1ChainPromotionResult::Skipped;
+static LogicalResult expandVF1BackwardClosure(Value root, DenseSet<Operation *> &closure, bool &hasNpuVectorSource) {
+  closure.clear();
+  hasNpuVectorSource = false;
+  DenseSet<Value> visited;
+  SmallVector<Value> stack{root};
 
-  OpBuilder::InsertionGuard guard(ctx.builder);
-  ctx.builder.setInsertionPoint(storeOp);
-  Value storeValue = storeOp.getValue();
+  while (!stack.empty()) {
+    Value value = stack.pop_back_val();
+    if (!visited.insert(value).second) {
+      continue;
+    }
+    if (auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(value.getType())) {
+      if (npuVecType.getRank() != 0) {
+        return failure();
+      }
+      hasNpuVectorSource = true;
+      continue;
+    }
+
+    Operation *def = value.getDefiningOp();
+    if (def == nullptr || isa<arith::ConstantOp>(def)) {
+      continue;
+    }
+    if (isa<memref::LoadOp>(def) || def->getNumRegions() != 0 || def->getNumResults() != 1 ||
+        def->hasAttr(kSkipVectorizeAttr)) {
+      return failure();
+    }
+
+    StringRef dialectName = def->getDialect()->getNamespace();
+    if (dialectName != "arith" && dialectName != "math") {
+      return failure();
+    }
+
+    closure.insert(def);
+    stack.append(def->operand_begin(), def->operand_end());
+  }
+
+  return success();
+}
+
+static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) {
+  if (auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(storeOp.getValue().getType())) {
+    if (npuVecType.getRank() != 0) {
+      return Vf1ChainPromotionResult::Skipped;
+    }
+    OpBuilder builder(storeOp);
+    LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+    vectorizeStore(storeOp, ctx);
+    storeOp.erase();
+    return Vf1ChainPromotionResult::Promoted;
+  }
+
+  DenseSet<Operation *> closure;
+  bool hasNpuVectorSource = false;
+  if (failed(expandVF1BackwardClosure(storeOp.getValue(), closure, hasNpuVectorSource)) || closure.empty() ||
+      !hasNpuVectorSource) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+
+  SmallVector<Operation *> topo;
+  if (failed(topoSortVF1Closure(closure, topo))) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+
+  OpBuilder builder(storeOp);
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+  for (Operation *op : topo) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(op);
+    Value vecVal = vectorizeArithOp(op, ctx);
+    if (!vecVal) {
+      return Vf1ChainPromotionResult::FatalError;
+    }
+    op->getResult(0).replaceAllUsesWith(vecVal);
+    op->erase();
+  }
+
+  builder.setInsertionPoint(storeOp);
   vectorizeStore(storeOp, ctx);
-  ctx.valueMapping.erase(storeValue);
   storeOp.erase();
   return Vf1ChainPromotionResult::Promoted;
 }
 
-static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp) {
-  constexpr unsigned kMaxRounds = 64;
-  for (unsigned round = 0; round < kMaxRounds; ++round) {
-    bool changed = false;
-    SmallVector<memref::LoadOp> loads;
-    funcOp.walk([&](memref::LoadOp ld) { loads.push_back(ld); });
+static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp, bool &changed) {
+  changed = false;
+  SmallVector<memref::LoadOp> loads;
+  funcOp.walk([&](memref::LoadOp ld) { loads.push_back(ld); });
 
-    for (memref::LoadOp ld : loads) {
-      Vf1ChainPromotionResult outcome = tryPromoteVF1Chain(ld);
-      if (outcome == Vf1ChainPromotionResult::FatalError) return failure();
-      if (outcome == Vf1ChainPromotionResult::Promoted) changed = true;
+  for (memref::LoadOp ld : loads) {
+    if (ld == nullptr || ld->getBlock() == nullptr) {
+      continue;
     }
-    if (!changed) break;
+    Vf1ChainPromotionResult outcome = tryPromoteVF1Chain(ld);
+    if (outcome == Vf1ChainPromotionResult::FatalError) {
+      return failure();
+    }
+    if (outcome == Vf1ChainPromotionResult::Promoted) {
+      changed = true;
+    }
   }
   return success();
 }
 
-static LogicalResult runMemRefStoreVF1Sweep(func::FuncOp funcOp) {
+static LogicalResult runMemRefStoreVF1Sweep(func::FuncOp funcOp, bool &changed) {
+  changed = false;
   SmallVector<memref::StoreOp> stores;
-  funcOp.walk([&](memref::StoreOp storeOp) {
-    if (!storeOp.getIndices().empty()) stores.push_back(storeOp);
-  });
-  if (stores.empty()) return success();
+  funcOp.walk([&](memref::StoreOp storeOp) { stores.push_back(storeOp); });
 
-  OpBuilder builder(funcOp.getContext());
-  builder.setInsertionPointToStart(&funcOp.getBody().front());
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, funcOp.getLoc());
   for (memref::StoreOp storeOp : stores) {
-    Vf1ChainPromotionResult outcome = tryPromoteVF1Store(storeOp, ctx);
-    if (outcome == Vf1ChainPromotionResult::FatalError) return failure();
+    if (storeOp == nullptr || storeOp->getBlock() == nullptr) {
+      continue;
+    }
+    Vf1ChainPromotionResult outcome = tryPromoteVF1StoreChain(storeOp);
+    if (outcome == Vf1ChainPromotionResult::FatalError) {
+      return failure();
+    }
+    if (outcome == Vf1ChainPromotionResult::Promoted) {
+      changed = true;
+    }
   }
   return success();
+}
+
+static LogicalResult runPhase2RankZeroSweep(func::FuncOp funcOp) {
+  constexpr unsigned kMaxRounds = 64;
+  for (unsigned round = 0; round < kMaxRounds; ++round) {
+    bool loadChanged = false;
+    bool storeChanged = false;
+    if (failed(runMemRefLoadVF1Sweep(funcOp, loadChanged)) || failed(runMemRefStoreVF1Sweep(funcOp, storeChanged))) {
+      return failure();
+    }
+    if (!loadChanged && !storeChanged) {
+      return success();
+    }
+  }
+  return funcOp.emitError("npuvector-vectorize: Phase 2 rank-0 sweep did not converge");
 }
 
 static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder &builder, int64_t maxStepFromAttr,
@@ -3467,14 +4123,14 @@ static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder 
   processLoop(ctx);
 }
 
-class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBase<NPUVectorVectorizePass> {
+class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVectorVectorize> {
  public:
-  NPUVectorVectorizePass() = default;
-  NPUVectorVectorizePass(const NPUVectorVectorizePass &) = default;
+  NPUVectorVectorize() = default;
+  NPUVectorVectorize(const NPUVectorVectorize &) = default;
 
-  StringRef getArgument() const override { return "npuvector-vectorize"; }
+  [[nodiscard]] StringRef getArgument() const override { return "npuvector-vectorize"; }
 
-  StringRef getDescription() const override {
+  [[nodiscard]] StringRef getDescription() const override {
     return "SCF loop vectorization using NPUVector with dynamic shape support";
   }
 
@@ -3485,19 +4141,23 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
 
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
-    if (!hacc::utils::isDevice(funcOp)) return;
+    if (!hacc::utils::isDevice(funcOp)) {
+      return;
+    }
 
     OpBuilder builder(&getContext());
 
     SmallVector<scf::ForOp> allCandidateLoops;
     funcOp.walk([&](scf::ForOp forOp) {
-      if (hasVectorizationAttr(forOp)) allCandidateLoops.push_back(forOp);
+      if (hasVectorizationAttr(forOp)) {
+        allCandidateLoops.push_back(forOp);
+      }
     });
 
     SmallVector<scf::ForOp> topLevelLoops;
     for (scf::ForOp loop : allCandidateLoops) {
       bool isNested = false;
-      for (Operation *parent = loop->getParentOp(); parent && !isa<func::FuncOp>(parent);
+      for (Operation *parent = loop->getParentOp(); (parent != nullptr) && !isa<func::FuncOp>(parent);
            parent = parent->getParentOp()) {
         if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
           if (hasVectorizationAttr(parentFor)) {
@@ -3506,26 +4166,32 @@ class NPUVectorVectorizePass : public mlir::scf::impl::NPUVectorVectorizePassBas
           }
         }
       }
-      if (!isNested) topLevelLoops.push_back(loop);
+      if (!isNested) {
+        topLevelLoops.push_back(loop);
+      }
     }
 
     for (scf::ForOp loop : topLevelLoops) {
       int64_t maxStepFromAttr = -1;
       VectorizationMode mode = getVectorizationMode(loop, maxStepFromAttr);
-      if (mode == VectorizationMode::None || maxStepFromAttr <= 0) continue;
+      if (mode == VectorizationMode::None || maxStepFromAttr <= 0) {
+        continue;
+      }
 
       auto [skip, isDynamic] = checkLoopEligibility(loop);
-      if (skip) continue;
+      if (skip) {
+        continue;
+      }
 
       runVectorization(loop, mode, builder, maxStepFromAttr, isDynamic);
     }
 
-    if (failed(runMemRefLoadVF1Sweep(funcOp)) || failed(runMemRefStoreVF1Sweep(funcOp))) signalPassFailure();
+    if (failed(runPhase2RankZeroSweep(funcOp))) signalPassFailure();
   }
 };
 
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::scf::createNPUVectorVectorizePass() {
-  return std::make_unique<NPUVectorVectorizePass>();
+  return std::make_unique<NPUVectorVectorize>();
 }

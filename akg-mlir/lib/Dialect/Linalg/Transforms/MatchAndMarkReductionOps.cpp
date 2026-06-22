@@ -67,7 +67,7 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
     }
     ArrayAttr axesAttr = builder.getArrayAttr(intAttrs);
     // if has reduction axis
-    if (axesAttr.size() >= 1) {
+    if (!axesAttr.empty()) {
       Operation *yield_op = &genericOp.getRegion().front().getOperations().back();
       Operation *op = yield_op->getOperand(0).getDefiningOp();
       op->setAttr(kReductionAxesStr, axesAttr);
@@ -87,6 +87,32 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
 }
 
 // Update reduction_axes in affine dialect
+static SmallVector<bool, 8> collectRedFlags(Operation *redOp) {
+  SmallVector<bool, 8> redFlags(false);
+  auto curOp = redOp;
+  while (curOp) {
+    if (isa<affine::AffineForOp>(curOp)) {
+      redFlags.push_back(curOp->hasAttr(kReductionLoopAttr));
+    }
+    curOp = curOp->getParentOp();
+  }
+  std::reverse(redFlags.begin(), redFlags.end());
+  return redFlags;
+}
+
+static void updateReductionAxes(Operation *redOp, OpBuilder &builder) {
+  SmallVector<bool, 8> redFlags = collectRedFlags(redOp);
+  SmallVector<mlir::Attribute> intAttrs;
+  for (size_t i = 0; i < redFlags.size(); i++) {
+    if (redFlags[i]) {
+      auto intAttr = builder.getIntegerAttr(builder.getIndexType(), i);
+      intAttrs.push_back(intAttr);
+    }
+  }
+  ArrayAttr axesAttr = builder.getArrayAttr(intAttrs);
+  redOp->setAttr(kReductionAxesStr, axesAttr);
+}
+
 static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
   OpBuilder builder(funcOp);
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
@@ -95,30 +121,7 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
   }
   (void)funcOp->walk([&](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
-      SmallVector<bool, 8> redFlags(false);
-      auto curOp = redOp;
-      while (curOp) {
-        if (isa<affine::AffineForOp>(curOp)) {
-          if (curOp->hasAttr(kReductionLoopAttr)) {
-            redFlags.push_back(true);
-          } else {
-            redFlags.push_back(false);
-          }
-        }
-        curOp = curOp->getParentOp();
-      }
-      std::reverse(redFlags.begin(), redFlags.end());
-
-      // re-set reduction_axes properly
-      SmallVector<mlir::Attribute> intAttrs;
-      for (size_t i = 0; i < redFlags.size(); i++) {
-        if (redFlags[i]) {
-          auto intAttr = builder.getIntegerAttr(builder.getIndexType(), i);
-          intAttrs.push_back(intAttr);
-        }
-      }
-      ArrayAttr axesAttr = builder.getArrayAttr(intAttrs);
-      redOp->setAttr(kReductionAxesStr, axesAttr);
+      updateReductionAxes(redOp, builder);
     }
   });
 }

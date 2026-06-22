@@ -39,11 +39,10 @@ namespace mlir {
 
 namespace {
 
-class GenerateSingleAffineParallelPass
-    : public impl::GenerateSingleAffineParallelBase<GenerateSingleAffineParallelPass> {
+class GenerateSingleAffineParallel : public impl::GenerateSingleAffineParallelBase<GenerateSingleAffineParallel> {
  public:
-  explicit GenerateSingleAffineParallelPass() {}
-  explicit GenerateSingleAffineParallelPass(bool isDynamicShape) {
+  explicit GenerateSingleAffineParallel() {}
+  explicit GenerateSingleAffineParallel(bool isDynamicShape) {
     if (isDynamicShape) {
       forceGen = 1;
     }
@@ -60,7 +59,7 @@ class GenerateSingleAffineParallelPass
 };
 }  // namespace
 
-void GenerateSingleAffineParallelPass::generateWithoutLoop() {
+void GenerateSingleAffineParallel::generateWithoutLoop() {
   func::FuncOp funcOp = getOperation();
   Operation *topLoop = nullptr;
   SmallVector<Operation *> restOp;
@@ -78,13 +77,13 @@ void GenerateSingleAffineParallelPass::generateWithoutLoop() {
   if (topLoop != nullptr) {
     Location loc = topLoop->getLoc();
     OpBuilder b(topLoop);
-    affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
+    auto pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
     AffineMap lowerBoundMap = pointLoop.getLowerBoundMap();
     ValueRange lowerBoundOperands = pointLoop.getLowerBoundOperands();
     AffineMap upperBoundMap = pointLoop.getUpperBoundMap();
     ValueRange upperBoundOperands = pointLoop.getUpperBoundOperands();
 
-    affine::AffineParallelOp parallelLoop = b.create<affine::AffineParallelOp>(
+    auto parallelLoop = b.create<affine::AffineParallelOp>(
       loc, TypeRange(), ArrayRef<arith::AtomicRMWKind>(), llvm::ArrayRef(lowerBoundMap), lowerBoundOperands,
       llvm::ArrayRef(upperBoundMap), upperBoundOperands, llvm::ArrayRef(pointLoop.getStepAsInt()));
     for (auto it = restOp.begin(); it != std::prev(restOp.end()); ++it) {
@@ -96,11 +95,11 @@ void GenerateSingleAffineParallelPass::generateWithoutLoop() {
   }
 }
 
-void GenerateSingleAffineParallelPass::generateWithLoop(affine::AffineForOp outerLoop) {
+void GenerateSingleAffineParallel::generateWithLoop(affine::AffineForOp outerLoop) {
   Location loc = outerLoop.getLoc();
   Operation *topLoop = outerLoop.getOperation();
   OpBuilder b(topLoop);
-  affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
+  auto pointLoop = b.create<affine::AffineForOp>(loc, 0, 1);
   pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
                                               topLoop);
   if (forceGen == 1) {
@@ -110,7 +109,7 @@ void GenerateSingleAffineParallelPass::generateWithLoop(affine::AffineForOp oute
 
 // This func will sink all the DimOp as well as the ExpandShapeOps users.
 // Note that it is designed for gpu kernel outlining and should be invoked carefully.
-void GenerateSingleAffineParallelPass::sinkOps(affine::AffineForOp pointLoop) {
+void GenerateSingleAffineParallel::sinkOps(affine::AffineForOp pointLoop) {
   func::FuncOp funcOp = getOperation();
   SmallVector<Operation *> toSink;
   funcOp->walk([&](Operation *op) {
@@ -136,13 +135,12 @@ void GenerateSingleAffineParallelPass::sinkOps(affine::AffineForOp pointLoop) {
   if (toSink.empty()) {
     return;
   }
-  for (auto it = toSink.begin(); it != toSink.end(); ++it) {
-    auto op = *it;
+  for (auto op : toSink) {
     pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), op->getBlock()->getOperations(), op);
   }
 }
 
-void GenerateSingleAffineParallelPass::updateReductionLoop() {
+void GenerateSingleAffineParallel::updateReductionLoop() {
   func::FuncOp funcOp = getOperation();
   OpBuilder builder(funcOp);
   (void)funcOp->walk([&](Operation *redOp) {
@@ -163,7 +161,7 @@ void GenerateSingleAffineParallelPass::updateReductionLoop() {
   });
 }
 
-void GenerateSingleAffineParallelPass::runOnOperation() {
+void GenerateSingleAffineParallel::runOnOperation() {
   func::FuncOp funcOp = getOperation();
   bool hasLoop = false;
   affine::AffineForOp outerLoop;
@@ -190,10 +188,10 @@ void GenerateSingleAffineParallelPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> createGenerateSingleAffineParallelPass() {
-  return std::make_unique<GenerateSingleAffineParallelPass>();
+  return std::make_unique<GenerateSingleAffineParallel>();
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> createGenerateSingleAffineParallelPass(bool isDynamicShape) {
-  return std::make_unique<GenerateSingleAffineParallelPass>(isDynamicShape);
+  return std::make_unique<GenerateSingleAffineParallel>(isDynamicShape);
 }
 }  // namespace mlir
