@@ -6,7 +6,7 @@ module {
 // CHECK: %[[FUSED:.*]] = mfuse.fused %arg0 {fusion_type = "dvm"}
 // CHECK: ^bb0(%[[ARG1:.*]]: tensor<4x4xf32>):
 // CHECK: %[[CST:.*]] = mfuse.constant
-// CHECK: %[[FULL:.*]] = mfuse.full %[[CST]]
+// CHECK: %[[FULL:.*]] = mfuse.full %[[CST]] {device = "npu"}
 // CHECK: %[[ADD:.*]] = mfuse.add %[[ARG1]], %[[FULL]] : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
 // CHECK: mfuse.yield %[[ADD]] : tensor<4x4xf32>
 // CHECK: return %[[FUSED]] : tensor<4x4xf32>
@@ -15,6 +15,45 @@ func.func @test_split_with_full(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   ^bb0(%arg1: tensor<4x4xf32>):
     %cst = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
     %1 = mfuse.full %cst : (tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
+    %2 = mfuse.add %arg1, %1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+    mfuse.yield %2 : tensor<4x4xf32>
+  }
+  return %0 : tensor<4x4xf32>
+}
+
+// CHECK-LABEL: func @test_select_with_scalar_full
+// CHECK-SAME: %arg0: tensor<4x4xi1>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"}
+// CHECK: ^bb0(%[[COND:.*]]: tensor<4x4xi1>, %[[ALT:.*]]: tensor<4x4xf32>):
+// CHECK: %[[CST:.*]] = mfuse.constant dense<-3.4028234663852886E+38> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[FULL:.*]] = mfuse.full %[[CST]] {device = "npu"} : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+// CHECK: %[[SELECT:.*]] = mfuse.select %[[COND]], %[[FULL]], %[[ALT]] : (tensor<4x4xi1>, tensor<f32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[SELECT]] : tensor<4x4xf32>
+// CHECK: return %[[FUSED]] : tensor<4x4xf32>
+func.func @test_select_with_scalar_full(%arg0: tensor<4x4xi1>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %0 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<4x4xi1>, tensor<4x4xf32>) -> tensor<4x4xf32> {
+  ^bb0(%arg2: tensor<4x4xi1>, %arg3: tensor<4x4xf32>):
+    %cst = mfuse.constant dense<-3.4028234663852886E+38> : tensor<f64, {is_scalar = ""}>
+    %1 = mfuse.full %cst : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+    %2 = mfuse.select %arg2, %1, %arg3 : (tensor<4x4xi1>, tensor<f32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+    mfuse.yield %2 : tensor<4x4xf32>
+  }
+  return %0 : tensor<4x4xf32>
+}
+
+// CHECK-LABEL: func @test_split_with_cpu_full
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0 {fusion_type = "dvm"}
+// CHECK: ^bb0(%[[ARG1:.*]]: tensor<4x4xf32>):
+// CHECK: %[[CST:.*]] = mfuse.constant
+// CHECK: %[[FULL:.*]] = mfuse.full %[[CST]] {device = "npu"}
+// CHECK: %[[ADD:.*]] = mfuse.add %[[ARG1]], %[[FULL]] : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[ADD]] : tensor<4x4xf32>
+func.func @test_split_with_cpu_full(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4x4xf32>) -> tensor<4x4xf32> {
+  ^bb0(%arg1: tensor<4x4xf32>):
+    %cst = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+    %1 = mfuse.full %cst {device = "cpu"} : (tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
     %2 = mfuse.add %arg1, %1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
     mfuse.yield %2 : tensor<4x4xf32>
   }
