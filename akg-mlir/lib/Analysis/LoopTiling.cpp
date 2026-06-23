@@ -1206,6 +1206,10 @@ static void buildParallelTileCoordMap(ArrayRef<unsigned> parallelDims, ArrayRef<
   mlir::Location loc = parallelTileLoop.getLoc();
   builder.setInsertionPoint(insertBeforeLoop);
   Value remaining = parallelTileLoop.getInductionVar();
+  AffineExpr remainingExpr = builder.getAffineDimExpr(0);
+  AffineExpr tileCountExpr = builder.getAffineSymbolExpr(0);
+  auto remMap = AffineMap::get(1, 1, remainingExpr % tileCountExpr, builder.getContext());
+  auto divMap = AffineMap::get(1, 1, remainingExpr.floorDiv(tileCountExpr), builder.getContext());
   for (int64_t pos = static_cast<int64_t>(parallelDims.size()) - 1; pos >= 0; --pos) {
     unsigned dim = parallelDims[static_cast<size_t>(pos)];
     if (dim >= tileCountsByDim.size() || dim >= parallelTileCoordByDim.size()) {
@@ -1219,8 +1223,11 @@ static void buildParallelTileCoordMap(ArrayRef<unsigned> parallelDims, ArrayRef<
       parallelTileCoordByDim[dim] = builder.create<arith::ConstantIndexOp>(loc, 0);
       continue;
     }
-    parallelTileCoordByDim[dim] = builder.create<arith::RemSIOp>(loc, remaining, tileCount);
-    remaining = builder.create<arith::DivSIOp>(loc, remaining, tileCount);
+    parallelTileCoordByDim[dim] =
+      builder.create<affine::AffineApplyOp>(loc, remMap, ValueRange{remaining, tileCount});
+    if (pos > 0) {
+      remaining = builder.create<affine::AffineApplyOp>(loc, divMap, ValueRange{remaining, tileCount});
+    }
   }
 }
 
