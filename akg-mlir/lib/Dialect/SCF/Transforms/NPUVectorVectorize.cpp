@@ -47,7 +47,8 @@
 //      ├── Elementwise: inline or loop-based transformation
 //      └── Reduction: vector reduction + tail processing + init value merging
 //   5. Phase 2 (same pass tail): rank-0 sweep — fictional LoopVectorizationCtx instances (Elementwise, no scf.for
-//      anchor, vf1FuncLevelNoAnchor) over remaining scalar memref.load chains and store-rooted reduction consumers.
+//      anchor, vf1FuncLevelNoAnchor) over remaining mixed arith/math ops, scalar memref.load chains, and
+//      store-rooted reduction consumers.
 //===----------------------------------------------------------------------===//
 
 #include <algorithm>
@@ -4049,6 +4050,75 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
   return Vf1ChainPromotionResult::Promoted;
 }
 
+static bool isArithOrMathOp(Operation *op) {
+  if (op == nullptr || op->getDialect() == nullptr) {
+    return false;
+  }
+  StringRef dialectName = op->getDialect()->getNamespace();
+  return dialectName == "arith" || dialectName == "math";
+}
+
+static bool hasRankZeroNpuVectorOperand(Operation *op) {
+  for (Value operand : op->getOperands()) {
+    auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(operand.getType());
+    if (npuVecType && npuVecType.getRank() == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
+  if (!isArithOrMathOp(op) || op->getNumRegions() != 0 || op->getNumResults() != 1 || op->getNumOperands() == 0 ||
+      hasIndexResult(*op) || op->hasAttr(kSkipVectorizeAttr) || isa<arith::ConstantOp>(op)) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+  if (mlir::isa<npuvector::NPUVectorType>(op->getResult(0).getType())) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+  if (!hasRankZeroNpuVectorOperand(op)) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+
+  OpBuilder builder(op);
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, op->getLoc());
+  if (failed(handleArithOrMathOp(*op, ctx))) {
+    return Vf1ChainPromotionResult::FatalError;
+  }
+  Value vecVal = ctx.valueMapping.lookupOrNull(op->getResult(0));
+  if (!vecVal || vecVal == op->getResult(0) || !mlir::isa<npuvector::NPUVectorType>(vecVal.getType())) {
+    return Vf1ChainPromotionResult::Skipped;
+  }
+
+  op->getResult(0).replaceAllUsesWith(vecVal);
+  op->erase();
+  return Vf1ChainPromotionResult::Promoted;
+}
+
+static LogicalResult runArithVF1Sweep(func::FuncOp funcOp, bool &changed) {
+  changed = false;
+  SmallVector<Operation *> ops;
+  funcOp.walk([&](Operation *op) {
+    if (isArithOrMathOp(op)) {
+      ops.push_back(op);
+    }
+  });
+
+  for (Operation *op : ops) {
+    if (op == nullptr || op->getBlock() == nullptr) {
+      continue;
+    }
+    Vf1ChainPromotionResult outcome = tryPromoteVF1ArithOp(op);
+    if (outcome == Vf1ChainPromotionResult::FatalError) {
+      return failure();
+    }
+    if (outcome == Vf1ChainPromotionResult::Promoted) {
+      changed = true;
+    }
+  }
+  return success();
+}
+
 static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp, bool &changed) {
   changed = false;
   SmallVector<memref::LoadOp> loads;
@@ -4094,10 +4164,12 @@ static LogicalResult runPhase2RankZeroSweep(func::FuncOp funcOp) {
   for (unsigned round = 0; round < kMaxRounds; ++round) {
     bool loadChanged = false;
     bool storeChanged = false;
-    if (failed(runMemRefLoadVF1Sweep(funcOp, loadChanged)) || failed(runMemRefStoreVF1Sweep(funcOp, storeChanged))) {
+    bool arithChanged = false;
+    if (failed(runMemRefLoadVF1Sweep(funcOp, loadChanged)) || failed(runMemRefStoreVF1Sweep(funcOp, storeChanged)) ||
+        failed(runArithVF1Sweep(funcOp, arithChanged))) {
       return failure();
     }
-    if (!loadChanged && !storeChanged) {
+    if (!arithChanged && !loadChanged && !storeChanged) {
       return success();
     }
   }
