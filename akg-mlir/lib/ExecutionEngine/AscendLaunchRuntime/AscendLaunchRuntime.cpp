@@ -14,27 +14,28 @@
  * limitations under the License.
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendLaunchRuntime.h"
-#include <climits>
-#include <cstdint>
-#include <limits>
+
 #include <algorithm>
-#include <iostream>
+#include <climits>
 #include <cstdlib>
-#include <string>
+#include <cstdint>
 #include <fstream>
+#include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
-#include <vector>
+#include <string>
 #include <unordered_map>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/CceWrapper.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
-#include <nlohmann/json.hpp>
-
-using std::vector;
 
 namespace mlir {
 namespace runtime {
+using std::vector;
 
 constexpr auto kDynamicSuffix = ".so";
 constexpr auto kStaticSuffix = ".o";
@@ -94,7 +95,7 @@ uintptr_t RegisterDeviceKernel(const std::string &func_name, const void *data, s
   }
 
   ret = rtFunctionRegister(bin_handle, reinterpret_cast<void *>(stub_addr), func_name.c_str(),
-                           reinterpret_cast<const void *>(func_name.c_str()), 0);
+                           static_cast<const void *>(func_name.c_str()), 0);
   if (ret != RT_ERROR_NONE) {
     LOG(FATAL) << "Call rtFunctionRegister, ret[" << ret << "]";
     return 0;
@@ -111,7 +112,7 @@ uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin
 void KernelLaunch(uint64_t kernel_func, uint64_t block_num, rtStream_t stream, std::vector<void *> args,
                   bool is_dynamic) {
   if (is_dynamic) {
-    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
+    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);  // NOLINT
     kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
   } else {
     int ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), nullptr,

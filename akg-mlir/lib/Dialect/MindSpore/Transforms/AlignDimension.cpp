@@ -31,16 +31,17 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_ALIGNDIMENSION
 #include "akg/Dialect/MindSpore/Passes.h.inc"
+
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 
 static LogicalResult computeReshapeOutput(ArrayRef<int64_t> higherRankShape, ArrayRef<int64_t> lowerRankShape,
                                           SmallVectorImpl<int64_t> &reshapeOutputShape) {
@@ -91,7 +92,7 @@ static LogicalResult EqualizeRanks(PatternRewriter &rewriter, Location loc, Valu
   ArrayRef<int64_t> higherRankShape = llvm::cast<RankedTensorType>(higherTensorValue.getType()).getShape();
   ArrayRef<int64_t> lowerRankShape = llvm::cast<RankedTensorType>(lowerTensorValue.getType()).getShape();
 
-  SmallVector<int64_t, 4> reshapeOutputShape;
+  SmallVector<int64_t, kSmallVectorSizeFour> reshapeOutputShape;
 
   if (computeReshapeOutput(higherRankShape, lowerRankShape, reshapeOutputShape).failed()) {
     return failure();
@@ -248,4 +249,6 @@ struct AlignDimension : public impl::AlignDimensionBase<AlignDimension> {
 };
 }  // namespace
 
-std::unique_ptr<Pass> mlir::createAlignDimensionPass() { return std::make_unique<AlignDimension>(); }
+namespace mlir {
+std::unique_ptr<Pass> createAlignDimensionPass() { return std::make_unique<AlignDimension>(); }
+}  // namespace mlir

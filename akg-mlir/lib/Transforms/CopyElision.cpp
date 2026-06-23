@@ -74,6 +74,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 
   CopyElisionPass() = default;
   CopyElisionPass(const CopyElisionPass &pass) = default;
+  CopyElisionPass &operator=(const CopyElisionPass &) = default;
 
  private:
   /// Returns the allocation operation for `value` if it exists.
@@ -93,7 +94,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   /// nullptr otherwise.
   [[nodiscard]] Operation *getDeallocationOp(const Value &value) const {
     auto valueUsers = value.getUsers();
-    auto it = llvm::find_if(valueUsers, [&](Operation *op) {
+    auto it = llvm::find_if(valueUsers, [](Operation *op) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
       return effects && effects.hasEffect<MemoryEffects::Free>();
     });
@@ -122,7 +123,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       // internal operations may have the side effect `EffectType` on
       // `val`.
       for (Region &region : op->getRegions()) {
-        auto walkResult = region.walk([&](Operation *op) {
+        auto walkResult = region.walk([&val](Operation *op) {
           if (doesOpHaveWriteEffect(val, op)) {
             return WalkResult::interrupt();
           }
@@ -153,7 +154,8 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
                         const std::function<bool(Value, Operation *)> &checkPropertiesOfOperation) const {
     // Check for all paths from operation `fromp` to operation `untilOp` for the
     // given property.
-    std::function<bool(Operation *, Operation *)> recur = [&](Operation *fromOp, Operation *untilOp) {
+    std::function<bool(Operation *, Operation *)> recur = [&recur, &checkPropertiesOfOperation, &val](
+                                                            Operation *fromOp, Operation *untilOp) {
       auto untilOpParentRegion = untilOp->getParentRegion();
       auto untilOpParentOp = untilOp->getParentOp();
       auto fromOpParentRegion = fromOp->getParentRegion();
@@ -354,7 +356,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 void CopyElisionPass::runOnOperation() {
   /// Operations that need to be removed.
   llvm::SmallPtrSet<Operation *, kVectorSizeFour> opsToErase;
-  getOperation()->walk([&](CopyOpInterface copyOp) {
+  getOperation()->walk([this, &opsToErase](CopyOpInterface copyOp) {
     if (isa<BlockArgument>(copyOp.getTarget())) {
       return;
     }
@@ -372,4 +374,6 @@ void CopyElisionPass::runOnOperation() {
 
 }  // namespace mlir
 
-std::unique_ptr<mlir::Pass> mlir::createCopyElisionPass() { return std::make_unique<mlir::CopyElisionPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createCopyElisionPass() { return std::make_unique<CopyElisionPass>(); }
+}  // namespace mlir

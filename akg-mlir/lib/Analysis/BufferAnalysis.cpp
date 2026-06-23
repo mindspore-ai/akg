@@ -474,7 +474,7 @@ void BufferAnalysis::UpdateIfOpBufferAliasImpl(IfOpType ifOp, YieldOpType yieldO
     Value result = ifOp->getResult(i);
     if (isMemRefValue(result) && isMemRefValue(arg)) {
       // Multiple buffers involved, requiring one-to-one correspondence
-      UpdateBufferAlias(result, arg, /*hasCond=*/true);
+      UpdateBufferAlias(result, arg, /* hasCond= */ true);
     }
   }
 }
@@ -533,7 +533,7 @@ void BufferAnalysis::RecursiveIfOpImpl(IfOpType ifOp, Liveness live) {
 //===----------------------------------------------------------------------===//
 
 void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
-  auto result = region->walk<WalkOrder::PreOrder>([&](Operation *op) {
+  auto result = region->walk<WalkOrder::PreOrder>([this, &live](Operation *op) {
     if (auto affineForOp = dyn_cast<mlir::affine::AffineForOp>(op)) {
       // Recursive control flow - affine.for
       RecursiveForOpImpl(affineForOp, live);
@@ -770,8 +770,9 @@ llvm::DenseSet<Value> BufferAnalysis::gatherInplaceReuseBuffers() const {
     }
     // Check if any gen buffer can reuse a kill buffer
     for (const Value &genBuffer : genKill.gen) {
-      if (std::any_of(genKill.kill.begin(), genKill.kill.end(),
-                      [&](const Value &killBuffer) { return canInplaceReuse(genBuffer, killBuffer, bufferInfos); })) {
+      if (std::any_of(genKill.kill.begin(), genKill.kill.end(), [this, &genBuffer](const Value &killBuffer) {
+            return canInplaceReuse(genBuffer, killBuffer, bufferInfos);
+          })) {
         inplaceReuseBuffers.insert(genBuffer);
       }
     }

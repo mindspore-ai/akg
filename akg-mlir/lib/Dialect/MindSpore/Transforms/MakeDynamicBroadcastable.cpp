@@ -135,7 +135,7 @@ struct EnableTosaBroadCastOp : public OpRewritePattern<OpTy> {
       Value shapeof1 = rewriter.create<shape::ShapeOfOp>(loc, input1);
       Value shapeof2 = rewriter.create<shape::ShapeOfOp>(loc, input2);
       Value bs = rewriter.create<shape::BroadcastOp>(loc, shape::getExtentTensorType(rewriter.getContext(), rank),
-                                                     shapeof1, shapeof2, /*error=*/nullptr);
+                                                     shapeof1, shapeof2, /* error= */ nullptr);
       Value newInput1 = rewriter.create<mindspore::BroadcastToOp>(loc, output.getType(), input1, bs);
       Value newInput2 = rewriter.create<mindspore::BroadcastToOp>(loc, output.getType(), input2, bs);
       // update operands
@@ -213,7 +213,7 @@ class MakeDynamicBroadcastableTracer {
   bool GoThroughIntermediateNoSideEffectOps(Value arg, tensor::CastOp castOp,
                                             SmallVector<int64_t> &needCastDims) const {
     auto src = castOp.getSource();
-    auto check = [&](Operation *op) -> bool {
+    auto check = [this, &arg](Operation *op) -> bool {
       if (!op) {
         return false;
       }
@@ -262,7 +262,7 @@ struct MakeDynamicBroadcastable : public impl::MakeDynamicBroadcastableBase<Make
   void insertDynamicIndexingAttr() {
     func::FuncOp funcOp;
     SmallVector<tensor::CastOp> needFixOps;
-    getOperation()->walk([&](Operation *op) {
+    getOperation()->walk([&funcOp, &needFixOps](Operation *op) {
       if (auto f = dyn_cast<func::FuncOp>(op)) {
         funcOp = f;
       } else if (auto c = dyn_cast<tensor::CastOp>(op)) {

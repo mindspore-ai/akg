@@ -33,10 +33,9 @@ namespace mlir {
 #include "akg/Dialect/MindSpore/Passes.h.inc"
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 
 static DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
   ShapedType shapedType = cast<ShapedType>(inputType);
@@ -101,4 +100,6 @@ struct EliminateDimension : public impl::EliminateDimensionBase<EliminateDimensi
 };
 }  // namespace
 
-std::unique_ptr<Pass> mlir::createEliminateDimensionPass() { return std::make_unique<EliminateDimension>(); }
+namespace mlir {
+std::unique_ptr<Pass> createEliminateDimensionPass() { return std::make_unique<EliminateDimension>(); }
+}  // namespace mlir

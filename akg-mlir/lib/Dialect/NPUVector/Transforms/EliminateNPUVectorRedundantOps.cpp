@@ -213,7 +213,7 @@ static void eraseWriteOnlyLocalAllocs(func::FuncOp funcOp) {
   SmallVector<memref::AllocOp> allocsToErase;
   SmallVector<Operation *> writesToErase;
 
-  funcOp.walk([&](memref::AllocOp allocOp) {
+  funcOp.walk([&allocsToErase, &writesToErase](memref::AllocOp allocOp) {
     if (allocOp->use_empty()) {
       allocsToErase.push_back(allocOp);
       return;
@@ -241,6 +241,7 @@ class EliminateNPUVectorRedundantOps
  public:
   EliminateNPUVectorRedundantOps() = default;
   EliminateNPUVectorRedundantOps(const EliminateNPUVectorRedundantOps &) = default;
+  EliminateNPUVectorRedundantOps &operator=(const EliminateNPUVectorRedundantOps &) = default;
 
   void runOnOperation() override {
     if (getOperation().isDeclaration()) {

@@ -30,41 +30,52 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+using mlir::BitVector;
+using mlir::dyn_cast;
+using mlir::isa;
+using mlir::MemRefType;
+using mlir::OpBuilder;
+using mlir::Operation;
+using mlir::OperationPass;
+using mlir::RankedTensorType;
+using mlir::SmallVector;
+using mlir::Type;
+using mlir::UnrankedMemRefType;
+using mlir::UnrankedTensorType;
+using mlir::Value;
 constexpr auto kVectorInitSize4 = 4;
 
 Value castTensorToMemref(OpBuilder &builder, Value value) {
   Type type = value.getType();
   if (auto rankedTensorType = dyn_cast<RankedTensorType>(type)) {
     Type memrefType = MemRefType::get(rankedTensorType.getShape(), rankedTensorType.getElementType());
-    return builder.create<bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
+    return builder.create<mlir::bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
   }
 
   if (auto unrankedTensorType = dyn_cast<UnrankedTensorType>(type)) {
     Type memrefType = UnrankedMemRefType::get(unrankedTensorType.getElementType(), {});
-    return builder.create<bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
+    return builder.create<mlir::bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
   }
 
   return value;
 }
 
-struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBufferize> {
+struct LinalgCopyBufferize : public mlir::impl::LinalgCopyBufferizeBase<LinalgCopyBufferize> {
  public:
   LinalgCopyBufferize() = default;
   explicit LinalgCopyBufferize(const bool keepOuts) { this->keepOuts = keepOuts; }
   // LinalgCopyBufferize(const LinalgCopyBufferizeOptions &options) : LinalgCopyBufferizeBase(options) {}
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    mlir::func::FuncOp funcOp = getOperation();
     // Record linalgCopyOp, Result to be erased and to be kept
     // For GPU, bufferize the linalg copy op, and keep the fake output of InplaceAssign
     // For CPU, remove the fake output from returnOp and funcArguments
     SmallVector<Operation *, kVectorInitSize4> targetCopyOps;
     BitVector erasedResultIndices(funcOp.getFunctionType().getNumResults());
     SmallVector<Value, kVectorInitSize4> keptResultValue;
-    funcOp.walk([&](func::ReturnOp op) {
+    funcOp.walk([this, &erasedResultIndices, &targetCopyOps, &keptResultValue](mlir::func::ReturnOp op) {
       for (const auto &it : llvm::enumerate(op.getOperands())) {
         auto oprd = it.value();
         auto index = it.index();
@@ -72,21 +83,21 @@ struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBuff
         if (returnInputOp == nullptr) {
           return;
         }
-        if (isa<linalg::CopyOp>(returnInputOp)) {
+        if (isa<mlir::linalg::CopyOp>(returnInputOp)) {
           (void)erasedResultIndices.set(static_cast<unsigned int>(index));
           (void)targetCopyOps.emplace_back(returnInputOp);
           if (this->keepOuts) {
-            (void)keptResultValue.emplace_back(dyn_cast<linalg::CopyOp>(returnInputOp).getInputs()[0]);
+            (void)keptResultValue.emplace_back(dyn_cast<mlir::linalg::CopyOp>(returnInputOp).getInputs()[0]);
           }
           continue;
         }
-        if (isa<bufferization::ToMemrefOp>(returnInputOp)) {
+        if (isa<mlir::bufferization::ToMemrefOp>(returnInputOp)) {
           auto memrefInputOp = returnInputOp->getOperands()[0].getDefiningOp();
-          if (isa<linalg::CopyOp>(memrefInputOp)) {
+          if (isa<mlir::linalg::CopyOp>(memrefInputOp)) {
             (void)erasedResultIndices.set(static_cast<unsigned int>(index));
             targetCopyOps.emplace_back(memrefInputOp);
             if (this->keepOuts) {
-              (void)keptResultValue.emplace_back(dyn_cast<linalg::CopyOp>(memrefInputOp).getInputs()[0]);
+              (void)keptResultValue.emplace_back(dyn_cast<mlir::linalg::CopyOp>(memrefInputOp).getInputs()[0]);
             }
             continue;
           }
@@ -103,13 +114,13 @@ struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBuff
       funcOp.eraseResults(erasedResultIndices);
     }
     // Create new ReturnOp without CopyOp's output
-    funcOp.walk([&](func::ReturnOp op) {
+    funcOp.walk([&keptResultValue](mlir::func::ReturnOp op) {
       OpBuilder builder(op);
-      (void)builder.create<func::ReturnOp>(op.getLoc(), keptResultValue);
+      (void)builder.create<mlir::func::ReturnOp>(op.getLoc(), keptResultValue);
       op.erase();
     });
     // Rewrite linalg Copy to Memref Copy
-    funcOp.walk([&](linalg::CopyOp op) {
+    funcOp.walk([&targetCopyOps](mlir::linalg::CopyOp op) {
       if (std::find(targetCopyOps.begin(), targetCopyOps.end(), op) == targetCopyOps.end()) {
         return;
       }
@@ -118,17 +129,21 @@ struct LinalgCopyBufferize : public impl::LinalgCopyBufferizeBase<LinalgCopyBuff
       auto src = castTensorToMemref(builder, op.getInputs()[0]);
       auto dst = castTensorToMemref(builder, op.getOutputs()[0]);
       // Create new MemrefCopyOp without result
-      (void)builder.create<memref::CopyOp>(op.getLoc(), src, dst);
+      (void)builder.create<mlir::memref::CopyOp>(op.getLoc(), src, dst);
       op.erase();
     });
   }
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgCopyBufferizePass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLinalgCopyBufferizePass() {
   return std::make_unique<LinalgCopyBufferize>();
 }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgCopyBufferizePass(bool keepOuts) {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLinalgCopyBufferizePass(bool keepOuts) {
   return std::make_unique<LinalgCopyBufferize>(keepOuts);
 }
+}  // namespace mlir

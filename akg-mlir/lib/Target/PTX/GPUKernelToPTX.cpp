@@ -204,7 +204,7 @@ void GPUKernelToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
   llvm::FunctionPassManager fPM = pB.buildFunctionSimplificationPipeline(optLevel, llvm::ThinOrFullLTOPhase::None);
   llvm::ModulePassManager mPM = pB.buildPerModuleDefaultPipeline(optLevel);
 
-  (void)fAM.registerPass([&] { return targetMachine.getTargetIRAnalysis(); });
+  (void)fAM.registerPass([&targetMachine] { return targetMachine.getTargetIRAnalysis(); });
 
   addOptimizationPasses(fPM, mPM, optLevel);
 
@@ -254,7 +254,7 @@ LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
     }
 
     llvm::AttrBuilder FuncAttrs(llvmContext);
-    (void)FuncAttrs.addAttribute("frame-pointer", /*FramePointerKind*/ "all");
+    (void)FuncAttrs.addAttribute("frame-pointer", /* FramePointerKind */ "all");
     (void)FuncAttrs.addAttribute("less-precise-fpmad", "false");
     (void)FuncAttrs.addAttribute("no-trapping-math", "true");
 
@@ -266,12 +266,13 @@ LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
   }
 
   // libdevice module is of an ``internalize'' module
-  if (llvm::Linker::linkModules(
-        llvmModule, std::move(libdeviceModule),
-        /*LinkFlags*/ (unsigned)llvm::Linker::Flags::LinkOnlyNeeded, [](llvm::Module &M, const llvm::StringSet<> &GS) {
-          (void)llvm::internalizeModule(
-            M, [&GS](const llvm::GlobalValue &GV) { return !GV.hasName() || (GS.count(GV.getName()) == 0); });
-        })) {
+  if (llvm::Linker::linkModules(llvmModule, std::move(libdeviceModule),
+                                /* LinkFlags */ (unsigned)llvm::Linker::Flags::LinkOnlyNeeded,
+                                [](llvm::Module &M, const llvm::StringSet<> &GS) {
+                                  (void)llvm::internalizeModule(M, [&GS](const llvm::GlobalValue &GV) {
+                                    return !GV.hasName() || (GS.count(GV.getName()) == 0);
+                                  });
+                                })) {
     llvm::errs() << "failed to link libdevice module\n";
     return failure();
   }

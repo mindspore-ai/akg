@@ -31,19 +31,37 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;             // NOLINT(build/namespaces)
-using namespace mlir::linalg;     // NOLINT(build/namespaces)
-using namespace mlir::linalgExt;  // NOLINT(build/namespaces)
-
 namespace {
-struct LowerTemplateOp : public OpRewritePattern<TemplateOp> {
+using mlir::applyPatternsAndFoldGreedily;
+using mlir::ArrayRef;
+using mlir::cast;
+using mlir::dyn_cast_or_null;
+using mlir::getValueOrCreateConstantIndexOp;
+using mlir::isa;
+using mlir::Location;
+using mlir::LogicalResult;
+using mlir::MemRefType;
+using mlir::Operation;
+using mlir::OpRewritePattern;
+using mlir::PatternRewriter;
+using mlir::Range;
+using mlir::RewritePatternSet;
+using mlir::ShapedType;
+using mlir::SmallVector;
+using mlir::StringAttr;
+using mlir::success;
+using mlir::SymbolRefAttr;
+using mlir::SymbolTable;
+using mlir::Type;
+using mlir::Value;
+struct LowerTemplateOp : public OpRewritePattern<mlir::linalgExt::TemplateOp> {
  public:
-  using OpRewritePattern<TemplateOp>::OpRewritePattern;
+  using OpRewritePattern<mlir::linalgExt::TemplateOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(TemplateOp templateOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(mlir::linalgExt::TemplateOp templateOp, PatternRewriter &rewriter) const override {
     // find func Op
-    auto fnSym = cast<SymbolRefAttr>(templateOp->getAttr(TemplateFuncAttrName));
-    auto funcOp = dyn_cast_or_null<func::FuncOp>(SymbolTable::lookupNearestSymbolFrom(templateOp, fnSym));
+    auto fnSym = cast<SymbolRefAttr>(templateOp->getAttr(mlir::TemplateFuncAttrName));
+    auto funcOp = dyn_cast_or_null<mlir::func::FuncOp>(SymbolTable::lookupNearestSymbolFrom(templateOp, fnSym));
 
     // cast linalg op operands if they are not all dynamic sizes
 
@@ -51,14 +69,14 @@ struct LowerTemplateOp : public OpRewritePattern<TemplateOp> {
       castOperands(templateOp.getOperands(), funcOp.getArgumentTypes(), templateOp->getLoc(), rewriter);
 
     SmallVector<Range> loopRanges =
-      cast<LinalgOp>(templateOp.getOperation()).createLoopRanges(rewriter, templateOp.getLoc());
+      cast<mlir::linalg::LinalgOp>(templateOp.getOperation()).createLoopRanges(rewriter, templateOp.getLoc());
     // insert loop size to operands
-    llvm::transform(loopRanges, std::back_inserter(castedOperands), [&](Range range) {
+    llvm::transform(loopRanges, std::back_inserter(castedOperands), [&rewriter, &templateOp](Range range) {
       return getValueOrCreateConstantIndexOp(rewriter, templateOp->getLoc(), range.size);
     });
 
     // create function call op by template op operands
-    auto newOp = rewriter.create<func::CallOp>(templateOp->getLoc(), funcOp, castedOperands);
+    auto newOp = rewriter.create<mlir::func::CallOp>(templateOp->getLoc(), funcOp, castedOperands);
 
     // replace
     rewriter.replaceOp(templateOp, newOp.getResults());
@@ -70,7 +88,7 @@ struct LowerTemplateOp : public OpRewritePattern<TemplateOp> {
                                   PatternRewriter &rewriter) const;
 };
 
-struct LinalgLowerTemplateOpPass : public impl::LinalgLowerTemplateOpBase<LinalgLowerTemplateOpPass> {
+struct LinalgLowerTemplateOpPass : public mlir::impl::LinalgLowerTemplateOpBase<LinalgLowerTemplateOpPass> {
   LinalgLowerTemplateOpPass() = default;
   LinalgLowerTemplateOpPass(const LinalgLowerTemplateOpPass &) = default;
   LinalgLowerTemplateOpPass &operator=(const LinalgLowerTemplateOpPass &) = delete;
@@ -106,17 +124,21 @@ SmallVector<Value> LowerTemplateOp::castOperands(SmallVector<Value> operands, Ar
     } else {
       // add castOp to cast memref type to all dynamic sizes
       auto dynType = memType.clone(std::vector<int64_t>(memType.getShape().size(), mlir::ShapedType::kDynamic));
-      auto dynOper = rewriter.create<memref::CastOp>(loc, dynType, oper);
+      auto dynOper = rewriter.create<mlir::memref::CastOp>(loc, dynType, oper);
       newOperands.push_back(dynOper.getResult());
     }
   }
   return newOperands;
 }
 
-void mlir::populateLinalgTemplateOpLowerPatterns(RewritePatternSet &patterns) {
+namespace mlir {
+void populateLinalgTemplateOpLowerPatterns(RewritePatternSet &patterns) {
   (void)patterns.add<LowerTemplateOp>(patterns.getContext());
 }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgLowerTemplateOpPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLinalgLowerTemplateOpPass() {
   return std::make_unique<LinalgLowerTemplateOpPass>();
 }
+}  // namespace mlir

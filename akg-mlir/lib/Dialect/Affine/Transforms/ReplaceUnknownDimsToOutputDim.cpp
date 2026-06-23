@@ -30,21 +30,22 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_REPLACEUNKNOWNDIMSTOOUTPUTDIM
 #define GEN_PASS_DECL_REPLACEUNKNOWNDIMSTOOUTPUTDIM
 GEN_PASS_DECL_REPLACEUNKNOWNDIMSTOOUTPUTDIM
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "replace-unknown-dims-to-output-dim"
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace llvm;       // NOLINT(build/namespaces)
 using namespace akgglobal;  // NOLINT(build/namespaces)
-
-namespace {
 
 std::vector<std::string> findSymbol(const std::string &str) {
   std::vector<std::string> result;
@@ -75,11 +76,12 @@ std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, const std::string &ta
   return "";  // should raise error
 }
 
-void collectRelatedDimsAndAffineMax(func::FuncOp funcOp, SmallVector<SmallVector<Operation *, 8>, 8> &dimPack,
-                                    SmallVector<Operation *, 8> &maxList) {
-  funcOp.walk([&](affine::AffineMaxOp maxOp) {
+void collectRelatedDimsAndAffineMax(func::FuncOp funcOp,
+                                    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> &dimPack,
+                                    SmallVector<Operation *, kSmallVectorSizeEight> &maxList) {
+  funcOp.walk([&dimPack, &maxList](affine::AffineMaxOp maxOp) {
     bool flag = true;
-    dimPack.push_back(SmallVector<Operation *, 8>());
+    dimPack.push_back(SmallVector<Operation *, kSmallVectorSizeEight>());
     auto new_idx = dimPack.size() - 1;
     for (auto operand : maxOp.getOperation()->getOperands()) {
       auto op = operand.getDefiningOp();
@@ -153,8 +155,8 @@ class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDim
     if (dict.empty()) {
       return;
     }
-    SmallVector<SmallVector<Operation *, 8>, 8> dimPack;
-    SmallVector<Operation *, 8> maxList;
+    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> dimPack;
+    SmallVector<Operation *, kSmallVectorSizeEight> maxList;
     collectRelatedDimsAndAffineMax(funcOp, dimPack, maxList);
 
     ShapeAlignTool &tool = ShapeAlignTool::getInstance();
@@ -187,6 +189,8 @@ class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDim
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createReplaceUnknownDimsToOutputDimPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createReplaceUnknownDimsToOutputDimPass() {
   return std::make_unique<ReplaceUnknownDimsToOutputDim>();
 }
+}  // namespace mlir

@@ -20,9 +20,23 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+namespace arith = mlir::arith;
+namespace fusion = mlir::fusion;
+namespace memref = mlir::memref;
+namespace vector = mlir::vector;
+using mlir::AffineMapAttr;
+using mlir::cast;
+using mlir::dyn_cast;
+using mlir::isa;
+using mlir::LogicalResult;
+using mlir::OpRewritePattern;
+using mlir::PatternRewriter;
+using mlir::RewritePatternSet;
+using mlir::success;
+using mlir::Value;
+using mlir::ValueRange;
+using mlir::VectorType;
 class FusionLoadLowering : public OpRewritePattern<fusion::LoadOp> {
  public:
   using OpRewritePattern<fusion::LoadOp>::OpRewritePattern;

@@ -22,6 +22,7 @@
 #include "akg/Utils/AnalysisForNpu.hpp"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace autotiling {
@@ -40,7 +41,7 @@ void Tensor::SetLoadTensor(T loadOp, const std::vector<AxisPtr> &loopNest) {
   opType = "Load";
   dataType = loadOp.getMemRefType().getElementType();
   Value loadResult = loadOp.getResult();
-  SmallVector<Operation *, 8> loadRelatedFor;
+  SmallVector<Operation *, kSmallVectorSizeEight> loadRelatedFor;
   CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
   for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
     for (auto axis : loopNest) {
@@ -87,7 +88,7 @@ void Tensor::SetLoadTensor<affine::AffineLoadOp>(affine::AffineLoadOp loadOp, co
   opType = "Load";
   dataType = loadOp.getMemRefType().getElementType();
   Value loadResult = loadOp.getResult();
-  SmallVector<Operation *, 8> loadRelatedFor;
+  SmallVector<Operation *, kSmallVectorSizeEight> loadRelatedFor;
   CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
   for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
     for (auto axis : loopNest) {
@@ -108,7 +109,7 @@ void Tensor::SetLoadTensor<memref::LoadOp>(memref::LoadOp loadOp, const std::vec
   opType = "Load";
   dataType = loadOp.getMemRefType().getElementType();
   Value loadResult = loadOp.getResult();
-  SmallVector<Operation *, 8> loadRelatedFor;
+  SmallVector<Operation *, kSmallVectorSizeEight> loadRelatedFor;
   CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
   for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
     for (auto axis : loopNest) {

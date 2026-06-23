@@ -24,7 +24,8 @@
 #include <cstdint>
 #include <numeric>
 #include <string>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Pass.h"
@@ -32,6 +33,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace akg {
@@ -77,72 +79,75 @@ class HardwareConfig {
   uint32_t RegVectorLength{0};
 };
 
-static const std::unordered_map<std::string, HardwareConfig> kHardwareConfigs = {
-  {kSoc910B1, HardwareConfig{/* coreNumAic = */ 24,
-                             /* coreNumAiv = */ 48,
-                             /* l2 = */ 201326592,
-                             /* l1 = */ 524288,
-                             /* l0a = */ 65536,
-                             /* l0b = */ 65536,
-                             /* l0c = */ 131072,
-                             /* ub = */ 196608,
-                             /* isRegBasedArch = */ false}},
-  {kSoc910B2, HardwareConfig{/* coreNumAic = */ 24,
-                             /* coreNumAiv = */ 48,
-                             /* l2 = */ 201326592,
-                             /* l1 = */ 524288,
-                             /* l0a = */ 65536,
-                             /* l0b = */ 65536,
-                             /* l0c = */ 131072,
-                             /* ub = */ 196608,
-                             /* isRegBasedArch = */ false}},
-  {kSoc910B2C, HardwareConfig{/* coreNumAic = */ 24,
-                              /* coreNumAiv = */ 48,
-                              /* l2 = */ 201326592,
-                              /* l1 = */ 524288,
-                              /* l0a = */ 65536,
-                              /* l0b = */ 65536,
-                              /* l0c = */ 131072,
-                              /* ub = */ 196608,
-                              /* isRegBasedArch = */ false}},
-  {kSoc910B3, HardwareConfig{/* coreNumAic = */ 20,
-                             /* coreNumAiv = */ 40,
-                             /* l2 = */ 201326592,
-                             /* l1 = */ 524288,
-                             /* l0a = */ 65536,
-                             /* l0b = */ 65536,
-                             /* l0c = */ 131072,
-                             /* ub = */ 196608,
-                             /* isRegBasedArch = */ false}},
-  {kSoc910B4, HardwareConfig{/* coreNumAic = */ 20,
-                             /* coreNumAiv = */ 40,
-                             /* l2 = */ 100663296,
-                             /* l1 = */ 524288,
-                             /* l0a = */ 65536,
-                             /* l0b = */ 65536,
-                             /* l0c = */ 131072,
-                             /* ub = */ 196608,
-                             /* isRegBasedArch = */ false}},
-  {kSoc910B4_1, HardwareConfig{/* coreNumAic = */ 20,
-                               /* coreNumAiv = */ 40,
-                               /* l2 = */ 176160768,
+inline const std::vector<std::pair<std::string, HardwareConfig>> &getHardwareConfigs() {
+  static const std::vector<std::pair<std::string, HardwareConfig>> kHardwareConfigs = {
+    {kSoc910B1, HardwareConfig{/* coreNumAic = */ 24,
+                               /* coreNumAiv = */ 48,
+                               /* l2 = */ 201326592,
                                /* l1 = */ 524288,
                                /* l0a = */ 65536,
                                /* l0b = */ 65536,
                                /* l0c = */ 131072,
                                /* ub = */ 196608,
                                /* isRegBasedArch = */ false}},
-  {kSoc950PR_9599, HardwareConfig{/* coreNumAic = */ 36,
-                                  /* coreNumAiv = */ 72,
-                                  /* l2 = */ 134217728,
-                                  /* l1 = */ 524288,
-                                  /* l0a = */ 65536,
-                                  /* l0b = */ 65536,
-                                  /* l0c = */ 262144,
-                                  /* ub = */ 253952,
-                                  /* isRegBasedArch = */ true,
-                                  /* RegVectorLength = */ 256}},
-};
+    {kSoc910B2, HardwareConfig{/* coreNumAic = */ 24,
+                               /* coreNumAiv = */ 48,
+                               /* l2 = */ 201326592,
+                               /* l1 = */ 524288,
+                               /* l0a = */ 65536,
+                               /* l0b = */ 65536,
+                               /* l0c = */ 131072,
+                               /* ub = */ 196608,
+                               /* isRegBasedArch = */ false}},
+    {kSoc910B2C, HardwareConfig{/* coreNumAic = */ 24,
+                                /* coreNumAiv = */ 48,
+                                /* l2 = */ 201326592,
+                                /* l1 = */ 524288,
+                                /* l0a = */ 65536,
+                                /* l0b = */ 65536,
+                                /* l0c = */ 131072,
+                                /* ub = */ 196608,
+                                /* isRegBasedArch = */ false}},
+    {kSoc910B3, HardwareConfig{/* coreNumAic = */ 20,
+                               /* coreNumAiv = */ 40,
+                               /* l2 = */ 201326592,
+                               /* l1 = */ 524288,
+                               /* l0a = */ 65536,
+                               /* l0b = */ 65536,
+                               /* l0c = */ 131072,
+                               /* ub = */ 196608,
+                               /* isRegBasedArch = */ false}},
+    {kSoc910B4, HardwareConfig{/* coreNumAic = */ 20,
+                               /* coreNumAiv = */ 40,
+                               /* l2 = */ 100663296,
+                               /* l1 = */ 524288,
+                               /* l0a = */ 65536,
+                               /* l0b = */ 65536,
+                               /* l0c = */ 131072,
+                               /* ub = */ 196608,
+                               /* isRegBasedArch = */ false}},
+    {kSoc910B4_1, HardwareConfig{/* coreNumAic = */ 20,
+                                 /* coreNumAiv = */ 40,
+                                 /* l2 = */ 176160768,
+                                 /* l1 = */ 524288,
+                                 /* l0a = */ 65536,
+                                 /* l0b = */ 65536,
+                                 /* l0c = */ 131072,
+                                 /* ub = */ 196608,
+                                 /* isRegBasedArch = */ false}},
+    {kSoc950PR_9599, HardwareConfig{/* coreNumAic = */ 36,
+                                    /* coreNumAiv = */ 72,
+                                    /* l2 = */ 134217728,
+                                    /* l1 = */ 524288,
+                                    /* l0a = */ 65536,
+                                    /* l0b = */ 65536,
+                                    /* l0c = */ 262144,
+                                    /* ub = */ 253952,
+                                    /* isRegBasedArch = */ true,
+                                    /* RegVectorLength = */ 256}},
+  };
+  return kHardwareConfigs;
+}
 
 class NpuInfo {
  public:
@@ -168,8 +173,11 @@ class NpuInfo {
 
   const HardwareConfig &getConfigByVersion(const std::string &socVersion) const {
     static HardwareConfig invalidHardwareConfig;
-    const auto &it = kHardwareConfigs.find(socVersion);
-    if (it == kHardwareConfigs.end()) {
+    const auto &configs = getHardwareConfigs();
+    const auto it = std::find_if(
+      configs.begin(), configs.end(),
+      [&socVersion](const std::pair<std::string, HardwareConfig> &entry) { return entry.first == socVersion; });
+    if (it == configs.end()) {
       llvm::errs() << "The config for socVersion: " << socVersion << " does not exist.";
       return invalidHardwareConfig;
     }
@@ -186,44 +194,62 @@ class NpuInfo {
 inline int64_t ceilDivInt64(int64_t lhs, int64_t rhs) { return (rhs <= 0) ? lhs : (lhs + rhs - 1) / rhs; }
 
 inline int64_t alignUpInt64(int64_t value, int64_t alignment) {
-  if (alignment <= 1) return value;
+  if (alignment <= 1) {
+    return value;
+  }
   return ceilDivInt64(value, alignment) * alignment;
 }
 
 inline int64_t multiplyAndCap(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0) return 0;
+  if (lhs <= 0 || rhs <= 0) {
+    return 0;
+  }
   return (lhs > LLONG_MAX / rhs) ? LLONG_MAX : lhs * rhs;
 }
 
 inline int64_t getElementBitWidth(Type type) {
   Type elemType = type;
-  if (auto shapedType = dyn_cast<ShapedType>(type)) elemType = shapedType.getElementType();
-  if (elemType.isIndex()) return 64;
-  if (!llvm::isa<IntegerType, FloatType>(elemType)) return 0;
+  if (auto shapedType = dyn_cast<ShapedType>(type)) {
+    elemType = shapedType.getElementType();
+  }
+  if (elemType.isIndex()) {
+    return 64;
+  }
+  if (!llvm::isa<IntegerType, FloatType>(elemType)) {
+    return 0;
+  }
   return static_cast<int64_t>(elemType.getIntOrFloatBitWidth());
 }
 
 inline int64_t getBishengStrideAlignTargetForBits(int64_t elementBits) {
   int64_t bitWidth = std::max<int64_t>(elementBits, 1);
-  if (bitWidth >= kNpuUbAlignBits || kNpuUbAlignBits % bitWidth != 0) return 1;
+  if (bitWidth >= kNpuUbAlignBits || kNpuUbAlignBits % bitWidth != 0) {
+    return 1;
+  }
   return kNpuUbAlignBits / bitWidth;
 }
 
-inline SmallVector<int32_t, 6> getDefaultBishengStrideAlignDims(int64_t rank) {
-  if (rank <= 1) return {};
+inline SmallVector<int32_t, kSmallVectorSizeSix> getDefaultBishengStrideAlignDims(int64_t rank) {
+  if (rank <= 1) {
+    return {};
+  }
   return {static_cast<int32_t>(rank <= 2 ? 0 : rank - 3)};
 }
 
-inline SmallVector<int32_t, 6> getBishengLogicalStructuredStrideAlignDims(int64_t rank) {
-  if (rank <= 1) return {};
+inline SmallVector<int32_t, kSmallVectorSizeSix> getBishengLogicalStructuredStrideAlignDims(int64_t rank) {
+  if (rank <= 1) {
+    return {};
+  }
   // BiShengIR MarkStrideAlign picks the last non-continuous dim before the
   // innermost unit-stride dimension. collectAlignUnits then expands dim+1, so
   // a rank-N structured vector buffer aligns its logical innermost dimension.
   return {static_cast<int32_t>(rank - 2)};
 }
 
-inline SmallVector<int32_t, 6> getBishengStorageStrideAlignDims(ArrayRef<char> staticDims) {
-  if (staticDims.size() <= 1) return {};
+inline SmallVector<int32_t, kSmallVectorSizeSix> getBishengStorageStrideAlignDims(ArrayRef<char> staticDims) {
+  if (staticDims.size() <= 1) {
+    return {};
+  }
   // This entry is for an already materialized storage shape. When ArithToHIVM
   // rank-extends a VBrc source, the trailing size-1 broadcast axis becomes the
   // innermost unit-stride dimension, so the raw stride-align mark starts one dim
@@ -232,35 +258,47 @@ inline SmallVector<int32_t, 6> getBishengStorageStrideAlignDims(ArrayRef<char> s
   // the mark moves inward to the last such dynamic dim.
   int32_t alignDim = static_cast<int32_t>(staticDims.size() <= 2 ? 0 : staticDims.size() - 3);
   for (int64_t dim = alignDim + 1, e = static_cast<int64_t>(staticDims.size()) - 1; dim < e; ++dim) {
-    if (!staticDims[dim]) alignDim = static_cast<int32_t>(dim);
+    if (!staticDims[dim]) {
+      alignDim = static_cast<int32_t>(dim);
+    }
   }
   return {alignDim};
 }
 
-inline SmallVector<int32_t, 6> getBishengNpuVectorStrideAlignDims(int64_t rank, int64_t elementBits) {
+inline SmallVector<int32_t, kSmallVectorSizeSix> getBishengNpuVectorStrideAlignDims(int64_t rank, int64_t elementBits) {
   // Sub-byte masks keep BiShengIR's default storage mark behavior; byte-addressable
   // vector buffers follow the structured path used by MarkStrideAlign.
-  if (elementBits < kNpuBitsPerByte) return getDefaultBishengStrideAlignDims(rank);
+  if (elementBits < kNpuBitsPerByte) {
+    return getDefaultBishengStrideAlignDims(rank);
+  }
   return getBishengLogicalStructuredStrideAlignDims(rank);
 }
 
-inline SmallVector<int32_t, 6> getBishengInlineBroadcastSourceStrideAlignDims(int64_t rank) {
-  if (rank <= 0) return {};
+inline SmallVector<int32_t, kSmallVectorSizeSix> getBishengInlineBroadcastSourceStrideAlignDims(int64_t rank) {
+  if (rank <= 0) {
+    return {};
+  }
   // Inline broadcast can propagate stride-align from the expanded operand back
   // to a lower-rank source. For rank-1 this is the only path that marks dim 0.
   return {static_cast<int32_t>(rank <= 2 ? 0 : rank - 2)};
 }
 
-inline SmallVector<int64_t, 6> collectBishengStrideAlignUnits(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
-                                                              ArrayRef<int32_t> alignDims, int64_t elementBits) {
-  SmallVector<int64_t, 6> alignUnits(shape.size() + 1, 1);
-  if (shape.empty() || staticDims.size() != shape.size()) return alignUnits;
+inline SmallVector<int64_t, kSmallVectorSizeSix> collectBishengStrideAlignUnits(ArrayRef<int64_t> shape,
+                                                                                ArrayRef<char> staticDims,
+                                                                                ArrayRef<int32_t> alignDims,
+                                                                                int64_t elementBits) {
+  SmallVector<int64_t, kSmallVectorSizeSix> alignUnits(shape.size() + 1, 1);
+  if (shape.empty() || staticDims.size() != shape.size()) {
+    return alignUnits;
+  }
 
   int64_t unit = getBishengStrideAlignTargetForBits(elementBits);
-  SmallVector<int64_t, 6> alignTargets(shape.size(), 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> alignTargets(shape.size(), 1);
   if (unit > 1) {
     for (int32_t dim : alignDims) {
-      if (dim < 0 || static_cast<size_t>(dim) >= shape.size()) continue;
+      if (dim < 0 || static_cast<size_t>(dim) >= shape.size()) {
+        continue;
+      }
       size_t idx = static_cast<size_t>(dim);
       alignTargets[idx] = std::lcm(alignTargets[idx], unit);
     }
@@ -283,7 +321,8 @@ inline SmallVector<int64_t, 6> collectBishengStrideAlignUnits(ArrayRef<int64_t> 
 
 inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, ArrayRef<char> staticDims,
                                                        ArrayRef<int32_t> alignDims, int64_t elementBits) {
-  SmallVector<int64_t, 6> alignUnits = collectBishengStrideAlignUnits(shape, staticDims, alignDims, elementBits);
+  SmallVector<int64_t, kSmallVectorSizeSix> alignUnits =
+    collectBishengStrideAlignUnits(shape, staticDims, alignDims, elementBits);
 
   int64_t elems = 1;
   for (size_t i = 0; i < alignUnits.size(); ++i) {
@@ -296,7 +335,9 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
 
 inline int64_t computeBishengAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes,
                                                int64_t elemBytes) {
-  if (shape.empty() || shape.size() != alignBytes.size() || elemBytes <= 0) return 0;
+  if (shape.empty() || shape.size() != alignBytes.size() || elemBytes <= 0) {
+    return 0;
+  }
   int64_t elems = 1;
   for (size_t i = 0; i < shape.size(); ++i) {
     int64_t alignUnit = alignBytes[i] > 0 ? std::max<int64_t>(alignBytes[i] / elemBytes, 1) : 1;
@@ -311,32 +352,40 @@ inline int64_t computeBishengLastDimTransposeBufferBytes(ArrayRef<int64_t> sourc
                                                          bool resultBuffer) {
   int64_t elementBits = getElementBitWidth(elemType);
   if (sourceTypeShape.empty() || sourceMaxShape.size() != sourceTypeShape.size() ||
-      permutation.size() != sourceTypeShape.size() || elementBits <= 0)
+      permutation.size() != sourceTypeShape.size() || elementBits <= 0) {
     return 0;
+  }
 
-  SmallVector<size_t, 2> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeTwo> transposeDims;
   for (size_t i = 0; i < permutation.size(); ++i) {
-    if (permutation[i] != static_cast<int64_t>(i)) transposeDims.push_back(i);
+    if (permutation[i] != static_cast<int64_t>(i)) {
+      transposeDims.push_back(i);
+    }
   }
   if (transposeDims.size() != 2 ||
-      (transposeDims[0] != sourceTypeShape.size() - 1 && transposeDims[1] != sourceTypeShape.size() - 1))
+      (transposeDims[0] != sourceTypeShape.size() - 1 && transposeDims[1] != sourceTypeShape.size() - 1)) {
     return 0;
+  }
 
-  SmallVector<int64_t, 6> sourceShape;
+  SmallVector<int64_t, kSmallVectorSizeSix> sourceShape;
   sourceShape.reserve(sourceTypeShape.size());
   for (size_t i = 0; i < sourceTypeShape.size(); ++i) {
     sourceShape.push_back(ShapedType::isDynamic(sourceTypeShape[i]) ? sourceMaxShape[i] : sourceTypeShape[i]);
   }
 
   int64_t elemBytes = std::max<int64_t>(ceilDivInt64(elementBits, kNpuBitsPerByte), 1);
-  SmallVector<int64_t, 6> resultShape(sourceShape.begin(), sourceShape.end());
+  SmallVector<int64_t, kSmallVectorSizeSix> resultShape(sourceShape.begin(), sourceShape.end());
   std::swap(resultShape[transposeDims[0]], resultShape[transposeDims[1]]);
 
-  SmallVector<int64_t, 6> sourceAlign(sourceShape.size(), 0);
-  SmallVector<int64_t, 6> resultAlign(sourceShape.size(), 0);
+  SmallVector<int64_t, kSmallVectorSizeSix> sourceAlign(sourceShape.size(), 0);
+  SmallVector<int64_t, kSmallVectorSizeSix> resultAlign(sourceShape.size(), 0);
   for (size_t dim : transposeDims) {
-    if (multiplyAndCap(sourceShape[dim], elemBytes) % kNpuUbAlignBytes != 0) sourceAlign[dim] = kNpuUbAlignBytes;
-    if (multiplyAndCap(resultShape[dim], elemBytes) % kNpuUbAlignBytes != 0) resultAlign[dim] = kNpuUbAlignBytes;
+    if (multiplyAndCap(sourceShape[dim], elemBytes) % kNpuUbAlignBytes != 0) {
+      sourceAlign[dim] = kNpuUbAlignBytes;
+    }
+    if (multiplyAndCap(resultShape[dim], elemBytes) % kNpuUbAlignBytes != 0) {
+      resultAlign[dim] = kNpuUbAlignBytes;
+    }
   }
 
   int64_t alignedDim0Bytes = alignUpInt64(multiplyAndCap(sourceShape[transposeDims[0]], elemBytes), kNpuUbAlignBytes);
@@ -361,10 +410,12 @@ inline int64_t computeBishengStrideAlignedStorageBytesWithTrailingUnit(ArrayRef<
                                                                        ArrayRef<char> staticDims,
                                                                        ArrayRef<int32_t> alignDims,
                                                                        int64_t elementBits) {
-  if (shape.empty() || staticDims.size() != shape.size() || elementBits <= 0) return 0;
+  if (shape.empty() || staticDims.size() != shape.size() || elementBits <= 0) {
+    return 0;
+  }
 
-  SmallVector<int64_t, 6> storageShape(shape.begin(), shape.end());
-  SmallVector<char, 6> storageStaticDims(staticDims.begin(), staticDims.end());
+  SmallVector<int64_t, kSmallVectorSizeSix> storageShape(shape.begin(), shape.end());
+  SmallVector<char, kSmallVectorSizeSix> storageStaticDims(staticDims.begin(), staticDims.end());
   // BiShengIR EnableStrideAlign materializes aligned storage with a trailing unit dimension.
   storageShape.push_back(1);
   storageStaticDims.push_back(true);
@@ -374,9 +425,11 @@ inline int64_t computeBishengStrideAlignedStorageBytesWithTrailingUnit(ArrayRef<
 inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> typeShape,
                                                        Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
-  if (shape.empty() || elementBits <= 0) return 0;
+  if (shape.empty() || elementBits <= 0) {
+    return 0;
+  }
 
-  SmallVector<char, 6> staticDims;
+  SmallVector<char, kSmallVectorSizeSix> staticDims;
   staticDims.reserve(shape.size());
   for (size_t i = 0; i < shape.size(); ++i) {
     staticDims.push_back(i < typeShape.size() && !ShapedType::isDynamic(typeShape[i]));
@@ -388,10 +441,12 @@ inline int64_t computeBishengStrideAlignedStorageBytes(ArrayRef<int64_t> shape, 
 inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankDim, ArrayRef<int64_t> typeShape,
                                                    Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
-  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) return 0;
+  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) {
+    return 0;
+  }
 
-  SmallVector<int64_t, 6> shape;
-  SmallVector<char, 6> staticDims;
+  SmallVector<int64_t, kSmallVectorSizeSix> shape;
+  SmallVector<char, kSmallVectorSizeSix> staticDims;
   shape.reserve(typeShape.size());
   staticDims.reserve(typeShape.size());
   for (size_t i = 0; i < typeShape.size(); ++i) {
@@ -407,10 +462,12 @@ inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankD
 inline int64_t computeBishengInlineBroadcastSourceStorageBytes(ArrayRef<int64_t> maxPerRankDim,
                                                                ArrayRef<int64_t> typeShape, Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
-  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) return 0;
+  if (typeShape.empty() || maxPerRankDim.size() != typeShape.size() || elementBits <= 0) {
+    return 0;
+  }
 
-  SmallVector<int64_t, 6> shape;
-  SmallVector<char, 6> staticDims;
+  SmallVector<int64_t, kSmallVectorSizeSix> shape;
+  SmallVector<char, kSmallVectorSizeSix> staticDims;
   shape.reserve(typeShape.size());
   staticDims.reserve(typeShape.size());
   for (size_t i = 0; i < typeShape.size(); ++i) {

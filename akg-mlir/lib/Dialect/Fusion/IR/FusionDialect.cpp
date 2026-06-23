@@ -15,13 +15,14 @@
  */
 
 #include "akg/Dialect/Fusion/IR/Fusion.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::fusion;  // NOLINT(build/namespaces)
 
 #include "akg/Dialect/Fusion/IR/FusionOpsDialect.cpp.inc"
 
-void mlir::fusion::FusionDialect::initialize() {
+void FusionDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "akg/Dialect/Fusion/IR/FusionOps.cpp.inc"

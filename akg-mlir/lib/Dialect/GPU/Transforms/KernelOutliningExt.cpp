@@ -36,25 +36,63 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_GPUKERNELOUTLININGEXT
 #define GEN_PASS_DEF_GPUKERNELOUTLININGEXT
 #include "akg/Dialect/GPU/Passes.h.inc"
+
 }  // namespace mlir
 
-using namespace mlir;              // NOLINT(build/namespaces)
-using namespace akgglobal;         // NOLINT(build/namespaces)
-using namespace mlir::akg::utils;  // NOLINT(build/namespaces)
-
+namespace {
+using mlir::Attribute;
+using mlir::Block;
+using mlir::cast;
+using mlir::DataLayoutSpecInterface;
+using mlir::DLTIDialect;
+using mlir::dyn_cast;
+using mlir::failed;
+using mlir::failure;
+using mlir::FlatSymbolRefAttr;
+using mlir::FunctionType;
+using mlir::getStridesAndOffset;
+using mlir::getUsedValuesDefinedAbove;
+using mlir::IOHelper;
+using mlir::IRMapping;
+using mlir::isa;
+using mlir::kSmallVectorSizeTwelve;
+using mlir::Location;
+using mlir::LogicalResult;
+using mlir::MemRefType;
+using mlir::MLIRContext;
+using mlir::ModuleOp;
+using mlir::OpBuilder;
+using mlir::Operation;
+using mlir::OperationPass;
+using mlir::Region;
+using mlir::SetVector;
+using mlir::SmallVector;
+using mlir::SmallVectorImpl;
+using mlir::StringRef;
+using mlir::success;
+using mlir::SymbolTable;
+using mlir::Twine;
+using mlir::Type;
+using mlir::UnitAttr;
+using mlir::Value;
+using mlir::ValueRange;
+using mlir::WalkResult;
 constexpr auto kVectorInitSize8 = 8;
 constexpr auto kVectorInitSize4 = 4;
 
 template <typename OpTy>
 static void createForAllDimensions(OpBuilder &builder, const Location loc, SmallVectorImpl<Value> &values) {
-  static const gpu::Dimension allDims[] = {gpu::Dimension::x, gpu::Dimension::y, gpu::Dimension::z};
-  std::transform(std::begin(allDims), std::end(allDims), std::back_inserter(values),
-                 [&](gpu::Dimension dim) { return builder.create<OpTy>(loc, builder.getIndexType(), dim); });
+  static const mlir::gpu::Dimension allDims[] = {mlir::gpu::Dimension::x, mlir::gpu::Dimension::y,
+                                                 mlir::gpu::Dimension::z};
+  std::transform(
+    std::begin(allDims), std::end(allDims), std::back_inserter(values),
+    [&builder, &loc](mlir::gpu::Dimension dim) { return builder.create<OpTy>(loc, builder.getIndexType(), dim); });
 }
 
 /// Adds operations generating block/thread ids and grid/block dimensions at the
@@ -65,11 +103,11 @@ static void injectGpuIndexOperations(Location loc, Region &launchFuncOpBody, Reg
   OpBuilder builder(loc->getContext());
   Block &firstBlock = launchOpBody.front();
   builder.setInsertionPointToStart(&launchFuncOpBody.front());
-  SmallVector<Value, 12> indexOps;
-  createForAllDimensions<gpu::BlockIdOp>(builder, loc, indexOps);
-  createForAllDimensions<gpu::ThreadIdOp>(builder, loc, indexOps);
-  createForAllDimensions<gpu::GridDimOp>(builder, loc, indexOps);
-  createForAllDimensions<gpu::BlockDimOp>(builder, loc, indexOps);
+  SmallVector<Value, kSmallVectorSizeTwelve> indexOps;
+  createForAllDimensions<mlir::gpu::BlockIdOp>(builder, loc, indexOps);
+  createForAllDimensions<mlir::gpu::ThreadIdOp>(builder, loc, indexOps);
+  createForAllDimensions<mlir::gpu::GridDimOp>(builder, loc, indexOps);
+  createForAllDimensions<mlir::gpu::BlockDimOp>(builder, loc, indexOps);
   // Replace the leading 12 function args with the respective thread/block index
   // operations. Iterate backwards since args are erased and indices change.
   for (const auto &indexOp : enumerate(indexOps)) {
@@ -82,7 +120,7 @@ static bool idxIsInVector(size_t funcIdx, SmallVector<int, kVectorInitSize8> &ma
                      [funcIdx](int idx) { return idx == static_cast<int>(funcIdx); });
 }
 
-static void initOperandOrder(func::FuncOp funcOp, SetVector<Value> &operands,
+static void initOperandOrder(mlir::func::FuncOp funcOp, SetVector<Value> &operands,
                              SmallVector<int, kVectorInitSize8> &mapResult) {
   auto funcArguments = funcOp.getArguments();
   for (size_t idx = 0; idx < operands.size(); idx++) {
@@ -96,7 +134,7 @@ static void initOperandOrder(func::FuncOp funcOp, SetVector<Value> &operands,
   }
 }
 
-static void getAdditionalOperandOrder(func::FuncOp funcOp, SetVector<Value> &operands,
+static void getAdditionalOperandOrder(mlir::func::FuncOp funcOp, SetVector<Value> &operands,
                                       SmallVector<int, kVectorInitSize8> &mapResult,
                                       std::map<int, int> &additionalArgs) {
   auto funcArguments = funcOp.getArguments();
@@ -134,8 +172,8 @@ static void matchOperandIndex(Value v, size_t funcIdx, SetVector<Value> &operand
   }
 }
 
-static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &operands) {
-  auto funcOp = launchOp->getParentOfType<func::FuncOp>();
+static void reviseProperOperandOrder(mlir::gpu::LaunchOp launchOp, SetVector<Value> &operands) {
+  auto funcOp = launchOp->getParentOfType<mlir::func::FuncOp>();
   if (!funcOp) {
     return;
   }
@@ -148,8 +186,8 @@ static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &o
       continue;
     }
     mlir::Value v = Value();
-    GpuCommonUtils::findAllocOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
-    GpuCommonUtils::findExpandShapeOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
+    mlir::akg::utils::GpuCommonUtils::findAllocOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
+    mlir::akg::utils::GpuCommonUtils::findExpandShapeOpForFuncArg(v, funcOp, funcArguments[funcIdx]);
     if (!v) {
       continue;
     }
@@ -177,8 +215,8 @@ static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &o
 /// Outline the `gpu.launch` operation body into a kernel function. Replace
 /// `gpu.terminator` operations by `gpu.return` in the generated function.
 /// Set block and grid size bounds if known.
-static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef kernelFnName,
-                                            SetVector<Value> &operands) {
+static mlir::gpu::GPUFuncOp outlineKernelFuncImpl(mlir::gpu::LaunchOp launchOp, StringRef kernelFnName,
+                                                  SetVector<Value> &operands) {
   Location loc = launchOp.getLoc();
   // Create a builder with no insertion point, insertion will happen separately
   // due to symbol table manipulation.
@@ -197,8 +235,8 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef ke
   std::transform(operands.begin(), operands.end(), std::back_inserter(kernelOperandTypes),
                  [](Value operand) { return operand.getType(); });
   FunctionType type = FunctionType::get(launchOp.getContext(), kernelOperandTypes, {});
-  auto outlinedFunc = builder.create<gpu::GPUFuncOp>(loc, kernelFnName, type);
-  outlinedFunc->setAttr(gpu::GPUDialect::getKernelFuncAttrName(), builder.getUnitAttr());
+  auto outlinedFunc = builder.create<mlir::gpu::GPUFuncOp>(loc, kernelFnName, type);
+  outlinedFunc->setAttr(mlir::gpu::GPUDialect::getKernelFuncAttrName(), builder.getUnitAttr());
 
   IRMapping map;
 
@@ -222,11 +260,11 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef ke
   Block &launchOpEntry = launchOpBody.front();
   Block *clonedLaunchOpEntry = map.lookup(&launchOpEntry);
   builder.setInsertionPointToEnd(&entryBlock);
-  (void)builder.create<cf::BranchOp>(loc, clonedLaunchOpEntry);
+  (void)builder.create<mlir::cf::BranchOp>(loc, clonedLaunchOpEntry);
 
-  outlinedFunc.walk([](gpu::TerminatorOp op) {
+  outlinedFunc.walk([](mlir::gpu::TerminatorOp op) {
     OpBuilder replacer(op);
-    (void)replacer.create<gpu::ReturnOp>(op.getLoc());
+    (void)replacer.create<mlir::gpu::ReturnOp>(op.getLoc());
     op.erase();
   });
   return outlinedFunc;
@@ -235,18 +273,19 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef ke
 /// Replace `gpu.launch` operations with an `gpu.launch_func` operation
 /// launching `kernelFunc`. The kernel func contains the body of the
 /// `gpu.launch` with constant region arguments inlined.
-static void convertToLaunchFuncOp(gpu::LaunchOp launchOp, gpu::GPUFuncOp kernelFunc, ValueRange operands) {
+static void convertToLaunchFuncOp(mlir::gpu::LaunchOp launchOp, mlir::gpu::GPUFuncOp kernelFunc, ValueRange operands) {
   OpBuilder builder(launchOp);
   // The launch op has an optional dynamic shared memory size. If it doesn't
   // exist, we use zero.
   Value asyncToken = launchOp.getAsyncToken();
-  auto launchFunc = builder.create<gpu::LaunchFuncOp>(
+  auto launchFunc = builder.create<mlir::gpu::LaunchFuncOp>(
     launchOp.getLoc(), kernelFunc, launchOp.getGridSizeOperandValues(), launchOp.getBlockSizeOperandValues(),
     launchOp.getDynamicSharedMemorySize(), operands, asyncToken ? asyncToken.getType() : nullptr,
     launchOp.getAsyncDependencies());
   launchOp.replaceAllUsesWith(launchFunc);
   launchOp.erase();
 }
+}  // namespace
 
 namespace {
 /// Pass that moves ops which are likely an index computation into gpu.launch
@@ -261,7 +300,7 @@ namespace {
 /// The gpu.modules are intended to be compiled to a cubin blob independently in
 /// a separate pass. The external functions can then be annotated with the
 /// symbol of the cubin accessor function.
-class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutliningExt> {
+class KernelOutliningExt : public mlir::impl::GpuKernelOutliningExtBase<KernelOutliningExt> {
  public:
   explicit KernelOutliningExt(StringRef dlStr) {
     if (!dlStr.empty() && !dataLayoutStr.hasValue()) {
@@ -273,6 +312,14 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
       : GpuKernelOutliningExtBase(other), dataLayoutSpec(other.dataLayoutSpec) {
     // cppcheck-suppress useInitializationList
     dataLayoutStr = other.dataLayoutStr.getValue();
+  }
+
+  KernelOutliningExt &operator=(const KernelOutliningExt &other) {
+    if (this != &other) {
+      dataLayoutSpec = other.dataLayoutSpec;
+      dataLayoutStr = other.dataLayoutStr.getValue();
+    }
+    return *this;
   }
 
   LogicalResult initialize(MLIRContext *context) override {
@@ -293,18 +340,18 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
   }
 
   void doShapeAlign() {
-    func::FuncOp mainFunc = [&]() {
-      func::FuncOp result;
-      getOperation()->walk([&](func::FuncOp op) { result = op; });
+    mlir::func::FuncOp mainFunc = [this]() {
+      mlir::func::FuncOp result;
+      getOperation()->walk([&result](mlir::func::FuncOp op) { result = op; });
       return result;
     }();
-    ShapeAlignTool &tool = ShapeAlignTool::getInstance();
+    akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
     auto mainFuncArgSizes = tool.getFuncArgSizes();
     if (!mainFunc || mainFuncArgSizes == 0) {
       return;
     }
     SmallVector<Value> gpuArgs;
-    getOperation()->walk([&](gpu::LaunchFuncOp funcOp) {
+    getOperation()->walk([&gpuArgs, &mainFuncArgSizes](mlir::gpu::LaunchFuncOp funcOp) {
       auto operands = funcOp.getKernelOperands();
       for (size_t i = 0; i < operands.size(); i++) {
         if (i >= mainFuncArgSizes) {
@@ -336,8 +383,9 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
   void RecordStaticShapeArgs() {
     std::vector<std::vector<int>> shapeArgs;
     size_t mainFuncSize = 0;
-    getOperation()->walk([&](func::FuncOp func) { mainFuncSize = func.getBody().front().getArguments().size(); });
-    getOperation()->walk([&](gpu::LaunchFuncOp funcOp) {
+    getOperation()->walk(
+      [&mainFuncSize](mlir::func::FuncOp func) { mainFuncSize = func.getBody().front().getArguments().size(); });
+    getOperation()->walk([&mainFuncSize, &shapeArgs](mlir::gpu::LaunchFuncOp funcOp) {
       auto operands = funcOp.getKernelOperands();
       for (size_t i = 0; i < mainFuncSize; i++) {
         mlir::MemRefType memrefType = cast<mlir::MemRefType>(operands[i].getType());
@@ -356,7 +404,7 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
 
     nlohmann::json j = shapeArgs;
     std::string kernelName = "akg_kernel";
-    (void)getOperation()->walk([&](func::FuncOp func) {
+    (void)getOperation()->walk([&kernelName](mlir::func::FuncOp func) {
       if (func->hasAttr("mindspore_kernel")) {
         kernelName = func.getName().str();
         return WalkResult::interrupt();
@@ -365,7 +413,7 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
     });
     (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
     std::string output_filename = "./akg_kernel_meta/" + kernelName + "_shape_arg.txt";
-    if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+    if (llvm::writeToOutput(output_filename, [&j](llvm::raw_ostream &OS) -> llvm::Error {
           OS << j.dump();
           return llvm::Error::success();
         })) {
@@ -376,14 +424,14 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
   void runOnOperation() override {
     SymbolTable symbolTable(getOperation());
     bool modified = false;
-    for (auto func : getOperation().getOps<func::FuncOp>()) {
+    for (auto func : getOperation().getOps<mlir::func::FuncOp>()) {
       // Insert just after the function.
       Block::iterator insertPt(func->getNextNode());
-      auto funcWalkResult = func.walk([&](gpu::LaunchOp op) {
+      auto funcWalkResult = func.walk([this, &symbolTable, &insertPt, &modified](mlir::gpu::LaunchOp op) {
         SetVector<Value> operands;
-        std::string kernelFnName = Twine(op->getParentOfType<func::FuncOp>().getName(), "_kernel").str();
+        std::string kernelFnName = Twine(op->getParentOfType<mlir::func::FuncOp>().getName(), "_kernel").str();
 
-        gpu::GPUFuncOp outlinedFunc = outlineKernelFuncImpl(op, kernelFnName, operands);
+        mlir::gpu::GPUFuncOp outlinedFunc = outlineKernelFuncImpl(op, kernelFnName, operands);
 
         // Create nested module and insert outlinedFunc. The module will
         // originally get the same name as the function, but may be renamed on
@@ -404,7 +452,7 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
     // If any new module was inserted in this module, annotate this module as
     // a container module.
     if (modified) {
-      getOperation()->setAttr(gpu::GPUDialect::getContainerModuleAttrName(), UnitAttr::get(&getContext()));
+      getOperation()->setAttr(mlir::gpu::GPUDialect::getContainerModuleAttrName(), UnitAttr::get(&getContext()));
     }
 
     bool isDynamicShape = akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0;
@@ -417,10 +465,10 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
 
  private:
   /// Returns a gpu.module containing kernelFunc and all callees (recursive).
-  gpu::GPUModuleOp createKernelModule(gpu::GPUFuncOp kernelFunc, const SymbolTable &parentSymbolTable) {
+  mlir::gpu::GPUModuleOp createKernelModule(mlir::gpu::GPUFuncOp kernelFunc, const SymbolTable &parentSymbolTable) {
     auto *context = getOperation().getContext();
     OpBuilder builder(context);
-    auto kernelModule = builder.create<gpu::GPUModuleOp>(kernelFunc.getLoc(), kernelFunc.getName());
+    auto kernelModule = builder.create<mlir::gpu::GPUModuleOp>(kernelFunc.getLoc(), kernelFunc.getName());
 
     // If a valid data layout spec was provided, attach it to the kernel module.
     // Otherwise, the default data layout will be used.
@@ -460,6 +508,8 @@ class KernelOutliningExt : public impl::GpuKernelOutliningExtBase<KernelOutlinin
 
 }  // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> mlir::createGpuKernelOutliningExt(StringRef dataLayoutStr) {
+namespace mlir {
+std::unique_ptr<OperationPass<ModuleOp>> createGpuKernelOutliningExt(StringRef dataLayoutStr) {
   return std::make_unique<KernelOutliningExt>(dataLayoutStr);
 }
+}  // namespace mlir

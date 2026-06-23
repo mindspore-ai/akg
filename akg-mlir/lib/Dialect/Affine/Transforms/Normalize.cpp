@@ -40,6 +40,10 @@ namespace mlir {
 #define GEN_PASS_DECL_NORMALIZE
 #include "akg/Dialect/Affine/Passes.h.inc"
 
+static constexpr int kTaylerExpansionNum = 5;
+static constexpr int kTaylerOrderSub = 2;
+static constexpr double kBaseTwo = 2.0;
+
 #define DEBUG_TYPE "math-normalize"
 
 namespace {
@@ -65,7 +69,7 @@ static Value buildNaNConst(PatternRewriter &rewriter, Location loc, FloatType fT
 
 static Value buildInfConst(PatternRewriter &rewriter, Location loc, FloatType fTy) {
   llvm::APFloat val = llvm::APFloat::getInf(fTy.getFloatSemantics(),
-                                            /*Negative=*/false);
+                                            /* Negative= */ false);
   return rewriter.create<arith::ConstantOp>(loc, fTy, rewriter.getFloatAttr(fTy, val));
 }
 
@@ -84,8 +88,7 @@ static Value buildRoundWithMath(PatternRewriter &rewriter, Location loc, Value x
   return rewriter.create<math::RoundOp>(loc, x);
 }
 
-/// High/low precision norm:
-///   res = x
+/// High/low precision norm///   res = x
 ///   for each p in piApproParams:
 ///     res = res - p * xRoundHigh
 ///     [if i==1 and offsetHigh: res = res + offsetHigh]
@@ -118,8 +121,7 @@ static Value buildNormSplit(PatternRewriter &rewriter, Location loc, Value x, Va
   return res;
 }
 
-/// Compute (xRound, xRoundHigh, xRoundLow):
-///   xRoundHigh = round(inputDivPi / 2048) * 2048
+/// Compute (xRound, xRoundHigh, xRoundLow)///   xRoundHigh = round(inputDivPi / 2048) * 2048
 ///   xRoundLow  = xRound - xRoundHigh
 static std::tuple<Value, Value, Value> buildXRoundSplit(PatternRewriter &rewriter, Location loc, Value inputDivPi,
                                                         Value xRound, Type elemTy) {
@@ -141,7 +143,7 @@ static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpa
   switch (taylerMode) {
     case TaylerMode::SIN: {
       //   tayler(x) ≈ x * (1 + c1*x^2 + c2*x^4 + c3*x^6 + c4*x^8)
-      if (taylerExpansionNum == 5) {
+      if (taylerExpansionNum == kTaylerExpansionNum) {
         taylerParams.push_back(1.0);             // index 0
         taylerParams.push_back(-0.166666582);    // c1
         taylerParams.push_back(8.333050e-03);    // c2
@@ -174,7 +176,7 @@ static Value createTaylerSeries(PatternRewriter &rewriter, Location loc, Value l
                                 int taylerExpansionNum, ArrayRef<double> taylerParams) {
   Value partialRes = lastTaylerTerm;
   auto elemTy = getElementTypeOrSelf(xPow.getType());
-  for (int i = 0; i < taylerExpansionNum - 2; ++i) {
+  for (int i = 0; i < taylerExpansionNum - kTaylerOrderSub; ++i) {
     double coef = taylerParams[taylerExpansionNum - i - 2];
     Value coefCst = buildFloatConst(rewriter, loc, elemTy, coef);
     Value curTerm = rewriter.create<arith::AddFOp>(loc, partialRes, coefCst);
@@ -227,16 +229,16 @@ static Value buildSinSign(PatternRewriter &rewriter, Location loc, Value x) {
 
 static double getFPMAX(FloatType fType) {
   if (fType.isF32()) {
-    return std::pow(2.0, fType.getWidth() + 30);
+    return std::pow(kBaseTwo, fType.getWidth() + 30);
   }
-  return std::pow(2.0, fType.getWidth() - 1);
+  return std::pow(kBaseTwo, fType.getWidth() - 1);
 }
 
 static double getFPMIN(FloatType fType) {
   if (fType.isF32()) {
-    return std::pow(2.0, -static_cast<int>(fType.getWidth() + 30));
+    return std::pow(kBaseTwo, -static_cast<int>(fType.getWidth() + 30));
   }
-  return std::pow(2.0, -static_cast<int>(fType.getWidth() - 1));
+  return std::pow(kBaseTwo, -static_cast<int>(fType.getWidth() - 1));
 }
 
 /// sign(x) = FP_MAX * x /(FP_MIN + FP_MAX *|x|)
@@ -322,10 +324,10 @@ struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
 
     // norm_x = input - sum_p (p * xRoundHigh + p * xRoundLow)
     Value normInput = buildNormSplit(rewriter, loc, input, xRoundHigh, xRoundLow, fTy, piApproParams,
-                                     /*offsetHigh=*/std::nullopt, /*offsetLow=*/std::nullopt);
+                                     /* offsetHigh= */ std::nullopt, /* offsetLow= */ std::nullopt);
 
     // sinTayler(norm_x), 5 terms
-    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, /*taylerExpansionNum=*/5, TaylerMode::SIN);
+    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, /* taylerExpansionNum= */ 5, TaylerMode::SIN);
 
     // sign(xRound) = floor(xRound/2)*4 - xRound*2 + 1
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
@@ -389,17 +391,17 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
     // norm with split offset: pi/2_high inserted between p[1]*high and p[1]*low,
     // pi/2_low added at the end.
     Value normInput = buildNormSplit(rewriter, loc, input, xRoundHigh, xRoundLow, fTy, piApproParams,
-                                     /*offsetHigh=*/kPiOver2High, /*offsetLow=*/kPiOver2Low);
+                                     /* offsetHigh= */ kPiOver2High, /* offsetLow= */ kPiOver2Low);
 
     // sinTayler is reused for cos via the offset shift.
-    Value cosTayler = buildTayler(rewriter, loc, normInput, /*taylerExpansionNum=*/5, TaylerMode::SIN);
+    Value cosTayler = buildTayler(rewriter, loc, normInput, /* taylerExpansionNum= */ 5, TaylerMode::SIN);
 
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
 
     Value res = rewriter.create<arith::MulFOp>(loc, cosTayler, signX);
 
     // Clip result to [-1, 1] (cos's mathematical range).
-    res = clipInput(rewriter, loc, res, /*maxVal=*/1.0, /*minVal=*/-1.0);
+    res = clipInput(rewriter, loc, res, /* maxVal= */ 1.0, /* minVal= */ -1.0);
 
     if (needCastBack) {
       auto f16Ty = rewriter.getF16Type();

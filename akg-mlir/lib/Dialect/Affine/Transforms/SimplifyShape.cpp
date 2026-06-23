@@ -23,9 +23,9 @@
 
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
 #include "akg/Utils/GlobalVars.hpp"
-using akgglobal::ShapeAlignTool;
-
+#include "akg/Utils/SmallVectorSize.h"
 namespace mlir {
+using akgglobal::ShapeAlignTool;
 #ifndef GEN_PASS_DEF_SIMPLIFYSHAPE
 #define GEN_PASS_DEF_SIMPLIFYSHAPE
 #include "akg/Dialect/Affine/Passes.h.inc"
@@ -53,6 +53,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
  public:
   SimplifyShapePass() = default;
   SimplifyShapePass(const SimplifyShapePass &pass) = default;
+  SimplifyShapePass &operator=(const SimplifyShapePass &) = default;
   explicit SimplifyShapePass(const bool keepArg) { this->keepArgsShape = keepArg; }
   explicit SimplifyShapePass(const SimplifyShapeOptions &options) : SimplifyShapeBase(options) {}
 
@@ -260,12 +261,12 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
   void simplifyOpsUsingBlockArguments(mlir::ModuleOp &m) {
     ShapeAlignTool &tool = ShapeAlignTool::getInstance();
-    m.walk([&](mlir::func::FuncOp fop) {
+    m.walk([&m, this, &tool](mlir::func::FuncOp fop) {
       FunctionType functionType = fop.getFunctionType();
       SmallVector<Type, kVectorSizeEight> newArgTypes;
       SmallVector<Type, kVectorSizeFour> resultTypes;
       FunctionType newFuncType;
-      resultTypes = llvm::to_vector<4>(functionType.getResults());
+      resultTypes = llvm::to_vector<kSmallVectorSizeFour>(functionType.getResults());
 
       assert(resultTypes.empty() &&
              "Function result must be empty due to the call of "
@@ -330,12 +331,12 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
   }
 
   void simplifyAllocOpShape(mlir::ModuleOp m) {
-    m.walk([&](mlir::memref::AllocOp allocop) { simplifyDefiningOp(allocop); });
+    m.walk([this, &m](mlir::memref::AllocOp allocop) { simplifyDefiningOp(allocop); });
   }
 
   void simplifyGlobalOps(mlir::ModuleOp m) {
     // First simplify the globalops definition in the symbol table
-    m.walk([&](mlir::memref::GlobalOp globalop) {
+    m.walk([this, &m](mlir::memref::GlobalOp globalop) {
       MemRefType resultType = cast<MemRefType>(globalop.getType());
       const SimplifiedShapeInfos resultSimplifiedInfos = getSimplifiedShapeInfos(resultType);
       MemRefType resultSimplifyType = resultSimplifiedInfos.first;
@@ -365,13 +366,13 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     });
 
     // Now simplify uses of globalops within the function
-    m.walk([&](mlir::memref::GetGlobalOp getglobalop) { simplifyDefiningOp(getglobalop); });
+    m.walk([this, &m](mlir::memref::GetGlobalOp getglobalop) { simplifyDefiningOp(getglobalop); });
   }
 
   void runOnOperation() override {
     mlir::ModuleOp m = getOperation();
 
-    auto walkResult = m.walk([&](mlir::memref::ReshapeOp op) {
+    auto walkResult = m.walk([this, &m](mlir::memref::ReshapeOp op) {
       LLVM_DEBUG({
         llvm::dbgs() << DEBUG_TYPE << " - DISABLE --simplify-shape pass. Don't treat memref.reshape op\n";
         op.dump();
@@ -382,7 +383,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
       return;
     }
 
-    walkResult = m.walk([&](mlir::memref::SubViewOp op) {
+    walkResult = m.walk([this, &m](mlir::memref::SubViewOp op) {
       LLVM_DEBUG({
         llvm::dbgs() << DEBUG_TYPE << " - DISABLE --simplify-shape pass. Don't treat memref.subview op\n";
         op.dump();

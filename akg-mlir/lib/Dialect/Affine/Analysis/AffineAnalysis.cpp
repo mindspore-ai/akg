@@ -43,6 +43,7 @@
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 #define DEBUG_TYPE "akg-affine-analysis"
 
@@ -129,7 +130,7 @@ static bool isLocallyDefined(Value v, Operation *enclosingOp) {
 /// 'indexSet' correspond to the loops surrounding 'op' from outermost to
 /// innermost.
 static LogicalResult getOpIndexSet(Operation *op, FlatAffineValueConstraints *indexSet) {
-  SmallVector<Operation *, 4> ops;
+  SmallVector<Operation *, kSmallVectorSizeFour> ops;
   getEnclosingAffineOps(*op, &ops);
   return getIndexSet(ops, indexSet);
 }
@@ -141,8 +142,8 @@ bool isLoopMemoryParallelAKG(AffineForOp forOp) {
   }
 
   // Collect all load and store ops in loop nest rooted at 'forOp'.
-  SmallVector<Operation *, 8> loadAndStoreOps;
-  auto walkResult = forOp.walk([&](Operation *op) -> WalkResult {
+  SmallVector<Operation *, kSmallVectorSizeEight> loadAndStoreOps;
+  auto walkResult = forOp.walk([&loadAndStoreOps, &forOp](Operation *op) -> WalkResult {
     if (auto readOp = dyn_cast<AffineReadOpInterface>(op)) {
       // Memrefs that are allocated inside `forOp` need not be considered.
       if (!isLocallyDefined(readOp.getMemRef(), forOp)) {
@@ -249,7 +250,7 @@ static unsigned getNumCommonLoops(const FlatAffineValueConstraints &srcDomain,
 static Block *getCommonBlockInAffineScope(Operation *opA, Operation *opB) {
   // Get the chain of ancestor blocks for the given `MemRefAccess` instance. The
   // chain extends up to and includnig an op that starts an affine scope.
-  auto getChainOfAncestorBlocks = [&](Operation *op, SmallVectorImpl<Block *> &ancestorBlocks) {
+  auto getChainOfAncestorBlocks = [](Operation *op, SmallVectorImpl<Block *> &ancestorBlocks) {
     Block *currBlock = op->getBlock();
     // Loop terminates when the currBlock is nullptr or its parent operation
     // holds an affine scope.
@@ -262,8 +263,8 @@ static Block *getCommonBlockInAffineScope(Operation *opA, Operation *opB) {
   };
 
   // Find the closest common block.
-  SmallVector<Block *, 4> srcAncestorBlocks;
-  SmallVector<Block *, 4> dstAncestorBlocks;
+  SmallVector<Block *, kSmallVectorSizeFour> srcAncestorBlocks;
+  SmallVector<Block *, kSmallVectorSizeFour> dstAncestorBlocks;
   getChainOfAncestorBlocks(opA, srcAncestorBlocks);
   getChainOfAncestorBlocks(opB, dstAncestorBlocks);
 
@@ -307,7 +308,7 @@ static void addOrderingConstraints(const FlatAffineValueConstraints &srcDomain,
                                    const FlatAffineValueConstraints &dstDomain, unsigned loopDepth,
                                    IntegerRelation *dependenceDomain) {
   unsigned numCols = dependenceDomain->getNumCols();
-  SmallVector<int64_t, 4> eq(numCols);
+  SmallVector<int64_t, kSmallVectorSizeFour> eq(numCols);
   unsigned numSrcDims = srcDomain.getNumDimVars();
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain);
   unsigned numCommonLoopConstraints = std::min(numCommonLoops, loopDepth);
@@ -331,9 +332,9 @@ static void addOrderingConstraints(const FlatAffineValueConstraints &srcDomain,
 static void computeDirectionVector(const FlatAffineValueConstraints &srcDomain,
                                    const FlatAffineValueConstraints &dstDomain, unsigned loopDepth,
                                    IntegerPolyhedron *dependenceDomain,
-                                   SmallVector<DependenceComponent, 2> *dependenceComponents) {
+                                   SmallVector<DependenceComponent, kSmallVectorSizeTwo> *dependenceComponents) {
   // Find the number of common loops shared by src and dst accesses.
-  SmallVector<AffineForOp, 4> commonLoops;
+  SmallVector<AffineForOp, kSmallVectorSizeFour> commonLoops;
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain, &commonLoops);
   if (numCommonLoops == kEmptyVarCount) {
     return;
@@ -347,7 +348,7 @@ static void computeDirectionVector(const FlatAffineValueConstraints &srcDomain,
 
   // Add equality constraints for each common loop, setting newly introduced
   // variable at column 'j' to the 'dst' IV minus the 'src IV.
-  SmallVector<int64_t, 4> eq;
+  SmallVector<int64_t, kSmallVectorSizeFour> eq;
   eq.resize(dependenceDomain->getNumCols());
   unsigned numSrcDims = srcDomain.getNumDimVars();
   // Constraint variables format:
@@ -452,7 +453,7 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
     }
   }
 
-  SmallVector<Value, 8> operands(indices.begin(), indices.end());
+  SmallVector<Value, kSmallVectorSizeEight> operands(indices.begin(), indices.end());
   fullyComposeAffineMapAndOperands(&map, &operands);
   map = simplifyAffineMap(map);
   canonicalizeMapAndOperands(&map, &operands);
@@ -517,8 +518,7 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //       0        -1        0         0         0     0     50   >= 0
 //  The equalities in the above relations correspond to the access maps while
 //  the inequalities corresspond to the iteration domain constraints.
-// The dependence relation formed:
-//   [src_dim0, src_dim1, dst_dim0, dst_dim1,  %M,   %N,   %K,  const]
+// The dependence relation formed//   [src_dim0, src_dim1, dst_dim0, dst_dim1,  %M,   %N,   %K,  const]
 //      2         -4        -7        -9        1     1     0     0    = 0
 //      0          3         0        -11      -1     0     1     0    = 0
 //       1         0         0         0        0     0     0     0    >= 0
@@ -529,10 +529,10 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 //       0         0        -1         0        0     0     0     100  >= 0
 //       0         0         0         1        0     0     0     0    >= 0
 //       0         0         0        -1        0     0     0     50   >= 0
-DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess,
-                                                unsigned loopDepth, FlatAffineValueConstraints *dependenceConstraints,
-                                                SmallVector<DependenceComponent, 2> *dependenceComponents,
-                                                bool allowRAR, bool checkSrcBeforeDst) {
+DependenceResult checkMemrefAccessDependenceAKG(
+  const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess, unsigned loopDepth,
+  FlatAffineValueConstraints *dependenceConstraints,
+  SmallVector<DependenceComponent, kSmallVectorSizeTwo> *dependenceComponents, bool allowRAR, bool checkSrcBeforeDst) {
   LLVM_DEBUG(llvm::dbgs() << "Checking for dependence at depth: " << Twine(loopDepth) << " between:\n";);
   LLVM_DEBUG(srcAccess.opInst->dump());
   LLVM_DEBUG(dstAccess.opInst->dump());
@@ -652,7 +652,8 @@ AKGMemRefAccess::AKGMemRefAccess(Operation *loadOrStoreOpInst) {
 }
 
 // Adds loop IV bounds to 'cst' for loop IVs not found in 'ivs'.
-static LogicalResult addMissingLoopIVBounds(SmallPtrSet<Value, 8> &ivs, FlatAffineValueConstraints *cst) {
+static LogicalResult addMissingLoopIVBounds(SmallPtrSet<Value, kSmallVectorSizeEight> &ivs,
+                                            FlatAffineValueConstraints *cst) {
   for (unsigned i = 0, e = cst->getNumDimVars(); i < e; ++i) {
     auto value = cst->getValue(i);
     if (!ivs.contains(value)) {
@@ -689,11 +690,11 @@ static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceSta
   if (!sliceUnionCst.areVarsAlignedWithOther(tmpSliceCst)) {
     // Pre-constraint var alignment: record loop IVs used in each constraint
     // system.
-    SmallPtrSet<Value, 8> sliceUnionIVs;
+    SmallPtrSet<Value, kSmallVectorSizeEight> sliceUnionIVs;
     for (unsigned k = 0, l = sliceUnionCst.getNumDimVars(); k < l; ++k) {
       sliceUnionIVs.insert(sliceUnionCst.getValue(k));
     }
-    SmallPtrSet<Value, 8> tmpSliceIVs;
+    SmallPtrSet<Value, kSmallVectorSizeEight> tmpSliceIVs;
     for (unsigned k = 0, l = tmpSliceCst.getNumDimVars(); k < l; ++k) {
       tmpSliceIVs.insert(tmpSliceCst.getValue(k));
     }
@@ -807,7 +808,7 @@ static bool sliceLevelIsFullLoopRange(const ComputationSliceState &slice, unsign
 
 // Locate v in the dim portion of ops; insert at the dim/symbol boundary if absent. Updates
 // numDims when an insert occurs. Returns v's dim index.
-static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &numDims, Value v) {
+static unsigned findOrInsertDimOperand(SmallVector<Value, kSmallVectorSizeFour> &ops, unsigned &numDims, Value v) {
   for (unsigned k = 0; k < numDims && k < ops.size(); ++k) {
     if (ops[k] == v) {
       return k;
@@ -832,7 +833,8 @@ static unsigned findOrInsertDimOperand(SmallVector<Value, 4> &ops, unsigned &num
 // path and (b) are not nested under any of those gating ifs. If such "outside-the-gating"
 // work exists, the slice level is reset to the loop's full constant domain so the cloned
 // body preserves all original producer iterations.
-static void collectGatingIfsAndIVs(Operation *src, SmallPtrSet<Operation *, 4> &gatingIfs, DenseSet<Value> &gatedIVs) {
+static void collectGatingIfsAndIVs(Operation *src, SmallPtrSet<Operation *, kSmallVectorSizeFour> &gatingIfs,
+                                   DenseSet<Value> &gatedIVs) {
   for (Operation *p = src->getParentOp(); p != nullptr; p = p->getParentOp()) {
     auto ifOp = dyn_cast<AffineIfOp>(p);
     if (!ifOp) {
@@ -859,7 +861,7 @@ static bool sliceLevelAlreadyAtFullRange(const ComputationSliceState &slice, uns
   return lbC && ubC && lbC.getValue() == loopLb && ubC.getValue() == loopUb;
 }
 
-static bool buildPathToLoop(Operation *src, AffineForOp loop, SmallPtrSet<Operation *, 8> &onPath) {
+static bool buildPathToLoop(Operation *src, AffineForOp loop, SmallPtrSet<Operation *, kSmallVectorSizeEight> &onPath) {
   for (Operation *p = src; p != nullptr; p = p->getParentOp()) {
     onPath.insert(p);
     if (p == loop.getOperation()) {
@@ -869,10 +871,11 @@ static bool buildPathToLoop(Operation *src, AffineForOp loop, SmallPtrSet<Operat
   return false;
 }
 
-static bool loopBodyHasWorkOutsideGating(Operation *loopOp, const SmallPtrSet<Operation *, 8> &onPath,
-                                         const SmallPtrSet<Operation *, 4> &gatingIfs) {
+static bool loopBodyHasWorkOutsideGating(Operation *loopOp,
+                                         const SmallPtrSet<Operation *, kSmallVectorSizeEight> &onPath,
+                                         const SmallPtrSet<Operation *, kSmallVectorSizeFour> &gatingIfs) {
   bool hasOutsideWork = false;
-  loopOp->walk([&](Operation *op) {
+  loopOp->walk([&hasOutsideWork, loopOp, &onPath, &gatingIfs](Operation *op) {
     if (op == loopOp) {
       return WalkResult::advance();
     }
@@ -900,7 +903,7 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
   }
   Operation *src = opsA.front();
 
-  SmallPtrSet<Operation *, 4> gatingIfs;
+  SmallPtrSet<Operation *, kSmallVectorSizeFour> gatingIfs;
   DenseSet<Value> gatedIVs;
   collectGatingIfsAndIVs(src, gatingIfs, gatedIVs);
   if (gatingIfs.empty() || gatedIVs.empty()) {
@@ -922,7 +925,7 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
       continue;
     }
 
-    SmallPtrSet<Operation *, 8> onPath;
+    SmallPtrSet<Operation *, kSmallVectorSizeEight> onPath;
     if (!buildPathToLoop(src, loop, onPath)) {
       continue;
     }
@@ -993,7 +996,7 @@ static void collectForbiddenWriteSinks(ArrayRef<Operation *> opsA, ArrayRef<Oper
 
 static bool candidateWritesForbidden(AffineForOp forOp, const DenseSet<Value> &forbiddenWriteSinks) {
   bool hit = false;
-  forOp.getOperation()->walk([&](Operation *nested) {
+  forOp.getOperation()->walk([&hit, &forbiddenWriteSinks](Operation *nested) {
     auto w = dyn_cast<AffineWriteOpInterface>(nested);
     if (!w) {
       return WalkResult::advance();
@@ -1037,10 +1040,11 @@ static AffineForOp findMatchingSiblingLoop(Block::iterator searchStart, Block *s
 // corrupt fused semantics.
 // Returns the chain on success, empty vector on failure. Shared by both
 // slice-IV extension (backward) and receiver extension (forward).
-static SmallVector<AffineForOp, 4> findOpsASiblingChain(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
-                                                        ArrayRef<AffineForOp> partnerLoops, unsigned startDepth,
-                                                        unsigned loopDepth) {
-  SmallVector<AffineForOp, 4> extLoops;
+static SmallVector<AffineForOp, kSmallVectorSizeFour> findOpsASiblingChain(ArrayRef<Operation *> opsA,
+                                                                           ArrayRef<Operation *> opsB,
+                                                                           ArrayRef<AffineForOp> partnerLoops,
+                                                                           unsigned startDepth, unsigned loopDepth) {
+  SmallVector<AffineForOp, kSmallVectorSizeFour> extLoops;
   if (startDepth >= loopDepth) {
     return extLoops;
   }
@@ -1134,7 +1138,7 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
     slice.ivs.push_back(srcLoop.getInductionVar());
     slice.lbs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0));
     slice.ubs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0 + step));
-    SmallVector<Value, 4> operands{partnerLoop.getInductionVar()};
+    SmallVector<Value, kSmallVectorSizeFour> operands{partnerLoop.getInductionVar()};
     slice.lbOperands.push_back(operands);
     slice.ubOperands.push_back(operands);
   }
@@ -1218,7 +1222,7 @@ static void addMemrefConflictCandidates(ArrayRef<Operation *> clonedOps, Block *
 
   DenseSet<Value> clonedWrites;
   DenseSet<Value> clonedReads;
-  clonedRoot->walk([&](Operation *nested) {
+  clonedRoot->walk([&clonedWrites, &clonedReads](Operation *nested) {
     if (auto w = dyn_cast<AffineWriteOpInterface>(nested)) {
       clonedWrites.insert(getSourceMemRef(w.getMemRef()));
     }
@@ -1226,9 +1230,9 @@ static void addMemrefConflictCandidates(ArrayRef<Operation *> clonedOps, Block *
       clonedReads.insert(getSourceMemRef(r.getMemRef()));
     }
   });
-  auto opConflicts = [&](Operation &op) {
+  auto opConflicts = [&clonedWrites, &clonedReads](Operation &op) {
     bool hit = false;
-    op.walk([&](Operation *nested) {
+    op.walk([&hit, &clonedWrites, &clonedReads](Operation *nested) {
       if (auto r = dyn_cast<AffineReadOpInterface>(nested)) {
         if (clonedWrites.count(getSourceMemRef(r.getMemRef()))) {
           hit = true;
@@ -1256,8 +1260,8 @@ static void addMemrefConflictCandidates(ArrayRef<Operation *> clonedOps, Block *
 // back to their top-level ancestor in targetBlock. Keeps tightly coupled computations
 // (e.g. co-used loads feeding a single arith op) contiguous around the insertion point.
 static void expandCandidatesViaSSA(Block *targetBlock, DenseSet<Operation *> &candidates) {
-  SmallVector<Operation *, 8> worklist(candidates.begin(), candidates.end());
-  auto visit = [&](Operation *neighbor) {
+  SmallVector<Operation *, kSmallVectorSizeEight> worklist(candidates.begin(), candidates.end());
+  auto visit = [&targetBlock, &candidates, &worklist](Operation *neighbor) {
     if (!neighbor) {
       return;
     }
@@ -1268,7 +1272,7 @@ static void expandCandidatesViaSSA(Block *targetBlock, DenseSet<Operation *> &ca
   };
   while (!worklist.empty()) {
     Operation *op = worklist.pop_back_val();
-    op->walk([&](Operation *nested) {
+    op->walk([&visit](Operation *nested) {
       for (Value res : nested->getResults()) {
         for (Operation *user : res.getUsers()) {
           visit(user);
@@ -1290,7 +1294,7 @@ static Block::iterator chooseInsertPoint(ArrayRef<Operation *> opsA, ArrayRef<Op
                                          Block *targetBlock, ArrayRef<AffineForOp> surroundingLoops,
                                          bool isBackwardSlice, Block::iterator fallbackPoint) {
   DenseSet<Operation *> candidates;
-  auto addCandidate = [&](Operation *op) {
+  auto addCandidate = [&targetBlock, &candidates](Operation *op) {
     if (!op) {
       return;
     }
@@ -1328,10 +1332,12 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   std::vector<std::pair<Operation *, Operation *>> dependentOpPairs;
   for (auto *i : opsA) {
     AKGMemRefAccess srcAccess(i);
-    const bool hasFailure = std::any_of(opsB.begin(), opsB.end(), [&](Operation *j) {
-      return failed(processOpPairForSliceUnion(srcAccess, i, j, loopDepth, numCommonLoops, isBackwardSlice,
-                                               sliceUnionCst, dependentOpPairs));
-    });
+    const bool hasFailure = std::any_of(
+      opsB.begin(), opsB.end(),
+      [&srcAccess, i, loopDepth, numCommonLoops, isBackwardSlice, &sliceUnionCst, &dependentOpPairs](Operation *j) {
+        return failed(processOpPairForSliceUnion(srcAccess, i, j, loopDepth, numCommonLoops, isBackwardSlice,
+                                                 sliceUnionCst, dependentOpPairs));
+      });
     if (hasFailure) {
       return SliceComputationResult::GenericFailure;
     }
@@ -1348,19 +1354,19 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   //   deep reference for sibling-based depth lifts. In backward this matches the
   //   receiver; in forward (shallow opsA) it provides the deep loops the receiver
   //   needs to grow toward.
-  SmallVector<Operation *, 4> ops;
+  SmallVector<Operation *, kSmallVectorSizeFour> ops;
   ops.reserve(dependentOpPairs.size());
   std::transform(dependentOpPairs.begin(), dependentOpPairs.end(), std::back_inserter(ops),
                  [isBackwardSlice](const auto &dep) { return isBackwardSlice ? dep.second : dep.first; });
 
-  SmallVector<Operation *, 4> partnerOps;
+  SmallVector<Operation *, kSmallVectorSizeFour> partnerOps;
   partnerOps.reserve(dependentOpPairs.size());
   std::transform(dependentOpPairs.begin(), dependentOpPairs.end(), std::back_inserter(partnerOps),
                  [](const auto &dep) { return dep.second; });
 
-  SmallVector<AffineForOp, 4> surroundingLoops;
+  SmallVector<AffineForOp, kSmallVectorSizeFour> surroundingLoops;
   unsigned innermostCommonLoopDepth = getInnermostCommonLoopDepth(ops, &surroundingLoops);
-  SmallVector<AffineForOp, 4> partnerLoops;
+  SmallVector<AffineForOp, kSmallVectorSizeFour> partnerLoops;
   unsigned partnerCommonLoopDepth = getInnermostCommonLoopDepth(partnerOps, &partnerLoops);
   if (loopDepth > innermostCommonLoopDepth) {
     // Receiver is shallower than the requested fusion depth. Backward mode handles
@@ -1391,7 +1397,7 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
                                &sliceUnion->ubs);
 
   // Add slice bound operands of union.
-  SmallVector<Value, 4> sliceBoundOperands;
+  SmallVector<Value, kSmallVectorSizeFour> sliceBoundOperands;
   sliceUnionCst.getValues(numSliceLoopIVs, sliceUnionCst.getNumDimAndSymbolVars(), &sliceBoundOperands);
 
   // Copy src loop IVs from 'sliceUnionCst' to 'sliceUnion'.

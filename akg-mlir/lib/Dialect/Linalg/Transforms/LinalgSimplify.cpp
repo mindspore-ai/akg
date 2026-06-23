@@ -34,24 +34,48 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_LINALGSIMPLIFY
 #define GEN_PASS_DEF_LINALGSIMPLIFY
 #include "akg/Dialect/Linalg/Passes.h.inc"
+
 }  // namespace mlir
 
-using namespace mlir;          // NOLINT(build/namespaces)
-using namespace mlir::linalg;  // NOLINT(build/namespaces)
+namespace {
+using mlir::applyPatternsAndFoldGreedily;
+using mlir::cast;
+using mlir::dyn_cast;
+using mlir::GreedyRewriteConfig;
+using mlir::isa;
+using mlir::kSmallVectorSizeTwo;
+using mlir::LogicalResult;
+using mlir::MLIRContext;
+using mlir::Operation;
+using mlir::OpOperand;
+using mlir::OpRewritePattern;
+using mlir::PatternBenefit;
+using mlir::PatternRewriter;
+using mlir::RewritePatternSet;
+using mlir::ShapedType;
+using mlir::SmallVector;
+using mlir::success;
+using mlir::SymbolicShapeAnalysis;
+using mlir::Type;
+using mlir::Value;
+using mlir::WalkOrder;
+using mlir::WalkResult;
 
-using ValCollector = llvm::SmallVector<Value, 2>;
+using ValCollector = llvm::SmallVector<Value, kSmallVectorSizeTwo>;
 // map between producer and it's consumers.
 static llvm::DenseMap<Value, ValCollector> producerConsumerMap;
 // collect all symbolic-equal dimensions.
 static std::unordered_map<std::string, ValCollector> dimMap;
+}  // namespace
 
 /// fuse one of the dynamic broadCasts to their corresponding elementwise Op.
-// Convert from:
+// Convert from
 // %empty0 = tensor.empty(...)
 // %producer0 = linalg.generic {}
 //   ins(%arg0)
@@ -82,8 +106,8 @@ static std::unordered_map<std::string, ValCollector> dimMap;
 // %consumer = linalg.generic {} ins(%collapsed0, %collapsed_1 ...) outs(%11 ...)
 
 static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *fusedOperand) {
-  auto producer = fusedOperand->get().getDefiningOp<GenericOp>();
-  auto consumer = dyn_cast<GenericOp>(fusedOperand->getOwner());
+  auto producer = fusedOperand->get().getDefiningOp<mlir::linalg::GenericOp>();
+  auto consumer = dyn_cast<mlir::linalg::GenericOp>(fusedOperand->getOwner());
   if (producer == nullptr || consumer == nullptr) {
     return;
   }
@@ -116,11 +140,12 @@ static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *f
   }
 }
 
-class LinalgSimplifyPattern : public OpRewritePattern<GenericOp> {
+namespace {
+class LinalgSimplifyPattern : public OpRewritePattern<mlir::linalg::GenericOp> {
  public:
-  LinalgSimplifyPattern(MLIRContext *context, ControlFusionFn fun, PatternBenefit benefit = 1)
-      : OpRewritePattern<GenericOp>(context, benefit), controlFn(std::move(fun)) {}
-  LogicalResult matchAndRewrite(GenericOp genericOp, PatternRewriter &rewriter) const override {
+  LinalgSimplifyPattern(MLIRContext *context, mlir::linalg::ControlFusionFn fun, PatternBenefit benefit = 1)
+      : OpRewritePattern<mlir::linalg::GenericOp>(context, benefit), controlFn(std::move(fun)) {}
+  LogicalResult matchAndRewrite(mlir::linalg::GenericOp genericOp, PatternRewriter &rewriter) const override {
     for (OpOperand &opOperand : genericOp->getOpOperands()) {
       if (!controlFn(&opOperand)) {
         continue;
@@ -131,17 +156,20 @@ class LinalgSimplifyPattern : public OpRewritePattern<GenericOp> {
   }
 
  private:
-  ControlFusionFn controlFn;
+  mlir::linalg::ControlFusionFn controlFn;
 };
+}  // namespace
 
-void mlir::populateElementwiseOpsSimplify(RewritePatternSet &patterns,
-                                          const ControlFusionFn &controlElementwiseOpsFusion) {
+namespace mlir {
+void populateElementwiseOpsSimplify(RewritePatternSet &patterns,
+                                    const mlir::linalg::ControlFusionFn &controlElementwiseOpsFusion) {
   auto *context = patterns.getContext();
   (void)patterns.add<LinalgSimplifyPattern>(context, controlElementwiseOpsFusion);
 }
+}  // namespace mlir
 
 namespace {
-struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
+struct LinalgSimplify : public mlir::impl::LinalgSimplifyBase<LinalgSimplify> {
   void runOnOperation() override {
     Operation *op = getOperation();
     MLIRContext *context = op->getContext();
@@ -154,7 +182,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     grc.useTopDownTraversal = true;
 
     // optional:Add broadcastTo transform patterns for Fusion. use populateBroadcastToTransform Pass
-    ControlFusionFn controlFn = [](OpOperand *fusedOperand) {
+    mlir::linalg::ControlFusionFn controlFn = [](OpOperand *fusedOperand) {
       Operation *producer = fusedOperand->get().getDefiningOp();
       return producer;
     };
@@ -171,7 +199,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     }
     // Add the patterns that clean up dead operands and results.
     RewritePatternSet csePatterns0(context);
-    populateEraseUnusedOperandsAndResultsPatterns(csePatterns0);
+    mlir::linalg::populateEraseUnusedOperandsAndResultsPatterns(csePatterns0);
     (void)applyPatternsAndFoldGreedily(getOperation(), std::move(csePatterns0), grc);
 
     // Binding all equal (such as symbolic-equal) dimensions to the same SSA value.
@@ -180,7 +208,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     // 1 Analyze tensor.castOp
     // 1.1 Collect tensor.cast() first.
     SmallVector<Operation *> castCollector;
-    op->walk<WalkOrder::PreOrder>([&](tensor::CastOp castOp) {
+    op->walk<WalkOrder::PreOrder>([&castCollector](mlir::tensor::CastOp castOp) {
       castCollector.push_back(castOp.getOperation());
       return WalkResult::advance();
     });
@@ -198,7 +226,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     uint64_t uniqueNum = 0;
     std::map<std::string, uint64_t> symMap0;
     for (int64_t i = castCollector.size() - 1; i >= 0; i--) {
-      tensor::CastOp castOp = dyn_cast<tensor::CastOp>(castCollector[i]);
+      mlir::tensor::CastOp castOp = dyn_cast<mlir::tensor::CastOp>(castCollector[i]);
       Type inTy = castOp.getSource().getType();
       Type outTy = castOp.getType();
       llvm::SmallVector<std::string> inSymbol = *analysis.getSymbolicShape(inTy);
@@ -214,7 +242,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     }
     // analysis tensor.dim()
     std::map<uint64_t, std::string> symMap1;
-    op->walk([&](tensor::DimOp dimOp) {
+    op->walk([&analysis, &symMap0, &symMap1, &uniqueNum, &dimMap](mlir::tensor::DimOp dimOp) {
       std::optional<int64_t> maybeConstantIndex = dimOp.getConstantIndex();
       if (!maybeConstantIndex) {
         return WalkResult::advance();
@@ -242,10 +270,12 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     }
     // Add the patterns that clean up dead operands and results.
     RewritePatternSet csePatterns1(context);
-    populateEraseUnusedOperandsAndResultsPatterns(csePatterns1);
+    mlir::linalg::populateEraseUnusedOperandsAndResultsPatterns(csePatterns1);
     (void)applyPatternsAndFoldGreedily(getOperation(), std::move(csePatterns1), grc);
   }
 };
 }  // namespace
 
-std::unique_ptr<mlir::Pass> mlir::createLinalgSimplifyPass() { return std::make_unique<LinalgSimplify>(); }
+namespace mlir {
+std::unique_ptr<Pass> createLinalgSimplifyPass() { return std::make_unique<LinalgSimplify>(); }
+}  // namespace mlir

@@ -42,7 +42,7 @@ class Axis;
 using AxisPtr = std::shared_ptr<Axis>;
 class Axis {
  public:
-  enum AxisLabel { kDefault = 0, kMultiCore, kUnroll, kVectorization, kReduction, kDynamic };
+  enum class AxisLabel { kDefault = 0, kMultiCore, kUnroll, kVectorization, kReduction, kDynamic };
   explicit Axis(std::string name);
   Axis(size_t bandIdx, size_t axisIdx, affine::AffineForOp affineLoop);
   Axis(size_t bandIdx, size_t axisIdx, mlir::scf::ForOp scfLoop);

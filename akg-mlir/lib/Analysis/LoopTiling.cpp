@@ -56,6 +56,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 using llvm::DenseMap;
 using llvm::SmallVector;
@@ -87,11 +88,10 @@ static constexpr int64_t kDefaultNpuCoreNum = 48;
 // Main tiling functions
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
                                              bool isStaticShape, TilingMetadata *metadata = nullptr);
-static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling,
-                                                std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
-                                                std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                size_t &levelToTile);
+static LogicalResult calculateTileSizesForBands(
+  func::FuncOp funcOp, bool useAutoTiling, std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs, size_t &levelToTile);
 static LogicalResult applyTilingToLoop(mlir::scf::ForOp loop, ArrayRef<Value> tileSizeValues,
                                        ArrayRef<unsigned> tileSizesInt, OpBuilder &builder,
                                        std::map<int64_t, Value> &constantCache,
@@ -100,8 +100,8 @@ static LogicalResult applyTilingToLoop(mlir::scf::ForOp loop, ArrayRef<Value> ti
                                        Value parallelTileCoord = Value(), bool useRuntimeTileCounts = false);
 
 struct LeafBranchBandPlan {
-  SmallVector<mlir::scf::ForOp, 6> representativeBand;
-  SmallVector<mlir::scf::ForOp, 6> peerLeafLoops;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> representativeBand;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerLeafLoops;
   unsigned representativeLeafDim = 0;
   bool hasLeafBranching = false;
 };
@@ -140,10 +140,10 @@ struct TileRewriteContext {
 
 // Loop tiling core helpers
 static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value tilesize,
-                                                  unsigned tilesizeInt, OpBuilder &builder,
-                                                  std::map<int64_t, Value> &constantCache,
-                                                  bool dropFirstLevelReductionIterArgs, int64_t dynamicTileCoreNum,
-                                                  bool useRuntimeTileCount);
+                                                 unsigned tilesizeInt, OpBuilder &builder,
+                                                 std::map<int64_t, Value> &constantCache,
+                                                 bool dropFirstLevelReductionIterArgs, int64_t dynamicTileCoreNum,
+                                                 bool useRuntimeTileCount);
 static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value curTilesize,
                                                   Value prevTilesize, mlir::scf::ForOp prevLoop, OpBuilder &builder,
                                                   std::map<int64_t, Value> &constantCache, bool escapeReduceIterArgs);
@@ -152,11 +152,11 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
                                         OpBuilder &builder, std::map<int64_t, Value> &constantCache);
 static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds, mlir::Location loc,
                                                  OpBuilder &builder);
-static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
-                                  ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-                                  ArrayRef<unsigned> tileSizesInt,
-                                  SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
-                                  mlir::Location loc, std::map<int64_t, Value> &constantCache, TileRewriteContext &ctx);
+static void processSingleTileLoop(
+  int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
+  ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+  SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo, mlir::Location loc,
+  std::map<int64_t, Value> &constantCache, TileRewriteContext &ctx);
 static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
                                       ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
                                       OpBuilder &builder, std::map<int64_t, Value> &constantCache,
@@ -171,26 +171,25 @@ static Value emitDynamicTilePerDim(Location loc, OpBuilder &builder, Value dim, 
 static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping, int constraintMax,
                                                  func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
                                                  Value &result);
-static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-                                                    const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                    const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
-                                                    const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues);
-static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
-                                                ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, mlir::Location loc,
-                                                OpBuilder &builder,
-                                                std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                ArrayRef<SmallVector<unsigned, 6>> allBandTileSizesInt);
+static LogicalResult prepareTileSizesForStaticShape(
+  func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
+  const std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
+  const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
+  std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues);
+static LogicalResult prepareTileSizesFromMemref(
+  func::FuncOp originalKernel, ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands, mlir::Location loc,
+  OpBuilder &builder, std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues,
+  ArrayRef<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizesInt);
 static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel, OpBuilder &builder,
                                                     std::vector<LeafBranchBandPlan> &leafBranchPlans,
                                                     bool &shouldReturnEarly);
-static LogicalResult prepareTileMetadataForApply(func::FuncOp originalKernel, OpBuilder &builder, mlir::Location loc,
-                                                 bool isStaticShape,
-                                                 std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                 std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
-                                                 std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                 const TilingMetadata *metadata = nullptr);
+static LogicalResult prepareTileMetadataForApply(
+  func::FuncOp originalKernel, OpBuilder &builder, mlir::Location loc, bool isStaticShape,
+  std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizesInt,
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
+  std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues, const TilingMetadata *metadata = nullptr);
 static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel, OpBuilder &builder, size_t bandIdx,
                                                     ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
                                                     ArrayRef<unsigned> tileSizesInt, bool useRuntimeTileCounts,
@@ -199,23 +198,26 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
                                                         const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band,
                                                         ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
                                                         bool useRuntimeTileCounts, int64_t &nextNodeId);
-static void buildLeafBranchTileSlices(
-  const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-  ArrayRef<unsigned> tileSizesInt, unsigned bandSize, unsigned tileLevels, SmallVector<mlir::scf::ForOp, 6> &prefixBand,
-  SmallVector<Value, 6> &prefixTileValues, SmallVector<unsigned, 6> &prefixTileSizesInt,
-  SmallVector<Value, 6> &leafTileValues, SmallVector<unsigned, 6> &leafTileSizesInt);
+static void buildLeafBranchTileSlices(const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band,
+                                      ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+                                      unsigned bandSize, unsigned tileLevels,
+                                      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &prefixBand,
+                                      SmallVector<Value, kSmallVectorSizeSix> &prefixTileValues,
+                                      SmallVector<unsigned, kSmallVectorSizeSix> &prefixTileSizesInt,
+                                      SmallVector<Value, kSmallVectorSizeSix> &leafTileValues,
+                                      SmallVector<unsigned, kSmallVectorSizeSix> &leafTileSizesInt);
 static LogicalResult collectAndTagLeafBranchLoops(func::FuncOp originalKernel, OpBuilder &builder, size_t bandIdx,
                                                   const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band,
-                                                  int64_t &nextNodeId, SmallVector<int64_t, 6> &branchLeafNodeIds);
+                                                  int64_t &nextNodeId,
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds);
 static LogicalResult applyLeafBandsByNodeId(func::FuncOp originalKernel, OpBuilder &builder, size_t bandIdx,
                                             ArrayRef<int64_t> branchLeafNodeIds, ArrayRef<Value> leafTileValues,
                                             ArrayRef<unsigned> leafTileSizesInt, bool useRuntimeTileCounts);
-static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuilder &builder,
-                                             const std::vector<LeafBranchBandPlan> &leafBranchPlans,
-                                             const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                             const std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                             const std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
-                                             bool useRuntimeTileCounts);
+static LogicalResult applyAllBandsWithPlans(
+  func::FuncOp originalKernel, OpBuilder &builder, const std::vector<LeafBranchBandPlan> &leafBranchPlans,
+  const std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  const std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues,
+  const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizesInt, bool useRuntimeTileCounts);
 static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &builder);
 
 // Tiling function creation helpers
@@ -225,9 +227,9 @@ static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, 
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
                                             ArrayRef<Type> resTypes, OpBuilder &builder);
 static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
-                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-                                            ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
-                                            ArrayRef<SmallVector<int, 6>> allBandConstraintMaxs,
+                                            ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                            ArrayRef<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizes,
+                                            ArrayRef<SmallVector<int, kSmallVectorSizeSix>> allBandConstraintMaxs,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
                                             OpBuilder &builder);
 static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
@@ -286,8 +288,9 @@ static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
 static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
-                                                llvm::SmallSet<Operation *, 16> &opSet);
-static void collectOpsInOrderAfter(Operation *startOp, const llvm::SmallSet<Operation *, 16> &opSet,
+                                                llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet);
+static void collectOpsInOrderAfter(Operation *startOp,
+                                   const llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet,
                                    SmallVectorImpl<Operation *> &opsInOrder);
 static void moveOpsAfterLoop(mlir::scf::ForOp destLoop, ArrayRef<Operation *> ops, OpBuilder &builder);
 static void replaceUsesInOps(ValueRange oldResults, ValueRange newResults, ArrayRef<Operation *> ops);
@@ -345,8 +348,8 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
     return {};
   }
 
-  llvm::SmallVector<mlir::Operation *, 16> ops;
-  llvm::SmallPtrSet<mlir::Operation *, 32> visited;
+  llvm::SmallVector<mlir::Operation *, kSmallVectorSizeSixteen> ops;
+  llvm::SmallPtrSet<mlir::Operation *, kSmallVectorSizeThirtyTwo> visited;
   getOperandsTree(def, ops, visited);
 
   auto isSupportedOp = [](mlir::Operation *op) -> bool {
@@ -355,8 +358,8 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
     }
     return isa<arith::ConstantOp, arith::ConstantIndexOp, arith::ConstantIntOp, arith::IndexCastOp,
                arith::IndexCastUIOp, arith::CmpIOp, arith::SelectOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
-               arith::DivSIOp, arith::DivUIOp, arith::CeilDivSIOp, arith::RemSIOp, arith::RemUIOp,
-               arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, affine::AffineApplyOp,
+               arith::DivSIOp, arith::DivUIOp, arith::CeilDivSIOp, arith::RemSIOp, arith::RemUIOp, arith::MinSIOp,
+               arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, affine::AffineApplyOp,
                affine::AffineMinOp>(op);
   };
 
@@ -435,7 +438,9 @@ static bool valueDependsOnTarget(Value value, Value target, llvm::DenseSet<Value
   }
 
   return std::any_of(defOp->operand_begin(), defOp->operand_end(),
-                     [&](Value operand) { return valueDependsOnTarget(operand, target, visitedValues, visitedOps); });
+                     [&target, &visitedValues, &visitedOps](Value operand) {
+                       return valueDependsOnTarget(operand, target, visitedValues, visitedOps);
+                     });
 }
 
 static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
@@ -444,18 +449,18 @@ static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
   }
 
   llvm::DenseSet<Value> visitedValues;
-  llvm::SmallPtrSet<Operation *, 32> visitedOps;
+  llvm::SmallPtrSet<Operation *, kSmallVectorSizeThirtyTwo> visitedOps;
   return valueDependsOnTarget(value, loop.getInductionVar(), visitedValues, visitedOps);
 }
 
 static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
   return loop
-    .walk([&](memref::StoreOp store) -> WalkResult {
+    .walk([&loop](memref::StoreOp store) -> WalkResult {
       if (store.getIndices().empty() || !valueDependsOnLoopIV(store.getIndices().back(), loop)) {
         return WalkResult::advance();
       }
 
-      llvm::SmallVector<Value, 8> worklist{store.getValueToStore()};
+      llvm::SmallVector<Value, kSmallVectorSizeEight> worklist{store.getValueToStore()};
       llvm::DenseSet<Value> visited;
       while (!worklist.empty()) {
         Value value = worklist.pop_back_val();
@@ -464,7 +469,7 @@ static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
         }
 
         if (auto load = value.getDefiningOp<memref::LoadOp>()) {
-          if (llvm::none_of(load.getIndices(), [&](Value idx) { return valueDependsOnLoopIV(idx, loop); })) {
+          if (llvm::none_of(load.getIndices(), [&loop](Value idx) { return valueDependsOnLoopIV(idx, loop); })) {
             return WalkResult::interrupt();
           }
           continue;
@@ -483,31 +488,14 @@ static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
 static void setNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
   OpBuilder builder(funcOp.getContext());
   bool hasOuterInnerDimensionBroadcastLoop = false;
-  funcOp.walk([&](mlir::scf::ForOp loop) {
-    if (!loop->hasAttr(kBroadcastLoopAttr)) {
-      if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
-        loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
-      }
-      return;
-    }
-    if (isInnerDimensionBroadcastLoop(loop)) {
-      hasOuterInnerDimensionBroadcastLoop = true;
-    } else if (hasOuterInnerDimensionBroadcastLoop) {
-      loop->removeAttr(kBroadcastLoopAttr);
-    } else {
-      loop->setAttr(kNotInnerDimensionBroadcastLoopAttr, builder.getUnitAttr());
-    }
+  funcOp.walk([&hasOuterInnerDimensionBroadcastLoop, &builder](mlir::scf::ForOp loop) {
+    loop->removeAttr(kBroadcastLoopAttr);
+    loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
   });
-  if (!hasOuterInnerDimensionBroadcastLoop) {
-    funcOp.walk([&](mlir::scf::ForOp loop) {
-      loop->removeAttr(kBroadcastLoopAttr);
-      loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
-    });
-  }
 }
 
 static void clearNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
-  funcOp.walk([&](mlir::scf::ForOp loop) {
+  funcOp.walk([](mlir::scf::ForOp loop) {
     if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
       loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
     }
@@ -693,14 +681,13 @@ static Value emitLoopTripCountInCurrentFunc(Location loc, OpBuilder &builder, ml
     return builder.create<arith::ConstantIndexOp>(loc, staticTripCount);
   }
 
-  Value extent =
-    builder.create<arith::SubIOp>(loc, recreateConstantOrSelf(loop.getUpperBound(), builder),
-                                  recreateConstantOrSelf(loop.getLowerBound(), builder));
+  Value extent = builder.create<arith::SubIOp>(loc, recreateConstantOrSelf(loop.getUpperBound(), builder),
+                                               recreateConstantOrSelf(loop.getLowerBound(), builder));
   return builder.create<arith::CeilDivSIOp>(loc, extent, recreateConstantOrSelf(loop.getStep(), builder));
 }
 
 static LogicalResult emitLoopTripCountInTilingFunc(func::FuncOp tilingFunc, func::FuncOp originalKernel,
-                                                  mlir::scf::ForOp loop, OpBuilder &builder, Value &tripCount) {
+                                                   mlir::scf::ForOp loop, OpBuilder &builder, Value &tripCount) {
   int64_t staticTripCount = 0;
   if (getStaticTripCount(loop, staticTripCount)) {
     tripCount = builder.create<arith::ConstantIndexOp>(tilingFunc.getLoc(), staticTripCount);
@@ -726,9 +713,8 @@ static Value emitTileCountFromTileSize(Location loc, OpBuilder &builder, mlir::s
 }
 
 static LogicalResult emitParallelOuterTilesForBand(func::FuncOp tilingFunc, func::FuncOp originalKernel,
-                                                   ArrayRef<mlir::scf::ForOp> band,
-                                                   ArrayRef<unsigned> parallelDims, OpBuilder &builder,
-                                                   SmallVectorImpl<Value> &outerTileByDim) {
+                                                   ArrayRef<mlir::scf::ForOp> band, ArrayRef<unsigned> parallelDims,
+                                                   OpBuilder &builder, SmallVectorImpl<Value> &outerTileByDim) {
   outerTileByDim.assign(band.size(), Value());
   if (parallelDims.empty()) {
     return success();
@@ -797,7 +783,7 @@ static void copyHaccIOAttrsFrom(func::FuncOp orig, func::FuncOp dst) {
     unsigned n = std::min<unsigned>(arr.size(), dst.getNumArguments());
     for (unsigned i = 0; i < n; ++i) {
       if (auto dict = dyn_cast_or_null<DictionaryAttr>(arr[i])) {
-        SmallVector<NamedAttribute, 4> attrs;
+        SmallVector<NamedAttribute, kSmallVectorSizeFour> attrs;
         attrs.reserve(dict.size());
         std::copy(dict.begin(), dict.end(), std::back_inserter(attrs));
         for (const auto &na : attrs) {
@@ -812,7 +798,7 @@ static void copyHaccIOAttrsFrom(func::FuncOp orig, func::FuncOp dst) {
 static void setTilingKeyAndDataArgAttrs(func::FuncOp func, unsigned keyIdx, unsigned tilingDataIdx, MLIRContext *ctx) {
   auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
 
-  auto setArgKernelKind = [&](unsigned idx, KernelArgType kind) {
+  auto setArgKernelKind = [&func, &ctx, &katName](unsigned idx, KernelArgType kind) {
     DictionaryAttr old = func.getArgAttrDict(idx);
     SmallVector<NamedAttribute> nas;
     if (old) {
@@ -881,7 +867,7 @@ static void collectDirectChildLoopsInOrder(mlir::scf::ForOp parent, SmallVectorI
 }
 
 static bool isLeafForLoop(mlir::scf::ForOp loop) {
-  SmallVector<mlir::scf::ForOp, 4> children;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> children;
   collectDirectChildLoopsInOrder(loop, children);
   return children.empty();
 }
@@ -892,12 +878,12 @@ static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, L
   }
 
   plan = LeafBranchBandPlan{};
-  SmallVector<mlir::scf::ForOp, 6> linearPrefix;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> linearPrefix;
   linearPrefix.push_back(rootLoop);
   mlir::scf::ForOp current = rootLoop;
 
   while (true) {
-    SmallVector<mlir::scf::ForOp, 4> children;
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> children;
     collectDirectChildLoopsInOrder(current, children);
     if (children.empty()) {
       plan.representativeBand = linearPrefix;
@@ -955,7 +941,7 @@ static LogicalResult buildLeafBranchBandPlans(func::FuncOp funcOp, std::vector<L
 }
 
 static void collectRepresentativeBands(ArrayRef<LeafBranchBandPlan> plans,
-                                       std::vector<SmallVector<mlir::scf::ForOp, 6>> &bands) {
+                                       std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bands) {
   bands.clear();
   bands.reserve(plans.size());
   for (const LeafBranchBandPlan &plan : plans) {
@@ -965,8 +951,8 @@ static void collectRepresentativeBands(ArrayRef<LeafBranchBandPlan> plans,
   }
 }
 
-static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
-                                const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs) {
+static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
+                                const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs) {
   llvm::dbgs() << "=== All Band Tile Sizes ===\n";
   for (size_t i = 0; i < allBandTileSizes.size(); ++i) {
     llvm::dbgs() << "Band " << i << " tile sizes: [";
@@ -975,9 +961,8 @@ static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, 6>> &all
         llvm::dbgs() << ", ";
       }
       if (allBandTileSizes[i][j] == static_cast<unsigned>(-1)) {
-        int constraintMax = (i < allBandConstraintMaxs.size() && j < allBandConstraintMaxs[i].size())
-                              ? allBandConstraintMaxs[i][j]
-                              : 0;
+        int constraintMax =
+          (i < allBandConstraintMaxs.size() && j < allBandConstraintMaxs[i].size()) ? allBandConstraintMaxs[i][j] : 0;
         llvm::dbgs() << "dynamic(max=" << constraintMax << ")";
       } else {
         llvm::dbgs() << allBandTileSizes[i][j];
@@ -988,11 +973,10 @@ static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, 6>> &all
   llvm::dbgs() << "==========================\n";
 }
 
-static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling,
-                                                std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
-                                                std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                size_t &levelToTile) {
+static LogicalResult calculateTileSizesForBands(
+  func::FuncOp funcOp, bool useAutoTiling, std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs, size_t &levelToTile) {
   allBandTileSizes.clear();
   allBandConstraintMaxs.clear();
 
@@ -1001,7 +985,7 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
   }
 
   if (std::any_of(bandsToUse.begin(), bandsToUse.end(),
-                  [&](const auto &band) { return failed(verifyBandIsNestedChain(band)); })) {
+                  [](const auto &band) { return failed(verifyBandIsNestedChain(band)); })) {
     funcOp.emitError("tile size solver requires nested-chain bands");
     return failure();
   }
@@ -1058,9 +1042,9 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
 
   // Calculate tile sizes for each band (with constraint max for dynamic shapes)
   for (size_t bandIdx = 0; bandIdx < bandsToUse.size(); ++bandIdx) {
-    SmallVector<mlir::scf::ForOp, 6> curBand = bandsToUse[bandIdx];
-    SmallVector<unsigned, 6> bandTileSizes;
-    SmallVector<int, 6> bandConstraintMaxs;
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> curBand = bandsToUse[bandIdx];
+    SmallVector<unsigned, kSmallVectorSizeSix> bandTileSizes;
+    SmallVector<int, kSmallVectorSizeSix> bandConstraintMaxs;
 
     for (size_t level = 0; level < levelToTile; ++level) {
       getTileSizeWithSolver(solver, curBand, &bandTileSizes, &bandConstraintMaxs, TilingTaskDesc(bandIdx, level));
@@ -1143,7 +1127,7 @@ static void constructTiledLoopStatic(mlir::scf::ForOp rootScfForOp, unsigned wid
     // Without this, scf.for may create an empty body without terminator
     auto wrapperLoop = builder.create<mlir::scf::ForOp>(
       loc, c0, c0, c1, inits,
-      [&](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value /*iv*/, mlir::ValueRange iterArgs) {
+      [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value /* iv */, mlir::ValueRange iterArgs) {
         // Create yield with iter args (pass through by default)
         nestedBuilder.create<mlir::scf::YieldOp>(nestedLoc, iterArgs);
       });
@@ -1265,7 +1249,7 @@ static void createParallelMapAndTileLoop(func::FuncOp funcOp, ArrayRef<mlir::scf
 
   int64_t coreNum = getNpuCoreNum(funcOp);
   mlir::Location loc = root.getLoc();
-  SmallVector<Value, 6> tileCountsByDim(band.size(), Value());
+  SmallVector<Value, kSmallVectorSizeSix> tileCountsByDim(band.size(), Value());
   Value totalTilesValue;
   int64_t totalTiles = 1;
   if (useRuntimeTileCounts) {
@@ -1300,8 +1284,8 @@ static void createParallelMapAndTileLoop(func::FuncOp funcOp, ArrayRef<mlir::scf
   if (!useRuntimeTileCounts) {
     totalTilesValue = builder.create<arith::ConstantIndexOp>(loc, totalTiles);
   }
-  parallelUseCore = parallelDims.empty() ? 1 :
-                    (useRuntimeTileCounts ? coreNum : std::min<int64_t>(coreNum, totalTiles));
+  parallelUseCore =
+    parallelDims.empty() ? 1 : (useRuntimeTileCounts ? coreNum : std::min<int64_t>(coreNum, totalTiles));
   parallelMapLoop = createParallelMapLoop(funcOp, root, parallelUseCore, builder);
   if (!parallelMapLoop || parallelDims.empty()) {
     return;
@@ -1349,7 +1333,7 @@ static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::
                                                  bool dropFirstLevelReductionIterArgs, int64_t dynamicTileCoreNum,
                                                  bool useRuntimeTileCount) {
   if (isNoSplitLoop(origLoop)) {
-    return buildNoSplitBounds(loc, origLoop, /*prevLoop=*/{}, builder, constantCache, NoSplitKind::FirstLevel,
+    return buildNoSplitBounds(loc, origLoop, /* prevLoop= */ {}, builder, constantCache, NoSplitKind::FirstLevel,
                               dropFirstLevelReductionIterArgs);
   }
 
@@ -1457,14 +1441,14 @@ static bool collectStaticFullPointTileSizes(mlir::scf::ForOp origLoop, ArrayRef<
 static Value createFullTilePointBound(mlir::Location loc, ArrayRef<std::pair<Value, Value>> levelInfo,
                                       ArrayRef<int64_t> tileSizes, int64_t offset, OpBuilder &builder) {
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 8> operands;
+  SmallVector<Value, kSmallVectorSizeEight> operands;
   operands.reserve(levelInfo.size());
   AffineExpr expr = builder.getAffineConstantExpr(offset);
   for (auto [idx, entry] : llvm::enumerate(levelInfo)) {
     operands.push_back(entry.first);
     expr = expr + builder.getAffineDimExpr(static_cast<unsigned>(idx)) * tileSizes[idx];
   }
-  auto map = AffineMap::get(static_cast<unsigned>(levelInfo.size()), /*symbolCount=*/0, expr, context);
+  auto map = AffineMap::get(static_cast<unsigned>(levelInfo.size()), /* symbolCount= */ 0, expr, context);
   return builder.create<mlir::affine::AffineApplyOp>(loc, map, operands);
 }
 
@@ -1474,13 +1458,13 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
                                         OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   if (isNoSplitLoop(origLoop)) {
     return buildNoSplitBounds(loc, origLoop, prevLoop, builder, constantCache, NoSplitKind::Point,
-                              /*dropReductionInits=*/false);
+                              /* dropReductionInits= */ false);
   }
 
   LoopBounds bounds;
-  SmallVector<int64_t, 4> fullTileSizes;
+  SmallVector<int64_t, kSmallVectorSizeFour> fullTileSizes;
   if (collectStaticFullPointTileSizes(origLoop, levelInfo, fullTileSizes)) {
-    bounds.lb = createFullTilePointBound(loc, levelInfo, fullTileSizes, /*offset=*/0, builder);
+    bounds.lb = createFullTilePointBound(loc, levelInfo, fullTileSizes, /* offset= */ 0, builder);
     bounds.ub = createFullTilePointBound(loc, levelInfo, fullTileSizes, fullTileSizes.back(), builder);
     bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.inits = prevLoop.getResults();
@@ -1489,7 +1473,7 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
 
   Value origUb = origLoop.getUpperBound();
   Value clampedOrigUb = recreateConstantOrSelf(origUb, builder);
-  SmallVector<Value, 8> operands;
+  SmallVector<Value, kSmallVectorSizeEight> operands;
   operands.reserve(levelInfo.size() * 2 + 1);
   for (const auto &[iv, _] : levelInfo) {
     operands.push_back(iv);
@@ -1502,13 +1486,13 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
   auto levels = static_cast<unsigned>(levelInfo.size());
   AffineExpr lbExpr = builder.getAffineConstantExpr(0);
   AffineExpr origUbExpr = builder.getAffineDimExpr(levels);
-  SmallVector<AffineExpr, 4> ubExprs{origUbExpr};
+  SmallVector<AffineExpr, kSmallVectorSizeFour> ubExprs{origUbExpr};
   for (unsigned k = 0; k < levels; ++k) {
     lbExpr = lbExpr + builder.getAffineDimExpr(k) * builder.getAffineSymbolExpr(k);
     ubExprs.push_back(lbExpr + builder.getAffineSymbolExpr(k));
   }
 
-  SmallVector<AffineExpr, 2> lbExprs{lbExpr, origUbExpr};
+  SmallVector<AffineExpr, kSmallVectorSizeTwo> lbExprs{lbExpr, origUbExpr};
   auto lbMap = AffineMap::get(levels + 1, levels, lbExprs, builder.getContext());
   bounds.lb = builder.create<mlir::affine::AffineMinOp>(loc, lbMap, operands);
 
@@ -1530,7 +1514,7 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
   // Create new loop with explicit body builder to ensure yield is created
   auto newLoop = builder.create<mlir::scf::ForOp>(
     loc, bounds.lb, bounds.ub, bounds.step, bounds.inits,
-    [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value /*iv*/, mlir::ValueRange iterArgs) {
+    [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value /* iv */, mlir::ValueRange iterArgs) {
       // Create default yield - will be updated later with correct operands
       nestedBuilder.create<mlir::scf::YieldOp>(nestedLoc, iterArgs);
     });
@@ -1601,13 +1585,12 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
   return newLoop;
 }
 
-static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum, int curTile, int lastTile,
-                                        MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
-                                        ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
-                                        const SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
-                                        mlir::Location loc, mlir::OpBuilder &loopBuilder,
-                                        std::map<int64_t, Value> &constantCache, bool escapeReduceIterArgs,
-                                        const TileRewriteContext &ctx, LoopBounds &bounds) {
+static bool buildLoopBoundsForTileLevel(
+  int i, int j, int bandSize, int tileNum, int curTile, int lastTile, MutableArrayRef<mlir::scf::ForOp> newLoops,
+  ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+  const SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo, mlir::Location loc,
+  mlir::OpBuilder &loopBuilder, std::map<int64_t, Value> &constantCache, bool escapeReduceIterArgs,
+  const TileRewriteContext &ctx, LoopBounds &bounds) {
   mlir::scf::ForOp origLoop = band[j];
 
   if (i == 0) {
@@ -1615,8 +1598,8 @@ static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum,
       (curTile < static_cast<int>(tileSizesInt.size())) ? tileSizesInt[curTile] : static_cast<unsigned>(-1);
     bool dropFirstLevelReductionIterArgs = ctx.dropMappedOutermostFirstLevelIterArgs && j == 0;
     bounds = createFirstLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], tilesizeInt, loopBuilder,
-                                            constantCache, dropFirstLevelReductionIterArgs,
-                                            ctx.dynamicTileCoreNum, ctx.useRuntimeFirstLevelTileCount);
+                                            constantCache, dropFirstLevelReductionIterArgs, ctx.dynamicTileCoreNum,
+                                            ctx.useRuntimeFirstLevelTileCount);
     return true;
   }
 
@@ -1731,10 +1714,10 @@ static void copySemanticLoopAttrsToPointLoop(mlir::scf::ForOp origLoop, mlir::sc
   pointLoop->setAttr(kInnerLoopAttr, UnitAttr::get(pointLoop.getContext()));
 }
 
-static void recordTileLevelInfoForLoop(int i, int j, int tileNum, int curTile, ArrayRef<Value> tileSizeValues,
-                                       mlir::scf::ForOp newLoop,
-                                       SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
-                                       Value mappedIv = Value()) {
+static void recordTileLevelInfoForLoop(
+  int i, int j, int tileNum, int curTile, ArrayRef<Value> tileSizeValues, mlir::scf::ForOp newLoop,
+  SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo,
+  Value mappedIv = Value()) {
   if (i >= tileNum || curTile >= static_cast<int>(tileSizeValues.size())) {
     return;
   }
@@ -1745,7 +1728,7 @@ static void recordTileLevelInfoForLoop(int i, int j, int tileNum, int curTile, A
 static bool moveFirstTileLoopBodyToParallelScope(
   mlir::scf::ForOp loop, mlir::scf::ForOp parallelScopeLoop, Value parallelTileCoord, int i, int j, int tileNum,
   int curTile, MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<Value> tileSizeValues,
-  SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo) {
+  SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo) {
   if (!loop || !parallelScopeLoop || !parallelTileCoord || loop.getNumResults() != 0) {
     return false;
   }
@@ -1763,11 +1746,10 @@ static bool moveFirstTileLoopBodyToParallelScope(
   return true;
 }
 
-static bool tryMapFirstTileLoopToParallelWork(int i, int j, int tileNum, int curTile,
-                                              MutableArrayRef<mlir::scf::ForOp> newLoops,
-                                              ArrayRef<Value> tileSizeValues,
-                                              SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
-                                              const TileRewriteContext &ctx) {
+static bool tryMapFirstTileLoopToParallelWork(
+  int i, int j, int tileNum, int curTile, MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<Value> tileSizeValues,
+  SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo,
+  const TileRewriteContext &ctx) {
   if (!ctx.parallelTileCoord || i != 0) {
     return false;
   }
@@ -1777,12 +1759,11 @@ static bool tryMapFirstTileLoopToParallelWork(int i, int j, int tileNum, int cur
 }
 
 // Helper: Process a single tile loop (extracted to reduce cyclomatic complexity)
-static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
-                                  ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-                                  ArrayRef<unsigned> tileSizesInt,
-                                  SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
-                                  mlir::Location loc, std::map<int64_t, Value> &constantCache,
-                                  TileRewriteContext &ctx) {
+static void processSingleTileLoop(
+  int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
+  ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+  SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo, mlir::Location loc,
+  std::map<int64_t, Value> &constantCache, TileRewriteContext &ctx) {
   int curTile = i * bandSize + j;
   int lastTile = curTile - bandSize;
   if (curTile >= static_cast<int>(newLoops.size())) {
@@ -1840,7 +1821,7 @@ static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops
   int tileNum = static_cast<int>(tileSizeValues.size()) / bandSize;
 
   // Track tile level info for each dimension: {IV, tilesize}
-  SmallVector<SmallVector<std::pair<Value, Value>, 4>, 4> tileLevelInfo(bandSize);
+  SmallVector<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>, 4> tileLevelInfo(bandSize);
 
   // Process each tile level and dimension
   for (int i = 0; i <= tileNum; ++i) {
@@ -1956,7 +1937,7 @@ static LogicalResult createTailBlockStaticImpl(mlir::scf::ForOp forOp, int64_t d
 }
 
 // Static helper function to create tail block for dynamic bounds
-static LogicalResult createTailBlockDynamicImpl(mlir::scf::ForOp forOp, mlir::Value /*dynamicBound*/,
+static LogicalResult createTailBlockDynamicImpl(mlir::scf::ForOp forOp, mlir::Value /* dynamicBound */,
                                                 OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   mlir::Location loc = forOp.getLoc();
   mlir::Value origLb = forOp.getLowerBound();
@@ -2070,19 +2051,23 @@ static LogicalResult applyTilingToLoop(mlir::scf::ForOp loop, ArrayRef<Value> ti
                                        bool useRuntimeTileCounts) {
   unsigned tileSizesNum = tileSizeValues.size();
 
-  SmallVector<mlir::scf::ForOp, 1> band{loop};
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeOne> band{loop};
   // The band root is "outermost" w.r.t. its tile nest if either it has no
   // surrounding scf.for at all, or its only surrounding scf.for is the
   // parallel map loop created by the caller.
   auto parentFor = loop->getParentOfType<mlir::scf::ForOp>();
   unsigned width = tileSizesNum + 1;
-  SmallVector<mlir::scf::ForOp, 6> tiledLoops(width);
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> tiledLoops(width);
 
   llvm::DenseSet<mlir::Operation *> escapeReduceLoops = collectEscapingReductionLoops(band);
   func::FuncOp funcOp = loop->getParentOfType<func::FuncOp>();
-  TileRewriteContext ctx{escapeReduceLoops, parallelMapLoop, parallelTileLoop, parallelTileCoord,
-                         getNpuCoreNum(funcOp), useRuntimeTileCounts,
-                         /*dropMappedOutermostFirstLevelIterArgs=*/!parentFor || parentFor == parallelMapLoop};
+  TileRewriteContext ctx{escapeReduceLoops,
+                         parallelMapLoop,
+                         parallelTileLoop,
+                         parallelTileCoord,
+                         getNpuCoreNum(funcOp),
+                         useRuntimeTileCounts,
+                         /* dropMappedOutermostFirstLevelIterArgs= */ !parentFor || parentFor == parallelMapLoop};
   constructTiledLoopStatic(loop, width, tiledLoops, builder, constantCache);
 
   // Replace all dummy loops first, before cloning operations, so IV mapping points to final loops.
@@ -2092,12 +2077,12 @@ static LogicalResult applyTilingToLoop(mlir::scf::ForOp loop, ArrayRef<Value> ti
     return failure();
   }
 
-  return finalizeRootLoopAfterTiling(loop, tiledLoops, tileSizesNum, /*forNum=*/1, escapeReduceLoops, parallelMapLoop,
-                                     ctx.dropMappedOutermostFirstLevelIterArgs, builder);
+  return finalizeRootLoopAfterTiling(loop, tiledLoops, tileSizesNum, /* forNum= */ 1, escapeReduceLoops,
+                                     parallelMapLoop, ctx.dropMappedOutermostFirstLevelIterArgs, builder);
 }
 
 static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clearPointLoopAttr = true) {
-  funcOp.walk([&](mlir::scf::ForOp loop) {
+  funcOp.walk([&clearPointLoopAttr](mlir::scf::ForOp loop) {
     if (loop->hasAttr(kTreeNodeIdAttr)) {
       loop->removeAttr(kTreeNodeIdAttr);
     }
@@ -2116,7 +2101,7 @@ static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clea
 // Emit an error on `funcOp` and clean temporary identification attrs in one go.
 // Always returns `failure()` so call sites can `return emitTilingFailure(...)`.
 static LogicalResult emitTilingFailure(func::FuncOp funcOp, const Twine &msg) {
-  clearTemporaryLoopIdentificationAttrs(funcOp, /*clearPointLoopAttr=*/false);
+  clearTemporaryLoopIdentificationAttrs(funcOp, /* clearPointLoopAttr= */ false);
   funcOp.emitError() << msg;
   return failure();
 }
@@ -2124,7 +2109,7 @@ static LogicalResult emitTilingFailure(func::FuncOp funcOp, const Twine &msg) {
 static LogicalResult findUniqueLoopByTreeNodeId(func::FuncOp funcOp, int64_t nodeId, mlir::scf::ForOp &loop) {
   loop = mlir::scf::ForOp();
   int64_t matchCount = 0;
-  funcOp.walk([&](mlir::scf::ForOp candidate) {
+  funcOp.walk([&nodeId, &matchCount, &loop](mlir::scf::ForOp candidate) {
     auto idAttr = candidate->getAttrOfType<IntegerAttr>(kTreeNodeIdAttr);
     if (!idAttr || idAttr.getInt() != nodeId) {
       return;
@@ -2147,7 +2132,7 @@ static LogicalResult applyDecoupledAxisTiling(func::FuncOp funcOp, OpBuilder &bu
   unsigned bandSize = band.size();
   unsigned tileLevels = tileSizeValues.size() / bandSize;
 
-  SmallVector<int64_t, 6> axisNodeIds;
+  SmallVector<int64_t, kSmallVectorSizeSix> axisNodeIds;
   axisNodeIds.reserve(bandSize);
   for (unsigned dim = 0; dim < bandSize; ++dim) {
     int64_t axisNodeId = nextNodeId++;
@@ -2166,8 +2151,8 @@ static LogicalResult applyDecoupledAxisTiling(func::FuncOp funcOp, OpBuilder &bu
       activeAxisLoop->setAttr(kParallelAxisAttr, builder.getUnitAttr());
     }
 
-    SmallVector<Value, 6> axisTileValues;
-    SmallVector<unsigned, 6> axisTileSizesInt;
+    SmallVector<Value, kSmallVectorSizeSix> axisTileValues;
+    SmallVector<unsigned, kSmallVectorSizeSix> axisTileSizesInt;
     axisTileValues.reserve(tileLevels);
     axisTileSizesInt.reserve(tileLevels);
     for (unsigned level = 0; level < tileLevels; ++level) {
@@ -2223,14 +2208,14 @@ static Value stripIndexLikeCasts(Value value) {
 }
 
 struct TransposeOrderPairInfo {
-  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
-  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
   size_t commonPrefix = 0;
 };
 
 static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder, ArrayRef<mlir::scf::ForOp> rhsOrder,
-                                            SmallVector<mlir::scf::ForOp, 4> &lhsCommonOrder,
-                                            SmallVector<mlir::scf::ForOp, 4> &rhsCommonOrder) {
+                                            SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> &lhsCommonOrder,
+                                            SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> &rhsCommonOrder) {
   if (lhsOrder.size() < 2 || rhsOrder.size() < 2) {
     return false;
   }
@@ -2266,8 +2251,8 @@ static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(Arr
                                                                              ArrayRef<mlir::scf::ForOp> lhsOrder,
                                                                              ArrayRef<mlir::scf::ForOp> rhsOrder,
                                                                              bool linearBand) {
-  SmallVector<mlir::scf::ForOp, 4> lhsCommonOrder;
-  SmallVector<mlir::scf::ForOp, 4> rhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
   if (!intersectLoopOrdersForTranspose(lhsOrder, rhsOrder, lhsCommonOrder, rhsCommonOrder)) {
     return std::nullopt;
   }
@@ -2349,7 +2334,7 @@ static void markTransposeAttrsTreeCommonSuffix(const TransposeOrderPairInfo &inf
   const auto &lhsCommonOrder = info.lhsCommonOrder;
   const auto &rhsCommonOrder = info.rhsCommonOrder;
 
-  auto hasBlockingReduction = [&](ArrayRef<mlir::scf::ForOp> order) {
+  auto hasBlockingReduction = [&commonPrefix](ArrayRef<mlir::scf::ForOp> order) {
     for (auto it = order.begin() + commonPrefix; it != order.end(); ++it) {
       mlir::scf::ForOp loopOp = *it;
       if (loopOp->hasAttr(kReductionLoopAttr) && !isLeafForLoop(loopOp)) {
@@ -2394,7 +2379,7 @@ static void markTransposeOrderPair(ArrayRef<mlir::scf::ForOp> band, ArrayRef<mli
 static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
   auto isDerivedStore = [](memref::StoreOp store, memref::LoadOp load) {
     llvm::DenseSet<Value> visitedValues;
-    llvm::SmallPtrSet<Operation *, 32> visitedOps;
+    llvm::SmallPtrSet<Operation *, kSmallVectorSizeThirtyTwo> visitedOps;
     return valueDependsOnTarget(store.getValueToStore(), load.getResult(), visitedValues, visitedOps);
   };
   if (auto lhsLoad = dyn_cast<memref::LoadOp>(lhs)) {
@@ -2410,9 +2395,10 @@ static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
   return true;
 }
 
-static SmallVector<mlir::scf::ForOp, 4> extractMemrefLoopOrder(Operation *op, ArrayRef<mlir::scf::ForOp> band) {
-  SmallVector<mlir::scf::ForOp, 4> order;
-  auto appendIfMatch = [&](Value idx) {
+static SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> extractMemrefLoopOrder(Operation *op,
+                                                                                  ArrayRef<mlir::scf::ForOp> band) {
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> order;
+  auto appendIfMatch = [&band, &order](Value idx) {
     Value strippedIdx = stripIndexLikeCasts(idx);
     for (mlir::scf::ForOp loop : band) {
       if (stripIndexLikeCasts(loop.getInductionVar()) == strippedIdx) {
@@ -2434,11 +2420,12 @@ static SmallVector<mlir::scf::ForOp, 4> extractMemrefLoopOrder(Operation *op, Ar
   return order;
 }
 
-static void reconcileTransposeAttrsAfterBranchScan(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> leafBands,
-                                                   UnitAttr transposeAttr) {
-  const bool hasTransposeLeaf = llvm::any_of(leafBands, [](const SmallVector<mlir::scf::ForOp, 6> &band) {
-    return !band.empty() && band.back()->hasAttr(kTransposeLoopAttr);
-  });
+static void reconcileTransposeAttrsAfterBranchScan(
+  ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> leafBands, UnitAttr transposeAttr) {
+  const bool hasTransposeLeaf =
+    llvm::any_of(leafBands, [](const SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &band) {
+      return !band.empty() && band.back()->hasAttr(kTransposeLoopAttr);
+    });
   for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
     if (band.empty()) {
       continue;
@@ -2454,11 +2441,12 @@ static void reconcileTransposeAttrsAfterBranchScan(ArrayRef<SmallVector<mlir::sc
 }
 
 static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan &plan) {
-  SmallVector<SmallVector<mlir::scf::ForOp, 6>, 4> leafBands;
+  SmallVector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>, kSmallVectorSizeFour> leafBands;
   if (!plan.representativeBand.empty()) {
     leafBands.push_back(plan.representativeBand);
     for (mlir::scf::ForOp peerLeaf : plan.peerLeafLoops) {
-      SmallVector<mlir::scf::ForOp, 6> peerBand(plan.representativeBand.begin(), plan.representativeBand.end());
+      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerBand(plan.representativeBand.begin(),
+                                                                  plan.representativeBand.end());
       peerBand.back() = peerLeaf;
       leafBands.push_back(std::move(peerBand));
     }
@@ -2476,20 +2464,20 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
     if (linearBand && band.size() > 1 && isReductionLoop(leafLoop)) {
       scanRoot = band[band.size() - 2];
     }
-    SmallVector<Operation *, 8> memOps;
-    scanRoot.walk([&](Operation *op) {
+    SmallVector<Operation *, kSmallVectorSizeEight> memOps;
+    scanRoot.walk([&memOps](Operation *op) {
       if (isa<memref::LoadOp, memref::StoreOp>(op)) {
         memOps.push_back(op);
       }
     });
 
     for (size_t i = 0; i < memOps.size(); ++i) {
-      SmallVector<mlir::scf::ForOp, 4> lhsOrder = extractMemrefLoopOrder(memOps[i], band);
+      SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsOrder = extractMemrefLoopOrder(memOps[i], band);
       for (size_t j = i + 1; j < memOps.size(); ++j) {
         if (!memOpsMayFormTransposePair(memOps[i], memOps[j])) {
           continue;
         }
-        SmallVector<mlir::scf::ForOp, 4> rhsOrder = extractMemrefLoopOrder(memOps[j], band);
+        SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsOrder = extractMemrefLoopOrder(memOps[j], band);
         markTransposeOrderPair(band, lhsOrder, rhsOrder, transposeAttr, linearBand);
       }
     }
@@ -2507,7 +2495,7 @@ static ReduceDirection getReduceType(mlir::scf::ForOp loop) {
   }
 
   ReduceDirection result = ReduceDirection::UNKNOWN;
-  loop.getBody()->walk([&](Operation *op) {
+  loop.getBody()->walk([&result](Operation *op) {
     auto typeAttr = op->getAttrOfType<StringAttr>(kReductionTypeStr);
     if (!typeAttr) {
       return mlir::WalkResult::advance();
@@ -2573,7 +2561,7 @@ static mlir::scf::ForOp findVectorAttrTargetLoop(mlir::scf::ForOp startLoop, boo
 static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder,
                                                  mlir::scf::ForOp stopLoop = mlir::scf::ForOp()) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
-    if (shouldSkipVectorAttrCandidate(curLoop, /*restrictToPointLoops=*/false, /*skipDeleteLoops=*/true)) {
+    if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
       if (curLoop == stopLoop) {
         break;
       }
@@ -2613,7 +2601,7 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
 // alongside the normal vec case.
 static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
-    if (shouldSkipVectorAttrCandidate(curLoop, /*restrictToPointLoops=*/false, /*skipDeleteLoops=*/true)) {
+    if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
       continue;
     }
     if (!curLoop->hasAttr(kMultiVecLoopAttr)) {
@@ -2659,7 +2647,7 @@ static void inlinePointLoopWithLowerBound(mlir::scf::ForOp loop, OpBuilder &buil
   builder.setInsertionPoint(loop);
   loop.getInductionVar().replaceAllUsesWith(loop.getLowerBound());
 
-  SmallVector<Operation *, 16> opsToMove;
+  SmallVector<Operation *, kSmallVectorSizeSixteen> opsToMove;
   std::transform(loop.getBody()->without_terminator().begin(), loop.getBody()->without_terminator().end(),
                  std::back_inserter(opsToMove), [](Operation &op) { return &op; });
   for (Operation *op : opsToMove) {
@@ -2669,8 +2657,8 @@ static void inlinePointLoopWithLowerBound(mlir::scf::ForOp loop, OpBuilder &buil
 }
 
 static void inlineParallelNonVectorPointLoops(func::FuncOp funcOp, OpBuilder &builder) {
-  SmallVector<mlir::scf::ForOp, 8> loopsToInline;
-  funcOp.walk([&](mlir::scf::ForOp loop) {
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeEight> loopsToInline;
+  funcOp.walk([&loopsToInline](mlir::scf::ForOp loop) {
     if (isInlineableParallelNonVectorPointLoop(loop)) {
       loopsToInline.push_back(loop);
     }
@@ -2684,7 +2672,7 @@ static void inlineParallelNonVectorPointLoops(func::FuncOp funcOp, OpBuilder &bu
 }
 
 static void markBroadcastLoopChainWithVectorAttr(mlir::scf::ForOp vectorTarget, OpBuilder &builder) {
-  vectorTarget.walk([&](mlir::scf::ForOp loop) {
+  vectorTarget.walk([&vectorTarget, &builder](mlir::scf::ForOp loop) {
     if (!loop || loop == vectorTarget || hasReductionVectorAttr(loop)) {
       return;
     }
@@ -2694,7 +2682,7 @@ static void markBroadcastLoopChainWithVectorAttr(mlir::scf::ForOp vectorTarget, 
 
 // Mark all innermost scf.for loops with vector attribute.
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder) {
-  funcOp->walk([&](mlir::scf::ForOp forOp) {
+  funcOp->walk([&builder](mlir::scf::ForOp forOp) {
     if (isInnermostScfLoop(forOp)) {
       auto reduceType = ReduceDirection::UNKNOWN;
       const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
@@ -2719,7 +2707,7 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
             return;
           }
         }
-        if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /*skipDeleteLoops=*/false)) {
+        if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
           if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
             markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
             vectorTarget->removeAttr(kBroadcastLoopAttr);
@@ -2753,7 +2741,7 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
             continue;
           }
-          if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /*skipDeleteLoops=*/true)) {
+          if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
             continue;
           }
@@ -2805,9 +2793,9 @@ static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder) {
 
 // Inline loops marked with delete when they are guaranteed to execute exactly once.
 static void inlineDeleteMarkedLoops(func::FuncOp funcOp, OpBuilder &builder) {
-  SmallVector<mlir::scf::ForOp, 8> loopsToInline;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeEight> loopsToInline;
 
-  funcOp->walk([&](mlir::scf::ForOp forOp) {
+  funcOp->walk([&loopsToInline](mlir::scf::ForOp forOp) {
     if (!forOp->hasAttr(kDeleteLoopAttr)) {
       return;
     }
@@ -2832,10 +2820,10 @@ static void inlineDeleteMarkedLoops(func::FuncOp funcOp, OpBuilder &builder) {
     iv.replaceAllUsesWith(c0);
 
     // Move all operations from loop body to parent block (except terminator)
-    SmallVector<Operation *, 16> opsToMove;
+    SmallVector<Operation *, kSmallVectorSizeSixteen> opsToMove;
     std::transform(loopBody->without_terminator().begin(), loopBody->without_terminator().end(),
                    std::back_inserter(opsToMove), [](Operation &op) { return &op; });
-    std::for_each(opsToMove.begin(), opsToMove.end(), [&](Operation *op) { op->moveBefore(loop); });
+    std::for_each(opsToMove.begin(), opsToMove.end(), [&loop](Operation *op) { op->moveBefore(loop); });
 
     // Handle yield operands: these become the loop's results
     auto yieldOp = dyn_cast<mlir::scf::YieldOp>(loopBody->getTerminator());
@@ -2912,9 +2900,9 @@ static void createTilingFuncReturn(func::FuncOp tilingFunc, bool writeDummyTilin
 
 // Helper: Store tile sizes to memref
 static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
-                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-                                            ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
-                                            ArrayRef<SmallVector<int, 6>> allBandConstraintMaxs,
+                                            ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                            ArrayRef<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizes,
+                                            ArrayRef<SmallVector<int, kSmallVectorSizeSix>> allBandConstraintMaxs,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
                                             OpBuilder &builder) {
   auto loc = tilingFunc.getLoc();
@@ -2934,16 +2922,16 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
     const auto &bandDynamicMapping = allBandDynamicMappings[bandIdx];
     size_t bandSize = bands[bandIdx].size();
 
-    SmallVector<unsigned, 6> parallelDims;
+    SmallVector<unsigned, kSmallVectorSizeSix> parallelDims;
     collectParallelPrefixDims(bands[bandIdx], bandTileSizes, parallelDims);
-    SmallVector<Value, 6> parallelOuterTiles;
+    SmallVector<Value, kSmallVectorSizeSix> parallelOuterTiles;
     if (failed(emitParallelOuterTilesForBand(tilingFunc, originalKernel, bands[bandIdx], parallelDims, b,
                                              parallelOuterTiles))) {
       return failure();
     }
 
     // Cache runtime first-level step values (as i64) for later levels.
-    SmallVector<Value, 6> firstLevelStepI64Cache(bandSize, Value());
+    SmallVector<Value, kSmallVectorSizeSix> firstLevelStepI64Cache(bandSize, Value());
 
     for (size_t tileIdx = 0; tileIdx < bandTileSizes.size(); ++tileIdx) {
       Value idx = b.create<arith::ConstantIndexOp>(loc, memrefOffset);
@@ -3023,20 +3011,20 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   if (failed(buildLeafBranchBandPlans(originalKernel, leafBranchPlans, hasUnsupportedTreeShape))) {
     return failure();
   }
-  std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
+  std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
   bool skipTiling = hasUnsupportedTreeShape || leafBranchPlans.size() > 1;
 
   // Step 1: Dynamic-shape path computes tile metadata to derive tiling struct size.
-  std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
-  std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizes;
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> allBandConstraintMaxs;
   if (!isStaticShape) {
     if (!skipTiling) {
       if (!leafBranchPlans.empty()) {
         preprocessLoopAttrsForTileCalculation(originalKernel, leafBranchPlans.front());
       }
       [[maybe_unused]] auto clearNotInnerBroadcastGuard =
-        llvm::make_scope_exit([&] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
+        llvm::make_scope_exit([&originalKernel] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
       (void)clearNotInnerBroadcastGuard;
       size_t levelToTile = 0;
       if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
@@ -3048,10 +3036,11 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
         metadata->bandConstraintMaxs = allBandConstraintMaxs;
       }
 
-      tilingStructMemrefSize = std::accumulate(allBandTileSizes.begin(), allBandTileSizes.end(), int64_t{0},
-                                               [](int64_t acc, const SmallVector<unsigned, 6> &bandTileSizes) {
-                                                 return acc + static_cast<int64_t>(bandTileSizes.size());
-                                               });
+      tilingStructMemrefSize =
+        std::accumulate(allBandTileSizes.begin(), allBandTileSizes.end(), int64_t{0},
+                        [](int64_t acc, const SmallVector<unsigned, kSmallVectorSizeSix> &bandTileSizes) {
+                          return acc + static_cast<int64_t>(bandTileSizes.size());
+                        });
       if (tilingStructMemrefSize <= 0) {
         tilingStructMemrefSize = 1;
       }
@@ -3061,7 +3050,8 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   }
 
   // Step 2: Build function signature
-  SmallVector<Type> argTypes, resTypes;
+  SmallVector<Type> argTypes;
+  SmallVector<Type> resTypes;
   mlirCtx->getOrLoadDialect<LLVM::LLVMDialect>();
   buildTilingFunctionSignature(origTy, mlirCtx, builder, argTypes, resTypes, tilingStructMemrefSize);
 
@@ -3175,11 +3165,12 @@ static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mappi
 }
 
 // Helper: Prepare tile sizes for static shape
-static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-                                                    const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                    const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
-                                                    const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues) {
+static LogicalResult prepareTileSizesForStaticShape(
+  func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
+  const std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
+  const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
+  std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues) {
   if (bandsToUse.size() != allBandTileSizes.size() || bandsToUse.size() != allBandConstraintMaxs.size()) {
     originalKernel.emitError("inconsistent band metadata when preparing static tile values");
     return failure();
@@ -3198,7 +3189,7 @@ static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel,
     const auto &bandTileSizes = allBandTileSizes[bandIdx];
     const auto &bandConstraintMaxs = allBandConstraintMaxs[bandIdx];
     const auto &bandDynamicMapping = allBandDynamicMappings[bandIdx];
-    SmallVector<Value, 6> tileSizeValues;
+    SmallVector<Value, kSmallVectorSizeSix> tileSizeValues;
 
     for (size_t tileIdx = 0; tileIdx < bandTileSizes.size(); ++tileIdx) {
       unsigned tileSize = bandTileSizes[tileIdx];
@@ -3228,11 +3219,10 @@ static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel,
 }
 
 // Helper: Prepare tile sizes from memref (dynamic shape)
-static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
-                                                ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, mlir::Location loc,
-                                                OpBuilder &builder,
-                                                std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                ArrayRef<SmallVector<unsigned, 6>> allBandTileSizesInt) {
+static LogicalResult prepareTileSizesFromMemref(
+  func::FuncOp originalKernel, ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands, mlir::Location loc,
+  OpBuilder &builder, std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues,
+  ArrayRef<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizesInt) {
   auto args = originalKernel.getArguments();
   if (args.empty()) {
     originalKernel.emitError("originalKernel must have at least one argument (tileSizesMemref)");
@@ -3268,7 +3258,7 @@ static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
       return failure();
     }
 
-    SmallVector<Value, 6> tileSizeValues;
+    SmallVector<Value, kSmallVectorSizeSix> tileSizeValues;
     tileSizeValues.reserve(bandTileSizesCount);
 
     for (size_t i = 0; i < bandTileSizesCount; ++i) {
@@ -3300,7 +3290,7 @@ static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &build
     return failure();
   }
 
-  llvm::SmallVector<Operation *, 16> opsToMove;
+  llvm::SmallVector<Operation *, kSmallVectorSizeSixteen> opsToMove;
   for (auto it = entryBlock.begin(); it != Block::iterator(terminator); ++it) {
     opsToMove.push_back(&*it);
   }
@@ -3354,13 +3344,12 @@ static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel,
   return success();
 }
 
-static LogicalResult prepareTileMetadataForApply(func::FuncOp originalKernel, OpBuilder &builder, mlir::Location loc,
-                                                 bool isStaticShape,
-                                                 std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                 std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
-                                                 std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
-                                                 std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                 const TilingMetadata *metadata) {
+static LogicalResult prepareTileMetadataForApply(
+  func::FuncOp originalKernel, OpBuilder &builder, mlir::Location loc, bool isStaticShape,
+  std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizesInt,
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
+  std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues, const TilingMetadata *metadata) {
   bool usedCachedMetadata = false;
   if (!isStaticShape && metadata && !metadata->empty()) {
     if (metadata->bandTileSizes.size() == bandsToUse.size() &&
@@ -3422,12 +3411,12 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
     return emitTilingFailure(originalKernel, "empty tile levels for linear band " + Twine(bandIdx));
   }
 
-  SmallVector<unsigned, 6> parallelDims;
+  SmallVector<unsigned, kSmallVectorSizeSix> parallelDims;
   collectParallelPrefixDims(band, tileSizesInt, parallelDims);
   int64_t parallelUseCore = 0;
   mlir::scf::ForOp parallelMapLoop;
   mlir::scf::ForOp parallelTileLoop;
-  SmallVector<Value, 6> parallelTileCoordByDim;
+  SmallVector<Value, kSmallVectorSizeSix> parallelTileCoordByDim;
   createParallelMapAndTileLoop(originalKernel, band, tileSizeValues, tileSizesInt, parallelDims, useRuntimeTileCounts,
                                builder, parallelMapLoop, parallelTileLoop, parallelTileCoordByDim, parallelUseCore);
 
@@ -3442,11 +3431,14 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
   return success();
 }
 
-static void buildLeafBranchTileSlices(
-  const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-  ArrayRef<unsigned> tileSizesInt, unsigned bandSize, unsigned tileLevels, SmallVector<mlir::scf::ForOp, 6> &prefixBand,
-  SmallVector<Value, 6> &prefixTileValues, SmallVector<unsigned, 6> &prefixTileSizesInt,
-  SmallVector<Value, 6> &leafTileValues, SmallVector<unsigned, 6> &leafTileSizesInt) {
+static void buildLeafBranchTileSlices(const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band,
+                                      ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+                                      unsigned bandSize, unsigned tileLevels,
+                                      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &prefixBand,
+                                      SmallVector<Value, kSmallVectorSizeSix> &prefixTileValues,
+                                      SmallVector<unsigned, kSmallVectorSizeSix> &prefixTileSizesInt,
+                                      SmallVector<Value, kSmallVectorSizeSix> &leafTileValues,
+                                      SmallVector<unsigned, kSmallVectorSizeSix> &leafTileSizesInt) {
   // Shared prefix axes are tiled first (e.g. i1,i2,i3), then each leaf axis is tiled independently.
   for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
     prefixBand.push_back(band[dim]);
@@ -3470,14 +3462,15 @@ static void buildLeafBranchTileSlices(
 
 static LogicalResult collectAndTagLeafBranchLoops(func::FuncOp originalKernel, OpBuilder &builder, size_t bandIdx,
                                                   const LeafBranchBandPlan &plan, ArrayRef<mlir::scf::ForOp> band,
-                                                  int64_t &nextNodeId, SmallVector<int64_t, 6> &branchLeafNodeIds) {
+                                                  int64_t &nextNodeId,
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds) {
   mlir::scf::ForOp representativeLeaf = band[plan.representativeLeafDim];
   auto branchPoint = representativeLeaf->getParentOfType<mlir::scf::ForOp>();
   if (!branchPoint) {
     return emitTilingFailure(originalKernel, "failed to locate leaf-branch parent loop for band " + Twine(bandIdx));
   }
 
-  SmallVector<mlir::scf::ForOp, 6> branchLeaves;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchLeaves;
   collectDirectChildLoopsInOrder(branchPoint, branchLeaves);
   if (branchLeaves.size() < 2 ||
       !llvm::all_of(branchLeaves, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); }) ||
@@ -3536,25 +3529,25 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
     return emitTilingFailure(originalKernel, "empty tile levels for leaf-branch band " + Twine(bandIdx));
   }
 
-  SmallVector<mlir::scf::ForOp, 6> prefixBand;
-  SmallVector<Value, 6> prefixTileValues;
-  SmallVector<unsigned, 6> prefixTileSizesInt;
-  SmallVector<Value, 6> leafTileValues;
-  SmallVector<unsigned, 6> leafTileSizesInt;
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> prefixBand;
+  SmallVector<Value, kSmallVectorSizeSix> prefixTileValues;
+  SmallVector<unsigned, kSmallVectorSizeSix> prefixTileSizesInt;
+  SmallVector<Value, kSmallVectorSizeSix> leafTileValues;
+  SmallVector<unsigned, kSmallVectorSizeSix> leafTileSizesInt;
   buildLeafBranchTileSlices(plan, band, tileSizeValues, tileSizesInt, bandSize, tileLevels, prefixBand,
                             prefixTileValues, prefixTileSizesInt, leafTileValues, leafTileSizesInt);
 
   int64_t prefixParallelUseCore = 0;
-  SmallVector<unsigned, 6> prefixParallelDims;
+  SmallVector<unsigned, kSmallVectorSizeSix> prefixParallelDims;
   collectParallelPrefixDims(prefixBand, prefixTileSizesInt, prefixParallelDims);
   mlir::scf::ForOp prefixParallelMapLoop;
   mlir::scf::ForOp prefixParallelTileLoop;
-  SmallVector<Value, 6> prefixParallelTileCoordByDim;
+  SmallVector<Value, kSmallVectorSizeSix> prefixParallelTileCoordByDim;
   createParallelMapAndTileLoop(originalKernel, prefixBand, prefixTileValues, prefixTileSizesInt, prefixParallelDims,
                                useRuntimeTileCounts, builder, prefixParallelMapLoop, prefixParallelTileLoop,
                                prefixParallelTileCoordByDim, prefixParallelUseCore);
 
-  SmallVector<int64_t, 6> branchLeafNodeIds;
+  SmallVector<int64_t, kSmallVectorSizeSix> branchLeafNodeIds;
   if (failed(
         collectAndTagLeafBranchLoops(originalKernel, builder, bandIdx, plan, band, nextNodeId, branchLeafNodeIds))) {
     return failure();
@@ -3570,12 +3563,11 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
                                 useRuntimeTileCounts);
 }
 
-static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuilder &builder,
-                                            const std::vector<LeafBranchBandPlan> &leafBranchPlans,
-                                            const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                            const std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                            const std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt,
-                                            bool useRuntimeTileCounts) {
+static LogicalResult applyAllBandsWithPlans(
+  func::FuncOp originalKernel, OpBuilder &builder, const std::vector<LeafBranchBandPlan> &leafBranchPlans,
+  const std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
+  const std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues,
+  const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizesInt, bool useRuntimeTileCounts) {
   if (bandsToUse.size() != leafBranchPlans.size()) {
     originalKernel.emitError("representative bands and leaf-branch plans mismatch");
     return failure();
@@ -3588,17 +3580,17 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
     const auto &tileSizesInt = allBandTileSizesInt[bandIdx];
     const LeafBranchBandPlan &plan = leafBranchPlans[bandIdx];
 
-    LogicalResult status = plan.hasLeafBranching
-                             ? applySingleLeafBranchBandDecoupled(originalKernel, builder, bandIdx, plan, band,
-                                                                  tileSizeValues, tileSizesInt, useRuntimeTileCounts,
-                                                                  nextNodeId)
-                             : applySingleLinearBandDecoupled(originalKernel, builder, bandIdx, band, tileSizeValues,
-                                                              tileSizesInt, useRuntimeTileCounts, nextNodeId);
+    LogicalResult status =
+      plan.hasLeafBranching
+        ? applySingleLeafBranchBandDecoupled(originalKernel, builder, bandIdx, plan, band, tileSizeValues, tileSizesInt,
+                                             useRuntimeTileCounts, nextNodeId)
+        : applySingleLinearBandDecoupled(originalKernel, builder, bandIdx, band, tileSizeValues, tileSizesInt,
+                                         useRuntimeTileCounts, nextNodeId);
     if (failed(status)) {
       return failure();
     }
 
-    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
   }
 
   return success();
@@ -3606,7 +3598,7 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
 
 static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &builder) {
   // Step 5: Post-processing - mark attributes.
-  clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
+  clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
   inlineDeleteMarkedLoops(originalKernel, builder);
   sinkTransposePointLoops(originalKernel);
   sinkMultiVecPointLoops(originalKernel);
@@ -3635,14 +3627,14 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
     return success();
   }
 
-  std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
+  std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
 
   if (!leafBranchPlans.empty()) {
     preprocessLoopAttrsForTileCalculation(originalKernel, leafBranchPlans.front());
   }
   [[maybe_unused]] auto clearNotInnerBroadcastGuard =
-    llvm::make_scope_exit([&] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
+    llvm::make_scope_exit([&originalKernel] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
   (void)clearNotInnerBroadcastGuard;
 
   // Setup builder.
@@ -3650,9 +3642,9 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   Block *body = &originalKernel.getBody().front();
   builder.setInsertionPointToStart(body);
 
-  std::vector<SmallVector<unsigned, 6>> allBandTileSizesInt;
-  std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
-  std::vector<SmallVector<Value, 6>> allTileSizeValues;
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizesInt;
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> allBandConstraintMaxs;
+  std::vector<SmallVector<Value, kSmallVectorSizeSix>> allTileSizeValues;
   if (failed(prepareTileMetadataForApply(originalKernel, builder, loc, isStaticShape, bandsToUse, allBandTileSizesInt,
                                          allBandConstraintMaxs, allTileSizeValues, metadata))) {
     return failure();
@@ -3724,7 +3716,7 @@ static mlir::LogicalResult cloneComputeIntoInnermostPointLoop(llvm::ArrayRef<mli
   }
 
   // 1) collect the list of ops to clone
-  llvm::SmallVector<mlir::Operation *, 32> computeOps;
+  llvm::SmallVector<mlir::Operation *, kSmallVectorSizeThirtyTwo> computeOps;
   collectChainComputeOps(band, computeOps);
   if (computeOps.empty()) {
     return mlir::success();
@@ -3934,12 +3926,12 @@ static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainA
     }
   }
 
-  SmallVector<Operation *, 8> hoistOps;
-  llvm::SmallDenseSet<Value, 8> dependentValues;
+  SmallVector<Operation *, kSmallVectorSizeEight> hoistOps;
+  llvm::SmallDenseSet<Value, kSmallVectorSizeEight> dependentValues;
   dependentValues.insert(pointLoop.getInductionVar());
   for (Operation &op : pointLoop.getBody()->without_terminator()) {
     bool dependsOnPointLoop =
-      llvm::any_of(op.getOperands(), [&](Value operand) { return dependentValues.contains(operand); });
+      llvm::any_of(op.getOperands(), [&dependentValues](Value operand) { return dependentValues.contains(operand); });
     if (!dependsOnPointLoop) {
       hoistOps.push_back(&op);
       continue;
@@ -3973,8 +3965,8 @@ static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainA
 // multi-dim vectorization). `isPointLoop` recognises members of the chain.
 static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chainAttr,
                                       llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
-  SmallVector<mlir::scf::ForOp, 8> pointLoops;
-  funcOp.walk([&](mlir::scf::ForOp loop) {
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeEight> pointLoops;
+  funcOp.walk([&isPointLoop, &pointLoops](mlir::scf::ForOp loop) {
     if (isPointLoop(loop)) {
       pointLoops.push_back(loop);
     }
@@ -4067,9 +4059,9 @@ static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::
 }
 
 static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
-                                                llvm::SmallSet<Operation *, 16> &opSet) {
+                                                llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet) {
   Block *sourceBlock = userAnchorLoop->getBlock();
-  SmallVector<Value, 8> worklist(rootLoop.getResults().begin(), rootLoop.getResults().end());
+  SmallVector<Value, kSmallVectorSizeEight> worklist(rootLoop.getResults().begin(), rootLoop.getResults().end());
 
   for (size_t i = 0; i < worklist.size(); ++i) {
     Value v = worklist[i];
@@ -4089,7 +4081,8 @@ static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir:
   return success();
 }
 
-static void collectOpsInOrderAfter(Operation *startOp, const llvm::SmallSet<Operation *, 16> &opSet,
+static void collectOpsInOrderAfter(Operation *startOp,
+                                   const llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet,
                                    SmallVectorImpl<Operation *> &opsInOrder) {
   for (Operation *op = startOp->getNextNode(); op != nullptr; op = op->getNextNode()) {
     if (opSet.count(op) != 0u) {
@@ -4119,7 +4112,7 @@ static void replaceUsesInOps(ValueRange oldResults, ValueRange newResults, Array
 
 static bool isTriviallyRecreatableConst(Operation *op) { return isa<arith::ConstantOp, arith::ConstantIndexOp>(op); }
 
-static LogicalResult ensureNoExternalUsers(const llvm::SmallSet<Operation *, 16> &opSet) {
+static LogicalResult ensureNoExternalUsers(const llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet) {
   for (Operation *op : opSet) {
     for (Value res : op->getResults()) {
       for (Operation *user : res.getUsers()) {
@@ -4135,13 +4128,14 @@ static LogicalResult ensureNoExternalUsers(const llvm::SmallSet<Operation *, 16>
 
 // Collect operand dependencies for ops to be moved. For constant-like defs after the outer loop,
 // mark them for recreation instead of moving.
-static LogicalResult collectOperandClosure(Operation *outerLoopOp, llvm::SmallSet<Operation *, 16> &opSet,
-                                           llvm::SmallSet<Operation *, 16> &recreateOps,
+static LogicalResult collectOperandClosure(Operation *outerLoopOp,
+                                           llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet,
+                                           llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &recreateOps,
                                            const llvm::DenseSet<Value> &ignoreValues) {
   bool changed = true;
   while (changed) {
     changed = false;
-    SmallVector<Operation *, 16> currentOps(opSet.begin(), opSet.end());
+    SmallVector<Operation *, kSmallVectorSizeSixteen> currentOps(opSet.begin(), opSet.end());
     for (Operation *op : currentOps) {
       for (Value operand : op->getOperands()) {
         if (ignoreValues.contains(operand)) {
@@ -4173,7 +4167,8 @@ static LogicalResult collectOperandClosure(Operation *outerLoopOp, llvm::SmallSe
 }
 
 static void recreateConstantsForMovedOps(ArrayRef<Operation *> movedOps,
-                                         const llvm::SmallSet<Operation *, 16> &recreateOps, mlir::OpBuilder &builder) {
+                                         const llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &recreateOps,
+                                         mlir::OpBuilder &builder) {
   if (movedOps.empty() || recreateOps.empty()) {
     return;
   }
@@ -4182,7 +4177,7 @@ static void recreateConstantsForMovedOps(ArrayRef<Operation *> movedOps,
   builder.setInsertionPoint(movedOps.front());
 
   DenseMap<Value, Value> constMap;
-  auto getRecreated = [&](Value v) -> Value {
+  auto getRecreated = [&constMap, &builder](Value v) -> Value {
     auto it = constMap.find(v);
     if (it != constMap.end()) {
       return it->second;
@@ -4233,7 +4228,7 @@ static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoo
     return failure();
   }
 
-  llvm::SmallSet<Operation *, 16> opSet;
+  llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> opSet;
   if (failed(collectReduceResultUserOps(rootLoop, userAnchorLoop, opSet))) {
     return failure();
   }
@@ -4242,14 +4237,14 @@ static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoo
     return success();
   }
 
-  llvm::SmallSet<Operation *, 16> recreateOps;
+  llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> recreateOps;
   llvm::DenseSet<Value> ignoreValues;
   ignoreValues.insert(rootResults.begin(), rootResults.end());
   if (failed(collectOperandClosure(userAnchorLoop.getOperation(), opSet, recreateOps, ignoreValues))) {
     return failure();
   }
 
-  SmallVector<Operation *, 16> opsInOrder;
+  SmallVector<Operation *, kSmallVectorSizeSixteen> opsInOrder;
   collectOpsInOrderAfter(userAnchorLoop.getOperation(), opSet, opsInOrder);
   moveOpsAfterLoop(middleLoop, opsInOrder, builder);
   recreateConstantsForMovedOps(opsInOrder, recreateOps, builder);
@@ -4297,7 +4292,8 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
   initIVMapping(band, tiledLoops, tileSizesNum, mapping);
 
   for (unsigned i = 0; i + 1 < forNum; ++i) {
-    llvm::SmallVector<mlir::Operation *, 16> pre, post;
+    llvm::SmallVector<mlir::Operation *, kSmallVectorSizeSixteen> pre;
+    llvm::SmallVector<mlir::Operation *, kSmallVectorSizeSixteen> post;
     mlir::scf::ForOp parentLoop = band[i];
     mlir::scf::ForOp childLoop = band[i + 1];
     splitOpsAroundChildLoop(parentLoop, childLoop.getOperation(), pre, post);
@@ -4310,12 +4306,12 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
 
     // pre: put into the beginning of the body (before the child loop op)
     if (!pre.empty()) {
-      cloneOpsToPointLoop(parentTile0, pre, /*insertAtStart=*/true, builder, mapping);
+      cloneOpsToPointLoop(parentTile0, pre, /* insertAtStart= */ true, builder, mapping);
     }
 
     // post: put into the end of the body (before the yield)
     if (!post.empty()) {
-      cloneOpsToPointLoop(parentTile0, post, /*insertAtStart=*/false, builder, mapping);
+      cloneOpsToPointLoop(parentTile0, post, /* insertAtStart= */ false, builder, mapping);
     }
   }
 

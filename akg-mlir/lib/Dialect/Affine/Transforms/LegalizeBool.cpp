@@ -30,11 +30,13 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_LEGALIZEBOOL
 #define GEN_PASS_DEF_LEGALIZEBOOL
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -90,8 +92,8 @@ Value castBitBinaryOperandToResultTy(Location loc, Type resTy, Value v, OpBuilde
 void updateFunctionType(func::FuncOp func) {
   OpBuilder b(func);
   FunctionType old = func.getFunctionType();
-  SmallVector<Type, 4> in;
-  SmallVector<Type, 4> out;
+  SmallVector<Type, kSmallVectorSizeFour> in;
+  SmallVector<Type, kSmallVectorSizeFour> out;
   std::transform(old.getInputs().begin(), old.getInputs().end(), std::back_inserter(in), convertI1ElemToI8);
   std::transform(old.getResults().begin(), old.getResults().end(), std::back_inserter(out), convertI1ElemToI8);
   FunctionType neu = b.getFunctionType(in, out);
@@ -213,7 +215,7 @@ struct ArithIntBinaryPattern final : public OpRewritePattern<OpTy> {
     Location loc = o->getLoc();
     Type i8ty = r.getI8Type();
     Type f16 = r.getF16Type();
-    auto toF16 = [&](Value v) { return r.create<arith::UIToFPOp>(loc, f16, v).getResult(); };
+    auto toF16 = [&r, &loc, &f16](Value v) { return r.create<arith::UIToFPOp>(loc, f16, v).getResult(); };
     using FloatOp = typename IntToFloatMap<OpTy>::type;
     Value w = r.create<FloatOp>(loc, toF16(lhs), toF16(rhs)).getResult();
     r.replaceOp(o, {r.create<arith::FPToUIOp>(loc, i8ty, w).getResult()});

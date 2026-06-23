@@ -31,6 +31,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_GENERATESINGLEAFFINEPARALLEL
@@ -65,7 +66,7 @@ void GenerateSingleAffineParallel::generateWithoutLoop() {
   SmallVector<Operation *> restOp;
   auto &currentBlock = funcOp.front();
   auto terminator = currentBlock.getTerminator();
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([&topLoop, &restOp, &terminator](Operation *op) {
     if (op == terminator) {
       return;
     }
@@ -112,7 +113,7 @@ void GenerateSingleAffineParallel::generateWithLoop(affine::AffineForOp outerLoo
 void GenerateSingleAffineParallel::sinkOps(affine::AffineForOp pointLoop) {
   func::FuncOp funcOp = getOperation();
   SmallVector<Operation *> toSink;
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([&toSink](Operation *op) {
     if (auto dimOp = dyn_cast<memref::DimOp>(op)) {
       for (auto user : op->getUsers()) {
         // These ops are not allowed in gpu func.
@@ -143,12 +144,12 @@ void GenerateSingleAffineParallel::sinkOps(affine::AffineForOp pointLoop) {
 void GenerateSingleAffineParallel::updateReductionLoop() {
   func::FuncOp funcOp = getOperation();
   OpBuilder builder(funcOp);
-  (void)funcOp->walk([&](Operation *redOp) {
+  (void)funcOp->walk([&builder](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
       ArrayAttr axesArrayAttr = cast<ArrayAttr>(redOp->getAttr(kReductionAxesStr));
 
       SmallVector<mlir::Attribute> intAttrs;
-      SmallVector<int, 8> flags;
+      SmallVector<int, kSmallVectorSizeEight> flags;
       for (auto axisAttr : axesArrayAttr) {
         auto value = cast<IntegerAttr>(axisAttr).getInt() + 1;
         flags.push_back(value);
@@ -165,7 +166,7 @@ void GenerateSingleAffineParallel::runOnOperation() {
   func::FuncOp funcOp = getOperation();
   bool hasLoop = false;
   affine::AffineForOp outerLoop;
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([&hasLoop, &outerLoop](Operation *op) {
     if (auto loop = dyn_cast<affine::AffineForOp>(op)) {
       outerLoop = loop;
     }
