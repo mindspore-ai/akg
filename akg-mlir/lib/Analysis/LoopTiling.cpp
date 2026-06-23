@@ -1686,7 +1686,7 @@ static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, 
         newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
       }
       if (i == tileNum) {
-        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
+        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
       }
       return;
     }
@@ -1698,7 +1698,7 @@ static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, 
 
     // For inner point loop: preserve reduction attribute from original loop.
     if (i == tileNum && j == (bandSize - 1)) {
-      newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
+      newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
     }
     return;
   }
@@ -2726,13 +2726,11 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
         reduceType = getReduceType(forOp);
 
         if (reduceType == ReduceDirection::X) {
-          forOp->setAttr(kReductionXLoopAttr,
-                         builder.getI64IntegerAttr(std::min<int64_t>(getLoopExtent(forOp), kVectorSize)));
+          forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
         } else if (reduceType == ReduceDirection::Y) {
           forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
         } else if (reduceType == ReduceDirection::ALL) {
-          forOp->setAttr(kReductionAllLoopAttr,
-                         builder.getI64IntegerAttr(std::min<int64_t>(getLoopExtent(forOp), kVectorSize)));
+          forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
         }
 
         forOp = forOp->getParentOfType<mlir::scf::ForOp>();
