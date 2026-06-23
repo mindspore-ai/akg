@@ -1827,6 +1827,41 @@ func.func @test_rank_zero_store_after_reduction(%input: memref<64xf32>, %output:
 
 // -----
 
+// Phase 2 promotes dangling rank-0 arith whose source is a reduction result after load/store sweeps.
+// CHECK-LABEL: func.func @test_vf1_arith_after_reduction_without_load_or_store_seed
+// CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %{{.*}} {reduction_dims = array<i64: 0>} : !npuvector<64xf32> into !npuvector.f32
+// CHECK: %[[HALF_VEC:.*]] = npuvector.broadcast %{{.*}} : f32 to !npuvector.f32
+// CHECK: %[[SCALED:.*]] = arith.mulf %[[SUM]], %[[HALF_VEC]] : !npuvector.f32
+// CHECK: %[[SEED:.*]] = npuvector.transfer_read %{{.*}}[]{{.*}} : memref<f32>, !npuvector.f32
+// CHECK: %[[SEED_SQ:.*]] = arith.mulf %[[SEED]], %[[SEED]] : !npuvector.f32
+// CHECK: %[[MIX:.*]] = arith.mulf {{.*}}, %[[SEED_SQ]] : !npuvector.f32
+// CHECK: npuvector.transfer_write %[[MIX]], %{{.*}}[] : !npuvector.f32, memref<f32>
+func.func @test_vf1_arith_after_reduction_without_load_or_store_seed(
+    %input: memref<64xf32>,
+    %seed: memref<f32>,
+    %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c64 = arith.constant 64 : index
+  %c1 = arith.constant 1 : index
+  %init = arith.constant 0.000000e+00 : f32
+  %half = arith.constant 5.000000e-01 : f32
+
+  %sum = scf.for %i = %c0 to %c64 step %c1 iter_args(%acc = %init) -> f32 {
+    %value = memref.load %input[%i] : memref<64xf32>
+    %next = arith.addf %acc, %value {reduction_axes = [0 : index], reduction_type = "x"} : f32
+    scf.yield %next : f32
+  } {reduction_x = 64 : i64}
+
+  %scaled = arith.mulf %sum, %half : f32
+  %seed_value = memref.load %seed[] : memref<f32>
+  %seed_square = arith.mulf %seed_value, %seed_value : f32
+  %mix = arith.mulf %scaled, %seed_square : f32
+  memref.store %mix, %output[] : memref<f32>
+  return
+}
+
+// -----
+
 // CHECK-LABEL: func.func @test_nested_vector_reduction_x_rank_lift_accumulator_dim_order
 // CHECK: %[[VEC_ADD:.*]] = arith.addf {{.*}} : !npuvector<64xf16>
 // CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<64x8xf16>
