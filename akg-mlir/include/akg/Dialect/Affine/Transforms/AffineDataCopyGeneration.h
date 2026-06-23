@@ -25,14 +25,18 @@ namespace mlir {
 
 namespace affine {
 
-/// Performs packing (or explicit copying) of accessed memref regions into
-/// buffers in the specified faster memory space through either pointwise copies
-/// or DMA operations.
+struct AKGDataCopyGenerationParams {
+  unsigned slowMemorySpace = 0;
+  unsigned fastMemorySpace = 0;
+  unsigned tagMemorySpace = 0;
+  int minDmaTransferSize = 1024;
+  uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max();
+  bool generateDma = true;
+  bool skipNonUnitStrideLoops = false;
+};
+
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGAffineDataCopyGenerationPass(
-  unsigned slowMemorySpace, unsigned fastMemorySpace, unsigned tagMemorySpace = 0, int minDmaTransferSize = 1024,
-  uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max(), bool generateDmaArg = true,
-  bool skipNonUnitStrideLoopsArg = false);
-/// Overload relying on pass options for initialization.
+  const AKGDataCopyGenerationParams &params);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGAffineDataCopyGenerationPass();
 }  // namespace affine
 }  // namespace mlir

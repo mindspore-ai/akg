@@ -501,9 +501,17 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return newFunc;
   }
 
-  void populateKernelBody(func::FuncOp newFunc, const llvm::SetVector<Value> &realArgs,
-                          const SmallVector<Value> &constInputs, const SmallVector<Operation *> &group,
-                          const llvm::SetVector<Value> &outputs, Location loc) {
+  struct KernelBodyParams {
+    mutable func::FuncOp newFunc;
+    const llvm::SetVector<Value> &realArgs;
+    const SmallVector<Value> &constInputs;
+    const SmallVector<Operation *> &group;
+    const llvm::SetVector<Value> &outputs;
+    Location loc;
+  };
+
+  void populateKernelBody(const KernelBodyParams &params) {
+    auto &[newFunc, realArgs, constInputs, group, outputs, loc] = params;
     Block *fnEntry = &newFunc.getBody().front();
     OpBuilder fnBuilder(fnEntry, fnEntry->begin());
     IRMapping mapping;
@@ -526,8 +534,22 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     fnBuilder.create<func::ReturnOp>(loc, retVals);
   }
 
-  void emitCallAndErase(Operation *firstOp, func::FuncOp newFunc, const llvm::SetVector<Value> &realArgs,
-                        const llvm::SetVector<Value> &outputs, SmallVector<Operation *> &group, Location loc) {
+  struct CallEraseParams {
+    Operation *firstOp;
+    func::FuncOp newFunc;
+    const llvm::SetVector<Value> &realArgs;
+    const llvm::SetVector<Value> &outputs;
+    SmallVector<Operation *> &group;
+    Location loc;
+  };
+
+  void emitCallAndErase(const CallEraseParams &params) {
+    auto &firstOp = params.firstOp;
+    auto &newFunc = params.newFunc;
+    auto &realArgs = params.realArgs;
+    const auto &outputs = params.outputs;
+    auto &group = params.group;
+    auto &loc = params.loc;
     OpBuilder callBuilder(firstOp);
     SmallVector<Value> callArgs(realArgs.begin(), realArgs.end());
     auto callOp = callBuilder.create<func::CallOp>(loc, newFunc, callArgs);
@@ -575,8 +597,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     SmallVector<Type> outputTypes = llvm::to_vector(llvm::map_range(outputs, getType));
 
     auto newFunc = buildKernelFuncShell(parentFunc, loc, id, inputTypes, outputTypes);
-    populateKernelBody(newFunc, realArgs, constInputs, group, outputs, loc);
-    emitCallAndErase(firstOp, newFunc, realArgs, outputs, group, loc);
+    populateKernelBody({newFunc, realArgs, constInputs, group, outputs, loc});
+    emitCallAndErase({firstOp, newFunc, realArgs, outputs, group, loc});
   }
 
   // =========================================================================
@@ -644,8 +666,17 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   }
 
   // Write a returned value into its UB output param inside the kernel.
-  static void emitWriteToOutParam(OpBuilder &b, Location loc, Value retVal, Value outArg, const RetUbInfo &info,
-                                  Value c0) {
+  struct WriteToOutParamParams {
+    OpBuilder &b;
+    Location loc;
+    Value retVal;
+    Value outArg;
+    const RetUbInfo &info;
+    Value c0;
+  };
+
+  static void emitWriteToOutParam(const WriteToOutParamParams &params) {
+    auto &[b, loc, retVal, outArg, info, c0] = params;
     if (info.isVector) {
       unsigned rank = info.ubType.getRank();
       SmallVector<Value> idx((rank != 0u) ? rank : 1u, c0);
@@ -717,7 +748,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     OpBuilder wb(retOp);
     Value c0k = wb.create<arith::ConstantIndexOp>(loc, 0);
     for (size_t k = 0; k < retInfos.size(); ++k) {
-      emitWriteToOutParam(wb, loc, retOp.getOperand(k), outArgs[k], retInfos[k], c0k);
+      emitWriteToOutParam({wb, loc, retOp.getOperand(k), outArgs[k], retInfos[k], c0k});
     }
 
     // 2. Replace the return with an empty one and drop the results.
@@ -911,9 +942,33 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   // describe the actual tile being moved; using the original transfer's
   // dynamic extents (rather than the padded UB size) ensures only the valid
   // region is copied for partial/tail tiles.
-  static void emitGmToUbCopy(OpBuilder &builder, Location loc, Value origArg, Value ubBuf, ValueRange gmIndices,
-                             Value c0, Type elemType, Type vecType, ValueRange dynSizes, ValueRange maxSizes,
-                             unsigned ubRank) {
+  struct GmUbCopyParams {
+    OpBuilder &builder;
+    Location loc;
+    Value origArg;
+    Value ubBuf;
+    ValueRange gmIndices;
+    Value c0;
+    Type elemType;
+    Type vecType;
+    ValueRange dynSizes;
+    ValueRange maxSizes;
+    unsigned ubRank;
+    func::CallOp callOp;
+  };
+
+  static void emitGmToUbCopy(const GmUbCopyParams &params) {
+    auto &builder = params.builder;
+    auto &loc = params.loc;
+    auto &origArg = params.origArg;
+    auto &ubBuf = params.ubBuf;
+    auto &gmIndices = params.gmIndices;
+    auto &c0 = params.c0;
+    auto &elemType = params.elemType;
+    auto &vecType = params.vecType;
+    auto &dynSizes = params.dynSizes;
+    auto &maxSizes = params.maxSizes;
+    auto &ubRank = params.ubRank;
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
     SmallVector<Value> ubIndices((ubRank != 0u) ? ubRank : 1u, c0);
     Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, origArg, gmIndices, padding,
@@ -924,9 +979,18 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   // Emit UB -> GM transfer after the call.  Mirrors `emitGmToUbCopy`: only the
   // valid tile (described by `dynSizes`) is written back, so partial/tail
   // tiles do not overwrite neighboring GM data.
-  static void emitUbToGmCopy(OpBuilder &builder, func::CallOp callOp, Location loc, Value ubBuf, Value origArg,
-                             ValueRange gmIndices, Type elemType, Type vecType, ValueRange dynSizes,
-                             ValueRange maxSizes, unsigned ubRank) {
+  static void emitUbToGmCopy(const GmUbCopyParams &params) {
+    auto &builder = params.builder;
+    auto &loc = params.loc;
+    auto &origArg = params.origArg;
+    auto &ubBuf = params.ubBuf;
+    auto &gmIndices = params.gmIndices;
+    auto &elemType = params.elemType;
+    auto &vecType = params.vecType;
+    auto &dynSizes = params.dynSizes;
+    auto &maxSizes = params.maxSizes;
+    auto &ubRank = params.ubRank;
+    auto &callOp = params.callOp;
     builder.setInsertionPointAfter(callOp);
     Value c0p = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
@@ -940,10 +1004,30 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   // Determine tile extents (copyVecType, dynSizes, maxSizes) for GM<->UB copies.
   // Prefer the original transfer's dynamic sizes so partial/tail tiles copy only
   // the valid region.
-  static void resolveGmUbCopyTileParams(func::CallOp callOp, func::FuncOp kernelFunc, OpBuilder &builder, Location loc,
-                                        unsigned argIdx, ArgReadMap &argToRead, ArgWriteMap &argToWrite,
-                                        ArrayRef<int64_t> ubShape, Type elemType, Type &copyVecType,
-                                        SmallVector<Value> &dynSizes, SmallVector<Value> &maxSizes) {
+  struct GmUbCopyTileParams {
+    func::CallOp callOp;
+    func::FuncOp kernelFunc;
+    OpBuilder &builder;
+    Location loc;
+    unsigned argIdx;
+    ArgReadMap &argToRead;
+    ArgWriteMap &argToWrite;
+    ArrayRef<int64_t> ubShape;
+    Type elemType;
+    Type &copyVecType;
+    SmallVector<Value> &dynSizes;
+    SmallVector<Value> &maxSizes;
+  };
+
+  static void resolveGmUbCopyTileParams(const GmUbCopyTileParams &params) {
+    auto &argIdx = params.argIdx;
+    auto &argToRead = params.argToRead;
+    auto &argToWrite = params.argToWrite;
+    auto &ubShape = params.ubShape;
+    auto &elemType = params.elemType;
+    auto &copyVecType = params.copyVecType;
+    auto &dynSizes = params.dynSizes;
+    auto &maxSizes = params.maxSizes;
     auto rIt = argToRead.find(argIdx);
     auto wIt = argToWrite.find(argIdx);
     copyVecType = mlir::npuvector::NPUVectorType::get(ubShape, elemType);
@@ -969,6 +1053,8 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
           ++numDyn;
         }
       }
+      const auto &callOp = params.callOp;
+      const auto &kernelFunc = params.kernelFunc;
       SmallVector<Value> rd = remapSizesToCaller(origDyn, callOp, kernelFunc);
       SmallVector<Value> rm = remapSizesToCaller(origMax, callOp, kernelFunc);
       if (numDyn > 0 && rd.size() == numDyn && rm.size() == numDyn) {
@@ -979,8 +1065,12 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
       }
     }
     if (!dynamicCopy) {
+      auto &builder = params.builder;
+      const auto &loc = params.loc;
+      OpBuilder &b = builder;
+      Location l = loc;
       std::transform(ubShape.begin(), ubShape.end(), std::back_inserter(dynSizes),
-                     [&builder, loc](int64_t d) { return builder.create<arith::ConstantIndexOp>(loc, d); });
+                     [&b, l](int64_t d) { return b.create<arith::ConstantIndexOp>(l, d); });
       maxSizes = dynSizes;
     }
   }
@@ -1051,25 +1141,40 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     Type copyVecType;
     SmallVector<Value> dynSizes;
     SmallVector<Value> maxSizes;
-    resolveGmUbCopyTileParams(callOp, kernelFunc, builder, loc, i, argToRead, argToWrite, ubShape, elemType,
-                              copyVecType, dynSizes, maxSizes);
+    resolveGmUbCopyTileParams(
+      {callOp, kernelFunc, builder, loc, i, argToRead, argToWrite, ubShape, elemType, copyVecType, dynSizes, maxSizes});
     auto ubRank = static_cast<unsigned>(ubBufShape.size());
 
     if (rIt != argToRead.end()) {
-      emitGmToUbCopy(builder, loc, origArg, ubBuf, gmIndices, c0, elemType, copyVecType, dynSizes, maxSizes, ubRank);
+      emitGmToUbCopy(
+        {builder, loc, origArg, ubBuf, gmIndices, c0, elemType, copyVecType, dynSizes, maxSizes, ubRank, callOp});
     }
     newCallArgs[i] = ubBuf;
     if (wIt != argToWrite.end()) {
-      emitUbToGmCopy(builder, callOp, loc, ubBuf, origArg, gmIndices, elemType, copyVecType, dynSizes, maxSizes,
-                     ubRank);
+      emitUbToGmCopy(
+        {builder, loc, origArg, ubBuf, gmIndices, c0, elemType, copyVecType, dynSizes, maxSizes, ubRank, callOp});
     }
     return Type(ubType);
   }
 
   // Returns failure() on hard error.  On success, sets `updated` to whether
   // any operand was promoted.
-  LogicalResult processOneCall(func::CallOp callOp, func::FuncOp kernelFunc, ArgReadMap &argToRead,
-                               ArgWriteMap &argToWrite, SmallVector<Type> &newArgTypes, bool &updated) {
+  struct ProcessOneCallParams {
+    mutable func::CallOp callOp;
+    func::FuncOp kernelFunc;
+    ArgReadMap &argToRead;
+    ArgWriteMap &argToWrite;
+    SmallVector<Type> &newArgTypes;
+    bool &updated;
+  };
+
+  LogicalResult processOneCall(const ProcessOneCallParams &params) {
+    auto &callOp = params.callOp;
+    const auto &kernelFunc = params.kernelFunc;
+    auto &argToRead = params.argToRead;
+    auto &argToWrite = params.argToWrite;
+    auto &newArgTypes = params.newArgTypes;
+    auto &updated = params.updated;
     updated = false;
     auto parentFunc = callOp->getParentOfType<func::FuncOp>();
     if (!parentFunc) {
@@ -1189,7 +1294,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     bool sigUpdated = false;
     for (func::CallOp callOp : callOps) {
       bool updated = false;
-      if (failed(processOneCall(callOp, kernelFunc, argToRead, argToWrite, newArgTypes, updated))) {
+      if (failed(processOneCall({callOp, kernelFunc, argToRead, argToWrite, newArgTypes, updated}))) {
         return failure();
       }
       sigUpdated = sigUpdated || updated;
@@ -1233,10 +1338,17 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return shape;
   }
 
-  LogicalResult collectVectorArgsToPromote(Block &entry, ArrayRef<func::CallOp> callOps, func::FuncOp parentFunc,
-                                           SmallVector<unsigned> &vecArgIdx,
-                                           SmallVector<mlir::npuvector::NPUVectorType> &vecArgOrigType,
-                                           SmallVector<MemRefType> &vecArgBufType) {
+  struct VectorArgsToPromoteParams {
+    Block &entry;
+    ArrayRef<func::CallOp> callOps;
+    func::FuncOp parentFunc;
+    SmallVector<unsigned> &vecArgIdx;
+    SmallVector<mlir::npuvector::NPUVectorType> &vecArgOrigType;
+    SmallVector<MemRefType> &vecArgBufType;
+  };
+
+  LogicalResult collectVectorArgsToPromote(const VectorArgsToPromoteParams &params) {
+    auto &[entry, callOps, parentFunc, vecArgIdx, vecArgOrigType, vecArgBufType] = params;
     for (unsigned i = 0; i < entry.getNumArguments(); ++i) {
       auto vt = llvm::dyn_cast<mlir::npuvector::NPUVectorType>(entry.getArgument(i).getType());
       if (!vt) {
@@ -1281,8 +1393,17 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
   }
 
-  LogicalResult emitVectorReloadAtEntry(OpBuilder &kb, Location kloc, Value c0k, BlockArgument arg,
-                                        mlir::npuvector::NPUVectorType vt, func::FuncOp parentFunc) {
+  struct VectorReloadParams {
+    OpBuilder &kb;
+    Location kloc;
+    Value c0k;
+    mutable BlockArgument arg;
+    mlir::npuvector::NPUVectorType vt;
+    func::FuncOp parentFunc;
+  };
+
+  LogicalResult emitVectorReloadAtEntry(const VectorReloadParams &params) {
+    auto &[kb, kloc, c0k, arg, vt, parentFunc] = params;
     Type elemType = vt.getElementType();
     Value padding = kb.create<arith::ConstantOp>(kloc, elemType, kb.getZeroAttr(elemType));
 
@@ -1315,9 +1436,17 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return success();
   }
 
-  LogicalResult rewriteKernelForVectorPromotion(func::FuncOp kernelFunc, Block &entry, ArrayRef<unsigned> vecArgIdx,
-                                                ArrayRef<mlir::npuvector::NPUVectorType> vecArgOrigType,
-                                                ArrayRef<MemRefType> vecArgBufType, func::FuncOp parentFunc) {
+  struct RewriteKernelParams {
+    mutable func::FuncOp kernelFunc;
+    Block &entry;
+    ArrayRef<unsigned> vecArgIdx;
+    ArrayRef<mlir::npuvector::NPUVectorType> vecArgOrigType;
+    ArrayRef<MemRefType> vecArgBufType;
+    func::FuncOp parentFunc;
+  };
+
+  LogicalResult rewriteKernelForVectorPromotion(const RewriteKernelParams &params) {
+    auto &[kernelFunc, entry, vecArgIdx, vecArgOrigType, vecArgBufType, parentFunc] = params;
     SmallVector<Type> finalArgTypes;
     finalArgTypes.reserve(entry.getNumArguments());
     for (unsigned i = 0; i < entry.getNumArguments(); ++i) {
@@ -1339,7 +1468,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     for (size_t k = 0; k < vecArgIdx.size(); ++k) {
       BlockArgument arg = entry.getArgument(vecArgIdx[k]);
-      if (failed(emitVectorReloadAtEntry(kb, kloc, c0k, arg, vecArgOrigType[k], parentFunc))) {
+      if (failed(emitVectorReloadAtEntry({kb, kloc, c0k, arg, vecArgOrigType[k], parentFunc}))) {
         return failure();
       }
     }
@@ -1358,11 +1487,12 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     func::FuncOp parentFunc = pickParentFunc(callOps);
 
+    // cppcheck-suppress constVariable
     Block &entry = kernelFunc.getBody().front();
     SmallVector<unsigned> vecArgIdx;
     SmallVector<mlir::npuvector::NPUVectorType> vecArgOrigType;
     SmallVector<MemRefType> vecArgBufType;
-    if (failed(collectVectorArgsToPromote(entry, callOps, parentFunc, vecArgIdx, vecArgOrigType, vecArgBufType))) {
+    if (failed(collectVectorArgsToPromote({entry, callOps, parentFunc, vecArgIdx, vecArgOrigType, vecArgBufType}))) {
       return failure();
     }
     if (vecArgIdx.empty()) {
@@ -1370,7 +1500,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
 
     updateCallersForVectorPromotion(callOps, vecArgIdx, vecArgBufType);
-    return rewriteKernelForVectorPromotion(kernelFunc, entry, vecArgIdx, vecArgOrigType, vecArgBufType, parentFunc);
+    return rewriteKernelForVectorPromotion({kernelFunc, entry, vecArgIdx, vecArgOrigType, vecArgBufType, parentFunc});
   }
 
   // =========================================================================

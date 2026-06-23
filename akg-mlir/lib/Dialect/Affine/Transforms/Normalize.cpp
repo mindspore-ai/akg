@@ -51,6 +51,23 @@ namespace {
 using mlir::hivm::RoundMode;
 using mlir::hivm::RoundModeAttr;
 
+struct NormSplitParams {
+  Value x;
+  Value xRoundHigh;
+  Value xRoundLow;
+  Type elemTy;
+  ArrayRef<double> piApproParams;
+  std::optional<double> offsetHigh;
+  std::optional<double> offsetLow;
+};
+
+struct TaylerSeriesParams {
+  Value lastTaylerTerm;
+  Value xPow;
+  int taylerExpansionNum;
+  ArrayRef<double> taylerParams;
+};
+
 static Value buildFloatConst(PatternRewriter &rewriter, Location loc, Type ty, double v) {
   auto fTy = dyn_cast<FloatType>(ty);
   assert(fTy && "expected float type");
@@ -95,27 +112,23 @@ static Value buildRoundWithMath(PatternRewriter &rewriter, Location loc, Value x
 ///     res = res - p * xRoundLow
 ///   if offsetLow: res = res + offsetLow
 /// This avoids the rounding error of `xRound * pi` for large xRound.
-static Value buildNormSplit(PatternRewriter &rewriter, Location loc, Value x, Value xRoundHigh, Value xRoundLow,
-                            Type elemTy, ArrayRef<double> piApproParams,
-                            std::optional<double> offsetHigh = std::nullopt,
-                            std::optional<double> offsetLow = std::nullopt) {
-  Value res = x;
-  for (size_t i = 0; i < piApproParams.size(); ++i) {
-    Value piCst = buildFloatConst(rewriter, loc, elemTy, piApproParams[i]);
-    Value kpHigh = rewriter.create<arith::MulFOp>(loc, piCst, xRoundHigh);
+static Value buildNormSplit(PatternRewriter &rewriter, Location loc, const NormSplitParams &params) {
+  Value res = params.x;
+  for (size_t i = 0; i < params.piApproParams.size(); ++i) {
+    Value piCst = buildFloatConst(rewriter, loc, params.elemTy, params.piApproParams[i]);
+    Value kpHigh = rewriter.create<arith::MulFOp>(loc, piCst, params.xRoundHigh);
     res = rewriter.create<arith::SubFOp>(loc, res, kpHigh);
 
-    // For cos: insert offsetHigh between p[1]*high and p[1]*low
-    if (i == 1 && offsetHigh.has_value()) {
-      Value oh = buildFloatConst(rewriter, loc, elemTy, offsetHigh.value());
+    if (i == 1 && params.offsetHigh.has_value()) {
+      Value oh = buildFloatConst(rewriter, loc, params.elemTy, params.offsetHigh.value());
       res = rewriter.create<arith::AddFOp>(loc, res, oh);
     }
 
-    Value kpLow = rewriter.create<arith::MulFOp>(loc, piCst, xRoundLow);
+    Value kpLow = rewriter.create<arith::MulFOp>(loc, piCst, params.xRoundLow);
     res = rewriter.create<arith::SubFOp>(loc, res, kpLow);
   }
-  if (offsetLow.has_value()) {
-    Value ol = buildFloatConst(rewriter, loc, elemTy, offsetLow.value());
+  if (params.offsetLow.has_value()) {
+    Value ol = buildFloatConst(rewriter, loc, params.elemTy, params.offsetLow.value());
     res = rewriter.create<arith::AddFOp>(loc, res, ol);
   }
   return res;
@@ -123,8 +136,14 @@ static Value buildNormSplit(PatternRewriter &rewriter, Location loc, Value x, Va
 
 /// Compute (xRound, xRoundHigh, xRoundLow)///   xRoundHigh = round(inputDivPi / 2048) * 2048
 ///   xRoundLow  = xRound - xRoundHigh
+struct XRoundSplitInfo {
+  Value xRound;
+  Type elemTy;
+};
+
 static std::tuple<Value, Value, Value> buildXRoundSplit(PatternRewriter &rewriter, Location loc, Value inputDivPi,
-                                                        Value xRound, Type elemTy) {
+                                                        const XRoundSplitInfo &info) {
+  auto &[xRound, elemTy] = info;
   Value invSplit = buildFloatConst(rewriter, loc, elemTy, 1.0 / 2048.0);
   Value split = buildFloatConst(rewriter, loc, elemTy, 2048.0);
   Value scaled = rewriter.create<arith::MulFOp>(loc, inputDivPi, invSplit);
@@ -172,21 +191,26 @@ static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpa
   llvm_unreachable("Unsupported TaylerMode");
 }
 
-static Value createTaylerSeries(PatternRewriter &rewriter, Location loc, Value lastTaylerTerm, Value xPow,
-                                int taylerExpansionNum, ArrayRef<double> taylerParams) {
-  Value partialRes = lastTaylerTerm;
-  auto elemTy = getElementTypeOrSelf(xPow.getType());
-  for (int i = 0; i < taylerExpansionNum - kTaylerOrderSub; ++i) {
-    double coef = taylerParams[taylerExpansionNum - i - 2];
+static Value createTaylerSeries(PatternRewriter &rewriter, Location loc, const TaylerSeriesParams &params) {
+  Value partialRes = params.lastTaylerTerm;
+  auto elemTy = getElementTypeOrSelf(params.xPow.getType());
+  for (int i = 0; i < params.taylerExpansionNum - kTaylerOrderSub; ++i) {
+    double coef = params.taylerParams[params.taylerExpansionNum - i - 2];
     Value coefCst = buildFloatConst(rewriter, loc, elemTy, coef);
     Value curTerm = rewriter.create<arith::AddFOp>(loc, partialRes, coefCst);
-    partialRes = rewriter.create<arith::MulFOp>(loc, curTerm, xPow);
+    partialRes = rewriter.create<arith::MulFOp>(loc, curTerm, params.xPow);
   }
   return partialRes;
 }
 
 /// tayler(x) = x * (1 + \sum_{i>=1} a_i x^{2i})
-static Value buildTayler(PatternRewriter &rewriter, Location loc, Value x, int taylerExpansionNum, TaylerMode mode) {
+struct TaylerInfo {
+  int taylerExpansionNum;
+  TaylerMode mode;
+};
+
+static Value buildTayler(PatternRewriter &rewriter, Location loc, Value x, const TaylerInfo &info) {
+  auto &[taylerExpansionNum, mode] = info;
   SmallVector<double> taylerParams = getTaylerParams(mode, taylerExpansionNum);
 
   auto elemTy = getElementTypeOrSelf(x.getType());
@@ -197,7 +221,7 @@ static Value buildTayler(PatternRewriter &rewriter, Location loc, Value x, int t
   Value lastCoefCst = buildFloatConst(rewriter, loc, elemTy, lastCoef);
   Value lastTerm = rewriter.create<arith::MulFOp>(loc, xPow, lastCoefCst);
 
-  Value partialRes = createTaylerSeries(rewriter, loc, lastTerm, xPow, taylerExpansionNum, taylerParams);
+  Value partialRes = createTaylerSeries(rewriter, loc, {lastTerm, xPow, taylerExpansionNum, taylerParams});
 
   Value one = buildFloatConst(rewriter, loc, elemTy, 1.0);
   Value poly1 = rewriter.create<arith::AddFOp>(loc, partialRes, one);
@@ -269,7 +293,14 @@ static Value buildSign(PatternRewriter &rewriter, Location loc, Value x, TaylerM
   llvm_unreachable("unsupported TaylerMode");
 }
 
-static Value clipInput(PatternRewriter &rewriter, Location loc, Value input, double maxVal, double minVal) {
+struct ClipRangeInfo {
+  double maxVal;
+  double minVal;
+};
+
+static Value clipInput(PatternRewriter &rewriter, Location loc, Value input, const ClipRangeInfo &info) {
+  double maxVal = info.maxVal;
+  double minVal = info.minVal;
   auto elemTy = getElementTypeOrSelf(input.getType());
   Value maxCst = buildFloatConst(rewriter, loc, elemTy, maxVal);
   Value minCst = buildFloatConst(rewriter, loc, elemTy, minVal);
@@ -317,17 +348,17 @@ struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
     Value xRound = buildRoundWithMath(rewriter, loc, inputDivPi);
 
     // xRound = xRoundHigh + xRoundLow, with xRoundHigh = round(inputDivPi / 2048) * 2048
-    auto [xRoundOrig, xRoundHigh, xRoundLow] = buildXRoundSplit(rewriter, loc, inputDivPi, xRound, fTy);
+    auto [xRoundOrig, xRoundHigh, xRoundLow] = buildXRoundSplit(rewriter, loc, inputDivPi, {xRound, fTy});
     (void)xRoundOrig;
 
     ArrayRef<double> piApproParams(kPiApproParams, sizeof(kPiApproParams) / sizeof(double));
 
     // norm_x = input - sum_p (p * xRoundHigh + p * xRoundLow)
-    Value normInput = buildNormSplit(rewriter, loc, input, xRoundHigh, xRoundLow, fTy, piApproParams,
-                                     /* offsetHigh= */ std::nullopt, /* offsetLow= */ std::nullopt);
+    Value normInput =
+      buildNormSplit(rewriter, loc, {input, xRoundHigh, xRoundLow, fTy, piApproParams, std::nullopt, std::nullopt});
 
     // sinTayler(norm_x), 5 terms
-    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, /* taylerExpansionNum= */ 5, TaylerMode::SIN);
+    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, {5, TaylerMode::SIN});
 
     // sign(xRound) = floor(xRound/2)*4 - xRound*2 + 1
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
@@ -383,25 +414,25 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
     Value xRound = buildRoundWithMath(rewriter, loc, xPlusHalf);
 
     // High/low split of xRound; note: split base is inputDivPi (no +0.5), per IR.
-    auto [xRoundOrig, xRoundHigh, xRoundLow] = buildXRoundSplit(rewriter, loc, inputDivPi, xRound, fTy);
+    auto [xRoundOrig, xRoundHigh, xRoundLow] = buildXRoundSplit(rewriter, loc, inputDivPi, {xRound, fTy});
     (void)xRoundOrig;
 
     ArrayRef<double> piApproParams(kPiApproParams, sizeof(kPiApproParams) / sizeof(double));
 
     // norm with split offset: pi/2_high inserted between p[1]*high and p[1]*low,
     // pi/2_low added at the end.
-    Value normInput = buildNormSplit(rewriter, loc, input, xRoundHigh, xRoundLow, fTy, piApproParams,
-                                     /* offsetHigh= */ kPiOver2High, /* offsetLow= */ kPiOver2Low);
+    Value normInput =
+      buildNormSplit(rewriter, loc, {input, xRoundHigh, xRoundLow, fTy, piApproParams, kPiOver2High, kPiOver2Low});
 
     // sinTayler is reused for cos via the offset shift.
-    Value cosTayler = buildTayler(rewriter, loc, normInput, /* taylerExpansionNum= */ 5, TaylerMode::SIN);
+    Value cosTayler = buildTayler(rewriter, loc, normInput, {5, TaylerMode::SIN});
 
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
 
     Value res = rewriter.create<arith::MulFOp>(loc, cosTayler, signX);
 
     // Clip result to [-1, 1] (cos's mathematical range).
-    res = clipInput(rewriter, loc, res, /* maxVal= */ 1.0, /* minVal= */ -1.0);
+    res = clipInput(rewriter, loc, res, {1.0, -1.0});
 
     if (needCastBack) {
       auto f16Ty = rewriter.getF16Type();
@@ -442,7 +473,7 @@ struct NormalizeTanhOp : public OpRewritePattern<math::TanhOp> {
     }
 
     // step 1: clip to [-8.8, 8.8] to avoid exp(2x) overflow; epsilon ~ 1e-8.
-    Value clippedInput = clipInput(rewriter, loc, input, 8.8, -8.8);
+    Value clippedInput = clipInput(rewriter, loc, input, {8.8, -8.8});
 
     // step 2: y = exp(2x)
     Value two = buildFloatConst(rewriter, loc, fTy, 2.0);

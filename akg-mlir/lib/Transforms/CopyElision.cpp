@@ -40,6 +40,12 @@ namespace mlir {
 
 static constexpr const int kVectorSizeFour = 4;
 
+struct CopyElisionOps {
+  Operation *srcDeallocOp;
+  Operation *destDefOp;
+  Operation *lastOpOfCurrentRegion;
+};
+
 // ===----------------------------------------------------------------------=== //
 // CopyElisionPass
 // ===----------------------------------------------------------------------=== //
@@ -231,19 +237,18 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   /// 3) If there is some read operations on `destination`, there should not exist
   /// any write of the `source`
 
-  bool canReplaceDestWithSrc(CopyOpInterface copyOp, Value src, Value dest, Operation *srcDeallocOp,
-                             Operation *destDefOp, Operation *lastOpOfCurrentRegion) const {
-    Operation *lastOpUsingSrc = lastOpOfCurrentRegion;
+  bool canReplaceDestWithSrc(CopyOpInterface copyOp, Value src, Value dest, const CopyElisionOps &ops) const {
+    Operation *lastOpUsingSrc = ops.lastOpOfCurrentRegion;
 
     // If `srcDeallocOp` is not null, `lastOpUsingSrc` will be `srcDeallocOp`.
-    if (srcDeallocOp != nullptr) {
-      lastOpUsingSrc = srcDeallocOp;
+    if (ops.srcDeallocOp != nullptr) {
+      lastOpUsingSrc = ops.srcDeallocOp;
     }
     Operation *firstOpUsingDest = &dest.getParentRegion()->front().front();
 
     // If `destDefOp` is not null, `firstOpUsingDest` will be `destDefOp`.
-    if (destDefOp != nullptr) {
-      firstOpUsingDest = destDefOp;
+    if (ops.destDefOp != nullptr) {
+      firstOpUsingDest = ops.destDefOp;
     }
 
     bool isDestReadBefore =
@@ -299,7 +304,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     Operation *lastOpOfCurrentRegion = &src.getParentRegion()->back().back();
 
     // Check if a replacement of `dest` with `src` is possible.
-    if (!canReplaceDestWithSrc(copyOp, src, dest, srcDeallocOp, destDefOp, lastOpOfCurrentRegion)) {
+    if (!canReplaceDestWithSrc(copyOp, src, dest, {srcDeallocOp, destDefOp, lastOpOfCurrentRegion})) {
       return;
     }
     // Check if a cast is needed.

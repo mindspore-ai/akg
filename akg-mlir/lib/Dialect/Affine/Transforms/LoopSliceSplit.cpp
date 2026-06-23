@@ -129,8 +129,14 @@ static std::optional<PerfectNest> capturePerfectNest(affine::AffineForOp root) {
 
 // `analyzeAccess` pre-normalizes via `getUnifiedAffineAccess`, so symbols are
 // already demoted to dims — `e` is always an AffineDimExpr into the flat list.
-static bool addAxisTerm(AffineExpr e, ValueRange operands, const PerfectNest &nest, AccessDim &out,
-                        int64_t multiplier) {
+struct AxisTermCtx {
+  const PerfectNest &nest;
+  int64_t multiplier;
+};
+
+static bool addAxisTerm(AffineExpr e, ValueRange operands, AccessDim &out, const AxisTermCtx &ctx) {
+  const PerfectNest &nest = ctx.nest;
+  int64_t multiplier = ctx.multiplier;
   auto dim = dyn_cast<AffineDimExpr>(e);
   if (!dim || dim.getPosition() >= operands.size()) {
     return false;
@@ -166,11 +172,11 @@ static bool parseExpr(AffineExpr e, ValueRange operands, const PerfectNest &nest
       } else {
         return false;
       }
-      return addAxisTerm(varExpr, operands, nest, out, k);
+      return addAxisTerm(varExpr, operands, out, {nest, k});
     }
     return false;
   }
-  return addAxisTerm(e, operands, nest, out, 1);
+  return addAxisTerm(e, operands, out, {nest, 1});
 }
 
 template <typename OpT>
@@ -430,9 +436,14 @@ static std::optional<WawShrink> detectWawShrink(const AccessInfo &sa, const Perf
   return std::nullopt;
 }
 
+struct DeadRegionCtx {
+  const PerfectNest &nestB;
+  int diffDim;
+};
+
 static SmallVector<Interval, kSmallVectorSizeFour> buildDeadRegion(const AccessInfo &sa, const PerfectNest &nestA,
-                                                                   const AccessInfo &sb, const PerfectNest &nestB,
-                                                                   int diffDim) {
+                                                                   const AccessInfo &sb, const DeadRegionCtx &ctx) {
+  auto &[nestB, diffDim] = ctx;
   SmallVector<Interval, kSmallVectorSizeFour> dead;
   for (size_t k = 0; k < sa.dims.size(); ++k) {
     dead.push_back(static_cast<int>(k) == diffDim ? intervalFor(sb.dims[k], nestB) : intervalFor(sa.dims[k], nestA));
@@ -449,8 +460,13 @@ static SmallVector<Interval, kSmallVectorSizeFour> buildDeadRegion(const AccessI
 // a consumer's load interval; the producer-mirror variant maps the
 // consumer-side boundaries back onto the producer's IV via the store offset.
 
-static bool dimsCompatible(const AccessInfo &st, const AccessInfo &load, size_t dimIdx, const PerfectNest &stNest,
-                           const PerfectNest &consumerNest) {
+struct NestPair {
+  const PerfectNest &stNest;
+  const PerfectNest &consumerNest;
+};
+
+static bool dimsCompatible(const AccessInfo &st, const AccessInfo &load, size_t dimIdx, const NestPair &np) {
+  auto &[stNest, consumerNest] = np;
   if (st.memref != load.memref || st.dims.size() != load.dims.size()) {
     return false;
   }
@@ -477,16 +493,20 @@ static bool applyIntersection(Interval inter, Interval &remaining) {
   return false;
 }
 
-static void collectProducerSplits(const AccessInfo &load, size_t dimIdx, const PerfectNest &consumerNest,
-                                  ArrayRef<LoopInfo> earlier, SmallVectorImpl<int64_t> &pts,
-                                  SmallVectorImpl<SplitBoundary> &boundaries) {
+struct ProducerSplitContext {
+  const PerfectNest *consumerNest;
+  ArrayRef<LoopInfo> earlier;
+};
+
+static void collectProducerSplits(const AccessInfo &load, size_t dimIdx, const ProducerSplitContext &ctx,
+                                  SmallVectorImpl<int64_t> &pts, SmallVectorImpl<SplitBoundary> &boundaries) {
   const AccessDim &d = load.dims[dimIdx];
   int axis = d.affineAxis();
   if (axis == -1) {
     return;
   }
   int64_t c = d.offset;
-  Interval absRange{consumerNest.lo[axis] + c, consumerNest.hi[axis] + c};
+  Interval absRange{ctx.consumerNest->lo[axis] + c, ctx.consumerNest->hi[axis] + c};
   Interval remaining = absRange;
 
   auto record = [&absRange, &pts, &boundaries, &c, &load, &dimIdx](int64_t p) {
@@ -496,15 +516,15 @@ static void collectProducerSplits(const AccessInfo &load, size_t dimIdx, const P
     }
   };
 
-  for (int k = static_cast<int>(earlier.size()) - 1; k >= 0 && remaining.valid(); --k) {
-    if (!earlier[k].ok) {
+  for (int k = static_cast<int>(ctx.earlier.size()) - 1; k >= 0 && remaining.valid(); --k) {
+    if (!ctx.earlier[k].ok) {
       continue;
     }
-    for (const AccessInfo &st : earlier[k].stores) {
-      if (!dimsCompatible(st, load, dimIdx, earlier[k].nest, consumerNest)) {
+    for (const AccessInfo &st : ctx.earlier[k].stores) {
+      if (!dimsCompatible(st, load, dimIdx, {ctx.earlier[k].nest, *ctx.consumerNest})) {
         continue;
       }
-      Interval rs = intervalFor(st.dims[dimIdx], earlier[k].nest);
+      Interval rs = intervalFor(st.dims[dimIdx], ctx.earlier[k].nest);
       Interval inter{std::max(rs.lo, remaining.lo), std::min(rs.hi, remaining.hi)};
       if (!inter.valid()) {
         continue;
@@ -525,7 +545,7 @@ static SmallVector<int64_t, kSmallVectorSizeFour> collectAxisSplitPoints(const L
   for (const AccessInfo &load : L.loads) {
     for (size_t d = 0; d < load.dims.size(); ++d) {
       if (load.dims[d].affineAxis() == static_cast<int>(axis)) {
-        collectProducerSplits(load, d, L.nest, earlier, pts, boundaries);
+        collectProducerSplits(load, d, {&L.nest, earlier}, pts, boundaries);
       }
     }
   }
@@ -601,8 +621,14 @@ enum class DimRel { Contained, Disjoint, Partial };
 
 // Classify a consumer load's bbox vs a producer store's bbox on every dim
 // except `skipDim`. Shared by both consumer-use scan and stride scan.
-static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size_t skipDim, const PerfectNest &stNest,
-                                const PerfectNest &ldNest) {
+struct ClassifyNestPair {
+  const PerfectNest &stNest;
+  const PerfectNest &ldNest;
+};
+
+static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size_t skipDim,
+                                const ClassifyNestPair &np) {
+  auto &[stNest, ldNest] = np;
   for (size_t dd = 0; dd < ld.dims.size(); ++dd) {
     if (dd == skipDim) {
       continue;
@@ -825,7 +851,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
           if (!spec) {
             continue;
           }
-          auto dead = buildDeadRegion(sa, loops[i].nest, sb, loops[j].nest, spec->diffDim);
+          auto dead = buildDeadRegion(sa, loops[i].nest, sb, {loops[j].nest, spec->diffDim});
           if (isWawDeadRegionBlocked(i, j, sa.memref, dead)) {
             continue;
           }
@@ -954,7 +980,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
         if (ld.memref != st.memref || ld.dims.size() != st.dims.size()) {
           continue;
         }
-        DimRel rel = classifyOtherDims(st, ld, d, stNest, loops[j].nest);
+        DimRel rel = classifyOtherDims(st, ld, d, {stNest, loops[j].nest});
         if (rel == DimRel::Partial) {
           return std::nullopt;
         }
@@ -1030,7 +1056,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
         if (ld.memref != st.memref || ld.dims.size() != st.dims.size()) {
           continue;
         }
-        DimRel rel = classifyOtherDims(st, ld, d, stNest, loops[j].nest);
+        DimRel rel = classifyOtherDims(st, ld, d, {stNest, loops[j].nest});
         if (rel == DimRel::Partial) {
           return std::nullopt;
         }

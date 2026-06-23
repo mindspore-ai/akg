@@ -154,8 +154,14 @@ class LoopTiling : public impl::AKGAffineLoopTilingBase<LoopTiling> {
   DimensionInfo *selectMappingDimension(SmallVector<DimensionInfo> &dimInfos, int32_t maxNumBlocks);
 
   affine::AffineForOp createKernelLoopAndMapFullBlock(OpBuilder &builder, func::FuncOp funcOp, MappingContext &ctx);
-  void mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp kernelLoop, affine::AffineForOp fullLoop,
-                            affine::AffineForOp tailLoop, int32_t numKernels, Value kernelId);
+  struct TailBlockMappingParams {
+    affine::AffineForOp kernelLoop;
+    affine::AffineForOp fullLoop;
+    affine::AffineForOp tailLoop;
+    int32_t numKernels;
+    Value kernelId;
+  };
+  void mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams params);
   void BandCheck(const std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> &bands);
   void getTileSizes();
   std::string getHardware();
@@ -234,9 +240,11 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::
   return std::make_unique<LoopTiling>(target, useAutoTiling, arch, feature);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(
-  const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature,
-  const llvm::SmallVector<unsigned, kSmallVectorSizeSix> &inputTileSizes) {
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
+                                                                     const ArchFeatureInfo &af,
+                                                                     const InputTileSizesParam &params) {
+  auto &[arch, feature] = af;
+  auto &[inputTileSizes] = params;
   return std::make_unique<LoopTiling>(target, useAutoTiling, arch, feature, inputTileSizes);
 }
 
@@ -1410,40 +1418,37 @@ affine::AffineForOp LoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &build
 }
 
 // Map tail block to the last kernel iteration
-void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp kernelLoop, affine::AffineForOp fullLoop,
-                                      affine::AffineForOp tailLoop, int32_t numKernels, Value kernelId) {
-  if (!tailLoop) {
+void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams params) {
+  if (!params.tailLoop) {
     return;
   }
 
-  Block *kernelBody = kernelLoop.getBody();
+  Block *kernelBody = params.kernelLoop.getBody();
 
-  Operation *insertAfterOp = fullLoop.getOperation();
-  Operation *wrappingIfOp = findWrappingAffineIfOp(fullLoop->getParentOp(), kernelBody);
+  Operation *insertAfterOp = params.fullLoop.getOperation();
+  Operation *wrappingIfOp = findWrappingAffineIfOp(params.fullLoop->getParentOp(), kernelBody);
   if (wrappingIfOp != nullptr) {
     insertAfterOp = wrappingIfOp;
   }
-  // Move tail block into kernel body (after full block or its wrapping if)
   builder.setInsertionPointAfter(insertAfterOp);
-  if (tailLoop->getBlock() != kernelBody) {
-    tailLoop->moveBefore(builder.getInsertionBlock(), builder.getInsertionPoint());
+  if (params.tailLoop->getBlock() != kernelBody) {
+    params.tailLoop->moveBefore(builder.getInsertionBlock(), builder.getInsertionPoint());
   }
 
-  // Create condition: kernel_id == numKernels - 1 (last iteration reserved for tail)
   auto lastKernelIdExpr = builder.getAffineDimExpr(kAffineFirstDimIndex);
-  auto numKernelsConstExpr = builder.getAffineConstantExpr(numKernels);
+  auto numKernelsConstExpr = builder.getAffineConstantExpr(params.numKernels);
   auto lastIterExpr =
     lastKernelIdExpr - (numKernelsConstExpr - builder.getAffineConstantExpr(kExclusiveBoundAdjustment));
 
   SmallVector<AffineExpr> exprs = {lastIterExpr};
-  SmallVector<bool> eqFlags = {true};  // Equality condition: kernel_id == numKernels - 1
+  SmallVector<bool> eqFlags = {true};
   auto lastIterSet = IntegerSet::get(kAffineSingleDimCount, kAffineZeroSymbolCount, exprs, eqFlags);
 
-  builder.setInsertionPoint(tailLoop);
-  auto tailIfOp =
-    builder.create<affine::AffineIfOp>(tailLoop.getLoc(), lastIterSet, ValueRange{kernelId}, /* hasElse= */ false);
+  builder.setInsertionPoint(params.tailLoop);
+  auto tailIfOp = builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId},
+                                                     /*hasElse=*/false);
 
-  tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
+  params.tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
 }
 
 // Add outer kernel mapping loop to distribute work across NPU cores
@@ -1471,7 +1476,7 @@ void LoopTiling::addOuterKernelMappingLoop(affine::AffineForOp bandRootLoop) {
   Value kernelId = kernelLoop.getInductionVar();
 
   // Map tail block to last kernel iteration
-  mapTailBlockToKernel(builder, kernelLoop, ctx.fullBlock, ctx.tailBlock, ctx.numKernels, kernelId);
+  mapTailBlockToKernel(builder, {kernelLoop, ctx.fullBlock, ctx.tailBlock, ctx.numKernels, kernelId});
 }
 
 // Find the tiled band root loop after tiling transformation

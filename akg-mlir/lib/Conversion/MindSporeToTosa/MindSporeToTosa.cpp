@@ -295,6 +295,12 @@ std::optional<Value> getConstTensor<float>(PatternRewriter &rewriter, Operation 
   return constOp.getResult();
 }
 
+struct ScalarToTensorConfig {
+  int64_t value;
+  Type dtype;
+  llvm::ArrayRef<int64_t> shape;
+};
+
 template <typename SrcOp>
 class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
  public:
@@ -361,7 +367,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     Value padTensor;
     IntegerAttr integerAttr = mindsporeOp.getValueAttr();
     int64_t padValue = integerAttr.getInt();
-    if (failed(MindSporeScalarToTosaTensor(rewriter, op, padValue, padTensor, inputElemTy, {}))) {
+    if (failed(MindSporeScalarToTosaTensor(rewriter, op, {padValue, inputElemTy, {}}, padTensor))) {
       return rewriter.notifyMatchFailure(
         op, "Pad value needs to be a scalar constant for conversion to TOSA pad operation");
     }
@@ -375,35 +381,34 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     return (intValue >= std::numeric_limits<T>::min()) && (intValue <= std::numeric_limits<T>::max());
   }
 
-  LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op, int64_t padScalarValue,
-                                            Value &tosaTensor, const Type dtype,
-                                            const llvm::ArrayRef<int64_t> dshape) const {
+  LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op,
+                                            const ScalarToTensorConfig &config, Value &tosaTensor) const {
     uint32_t width32 = 32;
     uint32_t width64 = 64;
-    if (isa<FloatType>(dtype)) {
-      auto floatValue = static_cast<float>(padScalarValue);
-      tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, dshape).value();
-    } else if (auto intType = dyn_cast<IntegerType>(dtype)) {
+    if (isa<FloatType>(config.dtype)) {
+      auto floatValue = static_cast<float>(config.value);
+      tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, config.shape).value();
+    } else if (auto intType = dyn_cast<IntegerType>(config.dtype)) {
       auto w = intType.getWidth();
       if (w != width32 && w != width64) {
         return rewriter.notifyMatchFailure(op, "only support 32 or 64 bits int");
       }
 
       if (w == width32) {
-        if (isInvalidRange<int32_t>(padScalarValue)) {
-          auto dVal = static_cast<int32_t>(padScalarValue);
-          tosaTensor = getConstTensor<int32_t>(rewriter, op, {dVal}, dshape).value();
+        if (isInvalidRange<int32_t>(config.value)) {
+          auto dVal = static_cast<int32_t>(config.value);
+          tosaTensor = getConstTensor<int32_t>(rewriter, op, {dVal}, config.shape).value();
         } else {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
         }
       }
 
       if (w == width64) {
-        if (!isInvalidRange<int64_t>(padScalarValue)) {
+        if (!isInvalidRange<int64_t>(config.value)) {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
         }
-        auto dVal = static_cast<int64_t>(padScalarValue);
-        tosaTensor = getConstTensor<int64_t>(rewriter, op, {dVal}, dshape).value();
+        auto dVal = static_cast<int64_t>(config.value);
+        tosaTensor = getConstTensor<int64_t>(rewriter, op, {dVal}, config.shape).value();
       }
     }
     return success();
