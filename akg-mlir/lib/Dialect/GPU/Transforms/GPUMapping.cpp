@@ -41,6 +41,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AKGGPUMAPPING
@@ -118,11 +119,11 @@ static constexpr int kNumHardwareIds = 3;
 /// distributed to map to x, the next innermost to y and the next innermost to
 /// z.
 static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
-  if (dimension >= kNumHardwareIds || level == mlir::akg::utils::Sequential) {
+  if (dimension >= kNumHardwareIds || level == mlir::akg::utils::MappingLevel::Sequential) {
     return Processor::Sequential;
   }
   switch (level) {
-    case mlir::akg::utils::MapGrid:
+    case mlir::akg::utils::MappingLevel::MapGrid:
       switch (dimension) {
         case 0:
           return Processor::BlockX;
@@ -134,7 +135,7 @@ static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
           return Processor::Sequential;
       }
       break;
-    case mlir::akg::utils::MapBlock:
+    case mlir::akg::utils::MappingLevel::MapBlock:
       switch (dimension) {
         case 0:
           return Processor::ThreadX;
@@ -167,7 +168,7 @@ struct MappingTask {
   [[nodiscard]] bool isDynamicOuterAxis() const { return problemSize == 1 && isDynamicAxis; }
   [[nodiscard]] bool needToMap() const { return problemSize > 1 || isDynamicAxis; }
   void dump() {
-    llvm::dbgs() << "Task : Length = " << problemSize << " MapLevel = " << level << "\n";
+    llvm::dbgs() << "Task : Length = " << problemSize << " MapLevel = " << static_cast<int>(level) << "\n";
     loopVar.dump();
   }
 };
@@ -272,7 +273,7 @@ bool hasNonZeroConstant(Operation *op) {
       flag |= (!hasNonZeroConstant(prevOp) ? 0 : 1);
     }
   }
-  return (bool)flag;
+  return static_cast<bool>(flag);
 }
 
 bool isPostFusionSingleStmt(Operation *op) {
@@ -306,7 +307,7 @@ bool isPostFusionMultiStmt(Operation *op) {
 void checkIfOpStatus(scf::IfOp ifOp, bool &shouldKeepIfOp, bool &postFusionMode) {
   // check whether the scf.if has mindspore.keepargs {BoundaryIf} inside.
   bool hasBoundaryIf = false;
-  (void)ifOp.walk([&](mindspore::KeepArgsOp op) {
+  (void)ifOp.walk([&hasBoundaryIf](mindspore::KeepArgsOp op) {
     if (op.getOperation()->hasAttr("BoundaryIf")) {
       hasBoundaryIf = true;
       return WalkResult::interrupt();
@@ -336,7 +337,7 @@ static bool IsAncestorOrEqual(Operation *a, Operation *b) {
 
 static bool canMoveOpOutOfTarget(Operation *op, Operation *targetOp) {
   for (auto operand : op->getOperands()) {
-    SmallVector<Operation *, 8> axesA;
+    SmallVector<Operation *, kSmallVectorSizeEight> axesA;
     CommonUtils::collectRelatedAxes(operand, axesA);
     if (llvm::any_of(axesA, [targetOp](Operation *op) { return op == targetOp; })) {
       return false;
@@ -431,7 +432,7 @@ static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcO
       op.replaceAllUsesWith(clonedOp);
     }
   }
-  SmallVector<Operation *, 8> previousOps;
+  SmallVector<Operation *, kSmallVectorSizeEight> previousOps;
   CommonUtils::getAllPreviousRelatedOps(ifOp, previousOps);
 
   ifOp.erase();
@@ -441,12 +442,12 @@ static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcO
 }
 
 static void FixForLogicToGpuParallel(Region &region) {
-  SmallVector<Operation *, 8> ifOpsToHoist;
+  SmallVector<Operation *, kSmallVectorSizeEight> ifOpsToHoist;
   OpBuilder opBuilder(region);
   auto funcOp = region.getParentOp();
 
-  SmallVector<Operation *, 8> ifOps;
-  (void)region.walk([&](scf::IfOp ifOp) { ifOps.push_back(ifOp.getOperation()); });
+  SmallVector<Operation *, kSmallVectorSizeEight> ifOps;
+  (void)region.walk([&ifOps](scf::IfOp ifOp) { ifOps.push_back(ifOp.getOperation()); });
   for (auto opInit : ifOps) {
     auto ifOp = dyn_cast<scf::IfOp>(opInit);
     opBuilder.setInsertionPoint(ifOp.getOperation());
@@ -474,7 +475,7 @@ static void FixForLogicToGpuParallel(Region &region) {
             op.replaceAllUsesWith(clonedOp);
           }
         }
-        SmallVector<Operation *, 8> previousOps;
+        SmallVector<Operation *, kSmallVectorSizeEight> previousOps;
         CommonUtils::getAllPreviousRelatedOps(ifOp, previousOps);
 
         ifOp.erase();
@@ -547,7 +548,7 @@ static std::string updateSeqConfigId(const json &jsonResults, const std::string 
 }
 
 void AKGGPUMappingLoops::collectDynamicTensorsAndIndices(func::FuncOp funcOp, std::map<size_t, Operation *> &tensors) {
-  auto getArgIndex = [&](Value memref) -> int {
+  auto getArgIndex = [&funcOp](Value memref) -> int {
     size_t i = 0;
     for (auto arg : funcOp.getBody().front().getArguments()) {
       if (arg == memref) {
@@ -564,7 +565,7 @@ void AKGGPUMappingLoops::collectDynamicTensorsAndIndices(func::FuncOp funcOp, st
     return -1;
   };
 
-  funcOp.walk([&](Operation *op) {
+  funcOp.walk([&getArgIndex, &tensors](Operation *op) {
     int tensorId = -1;
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       tensorId = getArgIndex(load.getMemref());
@@ -604,7 +605,7 @@ void AKGGPUMappingLoops::updateJsonWithTensorMapping(func::FuncOp funcOp, const 
       continue;
     }
     for (size_t dimId = 0; dimId < indices.size(); ++dimId) {
-      SmallVector<Operation *, 8> relatedAxes;
+      SmallVector<Operation *, kSmallVectorSizeEight> relatedAxes;
       CommonUtils::collectRelatedAxes(indices[dimId], relatedAxes);
       std::string dynConfigId;
       std::string symbolPart = tool.getCurrShapeInfo(tid)[dimId];
@@ -653,7 +654,7 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
   func::FuncOp funcOp = getOperation();
 
   if (!isDynamicShape()) {
-    funcOp.walk([&](Operation *op) {
+    funcOp.walk([this, &jsonResults](Operation *op) {
       if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
         auto [configId, configSize] = genAxisMappingId(op);
         if (configId.empty() || configSize == akg::kDynamicShapeSize) {
@@ -692,7 +693,7 @@ bool AKGGPUMappingLoops::saveMappingResultToJson() {
   auto kernelName = getAkgKernelName();
   (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
   std::string output_filename = "./akg_kernel_meta/" + kernelName + ".json";
-  if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+  if (llvm::writeToOutput(output_filename, [&res](llvm::raw_ostream &OS) -> llvm::Error {
         OS << res;
         return llvm::Error::success();
       })) {
@@ -704,10 +705,10 @@ bool AKGGPUMappingLoops::saveMappingResultToJson() {
 
 static void SetRedutionMarkToParallelOp(Operation *funcOp) {
   OpBuilder builder(funcOp);
-  funcOp->walk([&](Operation *redOp) {
+  funcOp->walk([&builder, &funcOp](Operation *redOp) {
     if (redOp->hasAttr(kReductionAxesStr)) {
       ArrayAttr attrs = dyn_cast<ArrayAttr>(redOp->getAttr(kReductionAxesStr));
-      SmallVector<Operation *, 8> parallelOps;
+      SmallVector<Operation *, kSmallVectorSizeEight> parallelOps;
       auto curOp = redOp;
       while (curOp) {
         if (isa<scf::ParallelOp>(curOp)) {
@@ -783,7 +784,7 @@ void AKGGPUMappingLoops::runOnOperation() {
   SetRedutionMarkToParallelOp(funcOp);
   for (Region &region : getOperation()->getRegions()) {
     // 2. find the root parallelOp to build mapping task top-down
-    region.walk([&](ParallelOp parallelOp) {
+    region.walk([this](ParallelOp parallelOp) {
       if (!parallelOp->getParentOfType<ParallelOp>()) {
         createMappingTask(parallelOp);
       }
@@ -963,7 +964,7 @@ void AKGGPUMappingLoops::mapParallelOp(ParallelOp parallelOp, const std::vector<
   ctx->loadDialect<GPUDialect>();
 
   Builder b(ctx);
-  SmallVector<ParallelLoopDimMappingAttr, 4> attrs;
+  SmallVector<ParallelLoopDimMappingAttr, kSmallVectorSizeFour> attrs;
   attrs.reserve(parallelOp.getNumLoops());
   if (parallelOp.getNumLoops() != result.size()) {
     llvm::errs() << "parallelOp.getNumLoops() != mapResults.size(): " << parallelOp.getNumLoops() << " vs "

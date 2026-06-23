@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#include <utility>
-
 #include "akg/Dialect/Affine/Transforms/MergeFusionOp.h"
-#include "akg/Utils/AnalysisCommon.hpp"
+
+#include <utility>
 
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/CommandLine.h"
@@ -35,6 +34,8 @@
 #include "mlir/IR/AffineExprVisitor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
+#include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_MERGEFUSIONOP
@@ -42,16 +43,16 @@ namespace mlir {
 #ifndef GEN_PASS_DECL_MERGEFUSIONOP
 #define GEN_PASS_DECL_MERGEFUSIONOP
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
 
 #define DEBUG_TYPE "merge-fusion-op"
 
+namespace {
 using namespace mlir;  // NOLINT(build/namespaces)
 using namespace llvm;  // NOLINT(build/namespaces)
-
-namespace {
 
 // Move all operators between two for loops up or down to the innermost for loop and add if statements
 // to ensure the correctness of the result, so that the subsequent pass can be enabled correctly.
@@ -68,11 +69,11 @@ class MergeFusionOp : public impl::MergeFusionOpBase<MergeFusionOp> {
   affine::AffineIfOp createAffineIfOp(OpBuilder &builder, const bool isBackward = false);
   void createIfThenBlock(Operation *op);
 
-  SmallVector<Operation *, 8> forwardFusionOp;
-  SmallVector<Operation *, 8> backwardFusionOp;
-  SmallVector<affine::AffineForOp, 4> forwardBetweenLoops;
-  SmallVector<affine::AffineForOp, 4> backwardBetweenLoops;
-  SmallSet<Operation *, 8> reduceInitOp;
+  SmallVector<Operation *, kSmallVectorSizeEight> forwardFusionOp;
+  SmallVector<Operation *, kSmallVectorSizeEight> backwardFusionOp;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> forwardBetweenLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> backwardBetweenLoops;
+  SmallSet<Operation *, kSmallVectorSizeEight> reduceInitOp;
   std::string target = kTargetCpu;
 };
 
@@ -106,17 +107,18 @@ static Operation *getAncestorForOp(Operation &op, Block *block,
   return currOp;
 }
 
-static void getAllAffineFor(func::FuncOp f, std::vector<SmallVector<affine::AffineForOp, 6>> *bands) {
+static void getAllAffineFor(func::FuncOp f, std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> *bands) {
   // multi-filter: the outermost layer consists of multiple affine::AffineForOp
   for (affine::AffineForOp forOp : f.getOps<affine::AffineForOp>()) {
-    SmallVector<affine::AffineForOp, 6> band;
+    SmallVector<affine::AffineForOp, kSmallVectorSizeSix> band;
     // From the inside to outside
     forOp.walk([&band](const affine::AffineForOp op) { band.push_back(op); });
     bands->push_back(band);
   }
 }
 
-static void insertUniqueValue(SmallVectorImpl<affine::AffineForOp> *loopA, SmallVector<affine::AffineForOp, 16> loopB) {
+static void insertUniqueValue(SmallVectorImpl<affine::AffineForOp> *loopA,
+                              SmallVector<affine::AffineForOp, kSmallVectorSizeSixteen> loopB) {
   for (auto loop : loopB) {
     if (std::find(loopA->begin(), loopA->end(), loop) != loopA->end()) {
       continue;
@@ -157,7 +159,7 @@ void MergeFusionOp::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp
 
     // Collect all affine.for between two for loops to facilitate the generation of
     // conditions in if statements.
-    SmallVector<affine::AffineForOp, 16> betweenLoops;
+    SmallVector<affine::AffineForOp, kSmallVectorSizeSixteen> betweenLoops;
     Operation *opAncestor = getAncestorForOp(*op, commBlock, &betweenLoops);
     Operation *afterAncestor = getAncestorForOp(*(after.getOperation()), commBlock, &betweenLoops);
     // The current op is the ancestor of after op, that is, the current op contains after op, which is not
@@ -176,7 +178,8 @@ void MergeFusionOp::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp
 }
 
 affine::AffineIfOp MergeFusionOp::createAffineIfOp(OpBuilder &builder, const bool isBackward) {
-  SmallVector<affine::AffineForOp, 4> loops = isBackward ? backwardBetweenLoops : forwardBetweenLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> loops =
+    isBackward ? backwardBetweenLoops : forwardBetweenLoops;
   if (loops.empty()) {
     return nullptr;
   }
@@ -184,14 +187,14 @@ affine::AffineIfOp MergeFusionOp::createAffineIfOp(OpBuilder &builder, const boo
   auto *context = loops[0]->getContext();
 
   affine::FlatAffineValueConstraints cst;
-  SmallVector<Operation *, 8> ops;
+  SmallVector<Operation *, kSmallVectorSizeEight> ops;
   llvm::append_range(ops, loops);
   (void)getIndexSet(ops, &cst);
 
   IntegerSet allCondSet = cst.getAsIntegerSet(context);
   // left side of a constraint in the if statement
-  SmallVector<AffineExpr, 4> exprs;
-  SmallVector<bool, 4> eqFlags;
+  SmallVector<AffineExpr, kSmallVectorSizeFour> exprs;
+  SmallVector<bool, kSmallVectorSizeFour> eqFlags;
   auto numVar = cst.getNumDimVars();
   // Determine the number of conditions in the if statement based on the vars of each
   // affine::AffineForOp in loops.
@@ -210,7 +213,7 @@ affine::AffineIfOp MergeFusionOp::createAffineIfOp(OpBuilder &builder, const boo
   }
 
   // right side of a constraint in the if statement
-  SmallVector<mlir::Value, 4> setOperands;
+  SmallVector<mlir::Value, kSmallVectorSizeFour> setOperands;
   cst.getValues(0, numVar, &setOperands);
   affine::canonicalizeSetAndOperands(&ifCondSet, &setOperands);
 
@@ -254,7 +257,7 @@ void MergeFusionOp::createIfThenBlock(Operation *op) {
 }
 
 void MergeFusionOp::runOnOperation() {
-  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
+  std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> bands;
   auto funcOp = getOperation();
   getAllAffineFor(funcOp, &bands);
 
@@ -278,7 +281,7 @@ void MergeFusionOp::runOnOperation() {
     ReduceDirection reduceDirection = CommonUtils::getReduceDirection(firstOp);
     // reduce_x and all reduce: init op do not need to sink.
     if (!mergeSpecificOp && (reduceDirection == ReduceDirection::X || reduceDirection == ReduceDirection::ALL)) {
-      firstOp->walk([&](Operation *op) {
+      firstOp->walk([this, &funcOp](Operation *op) {
         if (op->getAttr(kReductionTypeStr)) {
           auto initOp = CommonUtils::getReduceInitOp(op, &funcOp.getBody().front());
           if (initOp) {
@@ -312,10 +315,12 @@ void MergeFusionOp::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMergeFusionOpPass() {
-  return std::make_unique<MergeFusionOp>();
-}
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createMergeFusionOpPass() { return std::make_unique<MergeFusionOp>(); }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMergeFusionOpPass(const std::string &target) {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createMergeFusionOpPass(const std::string &target) {
   return std::make_unique<MergeFusionOp>(target);
 }
+}  // namespace mlir

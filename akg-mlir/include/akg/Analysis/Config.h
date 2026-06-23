@@ -53,9 +53,7 @@ class Constraint {
     return ss.str();
   }
 };
-enum ConfigPos { kOuter = 0, kMiddle, kInner, kAuto };
-class Config;
-using ConfigPtr = std::shared_ptr<Config>;
+enum class ConfigPos { kOuter = 0, kMiddle, kInner, kAuto };
 class Config {
  public:
   Config(const std::string &name, const std::string &type, int max = INT_MAX)
@@ -87,6 +85,7 @@ class Config {
   std::vector<int> getValidCandidates();
   int mapDim{-1};
 };
+using ConfigPtr = std::shared_ptr<Config>;
 
 class Tile : public Config {
  public:

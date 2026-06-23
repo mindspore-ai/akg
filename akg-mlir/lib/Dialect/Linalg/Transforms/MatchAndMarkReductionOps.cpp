@@ -35,11 +35,13 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_MATCHANDMARKREDUCTIONOPS
 #define GEN_PASS_DEF_MATCHANDMARKREDUCTIONOPS
 #include "akg/Dialect/Linalg/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -48,7 +50,7 @@ namespace {
 
 static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
   OpBuilder builder(funcOp);
-  (void)funcOp->walk([&](linalg::GenericOp genericOp) {
+  (void)funcOp->walk([&builder](linalg::GenericOp genericOp) {
     auto iteratorTypes = genericOp.getIteratorTypesArray();
     SmallVector<mlir::Attribute> intAttrs;
     int axis = 0;
@@ -79,7 +81,7 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
       } else {
         reduceDirection = ReduceDirection::Y;
       }
-      auto strAttr = builder.getStringAttr(reduceDirectionMap.at(reduceDirection));
+      auto strAttr = builder.getStringAttr(reduceDirectionMap.at(static_cast<int>(reduceDirection)));
       op->setAttr(kReductionTypeStr, strAttr);
       akgglobal::GpuScheduleTool::getInstance().setReduceDirection((size_t)reduceDirection);
     }
@@ -87,8 +89,8 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
 }
 
 // Update reduction_axes in affine dialect
-static SmallVector<bool, 8> collectRedFlags(Operation *redOp) {
-  SmallVector<bool, 8> redFlags(false);
+static SmallVector<bool, kSmallVectorSizeEight> collectRedFlags(Operation *redOp) {
+  SmallVector<bool, kSmallVectorSizeEight> redFlags(false);
   auto curOp = redOp;
   while (curOp) {
     if (isa<affine::AffineForOp>(curOp)) {
@@ -101,7 +103,7 @@ static SmallVector<bool, 8> collectRedFlags(Operation *redOp) {
 }
 
 static void updateReductionAxes(Operation *redOp, OpBuilder &builder) {
-  SmallVector<bool, 8> redFlags = collectRedFlags(redOp);
+  SmallVector<bool, kSmallVectorSizeEight> redFlags = collectRedFlags(redOp);
   SmallVector<mlir::Attribute> intAttrs;
   for (size_t i = 0; i < redFlags.size(); i++) {
     if (redFlags[i]) {
@@ -115,11 +117,11 @@ static void updateReductionAxes(Operation *redOp, OpBuilder &builder) {
 
 static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
   OpBuilder builder(funcOp);
-  SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
+  SmallVector<Operation *, kSmallVectorSizeEight> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
   for (auto reduceLoop : reduceLoops) {
     reduceLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
   }
-  (void)funcOp->walk([&](Operation *redOp) {
+  (void)funcOp->walk([&builder](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
       updateReductionAxes(redOp, builder);
     }

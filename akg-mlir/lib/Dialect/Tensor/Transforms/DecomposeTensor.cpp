@@ -46,4 +46,6 @@ struct DecomposeTensor : public impl::DecomposeTensorBase<DecomposeTensor> {
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::Pass> mlir::createDecomposeTensorPass() { return std::make_unique<mlir::DecomposeTensor>(); }
+namespace mlir {
+std::unique_ptr<mlir::Pass> createDecomposeTensorPass() { return std::make_unique<mlir::DecomposeTensor>(); }
+}  // namespace mlir

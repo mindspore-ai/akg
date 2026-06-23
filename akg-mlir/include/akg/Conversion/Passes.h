@@ -19,7 +19,6 @@
 
 #include "akg/Conversion/ArithToLinalg/ArithToLinalg.h"
 #include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
-#include "akg/Conversion/FuncToLLVMExt/FuncToLLVMExtPass.h"
 #include "akg/Conversion/FusionToMemVec/FusionToMemVecPass.h"
 #include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
 #include "akg/Conversion/MindSporeFinalizingLower/MindSporeFinalizingLower.h"
@@ -27,7 +26,6 @@
 #include "akg/Conversion/MindSporeToLinalg/MindSporeToLinalgNamed.h"
 #include "akg/Conversion/MindSporeToTosa/MindSporeToTosa.h"
 #include "akg/Conversion/PureOpenMPToLLVM/PureOpenMPToLLVM.h"
-#include "akg/Conversion/SCFToGPUExt/SCFToGPUPassExt.h"
 #include "akg/Conversion/NPUVectorToVector/NPUVectorToVector.h"
 #include "akg/Conversion/TosaToLinalgUpdate/TosaMultiReduceToLinalg.h"
 #include "akg/Conversion/VectorTransferLower/VectorTransferLower.h"

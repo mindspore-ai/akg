@@ -22,6 +22,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_STORELOADELIM
@@ -31,6 +32,7 @@ namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 #endif
@@ -89,8 +91,8 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
   }
 
   bool accessSameLocation(Operation *op1, Operation *op2) const {
-    SmallVector<Value, 4> vals1;
-    SmallVector<Value, 4> vals2;
+    SmallVector<Value, kSmallVectorSizeFour> vals1;
+    SmallVector<Value, kSmallVectorSizeFour> vals2;
     if (isa<affine::AffineStoreOp, affine::AffineLoadOp>(op1) &&
         isa<affine::AffineStoreOp, affine::AffineLoadOp>(op2)) {
       AffineMap map1;
@@ -193,7 +195,7 @@ void StoreLoadElimPass::runOnOperation() {
   // Memrefs that had at least one load forwarded — candidates for store/alloc cleanup.
   llvm::SmallDenseSet<Value> affectedMemrefs;
 
-  getOperation()->walk([&](Operation *op) {
+  getOperation()->walk([this, &processedLoads, &domInfo, &toElimLoads, &affectedMemrefs](Operation *op) {
     if (!isa<memref::StoreOp, affine::AffineStoreOp>(op)) {
       return;
     }

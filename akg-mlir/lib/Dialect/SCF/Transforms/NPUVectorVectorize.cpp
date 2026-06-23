@@ -83,18 +83,19 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace scf {
 #define GEN_PASS_DECL_NPUVECTORVECTORIZE
 #define GEN_PASS_DEF_NPUVECTORVECTORIZE
 #include "akg/Dialect/SCF/Passes.h.inc"
+
 }  // namespace scf
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+using namespace mlir;  // NOLINT(build/namespaces)
 
 enum class VectorizationMode {
   None,
@@ -323,9 +324,9 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
   }
 
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 3> operands{upperBound, lowerBound, maxStepValue};
-  SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
-                                      getAffineDimExpr(2, context)};
+  SmallVector<Value, kSmallVectorSizeThree> operands{upperBound, lowerBound, maxStepValue};
+  SmallVector<AffineExpr, kSmallVectorSizeTwo> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
+                                                        getAffineDimExpr(2, context)};
   AffineMap minMap = AffineMap::get(/* dimCount= */ 3, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
@@ -635,7 +636,7 @@ static std::optional<int64_t> tryConstantIndex(Value indexValue) {
 
 static Value createAffineBinaryApply(OpBuilder &builder, Location loc, Value lhs, Value rhs, AffineExpr expr) {
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 2> operands{lhs, rhs};
+  SmallVector<Value, kSmallVectorSizeTwo> operands{lhs, rhs};
   AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, expr, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
@@ -654,24 +655,26 @@ static Value createAffineSub(OpBuilder &builder, Location loc, Value lhs, Value 
 
 static Value createAffineMinWithConstant(OpBuilder &builder, Location loc, Value value, int64_t constant) {
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 1> operands{value};
-  SmallVector<AffineExpr, 2> minExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
+  SmallVector<Value, kSmallVectorSizeOne> operands{value};
+  SmallVector<AffineExpr, kSmallVectorSizeTwo> minExprs{getAffineDimExpr(0, context),
+                                                        getAffineConstantExpr(constant, context)};
   AffineMap minMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
 static Value createAffineMax(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 2> operands{lhs, rhs};
-  SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
+  SmallVector<Value, kSmallVectorSizeTwo> operands{lhs, rhs};
+  SmallVector<AffineExpr, kSmallVectorSizeTwo> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
   AffineMap maxMap = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
 static Value createAffineMaxWithConstant(OpBuilder &builder, Location loc, Value value, int64_t constant) {
   MLIRContext *context = builder.getContext();
-  SmallVector<Value, 1> operands{value};
-  SmallVector<AffineExpr, 2> maxExprs{getAffineDimExpr(0, context), getAffineConstantExpr(constant, context)};
+  SmallVector<Value, kSmallVectorSizeOne> operands{value};
+  SmallVector<AffineExpr, kSmallVectorSizeTwo> maxExprs{getAffineDimExpr(0, context),
+                                                        getAffineConstantExpr(constant, context)};
   AffineMap maxMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
@@ -682,7 +685,7 @@ static Value createAffineAlignedUpperBound(OpBuilder &builder, Location loc, Val
   AffineExpr tripCount = getAffineDimExpr(0, context) - getAffineDimExpr(1, context);
   AffineExpr alignedTripCount = tripCount.floorDiv(alignment) * alignment;
   AffineExpr alignedUpperBound = alignedTripCount + getAffineDimExpr(1, context);
-  SmallVector<Value, 2> operands{upperBound, lowerBound};
+  SmallVector<Value, kSmallVectorSizeTwo> operands{upperBound, lowerBound};
   AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, alignedUpperBound, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
@@ -734,7 +737,7 @@ static bool gatherVectorDynExtents(Value vectorVal, SmallVectorImpl<Value> &outE
 
 static std::optional<unsigned> matchExtentValueToCtxAxis(Value extent, const LoopVectorizationCtx &ctx) {
   Value mappedExt = ctx.valueMapping.lookupOrDefault(extent);
-  llvm::SmallVector<unsigned, 4> hits;
+  llvm::SmallVector<unsigned, kSmallVectorSizeFour> hits;
   for (unsigned axisIdx = 0; axisIdx < ctx.allVectorSizes.size(); ++axisIdx) {
     if (ctx.allVectorSizeValues[axisIdx]) {
       Value refLen = ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[axisIdx]);
@@ -1487,13 +1490,13 @@ static Value vectorizeArithOp(Operation *op, LoopVectorizationCtx &ctx) {
     return nullptr;
   }
   mergeAncestorValueDimOrderMissingKeys(ctx);
-  SmallVector<Value, 4> vecOperands;
+  SmallVector<Value, kSmallVectorSizeFour> vecOperands;
   SmallVector<unsigned> scalarIndices;
   collectArithVecOperands(op, ctx, vecOperands, scalarIndices);
 
   npuvector::NPUVectorType refVecType;
   const bool haveRefVec = pickHighestRankNpuVecType(vecOperands, refVecType);
-  SmallVector<int, 8> broadcastAxesBuf;
+  SmallVector<int, kSmallVectorSizeEight> broadcastAxesBuf;
   llvm::ArrayRef<int> broadcastCtxAxes;
   if (haveRefVec) {
     if (!lookupPeerBroadcastAxes(op, ctx, vecOperands, scalarIndices, refVecType, broadcastAxesBuf)) {
@@ -1511,7 +1514,7 @@ static Value vectorizeArithOp(Operation *op, LoopVectorizationCtx &ctx) {
     return nullptr;
   }
 
-  SmallVector<Type, 4> vecResultTypes;
+  SmallVector<Type, kSmallVectorSizeFour> vecResultTypes;
   for (Value result : op->getResults()) {
     Type scalarType = result.getType();
     npuvector::NPUVectorType vecType =
@@ -2068,7 +2071,7 @@ static bool decomposeAffineOneDimension(AffineExpr affineExpr, int64_t &coeffici
 }
 
 static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSsaValue) {
-  SmallVector<Value, 8> worklist;
+  SmallVector<Value, kSmallVectorSizeEight> worklist;
   DenseSet<Value> visited;
   worklist.push_back(conditionSsaValue);
   while (!worklist.empty()) {
@@ -2104,7 +2107,7 @@ static void emitVectorizedStore(memref::StoreOp storeOp, Value vecVal, LoopVecto
   ValueRange rawIndices = storeOp.getIndices();
   indices.reserve(rawIndices.size());
   std::transform(rawIndices.begin(), rawIndices.end(), std::back_inserter(indices),
-                 [&](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
+                 [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(storeOp.getMemRef());
   ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vecVal, mappedMemRef, ValueRange(indices), Value());
 }
@@ -2389,7 +2392,7 @@ static Value vectorizeIfElseWithVectorResults(scf::IfOp ifOp, LoopVectorizationC
   TypeRange resultTypes = ifOp.getResultTypes();
   vecResultTypes.reserve(resultTypes.size());
   std::transform(resultTypes.begin(), resultTypes.end(), std::back_inserter(vecResultTypes),
-                 [&](Type elemTy) { return ctx.getVectorType(elemTy); });
+                 [&ctx](Type elemTy) { return ctx.getVectorType(elemTy); });
   auto vecIfOp = ctx.builder.create<scf::IfOp>(loc, vecResultTypes, vecCondition, true);
   {
     OpBuilder::InsertionGuard guard(ctx.builder);
@@ -2507,7 +2510,7 @@ static bool allOperandsNonNpuVector(Operation &op, LoopVectorizationCtx &ctx) {
   if (op.getNumOperands() == 0) {
     return false;
   }
-  return llvm::all_of(op.getOperands(), [&](Value opnd) {
+  return llvm::all_of(op.getOperands(), [&ctx](Value opnd) {
     Value v = ctx.valueMapping.lookupOrDefault(opnd);
     return !mlir::isa<npuvector::NPUVectorType>(v.getType());
   });
@@ -2729,7 +2732,7 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
 
   if (!ctx.vf1FuncLevelNoAnchor) {
     bool hasVectorDim =
-      llvm::any_of(storeOp.getIndices(), [&](Value idx) { return getVectorDimForIndex(idx, ctx) >= 0; });
+      llvm::any_of(storeOp.getIndices(), [&ctx](Value idx) { return getVectorDimForIndex(idx, ctx) >= 0; });
     Value mappedStoreValue = ctx.valueMapping.lookupOrNull(storeOp.getValue());
     bool hasMappedVectorValue = mappedStoreValue && mlir::isa<npuvector::NPUVectorType>(mappedStoreValue.getType());
     if (!hasVectorDim && !hasMappedVectorValue) {
@@ -3027,7 +3030,7 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
 
       if (loadIndicesAreLoopInvariant(loadOp, ctx)) {
         SmallVector<Value> indices = llvm::map_to_vector(
-          loadOp.getIndices(), [&](Value idx) { return tailCtx.valueMapping.lookupOrDefault(idx); });
+          loadOp.getIndices(), [&tailCtx](Value idx) { return tailCtx.valueMapping.lookupOrDefault(idx); });
 
         Value scalarLoad = tailCtx.builder.create<memref::LoadOp>(loc, mappedMemRef, indices);
         tailCtx.valueMapping.map(loadOp.getResult(), scalarLoad);
@@ -3061,7 +3064,7 @@ static void vectorizeTailOps(LoopVectorizationCtx &tailCtx, LoopVectorizationCtx
       continue;
     }
 
-    bool isIndexConst = tailLoadOp && llvm::any_of(tailLoadOp.getIndices(), [&](Value idx) {
+    bool isIndexConst = tailLoadOp && llvm::any_of(tailLoadOp.getIndices(), [&op, &tailLoadOp](Value idx) {
                           return op.getNumResults() > 0 && op.getResult(0) == idx;
                         });
     if (isIndexConst) {
@@ -3254,7 +3257,7 @@ static void vectorizeOpsForMultiDimTailCtx(scf::ForOp scalarLoop, LoopVectorizat
       }
       continue;
     }
-    bool isIndexConst = tailLoadOpOut && llvm::any_of(tailLoadOpOut.getIndices(), [&](Value idx) {
+    bool isIndexConst = tailLoadOpOut && llvm::any_of(tailLoadOpOut.getIndices(), [&op, &tailLoadOpOut](Value idx) {
                           return op.getNumResults() > 0 && op.getResult(0) == idx;
                         });
     if (isIndexConst) {
@@ -3735,7 +3738,8 @@ static LogicalResult recordVF1LoopLane(scf::ForOp loop, unsigned index, SmallVec
     vecType = npuvector::NPUVectorType::get({}, laneType);
   }
 
-  if (llvm::none_of(loopLanes, [&](const VF1LoopLane &lane) { return lane.loop == loop && lane.index == index; })) {
+  if (llvm::none_of(loopLanes,
+                    [loop, index](const VF1LoopLane &lane) { return lane.loop == loop && lane.index == index; })) {
     loopLanes.push_back({loop, index, vecType});
   }
   valuesToVisit.push_back(loop.getRegionIterArgs()[index]);
@@ -4048,7 +4052,7 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
 static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp, bool &changed) {
   changed = false;
   SmallVector<memref::LoadOp> loads;
-  funcOp.walk([&](memref::LoadOp ld) { loads.push_back(ld); });
+  funcOp.walk([&loads](memref::LoadOp ld) { loads.push_back(ld); });
 
   for (memref::LoadOp ld : loads) {
     if (ld == nullptr || ld->getBlock() == nullptr) {
@@ -4068,7 +4072,7 @@ static LogicalResult runMemRefLoadVF1Sweep(func::FuncOp funcOp, bool &changed) {
 static LogicalResult runMemRefStoreVF1Sweep(func::FuncOp funcOp, bool &changed) {
   changed = false;
   SmallVector<memref::StoreOp> stores;
-  funcOp.walk([&](memref::StoreOp storeOp) { stores.push_back(storeOp); });
+  funcOp.walk([&stores](memref::StoreOp storeOp) { stores.push_back(storeOp); });
 
   for (memref::StoreOp storeOp : stores) {
     if (storeOp == nullptr || storeOp->getBlock() == nullptr) {
@@ -4127,6 +4131,7 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
  public:
   NPUVectorVectorize() = default;
   NPUVectorVectorize(const NPUVectorVectorize &) = default;
+  NPUVectorVectorize &operator=(const NPUVectorVectorize &) = default;
 
   [[nodiscard]] StringRef getArgument() const override { return "npuvector-vectorize"; }
 
@@ -4148,7 +4153,7 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
     OpBuilder builder(&getContext());
 
     SmallVector<scf::ForOp> allCandidateLoops;
-    funcOp.walk([&](scf::ForOp forOp) {
+    funcOp.walk([&allCandidateLoops](scf::ForOp forOp) {
       if (hasVectorizationAttr(forOp)) {
         allCandidateLoops.push_back(forOp);
       }
@@ -4192,6 +4197,10 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::scf::createNPUVectorVectorizePass() {
+namespace mlir {
+namespace scf {
+std::unique_ptr<OperationPass<func::FuncOp>> createNPUVectorVectorizePass() {
   return std::make_unique<NPUVectorVectorize>();
 }
+}  // namespace scf
+}  // namespace mlir

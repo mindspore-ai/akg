@@ -43,10 +43,9 @@ namespace mlir {
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace akgglobal;  // NOLINT(build/namespaces)
-
-namespace {
 
 struct AffineHandleBoundaryIfExtract : public impl::AffineHandleBoundaryIfExtractBase<AffineHandleBoundaryIfExtract> {
   AffineHandleBoundaryIfExtract() {}
@@ -84,8 +83,8 @@ bool AffineHandleBoundaryIfExtract::isBoundaryIf(Operation *outerIfOp) {
 void AffineHandleBoundaryIfExtract::runOnOperation() {
   auto funcOp = getOperation();
   Operation *outerIfOp = nullptr;
-  (void)funcOp->walk([&](Operation *op) {
-    if (isa<affine::AffineIfOp>(op) && isBoundaryIf(op)) {
+  (void)funcOp->walk([this, &outerIfOp](Operation *op) {
+    if (isa<affine::AffineIfOp>(op) && this->isBoundaryIf(op)) {
       outerIfOp = op;
       return WalkResult::interrupt();
     }
@@ -118,6 +117,8 @@ void AffineHandleBoundaryIfExtract::runOnOperation() {
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAffineHandleBoundaryIfExtract() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createAffineHandleBoundaryIfExtract() {
   return std::make_unique<AffineHandleBoundaryIfExtract>();
 }
+}  // namespace mlir

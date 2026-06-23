@@ -30,26 +30,29 @@
 #include "mlir/Dialect/Affine/Passes.h.inc"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AKGAFFINELOOPPARALLELIZE
 #define GEN_PASS_DECL_AKGAFFINELOOPPARALLELIZE
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "akg-affine-loop-parallelize"
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace mlir::akg;  // NOLINT(build/namespaces)
 
-namespace {
 /// Convert all parallel affine.for op into 1-D affine.parallel op.
 struct AKGLoopParallelize : public impl::AKGAffineLoopParallelizeBase<AKGLoopParallelize> {
   AKGLoopParallelize() {}
   explicit AKGLoopParallelize(const bool enableParallel) : enableParallel(enableParallel) {}
 
   void runOnOperation() override;
-  bool isAncestorLoopParallel(SmallVector<affine::AffineForOp, 6> nonParallelizableLoops, Operation *op);
+  bool isAncestorLoopParallel(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> nonParallelizableLoops,
+                              Operation *op);
 
   bool enableParallel = true;
   static constexpr int64_t PARALLEL_SIZE = 65536;
@@ -67,8 +70,8 @@ struct ParallelizationCandidate {
 };
 }  // namespace
 
-bool AKGLoopParallelize::isAncestorLoopParallel(SmallVector<affine::AffineForOp, 6> nonParallelizableLoops,
-                                                Operation *op) {
+bool AKGLoopParallelize::isAncestorLoopParallel(
+  SmallVector<affine::AffineForOp, kSmallVectorSizeSix> nonParallelizableLoops, Operation *op) {
   for (auto nonParallelizable : nonParallelizableLoops) {
     if (nonParallelizable.getBody()->findAncestorOpInBlock(*op) != nullptr) {
       return false;
@@ -86,7 +89,7 @@ void AKGLoopParallelize::runOnOperation() {
   std::map<affine::AffineForOp, bool> smallLoop;
   for (auto band : funcOp.getOps<affine::AffineForOp>()) {
     int64_t upperSize = 1;
-    band->walk([&](affine::AffineForOp forOp) {
+    band->walk([&upperSize](affine::AffineForOp forOp) {
       if (!forOp.hasConstantBounds()) {
         return;
       }
@@ -95,7 +98,7 @@ void AKGLoopParallelize::runOnOperation() {
     if (upperSize > PARALLEL_SIZE) {
       continue;
     }
-    band->walk([&](affine::AffineForOp forOp) { smallLoop[forOp] = true; });
+    band->walk([&smallLoop](affine::AffineForOp forOp) { smallLoop[forOp] = true; });
   }
 
   // Tiling reduction axis to support parallelism for reduce op
@@ -103,15 +106,16 @@ void AKGLoopParallelize::runOnOperation() {
   // The walker proceeds in pre-order to process the outer loops first
   // and control the number of outer parallel loops.
   std::vector<ParallelizationCandidate> parallelizableLoops;
-  SmallVector<affine::AffineForOp, 6> nonParallelizableLoops;
-  funcOp.walk<WalkOrder::PreOrder>([&](affine::AffineForOp loop) {
-    SmallVector<affine::LoopReduction> reductions;
-    if (mlir::affine::isLoopParallelAKG(loop, parallelReductions ? &reductions : nullptr) && !smallLoop[loop]) {
-      parallelizableLoops.emplace_back(loop, std::move(reductions));
-    } else {
-      nonParallelizableLoops.push_back(loop);
-    }
-  });
+  SmallVector<affine::AffineForOp, kSmallVectorSizeSix> nonParallelizableLoops;
+  funcOp.walk<WalkOrder::PreOrder>(
+    [this, &parallelizableLoops, &smallLoop, &nonParallelizableLoops](affine::AffineForOp loop) {
+      SmallVector<affine::LoopReduction> reductions;
+      if (mlir::affine::isLoopParallelAKG(loop, parallelReductions ? &reductions : nullptr) && !smallLoop[loop]) {
+        parallelizableLoops.emplace_back(loop, std::move(reductions));
+      } else {
+        nonParallelizableLoops.push_back(loop);
+      }
+    });
 
   for (const ParallelizationCandidate &candidate : parallelizableLoops) {
     affine::AffineForOp loop = candidate.loop;
@@ -136,10 +140,14 @@ void AKGLoopParallelize::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopParallelizePass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopParallelizePass() {
   return std::make_unique<AKGLoopParallelize>();
 }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopParallelizePass(const bool enableParallel) {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopParallelizePass(const bool enableParallel) {
   return std::make_unique<AKGLoopParallelize>(enableParallel);
 }
+}  // namespace mlir

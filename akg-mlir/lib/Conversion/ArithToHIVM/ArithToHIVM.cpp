@@ -60,10 +60,12 @@
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTARITHTOHIVM
 #include "akg/Conversion/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -644,7 +646,7 @@ static FailureOr<Value> allocMemRef(ConversionPatternRewriter &rewriter, Locatio
 static FailureOr<DenseI64ArrayAttr> inferElementwiseBroadcastAttr(Value lhs, Value rhs, MemRefType resultTy,
                                                                   PatternRewriter &rewriter) {
   SmallVector<int64_t> broadcastDims;
-  auto collectFromOperand = [&](Value operand) -> LogicalResult {
+  auto collectFromOperand = [&broadcastDims, resultTy](Value operand) -> LogicalResult {
     auto operandTy = dyn_cast<MemRefType>(operand.getType());
     if (!operandTy) {
       return success();
@@ -965,7 +967,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       }
     }
     auto roundMode = getHIVMVCastRoundMode(op.getOperation(), rewriter, selectRoundMode(op));
-    auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
+    auto setCastBufferSizeMark = [&rewriter, loc, &op, &srcMemRef](Value buffer, Type markElemType) {
       if (setNPUVectorResultBufferSizeMark(rewriter, loc, op.getOperation(), buffer, markElemType)) {
         return true;
       }
@@ -1103,7 +1105,8 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     }
     auto roundMode = getHIVMVCastRoundMode(op.getOperation(), rewriter, selectRoundMode(op));
     auto maxShape = inferNPUVectorMaxShapeFromOperands(op.getOperation(), npuVectorType);
-    auto setCastBufferSizeMark = [&](Value buffer, Type markElemType) {
+    auto setCastBufferSizeMark = [&maxShape, &rewriter, loc, npuVectorType, srcMemRef](Value buffer,
+                                                                                       Type markElemType) {
       if (succeeded(maxShape) &&
           setNPUVectorBufferSizeMark(rewriter, loc, npuVectorType, markElemType, *maxShape, buffer)) {
         return true;
@@ -2668,9 +2671,9 @@ static int64_t computeRank1StrideAlignedTransferReadBytes(ArrayRef<int64_t> maxS
     return 0;
   }
 
-  SmallVector<char, 1> staticDims;
+  SmallVector<char, kSmallVectorSizeOne> staticDims;
   staticDims.push_back(static_cast<char>(!ShapedType::isDynamic(npuVecType.getShape().front())));
-  SmallVector<int32_t, 1> alignDims{0};
+  SmallVector<int32_t, kSmallVectorSizeOne> alignDims{0};
   return computeBishengStrideAlignedStorageBytesWithTrailingUnit(maxShape, staticDims, alignDims, elementBits);
 }
 
@@ -2821,7 +2824,7 @@ static bool isBeforeAnchorInSameBlock(Operation *op, Operation *anchor) {
 }
 
 static bool isDpsInitRoot(DestinationStyleOpInterface op, Value root) {
-  return llvm::any_of(op.getDpsInits(), [&](Value init) { return traceMemRefToRoot(init) == root; });
+  return llvm::any_of(op.getDpsInits(), [root](Value init) { return traceMemRefToRoot(init) == root; });
 }
 
 static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value buffer,
@@ -2852,7 +2855,7 @@ static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter,
 
 static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value buffer,
                                                       Operation *anchor, int64_t bytes) {
-  llvm::SmallPtrSet<Operation *, 8> visited;
+  llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
   markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, buffer, anchor, bytes, visited);
 }
 
@@ -3206,7 +3209,7 @@ static LogicalResult materializeSubviewIndicesBefore(SmallVectorImpl<OpFoldResul
                                                      SmallVectorImpl<OpFoldResult> &strides, Operation *insertPt,
                                                      ConversionPatternRewriter &rewriter) {
   IRMapping mapping;
-  auto materializeValue = [&](auto &&self, Value value) -> FailureOr<Value> {
+  auto materializeValue = [&mapping, insertPt, &rewriter](auto &&self, Value value) -> FailureOr<Value> {
     if (Value mapped = mapping.lookupOrNull(value)) {
       return mapped;
     }
@@ -3234,7 +3237,7 @@ static LogicalResult materializeSubviewIndicesBefore(SmallVectorImpl<OpFoldResul
     return mapping.lookup(value);
   };
 
-  auto materializeRange = [&](SmallVectorImpl<OpFoldResult> &foldResults) -> LogicalResult {
+  auto materializeRange = [&materializeValue](SmallVectorImpl<OpFoldResult> &foldResults) -> LogicalResult {
     for (OpFoldResult &foldResult : foldResults) {
       auto value = foldResult.dyn_cast<Value>();
       if (!value) {
@@ -3321,7 +3324,7 @@ static bool isContiguousZeroOffsetSlab(MemRefType t) {
 // func.call and plain reads are treated as readers (matching the full-coverage path).
 static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
   SmallVector<Value> worklist{dest};
-  SmallPtrSet<Value, 8> visited;
+  SmallPtrSet<Value, kSmallVectorSizeEight> visited;
   while (!worklist.empty()) {
     Value cur = worklist.pop_back_val();
     if (!visited.insert(cur).second) {
@@ -3427,7 +3430,7 @@ static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteO
   }
 
   DominanceInfo domInfo;
-  if (llvm::any_of(dest.getUses(), [&](OpOperand &use) {
+  if (llvm::any_of(dest.getUses(), [anchor, &domInfo](OpOperand &use) {
         Operation *user = use.getOwner();
         return user != anchor && !isa<annotation::MarkOp>(user) &&
                (isa<memref::DeallocOp>(user) || !domInfo.properlyDominates(anchor, user));
@@ -3442,7 +3445,7 @@ static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteO
   }
 
   eraseBufferMarks(dest, rewriter);
-  dest.replaceUsesWithIf(forwarded, [&](OpOperand &use) { return use.getOwner() != anchor; });
+  dest.replaceUsesWithIf(forwarded, [anchor](OpOperand &use) { return use.getOwner() != anchor; });
   rewriter.eraseOp(op);
   if (dataSubview->use_empty()) {
     rewriter.eraseOp(dataSubview);
@@ -3598,8 +3601,8 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
   }
 
   DominanceInfo domInfo;
-  auto indexAvailable = [&](ArrayRef<OpFoldResult> foldResults) {
-    return llvm::all_of(foldResults, [&](OpFoldResult foldResult) {
+  auto indexAvailable = [&domInfo, insertPt](ArrayRef<OpFoldResult> foldResults) {
+    return llvm::all_of(foldResults, [&domInfo, insertPt](OpFoldResult foldResult) {
       auto value = foldResult.dyn_cast<Value>();
       if (!value) {
         return true;
@@ -3721,7 +3724,7 @@ static FailureOr<Value> insertSingletonAtPosition(PatternRewriter &rewriter, Loc
   const int64_t srcRank = srcTy.getRank();
   assert(insertSingletonDimIndex >= 0 && insertSingletonDimIndex <= srcRank);
 
-  auto staticDimOrDynamic = [&](int64_t dimIdx) -> int64_t {
+  auto staticDimOrDynamic = [srcTy](int64_t dimIdx) -> int64_t {
     return srcTy.isDynamicDim(dimIdx) ? ShapedType::kDynamic : srcTy.getDimSize(dimIdx);
   };
 
@@ -3737,7 +3740,7 @@ static FailureOr<Value> insertSingletonAtPosition(PatternRewriter &rewriter, Loc
     }
 
     auto newMemTy = MemRefType::get(newShape, elemType);
-    SmallVector<ReassociationIndices, 8> reassoc;
+    SmallVector<ReassociationIndices, kSmallVectorSizeEight> reassoc;
     reassoc.reserve(static_cast<size_t>(srcRank));
     for (int64_t j = 0; j < insertSingletonDimIndex; ++j) {
       reassoc.push_back(ReassociationIndices{j});
@@ -3757,7 +3760,7 @@ static FailureOr<Value> insertSingletonAtPosition(PatternRewriter &rewriter, Loc
   newShape[static_cast<size_t>(srcRank - 1)] = staticDimOrDynamic(srcRank - 1);
   newShape[static_cast<size_t>(srcRank)] = 1;
   auto newMemTy = MemRefType::get(newShape, elemType);
-  SmallVector<ReassociationIndices, 8> reassoc;
+  SmallVector<ReassociationIndices, kSmallVectorSizeEight> reassoc;
   for (int64_t i = 0; i < srcRank - 1; ++i) {
     reassoc.push_back(ReassociationIndices{i});
   }

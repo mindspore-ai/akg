@@ -35,17 +35,18 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AFFINELOOPREORDER
 #define GEN_PASS_DECL_AFFINELOOPREORDER
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace akgglobal;  // NOLINT(build/namespaces)
-
-namespace {
 
 constexpr int kDoubleTileNums = 3;  // two-tile split one loop to three parts
 
@@ -64,7 +65,7 @@ struct AffineLoopReorder : public impl::AffineLoopReorderBase<AffineLoopReorder>
   // Validate whether we need to do reorder
   bool needToReorder(const std::vector<int> &nums);
   // Sink apply ops to keep the correctness
-  void SinkApplyOps(OpBuilder &builder, SmallVector<Operation *, 8> &opList);
+  void SinkApplyOps(OpBuilder &builder, SmallVector<Operation *, kSmallVectorSizeEight> &opList);
   // Check the op0 is inside in op1
   bool isInsideIn(Operation *const op0, const Operation *const op1);
 };
@@ -103,10 +104,10 @@ bool AffineLoopReorder::isInsideIn(Operation *const op0, const Operation *const 
   return false;
 }
 
-void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *, 8> &opList) {
+void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *, kSmallVectorSizeEight> &opList) {
   auto funcOp = getOperation();
   Operation *keepArgs = nullptr;
-  funcOp->walk([&](mindspore::KeepArgsOp op) {
+  funcOp->walk([&keepArgs](mindspore::KeepArgsOp op) {
     if (op->hasAttr("BoundaryIf")) {
       keepArgs = op;
       WalkResult::interrupt();
@@ -115,8 +116,8 @@ void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *
   });
   auto firstOp = &*dyn_cast<affine::AffineForOp>(opList[opList.size() - 1]).getRegion().front().getOperations().begin();
   builder.setInsertionPoint(firstOp);
-  SmallVector<Operation *, 8> ops;
-  funcOp->walk([&](affine::AffineApplyOp op) {
+  SmallVector<Operation *, kSmallVectorSizeEight> ops;
+  funcOp->walk([this, &ops, &opList](affine::AffineApplyOp op) {
     if (!isInsideIn(op.getOperation(), opList[opList.size() - 1])) {
       ops.push_back(op.getOperation());
     }
@@ -135,8 +136,8 @@ void AffineLoopReorder::runOnOperation() {
     return;
   }
 
-  SmallVector<Operation *, 8> opList;
-  funcOp->walk([&](affine::AffineForOp op) { opList.push_back(op.getOperation()); });
+  SmallVector<Operation *, kSmallVectorSizeEight> opList;
+  funcOp->walk([&opList](affine::AffineForOp op) { opList.push_back(op.getOperation()); });
   std::reverse(opList.begin(), opList.end());
 
   // Get the order and check the validations
@@ -170,7 +171,7 @@ void AffineLoopReorder::runOnOperation() {
   // Start to transforms the mlir file by settings.
   mlir::OpBuilder builder(funcOp);
   mlir::IRMapping mapper;
-  SmallVector<Operation *, 8> newOpList;
+  SmallVector<Operation *, kSmallVectorSizeEight> newOpList;
   // sink affine.apply ops to deal with non perfect nest
   SinkApplyOps(builder, opList);
   builder.setInsertionPointAfter(opList[start]);
@@ -194,6 +195,8 @@ void AffineLoopReorder::runOnOperation() {
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAffineLoopReorderPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createAffineLoopReorderPass() {
   return std::make_unique<AffineLoopReorder>();
 }
+}  // namespace mlir

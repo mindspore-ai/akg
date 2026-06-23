@@ -34,18 +34,20 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_REWRITEREDUCEINMULTILEVELMEMORY
 #define GEN_PASS_DEF_REWRITEREDUCEINMULTILEVELMEMORY
 #include "akg/Dialect/SCF/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
 namespace scf {
 namespace {
 
-void cloneAndReplaceOps(const SmallVector<Operation *, 8> &ops, OpBuilder &builder) {
+void cloneAndReplaceOps(const SmallVector<Operation *, kSmallVectorSizeEight> &ops, OpBuilder &builder) {
   for (Operation *op : ops) {
     if (op != nullptr) {
       Operation *clonedOp = builder.clone(*op);
@@ -108,7 +110,7 @@ static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation 
   loadLocalA = localA.getDefiningOp();
   storeLocalA = *(redOp->getUsers().begin());
   allocLocalA = loadLocalA->getOperand(0).getDefiningOp();
-  (void)funcOp->walk([&](memref::StoreOp storeOp) -> WalkResult {
+  (void)funcOp->walk([&allocLocalA, &initStoreLocalA](memref::StoreOp storeOp) -> WalkResult {
     if (storeOp.getMemref() == allocLocalA->getResult(0)) {
       initStoreLocalA = storeOp.getOperation();
       return WalkResult::interrupt();
@@ -124,7 +126,7 @@ static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation 
 }
 
 static void removeInitOuput(Operation *funcOp, mlir::Value v) {
-  funcOp->walk([&](memref::StoreOp storeOp) {
+  funcOp->walk([&v](memref::StoreOp storeOp) {
     // constant init like :memref.store %cst, %arg1[] : memref<f32>
     if (storeOp.getOperand(1) == v && isa<arith::ConstantOp>(storeOp.getOperand(0).getDefiningOp())) {
       storeOp.erase();
@@ -171,9 +173,10 @@ struct RewriteReduceInMultiLevelMemory
     : public impl::RewriteReduceInMultiLevelMemoryBase<RewriteReduceInMultiLevelMemory> {
   void runOnOperation() override {
     auto funcOp = getOperation();
-    SmallVector<Operation *, 2> redOps;
-    bool isReduceY = akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == (size_t)ReduceDirection::Y;
-    funcOp.walk([&](Operation *op) {
+    SmallVector<Operation *, kSmallVectorSizeTwo> redOps;
+    bool isReduceY =
+      akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == static_cast<size_t>(ReduceDirection::Y);
+    funcOp.walk([&funcOp, &isReduceY, &redOps](Operation *op) {
       if (!isa<mlir::func::FuncOp>(op)) {
         bool parallelReduce = (op->hasAttr(akg::utils::kEnableParallelReduce) &&
                                op->getAttrOfType<BoolAttr>(akg::utils::kEnableParallelReduce).getValue());
@@ -227,15 +230,15 @@ struct RewriteReduceInMultiLevelMemory
       // NOTE:reduce op should be the last op in sequential loop. if there is any other op, move
       // it below thread-loop; also if some of alloc/deallocs break the relationship, move them
       // either.
-      SmallVector<Operation *, 8> needMoveBeforeOps;
-      SmallVector<mlir::Value, 8> usedValues;
+      SmallVector<Operation *, kSmallVectorSizeEight> needMoveBeforeOps;
+      SmallVector<mlir::Value, kSmallVectorSizeEight> usedValues;
 
       CommonUtils::getAllPreviousRelatedOpsV2(loadLocalA, needMoveBeforeOps, usedValues);
       std::reverse(needMoveBeforeOps.begin(), needMoveBeforeOps.end());
       builder.setInsertionPoint(outerSeqReduceLoop);
       cloneAndReplaceOps(needMoveBeforeOps, builder);
 
-      SmallVector<Operation *, 8> needMoveAfterOps;
+      SmallVector<Operation *, kSmallVectorSizeEight> needMoveAfterOps;
       usedValues.clear();
       CommonUtils::getAllNextRelatedOps(storeLocalA, needMoveAfterOps, usedValues);
       builder.setInsertionPointAfter(outerSeqReduceLoop);

@@ -135,157 +135,163 @@ bool CceWrapper::LoadRuntime() {
 }  // namespace runtime
 }  // namespace mlir
 
+namespace mlir {
+namespace runtime {
+
 int aclrtSetCurrentContext(aclrtContext context) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtSetCurrentContext;
+  auto func = CceWrapper::GetInstance()->aclrtSetCurrentContext;
   CHECK_NOTNULL(func);
   return func(context);
 }
 
 int aclrtGetDeviceCount(uint32_t *count) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtGetDeviceCount;
+  auto func = CceWrapper::GetInstance()->aclrtGetDeviceCount;
   CHECK_NOTNULL(func);
   return func(count);
 }
 
 int aclrtGetCurrentContext(aclrtContext *context) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtGetCurrentContext;
+  auto func = CceWrapper::GetInstance()->aclrtGetCurrentContext;
   CHECK_NOTNULL(func);
   return func(context);
 }
 
 int aclrtCreateStreamWithConfig(aclrtStream *stream, uint32_t priority, uint32_t flag) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtCreateStreamWithConfig;
+  auto func = CceWrapper::GetInstance()->aclrtCreateStreamWithConfig;
   CHECK_NOTNULL(func);
   return func(stream, priority, flag);
 }
 
 int aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind,
                      aclrtStream stream) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtMemcpyAsync;
+  auto func = CceWrapper::GetInstance()->aclrtMemcpyAsync;
   CHECK_NOTNULL(func);
   return func(dst, destMax, src, count, kind, stream);
 }
 
 int aclrtGetMemInfo(aclrtMemAttr attr, size_t *freeSize, size_t *total) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtGetMemInfo;
+  auto func = CceWrapper::GetInstance()->aclrtGetMemInfo;
   CHECK_NOTNULL(func);
   return func(attr, freeSize, total);
 }
 
 int aclrtSetDevice(int32_t deviceId) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtSetDevice;
+  auto func = CceWrapper::GetInstance()->aclrtSetDevice;
   CHECK_NOTNULL(func);
   return func(deviceId);
 }
 
 int aclrtCreateContext(aclrtContext *context, int32_t deviceId) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtCreateContext;
+  auto func = CceWrapper::GetInstance()->aclrtCreateContext;
   CHECK_NOTNULL(func);
   return func(context, deviceId);
 }
 
 int aclrtCreateStream(aclrtStream *stream) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtCreateStream;
+  auto func = CceWrapper::GetInstance()->aclrtCreateStream;
   CHECK_NOTNULL(func);
   return func(stream);
 }
 
 int aclrtMallocHost(void **hostPtr, size_t size) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtMallocHost;
+  auto func = CceWrapper::GetInstance()->aclrtMallocHost;
   CHECK_NOTNULL(func);
   return func(hostPtr, size);
 }
 
 int aclrtMalloc(void **devPtr, size_t size, aclrtMemMallocPolicy policy) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtMalloc;
+  auto func = CceWrapper::GetInstance()->aclrtMalloc;
   CHECK_NOTNULL(func);
   return func(devPtr, size, policy);
 }
 
 int aclrtMemcpy(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtMemcpy;
+  auto func = CceWrapper::GetInstance()->aclrtMemcpy;
   CHECK_NOTNULL(func);
   return func(dst, destMax, src, count, kind);
 }
 
 int aclrtSynchronizeStream(aclrtStream stream) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtSynchronizeStream;
+  auto func = CceWrapper::GetInstance()->aclrtSynchronizeStream;
   CHECK_NOTNULL(func);
   return func(stream);
 }
 
 int aclrtFree(void *devPtr) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtFree;
+  auto func = CceWrapper::GetInstance()->aclrtFree;
   CHECK_NOTNULL(func);
   return func(devPtr);
 }
 
 int aclrtFreeHost(void *hostPtr) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtFreeHost;
+  auto func = CceWrapper::GetInstance()->aclrtFreeHost;
   CHECK_NOTNULL(func);
   return func(hostPtr);
 }
 
 int aclrtDestroyStream(aclrtStream stream) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtDestroyStream;
+  auto func = CceWrapper::GetInstance()->aclrtDestroyStream;
   CHECK_NOTNULL(func);
   return func(stream);
 }
 
 int aclrtDestroyContext(aclrtContext context) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtDestroyContext;
+  auto func = CceWrapper::GetInstance()->aclrtDestroyContext;
   CHECK_NOTNULL(func);
   return func(context);
 }
 
 int aclrtResetDevice(int32_t deviceId) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtResetDevice;
+  auto func = CceWrapper::GetInstance()->aclrtResetDevice;
   CHECK_NOTNULL(func);
   return func(deviceId);
 }
 
 int aclrtGetDevice(int32_t *deviceId) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclrtGetDevice;
+  auto func = CceWrapper::GetInstance()->aclrtGetDevice;
   CHECK_NOTNULL(func);
   return func(deviceId);
 }
 
 int aclprofInit(const char *profilerResultPath, size_t length) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofInit;
+  auto func = CceWrapper::GetInstance()->aclprofInit;
   CHECK_NOTNULL(func);
   return func(profilerResultPath, length);
 }
 
 int aclprofStart(const aclprofConfig *profilerConfig) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofStart;
+  auto func = CceWrapper::GetInstance()->aclprofStart;
   CHECK_NOTNULL(func);
   return func(profilerConfig);
 }
 
 int aclprofStop(const aclprofConfig *profilerConfig) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofStop;
+  auto func = CceWrapper::GetInstance()->aclprofStop;
   CHECK_NOTNULL(func);
   return func(profilerConfig);
 }
 
 int aclprofFinalize() {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofFinalize;
+  auto func = CceWrapper::GetInstance()->aclprofFinalize;
   CHECK_NOTNULL(func);
   return func();
 }
 
 aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums, aclprofAicoreMetrics aicoreMetrics,
                                    const aclprofAicoreEvents *aicoreEvents, uint64_t dataTypeConfig) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofCreateConfig;
+  auto func = CceWrapper::GetInstance()->aclprofCreateConfig;
   CHECK_NOTNULL(func);
   return func(deviceIdList, deviceNums, aicoreMetrics, aicoreEvents, dataTypeConfig);
 }
 
 int aclprofDestroyConfig(const aclprofConfig *profilerConfig) {
-  auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofDestroyConfig;
+  auto func = CceWrapper::GetInstance()->aclprofDestroyConfig;
   CHECK_NOTNULL(func);
   return func(profilerConfig);
 }
+
+}  // namespace runtime
+}  // namespace mlir
 
 extern "C" {
 int rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len) {

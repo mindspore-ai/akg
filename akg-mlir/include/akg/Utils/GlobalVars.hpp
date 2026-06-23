@@ -27,6 +27,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace akgglobal {
 
@@ -43,11 +44,19 @@ static const int kGpuSeqMapDim = 3;
 // Constexpr prime number generation helpers (C++17 compatible)
 namespace prime_helpers {
 constexpr bool isPrime(size_t n) {
-  if (n < 2) return false;
-  if (n == 2) return true;
-  if (n % 2 == 0) return false;
+  if (n < 2) {
+    return false;
+  }
+  if (n == 2) {
+    return true;
+  }
+  if (n % 2 == 0) {
+    return false;
+  }
   for (size_t i = 3; i * i <= n; i += 2) {
-    if (n % i == 0) return false;
+    if (n % i == 0) {
+      return false;
+    }
   }
   return true;
 }
@@ -56,7 +65,9 @@ constexpr std::array<size_t, kPrimeSize> generatePrimeList() {
   std::array<size_t, 300> primes{};
   size_t num = 40009;
   for (size_t i = 0; i < 300; ++i) {
-    while (!isPrime(num)) ++num;
+    while (!isPrime(num)) {
+      ++num;
+    }
     primes[i] = num++;
   }
   return primes;
@@ -411,7 +422,7 @@ class ShapeAlignTool {
     auto shapes = shapedType.getShape();
     for (size_t i = 0; i < shapes.size(); ++i) {
       if (shapedType.isDynamicDim(static_cast<int>(i))) {
-        constShapes.push_back((int64_t)-1);
+        constShapes.push_back(static_cast<int64_t>(-1));
       } else {
         constShapes.push_back(shapes[i]);
       }

@@ -62,7 +62,7 @@ class CopyReturnedFuncArgs : public impl::CopyReturnedFuncArgsBase<CopyReturnedF
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     SmallVector<func::ReturnOp> returns;
-    func.walk([&](func::ReturnOp ret) { returns.push_back(ret); });
+    func.walk([&returns](func::ReturnOp ret) { returns.push_back(ret); });
 
     for (func::ReturnOp ret : returns) {
       OpBuilder b(ret);

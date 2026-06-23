@@ -32,7 +32,7 @@ namespace mlir {
 namespace akg {
 
 // Loop transformation types for fusion planning.
-enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
+enum class LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
 inline const char *loopTransformToString(LoopTransform type) {
   switch (type) {
     case LoopTransform::Merge:

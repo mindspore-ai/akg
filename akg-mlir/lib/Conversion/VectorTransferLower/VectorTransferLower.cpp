@@ -35,10 +35,29 @@ namespace mlir {
 #include "akg/Conversion/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;          // NOLINT(build/namespaces)
-using namespace mlir::vector;  // NOLINT(build/namespaces)
-
 namespace {
+namespace arith = mlir::arith;
+namespace impl = mlir::impl;
+namespace memref = mlir::memref;
+namespace tensor = mlir::tensor;
+namespace vector = mlir::vector;
+using mlir::applyPartialConversion;
+using mlir::BoolAttr;
+using mlir::cast;
+using mlir::ConversionTarget;
+using mlir::DialectRegistry;
+using mlir::failed;
+using mlir::failure;
+using mlir::isa;
+using mlir::LogicalResult;
+using mlir::MLIRContext;
+using mlir::OperationPass;
+using mlir::OpRewritePattern;
+using mlir::PatternRewriter;
+using mlir::populateVectorTransferLowerPatterns;
+using mlir::RewritePatternSet;
+using mlir::success;
+using mlir::VectorType;
 class VectorTransferLowerPass : public impl::VectorTransferLowerBase<VectorTransferLowerPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<tensor::TensorDialect, memref::MemRefDialect>();
@@ -47,6 +66,7 @@ class VectorTransferLowerPass : public impl::VectorTransferLowerBase<VectorTrans
 };
 }  // namespace
 
+namespace {
 class AKGTransferReadToVectorLoadLowering : public OpRewritePattern<vector::TransferReadOp> {
  public:
   using OpRewritePattern<vector::TransferReadOp>::OpRewritePattern;
@@ -76,10 +96,7 @@ class AKGTransferWriteToVectorStoreLowering : public OpRewritePattern<vector::Tr
     return success();
   }
 };
-
-void mlir::populateVectorTransferLowerPatterns(RewritePatternSet &patterns) {
-  (void)patterns.add<AKGTransferReadToVectorLoadLowering, AKGTransferWriteToVectorStoreLowering>(patterns.getContext());
-}
+}  // namespace
 
 void VectorTransferLowerPass::runOnOperation() {
   MLIRContext *context = &getContext();
@@ -103,6 +120,10 @@ void VectorTransferLowerPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<>> mlir::createVectorTransferLowerPass() {
-  return std::make_unique<VectorTransferLowerPass>();
+namespace mlir {
+void populateVectorTransferLowerPatterns(RewritePatternSet &patterns) {
+  (void)patterns.add<AKGTransferReadToVectorLoadLowering, AKGTransferWriteToVectorStoreLowering>(patterns.getContext());
 }
+
+std::unique_ptr<OperationPass<>> createVectorTransferLowerPass() { return std::make_unique<VectorTransferLowerPass>(); }
+}  // namespace mlir
