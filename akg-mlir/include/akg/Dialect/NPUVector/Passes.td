@@ -32,6 +32,19 @@ def EliminateNPUVectorRedundantOps
   let constructor = "mlir::npuvector::createEliminateNPUVectorRedundantOpsPass()";
 }
 
+def RefineNPUVectorStaticShape
+    : Pass<"refine-npuvector-static-shape", "mlir::func::FuncOp"> {
+  let summary = "Refine NPUVector dynamic result dims whose tile sizes are constant";
+  let description = [{
+    Narrows NPUVector result types after canonicalization folds dynamic tile
+    size operands to constants. For example, a transfer_read with result type
+    `!npuvector<?xf32>` and dynamic size `%c16` is refined to
+    `!npuvector<16xf32>`, and the static shape is propagated through local
+    NPUVector elementwise users.
+  }];
+  let constructor = "mlir::npuvector::createRefineNPUVectorStaticShapePass()";
+}
+
 def OutlineVectorFunction : Pass<"outline-vector-function", "mlir::ModuleOp"> {
   let summary = "This pass is designed to support SMID Reg";
   let description = [{
