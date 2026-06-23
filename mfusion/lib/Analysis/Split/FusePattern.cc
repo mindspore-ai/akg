@@ -16,10 +16,34 @@
 #include "mfusion/Analysis/Split/FusePattern.h"
 
 #include "mfusion/Analysis/Split/SplitModel.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir {
 namespace mfuse {
 namespace split {
+
+namespace {
+
+bool canFuseScalarBroadcastInput(const AreaPtr &area, const AreaPtr &input, EdgeRelation relation) {
+  if (relation != EdgeRelation::BROADCAST || !area || !input || !input->dom() || !input->dom()->op()) {
+    return false;
+  }
+
+  if (area->pattern() != NodePattern::BROADCAST) {
+    return false;
+  }
+
+  Operation *inputOp = input->dom()->op();
+  if (!isa<mfuse::FullOp>(inputOp) || inputOp->getNumResults() != 1) {
+    return false;
+  }
+
+  auto type = dyn_cast<RankedTensorType>(inputOp->getResult(0).getType());
+  return type && type.hasStaticShape() && type.getNumElements() == 1;
+}
+
+}  // namespace
 
 void FusePattern::setCircleChecker(std::shared_ptr<ReachTable> checker) { circle_checker_ = checker; }
 
@@ -118,13 +142,13 @@ bool FuseElemwiseBroadcastFwd::match(const AreaPtr &area) {
     if (fuse_type_ == FuseType::kDepth && input->userNum() != 1) {
       continue;
     }
-    if (input->pattern() <= NodePattern::BROADCAST && relation == EdgeRelation::INJECTIVE) {
+    bool canFuseInjective = relation == EdgeRelation::INJECTIVE && input->computeSizeEqual(area);
+    bool canFuseScalarBroadcast = canFuseScalarBroadcastInput(area, input, relation);
+    if (input->pattern() <= NodePattern::BROADCAST && (canFuseInjective || canFuseScalarBroadcast)) {
       if (fuse_type_ == FuseType::kWidth && hasCircle(input, area)) {
         continue;
       }
-      if (input->computeSizeEqual(area)) {
-        fused_areas_.push_back(input);
-      }
+      fused_areas_.push_back(input);
     }
   }
   return !fused_areas_.empty();
