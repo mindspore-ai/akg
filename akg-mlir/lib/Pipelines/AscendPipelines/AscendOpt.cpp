@@ -261,6 +261,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(scf::createNPUVectorVectorizePass());
     pm.addPass(npuvector::createElimScfIterArgsPass());
     pm.addPass(createCanonicalizerPass());
+    pm.addPass(npuvector::createRefineNPUVectorStaticShapePass());
     pm.addPass(npuvector::createEliminateNPUVectorRedundantOpsPass());
     pm.addPass(createCSEPass());
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
