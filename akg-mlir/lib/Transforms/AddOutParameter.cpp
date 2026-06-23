@@ -32,6 +32,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 #define DEBUG_TYPE "add-out-parameter"
 
@@ -39,6 +40,7 @@ namespace mlir {
 #define GEN_PASS_DECL_ADDOUTPARAMETER
 #define GEN_PASS_DEF_ADDOUTPARAMETER
 #include "akg/Transforms/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -103,7 +105,7 @@ static bool isAliasOfOriginalInput(Value v, func::FuncOp func, unsigned origNumI
 static LogicalResult collectOriginalReturnValues(func::FuncOp func, unsigned origNumResults,
                                                  SmallVectorImpl<func::ReturnOp> &returns,
                                                  SmallVectorImpl<Value> &origReturnValues) {
-  func.walk([&](func::ReturnOp ret) { returns.push_back(ret); });
+  func.walk([&returns](func::ReturnOp ret) { returns.push_back(ret); });
   if (returns.empty()) {
     return success();
   }
@@ -235,7 +237,7 @@ static LogicalResult buildInverseShapeChainOnOut(Value outArg, ArrayRef<ShapeOpI
         return failure();
       }
 
-      SmallVector<int64_t, 4> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
+      SmallVector<int64_t, kSmallVectorSizeFour> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
       cur = buildReshapeFromOut(b, r.getLoc(), srcTy, cur, staticDims);
     } else {
       return failure();
@@ -253,7 +255,7 @@ static LogicalResult buildInverseShapeChainOnOut(Value outArg, ArrayRef<ShapeOpI
 }
 
 static LogicalResult rewriteTempShapeChainToOutView(Value oldResVal, Value outArg) {
-  SmallVector<ShapeOpInChain, 4> chain;
+  SmallVector<ShapeOpInChain, kSmallVectorSizeFour> chain;
   memref::AllocOp rootAlloc;
 
   if (failed(collectShapeChainToAlloc(oldResVal, chain, rootAlloc))) {
@@ -313,7 +315,7 @@ static LogicalResult rewriteSrcOutShapeOpToOutViewImpl(SrcOpTy shapeOp, Value ou
   auto backViewOp = topBuilder.template create<BackViewOpTy>(shapeOp.getLoc(), srcTy, outArg, reassoc);
   Value backView = backViewOp.getResult();
 
-  SmallVector<memref::StoreOp, 4> srcStores;
+  SmallVector<memref::StoreOp, kSmallVectorSizeFour> srcStores;
   for (Operation *user : src.getUsers()) {
     if (auto store = dyn_cast<memref::StoreOp>(user)) {
       if (store.getMemRef() == src) {
@@ -384,7 +386,7 @@ static LogicalResult rewriteTempReshapeSourceToOutView(memref::ReshapeOp reshape
     return success();
   }
 
-  SmallVector<int64_t, 4> staticDims(tmpTy.getShape().begin(), tmpTy.getShape().end());
+  SmallVector<int64_t, kSmallVectorSizeFour> staticDims(tmpTy.getShape().begin(), tmpTy.getShape().end());
 
   Operation *tmpDef = tmp.getDefiningOp();
   Value newViewVal;
@@ -449,12 +451,12 @@ static LogicalResult rewriteSrcOutReshapeOpToOutView(memref::ReshapeOp reshapeOp
 
   Block &entry = func.front();
 
-  SmallVector<int64_t, 4> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
+  SmallVector<int64_t, kSmallVectorSizeFour> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
 
   OpBuilder topBuilder(&entry, entry.begin());
   Value backView = buildReshapeFromOut(topBuilder, reshapeOp.getLoc(), srcTy, outArg, staticDims);
 
-  SmallVector<memref::StoreOp, 4> srcStores;
+  SmallVector<memref::StoreOp, kSmallVectorSizeFour> srcStores;
   for (Operation *user : src.getUsers()) {
     if (auto store = dyn_cast<memref::StoreOp>(user)) {
       if (store.getMemRef() == src) {
@@ -602,14 +604,14 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
     OpBuilder b(reshapeOp);
     if (isReshapeSpecialCase(reshapeOp, srcTy, resTy) && srcTy.getRank() == 0 && resTy.getRank() == 1) {
       // 0D -> 1D
-      SmallVector<ReassociationIndices, 1> reassoc;
+      SmallVector<ReassociationIndices, kSmallVectorSizeOne> reassoc;
       auto expand = b.create<memref::ExpandShapeOp>(reshapeOp.getLoc(), resTy, reshapeOp.getSource(), reassoc);
       reshapeOp.replaceAllUsesWith(expand.getResult());
       reshapeOp.erase();
       oldResVal = expand.getResult();
     } else if (isReshapeSpecialCase(reshapeOp, srcTy, resTy) && srcTy.getRank() == 1 && resTy.getRank() == 0) {
       // 1D -> 0D
-      SmallVector<ReassociationIndices, 1> reassoc;
+      SmallVector<ReassociationIndices, kSmallVectorSizeOne> reassoc;
       auto collapse = b.create<memref::CollapseShapeOp>(reshapeOp.getLoc(), resTy, reshapeOp.getSource(), reassoc);
       reshapeOp.replaceAllUsesWith(collapse.getResult());
       reshapeOp.erase();
@@ -648,7 +650,7 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
 static LogicalResult handleAllReturns(func::FuncOp func, unsigned origNumResults, SmallVector<Value> maybeOutArgs,
                                       SmallVector<Value> &origReturnValues) {
   SmallVector<func::ReturnOp> returns;
-  func.walk([&](func::ReturnOp ret) { returns.push_back(ret); });
+  func.walk([&returns](func::ReturnOp ret) { returns.push_back(ret); });
 
   if (returns.empty()) {
     return success();
@@ -675,8 +677,8 @@ static LogicalResult handleAllReturns(func::FuncOp func, unsigned origNumResults
 
 template <typename OpTy>
 static void eraseDeadOpsOfType(func::FuncOp func) {
-  SmallVector<OpTy, 4> deadOps;
-  func.walk([&](OpTy op) {
+  SmallVector<OpTy, kSmallVectorSizeFour> deadOps;
+  func.walk([&deadOps](OpTy op) {
     if (op->use_empty()) {
       deadOps.push_back(op);
     }
@@ -718,7 +720,7 @@ static LogicalResult rewriteReturnsAndAllocToUseOutParams(func::FuncOp func, uns
   }
 
   func::ReturnOp anyRet;
-  func.walk([&](func::ReturnOp r) {
+  func.walk([&anyRet](func::ReturnOp r) {
     if (!anyRet) {
       anyRet = r;
     }
@@ -781,7 +783,7 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
   unsigned origNumInputs = origInputs.size();
   unsigned origNumResults = origResults.size();
   if (origNumResults == 0) {
-    setHaccIOArgAttrs(func, origNumInputs, /*nOutputs=*/0, builder);
+    setHaccIOArgAttrs(func, origNumInputs, /* nOutputs= */ 0, builder);
     return success();
   }
 
@@ -792,7 +794,7 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     newInputs.append(origResults.begin(), origResults.end());
 
     // Function no longer returns anything.
-    auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
+    auto newFuncTy = FunctionType::get(ctx, newInputs, /* results= */ {});
     func.setFunctionType(newFuncTy);
 
     setHaccIOArgAttrs(func, origNumInputs, origNumResults, builder);
@@ -800,13 +802,13 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
   }
 
   func::ReturnOp reprRet;
-  func.walk([&](func::ReturnOp r) {
+  func.walk([&reprRet](func::ReturnOp r) {
     if (!reprRet) {
       reprRet = r;
     }
   });
   if (!reprRet) {
-    setHaccIOArgAttrs(func, origNumInputs, /*nOutputs=*/0, builder);
+    setHaccIOArgAttrs(func, origNumInputs, /* nOutputs= */ 0, builder);
     return success();
   }
 
@@ -815,7 +817,7 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
                         << ") does not match number of function results (" << origNumResults << ")";
   }
 
-  SmallVector<bool, 4> needOut(origNumResults, true);
+  SmallVector<bool, kSmallVectorSizeFour> needOut(origNumResults, true);
   for (unsigned i = 0; i < origNumResults; ++i) {
     Value rv = reprRet.getOperand(i);
     if (isAliasOfOriginalInput(rv, func, origNumInputs)) {
@@ -833,7 +835,7 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
   }
 
   // Function no longer returns anything.
-  auto newFuncTy = FunctionType::get(ctx, newInputs, /*results=*/{});
+  auto newFuncTy = FunctionType::get(ctx, newInputs, /* results= */ {});
   func.setFunctionType(newFuncTy);
 
   Block &entry = func.front();
@@ -878,10 +880,10 @@ struct AddOutParameter : public mlir::impl::AddOutParameterBase<AddOutParameter>
 
     OpBuilder builder(module.getContext());
 
-    SmallVector<func::FuncOp, 8> funcs;
-    module.walk([&](func::FuncOp f) { funcs.push_back(f); });
+    SmallVector<func::FuncOp, kSmallVectorSizeEight> funcs;
+    module.walk([&funcs](func::FuncOp f) { funcs.push_back(f); });
 
-    auto it = std::find_if(funcs.begin(), funcs.end(), [&](func::FuncOp f) {
+    auto it = std::find_if(funcs.begin(), funcs.end(), [&builder](func::FuncOp f) {
       if (failed(transformFunc(f, builder))) {
         f.emitError("AddOutParameter pass failed for this function");
         return true;

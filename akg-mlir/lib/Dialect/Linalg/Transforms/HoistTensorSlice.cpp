@@ -89,8 +89,7 @@ static bool isFuncLeaf(Value v, func::FuncOp func) {
 /// Build the cone of linalg.generic ops from `rootOp` upward until hitting
 /// leaves (func args / constants). Populates `cone`. Returns false if any of
 /// the hoisting preconditions is violated.
-/// Preconditions:
-///  - rootOp and every op in the cone is a linalg.generic with exactly one
+/// Preconditions///  - rootOp and every op in the cone is a linalg.generic with exactly one
 ///    dps init. Reduction iterators are allowed .
 ///  - All users of rootOp's result are in `sliceSet`.
 ///  - All users of intermediate cone op results are themselves in the cone.
@@ -371,7 +370,7 @@ struct HoistTensorSlice : public impl::HoistTensorSliceBase<HoistTensorSlice> {
 
     // Step 1: collect tensor.extract_slice ops grouped by source value.
     llvm::MapVector<Value, SmallVector<tensor::ExtractSliceOp>> bySource;
-    funcOp.walk([&](tensor::ExtractSliceOp es) { bySource[es.getSource()].push_back(es); });
+    funcOp.walk([&bySource](tensor::ExtractSliceOp es) { bySource[es.getSource()].push_back(es); });
 
     for (auto &kv : bySource) {
       Value source = kv.first;
@@ -435,7 +434,7 @@ struct HoistTensorSlice : public impl::HoistTensorSliceBase<HoistTensorSlice> {
     while (changed) {
       changed = false;
       SmallVector<Operation *> toErase;
-      funcOp.walk([&](Operation *op) {
+      funcOp.walk([&toErase](Operation *op) {
         if (op->use_empty() &&
             (isa<tensor::EmptyOp>(op) || isa<linalg::FillOp>(op) || op->hasTrait<OpTrait::ConstantLike>())) {
           toErase.push_back(op);

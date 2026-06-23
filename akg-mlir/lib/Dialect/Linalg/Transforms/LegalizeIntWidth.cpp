@@ -247,7 +247,7 @@ struct FuseExtensionIntoConsumerGenericPattern : public OpRewritePattern<linalg:
 
       // Only fuse when the extended value feeds a narrowable op.
       BlockArgument bbArg = body.getArgument(opOperand->getOperandNumber());
-      if (llvm::none_of(bbArg.getUsers(), [&](Operation *u) { return isNarrowableConsumer(u, bbArg); })) {
+      if (llvm::none_of(bbArg.getUsers(), [&bbArg](Operation *u) { return isNarrowableConsumer(u, bbArg); })) {
         continue;
       }
 

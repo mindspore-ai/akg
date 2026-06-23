@@ -35,21 +35,20 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-
-using namespace akgglobal;  // NOLINT(build/namespaces)
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_PRIMENUMREPLACEFORDYNAMICSHAPE
 #define GEN_PASS_DEF_PRIMENUMREPLACEFORDYNAMICSHAPE
 #include "akg/Dialect/SCF/Passes.h.inc"
-}  // namespace mlir
 
-using namespace mlir;       // NOLINT(build/namespaces)
-using namespace akgglobal;  // NOLINT(build/namespaces)
+}  // namespace mlir
 
 namespace mlir {
 namespace scf {
 namespace {
+using namespace mlir;       // NOLINT(build/namespaces)
+using namespace akgglobal;  // NOLINT(build/namespaces)
 constexpr auto kPrimeReplace = "PrimeReplace";
 
 // A struct to collect the keep args information
@@ -106,7 +105,7 @@ static mlir::LogicalResult PrimeNumReplace(Operation *funcOp) {
   OpBuilder builder(funcOp);
   auto ctx = funcOp->getContext();
   auto &tool = PrimeNumTool::getInstance();
-  funcOp->walk([&](scf::ParallelOp parallelOp) {
+  funcOp->walk([&builder, &ctx, &tool, funcOp](scf::ParallelOp parallelOp) {
     auto upperBound = parallelOp.getUpperBound().front();
     if (!isa<mlir::arith::ConstantOp>(upperBound.getDefiningOp())) {
       auto primeNum = tool.getOnePrimeWithIdxUpdate();
@@ -134,13 +133,14 @@ static mlir::LogicalResult PrimeNumReplace(Operation *funcOp) {
 static void UpdateRuntimeVars(func::FuncOp &mainFunc, std::map<int, mlir::Value> &allConstsMap) {
   mlir::MLIRContext *context = mainFunc.getContext();
   mlir::TypeRange originalArgTypes = mainFunc.getFunctionType().getInputs();
-  llvm::SmallVector<mlir::Type, 4> newArgTypes(originalArgTypes.begin(), originalArgTypes.end());
+  llvm::SmallVector<mlir::Type, kSmallVectorSizeFour> newArgTypes(originalArgTypes.begin(), originalArgTypes.end());
   size_t currArgSize = mainFunc.getArguments().size();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
 
   for (auto it : GpuScheduleTool::getInstance().getRuntimeVars()) {
     mlir::Region &bodyRegion = mainFunc.getBody();
-    auto doReplace = [&](int64_t primeNum) {
+    auto doReplace = [&allConstsMap, &context, &bodyRegion, &gpuTool, &currArgSize, &newArgTypes,
+                      &mainFunc](int64_t primeNum) {
       if (allConstsMap.find(primeNum) == allConstsMap.end()) {
         return;
       }
@@ -207,7 +207,7 @@ static mlir::LogicalResult PrimeNumReStore(Operation *funcOp) {
   std::map<int, mlir::Value> allConstsMap;
 
   // collect dynamic shape related information
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([&gpuLaunch, &mainFunc, &convertInfos, &allConstsMap](Operation *op) {
     if (auto f = dyn_cast<gpu::LaunchOp>(op)) {
       gpuLaunch = f;
     }

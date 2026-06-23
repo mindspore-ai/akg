@@ -18,12 +18,10 @@
 #define AKG_DIALECT_LINALG_TRANSFORMS_LEGALIZEINTWIDTH_H_
 
 #include <memory>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-namespace func {
-class FuncOp;
-}  // namespace func
 
 /// Narrows wide integer elementwise ops back to their original type when
 /// value-exact. Covers cmpi, select, and bitwise ops on extsi/extui

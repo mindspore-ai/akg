@@ -15,10 +15,6 @@
  */
 
 #include <numeric>
-#include "akg/Conversion/Passes.h"
-#include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
-#include "bishengir/Dialect/HACC/IR/HACC.h"
-#include "bishengir/Dialect/HFusion/IR/HFusion.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -27,11 +23,18 @@
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "akg/Conversion/Passes.h"
+#include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
+#include "akg/Utils/SmallVectorSize.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HFusion/IR/HFusion.h"
 
 namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Conversion/Passes.h.inc"
+
 #endif
 
 namespace {
@@ -50,11 +53,11 @@ bool isIntegerType(Operation *op) {
 static linalg::UnaryFn getLinalgUnaryKind(Operation *op) {
   linalg::UnaryFn kind{};
   llvm::TypeSwitch<Operation *>(op)
-    .Case([&](mindspore::ExpOp) { kind = linalg::UnaryFn::exp; })
-    .Case([&](mindspore::AbsOp) { kind = linalg::UnaryFn::abs; })
-    .Case([&](mindspore::LogOp) { kind = linalg::UnaryFn::log; })
-    .Case([&](mindspore::NegateOp) { kind = linalg::UnaryFn::negf; })
-    .Case([&](mindspore::SqrtOp) { kind = linalg::UnaryFn::sqrt; })
+    .Case([&kind](mindspore::ExpOp) { kind = linalg::UnaryFn::exp; })
+    .Case([&kind](mindspore::AbsOp) { kind = linalg::UnaryFn::abs; })
+    .Case([&kind](mindspore::LogOp) { kind = linalg::UnaryFn::log; })
+    .Case([&kind](mindspore::NegateOp) { kind = linalg::UnaryFn::negf; })
+    .Case([&kind](mindspore::SqrtOp) { kind = linalg::UnaryFn::sqrt; })
     .Default([](Operation *) {});
   return kind;
 }
@@ -62,13 +65,13 @@ static linalg::UnaryFn getLinalgUnaryKind(Operation *op) {
 static linalg::BinaryFn getLinalgBinaryKind(Operation *op) {
   linalg::BinaryFn kind{};
   llvm::TypeSwitch<Operation *>(op)
-    .Case([&](mindspore::AddOp) { kind = linalg::BinaryFn::add; })
-    .Case([&](mindspore::MulOp) { kind = linalg::BinaryFn::mul; })
-    .Case([&](mindspore::SubOp) { kind = linalg::BinaryFn::sub; })
-    .Case([&](mindspore::DivOp) { kind = linalg::BinaryFn::div; })
-    .Case([&](mindspore::MaximumOp) { kind = linalg::BinaryFn::max_signed; })
-    .Case([&](mindspore::MinimumOp) { kind = linalg::BinaryFn::min_signed; })
-    .Case([&](mindspore::PowOp) { kind = linalg::BinaryFn::powf; })
+    .Case([&kind](mindspore::AddOp) { kind = linalg::BinaryFn::add; })
+    .Case([&kind](mindspore::MulOp) { kind = linalg::BinaryFn::mul; })
+    .Case([&kind](mindspore::SubOp) { kind = linalg::BinaryFn::sub; })
+    .Case([&kind](mindspore::DivOp) { kind = linalg::BinaryFn::div; })
+    .Case([&kind](mindspore::MaximumOp) { kind = linalg::BinaryFn::max_signed; })
+    .Case([&kind](mindspore::MinimumOp) { kind = linalg::BinaryFn::min_signed; })
+    .Case([&kind](mindspore::PowOp) { kind = linalg::BinaryFn::powf; })
     .Default([](Operation *) {});
   return kind;
 }
@@ -225,10 +228,10 @@ static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, Pa
       return rewriter.getFloatAttr(floatTy, 1.0);
     }
     if (isa<mindspore::ReduceMinOp>(op)) {
-      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/false));
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /* Negative= */ false));
     }
     if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op)) {
-      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/true));
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /* Negative= */ true));
     }
     return {};
   }
@@ -340,7 +343,9 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t
 
   bool didEncounterError = false;
   auto reduceOp = rewriter.create<linalg::ReduceOp>(
-    loc, input, filledTensor, axes, [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+    loc, input, filledTensor, axes,
+    [&op, &elementTy, &rewriter, &didEncounterError](OpBuilder &nestedBuilder, Location nestedLoc,
+                                                     ValueRange blockArgs) {
       auto result = createLinalgBodyCalculationForReduceOp(op, blockArgs, elementTy, rewriter);
       if (result) {
         didEncounterError = true;
@@ -418,8 +423,8 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
 }
 
 static void collapseTrailingOneDims(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape,
-                                    SmallVector<ReassociationExprs, 4> &reassociationMap, unsigned &currSrcDim,
-                                    unsigned currDstDim) {
+                                    SmallVector<ReassociationExprs, kSmallVectorSizeFour> &reassociationMap,
+                                    unsigned &currSrcDim, unsigned currDstDim) {
   if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
     while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
       reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
@@ -429,9 +434,10 @@ static void collapseTrailingOneDims(PatternRewriter &rewriter, ArrayRef<int64_t>
 
 static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape,
                                                ArrayRef<int64_t> dstShape,
-                                               SmallVector<ReassociationExprs, 4> &reassociationMap, bool isDynamic) {
+                                               SmallVector<ReassociationExprs, kSmallVectorSizeFour> &reassociationMap,
+                                               bool isDynamic) {
   if (isDynamic) {
-    SmallVector<AffineExpr, 2> exprs;
+    SmallVector<AffineExpr, kSmallVectorSizeTwo> exprs;
     for (int i = 0, s = srcShape.size(); i < s; ++i) {
       exprs.push_back(rewriter.getAffineDimExpr(i));
     }
@@ -477,7 +483,7 @@ Value createCollapse(PatternRewriter &rewriter, Location loc, ShapedType resultT
     return {};
   }
 
-  SmallVector<ReassociationExprs, 4> reassociationMap;
+  SmallVector<ReassociationExprs, kSmallVectorSizeFour> reassociationMap;
   if (!createReassociationMapsForCollapse(rewriter, operandTy.getShape(), resultTy.getShape(), reassociationMap,
                                           isDynamic)) {
     (void)rewriter.notifyMatchFailure(loc, "mindspore.reshape Attempting to collapse into an incompatible shape");
@@ -503,7 +509,7 @@ Value createExpand(PatternRewriter &rewriter, Location loc, ShapedType resultTy,
     return {};
   }
 
-  SmallVector<ReassociationExprs, 4> reassociationMap;
+  SmallVector<ReassociationExprs, kSmallVectorSizeFour> reassociationMap;
   if (!createReassociationMapsForCollapse(rewriter, resultTy.getShape(), operandTy.getShape(), reassociationMap,
                                           isDynamic)) {
     (void)rewriter.notifyMatchFailure(loc, "mindspore.reshape Attempting to expand into an incompatible shape");
@@ -630,9 +636,9 @@ static DenseI64ArrayAttr computeDimension(mindspore::BroadcastToOp brcOp) {
 }
 
 static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
-  SmallVector<Operation *, 8> msOps;
+  SmallVector<Operation *, kSmallVectorSizeEight> msOps;
   auto func = brcOp->getParentOp();
-  func->walk([&](Operation *op) {
+  func->walk([&msOps](Operation *op) {
     if (isa<mindspore::AddOp, mindspore::MulOp, mindspore::SubOp, mindspore::DivOp, mindspore::PowOp,
             mindspore::MaximumOp, mindspore::MinimumOp, mindspore::EqualOp, mindspore::GreaterOp,
             mindspore::GreaterEqualOp, mindspore::LogicalAndOp, mindspore::LogicalOrOp, mindspore::SelectOp,

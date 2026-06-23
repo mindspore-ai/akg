@@ -35,16 +35,33 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;             // NOLINT(build/namespaces)
-using namespace mlir::linalg;     // NOLINT(build/namespaces)
-using namespace mlir::linalgExt;  // NOLINT(build/namespaces)
-using namespace bufferization;    // NOLINT(build/namespaces)
-
 namespace {
+using mlir::AffineMap;
+using mlir::DialectRegistry;
+using mlir::dyn_cast;
+using mlir::failure;
+using mlir::FailureOr;
+using mlir::isa;
+using mlir::MemRefType;
+using mlir::ModuleOp;
+using mlir::NamedAttribute;
+using mlir::OpBuilder;
+using mlir::OperationPass;
+using mlir::OwningOpRef;
+using mlir::parseSourceFile;
+using mlir::SmallVector;
+using mlir::StringAttr;
+using mlir::SymbolRefAttr;
+using mlir::TensorType;
+using mlir::Type;
+using mlir::TypeRange;
+using mlir::Value;
+using mlir::ValueRange;
+using mlir::WalkResult;
 
 std::atomic<int> instanceIndex{0};
 
-struct LinalgTemplatedPass : public impl::LinalgTemplatedBase<LinalgTemplatedPass> {
+struct LinalgTemplatedPass : public mlir::impl::LinalgTemplatedBase<LinalgTemplatedPass> {
   LinalgTemplatedPass() = default;
   explicit LinalgTemplatedPass(const std::string &templatePath = "") {
     this->templatePath = templatePath;
@@ -56,15 +73,15 @@ struct LinalgTemplatedPass : public impl::LinalgTemplatedBase<LinalgTemplatedPas
   void runOnOperation() override;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    impl::LinalgTemplatedBase<LinalgTemplatedPass>::getDependentDialects(registry);
-    linalg::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::impl::LinalgTemplatedBase<LinalgTemplatedPass>::getDependentDialects(registry);
+    mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
   }
 
  private:
-  FailureOr<std::string> getTemplateFile(LinalgOp linalgOp);
-  FailureOr<func::FuncOp> insertTemplatedFunc(std::string filePath, func::FuncOp &funcOp);
+  FailureOr<std::string> getTemplateFile(mlir::linalg::LinalgOp linalgOp);
+  FailureOr<mlir::func::FuncOp> insertTemplatedFunc(std::string filePath, mlir::func::FuncOp &funcOp);
 
-  void templateLinalgOp(LinalgOp linalgOp, func::FuncOp &insertedFunc);
+  void templateLinalgOp(mlir::linalg::LinalgOp linalgOp, mlir::func::FuncOp &insertedFunc);
 
   std::map<std::string, std::string> op2file = {{"linalg.matmul", "matmul"},
                                                 {"linalg.batch_matmul", "batch_matmul"},
@@ -74,7 +91,7 @@ struct LinalgTemplatedPass : public impl::LinalgTemplatedBase<LinalgTemplatedPas
 };
 }  // namespace
 
-FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
+FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(mlir::linalg::LinalgOp linalgOp) {
   auto opName = linalgOp->getName().getStringRef();
   if (op2file.count(opName.lower()) == 0u) {
     return failure();
@@ -105,7 +122,8 @@ FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
   return filePath;
 }
 
-FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string filePath, func::FuncOp &funcOp) {
+FailureOr<mlir::func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string filePath,
+                                                                       mlir::func::FuncOp &funcOp) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr = llvm::MemoryBuffer::getFileOrSTDIN(filePath);
 
   if (std::error_code ec = fileOrErr.getError()) {
@@ -118,7 +136,7 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
 
   OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, funcOp.getContext());
 
-  auto template_func = module->getOps<func::FuncOp>().begin();
+  auto template_func = module->getOps<mlir::func::FuncOp>().begin();
   if ((*template_func).empty()) {
     llvm::errs() << "No templated function in templated file: " << filePath << "\n";
     return failure();
@@ -126,7 +144,7 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
 
   OpBuilder insertBuilder(funcOp);
   auto insertedOp = insertBuilder.clone(*(*template_func).getOperation());
-  auto insertedFunc = dyn_cast<func::FuncOp>(insertedOp);
+  auto insertedFunc = dyn_cast<mlir::func::FuncOp>(insertedOp);
   assert(insertedFunc);
 
   // set different name for different linalg.op
@@ -134,11 +152,11 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
   return insertedFunc;
 }
 
-void LinalgTemplatedPass::templateLinalgOp(LinalgOp linalgOp, func::FuncOp &insertedFunc) {
+void LinalgTemplatedPass::templateLinalgOp(mlir::linalg::LinalgOp linalgOp, mlir::func::FuncOp &insertedFunc) {
   SmallVector<Value> inputOperands = linalgOp.getDpsInputs();
   SmallVector<Value> outputOperands = linalgOp.getDpsInits();
   SmallVector<AffineMap> indexingMaps = linalgOp.getIndexingMapsArray();
-  SmallVector<utils::IteratorType> iterators = linalgOp.getIteratorTypesArray();
+  SmallVector<mlir::utils::IteratorType> iterators = linalgOp.getIteratorTypesArray();
   SmallVector<Type> resultTypes =
     linalgOp.hasPureTensorSemantics() ? TypeRange(ValueRange(outputOperands)) : TypeRange{};
   SmallVector<Type> types(resultTypes.begin(), resultTypes.end());
@@ -150,10 +168,10 @@ void LinalgTemplatedPass::templateLinalgOp(LinalgOp linalgOp, func::FuncOp &inse
 
   auto fn = SymbolRefAttr::get(builder.getContext(), insertedFunc.getSymName());
   SmallVector<NamedAttribute> attrs;
-  attrs.emplace_back(NamedAttribute(StringAttr::get(builder.getContext(), TemplateFuncAttrName), fn));
+  attrs.emplace_back(NamedAttribute(StringAttr::get(builder.getContext(), mlir::TemplateFuncAttrName), fn));
 
-  auto templateOp = builder.create<TemplateOp>(linalgOp.getLoc(), types, inputOperands, outputOperands, indexingMaps,
-                                               iterators, nullptr, attrs);
+  auto templateOp = builder.create<mlir::linalgExt::TemplateOp>(linalgOp.getLoc(), types, inputOperands, outputOperands,
+                                                                indexingMaps, iterators, nullptr, attrs);
 
   templateOp.getRegion().getBlocks().splice(templateOp.getRegion().begin(), linalgOp->getRegion(0).getBlocks());
 
@@ -162,9 +180,9 @@ void LinalgTemplatedPass::templateLinalgOp(LinalgOp linalgOp, func::FuncOp &inse
 }
 
 void LinalgTemplatedPass::runOnOperation() {
-  for (auto func : getOperation().getOps<func::FuncOp>()) {
-    auto funcWalkResult = func.walk([&](LinalgOp linalgOp) {
-      if (isa<GenericOp>(linalgOp) || isa<TemplateOp>(linalgOp)) {
+  for (auto func : getOperation().getOps<mlir::func::FuncOp>()) {
+    auto funcWalkResult = func.walk([this, &func](mlir::linalg::LinalgOp linalgOp) {
+      if (isa<mlir::linalg::GenericOp>(linalgOp) || isa<mlir::linalgExt::TemplateOp>(linalgOp)) {
         return WalkResult::advance();
       }
 
@@ -191,6 +209,8 @@ void LinalgTemplatedPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<ModuleOp>> mlir::createLinalgTemplatedPass(std::string templatePath) {
+namespace mlir {
+std::unique_ptr<OperationPass<ModuleOp>> createLinalgTemplatedPass(std::string templatePath) {
   return std::make_unique<LinalgTemplatedPass>(templatePath);
 }
+}  // namespace mlir

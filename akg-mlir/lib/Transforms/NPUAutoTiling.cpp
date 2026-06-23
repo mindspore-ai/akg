@@ -47,6 +47,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 #define DEBUG_TYPE "npu-auto-tiling"
 
@@ -54,6 +55,7 @@ namespace mlir {
 #define GEN_PASS DECL_NPUAUTOTILING
 #define GEN_PASS_DEF_NPUAUTOTILING
 #include "akg/Transforms/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -90,7 +92,7 @@ static void setTilingKeyAndDataArgAttrs(func::FuncOp func, unsigned keyIdx, unsi
   auto *ctx = func.getContext();
   auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
 
-  auto setArgKernelKind = [&](unsigned idx, KernelArgType kind) {
+  auto setArgKernelKind = [&ctx, &func, &katName](unsigned idx, KernelArgType kind) {
     DictionaryAttr old = func.getArgAttrDict(idx);
     SmallVector<NamedAttribute> nas;
     if (old) {
@@ -298,7 +300,7 @@ class TilingBase {
     }
 
     bool allOk = std::all_of(tilingKeys.begin(), tilingKeys.end(),
-                             [&](int64_t key) { return succeeded(initTilingKernel(key, builder)); });
+                             [this, &builder](int64_t key) { return succeeded(initTilingKernel(key, builder)); });
     if (!allOk) {
       return failure();
     }
@@ -377,7 +379,7 @@ class TilingBase {
       unsigned n = std::min<unsigned>(arr.size(), dst.getNumArguments());
       for (unsigned i = 0; i < n; ++i) {
         if (auto dict = dyn_cast_or_null<DictionaryAttr>(arr[i])) {
-          SmallVector<NamedAttribute, 4> attrs;
+          SmallVector<NamedAttribute, kSmallVectorSizeFour> attrs;
           attrs.reserve(dict.size());
           std::copy(dict.begin(), dict.end(), std::back_inserter(attrs));
           for (const auto &na : attrs) {
@@ -483,7 +485,7 @@ class TilingBase {
     }
 
     auto switchOp = bodyBuilder.create<scf::IndexSwitchOp>(loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys),
-                                                           /*numCases=*/caseKeys.size());
+                                                           /* numCases= */ caseKeys.size());
 
     for (unsigned i = 0; i < caseKeys.size(); ++i) {
       int64_t key = caseKeys[i];
@@ -527,7 +529,7 @@ class TilingBase {
   }
 
   LogicalResult collectDeviceSignature(func::FuncOp orig, SmallVector<Type> &devInputs, SmallVector<Type> &devResults,
-                                       int64_t /*key*/) {
+                                       int64_t /* key */) {
     auto origTy = orig.getFunctionType();
 
     devInputs.clear();
@@ -555,7 +557,7 @@ class TilingBase {
   }
 
   func::FuncOp createAndAnnotateDeviceFunc(OpBuilder &builder, Location loc, StringRef name, FunctionType devTy,
-                                           FunctionType /*origTy*/, unsigned blockDim, func::FuncOp hostTiling) {
+                                           FunctionType /* origTy */, unsigned blockDim, func::FuncOp hostTiling) {
     auto deviceFunc = builder.create<func::FuncOp>(loc, name, devTy);
     deviceFunc.addEntryBlock();
 
@@ -824,7 +826,7 @@ class TilingBase {
   LogicalResult applyStaticTilingWithoutAnyTilingFunc(OpBuilder &builder) {
     auto *ctx = builder.getContext();
 
-    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, /*isStaticShape=*/true))) {
+    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, /* isStaticShape= */ true))) {
       originalKernel_.emitError("static tiling: failed to apply tiling on kernel");
       return failure();
     }
@@ -1105,7 +1107,7 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
     }
 
     SmallVector<func::FuncOp> kernels;
-    module.walk([&](func::FuncOp f) {
+    module.walk([&kernels, this](func::FuncOp f) {
       auto kind = f->getAttrOfType<StringAttr>(HACCFuncTypeAttr::name);
       if (kind && kind.getValue() == "DEVICE") {
         return;

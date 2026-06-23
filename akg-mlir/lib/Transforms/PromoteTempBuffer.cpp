@@ -27,6 +27,7 @@
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_PROMOTETEMPBUFFER
@@ -36,6 +37,7 @@ namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 #endif
@@ -116,7 +118,8 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
       auto operands = oldLaunchFunc.getKernelOperands();
       for (size_t i = 0; i < operands.size(); i++) {
         auto operand = operands[i];
-        if (std::any_of(globalTempBuffer.begin(), globalTempBuffer.end(), [&](auto buf) { return operand == buf; })) {
+        if (std::any_of(globalTempBuffer.begin(), globalTempBuffer.end(),
+                        [&operand](auto buf) { return operand == buf; })) {
           promotedArgIdx.emplace_back(i, it.first);
         }
       }
@@ -124,7 +127,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
   }
 
   void findLaunchFunc() {
-    getOperation()->walk([&](gpu::LaunchFuncOp launchOp) { oldLaunchFunc = launchOp; });
+    getOperation()->walk([this](gpu::LaunchFuncOp launchOp) { oldLaunchFunc = launchOp; });
     if (!oldLaunchFunc) {
       llvm::report_fatal_error(llvm::StringRef("Error during promote temp buffer: no gpu launch func."));
     }
@@ -160,7 +163,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
   }
 
   void createPromotedGpuFunc() {
-    getOperation()->walk([&](gpu::GPUFuncOp gpuFunc) {
+    getOperation()->walk([this](gpu::GPUFuncOp gpuFunc) {
       for (auto [idx, bufLevel] : promotedArgIdx) {
         if (bufLevel <= kSharedCache) {
           hasFail |= (!promoteToWorkgroupMemory(gpuFunc, idx) ? 1 : 0);
@@ -197,10 +200,10 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
       }
 
       auto functionType = gpuFunc.getFunctionType();
-      SmallVector<Type, 4> newInputTypes;
+      SmallVector<Type, kSmallVectorSizeFour> newInputTypes;
       for (unsigned i = 0, e = functionType.getNumInputs(); i < e; ++i) {
         bool isPromotedArg =
-          std::any_of(promotedArgIdx.begin(), promotedArgIdx.end(), [&](auto it) { return it.first == i; });
+          std::any_of(promotedArgIdx.begin(), promotedArgIdx.end(), [&i](auto it) { return it.first == i; });
         if (isPromotedArg) {
           continue;
         }
@@ -215,9 +218,9 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
     if (hasFail != 0) {
       return;
     }
-    gpu::GPUFuncOp newGpuFunc = [&]() {
+    gpu::GPUFuncOp newGpuFunc = [this]() {
       gpu::GPUFuncOp result;
-      getOperation()->walk([&](gpu::GPUFuncOp gpuFunc) { result = gpuFunc; });
+      getOperation()->walk([&result](gpu::GPUFuncOp gpuFunc) { result = gpuFunc; });
       return result;
     }();
     if (!newGpuFunc) {
@@ -227,7 +230,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
     for (size_t i = 0; i < oldLaunchFunc.getNumKernelOperands(); ++i) {
       auto op = oldLaunchFunc.getKernelOperand(i);
       bool isPromotedArg =
-        std::any_of(promotedArgIdx.begin(), promotedArgIdx.end(), [&](auto it) { return it.first == i; });
+        std::any_of(promotedArgIdx.begin(), promotedArgIdx.end(), [&i](auto it) { return it.first == i; });
       if (isPromotedArg) {
         continue;
       }
@@ -263,4 +266,6 @@ void PromoteTempBufferPass::runOnOperation() {
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createPromoteTempBufferPass() { return std::make_unique<PromoteTempBufferPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createPromoteTempBufferPass() { return std::make_unique<PromoteTempBufferPass>(); }
+}  // namespace mlir

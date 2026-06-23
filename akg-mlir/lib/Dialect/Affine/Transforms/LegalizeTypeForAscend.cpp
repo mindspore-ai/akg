@@ -26,11 +26,13 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_LEGALIZETYPEFORASCEND
 #define GEN_PASS_DECL_LEGALIZETYPEFORASCEND
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "legalize-type-for-ascend"
@@ -286,7 +288,7 @@ FailureOr<Operation *> legalizeOp(Operation *op, ValueRange operands, const Type
   Location loc = op->getLoc();
 
   bool isMatch = false;
-  SmallVector<Value, 4> newOperands;
+  SmallVector<Value, kSmallVectorSizeFour> newOperands;
   for (auto operand : operands) {
     if (isa<BFloat16Type, Float64Type>(operand.getType())) {
       isMatch = true;

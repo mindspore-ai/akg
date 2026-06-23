@@ -82,7 +82,7 @@ static func::FuncOp findArchFunc(func::FuncOp vfFunc) {
     return {};
   }
   func::FuncOp found;
-  module.walk([&](func::CallOp call) {
+  module.walk([&found, &vfFunc](func::CallOp call) {
     if (found) {
       return;
     }
@@ -123,7 +123,7 @@ static unsigned elemByteWidth(Type elemType) {
 //   mixed f32+i8   -> 64 lanes (f32=256B, i8=64B, both within budget).
 static int64_t computeLaneCount(func::FuncOp vfFunc, int64_t regWidthBytes) {
   unsigned maxBytes = 0;
-  auto consider = [&](Type t) {
+  auto consider = [&maxBytes](Type t) {
     if (auto vt = llvm::dyn_cast<npuv::NPUVectorType>(t)) {
       unsigned b = elemByteWidth(vt.getElementType());
       if (b > maxBytes) {
@@ -131,7 +131,7 @@ static int64_t computeLaneCount(func::FuncOp vfFunc, int64_t regWidthBytes) {
       }
     }
   };
-  vfFunc.walk([&](Operation *op) {
+  vfFunc.walk([&consider](Operation *op) {
     for (Type t : op->getOperandTypes()) {
       consider(t);
     }
@@ -456,6 +456,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
  public:
   NPUVectorToVector() = default;
   NPUVectorToVector(const NPUVectorToVector &) = default;
+  NPUVectorToVector &operator=(const NPUVectorToVector &) = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, math::MathDialect, npuv::NPUVectorDialect, vector::VectorDialect,
@@ -484,7 +485,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     }
     bool ok = true;
     bool hasAnchor = false;
-    vfFunc.walk([&](Operation *op) {
+    vfFunc.walk([&ok, &hasAnchor](Operation *op) {
       if (isa<npuv::ReductionOp, npuv::TransposeOp>(op)) {
         ok = false;
       }
@@ -527,7 +528,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     int redCount = 0;
     bool ok = true;
     bool hasRead = false;
-    vfFunc.walk([&](Operation *op) {
+    vfFunc.walk([&ok, &redOp, &redCount, &hasRead](Operation *op) {
       if (isa<npuv::TransposeOp>(op)) {
         ok = false;
       }
@@ -592,8 +593,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   LogicalResult tileComputeOp(OpBuilder &b, Operation *op, IRMapping &map, ValueRange indices, Value mask,
                               int64_t laneCount) const {
     Location loc = op->getLoc();
-    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
-    auto vecTypeOf = [&](Type elemType) { return VectorType::get({laneCount}, elemType); };
+    auto remap = [&map](Value v) { return map.lookupOrDefault(v); };
+    auto vecTypeOf = [laneCount](Type elemType) { return VectorType::get({laneCount}, elemType); };
     // The register vector is always 1-D (vector<laneCount>); the permutation
     // map projects the n-D memref index space onto its innermost dimension.
     // A memref source may have FEWER dims than the anchor iteration space when
@@ -601,11 +602,11 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     // bias added to a 2-D tensor). Such an op must be indexed with exactly its
     // own source rank, using the trailing induction variables, so the emitted
     // vector.transfer_{read,write} carries the right number of indices.
-    auto sourceRank = [&](Value src) -> int64_t {
+    auto sourceRank = [&indices](Value src) -> int64_t {
       auto mt = llvm::dyn_cast<MemRefType>(src.getType());
       return mt ? mt.getRank() : static_cast<int64_t>(indices.size());
     };
-    auto trailingIndices = [&](int64_t srcRank) {
+    auto trailingIndices = [&indices](int64_t srcRank) {
       SmallVector<Value> result(indices.begin(), indices.end());
       auto n = static_cast<int64_t>(result.size());
       if (srcRank < n) {
@@ -613,7 +614,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
       }
       return result;
     };
-    auto permMapForRank = [&](int64_t srcRank) {
+    auto permMapForRank = [&b](int64_t srcRank) {
       return AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), 1, b.getContext());
     };
     auto inBounds = b.getBoolArrayAttr({true});
@@ -637,7 +638,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
         auto unitVecTy = VectorType::get(shape, elemType);
         SmallVector<Value> unitIndices(rd.getIndices().size());
         std::transform(rd.getIndices().begin(), rd.getIndices().end(), unitIndices.begin(),
-                       [&](Value idx) { return remap(idx); });
+                       [&remap](Value idx) { return remap(idx); });
         auto unitPermMap = b.getMultiDimIdentityMap(unitVecTy.getRank());
         auto unitInBounds = b.getBoolArrayAttr(SmallVector<bool>(unitVecTy.getRank(), true));
         Value res = b.create<vector::TransferReadOp>(loc, unitVecTy, remap(rd.getSource()), unitIndices, unitPermMap,
@@ -696,58 +697,69 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     auto outElem = [](Operation *o) {
       return llvm::cast<npuv::NPUVectorType>(o->getResult(0).getType()).getElementType();
     };
-    auto castTo = [&](Operation *o, auto creator) -> LogicalResult {
+    auto castTo = [&map, laneCount, &outElem](Operation *o, auto creator) -> LogicalResult {
       Value res = creator(VectorType::get({laneCount}, outElem(o)));
       map.map(o->getResult(0), res);
       return success();
     };
 
     if (auto c = dyn_cast<npuv::ExtFOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::ExtFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::ExtFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::TruncFOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::TruncFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::TruncFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::ExtSIOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::ExtSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::ExtSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::ExtUIOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::ExtUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::ExtUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::TruncIOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::TruncIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::TruncIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::SIToFPOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::SIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::SIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::UIToFPOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::UIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::UIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::FPToSIOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::FPToSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::FPToSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::FPToUIOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::FPToUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::FPToUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::BitcastOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::BitcastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::BitcastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::IndexCastOp>(op)) {
-      return castTo(
-        op, [&](Type ty) { return b.create<arith::IndexCastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult(); });
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
+        return b.create<arith::IndexCastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
+      });
     }
     if (auto c = dyn_cast<npuv::IndexCastUIOp>(op)) {
-      return castTo(op, [&](Type ty) {
+      return castTo(op, [&b, loc, &map, &c](Type ty) {
         return b.create<arith::IndexCastUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
       });
     }
@@ -785,7 +797,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     }
     SmallVector<Value> operands(op->getNumOperands());
     std::transform(op->operand_begin(), op->operand_end(), operands.begin(),
-                   [&](Value v) { return map.lookupOrDefault(v); });
+                   [&map](Value v) { return map.lookupOrDefault(v); });
     OperationState state(loc, op->getName().getStringRef());
     state.addOperands(operands);
     state.addTypes(resultTypes);
@@ -860,7 +872,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
 
     IRMapping map;
     if (std::any_of(computeOps.begin(), computeOps.end(),
-                    [&](Operation *op) { return failed(tileComputeOp(bodyBuilder, op, map, ivs, mask, laneCount)); })) {
+                    [this, &bodyBuilder, &map, &ivs, &mask, laneCount](Operation *op) {
+                      return failed(tileComputeOp(bodyBuilder, op, map, ivs, mask, laneCount));
+                    })) {
       return failure();
     }
 
@@ -1102,8 +1116,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Value tileMask = lb.create<vector::CreateMaskOp>(loc, tileMaskTy, ValueRange{activeLen});
 
     IRMapping map;
-    if (std::any_of(producers.begin(), producers.end(),
-                    [&](Operation *op) { return failed(tileComputeOp(lb, op, map, ivs, tileMask, laneCount)); })) {
+    if (std::any_of(producers.begin(), producers.end(), [this, &lb, &map, &ivs, &tileMask, laneCount](Operation *op) {
+          return failed(tileComputeOp(lb, op, map, ivs, tileMask, laneCount));
+        })) {
       return failure();
     }
     Value redInput = map.lookupOrDefault(redOp.getVector());
@@ -1228,14 +1243,14 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
 
     // Step 1: collect the functions tagged as vector kernels.
     SmallVector<func::FuncOp> vfFuncs;
-    module.walk([&](func::FuncOp f) {
+    module.walk([&vfFuncs](func::FuncOp f) {
       if (f->hasAttr(kVectorFunctionAttr)) {
         vfFuncs.push_back(f);
       }
     });
 
     // Steps 2 & 3: lower npuvector to community vector inside each kernel.
-    if (std::any_of(vfFuncs.begin(), vfFuncs.end(), [&](func::FuncOp f) { return failed(convertKernel(f)); })) {
+    if (std::any_of(vfFuncs.begin(), vfFuncs.end(), [this](func::FuncOp f) { return failed(convertKernel(f)); })) {
       signalPassFailure();
       return;
     }

@@ -31,6 +31,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 #define DEBUG_TYPE "dependence-analysis"
 
@@ -110,7 +111,7 @@ void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value,
     return;
   }
 
-  auto findEdge = [](SmallVector<Edge, 2> &edges, unsigned otherId) {
+  auto findEdge = [](SmallVector<Edge, kSmallVectorSizeTwo> &edges, unsigned otherId) {
     return std::find_if(edges.begin(), edges.end(), [otherId](const Edge &e) { return e.id == otherId; });
   };
   auto &dstIn = inEdges[dstId];
@@ -187,7 +188,7 @@ void MemRefDependenceGraph::print(raw_ostream &os) const {
 // operations that the edges connected are expected to be from the same block.
 bool MemRefDependenceGraph::hasDependencePath(unsigned srcId, unsigned dstId) {
   // Worklist state is: <node-id, next-output-edge-index-to-visit>
-  SmallVector<std::pair<unsigned, unsigned>, 4> worklist;
+  SmallVector<std::pair<unsigned, unsigned>, kSmallVectorSizeFour> worklist;
   worklist.push_back({srcId, 0});
   Operation *dstOp = getNode(dstId)->op;
   // Run DFS traversal to see if 'dstId' is reachable from 'srcId'.
@@ -220,8 +221,7 @@ bool MemRefDependenceGraph::hasDependencePath(unsigned srcId, unsigned dstId) {
 
 // When 'srcId' and 'dstId' are under two parallel for nodes, check whether
 // the data structures accessed by 'srcId' and  'dstId' overlap.
-// For example:
-// ```
+// For example// ```
 // affine.for %arg14 = 0 to 4953 {
 //   affine.for %arg15 = 0 to 4952 {
 //     %61 = affine.load %alloc[] : memref<f32>
@@ -278,7 +278,8 @@ static unsigned computeDependenceDepthForPair(Operation *srcOpInst, Operation *d
   return effectiveDepth;
 }
 
-static unsigned computeMinDependenceDepthForSrc(Operation *srcOpInst, const SmallVector<Operation *, 4> &targetOps,
+static unsigned computeMinDependenceDepthForSrc(Operation *srcOpInst,
+                                                const SmallVector<Operation *, kSmallVectorSizeFour> &targetOps,
                                                 unsigned effectiveDepth) {
   for (unsigned j = 0, e = targetOps.size(); j < e; ++j) {
     effectiveDepth = computeDependenceDepthForPair(srcOpInst, targetOps[j], effectiveDepth);
@@ -302,7 +303,7 @@ unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) 
     return 0;
   }
   // Collect all load/store ops in dstId's for loop that access the given memref.
-  SmallVector<Operation *, 4> targetOps;
+  SmallVector<Operation *, kSmallVectorSizeFour> targetOps;
   Node *node = getNode(static_cast<unsigned>(dstId));
   for (Operation *loadOp : node->loads) {
     if (isSameOrAliasedMemRef(cast<affine::AffineReadOpInterface>(loadOp).getMemRef(), memref)) {
@@ -319,7 +320,7 @@ unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) 
     return 0;
   }
 
-  SmallVector<affine::AffineForOp, 4> surroundingLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> surroundingLoops;
   unsigned loopDepth = affine::getInnermostCommonLoopDepth(targetOps, &surroundingLoops);
   unsigned effectiveDepth = UINT_MAX;
   for (unsigned d = 0; d < loopDepth; ++d) {
@@ -367,7 +368,7 @@ void MemRefDependenceGraph::getSuccessorNodes(unsigned id, std::vector<unsigned>
 }
 
 void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
-  block->walk([&](Operation *op) {
+  block->walk([this, &memrefAccesses](Operation *op) {
     if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
       Node node(nextNodeId++, op);
@@ -389,7 +390,7 @@ void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> 
       // Create graph node for top-level Call Op that takes any argument of
       // memref type. Call Op that returns one or more memref type results
       // is already taken care of, by the previous conditions.
-      if (llvm::any_of(op->getOperandTypes(), [&](Type t) { return isa<MemRefType>(t); })) {
+      if (llvm::any_of(op->getOperandTypes(), [](Type t) { return isa<MemRefType>(t); })) {
         Node node(nextNodeId++, op);
         nodes.insert({node.id, node});
       }
@@ -427,7 +428,7 @@ void MemRefDependenceGraph::addSSAResultEdges() {
 
 void MemRefDependenceGraph::addMemrefDependenceEdgesForPair(
   unsigned srcId, unsigned dstId, Value memref, bool srcHasStore,
-  const SmallVector<std::pair<unsigned, Operation *>, 2> &forLoopEntries) {
+  const SmallVector<std::pair<unsigned, Operation *>, kSmallVectorSizeTwo> &forLoopEntries) {
   Operation *srcOp = getNode(srcId)->op;
   Operation *dstOp = getNode(dstId)->op;
   if (!isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(srcOp) ||
@@ -454,7 +455,7 @@ void MemRefDependenceGraph::addMemrefDependenceEdgesForPair(
 void MemRefDependenceGraph::addMemrefDependenceEdges(Value memref, const SetVector<unsigned> &accessIds) {
   unsigned n = accessIds.size();
 
-  SmallVector<std::pair<unsigned, Operation *>, 2> forLoopEntries;
+  SmallVector<std::pair<unsigned, Operation *>, kSmallVectorSizeTwo> forLoopEntries;
   for (unsigned k = 0; k < n; ++k) {
     unsigned nodeId = accessIds[k];
     Operation *op = getNode(nodeId)->op;

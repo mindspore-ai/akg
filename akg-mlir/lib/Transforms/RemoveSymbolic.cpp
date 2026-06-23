@@ -24,6 +24,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/OperationSupport.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_REMOVESYMBOLIC
@@ -31,6 +32,7 @@ namespace mlir {
 #ifndef GEN_PASS_DEF_REMOVESYMBOLIC
 #define GEN_PASS_DEF_REMOVESYMBOLIC
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 
@@ -75,11 +77,11 @@ static void RemoveFuncSymbolic(func::FuncOp &func) {
   for (auto value : func.getArguments()) {
     value.setType(RemoveTypeSymbolic(value.getType()));
   }
-  llvm::SmallVector<Type, 4> newInTys;
+  llvm::SmallVector<Type, kSmallVectorSizeFour> newInTys;
   (void)std::transform(func.getArgumentTypes().begin(), func.getArgumentTypes().end(), std::back_inserter(newInTys),
                        [](const Type type) { return RemoveTypeSymbolic(type); });
 
-  llvm::SmallVector<Type, 4> newResTys;
+  llvm::SmallVector<Type, kSmallVectorSizeFour> newResTys;
   (void)std::transform(func.getResultTypes().begin(), func.getResultTypes().end(), std::back_inserter(newResTys),
                        [](Type type) { return RemoveTypeSymbolic(type); });
   // update func type
@@ -121,7 +123,7 @@ struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
 
     // gather memref.global to avoid modification during walk
     llvm::SmallVector<memref::GlobalOp> globalsToUpdate;
-    module.walk([&](memref::GlobalOp globalOp) {
+    module.walk([&globalsToUpdate](memref::GlobalOp globalOp) {
       if (SymbolicShapeAnalysis::getInstance().hasSymbolicShape(globalOp.getType())) {
         globalsToUpdate.push_back(globalOp);
       }
@@ -130,7 +132,7 @@ struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
       RemoveGlobalSymbolic(globalOp, builder);
     }
 
-    (void)module.walk([&](Operation *op) {
+    (void)module.walk([](Operation *op) {
       if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {
         Value src = castOp.getSource();
         src.setType(RemoveTypeSymbolic(src.getType()));

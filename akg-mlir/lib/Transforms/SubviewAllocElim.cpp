@@ -846,7 +846,8 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
     Value partIdx = indices[partitionAxis];
     Block *block = loadOp->getBlock();
 
-    auto it = llvm::find_if(groups, [&](const LoadGroup &g) { return g.partAxisIdx == partIdx && g.block == block; });
+    auto it = llvm::find_if(
+      groups, [&partIdx, &block](const LoadGroup &g) { return g.partAxisIdx == partIdx && g.block == block; });
     if (it != groups.end()) {
       it->loads.push_back(loadOp);
     } else {
@@ -940,7 +941,7 @@ static void cleanupGuardIfs(const SetVector<affine::AffineIfOp> &guardIfs, Dense
       }
     }
     if (isOpTriviallyDead(ifOp)) {
-      ifOp->walk([&](Operation *inner) { erased.insert(inner); });
+      ifOp->walk([&erased](Operation *inner) { erased.insert(inner); });
       erased.insert(ifOp.getOperation());
       ifOp->erase();
     }
@@ -1036,8 +1037,8 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
   // These are simple local temporaries (e.g., reduction results stored then immediately
   // loaded). Cloning their source computation (which may include entire loops) is
   // wasteful and produces redundant code. Let mem2reg handle these instead.
-  bool allSameBlock = llvm::all_of(directStores, [&](Operation *store) {
-    return llvm::all_of(directLoads, [&](Operation *load) { return store->getBlock() == load->getBlock(); });
+  bool allSameBlock = llvm::all_of(directStores, [this](Operation *store) {
+    return llvm::all_of(directLoads, [&store](Operation *load) { return store->getBlock() == load->getBlock(); });
   });
   if (allSameBlock) {
     return false;
@@ -1055,7 +1056,7 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
 
   // All stores must write the same SSA value; otherwise folding would drop other stores' computation.
   Value templateVal = stores[0].getValueToStore();
-  if (llvm::any_of(stores, [&](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; })) {
+  if (llvm::any_of(stores, [&templateVal](affine::AffineStoreOp s) { return s.getValueToStore() != templateVal; })) {
     return false;
   }
 
@@ -1073,7 +1074,8 @@ bool SubviewAllocElimPass::processSimpleAlloc(memref::AllocOp allocOp) {
   } else {
     opsToCheck = srcInfo.computeOps;
   }
-  if (llvm::any_of(directLoads, [&](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
+  if (llvm::any_of(directLoads,
+                   [&opsToCheck](Operation *loadOp) { return !allExternalOperandsDominate(opsToCheck, loadOp); })) {
     return false;
   }
 
@@ -1231,7 +1233,7 @@ void SubviewAllocElimPass::runOnOperation() {
   // Only collect non-returned allocs that have subview users (potential candidates).
   // This avoids repeatedly processing returned allocs and trivial temporaries.
   SmallVector<memref::AllocOp> allocOps;
-  getOperation()->walk([&](memref::AllocOp op) {
+  getOperation()->walk([&allocOps](memref::AllocOp op) {
     if (!isAllocReturned(op)) {
       allocOps.push_back(op);
     }

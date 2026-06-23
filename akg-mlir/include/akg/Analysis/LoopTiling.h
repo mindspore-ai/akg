@@ -26,6 +26,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 using llvm::DenseMap;
 using llvm::SmallVector;
@@ -34,8 +35,8 @@ namespace mlir {
 namespace autotiling {
 
 struct TilingMetadata {
-  std::vector<SmallVector<unsigned, 6>> bandTileSizes;
-  std::vector<SmallVector<int, 6>> bandConstraintMaxs;
+  std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> bandTileSizes;
+  std::vector<SmallVector<int, kSmallVectorSizeSix>> bandConstraintMaxs;
 
   bool empty() const { return bandTileSizes.empty() && bandConstraintMaxs.empty(); }
   void clear() {

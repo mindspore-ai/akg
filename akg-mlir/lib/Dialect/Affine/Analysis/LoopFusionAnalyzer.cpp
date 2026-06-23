@@ -353,12 +353,10 @@ std::unordered_map<unsigned, unsigned> FusionAnalyzer::findReachableGroups(unsig
 
 // Finds all terminal nodes (nodes with no outgoing edges) in paths starting from srcGroupId in fusePlans.
 // These terminal nodes represent the last nodes in different paths from srcGroupId.
-// Example:
-// Assume fusePlans contains the following edges:
+// Example// Assume fusePlans contains the following edges:
 //   - 33 -> 38
 //   - 38 -> 42
-// If srcGroupId=33, then:
-//   - Path: 33 -> 38 -> 42 (terminal node is 42)
+// If srcGroupId=33, then//   - Path: 33 -> 38 -> 42 (terminal node is 42)
 //   - Return value: [42]
 std::vector<unsigned> FusionAnalyzer::findLastNodesInPath(unsigned srcGroupId) {
   std::vector<unsigned> lastNodes;
@@ -388,8 +386,7 @@ std::vector<unsigned> FusionAnalyzer::findLastNodesInPath(unsigned srcGroupId) {
 // chain ordered by groupId. Caller guarantees srcGroupId != dstGroupId.
 // Let LO be the side with the smaller head groupId, HI the other. Pick
 // insertPoint = max{g ∈ reach(loHead) : g < hiHead}. Splice HI's chain into
-// LO's chain at insertPoint:
-//   - add insertPoint → hiHead         (inherits depInfo from origCacheKey)
+// LO's chain at insertPoint//   - add insertPoint → hiHead         (inherits depInfo from origCacheKey)
 //   - replace insertPoint → nextInChain with hiTail → nextInChain
 //                                       (inherits depInfo from the erased edge)
 // origCacheKey is the (from, to) of the RAR/multi-out edge that triggered this
@@ -537,7 +534,7 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
   unsigned fromGroupId = plan.fusedGroup.from;
   unsigned toGroupId = plan.fusedGroup.to;
 
-  auto updateDepInfoFromCache = [&](unsigned srcId, unsigned dstId) {
+  auto updateDepInfoFromCache = [this, &plan](unsigned srcId, unsigned dstId) {
     auto key = std::make_pair(srcId, dstId);
     auto it = groupDependenciesCache.find(key);
     if (it != groupDependenciesCache.end()) {
@@ -768,7 +765,7 @@ void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId,
     return;
   }
 
-  auto firstReachable = [&](unsigned start, const std::unordered_map<unsigned, unsigned> &reach) {
+  auto firstReachable = [this](unsigned start, const std::unordered_map<unsigned, unsigned> &reach) {
     unsigned cur = start;
     std::unordered_set<unsigned> seen;
     while (cur != UINT_MAX && seen.insert(cur).second) {
@@ -779,7 +776,7 @@ void FusionAnalyzer::propagateDeletedDep(unsigned existingTo, unsigned targetId,
     }
     return UINT_MAX;
   };
-  auto findChainPredecessor = [&](unsigned start, unsigned end) {
+  auto findChainPredecessor = [this](unsigned start, unsigned end) {
     unsigned cur = start;
     std::unordered_set<unsigned> seen{cur};
     while (true) {
@@ -853,7 +850,7 @@ void FusionAnalyzer::bridgeChainToTarget(std::pair<unsigned, unsigned> hEdge) {
     deletedDep = it->second;
   }
   fusionPlans.erase(std::remove_if(fusionPlans.begin(), fusionPlans.end(),
-                                   [&](const FusionPlan &p) {
+                                   [bridgeFromId, existingTo](const FusionPlan &p) {
                                      return p.fusedGroup.from == bridgeFromId && p.fusedGroup.to == existingTo;
                                    }),
                     fusionPlans.end());
@@ -1188,7 +1185,7 @@ void FusionAnalyzer::processNonWarEdges(const std::unordered_map<unsigned, std::
   // Within a target, prefer Normal (intermediate alloc, producer-consumer) over
   // Input (shared block-arg) over Subview (aliased slice). When checkAndFixMultiOut
   // resolves a multi-out conflict, the stronger dep keeps the slot.
-  auto kindRank = [&](unsigned source, unsigned target) {
+  auto kindRank = [this](unsigned source, unsigned target) {
     auto it = groupDependenciesCache.find(std::make_pair(source, target));
     MemrefKind kind = (it != groupDependenciesCache.end()) ? it->second.memrefKind : MemrefKind::Input;
     switch (kind) {
@@ -1203,7 +1200,7 @@ void FusionAnalyzer::processNonWarEdges(const std::unordered_map<unsigned, std::
   };
 
   std::sort(sortedRarEdges.begin(), sortedRarEdges.end(),
-            [&](const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
+            [&kindRank](const std::pair<unsigned, unsigned> &a, const std::pair<unsigned, unsigned> &b) {
               if (a.second != b.second) {
                 return a.second < b.second;
               }

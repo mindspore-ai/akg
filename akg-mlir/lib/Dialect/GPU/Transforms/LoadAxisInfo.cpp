@@ -30,14 +30,13 @@ namespace mlir {
 #include "akg/Dialect/GPU/Passes.h.inc"
 }  // namespace mlir
 
-using namespace akgglobal;  // NOLINT(build/namespaces)
 namespace mlir {
 namespace gpu {
 
 namespace {
 struct LoadAxisInfoPass : public impl::LoadAxisInfoBase<LoadAxisInfoPass> {
   LoadAxisInfoPass() {}
-  void runOnOperation() override { GpuScheduleTool::getInstance().tagLoopWithAxisName(getOperation()); }
+  void runOnOperation() override { akgglobal::GpuScheduleTool::getInstance().tagLoopWithAxisName(getOperation()); }
 };
 }  // namespace
 }  // namespace gpu

@@ -42,18 +42,27 @@ namespace mlir {
 #endif
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+namespace cf = mlir::cf;
+namespace impl = mlir::impl;
+namespace omp = mlir::omp;
+using mlir::applyPartialConversion;
+using mlir::configureOpenMPToLLVMConversionLegality;
+using mlir::failed;
+using mlir::LLVMConversionTarget;
+using mlir::LLVMTypeConverter;
+using mlir::ModuleOp;
+using mlir::OperationPass;
+using mlir::populateOpenMPToLLVMConversionPatterns;
+using mlir::RewritePatternSet;
+
 class PureOpenMPToLLVM : public impl::PureOpenMPToLLVMBase<PureOpenMPToLLVM> {
  public:
   PureOpenMPToLLVM() = default;
   void runOnOperation() override;
 };
-}  // namespace
 
 void PureOpenMPToLLVM::runOnOperation() {
-  // Convert to OpenMP operations with LLVM IR dialect
   RewritePatternSet patterns(&getContext());
   LLVMTypeConverter converter(&getContext());
   cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
@@ -66,7 +75,8 @@ void PureOpenMPToLLVM::runOnOperation() {
     signalPassFailure();
   }
 }
+}  // namespace
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createPureOpenMPToLLVM() {
-  return std::make_unique<PureOpenMPToLLVM>();
-}
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createPureOpenMPToLLVM() { return std::make_unique<PureOpenMPToLLVM>(); }
+}  // namespace mlir

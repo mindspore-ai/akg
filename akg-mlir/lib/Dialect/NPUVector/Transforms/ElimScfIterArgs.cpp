@@ -37,6 +37,7 @@
 
 #include "akg/Dialect/NPUVector/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace npuvector {
@@ -63,6 +64,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
  public:
   ElimScfIterArgs() = default;
   ElimScfIterArgs(const ElimScfIterArgs &) = default;
+  ElimScfIterArgs &operator=(const ElimScfIterArgs &) = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect, npuvector::NPUVectorDialect, memref::MemRefDialect, func::FuncDialect,
@@ -123,7 +125,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     sizes.clear();
     maxSizes.clear();
 
-    llvm::SmallPtrSet<Operation *, 8> visited;
+    llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
     Value cur = v;
 
     while (cur) {
@@ -265,13 +267,14 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
     SmallVector<Value> idx(shape.size(), zeroIdx);
     Value padding = b.create<arith::ConstantOp>(loc, vt.getElementType(), b.getZeroAttr(vt.getElementType()));
-    return b.create<mlir::npuvector::TransferReadOp>(loc, vt, buffer, idx, padding, /*mask=*/Value(), sizes, maxSizes);
+    return b.create<mlir::npuvector::TransferReadOp>(loc, vt, buffer, idx, padding, /* mask= */ Value(), sizes,
+                                                     maxSizes);
   }
 
   static void writeVectorToBuffer(OpBuilder &b, Location loc, Value vec, Value buffer, Value zeroIdx) {
     auto npuVec = llvm::cast<mlir::npuvector::NPUVectorType>(vec.getType());
     SmallVector<Value> idx(npuVec.getShape().size(), zeroIdx);
-    b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, buffer, idx, /*mask=*/Value());
+    b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, buffer, idx, /* mask= */ Value());
   }
 
   void writeSeedValues(OpBuilder &builder, Location loc, scf::ForOp forOp, ArrayRef<Value> buffers, Value zeroIdx) {
@@ -327,7 +330,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
  public:
   void eliminateIterArgs(func::FuncOp funcOp) {
     SmallVector<scf::ForOp> targets;
-    funcOp.walk([&](scf::ForOp forOp) {
+    funcOp.walk([&targets](scf::ForOp forOp) {
       if (forOp.getInitArgs().empty()) {
         return;
       }
@@ -345,7 +348,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
   // Rewrite a single scf.for so that its NPUVector iter_args are routed
   // through memref buffers instead of being passed as block arguments.
-  // The high-level structure is:
+  // The high-level structure is
   //   1. Allocate a buffer per iter_arg (using a stable anchor point).
   //   2. Seed each buffer with its initial value just before the for op.
   //   3. Create a new for op without iter_args.
@@ -388,7 +391,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<func::FuncOp> targetFuncs;
-    module.walk([&](func::FuncOp f) { targetFuncs.push_back(f); });
+    module.walk([&targetFuncs](func::FuncOp f) { targetFuncs.push_back(f); });
     for (auto f : targetFuncs) {
       eliminateIterArgs(f);
     }

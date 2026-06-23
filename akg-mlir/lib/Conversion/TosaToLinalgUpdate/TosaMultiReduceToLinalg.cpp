@@ -38,15 +38,15 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_TOSAMULTIREDUCETOLINALG
 #define GEN_PASS_DEF_TOSAMULTIREDUCETOLINALG
 #include "akg/Conversion/Passes.h.inc"
+
 #endif
 }  // namespace mlir
-
-using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace mlir {
 namespace tosa {
@@ -61,9 +61,10 @@ bool IsTosaReduceOp(Operation *redOp) {
 
 size_t valueUsageCount(Value v, func::FuncOp funcOp) {
   size_t cnt = 0;
-  funcOp.walk([&](Operation *op) {
+  funcOp.walk([&cnt, &v](Operation *op) {
     auto operands = op->getOperands();
-    cnt += (size_t)std::count_if(operands.begin(), operands.end(), [&v](const Value operand) { return operand == v; });
+    cnt += static_cast<size_t>(
+      std::count_if(operands.begin(), operands.end(), [&v](const Value operand) { return operand == v; }));
   });
   return cnt;
 }
@@ -188,18 +189,18 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
   return {};
 }
 
-bool IntInVector(int i, const SmallVector<int, 8> &redAxes) {
+bool IntInVector(int i, const SmallVector<int, kSmallVectorSizeEight> &redAxes) {
   return std::any_of(redAxes.begin(), redAxes.end(), [i](int v) { return v == i; });
 }
 
 static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
   func::FuncOp funcOp = dyn_cast<func::FuncOp>(op->getParentOp());
   SmallVector<Operation *, kVectorSizeEight> redOpList;
-  SmallVector<bool, 8> usedRedOps;
-  SmallVector<SmallVector<Operation *, 8>, 8> redOpsGroups;
+  SmallVector<bool, kSmallVectorSizeEight> usedRedOps;
+  SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> redOpsGroups;
 
   // collect all tosa.reduce
-  funcOp.walk([&](Operation *redOp) {
+  funcOp.walk([&redOpList, &usedRedOps](Operation *redOp) {
     if (IsTosaReduceOp(redOp)) {
       redOpList.push_back(redOp);
       usedRedOps.push_back(false);
@@ -208,14 +209,14 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
 
   for (size_t i = 0; i < redOpList.size(); i++) {
     if (!usedRedOps[i]) {
-      redOpsGroups.push_back(SmallVector<Operation *, 8>());
+      redOpsGroups.push_back(SmallVector<Operation *, kSmallVectorSizeEight>());
       findNextRedOp(i, redOpsGroups.size() - 1, redOpList, usedRedOps, redOpsGroups, funcOp);
     }
   }
 
   // rewrite
   for (auto redOps : redOpsGroups) {
-    SmallVector<int, 8> redAxes;
+    SmallVector<int, kSmallVectorSizeEight> redAxes;
     for (auto redOp : redOps) {
       auto axis = dyn_cast<IntegerAttr>(redOp->getAttr("axis")).getValue().getSExtValue();
       redAxes.push_back(static_cast<int>(axis));
@@ -254,9 +255,9 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
     auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
-    SmallVector<AffineExpr, 2> srcExprs;
-    SmallVector<AffineExpr, 2> dstExprs;
-    SmallVector<utils::IteratorType, 4> iteratorTypes;
+    SmallVector<AffineExpr, kSmallVectorSizeTwo> srcExprs;
+    SmallVector<AffineExpr, kSmallVectorSizeTwo> dstExprs;
+    SmallVector<utils::IteratorType, kSmallVectorSizeFour> iteratorTypes;
     for (int64_t i = 0, rank = inputTy.getRank(); i != rank; ++i) {
       srcExprs.push_back(mlir::getAffineDimExpr(i, rewriter.getContext()));
 
@@ -271,7 +272,8 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs}, rewriter.getContext());
     auto linalgOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, input, filledTensor, maps, iteratorTypes,
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+      [&firstRedOp, &elementTy, &rewriter, &didEncounterError, &loc](OpBuilder &nestedBuilder, Location nestedLoc,
+                                                                     ValueRange blockArgs) {
         auto result = createLinalgBodyCalculationForReduceOp(firstRedOp, blockArgs, elementTy, rewriter);
         if (result) {
           didEncounterError = true;
@@ -283,7 +285,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     if (!didEncounterError) {
       return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
     }
-    SmallVector<ReassociationExprs, 4> reassociationMap;
+    SmallVector<ReassociationExprs, kSmallVectorSizeFour> reassociationMap;
     uint64_t expandInputRank = cast<ShapedType>(linalgOp.getResults()[0].getType()).getRank();
     reassociationMap.resize(expandInputRank);
 
@@ -335,6 +337,8 @@ struct TosaMultiReduceToLinalg : public impl::TosaMultiReduceToLinalgBase<TosaMu
 }  // namespace tosa
 }  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createTosaMultiReduceToLinalgPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createTosaMultiReduceToLinalgPass() {
   return std::make_unique<tosa::TosaMultiReduceToLinalg>();
 }
+}  // namespace mlir
