@@ -36,6 +36,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace autotiling {
@@ -98,7 +99,7 @@ bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph, std:
   if (ops.empty()) {
     return false;
   }
-  return std::any_of(graph->nodes().begin(), graph->nodes().end(), [&](const NodePtr &node) {
+  return std::any_of(graph->nodes().begin(), graph->nodes().end(), [&a, &ops](const NodePtr &node) {
     if (ops.find(node->opType) == ops.end()) {
       return false;
     }
@@ -143,7 +144,7 @@ Sketch DynamicShapeStrategy::SketchAnalysis(std::vector<int64_t> shapes) {
       }
       ++dynCnt;
     }
-    gpuSketch = Sketch(std::min<int>(dynCnt, static_cast<int>(Sketch::kMoreDynamicInner)));
+    gpuSketch = static_cast<Sketch>(std::min<int>(dynCnt, static_cast<int>(Sketch::kMoreDynamicInner)));
   } else {
     int64_t mul = 1;
     for (int i = static_cast<int>(shapes.size()) - 1; i >= 0; --i) {
@@ -183,7 +184,7 @@ void DynamicShapeStrategy::DoConstTile(const GpuModelGraphPtr initGraph, Sketch 
     dynamicTiles = {kMoreDynamicInnerTileSizeOuter, kMoreDynamicInnerTileSizeMiddle, kMoreDynamicInnerTileSizeInner};
   }
   int staticTiles = 1;
-  initGraph->rootAxis->forEachAxisBottomUp([&](const AxisPtr a) {
+  initGraph->rootAxis->forEachAxisBottomUp([&dynamicTiles, &sketch, &totalBlocks, &staticTiles](const AxisPtr a) {
     if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       if (dynamicTiles.empty()) {
         if (sketch == Sketch::kSmallStaticInner && staticTiles < totalBlocks) {
@@ -222,7 +223,7 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
   auto arg2 = gpuTool.addRuntimeArgument(static_cast<int64_t>(prime2));
   std::vector<akgglobal::RuntimeVar> dynamicTiles{arg1, arg2};
   size_t totalAxis = 0;
-  initGraph->rootAxis->forEachAxisBottomUp([&, currMapDim = size_t{0}](const AxisPtr a) mutable {
+  initGraph->rootAxis->forEachAxisBottomUp([&totalAxis, &initGraph, currMapDim = size_t{0}](const AxisPtr a) mutable {
     ++totalAxis;
     if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       return;
@@ -237,51 +238,52 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
   });
 
   size_t currDynAxis = 0;
-  initGraph->rootAxis->forEachAxisBottomUp([&](const AxisPtr a) {
-    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) == a->axisType.end()) {
-      return;
-    }
-    // Dynamic shape
-    if (dynamicTiles.empty()) {
-      a->tryAddConstraint(0, Constraint({1}));
-    } else {
-      auto arg = dynamicTiles.back();
-      auto prime = static_cast<int>(arg.prime);
-      a->tryAddConstraint(0, Constraint({prime}));
-      if (initGraph->gpuBlock.canApply(kDynamicAllocationSize)) {
-        (void)initGraph->gpuBlock.alloc(a, kDynamicAllocationSize);
-        auto blockCfg = std::make_shared<GpuBlock>("DynBlock");
-        blockCfg->index = ConfigPos::kInner;
-        blockCfg->value = prime;
-        a->configs[blockCfg->type].push_back(blockCfg);
+  initGraph->rootAxis->forEachAxisBottomUp(
+    [&dynamicTiles, &initGraph, &totalAxis, &currDynAxis, &gpuTool](const AxisPtr a) {
+      if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) == a->axisType.end()) {
+        return;
       }
+      // Dynamic shape
+      if (dynamicTiles.empty()) {
+        a->tryAddConstraint(0, Constraint({1}));
+      } else {
+        auto arg = dynamicTiles.back();
+        auto prime = static_cast<int>(arg.prime);
+        a->tryAddConstraint(0, Constraint({prime}));
+        if (initGraph->gpuBlock.canApply(kDynamicAllocationSize)) {
+          (void)initGraph->gpuBlock.alloc(a, kDynamicAllocationSize);
+          auto blockCfg = std::make_shared<GpuBlock>("DynBlock");
+          blockCfg->index = ConfigPos::kInner;
+          blockCfg->value = prime;
+          a->configs[blockCfg->type].push_back(blockCfg);
+        }
 
-      if ((totalAxis <= initGraph->gpuGrid.availbleSize.size() || currDynAxis == 1) &&
-          initGraph->gpuGrid.canApply(kDynamicAllocationSize)) {
-        (void)initGraph->gpuGrid.alloc(a, kDynamicAllocationSize);
-        auto gridCfg = std::make_shared<GpuGrid>("DynGrid");
-        gridCfg->index = ConfigPos::kOuter;
-        gridCfg->value = 1;
-        a->configs[gridCfg->type].push_back(gridCfg);
+        if ((totalAxis <= initGraph->gpuGrid.availbleSize.size() || currDynAxis == 1) &&
+            initGraph->gpuGrid.canApply(kDynamicAllocationSize)) {
+          (void)initGraph->gpuGrid.alloc(a, kDynamicAllocationSize);
+          auto gridCfg = std::make_shared<GpuGrid>("DynGrid");
+          gridCfg->index = ConfigPos::kOuter;
+          gridCfg->value = 1;
+          a->configs[gridCfg->type].push_back(gridCfg);
+        }
+
+        if (currDynAxis == 0) {
+          arg.expr = "mod32 OR -1";
+          gpuTool.updateRuntimeArgument(arg);
+        } else if (currDynAxis == 1 && totalAxis >= initGraph->gpuGrid.availbleSize.size()) {
+          arg.expr = "mod8 OR -1";
+          gpuTool.updateRuntimeArgument(arg);
+        }
+
+        dynamicTiles.pop_back();
       }
-
-      if (currDynAxis == 0) {
-        arg.expr = "mod32 OR -1";
-        gpuTool.updateRuntimeArgument(arg);
-      } else if (currDynAxis == 1 && totalAxis >= initGraph->gpuGrid.availbleSize.size()) {
-        arg.expr = "mod8 OR -1";
-        gpuTool.updateRuntimeArgument(arg);
-      }
-
-      dynamicTiles.pop_back();
-    }
-    currDynAxis++;
-  });
+      currDynAxis++;
+    });
 }
 
 void DynamicShapeStrategy::AddGpuConstraint(GpuModelGraphPtr initGraph) {
   std::vector<int64_t> shapes;
-  initGraph->rootAxis->forEachAxisTopDown([&](const AxisPtr a) {
+  initGraph->rootAxis->forEachAxisTopDown([&shapes](const AxisPtr a) {
     if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       shapes.push_back(kDynamicShapeValue);
     } else if (a->range.second > 1) {
@@ -327,7 +329,7 @@ void TransposeStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
   NodePtr transposeRead;
   NodePtr transposeWrite;
   for (auto node : gpuGraph->nodes_) {
-    auto isHigherRank = [&](const NodePtr target) -> bool {
+    auto isHigherRank = [&node](const NodePtr target) -> bool {
       return (target == nullptr || target->loopNest_.size() < node->loopNest_.size());
     };
     if (node->opType == "Load" && isHigherRank(transposeRead)) {
@@ -347,7 +349,7 @@ void TransposeStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
   auto warpSize = GpuInfo::getInstance(gpuGraph->hardware).getWarpSizes();
   auto innerMostReadAxis = transposeRead->loopNest_.back();
   auto innerMostWriteAxis = transposeWrite->loopNest_.back();
-  auto allocResource = [&, this](const AxisPtr axis) {
+  auto allocResource = [this, &warpSize, &gpuGraph](const AxisPtr axis) {
     auto blockSize = std::min<int64_t>(warpSize, axis->range.second);
     if (!gpuGraph->gpuBlock.canApply(blockSize)) {
       return;
@@ -409,7 +411,7 @@ bool BroadcastStrategy::searchForSmallShape(const GpuModelGraphPtr gpuGraph, con
     auto tile = a->tryGetConfig(0);
     tile->value = static_cast<int>(innerSize);
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
-    seqCfg->index = kOuter;
+    seqCfg->index = ConfigPos::kOuter;
     a->configs[seqCfg->type].push_back(seqCfg);
     succ = true;
     break;
@@ -439,7 +441,7 @@ bool BroadcastStrategy::searchForLargeShape(const GpuModelGraphPtr gpuGraph, con
     auto tile = a->tryGetConfig(0);
     tile->value = middleSize;
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
-    seqCfg->index = kMiddle;
+    seqCfg->index = ConfigPos::kMiddle;
     a->configs[seqCfg->type].push_back(seqCfg);
 
     auto gridcfg = gpuGraph->gpuGrid.alloc(a, outerSize);
@@ -897,34 +899,34 @@ constexpr int64_t kTransposeOrBroadcastFootprintBuffers = 4;
 constexpr int64_t kSuffixPreservePointRows = 2;
 
 struct TransposeCoLiveReserve {
-  SmallVector<size_t, 6> axisOrder;
-  SmallVector<int32_t, 6> alignDims;
+  SmallVector<size_t, kSmallVectorSizeSix> axisOrder;
+  SmallVector<int32_t, kSmallVectorSizeSix> alignDims;
   int64_t elementBits{kDefaultTypeBits};
 };
 
 struct VectorLiveReserve {
-  SmallVector<size_t, 6> axisOrder;
-  SmallVector<int32_t, 6> alignDims;
+  SmallVector<size_t, kSmallVectorSizeSix> axisOrder;
+  SmallVector<int32_t, kSmallVectorSizeSix> alignDims;
   int64_t elementBits{kDefaultTypeBits};
 };
 
 struct VectorPeakReserveSet {
-  SmallVector<VectorLiveReserve, 8> liveBuffers;
+  SmallVector<VectorLiveReserve, kSmallVectorSizeEight> liveBuffers;
   int64_t fixedBytes{0};
 };
 
 struct TransposeVectorInfo {
-  SmallVector<size_t, 6> sourceAxisOrder;
-  SmallVector<size_t, 6> targetAxisOrder;
+  SmallVector<size_t, kSmallVectorSizeSix> sourceAxisOrder;
+  SmallVector<size_t, kSmallVectorSizeSix> targetAxisOrder;
   int64_t elementBits{kDefaultTypeBits};
   bool isF32{true};
 };
 
 struct NpuBandContext {
   size_t bandIdx{0};
-  SmallVector<AxisPtr, 4> axes;
-  SmallVector<int64_t, 4> extents;
-  SmallVector<NodePtr, 32> nodes;
+  SmallVector<AxisPtr, kSmallVectorSizeFour> axes;
+  SmallVector<int64_t, kSmallVectorSizeFour> extents;
+  SmallVector<NodePtr, kSmallVectorSizeThirtyTwo> nodes;
   GraphTemplate graphTemplate{GraphTemplate::DEFAULT};
   int64_t rawUbElems{1};
   int64_t ubCapacityElems{1};
@@ -933,12 +935,12 @@ struct NpuBandContext {
   int64_t vectorElementBits{kDefaultTypeBits};
   int64_t transposeElementBits{kDefaultTypeBits};
   bool transposeElementIsF32{true};
-  SmallVector<int64_t, 6> axesAlignUnits;
-  SmallVector<size_t, 6> transposeSourceAxisOrder;
-  SmallVector<size_t, 6> transposeTargetAxisOrder;
-  SmallVector<TransposeVectorInfo, 6> transposeInfos;
-  SmallVector<SmallVector<TransposeCoLiveReserve, 4>, 4> transposeCoLiveReserveSets;
-  SmallVector<VectorPeakReserveSet, 32> vectorPeakReserveSets;
+  SmallVector<int64_t, kSmallVectorSizeSix> axesAlignUnits;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeSourceAxisOrder;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeTargetAxisOrder;
+  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> transposeInfos;
+  SmallVector<SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour>, 4> transposeCoLiveReserveSets;
+  SmallVector<VectorPeakReserveSet, kSmallVectorSizeThirtyTwo> vectorPeakReserveSets;
   int64_t fixedReserveBytes{0};
   int64_t targetBlocks{kNpuTargetBlocks};
   int64_t mathComplexityScore{0};
@@ -949,13 +951,13 @@ struct NpuBandContext {
 };
 
 struct BandTilePlan {
-  SmallVector<unsigned, 4> outerTiles;
-  SmallVector<unsigned, 4> innerTiles;
+  SmallVector<unsigned, kSmallVectorSizeFour> outerTiles;
+  SmallVector<unsigned, kSmallVectorSizeFour> innerTiles;
   // True for axes that participate in multi-dimensional vectorization.
   // When set, the corresponding inner-tile (point) loop receives
   // `kMultiVecLoopAttr` so the apply phase can sink them together and
   // consume them as a unified vec chain.
-  SmallVector<bool, 6> multiVecAxisMask;
+  SmallVector<bool, kSmallVectorSizeSix> multiVecAxisMask;
   // When true, the plan used multi-dimensional vectorization greedy search;
   // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
   bool usesMultiVecScheme{false};
@@ -965,7 +967,7 @@ int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
 void applyF32LastDimDoubleAlign(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisAlignUnits);
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx);
 
-static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes,
+static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes,
                                     unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
                                     bool isFullTileAxis = false);
 
@@ -1055,8 +1057,8 @@ inline int64_t ubCapacityForVectorTile(const NpuBandContext &ctx) {
   return std::max<int64_t>(ctx.vectorUbCapacityElems, 1);
 }
 
-std::map<size_t, SmallVector<AxisPtr, 4>> groupAxesByBand(const SmallVector<AxisPtr> &axes) {
-  std::map<size_t, SmallVector<AxisPtr, 4>> grouped;
+std::map<size_t, SmallVector<AxisPtr, kSmallVectorSizeFour>> groupAxesByBand(const SmallVector<AxisPtr> &axes) {
+  std::map<size_t, SmallVector<AxisPtr, kSmallVectorSizeFour>> grouped;
   for (const auto &axis : axes) {
     if (axis) {
       grouped[axis->bandIdx].push_back(axis);
@@ -1076,22 +1078,22 @@ struct BandNodeFacts {
 struct VectorUbFootprint {
   int64_t peakBitsPerElem{kDefaultTypeBits}, vectorElementBits{kDefaultTypeBits};
   int64_t fixedReserveBytes{0};
-  SmallVector<SmallVector<TransposeCoLiveReserve, 4>, 4> transposeCoLiveReserveSets;
-  SmallVector<VectorPeakReserveSet, 32> vectorPeakReserveSets;
+  SmallVector<SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour>, 4> transposeCoLiveReserveSets;
+  SmallVector<VectorPeakReserveSet, kSmallVectorSizeThirtyTwo> vectorPeakReserveSets;
 };
 struct VectorUbLiveState {
   llvm::DenseMap<Value, int64_t> remainingUses;
   llvm::DenseMap<Value, bool> multiBufferedValues;
   llvm::DenseMap<Value, int64_t> liveBits;
-  llvm::DenseMap<Value, SmallVector<size_t, 6>> liveAxisOrders;
-  llvm::DenseMap<Value, SmallVector<int32_t, 6>> liveAlignDims;
+  llvm::DenseMap<Value, SmallVector<size_t, kSmallVectorSizeSix>> liveAxisOrders;
+  llvm::DenseMap<Value, SmallVector<int32_t, kSmallVectorSizeSix>> liveAlignDims;
   int64_t liveBitsSum{0};
   int64_t liveMultiBufferExtraBitsSum{0};
 };
 struct BandNodeInfo {
   BandNodeFacts facts;
-  SmallVector<NodePtr, 32> nodes;
-  SmallVector<TransposeVectorInfo, 6> transposeInfos;
+  SmallVector<NodePtr, kSmallVectorSizeThirtyTwo> nodes;
+  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> transposeInfos;
 };
 enum class VectorOpKind { None, Generic, Heavy, Compare, Select };
 int64_t getValueElementBits(Value value);
@@ -1110,8 +1112,8 @@ std::optional<size_t> findAxisIndex(ArrayRef<AxisPtr> axes, const AxisPtr &targe
   }
   return std::nullopt;
 }
-SmallVector<size_t, 6> getNodeAxisOrder(const NodePtr &node, ArrayRef<AxisPtr> axes) {
-  SmallVector<size_t, 6> order;
+SmallVector<size_t, kSmallVectorSizeSix> getNodeAxisOrder(const NodePtr &node, ArrayRef<AxisPtr> axes) {
+  SmallVector<size_t, kSmallVectorSizeSix> order;
   if (!node) {
     return order;
   }
@@ -1122,8 +1124,8 @@ SmallVector<size_t, 6> getNodeAxisOrder(const NodePtr &node, ArrayRef<AxisPtr> a
   }
   return order;
 }
-SmallVector<size_t, 6> intersectAxisOrder(ArrayRef<size_t> lhs, ArrayRef<size_t> rhs) {
-  SmallVector<size_t, 6> order;
+SmallVector<size_t, kSmallVectorSizeSix> intersectAxisOrder(ArrayRef<size_t> lhs, ArrayRef<size_t> rhs) {
+  SmallVector<size_t, kSmallVectorSizeSix> order;
   for (size_t idx : lhs) {
     if (llvm::is_contained(rhs, idx)) {
       order.push_back(idx);
@@ -1135,8 +1137,8 @@ bool isSameTransposeInfo(const TransposeVectorInfo &lhs, const TransposeVectorIn
   return lhs.sourceAxisOrder == rhs.sourceAxisOrder && lhs.targetAxisOrder == rhs.targetAxisOrder &&
          lhs.elementBits == rhs.elementBits && lhs.isF32 == rhs.isF32;
 }
-SmallVector<size_t, 6> getMemrefAxisOrder(ValueRange indices, const NpuBandContext &ctx) {
-  SmallVector<size_t, 6> order;
+SmallVector<size_t, kSmallVectorSizeSix> getMemrefAxisOrder(ValueRange indices, const NpuBandContext &ctx) {
+  SmallVector<size_t, kSmallVectorSizeSix> order;
   Operation *leafParent = !ctx.axes.empty() && ctx.axes.back() && ctx.axes.back()->loop
                             ? ctx.axes.back()->getLoopOperation()->getParentOp()
                             : nullptr;
@@ -1196,13 +1198,13 @@ bool isValueDerivedFromImpl(Value value, Value source, llvm::SmallPtrSetImpl<Val
     return false;
   }
   if (llvm::any_of(defOp->getOperands(),
-                   [&](Value operand) { return isValueDerivedFromImpl(operand, source, visited); })) {
+                   [&source, &visited](Value operand) { return isValueDerivedFromImpl(operand, source, visited); })) {
     return true;
   }
   for (Region &region : defOp->getRegions()) {
     for (Block &block : region) {
       Operation *terminator = block.getTerminator();
-      if ((terminator != nullptr) && llvm::any_of(terminator->getOperands(), [&](Value v) {
+      if ((terminator != nullptr) && llvm::any_of(terminator->getOperands(), [&source, &visited](Value v) {
             return isValueDerivedFromImpl(v, source, visited);
           })) {
         return true;
@@ -1212,29 +1214,30 @@ bool isValueDerivedFromImpl(Value value, Value source, llvm::SmallPtrSetImpl<Val
   return false;
 }
 bool isValueDerivedFrom(Value value, Value source) {
-  llvm::SmallPtrSet<Value, 16> visited;
+  llvm::SmallPtrSet<Value, kSmallVectorSizeSixteen> visited;
   return isValueDerivedFromImpl(value, source, visited);
 }
 void pushUniqueTransposeInfo(SmallVectorImpl<TransposeVectorInfo> &infos, TransposeVectorInfo info) {
-  if (llvm::any_of(infos, [&](const TransposeVectorInfo &existing) { return isSameTransposeInfo(existing, info); })) {
+  if (llvm::any_of(infos,
+                   [&info](const TransposeVectorInfo &existing) { return isSameTransposeInfo(existing, info); })) {
     return;
   }
   infos.push_back(std::move(info));
 }
-SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContext &ctx) {
-  SmallVector<TransposeVectorInfo, 6> infos;
+SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> findTransposeVectorInfos(const NpuBandContext &ctx) {
+  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> infos;
   const bool hasTaggedTransposeAxis = llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
-  auto tryAddInfo = [&](Operation *loadOp, ArrayRef<size_t> loadOrder, Operation *storeOp,
-                        ArrayRef<size_t> storeOrder) {
+  auto tryAddInfo = [&hasTaggedTransposeAxis, &ctx, &infos](Operation *loadOp, ArrayRef<size_t> loadOrder,
+                                                            Operation *storeOp, ArrayRef<size_t> storeOrder) {
     if (!isValueDerivedFrom(storeOp->getOperand(0), loadOp->getResult(0))) {
       return;
     }
-    SmallVector<size_t, 6> loadCommon = intersectAxisOrder(loadOrder, storeOrder);
-    SmallVector<size_t, 6> storeCommon = intersectAxisOrder(storeOrder, loadOrder);
+    SmallVector<size_t, kSmallVectorSizeSix> loadCommon = intersectAxisOrder(loadOrder, storeOrder);
+    SmallVector<size_t, kSmallVectorSizeSix> storeCommon = intersectAxisOrder(storeOrder, loadOrder);
     if (loadCommon.size() < kMinTransposeAxisOrderSize || loadCommon.size() != storeCommon.size() ||
         loadCommon == storeCommon || !std::is_permutation(loadCommon.begin(), loadCommon.end(), storeCommon.begin()) ||
         (hasTaggedTransposeAxis &&
-         !llvm::any_of(loadCommon, [&](size_t idx) { return isTransposeAxis(ctx.axes[idx]); }))) {
+         !llvm::any_of(loadCommon, [&ctx](size_t idx) { return isTransposeAxis(ctx.axes[idx]); }))) {
       return;
     }
     pushUniqueTransposeInfo(infos,
@@ -1248,10 +1251,10 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
   } else if (!ctx.axes.empty() && ctx.axes.front()) {
     scanRoot = ctx.axes.front()->getLoopOperation();
   }
-  SmallVector<memref::LoadOp, 8> loads;
-  SmallVector<memref::StoreOp, 8> stores;
+  SmallVector<memref::LoadOp, kSmallVectorSizeEight> loads;
+  SmallVector<memref::StoreOp, kSmallVectorSizeEight> stores;
   if (scanRoot != nullptr) {
-    scanRoot->walk([&](Operation *op) {
+    scanRoot->walk([&loads, &stores](Operation *op) {
       if (auto load = dyn_cast<memref::LoadOp>(op)) {
         loads.push_back(load);
       } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
@@ -1260,7 +1263,7 @@ SmallVector<TransposeVectorInfo, 6> findTransposeVectorInfos(const NpuBandContex
     });
   }
   for (memref::LoadOp load : loads) {
-    SmallVector<size_t, 6> loadOrder = getMemrefAxisOrder(load.getIndices(), ctx);
+    SmallVector<size_t, kSmallVectorSizeSix> loadOrder = getMemrefAxisOrder(load.getIndices(), ctx);
     for (memref::StoreOp store : stores) {
       tryAddInfo(load, loadOrder, store, getMemrefAxisOrder(store.getIndices(), ctx));
     }
@@ -1340,10 +1343,10 @@ VectorOpKind classifyVectorOp(Operation *op) {
   if (op->getNumResults() == 0) {
     return VectorOpKind::None;
   }
-  if (llvm::any_of(heavyPatterns, [&](llvm::StringRef pattern) { return name.contains(pattern); })) {
+  if (llvm::any_of(heavyPatterns, [&name](llvm::StringRef pattern) { return name.contains(pattern); })) {
     return VectorOpKind::Heavy;
   }
-  if (llvm::any_of(genericPatterns, [&](llvm::StringRef pattern) { return name.contains(pattern); }) ||
+  if (llvm::any_of(genericPatterns, [&name](llvm::StringRef pattern) { return name.contains(pattern); }) ||
       name.starts_with("math.")) {
     return VectorOpKind::Generic;
   }
@@ -1363,19 +1366,62 @@ bool isBishengStructuredVectorLoweringOp(Operation *op) {
   if ((op == nullptr) || op->getNumResults() == 0) {
     return false;
   }
-  static const llvm::StringSet<> kStructuredOps = {
-    "arith.addf",     "arith.addi",    "arith.mulf",       "arith.muli",       "arith.subf",
-    "arith.subi",     "arith.divf",    "arith.divsi",      "arith.divui",      "arith.maxsi",
-    "arith.maxui",    "arith.minsi",   "arith.minui",      "arith.andi",       "arith.ori",
-    "arith.xori",     "arith.remf",    "arith.remsi",      "arith.remui",      "arith.minnumf",
-    "arith.minimumf", "arith.maxnumf", "arith.maximumf",   "arith.shli",       "arith.shrsi",
-    "arith.shrui",    "arith.extf",    "arith.fptosi",     "arith.fptoui",     "arith.sitofp",
-    "arith.uitofp",   "arith.extsi",   "arith.extui",      "arith.trunci",     "arith.truncf",
-    "arith.cmpf",     "arith.cmpi",    "arith.select",     "arith.constant",   "arith.negf",
-    "math.log",       "math.absf",     "math.sqrt",        "math.rsqrt",       "math.tanh",
-    "math.sin",       "math.cos",      "math.erf",         "math.ceil",        "math.floor",
-    "math.absi",      "math.exp",      "vector.reduction", "vector.broadcast", "arith.mulsi_extended",
-    "arith.mului_extended"};
+  static const llvm::StringSet<> kStructuredOps = {"arith.addf",
+                                                   "arith.addi",
+                                                   "arith.mulf",
+                                                   "arith.muli",
+                                                   "arith.subf",
+                                                   "arith.subi",
+                                                   "arith.divf",
+                                                   "arith.divsi",
+                                                   "arith.divui",
+                                                   "arith.maxsi",
+                                                   "arith.maxui",
+                                                   "arith.minsi",
+                                                   "arith.minui",
+                                                   "arith.andi",
+                                                   "arith.ori",
+                                                   "arith.xori",
+                                                   "arith.remf",
+                                                   "arith.remsi",
+                                                   "arith.remui",
+                                                   "arith.minnumf",
+                                                   "arith.minimumf",
+                                                   "arith.maxnumf",
+                                                   "arith.maximumf",
+                                                   "arith.shli",
+                                                   "arith.shrsi",
+                                                   "arith.shrui",
+                                                   "arith.extf",
+                                                   "arith.fptosi",
+                                                   "arith.fptoui",
+                                                   "arith.sitofp",
+                                                   "arith.uitofp",
+                                                   "arith.extsi",
+                                                   "arith.extui",
+                                                   "arith.trunci",
+                                                   "arith.truncf",
+                                                   "arith.cmpf",
+                                                   "arith.cmpi",
+                                                   "arith.select",
+                                                   "arith.constant",
+                                                   "arith.negf",
+                                                   "math.log",
+                                                   "math.absf",
+                                                   "math.sqrt",
+                                                   "math.rsqrt",
+                                                   "math.tanh",
+                                                   "math.sin",
+                                                   "math.cos",
+                                                   "math.erf",
+                                                   "math.ceil",
+                                                   "math.floor",
+                                                   "math.absi",
+                                                   "math.exp",
+                                                   "vector.reduction",
+                                                   "vector.broadcast",
+                                                   "arith.mulsi_extended",
+                                                   "arith.mului_extended"};
   return kStructuredOps.contains(op->getName().getStringRef());
 }
 
@@ -1388,8 +1434,8 @@ bool isBishengStrideAlignedCandidate(const NodePtr &node, Operation *op) {
   }
   return isBishengStructuredVectorLoweringOp(op);
 }
-SmallVector<int32_t, 6> getBishengStrideAlignDims(const NpuBandContext &ctx, const NodePtr &node, Operation *op,
-                                                  ArrayRef<size_t> axisOrder) {
+SmallVector<int32_t, kSmallVectorSizeSix> getBishengStrideAlignDims(const NpuBandContext &ctx, const NodePtr &node,
+                                                                    Operation *op, ArrayRef<size_t> axisOrder) {
   if (!isBishengStrideAlignedCandidate(node, op)) {
     return {};
   }
@@ -1398,14 +1444,14 @@ SmallVector<int32_t, 6> getBishengStrideAlignDims(const NpuBandContext &ctx, con
   // innermost stride, the marked dim is the last non-continuous dim before it.
   // EnableStrideAlign's collectAlignUnits applies that mark to dim+1, i.e. the
   // logical innermost vector dimension for the shape seen by akg-opt.
-  SmallVector<int32_t, 6> alignDims =
+  SmallVector<int32_t, kSmallVectorSizeSix> alignDims =
     getBishengLogicalStructuredStrideAlignDims(static_cast<int64_t>(axisOrder.size()));
   // Drop align dims whose entire prefix [0..dim] is degenerate (extent==1).
   // bishengir's MarkStrideAlign / flatten step collapses unit-extent prefixes
   // away; pretending they need stride padding inflates the live footprint and
   // produces tiles that bishengir would just flatten back. An out-of-range
   // axis index also falls into this branch as a defensive guard.
-  llvm::erase_if(alignDims, [&](int32_t dim) {
+  llvm::erase_if(alignDims, [&axisOrder, &ctx](int32_t dim) {
     if (dim < 0 || static_cast<size_t>(dim) >= axisOrder.size()) {
       return true;
     }
@@ -1542,13 +1588,13 @@ void recordVectorUbPeakState(VectorUbFootprint &footprint, const NpuBandContext 
   VectorPeakReserveSet set;
   set.fixedBytes = getSelectTempBytes(kind, hasVectorInput, resultBits);
   Operation *op = node ? node->op() : nullptr;
-  SmallVector<int32_t, 6> nodeAlignDims = getBishengStrideAlignDims(ctx, node, op, nodeAxisOrder);
+  SmallVector<int32_t, kSmallVectorSizeSix> nodeAlignDims = getBishengStrideAlignDims(ctx, node, op, nodeAxisOrder);
   for (const auto &entry : state.liveBits) {
     auto axisIt = state.liveAxisOrders.find(entry.first);
     if (axisIt == state.liveAxisOrders.end()) {
       continue;
     }
-    SmallVector<int32_t, 6> alignDims = state.liveAlignDims.lookup(entry.first);
+    SmallVector<int32_t, kSmallVectorSizeSix> alignDims = state.liveAlignDims.lookup(entry.first);
     appendVectorReserve(set, axisIt->second, alignDims, entry.second);
     if (state.multiBufferedValues.lookup(entry.first)) {
       appendVectorReserve(set, axisIt->second, alignDims, entry.second);
@@ -1569,13 +1615,14 @@ void recordVectorUbPeakState(VectorUbFootprint &footprint, const NpuBandContext 
   if (node->opType != "Load") {
     return;
   }
-  SmallVector<size_t, 6> currentOrder = getNodeAxisOrder(node, ctx.axes);
-  bool isKnownTransposeLoad = llvm::any_of(
-    ctx.transposeInfos, [&](const TransposeVectorInfo &info) { return currentOrder == info.sourceAxisOrder; });
+  SmallVector<size_t, kSmallVectorSizeSix> currentOrder = getNodeAxisOrder(node, ctx.axes);
+  bool isKnownTransposeLoad = llvm::any_of(ctx.transposeInfos, [&currentOrder](const TransposeVectorInfo &info) {
+    return currentOrder == info.sourceAxisOrder;
+  });
   if (!isKnownTransposeLoad && (ctx.transposeSourceAxisOrder.empty() || currentOrder != ctx.transposeSourceAxisOrder)) {
     return;
   }
-  SmallVector<TransposeCoLiveReserve, 4> liveSet;
+  SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour> liveSet;
   for (const auto &entry : state.liveBits) {
     if (entry.second < kBitsPerByte) {
       continue;
@@ -1611,7 +1658,8 @@ void updateVectorUbLiveState(VectorUbFootprint &footprint, const NpuBandContext 
         state.multiBufferedValues[result] = true;
       }
       state.liveBits[result] = bits;
-      state.liveAxisOrders[result] = SmallVector<size_t, 6>(nodeAxisOrder.begin(), nodeAxisOrder.end());
+      state.liveAxisOrders[result] =
+        SmallVector<size_t, kSmallVectorSizeSix>(nodeAxisOrder.begin(), nodeAxisOrder.end());
       state.liveAlignDims[result] = getBishengStrideAlignDims(ctx, node, op, nodeAxisOrder);
       state.liveBitsSum += bits;
       state.liveMultiBufferExtraBitsSum += static_cast<int64_t>(state.multiBufferedValues.lookup(result)) * bits;
@@ -1620,7 +1668,7 @@ void updateVectorUbLiveState(VectorUbFootprint &footprint, const NpuBandContext 
     }
   }
 
-  SmallVector<Value, 8> valuesToErase;
+  SmallVector<Value, kSmallVectorSizeEight> valuesToErase;
   for (Value operand : op->getOperands()) {
     auto useIt = state.remainingUses.find(operand);
     if (useIt == state.remainingUses.end()) {
@@ -1683,11 +1731,11 @@ VectorUbFootprint computeVectorUbFootprint(ArrayRef<NodePtr> bandNodes, const Np
     int64_t scalarVbrcBits = getScalarVbrcBitsPerElem(op, kind, state.liveBits);
     int64_t opDataBits = getOpDataBitsPerElem(op, state.liveBits, resultBits, scalarVbrcBits);
     int64_t workspaceBits = getHivmWorkspaceBitsPerElem(kind, opDataBits);
-    SmallVector<size_t, 6> nodeAxisOrder = getNodeAxisOrder(node, ctx.axes);
+    SmallVector<size_t, kSmallVectorSizeSix> nodeAxisOrder = getNodeAxisOrder(node, ctx.axes);
     bool inheritsMultiBuffer = resultBits >= kBitsPerByte && inheritsMultiBufferFromOperand(op, kind, state);
     int64_t resultBufferCopies =
       (inheritsMultiBuffer ||
-       llvm::any_of(op->getResults(), [&](Value result) { return state.multiBufferedValues.lookup(result); }))
+       llvm::any_of(op->getResults(), [&state](Value result) { return state.multiBufferedValues.lookup(result); }))
         ? kHivmAutoMultiBufferFactor
         : 1;
     recordVectorUbPeakState(footprint, ctx, state, node, nodeAxisOrder, scalarVbrcBits, resultBits, resultBufferCopies,
@@ -1752,8 +1800,8 @@ void forEachBishengVectorNode(const NpuBandContext &ctx, Fn &&fn) {
     }
     bool isLoad = node->opType == "Load";
     bool hasVectorInput =
-      llvm::any_of(op->getOperands(), [&](Value operand) { return vectorValues.contains(operand); });
-    SmallVector<size_t, 6> axisOrder = getNodeAxisOrder(node, ctx.axes);
+      llvm::any_of(op->getOperands(), [&vectorValues](Value operand) { return vectorValues.contains(operand); });
+    SmallVector<size_t, kSmallVectorSizeSix> axisOrder = getNodeAxisOrder(node, ctx.axes);
     bool hasVectorResult = isLoad || (hasVectorInput && isBishengStrideAlignedCandidate(node, op));
     fn(node, op, hasVectorResult, hasVectorInput, ArrayRef<size_t>(axisOrder));
     if (hasVectorResult) {
@@ -1771,28 +1819,29 @@ void mergeGenericStrideAlignUnits(NpuBandContext &ctx) {
   }
   // Shared loop tiles follow the widest byte type; narrower buffers are padded by their own reserve/mark path.
   int64_t maxElementBits = 0;
-  forEachBishengVectorNode(ctx, [&](const NodePtr &, Operation *op, bool hasVectorResult, bool, ArrayRef<size_t>) {
-    if (!hasVectorResult) {
-      return;
-    }
-    for (Value result : op->getResults()) {
-      maxElementBits = std::max(maxElementBits, getValueElementBits(result));
-    }
-  });
-  if (maxElementBits < kBitsPerByte) {
-    return;
-  }
   forEachBishengVectorNode(
-    ctx, [&](const NodePtr &node, Operation *op, bool hasVectorResult, bool, ArrayRef<size_t> axisOrder) {
+    ctx, [&maxElementBits](const NodePtr &, Operation *op, bool hasVectorResult, bool, ArrayRef<size_t>) {
       if (!hasVectorResult) {
         return;
       }
-      mergeStrideAlignUnits(ctx, axisOrder, getBishengStrideAlignDims(ctx, node, op, axisOrder), maxElementBits);
+      for (Value result : op->getResults()) {
+        maxElementBits = std::max(maxElementBits, getValueElementBits(result));
+      }
     });
+  if (maxElementBits < kBitsPerByte) {
+    return;
+  }
+  forEachBishengVectorNode(ctx, [&ctx, &maxElementBits](const NodePtr &node, Operation *op, bool hasVectorResult, bool,
+                                                        ArrayRef<size_t> axisOrder) {
+    if (!hasVectorResult) {
+      return;
+    }
+    mergeStrideAlignUnits(ctx, axisOrder, getBishengStrideAlignDims(ctx, node, op, axisOrder), maxElementBits);
+  });
 }
 
 NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t bandIdx,
-                                   const SmallVector<AxisPtr, 4> &bandAxes) {
+                                   const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes) {
   NpuBandContext ctx;
   ctx.bandIdx = bandIdx;
   ctx.axes = bandAxes;
@@ -1925,8 +1974,9 @@ size_t computeBroadcastSuffixStart(const NpuBandContext &ctx, int64_t tileBudget
   return bestStart;
 }
 
-static SmallVector<int64_t, 16> collectAlignAwareTileCandidates(int64_t extent, int64_t alignUnit) {
-  SmallVector<int64_t, 16> candidates;
+static SmallVector<int64_t, kSmallVectorSizeSixteen> collectAlignAwareTileCandidates(int64_t extent,
+                                                                                     int64_t alignUnit) {
+  SmallVector<int64_t, kSmallVectorSizeSixteen> candidates;
   extent = std::max<int64_t>(extent, 1);
   alignUnit = std::max<int64_t>(alignUnit, 1);
   if (alignUnit == 1) {
@@ -1947,10 +1997,11 @@ static SmallVector<int64_t, 16> collectAlignAwareTileCandidates(int64_t extent, 
   return candidates;
 }
 
-SmallVector<unsigned, 4> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents, ArrayRef<int64_t> prefixAlignUnits,
-                                                int64_t targetBlocks) {
+SmallVector<unsigned, kSmallVectorSizeFour> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents,
+                                                                   ArrayRef<int64_t> prefixAlignUnits,
+                                                                   int64_t targetBlocks) {
   constexpr int64_t kMaxSmallPrefixTileCount = 2;
-  SmallVector<unsigned, 4> outerTiles;
+  SmallVector<unsigned, kSmallVectorSizeFour> outerTiles;
   outerTiles.reserve(prefixExtents.size());
   int64_t producedTiles = 1;
   for (size_t i = 0; i < prefixExtents.size(); ++i) {
@@ -1961,7 +2012,7 @@ SmallVector<unsigned, 4> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents,
     }
     int64_t alignUnit = i < prefixAlignUnits.size() ? std::max<int64_t>(prefixAlignUnits[i], 1) : 1;
     int64_t remaining = ceilDivInt64(targetBlocks, producedTiles);
-    SmallVector<int64_t, 16> candidates = collectAlignAwareTileCandidates(extent, alignUnit);
+    SmallVector<int64_t, kSmallVectorSizeSixteen> candidates = collectAlignAwareTileCandidates(extent, alignUnit);
 
     int64_t bestTile = extent;
     int64_t bestScore = std::numeric_limits<int64_t>::min();
@@ -2008,8 +2059,8 @@ int64_t getVectorUbBytes(const NpuBandContext &ctx) {
   return std::max<int64_t>(rawBytes - ctx.fixedReserveBytes, kUbAlignBytes);
 }
 int64_t computeReserveBytes(const NpuBandContext &ctx, const VectorLiveReserve &reserve, ArrayRef<int64_t> axisTiles) {
-  SmallVector<int64_t, 6> shape;
-  SmallVector<char, 6> staticDims;
+  SmallVector<int64_t, kSmallVectorSizeSix> shape;
+  SmallVector<char, kSmallVectorSizeSix> staticDims;
   shape.reserve(reserve.axisOrder.size());
   staticDims.reserve(reserve.axisOrder.size());
   for (size_t axisIdx : reserve.axisOrder) {
@@ -2028,7 +2079,7 @@ int64_t computeLogicalShapeBytes(ArrayRef<int64_t> shape, int64_t elementBits) {
   return alignUpInt64(ceilDivInt64(multiplyAndCap(elems, elementBits), kBitsPerByte), kUbAlignBytes);
 }
 int64_t computeLogicalReserveBytes(const VectorLiveReserve &reserve, ArrayRef<int64_t> axisTiles) {
-  SmallVector<int64_t, 6> shape;
+  SmallVector<int64_t, kSmallVectorSizeSix> shape;
   shape.reserve(reserve.axisOrder.size());
   for (size_t axisIdx : reserve.axisOrder) {
     int64_t tile = axisIdx < axisTiles.size() ? axisTiles[axisIdx] : 1;
@@ -2041,7 +2092,7 @@ int64_t computeReductionBackendExtraReserveBytes(const NpuBandContext &ctx, Arra
       ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP) {
     return 0;
   }
-  SmallVector<size_t, 6> axisOrder;
+  SmallVector<size_t, kSmallVectorSizeSix> axisOrder;
   axisOrder.reserve(axisTiles.size());
   for (size_t i = 0; i < axisTiles.size() && i < ctx.axes.size(); ++i) {
     axisOrder.push_back(i);
@@ -2118,9 +2169,9 @@ void computeLastDimTransposeAlignBytes(ArrayRef<int64_t> srcShape, size_t dim0, 
 }
 int64_t computeLastDimTransposeAllocBytes(ArrayRef<int64_t> srcShape, size_t dim0, size_t dim1, int64_t elemBytes,
                                           bool isF32Transpose) {
-  SmallVector<int64_t, 6> dstShape;
-  SmallVector<int64_t, 6> srcAlign;
-  SmallVector<int64_t, 6> dstAlign;
+  SmallVector<int64_t, kSmallVectorSizeSix> dstShape;
+  SmallVector<int64_t, kSmallVectorSizeSix> srcAlign;
+  SmallVector<int64_t, kSmallVectorSizeSix> dstAlign;
   computeLastDimTransposeAlignBytes(srcShape, dim0, dim1, elemBytes, isF32Transpose, dstShape, srcAlign, dstAlign);
   int64_t srcReserve =
     multiplyAndCap(kHivmAutoMultiBufferFactor, computeAlignedShapeBytes(srcShape, srcAlign, elemBytes));
@@ -2135,7 +2186,7 @@ int64_t computeTransposeAllocReserveBytes(ArrayRef<int64_t> srcShape, ArrayRef<s
   }
 
   int64_t peakBytes = 0;
-  SmallVector<size_t, 6> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeDims;
   for (size_t i = 0; i < sourceOrder.size(); ++i) {
     if (sourceOrder[i] != targetOrder[i]) {
       transposeDims.push_back(i);
@@ -2148,8 +2199,8 @@ int64_t computeTransposeAllocReserveBytes(ArrayRef<int64_t> srcShape, ArrayRef<s
     return peakBytes;
   }
 
-  SmallVector<size_t, 6> currentOrder(sourceOrder.begin(), sourceOrder.end());
-  SmallVector<int64_t, 6> currentShape(srcShape.begin(), srcShape.end());
+  SmallVector<size_t, kSmallVectorSizeSix> currentOrder(sourceOrder.begin(), sourceOrder.end());
+  SmallVector<int64_t, kSmallVectorSizeSix> currentShape(srcShape.begin(), srcShape.end());
   for (size_t targetPos = 0; targetPos < targetOrder.size(); ++targetPos) {
     auto it = llvm::find(currentOrder, targetOrder[targetPos]);
     if (it == currentOrder.end()) {
@@ -2168,9 +2219,9 @@ int64_t computeTransposeAllocReserveBytes(ArrayRef<int64_t> srcShape, ArrayRef<s
 }
 bool satisfiesLastDimTransposeAllocAlign(ArrayRef<int64_t> srcShape, size_t dim0, size_t dim1, int64_t elemBytes,
                                          bool isF32Transpose) {
-  SmallVector<int64_t, 6> dstShape;
-  SmallVector<int64_t, 6> srcAlign;
-  SmallVector<int64_t, 6> dstAlign;
+  SmallVector<int64_t, kSmallVectorSizeSix> dstShape;
+  SmallVector<int64_t, kSmallVectorSizeSix> srcAlign;
+  SmallVector<int64_t, kSmallVectorSizeSix> dstAlign;
   computeLastDimTransposeAlignBytes(srcShape, dim0, dim1, elemBytes, isF32Transpose, dstShape, srcAlign, dstAlign);
   return satisfiesAlignedShapeWithoutExpansion(srcShape, srcAlign, elemBytes) &&
          satisfiesAlignedShapeWithoutExpansion(dstShape, dstAlign, elemBytes);
@@ -2181,7 +2232,7 @@ bool satisfiesTransposeAllocAlign(ArrayRef<int64_t> srcShape, ArrayRef<size_t> s
     return false;
   }
 
-  SmallVector<size_t, 6> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeDims;
   for (size_t i = 0; i < sourceOrder.size(); ++i) {
     if (sourceOrder[i] != targetOrder[i]) {
       transposeDims.push_back(i);
@@ -2194,8 +2245,8 @@ bool satisfiesTransposeAllocAlign(ArrayRef<int64_t> srcShape, ArrayRef<size_t> s
     return true;
   }
 
-  SmallVector<size_t, 6> currentOrder(sourceOrder.begin(), sourceOrder.end());
-  SmallVector<int64_t, 6> currentShape(srcShape.begin(), srcShape.end());
+  SmallVector<size_t, kSmallVectorSizeSix> currentOrder(sourceOrder.begin(), sourceOrder.end());
+  SmallVector<int64_t, kSmallVectorSizeSix> currentShape(srcShape.begin(), srcShape.end());
   for (size_t targetPos = 0; targetPos < targetOrder.size(); ++targetPos) {
     auto it = llvm::find(currentOrder, targetOrder[targetPos]);
     if (it == currentOrder.end()) {
@@ -2226,19 +2277,19 @@ int64_t computeStrideAlignedTransposeBytes(ArrayRef<int64_t> shape, ArrayRef<siz
     }
     return static_cast<size_t>(it - order.begin());
   };
-  auto computePairBytes = [&](size_t lhsAxis, size_t rhsAxis) {
+  auto computePairBytes = [&sourceOrder, &shape, &elemBytes, &findPos](size_t lhsAxis, size_t rhsAxis) {
     std::optional<size_t> lhs = findPos(sourceOrder, lhsAxis);
     std::optional<size_t> rhs = findPos(sourceOrder, rhsAxis);
     if (!lhs || !rhs) {
       return int64_t{0};
     }
-    SmallVector<int64_t, 6> alignBytes(shape.size(), 0);
+    SmallVector<int64_t, kSmallVectorSizeSix> alignBytes(shape.size(), 0);
     alignBytes[*lhs] = kUbAlignBytes;
     alignBytes[*rhs] = kUbAlignBytes;
     return computeAlignedShapeBytes(shape, alignBytes, elemBytes);
   };
 
-  SmallVector<size_t, 6> current(sourceOrder.begin(), sourceOrder.end());
+  SmallVector<size_t, kSmallVectorSizeSix> current(sourceOrder.begin(), sourceOrder.end());
   int64_t peakBytes = 0;
   for (size_t targetPos = 0; targetPos < targetOrder.size(); ++targetPos) {
     std::optional<size_t> pos = findPos(current, targetOrder[targetPos]);
@@ -2268,19 +2319,19 @@ bool satisfiesStrideAlignedTranspose(ArrayRef<int64_t> shape, ArrayRef<size_t> s
     }
     return static_cast<size_t>(it - order.begin());
   };
-  auto satisfiesPair = [&](size_t lhsAxis, size_t rhsAxis) {
+  auto satisfiesPair = [&sourceOrder, &shape, &elemBytes, &findPos](size_t lhsAxis, size_t rhsAxis) {
     std::optional<size_t> lhs = findPos(sourceOrder, lhsAxis);
     std::optional<size_t> rhs = findPos(sourceOrder, rhsAxis);
     if (!lhs || !rhs) {
       return false;
     }
-    SmallVector<int64_t, 6> alignBytes(shape.size(), 0);
+    SmallVector<int64_t, kSmallVectorSizeSix> alignBytes(shape.size(), 0);
     alignBytes[*lhs] = kUbAlignBytes;
     alignBytes[*rhs] = kUbAlignBytes;
     return satisfiesAlignedShapeWithoutExpansion(shape, alignBytes, elemBytes);
   };
 
-  SmallVector<size_t, 6> current(sourceOrder.begin(), sourceOrder.end());
+  SmallVector<size_t, kSmallVectorSizeSix> current(sourceOrder.begin(), sourceOrder.end());
   for (size_t targetPos = 0; targetPos < targetOrder.size(); ++targetPos) {
     std::optional<size_t> pos = findPos(current, targetOrder[targetPos]);
     if (!pos) {
@@ -2354,7 +2405,7 @@ void fillPrefixSuffixTiles(const NpuBandContext &ctx, ArrayRef<unsigned> prefixO
     plan.innerTiles[i] = prefixOuter[i];
   }
   size_t innermost = ctx.extents.size() - 1;
-  SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
+  SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
   int64_t maxPointRows = std::min<int64_t>(requestedPointRows, prefixOuter.front());
   for (int64_t pointRows = std::max<int64_t>(maxPointRows, 1); pointRows >= 1; --pointRows) {
     axisTiles.front() = pointRows;
@@ -2386,9 +2437,9 @@ int64_t computeTransposeCoLiveReserveBytes(const NpuBandContext &ctx, ArrayRef<i
   }
   return peakBytes;
 }
-SmallVector<size_t, 6> normalizeTransposeTargetAxisOrder(ArrayRef<size_t> sourceAxisOrder,
-                                                         ArrayRef<size_t> targetAxisOrder) {
-  SmallVector<size_t, 6> normalized(targetAxisOrder.begin(), targetAxisOrder.end());
+SmallVector<size_t, kSmallVectorSizeSix> normalizeTransposeTargetAxisOrder(ArrayRef<size_t> sourceAxisOrder,
+                                                                           ArrayRef<size_t> targetAxisOrder) {
+  SmallVector<size_t, kSmallVectorSizeSix> normalized(targetAxisOrder.begin(), targetAxisOrder.end());
   if (normalized.size() == sourceAxisOrder.size()) {
     return normalized;
   }
@@ -2405,10 +2456,10 @@ int64_t computeTransposeTempReserveBytes(const NpuBandContext &ctx, ArrayRef<int
   if (sourceAxisOrder.empty()) {
     return 0;
   }
-  SmallVector<size_t, 6> normalizedTargetAxisOrder =
+  SmallVector<size_t, kSmallVectorSizeSix> normalizedTargetAxisOrder =
     normalizeTransposeTargetAxisOrder(sourceAxisOrder, targetAxisOrder);
 
-  SmallVector<size_t, 6> sourceOrder(sourceAxisOrder.begin(), sourceAxisOrder.end());
+  SmallVector<size_t, kSmallVectorSizeSix> sourceOrder(sourceAxisOrder.begin(), sourceAxisOrder.end());
   VectorLiveReserve source{sourceOrder, getDefaultBishengStrideAlignDims(static_cast<int64_t>(sourceAxisOrder.size())),
                            elementBits};
   VectorLiveReserve target{normalizedTargetAxisOrder,
@@ -2422,10 +2473,10 @@ int64_t computeTransposeTempReserveBytes(const NpuBandContext &ctx, ArrayRef<int
     kHivmAutoMultiBufferFactor, sourceBytes > LLONG_MAX - targetBytes ? LLONG_MAX : sourceBytes + targetBytes);
 
   int64_t elemBytes = std::max<int64_t>(ceilDivInt64(std::max<int64_t>(elementBits, 1), kBitsPerByte), 1);
-  SmallVector<int64_t, 6> sourceShape;
+  SmallVector<int64_t, kSmallVectorSizeSix> sourceShape;
   sourceShape.resize(sourceOrder.size());
   std::transform(sourceOrder.begin(), sourceOrder.end(), sourceShape.begin(),
-                 [&](size_t axisIdx) { return std::max<int64_t>(axisTiles[axisIdx], 1); });
+                 [&axisTiles](size_t axisIdx) { return std::max<int64_t>(axisTiles[axisIdx], 1); });
 
   int64_t allocReserveBytes =
     computeTransposeAllocReserveBytes(sourceShape, sourceOrder, normalizedTargetAxisOrder, elemBytes, elementIsF32);
@@ -2435,20 +2486,22 @@ int64_t computeTransposeTempReserveBytes(const NpuBandContext &ctx, ArrayRef<int
   return std::max(strideReserveBytes, std::max(allocReserveBytes, adjacentStrideBytes));
 }
 bool satisfiesVectorReserveAlignConstraints(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
-  if (std::any_of(
-        ctx.vectorPeakReserveSets.begin(), ctx.vectorPeakReserveSets.end(), [&](const VectorPeakReserveSet &set) {
-          return std::any_of(set.liveBuffers.begin(), set.liveBuffers.end(), [&](const VectorLiveReserve &reserve) {
-            return !satisfiesStrideAlignWithoutExpansion(ctx, reserve, axisTiles);
-          });
-        })) {
+  if (std::any_of(ctx.vectorPeakReserveSets.begin(), ctx.vectorPeakReserveSets.end(),
+                  [&ctx, &axisTiles](const VectorPeakReserveSet &set) {
+                    return std::any_of(set.liveBuffers.begin(), set.liveBuffers.end(),
+                                       [&ctx, &axisTiles](const VectorLiveReserve &reserve) {
+                                         return !satisfiesStrideAlignWithoutExpansion(ctx, reserve, axisTiles);
+                                       });
+                  })) {
     return false;
   }
   if (std::any_of(ctx.transposeCoLiveReserveSets.begin(), ctx.transposeCoLiveReserveSets.end(),
-                  [&](const SmallVector<TransposeCoLiveReserve, 4> &liveSet) {
-                    return std::any_of(liveSet.begin(), liveSet.end(), [&](const TransposeCoLiveReserve &reserve) {
-                      VectorLiveReserve vectorReserve{reserve.axisOrder, reserve.alignDims, reserve.elementBits};
-                      return !satisfiesStrideAlignWithoutExpansion(ctx, vectorReserve, axisTiles);
-                    });
+                  [&ctx, &axisTiles](const SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour> &liveSet) {
+                    return std::any_of(
+                      liveSet.begin(), liveSet.end(), [&ctx, &axisTiles](const TransposeCoLiveReserve &reserve) {
+                        VectorLiveReserve vectorReserve{reserve.axisOrder, reserve.alignDims, reserve.elementBits};
+                        return !satisfiesStrideAlignWithoutExpansion(ctx, vectorReserve, axisTiles);
+                      });
                   })) {
     return false;
   }
@@ -2461,13 +2514,13 @@ bool satisfiesSingleTransposeAlignConstraints(ArrayRef<int64_t> axisTiles, Array
     return false;
   }
 
-  SmallVector<size_t, 6> normalizedTargetAxisOrder =
+  SmallVector<size_t, kSmallVectorSizeSix> normalizedTargetAxisOrder =
     normalizeTransposeTargetAxisOrder(sourceAxisOrder, targetAxisOrder);
   int64_t elemBytes = std::max<int64_t>(ceilDivInt64(std::max<int64_t>(elementBits, 1), kBitsPerByte), 1);
-  SmallVector<int64_t, 6> sourceShape;
+  SmallVector<int64_t, kSmallVectorSizeSix> sourceShape;
   sourceShape.resize(sourceAxisOrder.size());
   std::transform(sourceAxisOrder.begin(), sourceAxisOrder.end(), sourceShape.begin(),
-                 [&](size_t axisIdx) { return std::max<int64_t>(axisTiles[axisIdx], 1); });
+                 [&axisTiles](size_t axisIdx) { return std::max<int64_t>(axisTiles[axisIdx], 1); });
   return satisfiesTransposeAllocAlign(sourceShape, sourceAxisOrder, normalizedTargetAxisOrder, elemBytes,
                                       elementIsF32) &&
          satisfiesStrideAlignedTranspose(sourceShape, sourceAxisOrder, normalizedTargetAxisOrder, elemBytes);
@@ -2482,7 +2535,7 @@ bool satisfiesTransposeAlignConstraints(const NpuBandContext &ctx, ArrayRef<int6
                                                     ctx.transposeElementBits, ctx.transposeElementIsF32);
   }
 
-  return llvm::all_of(ctx.transposeInfos, [&](const TransposeVectorInfo &info) {
+  return llvm::all_of(ctx.transposeInfos, [&axisTiles, &ctx](const TransposeVectorInfo &info) {
     return satisfiesSingleTransposeAlignConstraints(axisTiles, info.sourceAxisOrder, info.targetAxisOrder,
                                                     info.elementBits, info.isF32);
   });
@@ -2493,7 +2546,7 @@ int64_t getAnotherLastDimTransposeSizeAlignDim(const TransposeVectorInfo &info, 
     return kInvalidAxisIndex;
   }
 
-  SmallVector<size_t, 6> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeDims;
   for (size_t i = 0; i < info.sourceAxisOrder.size(); ++i) {
     if (info.sourceAxisOrder[i] != info.targetAxisOrder[i]) {
       transposeDims.push_back(i);
@@ -2509,7 +2562,7 @@ int64_t getAnotherLastDimTransposeSizeAlignDim(const TransposeVectorInfo &info, 
   }
 
   size_t sourceAxis = info.sourceAxisOrder[dim];
-  SmallVector<size_t, 6> currentOrder(info.sourceAxisOrder.begin(), info.sourceAxisOrder.end());
+  SmallVector<size_t, kSmallVectorSizeSix> currentOrder(info.sourceAxisOrder.begin(), info.sourceAxisOrder.end());
   for (size_t targetPos = 0; targetPos < info.targetAxisOrder.size(); ++targetPos) {
     auto it = llvm::find(currentOrder, info.targetAxisOrder[targetPos]);
     if (it == currentOrder.end()) {
@@ -2549,7 +2602,7 @@ int64_t getNonLastTransposeStrideAlignDim(ArrayRef<size_t> sourceOrder, ArrayRef
     return kInvalidAxisIndex;
   }
 
-  SmallVector<size_t, 6> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeDims;
   for (size_t i = 0; i < sourceOrder.size(); ++i) {
     if (sourceOrder[i] != targetOrder[i]) {
       transposeDims.push_back(i);
@@ -2567,13 +2620,13 @@ bool isNonLastTransposeStrideAlignAxis(const TransposeVectorInfo &info, size_t a
     return false;
   }
 
-  SmallVector<size_t, 6> transposeDims;
+  SmallVector<size_t, kSmallVectorSizeSix> transposeDims;
   for (size_t i = 0; i < info.sourceAxisOrder.size(); ++i) {
     if (info.sourceAxisOrder[i] != info.targetAxisOrder[i]) {
       transposeDims.push_back(i);
     }
   }
-  auto matchesAxis = [&](ArrayRef<size_t> sourceOrder, ArrayRef<size_t> targetOrder, int64_t dim) {
+  auto matchesAxis = [&axisIdx](ArrayRef<size_t> sourceOrder, ArrayRef<size_t> targetOrder, int64_t dim) {
     return dim >= 0 &&
            (sourceOrder[static_cast<size_t>(dim)] == axisIdx || targetOrder[static_cast<size_t>(dim)] == axisIdx);
   };
@@ -2585,14 +2638,14 @@ bool isNonLastTransposeStrideAlignAxis(const TransposeVectorInfo &info, size_t a
     return false;
   }
 
-  SmallVector<size_t, 6> currentOrder(info.sourceAxisOrder.begin(), info.sourceAxisOrder.end());
+  SmallVector<size_t, kSmallVectorSizeSix> currentOrder(info.sourceAxisOrder.begin(), info.sourceAxisOrder.end());
   for (size_t targetPos = 0; targetPos < info.targetAxisOrder.size(); ++targetPos) {
     auto it = llvm::find(currentOrder, info.targetAxisOrder[targetPos]);
     if (it == currentOrder.end()) {
       return false;
     }
     for (auto i = static_cast<size_t>(it - currentOrder.begin()); i > targetPos; --i) {
-      SmallVector<size_t, 6> nextOrder(currentOrder.begin(), currentOrder.end());
+      SmallVector<size_t, kSmallVectorSizeSix> nextOrder(currentOrder.begin(), currentOrder.end());
       std::swap(nextOrder[i - 1], nextOrder[i]);
       if (matchesAxis(currentOrder, nextOrder, getNonLastTransposeStrideAlignDim(currentOrder, nextOrder, ctx))) {
         return true;
@@ -2658,10 +2711,11 @@ void applyF32LastDimDoubleAlign(const NpuBandContext &ctx, SmallVectorImpl<int64
   }
 }
 
-static SmallVector<int64_t, 6> buildTransposeSearchAxisTiles(const NpuBandContext &ctx, const BandTilePlan &plan,
-                                                             ArrayRef<size_t> searchAxisOrder,
-                                                             ArrayRef<int64_t> searchShape) {
-  SmallVector<int64_t, 6> axisTiles;
+static SmallVector<int64_t, kSmallVectorSizeSix> buildTransposeSearchAxisTiles(const NpuBandContext &ctx,
+                                                                               const BandTilePlan &plan,
+                                                                               ArrayRef<size_t> searchAxisOrder,
+                                                                               ArrayRef<int64_t> searchShape) {
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles;
   axisTiles.reserve(ctx.extents.size());
   for (size_t i = 0; i < ctx.extents.size(); ++i) {
     const int64_t fullExtent = i < ctx.extents.size() ? std::max<int64_t>(ctx.extents[i], 1) : int64_t{1};
@@ -2687,7 +2741,8 @@ static SmallVector<int64_t, 6> buildTransposeSearchAxisTiles(const NpuBandContex
 
 static int64_t computeTransposeSearchCandidatePeak(const NpuBandContext &ctx, const BandTilePlan &plan,
                                                    ArrayRef<size_t> searchAxisOrder, ArrayRef<int64_t> searchShape) {
-  SmallVector<int64_t, 6> axisTiles = buildTransposeSearchAxisTiles(ctx, plan, searchAxisOrder, searchShape);
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles =
+    buildTransposeSearchAxisTiles(ctx, plan, searchAxisOrder, searchShape);
   if (!satisfiesTransposeAlignConstraints(ctx, axisTiles, searchAxisOrder)) {
     return static_cast<int64_t>(LLONG_MAX);
   }
@@ -2731,7 +2786,7 @@ static void emitAlignedTransposeMinTileExceedsUb(const NpuBandContext &ctx, Arra
 // stride for non-last-dim transposes). Because every tile we emit is a multiple
 // of `axisAlignSize`, satisfaction of `satisfiesTransposeAlignConstraints` is
 // guaranteed by construction; we only assert it as an invariant.
-// Strategy (matches the agreed plan):
+// Strategy (matches the agreed plan)
 //   1. Compute `axisAlignSize[i]` and `axisMaxTileSize[i] = alignUp(extent, alignSize)`
 //      for every axis in `searchAxisOrder`.
 //   2. Initialize tiles to `[axisAlignSize, ..., axisAlignSize, axisMaxTileSize_last]`
@@ -2753,8 +2808,8 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
   }
 
   const size_t n = searchAxisOrder.size();
-  SmallVector<int64_t, 6> axisAlignSize(n, 1);
-  SmallVector<int64_t, 6> axisMaxTileSize(n, 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> axisAlignSize(n, 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> axisMaxTileSize(n, 1);
   for (size_t i = 0; i < n; ++i) {
     size_t axisIdx = searchAxisOrder[i];
     int64_t alignSize = axisIdx < ctx.axesAlignUnits.size() ? ctx.axesAlignUnits[axisIdx] : 1;
@@ -2776,13 +2831,13 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
   }
 
   // Initial tile: outer axes minimal, innermost maximal.
-  SmallVector<int64_t, 6> tiles(n, 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> tiles(n, 1);
   for (size_t i = 0; i + 1 < n; ++i) {
     tiles[i] = axisAlignSize[i];
   }
   tiles[n - 1] = axisMaxTileSize[n - 1];
 
-  auto peakOf = [&](ArrayRef<int64_t> shape) {
+  auto peakOf = [&ctx, &plan, &searchAxisOrder](ArrayRef<int64_t> shape) {
     return computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, shape);
   };
 
@@ -2874,7 +2929,7 @@ ReduceDirection inferReduceDirection(scf::ForOp loop) {
     return ReduceDirection::UNKNOWN;
   }
   ReduceDirection result = ReduceDirection::UNKNOWN;
-  loop.getBody()->walk([&](Operation *op) {
+  loop.getBody()->walk([&result](Operation *op) {
     auto typeAttr = op->getAttrOfType<StringAttr>(kReductionTypeStr);
     if (!typeAttr) {
       return WalkResult::advance();
@@ -2918,8 +2973,8 @@ bool isInnermostAxisReduceY(const NpuBandContext &ctx) {
 // Pre-compute per-axis reduction labels for the multi-vec greedy search.
 // Reduction axes are *always* eligible for vec (their inner tile becomes the
 // per-vec-instruction chunk), even when their tile must be shrunk to fit UB.
-SmallVector<bool, 6> collectReductionAxisMask(const NpuBandContext &ctx) {
-  SmallVector<bool, 6> mask(ctx.axes.size(), false);
+SmallVector<bool, kSmallVectorSizeSix> collectReductionAxisMask(const NpuBandContext &ctx) {
+  SmallVector<bool, kSmallVectorSizeSix> mask(ctx.axes.size(), false);
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     mask[i] = ctx.axes[i] ? isReductionAxis(ctx.axes[i]) : false;
   }
@@ -2939,7 +2994,7 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
     return;
   }
 
-  SmallVector<int64_t, 6> axisTiles(n, 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(n, 1);
   bool stopped = false;
   bool hasInnerVecAxis = false;
   for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
@@ -3025,10 +3080,10 @@ void preserveDegeneratePrefixTransposeAxes(const NpuBandContext &ctx, BandTilePl
     return;
   }
 
-  auto isAxisMarked = [&](size_t axisIdx) {
+  auto isAxisMarked = [&plan](size_t axisIdx) {
     return axisIdx < plan.multiVecAxisMask.size() && plan.multiVecAxisMask[axisIdx];
   };
-  auto markUnitNonReductionAxis = [&](size_t axisIdx) {
+  auto markUnitNonReductionAxis = [&plan, &ctx](size_t axisIdx) {
     if (axisIdx >= plan.innerTiles.size() || axisIdx >= ctx.axes.size()) {
       return;
     }
@@ -3080,7 +3135,7 @@ void preserveDegeneratePrefixTransposeAxes(const NpuBandContext &ctx, BandTilePl
 // The dynamic-shape pipeline re-enters the strategy for the same band twice
 // (memref-size pre-pass + actual apply); clearing stale markers first keeps
 // the second pass authoritative when the chosen plan changes.
-void tagMultiVecLoops(const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan) {
+void tagMultiVecLoops(const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes, const BandTilePlan &plan) {
   for (const AxisPtr &axis : bandAxes) {
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
     if ((loopOp != nullptr) && loopOp->hasAttr(kMultiVecLoopAttr)) {
@@ -3129,7 +3184,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   initWholeBandPlan(ctx, plan);
 
   size_t innermost = ctx.extents.size() - 1;
-  SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
+  SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
   for (size_t i = 0; i < suffixStart; ++i) {
     axisTiles[i] = 1;
   }
@@ -3166,7 +3221,7 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   plan.outerTiles.front() = firstAxisTile;
   plan.innerTiles.front() = firstAxisTile;
   int64_t ubLimitBytes = getVectorUbBytes(ctx);
-  SmallVector<size_t, 6> searchAxisOrder;
+  SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
   for (auto i = static_cast<size_t>(outermostTransposeIdx); i < ctx.axes.size(); ++i) {
     searchAxisOrder.push_back(i);
   }
@@ -3189,11 +3244,12 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  SmallVector<unsigned, 4> prefixPlaceholder(plan.outerTiles.begin(), plan.outerTiles.begin() + suffixStart);
+  SmallVector<unsigned, kSmallVectorSizeFour> prefixPlaceholder(plan.outerTiles.begin(),
+                                                                plan.outerTiles.begin() + suffixStart);
   fillPrefixSuffixTiles(ctx, prefixPlaceholder, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
                         plan);
 
-  SmallVector<int64_t, 4> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
+  SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
   for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 1; i >= 0; --i) {
     auto idx = static_cast<size_t>(i);
     Operation *loopOp = ctx.axes[idx] ? ctx.axes[idx]->getLoopOperation() : nullptr;
@@ -3258,8 +3314,8 @@ bool isStrictPerfectAxisEdge(const NpuBandContext &ctx, size_t parentIdx) {
   return sawChild;
 }
 
-SmallVector<size_t, 6> collectParallelPrefixAxes(const NpuBandContext &ctx) {
-  SmallVector<size_t, 6> axes;
+SmallVector<size_t, kSmallVectorSizeSix> collectParallelPrefixAxes(const NpuBandContext &ctx) {
+  SmallVector<size_t, kSmallVectorSizeSix> axes;
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     if (!isParallelCandidateAxis(ctx, i)) {
       break;
@@ -3289,13 +3345,13 @@ void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &pla
   }
   alignPlanTiles(ctx, plan);
 
-  SmallVector<size_t, 6> parallelAxes = collectParallelPrefixAxes(ctx);
+  SmallVector<size_t, kSmallVectorSizeSix> parallelAxes = collectParallelPrefixAxes(ctx);
   if (parallelAxes.empty()) {
     return;
   }
 
-  SmallVector<int64_t, 6> parallelExtents;
-  SmallVector<int64_t, 6> parallelAlignUnits;
+  SmallVector<int64_t, kSmallVectorSizeSix> parallelExtents;
+  SmallVector<int64_t, kSmallVectorSizeSix> parallelAlignUnits;
   parallelExtents.reserve(parallelAxes.size());
   parallelAlignUnits.reserve(parallelAxes.size());
   for (size_t axisIdx : parallelAxes) {
@@ -3303,7 +3359,8 @@ void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &pla
     parallelAlignUnits.push_back(axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1)
                                                                      : 1);
   }
-  SmallVector<unsigned, 4> outerCaps = assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks);
+  SmallVector<unsigned, kSmallVectorSizeFour> outerCaps =
+    assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks);
 
   for (auto [pos, axisIdx] : llvm::enumerate(parallelAxes)) {
     int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
@@ -3336,8 +3393,8 @@ static unsigned saturateReductionTileValue(int64_t alignUnit, const AxisPtr axis
   return saturateToTileValue(std::max<int64_t>(fullExtent, 1));
 }
 
-void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, 4> &bandAxes, const BandTilePlan &plan,
-                       size_t &maxLevelToTile) {
+void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes,
+                       const BandTilePlan &plan, size_t &maxLevelToTile) {
   constexpr size_t kTileLevels = 2;
   for (size_t i = 0; i < bandAxes.size(); ++i) {
     const auto &axis = bandAxes[i];
@@ -3396,7 +3453,7 @@ void applyDynamicFallbackAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
   }
 }
 
-static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes,
+static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes,
                                     unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
                                     bool isFullTileAxis) {
   bool hasStaticBounds = axis->hasConstantBounds();
@@ -3411,7 +3468,7 @@ static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsign
   int64_t upperBound = axis->getConstantUpperBound();
   int64_t extent = upperBound - lowerBound;
 
-  SmallVector<unsigned, 4> currentTileSizes = tileSizes;
+  SmallVector<unsigned, kSmallVectorSizeFour> currentTileSizes = tileSizes;
   if (isFullTileAxis) {
     unsigned fullTile = 1;
     if (extent > 0) {
@@ -3423,7 +3480,7 @@ static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsign
     currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
   }
 
-  SmallVector<unsigned, 4> usedTileSizes;
+  SmallVector<unsigned, kSmallVectorSizeFour> usedTileSizes;
   int64_t currentSize = extent;
   for (size_t i = 0; i < currentTileSizes.size(); ++i) {
     auto tileSize = static_cast<int64_t>(currentTileSizes[i]);
@@ -3470,8 +3527,9 @@ SmallVector<AxisPtr> NpuDefaultTileStrategy::collectAxes(const NpuModelGraphPtr 
   return axes;
 }
 
-SmallVector<unsigned, 4> NpuDefaultTileStrategy::parseTileSizesConfig(const NpuModelGraphPtr npuGraph) {
-  SmallVector<unsigned, 4> tileSizes;
+SmallVector<unsigned, kSmallVectorSizeFour> NpuDefaultTileStrategy::parseTileSizesConfig(
+  const NpuModelGraphPtr npuGraph) {
+  SmallVector<unsigned, kSmallVectorSizeFour> tileSizes;
   auto appendTileSizes = [&tileSizes](Attribute attr) {
     auto arrayAttr = dyn_cast_or_null<ArrayAttr>(attr);
     if (arrayAttr) {
@@ -3503,7 +3561,7 @@ SmallVector<unsigned, 4> NpuDefaultTileStrategy::parseTileSizesConfig(const NpuM
 }
 
 void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, const SmallVector<AxisPtr> &axes,
-                                               const SmallVector<unsigned, 4> &tileSizes) {
+                                               const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes) {
   size_t maxLevelToTile = 1;
   constexpr unsigned innerTileSize = kNpuMinInnerTileSize;
   const unsigned blockNumber =
@@ -3543,7 +3601,7 @@ void NpuDefaultTileStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
   }
 
   SmallVector<AxisPtr> axes = collectAxes(npuGraph);
-  SmallVector<unsigned, 4> tileSizes = parseTileSizesConfig(npuGraph);
+  SmallVector<unsigned, kSmallVectorSizeFour> tileSizes = parseTileSizesConfig(npuGraph);
 
   applyTilingToAxes(npuGraph, axes, tileSizes);
 

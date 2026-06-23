@@ -89,7 +89,7 @@ void generateFusedElementwiseOpRegion(RewriterBase &rewriter, CONSUMEROP fusedOp
     SmallVector<Value> fusedIndices;
     fusedIndices.reserve(numFusedOpLoops);
     llvm::transform(llvm::seq<uint64_t>(0, numFusedOpLoops), std::back_inserter(fusedIndices),
-                    [&](uint64_t dim) { return rewriter.create<IndexOp>(producer.getLoc(), dim); });
+                    [&rewriter, &producer](uint64_t dim) { return rewriter.create<IndexOp>(producer.getLoc(), dim); });
     for (IndexOp indexOp : llvm::make_early_inc_range(producerBlock.getOps<IndexOp>())) {
       Value newIndex = rewriter.create<mlir::affine::AffineApplyOp>(
         producer.getLoc(), consumerToProducerLoopsMap.getSubMap(indexOp.getDim()), fusedIndices);

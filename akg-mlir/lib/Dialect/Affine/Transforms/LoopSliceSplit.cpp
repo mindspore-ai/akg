@@ -35,6 +35,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_LOOPSLICESPLIT
@@ -42,6 +43,7 @@ namespace mlir {
 #ifndef GEN_PASS_DECL_LOOPSLICESPLIT
 #define GEN_PASS_DECL_LOOPSLICESPLIT
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
@@ -60,7 +62,7 @@ struct Interval {
 
 struct AccessDim {
   // sum_i (stride_i * iv[axis_i]) + offset. Empty contribs = pure constant.
-  SmallVector<std::pair<int, int64_t>, 2> contribs;
+  SmallVector<std::pair<int, int64_t>, kSmallVectorSizeTwo> contribs;
   int64_t offset = 0;
   [[nodiscard]] bool isConst() const { return contribs.empty(); }
   // Single contributing axis iff the dim is exactly `iv[axis] + offset`; else -1.
@@ -70,8 +72,8 @@ struct AccessDim {
 };
 
 struct PerfectNest {
-  SmallVector<affine::AffineForOp, 4> loops;
-  SmallVector<int64_t, 4> lo, hi;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> loops;
+  SmallVector<int64_t, kSmallVectorSizeFour> lo, hi;
   [[nodiscard]] int axisOf(Value v) const {
     for (size_t i = 0; i < loops.size(); ++i) {
       affine::AffineForOp f = loops[i];
@@ -86,7 +88,7 @@ struct PerfectNest {
 struct AccessInfo {
   Operation *op = nullptr;
   Value memref;
-  SmallVector<AccessDim, 4> dims;
+  SmallVector<AccessDim, kSmallVectorSizeFour> dims;
 };
 
 struct SplitBoundary {
@@ -98,12 +100,12 @@ struct SplitBoundary {
 struct LoopInfo {
   affine::AffineForOp root;
   PerfectNest nest;
-  SmallVector<AccessInfo, 4> stores, loads;
+  SmallVector<AccessInfo, kSmallVectorSizeFour> stores, loads;
   bool ok = true;
 };
 
 static std::optional<PerfectNest> capturePerfectNest(affine::AffineForOp root) {
-  SmallVector<affine::AffineForOp, 4> band;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> band;
   affine::getPerfectlyNestedLoops(band, root);
   if (band.empty()) {
     return std::nullopt;
@@ -176,7 +178,7 @@ static std::optional<AccessInfo> analyzeAccess(OpT op, const PerfectNest &nest) 
   // Compose feeding affine.apply chains and demote symbols to dims so the
   // result map only contains AffineDimExpr.
   AffineMap map;
-  SmallVector<Value, 4> operands;
+  SmallVector<Value, kSmallVectorSizeFour> operands;
   CommonUtils::getUnifiedAffineAccess(op.getOperation(), map, operands);
   if (!map) {
     return std::nullopt;
@@ -260,7 +262,7 @@ static bool accessTouches(const AccessInfo &a, Value memref, ArrayRef<Interval> 
 // iff any op inside `root` uses `memref` as an operand. Lets producer/consumer
 // scans skip unanalyzable loops that don't reference the memref of interest.
 bool loopHasAccessTo(affine::AffineForOp root, Value memref) {
-  WalkResult res = root.walk([&](Operation *op) -> WalkResult {
+  WalkResult res = root.walk([&memref](Operation *op) -> WalkResult {
     if (llvm::is_contained(op->getOperands(), memref)) {
       return WalkResult::interrupt();
     }
@@ -301,20 +303,21 @@ static void splitLoopAtPoints(LoopInfo &L, int splitAxis, ArrayRef<int64_t> spli
 static bool substituteIVInAffineOp(Operation *user, Value iv, llvm::function_ref<AffineExpr(AffineExpr)> make) {
   AffineMap map;
   SmallVector<Value> operands;
-  enum { Load, Store, Apply, Other } kind = Other;
+  enum class OpKind { Load, Store, Apply, Other };
+  OpKind kind = OpKind::Other;
 
   if (auto load = dyn_cast<affine::AffineLoadOp>(user)) {
     map = load.getAffineMap();
     operands.assign(load.getMapOperands().begin(), load.getMapOperands().end());
-    kind = Load;
+    kind = OpKind::Load;
   } else if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
     map = store.getAffineMap();
     operands.assign(store.getMapOperands().begin(), store.getMapOperands().end());
-    kind = Store;
+    kind = OpKind::Store;
   } else if (auto apply = dyn_cast<affine::AffineApplyOp>(user)) {
     map = apply.getAffineMap();
     operands.assign(user->getOperands().begin(), user->getOperands().end());
-    kind = Apply;
+    kind = OpKind::Apply;
   } else {
     return false;
   }
@@ -338,11 +341,11 @@ static bool substituteIVInAffineOp(Operation *user, Value iv, llvm::function_ref
     (idx < static_cast<int>(numDims)) ? getAffineDimExpr(idx, ctx) : getAffineSymbolExpr(idx - numDims, ctx);
   AffineExpr substExpr = make(ivExpr);
 
-  SmallVector<AffineExpr, 4> dimRepls;
+  SmallVector<AffineExpr, kSmallVectorSizeFour> dimRepls;
   for (unsigned k = 0; k < numDims; ++k) {
     dimRepls.push_back(getAffineDimExpr(k, ctx));
   }
-  SmallVector<AffineExpr, 4> symRepls;
+  SmallVector<AffineExpr, kSmallVectorSizeFour> symRepls;
   for (unsigned k = 0; k < numSyms; ++k) {
     symRepls.push_back(getAffineSymbolExpr(k, ctx));
   }
@@ -354,14 +357,14 @@ static bool substituteIVInAffineOp(Operation *user, Value iv, llvm::function_ref
   AffineMap newMap = map.replaceDimsAndSymbols(dimRepls, symRepls, numDims, numSyms);
   affine::canonicalizeMapAndOperands(&newMap, &operands);
 
-  if (kind == Load) {
+  if (kind == OpKind::Load) {
     auto load = cast<affine::AffineLoadOp>(user);
     SmallVector<Value> allOps;
     allOps.push_back(load.getMemRef());
     allOps.append(operands.begin(), operands.end());
     load.setMap(newMap);
     user->setOperands(allOps);
-  } else if (kind == Store) {
+  } else if (kind == OpKind::Store) {
     auto store = cast<affine::AffineStoreOp>(user);
     SmallVector<Value> allOps;
     allOps.push_back(store.getValueToStore());
@@ -369,7 +372,7 @@ static bool substituteIVInAffineOp(Operation *user, Value iv, llvm::function_ref
     allOps.append(operands.begin(), operands.end());
     store.setMap(newMap);
     user->setOperands(allOps);
-  } else if (kind == Apply) {
+  } else if (kind == OpKind::Apply) {
     auto apply = cast<affine::AffineApplyOp>(user);
     apply.setMap(newMap);
     user->setOperands(operands);
@@ -427,9 +430,10 @@ static std::optional<WawShrink> detectWawShrink(const AccessInfo &sa, const Perf
   return std::nullopt;
 }
 
-static SmallVector<Interval, 4> buildDeadRegion(const AccessInfo &sa, const PerfectNest &nestA, const AccessInfo &sb,
-                                                const PerfectNest &nestB, int diffDim) {
-  SmallVector<Interval, 4> dead;
+static SmallVector<Interval, kSmallVectorSizeFour> buildDeadRegion(const AccessInfo &sa, const PerfectNest &nestA,
+                                                                   const AccessInfo &sb, const PerfectNest &nestB,
+                                                                   int diffDim) {
+  SmallVector<Interval, kSmallVectorSizeFour> dead;
   for (size_t k = 0; k < sa.dims.size(); ++k) {
     dead.push_back(static_cast<int>(k) == diffDim ? intervalFor(sb.dims[k], nestB) : intervalFor(sa.dims[k], nestA));
   }
@@ -485,7 +489,7 @@ static void collectProducerSplits(const AccessInfo &load, size_t dimIdx, const P
   Interval absRange{consumerNest.lo[axis] + c, consumerNest.hi[axis] + c};
   Interval remaining = absRange;
 
-  auto record = [&](int64_t p) {
+  auto record = [&absRange, &pts, &boundaries, &c, &load, &dimIdx](int64_t p) {
     if (p > absRange.lo && p < absRange.hi) {
       pts.push_back(p - c);
       boundaries.push_back({load.memref, dimIdx, p});
@@ -514,9 +518,10 @@ static void collectProducerSplits(const AccessInfo &load, size_t dimIdx, const P
   }
 }
 
-static SmallVector<int64_t, 4> collectAxisSplitPoints(const LoopInfo &L, size_t axis, ArrayRef<LoopInfo> earlier,
-                                                      SmallVectorImpl<SplitBoundary> &boundaries) {
-  SmallVector<int64_t, 4> pts;
+static SmallVector<int64_t, kSmallVectorSizeFour> collectAxisSplitPoints(const LoopInfo &L, size_t axis,
+                                                                         ArrayRef<LoopInfo> earlier,
+                                                                         SmallVectorImpl<SplitBoundary> &boundaries) {
+  SmallVector<int64_t, kSmallVectorSizeFour> pts;
   for (const AccessInfo &load : L.loads) {
     for (size_t d = 0; d < load.dims.size(); ++d) {
       if (load.dims[d].affineAxis() == static_cast<int>(axis)) {
@@ -526,15 +531,15 @@ static SmallVector<int64_t, 4> collectAxisSplitPoints(const LoopInfo &L, size_t 
   }
   llvm::sort(pts);
   pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
-  SmallVector<int64_t, 4> filtered;
+  SmallVector<int64_t, kSmallVectorSizeFour> filtered;
   std::copy_if(pts.begin(), pts.end(), std::back_inserter(filtered),
                [lo = L.nest.lo[axis], hi = L.nest.hi[axis]](int64_t p) { return p > lo && p < hi; });
   return filtered;
 }
 
-static SmallVector<int64_t, 4> collectMirrorSplitPoints(const LoopInfo &L, size_t axis,
-                                                        ArrayRef<SplitBoundary> consumerBds) {
-  SmallVector<int64_t, 4> ivPts;
+static SmallVector<int64_t, kSmallVectorSizeFour> collectMirrorSplitPoints(const LoopInfo &L, size_t axis,
+                                                                           ArrayRef<SplitBoundary> consumerBds) {
+  SmallVector<int64_t, kSmallVectorSizeFour> ivPts;
   for (const AccessInfo &st : L.stores) {
     for (size_t d = 0; d < st.dims.size(); ++d) {
       if (st.dims[d].affineAxis() != static_cast<int>(axis)) {
@@ -572,7 +577,7 @@ static bool runAxisSplit(SmallVectorImpl<LoopInfo> &loops, Collect collect) {
       if (pts.empty()) {
         continue;
       }
-      SmallVector<int64_t, 4> splitPoints;
+      SmallVector<int64_t, kSmallVectorSizeFour> splitPoints;
       splitPoints.push_back(L.nest.lo[axis]);
       splitPoints.append(pts.begin(), pts.end());
       splitPoints.push_back(L.nest.hi[axis]);
@@ -626,7 +631,7 @@ static DimRel classifyOtherDims(const AccessInfo &st, const AccessInfo &ld, size
 
 struct StrideScan {
   int64_t stride = 0;
-  llvm::SmallSetVector<int64_t, 4> offsetClasses;
+  llvm::SmallSetVector<int64_t, kSmallVectorSizeFour> offsetClasses;
 };
 
 // True iff offsetClasses == {0..stride-1} with stride > 1.
@@ -666,7 +671,7 @@ static void stridedSplitTransform(LoopInfo &L, int axis, int64_t stride, int64_t
     targetLoop.setConstantUpperBound(halfSize);
 
     Value newIv = targetLoop.getInductionVar();
-    llvm::SmallSetVector<Operation *, 4> users;
+    llvm::SmallSetVector<Operation *, kSmallVectorSizeFour> users;
     for (Operation *u : newIv.getUsers()) {
       users.insert(u);
     }
@@ -701,12 +706,12 @@ static bool promoteSingletonLoop(affine::AffineForOp forOp) {
   Value iv = forOp.getInductionVar();
   AffineExpr loConst = getAffineConstantExpr(lo, forOp.getContext());
 
-  llvm::SmallSetVector<Operation *, 4> users;
+  llvm::SmallSetVector<Operation *, kSmallVectorSizeFour> users;
   for (Operation *u : iv.getUsers()) {
     users.insert(u);
   }
   for (Operation *u : users) {
-    if (!substituteIVInAffineOp(u, iv, [&](AffineExpr) { return loConst; })) {
+    if (!substituteIVInAffineOp(u, iv, [&loConst](AffineExpr) { return loConst; })) {
       OpBuilder b(u);
       auto cOp = b.create<arith::ConstantIndexOp>(forOp.getLoc(), lo);
       u->replaceUsesOfWith(iv, cOp.getResult());
@@ -736,7 +741,7 @@ static bool normalizeNonZeroLb(affine::AffineForOp forOp) {
   }
 
   Value iv = forOp.getInductionVar();
-  llvm::SmallSetVector<Operation *, 4> users;
+  llvm::SmallSetVector<Operation *, kSmallVectorSizeFour> users;
   for (Operation *u : iv.getUsers()) {
     users.insert(u);
   }
@@ -748,7 +753,7 @@ static bool normalizeNonZeroLb(affine::AffineForOp forOp) {
 
   AffineExpr lbExpr = getAffineConstantExpr(lb, forOp.getContext());
   for (Operation *u : users) {
-    substituteIVInAffineOp(u, iv, [&](AffineExpr ivExpr) { return ivExpr + lbExpr; });
+    substituteIVInAffineOp(u, iv, [&lbExpr](AffineExpr ivExpr) { return ivExpr + lbExpr; });
   }
 
   forOp.setConstantLowerBound(0);
@@ -788,8 +793,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
 
  private:
   func::FuncOp func;
-  SmallVector<LoopInfo, 16> loops;
-  SmallVector<SplitBoundary, 8> boundaries;
+  SmallVector<LoopInfo, kSmallVectorSizeSixteen> loops;
+  SmallVector<SplitBoundary, kSmallVectorSizeEight> boundaries;
 
   // Refresh `loops` from the current IR. Each stage that depends on `loops`
   // calls this first, so transformations that erased or created loops in
@@ -845,12 +850,14 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
         }
         continue;
       }
-      if (std::any_of(loops[k].loads.begin(), loops[k].loads.end(),
-                      [&](const AccessInfo &x) { return accessTouches(x, memref, dead, loops[k].nest); })) {
+      if (std::any_of(loops[k].loads.begin(), loops[k].loads.end(), [this, &memref, &dead, &k](const AccessInfo &x) {
+            return accessTouches(x, memref, dead, loops[k].nest);
+          })) {
         return true;
       }
-      if (std::any_of(loops[k].stores.begin(), loops[k].stores.end(),
-                      [&](const AccessInfo &x) { return accessTouches(x, memref, dead, loops[k].nest); })) {
+      if (std::any_of(loops[k].stores.begin(), loops[k].stores.end(), [this, &memref, &dead, &k](const AccessInfo &x) {
+            return accessTouches(x, memref, dead, loops[k].nest);
+          })) {
         return true;
       }
     }
@@ -860,8 +867,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
   // Interval-based axis split
   void runSliceSplit() {
     gather();
-    runAxisSplit(loops, [&](const LoopInfo &L, size_t axis, size_t i) {
-      SmallVector<SplitBoundary, 4> bds;
+    runAxisSplit(loops, [this](const LoopInfo &L, size_t axis, size_t i) {
+      SmallVector<SplitBoundary, kSmallVectorSizeFour> bds;
       auto pts = collectAxisSplitPoints(L, axis, ArrayRef<LoopInfo>(loops).take_front(i), bds);
       if (!pts.empty()) {
         boundaries.append(bds.begin(), bds.end());
@@ -875,7 +882,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
       return;
     }
     gather();
-    runAxisSplit(loops, [&](const LoopInfo &L, size_t axis, size_t /*i*/) {
+    runAxisSplit(loops, [this](const LoopInfo &L, size_t axis, size_t /* i */) {
       return collectMirrorSplitPoints(L, axis, boundaries);
     });
   }
@@ -940,7 +947,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
         continue;
       }
       if (std::any_of(loops[j].stores.begin(), loops[j].stores.end(),
-                      [&](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
+                      [&st](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
         return std::nullopt;
       }
       for (const AccessInfo &ld : loops[j].loads) {
@@ -1016,7 +1023,7 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
         continue;
       }
       if (std::any_of(loops[j].stores.begin(), loops[j].stores.end(),
-                      [&](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
+                      [&st](const AccessInfo &midSt) { return midSt.memref == st.memref; })) {
         return std::nullopt;
       }
       for (const AccessInfo &ld : loops[j].loads) {
@@ -1053,8 +1060,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
   // Fold `(iv + lb)` into each user's affine map; falls back to stock normalize
   // (which emits `affine.apply`) when a user isn't a load/store/apply.
   void normalizeLowerBounds() {
-    SmallVector<affine::AffineForOp, 8> targets;
-    func.walk([&](affine::AffineForOp f) {
+    SmallVector<affine::AffineForOp, kSmallVectorSizeEight> targets;
+    func.walk([&targets](affine::AffineForOp f) {
       if (!f.hasConstantLowerBound() || !f.hasConstantUpperBound()) {
         return;
       }
@@ -1078,8 +1085,8 @@ struct LoopSliceSplit : impl::LoopSliceSplitBase<LoopSliceSplit> {
     bool changed = true;
     while (changed) {
       changed = false;
-      SmallVector<affine::AffineForOp, 8> singletons;
-      func.walk([&](affine::AffineForOp f) {
+      SmallVector<affine::AffineForOp, kSmallVectorSizeEight> singletons;
+      func.walk([&singletons](affine::AffineForOp f) {
         if (!f.hasConstantLowerBound() || !f.hasConstantUpperBound()) {
           return;
         }

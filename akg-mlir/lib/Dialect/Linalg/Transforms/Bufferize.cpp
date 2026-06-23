@@ -35,33 +35,35 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;           // NOLINT(build/namespaces)
-using namespace bufferization;  // NOLINT(build/namespaces)
-
 namespace {
+using mlir::DialectRegistry;
+using mlir::failed;
+using mlir::OperationPass;
 /// Converts Linalg operations that work on tensor-type operands or results to
 /// work on buffers.
-struct LinalgExtBufferizePass : public impl::LinalgExtBufferizeBase<LinalgExtBufferizePass> {
+struct LinalgExtBufferizePass : public mlir::impl::LinalgExtBufferizeBase<LinalgExtBufferizePass> {
   void runOnOperation() override {
-    BufferizationOptions options = getPartialBufferizationOptions();
+    mlir::bufferization::BufferizationOptions options = mlir::bufferization::getPartialBufferizationOptions();
     options.bufferAlignment = 0;
-    options.opFilter.allowDialect<linalg::LinalgDialect, linalgExt::LinalgExtDialect>();
+    options.opFilter.allowDialect<mlir::linalg::LinalgDialect, mlir::linalgExt::LinalgExtDialect>();
 
-    if (failed(bufferizeOp(getOperation(), options))) {
+    if (failed(mlir::bufferization::bufferizeOp(getOperation(), options))) {
       signalPassFailure();
     }
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<bufferization::BufferizationDialect, memref::MemRefDialect, tensor::TensorDialect,
-                    linalg::LinalgDialect, linalgExt::LinalgExtDialect>();
+    registry.insert<mlir::bufferization::BufferizationDialect, mlir::memref::MemRefDialect, mlir::tensor::TensorDialect,
+                    mlir::linalg::LinalgDialect, mlir::linalgExt::LinalgExtDialect>();
 
-    linalg::registerBufferizableOpInterfaceExternalModels(registry);
-    linalgExt::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::linalgExt::registerBufferizableOpInterfaceExternalModels(registry);
   }
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgExtBufferizePass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLinalgExtBufferizePass() {
   return std::make_unique<LinalgExtBufferizePass>();
 }
+}  // namespace mlir

@@ -46,7 +46,7 @@ class Op {
   OpCategory opCategory;
 };
 
-enum GraphTemplate { DEFAULT = 0, CONV, MATMUL, REDUCTION, BROADCAST_OP, TRANSPOSE_OP, PURE_ELEM, TEMPLATE_BULK };
+enum class GraphTemplate { DEFAULT = 0, CONV, MATMUL, REDUCTION, BROADCAST_OP, TRANSPOSE_OP, PURE_ELEM, TEMPLATE_BULK };
 
 class Tensor {
  public:

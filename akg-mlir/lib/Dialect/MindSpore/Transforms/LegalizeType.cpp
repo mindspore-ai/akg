@@ -33,10 +33,9 @@ namespace mlir {
 #include "akg/Dialect/MindSpore/Passes.h.inc"
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 
 static Value getCastedValue(PatternRewriter &rewriter, Value oper, Type toElemTy) {
   ShapedType shapedType = cast<ShapedType>(oper.getType());
@@ -134,4 +133,6 @@ struct LegalizeType : public impl::LegalizeTypeBase<LegalizeType> {
 };
 }  // namespace
 
-std::unique_ptr<Pass> mlir::createLegalizeTypePass() { return std::make_unique<LegalizeType>(); }
+namespace mlir {
+std::unique_ptr<Pass> createLegalizeTypePass() { return std::make_unique<LegalizeType>(); }
+}  // namespace mlir

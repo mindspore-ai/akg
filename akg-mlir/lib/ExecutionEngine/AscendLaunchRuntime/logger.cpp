@@ -15,8 +15,12 @@
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
+namespace mlir {
+namespace runtime {
 void akg_log_init() {
   if (!google::IsGoogleLoggingInitialized()) {
     google::InitGoogleLogging("akg");
   }
 }
+}  // namespace runtime
+}  // namespace mlir

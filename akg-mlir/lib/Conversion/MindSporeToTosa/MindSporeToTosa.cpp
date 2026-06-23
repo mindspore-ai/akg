@@ -189,7 +189,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
 
     // create one tosa.reduce operation for each axis
     for (int64_t i = 0; i < adaptor.getAxisAttr().size(); i++) {
-      auto axis = (int64_t)adaptor.getAxisAttr()[i];
+      auto axis = static_cast<int64_t>(adaptor.getAxisAttr()[i]);
       reduce_output_shape[axis] = 1;
       auto reduce_inter_tensor = RankedTensorType::get(reduce_output_shape, resultElementTy);
       llvm::SmallVector<NamedAttribute> attrs_once;
@@ -268,7 +268,7 @@ template <typename T>
 std::optional<Value> getConstTensor(PatternRewriter &rewriter, Operation *op, const ArrayRef<T> vec,
                                     const ArrayRef<int64_t> shape) {
   int64_t elemNum = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
-  if (vec.size() != (uint64_t)elemNum) {
+  if (vec.size() != static_cast<uint64_t>(elemNum)) {
     (void)op->emitOpError("getConstTensor(): number of elements mismatch.");
     return std::nullopt;
   }
@@ -283,7 +283,7 @@ template <>
 std::optional<Value> getConstTensor<float>(PatternRewriter &rewriter, Operation *op, const ArrayRef<float> vec,
                                            ArrayRef<int64_t> shape) {
   int64_t elemNum = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
-  if (vec.size() != (uint64_t)elemNum) {
+  if (vec.size() != static_cast<uint64_t>(elemNum)) {
     (void)op->emitOpError("getConstTensor(): number of elements mismatch.");
     return std::nullopt;
   }
@@ -335,7 +335,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
       return rewriter.notifyMatchFailure(op, "pad range size should be even");
     }
 
-    if (rank < 0 || padRank > (uint64_t)rank) {
+    if (rank < 0 || padRank > static_cast<uint64_t>(rank)) {
       return rewriter.notifyMatchFailure(op, "padding exceeds out tensor rank");
     }
 

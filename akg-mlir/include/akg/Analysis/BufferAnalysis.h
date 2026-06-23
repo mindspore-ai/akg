@@ -122,7 +122,7 @@ struct BufferAnalysisOptions {
 //===----------------------------------------------------------------------===//
 
 /// Buffer status enumeration
-enum BufferStatus { UNDEFINED = 0, DEFINED, GENED, KILLED };
+enum class BufferStatus { UNDEFINED = 0, DEFINED, GENED, KILLED };
 
 /// Buffer information structure
 struct BufferInfo {

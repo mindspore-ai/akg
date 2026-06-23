@@ -48,16 +48,18 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_SHAPENORMALIZATION
 #define GEN_PASS_DEF_SHAPENORMALIZATION
 #include "akg/Dialect/Linalg/Passes.h.inc"
+
 }  // namespace mlir
 
-using mlir::linalg::GenericOp;
-
 namespace mlir {
+using linalg::GenericOp;
+
 namespace {
 
 struct GlobalTargetInfo {
@@ -123,7 +125,7 @@ struct ShapeNormalState {
     SmallVector<int64_t> FinalSizes;
     SmallVector<int64_t> FinalStrides;
   };
-  DenseMap<Operation *, SmallVector<SubviewAxisTargetExpandRecord, 0>> subviewPreExpandPlans;
+  DenseMap<Operation *, SmallVector<SubviewAxisTargetExpandRecord, kSmallVectorSizeZero>> subviewPreExpandPlans;
   DenseMap<Operation *, SmallVector<std::string>> subviewOldSrcSymShape;
 
   ShapeNormalState() : manager(SymbolicShapeAnalysis::getInstance()) { axisSizes["1"] = 1; }
@@ -224,8 +226,10 @@ struct ShapeNormalState {
     SmallVector<std::string> tempAxes2;
     SmallVector<int64_t> tempSizes2;
 
-    size_t idx1 = 1, idx2 = 1;
-    int64_t accum1 = sizes1[0], accum2 = sizes2[0];
+    size_t idx1 = 1;
+    size_t idx2 = 1;
+    int64_t accum1 = sizes1[0];
+    int64_t accum2 = sizes2[0];
     tempAxes1.push_back(axesgroup1[0]);
     tempSizes1.push_back(sizes1[0]);
     tempAxes2.push_back(axesgroup2[0]);
@@ -397,9 +401,12 @@ struct ShapeNormalState {
       return *trivial;
     }
 
-    std::string axis1 = axes1[0], axis2 = axes2[0];
-    int64_t size1 = sizes1[0], size2 = sizes2[0];
-    int64_t idx1 = 0, idx2 = 0;
+    std::string axis1 = axes1[0];
+    std::string axis2 = axes2[0];
+    int64_t size1 = sizes1[0];
+    int64_t size2 = sizes2[0];
+    int64_t idx1 = 0;
+    int64_t idx2 = 0;
     skipLeadingSizeOne(axes1, sizes1, axis1, size1, idx1);
     skipLeadingSizeOne(axes2, sizes2, axis2, size2, idx2);
 
@@ -438,8 +445,9 @@ struct ShapeNormalState {
     SmallVector<std::string> expandedaxesgroup1 = expandGroupedAxes(axesgroup1);
     SmallVector<std::string> expandedaxesgroup2 = expandGroupedAxes(axesgroup2);
 
-    // TODO(akg): This judgment may need to be improved in the future by the expression of dynamic axis length
-    SmallVector<std::string> dynAxes1, dynAxes2;
+    // This judgment may need to be improved in the future by the expression of dynamic axis length
+    SmallVector<std::string> dynAxes1;
+    SmallVector<std::string> dynAxes2;
     for (const auto &axis : expandedaxesgroup1) {
       if (axisSizes.lookup(axis) == ShapedType::kDynamic) {
         dynAxes1.push_back(axis);
@@ -451,7 +459,7 @@ struct ShapeNormalState {
       }
     }
     if (dynAxes1 != dynAxes2) {
-      // TODO(akg): static axes being broken by dynamic axes should also return false.
+      // static axes being broken by dynamic axes should also return false.
       result.success = false;
       result.finestAxes = expandedaxesgroup2;
       return result;
@@ -765,7 +773,7 @@ struct ShapeNormalState {
                                        const SmallVector<ReassociationIndices> &reassociation,
                                        const SmallVector<std::string> &inputSymShape,
                                        SmallVector<int64_t> &targetStrides) const {
-    auto symAxisIsUnit = [&](int64_t dimIndex) {
+    auto symAxisIsUnit = [this, inputSymShape](int64_t dimIndex) {
       const std::string &axis = inputSymShape[static_cast<size_t>(dimIndex)];
       return axis == "1" || axisSizes.lookup(axis) == 1;
     };
@@ -815,9 +823,9 @@ struct ShapeNormalState {
                                       const SmallVector<ReassociationIndices> &reassociation,
                                       const SmallVector<std::string> &inputSymShape,
                                       SmallVector<int64_t> &targetStrides) const {
-    auto symAxisIsUnit = [&](int64_t dimIndex) {
+    auto symAxisIsUnit = [this, inputSymShape](int64_t dimIndex) {
       const std::string &axis = inputSymShape[static_cast<size_t>(dimIndex)];
-      // TODO(akg) if axis is a dynamic axis but length is known
+      // if axis is a dynamic axis but length is known
       return axis == "1" || axisSizes.lookup(axis) == 1;
     };
     for (const ReassociationIndices &group : reassociation) {
@@ -920,7 +928,7 @@ struct ShapeNormalState {
     SmallVector<Operation *> ops;
     SmallVector<int64_t> targetSizes = getAxesSizes(targetSymShape);
     auto rank = static_cast<int64_t>(targetSymShape.size());
-    // TODO(akg): Unify the shape value to i64 for now, modify if needed later
+    // Unify the shape value to i64 for now, modify if needed later
     auto i64Ty = rewriter.getI64Type();
     auto shapeMemrefTy = MemRefType::get({rank}, i64Ty);
     Value shapeMemref = rewriter.create<memref::AllocOp>(loc, shapeMemrefTy);
@@ -1328,7 +1336,7 @@ struct StoreOpAdapter final : OpAdapter {
     Value memref = storeOp.getMemRef();
     Value value = storeOp.getValueToStore();
     auto indices = storeOp.getIndices();
-    // TODO(akg): Future implementation of extract requires handling multi-dimensional indices
+    // Future implementation of extract requires handling multi-dimensional indices
     if (indices.size() != 1) {
       return;
     }
@@ -1396,7 +1404,7 @@ struct GlobalAdapter final : OpAdapter {
     auto globalOp = cast<memref::GlobalOp>(op);
     auto module = globalOp->getParentOfType<ModuleOp>();
     StringRef symName = globalOp.getSymName();
-    module.walk([&](memref::GetGlobalOp getGlobal) {
+    module.walk([&symName, &state](memref::GetGlobalOp getGlobal) {
       if (getGlobal.getNameAttr().getLeafReference() != symName) {
         return;
       }
@@ -1431,7 +1439,7 @@ struct GlobalAdapter final : OpAdapter {
     auto module = globalOp->getParentOfType<ModuleOp>();
     StringRef symName = globalOp.getSymName();
     SmallVector<memref::GetGlobalOp> getGlobalOpsToUpdate;
-    module.walk([&](memref::GetGlobalOp getGlobal) {
+    module.walk([&symName, &getGlobalOpsToUpdate](memref::GetGlobalOp getGlobal) {
       if (getGlobal.getNameAttr().getLeafReference() == symName) {
         getGlobalOpsToUpdate.push_back(getGlobal);
       }
@@ -1684,7 +1692,7 @@ struct ReshapeAdapter final : OpAdapter {
         tmpResProduct *= std::get<int64_t>(resultShapeValues[resIdx]);
         resIdx++;
       }
-      // TODO(akg): support dynamic axis x/2 * 2
+      // support dynamic axis x/2 * 2
       if (tmpSrcProduct != tmpResProduct) {
         break;
       }
@@ -1741,7 +1749,7 @@ struct ReshapeAdapter final : OpAdapter {
     SmallVector<ShapeDimValue> srcShapeValues = computeSrcShapeValues(srcSymShape, state);
     SmallVector<std::string> resultSymShape(resultShapeValues.size());
     matchDstShapeToSrcShape(resultShapeValues, srcShapeValues, srcSymShape, resultSymShape);
-    // TODO(akg): consider match again from the end
+    // consider match again from the end
 
     fillResultSymShape(resultSymShape, resultType, sortedVals, state);
     state.updateValueSymbolicShape(result, resultSymShape);
@@ -1816,7 +1824,7 @@ struct GenericAdapter final : OpAdapter {
           // else: could use axisRenameMap
           std::replace_if(
             unifiedAxesNames.begin(), unifiedAxesNames.end(),
-            [&](const std::string &affineMapName) {
+            [&SymShape, &unifiedAxesNames, &inputDimMap, i](const std::string &affineMapName) {
               return affineMapName == SymShape[i] || affineMapName == unifiedAxesNames[inputDimMap[i]];
             },
             updatedAxis);
@@ -1978,7 +1986,7 @@ struct GenericAdapter final : OpAdapter {
 
   static int findAxisIndex(const SmallVector<std::string> &axes, const std::string &a) {
     auto it = std::find(axes.begin(), axes.end(), a);
-    return it != axes.end() ? (int)(it - axes.begin()) : -1;
+    return it != axes.end() ? static_cast<int>(it - axes.begin()) : -1;
   }
 
   static SmallVector<int64_t> getDuplicateAxisTargetIndicesInAffineMap(
@@ -2035,7 +2043,8 @@ struct GenericAdapter final : OpAdapter {
     GenericOp generic, const SmallVector<std::string> &newUnifiedAxesNames,
     const SmallVector<std::string> &affineMapSymDims, const ShapeNormalState &state) {
     SmallVector<int64_t> productionOfUnifiedAxesNames;
-    int64_t production = 1, lastValidProduction = -1;
+    int64_t production = 1;
+    int64_t lastValidProduction = -1;
     for (const std::string &axis : affineMapSymDims) {
       if (state.axisSizes.lookup(axis) == ShapedType::kDynamic) {
         productionOfUnifiedAxesNames.push_back(lastValidProduction);
@@ -2245,7 +2254,7 @@ static ShapeNormalState::SubviewAxisTargetExpandRecord resultNeedsExpand(Operati
 static void collectExpandShapeOpsAfterAnchor(ModuleOp module, Operation *anchor,
                                              SmallVector<memref::ExpandShapeOp> &out) {
   bool seenAnchor = false;
-  module.walk([&](Operation *op) {
+  module.walk([&anchor, &seenAnchor, &out](Operation *op) {
     if (!seenAnchor) {
       if (op == anchor) {
         seenAnchor = true;
@@ -2274,7 +2283,7 @@ static bool childGroupLabelsUnify(const ShapeNormalState &state, ArrayRef<std::s
   return true;
 }
 
-// TODO(akg): strip ones
+// strip ones
 static SmallVector<std::string> finestSymAxesAfterModuleExpands(ModuleOp module, const ShapeNormalState &state,
                                                                 memref::SubViewOp subviewOp, const std::string &axis) {
   SmallVector<std::string> current;
@@ -2329,7 +2338,7 @@ static SmallVector<std::string> finestSymAxesAfterModuleExpands(ModuleOp module,
 }
 
 static void analyzeSubviewAxes(ModuleOp module, ShapeNormalState &state) {
-  module.walk([&](memref::SubViewOp subviewOp) {
+  module.walk([&module, &state](memref::SubViewOp subviewOp) {
     Operation *op = subviewOp.getOperation();
     SmallVector<int64_t> updatedAxesIndex = state.updatedAxesIndex[op];
     Value src = subviewOp.getSource();
@@ -2498,11 +2507,13 @@ struct SubviewAdapter final : OpAdapter {
     offsets.reserve(targetForSubView.size());
     sizes.reserve(targetForSubView.size());
     strides.reserve(targetForSubView.size());
-    for (size_t i = 0; i < targetForSubView.size(); ++i) {
+    size_t i = 0;
+    while (i < targetForSubView.size()) {
       if (!llvm::is_contained(newUpdatedIndex, static_cast<int64_t>(i))) {
         offsets.push_back(rewriter.getIndexAttr(0));
         sizes.push_back(rewriter.getIndexAttr(targetForSubViewShapeInt[static_cast<int64_t>(i)]));
         strides.push_back(rewriter.getIndexAttr(1));
+        ++i;
       } else {
         auto oldTargetIt = newUpdatedIndexToOldTargetIndex.find(static_cast<int64_t>(i));
         assert(oldTargetIt != newUpdatedIndexToOldTargetIndex.end() &&
@@ -2510,16 +2521,17 @@ struct SubviewAdapter final : OpAdapter {
         const int64_t oldTargetIndex = oldTargetIt->second;
         if (const auto *rec = findSubviewAxisExpandPlan(state, op, oldTargetIndex)) {
           llvm::transform(rec->FinalOffsets, std::back_inserter(offsets),
-                          [&](int64_t off) { return rewriter.getIndexAttr(off); });
+                          [&rewriter](int64_t off) { return rewriter.getIndexAttr(off); });
           llvm::transform(rec->FinalSizes, std::back_inserter(sizes),
-                          [&](int64_t sz) { return rewriter.getIndexAttr(sz); });
+                          [&rewriter](int64_t sz) { return rewriter.getIndexAttr(sz); });
           llvm::transform(rec->FinalStrides, std::back_inserter(strides),
-                          [&](int64_t st) { return rewriter.getIndexAttr(st); });
-          i += rec->FinalOffsets.size() - 1;
+                          [&rewriter](int64_t st) { return rewriter.getIndexAttr(st); });
+          i += rec->FinalOffsets.size();
         } else {
           offsets.push_back(oldOffsets[oldTargetIndex]);
           sizes.push_back(oldSizes[oldTargetIndex]);
           strides.push_back(oldStrides[oldTargetIndex]);
+          ++i;
         }
       }
     }
@@ -2743,7 +2755,7 @@ void initFinestAxes(func::FuncOp func, ShapeNormalState &state, PatternRewriter 
 }
 
 void unifyToFinestAxes(ModuleOp module, ShapeNormalState &state) {
-  module.walk([&](Operation *op) {
+  module.walk([&state](Operation *op) {
     if (!state.isSupportedOp(op)) {
       return;
     }
@@ -2752,7 +2764,7 @@ void unifyToFinestAxes(ModuleOp module, ShapeNormalState &state) {
 }
 
 void collectGlobalTargetShapes(ModuleOp module, ShapeNormalState &state) {
-  module.walk([&](memref::GetGlobalOp getGlobal) {
+  module.walk([&state](memref::GetGlobalOp getGlobal) {
     Value result = getGlobal.getResult();
     if (!state.ValuesinFunc.contains(result)) {
       return;
@@ -2828,14 +2840,14 @@ void assignLabels(ModuleOp module, ShapeNormalState &state) {
     }
   }
 
-  module.walk([&](Operation *op) {
+  module.walk([&state](Operation *op) {
     if (!state.isSupportedOp(op)) {
       return;
     }
     state.assignLabels(op);
   });
 
-  module.walk([&](func::ReturnOp returnOp) {
+  module.walk([&state](func::ReturnOp returnOp) {
     SmallVector<SmallVector<std::string>> shapes;
     llvm::transform(returnOp.getOperands(), std::back_inserter(shapes),
                     [&state](Value v) { return state.getValueSymbolicShape(v); });
@@ -2847,7 +2859,7 @@ void assignLabels(ModuleOp module, ShapeNormalState &state) {
       Value preservedOneValue = preservedOneValueEntry.first;
       SmallVector<std::string> symShape = state.getValueSymbolicShape(preservedOneValue);
 
-      auto assignLabelsOnGroup = [&](const SmallVector<std::string> &rawSymDims) {
+      auto assignLabelsOnGroup = [&state](const SmallVector<std::string> &rawSymDims) {
         if (rawSymDims.empty()) {
           return;
         }
@@ -2916,7 +2928,7 @@ void solveEntryTargetLayouts(func::FuncOp func, ShapeNormalState &state, Pattern
 }
 
 void rewriteAllOps(ModuleOp module, ShapeNormalState &state, PatternRewriter &rewriter) {
-  module.walk([&](Operation *op) {
+  module.walk([&state, &rewriter](Operation *op) {
     if (state.entryMaterializedOps.contains(op)) {
       return;
     }
@@ -2928,7 +2940,7 @@ void rewriteAllOps(ModuleOp module, ShapeNormalState &state, PatternRewriter &re
 }
 
 void materializeReturnReshapes(ModuleOp module, ShapeNormalState &state, PatternRewriter &rewriter) {
-  module.walk([&](func::ReturnOp returnOp) {
+  module.walk([&state, &rewriter](func::ReturnOp returnOp) {
     Location loc = returnOp.getLoc();
     SmallVector<Value> newOperands;
     auto func = returnOp->getParentOfType<func::FuncOp>();
@@ -2982,7 +2994,7 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
       }
     }
   }
-  module.walk([&](func::FuncOp func) { initFinestAxes(func, state, rewriter); });
+  module.walk([&state, &rewriter](func::FuncOp func) { initFinestAxes(func, state, rewriter); });
   unifyToFinestAxes(module, state);
   for (const auto &decomp : state.decompositions) {
     SmallVector<std::string> expandedAxes = state.expandGroupedAxes(decomp.second);
@@ -3000,7 +3012,7 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     return false;
   }
 
-  module.walk([&](func::FuncOp func) {
+  module.walk([](func::FuncOp func) {
     SmallVector<Type> newArgTypes;
     llvm::transform(func.getArguments(), std::back_inserter(newArgTypes),
                     [](BlockArgument arg) { return arg.getType(); });
@@ -3012,7 +3024,7 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
 }
 
 static void rewriteShapeNormalization(ModuleOp module, ShapeNormalState &state, PatternRewriter &rewriter) {
-  module.walk([&](func::FuncOp func) { solveEntryTargetLayouts(func, state, rewriter); });
+  module.walk([&state, &rewriter](func::FuncOp func) { solveEntryTargetLayouts(func, state, rewriter); });
   rewriteAllOps(module, state, rewriter);
   materializeReturnReshapes(module, state, rewriter);
   for (Operation *op : state.toDeleteOps) {
@@ -3031,7 +3043,7 @@ static void rewriteShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     }
     return true;
   };
-  auto canErase = [&](Operation *op) {
+  auto canErase = [&isDeadStore](Operation *op) {
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
       return isDeadStore(store);
     }
@@ -3045,7 +3057,7 @@ static void rewriteShapeNormalization(ModuleOp module, ShapeNormalState &state, 
   for (bool changed = true; changed;) {
     changed = false;
     SmallVector<Operation *> ops;
-    module.walk([&](Operation *op) {
+    module.walk([&ops](Operation *op) {
       if (isa<memref::StoreOp, memref::DimOp, memref::AllocOp, arith::ConstantOp>(op)) {
         ops.push_back(op);
       }

@@ -91,6 +91,7 @@ class OpNode {
  public:
   OpNode(const std::string &, nlohmann::json, nlohmann::json, nlohmann::json, const std::string &);
   OpNode(const OpNode &d);
+  OpNode &operator=(const OpNode &d);
   std::string opName;
   nlohmann::json inputDesc;
   nlohmann::json outputDesc;
@@ -140,7 +141,7 @@ class MindBuilder {
                                                   MLIRContext *context) const;
   SmallVector<NamedAttribute> addFuncSymShapeAttr(SmallVector<NamedAttribute> attrs, SmallVector<ValueNode> inputNodes,
                                                   SmallVector<ValueNode> outputNodes, MLIRContext *context) const;
-  bool isIndex1DAttrAsInput(std::string, int64_t);
+  bool isIndex1DAttrAsInput(std::string opName, int64_t inputIdx);
   Value getIndexFromVector(OpBuilder builder, SmallVector<int64_t> vector);  // convert vector to 1D index tensor
   SmallVector<NamedAttribute> getDictAttrFromJson(nlohmann::json attrJson,
                                                   MLIRContext *context) const;  // get dict attrs from json
@@ -277,13 +278,8 @@ SmallVector<int64_t> MindBuilder::enableDynamicShape(SmallVector<int64_t> oriSha
 }
 
 ValueNode::ValueNode(const std::string &tensorName, const std::string &dtype, bool isInput,
-                     const SmallVector<int64_t> &shape, const SmallVector<std::string> &symShape) {
-  this->dataType = dtype;
-  this->tensorName = tensorName;
-  this->isInput = isInput;
-  this->shape = shape;
-  this->symShape = symShape;
-}
+                     const SmallVector<int64_t> &shape, const SmallVector<std::string> &symShape)
+    : tensorName(tensorName), dataType(dtype), isInput(isInput), shape(shape), symShape(symShape) {}
 
 OpNode::OpNode(const std::string &name, nlohmann::json inputDesc, nlohmann::json outputDesc, nlohmann::json attrs,
                const std::string &ptrAddress) {
@@ -294,12 +290,23 @@ OpNode::OpNode(const std::string &name, nlohmann::json inputDesc, nlohmann::json
   this->ptrAddress = ptrAddress;
 }
 
-OpNode::OpNode(const OpNode &d1) {
-  this->opName = d1.opName;
-  this->inputDesc = d1.inputDesc;
-  this->outputDesc = d1.outputDesc;
-  this->attrs = d1.attrs;
-  this->ptrAddress = d1.ptrAddress;
+OpNode::OpNode(const OpNode &d) {
+  this->opName = d.opName;
+  this->inputDesc = d.inputDesc;
+  this->outputDesc = d.outputDesc;
+  this->attrs = d.attrs;
+  this->ptrAddress = d.ptrAddress;
+}
+
+OpNode &OpNode::operator=(const OpNode &d) {
+  if (this != &d) {
+    this->opName = d.opName;
+    this->inputDesc = d.inputDesc;
+    this->outputDesc = d.outputDesc;
+    this->attrs = d.attrs;
+    this->ptrAddress = d.ptrAddress;
+  }
+  return *this;
 }
 
 MindBuilder MindConverter::initBuilder() {
@@ -673,12 +680,12 @@ bool MindBuilder::isConstInput(const nlohmann::json node) const {
   return false;
 }
 
-SmallVector<double> MindBuilder::getConstInputValue(const nlohmann::json node, const std::string &opName) {
+SmallVector<double> MindBuilder::getConstInputValue(const nlohmann::json inputDesc, const std::string &opName) {
   SmallVector<double> value;
-  if (node.at(kValue).is_number()) {
-    value.push_back(node.at(kValue));
-  } else if (node.at(kValue).is_array()) {
-    value = node.at(kValue).get<SmallVector<double>>();
+  if (inputDesc.at(kValue).is_number()) {
+    value.push_back(inputDesc.at(kValue));
+  } else if (inputDesc.at(kValue).is_array()) {
+    value = inputDesc.at(kValue).get<SmallVector<double>>();
   } else {
     llvm::report_fatal_error(llvm::StringRef("Unexpected value from const input of op: ") + opName);
   }
@@ -1450,8 +1457,8 @@ mlir::IntegerType MindBuilder::getIntType(const std::string &dtype, OpBuilder bu
 }  // namespace
 }  // namespace mlir
 
-mlir::Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, MLIRContext *context,
-                                                   std::string outputName) {
+namespace mlir {
+Operation *translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, MLIRContext *context, std::string outputName) {
   llvm::MemoryBufferRef buffer = *sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID());
   std::string jsonName = buffer.getBufferIdentifier().str();
   (void)context->getOrLoadDialect<func::FuncDialect>();
@@ -1480,3 +1487,4 @@ mlir::Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, M
   }
   return mlirBuilder.mlirModule;
 }
+}  // namespace mlir

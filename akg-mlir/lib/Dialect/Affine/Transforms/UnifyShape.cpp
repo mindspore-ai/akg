@@ -29,10 +29,12 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "akg/Utils/SmallVectorSize.h"
 namespace mlir {
 #ifndef GEN_PASS_DEF_UNIFYSHAPE
 #define GEN_PASS_DEF_UNIFYSHAPE
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 }  // namespace mlir
 #define DEBUG_TYPE "unify-shape"
@@ -55,6 +57,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
  public:
   UnifyShape() = default;
   UnifyShape(const UnifyShape &pass) = default;
+  UnifyShape &operator=(const UnifyShape &) = default;
   UnifyShape(const bool allowNonPolyhedralAccess, const bool keepArg) {
     this->allowNonPolyhedralAccess = allowNonPolyhedralAccess;
     this->keepArgsShape = keepArg;
@@ -147,12 +150,12 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
 
   //  void eraseOpsUsingBlockArguments(mlir::func::FuncOp &fop) {
   void eraseOpsUsingBlockArguments(mlir::ModuleOp &m) {
-    m.walk([&](mlir::func::FuncOp fop) {
+    m.walk([this](mlir::func::FuncOp fop) {
       FunctionType functionType = fop.getFunctionType();
       SmallVector<Type, kVectorSizeEight> newArgTypes;
       SmallVector<Type, kVectorSizeFour> resultTypes;
       FunctionType newFuncType;
-      resultTypes = llvm::to_vector<4>(functionType.getResults());
+      resultTypes = llvm::to_vector<kSmallVectorSizeFour>(functionType.getResults());
 
       assert(resultTypes.empty() &&
              "Function result must be empty due to the call of "
@@ -357,7 +360,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     }
     newAccesExpr.push_back(accessRes);
 
-    SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
+    SmallVector<AffineMap, kSmallVectorSizeOne> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
     result.newShapeMap[newShapeMap[0]] = symbolicValue;
     return true;
   }
@@ -391,9 +394,11 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
 
     result.dynamicReshape = isDynamicReshape(referenceShape, reshapeMap);
 
-    if (!std::all_of(reshapeMap.begin(), reshapeMap.end(), [&](AffineMap map) {
-          return processMapEntry(map, referenceOp, referenceType, context, nbSymbolExpr, newAccesExpr, result);
-        })) {
+    if (!std::all_of(
+          reshapeMap.begin(), reshapeMap.end(),
+          [this, &referenceOp, &referenceType, &context, &nbSymbolExpr, &newAccesExpr, &result](AffineMap map) {
+            return processMapEntry(map, referenceOp, referenceType, context, nbSymbolExpr, newAccesExpr, result);
+          })) {
       return result;
     }
 
@@ -405,7 +410,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
       }
     }
 
-    SmallVector<AffineMap, 1> newAccessMap = AffineMap::inferFromExprList(newAccesExpr, context);
+    SmallVector<AffineMap, kSmallVectorSizeOne> newAccessMap = AffineMap::inferFromExprList(newAccesExpr, context);
     assert(newAccessMap.size() == 1 && "Generation from a list of AffineExpr must result in only one AffineMap");
     LLVM_DEBUG({
       llvm::dbgs() << " new access map function:\n";
@@ -504,7 +509,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
       SmallVector<Type, kVectorSizeEight> newArgTypes;
       SmallVector<Type, kVectorSizeFour> resultTypes;
       FunctionType newFuncType;
-      resultTypes = llvm::to_vector<4>(functionType.getResults());
+      resultTypes = llvm::to_vector<kSmallVectorSizeFour>(functionType.getResults());
 
       assert(resultTypes.empty() &&
              "Function result must be empty due to the call of "
@@ -599,7 +604,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     // for i, 0 a00
     //     for j, 0 a01
     //         d[i, j] = a[i*a01 + j]
-    (void)m.walk([&](mlir::memref::ExpandShapeOp esop) {
+    (void)m.walk([this](mlir::memref::ExpandShapeOp esop) {
       LLVM_DEBUG({
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         esop.dump();
@@ -689,7 +694,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     //         a[i*a01 + j] = c[i, j]
     // for i, 0 a0
     //     d[i] = a[i]
-    (void)m.walk([&](mlir::memref::CollapseShapeOp csop) {
+    (void)m.walk([this](mlir::memref::CollapseShapeOp csop) {
       LLVM_DEBUG({
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         csop.dump();

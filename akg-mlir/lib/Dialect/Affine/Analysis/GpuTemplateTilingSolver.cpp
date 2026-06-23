@@ -462,7 +462,8 @@ void GpuTemplateTilingSolver::SolveScheduleForReductionOps(std::vector<AxisPtr> 
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   gpuTool.reduceSizeStatic = reductionSize;
   gpuTool.parallelSizeStatic = parallelSize;
-  bool isReduceY = akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == ReduceDirection::Y;
+  bool isReduceY =
+    akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == static_cast<size_t>(ReduceDirection::Y);
 
   // reuse to map non-reduce-axes
   std::vector<int> parallelFlags(redFlags.size());

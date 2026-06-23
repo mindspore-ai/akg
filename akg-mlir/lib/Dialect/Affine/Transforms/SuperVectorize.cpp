@@ -41,11 +41,13 @@
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 namespace affine {
 #define GEN_PASS_DEF_AFFINEVECTORIZE
 #include "mlir/Dialect/Affine/Passes.h.inc"
+
 }  // namespace affine
 }  // namespace mlir
 
@@ -552,7 +554,7 @@ using namespace vector;  // NOLINT(build/namespaces)
 
 using llvm::dbgs;
 
-/// Forward declaration.
+namespace {
 static FilterFunctionType isVectorizableLoopPtrFactory(const DenseSet<Operation *> &parallelLoops,
                                                        int fastestVaryingMemRefDimension);
 
@@ -587,6 +589,8 @@ static NestedPattern &vectorTransferPattern() {
   return pattern;
 }
 
+}  // namespace
+
 namespace {
 
 /// Base state for the vectorize pass.
@@ -617,7 +621,7 @@ static void vectorizeLoopIfProfitable(Operation *loop, unsigned depthInPattern, 
 /// load/store MemRefs, this creates a generic vectorization strategy that works
 /// for any loop in a hierarchy (outermost, innermost or intermediate).
 /// In the future we should additionally increase the power of the
-/// profitability analysis along 3 directions:
+/// profitability analysis along 3 directions
 ///   1. account for loop extents (both static and parametric + annotations);
 ///   2. account for data layout permutations;
 ///   3. account for impact of vectorization on maximal loop fusion.
@@ -640,7 +644,7 @@ static LogicalResult analyzeProfitability(ArrayRef<NestedMatch> matches, unsigne
 /// values. Both operations must have the same number of results.
 /// This utility is used to register the replacement for the vast majority of
 /// the vectorized operations.
-/// Example:
+/// Example
 ///   * 'replaced': %0 = arith.addf %1, %2 : f32
 ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
 void VectorizationState::registerOpVectorReplacement(Operation *replaced, Operation *replacement) {
@@ -663,7 +667,7 @@ void VectorizationState::registerOpVectorReplacement(Operation *replaced, Operat
 /// This utility is used to register the vector replacement of block arguments
 /// and operation results which are not directly vectorized (i.e., their
 /// scalar version still exists after vectorization), like uniforms.
-/// Example:
+/// Example
 ///   * 'replaced': block argument or operation outside of the vectorized loop.
 ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
 void VectorizationState::registerValueVectorReplacement(Value replaced, Operation *replacement) {
@@ -676,7 +680,7 @@ void VectorizationState::registerValueVectorReplacement(Value replaced, Operatio
 }
 
 /// Registers the vector replacement of a block argument (e.g., iter_args).
-/// Example:
+/// Example
 ///   * 'replaced': 'iter_arg' block argument.
 ///   * 'replacement': vectorized 'iter_arg' block argument.
 void VectorizationState::registerBlockArgVectorReplacement(BlockArgument replaced, BlockArgument replacement) {
@@ -695,7 +699,7 @@ void VectorizationState::registerValueVectorReplacementImpl(Value replaced, Valu
 /// This utility is used to register the replacement of block arguments
 /// that are within the loop to be vectorized and will continue being scalar
 /// within the vector loop.
-/// Example:
+/// Example
 ///   * 'replaced': induction variable of a loop to be vectorized.
 ///   * 'replacement': new induction variable in the new vector loop.
 void VectorizationState::registerValueScalarReplacement(BlockArgument replaced, BlockArgument replacement) {
@@ -706,7 +710,7 @@ void VectorizationState::registerValueScalarReplacement(BlockArgument replaced, 
 /// reduction loop. 'replacement' must be scalar.
 /// This utility is used to register the replacement for scalar results of
 /// vectorized reduction loops with iter_args.
-/// Example 2:
+/// Example 2
 ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
 ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into f32
 void VectorizationState::registerLoopResultScalarReplacement(Value replaced, Value replacement) {
@@ -992,11 +996,11 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp, VectorizationState &s
   auto vectorType = VectorType::get(state.strategy->vectorSizes, elementType);
 
   // Replace map operands with operands from the vector loop nest.
-  SmallVector<Value, 8> mapOperands;
+  SmallVector<Value, kSmallVectorSizeEight> mapOperands;
   state.getScalarValueReplacementsFor(loadOp.getMapOperands(), mapOperands);
 
   // Compute indices for the transfer op. AffineApplyOp's may be generated.
-  SmallVector<Value, 8> indices;
+  SmallVector<Value, kSmallVectorSizeEight> indices;
   indices.reserve(memRefType.getRank());
   if (loadOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
     computeMemoryOpIndices(loadOp, loadOp.getAffineMap(), mapOperands, state, indices);
@@ -1035,11 +1039,11 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp, VectorizationState
   }
 
   // Replace map operands with operands from the vector loop nest.
-  SmallVector<Value, 8> mapOperands;
+  SmallVector<Value, kSmallVectorSizeEight> mapOperands;
   state.getScalarValueReplacementsFor(storeOp.getMapOperands(), mapOperands);
 
   // Compute indices for the transfer op. AffineApplyOp's may be generated.
-  SmallVector<Value, 8> indices;
+  SmallVector<Value, kSmallVectorSizeEight> indices;
   indices.reserve(memRefType.getRank());
   if (storeOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
     computeMemoryOpIndices(storeOp, storeOp.getAffineMap(), mapOperands, state, indices);
@@ -1118,16 +1122,16 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   }
 
   // Vectorize 'iter_args'.
-  SmallVector<Value, 8> vecIterOperands;
+  SmallVector<Value, kSmallVectorSizeEight> vecIterOperands;
   if (!isLoopVecDim) {
     std::transform(forOp.getInits().begin(), forOp.getInits().end(), std::back_inserter(vecIterOperands),
-                   [&](Value operand) { return vectorizeOperand(operand, state); });
+                   [&state](Value operand) { return vectorizeOperand(operand, state); });
   } else {
     // For reduction loops we need to pass a vector of neutral elements as an
     // initial value of the accumulator. We will add the original initial value
     // later.
     std::transform(llvm::zip(reductions, forOp.getInits()).begin(), llvm::zip(reductions, forOp.getInits()).end(),
-                   std::back_inserter(vecIterOperands), [&](auto redAndOperand) {
+                   std::back_inserter(vecIterOperands), [&state](auto redAndOperand) {
                      return createInitialVector(std::get<0>(redAndOperand).kind, std::get<1>(redAndOperand), state);
                    });
   }
@@ -1135,7 +1139,7 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   auto vecForOp =
     state.builder.create<AffineForOp>(forOp.getLoc(), forOp.getLowerBoundOperands(), forOp.getLowerBoundMap(),
                                       forOp.getUpperBoundOperands(), forOp.getUpperBoundMap(), newStep, vecIterOperands,
-                                      /*bodyBuilder=*/[](OpBuilder &, Location, Value, ValueRange) {
+                                      /* bodyBuilder= */ [](OpBuilder &, Location, Value, ValueRange) {
                                         // Make sure we don't create a default terminator in the loop body as
                                         // the proper terminator will be added during vectorization.
                                       });
@@ -1191,10 +1195,10 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
 }
 
 static Operation *vectorizeAffineIfOp(AffineIfOp ifOp, VectorizationState &state) {
-  SmallVector<Value, 8> vecIterOperands;
+  SmallVector<Value, kSmallVectorSizeEight> vecIterOperands;
   state.getScalarValueReplacementsFor(ifOp.getOperands(), vecIterOperands);
   auto vecIfOp = state.builder.create<AffineIfOp>(ifOp.getLoc(), ifOp.getIntegerSet(), vecIterOperands, false);
-  vecIfOp.getThenRegion().walk<WalkOrder::PreOrder>([&](AffineYieldOp op) { op.erase(); });
+  vecIfOp.getThenRegion().walk<WalkOrder::PreOrder>([](AffineYieldOp op) { op.erase(); });
   state.registerOpVectorReplacement(ifOp, vecIfOp);
 
   state.builder.setInsertionPointToStart(&vecIfOp.getThenRegion().front());
@@ -1205,11 +1209,11 @@ static Operation *vectorizeAffineIfOp(AffineIfOp ifOp, VectorizationState &state
 /// widening of all its results and retrieve the vector counterparts for all its
 /// operands.
 static Operation *widenOp(Operation *op, VectorizationState &state) {
-  SmallVector<Type, 8> vectorTypes;
+  SmallVector<Type, kSmallVectorSizeEight> vectorTypes;
   std::transform(op->getResults().begin(), op->getResults().end(), std::back_inserter(vectorTypes),
-                 [&](Value result) { return VectorType::get(state.strategy->vectorSizes, result.getType()); });
+                 [&state](Value result) { return VectorType::get(state.strategy->vectorSizes, result.getType()); });
 
-  SmallVector<Value, 8> vectorOperands;
+  SmallVector<Value, kSmallVectorSizeEight> vectorOperands;
   for (Value operand : op->getOperands()) {
     Value vecOperand = vectorizeOperand(operand, state);
     if (!vecOperand) {
@@ -1313,7 +1317,7 @@ static Operation *vectorizeOneOperation(Operation *op, VectorizationState &state
 /// respect to the others in 'match'. 'currentLevel' is the nesting level that
 /// will be assigned to the loop in the current 'match'.
 static void getMatchedAffineLoopsRec(NestedMatch match, unsigned currentLevel,
-                                     std::vector<SmallVector<AffineForOp, 2>> &loops) {
+                                     std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops) {
   // Add a new empty level to the output if it doesn't exist already.
   assert(currentLevel <= loops.size() && "Unexpected currentLevel");
   if (currentLevel == loops.size()) {
@@ -1332,13 +1336,14 @@ static void getMatchedAffineLoopsRec(NestedMatch match, unsigned currentLevel,
 /// in 'match'. This means that every loop in 'loops[i]' will have a parent loop
 /// in 'loops[i-1]'. A loop in 'loops[i]' may or may not have a child loop in
 /// 'loops[i+1]'.
-static void getMatchedAffineLoops(NestedMatch match, std::vector<SmallVector<AffineForOp, 2>> &loops) {
-  getMatchedAffineLoopsRec(match, /*currLoopDepth=*/0, loops);
+static void getMatchedAffineLoops(NestedMatch match,
+                                  std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops) {
+  getMatchedAffineLoopsRec(match, /* currLoopDepth= */ 0, loops);
 }
 
 /// Internal implementation to vectorize affine loops from a single loop nest
 /// using an n-D vectorization strategy.
-static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> &loops,
+static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops,
                                        const VectorizationStrategy &strategy) {
   assert(loops[0].size() == 1 && "Expected single root loop");
   AffineForOp rootLoop = loops[0][0];
@@ -1366,7 +1371,7 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> 
   // modified.
   //////////////////////////////////////////////////////////////////////////////
 
-  auto opVecResult = rootLoop.walk<WalkOrder::PreOrder>([&](Operation *op) {
+  auto opVecResult = rootLoop.walk<WalkOrder::PreOrder>([&state](Operation *op) {
     LLVM_DEBUG(dbgs() << "[early-vect]+++++ Vectorizing: " << *op);
     Operation *vectorOp = vectorizeOneOperation(op, state);
     if (!vectorOp) {
@@ -1406,7 +1411,7 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, 2>> 
 /// order. A new vector loop nest will be created if vectorization succeeds. The
 /// original loop nest won't be modified in any case.
 static LogicalResult vectorizeRootMatch(NestedMatch m, const VectorizationStrategy &strategy) {
-  std::vector<SmallVector<AffineForOp, 2>> loopsToVectorize;
+  std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> loopsToVectorize;
   getMatchedAffineLoops(m, loopsToVectorize);
   return vectorizeLoopNest(loopsToVectorize, strategy);
 }
@@ -1415,11 +1420,11 @@ static LogicalResult vectorizeRootMatch(NestedMatch m, const VectorizationStrate
 /// buckets. Two matches intersect if any of them encloses the other one. A
 /// match intersects with a bucket if the match intersects with the root
 /// (outermost) loop in that bucket.
-static void computeIntersectionBuckets(ArrayRef<NestedMatch> matches,
-                                       std::vector<SmallVector<NestedMatch, 8>> &intersectionBuckets) {
+static void computeIntersectionBuckets(
+  ArrayRef<NestedMatch> matches, std::vector<SmallVector<NestedMatch, kSmallVectorSizeEight>> &intersectionBuckets) {
   assert(intersectionBuckets.empty() && "Expected empty output");
   // Keeps track of the root (outermost) loop of each bucket.
-  SmallVector<AffineForOp, 8> bucketRoots;
+  SmallVector<AffineForOp, kSmallVectorSizeEight> bucketRoots;
 
   for (const NestedMatch &match : matches) {
     AffineForOp matchRoot = cast<AffineForOp>(match.getMatchedOperation());
@@ -1479,9 +1484,9 @@ static void vectorizeLoops(Operation *parentOp, const DenseSet<Operation *> &loo
 
   // Compute all the pattern matches and classify them into buckets of
   // intersecting matches.
-  SmallVector<NestedMatch, 32> allMatches;
+  SmallVector<NestedMatch, kSmallVectorSizeThirtyTwo> allMatches;
   pattern->match(parentOp, &allMatches);
-  std::vector<SmallVector<NestedMatch, 8>> intersectionBuckets;
+  std::vector<SmallVector<NestedMatch, kSmallVectorSizeEight>> intersectionBuckets;
   computeIntersectionBuckets(allMatches, intersectionBuckets);
 
   // Iterate over all buckets and vectorize the matches eagerly. We can only
@@ -1538,7 +1543,7 @@ void VectorizeAKG::runOnOperation() {
   // `reductionLoops` map.
   if (vectorizeReductions) {
     f.walk([&parallelLoops, &reductionLoops](AffineForOp loop) {
-      SmallVector<LoopReduction, 2> reductions;
+      SmallVector<LoopReduction, kSmallVectorSizeTwo> reductions;
       if (isLoopParallelAKG(loop, &reductions)) {
         parallelLoops.insert(loop);
         // If it's not a reduction loop, adding it to the map is not necessary.
@@ -1560,14 +1565,16 @@ void VectorizeAKG::runOnOperation() {
   vectorizeLoops(f, parallelLoops, vectorSizes, fastestVaryingPattern, reductionLoops);
 }
 
-/// It is convenient to reference static functions in AKG.
+namespace mlir {
+namespace affine {
+
 std::optional<NestedPattern> makePatternAKG(const DenseSet<Operation *> &parallelLoops, int vectorRank,
                                             ArrayRef<int64_t> fastestVaryingPattern) {
   return makePattern(parallelLoops, vectorRank, fastestVaryingPattern);
 }
 
 void computeIntersectionBucketsAKG(ArrayRef<NestedMatch> matches,
-                                   std::vector<SmallVector<NestedMatch, 8>> &intersectionBuckets) {
+                                   std::vector<SmallVector<NestedMatch, kSmallVectorSizeEight>> &intersectionBuckets) {
   computeIntersectionBuckets(matches, intersectionBuckets);
 }
 
@@ -1581,14 +1588,16 @@ void vectorizeLoopIfProfitableAKG(Operation *loop, unsigned depthInPattern, unsi
   vectorizeLoopIfProfitable(loop, depthInPattern, patternDepth, strategy);
 }
 
-void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, 2>> &loops) {
+void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops) {
   getMatchedAffineLoops(match, loops);
 }
 
-LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, 2>> &loops,
+LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops,
                                    const VectorizationStrategy &strategy) {
   return vectorizeLoopNest(loops, strategy);
 }
+
+}  // namespace affine
 
 namespace vector {
 
@@ -1597,3 +1606,4 @@ Operation *vectorizeOneOperationAKG(Operation *op, VectorizationState &state) {
 }
 
 }  // namespace vector
+}  // namespace mlir

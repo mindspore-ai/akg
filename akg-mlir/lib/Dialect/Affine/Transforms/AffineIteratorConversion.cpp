@@ -31,11 +31,13 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_AFFINEITERATORCONVERSION
 #define GEN_PASS_DEF_AFFINEITERATORCONVERSION
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "affine-iterator-conversion"
@@ -73,18 +75,18 @@ struct ReductionArithCreator {
   Operation *createMatchingOp() {
     Operation *result = nullptr;
     llvm::TypeSwitch<Operation *>(arithOp)
-      .Case([&](arith::AddFOp) { result = create<arith::AddFOp>(); })
-      .Case([&](arith::MulFOp) { result = create<arith::MulFOp>(); })
-      .Case([&](arith::AddIOp) { result = create<arith::AddIOp>(); })
-      .Case([&](arith::AndIOp) { result = create<arith::AndIOp>(); })
-      .Case([&](arith::OrIOp) { result = create<arith::OrIOp>(); })
-      .Case([&](arith::MulIOp) { result = create<arith::MulIOp>(); })
-      .Case([&](arith::MinNumFOp) { result = create<arith::MinNumFOp>(); })
-      .Case([&](arith::MaxNumFOp) { result = create<arith::MaxNumFOp>(); })
-      .Case([&](arith::MinSIOp) { result = create<arith::MinSIOp>(); })
-      .Case([&](arith::MaxSIOp) { result = create<arith::MaxSIOp>(); })
-      .Case([&](arith::MinUIOp) { result = create<arith::MinUIOp>(); })
-      .Case([&](arith::MaxUIOp) { result = create<arith::MaxUIOp>(); })
+      .Case([this, &result](arith::AddFOp) { result = create<arith::AddFOp>(); })
+      .Case([this, &result](arith::MulFOp) { result = create<arith::MulFOp>(); })
+      .Case([this, &result](arith::AddIOp) { result = create<arith::AddIOp>(); })
+      .Case([this, &result](arith::AndIOp) { result = create<arith::AndIOp>(); })
+      .Case([this, &result](arith::OrIOp) { result = create<arith::OrIOp>(); })
+      .Case([this, &result](arith::MulIOp) { result = create<arith::MulIOp>(); })
+      .Case([this, &result](arith::MinNumFOp) { result = create<arith::MinNumFOp>(); })
+      .Case([this, &result](arith::MaxNumFOp) { result = create<arith::MaxNumFOp>(); })
+      .Case([this, &result](arith::MinSIOp) { result = create<arith::MinSIOp>(); })
+      .Case([this, &result](arith::MaxSIOp) { result = create<arith::MaxSIOp>(); })
+      .Case([this, &result](arith::MinUIOp) { result = create<arith::MinUIOp>(); })
+      .Case([this, &result](arith::MaxUIOp) { result = create<arith::MaxUIOp>(); })
       .Default([](Operation *) {});
     return result;
   }
@@ -92,7 +94,7 @@ struct ReductionArithCreator {
 
 static Operation *findReduceArithOp(Operation *root) {
   Operation *result = nullptr;
-  root->walk([&](Operation *op) -> WalkResult {
+  root->walk([&result](Operation *op) -> WalkResult {
     if (op->getAttr(kReductionTypeStr)) {
       bool converted = llvm::any_of(op->getOperands(), [](Value v) { return !v.getDefiningOp(); });
       if (!converted) {
@@ -112,7 +114,7 @@ static affine::AffineLoadOp getAccumulatorLoad(affine::AffineForOp reduceLoop, O
   Value rhs = arithOp->getOperand(1);
   Value iv = reduceLoop.getInductionVar();
   affine::AffineLoadOp result;
-  reduceLoop.walk([&](affine::AffineLoadOp op) {
+  reduceLoop.walk([&lhs, &rhs, &iv, &result](affine::AffineLoadOp op) {
     if (op != lhs.getDefiningOp() && op != rhs.getDefiningOp()) {
       return;
     }
@@ -146,7 +148,7 @@ static arith::ConstantOp resolveInitConstant(affine::AffineStoreOp initStore) {
 
 static affine::AffineStoreOp findMatchingStore(affine::AffineForOp loop, affine::AffineLoadOp loadOp) {
   affine::AffineStoreOp result;
-  loop.walk([&](affine::AffineStoreOp op) {
+  loop.walk([&result, &loadOp](affine::AffineStoreOp op) {
     if (op.getMemref() == loadOp.getMemref()) {
       result = op;
     }
@@ -160,7 +162,7 @@ static affine::AffineStoreOp findMatchingStore(affine::AffineForOp loop, affine:
 static affine::AffineStoreOp findInitStore(Operation *band, Operation *reduceLoop, Value accumMemRef) {
   auto func = band->getParentOfType<func::FuncOp>();
   affine::AffineStoreOp result;
-  func.walk([&](affine::AffineStoreOp store) {
+  func.walk([&result, &accumMemRef](affine::AffineStoreOp store) {
     if (!result && store->getAttr(kReductionInitAttr) && store.getMemRef() == accumMemRef) {
       result = store;
     }
@@ -196,7 +198,7 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
   auto newLoop = cast<affine::AffineForOp>(*loop.replaceWithAdditionalYields(
     rewriter, initVal.getResult(),
     /*replaceInitOperandUsesInLoop=*/false,
-    [&](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
+    [&storeIf, &storeOp](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
       if (!storeIf) {
         return SmallVector<Value>{storeOp.getValue()};
       }
@@ -205,9 +207,8 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
       nested.setInsertionPoint(storeIf);
 
       // Build a result-producing affine.if.
-      auto newIf = nested.create<affine::AffineIfOp>(
-        storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
-        storeIf->getOperands(), /*withElseRegion=*/true);
+      auto newIf = nested.create<affine::AffineIfOp>(storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
+                                                     storeIf->getOperands(), /*withElseRegion=*/true);
 
       Block *oldThen = storeIf.getThenBlock();
       Block *newThen = newIf.getThenBlock();
@@ -234,8 +235,9 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
       return SmallVector<Value>{newIf.getResult(0)};
     }));
   newLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
-  loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(),
-                                       [&](OpOperand &use) { return newLoop->isProperAncestor(use.getOwner()); });
+  loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(), [&newLoop](OpOperand &use) {
+    return newLoop->isProperAncestor(use.getOwner());
+  });
   return newLoop;
 }
 
@@ -292,7 +294,7 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
 
 void AffineIteratorConversion::removeInitMemoryCopy(func::FuncOp func) {
   memref::CopyOp initCopy;
-  func.walk([&](memref::CopyOp copyOp) {
+  func.walk([&initCopy](memref::CopyOp copyOp) {
     if (copyOp.getTarget().getDefiningOp() && isa<memref::AllocOp>(copyOp.getSource().getDefiningOp()) &&
         isa<memref::AllocOp>(copyOp.getTarget().getDefiningOp())) {
       initCopy = copyOp;
@@ -319,7 +321,7 @@ void AffineIteratorConversion::convertReduction(Operation *band) {
     return;
   }
 
-  SmallVector<affine::AffineForOp, 4> enclosingLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> enclosingLoops;
   affine::getAffineForIVs(*arithOp, &enclosingLoops);
 
   Operation *reduceLoopOp = nullptr;
@@ -389,8 +391,8 @@ void AffineIteratorConversion::runOnOperation() {
   // objects themselves (not just bounds/IVs), so {reduction} attributes
   // follow the original Operation to its new (inner) position automatically.
   auto reduceAxes = CommonUtils::collectReductionAxes(func);
-  SmallVector<affine::AffineForOp, 4> loopsToSink;
-  func.walk([&](affine::AffineForOp inner) {
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> loopsToSink;
+  func.walk([&reduceAxes, &loopsToSink](affine::AffineForOp inner) {
     auto outer = dyn_cast<affine::AffineForOp>(inner->getParentOp());
     if (!outer) {
       return;
@@ -417,12 +419,12 @@ void AffineIteratorConversion::runOnOperation() {
     loop->setAttr(kReductionLoopAttr, b.getUnitAttr());
   }
 
-  SmallVector<affine::AffineForOp, 6> bands;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeSix> bands;
   std::copy(func.getOps<affine::AffineForOp>().begin(), func.getOps<affine::AffineForOp>().end(),
             std::back_inserter(bands));
   for (auto band : bands) {
     int reductionCount = 0;
-    band.walk([&](Operation *op) {
+    band.walk([&reductionCount](Operation *op) {
       if (op->getAttr(kReductionTypeStr)) {
         reductionCount++;
       }
@@ -432,7 +434,7 @@ void AffineIteratorConversion::runOnOperation() {
     }
   }
 
-  func->walk([&](affine::AffineForOp forOp) {
+  func->walk([](affine::AffineForOp forOp) {
     if (isa<affine::AffineYieldOp>(forOp.getBody()->front())) {
       forOp.erase();
     }

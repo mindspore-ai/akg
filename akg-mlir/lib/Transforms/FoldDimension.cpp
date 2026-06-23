@@ -412,7 +412,7 @@ bool FoldDimensionAnalyser::checkBroadcast(Operation *op) const {
 }
 
 void FoldDimensionAnalyser::analyseFoldDimension(const func::FuncOp funcOp) {
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([this](Operation *op) {
     this->opFoldableInfo.clear();
 
     if (!(isa<tosa::TosaOp>(op) || isa<mindspore::MindSporeOp>(op) || isa<tensor::CastOp>(op))) {
@@ -679,25 +679,26 @@ void populateFoldDimension(func::FuncOp funcOp, llvm::DenseMap<Value, Type> tens
     argIdx++;
   }
   llvm::SmallVector<Type> newResTys;
-  funcOp.walk([&](func::ReturnOp op) {
-    for (auto value : op.getOperation()->getOperands()) {
-      if (tensorToBeFolded.find(value) != tensorToBeFolded.end()) {
-        auto newTy = tensorToBeFolded[value];
-        value.setType(newTy);
-        if (analysis.hasSymbolicShape(newTy)) {
-          llvm::SmallVector<std::string> symbolShape = *analysis.getSymbolicShape(newTy);
-          newShape.clear();
-          (void)std::transform(symbolShape.begin(), symbolShape.end(), std::back_inserter(newShape),
-                               [](std::string s) { return s; });
-          tool.updateCurrShapeInfo(argIdx, newShape);
+  funcOp.walk(
+    [&tensorToBeFolded, &analysis, &newShape, &tool, &funcArgsMap, &visited, &newResTys, &argIdx](func::ReturnOp op) {
+      for (auto value : op.getOperation()->getOperands()) {
+        if (tensorToBeFolded.find(value) != tensorToBeFolded.end()) {
+          auto newTy = tensorToBeFolded[value];
+          value.setType(newTy);
+          if (analysis.hasSymbolicShape(newTy)) {
+            llvm::SmallVector<std::string> symbolShape = *analysis.getSymbolicShape(newTy);
+            newShape.clear();
+            (void)std::transform(symbolShape.begin(), symbolShape.end(), std::back_inserter(newShape),
+                                 [](std::string s) { return s; });
+            tool.updateCurrShapeInfo(argIdx, newShape);
+          }
+          tool.recordNeedFixIndice(argIdx, funcArgsMap[value]);
+          visited[value] = true;
         }
-        tool.recordNeedFixIndice(argIdx, funcArgsMap[value]);
-        visited[value] = true;
+        (void)newResTys.emplace_back(value.getType());
+        argIdx++;
       }
-      (void)newResTys.emplace_back(value.getType());
-      argIdx++;
-    }
-  });
+    });
   // update all other tensors
   for (auto item : tensorToBeFolded) {
     auto value = item.first;
@@ -770,7 +771,7 @@ void rewriteReshapeAttr(Operation *op) {
 }
 
 void rewriteOpAttr(func::FuncOp funcOp) {
-  funcOp->walk([&](Operation *op) {
+  funcOp->walk([](Operation *op) {
     if (isa<tosa::ConstOp>(op)) {
       rewriteConstOpAttr<tosa::ConstOp>(dyn_cast<tosa::ConstOp>(op));
     } else if (isa<mindspore::ConstOp>(op)) {

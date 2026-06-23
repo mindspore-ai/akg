@@ -35,6 +35,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
+#include "akg/Utils/SmallVectorSize.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_EXTRACTIFOP
@@ -42,15 +43,16 @@ namespace mlir {
 #ifndef GEN_PASS_DECL_EXTRACTIFOP
 #define GEN_PASS_DECL_EXTRACTIFOP
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
 
+namespace {
 using namespace mlir;  // NOLINT(build/namespaces)
 using namespace llvm;  // NOLINT(build/namespaces)
 using namespace akg;   // NOLINT(build/namespaces)
 
-namespace {
 // To prevent repeated data reading or unnecessary branch judgment, extract the statements that are lifted or sunk in
 // MergeFusionOp to the corresponding for loop, thereby improving operator performance.
 class ExtractIfOp : public impl::ExtractIfOpBase<ExtractIfOp> {
@@ -68,7 +70,7 @@ class ExtractIfOp : public impl::ExtractIfOpBase<ExtractIfOp> {
   void extractBroadcastForwardOp(affine::AffineIfOp ifOp) const;
   [[nodiscard]] bool extractIfOpPrejudgment(affine::AffineIfOp ifOp) const;
 
-  SmallSet<Operation *, 8> unextractableOp;
+  SmallSet<Operation *, kSmallVectorSizeEight> unextractableOp;
   MemRefDependenceGraph dependenceGraph{nullptr};
   std::string target = kTargetCpu;
 };
@@ -105,13 +107,13 @@ static uint64_t isInConstantEqualityRange(IntegerSet set) {
 Operation *ExtractIfOp::getInsertPoint(mlir::Operation *op, bool isForward) {
   Operation *innerOp = nullptr;
   for (auto operand : op->getOperands()) {
-    SmallVector<Operation *, 8> opAxes;
+    SmallVector<Operation *, kSmallVectorSizeEight> opAxes;
     CommonUtils::collectRelatedAxes(operand, opAxes);
     // The current op does not have a related axis. Searches for the position based on the if condition.
     // affine.store %cst, %arg1[] : memref<f32>
     if (opAxes.empty() && (op->getParentOp() != nullptr)) {
       Operation *parentOp = op->getParentOp();
-      SmallVector<affine::AffineIfOp, 8> ifOpVec;
+      SmallVector<affine::AffineIfOp, kSmallVectorSizeEight> ifOpVec;
       // Gets all nested if statements.
       while ((parentOp != nullptr) && isa<affine::AffineIfOp>(parentOp)) {
         ifOpVec.push_back(dyn_cast<affine::AffineIfOp>(parentOp));
@@ -221,9 +223,9 @@ void ExtractIfOp::extractIfOp(affine::AffineIfOp ifOp) {
   }
 
   Operation *innermostOp = nullptr;
-  SmallVector<Operation *, 8> opVec;
+  SmallVector<Operation *, kSmallVectorSizeEight> opVec;
   // Find the innermost for loop associated with the current if statement.
-  ifOp.getThenRegion().walk<WalkOrder::PreOrder>([&](mlir::Operation *op) {
+  ifOp.getThenRegion().walk<WalkOrder::PreOrder>([this, &isForward, &innermostOp, &opVec](mlir::Operation *op) {
     if (isa<affine::AffineYieldOp>(op)) {
       return;
     }
@@ -294,9 +296,9 @@ void ExtractIfOp::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
     return;
   }
 
-  SmallVector<Operation *, 8> forwardFusionOp;
+  SmallVector<Operation *, kSmallVectorSizeEight> forwardFusionOp;
   // Collect the for loops of all forward fusion operators.
-  auto opResult = ifOp.getThenRegion().walk<WalkOrder::PreOrder>([&](mlir::Operation *op) {
+  auto opResult = ifOp.getThenRegion().walk<WalkOrder::PreOrder>([&innermostOp, &forwardFusionOp](mlir::Operation *op) {
     mlir::ValueRange indices;
     if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
       indices = load.getIndices();
@@ -304,7 +306,7 @@ void ExtractIfOp::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
       indices = store.getIndices();
     }
 
-    llvm::SmallSet<Operation *, 8> relatedAxes;
+    llvm::SmallSet<Operation *, kSmallVectorSizeEight> relatedAxes;
     for (auto indice : indices) {
       if (auto blockArg = dyn_cast<BlockArgument>(indice)) {
         if (isa<IndexType>(blockArg.getType())) {
@@ -348,14 +350,14 @@ void ExtractIfOp::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
 }
 
 void ExtractIfOp::runOnBlock(Block *block) {
-  block->walk([&](affine::AffineIfOp ifOp) { removeUselessIf(ifOp); });
+  block->walk([this](affine::AffineIfOp ifOp) { removeUselessIf(ifOp); });
   // build dependence graph
   dependenceGraph = MemRefDependenceGraph(block);
   if (!dependenceGraph.init()) {
     return;
   }
 
-  block->walk([&](affine::AffineIfOp ifOp) { extractIfOp(ifOp); });
+  block->walk([this](affine::AffineIfOp ifOp) { extractIfOp(ifOp); });
 }
 
 void ExtractIfOp::runOnOperation() {
@@ -370,13 +372,17 @@ void ExtractIfOp::runOnOperation() {
     OperatorTemplate opType = CommonUtils::getOperatorType(funcOp);
     // To enable parallel, the forward fusion of the broadcast operator is extracted.
     if (opType == OperatorTemplate::Broadcast) {
-      funcOp->walk([&](affine::AffineIfOp ifOp) { extractBroadcastForwardOp(ifOp); });
+      funcOp->walk([this](affine::AffineIfOp ifOp) { extractBroadcastForwardOp(ifOp); });
     }
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createExtractIfOpPass() { return std::make_unique<ExtractIfOp>(); }
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createExtractIfOpPass() { return std::make_unique<ExtractIfOp>(); }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createExtractIfOpPass(const std::string &target) {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createExtractIfOpPass(const std::string &target) {
   return std::make_unique<ExtractIfOp>(target);
 }
+}  // namespace mlir
