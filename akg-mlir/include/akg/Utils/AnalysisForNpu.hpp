@@ -54,18 +54,6 @@ class HardwareConfig {
  public:
   HardwareConfig() = default;
   ~HardwareConfig() = default;
-  HardwareConfig(uint32_t coreNumAic, uint32_t coreNumAiv, uint32_t l2Size, uint32_t l1Size, uint32_t l0aSize,
-                 uint32_t l0bSize, uint32_t l0cSize, uint32_t ubSize, bool isRegBasedArch, uint32_t RegVectorLength = 0)
-      : coreNumAic(coreNumAic),
-        coreNumAiv(coreNumAiv),
-        l2(l2Size),
-        l1(l1Size),
-        l0a(l0aSize),
-        l0b(l0bSize),
-        l0c(l0cSize),
-        ub(ubSize),
-        isRegBasedArch(isRegBasedArch),
-        RegVectorLength(RegVectorLength) {}
 
   uint32_t coreNumAic{0};
   uint32_t coreNumAiv{0};

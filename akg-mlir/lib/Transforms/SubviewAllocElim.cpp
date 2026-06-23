@@ -254,6 +254,13 @@ struct InitInfo {
   Value initValue;  // The constant value used to initialize (e.g., 0.0)
 };
 
+struct NestedIfContext {
+  ArrayRef<Operation *> loads;
+  ArrayRef<Type> resultTypes;
+  Value partAxisIdx;
+  bool isFullCoverage;
+};
+
 struct SubviewAllocElimPass : public SubviewAllocElimBase<SubviewAllocElimPass> {
  public:
   void runOnOperation() override;
@@ -290,8 +297,7 @@ struct SubviewAllocElimPass : public SubviewAllocElimBase<SubviewAllocElimPass> 
                             IRMapping &mapping);
   SmallVector<Value> buildPartitionValues(OpBuilder &b, Location loc, const Partition &part,
                                           ArrayRef<Operation *> loads);
-  SmallVector<Value> buildNestedIf(OpBuilder &b, Location loc, unsigned partIdx, ArrayRef<Operation *> loads,
-                                   ArrayRef<Type> resultTypes, Value partAxisIdx, bool isFullCoverage);
+  SmallVector<Value> buildNestedIf(OpBuilder &b, Location loc, unsigned partIdx, const NestedIfContext &ctx);
 };
 
 // Collect all SubViewOps that are direct or indirect users of a memref value
@@ -758,9 +764,8 @@ SmallVector<Value> SubviewAllocElimPass::buildPartitionValues(OpBuilder &b, Loca
 // Recursively build a nested affine.if/else chain that selects the correct partition
 // value(s) based on the partition-axis index. Works for any number of loads (1 or N).
 SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location loc, unsigned partIdx,
-                                                       ArrayRef<Operation *> loads, ArrayRef<Type> resultTypes,
-                                                       Value partAxisIdx, bool isFullCoverage) {
-  unsigned numLoads = loads.size();
+                                                       const NestedIfContext &ctx) {
+  unsigned numLoads = ctx.loads.size();
 
   // Base case: past all partitions — return init values or fail.
   if (partIdx >= partitions.size()) {
@@ -773,20 +778,20 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
   const Partition &part = partitions[partIdx];
   bool isLastPartition = (partIdx == partitions.size() - 1);
   // Fast path: last partition + full coverage → no if needed, directly emit values.
-  if (isLastPartition && isFullCoverage) {
-    return buildPartitionValues(b, loc, part, loads);
+  if (isLastPartition && ctx.isFullCoverage) {
+    return buildPartitionValues(b, loc, part, ctx.loads);
   }
 
   // Build condition: partAxisIdx <= partition.offset + partition.size - 1
   int64_t boundary = part.offset + part.size - 1;
   auto d0 = getAffineDimExpr(0, b.getContext());
   IntegerSet condSet = IntegerSet::get(1, 0, {-d0 + boundary}, {false});
-  bool hasElse = (!isLastPartition || !isFullCoverage);
-  auto ifOp = b.create<affine::AffineIfOp>(loc, resultTypes, condSet, ValueRange{partAxisIdx}, hasElse);
+  bool hasElse = (!isLastPartition || !ctx.isFullCoverage);
+  auto ifOp = b.create<affine::AffineIfOp>(loc, ctx.resultTypes, condSet, ValueRange{ctx.partAxisIdx}, hasElse);
 
   // Then block: values from the current partition.
   OpBuilder thenBuilder = OpBuilder::atBlockBegin(ifOp.getThenBlock());
-  SmallVector<Value> thenVals = buildPartitionValues(thenBuilder, loc, part, loads);
+  SmallVector<Value> thenVals = buildPartitionValues(thenBuilder, loc, part, ctx.loads);
   if (thenVals.empty()) {
     return {};
   }
@@ -796,13 +801,13 @@ SmallVector<Value> SubviewAllocElimPass::buildNestedIf(OpBuilder &b, Location lo
   if (hasElse) {
     OpBuilder elseBuilder = OpBuilder::atBlockBegin(ifOp.getElseBlock());
     SmallVector<Value> elseVals;
-    if (isLastPartition && !isFullCoverage) {
+    if (isLastPartition && !ctx.isFullCoverage) {
       if (!initInfo.hasInit) {
         return {};
       }
       elseVals.assign(numLoads, initInfo.initValue);
     } else {
-      elseVals = buildNestedIf(elseBuilder, loc, partIdx + 1, loads, resultTypes, partAxisIdx, isFullCoverage);
+      elseVals = buildNestedIf(elseBuilder, loc, partIdx + 1, ctx);
       if (elseVals.empty()) {
         return {};
       }
@@ -873,7 +878,7 @@ bool SubviewAllocElimPass::replaceLoads(memref::AllocOp allocOp) {
                     [](Operation *l) { return getLoadResult(l).getType(); });
 
     SmallVector<Value> replacements =
-      buildNestedIf(builder, loc, 0, group.loads, resultTypes, group.partAxisIdx, isFullCoverage);
+      buildNestedIf(builder, loc, 0, {group.loads, resultTypes, group.partAxisIdx, isFullCoverage});
     if (replacements.size() != group.loads.size()) {
       continue;
     }

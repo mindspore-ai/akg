@@ -28,6 +28,15 @@ using llvm::SmallVectorImpl;
 
 namespace mlir {
 
+struct InputTileSizesParam {
+  SmallVector<unsigned, 6> inputTileSizes;
+};
+
+struct ArchFeatureInfo {
+  std::string arch;
+  std::string feature;
+};
+
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass();
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
@@ -38,9 +47,8 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::
                                                                      const std::string &arch,
                                                                      const std::string &feature);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
-                                                                     const std::string &arch,
-                                                                     const std::string &feature,
-                                                                     const SmallVector<unsigned, 6> &inputTileSizes);
+                                                                     const ArchFeatureInfo &af,
+                                                                     const InputTileSizesParam &params);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(uint64_t cacheSizeBytes);
 
 }  // namespace mlir

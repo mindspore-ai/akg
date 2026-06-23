@@ -722,31 +722,29 @@ static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceSta
   return success();
 }
 
+struct SliceUnionContext {
+  unsigned loopDepth;
+  unsigned numCommonLoops;
+  bool isBackwardSlice;
+  FlatAffineValueConstraints &cst;
+  std::vector<std::pair<Operation *, Operation *>> &dependentOpPairs;
+};
+
 static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess, Operation *i, Operation *j,
-                                                unsigned loopDepth, unsigned numCommonLoops, bool isBackwardSlice,
-                                                FlatAffineValueConstraints &sliceUnionCst,
-                                                std::vector<std::pair<Operation *, Operation *>> &dependentOpPairs) {
+                                                SliceUnionContext &ctx) {
   AKGMemRefAccess dstAccess(j);
   if (srcAccess.memref != dstAccess.memref) {
     return success();
   }
 
-  // Upstream getComputationSliceState asserts loopDepth ≤ nesting depth of opsA in
-  // forward mode and ≤ nesting depth of opsB in backward mode (the "depSource" side
-  // it projects against). When the producer write lives shallower than the requested
-  // fusion depth, clamp per pair rather than failing — the slice IVs end up at the
-  // natural depth, and computeSliceUnionAKG lifts the rest via sibling matching
-  // (slice-IV extension in backward, receiver extension in forward).
-  unsigned naturalDepth = isBackwardSlice ? getNestingDepth(j) : getNestingDepth(i);
-  unsigned effLoopDepth = std::min(loopDepth, naturalDepth);
+  unsigned naturalDepth = ctx.isBackwardSlice ? getNestingDepth(j) : getNestingDepth(i);
+  unsigned effLoopDepth = std::min(ctx.loopDepth, naturalDepth);
 
   bool readReadAccesses = isa<AffineReadOpInterface>(srcAccess.opInst) && isa<AffineReadOpInterface>(dstAccess.opInst);
   FlatAffineValueConstraints dependenceConstraints;
-  // Check dependence between 'srcAccess' and 'dstAccess'.
   DependenceResult result =
-    checkMemrefAccessDependenceAKG(srcAccess, dstAccess, /* loopDepth= */ numCommonLoops + kDepDepthIncrement,
-                                   &dependenceConstraints, /* dependenceComponents= */ nullptr,
-                                   /* allowRAR= */ readReadAccesses, /* checkSrcBeforeDst= */ false);
+    checkMemrefAccessDependenceAKG(srcAccess, dstAccess, ctx.numCommonLoops + kDepDepthIncrement,
+                                   &dependenceConstraints, nullptr, readReadAccesses, false);
   if (result.value == DependenceResult::Failure) {
     LLVM_DEBUG(llvm::dbgs() << "Dependence check failed\n");
     return failure();
@@ -755,13 +753,13 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
     return success();
   }
 
-  dependentOpPairs.emplace_back(i, j);
+  ctx.dependentOpPairs.emplace_back(i, j);
 
-  // Compute slice bounds for 'srcAccess' and 'dstAccess'.
   ComputationSliceState tmpSliceState;
-  mlir::affine::getComputationSliceState(i, j, &dependenceConstraints, effLoopDepth, isBackwardSlice, &tmpSliceState);
+  mlir::affine::getComputationSliceState(i, j, &dependenceConstraints, effLoopDepth, ctx.isBackwardSlice,
+                                         &tmpSliceState);
 
-  return mergeSliceStateIntoUnion(tmpSliceState, sliceUnionCst);
+  return mergeSliceStateIntoUnion(tmpSliceState, ctx.cst);
 }
 
 // Public per the declaration in akg/Dialect/Affine/Analysis/AffineAnalysis.h.
@@ -1095,20 +1093,21 @@ static SmallVector<AffineForOp, kSmallVectorSizeFour> findOpsASiblingChain(Array
 // bounds coupled to partnerLoops[d] (the receiver side, deep). Pre-spine ops
 // replicate at the outer level — same execution count they had in src — instead
 // of being smeared across the receiver's inner range.
-static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
-                                           ComputationSliceState &slice, unsigned currentNumIVs, unsigned loopDepth,
-                                           ArrayRef<AffineForOp> partnerLoops) {
+struct OpsPair {
+  ArrayRef<Operation *> opsA;
+  ArrayRef<Operation *> opsB;
+};
+
+static bool extendSliceWithSrcSiblingLoops(const OpsPair &ops, ComputationSliceState &slice, unsigned currentNumIVs,
+                                           unsigned loopDepth, ArrayRef<AffineForOp> partnerLoops) {
   if (currentNumIVs >= loopDepth) {
     return false;
   }
-  if (opsA.empty()) {
+  if (ops.opsA.empty()) {
     return false;
   }
 
-  // Continuity: existing slice IVs must end at opsA's common parent so the new
-  // sibling IVs splice on without a gap. This also filters out the forward-slice
-  // case where slice.ivs are opsB-side IVs (covered by the receiver-extension path).
-  Operation *commonParent = opsA.front()->getParentOp();
+  Operation *commonParent = ops.opsA.front()->getParentOp();
   auto parentLoop = dyn_cast_or_null<AffineForOp>(commonParent);
   if (!parentLoop) {
     return false;
@@ -1120,15 +1119,12 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
     }
   }
 
-  auto extLoops = findOpsASiblingChain(opsA, opsB, partnerLoops, currentNumIVs, loopDepth);
+  auto extLoops = findOpsASiblingChain(ops.opsA, ops.opsB, partnerLoops, currentNumIVs, loopDepth);
   if (extLoops.empty()) {
     return false;
   }
 
-  // opsA is non-const Operation*, and Operation::getContext() is const-callable, so this
-  // avoids the const-cast trap of going through ArrayRef<AffineForOp>::operator[] (which
-  // returns const T& and would discard qualifiers on OpState::getContext()).
-  MLIRContext *ctx = opsA.front()->getContext();
+  MLIRContext *ctx = ops.opsA.front()->getContext();
   AffineExpr d0 = getAffineDimExpr(kFirstResultIndex, ctx);
   for (unsigned d = currentNumIVs; d < loopDepth; ++d) {
     AffineForOp srcLoop = extLoops[d - currentNumIVs];
@@ -1136,8 +1132,8 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
     int64_t step = srcLoop.getStepAsInt();
 
     slice.ivs.push_back(srcLoop.getInductionVar());
-    slice.lbs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0));
-    slice.ubs.push_back(AffineMap::get(/* dimCount= */ kSingleDimCount, /* symCount= */ kZeroSymbolCount, d0 + step));
+    slice.lbs.push_back(AffineMap::get(kSingleDimCount, kZeroSymbolCount, d0));
+    slice.ubs.push_back(AffineMap::get(kSingleDimCount, kZeroSymbolCount, d0 + step));
     SmallVector<Value, kSmallVectorSizeFour> operands{partnerLoop.getInductionVar()};
     slice.lbOperands.push_back(operands);
     slice.ubOperands.push_back(operands);
@@ -1154,21 +1150,17 @@ static bool extendSliceWithSrcSiblingLoops(ArrayRef<Operation *> opsA, ArrayRef<
 // Subsequent alignSliceWithPartnerLoops couples slice.ivs[d] (opsB IV) with the
 // appended sibling's IV at single-point bounds — yielding the same merge-point
 // shape as the backward-mode extension produces, just from the other direction.
-static bool extendReceiverWithSiblingForLoops(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
-                                              SmallVectorImpl<AffineForOp> &receiverLoops,
+static bool extendReceiverWithSiblingForLoops(const OpsPair &ops, SmallVectorImpl<AffineForOp> &receiverLoops,
                                               ArrayRef<AffineForOp> partnerLoops, unsigned currentDepth,
                                               unsigned loopDepth) {
   if (currentDepth >= loopDepth) {
     return false;
   }
-  if (opsA.empty()) {
+  if (ops.opsA.empty()) {
     return false;
   }
 
-  // The receiver chain must end at opsA's common parent so the matched siblings
-  // attach right where opsA's nest ends. Without this anchor we'd be guessing at
-  // which subtree the appended for-loops belong to.
-  Operation *commonParent = opsA.front()->getParentOp();
+  Operation *commonParent = ops.opsA.front()->getParentOp();
   auto parentLoop = dyn_cast_or_null<AffineForOp>(commonParent);
   if (!parentLoop) {
     return false;
@@ -1177,7 +1169,7 @@ static bool extendReceiverWithSiblingForLoops(ArrayRef<Operation *> opsA, ArrayR
     return false;
   }
 
-  auto extLoops = findOpsASiblingChain(opsA, opsB, partnerLoops, currentDepth, loopDepth);
+  auto extLoops = findOpsASiblingChain(ops.opsA, ops.opsB, partnerLoops, currentDepth, loopDepth);
   if (extLoops.empty()) {
     return false;
   }
@@ -1285,28 +1277,31 @@ static void expandCandidatesViaSSA(Block *targetBlock, DenseSet<Operation *> &ca
   }
 }
 
-// Pick the anchor iterator inside targetBlock for inserting the cloned slice when the cloned
-// body is purely sequential. Combines: dependentOpPairs (primary fusion mediator), memref-
-// conflict candidates from the cloned for-op's full body, and SSA-edge cluster expansion.
-// Returns fallbackPoint when no candidate is found.
-static Block::iterator chooseInsertPoint(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB,
+struct InsertPointContext {
+  Block *targetBlock;
+  ArrayRef<AffineForOp> surroundingLoops;
+  bool isBackwardSlice;
+  Block::iterator fallbackPoint;
+};
+
+static Block::iterator chooseInsertPoint(const OpsPair &ops,
                                          const std::vector<std::pair<Operation *, Operation *>> &dependentOpPairs,
-                                         Block *targetBlock, ArrayRef<AffineForOp> surroundingLoops,
-                                         bool isBackwardSlice, Block::iterator fallbackPoint) {
+                                         const InsertPointContext &ctx) {
   DenseSet<Operation *> candidates;
-  auto addCandidate = [&targetBlock, &candidates](Operation *op) {
+  auto addCandidate = [&ctx, &candidates](Operation *op) {
     if (!op) {
       return;
     }
-    if (Operation *top = targetBlock->findAncestorOpInBlock(*op)) {
+    if (Operation *top = ctx.targetBlock->findAncestorOpInBlock(*op)) {
       candidates.insert(top);
     }
   };
   for (const auto &dep : dependentOpPairs) {
-    addCandidate(isBackwardSlice ? dep.second : dep.first);
+    addCandidate(ctx.isBackwardSlice ? dep.second : dep.first);
   }
-  addMemrefConflictCandidates(isBackwardSlice ? opsA : opsB, targetBlock, surroundingLoops, candidates);
-  expandCandidatesViaSSA(targetBlock, candidates);
+  addMemrefConflictCandidates(ctx.isBackwardSlice ? ops.opsA : ops.opsB, ctx.targetBlock, ctx.surroundingLoops,
+                              candidates);
+  expandCandidatesViaSSA(ctx.targetBlock, candidates);
 
   Operation *anchor = nullptr;
   for (Operation *cand : candidates) {
@@ -1314,13 +1309,13 @@ static Block::iterator chooseInsertPoint(ArrayRef<Operation *> opsA, ArrayRef<Op
       anchor = cand;
       continue;
     }
-    bool replace = isBackwardSlice ? cand->isBeforeInBlock(anchor) : anchor->isBeforeInBlock(cand);
+    bool replace = ctx.isBackwardSlice ? cand->isBeforeInBlock(anchor) : anchor->isBeforeInBlock(cand);
     if (replace) {
       anchor = cand;
     }
   }
-  return (anchor != nullptr) ? (isBackwardSlice ? anchor->getIterator() : std::next(anchor->getIterator()))
-                             : fallbackPoint;
+  return (anchor != nullptr) ? (ctx.isBackwardSlice ? anchor->getIterator() : std::next(anchor->getIterator()))
+                             : ctx.fallbackPoint;
 }
 
 SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
@@ -1330,14 +1325,12 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   FlatAffineValueConstraints sliceUnionCst;
   assert(sliceUnionCst.getNumDimAndSymbolVars() == kEmptyVarCount);
   std::vector<std::pair<Operation *, Operation *>> dependentOpPairs;
+  SliceUnionContext sliceCtx{loopDepth, numCommonLoops, isBackwardSlice, sliceUnionCst, dependentOpPairs};
   for (auto *i : opsA) {
     AKGMemRefAccess srcAccess(i);
-    const bool hasFailure = std::any_of(
-      opsB.begin(), opsB.end(),
-      [&srcAccess, i, loopDepth, numCommonLoops, isBackwardSlice, &sliceUnionCst, &dependentOpPairs](Operation *j) {
-        return failed(processOpPairForSliceUnion(srcAccess, i, j, loopDepth, numCommonLoops, isBackwardSlice,
-                                                 sliceUnionCst, dependentOpPairs));
-      });
+    const bool hasFailure = std::any_of(opsB.begin(), opsB.end(), [&srcAccess, i, &sliceCtx](Operation *j) {
+      return failed(processOpPairForSliceUnion(srcAccess, i, j, sliceCtx));
+    });
     if (hasFailure) {
       return SliceComputationResult::GenericFailure;
     }
@@ -1374,9 +1367,10 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
     // body; the receiver was already deep enough by virtue of being opsB). Forward
     // mode is the inverse: slice IVs are already deep (opsB-sized), but the
     // receiver needs matched opsA-side siblings to host the deeper levels.
-    bool extended = !isBackwardSlice && loopDepth <= partnerCommonLoopDepth &&
-                    extendReceiverWithSiblingForLoops(opsA, opsB, surroundingLoops, partnerLoops,
-                                                      innermostCommonLoopDepth, loopDepth);
+    OpsPair opsPair{opsA, opsB};
+    bool extended =
+      !isBackwardSlice && loopDepth <= partnerCommonLoopDepth &&
+      extendReceiverWithSiblingForLoops(opsPair, surroundingLoops, partnerLoops, innermostCommonLoopDepth, loopDepth);
     if (!extended) {
       LLVM_DEBUG(llvm::dbgs() << "Exceeds max loop depth\n");
       return SliceComputationResult::GenericFailure;
@@ -1429,8 +1423,9 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   // surroundingLoops; in forward (shallow opsA) the function exits via the IV-continuity
   // check anyway — the depth lift in that direction is handled above by
   // extendReceiverWithSiblingForLoops.
+  OpsPair opsPair{opsA, opsB};
   if (numSliceLoopIVs < loopDepth &&
-      extendSliceWithSrcSiblingLoops(opsA, opsB, *sliceUnion, numSliceLoopIVs, loopDepth, partnerLoops)) {
+      extendSliceWithSrcSiblingLoops(opsPair, *sliceUnion, numSliceLoopIVs, loopDepth, partnerLoops)) {
     numSliceLoopIVs = loopDepth;
   }
 
@@ -1446,8 +1441,8 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   if (sliceHasInnerFor(*sliceUnion, numSliceLoopIVs)) {
     sliceUnion->insertPoint = fallbackPoint;
   } else {
-    sliceUnion->insertPoint =
-      chooseInsertPoint(opsA, opsB, dependentOpPairs, targetBlock, surroundingLoops, isBackwardSlice, fallbackPoint);
+    InsertPointContext ipCtx{targetBlock, surroundingLoops, isBackwardSlice, fallbackPoint};
+    sliceUnion->insertPoint = chooseInsertPoint(opsPair, dependentOpPairs, ipCtx);
   }
 
   // Check if the slice computed is valid. Return success only if it is verified
