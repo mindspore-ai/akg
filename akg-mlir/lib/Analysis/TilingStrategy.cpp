@@ -962,6 +962,7 @@ struct BandTilePlan {
   // When true, the plan used multi-dimensional vectorization greedy search;
   // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
   bool usesMultiVecScheme{false};
+  bool preserveWholeBandTiles{false};
 };
 
 int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
@@ -3544,8 +3545,38 @@ void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 }
 
+bool tryBuildSmallHeavyElementwiseLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  constexpr int64_t kSmallHeavyElementwiseTargetCores = 3;
+  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.empty() ||
+      ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP || ctx.graphTemplate == GraphTemplate::BROADCAST_OP ||
+      ctx.mathComplexityScore < kHeavyMathComplexityScore) {
+    return false;
+  }
+  initWholeBandPlan(ctx, plan);
+  alignPlanTiles(ctx, plan);
+  SmallVector<int64_t, 6> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
+  if (!fitsVectorUb(ctx, axisTiles)) {
+    return false;
+  }
+  for (size_t i = 0; i < ctx.extents.size(); ++i) {
+    int64_t extent = std::max<int64_t>(ctx.extents[i], 1);
+    int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+    int64_t targetCoreTile = alignUpInt64(ceilDivInt64(extent, kSmallHeavyElementwiseTargetCores), alignUnit);
+    if (targetCoreTile < extent) {
+      plan.outerTiles[i] = saturateToTileValue(targetCoreTile);
+      plan.innerTiles[i] = plan.outerTiles[i];
+      break;
+    }
+  }
+  plan.multiVecAxisMask.assign(ctx.axes.size(), true);
+  plan.usesMultiVecScheme = true;
+  plan.preserveWholeBandTiles = true;
+  return true;
+}
+
 void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
-  if (ctx.hasDynamicAxis || plan.outerTiles.size() < ctx.axes.size() || plan.innerTiles.size() < ctx.axes.size()) {
+  if (ctx.hasDynamicAxis || plan.preserveWholeBandTiles || plan.outerTiles.size() < ctx.axes.size() ||
+      plan.innerTiles.size() < ctx.axes.size()) {
     return;
   }
   alignPlanTiles(ctx, plan);
@@ -3784,7 +3815,9 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     NpuBandContext bandCtx = buildNpuBandContext(npuGraph, bandIdx, bandAxes);
     BandTilePlan bandPlan;
     bool matched = tryBuildTransposePlan(bandCtx, bandPlan) || tryBuildReductionSuffixPlan(bandCtx, bandPlan) ||
-                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) || tryBuildElementwisePlan(bandCtx, bandPlan) ||
+                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) ||
+                   tryBuildSmallHeavyElementwiseLimitedCorePlan(bandCtx, bandPlan) ||
+                   tryBuildElementwisePlan(bandCtx, bandPlan) ||
                    tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
