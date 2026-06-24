@@ -496,13 +496,17 @@ static SmallVector<int64_t> buildAdjacentSwapPerm(int64_t rank, int64_t a) {
 
 static bool traceSubviewDim(memref::SubViewOp subviewOp, MemRefType baseType, int64_t dim,
                             std::optional<Value> &resolvedOut) {
-  if (dim < 0 || dim >= baseType.getRank()) return false;
+  if (dim < 0 || dim >= baseType.getRank()) {
+    return false;
+  }
 
   auto droppedDims = subviewOp.getDroppedDims();
   int64_t sourceDim = -1;
   int64_t resultDim = 0;
   for (int64_t i = 0; i < static_cast<int64_t>(droppedDims.size()); ++i) {
-    if (droppedDims.test(i)) continue;
+    if (droppedDims.test(i)) {
+      continue;
+    }
     if (resultDim++ == dim) {
       sourceDim = i;
       break;
@@ -3808,8 +3812,12 @@ static SmallVector<OpFoldResult> buildExpandShapeOutputShape(PatternRewriter &re
   for (auto [srcDim, resultDims] : llvm::enumerate(reassoc)) {
     Value srcDimValue;
     for (int64_t resultDim : resultDims) {
-      if (!ShapedType::isDynamic(resultShape[static_cast<size_t>(resultDim)])) continue;
-      if (!srcDimValue) srcDimValue = rewriter.create<memref::DimOp>(loc, src, static_cast<int64_t>(srcDim));
+      if (!ShapedType::isDynamic(resultShape[static_cast<size_t>(resultDim)])) {
+        continue;
+      }
+      if (!srcDimValue) {
+        srcDimValue = rewriter.create<memref::DimOp>(loc, src, static_cast<int64_t>(srcDim));
+      }
       outputShape[static_cast<size_t>(resultDim)] = srcDimValue;
     }
   }
@@ -4211,7 +4219,9 @@ struct NPUVectorExtractSliceToHIVM : public OpConversionPattern<npuvector::Extra
     Location loc = op.getLoc();
     Value src = adaptor.getSource();
     auto srcMemRef = dyn_cast<MemRefType>(src.getType());
-    if (!srcMemRef) return rewriter.notifyMatchFailure(op, "expected memref source");
+    if (!srcMemRef) {
+      return rewriter.notifyMatchFailure(op, "expected memref source");
+    }
     auto npuResult = cast<npuvector::NPUVectorType>(op.getResult().getType());
 
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getOffsets());
@@ -4219,11 +4229,13 @@ struct NPUVectorExtractSliceToHIVM : public OpConversionPattern<npuvector::Extra
     SmallVector<OpFoldResult> strides = getAsOpFoldResult(adaptor.getStrides());
 
     ArrayRef<int64_t> keepDims = op.getKeepDims();
-    if (keepDims.size() != static_cast<size_t>(npuResult.getRank()))
+    if (keepDims.size() != static_cast<size_t>(npuResult.getRank())) {
       return rewriter.notifyMatchFailure(op, "keep_dims length must match result rank");
+    }
     for (auto [resultDim, sourceDim] : llvm::enumerate(keepDims)) {
-      if (sourceDim < 0 || sourceDim >= static_cast<int64_t>(sizes.size()))
+      if (sourceDim < 0 || sourceDim >= static_cast<int64_t>(sizes.size())) {
         return rewriter.notifyMatchFailure(op, "keep_dims contains an out-of-range dimension");
+      }
       // Preserve the declared dynamic result shape even when the size SSA value is constant.
       if (npuResult.isDynamicDim(resultDim)) {
         sizes[sourceDim] = adaptor.getSizes()[sourceDim];
@@ -4232,10 +4244,14 @@ struct NPUVectorExtractSliceToHIVM : public OpConversionPattern<npuvector::Extra
 
     auto fullResultType =
       dyn_cast_or_null<MemRefType>(memref::SubViewOp::inferResultType(srcMemRef, offsets, sizes, strides));
-    if (!fullResultType) return rewriter.notifyMatchFailure(op, "failed to infer full-rank subview type");
+    if (!fullResultType) {
+      return rewriter.notifyMatchFailure(op, "failed to infer full-rank subview type");
+    }
 
     auto fullLayout = dyn_cast<StridedLayoutAttr>(fullResultType.getLayout());
-    if (!fullLayout) return rewriter.notifyMatchFailure(op, "expected strided layout on full-rank subview");
+    if (!fullLayout) {
+      return rewriter.notifyMatchFailure(op, "expected strided layout on full-rank subview");
+    }
 
     SmallVector<int64_t> reducedStrides;
     reducedStrides.reserve(keepDims.size());

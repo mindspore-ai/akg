@@ -753,7 +753,9 @@ static bool gatherVectorDynExtents(Value vectorVal, SmallVectorImpl<Value> &outE
     outExtents.clear();
     outExtents.reserve(keepDims.size());
     for (int64_t d : keepDims) {
-      if (d < 0 || static_cast<size_t>(d) >= sizes.size()) return false;
+      if (d < 0 || static_cast<size_t>(d) >= sizes.size()) {
+        return false;
+      }
       outExtents.push_back(sizes[static_cast<unsigned>(d)]);
     }
     return true;
@@ -2748,7 +2750,9 @@ static LogicalResult normalizeSubviewAccess(memref::SubViewOp subview, SmallVect
                                             MLIRContext *context) {
   for (OpFoldResult stride : subview.getMixedStrides()) {
     std::optional<int64_t> constantStride = getConstantIntValue(stride);
-    if (!constantStride || *constantStride != 1) return failure();
+    if (!constantStride || *constantStride != 1) {
+      return failure();
+    }
   }
 
   SmallVector<OpFoldResult> mixedOffsets = subview.getMixedOffsets();
@@ -2762,13 +2766,19 @@ static LogicalResult normalizeSubviewAccess(memref::SubViewOp subview, SmallVect
       srcIdx[d] = offset;
       continue;
     }
-    if (resPos >= curIdx.size()) return failure();
+    if (resPos >= curIdx.size()) {
+      return failure();
+    }
     std::optional<OpFoldResult> sum = addScratchIndexOFR(offset, curIdx[resPos], context);
-    if (!sum) return failure();
+    if (!sum) {
+      return failure();
+    }
     srcIdx[d] = *sum;
     ++resPos;
   }
-  if (resPos != curIdx.size()) return failure();
+  if (resPos != curIdx.size()) {
+    return failure();
+  }
   curIdx = std::move(srcIdx);
   return success();
 }
@@ -2778,23 +2788,37 @@ static LogicalResult normalizeCollapseShapeAccess(memref::CollapseShapeOp collap
   auto srcType = collapse.getSrcType();
   ArrayRef<int64_t> srcShape = srcType.getShape();
   SmallVector<ReassociationIndices> reassoc = collapse.getReassociationIndices();
-  if (reassoc.size() != curIdx.size()) return failure();
+  if (reassoc.size() != curIdx.size()) {
+    return failure();
+  }
 
   SmallVector<OpFoldResult> srcIdx(srcType.getRank());
   for (unsigned g = 0; g < reassoc.size(); ++g) {
     SmallVector<int64_t> nonUnit;
     for (int64_t sd : reassoc[g]) {
-      if (sd < 0 || sd >= static_cast<int64_t>(srcShape.size())) return failure();
-      if (srcShape[sd] == 1) continue;
-      if (srcShape[sd] == ShapedType::kDynamic) return failure();
+      if (sd < 0 || sd >= static_cast<int64_t>(srcShape.size())) {
+        return failure();
+      }
+      if (srcShape[sd] == 1) {
+        continue;
+      }
+      if (srcShape[sd] == ShapedType::kDynamic) {
+        return failure();
+      }
       nonUnit.push_back(sd);
     }
     if (nonUnit.empty()) {
       std::optional<int64_t> ri = getConstantIntValue(curIdx[g]);
-      if (!ri || *ri != 0) return failure();
-      for (int64_t sd : reassoc[g]) srcIdx[sd] = zeroIndexOFR(context);
+      if (!ri || *ri != 0) {
+        return failure();
+      }
+      for (int64_t sd : reassoc[g]) {
+        srcIdx[sd] = zeroIndexOFR(context);
+      }
     } else if (nonUnit.size() == 1) {
-      for (int64_t sd : reassoc[g]) srcIdx[sd] = (sd == nonUnit[0]) ? curIdx[g] : zeroIndexOFR(context);
+      for (int64_t sd : reassoc[g]) {
+        srcIdx[sd] = (sd == nonUnit[0]) ? curIdx[g] : zeroIndexOFR(context);
+      }
     } else {
       return failure();
     }
@@ -2808,28 +2832,42 @@ static LogicalResult normalizeExpandShapeAccess(memref::ExpandShapeOp expand, Sm
   auto resultType = expand.getResultType();
   ArrayRef<int64_t> resultShape = resultType.getShape();
   SmallVector<ReassociationIndices> reassoc = expand.getReassociationIndices();
-  if (static_cast<int64_t>(curIdx.size()) != resultType.getRank()) return failure();
+  if (static_cast<int64_t>(curIdx.size()) != resultType.getRank()) {
+    return failure();
+  }
 
   SmallVector<OpFoldResult> srcIdx(reassoc.size());
   for (unsigned g = 0; g < reassoc.size(); ++g) {
     SmallVector<int64_t> nonUnit;
     for (int64_t rd : reassoc[g]) {
-      if (rd < 0 || rd >= static_cast<int64_t>(resultShape.size())) return failure();
-      if (resultShape[rd] == 1) continue;
-      if (resultShape[rd] == ShapedType::kDynamic) return failure();
+      if (rd < 0 || rd >= static_cast<int64_t>(resultShape.size())) {
+        return failure();
+      }
+      if (resultShape[rd] == 1) {
+        continue;
+      }
+      if (resultShape[rd] == ShapedType::kDynamic) {
+        return failure();
+      }
       nonUnit.push_back(rd);
     }
     if (nonUnit.empty()) {
       for (int64_t rd : reassoc[g]) {
         std::optional<int64_t> ri = getConstantIntValue(curIdx[rd]);
-        if (!ri || *ri != 0) return failure();
+        if (!ri || *ri != 0) {
+          return failure();
+        }
       }
       srcIdx[g] = zeroIndexOFR(context);
     } else if (nonUnit.size() == 1) {
       for (int64_t rd : reassoc[g]) {
-        if (rd == nonUnit[0]) continue;
+        if (rd == nonUnit[0]) {
+          continue;
+        }
         std::optional<int64_t> ri = getConstantIntValue(curIdx[rd]);
-        if (!ri || *ri != 0) return failure();
+        if (!ri || *ri != 0) {
+          return failure();
+        }
       }
       srcIdx[g] = curIdx[nonUnit[0]];
     } else {
@@ -2848,7 +2886,9 @@ static FailureOr<NormalizedScratchAccess> normalizeMemrefAccess(Value memref, Va
 
   for (int guard = 0; guard < 64; ++guard) {
     Operation *def = cur.getDefiningOp();
-    if (!def) break;
+    if (!def) {
+      break;
+    }
 
     if (auto castOp = dyn_cast<memref::CastOp>(def)) {
       cur = castOp.getSource();
@@ -2860,19 +2900,25 @@ static FailureOr<NormalizedScratchAccess> normalizeMemrefAccess(Value memref, Va
     }
 
     if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
-      if (failed(normalizeSubviewAccess(subview, curIdx, context))) return failure();
+      if (failed(normalizeSubviewAccess(subview, curIdx, context))) {
+        return failure();
+      }
       cur = subview.getSource();
       continue;
     }
 
     if (auto collapse = dyn_cast<memref::CollapseShapeOp>(def)) {
-      if (failed(normalizeCollapseShapeAccess(collapse, curIdx, context))) return failure();
+      if (failed(normalizeCollapseShapeAccess(collapse, curIdx, context))) {
+        return failure();
+      }
       cur = collapse.getSrc();
       continue;
     }
 
     if (auto expand = dyn_cast<memref::ExpandShapeOp>(def)) {
-      if (failed(normalizeExpandShapeAccess(expand, curIdx, context))) return failure();
+      if (failed(normalizeExpandShapeAccess(expand, curIdx, context))) {
+        return failure();
+      }
       cur = expand.getSrc();
       continue;
     }
@@ -2925,44 +2971,72 @@ static FailureOr<ScratchTileMeta> buildScratchTileMeta(const NormalizedScratchAc
   meta.allocRank = rootType.getRank();
   for (unsigned d = 0; d < norm.rootIndices.size(); ++d) {
     Value idxVal = llvm::dyn_cast_if_present<Value>(norm.rootIndices[d]);
-    if (!idxVal) continue;
+    if (!idxVal) {
+      continue;
+    }
     int axis = getVectorDimForIndex(idxVal, ctx);
-    if (axis < 0 || !llvm::is_contained(vdo, axis)) continue;
+    if (axis < 0 || !llvm::is_contained(vdo, axis)) {
+      continue;
+    }
     FailureOr<int64_t> lb = getConstantVectorIndexLowerBound(idxVal);
-    if (failed(lb)) return failure();
+    if (failed(lb)) {
+      return failure();
+    }
     meta.channelDims.push_back({static_cast<int>(d), axis, *lb});
   }
-  if (meta.channelDims.empty()) meta.storeRootIndices = norm.rootIndices;
+  if (meta.channelDims.empty()) {
+    meta.storeRootIndices = norm.rootIndices;
+  }
   return meta;
 }
 
 static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
-  if (ctx.vf1FuncLevelNoAnchor) return false;
+  if (ctx.vf1FuncLevelNoAnchor) {
+    return false;
+  }
 
   Value storeValue = storeOp.getValue();
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
-  if (!vectorValue) return false;
+  if (!vectorValue) {
+    return false;
+  }
   auto nvt = dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
-  if (!nvt) return false;
+  if (!nvt) {
+    return false;
+  }
   auto vdoIt = ctx.valueDimOrder.find(vectorValue);
-  if (vdoIt == ctx.valueDimOrder.end() || vdoIt->second.empty()) return false;
+  if (vdoIt == ctx.valueDimOrder.end() || vdoIt->second.empty()) {
+    return false;
+  }
   SmallVector<int> vdo = vdoIt->second;
-  if (static_cast<int64_t>(vdo.size()) != nvt.getRank()) return false;
+  if (static_cast<int64_t>(vdo.size()) != nvt.getRank()) {
+    return false;
+  }
 
   SmallVector<int> storeAxes;
   for (Value idx : storeOp.getIndices()) {
     int d = getVectorDimForIndex(idx, ctx);
-    if (d >= 0) storeAxes.push_back(d);
+    if (d >= 0) {
+      storeAxes.push_back(d);
+    }
   }
   const bool hasMissingAxis = llvm::any_of(vdo, [&](int a) { return !llvm::is_contained(storeAxes, a); });
-  if (!hasMissingAxis) return false;
+  if (!hasMissingAxis) {
+    return false;
+  }
 
   FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(storeOp.getMemRef(), storeOp.getIndices(), ctx);
-  if (failed(norm)) return false;
+  if (failed(norm)) {
+    return false;
+  }
   Value root = norm->root;
   auto rootType = dyn_cast<MemRefType>(root.getType());
-  if (!rootType || static_cast<int64_t>(norm->rootIndices.size()) != rootType.getRank()) return false;
-  if (!isLocalNonEscapingScratch(root)) return false;
+  if (!rootType || static_cast<int64_t>(norm->rootIndices.size()) != rootType.getRank()) {
+    return false;
+  }
+  if (!isLocalNonEscapingScratch(root)) {
+    return false;
+  }
 
   FailureOr<ScratchTileMeta> meta = buildScratchTileMeta(*norm, rootType, vdo, ctx);
   if (failed(meta)) {
@@ -2976,17 +3050,23 @@ static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, Loo
 }
 
 static bool scratchIndicesMatch(ArrayRef<OpFoldResult> storeIndices, ArrayRef<OpFoldResult> loadIndices) {
-  if (storeIndices.size() != loadIndices.size()) return false;
+  if (storeIndices.size() != loadIndices.size()) {
+    return false;
+  }
   for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
     std::optional<int64_t> storeConst = getConstantIntValue(storeIdx);
     std::optional<int64_t> loadConst = getConstantIntValue(loadIdx);
     if (storeConst || loadConst) {
-      if (!storeConst || !loadConst || *storeConst != *loadConst) return false;
+      if (!storeConst || !loadConst || *storeConst != *loadConst) {
+        return false;
+      }
       continue;
     }
     Value storeValue = llvm::dyn_cast_if_present<Value>(storeIdx);
     Value loadValue = llvm::dyn_cast_if_present<Value>(loadIdx);
-    if (!storeValue || storeValue != loadValue) return false;
+    if (!storeValue || storeValue != loadValue) {
+      return false;
+    }
   }
   return true;
 }
@@ -3000,10 +3080,14 @@ static bool computeScratchSliceProjection(const ScratchTileMeta &meta, const Nor
     int axis = std::get<1>(cd);
     int64_t lb = std::get<2>(cd);
     auto axisIt = llvm::find(meta.tileAxisOrder, axis);
-    if (axisIt == meta.tileAxisOrder.end() || allocDim < 0 || allocDim >= static_cast<int>(norm.rootIndices.size()))
+    if (axisIt == meta.tileAxisOrder.end() || allocDim < 0 ||
+        allocDim >= static_cast<int>(norm.rootIndices.size())) {
       return false;
+    }
     unsigned tileDim = static_cast<unsigned>(std::distance(meta.tileAxisOrder.begin(), axisIt));
-    if (tileDim >= tileRank) return false;
+    if (tileDim >= tileRank) {
+      return false;
+    }
     OpFoldResult rootIndex = norm.rootIndices[allocDim];
     if (std::optional<int64_t> c = getConstantIntValue(rootIndex)) {
       dropDim[tileDim] = true;
@@ -3012,7 +3096,9 @@ static bool computeScratchSliceProjection(const ScratchTileMeta &meta, const Nor
       continue;
     }
     Value idxVal = llvm::dyn_cast_if_present<Value>(rootIndex);
-    if (!idxVal || getVectorDimForIndex(idxVal, ctx) != axis) return false;
+    if (!idxVal || getVectorDimForIndex(idxVal, ctx) != axis) {
+      return false;
+    }
     cacheKey.push_back(-1);
   }
   return true;
@@ -3023,7 +3109,9 @@ static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuv
                                          const SmallVector<int64_t> &dropOffset, const SmallVector<int64_t> &cacheKey,
                                          LoopVectorizationCtx &ctx) {
   for (auto &entry : ctx.scratchSliceCache) {
-    if (std::get<0>(entry) == tile && std::get<1>(entry) == cacheKey) return std::get<2>(entry);
+    if (std::get<0>(entry) == tile && std::get<1>(entry) == cacheKey) {
+      return std::get<2>(entry);
+    }
   }
 
   Location loc = loadOp.getLoc();
@@ -3044,12 +3132,16 @@ static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuv
       sizes[t] = tileExtents[t];
     } else {
       int64_t st = tileType.getShape()[t];
-      if (st == ShapedType::kDynamic) return nullptr;
+      if (st == ShapedType::kDynamic) {
+        return nullptr;
+      }
       sizes[t] = ctx.builder.create<arith::ConstantIndexOp>(loc, st);
     }
     keepDims.push_back(static_cast<int64_t>(t));
   }
-  if (keepDims.empty()) return nullptr;
+  if (keepDims.empty()) {
+    return nullptr;
+  }
 
   SmallVector<int64_t> sliceShape;
   sliceShape.reserve(keepDims.size());
@@ -3069,25 +3161,41 @@ static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuv
 }
 
 static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
-  if (ctx.scratchMeta.empty()) return false;
+  if (ctx.scratchMeta.empty()) {
+    return false;
+  }
 
   FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(loadOp.getMemRef(), loadOp.getIndices(), ctx);
-  if (failed(norm)) return false;
+  if (failed(norm)) {
+    return false;
+  }
   Value root = norm->root;
   auto metaIt = ctx.scratchMeta.find(root);
-  if (metaIt == ctx.scratchMeta.end()) return false;
+  if (metaIt == ctx.scratchMeta.end()) {
+    return false;
+  }
   auto bypassIt = ctx.allocBypass.find(root);
-  if (bypassIt == ctx.allocBypass.end() || !bypassIt->second) return false;
+  if (bypassIt == ctx.allocBypass.end() || !bypassIt->second) {
+    return false;
+  }
 
   Value tile = bypassIt->second;
   auto tileType = dyn_cast<npuvector::NPUVectorType>(tile.getType());
-  if (!tileType) return false;
+  if (!tileType) {
+    return false;
+  }
   const ScratchTileMeta &meta = metaIt->second;
-  if (static_cast<int64_t>(norm->rootIndices.size()) != meta.allocRank) return false;
-  if (static_cast<int64_t>(meta.tileAxisOrder.size()) != tileType.getRank()) return false;
+  if (static_cast<int64_t>(norm->rootIndices.size()) != meta.allocRank) {
+    return false;
+  }
+  if (static_cast<int64_t>(meta.tileAxisOrder.size()) != tileType.getRank()) {
+    return false;
+  }
 
   if (meta.channelDims.empty()) {
-    if (!scratchIndicesMatch(meta.storeRootIndices, norm->rootIndices)) return false;
+    if (!scratchIndicesMatch(meta.storeRootIndices, norm->rootIndices)) {
+      return false;
+    }
     ctx.valueMapping.map(loadOp.getResult(), tile);
     return true;
   }
@@ -3096,15 +3204,21 @@ static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizatio
   SmallVector<bool> dropDim(tileRank, false);
   SmallVector<int64_t> dropOffset(tileRank, 0);
   SmallVector<int64_t> cacheKey;
-  if (!computeScratchSliceProjection(meta, *norm, tileRank, ctx, dropDim, dropOffset, cacheKey)) return false;
+  if (!computeScratchSliceProjection(meta, *norm, tileRank, ctx, dropDim, dropOffset, cacheKey)) {
+    return false;
+  }
   Value slice = createForwardedScratchSlice(loadOp, tile, tileType, meta, dropDim, dropOffset, cacheKey, ctx);
-  if (!slice) return false;
+  if (!slice) {
+    return false;
+  }
   ctx.valueMapping.map(loadOp.getResult(), slice);
   return true;
 }
 
 static LogicalResult vectorizeMemrefLoadLike(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
-  if (tryForwardVirtualScratchLoad(loadOp, ctx)) return success();
+  if (tryForwardVirtualScratchLoad(loadOp, ctx)) {
+    return success();
+  }
 
   if (!ctx.scratchMeta.empty()) {
     FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(loadOp.getMemRef(), loadOp.getIndices(), ctx);
@@ -3150,8 +3264,12 @@ static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVecto
   }
 
   FailureOr<bool> recordedVirtualScratch = tryRecordVirtualScratchStore(storeOp, ctx);
-  if (failed(recordedVirtualScratch)) return failure();
-  if (*recordedVirtualScratch) return success();
+  if (failed(recordedVirtualScratch)) {
+    return failure();
+  }
+  if (*recordedVirtualScratch) {
+    return success();
+  }
 
   if (!ctx.vf1FuncLevelNoAnchor) {
     bool hasVectorDim =
