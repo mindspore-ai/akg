@@ -270,9 +270,9 @@ class TilingBase {
     }
 
     llvm::DenseMap<int64_t, mlir::func::FuncOp> tilingFuncMap;
-    mlir::autotiling::TilingMetadata tilingMetadata;
+    mlir::autotiling::TilingMetadataMap tilingMetadataMap;
     if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap,
-                                                       tilingInfo_.isStaticShape, &tilingMetadata))) {
+                                                       tilingInfo_.isStaticShape, &tilingMetadataMap))) {
       return failure();
     }
     for (const auto &it : tilingFuncMap) {
@@ -280,8 +280,8 @@ class TilingBase {
       mlir::func::FuncOp f = it.getSecond();
       tilingInfo_.setPerCaseTilingFunc(key, f);
     }
-    if (!tilingMetadata.empty()) {
-      tilingInfo_.setPerCaseTilingMetadata(0, std::move(tilingMetadata));
+    for (auto &it : tilingMetadataMap) {
+      tilingInfo_.setPerCaseTilingMetadata(it.getFirst(), std::move(it.getSecond()));
     }
 
     if (failed(computeTilingStructSizeFromTilingFuncs(builder, tilingFuncMap))) {
@@ -316,55 +316,50 @@ class TilingBase {
 
   LogicalResult computeTilingStructSizeFromTilingFuncs(
     OpBuilder &builder, const llvm::DenseMap<int64_t, mlir::func::FuncOp> &tilingFuncMap) {
-    auto it0 = tilingFuncMap.find(0);
-    if (it0 == tilingFuncMap.end()) {
-      originalKernel_.emitError("tilingFuncMap does not contain key=0");
+    if (tilingFuncMap.empty()) {
+      originalKernel_.emitError("tilingFuncMap is empty");
       return failure();
     }
-
-    func::FuncOp tilingFunc0 = it0->second;
 
     auto *ctx = builder.getContext();
     auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
 
-    unsigned structSize = 0;
-
-    for (auto [idx, arg] : llvm::enumerate(tilingFunc0.getArguments())) {
-      DictionaryAttr dict = tilingFunc0.getArgAttrDict(idx);
-      if (!dict) {
-        continue;
-      }
-
-      Attribute attr = dict.get(katName);
-      if (!attr) {
-        continue;
-      }
-
-      auto katAttr = dyn_cast<KernelArgTypeAttr>(attr);
-      if (!katAttr) {
-        continue;
-      }
-
-      if (katAttr.getArgType() == KernelArgType::kTilingStruct) {
+    auto getStructSize = [&](func::FuncOp tilingFunc, unsigned &structSize) -> LogicalResult {
+      for (auto [idx, arg] : llvm::enumerate(tilingFunc.getArguments())) {
+        DictionaryAttr dict = tilingFunc.getArgAttrDict(idx);
+        auto katAttr = dyn_cast_or_null<KernelArgTypeAttr>(dict ? dict.get(katName) : Attribute());
+        if (!katAttr || katAttr.getArgType() != KernelArgType::kTilingStruct) {
+          continue;
+        }
         auto memrefTy = dyn_cast<MemRefType>(arg.getType());
         if (!memrefTy || memrefTy.getRank() != 1 || !memrefTy.getElementType().isInteger(64)) {
           originalKernel_.emitError("tiling struct argument must be rank-1 memref<i64>");
           return failure();
         }
-
         int64_t dim0 = memrefTy.getDimSize(0);
         if (dim0 <= 0) {
           originalKernel_.emitError("tiling struct size must be a positive static dimension");
           return failure();
         }
-
         structSize = static_cast<unsigned>(dim0);
-        break;
+        return success();
       }
-    }
-
-    if (structSize == 0) {
       structSize = 1;
+      return success();
+    };
+
+    unsigned structSize = 0;
+    for (const auto &it : tilingFuncMap) {
+      unsigned curSize = 0;
+      if (failed(getStructSize(it.getSecond(), curSize))) {
+        return failure();
+      }
+      if (structSize == 0) {
+        structSize = curSize;
+      } else if (structSize != curSize) {
+        originalKernel_.emitError("per-key tiling struct sizes must match");
+        return failure();
+      }
     }
 
     tilingInfo_.tilingStructSize = structSize;
@@ -440,7 +435,26 @@ class TilingBase {
   }
 
   Value selectKeyByDimension(OpBuilder &b, Location loc, ArrayRef<Value> args) {
-    (void)args;
+    for (int64_t key : tilingInfo_.getAllKeys()) {
+      const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
+      if (!metadata || !metadata->hasRuntimeSelector()) {
+        continue;
+      }
+      if (metadata->selectorInputIndex >= args.size()) {
+        continue;
+      }
+      auto memrefTy = dyn_cast<MemRefType>(args[metadata->selectorInputIndex].getType());
+      if (!memrefTy || metadata->selectorDimIndex >= static_cast<unsigned>(memrefTy.getRank())) {
+        continue;
+      }
+      Value dimIdx = b.create<arith::ConstantIndexOp>(loc, metadata->selectorDimIndex);
+      Value dim = b.create<memref::DimOp>(loc, args[metadata->selectorInputIndex], dimIdx);
+      Value limit = b.create<arith::ConstantIndexOp>(loc, metadata->selectorLimit);
+      Value useTrueKey = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, dim, limit);
+      Value trueKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorTrueKey, 64);
+      Value falseKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorFalseKey, 64);
+      return b.create<arith::SelectOp>(loc, useTrueKey, trueKey, falseKey);
+    }
     auto k0 = b.create<arith::ConstantIntOp>(loc, 0, 64);  // i64
     return k0;
   }
@@ -644,12 +658,7 @@ class TilingBase {
       return failure();
     }
 
-    std::string keyStr = std::to_string(key);
-    if (keyStr.size() == 1) {
-      keyStr = "0" + keyStr;
-    }
-
-    std::string name = kernelInfo_->baseKernelName + "_" + keyStr;
+    std::string name = kernelInfo_->baseKernelName + "_" + autotiling::formatTilingKeySuffix(key);
 
     auto devTy = FunctionType::get(builder.getContext(), devInputs, devResults);
     auto origTy = originalKernel_.getFunctionType();
@@ -916,11 +925,7 @@ class TilingBase {
     callArgs.push_back(keyI64);
     std::copy(tilingStructArgs.begin(), tilingStructArgs.end(), std::back_inserter(callArgs));
 
-    std::string keyStr = std::to_string(key);
-    if (keyStr.size() == 1) {
-      keyStr = "0" + keyStr;
-    }
-    std::string devName = kernelInfo_->baseKernelName + "_" + keyStr;
+    std::string devName = kernelInfo_->baseKernelName + "_" + autotiling::formatTilingKeySuffix(key);
 
     auto sym = SymbolTable::lookupSymbolIn(module_, StringAttr::get(ctx, devName));
     if (sym == nullptr) {
