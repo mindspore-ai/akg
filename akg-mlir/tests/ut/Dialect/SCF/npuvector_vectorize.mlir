@@ -1894,3 +1894,74 @@ func.func @test_nested_vector_reduction_x_rank_lift_accumulator_dim_order(
   }
   return
 }
+
+// -----
+
+// AllocBufferShrink scratch: an inner copy loop writes a high-rank tile into a
+// shrunk local buffer; fixed-channel reads must be forwarded via
+// npuvector.extract_slice instead of a (impossible) write to the 1x2 buffer.
+// CHECK-LABEL: func.func @test_scratch_extract_slice
+// CHECK: %[[TILE:.*]] = npuvector.transfer_read %{{.*}} : memref<8x2xf32>, !npuvector<8x2xf32>
+// CHECK: %[[S0:.*]] = npuvector.extract_slice %[[TILE]]{{.*}} {keep_dims = array<i64: 0>} : !npuvector<8x2xf32> to !npuvector<8xf32>
+// CHECK: %[[S1:.*]] = npuvector.extract_slice %[[TILE]]{{.*}} {keep_dims = array<i64: 0>} : !npuvector<8x2xf32> to !npuvector<8xf32>
+// CHECK: arith.addf %[[S0]], %[[S1]] : !npuvector<8xf32>
+// CHECK: npuvector.transfer_write %{{.*}}, %{{.*}} : !npuvector<8xf32>, memref<8xf32>
+// CHECK-NOT: npuvector.transfer_write %{{.*}} : !npuvector{{.*}}, memref<1x2xf32>
+func.func @test_scratch_extract_slice(
+    %A: memref<8x2xf32>,
+    %O: memref<8xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c8 = arith.constant 8 : index
+  %alloc = memref.alloc() : memref<1x2xf32>
+  %ch0 = memref.subview %alloc[0, 0] [1, 1] [1, 1] : memref<1x2xf32> to memref<1x1xf32, strided<[2, 1]>>
+  %ch1 = memref.subview %alloc[0, 1] [1, 1] [1, 1] : memref<1x2xf32> to memref<1x1xf32, strided<[2, 1], offset: 1>>
+  scf.for %i = %c0 to %c8 step %c1 {
+    scf.for %k = %c0 to %c2 step %c1 {
+      %a = memref.load %A[%i, %k] : memref<8x2xf32>
+      memref.store %a, %alloc[%c0, %k] : memref<1x2xf32>
+    } {vector = 16 : i64}
+    %v0 = memref.load %ch0[%c0, %c0] : memref<1x1xf32, strided<[2, 1]>>
+    %v1 = memref.load %ch1[%c0, %c0] : memref<1x1xf32, strided<[2, 1], offset: 1>>
+    %s = arith.addf %v0, %v1 : f32
+    memref.store %s, %O[%i] : memref<8xf32>
+  } {vector = 16 : i64}
+  return
+}
+
+// -----
+
+// A value that is invariant along all scratch indices is replicated by the
+// scalar store. A same-index load can be forwarded directly from the tile.
+// CHECK-LABEL: func.func @test_scratch_replicated_store_load
+// CHECK: %[[TILE:.*]] = npuvector.transfer_read %{{.*}} : memref<8xf32>, !npuvector<8xf32>
+// CHECK-NOT: npuvector.transfer_write %[[TILE]]{{.*}}memref<1x2x16xf32>
+// CHECK-NOT: npuvector.transfer_read %{{.*}} : memref<1x2x16xf32>
+// CHECK: npuvector.broadcast %[[TILE]]
+func.func @test_scratch_replicated_store_load(
+    %A: memref<8xf32>,
+    %O: memref<8xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+  %zero = arith.constant 0.000000e+00 : f32
+  %alloc = memref.alloc() : memref<1x2x16xf32>
+  scf.for %i = %c0 to %c8 step %c1 {
+    %value = memref.load %A[%i] : memref<8xf32>
+    %outer = scf.for %j = %c0 to %c2 step %c1 iter_args(%outerAcc = %zero) -> (f32) {
+      %inner = scf.for %k = %c0 to %c16 step %c1 iter_args(%innerAcc = %zero) -> (f32) {
+        memref.store %value, %alloc[%c0, %j, %k] : memref<1x2x16xf32>
+        %loaded = memref.load %alloc[%c0, %j, %k] : memref<1x2x16xf32>
+        %next = arith.addf %loaded, %innerAcc {reduction_axes = [1 : index, 2 : index], reduction_type = "x"} : f32
+        scf.yield %next : f32
+      } {reduction_x = 16 : i64}
+      %nextOuter = arith.addf %inner, %outerAcc : f32
+      scf.yield %nextOuter : f32
+    } {reduction_x = 2 : i64}
+    memref.store %outer, %O[%i] : memref<8xf32>
+  } {vector = 8 : i64}
+  return
+}
