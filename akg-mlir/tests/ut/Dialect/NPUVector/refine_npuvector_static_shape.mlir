@@ -36,3 +36,28 @@ func.func @refine_partial_dynamic_extf_transpose(%input: memref<32x40x64xbf16>, 
   npuvector.transfer_write %trans, %out[%c0, %c0, %c0] : !npuvector<?x?x?xf32>, memref<8x16x40xf32>
   return
 }
+
+// CHECK-LABEL: func.func @refine_partial_reduction_extf_transpose
+func.func @refine_partial_reduction_extf_transpose(%input: memref<32x64xf16>, %out: memref<64x32xf32>) {
+  // CHECK: %[[READ:.*]] = npuvector.transfer_read {{.*}} : memref<32x64xf16>, !npuvector<16x16xf16>
+  // CHECK: %[[RED:.*]] = npuvector.reduction <add>, {{.*}} {reduction_dims = array<i64: 2>} : !npuvector<16x16x8xf16> into !npuvector<16x16xf16>
+  // CHECK: %[[EXT:.*]] = npuvector.extf %[[RED]] : !npuvector<16x16xf16> to !npuvector<16x16xf32>
+  // CHECK: %[[TRANS:.*]] = npuvector.transpose %[[EXT]], [1, 0] : !npuvector<16x16xf32> to !npuvector<16x16xf32>
+  // CHECK: npuvector.transfer_write %[[TRANS]], {{.*}} : !npuvector<16x16xf32>, memref<64x32xf32>
+  %c0 = arith.constant 0 : index
+  %c16 = arith.constant 16 : index
+  %c8 = arith.constant 8 : index
+  %pad = arith.constant 0.000000e+00 : f16
+  %one = arith.constant 1.000000e+00 : f16
+  %read = npuvector.transfer_read %input[%c0, %c0] [%c16, %c16] [%c16, %c16], %pad : memref<32x64xf16>, !npuvector<?x?xf16>
+  %bcast = npuvector.broadcast %one[%c16, %c16] [%c16, %c16] : f16 to !npuvector<?x?xf16>
+  %add = arith.addf %read, %bcast : !npuvector<?x?xf16>
+  %init = npuvector.broadcast %pad[%c16, %c16, %c8] [%c16, %c16, %c16] : f16 to !npuvector<?x?x8xf16>
+  %bcast3d = npuvector.broadcast %add[%c16, %c16, %c8] [%c16, %c16, %c16] : !npuvector<?x?xf16> to !npuvector<?x?x8xf16> {dimension = array<i64: 0, 1>}
+  %sum = arith.addf %bcast3d, %init {reduction_axes = [2 : index], reduction_type = "x"} : !npuvector<?x?x8xf16>
+  %red = npuvector.reduction <add>, %sum {reduction_dims = array<i64: 2>} : !npuvector<?x?x8xf16> into !npuvector<?x?xf16>
+  %ext = npuvector.extf %red : !npuvector<?x?xf16> to !npuvector<?x?xf32>
+  %trans = npuvector.transpose %ext, [1, 0] : !npuvector<?x?xf32> to !npuvector<?x?xf32>
+  npuvector.transfer_write %trans, %out[%c0, %c0] : !npuvector<?x?xf32>, memref<64x32xf32>
+  return
+}
