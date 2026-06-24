@@ -27,6 +27,7 @@
 #include "akg/ExecutionEngine/AscendLaunchRuntime/CceWrapper.h"
 #include <dlfcn.h>
 #include <mutex>
+#include <string>
 
 namespace mlir {
 namespace runtime {
@@ -49,26 +50,40 @@ CceWrapper::~CceWrapper() {
 }
 
 bool CceWrapper::UnLoadLibraries() {
+  bool success = true;
+  for (void *handle_ptr : msprof_handles_) {
+    if (dlclose(handle_ptr) != 0) {
+      success = false;
+    }
+  }
+  msprof_handles_.clear();
+
   if (ascendcl_handle_ != nullptr) {
     if (dlclose(ascendcl_handle_) != 0) {
-      return false;
+      success = false;
     }
   }
   ascendcl_handle_ = nullptr;
 
   if (runtime_handle_ != nullptr) {
     if (dlclose(runtime_handle_) != 0) {
-      return false;
+      success = false;
     }
   }
   runtime_handle_ = nullptr;
-  return true;
+  return success;
 }
 
 bool CceWrapper::LoadLibraries() {
   LoadAscendCL();
   LoadRuntime();
+  LoadMsprof();
   return true;
+}
+
+bool CceWrapper::IsMsprofAvailable() const {
+  return MsprofSysCycleTime != nullptr && MsprofGetHashId != nullptr && MsprofReportApi != nullptr &&
+         MsprofReportCompactInfo != nullptr;
 }
 
 bool CceWrapper::LoadAscendCL() {
@@ -130,6 +145,40 @@ bool CceWrapper::LoadRuntime() {
   LOAD_FUNCTION_PTR(rtSetupArgument);
 
   return true;
+}
+
+bool CceWrapper::LoadMsprof() {
+  constexpr const char *kMsprofLibraries[] = {"libmsprofiler.so", "libprofapi.so"};
+  for (const char *library_path : kMsprofLibraries) {
+    void *handle_ptr = dlopen(library_path, RTLD_LAZY | RTLD_LOCAL);
+    if (handle_ptr != nullptr) {
+      msprof_handles_.push_back(handle_ptr);
+    }
+  }
+
+  this->MsprofSysCycleTime = reinterpret_cast<MsprofSysCycleTimeFunc>(FindMsprofSymbol("MsprofSysCycleTime"));
+  this->MsprofGetHashId = reinterpret_cast<MsprofGetHashIdFunc>(FindMsprofSymbol("MsprofGetHashId"));
+  this->MsprofReportApi = reinterpret_cast<MsprofReportApiFunc>(FindMsprofSymbol("MsprofReportApi"));
+  this->MsprofReportCompactInfo =
+    reinterpret_cast<MsprofReportCompactInfoFunc>(FindMsprofSymbol("MsprofReportCompactInfo"));
+  return true;
+}
+
+void *CceWrapper::FindMsprofSymbol(const char *symbol) {
+  void *func = dlsym(RTLD_DEFAULT, symbol);
+  if (func != nullptr) {
+    return func;
+  }
+  for (void *handle_ptr : msprof_handles_) {
+    func = dlsym(handle_ptr, symbol);
+    if (func != nullptr) {
+      return func;
+    }
+  }
+  if (ascendcl_handle_ != nullptr) {
+    func = dlsym(ascendcl_handle_, symbol);
+  }
+  return func;
 }
 
 }  // namespace runtime
