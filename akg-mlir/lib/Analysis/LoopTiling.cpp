@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -84,10 +85,13 @@ static constexpr const char *kDeleteLoopAttr = "delete";
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
 static constexpr const char *kParallelAxisAttr = "parallel__axis";
 static constexpr int64_t kDefaultNpuCoreNum = 48;
+static constexpr int64_t kDefaultTilingKey = 0;
+static constexpr int64_t kTwoDimDynamicVectorTilingKey = 1;
 
 // Main tiling functions
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
-                                             bool isStaticShape, TilingMetadata *metadata = nullptr);
+                                             bool isStaticShape, int64_t tilingKey,
+                                             TilingMetadata *metadata = nullptr);
 static LogicalResult calculateTileSizesForBands(
   func::FuncOp funcOp, bool useAutoTiling, std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> &bandsToUse,
   std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
@@ -166,6 +170,11 @@ static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops
 static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<mlir::scf::ForOp> band,
                                                                       ArrayRef<unsigned> bandTileSizes,
                                                                       func::FuncOp originalKernel);
+static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+                                         TilingMetadata &metadata);
+static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
+                                             ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bandsToUse,
+                                             const TilingMetadata &baseMetadata, TilingMetadata &metadata);
 static Value emitDynamicTilePerDim(Location loc, OpBuilder &builder, Value dim, int constraintMax,
                                    int64_t dynamicTileCoreNum);
 static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping, int constraintMax,
@@ -225,7 +234,7 @@ static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, 
                                          SmallVector<Type> &argTypes, SmallVector<Type> &resTypes,
                                          int64_t tilingStructMemrefSize);
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
-                                            ArrayRef<Type> resTypes, OpBuilder &builder);
+                                            ArrayRef<Type> resTypes, OpBuilder &builder, int64_t tilingKey);
 static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
                                             ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
                                             ArrayRef<SmallVector<unsigned, kSmallVectorSizeSix>> allBandTileSizes,
@@ -755,6 +764,25 @@ static int64_t multiplyAndCapPositive(int64_t lhs, int64_t rhs) {
     return 1;
   }
   return (lhs > std::numeric_limits<int64_t>::max() / rhs) ? std::numeric_limits<int64_t>::max() : lhs * rhs;
+}
+
+static int64_t floorSqrtInt64(int64_t value) {
+  if (value <= 0) {
+    return 0;
+  }
+  int64_t root = static_cast<int64_t>(std::sqrt(static_cast<long double>(value)));
+  while (multiplyAndCapPositive(root + 1, root + 1) <= value) {
+    ++root;
+  }
+  while (multiplyAndCapPositive(root, root) > value) {
+    --root;
+  }
+  return root;
+}
+
+std::string formatTilingKeySuffix(int64_t key) {
+  std::string keyStr = std::to_string(key);
+  return keyStr.size() == 1 ? "0" + keyStr : keyStr;
 }
 
 // Helper function to calculate difference between upper and lower bounds
@@ -2859,14 +2887,14 @@ static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, 
   resTypes.clear();
 }
 
-// Helper: Create and initialize tiling function (set attrs, write strategy key)
+// Helper: Create and initialize tiling function (set attrs, write tiling key)
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
-                                            ArrayRef<Type> resTypes, OpBuilder &builder) {
+                                            ArrayRef<Type> resTypes, OpBuilder &builder, int64_t tilingKey) {
   auto *ctx = builder.getContext();
   auto loc = originalKernel.getLoc();
 
   std::string baseName = originalKernel.getSymName().str();
-  std::string name = baseName + "_00_tiling_function";
+  std::string name = baseName + "_" + formatTilingKeySuffix(tilingKey) + "_tiling_function";
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(originalKernel);
@@ -2882,12 +2910,11 @@ static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRe
   unsigned tilingDataIdx = numArgs - 1;
   setTilingKeyAndDataArgAttrs(f, keyIdx, tilingDataIdx, ctx);
 
-  // Write strategy index to tiling key
+  // Write tiling key.
   OpBuilder b(&f.getBody().front(), f.getBody().front().end());
-  Value tilingKey = f.getArgument(keyIdx);
-  int64_t strategyIndex = getSelectedTilingStrategyIndex();
-  Value strategyValue = b.create<arith::ConstantIntOp>(loc, strategyIndex, 64);
-  b.create<LLVM::StoreOp>(loc, strategyValue, tilingKey);
+  Value tilingKeyPtr = f.getArgument(keyIdx);
+  Value strategyValue = b.create<arith::ConstantIntOp>(loc, tilingKey, 64);
+  b.create<LLVM::StoreOp>(loc, strategyValue, tilingKeyPtr);
 
   return f;
 }
@@ -2951,23 +2978,29 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
         b.create<memref::StoreOp>(loc, stepI64, dataMem, ValueRange{idx});
         firstLevelStepI64Cache[dimIdx] = stepI64;
       } else if (tileSize == static_cast<unsigned>(-1)) {
-        // Dynamic tile size: compute min(constraintMax, dim) and store
-        // The constraintMax comes from TilingStrategy's constraint upper bound
-        const auto &mapping = bandDynamicMapping[tileIdx];
         int constraintMax = (tileIdx < bandConstraintMaxs.size()) ? bandConstraintMaxs[tileIdx] : 0;
-        Value dim;
-        if (!mapping.upperBound) {
-          tilingFunc.emitError("dynamic axis upper bound missing for tile index " + std::to_string(tileIdx));
-          return failure();
+        Value step;
+        if (level == 0) {
+          if (failed(emitLoopTripCountInTilingFunc(tilingFunc, originalKernel, bands[bandIdx][dimIdx], b, step))) {
+            return failure();
+          }
+        } else {
+          // Dynamic tile size: compute min(constraintMax, dim) and store. The
+          // constraintMax comes from TilingStrategy's constraint upper bound.
+          const auto &mapping = bandDynamicMapping[tileIdx];
+          if (!mapping.upperBound) {
+            tilingFunc.emitError("dynamic axis upper bound missing for tile index " + std::to_string(tileIdx));
+            return failure();
+          }
+
+          Value dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b);
+          if (!dim) {
+            tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " + std::to_string(tileIdx));
+            return failure();
+          }
+          step = emitDynamicTilePerDim(loc, b, dim, constraintMax, dynamicTileCoreNum);
         }
 
-        dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b);
-        if (!dim) {
-          tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " + std::to_string(tileIdx));
-          return failure();
-        }
-
-        Value step = emitDynamicTilePerDim(loc, b, dim, constraintMax, dynamicTileCoreNum);
         Value stepI64 = b.create<arith::IndexCastOp>(loc, i64Ty, step);
         b.create<memref::StoreOp>(loc, stepI64, dataMem, ValueRange{idx});
 
@@ -3003,11 +3036,12 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 
 // Create default tiling function
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
-                                             bool isStaticShape, TilingMetadata *metadata) {
+                                             bool isStaticShape, int64_t tilingKey, TilingMetadata *metadata) {
   auto *mlirCtx = builder.getContext();
   auto origTy = originalKernel.getFunctionType();
   int64_t tilingStructMemrefSize = 1;
-  if (metadata) {
+  bool hasPresetMetadata = metadata && !metadata->bandTileSizes.empty();
+  if (metadata && !hasPresetMetadata) {
     metadata->clear();
   }
 
@@ -3031,14 +3065,21 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
       [[maybe_unused]] auto clearNotInnerBroadcastGuard =
         llvm::make_scope_exit([&originalKernel] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
       (void)clearNotInnerBroadcastGuard;
-      size_t levelToTile = 0;
-      if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
-                                            levelToTile))) {
-        return failure();
+      if (hasPresetMetadata) {
+        allBandTileSizes = metadata->bandTileSizes;
+        allBandConstraintMaxs = metadata->bandConstraintMaxs;
+      } else {
+        size_t levelToTile = 0;
+        if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
+                                              levelToTile))) {
+          return failure();
+        }
       }
-      if (metadata) {
+      if (metadata && !hasPresetMetadata) {
+        metadata->tilingKey = tilingKey;
         metadata->bandTileSizes = allBandTileSizes;
         metadata->bandConstraintMaxs = allBandConstraintMaxs;
+        initializeEmptyMultiVecMasks(bandsToUse, *metadata);
       }
 
       tilingStructMemrefSize =
@@ -3061,7 +3102,7 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   buildTilingFunctionSignature(origTy, mlirCtx, builder, argTypes, resTypes, tilingStructMemrefSize);
 
   // Step 3: Create and initialize tiling function.
-  func::FuncOp f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder);
+  func::FuncOp f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder, tilingKey);
 
   // Step 4: Static-shape or no-band path doesn't need memref store in create stage.
   if (isStaticShape || bandsToUse.empty()) {
@@ -3091,21 +3132,63 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
 // Public interface functions
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape) {
-  return createTilingFunctions(originalKernel, builder, out, isStaticShape, nullptr);
+  return createTilingFunctions(originalKernel, builder, out, isStaticShape, static_cast<TilingMetadata *>(nullptr));
 }
 
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
                                     TilingMetadata *metadata) {
+  out.clear();
   func::FuncOp tilingFunc;
-  if (failed(createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape, metadata))) {
+  if (failed(
+        createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape, kDefaultTilingKey, metadata))) {
     return failure();
   }
-  out[0] = tilingFunc;
+  out[kDefaultTilingKey] = tilingFunc;
   return success();
 }
 
-int64_t getSelectedTilingStrategyIndex() { return 0; }
+LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
+                                    TilingMetadataMap *metadataByKey) {
+  out.clear();
+  if (metadataByKey) {
+    metadataByKey->clear();
+  }
+
+  TilingMetadata key0Metadata;
+  func::FuncOp tilingFunc;
+  if (failed(createTilingFuncDefault(originalKernel, builder, tilingFunc, isStaticShape, kDefaultTilingKey,
+                                     metadataByKey ? &key0Metadata : nullptr))) {
+    return failure();
+  }
+  out[kDefaultTilingKey] = tilingFunc;
+  if (metadataByKey && !key0Metadata.empty()) {
+    (*metadataByKey)[kDefaultTilingKey] = key0Metadata;
+  }
+
+  std::vector<LeafBranchBandPlan> plans;
+  bool hasUnsupportedTreeShape = false;
+  std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
+  if (!isStaticShape && metadataByKey &&
+      succeeded(buildLeafBranchBandPlans(originalKernel, plans, hasUnsupportedTreeShape)) &&
+      !hasUnsupportedTreeShape) {
+    collectRepresentativeBands(plans, bandsToUse);
+  }
+
+  TilingMetadata key1Metadata;
+  if (!isStaticShape && metadataByKey &&
+      buildTwoDimDynamicVectorMetadata(originalKernel, bandsToUse, key0Metadata, key1Metadata)) {
+    func::FuncOp key1TilingFunc;
+    if (failed(createTilingFuncDefault(originalKernel, builder, key1TilingFunc, isStaticShape,
+                                       kTwoDimDynamicVectorTilingKey, &key1Metadata))) {
+      return failure();
+    }
+    out[kTwoDimDynamicVectorTilingKey] = key1TilingFunc;
+    (*metadataByKey)[kTwoDimDynamicVectorTilingKey] = key1Metadata;
+  }
+  return success();
+}
 
 // Helper: Build dynamic axis mapping for a single band
 static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<mlir::scf::ForOp> band,
@@ -3136,6 +3219,97 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<m
   }
 
   return bandDynamicMapping;
+}
+
+static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+                                         TilingMetadata &metadata) {
+  metadata.bandMultiVecAxisMasks.clear();
+  metadata.bandMultiVecAxisMasks.reserve(bands.size());
+  for (const auto &band : bands) {
+    metadata.bandMultiVecAxisMasks.emplace_back(band.size(), static_cast<char>(false));
+  }
+}
+
+static bool isZeroBasedUnitStepLoop(mlir::scf::ForOp loop) {
+  std::optional<int64_t> lb = getConstantIndexValue(loop.getLowerBound());
+  std::optional<int64_t> step = getConstantIndexValue(loop.getStep());
+  return lb && step && *lb == 0 && *step == 1;
+}
+
+static int64_t computeTwoDimDynamicVectorCap(func::FuncOp originalKernel, const DynamicAxisMapping &selectorMapping,
+                                             int64_t singleAxisCap) {
+  if (singleAxisCap <= 1 || selectorMapping.inputMemrefIndex >= originalKernel.getNumArguments()) {
+    return 0;
+  }
+  auto memrefTy = dyn_cast<MemRefType>(originalKernel.getArgument(selectorMapping.inputMemrefIndex).getType());
+  if (!memrefTy) {
+    return 0;
+  }
+  int64_t alignUnit = std::max<int64_t>(akg::getBishengStrideAlignTargetForBits(akg::getElementBitWidth(memrefTy)), 1);
+  int64_t root = floorSqrtInt64(singleAxisCap);
+  int64_t cap = (root / alignUnit) * alignUnit;
+  return (cap > 1 && multiplyAndCapPositive(cap, cap) <= singleAxisCap) ? cap : 0;
+}
+
+static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
+                                             ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bandsToUse,
+                                             const TilingMetadata &baseMetadata, TilingMetadata &metadata) {
+  if (bandsToUse.size() != 1 || baseMetadata.bandTileSizes.size() != 1 ||
+      baseMetadata.bandConstraintMaxs.size() != 1) {
+    return false;
+  }
+
+  const auto &band = bandsToUse.front();
+  const auto &baseTileSizes = baseMetadata.bandTileSizes.front();
+  size_t bandSize = band.size();
+  if (bandSize < 2 || baseTileSizes.size() != bandSize * 2 || !isZeroBasedUnitStepLoop(band[bandSize - 2]) ||
+      !isZeroBasedUnitStepLoop(band.back())) {
+    return false;
+  }
+  if (std::any_of(band.begin(), band.end(), [](mlir::scf::ForOp loop) { return loop->hasAttr(kTransposeLoopAttr); })) {
+    return false;
+  }
+  if (band.back()->hasAttr(kReductionLoopAttr) && getReduceType(band.back()) == ReduceDirection::Y) {
+    return false;
+  }
+
+  unsigned dynamicTile = static_cast<unsigned>(-1);
+  size_t outerDim0 = bandSize - 2;
+  size_t outerDim1 = bandSize - 1;
+  size_t innerDim0 = bandSize + outerDim0;
+  size_t innerDim1 = bandSize + outerDim1;
+  if (baseTileSizes[outerDim0] != dynamicTile || baseTileSizes[outerDim1] != dynamicTile ||
+      baseTileSizes[innerDim1] == dynamicTile) {
+    return false;
+  }
+
+  std::vector<DynamicAxisMapping> mappings = buildDynamicAxisMappingForBand(band, baseTileSizes, originalKernel);
+  if (mappings.size() != baseTileSizes.size()) {
+    return false;
+  }
+  const DynamicAxisMapping &selector = mappings[outerDim1];
+  if (selector.inputMemrefIndex == UINT_MAX || selector.dimIndex == UINT_MAX) {
+    return false;
+  }
+
+  int64_t cap = computeTwoDimDynamicVectorCap(originalKernel, selector, baseTileSizes[innerDim1]);
+  if (cap <= 1) {
+    return false;
+  }
+
+  metadata = baseMetadata;
+  metadata.tilingKey = kTwoDimDynamicVectorTilingKey;
+  metadata.selectorInputIndex = selector.inputMemrefIndex;
+  metadata.selectorDimIndex = selector.dimIndex;
+  metadata.selectorLimit = cap;
+  metadata.selectorTrueKey = kTwoDimDynamicVectorTilingKey;
+  metadata.selectorFalseKey = kDefaultTilingKey;
+  metadata.bandTileSizes[0][innerDim0] = static_cast<unsigned>(cap);
+  metadata.bandTileSizes[0][innerDim1] = static_cast<unsigned>(cap);
+  initializeEmptyMultiVecMasks(bandsToUse, metadata);
+  metadata.bandMultiVecAxisMasks[0][outerDim0] = static_cast<char>(true);
+  metadata.bandMultiVecAxisMasks[0][outerDim1] = static_cast<char>(true);
+  return true;
 }
 
 // Emit per-dim dynamic tile-size: min(constraintMax, dim) if constraintMax > 0,
@@ -3280,6 +3454,41 @@ static LogicalResult prepareTileSizesFromMemref(
   return success();
 }
 
+static bool hasValidMultiVecMaskLayout(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+                                       ArrayRef<SmallVector<char, 6>> masks) {
+  if (masks.empty()) {
+    return true;
+  }
+  if (masks.size() != bands.size()) {
+    return false;
+  }
+  for (auto [band, mask] : llvm::zip_equal(bands, masks)) {
+    if (mask.size() != band.size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void applyMetadataMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+                                       ArrayRef<SmallVector<char, 6>> masks) {
+  if (masks.empty()) {
+    return;
+  }
+  for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
+    const auto &band = bands[bandIdx];
+    const auto &mask = masks[bandIdx];
+    for (size_t loopIdx = 0; loopIdx < band.size(); ++loopIdx) {
+      mlir::scf::ForOp loop = band[loopIdx];
+      if (mask[loopIdx]) {
+        loop->setAttr(kMultiVecLoopAttr, UnitAttr::get(loop.getContext()));
+      } else {
+        loop->removeAttr(kMultiVecLoopAttr);
+      }
+    }
+  }
+}
+
 static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &builder) {
   Location loc = func.getLoc();
 
@@ -3358,7 +3567,8 @@ static LogicalResult prepareTileMetadataForApply(
   bool usedCachedMetadata = false;
   if (!isStaticShape && metadata && !metadata->empty()) {
     if (metadata->bandTileSizes.size() == bandsToUse.size() &&
-        metadata->bandConstraintMaxs.size() == bandsToUse.size()) {
+        metadata->bandConstraintMaxs.size() == bandsToUse.size() &&
+        hasValidMultiVecMaskLayout(bandsToUse, metadata->bandMultiVecAxisMasks)) {
       usedCachedMetadata = true;
       for (size_t bandIdx = 0; bandIdx < bandsToUse.size(); ++bandIdx) {
         size_t bandSize = bandsToUse[bandIdx].size();
@@ -3372,6 +3582,7 @@ static LogicalResult prepareTileMetadataForApply(
       if (usedCachedMetadata) {
         allBandTileSizesInt = metadata->bandTileSizes;
         allBandConstraintMaxs = metadata->bandConstraintMaxs;
+        applyMetadataMultiVecMasks(bandsToUse, metadata->bandMultiVecAxisMasks);
       }
     }
   }

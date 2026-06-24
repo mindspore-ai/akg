@@ -3212,11 +3212,12 @@ void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
 
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     const AxisPtr &axis = ctx.axes[i];
-    if (isReductionAxis(axis)) {
+    bool hasRuntime = hasRuntimeExtent(axis);
+    if (isReductionAxis(axis) && !hasRuntime) {
       continue;
     }
-    plan.outerTiles[i] = hasRuntimeExtent(axis) ? static_cast<unsigned>(UINT_MAX)
-                                                : saturateToTileValue(std::max<int64_t>(ctx.extents[i], 1));
+    plan.outerTiles[i] =
+      hasRuntime ? static_cast<unsigned>(UINT_MAX) : saturateToTileValue(std::max<int64_t>(ctx.extents[i], 1));
   }
 }
 
