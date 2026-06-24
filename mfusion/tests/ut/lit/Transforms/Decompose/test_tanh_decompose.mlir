@@ -4,6 +4,9 @@ func.func @test_tanh(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %0 = mfuse.aclnn.tanh %arg0 : (tensor<4x4xf32>) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
   // CHECK-NOT: mfuse.aclnn.tanh
+  // CHECK-NOT: mfuse.aclnn.clamp
+  // CHECK: mfuse.maximum
+  // CHECK: mfuse.minimum
   // CHECK: mfuse.add
 }
 
@@ -17,7 +20,9 @@ func.func @test_tanh_no_decompose(%arg0: tensor<4x4xf64>) -> tensor<4x4xf64> {
 func.func @test_tanh_dynamic_shape(%arg0: !torch.int, %arg1: !torch.vtensor<[2,?],f32>) -> !torch.vtensor<[2,?],f32> attributes {mfuse.syminfo = {s0 = #mfuse.syminfo<range=[2, inf]>}, torch.assume_strict_symbolic_shapes} {
   // CHECK-LABEL: func.func @test_tanh_dynamic_shape
   // CHECK-NOT: mfuse.aclnn.tanh
-  // CHECK: mfuse.aclnn.clamp {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
+  // CHECK-NOT: mfuse.aclnn.clamp
+  // CHECK: mfuse.maximum
+  // CHECK: mfuse.minimum
   // CHECK: mfuse.mul {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
   // CHECK: mfuse.exp {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
   // CHECK: mfuse.sub {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>

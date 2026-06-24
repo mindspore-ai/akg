@@ -133,15 +133,31 @@ class TanhDecomposePattern : public OpRewritePattern<mfuse::AclnnTanhOp> {
     // Create OpBuilder instance
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
-    // Tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
-    auto x = builder.clamp(input, kMinTanhClampValue, kMaxTanhClampValue);
+    // Tanh(x) = (exp(2x) - 1) / (exp(2x) + 1), clamp via maximum/minimum (not aclnn.clamp).
+    auto x = builder.clampMinMax(input, kMinTanhClampValue, kMaxTanhClampValue);
     auto two_x = builder.mul(x, kTwo);
     auto exp_2x = builder.buildExpr(builder.exp(two_x));
     auto result = (exp_2x - kOne) / (exp_2x + kOne);
-
-    // Replace the original Tanh operation with the decomposed computation
     rewriter.replaceOp(tanhOp, result.getValue());
 
+    return success();
+  }
+};
+
+/// OpRewritePattern for decomposing aclnn.clamp to maximum/minimum.
+class ClampDecomposePattern : public OpRewritePattern<mfuse::AclnnClampOp> {
+ public:
+  using OpRewritePattern<mfuse::AclnnClampOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mfuse::AclnnClampOp clampOp, PatternRewriter &rewriter) const override {
+    Value input = clampOp.getInput();
+    Value minVal = clampOp.getMin();
+    Value maxVal = clampOp.getMax();
+    Location loc = clampOp.getLoc();
+    auto resultType = clampOp.getResult().getType();
+    Value afterMin = rewriter.create<mfuse::MaximumOp>(loc, resultType, input, minVal);
+    Value output = rewriter.create<mfuse::MinimumOp>(loc, resultType, afterMin, maxVal);
+    rewriter.replaceOp(clampOp, output);
     return success();
   }
 };
@@ -325,6 +341,7 @@ void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vec
 
   // Map of operation names to their pattern registration functions
   std::map<std::string, PatternFunc> patternMap = {
+    {"clamp", [](RewritePatternSet &p, MLIRContext *c) { p.add<ClampDecomposePattern>(c); }},
     {"gelu", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluDecomposePattern>(c); }},
     {"gelubackward", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluBackwardDecomposePattern>(c); }},
     {"reducemean", [](RewritePatternSet &p, MLIRContext *c) { p.add<ReduceMeanDecomposePattern>(c); }},

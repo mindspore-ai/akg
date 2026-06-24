@@ -1,10 +1,14 @@
-// RUN: mfusion-opt %s -decompose="pattern-type=AFTER_MANUAL_FUSION op-list=gelu_backward" | FileCheck %s
+// RUN: mfusion-opt %s -decompose="pattern-type=AFTER_MANUAL_FUSION op-list=gelu_backward,tanh" | FileCheck %s
 
 func.func @test_gelu_backward(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // geluBackwardOp
   %0 = mfuse.aclnn.gelu_backward %arg0, %arg1 {approximate = "tanh"} : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
   // CHECK-NOT: mfuse.aclnn.gelu_backward
+  // CHECK-NOT: mfuse.aclnn.tanh
+  // CHECK-NOT: mfuse.aclnn.clamp
+  // CHECK: mfuse.maximum
+  // CHECK: mfuse.minimum
   // CHECK: mfuse.mul
 }
 
@@ -17,5 +21,9 @@ func.func @test_gelu_backward_dynamic_shape(%arg0: !torch.int, %arg1: !torch.vte
   return %3 : !torch.vtensor<[2,?],f32>
 
   // CHECK-NOT: mfuse.aclnn.gelu_backward
+  // CHECK-NOT: mfuse.aclnn.tanh
+  // CHECK-NOT: mfuse.aclnn.clamp
+  // CHECK: mfuse.maximum {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
+  // CHECK: mfuse.minimum {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
   // CHECK: mfuse.mul {{.*}} -> tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
 }
