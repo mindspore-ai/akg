@@ -2976,6 +2976,17 @@ bool isInnermostAxisReduceY(const NpuBandContext &ctx) {
   return inferReduceDirection(forOp) == ReduceDirection::Y;
 }
 
+bool hasReduceYAxis(const NpuBandContext &ctx) {
+  for (const AxisPtr &axis : ctx.axes) {
+    Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
+    auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
+    if (isReductionAxis(axis) && forOp && inferReduceDirection(forOp) == ReduceDirection::Y) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Pre-compute per-axis reduction labels for the multi-vec greedy search.
 // Reduction axes are *always* eligible for vec (their inner tile becomes the
 // per-vec-instruction chunk), even when their tile must be shrunk to fit UB.
@@ -3545,11 +3556,12 @@ void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 }
 
-bool tryBuildSmallHeavyElementwiseLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
-  constexpr int64_t kSmallHeavyElementwiseTargetCores = 3;
-  if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.axes.empty() ||
-      ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP || ctx.graphTemplate == GraphTemplate::BROADCAST_OP ||
-      ctx.mathComplexityScore < kHeavyMathComplexityScore) {
+bool tryBuildSmallMathLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+  constexpr int64_t kSmallMathTargetCores = 3;
+  int64_t minMathScore = ctx.hasReduction ? kReduceMathComplexityScore : kMediumMathComplexityScore;
+  if (ctx.hasDynamicAxis || ctx.axes.empty() || ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP ||
+      ctx.graphTemplate == GraphTemplate::BROADCAST_OP || ctx.mathComplexityScore < minMathScore ||
+      (ctx.hasReduction && hasReduceYAxis(ctx))) {
     return false;
   }
   initWholeBandPlan(ctx, plan);
@@ -3559,9 +3571,12 @@ bool tryBuildSmallHeavyElementwiseLimitedCorePlan(const NpuBandContext &ctx, Ban
     return false;
   }
   for (size_t i = 0; i < ctx.extents.size(); ++i) {
+    if (isReductionAxis(ctx.axes[i])) {
+      continue;
+    }
     int64_t extent = std::max<int64_t>(ctx.extents[i], 1);
     int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-    int64_t targetCoreTile = alignUpInt64(ceilDivInt64(extent, kSmallHeavyElementwiseTargetCores), alignUnit);
+    int64_t targetCoreTile = alignUpInt64(ceilDivInt64(extent, kSmallMathTargetCores), alignUnit);
     if (targetCoreTile < extent) {
       plan.outerTiles[i] = saturateToTileValue(targetCoreTile);
       plan.innerTiles[i] = plan.outerTiles[i];
@@ -3814,9 +3829,8 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
   for (const auto &[bandIdx, bandAxes] : groupAxesByBand(axes)) {
     NpuBandContext bandCtx = buildNpuBandContext(npuGraph, bandIdx, bandAxes);
     BandTilePlan bandPlan;
-    bool matched = tryBuildTransposePlan(bandCtx, bandPlan) || tryBuildReductionSuffixPlan(bandCtx, bandPlan) ||
-                   tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) ||
-                   tryBuildSmallHeavyElementwiseLimitedCorePlan(bandCtx, bandPlan) ||
+    bool matched = tryBuildTransposePlan(bandCtx, bandPlan) || tryBuildSmallMathLimitedCorePlan(bandCtx, bandPlan) ||
+                   tryBuildReductionSuffixPlan(bandCtx, bandPlan) || tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) ||
                    tryBuildElementwisePlan(bandCtx, bandPlan) ||
                    tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
     if (matched) {
