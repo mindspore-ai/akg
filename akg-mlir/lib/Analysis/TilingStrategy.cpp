@@ -3366,12 +3366,16 @@ void tagMultiVecLoops(const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes
 
 bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   if (ctx.hasDynamicAxis || !ctx.hasReduction || !ctx.lastAxisIsReduction ||
-      ctx.axes.size() < kMinTransposeAxisOrderSize || ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP) {
+      ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP) {
+    return false;
+  }
+  bool singleReductionAxis = ctx.axes.size() == 1;
+  if (!singleReductionAxis && ctx.axes.size() < kMinTransposeAxisOrderSize) {
     return false;
   }
 
   size_t suffixStart = computeReductionSuffixStart(ctx);
-  if (suffixStart == 0) {
+  if (suffixStart == 0 && !singleReductionAxis) {
     return false;
   }
 
