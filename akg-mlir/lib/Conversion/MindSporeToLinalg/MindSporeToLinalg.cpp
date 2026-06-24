@@ -45,7 +45,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_CLASSES
@@ -1143,7 +1143,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     int64_t dimIndices = 0;
     BroadcastInputInfo bcastInfo{loc, input, inputTy, resultTy, newShape};
     BroadcastDimContext bcastCtx{rewriter, genericShape, collapseShape, reassociationMap,
-                                 dynDims,  dimExprs,     dimIndices, needCastOp};
+                                 dynDims,  dimExprs,     dimIndices,    needCastOp};
     buildBroadcastShapesAndMaps(bcastInfo, rank, bcastCtx);
 
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(op.getLoc(), genericShape, elementTy, dynDims);

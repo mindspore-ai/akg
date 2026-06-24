@@ -100,7 +100,6 @@ static int getNumLevelsToHoist(affine::AffineForOp broadcastLoop) {
     broadcastLoop.walk([&result](affine::AffineStoreOp storeOp) { result = storeOp; });
     return result;
   }();
-
   if (!targetStore) {
     return 0;
   }
@@ -241,7 +240,6 @@ bool BroadcastLoopHoist::hoistBroadcastLoops(func::FuncOp funcOp) {
 }
 void BroadcastLoopHoist::runOnOperation() {
   auto funcOp = getOperation();
-
   if (!funcOp->hasAttr(kOperatorTypeStr)) {
     return;
   }

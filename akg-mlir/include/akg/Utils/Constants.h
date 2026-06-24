@@ -14,10 +14,22 @@
  * limitations under the License.
  */
 
-#ifndef AKG_UTILS_SMALLVECTORSIZE_H_
-#define AKG_UTILS_SMALLVECTORSIZE_H_
+#ifndef AKG_UTILS_CONSTANTS_H_
+#define AKG_UTILS_CONSTANTS_H_
 
 namespace mlir {
+
+inline constexpr unsigned kBoolBitWidth = 1;
+inline constexpr unsigned kI8BitWidth = 8;
+inline constexpr unsigned kI16BitWidth = 16;
+inline constexpr unsigned kI32BitWidth = 32;
+inline constexpr unsigned kI64BitWidth = 64;
+inline constexpr unsigned kBitsPerByte = 8;
+inline constexpr unsigned kBytesPerKb = 1024;
+
+inline constexpr unsigned kBinaryOpOperandCount = 2;
+inline constexpr unsigned kUnaryOpOperandCount = 1;
+inline constexpr unsigned kTernaryOpOperandCount = 3;
 
 inline constexpr unsigned kSmallVectorSizeZero = 0;
 inline constexpr unsigned kSmallVectorSizeOne = 1;
@@ -35,4 +47,4 @@ inline constexpr unsigned kSmallVectorSizeOneHundredTwentyEight = 128;
 
 }  // namespace mlir
 
-#endif  // AKG_UTILS_SMALLVECTORSIZE_H_
+#endif  // AKG_UTILS_CONSTANTS_H_

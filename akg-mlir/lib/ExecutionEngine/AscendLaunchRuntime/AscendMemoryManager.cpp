@@ -61,7 +61,7 @@ void AscendMemoryManager::MallocDeviceMemory() {
     if (ret == ACL_ERROR_RT_MEMORY_ALLOCATION) {
       LOG(WARNING) << "Device may be occupied, sleep 1s and retry again!";
       device_mem_base_ = nullptr;
-      std::this_thread::sleep_for(std::chrono::microseconds(1000000));
+      std::this_thread::sleep_for(std::chrono::seconds(1));
     } else {
       break;
     }

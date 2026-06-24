@@ -15,7 +15,7 @@
  */
 
 #include "akg/Dialect/Fusion/IR/Fusion.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/IR/Builders.h"
@@ -236,7 +236,7 @@ static SliceVerificationResult isRankReducedMemRefType(const MemRefType original
   }
 
   // check validity of type
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 
@@ -324,7 +324,7 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
   }
 
   // check validity of type
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 
@@ -567,7 +567,7 @@ LogicalResult TransposeOp::verify() {
     return failure();
   }
 
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 

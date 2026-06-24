@@ -29,7 +29,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 namespace mlir {
 #ifndef GEN_PASS_DEF_UNIFYSHAPE
 #define GEN_PASS_DEF_UNIFYSHAPE

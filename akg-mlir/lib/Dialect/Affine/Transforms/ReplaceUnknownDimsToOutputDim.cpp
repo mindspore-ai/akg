@@ -30,7 +30,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_REPLACEUNKNOWNDIMSTOOUTPUTDIM
@@ -76,9 +76,9 @@ std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, const std::string &ta
   return "";  // should raise error
 }
 
-void collectRelatedDimsAndAffineMax(func::FuncOp funcOp,
-                                    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> &dimPack,
-                                    SmallVector<Operation *, kSmallVectorSizeEight> &maxList) {
+void collectRelatedDimsAndAffineMax(
+  func::FuncOp funcOp, SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, kSmallVectorSizeEight> &dimPack,
+  SmallVector<Operation *, kSmallVectorSizeEight> &maxList) {
   funcOp.walk([&dimPack, &maxList](affine::AffineMaxOp maxOp) {
     bool flag = true;
     dimPack.push_back(SmallVector<Operation *, kSmallVectorSizeEight>());
@@ -155,7 +155,7 @@ class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDim
     if (dict.empty()) {
       return;
     }
-    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> dimPack;
+    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, kSmallVectorSizeEight> dimPack;
     SmallVector<Operation *, kSmallVectorSizeEight> maxList;
     collectRelatedDimsAndAffineMax(funcOp, dimPack, maxList);
 

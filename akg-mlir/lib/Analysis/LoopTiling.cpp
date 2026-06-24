@@ -57,7 +57,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "bishengir/Dialect/HACC/IR/HACC.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 using llvm::DenseMap;
 using llvm::SmallVector;
@@ -241,8 +241,7 @@ static void constructTiledIndexStatic(const TileLoopData &data, OpBuilder &build
 static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<mlir::scf::ForOp> band,
                                                                       ArrayRef<unsigned> bandTileSizes,
                                                                       func::FuncOp originalKernel);
-static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-                                         TilingMetadata &metadata);
+static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, TilingMetadata &metadata);
 static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
                                              ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bandsToUse,
                                              const TilingMetadata &baseMetadata, TilingMetadata &metadata);
@@ -993,7 +992,6 @@ static std::tuple<std::optional<int64_t>, mlir::Value, mlir::Value> getDifferenc
   // Try to get constant values
   auto lbConst = getConstantIndexValue(lb);
   auto ubConst = getConstantIndexValue(ub);
-
   if (lbConst.has_value() && ubConst.has_value()) {
     // Static case: return constant difference
     return std::make_tuple(ubConst.value() - lbConst.value(), mlir::Value(), mlir::Value());
@@ -1692,7 +1690,6 @@ static LoopBounds createMiddleLevelTileLoopBounds(const BuildContext &bc, const 
   // ub = ceildiv(previous tile size, current tile size)
   auto prevConst = getConstantIndexValue(prevTilesize);
   auto curConst = getConstantIndexValue(curTilesize);
-
   if (prevConst && curConst && curConst.value() != 0) {
     // Both are compile-time constants: compute ceildiv statically
     int64_t ubVal = (prevConst.value() + curConst.value() - 1) / curConst.value();
@@ -3207,7 +3204,6 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
       } else {
         forOp->removeAttr(kReductionLoopAttr);
         reduceType = getReduceType(forOp);
-
         if (reduceType == ReduceDirection::X) {
           forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
         } else if (reduceType == ReduceDirection::Y) {
@@ -3269,7 +3265,6 @@ static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder) {
 
   if (outermostLoop) {
     Value kernelnum = outermostLoop.getUpperBound();
-
     // Try to get constant value
     if (auto constantKernelnum = getConstantIndexValue(kernelnum)) {
       funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(constantKernelnum.value()));
@@ -3622,8 +3617,9 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
 
   TilingMetadata key0Metadata;
   func::FuncOp tilingFunc;
-  if (failed(createTilingFuncDefault({originalKernel, builder, isStaticShape, kDefaultTilingKey,
-                                     metadataByKey ? &key0Metadata : nullptr}, tilingFunc))) {
+  if (failed(createTilingFuncDefault(
+        {originalKernel, builder, isStaticShape, kDefaultTilingKey, metadataByKey ? &key0Metadata : nullptr},
+        tilingFunc))) {
     return failure();
   }
   out[kDefaultTilingKey] = tilingFunc;
@@ -3635,8 +3631,7 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   bool hasUnsupportedTreeShape = false;
   std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
   if (!isStaticShape && metadataByKey &&
-      succeeded(buildLeafBranchBandPlans(originalKernel, plans, hasUnsupportedTreeShape)) &&
-      !hasUnsupportedTreeShape) {
+      succeeded(buildLeafBranchBandPlans(originalKernel, plans, hasUnsupportedTreeShape)) && !hasUnsupportedTreeShape) {
     collectRepresentativeBands(plans, bandsToUse);
   }
 
@@ -3644,8 +3639,8 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   if (!isStaticShape && metadataByKey &&
       buildTwoDimDynamicVectorMetadata(originalKernel, bandsToUse, key0Metadata, key1Metadata)) {
     func::FuncOp key1TilingFunc;
-    if (failed(createTilingFuncDefault({originalKernel, builder, isStaticShape, kTwoDimDynamicVectorTilingKey,
-                                       &key1Metadata}, key1TilingFunc))) {
+    if (failed(createTilingFuncDefault(
+          {originalKernel, builder, isStaticShape, kTwoDimDynamicVectorTilingKey, &key1Metadata}, key1TilingFunc))) {
       return failure();
     }
     out[kTwoDimDynamicVectorTilingKey] = key1TilingFunc;
@@ -3685,8 +3680,7 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<m
   return bandDynamicMapping;
 }
 
-static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-                                         TilingMetadata &metadata) {
+static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, TilingMetadata &metadata) {
   metadata.bandMultiVecAxisMasks.clear();
   metadata.bandMultiVecAxisMasks.reserve(bands.size());
   for (const auto &band : bands) {
@@ -3718,8 +3712,7 @@ static int64_t computeTwoDimDynamicVectorCap(func::FuncOp originalKernel, const 
 static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
                                              ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bandsToUse,
                                              const TilingMetadata &baseMetadata, TilingMetadata &metadata) {
-  if (bandsToUse.size() != 1 || baseMetadata.bandTileSizes.size() != 1 ||
-      baseMetadata.bandConstraintMaxs.size() != 1) {
+  if (bandsToUse.size() != 1 || baseMetadata.bandTileSizes.size() != 1 || baseMetadata.bandConstraintMaxs.size() != 1) {
     return false;
   }
 
@@ -3890,8 +3883,7 @@ static LogicalResult prepareTileSizesFromMemref(
 
   Value tileSizesMemref = args.back();
   auto memrefType = dyn_cast<MemRefType>(tileSizesMemref.getType());
-
-  if (!memrefType || memrefType.getRank() != 1 || !memrefType.getElementType().isInteger(64)) {
+  if (!memrefType || memrefType.getRank() != 1 || !memrefType.getElementType().isInteger(kI64BitWidth)) {
     std::string typeStr;
     llvm::raw_string_ostream os(typeStr);
     os << tileSizesMemref.getType();
@@ -3911,7 +3903,6 @@ static LogicalResult prepareTileSizesFromMemref(
     const auto &bandTileSizes = allBandTileSizesInt[bandIdx];
     size_t bandSize = band.size();
     size_t bandTileSizesCount = bandTileSizes.size();
-
     if (bandSize == 0 || bandTileSizesCount == 0 || bandTileSizesCount % bandSize != 0) {
       originalKernel.emitError("invalid dynamic tile metadata for band " + std::to_string(bandIdx));
       return failure();

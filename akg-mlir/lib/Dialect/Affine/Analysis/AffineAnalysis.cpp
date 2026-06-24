@@ -43,7 +43,7 @@
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 #define DEBUG_TYPE "akg-affine-analysis"
 

@@ -37,7 +37,7 @@
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_AKGFUNCOUTLINING

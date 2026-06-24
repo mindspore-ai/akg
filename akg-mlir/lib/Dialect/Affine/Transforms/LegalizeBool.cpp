@@ -30,7 +30,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_LEGALIZEBOOL
@@ -44,12 +44,12 @@ namespace affine {
 namespace {
 
 Type convertI1ElemToI8(Type type) {
-  if (!getElementTypeOrSelf(type).isInteger(1)) {
+  if (!getElementTypeOrSelf(type).isInteger(kBoolBitWidth)) {
     return type;
   }
   MLIRContext *ctx = type.getContext();
   Type i8 = IntegerType::get(ctx, 8);
-  if (type.isInteger(1)) {
+  if (type.isInteger(kBoolBitWidth)) {
     return i8;
   }
   if (auto m = dyn_cast<MemRefType>(type)) {
@@ -59,7 +59,7 @@ Type convertI1ElemToI8(Type type) {
 }
 
 Value createI1ToI8ScalarCast(Location loc, Value v, OpBuilder &b) {
-  if (!v.getType().isInteger(1)) {
+  if (!v.getType().isInteger(kBoolBitWidth)) {
     return v;
   }
   Value f = b.create<arith::UIToFPOp>(loc, b.getF16Type(), v);
@@ -67,7 +67,7 @@ Value createI1ToI8ScalarCast(Location loc, Value v, OpBuilder &b) {
 }
 
 Value createI8ToI1ScalarCast(Location loc, Value v, OpBuilder &b) {
-  if (!v.getType().isInteger(8)) {
+  if (!v.getType().isInteger(kI8BitWidth)) {
     return v;
   }
   Value z = b.create<arith::ConstantOp>(loc, FloatAttr::get(b.getF16Type(), 0.0));
@@ -80,10 +80,10 @@ Value castBitBinaryOperandToResultTy(Location loc, Type resTy, Value v, OpBuilde
   if (t == resTy) {
     return v;
   }
-  if (resTy.isInteger(8) && t.isInteger(1)) {
+  if (resTy.isInteger(kI8BitWidth) && t.isInteger(kBoolBitWidth)) {
     return b.create<arith::ExtUIOp>(loc, resTy, v).getResult();
   }
-  if (resTy.isInteger(1) && t.isInteger(8)) {
+  if (resTy.isInteger(kBoolBitWidth) && t.isInteger(kI8BitWidth)) {
     return createI8ToI1ScalarCast(loc, v, b);
   }
   return v;
@@ -139,7 +139,7 @@ struct ArithSelectPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &b) const override {
     Value c = op.getCondition();
-    if (!c.getType().isInteger(8)) {
+    if (!c.getType().isInteger(kI8BitWidth)) {
       return failure();
     }
     b.setInsertionPoint(op);
@@ -201,14 +201,15 @@ struct ArithIntBinaryPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &r) const override {
     Operation *o = op.getOperation();
-    if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
+    if (o->getNumOperands() != kBinaryOpOperandCount || o->getNumResults() != kUnaryOpOperandCount) {
       return failure();
     }
     Value lhs = o->getOperand(0);
     Value rhs = o->getOperand(1);
     Type lt = lhs.getType();
     Type rt = rhs.getType();
-    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
+    if (!(lt.isInteger(kBoolBitWidth) || lt.isInteger(kI8BitWidth) || rt.isInteger(kBoolBitWidth) ||
+          rt.isInteger(kI8BitWidth))) {
       return failure();
     }
     r.setInsertionPoint(o);
@@ -229,7 +230,7 @@ struct ArithBitBinaryPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &r) const override {
     Operation *o = op.getOperation();
-    if (o->getNumOperands() != 2 || o->getNumResults() != 1) {
+    if (o->getNumOperands() != kBinaryOpOperandCount || o->getNumResults() != kUnaryOpOperandCount) {
       return failure();
     }
     Value lhs = o->getOperand(0);
@@ -237,7 +238,8 @@ struct ArithBitBinaryPattern final : public OpRewritePattern<OpTy> {
     Type lt = lhs.getType();
     Type rt = rhs.getType();
     Type resTy = o->getResult(0).getType();
-    if (!(lt.isInteger(1) || lt.isInteger(8) || rt.isInteger(1) || rt.isInteger(8))) {
+    if (!(lt.isInteger(kBoolBitWidth) || lt.isInteger(kI8BitWidth) || rt.isInteger(kBoolBitWidth) ||
+          rt.isInteger(kI8BitWidth))) {
       return failure();
     }
     if (lt == rt && rt == resTy) {
@@ -261,7 +263,7 @@ struct ArithCmplPattern final : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
   LogicalResult matchAndRewrite(OpTy op, PatternRewriter &b) const override {
     b.setInsertionPoint(op);
-    if (op->getNumOperands() != 2) {
+    if (op->getNumOperands() != kBinaryOpOperandCount) {
       return failure();
     }
     Value lhs = op.getLhs();
@@ -272,11 +274,11 @@ struct ArithCmplPattern final : public OpRewritePattern<OpTy> {
       return failure();
     }
     Location loc = op.getLoc();
-    if (lt.isInteger(8) && rt.isInteger(1)) {
+    if (lt.isInteger(kI8BitWidth) && rt.isInteger(kBoolBitWidth)) {
       op->setOperand(1, createI1ToI8ScalarCast(loc, rhs, b));
       return success();
     }
-    if (lt.isInteger(1) && rt.isInteger(8)) {
+    if (lt.isInteger(kBoolBitWidth) && rt.isInteger(kI8BitWidth)) {
       op->setOperand(0, createI1ToI8ScalarCast(loc, lhs, b));
       return success();
     }
@@ -309,11 +311,11 @@ struct MemRefStorePattern final : public OpRewritePattern<memref::StoreOp> {
       return failure();
     }
     b.setInsertionPoint(op);
-    if (vt.isInteger(1) && want.isInteger(8)) {
+    if (vt.isInteger(kBoolBitWidth) && want.isInteger(kI8BitWidth)) {
       op->setOperand(0, createI1ToI8ScalarCast(op.getLoc(), op.getValueToStore(), b));
       return success();
     }
-    if (vt.isInteger(8) && want.isInteger(1)) {
+    if (vt.isInteger(kI8BitWidth) && want.isInteger(kBoolBitWidth)) {
       op->setOperand(0, createI8ToI1ScalarCast(op.getLoc(), op.getValueToStore(), b));
       return success();
     }
@@ -337,9 +339,9 @@ struct ReturnPattern final : public OpRewritePattern<func::ReturnOp> {
         continue;
       }
       Value v;
-      if (cur.getType().isInteger(1) && want.isInteger(8)) {
+      if (cur.getType().isInteger(kBoolBitWidth) && want.isInteger(kI8BitWidth)) {
         v = createI1ToI8ScalarCast(op.getLoc(), cur, b);
-      } else if (cur.getType().isInteger(8) && want.isInteger(1)) {
+      } else if (cur.getType().isInteger(kI8BitWidth) && want.isInteger(kBoolBitWidth)) {
         v = createI8ToI1ScalarCast(op.getLoc(), cur, b);
       } else {
         op.emitOpError("unsupported i1 to i8 legalization for return operand");

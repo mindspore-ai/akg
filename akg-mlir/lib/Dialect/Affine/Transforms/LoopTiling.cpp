@@ -43,7 +43,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_AKGAFFINELOOPTILING

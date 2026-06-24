@@ -24,7 +24,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/OperationSupport.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_REMOVESYMBOLIC

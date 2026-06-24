@@ -30,7 +30,7 @@
 #include "mlir/Dialect/Affine/Passes.h.inc"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AKGAFFINELOOPPARALLELIZE

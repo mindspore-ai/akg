@@ -38,10 +38,9 @@ using mlir::autotiling::kGpuSeqCfg;
 using mlir::autotiling::kTileCfg;
 using mlir::autotiling::Tile;
 
-class Axis;
-using AxisPtr = std::shared_ptr<Axis>;
 class Axis {
  public:
+  using AxisPtr = std::shared_ptr<Axis>;
   enum class AxisLabel { kDefault = 0, kMultiCore, kUnroll, kVectorization, kReduction, kDynamic };
   explicit Axis(std::string name);
   Axis(size_t bandIdx, size_t axisIdx, affine::AffineForOp affineLoop);
@@ -82,6 +81,7 @@ class Axis {
   std::vector<std::string> mappings;
   float priority{0.0};
 };
+using AxisPtr = Axis::AxisPtr;
 }  // namespace autotiling
 }  // namespace mlir
 

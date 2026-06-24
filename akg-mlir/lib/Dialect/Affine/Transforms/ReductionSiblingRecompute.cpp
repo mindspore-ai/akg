@@ -32,7 +32,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_REDUCTIONSIBLINGRECOMPUTE

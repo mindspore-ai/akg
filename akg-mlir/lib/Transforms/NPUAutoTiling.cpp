@@ -47,7 +47,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 #define DEBUG_TYPE "npu-auto-tiling"
 
@@ -350,7 +350,7 @@ class TilingBase {
           continue;
         }
         auto memrefTy = dyn_cast<MemRefType>(arg.getType());
-        if (!memrefTy || memrefTy.getRank() != 1 || !memrefTy.getElementType().isInteger(64)) {
+        if (!memrefTy || memrefTy.getRank() != 1 || !memrefTy.getElementType().isInteger(kI64BitWidth)) {
           originalKernel_.emitError("tiling struct argument must be rank-1 memref<i64>");
           return failure();
         }

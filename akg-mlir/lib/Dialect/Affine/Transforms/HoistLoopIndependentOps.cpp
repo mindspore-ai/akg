@@ -29,7 +29,7 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_HOISTLOOPINDEPENDENTOPS

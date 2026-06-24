@@ -23,7 +23,7 @@
 
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
 #include "akg/Utils/GlobalVars.hpp"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 namespace mlir {
 using akgglobal::ShapeAlignTool;
 #ifndef GEN_PASS_DEF_SIMPLIFYSHAPE

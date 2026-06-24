@@ -26,7 +26,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 #include "bishengir/Dialect/HACC/IR/HACC.h"
 #include "bishengir/Dialect/HFusion/IR/HFusion.h"
 
@@ -210,12 +210,12 @@ static LogicalResult invMatchAndRewriteHelper(Operation *op, PatternRewriter &re
 // attribute type varies depending on the element type required.
 static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
-    if (intTy.isInteger(1)) {
+    if (intTy.isInteger(kBoolBitWidth)) {
       if (isa<mindspore::ReduceAllOp>(op)) {
-        return rewriter.getIntegerAttr(intTy, APInt::getAllOnes(1));
+        return rewriter.getIntegerAttr(intTy, APInt::getAllOnes(kBoolBitWidth));
       }
       if (isa<mindspore::ReduceAnyOp>(op)) {
-        return rewriter.getIntegerAttr(intTy, APInt::getZero(1));
+        return rewriter.getIntegerAttr(intTy, APInt::getZero(kBoolBitWidth));
       }
     }
   }
@@ -263,7 +263,7 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
   Location loc = op->getLoc();
 
   if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
-    if (intTy.isInteger(1)) {
+    if (intTy.isInteger(kBoolBitWidth)) {
       if (isa<mindspore::ReduceAllOp>(op)) {
         return rewriter.create<arith::AndIOp>(loc, args);
       }
@@ -658,7 +658,7 @@ static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
       continue;
     }
 
-    if (msOp->getNumOperands() < 2) {
+    if (msOp->getNumOperands() < kBinaryOpOperandCount) {
       continue;
     }
 

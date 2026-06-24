@@ -48,7 +48,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_SHAPENORMALIZATION
@@ -2181,7 +2181,6 @@ static ShapeNormalState::SubviewAxisTargetExpandRecord SrcNeedsExpand(Operation 
   int64_t size = subviewOp.getStaticSizes()[axisIndex];
   int64_t offset = subviewOp.getStaticOffsets()[axisIndex];
   int64_t stride = subviewOp.getStaticStrides()[axisIndex];
-
   if (stride != 1 || size == ShapedType::kDynamic) {
     state.isSupported = false;
     return rec;
@@ -2240,7 +2239,6 @@ static ShapeNormalState::SubviewAxisTargetExpandRecord resultNeedsExpand(Operati
   int64_t size = subviewOp.getStaticSizes()[axisIndex];
   int64_t offset = subviewOp.getStaticOffsets()[axisIndex];
   int64_t stride = subviewOp.getStaticStrides()[axisIndex];
-
   if (stride != 1 || size == ShapedType::kDynamic) {
     state.isSupported = false;
     return rec;
