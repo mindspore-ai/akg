@@ -188,6 +188,29 @@ func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs(%arg0 : memref<?x102
 
 // -----
 
+func.func @test_npuvector_broadcast_rank_lift_preserves_subview_layout(%arg0 : memref<64xf32>, %out : memref<64x64xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @test_npuvector_broadcast_rank_lift_preserves_subview_layout
+  // CHECK: %[[SCRATCH:.*]] = memref.alloc() : memref<256x1x64xf32>
+  // CHECK: %[[SLICE:.*]] = memref.subview %[[SCRATCH]]
+  // CHECK-SAME: to memref<64xf32, strided<{{.*}}>
+  // CHECK: %[[EXPAND:.*]] = memref.expand_shape %[[SLICE]]
+  // CHECK-SAME: : memref<64xf32, strided<{{.*}}> into memref<1x64xf32{{.*}}>
+  // CHECK: hivm.hir.vmul
+  %c0 = arith.constant 0 : index
+  %c64 = arith.constant 64 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %scratch = memref.alloc() : memref<256x1x64xf32>
+  %lhs0 = npuvector.transfer_read %arg0[%c0] [%c64] [%c64], %pad : memref<64xf32>, !npuvector<64xf32>
+  %rhs0 = npuvector.transfer_read %scratch[%c0, %c0, %c0] [%c64] [%c64], %pad : memref<256x1x64xf32>, !npuvector<64xf32>
+  %lhs = npuvector.broadcast %lhs0[%c64, %c64] [%c64, %c64] : !npuvector<64xf32> to !npuvector<64x64xf32> {dimension = array<i64: 0>}
+  %rhs = npuvector.broadcast %rhs0[%c64, %c64] [%c64, %c64] : !npuvector<64xf32> to !npuvector<64x64xf32> {dimension = array<i64: 1>}
+  %mul = arith.mulf %lhs, %rhs : !npuvector<64x64xf32>
+  npuvector.transfer_write %mul, %out[%c0, %c0] : !npuvector<64x64xf32>, memref<64x64xf32>
+  return
+}
+
+// -----
+
 // Dynamic ?x32: vector broadcast must not fold when paired with scalar broadcast,
 // so elementwise output alloc can take dynamic dims from the VBrc buffer.
 func.func @test_dynamic_dual_broadcast_reduction_addf(%arg0: memref<64x128xf16>, %arg1: memref<32xf16>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
@@ -3379,5 +3402,73 @@ func.func @test_fuse_producer_sink_dense_constant(%out: memref<512xf32>) attribu
     %v = npuvector.transfer_read %alloc_2[%c0][%c512][%c1_in], %pad : memref<512xf32>, !npuvector<512xf32>
     npuvector.transfer_write %v, %out[%c0] : !npuvector<512xf32>, memref<512xf32>
   }
+  return
+}
+
+// -----
+
+// Lower shared dense constants directly into each loop-local allocation.
+// CHECK-LABEL: func.func @test_dense_constant_transfer_write_shared
+func.func @test_dense_constant_transfer_write_shared() attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: scf.for
+  // CHECK: %[[ALLOC0:.*]] = memref.alloc() : memref<16xf32>
+  // CHECK: %[[ALLOC1:.*]] = memref.alloc() : memref<16xf32>
+  // CHECK: %[[VIEW0:.*]] = memref.subview %[[ALLOC0]][0] [16] [1]
+  // CHECK: hivm.hir.vbrc ins({{.*}} : f32) outs(%[[VIEW0]] : memref<16xf32{{.*}}>)
+  // CHECK: %[[VIEW1:.*]] = memref.subview %[[ALLOC1]][0] [16] [1]
+  // CHECK: hivm.hir.vbrc ins({{.*}} : f32) outs(%[[VIEW1]] : memref<16xf32{{.*}}>)
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %cst = arith.constant dense<0.0> : !npuvector<16xf32>
+  scf.for %i = %c0 to %c1 step %c1 {
+    %alloc0 = memref.alloc() : memref<16xf32>
+    %alloc1 = memref.alloc() : memref<16xf32>
+    npuvector.transfer_write %cst, %alloc0[%c0] : !npuvector<16xf32>, memref<16xf32>
+    npuvector.transfer_write %cst, %alloc1[%c0] : !npuvector<16xf32>, memref<16xf32>
+  }
+  return
+}
+
+// -----
+
+// npuvector.extract_slice lowers to a rank-reduced memref.subview on the source buffer.
+// CHECK-LABEL: func.func @test_npuvector_extract_slice
+func.func @test_npuvector_extract_slice(%arg0 : memref<8x4x2xf32>, %arg1 : memref<8x4xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: %[[SRC:.*]] = memref.alloc() : memref<8x4x2xf32>
+  // CHECK: hivm.hir.load
+  // CHECK: %[[SLICE:.*]] = memref.subview %[[SRC]][0, 0, 1] [8, 4, 1] [1, 1, 1] : memref<8x4x2xf32> to memref<8x4xf32, {{.*}}>
+  // CHECK: hivm.hir.store ins(%[[SLICE]]
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %pad = arith.constant 0.000000e+00 : f32
+  %tile = npuvector.transfer_read %arg0[%c0, %c0, %c0] [%c8, %c4, %c2] [%c8, %c4, %c2], %pad : memref<8x4x2xf32>, !npuvector<8x4x2xf32>
+  %slice = npuvector.extract_slice %tile [%c0, %c0, %c1] [%c8, %c4, %c1] [%c1, %c1, %c1] {keep_dims = array<i64: 0, 1>} : !npuvector<8x4x2xf32> to !npuvector<8x4xf32>
+  npuvector.transfer_write %slice, %arg1[%c0, %c0] : !npuvector<8x4xf32>, memref<8x4xf32>
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_npuvector_extract_slice_preserves_dynamic_kept_dims
+func.func @test_npuvector_extract_slice_preserves_dynamic_kept_dims(%arg0 : memref<32x16x1x2xbf16>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK: %[[TILE:.*]] = memref.alloc({{.*}}) : memref<32x?x?x2xbf16>
+  // CHECK: %[[SLICE:.*]] = memref.subview %[[TILE]][0, 0, 0, 0] [32, %{{.*}}, %{{.*}}, 1] [1, 1, 1, 1] : memref<32x?x?x2xbf16> to memref<32x?x?xbf16, {{.*}}>
+  // CHECK: %[[CAST:.*]] = memref.alloc({{.*}}) : memref<32x?x?xf32>
+  // CHECK: hivm.hir.vcast ins(%[[SLICE]] : memref<32x?x?xbf16, {{.*}}>) outs(%[[CAST]] : memref<32x?x?xf32>)
+  // CHECK: %[[MUL:.*]] = memref.alloc({{.*}}) : memref<32x?x?xf32>
+  // CHECK: hivm.hir.vmul ins(%[[CAST]], %[[CAST]] : memref<32x?x?xf32>, memref<32x?x?xf32>) outs(%[[MUL]] : memref<32x?x?xf32>)
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c16 = arith.constant 16 : index
+  %c32 = arith.constant 32 : index
+  %pad = arith.constant 0.000000e+00 : bf16
+  %tile = npuvector.transfer_read %arg0[%c0, %c0, %c0, %c0] [%c32, %c16, %c1, %c2] [%c32, %c16, %c1, %c2], %pad : memref<32x16x1x2xbf16>, !npuvector<32x?x?x2xbf16>
+  %slice = npuvector.extract_slice %tile [%c0, %c0, %c0, %c0] [%c32, %c16, %c1, %c1] [%c1, %c1, %c1, %c1] {keep_dims = array<i64: 0, 1, 2>} : !npuvector<32x?x?x2xbf16> to !npuvector<32x?x?xbf16>
+  %cast = npuvector.extf %slice : !npuvector<32x?x?xbf16> to !npuvector<32x?x?xf32>
+  %mul = arith.mulf %cast, %cast : !npuvector<32x?x?xf32>
   return
 }
