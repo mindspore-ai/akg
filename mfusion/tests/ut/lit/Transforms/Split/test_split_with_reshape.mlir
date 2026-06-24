@@ -32,4 +32,5 @@ func.func @test_split_with_reshape(%arg0: tensor<8xf32>) -> (tensor<2x4xf32>, te
   }
   return %2#0, %2#1 : tensor<2x4xf32>, tensor<2x4xf32>
 }
+
 }

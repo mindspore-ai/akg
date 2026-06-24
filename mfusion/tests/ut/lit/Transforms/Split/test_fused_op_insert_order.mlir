@@ -1,6 +1,6 @@
 // RUN: mfusion-opt %s --split | FileCheck %s
 module {
-  // CHECK-LABEL: @test_mfuse_fused_basic
+  // CHECK-LABEL: func.func @test_mfuse_fused_basic
   func.func @test_mfuse_fused_basic(
     %input: tensor<4x128x7x7xf32>,
     %scalar: tensor<f32>,

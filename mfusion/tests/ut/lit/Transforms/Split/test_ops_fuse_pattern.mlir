@@ -244,14 +244,10 @@ module {
   // CHECK: %[[SQRT:.*]] = mfuse.sqrt %[[MUL1]] : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
   // CHECK: %[[ABS:.*]] = mfuse.abs %[[SQRT]] : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
   // CHECK: %[[REDUCE_SUM:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1, 2], dtype = f32, keepdim = false} : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32>
-  // CHECK: mfuse.yield %[[REDUCE_SUM]] : tensor<2x4xf32>
-  // CHECK: %[[FUSED2:.*]] = mfuse.fused %[[FUSED1]] {fusion_type = "dvm"}
-  // CHECK-SAME: : (tensor<2x4xf32>) -> tensor<2x4xf32>
-  // CHECK: ^bb0(%[[ARG2:.*]]: tensor<2x4xf32>):
-  // CHECK: %[[ADD2:.*]] = mfuse.add %[[ARG2]], %[[ARG2]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: %[[ADD2:.*]] = mfuse.add %[[REDUCE_SUM]], %[[REDUCE_SUM]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: %[[MUL2:.*]] = mfuse.mul %[[ADD2]], %[[ADD2]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
   // CHECK: mfuse.yield %[[MUL2]] : tensor<2x4xf32>
-  // CHECK: return %[[FUSED2]] : tensor<2x4xf32>
+  // CHECK: return %[[FUSED1]] : tensor<2x4xf32>
   func.func @test_reduce_sum_operation_multi_rank(%arg0: tensor<2x4x4x4xf32>) -> tensor<2x4xf32> {
     %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32> {
     ^bb0(%arg1: tensor<2x4x4x4xf32>):
