@@ -16,6 +16,7 @@
 
 #include "akg/Dialect/NPUVector/Transforms/RefineNPUVectorStaticShape.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 
@@ -27,6 +28,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -94,7 +96,7 @@ static npuvector::NPUVectorType buildRefinedTypeFromSizes(npuvector::NPUVectorTy
 }
 
 static bool setResultType(Value result, npuvector::NPUVectorType newType) {
-  if (!newType || result.getType() == newType) {
+  if (newType == nullptr || result.getType() == newType) {
     return false;
   }
   result.setType(newType);
@@ -103,7 +105,7 @@ static bool setResultType(Value result, npuvector::NPUVectorType newType) {
 
 static bool refineFromDynamicSizes(Value result, ValueRange dynamicSizes) {
   auto oldType = dyn_cast<npuvector::NPUVectorType>(result.getType());
-  if (!oldType) {
+  if (oldType == nullptr) {
     return false;
   }
   return setResultType(result, buildRefinedTypeFromSizes(oldType, dynamicSizes));
@@ -120,7 +122,7 @@ static bool refineBroadcast(npuvector::BroadcastOp op) {
 static bool refineTranspose(npuvector::TransposeOp op) {
   auto srcType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
   auto oldType = dyn_cast<npuvector::NPUVectorType>(op.getResult().getType());
-  if (!srcType || !oldType || srcType.getRank() != oldType.getRank()) {
+  if (srcType == nullptr || oldType == nullptr || srcType.getRank() != oldType.getRank()) {
     return false;
   }
 
@@ -149,6 +151,61 @@ static bool refineTranspose(npuvector::TransposeOp op) {
   return setResultType(op.getResult(), npuvector::NPUVectorType::get(newShape, oldType.getElementType()));
 }
 
+static bool refineReduction(npuvector::ReductionOp op) {
+  auto srcType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
+  auto oldType = dyn_cast<npuvector::NPUVectorType>(op.getDest().getType());
+  if (srcType == nullptr || oldType == nullptr || oldType.hasStaticShape()) {
+    return false;
+  }
+
+  auto dimsAttr = op.getReductionDims();
+  if (!dimsAttr.has_value() || dimsAttr->empty()) {
+    return false;
+  }
+
+  const int64_t srcRank = srcType.getRank();
+  const int64_t resultRank = oldType.getRank();
+  llvm::DenseSet<int64_t> reduceDimSet(dimsAttr->begin(), dimsAttr->end());
+  if (reduceDimSet.size() != dimsAttr->size()) {
+    return false;
+  }
+  if (std::any_of(dimsAttr->begin(), dimsAttr->end(), [srcRank](int64_t dim) {
+        return dim < 0 || dim >= srcRank;
+      })) {
+    return false;
+  }
+
+  int64_t expectedResultRank = 0;
+  for (int64_t dim = 0; dim < srcRank; ++dim) {
+    if (reduceDimSet.count(dim) == 0) {
+      ++expectedResultRank;
+    }
+  }
+  if (expectedResultRank != resultRank) {
+    return false;
+  }
+
+  SmallVector<int64_t> newShape(oldType.getShape().begin(), oldType.getShape().end());
+  bool changed = false;
+  unsigned resultDim = 0;
+  for (int64_t srcDim = 0; srcDim < srcRank; ++srcDim) {
+    if (reduceDimSet.count(srcDim) != 0) {
+      continue;
+    }
+    int64_t srcSize = srcType.getDimSize(static_cast<unsigned>(srcDim));
+    if (ShapedType::isDynamic(newShape[resultDim]) && !ShapedType::isDynamic(srcSize)) {
+      newShape[resultDim] = srcSize;
+      changed = true;
+    }
+    ++resultDim;
+  }
+
+  if (!changed) {
+    return false;
+  }
+  return setResultType(op.getDest(), npuvector::NPUVectorType::get(newShape, oldType.getElementType()));
+}
+
 static bool isShapePreservingElementwiseOp(Operation *op) {
   if (isa<npuvector::TransferReadOp, npuvector::TransferWriteOp, npuvector::BroadcastOp, npuvector::TransposeOp,
           npuvector::ReductionOp>(op)) {
@@ -168,13 +225,13 @@ static bool refineShapePreservingElementwise(Operation *op) {
   }
 
   auto oldType = dyn_cast<npuvector::NPUVectorType>(op->getResult(0).getType());
-  if (!oldType || oldType.hasStaticShape()) {
+  if (oldType == nullptr || oldType.hasStaticShape()) {
     return false;
   }
 
   for (Value operand : op->getOperands()) {
     auto operandType = dyn_cast<npuvector::NPUVectorType>(operand.getType());
-    if (!operandType || operandType.getRank() != oldType.getRank()) {
+    if (operandType == nullptr || operandType.getRank() != oldType.getRank()) {
       continue;
     }
 
@@ -204,6 +261,9 @@ static bool refineOneOp(Operation *op) {
   }
   if (auto transposeOp = dyn_cast<npuvector::TransposeOp>(op)) {
     return refineTranspose(transposeOp);
+  }
+  if (auto reductionOp = dyn_cast<npuvector::ReductionOp>(op)) {
+    return refineReduction(reductionOp);
   }
   return refineShapePreservingElementwise(op);
 }
