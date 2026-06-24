@@ -2987,12 +2987,23 @@ SmallVector<bool, kSmallVectorSizeSix> collectReductionAxisMask(const NpuBandCon
   return mask;
 }
 
-// Multi-vec scheme: from inner to outer, try to set each axis'
-// inner tile equal to its outer tile (full block-local chunk). On UB pressure
-// we shrink the current axis with `findMaxFittingTile` and stop expanding
-// further outward. Returns a per-axis mask marking which axes should receive
-// `kMultiVecLoopAttr` on their point loop.
-void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, ArrayRef<bool> reductionAxisMask) {
+void markUnitAxesInsideMultiVecChain(BandTilePlan &plan) {
+  bool hasOuterVecAxis = false;
+  for (size_t i = 0; i < plan.innerTiles.size(); ++i) {
+    if (hasOuterVecAxis && plan.innerTiles[i] == 1) {
+      plan.multiVecAxisMask[i] = true;
+    }
+    hasOuterVecAxis |= plan.multiVecAxisMask[i];
+  }
+}
+
+// Multi-vec scheme: from the physical vector axis outward, try to set each
+// axis' inner tile equal to its outer tile (full block-local chunk). On UB
+// pressure we shrink the current axis with `findMaxFittingTile` and stop
+// expanding further outward. Returns a per-axis mask marking which axes should
+// receive `kMultiVecLoopAttr` on their point loop.
+void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, ArrayRef<bool> reductionAxisMask,
+                                std::optional<size_t> vectorAxis = std::nullopt) {
   const size_t n = ctx.axes.size();
   plan.innerTiles.assign(n, 1);
   plan.multiVecAxisMask.assign(n, false);
@@ -3000,17 +3011,25 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
     return;
   }
 
+  size_t primaryAxis = vectorAxis && *vectorAxis < n ? *vectorAxis : n - 1;
+  SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
+  for (size_t i = primaryAxis; i < n; ++i) {
+    searchAxisOrder.push_back(i);
+  }
+  for (size_t i = primaryAxis; i > 0; --i) {
+    searchAxisOrder.push_back(i - 1);
+  }
+
   SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(n, 1);
   bool stopped = false;
   bool hasInnerVecAxis = false;
-  for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
+  for (size_t idx : searchAxisOrder) {
     if (stopped) {
       break;
     }
-    auto idx = static_cast<size_t>(i);
     int64_t candidate = std::max<int64_t>(static_cast<int64_t>(plan.outerTiles[idx]), 1);
-    bool isInnermostAxis = idx + 1 == n;
-    if (!isInnermostAxis) {
+    bool isPrimaryAxis = idx == primaryAxis;
+    if (!isPrimaryAxis) {
       int64_t fitTile = findMaxFittingCommonFactorTile(ctx, axisTiles, idx, candidate);
       plan.innerTiles[idx] = saturateToTileValue(fitTile);
       axisTiles[idx] = fitTile;
@@ -3025,7 +3044,7 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
     axisTiles[idx] = candidate;
     if (fitsVectorUb(ctx, axisTiles)) {
       plan.innerTiles[idx] = saturateToTileValue(candidate);
-      plan.multiVecAxisMask[idx] = (candidate > 1) || reductionAxisMask[idx] || isInnermostAxis;
+      plan.multiVecAxisMask[idx] = (candidate > 1) || reductionAxisMask[idx] || isPrimaryAxis;
       hasInnerVecAxis |= plan.multiVecAxisMask[idx];
       continue;
     }
@@ -3049,13 +3068,29 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
   // Keep the multi-vec axis chain contiguous: an inner axis with innerTile==1 sitting
   // between two vectorized axes must still carry the marker so the apply phase emits a
   // length-1 vector slot (shapes like [10, 1, 10]) instead of breaking the chain.
-  bool hasOuterVecAxis = false;
-  for (size_t i = 0; i < n; ++i) {
-    if (hasOuterVecAxis && plan.innerTiles[i] == 1) {
-      plan.multiVecAxisMask[i] = true;
+  markUnitAxesInsideMultiVecChain(plan);
+}
+
+bool hasActiveVectorSuffix(const BandTilePlan &plan, size_t suffixStart) {
+  for (size_t i = suffixStart; i < plan.innerTiles.size(); ++i) {
+    if (plan.innerTiles[i] <= 1) {
+      return false;
     }
-    hasOuterVecAxis |= plan.multiVecAxisMask[i];
   }
+  return true;
+}
+
+bool tryBuildTargetFirstMultiVecPlan(const NpuBandContext &ctx, BandTilePlan &plan, size_t targetAxis) {
+  if (targetAxis + 1 >= ctx.axes.size()) {
+    return false;
+  }
+  initWholeBandPlan(ctx, plan);
+  computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx), targetAxis);
+  if (!hasActiveVectorSuffix(plan, targetAxis)) {
+    return false;
+  }
+  plan.usesMultiVecScheme = true;
+  return true;
 }
 
 std::optional<std::pair<size_t, size_t>> getPrefixTransposeDiffRange(const TransposeVectorInfo &info) {
@@ -3375,16 +3410,18 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
     return false;
   }
 
-  // Multi-dim vec path: requires the innermost axis to be reducible along the
-  // contiguous direction (reduce_x / reduce_all). Innermost reduce_y still has
-  // to walk the legacy single-dim path because its vec lane is the *outer*
-  // non-reduction axis.
   if (!isInnermostAxisReduceY(ctx)) {
     initWholeBandPlan(ctx, plan);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
     return true;
+  }
+
+  if (std::optional<size_t> targetAxis = findReduceYVectorTargetAxis(ctx)) {
+    if (tryBuildTargetFirstMultiVecPlan(ctx, plan, *targetAxis)) {
+      return true;
+    }
   }
 
   initWholeBandPlan(ctx, plan);
@@ -3441,6 +3478,12 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   if (ctx.hasDynamicAxis || ctx.hasReduction || ctx.graphTemplate != GraphTemplate::BROADCAST_OP ||
       ctx.axes.size() < kMinTransposeAxisOrderSize) {
     return false;
+  }
+
+  if (std::optional<size_t> targetAxis = findDefaultVectorTargetAxis(ctx)) {
+    if (tryBuildTargetFirstMultiVecPlan(ctx, plan, *targetAxis)) {
+      return true;
+    }
   }
 
   int64_t broadcastTileBudget = ubCapacityForVectorTile(ctx);
