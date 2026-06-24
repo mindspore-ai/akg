@@ -15,7 +15,7 @@
  */
 
 #include "akg/Dialect/Fusion/IR/Fusion.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::fusion;  // NOLINT(build/namespaces)

@@ -50,7 +50,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Value.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace akg {
@@ -2192,7 +2192,6 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   FusionAccessInfo accessInfo;
   bool haveAccesses =
     plan.depInfo.memref && collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo);
-
   if (haveAccesses && plan.depInfo.memrefKind != MemrefKind::Subview &&
       isDependenceAxisRelationUnresolved(accessInfo.srcAccesses, accessInfo.dstAccesses)) {
     return;

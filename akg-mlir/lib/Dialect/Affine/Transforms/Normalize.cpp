@@ -105,8 +105,9 @@ static Value buildRoundWithMath(PatternRewriter &rewriter, Location loc, Value x
   return rewriter.create<math::RoundOp>(loc, x);
 }
 
-/// High/low precision norm///   res = x
-///   for each p in piApproParams:
+/// High/low precision norm
+///   res = x
+///   for each p in piApproParams
 ///     res = res - p * xRoundHigh
 ///     [if i==1 and offsetHigh: res = res + offsetHigh]
 ///     res = res - p * xRoundLow

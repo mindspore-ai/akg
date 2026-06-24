@@ -38,7 +38,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_TOSAMULTIREDUCETOLINALG
@@ -122,11 +122,11 @@ static TypedAttr getReduceIntInit(Operation *op, Type elementTy, PatternRewriter
   if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(width));
   }
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(kBoolBitWidth));
   }
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getZero(kBoolBitWidth));
   }
   return {};
 }
@@ -172,10 +172,10 @@ static Value getReduceIntBody(Operation *op, Location loc, ValueRange args, Type
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
   }
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::AndIOp>(loc, args);
   }
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::OrIOp>(loc, args);
   }
   return {};

@@ -61,7 +61,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTARITHTOHIVM
@@ -250,7 +250,7 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operat
 
 static bool setNPUVectorResultBufferSizeMark(PatternRewriter &rewriter, Location loc, Operation *op, Value buffer,
                                              Type elemTypeOverride = Type()) {
-  if ((op == nullptr) || op->getNumResults() != 1) {
+  if ((op == nullptr) || op->getNumResults() != kUnaryOpOperandCount) {
     return false;
   }
   auto npuTy = dyn_cast<npuvector::NPUVectorType>(op->getResult(0).getType());
@@ -311,10 +311,10 @@ static bool hasVectorOrNPUVectorLikeResult(Operation *op) {
 
 static bool isI1VectorOrNPUVectorLike(Type type) {
   if (auto vectorType = dyn_cast<VectorType>(type)) {
-    return vectorType.getElementType().isInteger(1);
+    return vectorType.getElementType().isInteger(kBoolBitWidth);
   }
   if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(type)) {
-    return npuVectorType.getElementType().isInteger(1);
+    return npuVectorType.getElementType().isInteger(kBoolBitWidth);
   }
   return false;
 }
@@ -335,7 +335,7 @@ static bool isScalarBroadcast(Value value) {
 }
 
 static bool isSupportedBinaryComputeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
-  if (user->getNumOperands() != 2 || !hasVectorOrNPUVectorLikeResult(user)) {
+  if (user->getNumOperands() != kBinaryOpOperandCount || !hasVectorOrNPUVectorLikeResult(user)) {
     return false;
   }
 
@@ -363,7 +363,7 @@ static bool isSupportedBinaryComputeScalarFoldUser(Operation *user, ArrayRef<uns
 }
 
 static bool isSupportedSelectLikeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
-  if (user->getNumOperands() != 3 || !hasVectorOrNPUVectorLikeResult(user)) {
+  if (user->getNumOperands() != kTernaryOpOperandCount || !hasVectorOrNPUVectorLikeResult(user)) {
     return false;
   }
 
@@ -882,12 +882,12 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
 };
 
 inline bool isOverFlowMode(Type inType, Type outType) {
-  const bool isI16ToI8 = inType.isInteger(16) && outType.isInteger(8);
-  const bool isI32ToI8 = inType.isInteger(32) && outType.isInteger(8);
-  const bool isI32ToI16 = inType.isInteger(32) && outType.isInteger(16);
-  const bool isI64ToI8 = inType.isInteger(64) && outType.isInteger(8);
-  const bool isI64ToI16 = inType.isInteger(64) && outType.isInteger(16);
-  const bool isI64ToI32 = inType.isInteger(64) && outType.isInteger(32);
+  const bool isI16ToI8 = inType.isInteger(kI16BitWidth) && outType.isInteger(kI8BitWidth);
+  const bool isI32ToI8 = inType.isInteger(kI32BitWidth) && outType.isInteger(kI8BitWidth);
+  const bool isI32ToI16 = inType.isInteger(kI32BitWidth) && outType.isInteger(kI16BitWidth);
+  const bool isI64ToI8 = inType.isInteger(kI64BitWidth) && outType.isInteger(kI8BitWidth);
+  const bool isI64ToI16 = inType.isInteger(kI64BitWidth) && outType.isInteger(kI16BitWidth);
+  const bool isI64ToI32 = inType.isInteger(kI64BitWidth) && outType.isInteger(kI32BitWidth);
   return (isI16ToI8 || isI32ToI16 || isI32ToI8 || isI64ToI8 || isI64ToI16 || isI64ToI32);
 }
 
@@ -989,7 +989,8 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     };
 
     Value resBuf;
-    if ((isa<arith::SIToFPOp>(op) || isa<arith::UIToFPOp>(op)) && srcElemType.isInteger(8) && elemType.isF32()) {
+    if ((isa<arith::SIToFPOp>(op) || isa<arith::UIToFPOp>(op)) && srcElemType.isInteger(kI8BitWidth) &&
+        elemType.isF32()) {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
       setCastBufferSizeMark(midBuf, rewriter.getF16Type());
@@ -997,7 +998,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundMode, hivm::TypeFnAttr{});
-    } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(32)) {
+    } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(kBoolBitWidth) && elemType.isInteger(kI32BitWidth)) {
       auto i8MemRefType = MemRefType::get(shape, rewriter.getI8Type());
       Value i8Buf = rewriter.create<memref::AllocOp>(loc, i8MemRefType, allocOperands);
       setCastBufferSizeMark(i8Buf, rewriter.getI8Type());
@@ -1005,7 +1006,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       setCastBufferSizeMark(resBuf, elemType);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, i8Buf, resBuf, roundMode, hivm::TypeFnAttr{});
-    } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
+    } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(kBoolBitWidth) && elemType.isInteger(kI64BitWidth)) {
       auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
       Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
       setCastBufferSizeMark(f32Buf, rewriter.getF32Type());
@@ -1077,16 +1078,16 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
   //   i8 -> i64 : i8 -> f16 -> f32 -> i64
   //   i8 -> f32 : i8 -> f16 -> f32
   static SmallVector<Type> getCastElementChain(CastOp op, Type srcElemType, Type dstElemType, OpBuilder &b) {
-    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && dstElemType.isInteger(32)) {
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(kBoolBitWidth) && dstElemType.isInteger(kI32BitWidth)) {
       return {b.getI8Type(), dstElemType};
     }
-    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) && dstElemType.isInteger(64)) {
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(kBoolBitWidth) && dstElemType.isInteger(kI64BitWidth)) {
       return {b.getF32Type(), dstElemType};
     }
-    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) && dstElemType.isInteger(64)) {
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(kI8BitWidth) && dstElemType.isInteger(kI64BitWidth)) {
       return {b.getF16Type(), b.getF32Type(), dstElemType};
     }
-    if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) && srcElemType.isInteger(8) &&
+    if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) && srcElemType.isInteger(kI8BitWidth) &&
         dstElemType.isF32()) {
       return {b.getF16Type(), dstElemType};
     }
@@ -1203,7 +1204,7 @@ struct NPUVectorBitcastToHIVM : public OpConversionPattern<npuvector::BitcastOp>
 static FailureOr<Value> castI8ToF16ForHIVMValue(ConversionPatternRewriter &rewriter, Location loc, Value input,
                                                 std::optional<int64_t> alignedBufferBytes = std::nullopt) {
   Type elemType = getElementTypeOrSelf(input.getType());
-  if (!elemType.isInteger(8)) {
+  if (!elemType.isInteger(kI8BitWidth)) {
     return input;
   }
 
@@ -1668,7 +1669,7 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
     Value trueVal = adaptor.getTrueValue();
     Value falseVal = adaptor.getFalseValue();
     std::optional<int64_t> f16TempBufferBytes;
-    if (elemType.isInteger(8)) {
+    if (elemType.isInteger(kI8BitWidth)) {
       f16TempBufferBytes = computeNPUVectorF16TempBufferBytes(op.getOperation(), resType, rewriter);
     }
 
@@ -1688,7 +1689,7 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
       propagateSelectBufferSizeMark(rewriter, loc, trueVal, falseVal, resBuf);
     }
 
-    if (elemType.isInteger(8)) {
+    if (elemType.isInteger(kI8BitWidth)) {
       auto castedTrueVal = castI8ToF16ForHIVMValue(rewriter, loc, trueVal, f16TempBufferBytes);
       if (failed(castedTrueVal)) {
         return failure();
@@ -3262,8 +3263,7 @@ static LogicalResult tryLowerDenseConstantNPUVectorTransferWrite(npuvector::Tran
   }
 
   ArrayRef<int64_t> vectorShape = npuVecType.getShape();
-  SmallVector<OpFoldResult> sizes(static_cast<size_t>(memRefRank - dataRank),
-                                  OpFoldResult(rewriter.getIndexAttr(1)));
+  SmallVector<OpFoldResult> sizes(static_cast<size_t>(memRefRank - dataRank), OpFoldResult(rewriter.getIndexAttr(1)));
   SmallVector<OpFoldResult> strides(static_cast<size_t>(memRefRank), OpFoldResult(rewriter.getIndexAttr(1)));
   std::transform(vectorShape.begin(), vectorShape.end(), std::back_inserter(sizes),
                  [&rewriter](int64_t dim) { return OpFoldResult(rewriter.getIndexAttr(dim)); });
@@ -3804,10 +3804,9 @@ static SmallVector<OpFoldResult> buildExpandShapeOutputShape(PatternRewriter &re
                                                              ArrayRef<ReassociationIndices> reassoc) {
   SmallVector<OpFoldResult> outputShape;
   outputShape.reserve(resultShape.size());
-  std::transform(resultShape.begin(), resultShape.end(), std::back_inserter(outputShape),
-                 [&rewriter](int64_t dim) {
-                   return ShapedType::isDynamic(dim) ? OpFoldResult() : OpFoldResult(rewriter.getIndexAttr(dim));
-                 });
+  std::transform(resultShape.begin(), resultShape.end(), std::back_inserter(outputShape), [&rewriter](int64_t dim) {
+    return ShapedType::isDynamic(dim) ? OpFoldResult() : OpFoldResult(rewriter.getIndexAttr(dim));
+  });
 
   for (auto [srcDim, resultDims] : llvm::enumerate(reassoc)) {
     Value srcDimValue;
@@ -3952,7 +3951,7 @@ static FailureOr<Value> expandMemRefRankWithBroadcastMapping(PatternRewriter &re
 }
 
 static bool isSupportedBroadcastVectorFoldUser(Operation *user, Value broadcastResult) {
-  if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumOperands() != 2) {
+  if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumOperands() != kBinaryOpOperandCount) {
     return false;
   }
 
@@ -3970,7 +3969,7 @@ static bool tryFoldScalarBroadcast(npuvector::BroadcastOp op, Value source, Conv
 
   Value broadcastVal = op.getResult();
   const bool hasSinglePointVectorLhsUser = llvm::any_of(broadcastVal.getUsers(), [broadcastVal](Operation *user) {
-    if (user->getNumOperands() != 2 || user->getOperand(1) != broadcastVal) {
+    if (user->getNumOperands() != kBinaryOpOperandCount || user->getOperand(1) != broadcastVal) {
       return false;
     }
     auto shapeAndElem = getShapeAndElemType(user->getOperand(0).getType());
@@ -4132,7 +4131,7 @@ static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemR
 
   if (npuVecType.hasDynamicShape()) {
     for (Operation *user : broadcastVal.getUsers()) {
-      if (isa<annotation::MarkOp>(user) || user->getNumOperands() != 2) {
+      if (isa<annotation::MarkOp>(user) || user->getNumOperands() != kBinaryOpOperandCount) {
         continue;
       }
       Value other = user->getOperand(0) == broadcastVal ? user->getOperand(1) : user->getOperand(0);
@@ -4590,8 +4589,7 @@ void hivm::populateArithToHIVMConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorTransferReadToHIVM, NPUVectorTransferWriteToHIVM, NPUVectorBroadcastToHIVM,
-               NPUVectorTransposeToHIVM, NPUVectorExtractSliceToHIVM, NPUVectorIndexCastToHIVM>(
-    patterns.getContext());
+               NPUVectorTransposeToHIVM, NPUVectorExtractSliceToHIVM, NPUVectorIndexCastToHIVM>(patterns.getContext());
   patterns.add<UnaryNPUVectorToHIVMCast<npuvector::ExtFOp>, UnaryNPUVectorToHIVMCast<npuvector::TruncFOp>,
                UnaryNPUVectorToHIVMCast<npuvector::ExtSIOp>, UnaryNPUVectorToHIVMCast<npuvector::ExtUIOp>,
                UnaryNPUVectorToHIVMCast<npuvector::TruncIOp>, UnaryNPUVectorToHIVMCast<npuvector::SIToFPOp>,
@@ -4664,10 +4662,9 @@ void ArithToHIVMConversionPass::runOnOperation() {
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp, vector::TransferWriteOp, vector::BroadcastOp>();
   target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::TransferWriteOp,
                       npuvector::BroadcastOp, npuvector::TransposeOp, npuvector::ExtractSliceOp, npuvector::ExtFOp,
-                      npuvector::TruncFOp,
-                      npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp, npuvector::SIToFPOp,
-                      npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp, npuvector::BitcastOp,
-                      npuvector::CmpIOp, npuvector::CmpFOp, npuvector::SelectOp>();
+                      npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp,
+                      npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp,
+                      npuvector::BitcastOp, npuvector::CmpIOp, npuvector::CmpFOp, npuvector::SelectOp>();
 
   RewritePatternSet patterns(&getContext());
   hivm::populateArithToHIVMConversionPatterns(patterns);
