@@ -238,12 +238,26 @@ def test_torch_fusion_bf16_mlir_no_npu_rotary_mul(shape: tuple[int, ...]) -> Non
 # --- NPU numeric guard (why bf16 skips fusion) ---
 
 
+def _require_torch_npu():
+    """Skip when torch_npu or CANN runtime (libhccl etc.) is unavailable.
+
+    pytest 9.x importorskip only skips ModuleNotFoundError by default; a broken
+    torch_npu install (missing libhccl.so) raises ImportError and must be skipped
+    explicitly — see pytest #13893 / import-or-skip-import-error.
+    """
+    try:
+        import torch_npu  # pylint: disable=import-outside-toplevel
+    except (ImportError, RuntimeError, OSError) as exc:
+        pytest.skip(f"torch_npu/CANN runtime unavailable: {exc}")
+    if not torch_npu.npu.is_available():
+        pytest.skip("NPU device not available")
+    return torch_npu
+
+
 @pytest.mark.parametrize("shape", ROPE_SHAPES)
 def test_npu_rotary_mul_acl_vs_decomposed(shape: tuple[int, ...]) -> None:
     """Sentinel: ACL kernel differs from eager bf16; revisit TorchFuseRoPE if this fails."""
-    torch_npu = pytest.importorskip("torch_npu")
-    if not torch_npu.npu.is_available():
-        pytest.skip("NPU not available")
+    _require_torch_npu()
 
     x, cos, sin = _make_rope_inputs(shape, seed=42)
     ref = rope_decomposed_bf16(x, cos, sin)
