@@ -233,8 +233,17 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
   // Allocate buffers for every NPUVector iter_arg of `forOp`. The recovered
   // size info per init arg is appended to `allSizes` and `allMaxSizes`.
-  void allocateAllBuffers(scf::ForOp forOp, OpBuilder &allocBuilder, Location loc, SmallVectorImpl<Value> &buffers,
-                          SmallVector<SmallVector<Value>> &allSizes, SmallVector<SmallVector<Value>> &allMaxSizes) {
+  struct AllocateBuffersParams {
+    mutable scf::ForOp forOp;
+    OpBuilder &allocBuilder;
+    Location loc;
+    SmallVectorImpl<Value> &buffers;
+    SmallVector<SmallVector<Value>> &allSizes;
+    SmallVector<SmallVector<Value>> &allMaxSizes;
+  };
+
+  void allocateAllBuffers(const AllocateBuffersParams &params) {
+    auto &[forOp, allocBuilder, loc, buffers, allSizes, allMaxSizes] = params;
     for (Value initVal : forOp.getInitArgs()) {
       SmallVector<Value> sizes;
       SmallVector<Value> maxSizes;
@@ -258,8 +267,18 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     }
   }
 
-  static Value readBufferAsVector(OpBuilder &b, Location loc, mlir::npuvector::NPUVectorType vt, Value buffer,
-                                  Value zeroIdx, ArrayRef<Value> partialSizes, ArrayRef<Value> partialMaxSizes) {
+  struct ReadBufferParams {
+    OpBuilder &b;
+    Location loc;
+    mlir::npuvector::NPUVectorType vt;
+    Value buffer;
+    Value zeroIdx;
+    ArrayRef<Value> partialSizes;
+    ArrayRef<Value> partialMaxSizes;
+  };
+
+  static Value readBufferAsVector(const ReadBufferParams &params) {
+    auto &[b, loc, vt, buffer, zeroIdx, partialSizes, partialMaxSizes] = params;
     ArrayRef<int64_t> shape = vt.getShape();
     SmallVector<Value> sizes(partialSizes.begin(), partialSizes.end());
     SmallVector<Value> maxSizes(partialMaxSizes.begin(), partialMaxSizes.end());
@@ -297,7 +316,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
     for (size_t i = 0; i < oldFor.getInitArgs().size(); ++i) {
       auto vt = llvm::cast<mlir::npuvector::NPUVectorType>(oldFor.getInitArgs()[i].getType());
-      Value loaded = readBufferAsVector(bb, loc, vt, buffers[i], c0, allSizes[i], allMaxSizes[i]);
+      Value loaded = readBufferAsVector({bb, loc, vt, buffers[i], c0, allSizes[i], allMaxSizes[i]});
       map.map(oldBody->getArgument(i + 1), loaded);
     }
 
@@ -314,13 +333,22 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     }
   }
 
-  void replaceForOpResults(OpBuilder &builder, Location loc, scf::ForOp forOp, ArrayRef<Value> buffers,
-                           ArrayRef<SmallVector<Value>> allSizes, ArrayRef<SmallVector<Value>> allMaxSizes,
-                           Value zeroIdx) {
+  struct ReplaceForOpResultsParams {
+    OpBuilder &builder;
+    Location loc;
+    mutable scf::ForOp forOp;
+    ArrayRef<Value> buffers;
+    ArrayRef<SmallVector<Value>> allSizes;
+    ArrayRef<SmallVector<Value>> allMaxSizes;
+    Value zeroIdx;
+  };
+
+  void replaceForOpResults(const ReplaceForOpResultsParams &params) {
+    auto &[builder, loc, forOp, buffers, allSizes, allMaxSizes, zeroIdx] = params;
     SmallVector<Value> results;
     for (size_t i = 0; i < forOp.getNumResults(); ++i) {
       auto vt = llvm::cast<mlir::npuvector::NPUVectorType>(forOp.getResult(i).getType());
-      Value loaded = readBufferAsVector(builder, loc, vt, buffers[i], zeroIdx, allSizes[i], allMaxSizes[i]);
+      Value loaded = readBufferAsVector({builder, loc, vt, buffers[i], zeroIdx, allSizes[i], allMaxSizes[i]});
       results.push_back(loaded);
     }
     forOp.replaceAllUsesWith(results);
@@ -371,7 +399,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     allMaxSizes.reserve(forOp.getInitArgs().size());
 
     // Pass 1: allocate all backing buffers, retaining recovered size info.
-    allocateAllBuffers(forOp, allocBuilder, loc, buffers, allSizes, allMaxSizes);
+    allocateAllBuffers({forOp, allocBuilder, loc, buffers, allSizes, allMaxSizes});
 
     // Pass 2: seed-write the initial values immediately before the for op.
     writeSeedValues(builder, loc, forOp, buffers, c0Outer);
@@ -385,7 +413,7 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     // After the new loop, read the final buffer contents and use them as the
     // replacements for the original for op's results.
     builder.setInsertionPointAfter(newFor);
-    replaceForOpResults(builder, loc, forOp, buffers, allSizes, allMaxSizes, c0Outer);
+    replaceForOpResults({builder, loc, forOp, buffers, allSizes, allMaxSizes, c0Outer});
   }
 
   void runOnOperation() override {

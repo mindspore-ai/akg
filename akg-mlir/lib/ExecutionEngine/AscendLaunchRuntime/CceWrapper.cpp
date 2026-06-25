@@ -163,7 +163,7 @@ int aclrtCreateStreamWithConfig(aclrtStream *stream, uint32_t priority, uint32_t
 }
 
 int aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind,
-                     aclrtStream stream) {
+                     aclrtStream stream) {  // NOLINT(readability-function-size)
   auto func = CceWrapper::GetInstance()->aclrtMemcpyAsync;
   CHECK_NOTNULL(func);
   return func(dst, destMax, src, count, kind, stream);
@@ -326,7 +326,7 @@ int rtFunctionRegister(void *binHandle, const void *stubFunc, const char *stubNa
 }
 
 int rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t argsSize, rtSmDesc_t *smDesc,
-                   rtStream_t stm) {
+                   rtStream_t stm) {  // NOLINT(readability-function-size)
   auto func = mlir::runtime::CceWrapper::GetInstance()->rtKernelLaunch;
   CHECK_NOTNULL(func);
   return func(stubFunc, blockDim, arg, argsSize, smDesc, stm);

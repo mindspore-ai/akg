@@ -182,31 +182,28 @@ static affine::AffineStoreOp findInitStore(Operation *band, Operation *reduceLoo
   return nullptr;
 }
 
-static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, affine::AffineForOp loop,
-                                               affine::AffineLoadOp loadOp, affine::AffineStoreOp storeOp,
-                                               arith::ConstantOp initVal) {
+struct IterArgsReplacement {
+  affine::AffineForOp loop;
+  affine::AffineLoadOp loadOp;
+  affine::AffineStoreOp storeOp;
+  arith::ConstantOp initVal;
+};
+
+static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, IterArgsReplacement replacement) {
   IRRewriter rewriter(ctx->getContext());
+  auto storeIf = dyn_cast<affine::AffineIfOp>(replacement.storeOp->getParentOp());
 
-  // If the reduction body (load/arith/store) is wrapped in an affine.if without
-  // an else region, yielding storeOp.getValue() directly at the loop tail would
-  // violate dominance (the value is defined inside the if region). Restructure
-  // the affine.if so it produces the reduction value:
-  //   then -> yields the arith result;
-  //   else -> yields the iter_arg unchanged (predicate false ==> accumulator preserved).
-  auto storeIf = dyn_cast<affine::AffineIfOp>(storeOp->getParentOp());
-
-  auto newLoop = cast<affine::AffineForOp>(*loop.replaceWithAdditionalYields(
-    rewriter, initVal.getResult(),
+  auto newLoop = cast<affine::AffineForOp>(*replacement.loop.replaceWithAdditionalYields(
+    rewriter, replacement.initVal.getResult(),
     /*replaceInitOperandUsesInLoop=*/false,
-    [&storeIf, &storeOp](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
+    [&storeIf, &replacement](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
       if (!storeIf) {
-        return SmallVector<Value>{storeOp.getValue()};
+        return SmallVector<Value>{replacement.storeOp.getValue()};
       }
-      Type resultType = storeOp.getValue().getType();
+      Type resultType = replacement.storeOp.getValue().getType();
       OpBuilder::InsertionGuard guard(nested);
       nested.setInsertionPoint(storeIf);
 
-      // Build a result-producing affine.if.
       auto newIf = nested.create<affine::AffineIfOp>(storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
                                                      storeIf->getOperands(), /*withElseRegion=*/true);
 
@@ -214,10 +211,8 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
       Block *newThen = newIf.getThenBlock();
       Block *newElse = newIf.getElseBlock();
 
-      // Move all ops from the old then block into the new then block.
       newThen->getOperations().splice(newThen->end(), oldThen->getOperations());
 
-      // Drop any pre-existing terminators
       while (!newThen->empty() && newThen->back().hasTrait<OpTrait::IsTerminator>()) {
         newThen->back().erase();
       }
@@ -225,9 +220,8 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
         newElse->back().erase();
       }
 
-      // Then-branch yields the arith result; else-branch yields the iter_arg
       OpBuilder thenBuilder(newThen, newThen->end());
-      thenBuilder.create<affine::AffineYieldOp>(loc, ValueRange{storeOp.getValue()});
+      thenBuilder.create<affine::AffineYieldOp>(loc, ValueRange{replacement.storeOp.getValue()});
       OpBuilder elseBuilder(newElse, newElse->end());
       elseBuilder.create<affine::AffineYieldOp>(loc, ValueRange{newBBArgs.back()});
 
@@ -235,9 +229,9 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, aff
       return SmallVector<Value>{newIf.getResult(0)};
     }));
   newLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
-  loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(), [&newLoop](OpOperand &use) {
-    return newLoop->isProperAncestor(use.getOwner());
-  });
+  replacement.loadOp.getResult().replaceUsesWithIf(
+    newLoop.getBody()->getArguments().back(),
+    [&newLoop](OpOperand &use) { return newLoop->isProperAncestor(use.getOwner()); });
   return newLoop;
 }
 
@@ -363,7 +357,7 @@ void AffineIteratorConversion::convertReduction(Operation *band) {
       return;
     }
 
-    auto newLoop = replaceWithIterArgs(b, band, reduceLoop, loadOp, storeOp, constOp);
+    auto newLoop = replaceWithIterArgs(b, band, {reduceLoop, loadOp, storeOp, constOp});
     b.setInsertionPointAfter(newLoop);
     auto parentOp = newLoop->getParentOp();
     if (isa<affine::AffineForOp>(parentOp) && parentOp->getAttr(kReductionLoopAttr)) {

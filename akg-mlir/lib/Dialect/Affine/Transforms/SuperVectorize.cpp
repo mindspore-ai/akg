@@ -746,9 +746,15 @@ void VectorizationState::finishVectorizationPattern(AffineForOp rootLoop) {
   eraseLoopNest(rootLoop);
 }
 
+struct ComputeMemoryOpIndicesParams {
+  VectorizationState &state;
+  SmallVectorImpl<Value> &results;
+};
+
 // Apply 'map' with 'mapOperands' returning resulting values in 'results'.
-static void computeMemoryOpIndices(Operation *op, AffineMap map, ValueRange mapOperands, VectorizationState &state,
-                                   SmallVectorImpl<Value> &results) {
+static void computeMemoryOpIndices(Operation *op, AffineMap map, ValueRange mapOperands,
+                                   const ComputeMemoryOpIndicesParams &params) {
+  auto &[state, results] = params;
   for (auto resultExpr : map.getResults()) {
     auto singleResMap = AffineMap::get(map.getNumDims(), map.getNumSymbols(), resultExpr);
     auto afOp = state.builder.create<AffineApplyOp>(op->getLoc(), singleResMap, mapOperands);
@@ -1003,7 +1009,7 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp, VectorizationState &s
   SmallVector<Value, kSmallVectorSizeEight> indices;
   indices.reserve(memRefType.getRank());
   if (loadOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
-    computeMemoryOpIndices(loadOp, loadOp.getAffineMap(), mapOperands, state, indices);
+    computeMemoryOpIndices(loadOp, loadOp.getAffineMap(), mapOperands, {state, indices});
   } else {
     indices.append(mapOperands.begin(), mapOperands.end());
   }
@@ -1046,7 +1052,7 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp, VectorizationState
   SmallVector<Value, kSmallVectorSizeEight> indices;
   indices.reserve(memRefType.getRank());
   if (storeOp.getAffineMap() != state.builder.getMultiDimIdentityMap(memRefType.getRank())) {
-    computeMemoryOpIndices(storeOp, storeOp.getAffineMap(), mapOperands, state, indices);
+    computeMemoryOpIndices(storeOp, storeOp.getAffineMap(), mapOperands, {state, indices});
   } else {
     indices.append(mapOperands.begin(), mapOperands.end());
   }
@@ -1457,6 +1463,11 @@ static void computeIntersectionBuckets(
   }
 }
 
+struct VectorizeLoopsParams {
+  ArrayRef<int64_t> fastestVaryingPattern;
+  const ReductionLoopMap &reductionLoops;
+};
+
 /// Internal implementation to vectorize affine loops in 'loops' using the n-D
 /// vectorization factors in 'vectorSizes'. By default, each vectorization
 /// factor is applied inner-to-outer to the loops of each loop nest.
@@ -1464,7 +1475,8 @@ static void computeIntersectionBuckets(
 /// vectorization order. `reductionLoops` can be provided to specify loops which
 /// can be vectorized along the reduction dimension.
 static void vectorizeLoops(Operation *parentOp, const DenseSet<Operation *> &loops, ArrayRef<int64_t> vectorSizes,
-                           ArrayRef<int64_t> fastestVaryingPattern, const ReductionLoopMap &reductionLoops) {
+                           const VectorizeLoopsParams &params) {
+  auto &[fastestVaryingPattern, reductionLoops] = params;
   assert((reductionLoops.empty() || vectorSizes.size() == 1) &&
          "Vectorizing reductions is supported only for 1-D vectors");
 
@@ -1562,7 +1574,7 @@ void VectorizeAKG::runOnOperation() {
 
   // Thread-safe RAII local context, BumpPtrAllocator freed on exit.
   NestedPatternContext mlContext;
-  vectorizeLoops(f, parallelLoops, vectorSizes, fastestVaryingPattern, reductionLoops);
+  vectorizeLoops(f, parallelLoops, vectorSizes, {fastestVaryingPattern, reductionLoops});
 }
 
 namespace mlir {
