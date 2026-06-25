@@ -2211,6 +2211,17 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
   bool keepSrcDst = srcInfo.isPerfect || !dstInfo.isPerfect;
+
+  auto srcGroupTemplate = mdg.getGroup(srcGroupId)->groupTemplate;
+  auto dstGroupTemplate = mdg.getGroup(dstGroupId)->groupTemplate;
+  if (srcGroupTemplate == OperatorTemplate::Broadcast &&
+      dstGroupTemplate == OperatorTemplate::Broadcast &&
+      !srcInfo.isPerfect && dstInfo.isPerfect &&
+      dstInfo.loopDepth > srcInfo.loopDepth &&
+      dstInfo.perfectDepth > srcInfo.perfectDepth) {
+        keepSrcDst = true;
+  }
+
   if (keepSrcDst) {
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);
   } else {

@@ -238,6 +238,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(affine::createAffineReductionAnnotationPass());
     nestedFusionPM.addPass(createHoistLoopIndependentOpsPass());
     nestedFusionPM.addPass(createAKGLoopFusionPass());
+    nestedFusionPM.addPass(createStoreLoadElimPass());
     nestedFusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
     nestedFusionPM.addPass(createCanonicalizerPass());
     nestedFusionPM.addPass(createSubviewAllocElimPass());
