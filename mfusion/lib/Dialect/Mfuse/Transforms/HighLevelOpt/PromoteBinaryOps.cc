@@ -35,6 +35,7 @@ struct BinaryOpInfo {
   Value lhs, rhs;
   RankedTensorType lhsType, rhsType, resultType;
   Type lhsElem, rhsElem, resultElem;
+  bool lhsIsScalar;
   bool rhsIsScalar;
   bool isArithmetic;
   bool isComparison;
@@ -61,6 +62,7 @@ struct BinaryOpInfo {
                         curLhsType.getElementType(),
                         curRhsType.getElementType(),
                         curResultType.getElementType(),
+                        isScalarType(curLhsType),
                         isScalarType(curRhsType),
                         isArith,
                         isComp};
@@ -69,13 +71,19 @@ struct BinaryOpInfo {
   bool needsPromotion() const {
     Type targetElem = getTargetElemType();
     if (!targetElem) return false;
+    bool exactlyOneScalar = lhsIsScalar != rhsIsScalar;
+    if (exactlyOneScalar) {
+      if (isComparison) return false;
+      Type tensorElem = lhsIsScalar ? rhsElem : lhsElem;
+      return tensorElem != targetElem;
+    }
+    if (lhsIsScalar && rhsIsScalar) return false;
     if (isArithmetic) {
       bool bothMatch = (lhsElem == resultElem) && (rhsElem == resultElem);
-      bool rhsScalarAndLhsMatch = rhsIsScalar && (lhsElem == resultElem);
-      return !bothMatch && !rhsScalarAndLhsMatch;
+      return !bothMatch;
     }
     if (isComparison) {
-      return lhsElem != rhsElem && !rhsIsScalar;
+      return lhsElem != rhsElem;
     }
     return false;
   }
@@ -98,12 +106,11 @@ struct PromoteBinaryOpPattern : public RewritePattern {
     // Create new operands with target element type
     Value newLhs = info->lhs;
     Value newRhs = info->rhs;
-    if (info->lhsElem != targetElem) {
+    if (info->lhsElem != targetElem && !info->lhsIsScalar) {
       auto newType = RankedTensorType::get(info->lhsType.getShape(), targetElem, info->lhsType.getEncoding());
       newLhs = rewriter.create<CastOp>(op->getLoc(), newType, info->lhs);
     }
-    bool shouldCastRhs = info->rhsElem != targetElem && !info->rhsIsScalar;
-    if (shouldCastRhs) {
+    if (info->rhsElem != targetElem && !info->rhsIsScalar) {
       auto newType = RankedTensorType::get(info->rhsType.getShape(), targetElem, info->rhsType.getEncoding());
       newRhs = rewriter.create<CastOp>(op->getLoc(), newType, info->rhs);
     }
