@@ -69,20 +69,24 @@ size_t valueUsageCount(Value v, func::FuncOp funcOp) {
   return cnt;
 }
 
-void findNextRedOp(size_t currIdx, size_t groupNum, const SmallVector<Operation *, kVectorSizeEight> &redOpList,
-                   SmallVector<bool, kVectorSizeEight> &usedRedOps,
-                   SmallVector<SmallVector<Operation *, kVectorSizeEight>, kVectorSizeEight> &redOpsGroups,
-                   func::FuncOp funcOp) {
-  if (currIdx == redOpList.size()) {
+struct RedOpGroupContext {
+  const SmallVector<Operation *, kVectorSizeEight> &redOpList;
+  SmallVector<bool, kVectorSizeEight> &usedRedOps;
+  SmallVector<SmallVector<Operation *, kVectorSizeEight>, kVectorSizeEight> &redOpsGroups;
+  func::FuncOp funcOp;
+};
+
+void findNextRedOp(size_t currIdx, size_t groupNum, RedOpGroupContext &ctx) {
+  if (currIdx == ctx.redOpList.size()) {
     return;
   }
-  redOpsGroups[groupNum].push_back(redOpList[currIdx]);
-  usedRedOps[currIdx] = true;
-  for (size_t i = currIdx + 1; i < redOpList.size(); i++) {
-    if (redOpList[i]->getOperands()[0] == redOpList[currIdx]->getResults()[0] &&
-        redOpList[i]->getName() == redOpList[currIdx]->getName() &&
-        valueUsageCount(redOpList[currIdx]->getResults()[0], funcOp) == 1) {
-      findNextRedOp(i, groupNum, redOpList, usedRedOps, redOpsGroups, funcOp);
+  ctx.redOpsGroups[groupNum].push_back(ctx.redOpList[currIdx]);
+  ctx.usedRedOps[currIdx] = true;
+  for (size_t i = currIdx + 1; i < ctx.redOpList.size(); i++) {
+    if (ctx.redOpList[i]->getOperands()[0] == ctx.redOpList[currIdx]->getResults()[0] &&
+        ctx.redOpList[i]->getName() == ctx.redOpList[currIdx]->getName() &&
+        valueUsageCount(ctx.redOpList[currIdx]->getResults()[0], ctx.funcOp) == 1) {
+      findNextRedOp(i, groupNum, ctx);
     }
   }
 }
@@ -197,7 +201,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
   func::FuncOp funcOp = dyn_cast<func::FuncOp>(op->getParentOp());
   SmallVector<Operation *, kVectorSizeEight> redOpList;
   SmallVector<bool, kSmallVectorSizeEight> usedRedOps;
-  SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, 8> redOpsGroups;
+  SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, kSmallVectorSizeEight> redOpsGroups;
 
   // collect all tosa.reduce
   funcOp.walk([&redOpList, &usedRedOps](Operation *redOp) {
@@ -207,10 +211,11 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     }
   });
 
+  RedOpGroupContext ctx{redOpList, usedRedOps, redOpsGroups, funcOp};
   for (size_t i = 0; i < redOpList.size(); i++) {
     if (!usedRedOps[i]) {
       redOpsGroups.push_back(SmallVector<Operation *, kSmallVectorSizeEight>());
-      findNextRedOp(i, redOpsGroups.size() - 1, redOpList, usedRedOps, redOpsGroups, funcOp);
+      findNextRedOp(i, redOpsGroups.size() - 1, ctx);
     }
   }
 

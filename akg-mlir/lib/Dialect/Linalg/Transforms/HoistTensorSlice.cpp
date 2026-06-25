@@ -59,6 +59,11 @@ struct SliceSpec {
   SmallVector<OpFoldResult> strides;
 };
 
+struct BuilderLoc {
+  OpBuilder &builder;
+  Location loc;
+};
+
 // REDUCE: helper
 static bool hasReductionIterator(linalg::GenericOp gen) {
   auto iteratorTypes = gen.getIteratorTypesArray();
@@ -284,23 +289,21 @@ static SmallVector<int64_t> getStaticSizes(ArrayRef<OpFoldResult> sizes) {
 //         a fresh smaller empty (cheap);
 //       * otherwise fall back to extract_slice on the original init tensor.
 static Value buildNewInit(linalg::GenericOp gen, const SliceSpec &outSlice, RankedTensorType newOutType,
-                          ArrayRef<Value> dynSizes, OpBuilder &b, Location loc) {
+                          ArrayRef<Value> dynSizes, const BuilderLoc &bl) {
   bool isReduction = hasReductionIterator(gen);
   Value origInit = gen.getDpsInitOperand(0)->get();
 
   if (!isReduction) {
-    return b.create<tensor::EmptyOp>(loc, newOutType, dynSizes);
+    return bl.builder.create<tensor::EmptyOp>(bl.loc, newOutType, dynSizes);
   }
 
-  // Reduction path: preserve init semantics.
   if (auto fillOp = origInit.getDefiningOp<linalg::FillOp>()) {
-    Value newEmpty = b.create<tensor::EmptyOp>(loc, newOutType, dynSizes);
-    auto newFill = b.create<linalg::FillOp>(loc, fillOp.getInputs(), ValueRange{newEmpty});
+    Value newEmpty = bl.builder.create<tensor::EmptyOp>(bl.loc, newOutType, dynSizes);
+    auto newFill = bl.builder.create<linalg::FillOp>(bl.loc, fillOp.getInputs(), ValueRange{newEmpty});
     return newFill.getResult(0);
   }
-  // General fallback: slice the original init, which retains all initial
-  // values. Subsequent canonicalization can usually fold this further.
-  return b.create<tensor::ExtractSliceOp>(loc, origInit, outSlice.offsets, outSlice.sizes, outSlice.strides);
+  return bl.builder.create<tensor::ExtractSliceOp>(bl.loc, origInit, outSlice.offsets, outSlice.sizes,
+                                                   outSlice.strides);
 }
 
 /// Recursively materialize a sliced version of `val`.
@@ -341,7 +344,7 @@ static Value materializeSliced(Value val, const SliceSpec &slice, const DenseSet
     }
 
     // REDUCE: pick the correct init (empty for parallel, seeded for reduction).
-    Value newInit = buildNewInit(gen, slice, newOutType, dynSizes, b, loc);
+    Value newInit = buildNewInit(gen, slice, newOutType, dynSizes, BuilderLoc{b, loc});
 
     // Clone the generic with the new inputs / init. Indexing maps and iterator
     // types are preserved - they are abstract over iter-space dims and remain

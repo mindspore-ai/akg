@@ -76,6 +76,7 @@ using mlir::OperationPass;
 using mlir::RewritePatternSet;
 using mlir::SmallVector;
 using mlir::Value;
+using mlir::affine::AKGDataCopyGenerationParams;
 
 /// Replaces all loads and stores on memref's living in 'slowMemorySpace' by
 /// introducing copy operations to transfer data into `fastMemorySpace` and
@@ -90,16 +91,14 @@ using mlir::Value;
 // are strided. Check for strided stores.
 struct AffineDataCopyGeneration : public mlir::affine::impl::AKGAffineDataCopyGenerationBase<AffineDataCopyGeneration> {
   AffineDataCopyGeneration() = default;
-  explicit AffineDataCopyGeneration(unsigned slowMemorySpace, unsigned fastMemorySpace, unsigned tagMemorySpace,
-                                    int minDmaTransferSize, uint64_t fastMemCapacityBytes, bool generateDmaArg,
-                                    bool skipNonUnitStrideLoopsArg) {
-    this->slowMemorySpace = slowMemorySpace;
-    this->fastMemorySpace = fastMemorySpace;
-    this->tagMemorySpace = tagMemorySpace;
-    this->minDmaTransferSize = minDmaTransferSize;
-    this->fastMemoryCapacity = fastMemCapacityBytes / 1024;
-    this->generateDma = generateDmaArg;
-    this->skipNonUnitStrideLoops = skipNonUnitStrideLoopsArg;
+  explicit AffineDataCopyGeneration(const AKGDataCopyGenerationParams &params) {
+    this->slowMemorySpace = params.slowMemorySpace;
+    this->fastMemorySpace = params.fastMemorySpace;
+    this->tagMemorySpace = params.tagMemorySpace;
+    this->minDmaTransferSize = params.minDmaTransferSize;
+    this->fastMemoryCapacity = params.fastMemCapacityBytes / 1024;
+    this->generateDma = params.generateDma;
+    this->skipNonUnitStrideLoops = params.skipNonUnitStrideLoops;
   }
 
   void runOnOperation() override;
@@ -116,12 +115,9 @@ struct AffineDataCopyGeneration : public mlir::affine::impl::AKGAffineDataCopyGe
 /// by the latter. Only load op's handled for now.
 namespace mlir {
 namespace affine {
-std::unique_ptr<OperationPass<mlir::func::FuncOp>> createAKGAffineDataCopyGenerationPass(
-  unsigned slowMemorySpace, unsigned fastMemorySpace, unsigned tagMemorySpace, int minDmaTransferSize,
-  uint64_t fastMemCapacityBytes, bool generateDmaArg, bool skipNonUnitStrideLoopsArg) {
-  return std::make_unique<AffineDataCopyGeneration>(slowMemorySpace, fastMemorySpace, tagMemorySpace,
-                                                    minDmaTransferSize, fastMemCapacityBytes, generateDmaArg,
-                                                    skipNonUnitStrideLoopsArg);
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGAffineDataCopyGenerationPass(
+  const AKGDataCopyGenerationParams &params) {
+  return std::make_unique<AffineDataCopyGeneration>(params);
 }
 std::unique_ptr<OperationPass<mlir::func::FuncOp>> createAKGAffineDataCopyGenerationPass() {
   return std::make_unique<AffineDataCopyGeneration>();

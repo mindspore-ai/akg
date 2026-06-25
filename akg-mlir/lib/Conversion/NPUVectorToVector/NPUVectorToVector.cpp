@@ -51,6 +51,19 @@ namespace {
 
 namespace npuv = mlir::npuvector;
 
+struct TileDesc {
+  npuv::NPUVectorType type;
+  ValueRange dynSizes;
+  Value source;
+};
+
+struct ReductionDesc {
+  npuv::ReductionOp redOp;
+  Type scalarElem;
+  Value idScalar;
+  Value c0;
+};
+
 // ===========================================================================
 // Register-width helpers (Step 3)
 // ===========================================================================
@@ -846,7 +859,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     // matching dynamicSizes operand (consumed in shape order).
     SmallVector<Value> bounds;
     bounds.reserve(rank);
-    if (failed(collectTileBounds(builder, loc, anchorType, anchorDynSizes, anchorSource, bounds))) {
+    TileDesc anchorDesc{anchorType, anchorDynSizes, anchorSource};
+    if (failed(collectTileBounds(builder, loc, anchorDesc, bounds))) {
       return failure();
     }
 
@@ -901,17 +915,17 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // `dynSizes` operand (consumed in shape order, e.g. from transfer_read) and,
   // failing that, a `memref.dim` of the backing `source` memref. `builder`
   // inserts the freshly created ops.
-  static LogicalResult collectTileBounds(OpBuilder &builder, Location loc, npuv::NPUVectorType type,
-                                         ValueRange dynSizes, Value source, SmallVectorImpl<Value> &bounds) {
-    ArrayRef<int64_t> shape = type.getShape();
+  static LogicalResult collectTileBounds(OpBuilder &builder, Location loc, TileDesc desc,
+                                         SmallVectorImpl<Value> &bounds) {
+    ArrayRef<int64_t> shape = desc.type.getShape();
     unsigned dynIdx = 0;
-    for (int64_t d = 0, rank = type.getRank(); d < rank; ++d) {
+    for (int64_t d = 0, rank = desc.type.getRank(); d < rank; ++d) {
       if (!ShapedType::isDynamic(shape[d])) {
         bounds.push_back(builder.create<arith::ConstantIndexOp>(loc, shape[d]));
-      } else if (dynIdx < dynSizes.size()) {
-        bounds.push_back(dynSizes[dynIdx++]);
-      } else if (source && llvm::isa<MemRefType>(source.getType())) {
-        bounds.push_back(builder.create<memref::DimOp>(loc, source, d));
+      } else if (dynIdx < desc.dynSizes.size()) {
+        bounds.push_back(desc.dynSizes[dynIdx++]);
+      } else if (desc.source && llvm::isa<MemRefType>(desc.source.getType())) {
+        bounds.push_back(builder.create<memref::DimOp>(loc, desc.source, d));
       } else {
         return failure();
       }
@@ -1027,13 +1041,13 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // op. Fall back to a scratch alloc when the kernel returns the scalar instead.
   // The seed (the op's existing acc or `idScalar`) is stored into the buffer and
   // the delivering store is reported back so the caller can drop it later.
-  static Value prepareAccumulatorBuffer(OpBuilder &builder, Location loc, npuv::ReductionOp redOp, Type scalarElem,
-                                        Value idScalar, Value c0, memref::StoreOp &deliveryStore) {
+  static Value prepareAccumulatorBuffer(OpBuilder &builder, Location loc, ReductionDesc desc,
+                                        memref::StoreOp &deliveryStore) {
     Value outBuf;
-    for (Operation *user : redOp.getResult().getUsers()) {
+    for (Operation *user : desc.redOp.getResult().getUsers()) {
       if (auto st = dyn_cast<memref::StoreOp>(user)) {
         auto mt = llvm::dyn_cast<MemRefType>(st.getMemRef().getType());
-        if (mt && mt.getRank() == 1 && mt.getElementType() == scalarElem) {
+        if (mt && mt.getRank() == 1 && mt.getElementType() == desc.scalarElem) {
           outBuf = st.getMemRef();
           deliveryStore = st;
           break;
@@ -1041,13 +1055,13 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
       }
     }
 
-    Value seedInit = redOp.getAcc() ? redOp.getAcc() : idScalar;
+    Value seedInit = desc.redOp.getAcc() ? desc.redOp.getAcc() : desc.idScalar;
     Value accBuf = outBuf;
     if (!accBuf) {
-      auto seedMemTy = MemRefType::get({1}, scalarElem);
+      auto seedMemTy = MemRefType::get({1}, desc.scalarElem);
       accBuf = builder.create<memref::AllocOp>(loc, seedMemTy);
     }
-    builder.create<memref::StoreOp>(loc, seedInit, accBuf, ValueRange{c0});
+    builder.create<memref::StoreOp>(loc, seedInit, accBuf, ValueRange{desc.c0});
     return accBuf;
   }
 
@@ -1082,7 +1096,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
 
     SmallVector<Value> bounds;
     bounds.reserve(rank);
-    if (failed(collectTileBounds(builder, loc, nvt, refRead.getDynamicSizes(), refRead.getSource(), bounds))) {
+    TileDesc readDesc{nvt, refRead.getDynamicSizes(), refRead.getSource()};
+    if (failed(collectTileBounds(builder, loc, readDesc, bounds))) {
       return failure();
     }
 
@@ -1092,7 +1107,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     TypedAttr idAttr = getCombiningIdentityAttr(builder, kind, scalarElem);
     Value idScalar = builder.create<arith::ConstantOp>(loc, idAttr);
     memref::StoreOp deliveryStore;
-    Value accBuf = prepareAccumulatorBuffer(builder, loc, redOp, scalarElem, idScalar, c0, deliveryStore);
+    ReductionDesc redDesc{redOp, scalarElem, idScalar, c0};
+    Value accBuf = prepareAccumulatorBuffer(builder, loc, redDesc, deliveryStore);
 
     // Build the loop nest with a vector<laneCountxT> iter_arg threaded through
     // every level; outer dims step 1, innermost step laneCount.
