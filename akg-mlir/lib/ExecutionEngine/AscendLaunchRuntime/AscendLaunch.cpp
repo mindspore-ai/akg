@@ -15,8 +15,6 @@
  */
 
 #include <dlfcn.h>
-#include <sys/syscall.h>
-#include <unistd.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -39,129 +37,6 @@ constexpr auto kTilingMemSize = 1024;
 constexpr auto kTilingSizeFuncName = "_get_tiling_struct_size_function";
 constexpr auto kTilingFuncName = "_tiling_function";
 constexpr size_t kRuntimeArgCount = 6;
-constexpr uint16_t kMsprofReportDataMagicNum = 0x5a5a;
-constexpr uint16_t kMsprofReportNodeLevel = 10000;
-constexpr uint32_t kMsprofReportNodeBasicInfoType = 0;
-constexpr uint32_t kMsprofReportNodeLaunchType = 5;
-constexpr uint32_t kMsprofGeTaskTypeAiCore = 0;
-constexpr uint32_t kMsprofCompactInfoDataLength = 40;
-
-struct AkgMsprofApi {
-  uint16_t magicNumber;
-  uint16_t level;
-  uint32_t type;
-  uint32_t threadId;
-  uint32_t reserve;
-  uint64_t beginTime;
-  uint64_t endTime;
-  uint64_t itemId;
-};
-
-#pragma pack(push, 1)
-struct AkgMsprofNodeBasicInfo {
-  uint64_t opName;
-  uint32_t taskType;
-  uint64_t opType;
-  uint32_t blockDim;
-  uint32_t opFlag;
-};
-#pragma pack(pop)
-
-struct AkgMsprofCompactInfo {
-  uint16_t magicNumber;
-  uint16_t level;
-  uint32_t type;
-  uint32_t threadId;
-  uint32_t dataLen;
-  uint64_t timeStamp;
-  union {
-    uint8_t info[kMsprofCompactInfoDataLength];
-    AkgMsprofNodeBasicInfo nodeBasicInfo;
-  } data;
-};
-
-using MsprofSysCycleTimeFunc = uint64_t (*)();
-using MsprofGetHashIdFunc = uint64_t (*)(const char *, size_t);
-using MsprofReportApiFunc = int32_t (*)(uint32_t, const AkgMsprofApi *);
-using MsprofReportCompactInfoFunc = int32_t (*)(uint32_t, const void *, uint32_t);
-
-struct AkgMsprofReporter {
-  MsprofSysCycleTimeFunc sys_cycle_time{nullptr};
-  MsprofGetHashIdFunc get_hash_id{nullptr};
-  MsprofReportApiFunc report_api{nullptr};
-  MsprofReportCompactInfoFunc report_compact_info{nullptr};
-
-  bool IsAvailable() const {
-    return sys_cycle_time != nullptr && get_hash_id != nullptr && report_api != nullptr &&
-           report_compact_info != nullptr;
-  }
-};
-
-void *LoadMsprofSymbol(const char *symbol) {
-  void *func = dlsym(RTLD_DEFAULT, symbol);
-  if (func != nullptr) {
-    return func;
-  }
-  const char *libs[] = {"libmsprofiler.so", "libprofapi.so", "libascendcl.so"};
-  for (auto lib : libs) {
-    void *handle = dlopen(lib, RTLD_LAZY | RTLD_LOCAL);
-    if (handle == nullptr) {
-      continue;
-    }
-    func = dlsym(handle, symbol);
-    if (func != nullptr) {
-      return func;
-    }
-  }
-  return nullptr;
-}
-
-const AkgMsprofReporter &GetAkgMsprofReporter() {
-  static AkgMsprofReporter reporter;
-  static std::once_flag once;
-  std::call_once(once, []() {
-    reporter.sys_cycle_time = reinterpret_cast<MsprofSysCycleTimeFunc>(LoadMsprofSymbol("MsprofSysCycleTime"));
-    reporter.get_hash_id = reinterpret_cast<MsprofGetHashIdFunc>(LoadMsprofSymbol("MsprofGetHashId"));
-    reporter.report_api = reinterpret_cast<MsprofReportApiFunc>(LoadMsprofSymbol("MsprofReportApi"));
-    reporter.report_compact_info =
-      reinterpret_cast<MsprofReportCompactInfoFunc>(LoadMsprofSymbol("MsprofReportCompactInfo"));
-  });
-  return reporter;
-}
-
-void ReportAkgDynamicLaunch(const std::string &kernel_name, uint64_t block_num, uint64_t begin_time,
-                            uint64_t end_time) {
-  const auto &reporter = GetAkgMsprofReporter();
-  if (!reporter.IsAvailable()) {
-    return;
-  }
-  auto thread_id = static_cast<uint32_t>(syscall(SYS_gettid));
-  auto op_name = reporter.get_hash_id(kernel_name.c_str(), kernel_name.size());
-
-  AkgMsprofApi api{};
-  api.magicNumber = kMsprofReportDataMagicNum;
-  api.level = kMsprofReportNodeLevel;
-  api.type = kMsprofReportNodeLaunchType;
-  api.threadId = thread_id;
-  api.beginTime = begin_time;
-  api.endTime = end_time;
-  api.itemId = op_name;
-  reporter.report_api(0, &api);
-
-  AkgMsprofCompactInfo node_basic_info{};
-  std::memset(node_basic_info.data.info, 0, sizeof(node_basic_info.data.info));
-  node_basic_info.magicNumber = kMsprofReportDataMagicNum;
-  node_basic_info.level = kMsprofReportNodeLevel;
-  node_basic_info.type = kMsprofReportNodeBasicInfoType;
-  node_basic_info.threadId = thread_id;
-  node_basic_info.timeStamp = end_time;
-  node_basic_info.data.nodeBasicInfo.opName = op_name;
-  node_basic_info.data.nodeBasicInfo.taskType = kMsprofGeTaskTypeAiCore;
-  node_basic_info.data.nodeBasicInfo.opType = op_name;
-  node_basic_info.data.nodeBasicInfo.blockDim = static_cast<uint32_t>(block_num);
-  node_basic_info.data.nodeBasicInfo.opFlag = 0;
-  reporter.report_compact_info(0, &node_basic_info, sizeof(AkgMsprofCompactInfo));
-}
 
 class AscendLaunchTilingMemory {
  public:
@@ -429,16 +304,17 @@ std::vector<void *> InitKernelArgs(const py::args &args, uint64_t tiling_func = 
   return runtimeargs;
 }
 
-void Launch(uint64_t kernel_func, uint64_t tiling_func, uint64_t tiling_size, uint64_t block_num, uint64_t stream,
-            bool is_dynamic, const py::args &args) {  // NOLINT(readability-function-size)
+void Launch(const std::string &func_name, uint64_t kernel_func, uint64_t tiling_func, uint64_t tiling_size,
+            uint64_t block_num, uint64_t stream, bool is_dynamic,
+            const py::args &args) {  // NOLINT(readability-function-size)
   auto runtimeargs = InitKernelArgs(args, tiling_func, tiling_size);
-  mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+  mlir::runtime::KernelLaunch(func_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
 }
 
-void Launch(uint64_t kernel_func, uint64_t block_num, uint64_t stream, bool is_dynamic,
+void Launch(const std::string &func_name, uint64_t kernel_func, uint64_t block_num, uint64_t stream, bool is_dynamic,
             const py::args &args) {  // NOLINT(readability-function-size)
   auto runtimeargs = InitKernelArgs(args);
-  mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+  mlir::runtime::KernelLaunch(func_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
 }
 
 void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kernel_func, uint64_t tiling_func,
@@ -448,7 +324,7 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
   static void *torch_run_func = nullptr;
   if (torch_run_func == nullptr) {
     if (torch_path.empty()) {
-      mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+      mlir::runtime::KernelLaunch(kernel_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
       return;
     }
     std::string so_path = torch_path + "/lib/libtorch_npu.so";
@@ -460,12 +336,7 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
   }
 
   auto launch_call = [kernel_name, kernel_func, block_num, stream, runtimeargs, is_dynamic] {
-    const auto &reporter = GetAkgMsprofReporter();
-    uint64_t begin_time = (is_dynamic && reporter.IsAvailable()) ? reporter.sys_cycle_time() : 0;
-    mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
-    if (is_dynamic && reporter.IsAvailable()) {
-      ReportAkgDynamicLaunch(kernel_name, block_num, begin_time, reporter.sys_cycle_time());
-    }
+    mlir::runtime::KernelLaunch(kernel_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
     return 0;
   };
   reinterpret_cast<TorchRunFunc>(torch_run_func)(kernel_name.c_str(), launch_call);
@@ -482,9 +353,11 @@ PYBIND11_MODULE(ascend_launch, m) {
   m.def("akg_ascend_run", &akg_ascend_run);
   m.def("get_host_functions", &GetHostFunctions);
   m.def("get_device_function", &mlir::runtime::GetKernelFunction);
-  m.def("launch", py::overload_cast<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
+  m.def("launch",
+        py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool,
+                          const py::args &>(&Launch),
         "Launch kernel with tiling support");
-  m.def("launch", py::overload_cast<uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
+  m.def("launch", py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
         "Launch kernel without tiling support");
   m.def("torch_launch", &TorchLaunch, "Launch kernel for torch_npu");
 }
