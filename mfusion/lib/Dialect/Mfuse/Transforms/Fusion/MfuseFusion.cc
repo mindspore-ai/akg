@@ -37,6 +37,9 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
     std::vector<std::pair<const char *, PassCreator>> passes = {
+      // Must run before fuse-num-to-tensor so scalar binary operands are not materialized as mfuse.full.
+      {"mfuse-canonicalize-binary-scalar-operands",
+       []() { return createCanonicalizeBinaryScalarOperandsPass(); }},
       // Conv-related fusion passes:
       {"fuse-biasadd-conv", []() { return createFuseBiasaddConvPass(); }},
       {"fuse-conv2d-cast", []() { return createFuseConv2DCastPass(); }},
