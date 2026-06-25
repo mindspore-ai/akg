@@ -399,10 +399,14 @@ func.func @test_le_f64(%arg0: tensor<2x2xf64>, %arg1: tensor<2x2xf64>) -> tensor
   return %0 : tensor<2x2xi1>
 }
 
-// mfuse.aclnn.mm: trans_x1/trans_x2 -> discardable attrs on torch.aten.mm (for FX export / DVM trans_a/trans_b).
+// mfuse.aclnn.mm in a normal graph: residual trans_x2 lowers to an explicit permute.
 // CHECK-LABEL: func.func @test_aclnn_mm_trans_b
 func.func @test_aclnn_mm_trans_b(%arg0: tensor<2x4xf32>, %arg1: tensor<8x4xf32>) -> tensor<2x8xf32> {
-  // CHECK: torch.aten.mm{{.*}}dvm_trans_b = true
+  // CHECK-DAG: %[[MMTB_C1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[MMTB_C0:.*]] = torch.constant.int 0
+  // CHECK: %[[MMTB_PERM:.*]] = torch.prim.ListConstruct %[[MMTB_C1]], %[[MMTB_C0]]
+  // CHECK: %[[MMTB_RHS:.*]] = torch.aten.permute %arg1, %[[MMTB_PERM]]
+  // CHECK: torch.aten.mm %arg0, %[[MMTB_RHS]]
   %0 = mfuse.aclnn.mm %arg0, %arg1 {trans_x2 = true} : (tensor<2x4xf32>, tensor<8x4xf32>) -> tensor<2x8xf32>
   return %0 : tensor<2x8xf32>
 }

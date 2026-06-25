@@ -355,7 +355,7 @@ struct ConvertMfuseToTorchPass : public mlir::OperationPass<mlir::ModuleOp> {
 
   mlir::Pass::Option<std::string> kernelGenerator{
     *this, "kernel-generator",
-    llvm::cl::desc("Kernel backend: dvm (transpose as attrs on mm) or akg/bisheng (permute before mm)."),
+    llvm::cl::desc("Kernel backend: dvm copied subgraphs use dvm_trans attrs; other contexts use permute."),
     llvm::cl::init("dvm")};
 
   std::unique_ptr<mlir::Pass> clonePass() const override {
