@@ -26,7 +26,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_LEGALIZETYPEFORASCEND
@@ -199,7 +199,7 @@ struct ExtSIOpPattern : public OpRewritePattern<arith::ExtSIOp> {
     Value in = op.getIn();
     Type inTy = in.getType();
     Type outTy = op.getResult().getType();
-    if (!inTy.isInteger(8) || !outTy.isInteger(64)) {
+    if (!inTy.isInteger(kI8BitWidth) || !outTy.isInteger(kI64BitWidth)) {
       return failure();
     }
     Value i64Val = convertI8ExtSiToI64(rewriter, op.getLoc(), in);
@@ -218,7 +218,7 @@ struct BitcastOpPattern : public OpRewritePattern<arith::BitcastOp> {
       return success();
     }
     auto resType = bitcastOp.getResult().getType();
-    if (isa<Float32Type>(value.getType()) && resType.getIntOrFloatBitWidth() == 16) {
+    if (isa<Float32Type>(value.getType()) && resType.getIntOrFloatBitWidth() == kI16BitWidth) {
       Value bf16Value = convertWideFPToBF16(rewriter, bitcastOp.getLoc(), value);
       rewriter.replaceOpWithNewOp<arith::BitcastOp>(bitcastOp, resType, bf16Value);
     }

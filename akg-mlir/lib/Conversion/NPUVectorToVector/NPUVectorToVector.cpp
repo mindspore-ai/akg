@@ -23,6 +23,7 @@
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
+#include "akg/Utils/Constants.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -117,10 +118,10 @@ static unsigned elemByteWidth(Type elemType) {
     return 0;
   }
   unsigned bitWidth = elemType.getIntOrFloatBitWidth();
-  if (bitWidth < 8) {
+  if (bitWidth < kBitsPerByte) {
     return 0;
   }
-  return bitWidth / 8;
+  return bitWidth / kBitsPerByte;
 }
 
 // Compute one lane count for the whole vf kernel so that every dynamic

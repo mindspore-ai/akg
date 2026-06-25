@@ -31,7 +31,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_AFFINEITERATORCONVERSION
@@ -195,7 +195,7 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, Ite
 
   auto newLoop = cast<affine::AffineForOp>(*replacement.loop.replaceWithAdditionalYields(
     rewriter, replacement.initVal.getResult(),
-    /*replaceInitOperandUsesInLoop=*/false,
+    /* replaceInitOperandUsesInLoop= */ false,
     [&storeIf, &replacement](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
       if (!storeIf) {
         return SmallVector<Value>{replacement.storeOp.getValue()};
@@ -205,7 +205,7 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, Ite
       nested.setInsertionPoint(storeIf);
 
       auto newIf = nested.create<affine::AffineIfOp>(storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
-                                                     storeIf->getOperands(), /*withElseRegion=*/true);
+                                                     storeIf->getOperands(), /* withElseRegion= */ true);
 
       Block *oldThen = storeIf.getThenBlock();
       Block *newThen = newIf.getThenBlock();

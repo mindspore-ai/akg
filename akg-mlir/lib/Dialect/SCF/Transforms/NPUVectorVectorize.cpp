@@ -86,7 +86,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace scf {
@@ -411,7 +411,7 @@ static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
 
 /// True when `defOp` is a binary op whose lhs/rhs references the reduction carry (`iter_arg`).
 static bool binaryReductionUsesIterArg(Operation *defOp, Value iterArg) {
-  return (defOp != nullptr) && defOp->getNumOperands() >= 2 &&
+  return (defOp != nullptr) && defOp->getNumOperands() >= kBinaryOpOperandCount &&
          (defOp->getOperand(0) == iterArg || defOp->getOperand(1) == iterArg);
 }
 
@@ -2337,7 +2337,7 @@ static bool tryRecognizeIVDependentSlice(Value condition, Value inductionVar, Co
 }
 
 static memref::StoreOp findUniqueStoreConsumer(scf::IfOp ifOp) {
-  if (ifOp.getNumResults() != 1) {
+  if (ifOp.getNumResults() != kUnaryOpOperandCount) {
     return nullptr;
   }
   Value result = ifOp.getResult(0);
@@ -2579,7 +2579,6 @@ static LogicalResult handleArithOrMathOp(Operation &op, LoopVectorizationCtx &ct
 
 static LogicalResult handleIfOp(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   Value vecIfResult = vectorizeIf(ifOp, ctx);
-
   if (!vecIfResult && ifOp.getNumResults() > 0) {
     memref::StoreOp consumer = findUniqueStoreConsumer(ifOp);
     if (consumer && ctx.absorbedOps.contains(consumer.getOperation())) {
@@ -3040,8 +3039,9 @@ static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, Loo
 
   FailureOr<ScratchTileMeta> meta = buildScratchTileMeta(*norm, rootType, vdo, ctx);
   if (failed(meta)) {
-    storeOp.emitError("npuvector-vectorize: virtual scratch forwarding requires scratch indices "
-                      "mapped to vector axes to be direct scf.for induction variables with constant lower bounds");
+    storeOp.emitError(
+      "npuvector-vectorize: virtual scratch forwarding requires scratch indices "
+      "mapped to vector axes to be direct scf.for induction variables with constant lower bounds");
     return failure();
   }
   ctx.allocBypass[root] = vectorValue;
@@ -3080,8 +3080,7 @@ static bool computeScratchSliceProjection(const ScratchTileMeta &meta, const Nor
     int axis = std::get<1>(cd);
     int64_t lb = std::get<2>(cd);
     auto axisIt = llvm::find(meta.tileAxisOrder, axis);
-    if (axisIt == meta.tileAxisOrder.end() || allocDim < 0 ||
-        allocDim >= static_cast<int>(norm.rootIndices.size())) {
+    if (axisIt == meta.tileAxisOrder.end() || allocDim < 0 || allocDim >= static_cast<int>(norm.rootIndices.size())) {
       return false;
     }
     unsigned tileDim = static_cast<unsigned>(std::distance(meta.tileAxisOrder.begin(), axisIt));
@@ -3343,7 +3342,6 @@ static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx) 
 
     for (Value operand : originalYieldOp.getOperands()) {
       Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
-
       if (!vecOperand || !mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
         Value valueToBroadcast = vecOperand ? vecOperand : operand;
 
@@ -4530,7 +4528,7 @@ static LogicalResult expandVF1BackwardClosure(Value root, DenseSet<Operation *> 
     if (def == nullptr || isa<arith::ConstantOp>(def)) {
       continue;
     }
-    if (isa<memref::LoadOp>(def) || def->getNumRegions() != 0 || def->getNumResults() != 1 ||
+    if (isa<memref::LoadOp>(def) || def->getNumRegions() != 0 || def->getNumResults() != kUnaryOpOperandCount ||
         def->hasAttr(kSkipVectorizeAttr)) {
       return failure();
     }
@@ -4609,8 +4607,9 @@ static bool hasRankZeroNpuVectorOperand(Operation *op) {
 }
 
 static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
-  if (!isArithOrMathOp(op) || op->getNumRegions() != 0 || op->getNumResults() != 1 || op->getNumOperands() == 0 ||
-      hasIndexResult(*op) || op->hasAttr(kSkipVectorizeAttr) || isa<arith::ConstantOp>(op)) {
+  if (!isArithOrMathOp(op) || op->getNumRegions() != 0 || op->getNumResults() != kUnaryOpOperandCount ||
+      op->getNumOperands() == 0 || hasIndexResult(*op) || op->hasAttr(kSkipVectorizeAttr) ||
+      isa<arith::ConstantOp>(op)) {
     return Vf1ChainPromotionResult::Skipped;
   }
   if (mlir::isa<npuvector::NPUVectorType>(op->getResult(0).getType())) {

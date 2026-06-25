@@ -36,7 +36,7 @@
 #include "mlir/Dialect/GPU/Transforms/Utils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IntegerSet.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AFFINEHANDLEBOUNDARYIFRESTORE

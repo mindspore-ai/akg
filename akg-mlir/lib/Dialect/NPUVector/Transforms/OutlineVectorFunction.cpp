@@ -24,6 +24,7 @@
 
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Utils/AnalysisForNpu.hpp"
+#include "akg/Utils/Constants.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -88,7 +89,7 @@ static FailureOr<int64_t> getUbAlignment(func::FuncOp parentFunc, Type elemType)
   }
 
   unsigned bitWidth = elemType.getIntOrFloatBitWidth();
-  unsigned byteWidth = std::max(1u, bitWidth / 8);
+  unsigned byteWidth = std::max(1u, bitWidth / kBitsPerByte);
   int64_t alignment = vectorWidth / static_cast<int64_t>(byteWidth);
   return alignment > 0 ? alignment : int64_t{1};
 }

@@ -36,7 +36,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace affine {
@@ -127,7 +127,7 @@ struct AffineReductionAnnotation : public affine::impl::AffineReductionAnnotatio
 }  // namespace
 
 bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
-  if (op->getNumOperands() != 2 || op->getNumResults() != 1) {
+  if (op->getNumOperands() != kBinaryOpOperandCount || op->getNumResults() != kUnaryOpOperandCount) {
     return false;
   }
   if (getParentAffineLoop(op) == nullptr) {

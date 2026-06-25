@@ -37,7 +37,7 @@
 
 #include "akg/Dialect/NPUVector/Passes.h"
 #include "akg/Utils/AnalysisCommon.hpp"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace npuvector {

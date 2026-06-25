@@ -36,7 +36,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace autotiling {
@@ -3672,7 +3672,7 @@ bool tryBuildSmallMathLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &p
   }
   initWholeBandPlan(ctx, plan);
   alignPlanTiles(ctx, plan);
-  SmallVector<int64_t, 6> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
   if (!fitsVectorUb(ctx, axisTiles)) {
     return false;
   }
@@ -3892,8 +3892,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     BandTilePlan bandPlan;
     bool matched = tryBuildTransposePlan(bandCtx, bandPlan) || tryBuildSmallMathLimitedCorePlan(bandCtx, bandPlan) ||
                    tryBuildReductionSuffixPlan(bandCtx, bandPlan) || tryBuildBroadcastSuffixPlan(bandCtx, bandPlan) ||
-                   tryBuildElementwisePlan(bandCtx, bandPlan) ||
-                   tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
+                   tryBuildElementwisePlan(bandCtx, bandPlan) || tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
@@ -4340,7 +4339,6 @@ void ParallelStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
   }
   // Check if this is a dynamic shape scenario
   bool isDynamicShape = hasDynamicAxis(axes);
-
   if (isDynamicShape) {
     // Dynamic shape: simplified parallel tiling
     // Parallel constraint = vectorization upper bound * coreNum

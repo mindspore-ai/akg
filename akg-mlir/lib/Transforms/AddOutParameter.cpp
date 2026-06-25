@@ -32,7 +32,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 #define DEBUG_TYPE "add-out-parameter"
 

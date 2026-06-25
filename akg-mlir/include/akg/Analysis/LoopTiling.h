@@ -29,7 +29,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 using llvm::DenseMap;
 using llvm::SmallVector;
@@ -79,8 +79,7 @@ using TilingMetadataMap = DenseMap<int64_t, TilingMetadata>;
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape = false);
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
-                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
-                                    TilingMetadata *metadata);
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape, TilingMetadata *metadata);
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
                                     TilingMetadataMap *metadataByKey);

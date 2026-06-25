@@ -53,7 +53,7 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "akg/Dialect/Linalg/IR/LinalgExtOpsDialect.cpp.inc"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::linalg;     // NOLINT(build/namespaces)
