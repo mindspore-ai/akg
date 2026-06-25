@@ -27,6 +27,7 @@
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_VECTORTRANSFERLOWER
@@ -49,6 +50,7 @@ using mlir::DialectRegistry;
 using mlir::failed;
 using mlir::failure;
 using mlir::isa;
+using mlir::kBoolBitWidth;
 using mlir::LogicalResult;
 using mlir::MLIRContext;
 using mlir::OperationPass;
@@ -89,7 +91,7 @@ class AKGTransferWriteToVectorStoreLowering : public OpRewritePattern<vector::Tr
 
   LogicalResult matchAndRewrite(vector::TransferWriteOp op, PatternRewriter &rewriter) const override {
     rewriter.setInsertionPoint(op);
-    if (cast<VectorType>(op.getVector().getType()).getElementType().isInteger(1)) {
+    if (cast<VectorType>(op.getVector().getType()).getElementType().isInteger(kBoolBitWidth)) {
       return failure();
     }
     rewriter.replaceOpWithNewOp<vector::StoreOp>(op, op.getVector(), op.getSource(), op.getIndices());

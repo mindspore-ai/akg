@@ -22,6 +22,7 @@
 
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Utils/Constants.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -169,9 +170,7 @@ static bool refineReduction(npuvector::ReductionOp op) {
   if (reduceDimSet.size() != dimsAttr->size()) {
     return false;
   }
-  if (std::any_of(dimsAttr->begin(), dimsAttr->end(), [srcRank](int64_t dim) {
-        return dim < 0 || dim >= srcRank;
-      })) {
+  if (std::any_of(dimsAttr->begin(), dimsAttr->end(), [srcRank](int64_t dim) { return dim < 0 || dim >= srcRank; })) {
     return false;
   }
 
@@ -220,7 +219,7 @@ static bool isShapePreservingElementwiseOp(Operation *op) {
 }
 
 static bool refineShapePreservingElementwise(Operation *op) {
-  if (!isShapePreservingElementwiseOp(op) || op->getNumResults() != 1) {
+  if (!isShapePreservingElementwiseOp(op) || op->getNumResults() != kUnaryOpOperandCount) {
     return false;
   }
 

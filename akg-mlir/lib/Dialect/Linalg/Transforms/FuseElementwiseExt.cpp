@@ -25,7 +25,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_LINALGELEMENTWISEFUSIONEXT
@@ -189,7 +189,6 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     }
 
     ReassociationIndices foldedIterationSpaceDims = getDomainReassociation(indexingMap, foldedRangeDims);
-
     // Check that the folded iteration dims do not contain already processed
     // dims.
     if (llvm::any_of(foldedIterationSpaceDims,

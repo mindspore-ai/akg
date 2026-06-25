@@ -25,7 +25,7 @@
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/LoopFusionUtils.h"
 #include "mlir/Dialect/Affine/LoopFusionUtils.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace akg {

@@ -41,7 +41,7 @@
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace affine {
@@ -1387,7 +1387,6 @@ static LogicalResult vectorizeLoopNest(std::vector<SmallVector<AffineForOp, kSma
 
     return WalkResult::advance();
   });
-
   if (opVecResult.wasInterrupted()) {
     LLVM_DEBUG(dbgs() << "[early-vect]+++++ failed vectorization for: " << rootLoop << "\n");
     // Erase vector loop nest if it was created.

@@ -47,7 +47,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "akg/Utils/SmallVectorSize.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace affine {
@@ -69,6 +69,7 @@ using mlir::FrozenRewritePatternSet;
 using mlir::GreedyRewriteConfig;
 using mlir::GreedyRewriteStrictness;
 using mlir::isa;
+using mlir::kBytesPerKb;
 using mlir::kSmallVectorSizeFour;
 using mlir::OpBuilder;
 using mlir::Operation;
@@ -96,7 +97,7 @@ struct AffineDataCopyGeneration : public mlir::affine::impl::AKGAffineDataCopyGe
     this->fastMemorySpace = params.fastMemorySpace;
     this->tagMemorySpace = params.tagMemorySpace;
     this->minDmaTransferSize = params.minDmaTransferSize;
-    this->fastMemoryCapacity = params.fastMemCapacityBytes / 1024;
+    this->fastMemoryCapacity = params.fastMemCapacityBytes / kBytesPerKb;
     this->generateDma = params.generateDma;
     this->skipNonUnitStrideLoops = params.skipNonUnitStrideLoops;
   }
@@ -135,7 +136,7 @@ void AffineDataCopyGeneration::runOnBlock(Block *block, DenseSet<Operation *> &c
   }
 
   uint64_t fastMemCapacityBytes =
-    fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * 1024 : fastMemoryCapacity;
+    fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * kBytesPerKb : fastMemoryCapacity;
   mlir::affine::AffineCopyOptions copyOptions = {generateDma, slowMemorySpace, fastMemorySpace, tagMemorySpace,
                                                  fastMemCapacityBytes};
 
