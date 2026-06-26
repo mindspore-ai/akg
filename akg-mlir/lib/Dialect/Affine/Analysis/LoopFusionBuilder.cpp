@@ -435,7 +435,8 @@ bool MemRefDependenceGraphForFusion::areNonOverlappingSubviewStores(unsigned nod
         continue;
       }
       memref::SubViewOp sv;
-      Value base = affine::getSourceMemRef(writeOp.getMemRef(), /* hasSubView= */ nullptr, &sv);
+      // hasSubView: unused output parameter (pass nullptr).
+      Value base = affine::getSourceMemRef(writeOp.getMemRef(), nullptr, &sv);
       if (!sv) {
         continue;
       }
@@ -761,11 +762,13 @@ IntegerSet FusionGuard::buildCondSet(MLIRContext *ctx) const {
   if (offset != 0) {
     AffineExpr lowerCond = d0 - builder.getAffineConstantExpr(offset);
     AffineExpr upperCond = builder.getAffineConstantExpr(offset + boundValue - 1) - d0;
-    return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {lowerCond, upperCond}, /* eqFlags= */ {false, false});
+    // eqFlags: both constraints are inequalities (>=).
+    return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {lowerCond, upperCond}, {false, false});
   }
   AffineExpr condExpr = (kind == Kind::ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
                                                      : builder.getAffineConstantExpr(boundValue - 1) - d0;
-  return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {condExpr}, /* eqFlags= */ {false});
+  // eqFlags: single inequality constraint (>=).
+  return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {condExpr}, {false});
 }
 
 // Helper: check whether two loops have identical LB and step (UB may differ).
@@ -1011,6 +1014,24 @@ bool SubviewFusionHelper::buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionL
   return false;
 }
 
+// Scan `currentLoop`'s body for sibling AffineForOps. Sets `nextLevelFor` to
+// the main-chain inner for matching `expectedNext` (if any), counts all fors,
+// and returns false (side-branch detected) when the count exceeds the limit.
+static bool findNextLevelFor(affine::AffineForOp currentLoop, affine::AffineForOp expectedNext,
+                             affine::AffineForOp &nextLevelFor, unsigned &forCount) {
+  for (Operation &op : currentLoop.getBody()->without_terminator()) {
+    auto forOp = dyn_cast<affine::AffineForOp>(&op);
+    if (!forOp) {
+      continue;
+    }
+    forCount++;
+    if (forOp == expectedNext) {
+      nextLevelFor = forOp;
+    }
+  }
+  return forCount <= kMaxSiblingForLoops;
+}
+
 SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoopNestInfo &info) {
   SmallVector<CloneStage> stages;
 
@@ -1032,15 +1053,7 @@ SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoop
     affine::AffineForOp nextLevelFor;
     if (level + 1 < info.loopDepth) {
       unsigned forCount = 0;
-      for (Operation &op : currentLoop.getBody()->without_terminator()) {
-        if (auto forOp = dyn_cast<affine::AffineForOp>(&op)) {
-          forCount++;
-          if (forOp == info.loops[level + 1]) {
-            nextLevelFor = forOp;
-          }
-        }
-      }
-      if (forCount > kMaxSiblingForLoops) {
+      if (!findNextLevelFor(currentLoop, info.loops[level + 1], nextLevelFor, forCount)) {
         return {};  // side-branch for — bail out
       }
     }
@@ -1104,8 +1117,9 @@ void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages)
     Operation *anchorOp = nullptr;
 
     if (guardIV) {
+      // withElseRegion = false: no else block needed.
       auto ifOp = builder.create<affine::AffineIfOp>(targetLoop.getLoc(), condSet, ValueRange{guardIV},
-                                                     /* withElseRegion= */ false);
+                                                     false);
       anchorOp = ifOp;
       builder.setInsertionPointToStart(ifOp.getThenBlock());
     }
@@ -1209,10 +1223,12 @@ void SubviewFusionHelper::expandPrimaryLoopForOffset() {
   OpBuilder builder(body, body->begin());
   AffineExpr d0 = builder.getAffineDimExpr(kGuardDimIndex);
   AffineExpr condExpr = builder.getAffineConstantExpr(originalPrimaryUB - 1) - d0;
-  IntegerSet condSet = IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {condExpr}, /* eqFlags= */ {false});
+  // eqFlags: single inequality constraint (>=).
+  IntegerSet condSet = IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {condExpr}, {false});
 
+  // withElseRegion = false: no else block needed.
   auto ifOp = builder.create<affine::AffineIfOp>(innermostLoop.getLoc(), condSet, ValueRange{guardIV},
-                                                 /* withElseRegion= */ false);
+                                                 false);
   Block *thenBlock = ifOp.getThenBlock();
   for (auto *op : opsToGuard) {
     op->moveBefore(thenBlock->getTerminator());
@@ -2104,8 +2120,14 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     return 0;
   }
 
-  auto srcGroupTemplate = mdg.getGroup(plan.fusedGroup.from)->groupTemplate;
-  auto dstGroupTemplate = mdg.getGroup(plan.fusedGroup.to)->groupTemplate;
+  auto srcGroup = mdg.getGroup(plan.fusedGroup.from);
+  auto dstGroup = mdg.getGroup(plan.fusedGroup.to);
+  if (!srcGroup || !dstGroup) {
+    llvm::dbgs() << "srcGroup or dstGroup is nullptr\n";
+    return 0;
+  }
+  auto srcGroupTemplate = srcGroup->groupTemplate;
+  auto dstGroupTemplate = dstGroup->groupTemplate;
   bool isReduction =
     (srcGroupTemplate == OperatorTemplate::Reduction) || (dstGroupTemplate == OperatorTemplate::Reduction);
 
@@ -2182,6 +2204,30 @@ void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, Fusi
   }
 }
 
+// Resolve keepSrcDst for doFuse. Returns std::nullopt when src/dst group is
+// missing (caller should bail out), otherwise the resolved keepSrcDst value.
+static std::optional<bool> resolveKeepSrcDst(MemRefDependenceGraphForFusion &mdg, unsigned srcGroupId,
+                                             unsigned dstGroupId, const FusionLoopNestInfo &srcInfo,
+                                             const FusionLoopNestInfo &dstInfo) {
+  auto srcGroup = mdg.getGroup(srcGroupId);
+  auto dstGroup = mdg.getGroup(dstGroupId);
+  if (!srcGroup || !dstGroup) {
+    llvm::dbgs() << "srcGroup or dstGroup is nullptr\n";
+    return std::nullopt;
+  }
+  bool keepSrcDst = srcInfo.isPerfect || !dstInfo.isPerfect;
+  auto srcGroupTemplate = srcGroup->groupTemplate;
+  auto dstGroupTemplate = dstGroup->groupTemplate;
+  if (srcGroupTemplate == OperatorTemplate::Broadcast &&
+      dstGroupTemplate == OperatorTemplate::Broadcast &&
+      !srcInfo.isPerfect && dstInfo.isPerfect &&
+      dstInfo.loopDepth > srcInfo.loopDepth &&
+      dstInfo.perfectDepth > srcInfo.perfectDepth) {
+    keepSrcDst = true;
+  }
+  return keepSrcDst;
+}
+
 void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
                                  affine::AffineForOp dstAffineForOp, const FusionPlan &plan) {
   FusionLoopNestInfo srcInfo;
@@ -2210,17 +2256,12 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
 
   SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
-  bool keepSrcDst = srcInfo.isPerfect || !dstInfo.isPerfect;
 
-  auto srcGroupTemplate = mdg.getGroup(srcGroupId)->groupTemplate;
-  auto dstGroupTemplate = mdg.getGroup(dstGroupId)->groupTemplate;
-  if (srcGroupTemplate == OperatorTemplate::Broadcast &&
-      dstGroupTemplate == OperatorTemplate::Broadcast &&
-      !srcInfo.isPerfect && dstInfo.isPerfect &&
-      dstInfo.loopDepth > srcInfo.loopDepth &&
-      dstInfo.perfectDepth > srcInfo.perfectDepth) {
-        keepSrcDst = true;
+  auto keepSrcDstOpt = resolveKeepSrcDst(mdg, srcGroupId, dstGroupId, srcInfo, dstInfo);
+  if (!keepSrcDstOpt) {
+    return;
   }
+  bool keepSrcDst = *keepSrcDstOpt;
 
   if (keepSrcDst) {
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);

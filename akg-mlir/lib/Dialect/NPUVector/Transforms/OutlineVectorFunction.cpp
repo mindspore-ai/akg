@@ -53,6 +53,15 @@ namespace npuvector {
 
 namespace {
 
+// Index operands layout for NPUVector transfer ops: for each dimension, the
+// operand list carries two groups (sizes then maxSizes), so the total operand
+// count is 2 * rank. Used to slice out the per-dim size/maxSize operands.
+constexpr int kSizeGroupsPerRank = 2;
+
+// Maximum recursion depth when walking a value's def chain to extract vector
+// sizes. Prevents pathological / infinite traversal.
+constexpr int kMaxExtractDepth = 8;
+
 // (sizes, maxSizes) pair extracted from a vector value's def chain.
 // .first  = sizes
 // .second = maxSizes
@@ -306,10 +315,10 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
 
     SmallVector<Value> idxOpnds = collectIndexOperands(rd);
-    if (static_cast<int>(idxOpnds.size()) >= 2 * rank) {
+    if (static_cast<int>(idxOpnds.size()) >= kSizeGroupsPerRank * rank) {
       res.first.clear();
       for (int i = 0; i < rank; ++i) {
-        res.first.push_back(idxOpnds[idxOpnds.size() - 2 * rank + i]);
+        res.first.push_back(idxOpnds[idxOpnds.size() - kSizeGroupsPerRank * rank + i]);
       }
       if (res.second.empty()) {
         for (int i = 0; i < rank; ++i) {
@@ -325,13 +334,13 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
   static std::optional<VecSizesPair> extractFromGenericNpuVector(Operation *defOp, int rank) {
     SmallVector<Value> idxOpnds = collectIndexOperands(defOp);
-    if (static_cast<int>(idxOpnds.size()) < 2 * rank) {
+    if (static_cast<int>(idxOpnds.size()) < kSizeGroupsPerRank * rank) {
       return std::nullopt;
     }
 
     VecSizesPair res;
     for (int i = 0; i < rank; ++i) {
-      res.first.push_back(idxOpnds[idxOpnds.size() - 2 * rank + i]);
+      res.first.push_back(idxOpnds[idxOpnds.size() - kSizeGroupsPerRank * rank + i]);
     }
     for (int i = 0; i < rank; ++i) {
       res.second.push_back(idxOpnds[idxOpnds.size() - rank + i]);
@@ -340,7 +349,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   }
 
   static std::optional<VecSizesPair> tryExtractVecSizes(Value v, int depth = 0) {
-    if (depth > 8) {
+    if (depth > kMaxExtractDepth) {
       return std::nullopt;
     }
     auto vt = llvm::dyn_cast<mlir::npuvector::NPUVectorType>(v.getType());
@@ -679,9 +688,10 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   static void emitWriteToOutParam(const WriteToOutParamParams &params) {
     auto &[b, loc, retVal, outArg, info, c0] = params;
     if (info.isVector) {
-      unsigned rank = info.ubType.getRank();
+      unsigned rank = static_cast<unsigned>(info.ubType.getRank());
       SmallVector<Value> idx((rank != 0u) ? rank : 1u, c0);
-      b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, retVal, outArg, idx, /* mask= */ Value());
+      Value emptyMask;
+      b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, retVal, outArg, idx, emptyMask);
     } else {
       b.create<memref::StoreOp>(loc, retVal, outArg, ValueRange{c0});
     }
@@ -705,10 +715,11 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
                    [&b, loc](int64_t d) { return b.create<arith::ConstantIndexOp>(loc, d); });
     std::transform(bufShape.begin(), bufShape.end(), std::back_inserter(maxSizes),
                    [&b, loc](int64_t d) { return b.create<arith::ConstantIndexOp>(loc, d); });
-    unsigned rank = info.ubType.getRank();
+    unsigned rank = static_cast<unsigned>(info.ubType.getRank());
     SmallVector<Value> rIdx((rank != 0u) ? rank : 1u, c0);
-    return b.create<mlir::npuvector::TransferReadOp>(loc, info.vecType, ubBuf, rIdx, padding,
-                                                     /* mask= */ Value(), sizes, maxSizes);
+    Value emptyMask;
+    return b.create<mlir::npuvector::TransferReadOp>(loc, info.vecType, ubBuf, rIdx, padding, emptyMask, sizes,
+                                                     maxSizes);
   }
 
   LogicalResult convertReturnsToOutParams(func::FuncOp kernelFunc) {
@@ -972,9 +983,10 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     auto &ubRank = params.ubRank;
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
     SmallVector<Value> ubIndices((ubRank != 0u) ? ubRank : 1u, c0);
+    Value emptyMask;
     Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, origArg, gmIndices, padding,
-                                                                /* mask= */ Value(), dynSizes, maxSizes);
-    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, ubIndices, /* mask= */ Value());
+                                                                emptyMask, dynSizes, maxSizes);
+    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, ubIndices, emptyMask);
   }
 
   // Emit UB -> GM transfer after the call.  Mirrors `emitGmToUbCopy`: only the
@@ -996,9 +1008,10 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     Value c0p = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
     SmallVector<Value> ubIndices((ubRank != 0u) ? ubRank : 1u, c0p);
-    Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, ubBuf, ubIndices, padding,
-                                                                /* mask= */ Value(), dynSizes, maxSizes);
-    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, origArg, gmIndices, /* mask= */ Value());
+    Value emptyMask;
+    Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, ubBuf, ubIndices, padding, emptyMask,
+                                                                dynSizes, maxSizes);
+    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, origArg, gmIndices, emptyMask);
     builder.setInsertionPoint(callOp);
   }
 
@@ -1251,7 +1264,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     for (auto rd : readsToFix) {
       auto mt = llvm::dyn_cast<MemRefType>(rd.getSource().getType());
-      unsigned r = mt ? mt.getRank() : rd.getIndices().size();
+      unsigned r = mt ? mt.getRank() : static_cast<unsigned>(rd.getIndices().size());
       SmallVector<Value> newIdx(r, c0k);
       rd.getIndicesMutable().assign(newIdx);
 
@@ -1270,7 +1283,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
     for (auto wr : writesToFix) {
       auto mt = llvm::dyn_cast<MemRefType>(wr.getSource().getType());
-      unsigned r = mt ? mt.getRank() : wr.getIndices().size();
+      unsigned r = mt ? mt.getRank() : static_cast<unsigned>(wr.getIndices().size());
       SmallVector<Value> newIdx(r, c0k);
       wr.getIndicesMutable().assign(newIdx);
     }
@@ -1385,9 +1398,10 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
         b.setInsertionPoint(callOp);
         Value ubBuf = allocAtFuncStart(callOp, loc, vecArgBufType[k]);
         Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
-        unsigned rank = vecArgBufType[k].getRank();
+        unsigned rank = static_cast<unsigned>(vecArgBufType[k].getRank());
         SmallVector<Value> wIdx((rank != 0u) ? rank : 1u, c0);
-        b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, wIdx, /* mask= */ Value());
+        Value emptyMask;
+        b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, wIdx, emptyMask);
         newOperands[ai] = ubBuf;
       }
       callOp->setOperands(newOperands);
@@ -1431,8 +1445,9 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     auto mt = llvm::dyn_cast<MemRefType>(arg.getType());
     unsigned rank = mt ? static_cast<unsigned>(mt.getRank()) : 1u;
     SmallVector<Value> rIdx((rank != 0u) ? rank : 1u, c0k);
+    Value emptyMask;
     Value loaded =
-      kb.create<mlir::npuvector::TransferReadOp>(kloc, vt, arg, rIdx, padding, /* mask= */ Value(), sizes, maxSizes);
+      kb.create<mlir::npuvector::TransferReadOp>(kloc, vt, arg, rIdx, padding, emptyMask, sizes, maxSizes);
     arg.replaceAllUsesExcept(loaded, loaded.getDefiningOp());
     return success();
   }
