@@ -50,13 +50,10 @@ namespace akg {
 namespace utils {
 
 /* Device Info  */
-enum GpuMemScope {
-  // global
+enum class GpuMemScope {
   MEM_SCOPE_GM = 0,
-  // gpu
   MEM_SCOPE_SHARED,
   MEM_SCOPE_LOCAL,
-  // end
   MEM_SCOPE_BULK,
 };
 
@@ -69,7 +66,7 @@ constexpr auto kEnableParallelReduce = "gpu_parallel_reduce";
 constexpr auto kApplyReorderPass = "apply_reorder_pass";
 
 static constexpr int kDouble = 2;
-enum MappingLevel { MapGrid = 0, MapBlock = 1, Sequential = 2, Unknown = 3 };
+enum class MappingLevel { MapGrid = 0, MapBlock = 1, Sequential = 2, Unknown = 3 };
 
 /// Copied from AKG-TVM
 class GpuInfo {
@@ -83,8 +80,9 @@ class GpuInfo {
   }
 
   int64_t getMemoryLimitInScope(int scope_idx) {
-    if (scope_idx > (int)MEM_SCOPE_BULK) {
-      llvm::errs() << "scope_idx should be less than " << MEM_SCOPE_BULK << ", but got " << scope_idx << "\n";
+    if (scope_idx > static_cast<int>(GpuMemScope::MEM_SCOPE_BULK)) {
+      llvm::errs() << "scope_idx should be less than " << static_cast<int>(GpuMemScope::MEM_SCOPE_BULK) << ", but got "
+                   << scope_idx << "\n";
       return 0;
     }
 
@@ -110,7 +108,7 @@ class GpuInfo {
     initGpuMemoryLimit(device_type);
     initGpuComputeCapability(device_type);
   }
-  int64_t gpuMemLimit[MEM_SCOPE_BULK]{0};
+  int64_t gpuMemLimit[static_cast<int>(GpuMemScope::MEM_SCOPE_BULK)]{0};
   int numSm{80};
   int warpSize{32};
   int minElemForIoBound{2};
@@ -127,21 +125,21 @@ class GpuInfo {
     auto CollectLimit = [this, &device_type](const std::string &scope, GpuMemScope mem) {
       if (device_type == kV100Device) {
         if (scope == kSharedMem) {
-          gpuMemLimit[mem] = 48 * 1024;
+          gpuMemLimit[static_cast<int>(mem)] = 48 * 1024;
         } else if (scope == kRegMem) {
-          gpuMemLimit[mem] = 64 * 1024;
+          gpuMemLimit[static_cast<int>(mem)] = 64 * 1024;
         }
       } else if (device_type == kA100Device) {
         if (scope == kSharedMem) {
-          gpuMemLimit[mem] = 64 * 1024;
+          gpuMemLimit[static_cast<int>(mem)] = 64 * 1024;
         } else if (scope == kRegMem) {
-          gpuMemLimit[mem] = 64 * 1024;
+          gpuMemLimit[static_cast<int>(mem)] = 64 * 1024;
         }
       }
     };
-    CollectLimit(kSharedMem, MEM_SCOPE_SHARED);
-    CollectLimit(kRegMem, MEM_SCOPE_LOCAL);
-    gpuMemLimit[MEM_SCOPE_GM] = 0;
+    CollectLimit(kSharedMem, GpuMemScope::MEM_SCOPE_SHARED);
+    CollectLimit(kRegMem, GpuMemScope::MEM_SCOPE_LOCAL);
+    gpuMemLimit[static_cast<int>(GpuMemScope::MEM_SCOPE_GM)] = 0;
   }
 
   void initGpuComputeCapability(const std::string &device_type) {
@@ -218,7 +216,7 @@ class GpuCommonUtils {
       return;
     }
     mlir::memref::CopyOp targetCopyOp = nullptr;
-    funcOp->walk([&](mlir::memref::CopyOp op) {
+    funcOp->walk([&targetArg, &targetCopyOp](mlir::memref::CopyOp op) {
       if (op.getTarget() == targetArg) {
         targetCopyOp = op;
       }
@@ -247,7 +245,7 @@ class GpuCommonUtils {
       return;
     }
     mlir::memref::ExpandShapeOp targetExpandShape = nullptr;
-    (void)funcOp->walk([&](mlir::memref::ExpandShapeOp op) {
+    (void)funcOp->walk([&targetArg, &targetExpandShape](mlir::memref::ExpandShapeOp op) {
       if (op.getOperands()[0] == targetArg) {
         targetExpandShape = op;
       }

@@ -36,17 +36,18 @@
 #include "mlir/Dialect/GPU/Transforms/Utils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IntegerSet.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AFFINEHANDLEBOUNDARYIFRESTORE
 #define GEN_PASS_DECL_AFFINEHANDLEBOUNDARYIFRESTORE
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace akgglobal;  // NOLINT(build/namespaces)
-
-namespace {
 
 struct AffineHandleBoundaryIfRestore : public impl::AffineHandleBoundaryIfRestoreBase<AffineHandleBoundaryIfRestore> {
   AffineHandleBoundaryIfRestore() {}
@@ -56,17 +57,17 @@ struct AffineHandleBoundaryIfRestore : public impl::AffineHandleBoundaryIfRestor
   }
   void runOnOperation() override;
   std::pair<Operation *, Operation *> getBoundaryIf();
-  Operation *getInnerForOp(Operation *boundaryIf, const SmallVector<Value, 8> &relatedVars);
-  Operation *getInnerApplyOp(Operation *funcOp, const SmallVector<Operation *, 8> &relatedOps);
-  void collectRelatedOpsAndVars(Operation *op, SmallVector<Operation *, 8> &relatedOps,
-                                SmallVector<Value, 8> &relatedVars);
+  Operation *getInnerForOp(Operation *boundaryIf, const SmallVector<Value, kSmallVectorSizeEight> &relatedVars);
+  Operation *getInnerApplyOp(Operation *funcOp, const SmallVector<Operation *, kSmallVectorSizeEight> &relatedOps);
+  void collectRelatedOpsAndVars(Operation *op, SmallVector<Operation *, kSmallVectorSizeEight> &relatedOps,
+                                SmallVector<Value, kSmallVectorSizeEight> &relatedVars);
   bool isDeeper(Operation *const op1, const Operation *const op2);
   Operation *createFakeOuterLoop(OpBuilder &builder, Operation *funcOp);
 };
 
 std::pair<Operation *, Operation *> AffineHandleBoundaryIfRestore::getBoundaryIf() {
   Operation *keepArgs = nullptr;
-  getOperation()->walk([&](mindspore::KeepArgsOp op) {
+  getOperation()->walk([&keepArgs](mindspore::KeepArgsOp op) {
     if (op->hasAttr("BoundaryIf")) {
       keepArgs = op;
       WalkResult::interrupt();
@@ -84,12 +85,12 @@ std::pair<Operation *, Operation *> AffineHandleBoundaryIfRestore::getBoundaryIf
 }
 
 Operation *AffineHandleBoundaryIfRestore::getInnerForOp(Operation *boundaryIf,
-                                                        const SmallVector<Value, 8> &relatedVars) {
+                                                        const SmallVector<Value, kSmallVectorSizeEight> &relatedVars) {
   Operation *curOp = boundaryIf;
   while (curOp != nullptr) {
     if (auto forOp = dyn_cast<scf::ForOp>(curOp)) {
       if (std::any_of(relatedVars.begin(), relatedVars.end(),
-                      [&](Value arg) { return arg == forOp.getInductionVar(); })) {
+                      [&forOp](Value arg) { return arg == forOp.getInductionVar(); })) {
         return curOp;
       }
     }
@@ -98,9 +99,9 @@ Operation *AffineHandleBoundaryIfRestore::getInnerForOp(Operation *boundaryIf,
   return nullptr;
 }
 
-Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(Operation *funcOp,
-                                                          const SmallVector<Operation *, 8> &relatedOps) {
-  SmallVector<Operation *, 8> applyOps;
+Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(
+  Operation *funcOp, const SmallVector<Operation *, kSmallVectorSizeEight> &relatedOps) {
+  SmallVector<Operation *, kSmallVectorSizeEight> applyOps;
   for (auto op : relatedOps) {
     for (auto operand : op->getOperands()) {
       Operation *prev = operand.getDefiningOp();
@@ -111,8 +112,8 @@ Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(Operation *funcOp,
   }
 
   Operation *res = nullptr;
-  funcOp->walk([&](affine::AffineApplyOp apply) {
-    if (std::any_of(applyOps.begin(), applyOps.end(), [&](Operation *op) { return apply.getOperation() == op; })) {
+  funcOp->walk([&applyOps, &res](affine::AffineApplyOp apply) {
+    if (std::any_of(applyOps.begin(), applyOps.end(), [&apply](Operation *op) { return apply.getOperation() == op; })) {
       res = apply.getOperation();
     }
   });
@@ -136,8 +137,9 @@ bool AffineHandleBoundaryIfRestore::isDeeper(Operation *const op1, const Operati
   return false;
 }
 
-void AffineHandleBoundaryIfRestore::collectRelatedOpsAndVars(Operation *op, SmallVector<Operation *, 8> &relatedOps,
-                                                             SmallVector<Value, 8> &relatedVars) {
+void AffineHandleBoundaryIfRestore::collectRelatedOpsAndVars(
+  Operation *op, SmallVector<Operation *, kSmallVectorSizeEight> &relatedOps,
+  SmallVector<Value, kSmallVectorSizeEight> &relatedVars) {
   for (auto operand : op->getOperands()) {
     if (auto prevOp = operand.getDefiningOp()) {
       if (isa<arith::MulIOp>(prevOp) || isa<arith::AddIOp>(prevOp) || isa<arith::AndIOp>(prevOp) ||
@@ -168,7 +170,7 @@ Operation *AffineHandleBoundaryIfRestore::createFakeOuterLoop(OpBuilder &builder
                                                 builder.getIntegerAttr(builder.getIndexType(), 1));  // step
   auto fakeLoop = builder.create<mlir::scf::ForOp>(loc, lb, ub, step);
   Operation *end = nullptr;
-  fakeLoop.walk([&](scf::YieldOp op) { end = op.getOperation(); });
+  fakeLoop.walk([&end](scf::YieldOp op) { end = op.getOperation(); });
   auto curOp = fakeLoop.getOperation()->getNextNode();
   while ((curOp != nullptr) && !isa<scf::YieldOp>(curOp) && !isa<gpu::ReturnOp>(curOp)) {
     auto next = curOp->getNextNode();
@@ -182,7 +184,7 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
   auto m = getOperation();
   Operation *funcOp = nullptr;
 
-  m->walk([&](gpu::GPUFuncOp op) { funcOp = op.getOperation(); });
+  m->walk([&funcOp](gpu::GPUFuncOp op) { funcOp = op.getOperation(); });
 
   auto [boundaryIf, keepArgs] = getBoundaryIf();
   if (boundaryIf == nullptr) {
@@ -194,8 +196,8 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
     return;
   }
 
-  SmallVector<Operation *, 8> relatedOps;
-  SmallVector<mlir::Value, 8> relatedVars;
+  SmallVector<Operation *, kSmallVectorSizeEight> relatedOps;
+  SmallVector<mlir::Value, kSmallVectorSizeEight> relatedVars;
   collectRelatedOpsAndVars(boundaryIf, relatedOps, relatedVars);
   auto innerFor = getInnerForOp(boundaryIf, relatedVars);
   auto innerApply = getInnerApplyOp(funcOp, relatedOps);
@@ -208,12 +210,12 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
     innerFor = innerApply->getParentOp();
   }
 
-  SmallVector<Operation *, 16> moveOps;
+  SmallVector<Operation *, kSmallVectorSizeSixteen> moveOps;
   for (auto &op : dyn_cast<scf::ForOp>(boundaryIf->getParentOp()).getRegion().front()) {
     if ((&op) == boundaryIf || isa<scf::YieldOp>(op)) {
       continue;
     }
-    if (std::any_of(relatedOps.begin(), relatedOps.end(), [&](Operation *relatedOp) { return &op == relatedOp; })) {
+    if (std::any_of(relatedOps.begin(), relatedOps.end(), [&op](Operation *relatedOp) { return &op == relatedOp; })) {
       moveOps.push_back(&op);
     }
   }
@@ -256,6 +258,8 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
 
 }  // namespace
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAffineHandleBoundaryIfRestore() {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createAffineHandleBoundaryIfRestore() {
   return std::make_unique<AffineHandleBoundaryIfRestore>();
 }
+}  // namespace mlir

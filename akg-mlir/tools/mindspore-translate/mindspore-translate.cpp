@@ -23,5 +23,5 @@ using namespace mlir;  // NOLINT(build/namespaces)
 
 int main(int argc, char **argv) {
   registerToMindsporeDialectTranslation();
-  return (int)failed(mlirTranslateMain(argc, argv, "Akg Translation Testing Tool"));
+  return static_cast<int>(failed(mlirTranslateMain(argc, argv, "Akg Translation Testing Tool")));
 }

@@ -55,7 +55,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &ban
       auto body = loop.getBody();
       bool isBasicBlock = dyn_cast<affine::AffineForOp>(&body->front()) == nullptr;
       if (isBasicBlock) {
-        body->walk([&](Operation *op) {
+        body->walk([&loopNest, &initGraph](Operation *op) {
           auto node = std::make_shared<Node>(op, loopNest);
           initGraph->drawNode(node);
         });
@@ -116,7 +116,7 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
 
 void UniquePrimeCollect(Operation *op) {
   auto &tool = akgglobal::PrimeNumTool::getInstance();
-  op->walk([&](mlir::arith::ConstantOp constOp) {
+  op->walk([&tool](mlir::arith::ConstantOp constOp) {
     int constValue = 0;
     auto constValueAttr = constOp.getOperation()->getAttr("value");
     if (isa<IntegerAttr>(constValueAttr)) {
@@ -262,7 +262,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<scf::ForOp, 6>> &bands) {
       // Check if body's first operation is scf.for (nested loop) or not (basic block)
       bool isBasicBlock = dyn_cast<scf::ForOp>(&body->front()) == nullptr;
       if (isBasicBlock) {
-        body->walk([&](Operation *op) {
+        body->walk([&loopNest, &initGraph](Operation *op) {
           auto node = std::make_shared<Node>(op, loopNest);
           initGraph->drawNode(node);
         });

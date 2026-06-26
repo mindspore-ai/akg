@@ -32,6 +32,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_REMOVEREDUNDANTLOOPS
@@ -39,16 +40,16 @@ namespace mlir {
 #ifndef GEN_PASS_DECL_REMOVEREDUNDANTLOOPS
 #define GEN_PASS_DECL_REMOVEREDUNDANTLOOPS
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
 
 #define DEBUG_TYPE "remove-redundant-loops"
 
+namespace {
 using namespace mlir;  // NOLINT(build/namespaces)
 using namespace llvm;  // NOLINT(build/namespaces)
-
-namespace {
 
 // If the value of tripcount in the for loop is less than or equal to 1, the for loop runs only once.
 // This indicates that the for loop is redundant and needs to be deleted.
@@ -64,8 +65,8 @@ class RemoveRedundantLoops : public impl::RemoveRedundantLoopsBase<RemoveRedunda
 void RemoveRedundantLoops::runOnOperation() {
   func::FuncOp func = getOperation();
   OpBuilder b(func);
-  SmallVector<affine::AffineForOp, 8> redundantLoops;
-  func->walk([&](affine::AffineForOp forOp) {
+  SmallVector<affine::AffineForOp, kSmallVectorSizeEight> redundantLoops;
+  func->walk([&redundantLoops](affine::AffineForOp forOp) {
     // skipped for now
     // %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
     if (!forOp.getResults().empty()) {
@@ -116,6 +117,8 @@ void RemoveRedundantLoops::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createRemoveRedundantLoopsPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createRemoveRedundantLoopsPass() {
   return std::make_unique<RemoveRedundantLoops>();
 }
+}  // namespace mlir

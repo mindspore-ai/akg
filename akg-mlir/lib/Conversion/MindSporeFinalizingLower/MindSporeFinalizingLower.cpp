@@ -43,18 +43,49 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Conversion/Passes.h.inc"
+
 #endif
 }  // namespace mlir
 
-using namespace mlir;             // NOLINT(build/namespaces)
-using namespace mlir::tosa;       // NOLINT(build/namespaces)
-using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
+namespace {
+namespace arith = mlir::arith;
+namespace func = mlir::func;
+namespace linalg = mlir::linalg;
+namespace linalgExt = mlir::linalgExt;
+namespace math = mlir::math;
+namespace mindspore = mlir::mindspore;
+namespace shape = mlir::shape;
+namespace tensor = mlir::tensor;
+namespace tosa = mlir::tosa;
+using mlir::applyFullConversion;
+using mlir::ArrayRef;
+using mlir::cast;
+using mlir::ConversionPatternRewriter;
+using mlir::ConversionTarget;
+using mlir::DialectRegistry;
+using mlir::dyn_cast;
+using mlir::failed;
+using mlir::FunctionOpInterface;
+using mlir::kSmallVectorSizeFour;
+using mlir::Location;
+using mlir::LogicalResult;
+using mlir::MindSporeFinalizingLowerBase;
+using mlir::OpConversionPattern;
+using mlir::OperationPass;
+using mlir::OpRewritePattern;
+using mlir::PatternRewriter;
+using mlir::RewritePatternSet;
+using mlir::ShapedType;
+using mlir::SmallVector;
+using mlir::success;
+using mlir::Value;
+using mlir::ValueRange;
 class ConvertMindSporeConstOp : public OpRewritePattern<mindspore::ConstOp> {
  public:
   using OpRewritePattern<mindspore::ConstOp>::OpRewritePattern;
@@ -82,7 +113,7 @@ class ConvertMindSporeSliceOp : public OpRewritePattern<SourceOp> {
     // slice sizes, consists of dynSizes and staticSizes
     // Note: strided_SliceOp only own staticSizes
     SmallVector<int64_t> staticSizes;
-    SmallVector<Value, 4> dynSizes;
+    SmallVector<Value, kSmallVectorSizeFour> dynSizes;
     if (mindspore::Strided_SliceOp strided_SliceOp = dyn_cast<mindspore::Strided_SliceOp>(op.getOperation())) {
       starts = *(strided_SliceOp.getStart());
       strides = *(strided_SliceOp.getStrides());
@@ -138,17 +169,6 @@ class ConvertMindSporeReshapeOp : public OpConversionPattern<mindspore::ReshapeO
     return success();
   }
 };
-
-void mlir::populateMindSporeLowerPattern(RewritePatternSet &patterns) {
-  // clang-format off
-  (void)patterns.add<
-    ConvertMindSporeConstOp,
-    ConvertMindSporeReshapeOp
-  >(patterns.getContext());
-  // clang-format on
-  return;
-}
-
 struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSporeFinalizingLowerPass> {
  public:
   MindSporeFinalizingLowerPass() = default;
@@ -167,7 +187,6 @@ struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSp
     ConversionTarget target(getContext());
     FunctionOpInterface func = getOperation();
 
-    // Remove Tosa.
     target.addLegalDialect<tosa::TosaDialect, arith::ArithDialect, linalg::LinalgDialect, linalgExt::LinalgExtDialect,
                            tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();
@@ -180,13 +199,25 @@ struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSp
     // clang-format on
     mlir::populateMindSporeLowerPattern(patterns);
 
-    // finalizing Conversion
     if (failed(applyFullConversion(func, target, std::move(patterns)))) {
       signalPassFailure();
     }
   }
 };
+}  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMindSporeFinalizingLowerPass() {
+namespace mlir {
+void populateMindSporeLowerPattern(RewritePatternSet &patterns) {
+  // clang-format off
+  (void)patterns.add<
+    ConvertMindSporeConstOp,
+    ConvertMindSporeReshapeOp
+  >(patterns.getContext());
+  // clang-format on
+  return;
+}
+
+std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeFinalizingLowerPass() {
   return std::make_unique<MindSporeFinalizingLowerPass>();
 }
+}  // namespace mlir

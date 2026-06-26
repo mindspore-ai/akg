@@ -36,12 +36,14 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace affine {
 #define GEN_PASS_DECL_AFFINEREDUCTIONANNOTATION
 #define GEN_PASS_DEF_AFFINEREDUCTIONANNOTATION
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace affine
 
 using akgglobal::GpuScheduleTool;
@@ -125,7 +127,7 @@ struct AffineReductionAnnotation : public affine::impl::AffineReductionAnnotatio
 }  // namespace
 
 bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
-  if (op->getNumOperands() != 2 || op->getNumResults() != 1) {
+  if (op->getNumOperands() != kBinaryOpOperandCount || op->getNumResults() != kUnaryOpOperandCount) {
     return false;
   }
   if (getParentAffineLoop(op) == nullptr) {
@@ -161,7 +163,8 @@ static bool isSizeOneAffineForOp(Operation *op) {
   return (ub - lb == 1);
 }
 
-static void collectLoopInfo(Operation *curOp, SmallVector<bool, 8> &redFlags, SmallVector<bool, 8> &sizeOneFlags) {
+static void collectLoopInfo(Operation *curOp, SmallVector<bool, kSmallVectorSizeEight> &redFlags,
+                            SmallVector<bool, kSmallVectorSizeEight> &sizeOneFlags) {
   if (isa<affine::AffineForOp>(curOp)) {
     bool isSizeOne = isSizeOneAffineForOp(curOp);
     redFlags.push_back(curOp->hasAttr(kReductionLoopAttr));
@@ -169,8 +172,8 @@ static void collectLoopInfo(Operation *curOp, SmallVector<bool, 8> &redFlags, Sm
   }
 }
 
-static void collectLoopReductionFlags(Operation *redOp, SmallVector<bool, 8> &redFlags,
-                                      SmallVector<bool, 8> &sizeOneFlags) {
+static void collectLoopReductionFlags(Operation *redOp, SmallVector<bool, kSmallVectorSizeEight> &redFlags,
+                                      SmallVector<bool, kSmallVectorSizeEight> &sizeOneFlags) {
   Operation *curOp = redOp;
   while (curOp != nullptr) {
     collectLoopInfo(curOp, redFlags, sizeOneFlags);
@@ -201,8 +204,8 @@ static ReduceDirection computeReduceDirection(ArrayRef<bool> redFlags, ArrayRef<
 }
 
 static void updateSingleReductionOpAttrs(Operation *redOp, OpBuilder &builder) {
-  SmallVector<bool, 8> redFlags;
-  SmallVector<bool, 8> sizeOneFlags;
+  SmallVector<bool, kSmallVectorSizeEight> redFlags;
+  SmallVector<bool, kSmallVectorSizeEight> sizeOneFlags;
   collectLoopReductionFlags(redOp, redFlags, sizeOneFlags);
 
   SmallVector<mlir::Attribute> intAttrs;
@@ -214,7 +217,7 @@ static void updateSingleReductionOpAttrs(Operation *redOp, OpBuilder &builder) {
   redOp->setAttr(kReductionAxesStr, builder.getArrayAttr(intAttrs));
 
   ReduceDirection reduceDirection = computeReduceDirection(redFlags, sizeOneFlags);
-  redOp->setAttr(kReductionTypeStr, builder.getStringAttr(reduceDirectionMap.at(reduceDirection)));
+  redOp->setAttr(kReductionTypeStr, builder.getStringAttr(reduceDirectionMap.at(static_cast<int>(reduceDirection))));
   GpuScheduleTool::getInstance().setReduceDirection(static_cast<size_t>(reduceDirection));
 }
 
@@ -223,7 +226,7 @@ void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
   OpBuilder builder(funcOp);
   Block *funcBlock = &dyn_cast<FuncOp>(funcOp).getBody().front();
 
-  (void)funcOp->walk([&](Operation *op) {
+  (void)funcOp->walk([this, &builder, &funcBlock](Operation *op) {
     if (isReductionPattern(op)) {
       op->setAttr(kReductionAxesStr, builder.getArrayAttr({}));
       affine::AffineStoreOp initStoreOp = CommonUtils::getReduceInitOp(op, funcBlock);
@@ -233,12 +236,12 @@ void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
     }
   });
 
-  SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
+  SmallVector<Operation *, kSmallVectorSizeEight> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
   for (auto reduceLoop : reduceLoops) {
     reduceLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
   }
 
-  (void)funcOp->walk([&](Operation *redOp) {
+  (void)funcOp->walk([&builder](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
       updateSingleReductionOpAttrs(redOp, builder);
     }

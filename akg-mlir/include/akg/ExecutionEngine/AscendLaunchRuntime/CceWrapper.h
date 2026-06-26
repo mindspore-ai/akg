@@ -27,7 +27,10 @@
 #ifndef AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_CCEWRAPPER_H_
 #define AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_CCEWRAPPER_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <vector>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/CceAcl.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/SymbolsWrapper.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
@@ -43,14 +46,18 @@ class CceWrapper : public SymbolsWrapper {
   ~CceWrapper();
   bool LoadLibraries() override;
   bool UnLoadLibraries() override;
+  bool IsMsprofAvailable() const;
 
  private:
   CceWrapper();
   bool LoadAscendCL();
   bool LoadRuntime();
+  bool LoadMsprof();
+  void *FindMsprofSymbol(const char *symbol);
   static std::shared_ptr<CceWrapper> cce_wrapper_singleton_;
   void *ascendcl_handle_{nullptr};
   void *runtime_handle_{nullptr};
+  std::vector<void *> msprof_handles_;
 
  public:
   using aclrtSetCurrentContextFunc = int (*)(aclrtContext);
@@ -88,6 +95,10 @@ class CceWrapper : public SymbolsWrapper {
   using rtKernelLaunchFunc = int (*)(const void *, uint32_t, void *, uint32_t, rtSmDesc_t *, rtStream_t);
   using rtLaunchFunc = int (*)(const void *);
   using rtSetupArgumentFunc = int (*)(const void *, uint32_t, uint32_t);
+  using MsprofSysCycleTimeFunc = uint64_t (*)();
+  using MsprofGetHashIdFunc = uint64_t (*)(const char *, size_t);
+  using MsprofReportApiFunc = int32_t (*)(uint32_t, const void *);
+  using MsprofReportCompactInfoFunc = int32_t (*)(uint32_t, const void *, uint32_t);
 
   // kernel launch
   DEFINE_FUNC_PTR(aclrtSetCurrentContext);
@@ -126,6 +137,12 @@ class CceWrapper : public SymbolsWrapper {
   DEFINE_FUNC_PTR(rtKernelLaunch);
   DEFINE_FUNC_PTR(rtLaunch);
   DEFINE_FUNC_PTR(rtSetupArgument);
+
+  // msprof report
+  DEFINE_FUNC_PTR(MsprofSysCycleTime);
+  DEFINE_FUNC_PTR(MsprofGetHashId);
+  DEFINE_FUNC_PTR(MsprofReportApi);
+  DEFINE_FUNC_PTR(MsprofReportCompactInfo);
 };
 
 }  // namespace runtime

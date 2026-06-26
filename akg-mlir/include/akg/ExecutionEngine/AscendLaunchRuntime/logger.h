@@ -18,5 +18,9 @@
 #define AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_LOGGER_H_
 #define GLOG_USE_GLOG_EXPORT
 #include <glog/logging.h>
+namespace mlir {
+namespace runtime {
 void akg_log_init(void);
+}  // namespace runtime
+}  // namespace mlir
 #endif  // AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_LOGGER_H_

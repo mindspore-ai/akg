@@ -40,6 +40,12 @@ namespace mlir {
 
 static constexpr const int kVectorSizeFour = 4;
 
+struct CopyElisionOps {
+  Operation *srcDeallocOp;
+  Operation *destDefOp;
+  Operation *lastOpOfCurrentRegion;
+};
+
 // ===----------------------------------------------------------------------=== //
 // CopyElisionPass
 // ===----------------------------------------------------------------------=== //
@@ -74,6 +80,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 
   CopyElisionPass() = default;
   CopyElisionPass(const CopyElisionPass &pass) = default;
+  CopyElisionPass &operator=(const CopyElisionPass &) = default;
 
  private:
   /// Returns the allocation operation for `value` if it exists.
@@ -93,7 +100,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   /// nullptr otherwise.
   [[nodiscard]] Operation *getDeallocationOp(const Value &value) const {
     auto valueUsers = value.getUsers();
-    auto it = llvm::find_if(valueUsers, [&](Operation *op) {
+    auto it = llvm::find_if(valueUsers, [](Operation *op) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
       return effects && effects.hasEffect<MemoryEffects::Free>();
     });
@@ -122,7 +129,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       // internal operations may have the side effect `EffectType` on
       // `val`.
       for (Region &region : op->getRegions()) {
-        auto walkResult = region.walk([&](Operation *op) {
+        auto walkResult = region.walk([&val](Operation *op) {
           if (doesOpHaveWriteEffect(val, op)) {
             return WalkResult::interrupt();
           }
@@ -153,7 +160,8 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
                         const std::function<bool(Value, Operation *)> &checkPropertiesOfOperation) const {
     // Check for all paths from operation `fromp` to operation `untilOp` for the
     // given property.
-    std::function<bool(Operation *, Operation *)> recur = [&](Operation *fromOp, Operation *untilOp) {
+    std::function<bool(Operation *, Operation *)> recur = [&recur, &checkPropertiesOfOperation, &val](
+                                                            Operation *fromOp, Operation *untilOp) {
       auto untilOpParentRegion = untilOp->getParentRegion();
       auto untilOpParentOp = untilOp->getParentOp();
       auto fromOpParentRegion = fromOp->getParentRegion();
@@ -229,19 +237,18 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   /// 3) If there is some read operations on `destination`, there should not exist
   /// any write of the `source`
 
-  bool canReplaceDestWithSrc(CopyOpInterface copyOp, Value src, Value dest, Operation *srcDeallocOp,
-                             Operation *destDefOp, Operation *lastOpOfCurrentRegion) const {
-    Operation *lastOpUsingSrc = lastOpOfCurrentRegion;
+  bool canReplaceDestWithSrc(CopyOpInterface copyOp, Value src, Value dest, const CopyElisionOps &ops) const {
+    Operation *lastOpUsingSrc = ops.lastOpOfCurrentRegion;
 
     // If `srcDeallocOp` is not null, `lastOpUsingSrc` will be `srcDeallocOp`.
-    if (srcDeallocOp != nullptr) {
-      lastOpUsingSrc = srcDeallocOp;
+    if (ops.srcDeallocOp != nullptr) {
+      lastOpUsingSrc = ops.srcDeallocOp;
     }
     Operation *firstOpUsingDest = &dest.getParentRegion()->front().front();
 
     // If `destDefOp` is not null, `firstOpUsingDest` will be `destDefOp`.
-    if (destDefOp != nullptr) {
-      firstOpUsingDest = destDefOp;
+    if (ops.destDefOp != nullptr) {
+      firstOpUsingDest = ops.destDefOp;
     }
 
     bool isDestReadBefore =
@@ -297,7 +304,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     Operation *lastOpOfCurrentRegion = &src.getParentRegion()->back().back();
 
     // Check if a replacement of `dest` with `src` is possible.
-    if (!canReplaceDestWithSrc(copyOp, src, dest, srcDeallocOp, destDefOp, lastOpOfCurrentRegion)) {
+    if (!canReplaceDestWithSrc(copyOp, src, dest, {srcDeallocOp, destDefOp, lastOpOfCurrentRegion})) {
       return;
     }
     // Check if a cast is needed.
@@ -354,7 +361,7 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
 void CopyElisionPass::runOnOperation() {
   /// Operations that need to be removed.
   llvm::SmallPtrSet<Operation *, kVectorSizeFour> opsToErase;
-  getOperation()->walk([&](CopyOpInterface copyOp) {
+  getOperation()->walk([this, &opsToErase](CopyOpInterface copyOp) {
     if (isa<BlockArgument>(copyOp.getTarget())) {
       return;
     }
@@ -372,4 +379,6 @@ void CopyElisionPass::runOnOperation() {
 
 }  // namespace mlir
 
-std::unique_ptr<mlir::Pass> mlir::createCopyElisionPass() { return std::make_unique<mlir::CopyElisionPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createCopyElisionPass() { return std::make_unique<CopyElisionPass>(); }
+}  // namespace mlir

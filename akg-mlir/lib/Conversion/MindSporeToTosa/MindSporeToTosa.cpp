@@ -189,7 +189,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
 
     // create one tosa.reduce operation for each axis
     for (int64_t i = 0; i < adaptor.getAxisAttr().size(); i++) {
-      auto axis = (int64_t)adaptor.getAxisAttr()[i];
+      auto axis = static_cast<int64_t>(adaptor.getAxisAttr()[i]);
       reduce_output_shape[axis] = 1;
       auto reduce_inter_tensor = RankedTensorType::get(reduce_output_shape, resultElementTy);
       llvm::SmallVector<NamedAttribute> attrs_once;
@@ -268,7 +268,7 @@ template <typename T>
 std::optional<Value> getConstTensor(PatternRewriter &rewriter, Operation *op, const ArrayRef<T> vec,
                                     const ArrayRef<int64_t> shape) {
   int64_t elemNum = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
-  if (vec.size() != (uint64_t)elemNum) {
+  if (vec.size() != static_cast<uint64_t>(elemNum)) {
     (void)op->emitOpError("getConstTensor(): number of elements mismatch.");
     return std::nullopt;
   }
@@ -283,7 +283,7 @@ template <>
 std::optional<Value> getConstTensor<float>(PatternRewriter &rewriter, Operation *op, const ArrayRef<float> vec,
                                            ArrayRef<int64_t> shape) {
   int64_t elemNum = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
-  if (vec.size() != (uint64_t)elemNum) {
+  if (vec.size() != static_cast<uint64_t>(elemNum)) {
     (void)op->emitOpError("getConstTensor(): number of elements mismatch.");
     return std::nullopt;
   }
@@ -294,6 +294,12 @@ std::optional<Value> getConstTensor<float>(PatternRewriter &rewriter, Operation 
   auto constOp = rewriter.create<tosa::ConstOp>(op->getLoc(), constType, constAttr);
   return constOp.getResult();
 }
+
+struct ScalarToTensorConfig {
+  int64_t value;
+  Type dtype;
+  llvm::ArrayRef<int64_t> shape;
+};
 
 template <typename SrcOp>
 class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
@@ -335,7 +341,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
       return rewriter.notifyMatchFailure(op, "pad range size should be even");
     }
 
-    if (rank < 0 || padRank > (uint64_t)rank) {
+    if (rank < 0 || padRank > static_cast<uint64_t>(rank)) {
       return rewriter.notifyMatchFailure(op, "padding exceeds out tensor rank");
     }
 
@@ -361,7 +367,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     Value padTensor;
     IntegerAttr integerAttr = mindsporeOp.getValueAttr();
     int64_t padValue = integerAttr.getInt();
-    if (failed(MindSporeScalarToTosaTensor(rewriter, op, padValue, padTensor, inputElemTy, {}))) {
+    if (failed(MindSporeScalarToTosaTensor(rewriter, op, {padValue, inputElemTy, {}}, padTensor))) {
       return rewriter.notifyMatchFailure(
         op, "Pad value needs to be a scalar constant for conversion to TOSA pad operation");
     }
@@ -375,35 +381,34 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     return (intValue >= std::numeric_limits<T>::min()) && (intValue <= std::numeric_limits<T>::max());
   }
 
-  LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op, int64_t padScalarValue,
-                                            Value &tosaTensor, const Type dtype,
-                                            const llvm::ArrayRef<int64_t> dshape) const {
+  LogicalResult MindSporeScalarToTosaTensor(ConversionPatternRewriter &rewriter, Operation *op,
+                                            const ScalarToTensorConfig &config, Value &tosaTensor) const {
     uint32_t width32 = 32;
     uint32_t width64 = 64;
-    if (isa<FloatType>(dtype)) {
-      auto floatValue = static_cast<float>(padScalarValue);
-      tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, dshape).value();
-    } else if (auto intType = dyn_cast<IntegerType>(dtype)) {
+    if (isa<FloatType>(config.dtype)) {
+      auto floatValue = static_cast<float>(config.value);
+      tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, config.shape).value();
+    } else if (auto intType = dyn_cast<IntegerType>(config.dtype)) {
       auto w = intType.getWidth();
       if (w != width32 && w != width64) {
         return rewriter.notifyMatchFailure(op, "only support 32 or 64 bits int");
       }
 
       if (w == width32) {
-        if (isInvalidRange<int32_t>(padScalarValue)) {
-          auto dVal = static_cast<int32_t>(padScalarValue);
-          tosaTensor = getConstTensor<int32_t>(rewriter, op, {dVal}, dshape).value();
+        if (isInvalidRange<int32_t>(config.value)) {
+          auto dVal = static_cast<int32_t>(config.value);
+          tosaTensor = getConstTensor<int32_t>(rewriter, op, {dVal}, config.shape).value();
         } else {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
         }
       }
 
       if (w == width64) {
-        if (!isInvalidRange<int64_t>(padScalarValue)) {
+        if (!isInvalidRange<int64_t>(config.value)) {
           return rewriter.notifyMatchFailure(op, "value of scalar constant exceeds limits of destination type");
         }
-        auto dVal = static_cast<int64_t>(padScalarValue);
-        tosaTensor = getConstTensor<int64_t>(rewriter, op, {dVal}, dshape).value();
+        auto dVal = static_cast<int64_t>(config.value);
+        tosaTensor = getConstTensor<int64_t>(rewriter, op, {dVal}, config.shape).value();
       }
     }
     return success();

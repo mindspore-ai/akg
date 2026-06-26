@@ -255,6 +255,8 @@ typedef struct tagRtSmCtrl {
   uint8_t reserved[3];
 } rtSmDesc_t;
 
+namespace mlir {
+namespace runtime {
 int aclrtSetCurrentContext(aclrtContext context);
 int aclrtGetDeviceCount(uint32_t *count);
 int aclrtGetCurrentContext(aclrtContext *context);
@@ -276,7 +278,6 @@ int aclrtDestroyContext(aclrtContext context);
 int aclrtResetDevice(int32_t deviceId);
 int aclrtGetDevice(int32_t *deviceId);
 
-// profiling
 int aclprofInit(const char *profilerResultPath, size_t length);
 int aclprofStart(const aclprofConfig *profilerConfig);
 int aclprofStop(const aclprofConfig *profilerConfig);
@@ -284,6 +285,8 @@ int aclprofFinalize();
 aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums, aclprofAicoreMetrics aicoreMetrics,
                                    const aclprofAicoreEvents *aicoreEvents, uint64_t dataTypeConfig);
 int aclprofDestroyConfig(const aclprofConfig *profilerConfig);
+}  // namespace runtime
+}  // namespace mlir
 
 extern "C" {
 int rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len);

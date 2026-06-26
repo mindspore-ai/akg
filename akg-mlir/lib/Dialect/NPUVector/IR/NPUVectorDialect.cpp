@@ -90,7 +90,7 @@ void NPUVectorDialect::printType(::mlir::Type type, ::mlir::DialectAsmPrinter &p
 
   // Parse dimension list: ?x?x or ?x? or just ?
   // parseDimensionList expects format: dim1 x dim2 x ... x elementType
-  if (parser.parseDimensionList(shape, /*allowDynamic=*/true, /*withTrailingX=*/true)) {
+  if (parser.parseDimensionList(shape, /* allowDynamic= */ true, /* withTrailingX= */ true)) {
     return {};
   }
 
