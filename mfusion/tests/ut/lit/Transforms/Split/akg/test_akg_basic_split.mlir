@@ -162,4 +162,24 @@ func.func @test_fusion_type_filter(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32
   }
   return %0, %2#0, %2#1 : tensor<4x4xf32>, tensor<4x4xf32>, tensor<4x4xf32>
 }
+
+// Test 6: AKG split postprocessing must not hoist input reshapes from DVM FusedOps
+// CHECK-LABEL: func @test_skip_dvm_input_reshape_hoist_when_splitting_akg
+// CHECK-SAME: %arg0: tensor<8xf32>
+// CHECK-SAME: %arg1: tensor<1x8xf32>
+// CHECK-NEXT: %[[DVM:.*]] = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"}
+// CHECK-NEXT: ^bb0(%[[IN0:.*]]: tensor<8xf32>, %[[IN1:.*]]: tensor<1x8xf32>):
+// CHECK-NEXT: %[[RESHAPE:.*]] = mfuse.reshape %[[IN0]] : (tensor<8xf32>) -> tensor<1x8xf32>
+// CHECK-NEXT: %[[ADD:.*]] = mfuse.add %[[RESHAPE]], %[[IN1]] : (tensor<1x8xf32>, tensor<1x8xf32>) -> tensor<1x8xf32>
+// CHECK-NEXT: mfuse.yield %[[ADD]] : tensor<1x8xf32>
+// CHECK: return %[[DVM]] : tensor<1x8xf32>
+func.func @test_skip_dvm_input_reshape_hoist_when_splitting_akg(%arg0: tensor<8xf32>, %arg1: tensor<1x8xf32>) -> tensor<1x8xf32> {
+  %0 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<8xf32>, tensor<1x8xf32>) -> tensor<1x8xf32> {
+  ^bb0(%arg2: tensor<8xf32>, %arg3: tensor<1x8xf32>):
+    %1 = mfuse.reshape %arg2 : (tensor<8xf32>) -> tensor<1x8xf32>
+    %2 = mfuse.add %1, %arg3 : (tensor<1x8xf32>, tensor<1x8xf32>) -> tensor<1x8xf32>
+    mfuse.yield %2 : tensor<1x8xf32>
+  }
+  return %0 : tensor<1x8xf32>
+}
 }
