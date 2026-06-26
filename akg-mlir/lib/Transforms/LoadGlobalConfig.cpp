@@ -135,8 +135,12 @@ void LoadGlobalConfig::runOnOperation() {
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createLoadGlobalConfigPass() { return std::make_unique<LoadGlobalConfig>(); }
+namespace mlir {
+std::unique_ptr<Pass> createLoadGlobalConfigPass() { return std::make_unique<LoadGlobalConfig>(); }
+}  // namespace mlir
 
-std::unique_ptr<Pass> mlir::createLoadGlobalConfigPass(const std::string &fileName) {
+namespace mlir {
+std::unique_ptr<Pass> createLoadGlobalConfigPass(const std::string &fileName) {
   return std::make_unique<LoadGlobalConfig>(fileName);
 }
+}  // namespace mlir

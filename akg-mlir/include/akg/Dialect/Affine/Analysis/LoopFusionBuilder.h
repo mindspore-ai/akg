@@ -25,6 +25,7 @@
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/LoopFusionUtils.h"
 #include "mlir/Dialect/Affine/LoopFusionUtils.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace akg {
@@ -32,10 +33,10 @@ namespace akg {
 struct LoopNestStateCollector {
   void collect(Operation *opToWalk);
 
-  llvm::SmallVector<affine::AffineForOp, 4> forOps;
-  llvm::SmallVector<Operation *, 4> loadOpInsts;
-  llvm::SmallVector<Operation *, 4> storeOpInsts;
-  llvm::SmallVector<Operation *, 4> otherInsts;
+  llvm::SmallVector<affine::AffineForOp, kSmallVectorSizeFour> forOps;
+  llvm::SmallVector<Operation *, kSmallVectorSizeFour> loadOpInsts;
+  llvm::SmallVector<Operation *, kSmallVectorSizeFour> storeOpInsts;
+  llvm::SmallVector<Operation *, kSmallVectorSizeFour> otherInsts;
   bool hasNonAffineRegionOp = false;
 };
 
@@ -76,14 +77,15 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 
  private:
   bool areNonOverlappingSubviewStores(unsigned nodeIdA, unsigned nodeIdB);
-  void collectLoadNodeIdsAndNonForNodes(Value memref, const llvm::SetVector<unsigned> &nodeIds,
-                                        llvm::SmallVector<unsigned> &loadNodeIds,
-                                        llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
-                                        llvm::SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore);
-  void addAliasedStoreEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
-                            const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
-                            const llvm::SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore,
-                            bool hasLoadsForBaseMemref);
+  void collectLoadNodeIdsAndNonForNodes(
+    Value memref, const llvm::SetVector<unsigned> &nodeIds, llvm::SmallVector<unsigned> &loadNodeIds,
+    llvm::SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> &nonForNodesWithStore,
+    llvm::SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeEight> &forNodesWithStore);
+  void addAliasedStoreEdges(
+    Value memref, const llvm::SetVector<unsigned> &nodeIds,
+    const llvm::SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> &nonForNodesWithStore,
+    const llvm::SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeEight> &forNodesWithStore,
+    bool hasLoadsForBaseMemref);
   void addMultipleLoadEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                             llvm::SmallVector<unsigned> &loadNodeIds);
   void collectForNodeLoadIds(Operation *loadOpInst, Value memref, llvm::SmallVector<unsigned> &loadNodeIds);
@@ -92,7 +94,7 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 
 struct FusionLoopNestInfo {
   affine::AffineForOp root;
-  llvm::SmallVector<affine::AffineForOp, 4> loops;
+  llvm::SmallVector<affine::AffineForOp, kSmallVectorSizeFour> loops;
   unsigned perfectDepth = 0;
   unsigned loopDepth = UINT_MAX;
   bool isPerfect = false;
@@ -104,9 +106,9 @@ struct FusionLoopNestInfo {
 // Always stores data in true src/dst order; callers handle reversal when needed.
 struct FusionAccessInfo {
   DenseMap<Value, bool> srcMemFlags;
-  llvm::SmallVector<Operation *, 4> srcAccesses;
+  llvm::SmallVector<Operation *, kSmallVectorSizeFour> srcAccesses;
   DenseMap<Value, bool> dstMemFlags;
-  llvm::SmallVector<Operation *, 4> dstAccesses;
+  llvm::SmallVector<Operation *, kSmallVectorSizeFour> dstAccesses;
 };
 
 // Guard condition applied to cloned operations during subview fusion.
@@ -116,8 +118,8 @@ struct FusionGuard {
 
   // SmallerUB: same loop count, one dimension has a smaller upper bound;
   // cloned ops execute only when IV < boundValue (boundValue-1-IV >= 0).
-  enum Kind { None, ExtraDimEqLB, SmallerUB };
-  Kind kind = None;
+  enum class Kind { None, ExtraDimEqLB, SmallerUB };
+  Kind kind = Kind::None;
   // Which primary loop dimension to guard on.
   unsigned dimPos = 0;
   // LB for ExtraDimEqLB, UB for SmallerUB.
@@ -127,7 +129,7 @@ struct FusionGuard {
   // (secondaryIV = primaryIV - offset).
   int64_t offset = 0;
 
-  bool isNeeded() const { return kind != None; }
+  bool isNeeded() const { return kind != Kind::None; }
 
   // Builds an IntegerSet encoding the guard condition over a single dimension.
   // When offset != 0, the condition becomes "d0 - offset >= 0".
@@ -140,7 +142,7 @@ struct SubviewFusionPlan {
   // true when the src side provides the loop structure (kept)
   bool srcIsPrimary;
   // dimMap[i] maps secondary loop i → primary loop dimMap[i] for IV alignment
-  llvm::SmallVector<int, 4> dimMap;
+  llvm::SmallVector<int, kSmallVectorSizeFour> dimMap;
   // optional condition wrapping the cloned operations
   FusionGuard guard;
 
@@ -148,7 +150,7 @@ struct SubviewFusionPlan {
   FusionLoopNestInfo *secondaryInfo() const { return srcIsPrimary ? dstInfo : srcInfo; }
 };
 
-using CloneStage = llvm::SmallVector<Operation *, 8>;
+using CloneStage = llvm::SmallVector<Operation *, kSmallVectorSizeEight>;
 struct SubviewFusionHelper {
   // Attempts subview fusion between src and dst loop nests.
   // srcRank/dstRank: memref ranks of the dependency accesses (-1 → falls back to loop depth).
@@ -207,13 +209,13 @@ struct FusionCodeGenHelper {
  private:
   // Finds the maximum legal fusion depth for fusing src loop nest into dst loop nest.
   // accessInfo: pre-collected accesses in true src/dst order; srcDstReversed swaps references internally.
-  unsigned findMaxLegalFusionDepth(const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo,
-                                   const affine::FusionStrategy &strategy,
-                                   llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-                                   const FusionPlan &plan, FusionAccessInfo &accessInfo, bool srcDstReversed = false);
+  unsigned findMaxLegalFusionDepth(
+    const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
+    llvm::SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> &depthSliceUnions, const FusionPlan &plan,
+    FusionAccessInfo &accessInfo, bool srcDstReversed = false);
 
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
-                         llvm::SmallVector<Operation *, 4> &strategyOpsA);
+                         llvm::SmallVector<Operation *, kSmallVectorSizeFour> &strategyOpsA);
 
   bool trySubviewFuse(unsigned srcGroupId, unsigned dstGroupId, const FusionAccessInfo &accessInfo,
                       FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, const FusionPlan &plan);

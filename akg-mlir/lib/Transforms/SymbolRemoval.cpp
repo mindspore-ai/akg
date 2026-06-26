@@ -20,6 +20,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_SYMBOLREMOVAL
@@ -29,6 +30,7 @@ namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 #endif
@@ -102,9 +104,9 @@ AffineExpr replaceSymbolExpr(AffineExpr expr, OpBuilder b, unsigned numDims) {
 
 void SymbolRemovalPass::runOnOperation() {
   OpBuilder b(getOperation());
-  SmallVector<affine::AffineLoadOp, 8> loadOps;
-  SmallVector<affine::AffineStoreOp, 8> storeOps;
-  getOperation()->walk([&](Operation *op) {
+  SmallVector<affine::AffineLoadOp, kSmallVectorSizeEight> loadOps;
+  SmallVector<affine::AffineStoreOp, kSmallVectorSizeEight> storeOps;
+  getOperation()->walk([&loadOps, &storeOps](Operation *op) {
     if (affine::AffineLoadOp loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
       loadOps.push_back(loadOp);
     }
@@ -145,4 +147,6 @@ void SymbolRemovalPass::runOnOperation() {
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createSymbolRemovalPass() { return std::make_unique<SymbolRemovalPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createSymbolRemovalPass() { return std::make_unique<SymbolRemovalPass>(); }
+}  // namespace mlir

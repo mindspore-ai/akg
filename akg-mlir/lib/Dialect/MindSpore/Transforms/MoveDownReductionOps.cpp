@@ -24,6 +24,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_MOVEDOWNREDUCTIONOPS
@@ -31,14 +32,14 @@ namespace mlir {
 #ifndef GEN_PASS_DEF_MOVEDOWNREDUCTIONOPS
 #define GEN_PASS_DEF_MOVEDOWNREDUCTIONOPS
 #include "akg/Dialect/MindSpore/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 
 bool IsReduceOp(Operation *op) {
   return isa<mindspore::ReduceSumOp>(op) || isa<mindspore::ReduceAllOp>(op) || isa<mindspore::ReduceAnyOp>(op) ||
@@ -49,7 +50,7 @@ struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownRedu
   void runOnOperation() override {
     auto funcOp = getOperation();
     Operation *redOp = nullptr;
-    (void)funcOp->walk([&](Operation *op) {
+    (void)funcOp->walk([&redOp](Operation *op) {
       if (IsReduceOp(op)) {
         redOp = op;
         return WalkResult::interrupt();
@@ -60,8 +61,8 @@ struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownRedu
       return;
     }
 
-    SmallVector<Operation *, 8> relatedOps;
-    SmallVector<mlir::Value, 8> usedValues;
+    SmallVector<Operation *, kSmallVectorSizeEight> relatedOps;
+    SmallVector<mlir::Value, kSmallVectorSizeEight> usedValues;
 
     CommonUtils::getAllNextRelatedOps(redOp, relatedOps, usedValues);
     Operation *curOp = redOp->getNextNode();
@@ -81,6 +82,8 @@ struct MoveDownReductionOps : public impl::MoveDownReductionOpsBase<MoveDownRedu
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMoveDownReductionOpsPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createMoveDownReductionOpsPass() {
   return std::make_unique<MoveDownReductionOps>();
 }
+}  // namespace mlir

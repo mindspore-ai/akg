@@ -534,7 +534,7 @@ void AllocBufferShrinkPass::rebuildExpandShape(memref::ExpandShapeOp expandOp) {
   OpBuilder builder(expandOp);
   SmallVector<OpFoldResult> outputShapeOfr;
   std::transform(newOutputShape.begin(), newOutputShape.end(), std::back_inserter(outputShapeOfr),
-                 [&](int64_t s) { return builder.getIndexAttr(s); });
+                 [&builder](int64_t s) { return builder.getIndexAttr(s); });
   auto newExpand = builder.create<memref::ExpandShapeOp>(expandOp.getLoc(), newOutputShape, newSource,
                                                          expandOp.getReassociationIndices(), outputShapeOfr);
   replacementMap[expandOp.getResult()] = newExpand.getResult();
@@ -688,7 +688,7 @@ bool AllocBufferShrinkPass::processAlloc(memref::AllocOp allocOp) {
 void AllocBufferShrinkPass::runOnOperation() {
   zeroIdx = Value();
   SmallVector<memref::AllocOp> allocOps;
-  getOperation()->walk([&](memref::AllocOp op) { allocOps.push_back(op); });
+  getOperation()->walk([&allocOps](memref::AllocOp op) { allocOps.push_back(op); });
 
   for (auto allocOp : allocOps) {
     processAlloc(allocOp);

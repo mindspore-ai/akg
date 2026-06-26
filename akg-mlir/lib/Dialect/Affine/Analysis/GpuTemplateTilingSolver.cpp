@@ -144,18 +144,28 @@ static void initPrimes(std::vector<int> &primes, akgglobal::PrimeNumTool &tool) 
   primes.push_back(tool.getOnePrimeWithIdxUpdate());
 }
 
-static void processDynamicThreadUse(AxisPtr &a, ConfigPtr &threadTile, const int &i, const int &num,
-                                    const bool &handleRedAxis, const std::vector<int> &primes,
-                                    std::vector<std::string> &axisMap, akgglobal::GpuScheduleTool &gpuTool) {
+struct AxisTileContext {
+  AxisPtr axis;
+  ConfigPtr threadTile;
+  std::vector<std::string> axisMap;
+  int len;
+  std::vector<int> primes;
+  bool isDynamic;
+  int i;
+  int num;
+  bool handleRedAxis;
+};
+
+static void processDynamicThreadUse(AxisTileContext &ctx, akgglobal::GpuScheduleTool &gpuTool) {
   auto blockcfg = std::make_shared<GpuBlock>("DynBlock");
-  auto dynTile = primes[0];
-  threadTile->value = dynTile;
+  auto dynTile = ctx.primes[0];
+  ctx.threadTile->value = dynTile;
   blockcfg->value = dynTile;
-  a->configs[blockcfg->type].push_back(blockcfg);
-  axisMap[kNum2] = kGpuBlockCfg;
+  ctx.axis->configs[blockcfg->type].push_back(blockcfg);
+  ctx.axisMap[kNum2] = kGpuBlockCfg;
   auto argBlock = gpuTool.addRuntimeArgument(dynTile);
-  argBlock.mark = (i == num - 1) ? "thread-last" : "thread";
-  argBlock.mark = (handleRedAxis ? "reduce-" : "parallel-") + argBlock.mark;
+  argBlock.mark = (ctx.i == ctx.num - 1) ? "thread-last" : "thread";
+  argBlock.mark = (ctx.handleRedAxis ? "reduce-" : "parallel-") + argBlock.mark;
   gpuTool.updateRuntimeArgument(argBlock);
 }
 
@@ -235,35 +245,31 @@ static bool shouldMapToBlock(int gridDimsLeft, int blockNum, int len, bool isDyn
   return gridDimsLeft > 0 && ((blockNum > 1 && len > 1) || (blockNum > 0 && isDynamic));
 }
 
-static void mapAxisToThread(AxisPtr &a, ConfigPtr &threadTile, int i, int num, int &len, int &threadNum, bool isDynamic,
-                            bool handleRedAxis, const std::vector<int> &primes, std::vector<std::string> &axisMap,
-                            akgglobal::GpuScheduleTool &gpuTool) {
-  if (isDynamic) {
-    processDynamicThreadUse(a, threadTile, i, num, handleRedAxis, primes, axisMap, gpuTool);
-  } else if (len <= threadNum) {
-    processFullThreadUse(a, threadTile, len, threadNum, axisMap);
+static void mapAxisToThread(AxisTileContext &ctx, int &threadNum, akgglobal::GpuScheduleTool &gpuTool) {
+  if (ctx.isDynamic) {
+    processDynamicThreadUse(ctx, gpuTool);
+  } else if (ctx.len <= threadNum) {
+    processFullThreadUse(ctx.axis, ctx.threadTile, ctx.len, threadNum, ctx.axisMap);
   } else {
-    processPartThreadUse(a, threadTile, len, threadNum, axisMap);
+    processPartThreadUse(ctx.axis, ctx.threadTile, ctx.len, threadNum, ctx.axisMap);
   }
 }
 
-static void mapAxisToBlock(AxisPtr &a, int &len, int &blockNum, bool isDynamic, const std::vector<int> &primes,
-                           std::vector<std::string> &axisMap) {
-  if (isDynamic) {
-    processDynamicBlockUse(a, primes, axisMap);
-  } else if (len <= blockNum) {
-    processFullBlockUse(a, len, blockNum, axisMap);
+static void mapAxisToBlock(AxisTileContext &ctx, int &blockNum) {
+  if (ctx.isDynamic) {
+    processDynamicBlockUse(ctx.axis, ctx.primes, ctx.axisMap);
+  } else if (ctx.len <= blockNum) {
+    processFullBlockUse(ctx.axis, ctx.len, blockNum, ctx.axisMap);
   } else {
-    processPartBlockUse(a, len, blockNum, axisMap);
+    processPartBlockUse(ctx.axis, ctx.len, blockNum, ctx.axisMap);
   }
 }
 
-static void setAxisSequential(AxisPtr &a, ConfigPtr &seqTile, const ConfigPtr &threadTile, int len, bool isDynamic,
-                              bool handleRedAxis, const std::vector<int> &primes, akgglobal::GpuScheduleTool &gpuTool) {
-  if (!isDynamic) {
-    seqTile->value = len * threadTile->value;
+static void setAxisSequential(const AxisTileContext &ctx, ConfigPtr seqTile, akgglobal::GpuScheduleTool &gpuTool) {
+  if (!ctx.isDynamic) {
+    seqTile->value = ctx.len * ctx.threadTile->value;
   } else {
-    processLeftDynamic(seqTile, threadTile, handleRedAxis, primes, gpuTool);
+    processLeftDynamic(seqTile, ctx.threadTile, ctx.handleRedAxis, ctx.primes, gpuTool);
   }
 }
 
@@ -287,7 +293,7 @@ void GpuTemplateTilingSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<Axi
     // 0. Init
     auto a = axes[i];
     a->doExtraTile();
-    std::vector<std::string> axisMap = {kGpuSeqCfg, kGpuSeqCfg, kGpuSeqCfg};  // default
+    std::vector<std::string> axisMap = {kGpuSeqCfg, kGpuSeqCfg, kGpuSeqCfg};
     int len = a->range.second;
     auto threadTile = a->tryGetConfig(1);
     threadTile->value = 1;
@@ -297,22 +303,21 @@ void GpuTemplateTilingSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<Axi
       initPrimes(primes, tool);
     }
 
-    // 1. tile & map to threadIdx
-    if (shouldMapToThread(blockDimsLeft, threadNum, len, isDynamic)) {
-      mapAxisToThread(a, threadTile, i, num, len, threadNum, isDynamic, handleRedAxis, primes, axisMap, gpuTool);
+    AxisTileContext ctx{a, threadTile, axisMap, len, primes, isDynamic, i, num, handleRedAxis};
+
+    if (shouldMapToThread(blockDimsLeft, threadNum, ctx.len, ctx.isDynamic)) {
+      mapAxisToThread(ctx, threadNum, gpuTool);
       blockDimsLeft--;
     }
 
-    // 2. tile & map to blockIdx
-    if (shouldMapToBlock(gridDimsLeft, blockNum, len, isDynamic)) {
-      mapAxisToBlock(a, len, blockNum, isDynamic, primes, axisMap);
+    if (shouldMapToBlock(gridDimsLeft, blockNum, ctx.len, ctx.isDynamic)) {
+      mapAxisToBlock(ctx, blockNum);
       gridDimsLeft--;
     }
 
-    // 3. left length to sequential
     auto seqTile = a->tryGetConfig(0);
-    setAxisSequential(a, seqTile, threadTile, len, isDynamic, handleRedAxis, primes, gpuTool);
-    a->setMappings(axisMap);
+    setAxisSequential(ctx, seqTile, gpuTool);
+    a->setMappings(ctx.axisMap);
   }
 }
 
@@ -462,7 +467,8 @@ void GpuTemplateTilingSolver::SolveScheduleForReductionOps(std::vector<AxisPtr> 
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   gpuTool.reduceSizeStatic = reductionSize;
   gpuTool.parallelSizeStatic = parallelSize;
-  bool isReduceY = akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == ReduceDirection::Y;
+  bool isReduceY =
+    akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == static_cast<size_t>(ReduceDirection::Y);
 
   // reuse to map non-reduce-axes
   std::vector<int> parallelFlags(redFlags.size());

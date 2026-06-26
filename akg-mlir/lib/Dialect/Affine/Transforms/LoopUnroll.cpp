@@ -28,25 +28,39 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AKGAFFINELOOPUNROLL
 #define GEN_PASS_DECL_AKGAFFINELOOPUNROLL
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "akg-affine-loop-unroll"
 
-using namespace mlir;          // NOLINT(build/namespaces)
-using namespace mlir::affine;  // NOLINT(build/namespaces)
-
 namespace {
+using mlir::AffineExpr;
+using mlir::AffineMap;
+using mlir::dyn_cast;
+using mlir::isa;
+using mlir::kSmallVectorSizeFour;
+using mlir::kSmallVectorSizeOne;
+using mlir::kSmallVectorSizeTwo;
+using mlir::LogicalResult;
+using mlir::Operation;
+using mlir::OperationPass;
+using mlir::SmallVector;
+using mlir::SmallVectorImpl;
+using mlir::succeeded;
+using mlir::WalkResult;
+using mlir::func::FuncOp;
 
 /// Loop unrolling pass. Unrolls all innermost loops unless full unrolling and a
 /// full unroll threshold was specified, in which case, fully unrolls all loops
 /// with trip count less than the specified threshold. The latter is for testing
 /// purposes, especially for testing outer loop unrolling.
-struct AKGLoopUnroll : public impl::AKGAffineLoopUnrollBase<AKGLoopUnroll> {
+struct AKGLoopUnroll : public mlir::impl::AKGAffineLoopUnrollBase<AKGLoopUnroll> {
   AKGLoopUnroll() {}
 
   void runOnOperation() override;
@@ -54,14 +68,16 @@ struct AKGLoopUnroll : public impl::AKGAffineLoopUnrollBase<AKGLoopUnroll> {
 }  // namespace
 
 /// Returns true if no other affine.for ops are nested within `op`.
-static bool isInnermostAffineForOp(affine::AffineForOp op) {
+static bool isInnermostAffineForOp(mlir::affine::AffineForOp op) {
   return !op.getBody()
-            ->walk([&](affine::AffineForOp nestedForOp) {
+            ->walk([](mlir::affine::AffineForOp nestedForOp) {
               // Add original result expressions from lower/upper bound map.
               AffineMap lbMap = nestedForOp.getLowerBound().getMap();
               AffineMap ubMap = nestedForOp.getUpperBound().getMap();
-              SmallVector<AffineExpr, 1> origLbExprs(lbMap.getResults().begin(), lbMap.getResults().end());
-              SmallVector<AffineExpr, 2> origUbExprs(ubMap.getResults().begin(), ubMap.getResults().end());
+              SmallVector<AffineExpr, kSmallVectorSizeOne> origLbExprs(lbMap.getResults().begin(),
+                                                                       lbMap.getResults().end());
+              SmallVector<AffineExpr, kSmallVectorSizeTwo> origUbExprs(ubMap.getResults().begin(),
+                                                                       ubMap.getResults().end());
 
               // Insert all combinations of upper/lower bound results.
               int64_t origLoopStep = nestedForOp.getStepAsInt();
@@ -77,16 +93,17 @@ static bool isInnermostAffineForOp(affine::AffineForOp op) {
             .wasInterrupted();
 }
 
-/// Returns false if no vector::TransferReadOp or vector::TransferWriteOp ops
+/// Returns false if no mlir::vector::TransferReadOp or mlir::vector::TransferWriteOp ops
 /// are nested within `op`.
-static bool isVectorizedAffineForOp(affine::AffineForOp op) {
+static bool isVectorizedAffineForOp(mlir::affine::AffineForOp op) {
   if (!isInnermostAffineForOp(op)) {
     return false;
   }
 
   return op.getBody()
-    ->walk([&](Operation *op) {
-      if (isa<vector::TransferReadOp, vector::TransferWriteOp, vector::StoreOp, vector::LoadOp>(op)) {
+    ->walk([](Operation *op) {
+      if (isa<mlir::vector::TransferReadOp, mlir::vector::TransferWriteOp, mlir::vector::StoreOp, mlir::vector::LoadOp>(
+            op)) {
         return WalkResult::interrupt();
       }
       return WalkResult::advance();
@@ -95,8 +112,8 @@ static bool isVectorizedAffineForOp(affine::AffineForOp op) {
 }
 
 /// Gathers loops that have no affine.for's nested within.
-static void gatherInnermostLoops(func::FuncOp f, SmallVectorImpl<affine::AffineForOp> &loops) {
-  f.walk([&](affine::AffineForOp forOp) {
+static void gatherInnermostLoops(mlir::func::FuncOp f, SmallVectorImpl<mlir::affine::AffineForOp> &loops) {
+  f.walk([&loops](mlir::affine::AffineForOp forOp) {
     if (isVectorizedAffineForOp(forOp)) {
       loops.push_back(forOp);
     }
@@ -104,19 +121,19 @@ static void gatherInnermostLoops(func::FuncOp f, SmallVectorImpl<affine::AffineF
 }
 
 void AKGLoopUnroll::runOnOperation() {
-  func::FuncOp funcOp = getOperation();
+  mlir::func::FuncOp funcOp = getOperation();
   if (funcOp.isExternal()) {
     return;
   }
 
-  SmallVector<affine::AffineForOp, 4> loops;
+  SmallVector<mlir::affine::AffineForOp, kSmallVectorSizeFour> loops;
   gatherInnermostLoops(funcOp, loops);
   if (loops.empty()) {
     return;
   }
   bool unrolled = false;
   for (auto forOp : loops) {
-    LogicalResult isUnrolled = loopUnrollFull(forOp);
+    LogicalResult isUnrolled = mlir::affine::loopUnrollFull(forOp);
     unrolled |= succeeded(isUnrolled);
   }
   if (!unrolled) {
@@ -124,6 +141,8 @@ void AKGLoopUnroll::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopUnrollPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::func::FuncOp>> createAKGLoopUnrollPass() {
   return std::make_unique<AKGLoopUnroll>();
 }
+}  // namespace mlir

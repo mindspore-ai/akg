@@ -42,7 +42,7 @@ constexpr auto MIN_EXEC_NUM_PER_THREAD = 4096;
 constexpr auto BEST_PARALLEL_NUM = 192;
 constexpr auto PARALLEL_DECREASE_VALUE = 1;
 
-enum Sketch {
+enum class Sketch {
   kAllStatic = 0,
   kOneDynamicInner,
   kTwoDynamicInner,

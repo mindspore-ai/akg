@@ -31,9 +31,8 @@ namespace mlir {
 #include "akg/Dialect/MindSpore/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+using namespace mlir;  // NOLINT(build/namespaces)
 constexpr auto kVectorInitSize4 = 4;
 llvm::SmallVector<std::string, kVectorInitSize4> RecordFuncArgSymbols(func::FuncOp funcOp) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -49,7 +48,7 @@ llvm::SmallVector<std::string, kVectorInitSize4> RecordFuncArgSymbols(func::Func
       }
     }
   }
-  funcOp.walk([&](func::ReturnOp op) {
+  funcOp.walk([&analysis, &funcSymbols](func::ReturnOp op) {
     for (auto returnArg : op.getOperation()->getOperands()) {
       auto symbolShape = analysis.getSymbolicShape(returnArg.getType());
       if (!symbolShape) {
@@ -71,7 +70,7 @@ void updateFuncTypes(func::FuncOp funcOp) {
     (void)newInTys.emplace_back(value.getType());
   }
   llvm::SmallVector<Type, kVectorInitSize4> newResTys;
-  funcOp.walk([&](func::ReturnOp op) {
+  funcOp.walk([&newResTys](func::ReturnOp op) {
     for (auto value : op.getOperation()->getOperands()) {
       (void)newResTys.emplace_back(value.getType());
     }
@@ -156,7 +155,7 @@ void preprocessReshape(func::FuncOp funcOp) {
   auto originalFuncSymbols = RecordFuncArgSymbols(funcOp);
 
   // find ReshapeOp that can be eliminated
-  funcOp.walk([&](func::ReturnOp op) {
+  funcOp.walk([&argIdx, &tool, &analysis, &originalFuncSymbols](func::ReturnOp op) {
     for (auto returnArg : op.getOperation()->getOperands()) {
       argIdx++;
       if (auto ownerOp = returnArg.getDefiningOp()) {
@@ -200,6 +199,8 @@ struct EliminateReshape : public impl::EliminateReshapeBase<EliminateReshape> {
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createEliminateReshapePass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createEliminateReshapePass() {
   return std::make_unique<EliminateReshape>();
 }
+}  // namespace mlir

@@ -29,11 +29,13 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_HOISTLOOPINDEPENDENTOPS
 #define GEN_PASS_DECL_HOISTLOOPINDEPENDENTOPS
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "hoist-loop-independent-ops"
@@ -78,9 +80,11 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       } else {
         if (!visitingOps.contains(defOp)) {
           visitingOps.insert(defOp);
-          depends = std::any_of(defOp->getOperands().begin(), defOp->getOperands().end(), [&](Value operand) {
-            return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
-          });
+          depends =
+            std::any_of(defOp->getOperands().begin(), defOp->getOperands().end(),
+                        [&seenAffineForOps, &valueDepCache, &visitingOps](Value operand) {
+                          return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
+                        });
           visitingOps.erase(defOp);
         } else {
           // Cycles are generally not expected in SSA; handle conservatively.
@@ -99,13 +103,14 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   static bool opDependsOnSeenAffineFors(Operation *op, const llvm::DenseSet<Operation *> &seenAffineForOps,
                                         llvm::DenseMap<Value, bool> &valueDepCache) {
     llvm::DenseSet<Operation *> visitingOps;
-    return std::any_of(op->getOperands().begin(), op->getOperands().end(), [&](Value operand) {
-      return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
-    });
+    return std::any_of(op->getOperands().begin(), op->getOperands().end(),
+                       [&seenAffineForOps, &valueDepCache, &visitingOps](Value operand) {
+                         return valueDependsOnSeenAffineFors(operand, seenAffineForOps, valueDepCache, visitingOps);
+                       });
   }
 
   static void collectNestedOps(Operation *root, llvm::DenseSet<Operation *> &set) {
-    root->walk([&](Operation *nested) { set.insert(nested); });
+    root->walk([&set](Operation *nested) { set.insert(nested); });
   }
 
   void moveIndependentOpsBeforeFirstAffineFor(func::FuncOp funcOp) {
@@ -130,7 +135,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     llvm::DenseSet<Operation *> seenAffineForOps;
     collectNestedOps(firstAffineFor, seenAffineForOps);
 
-    SmallVector<Operation *, 8> toMove;
+    SmallVector<Operation *, kSmallVectorSizeEight> toMove;
     llvm::DenseMap<Value, bool> valueDepCache;
 
     for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
@@ -180,9 +185,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
 
     bool depends = false;
-    defOp->walk([&](Operation *op) {
+    defOp->walk([&depends, &iv](Operation *op) {
       if (std::any_of(op->getOperands().begin(), op->getOperands().end(),
-                      [&](Value operand) { return operand == iv; })) {
+                      [&iv](Value operand) { return operand == iv; })) {
         depends = true;
         return WalkResult::interrupt();
       }
@@ -223,7 +228,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   // Helper function to check if there are any stores to the memref in the loop subtree
   bool hasStoreToMemrefInLoopTree(affine::AffineForOp forOp, Value memref) {
     bool hasStore = false;
-    forOp.walk([&](Operation *op) {
+    forOp.walk([&hasStore, &memref](Operation *op) {
       if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
         if (storeOp.getMemRef() == memref) {
           hasStore = true;
@@ -238,7 +243,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   // Collect loop-invariant loads that are candidates for hoisting
   SmallVector<Operation *> collectLoopInvariantLoads(affine::AffineForOp outermostLoop) {
     SmallVector<affine::AffineForOp> nestedLoops;
-    outermostLoop.walk([&](affine::AffineForOp forOp) { nestedLoops.push_back(forOp); });
+    outermostLoop.walk([&nestedLoops](affine::AffineForOp forOp) { nestedLoops.push_back(forOp); });
 
     SmallVector<Operation *> toHoist;
     for (auto forOp : nestedLoops) {
@@ -302,13 +307,14 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
 
     loadOp.getResult().replaceAllUsesWith(forwardedValue);
-    SmallVector<Operation *, 4> toErase;
+    SmallVector<Operation *, kSmallVectorSizeFour> toErase;
     toErase.push_back(op);
 
     if (matchedStore) {
       auto users = memref.getUsers();
-      bool memrefStillUsed = std::any_of(
-        users.begin(), users.end(), [&](Operation *user) { return user != op && user != matchedStore.getOperation(); });
+      bool memrefStillUsed = std::any_of(users.begin(), users.end(), [&op, &matchedStore](Operation *user) {
+        return user != op && user != matchedStore.getOperation();
+      });
       if (!memrefStillUsed) {
         toErase.push_back(matchedStore.getOperation());
         Operation *memrefDefOp = memref.getDefiningOp();
@@ -325,7 +331,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
   void hoistLoopInvariantLoad(func::FuncOp funcOp) {
     SmallVector<affine::AffineForOp> outermostLoops;
-    funcOp.walk([&](affine::AffineForOp forOp) {
+    funcOp.walk([&outermostLoops](affine::AffineForOp forOp) {
       if (!forOp->getParentOfType<affine::AffineForOp>()) {
         outermostLoops.push_back(forOp);
       }

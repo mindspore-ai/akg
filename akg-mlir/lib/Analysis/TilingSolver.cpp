@@ -164,7 +164,7 @@ void GlobalConfigSolver::setEnableVectorize() {
   bool enableVec = true;
   int64_t innerAlignSize = -1;
   bool innerDivisible = false;
-  modelGraph->rootAxis->forEachAxisTopDown([&](const AxisPtr innerMostAxis) {
+  modelGraph->rootAxis->forEachAxisTopDown([&enableVec, &innerAlignSize, &innerDivisible](const AxisPtr innerMostAxis) {
     if (!enableVec || !innerMostAxis->isInnerMost) {
       return;
     }
@@ -214,7 +214,7 @@ void GlobalConfigSolver::solve(func::FuncOp funcOp) {
 
 static std::pair<int, int> CollectAllAxesInfo(func::FuncOp funcOp, const ModelGraphPtr &modelGraph,
                                               const AxisPtr targetAxis) {
-  auto getArgIndex = [&](const mlir::Value &memref) -> int {
+  auto getArgIndex = [&funcOp](const mlir::Value &memref) -> int {
     if (!memref) {
       return -1;
     }
@@ -273,7 +273,8 @@ static std::pair<int, int> CollectAllAxesInfo(func::FuncOp funcOp, const ModelGr
 std::map<AxisPtr, std::vector<std::pair<std::string, int>>> GlobalConfigSolver::globalAlloc() {
   std::map<AxisPtr, std::vector<std::pair<std::string, int>>> globalRes;
 
-  modelGraph->rootAxis->forEachAxisTopDown([&](const AxisPtr axis) { globalRes[axis] = solveMapResource(axis); });
+  modelGraph->rootAxis->forEachAxisTopDown(
+    [this, &globalRes](const AxisPtr axis) { globalRes[axis] = solveMapResource(axis); });
 
   return globalRes;
 }
@@ -283,7 +284,7 @@ std::vector<std::pair<std::string, int>> GlobalConfigSolver::solveMapResource(co
   auto axisSizes = modelGraph->getLoopExtentsAfterTiling(axis);
   std::vector<std::pair<std::string, int>> allocResult;
   allocResult.reserve(axisSizes.size());
-  auto Load = [&](const ConfigPtr &config) {
+  auto Load = [&tempMap, &axisSizes](const ConfigPtr &config) {
     const int outerLoc = 0;
     const int innerLoc = static_cast<int>(axisSizes.size()) - 1;
     const int midLoc = static_cast<int>(axisSizes.size()) - 2;

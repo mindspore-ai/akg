@@ -47,6 +47,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "akg/Utils/Constants.h"
 
 #define DEBUG_TYPE "npu-auto-tiling"
 
@@ -54,6 +55,7 @@ namespace mlir {
 #define GEN_PASS DECL_NPUAUTOTILING
 #define GEN_PASS_DEF_NPUAUTOTILING
 #include "akg/Transforms/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
@@ -90,7 +92,7 @@ static void setTilingKeyAndDataArgAttrs(func::FuncOp func, unsigned keyIdx, unsi
   auto *ctx = func.getContext();
   auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
 
-  auto setArgKernelKind = [&](unsigned idx, KernelArgType kind) {
+  auto setArgKernelKind = [&ctx, &func, &katName](unsigned idx, KernelArgType kind) {
     DictionaryAttr old = func.getArgAttrDict(idx);
     SmallVector<NamedAttribute> nas;
     if (old) {
@@ -205,6 +207,24 @@ struct TilingInfo {
   }
 };
 
+struct DeviceFuncDesc {
+  StringRef name;
+  FunctionType devTy;
+  FunctionType origTy;
+  unsigned blockDim;
+  func::FuncOp hostTiling;
+};
+
+struct SwitchCaseDesc {
+  int64_t key;
+  ArrayRef<Value> args;
+  Value keyI64;
+  ArrayRef<Value> tilingStructArgs;
+  unsigned oldNumInputs;
+  FunctionType oldTy;
+  MLIRContext *ctx;
+};
+
 class TilingBase {
  public:
   explicit TilingBase(func::FuncOp f)
@@ -268,9 +288,9 @@ class TilingBase {
     }
 
     llvm::DenseMap<int64_t, mlir::func::FuncOp> tilingFuncMap;
-    mlir::autotiling::TilingMetadata tilingMetadata;
+    mlir::autotiling::TilingMetadataMap tilingMetadataMap;
     if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap,
-                                                       tilingInfo_.isStaticShape, &tilingMetadata))) {
+                                                       tilingInfo_.isStaticShape, &tilingMetadataMap))) {
       return failure();
     }
     for (const auto &it : tilingFuncMap) {
@@ -278,8 +298,8 @@ class TilingBase {
       mlir::func::FuncOp f = it.getSecond();
       tilingInfo_.setPerCaseTilingFunc(key, f);
     }
-    if (!tilingMetadata.empty()) {
-      tilingInfo_.setPerCaseTilingMetadata(0, std::move(tilingMetadata));
+    for (auto &it : tilingMetadataMap) {
+      tilingInfo_.setPerCaseTilingMetadata(it.getFirst(), std::move(it.getSecond()));
     }
 
     if (failed(computeTilingStructSizeFromTilingFuncs(builder, tilingFuncMap))) {
@@ -298,7 +318,7 @@ class TilingBase {
     }
 
     bool allOk = std::all_of(tilingKeys.begin(), tilingKeys.end(),
-                             [&](int64_t key) { return succeeded(initTilingKernel(key, builder)); });
+                             [this, &builder](int64_t key) { return succeeded(initTilingKernel(key, builder)); });
     if (!allOk) {
       return failure();
     }
@@ -314,55 +334,50 @@ class TilingBase {
 
   LogicalResult computeTilingStructSizeFromTilingFuncs(
     OpBuilder &builder, const llvm::DenseMap<int64_t, mlir::func::FuncOp> &tilingFuncMap) {
-    auto it0 = tilingFuncMap.find(0);
-    if (it0 == tilingFuncMap.end()) {
-      originalKernel_.emitError("tilingFuncMap does not contain key=0");
+    if (tilingFuncMap.empty()) {
+      originalKernel_.emitError("tilingFuncMap is empty");
       return failure();
     }
-
-    func::FuncOp tilingFunc0 = it0->second;
 
     auto *ctx = builder.getContext();
     auto katName = StringAttr::get(ctx, KernelArgTypeAttr::name);
 
-    unsigned structSize = 0;
-
-    for (auto [idx, arg] : llvm::enumerate(tilingFunc0.getArguments())) {
-      DictionaryAttr dict = tilingFunc0.getArgAttrDict(idx);
-      if (!dict) {
-        continue;
-      }
-
-      Attribute attr = dict.get(katName);
-      if (!attr) {
-        continue;
-      }
-
-      auto katAttr = dyn_cast<KernelArgTypeAttr>(attr);
-      if (!katAttr) {
-        continue;
-      }
-
-      if (katAttr.getArgType() == KernelArgType::kTilingStruct) {
+    auto getStructSize = [&](func::FuncOp tilingFunc, unsigned &structSize) -> LogicalResult {
+      for (auto [idx, arg] : llvm::enumerate(tilingFunc.getArguments())) {
+        DictionaryAttr dict = tilingFunc.getArgAttrDict(idx);
+        auto katAttr = dyn_cast_or_null<KernelArgTypeAttr>(dict ? dict.get(katName) : Attribute());
+        if (!katAttr || katAttr.getArgType() != KernelArgType::kTilingStruct) {
+          continue;
+        }
         auto memrefTy = dyn_cast<MemRefType>(arg.getType());
-        if (!memrefTy || memrefTy.getRank() != 1 || !memrefTy.getElementType().isInteger(64)) {
+        if (!memrefTy || memrefTy.getRank() != 1 || !memrefTy.getElementType().isInteger(kI64BitWidth)) {
           originalKernel_.emitError("tiling struct argument must be rank-1 memref<i64>");
           return failure();
         }
-
         int64_t dim0 = memrefTy.getDimSize(0);
         if (dim0 <= 0) {
           originalKernel_.emitError("tiling struct size must be a positive static dimension");
           return failure();
         }
-
         structSize = static_cast<unsigned>(dim0);
-        break;
+        return success();
       }
-    }
-
-    if (structSize == 0) {
       structSize = 1;
+      return success();
+    };
+
+    unsigned structSize = 0;
+    for (const auto &it : tilingFuncMap) {
+      unsigned curSize = 0;
+      if (failed(getStructSize(it.getSecond(), curSize))) {
+        return failure();
+      }
+      if (structSize == 0) {
+        structSize = curSize;
+      } else if (structSize != curSize) {
+        originalKernel_.emitError("per-key tiling struct sizes must match");
+        return failure();
+      }
     }
 
     tilingInfo_.tilingStructSize = structSize;
@@ -377,7 +392,7 @@ class TilingBase {
       unsigned n = std::min<unsigned>(arr.size(), dst.getNumArguments());
       for (unsigned i = 0; i < n; ++i) {
         if (auto dict = dyn_cast_or_null<DictionaryAttr>(arr[i])) {
-          SmallVector<NamedAttribute, 4> attrs;
+          SmallVector<NamedAttribute, kSmallVectorSizeFour> attrs;
           attrs.reserve(dict.size());
           std::copy(dict.begin(), dict.end(), std::back_inserter(attrs));
           for (const auto &na : attrs) {
@@ -438,7 +453,26 @@ class TilingBase {
   }
 
   Value selectKeyByDimension(OpBuilder &b, Location loc, ArrayRef<Value> args) {
-    (void)args;
+    for (int64_t key : tilingInfo_.getAllKeys()) {
+      const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
+      if (!metadata || !metadata->hasRuntimeSelector()) {
+        continue;
+      }
+      if (metadata->selectorInputIndex >= args.size()) {
+        continue;
+      }
+      auto memrefTy = dyn_cast<MemRefType>(args[metadata->selectorInputIndex].getType());
+      if (!memrefTy || metadata->selectorDimIndex >= static_cast<unsigned>(memrefTy.getRank())) {
+        continue;
+      }
+      Value dimIdx = b.create<arith::ConstantIndexOp>(loc, metadata->selectorDimIndex);
+      Value dim = b.create<memref::DimOp>(loc, args[metadata->selectorInputIndex], dimIdx);
+      Value limit = b.create<arith::ConstantIndexOp>(loc, metadata->selectorLimit);
+      Value useTrueKey = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, dim, limit);
+      Value trueKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorTrueKey, 64);
+      Value falseKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorFalseKey, 64);
+      return b.create<arith::SelectOp>(loc, useTrueKey, trueKey, falseKey);
+    }
     auto k0 = b.create<arith::ConstantIntOp>(loc, 0, 64);  // i64
     return k0;
   }
@@ -483,7 +517,7 @@ class TilingBase {
     }
 
     auto switchOp = bodyBuilder.create<scf::IndexSwitchOp>(loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys),
-                                                           /*numCases=*/caseKeys.size());
+                                                           /* numCases= */ caseKeys.size());
 
     for (unsigned i = 0; i < caseKeys.size(); ++i) {
       int64_t key = caseKeys[i];
@@ -527,7 +561,7 @@ class TilingBase {
   }
 
   LogicalResult collectDeviceSignature(func::FuncOp orig, SmallVector<Type> &devInputs, SmallVector<Type> &devResults,
-                                       int64_t /*key*/) {
+                                       int64_t /* key */) {
     auto origTy = orig.getFunctionType();
 
     devInputs.clear();
@@ -554,9 +588,8 @@ class TilingBase {
     return success();
   }
 
-  func::FuncOp createAndAnnotateDeviceFunc(OpBuilder &builder, Location loc, StringRef name, FunctionType devTy,
-                                           FunctionType /*origTy*/, unsigned blockDim, func::FuncOp hostTiling) {
-    auto deviceFunc = builder.create<func::FuncOp>(loc, name, devTy);
+  func::FuncOp createAndAnnotateDeviceFunc(OpBuilder &builder, Location loc, const DeviceFuncDesc &desc) {
+    auto deviceFunc = builder.create<func::FuncOp>(loc, desc.name, desc.devTy);
     deviceFunc.addEntryBlock();
 
     copyHaccIOAttrsFrom(originalKernel_, deviceFunc);
@@ -564,17 +597,18 @@ class TilingBase {
 
     deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
     deviceFunc->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(builder.getContext(), HACCFuncType::DEVICE));
-    deviceFunc->setAttr(BlockDimAttr::name, builder.getI64IntegerAttr(blockDim));
+    deviceFunc->setAttr(BlockDimAttr::name, builder.getI64IntegerAttr(desc.blockDim));
     deviceFunc->setAttr(
       StringAttr::get(builder.getContext(), stringifyHACCToLLVMIRTranslateAttr(HACCToLLVMIRTranslateAttr::ENTRY)),
       builder.getUnitAttr());
-    if (hostTiling) {
+    if (desc.hostTiling) {
+      func::FuncOp hostTiling = desc.hostTiling;
       deviceFunc->setAttr(
         TilingFunctionAttr::name,
         TilingFunctionAttr::get(builder.getContext(), FlatSymbolRefAttr::get(hostTiling.getSymNameAttr())));
     }
 
-    unsigned numInputs = devTy.getNumInputs();
+    unsigned numInputs = desc.devTy.getNumInputs();
     unsigned keyIdx = numInputs - 2;
     unsigned tilingDataIdx = numInputs - 1;
     setTilingKeyAndDataArgAttrs(deviceFunc, keyIdx, tilingDataIdx);
@@ -642,18 +676,14 @@ class TilingBase {
       return failure();
     }
 
-    std::string keyStr = std::to_string(key);
-    if (keyStr.size() == 1) {
-      keyStr = "0" + keyStr;
-    }
-
-    std::string name = kernelInfo_->baseKernelName + "_" + keyStr;
+    std::string name = kernelInfo_->baseKernelName + "_" + autotiling::formatTilingKeySuffix(key);
 
     auto devTy = FunctionType::get(builder.getContext(), devInputs, devResults);
     auto origTy = originalKernel_.getFunctionType();
 
-    auto deviceFunc = createAndAnnotateDeviceFunc(builder, originalKernel_.getLoc(), name, devTy, origTy,
-                                                  kernelInfo_->blockDim, tilingInfo_.getPerCaseTilingFunc(key));
+    auto deviceFunc =
+      createAndAnnotateDeviceFunc(builder, originalKernel_.getLoc(),
+                                  {name, devTy, origTy, kernelInfo_->blockDim, tilingInfo_.getPerCaseTilingFunc(key)});
 
     (void)cloneKernelBodyToDeviceFunc(originalKernel_, deviceFunc);
 
@@ -824,7 +854,7 @@ class TilingBase {
   LogicalResult applyStaticTilingWithoutAnyTilingFunc(OpBuilder &builder) {
     auto *ctx = builder.getContext();
 
-    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, /*isStaticShape=*/true))) {
+    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, /* isStaticShape= */ true))) {
       originalKernel_.emitError("static tiling: failed to apply tiling on kernel");
       return failure();
     }
@@ -899,28 +929,22 @@ class TilingBase {
   }
 
   // Build one case region for tiling `key`: call the corresponding device kernel.
-  LogicalResult buildSwitchCaseForKernel(Region &reg, Location loc, int64_t key, ArrayRef<Value> args, Value keyI64,
-                                         ArrayRef<Value> tilingStructArgs, unsigned oldNumInputs, FunctionType oldTy,
-                                         MLIRContext *ctx) {
+  LogicalResult buildSwitchCaseForKernel(Region &reg, Location loc, const SwitchCaseDesc &desc) {
     auto *blk = new Block();
     reg.push_back(blk);
     OpBuilder cb(blk, blk->begin());
 
     SmallVector<Value> callArgs;
-    callArgs.reserve(oldNumInputs + 1 + tilingStructArgs.size());
-    for (unsigned a = 0; a < oldNumInputs; ++a) {
-      callArgs.push_back(args[a]);
+    callArgs.reserve(desc.oldNumInputs + 1 + desc.tilingStructArgs.size());
+    for (unsigned a = 0; a < desc.oldNumInputs; ++a) {
+      callArgs.push_back(desc.args[a]);
     }
-    callArgs.push_back(keyI64);
-    std::copy(tilingStructArgs.begin(), tilingStructArgs.end(), std::back_inserter(callArgs));
+    callArgs.push_back(desc.keyI64);
+    std::copy(desc.tilingStructArgs.begin(), desc.tilingStructArgs.end(), std::back_inserter(callArgs));
 
-    std::string keyStr = std::to_string(key);
-    if (keyStr.size() == 1) {
-      keyStr = "0" + keyStr;
-    }
-    std::string devName = kernelInfo_->baseKernelName + "_" + keyStr;
+    std::string devName = kernelInfo_->baseKernelName + "_" + autotiling::formatTilingKeySuffix(desc.key);
 
-    auto sym = SymbolTable::lookupSymbolIn(module_, StringAttr::get(ctx, devName));
+    auto sym = SymbolTable::lookupSymbolIn(module_, StringAttr::get(desc.ctx, devName));
     if (sym == nullptr) {
       originalKernel_.emitError() << "cannot find device kernel " << devName;
       return failure();
@@ -931,7 +955,7 @@ class TilingBase {
       return failure();
     }
 
-    auto call = cb.create<func::CallOp>(loc, devFunc.getSymName(), TypeRange(oldTy.getResults()), callArgs);
+    auto call = cb.create<func::CallOp>(loc, devFunc.getSymName(), TypeRange(desc.oldTy.getResults()), callArgs);
     cb.create<scf::YieldOp>(loc, ValueRange(call.getResults()));
     return success();
   }
@@ -1028,8 +1052,8 @@ class TilingBase {
                                                  ArrayRef<int64_t>(caseKeys), caseKeys.size());
 
     for (unsigned i = 0; i < caseKeys.size(); ++i) {
-      if (failed(buildSwitchCaseForKernel(switchOp.getCaseRegions()[i], loc, caseKeys[i], args, keyI64,
-                                          tilingStructArgs, oldNumInputs, oldTy, ctx))) {
+      if (failed(buildSwitchCaseForKernel(switchOp.getCaseRegions()[i], loc,
+                                          {caseKeys[i], args, keyI64, tilingStructArgs, oldNumInputs, oldTy, ctx}))) {
         return failure();
       }
     }
@@ -1105,7 +1129,7 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
     }
 
     SmallVector<func::FuncOp> kernels;
-    module.walk([&](func::FuncOp f) {
+    module.walk([&kernels, this](func::FuncOp f) {
       auto kind = f->getAttrOfType<StringAttr>(HACCFuncTypeAttr::name);
       if (kind && kind.getValue() == "DEVICE") {
         return;

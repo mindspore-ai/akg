@@ -29,13 +29,23 @@ namespace mlir {
 #endif
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace {
+namespace arith = mlir::arith;
+namespace fusion = mlir::fusion;
+namespace impl = mlir::impl;
+namespace memref = mlir::memref;
+namespace vector = mlir::vector;
+using mlir::applyPartialConversion;
+using mlir::ConversionTarget;
+using mlir::failed;
+using mlir::MLIRContext;
+using mlir::OperationPass;
+using mlir::populateFusionPatterns;
+using mlir::RewritePatternSet;
+
 class FusionToMemVecPass : public impl::ConvertFusionToMemVecBase<FusionToMemVecPass> {
   void runOnOperation() override;
 };
-}  // namespace
 
 void FusionToMemVecPass::runOnOperation() {
   MLIRContext *context = &getContext();
@@ -52,5 +62,8 @@ void FusionToMemVecPass::runOnOperation() {
     signalPassFailure();
   }
 }
+}  // namespace
 
-std::unique_ptr<OperationPass<>> mlir::createLowerFusionPass() { return std::make_unique<FusionToMemVecPass>(); }
+namespace mlir {
+std::unique_ptr<OperationPass<>> createLowerFusionPass() { return std::make_unique<FusionToMemVecPass>(); }
+}  // namespace mlir

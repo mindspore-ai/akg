@@ -75,7 +75,7 @@ static OperatorTemplate getOperatorTemplate(Operation *op) {
 void AKGOperatorIdentify::runOnOperation() {
   FunctionOpInterface funcOp = getOperation();
   OperatorTemplate curOpTemplate = OperatorTemplate::Default;
-  funcOp.walk([&](Operation *op) {
+  funcOp.walk([this, &curOpTemplate](Operation *op) {
     OperatorTemplate opTemplate = getOperatorTemplate(op);
     if (opTemplate > curOpTemplate) {
       curOpTemplate = opTemplate;

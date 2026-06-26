@@ -28,12 +28,12 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/DestinationStyleOpInterface.h"
 
+namespace {
 using namespace mlir;                 // NOLINT(build/namespaces)
 using namespace mlir::linalg;         // NOLINT(build/namespaces)
 using namespace mlir::linalgExt;      // NOLINT(build/namespaces)
 using namespace mlir::bufferization;  // NOLINT(build/namespaces)
 
-namespace {
 /// Generic conversion for any DestinationStyleOpInterface on tensors.
 static LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter, DestinationStyleOpInterface op,
                                                           const BufferizationOptions &options) {
@@ -88,8 +88,8 @@ static LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter
   // new op. Since the new op does not have any tensor results, it does not
   // return anything.
   assert(op->getNumRegions() == 1 && "expected that op has 1 region");
-  auto newOp =
-    cast<DestinationStyleOpInterface>(cloneWithoutRegions(rewriter, op, /*newResultTypes=*/TypeRange{}, newOperands));
+  auto newOp = cast<DestinationStyleOpInterface>(
+    cloneWithoutRegions(rewriter, op, /* newResultTypes= */ TypeRange{}, newOperands));
   rewriter.inlineRegionBefore(op->getRegion(0), newOp->getRegion(0), newOp->getRegion(0).begin());
 
   // Replace the results of the old op with the new output buffers.

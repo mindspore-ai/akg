@@ -14,21 +14,29 @@
  * limitations under the License.
  */
 
+#include <dlfcn.h>
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <iostream>
 #include <fstream>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendRun.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
+namespace {
 using TilingFunc = uint64_t (*)(void *);
 using GetTilingSizeFunc = uint64_t (*)();
 using TorchRunFunc = void (*)(const char *, std::function<int()>);
 constexpr auto kTilingMemSize = 1024;
 constexpr auto kTilingSizeFuncName = "_get_tiling_struct_size_function";
 constexpr auto kTilingFuncName = "_tiling_function";
+constexpr size_t kRuntimeArgCount = 6;
 
 class AscendLaunchTilingMemory {
  public:
@@ -56,14 +64,14 @@ mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
 
   if (py::isinstance<py::int_>(arg)) {
     auto val = arg.cast<int64_t>();
-    data_ptr = reinterpret_cast<void *>(val);
+    data_ptr = reinterpret_cast<void *>(val);  // NOLINT
   } else if (py::isinstance<py::float_>(arg)) {
     auto val = arg.cast<double>();
     static_assert(sizeof(double) == sizeof(void *), "double size mismatch");
     std::memcpy(&data_ptr, &val, sizeof(void *));
   } else if (py::isinstance<py::bool_>(arg)) {
     bool val = arg.cast<bool>();
-    data_ptr = reinterpret_cast<void *>(static_cast<intptr_t>(val));
+    data_ptr = reinterpret_cast<void *>(static_cast<intptr_t>(val));  // NOLINT
   }
 
   return std::make_shared<mlir::runtime::ScalarDevice>(data_ptr);
@@ -135,7 +143,7 @@ void ProcessTilingInputArg(mlir::runtime::BaseDevicePtr base, const std::vector<
   void *eff_addr = ((dev_addr != nullptr) ? dev_addr : host_addr);
   runtimeargs.push_back(eff_addr);
   runtimeargs.push_back(eff_addr);
-  runtimeargs.push_back(reinterpret_cast<void *>(offset));
+  runtimeargs.push_back(reinterpret_cast<void *>(offset));  // NOLINT
   int64_t size = 1;
   for (auto dim : shape) {
     runtimeargs.push_back(reinterpret_cast<void *>(dim));
@@ -148,58 +156,62 @@ void ProcessTilingInputArg(mlir::runtime::BaseDevicePtr base, const std::vector<
   }
 }
 
-static void processTilingWithSize(const std::string &kernel_name, void *handle,
-                                  std::vector<mlir::runtime::BaseDevicePtr> &input,
-                                  const std::vector<std::vector<int64_t>> &input_shapes, int64_t &tiling_key,
-                                  uint64_t tiling_size, std::vector<void *> &runtimeargs) {
+// Bundled tiling parameters to stay under readability-function-size_parameters limit.
+struct TilingParams {
+  std::vector<mlir::runtime::BaseDevicePtr> &input;
+  const std::vector<std::vector<int64_t>> &input_shapes;
+  int64_t &tiling_key;
+  uint64_t &tiling_size;
+  std::vector<void *> &runtimeargs;
+};
+
+static void processTilingWithSize(const std::string &kernel_name, void *handle, TilingParams &params) {
   int64_t offset = 0;
   std::string tiling_func_name = kernel_name + kTilingFuncName;
-  void *tiling_func = dlsym(handle, tiling_func_name.c_str());
+  void *tiling_func = dlsym(handle, tiling_func_name.data());
   CHECK(tiling_func != nullptr) << "dlsym failed, symbol: " << tiling_func_name << " error:" << dlerror();
-  auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);
+  auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);  // NOLINT
 
-  for (size_t idx = 0; idx < input.size(); idx++) {
-    ProcessTilingInputArg(input[idx], input_shapes[idx], offset, runtimeargs);
+  for (size_t idx = 0; idx < params.input.size(); idx++) {
+    ProcessTilingInputArg(params.input[idx], params.input_shapes[idx], offset, params.runtimeargs);
   }
-  DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key << ", offset: " << offset
-             << ", tiling_size: " << tiling_size;
-  runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-  runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
-  runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
-  runtimeargs.push_back(reinterpret_cast<void *>(offset));
-  runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));
-  runtimeargs.push_back(reinterpret_cast<void *>(1));
-  tiling_func_ptr((void *)(runtimeargs.data()));
-  for (uint64_t i = 0; i < tiling_size; i++) {
+  DLOG(INFO) << "Tiling args - tiling_key: " << params.tiling_key << ", offset: " << offset
+             << ", tiling_size: " << params.tiling_size;
+  params.runtimeargs.push_back(static_cast<void *>(&params.tiling_key));
+  params.runtimeargs.push_back(static_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+  params.runtimeargs.push_back(static_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+  params.runtimeargs.push_back(reinterpret_cast<void *>(offset));              // NOLINT
+  params.runtimeargs.push_back(reinterpret_cast<void *>(params.tiling_size));  // NOLINT
+  params.runtimeargs.push_back(reinterpret_cast<void *>(1));                   // NOLINT
+  tiling_func_ptr(reinterpret_cast<void *>(params.runtimeargs.data()));
+  for (uint64_t i = 0; i < params.tiling_size; i++) {
     DLOG(INFO) << "tiling data[" << i << "]: " << (AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i];
   }
-  input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
-    AscendLaunchTilingMemory::GetInstance()->tiling_host.get(), nullptr, tiling_size * sizeof(int64_t), false));
+  params.input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
+    AscendLaunchTilingMemory::GetInstance()->tiling_host.get(), nullptr, params.tiling_size * sizeof(int64_t), false));
 }
 
-void ProcessDynamicTiling(const std::string &path, const std::string &kernel_name,
-                          std::vector<mlir::runtime::BaseDevicePtr> &input,
-                          const std::vector<std::vector<int64_t>> &input_shapes, int64_t &tiling_key,
-                          uint64_t &tiling_size, std::vector<void *> &runtimeargs) {
+void ProcessDynamicTiling(const std::string &path, const std::string &kernel_name, TilingParams &params) {
   std::string so_path = path + "/lib" + kernel_name + ".so";
   void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
   CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
 
   std::string tiling_size_func_name = kernel_name + kTilingSizeFuncName;
-  void *tiling_size_func = dlsym(handle, tiling_size_func_name.c_str());
+  void *tiling_size_func = dlsym(handle, tiling_size_func_name.data());
   CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
-  tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
-  if (tiling_size > 0) {
-    processTilingWithSize(kernel_name, handle, input, input_shapes, tiling_key, tiling_size, runtimeargs);
+  params.tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();  // NOLINT
+  if (params.tiling_size > 0) {
+    processTilingWithSize(kernel_name, handle, params);
   }
 }
 
 void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic, bool use_mem_pool,
-                    const py::args &args, py::kwargs kwargs) {
+                    const py::args &args, py::kwargs kwargs) {  // NOLINT(readability-function-size)
   void *external_stream = nullptr;
   if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
     auto h = kwargs["stream"].cast<intptr_t>();
-    external_stream = (h == 0) ? reinterpret_cast<void *>(static_cast<uintptr_t>(-1)) : reinterpret_cast<void *>(h);
+    external_stream =
+      (h == 0) ? reinterpret_cast<void *>(static_cast<uintptr_t>(-1)) : reinterpret_cast<void *>(h);  // NOLINT
   }
   auto processed_args = kwargs["processed_args"].cast<py::list>();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
@@ -207,12 +219,13 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   ParseInputArgs(is_dynamic, input, input_shapes, processed_args);
 
-  int64_t tiling_key;
+  int64_t tiling_key = 0;
   uint64_t tiling_size = 0;
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
-    ProcessDynamicTiling(path, kernel_name, input, input_shapes, tiling_key, tiling_size, runtimeargs);
+    TilingParams params{input, input_shapes, tiling_key, tiling_size, runtimeargs};
+    ProcessDynamicTiling(path, kernel_name, params);
   }
   for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
     DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
@@ -227,16 +240,16 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 void *GetPointer(py::object arg) {
   if (py::isinstance<py::int_>(arg)) {
     auto val = arg.cast<int64_t>();
-    return reinterpret_cast<void *>(val);
+    return reinterpret_cast<void *>(val);  // NOLINT
   }
   if (py::isinstance<py::float_>(arg)) {
     double val = arg.cast<double>();
-    return reinterpret_cast<void *>(static_cast<intptr_t>(val));
+    return reinterpret_cast<void *>(static_cast<intptr_t>(val));  // NOLINT
   } else if (py::isinstance<py::bool_>(arg)) {
     bool val = arg.cast<bool>();
-    return reinterpret_cast<void *>(static_cast<intptr_t>(val));
+    return reinterpret_cast<void *>(static_cast<intptr_t>(val));  // NOLINT
   } else if (py::hasattr(arg, "data_ptr")) {
-    return reinterpret_cast<void *>(arg.attr("data_ptr")().cast<intptr_t>());
+    return reinterpret_cast<void *>(arg.attr("data_ptr")().cast<intptr_t>());  // NOLINT
   }
   return nullptr;
 }
@@ -248,15 +261,15 @@ py::tuple GetHostFunctions(std::string kernel_name, std::string lib_path) {
   void *handle = dlopen(lib_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
   CHECK(handle != nullptr) << "dlopen failed, file: " << lib_path << ", Error:" << dlerror();
 
-  void *kernel_func = dlsym(handle, kernel_name.c_str());
+  void *kernel_func = dlsym(handle, kernel_name.data());
   CHECK(kernel_func != nullptr) << "dlsym failed, symbol: " << kernel_name << " error:" << dlerror();
 
-  void *tiling_func = dlsym(handle, tiling_func_name.c_str());
+  void *tiling_func = dlsym(handle, tiling_func_name.data());
   CHECK(tiling_func != nullptr) << "dlsym failed, symbol: " << tiling_func_name << " error:" << dlerror();
 
-  void *tiling_size_func = dlsym(handle, tiling_size_func_name.c_str());
+  void *tiling_size_func = dlsym(handle, tiling_size_func_name.data());
   CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
-  uint64_t tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();
+  uint64_t tiling_size = reinterpret_cast<GetTilingSizeFunc>(tiling_size_func)();  // NOLINT
 
   return py::make_tuple(reinterpret_cast<uint64_t>(kernel_func), reinterpret_cast<uint64_t>(tiling_func),
                         reinterpret_cast<uint64_t>(tiling_size_func), tiling_size);
@@ -272,62 +285,67 @@ std::vector<void *> InitKernelArgs(const py::args &args, uint64_t tiling_func = 
   if (tiling_size > 0 && tiling_size < kTilingMemSize) {
     int64_t tiling_key;
     int64_t offset = 0;
-    runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
-    runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
-    runtimeargs.push_back(reinterpret_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
-    runtimeargs.push_back(reinterpret_cast<void *>(offset));
-    runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));
-    runtimeargs.push_back(reinterpret_cast<void *>(1));
-    auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);
-    tiling_func_ptr((void *)(runtimeargs.data()));
-    runtimeargs.resize(runtimeargs.size() - 6);
-    runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));
+    runtimeargs.push_back(static_cast<void *>(&tiling_key));
+    runtimeargs.push_back(static_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+    runtimeargs.push_back(static_cast<void *>(AscendLaunchTilingMemory::GetInstance()->tiling_host.get()));
+    runtimeargs.push_back(reinterpret_cast<void *>(offset));           // NOLINT
+    runtimeargs.push_back(reinterpret_cast<void *>(tiling_size));      // NOLINT
+    runtimeargs.push_back(reinterpret_cast<void *>(1));                // NOLINT
+    auto tiling_func_ptr = reinterpret_cast<TilingFunc>(tiling_func);  // NOLINT
+    tiling_func_ptr(reinterpret_cast<void *>(runtimeargs.data()));
+    runtimeargs.resize(runtimeargs.size() - kRuntimeArgCount);
+    runtimeargs.push_back(reinterpret_cast<void *>(tiling_key));  // NOLINT
     for (uint64_t i = 0; i < tiling_size; i++) {
       DLOG(INFO) << "tiling data[" << i << "]: " << (AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i];
-      runtimeargs.push_back(reinterpret_cast<void *>((AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i]));
+      runtimeargs.push_back(
+        reinterpret_cast<void *>((AscendLaunchTilingMemory::GetInstance()->tiling_host.get())[i]));  // NOLINT
     }
   }
   return runtimeargs;
 }
 
-void Launch(uint64_t kernel_func, uint64_t tiling_func, uint64_t tiling_size, uint64_t block_num, uint64_t stream,
-            bool is_dynamic, const py::args &args) {
+void Launch(const std::string &func_name, uint64_t kernel_func, uint64_t tiling_func, uint64_t tiling_size,
+            uint64_t block_num, uint64_t stream, bool is_dynamic,
+            const py::args &args) {  // NOLINT(readability-function-size)
   auto runtimeargs = InitKernelArgs(args, tiling_func, tiling_size);
-  mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+  mlir::runtime::KernelLaunch(func_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
 }
 
-void Launch(uint64_t kernel_func, uint64_t block_num, uint64_t stream, bool is_dynamic, const py::args &args) {
+void Launch(const std::string &func_name, uint64_t kernel_func, uint64_t block_num, uint64_t stream, bool is_dynamic,
+            const py::args &args) {  // NOLINT(readability-function-size)
   auto runtimeargs = InitKernelArgs(args);
-  mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+  mlir::runtime::KernelLaunch(func_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
 }
 
 void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kernel_func, uint64_t tiling_func,
-                 uint64_t tiling_size, uint64_t block_num, uint64_t stream, bool is_dynamic, const py::args &args) {
+                 uint64_t tiling_size, uint64_t block_num, uint64_t stream, bool is_dynamic,
+                 const py::args &args) {  // NOLINT(readability-function-size)
   auto runtimeargs = InitKernelArgs(args, tiling_func, tiling_size);
   static void *torch_run_func = nullptr;
   if (torch_run_func == nullptr) {
     if (torch_path.empty()) {
-      mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+      mlir::runtime::KernelLaunch(kernel_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
       return;
     }
     std::string so_path = torch_path + "/lib/libtorch_npu.so";
     std::string func_name = "_Z14opcommand_callPKcSt8functionIFivEE";
     void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
     CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
-    torch_run_func = dlsym(handle, func_name.c_str());
+    torch_run_func = dlsym(handle, func_name.data());
     CHECK(torch_run_func != nullptr) << "dlsym failed, symbol: opcommand_call, error:" << dlerror();
   }
 
-  auto launch_call = [kernel_func, block_num, stream, runtimeargs, is_dynamic] {
-    mlir::runtime::KernelLaunch(kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
+  auto launch_call = [kernel_name, kernel_func, block_num, stream, runtimeargs, is_dynamic] {
+    mlir::runtime::KernelLaunch(kernel_name, kernel_func, block_num, (rtStream_t)stream, runtimeargs, is_dynamic);
     return 0;
   };
   reinterpret_cast<TorchRunFunc>(torch_run_func)(kernel_name.c_str(), launch_call);
 }
+}  // namespace
 
 // PYBIND interface
 PYBIND11_MODULE(ascend_launch, m) {
-  akg_log_init();
+  mlir::runtime::akg_log_init();
   if (!google::IsGoogleLoggingInitialized()) {
     google::InitGoogleLogging("akg");
   }
@@ -335,9 +353,11 @@ PYBIND11_MODULE(ascend_launch, m) {
   m.def("akg_ascend_run", &akg_ascend_run);
   m.def("get_host_functions", &GetHostFunctions);
   m.def("get_device_function", &mlir::runtime::GetKernelFunction);
-  m.def("launch", py::overload_cast<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
+  m.def("launch",
+        py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool,
+                          const py::args &>(&Launch),
         "Launch kernel with tiling support");
-  m.def("launch", py::overload_cast<uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
+  m.def("launch", py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
         "Launch kernel without tiling support");
   m.def("torch_launch", &TorchLaunch, "Launch kernel for torch_npu");
 }

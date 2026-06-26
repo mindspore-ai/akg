@@ -19,7 +19,8 @@
 #include <vector>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/CceAcl.h"
 
-const std::map<uint32_t, std::string> error_msg = {
+namespace {
+static const std::map<uint32_t, std::string> error_msg = {
   {ACL_RT_SUCCESS, "success"},
   {ACL_ERROR_RT_PARAM_INVALID, "param invalid"},
   {ACL_ERROR_RT_INVALID_DEVICEID, "invalid device id"},
@@ -87,6 +88,7 @@ const std::map<uint32_t, std::string> error_msg = {
   {ACL_ERROR_RT_DEV_SETUP_ERROR, "device setup error"},
   {ACL_ERROR_RT_DRV_INTERNAL_ERROR, "drv internal error"},
 };
+}  // namespace
 
 namespace mlir {
 namespace runtime {

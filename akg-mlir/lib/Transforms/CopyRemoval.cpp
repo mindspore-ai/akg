@@ -27,6 +27,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_COPYREMOVAL
@@ -36,6 +37,7 @@ namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 #endif
@@ -98,7 +100,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
   /// nullptr otherwise.
   [[nodiscard]] Operation *getDeallocationOp(Value value) const {
     auto valueUsers = value.getUsers();
-    auto it = llvm::find_if(valueUsers, [&](Operation *op) {
+    auto it = llvm::find_if(valueUsers, [](Operation *op) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
       return effects && effects.hasEffect<Free>();
     });
@@ -112,7 +114,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
       if (!llvm::is_contained(val.getUsers(), op)) {
         return false;
       }
-      SmallVector<MemoryEffects::EffectInstance, 1> effects;
+      SmallVector<MemoryEffects::EffectInstance, kSmallVectorSizeOne> effects;
       memEffect.getEffects(effects);
 
       // Iterate through all the effects produced by `op`, and check
@@ -127,7 +129,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
       // internal operations may have the side effect `EffectType` on
       // `val`.
       for (Region &region : op->getRegions()) {
-        auto walkResult = region.walk([&](Operation *op) {
+        auto walkResult = region.walk([&val](Operation *op) {
           if (doesOpHaveWriteEffect(val, op)) {
             return WalkResult::interrupt();
           }
@@ -158,7 +160,8 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
                         std::function<bool(Value, Operation *)> checkPropertiesOfOperation) const {
     // Check for all paths from operation `fromp` to operation `untilOp` for the
     // given property.
-    std::function<bool(Operation *, Operation *)> recur = [&](Operation *fromOp, Operation *untilOp) {
+    std::function<bool(Operation *, Operation *)> recur = [&recur, &checkPropertiesOfOperation, &val](
+                                                            Operation *fromOp, Operation *untilOp) {
       auto untilOpParentRegion = untilOp->getParentRegion();
       auto untilOpParentOp = untilOp->getParentOp();
       auto fromOpParentRegion = fromOp->getParentRegion();
@@ -181,7 +184,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
       // perform a CFG traversal to check all the relevant operations.
 
       // Additional blocks to consider.
-      SmallVector<Block *, 2> todoBlocks;
+      SmallVector<Block *, kSmallVectorSizeTwo> todoBlocks;
       {
         // First consider the parent block of `fromOp` an check all
         // operations after `from`.
@@ -201,7 +204,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
 
       // Stores the blocks whose ops has been checked using
       // `checkPropertiesOfOperation`.
-      SmallPtrSet<Block *, 4> done;
+      SmallPtrSet<Block *, kSmallVectorSizeFour> done;
       // Traverse the CFG until hitting `untilOp`.
       while (!todoBlocks.empty()) {
         Block *blk = todoBlocks.pop_back_val();
@@ -233,7 +236,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
 
   /// Remove copy statements when there are no uses of `destination` after the
   /// copy op.
-  void removeCopy(CopyOpInterface copyOp, llvm::SmallPtrSet<Operation *, 4> &opsToErase) {
+  void removeCopy(CopyOpInterface copyOp, llvm::SmallPtrSet<Operation *, kSmallVectorSizeFour> &opsToErase) {
     if (opsToErase.count(copyOp) != 0) {
       return;
     }
@@ -265,11 +268,11 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
 
 void CopyRemovalPass::runOnOperation() {
   /// Operations that need to be removed.
-  SmallVector<func::FuncOp, 2> funcs;
-  getOperation()->walk([&](func::FuncOp func) { funcs.push_back(func); });
+  SmallVector<func::FuncOp, kSmallVectorSizeTwo> funcs;
+  getOperation()->walk([&funcs](func::FuncOp func) { funcs.push_back(func); });
   for (auto func : funcs) {
-    llvm::SmallPtrSet<Operation *, 4> opsToErase;
-    func.walk([&](CopyOpInterface copyOp) { removeCopy(copyOp, opsToErase); });
+    llvm::SmallPtrSet<Operation *, kSmallVectorSizeFour> opsToErase;
+    func.walk([this, &opsToErase](CopyOpInterface copyOp) { removeCopy(copyOp, opsToErase); });
     for (Operation *op : opsToErase) {
       assert(op->use_empty() &&
              "uses remaining for copy ops, memref allocation and deallocation "
@@ -282,4 +285,6 @@ void CopyRemovalPass::runOnOperation() {
 
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createCopyRemovalPass() { return std::make_unique<CopyRemovalPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createCopyRemovalPass() { return std::make_unique<CopyRemovalPass>(); }
+}  // namespace mlir

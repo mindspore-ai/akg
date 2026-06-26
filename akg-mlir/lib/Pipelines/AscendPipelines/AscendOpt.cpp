@@ -17,27 +17,28 @@
 #include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 
 #include <cstdlib>
-#include "llvm/ADT/SmallVector.h"
+
 #include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
-#include "akg/Dialect/SCF/Passes.h"
-#include "akg/Dialect/NPUVector/Passes.h"
-#include "akg/Dialect/Vector/Passes.h"
-#include "akg/Dialect/Tensor/Passes.h"
-#include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
+#include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
+#include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Dialect/SCF/Passes.h"
+#include "akg/Dialect/Tensor/Passes.h"
+#include "akg/Dialect/Vector/Passes.h"
 #include "akg/Transforms/Passes.h"
-#include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
-#include "bishengir/Dialect/Annotation/Transforms/Passes.h"
-#include "bishengir/Dialect/HIVM/Transforms/Passes.h"
-#include "bishengir/Dialect/HACC/Transforms/Passes.h"
-#include "bishengir/Dialect/SCF/Transforms/Passes.h"
-#include "bishengir/Dialect/Scope/Transforms/Passes.h"
+#include "akg/Utils/GlobalVars.hpp"
 #include "bishengir/Conversion/ArithToAffine/ArithToAffine.h"
 #include "bishengir/Conversion/HIVMToStandard/HIVMToStandard.h"
+#include "bishengir/Dialect/Annotation/Transforms/Passes.h"
+#include "bishengir/Dialect/HACC/Transforms/Passes.h"
+#include "bishengir/Dialect/HIVM/Transforms/Passes.h"
+#include "bishengir/Dialect/SCF/Transforms/Passes.h"
+#include "bishengir/Dialect/Scope/Transforms/Passes.h"
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -237,6 +238,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(affine::createAffineReductionAnnotationPass());
     nestedFusionPM.addPass(createHoistLoopIndependentOpsPass());
     nestedFusionPM.addPass(createAKGLoopFusionPass());
+    nestedFusionPM.addPass(createStoreLoadElimPass());
     nestedFusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
     nestedFusionPM.addPass(createCanonicalizerPass());
     nestedFusionPM.addPass(createSubviewAllocElimPass());
@@ -260,6 +262,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(scf::createNPUVectorVectorizePass());
     pm.addPass(npuvector::createElimScfIterArgsPass());
     pm.addPass(createCanonicalizerPass());
+    pm.addPass(npuvector::createRefineNPUVectorStaticShapePass());
     pm.addPass(npuvector::createEliminateNPUVectorRedundantOpsPass());
     pm.addPass(createCSEPass());
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {

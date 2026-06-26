@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
+
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -36,12 +38,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-
-#include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
-
-using namespace mlir;             // NOLINT(build/namespaces)
-using namespace mlir::linalgExt;  // NOLINT(build/namespaces)
 
 namespace mlir {
 #ifndef GEN_PASS_CLASSES
@@ -49,6 +46,39 @@ namespace mlir {
 #include "akg/Conversion/Passes.h.inc"
 #endif
 }  // namespace mlir
+
+namespace {
+namespace affine = mlir::affine;
+namespace arith = mlir::arith;
+namespace func = mlir::func;
+namespace linalgExt = mlir::linalgExt;
+namespace math = mlir::math;
+namespace memref = mlir::memref;
+namespace shape = mlir::shape;
+namespace tensor = mlir::tensor;
+namespace vector = mlir::vector;
+using mlir::AffineMap;
+using mlir::applyPatternsAndFoldGreedily;
+using mlir::ArrayAttr;
+using mlir::cast;
+using mlir::DialectRegistry;
+using mlir::FunctionOpInterface;
+using mlir::LinalgExtLowerBase;
+using mlir::Location;
+using mlir::LogicalResult;
+using mlir::MLIRContext;
+using mlir::OpBuilder;
+using mlir::OperationPass;
+using mlir::OpRewritePattern;
+using mlir::PatternRewriter;
+using mlir::RewritePatternSet;
+using mlir::ShapedType;
+using mlir::SmallVector;
+using mlir::success;
+using mlir::Type;
+using mlir::Value;
+using mlir::ValueRange;
+using mlir::VectorType;
 
 constexpr auto kVectorInitSize = 4;
 
@@ -78,16 +108,19 @@ class GatherOpConverter : public OpRewritePattern<linalgExt::GatherOp> {
     Value output = op.getOutput();
     affine::buildAffineLoopNest(
       rewriter, loc, lowerBounds, indicesShape, steps,
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
+      [&rewriter, &loc, &indices, &data, &output, &lowerBounds2, &upperBounds2, &steps2, &lowerBounds3, &upperBounds3,
+       &steps3](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
         Value slice = nestedBuilder.create<memref::LoadOp>(nestedLoc, indices, ivs);
         Value sliceIdx = nestedBuilder.create<arith::IndexCastOp>(nestedLoc, nestedBuilder.getIndexType(), slice);
 
         affine::buildAffineLoopNest(
           rewriter, loc, lowerBounds2, upperBounds2, steps2,
-          [&](OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
+          [&rewriter, &loc, &data, &output, &sliceIdx, &ivs, &lowerBounds3, &upperBounds3, &steps3](
+            OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
             affine::buildAffineLoopNest(
               rewriter, loc, lowerBounds3, upperBounds3, steps3,
-              [&](OpBuilder &nestedBuilder3, Location nestedLoc3, ValueRange ivs3) {
+              [&data, &output, &ivs2, &sliceIdx, &ivs](OpBuilder &nestedBuilder3, Location nestedLoc3,
+                                                       ValueRange ivs3) {
                 SmallVector<Value, kVectorInitSize> dataIndices(ivs2);
                 dataIndices.push_back(sliceIdx);
                 dataIndices.append(SmallVector<Value, kVectorInitSize>(ivs3));
@@ -126,15 +159,18 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
     SmallVector<int64_t, kVectorInitSize> sliceShape(dataShape.begin() + indicesShape.size(), dataShape.end());
 
     auto loc = op.getLoc();
+    Value output = op.getOutput();
     affine::buildAffineLoopNest(
       rewriter, loc, lowerBounds, indicesShape, steps,
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
+      [this, &rewriter, &loc, &indices, &data, &output, &op, &lowerBounds2, &sliceShape, &steps2](
+        OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
         Value slice = nestedBuilder.create<memref::LoadOp>(nestedLoc, indices, ivs);
         Value sliceIdx = nestedBuilder.create<arith::IndexCastOp>(nestedLoc, nestedBuilder.getIndexType(), slice);
 
         affine::buildAffineLoopNest(
           rewriter, nestedLoc, lowerBounds2, sliceShape, steps2,
-          [&](OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
+          [this, &rewriter, &data, &output, &sliceIdx, &ivs, &sliceShape, &op](OpBuilder &nestedBuilder2,
+                                                                               Location nestedLoc2, ValueRange ivs2) {
             SmallVector<Value, kVectorInitSize> dataIndices(ivs);
             dataIndices.append(ivs2.begin(), ivs2.end());
             SmallVector<Value, kVectorInitSize> outputIndices({sliceIdx});
@@ -160,7 +196,6 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
 
             auto dataRank = cast<ShapedType>(data.getType()).getRank();
 
-            Value output = op.getOutput();
             auto outputRank = cast<ShapedType>(output.getType()).getRank();
             auto dataMap =
               AffineMap::get(dataRank, 0, {nestedBuilder2.getAffineDimExpr(dataRank - 1)}, nestedBuilder2.getContext());
@@ -223,7 +258,10 @@ struct LinalgExtLowerPass : public LinalgExtLowerBase<LinalgExtLowerPass> {
     (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
   }
 };
+}  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgExtLowerPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createLinalgExtLowerPass() {
   return std::make_unique<LinalgExtLowerPass>();
 }
+}  // namespace mlir

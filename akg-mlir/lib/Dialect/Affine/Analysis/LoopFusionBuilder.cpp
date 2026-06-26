@@ -50,6 +50,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Value.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace akg {
@@ -89,7 +90,7 @@ constexpr unsigned kDefaultNumCommonLoops = 0;
 
 // Collect loop nest state from operations in the block
 void LoopNestStateCollector::collect(Operation *opToWalk) {
-  opToWalk->walk([&](Operation *op) {
+  opToWalk->walk([this](Operation *op) {
     if (isa<affine::AffineForOp>(op)) {
       forOps.push_back(cast<affine::AffineForOp>(op));
     } else {
@@ -143,7 +144,8 @@ static int getEnclosingForLoopNodeId(MemRefDependenceGraphForFusion &graph, cons
   return kInvalidNodeId;
 }
 
-static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal, llvm::SmallVector<int64_t, 4> &shapeBuf) {
+static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal,
+                                              llvm::SmallVector<int64_t, kSmallVectorSizeFour> &shapeBuf) {
   auto memrefType = mlir::dyn_cast<mlir::MemRefType>(memrefVal.getType());
   if (!memrefType || !memrefType.hasStaticShape()) {
     return {};
@@ -182,8 +184,8 @@ static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t
   if (a.size() != b.size()) {
     return false;
   }
-  llvm::SmallVector<int64_t, 4> aSorted(a.begin(), a.end());
-  llvm::SmallVector<int64_t, 4> bSorted(b.begin(), b.end());
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> aSorted(a.begin(), a.end());
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> bSorted(b.begin(), b.end());
   std::sort(aSorted.begin(), aSorted.end());
   std::sort(bSorted.begin(), bSorted.end());
   return isSameShape(aSorted, bSorted);
@@ -271,7 +273,7 @@ bool MemRefDependenceGraphForFusion::init() {
 }
 
 void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
-  block->walk([&](Operation *op) {
+  block->walk([this, &memrefAccesses](Operation *op) {
     if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
       if (isa<affine::AffineForOp>(op->getParentOp())) {
         return;
@@ -393,8 +395,8 @@ void MemRefDependenceGraphForFusion::collectForNodeLoadIds(Operation *loadOpInst
 
 void MemRefDependenceGraphForFusion::collectLoadNodeIdsAndNonForNodes(
   Value memref, const SetVector<unsigned> &nodeIds, SmallVector<unsigned> &loadNodeIds,
-  SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
-  SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore) {
+  SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> &nonForNodesWithStore,
+  SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeEight> &forNodesWithStore) {
   for (unsigned nodeId : nodeIds) {
     Node *node = getNode(nodeId);
     if (auto loadOpInterface = dyn_cast<affine::AffineReadOpInterface>(node->op)) {
@@ -481,8 +483,8 @@ bool MemRefDependenceGraphForFusion::areNonOverlappingSubviewStores(unsigned nod
 
 void MemRefDependenceGraphForFusion::addAliasedStoreEdges(
   Value memref, const SetVector<unsigned> &nodeIds,
-  const SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
-  const SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore, bool hasLoadsForBaseMemref) {
+  const SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> &nonForNodesWithStore,
+  const SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeEight> &forNodesWithStore, bool hasLoadsForBaseMemref) {
   for (unsigned i = 0; i < nonForNodesWithStore.size(); ++i) {
     unsigned srcId = nonForNodesWithStore[i].first;
     bool srcHasStore = nonForNodesWithStore[i].second;
@@ -550,8 +552,8 @@ bool MemRefDependenceGraphForFusion::createEdges(const DenseMap<Value, SetVector
       continue;
     }
     SmallVector<unsigned> loadNodeIds;
-    SmallVector<std::pair<unsigned, bool>, 16> nonForNodesWithStore;
-    SmallVector<std::pair<unsigned, bool>, 8> forNodesWithStore;
+    SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> nonForNodesWithStore;
+    SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeEight> forNodesWithStore;
     collectLoadNodeIdsAndNonForNodes(memref, nodeIds, loadNodeIds, nonForNodesWithStore, forNodesWithStore);
     bool hasLoadsForBaseMemref = !loadNodeIds.empty();
     addAliasedStoreEdges(memref, nodeIds, nonForNodesWithStore, forNodesWithStore, hasLoadsForBaseMemref);
@@ -611,7 +613,7 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
   auto store = stores.front();
   Value outMemref = store.getMemRef();
 
-  llvm::SmallVector<int64_t, 4> outShapeBuf;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> outShapeBuf;
   auto outShape = getStaticShape(outMemref, outShapeBuf);
   if (outShape.empty()) {
     return OperatorTemplate::Default;
@@ -621,7 +623,7 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
 
   for (auto load : loads) {
     Value inMemref = load.getMemRef();
-    llvm::SmallVector<int64_t, 4> inShapeBuf;
+    llvm::SmallVector<int64_t, kSmallVectorSizeFour> inShapeBuf;
     auto inShape = getStaticShape(inMemref, inShapeBuf);
     if (inShape.empty()) {
       continue;
@@ -713,11 +715,12 @@ void MemRefDependenceGraphForFusion::precomputeDependentGroups() {
 
 // Collect all loops in a loop nest starting from the given loop
 // This includes the loop itself and all nested loops, ordered from outermost to innermost
-static void collectLoopNest(affine::AffineForOp rootLoop, SmallVector<affine::AffineForOp, 4> &loops) {
+static void collectLoopNest(affine::AffineForOp rootLoop,
+                            SmallVector<affine::AffineForOp, kSmallVectorSizeFour> &loops) {
   loops.clear();
 
   // First, collect all parent loops (from outermost to the root loop's parent)
-  SmallVector<affine::AffineForOp, 4> parentLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> parentLoops;
   affine::getAffineForIVs(*rootLoop, &parentLoops);
   loops.append(parentLoops.begin(), parentLoops.end());
 
@@ -725,7 +728,7 @@ static void collectLoopNest(affine::AffineForOp rootLoop, SmallVector<affine::Af
   loops.push_back(rootLoop);
 
   // Finally, recursively collect nested loops in depth-first order
-  std::function<void(affine::AffineForOp)> collectNested = [&](affine::AffineForOp loop) {
+  std::function<void(affine::AffineForOp)> collectNested = [&loops, &collectNested](affine::AffineForOp loop) {
     for (auto &op : *loop.getBody()) {
       if (auto nestedLoop = dyn_cast<affine::AffineForOp>(op)) {
         loops.push_back(nestedLoop);
@@ -742,7 +745,7 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
   collectLoopNest(rootOp, loops);
   loopDepth = static_cast<unsigned>(loops.size());
 
-  SmallVector<affine::AffineForOp, 4> perfectBand;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> perfectBand;
   affine::getPerfectlyNestedLoops(perfectBand, rootOp);
   perfectDepth = static_cast<unsigned>(perfectBand.size());
   isPerfect = (perfectDepth == loopDepth);
@@ -760,8 +763,8 @@ IntegerSet FusionGuard::buildCondSet(MLIRContext *ctx) const {
     AffineExpr upperCond = builder.getAffineConstantExpr(offset + boundValue - 1) - d0;
     return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {lowerCond, upperCond}, /* eqFlags= */ {false, false});
   }
-  AffineExpr condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
-                                               : builder.getAffineConstantExpr(boundValue - 1) - d0;
+  AffineExpr condExpr = (kind == Kind::ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
+                                                     : builder.getAffineConstantExpr(boundValue - 1) - d0;
   return IntegerSet::get(kGuardDimCount, kGuardSymbolCount, {condExpr}, /* eqFlags= */ {false});
 }
 
@@ -771,8 +774,8 @@ static bool loopLBStepMatch(affine::AffineForOp a, affine::AffineForOp b) {
 }
 
 // Build an identity dim map: [0, 1, ..., depth-1].
-static SmallVector<int, 4> makeIdentityDimMap(unsigned depth) {
-  SmallVector<int, 4> map;
+static SmallVector<int, kSmallVectorSizeFour> makeIdentityDimMap(unsigned depth) {
+  SmallVector<int, kSmallVectorSizeFour> map;
   for (unsigned i = 0; i < depth; ++i) {
     map.push_back(i);
   }
@@ -780,8 +783,8 @@ static SmallVector<int, 4> makeIdentityDimMap(unsigned depth) {
 }
 
 // Build a dim map that skips one position: [0,..,skipPos-1, skipPos+1,..,depth].
-static SmallVector<int, 4> makeSkipOneDimMap(unsigned secondaryDepth, unsigned skipPos) {
-  SmallVector<int, 4> map;
+static SmallVector<int, kSmallVectorSizeFour> makeSkipOneDimMap(unsigned secondaryDepth, unsigned skipPos) {
+  SmallVector<int, kSmallVectorSizeFour> map;
   for (unsigned i = 0; i < skipPos; ++i) {
     map.push_back(i);
   }
@@ -792,8 +795,8 @@ static SmallVector<int, 4> makeSkipOneDimMap(unsigned secondaryDepth, unsigned s
 }
 
 // Compute the inverse permutation: if perm[i] = j, then inverse[j] = i.
-static SmallVector<int, 4> computeInversePermutation(ArrayRef<int> perm) {
-  SmallVector<int, 4> inverse(perm.size());
+static SmallVector<int, kSmallVectorSizeFour> computeInversePermutation(ArrayRef<int> perm) {
+  SmallVector<int, kSmallVectorSizeFour> inverse(perm.size());
   for (unsigned i = 0; i < perm.size(); ++i) {
     inverse[perm[i]] = static_cast<int>(i);
   }
@@ -883,7 +886,7 @@ bool SubviewFusionHelper::buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionL
     // actually encloses the target body.
     FusionGuard guard;
     if (extraEnclosesTarget && ub - lb > step) {
-      guard = {FusionGuard::ExtraDimEqLB, p, lb};
+      guard = {FusionGuard::Kind::ExtraDimEqLB, p, lb};
     }
 
     plan.srcInfo = &srcInfo;
@@ -933,7 +936,7 @@ bool SubviewFusionHelper::buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionL
   int64_t dstUB = dstLoop.getConstantUpperBound();
 
   plan.srcIsPrimary = (srcUB >= dstUB);
-  plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
+  plan.guard = {FusionGuard::Kind::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
   plan.guard.offset = detectGuardDimSubviewOffset(static_cast<unsigned>(mismatchPos));
   return true;
 }
@@ -960,7 +963,7 @@ static int checkPermMismatch(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &ds
 bool SubviewFusionHelper::buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo) {
   unsigned depth = srcInfo.loopDepth;
 
-  SmallVector<int, 4> perm;
+  SmallVector<int, kSmallVectorSizeFour> perm;
   for (unsigned i = 0; i < depth; ++i) {
     perm.push_back(static_cast<int>(i));
   }
@@ -993,12 +996,12 @@ bool SubviewFusionHelper::buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionL
     if (srcUB >= dstUB) {
       plan.srcIsPrimary = true;
       plan.dimMap.assign(perm.begin(), perm.end());
-      plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(perm[mismatchPos]), std::min(srcUB, dstUB)};
+      plan.guard = {FusionGuard::Kind::SmallerUB, static_cast<unsigned>(perm[mismatchPos]), std::min(srcUB, dstUB)};
       secondaryGuardDim = static_cast<unsigned>(mismatchPos);
     } else {
       plan.srcIsPrimary = false;
       plan.dimMap = computeInversePermutation(perm);
-      plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
+      plan.guard = {FusionGuard::Kind::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
       secondaryGuardDim = static_cast<unsigned>(perm[mismatchPos]);
     }
     plan.guard.offset = detectGuardDimSubviewOffset(secondaryGuardDim);
@@ -1123,7 +1126,7 @@ void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages)
 int64_t SubviewFusionHelper::detectGuardDimSubviewOffset(unsigned secondaryGuardDim) {
   // Collect base memrefs written by the primary loop.
   DenseSet<Value> primaryBases;
-  plan.primaryInfo()->loops.back().walk([&](Operation *op) {
+  plan.primaryInfo()->loops.back().walk([&primaryBases](Operation *op) {
     auto store = dyn_cast<affine::AffineWriteOpInterface>(op);
     if (!store) {
       return;
@@ -1134,7 +1137,7 @@ int64_t SubviewFusionHelper::detectGuardDimSubviewOffset(unsigned secondaryGuard
   // Walk secondary loop body for load/store ops whose memref chain passes
   // through a SubViewOp and whose base memref matches a primary write target.
   memref::SubViewOp foundSubview;
-  plan.secondaryInfo()->loops.back().walk([&](Operation *op) {
+  plan.secondaryInfo()->loops.back().walk([&foundSubview, &primaryBases](Operation *op) {
     if (foundSubview) {
       return;
     }
@@ -1173,7 +1176,7 @@ int64_t SubviewFusionHelper::detectGuardDimSubviewOffset(unsigned secondaryGuard
 }
 
 void SubviewFusionHelper::expandPrimaryLoopForOffset() {
-  if (plan.guard.kind != FusionGuard::SmallerUB || plan.guard.offset == 0) {
+  if (plan.guard.kind != FusionGuard::Kind::SmallerUB || plan.guard.offset == 0) {
     return;
   }
 
@@ -1196,7 +1199,7 @@ void SubviewFusionHelper::expandPrimaryLoopForOffset() {
   Block *body = innermostLoop.getBody();
 
   auto bodyOps = body->without_terminator();
-  SmallVector<Operation *, 16> opsToGuard;
+  SmallVector<Operation *, kSmallVectorSizeSixteen> opsToGuard;
   std::transform(bodyOps.begin(), bodyOps.end(), std::back_inserter(opsToGuard), [](Operation &op) { return &op; });
   if (opsToGuard.empty()) {
     return;
@@ -1243,7 +1246,7 @@ std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo
 // --- Static helpers for FusionCodeGenHelper ---
 
 static bool isDependentLoadOrStoreOp(Operation *candidate, DenseMap<Value, bool> &memFlags) {
-  auto lookupMemFlag = [&](Value memref) -> DenseMap<Value, bool>::iterator {
+  auto lookupMemFlag = [&memFlags](Value memref) -> DenseMap<Value, bool>::iterator {
     auto it = memFlags.find(memref);
     if (it != memFlags.end()) {
       return it;
@@ -1279,7 +1282,7 @@ static Operation *getFirstDependentOpInRange(affine::AffineForOp opA, affine::Af
        ++it) {
     Operation *opX = &*it;
 
-    opX->walk([&](Operation *nested) {
+    opX->walk([&firstDependent, &memFlags, &opX](Operation *nested) {
       if (firstDependent) {
         return WalkResult::interrupt();
       }
@@ -1308,7 +1311,7 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA, affine::Aff
        it != e && (lastDependent == nullptr); ++it) {
     Operation *opX = &*it;
 
-    opX->walk([&](Operation *nested) {
+    opX->walk([&lastDependent, &memFlags, &opB, &opX](Operation *nested) {
       if (lastDependent) {
         return WalkResult::interrupt();
       }
@@ -1323,7 +1326,7 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA, affine::Aff
 
       for (Value produced : nested->getResults()) {
         for (Operation *user : produced.getUsers()) {
-          SmallVector<affine::AffineForOp, 4> surroundingLoops;
+          SmallVector<affine::AffineForOp, kSmallVectorSizeFour> surroundingLoops;
           // Check whether any loop in the loop nest enclosing 'user' is opB.
           affine::getAffineForIVs(*user, &surroundingLoops);
           if (llvm::is_contained(surroundingLoops, opB)) {
@@ -1396,15 +1399,15 @@ static bool isOperationValid(Operation *candidate) {
 // Collects affine load/store operations from a loop that access any of 'memrefs'
 // into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
 static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp loopOp, DenseMap<Value, bool> &memFlags,
-                                          SmallVector<Operation *, 4> &loadAndStoreOps) {
+                                          SmallVector<Operation *, kSmallVectorSizeFour> &loadAndStoreOps) {
   if (!loopOp || !depMemref) {
     return;
   }
 
   Value sourceMemref = affine::getSourceMemRef(depMemref);
 
-  auto recordMemFlag = [&](Value memref, bool isStore) {
-    auto updateFlag = [&](Value key) {
+  auto recordMemFlag = [&memFlags](Value memref, bool isStore) {
+    auto updateFlag = [&memFlags, &isStore](Value key) {
       auto it = memFlags.find(key);
       if (it == memFlags.end()) {
         memFlags.insert({key, isStore});
@@ -1420,7 +1423,7 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
     }
   };
 
-  loopOp->walk([&](Operation *op) {
+  loopOp->walk([&sourceMemref, &recordMemFlag, &loadAndStoreOps](Operation *op) {
     if (!isOperationValid(op)) {
       return;
     }
@@ -1455,7 +1458,7 @@ static bool collectFusionAccesses(Value depMemref, affine::AffineForOp srcForOp,
 
 // Extracts the maximum memref rank across all access ops in the list.
 // Returns -1 if no valid access is found.
-static int getRankFromAccesses(const SmallVector<Operation *, 4> &accesses) {
+static int getRankFromAccesses(const SmallVector<Operation *, kSmallVectorSizeFour> &accesses) {
   int maxRank = kInvalidRank;
   for (auto *op : accesses) {
     Value memref;
@@ -1475,8 +1478,8 @@ static int getRankFromAccesses(const SmallVector<Operation *, 4> &accesses) {
 // same logical shape. For dynamic shapes this correspondence is only available via SymShapeAttr
 // (loop bounds have been rewritten to primes and no longer encode it). If the ranks differ or
 // SymShapeAttr is missing/mismatched, we skip fusion.
-static bool isDependenceAxisRelationUnresolved(const SmallVector<Operation *, 4> &srcAccesses,
-                                               const SmallVector<Operation *, 4> &dstAccesses) {
+static bool isDependenceAxisRelationUnresolved(const SmallVector<Operation *, kSmallVectorSizeFour> &srcAccesses,
+                                               const SmallVector<Operation *, kSmallVectorSizeFour> &dstAccesses) {
   auto &symAnalysis = SymbolicShapeAnalysis::getInstance();
   auto memrefTypeOf = [](Operation *op) -> MemRefType {
     Value memref;
@@ -1518,8 +1521,8 @@ static bool isDependenceAxisRelationUnresolved(const SmallVector<Operation *, 4>
 }
 
 // Helper function to check if the outermost loops (up to depth) have matching bounds.
-static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
-                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
+static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, kSmallVectorSizeFour> &loops1,
+                                 const SmallVector<affine::AffineForOp, kSmallVectorSizeFour> &loops2, unsigned depth) {
   if (depth > loops1.size() || depth > loops2.size()) {
     return false;
   }
@@ -1533,8 +1536,8 @@ static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loop
 
 // Collect aligned axis chains: pair src's last for-child with dst's first for-child at each level for deeper merging.
 static void collectAlignedAxisChains(affine::AffineForOp srcRoot, affine::AffineForOp dstRoot,
-                                     SmallVector<affine::AffineForOp, 4> &srcChain,
-                                     SmallVector<affine::AffineForOp, 4> &dstChain) {
+                                     SmallVector<affine::AffineForOp, kSmallVectorSizeFour> &srcChain,
+                                     SmallVector<affine::AffineForOp, kSmallVectorSizeFour> &dstChain) {
   srcChain.clear();
   dstChain.clear();
   affine::AffineForOp s = srcRoot;
@@ -1563,8 +1566,9 @@ static void collectAlignedAxisChains(affine::AffineForOp srcRoot, affine::Affine
 
 // Clone src body ops (excluding yield and next-axis child) into dst at each
 // aligned level, placing src ops before dst ops.
-static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcChain,
-                              SmallVector<affine::AffineForOp, 4> dstChain, unsigned bestDstLoopDepth) {
+static void performLoopFusion(SmallVector<affine::AffineForOp, kSmallVectorSizeFour> srcChain,
+                              SmallVector<affine::AffineForOp, kSmallVectorSizeFour> dstChain,
+                              unsigned bestDstLoopDepth) {
   IRMapping mapper;
   for (unsigned i = 0; i < bestDstLoopDepth && i < srcChain.size() && i < dstChain.size(); ++i) {
     mapper.map(srcChain[i].getInductionVar(), dstChain[i].getInductionVar());
@@ -1630,8 +1634,9 @@ static unsigned computeEffectiveDepDepth(ArrayRef<affine::AffineForOp> loops, Ar
 // off-spine siblings form per-level "stage" ops. src (guest) stages are cloned into dst (host).
 
 // Returns spine from root to anchor, truncated to `depth`. Empty if anchor not inside root or chain too short.
-static SmallVector<affine::AffineForOp, 4> buildSpine(Operation *anchor, affine::AffineForOp root, unsigned depth) {
-  SmallVector<affine::AffineForOp, 4> spine;
+static SmallVector<affine::AffineForOp, kSmallVectorSizeFour> buildSpine(Operation *anchor, affine::AffineForOp root,
+                                                                         unsigned depth) {
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> spine;
   if ((anchor == nullptr) || !root) {
     return spine;
   }
@@ -1661,7 +1666,8 @@ static SmallVector<affine::AffineForOp, 4> buildSpine(Operation *anchor, affine:
 // spineChild in src) must clone BEFORE dst spine child, and postSpine ops (those that ran after)
 // must clone AFTER it — otherwise off-spine consumers can land ahead of the leaf-merged producer.
 static void collectStageOps(affine::AffineForOp parentLevel, affine::AffineForOp spineChild,
-                            SmallVector<Operation *, 8> &preSpine, SmallVector<Operation *, 8> &postSpine) {
+                            SmallVector<Operation *, kSmallVectorSizeEight> &preSpine,
+                            SmallVector<Operation *, kSmallVectorSizeEight> &postSpine) {
   bool seen = false;
   for (Operation &op : parentLevel.getBody()->without_terminator()) {
     if (&op == spineChild.getOperation()) {
@@ -1691,7 +1697,7 @@ static Block::iterator computeStageInsertPoint(affine::AffineForOp dstLevel, aff
   DenseSet<Value> srcReads;
   DenseSet<Value> srcWrites;
   for (Operation *sop : srcStages) {
-    sop->walk([&](Operation *nested) {
+    sop->walk([&srcReads, &srcWrites](Operation *nested) {
       if (auto r = dyn_cast<affine::AffineReadOpInterface>(nested)) {
         srcReads.insert(affine::getSourceMemRef(r.getMemRef()));
       }
@@ -1703,7 +1709,7 @@ static Block::iterator computeStageInsertPoint(affine::AffineForOp dstLevel, aff
 
   for (Block::iterator it = dstBody->begin(); it != childIt; ++it) {
     bool hit = false;
-    it->walk([&](Operation *nested) {
+    it->walk([&srcReads, &srcWrites, &hit](Operation *nested) {
       if (auto w = dyn_cast<affine::AffineWriteOpInterface>(nested)) {
         Value m = affine::getSourceMemRef(w.getMemRef());
         if (srcReads.count(m) || srcWrites.count(m)) {
@@ -1740,7 +1746,7 @@ static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel,
   DenseSet<Value> srcReads;
   DenseSet<Value> srcWrites;
   for (Operation *sop : srcStages) {
-    sop->walk([&](Operation *nested) {
+    sop->walk([&srcReads, &srcWrites](Operation *nested) {
       if (auto r = dyn_cast<affine::AffineReadOpInterface>(nested)) {
         srcReads.insert(affine::getSourceMemRef(r.getMemRef()));
       }
@@ -1755,7 +1761,7 @@ static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel,
       break;
     }
     bool hit = false;
-    it->walk([&](Operation *nested) {
+    it->walk([&srcReads, &srcWrites, &hit](Operation *nested) {
       if (auto w = dyn_cast<affine::AffineWriteOpInterface>(nested)) {
         Value m = affine::getSourceMemRef(w.getMemRef());
         if (srcReads.count(m) || srcWrites.count(m)) {
@@ -1779,19 +1785,19 @@ static Block::iterator computePostStageInsertPoint(affine::AffineForOp dstLevel,
 
 // For an affine load/store, return the single induction variable indexing each
 // result dimension. dimIV[d] is null if dim d is not a bare single-dim expression.
-static SmallVector<Value, 4> extractPerDimIV(Operation *accessOp) {
+static SmallVector<Value, kSmallVectorSizeFour> extractPerDimIV(Operation *accessOp) {
   AffineMap map;
-  SmallVector<Value, 4> operands;
+  SmallVector<Value, kSmallVectorSizeFour> operands;
   if (auto r = dyn_cast<affine::AffineReadOpInterface>(accessOp)) {
     map = r.getAffineMap();
-    operands = llvm::to_vector<4>(r.getMapOperands());
+    operands = llvm::to_vector<kSmallVectorSizeFour>(r.getMapOperands());
   } else if (auto w = dyn_cast<affine::AffineWriteOpInterface>(accessOp)) {
     map = w.getAffineMap();
-    operands = llvm::to_vector<4>(w.getMapOperands());
+    operands = llvm::to_vector<kSmallVectorSizeFour>(w.getMapOperands());
   } else {
     return {};
   }
-  SmallVector<Value, 4> dimIV(map.getNumResults());
+  SmallVector<Value, kSmallVectorSizeFour> dimIV(map.getNumResults());
   for (unsigned d = 0; d < map.getNumResults(); ++d) {
     if (auto dimE = dyn_cast<AffineDimExpr>(map.getResult(d))) {
       if (dimE.getPosition() < operands.size()) {
@@ -1818,11 +1824,11 @@ static int spineLevelOf(Value iv, ArrayRef<affine::AffineForOp> spine) {
 // src and dst iterate the shared memref in a transposed axis order this is non-identity.
 // Returns identity if a full level bijection cannot be established (caller then keeps
 // the original positional behavior).
-static SmallVector<unsigned, 4> computeAxisLevelMap(Operation *srcAnchor, Operation *dstAnchor,
-                                                    ArrayRef<affine::AffineForOp> srcSpine,
-                                                    ArrayRef<affine::AffineForOp> dstSpine) {
+static SmallVector<unsigned, kSmallVectorSizeFour> computeAxisLevelMap(Operation *srcAnchor, Operation *dstAnchor,
+                                                                       ArrayRef<affine::AffineForOp> srcSpine,
+                                                                       ArrayRef<affine::AffineForOp> dstSpine) {
   auto depth = static_cast<unsigned>(srcSpine.size());
-  SmallVector<unsigned, 4> identity;
+  SmallVector<unsigned, kSmallVectorSizeFour> identity;
   for (unsigned i = 0; i < depth; ++i) {
     identity.push_back(i);
   }
@@ -1830,14 +1836,14 @@ static SmallVector<unsigned, 4> computeAxisLevelMap(Operation *srcAnchor, Operat
     return identity;
   }
 
-  SmallVector<Value, 4> srcDimIV = extractPerDimIV(srcAnchor);
-  SmallVector<Value, 4> dstDimIV = extractPerDimIV(dstAnchor);
+  SmallVector<Value, kSmallVectorSizeFour> srcDimIV = extractPerDimIV(srcAnchor);
+  SmallVector<Value, kSmallVectorSizeFour> dstDimIV = extractPerDimIV(dstAnchor);
   if (srcDimIV.empty() || srcDimIV.size() != dstDimIV.size()) {
     return identity;
   }
 
-  SmallVector<int, 4> m(depth, kUnmappedLevel);
-  SmallVector<bool, 4> used(depth, false);
+  SmallVector<int, kSmallVectorSizeFour> m(depth, kUnmappedLevel);
+  SmallVector<bool, kSmallVectorSizeFour> used(depth, false);
   for (unsigned d = 0; d < srcDimIV.size(); ++d) {
     if (!srcDimIV[d] || !dstDimIV[d]) {
       continue;
@@ -1856,7 +1862,7 @@ static SmallVector<unsigned, 4> computeAxisLevelMap(Operation *srcAnchor, Operat
     m[sl] = dl;
     used[dl] = true;
   }
-  SmallVector<unsigned, 4> result;
+  SmallVector<unsigned, kSmallVectorSizeFour> result;
   for (unsigned i = 0; i < depth; ++i) {
     if (m[i] == kUnmappedLevel) {
       return identity;  // not a full bijection
@@ -1870,7 +1876,7 @@ static SmallVector<unsigned, 4> computeAxisLevelMap(Operation *srcAnchor, Operat
 // descending into the spine child at its program position. Spine for-ops and
 // terminators are excluded.
 static void collectSpineCloneOps(ArrayRef<affine::AffineForOp> srcSpine, unsigned level,
-                                 SmallVector<Operation *, 16> &out) {
+                                 SmallVector<Operation *, kSmallVectorSizeSixteen> &out) {
   affine::AffineForOp cur = srcSpine[level];
   affine::AffineForOp childLoop = (level + 1 < srcSpine.size()) ? srcSpine[level + 1] : affine::AffineForOp();
   Operation *child = childLoop ? childLoop.getOperation() : nullptr;
@@ -1889,8 +1895,8 @@ static void fuseSpinePositional(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef
                                 affine::ComputationSliceState &srcSlice, IRMapping &mapper, unsigned fusionDepth) {
   for (unsigned L = 0; L + 1 < fusionDepth; ++L) {
     affine::AffineForOp dstL = dstSpine[L];
-    SmallVector<Operation *, 8> preSpine;
-    SmallVector<Operation *, 8> postSpine;
+    SmallVector<Operation *, kSmallVectorSizeEight> preSpine;
+    SmallVector<Operation *, kSmallVectorSizeEight> postSpine;
     collectStageOps(srcSpine[L], srcSpine[L + 1], preSpine, postSpine);
     if (!preSpine.empty()) {
       Block::iterator insertPt = computeStageInsertPoint(dstSpine[L], dstSpine[L + 1], preSpine);
@@ -1918,7 +1924,7 @@ static void fuseSpinePositional(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef
 // Deepest dst spine level the op touches, via the shared-memref axis alignment in levelMap.
 static unsigned requiredDstLevel(Operation *op, ArrayRef<affine::AffineForOp> srcSpine, ArrayRef<unsigned> levelMap) {
   unsigned lvl = 0;
-  op->walk([&](Operation *n) {
+  op->walk([&lvl, &srcSpine, &levelMap](Operation *n) {
     for (Value v : n->getOperands()) {
       int sl = spineLevelOf(v, srcSpine);
       if (sl >= 0) {
@@ -1935,7 +1941,7 @@ static unsigned requiredDstLevel(Operation *op, ArrayRef<affine::AffineForOp> sr
 // SSA value would be consumed outside its producer's scope (needs loop restructuring).
 static bool fuseSpineTransposed(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef<affine::AffineForOp> dstSpine,
                                 ArrayRef<unsigned> levelMap, IRMapping &mapper, unsigned fusionDepth) {
-  SmallVector<Operation *, 16> cloneOps;
+  SmallVector<Operation *, kSmallVectorSizeSixteen> cloneOps;
   collectSpineCloneOps(srcSpine, 0, cloneOps);
 
   DenseMap<Operation *, unsigned> assigned;
@@ -1946,7 +1952,7 @@ static bool fuseSpineTransposed(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef
   for (Operation *op : cloneOps) {
     unsigned useLvl = assigned[op];
     bool outOfScope = false;
-    op->walk([&](Operation *n) {
+    op->walk([&outOfScope, &assigned, &useLvl](Operation *n) {
       for (Value v : n->getOperands()) {
         if (Operation *def = v.getDefiningOp()) {
           if (assigned.count(def) && assigned[def] > useLvl) {
@@ -1960,7 +1966,7 @@ static bool fuseSpineTransposed(ArrayRef<affine::AffineForOp> srcSpine, ArrayRef
     }
   }
 
-  SmallVector<std::unique_ptr<OpBuilder>, 4> levelBuilders;
+  SmallVector<std::unique_ptr<OpBuilder>, kSmallVectorSizeFour> levelBuilders;
   for (unsigned d = 0; d < fusionDepth; ++d) {
     affine::AffineForOp dstD = dstSpine[d];
     levelBuilders.push_back(std::make_unique<OpBuilder>(dstD.getBody(), dstD.getBody()->begin()));
@@ -1993,8 +1999,8 @@ static bool fuseImperfectLoops(const FusionLoopNestInfo &srcInfo, const FusionLo
 
   Operation *srcAnchor = accessInfo.srcAccesses.front();
   Operation *dstAnchor = accessInfo.dstAccesses.front();
-  SmallVector<affine::AffineForOp, 4> srcSpine = buildSpine(srcAnchor, srcInfo.root, fusionDepth);
-  SmallVector<affine::AffineForOp, 4> dstSpine = buildSpine(dstAnchor, dstInfo.root, fusionDepth);
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> srcSpine = buildSpine(srcAnchor, srcInfo.root, fusionDepth);
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> dstSpine = buildSpine(dstAnchor, dstInfo.root, fusionDepth);
   if (srcSpine.empty() || dstSpine.empty()) {
     return false;
   }
@@ -2002,7 +2008,7 @@ static bool fuseImperfectLoops(const FusionLoopNestInfo &srcInfo, const FusionLo
   // Align src/dst loop levels by the shared dep-memref axes rather than by nesting
   // position, so a transposed src store ([..,arg3,arg2]) keeps feeding the dimension
   // the dst expects after fusion.
-  SmallVector<unsigned, 4> levelMap = computeAxisLevelMap(srcAnchor, dstAnchor, srcSpine, dstSpine);
+  SmallVector<unsigned, kSmallVectorSizeFour> levelMap = computeAxisLevelMap(srcAnchor, dstAnchor, srcSpine, dstSpine);
   bool isIdentity = true;
   for (unsigned i = 0; i < fusionDepth; ++i) {
     if (levelMap[i] != i) {
@@ -2043,7 +2049,7 @@ unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
 }
 
 void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> allOpsA,
-                                            llvm::SmallVector<Operation *, 4> &strategyOpsA) {
+                                            llvm::SmallVector<Operation *, kSmallVectorSizeFour> &strategyOpsA) {
   strategyOpsA.clear();
 
   switch (strategy.getStrategy()) {
@@ -2074,7 +2080,7 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
 
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
-  llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan,
+  llvm::SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> &depthSliceUnions, const FusionPlan &plan,
   FusionAccessInfo &accessInfo, bool srcDstReversed) {
   affine::AffineForOp srcAffineForOp = srcInfo.root;
   affine::AffineForOp dstAffineForOp = dstInfo.root;
@@ -2091,7 +2097,7 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     return 0;
   }
 
-  SmallVector<Operation *, 4> strategyOpsA;
+  SmallVector<Operation *, kSmallVectorSizeFour> strategyOpsA;
   buildStrategyOpsA(strategy, srcAccesses, strategyOpsA);
   if (strategyOpsA.empty()) {
     llvm::dbgs() << "No strategy ops found for fusion\n";
@@ -2141,8 +2147,8 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
 void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
                                   FusionLoopNestInfo &dstInfo, const FusionPlan &plan) {
   // Fusion depth = deepest common prefix of aligned axis chains with matching bounds.
-  SmallVector<affine::AffineForOp, 4> srcChain;
-  SmallVector<affine::AffineForOp, 4> dstChain;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> srcChain;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> dstChain;
   collectAlignedAxisChains(srcInfo.root, dstInfo.root, srcChain, dstChain);
 
   auto depth = std::min(srcChain.size(), dstChain.size());
@@ -2186,7 +2192,6 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
   FusionAccessInfo accessInfo;
   bool haveAccesses =
     plan.depInfo.memref && collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo);
-
   if (haveAccesses && plan.depInfo.memrefKind != MemrefKind::Subview &&
       isDependenceAxisRelationUnresolved(accessInfo.srcAccesses, accessInfo.dstAccesses)) {
     return;
@@ -2203,9 +2208,20 @@ void FusionCodeGenHelper::doFuse(unsigned srcGroupId, unsigned dstGroupId, affin
 
   affine::FusionStrategy strategy = getFusionStrategy(plan);
 
-  SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
+  SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
   bool keepSrcDst = srcInfo.isPerfect || !dstInfo.isPerfect;
+
+  auto srcGroupTemplate = mdg.getGroup(srcGroupId)->groupTemplate;
+  auto dstGroupTemplate = mdg.getGroup(dstGroupId)->groupTemplate;
+  if (srcGroupTemplate == OperatorTemplate::Broadcast &&
+      dstGroupTemplate == OperatorTemplate::Broadcast &&
+      !srcInfo.isPerfect && dstInfo.isPerfect &&
+      dstInfo.loopDepth > srcInfo.loopDepth &&
+      dstInfo.perfectDepth > srcInfo.perfectDepth) {
+        keepSrcDst = true;
+  }
+
   if (keepSrcDst) {
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);
   } else {

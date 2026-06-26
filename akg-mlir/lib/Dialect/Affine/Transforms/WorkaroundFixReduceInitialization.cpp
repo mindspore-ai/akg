@@ -44,11 +44,10 @@ namespace mlir {
 
 #include "akg/Utils/AnalysisCommon.hpp"
 
+namespace mlir {
 using namespace mlir;  // NOLINT(build/namespaces)
 
 #define DEBUG_TYPE "fix-reduce-initialization"
-
-namespace mlir {
 
 static constexpr const int kExpectedNbStore = 2;
 static constexpr const int kExpectedNBUsage = 3;
@@ -58,6 +57,7 @@ class WorkaroundFixReduceInitialization
  public:
   WorkaroundFixReduceInitialization() = default;
   WorkaroundFixReduceInitialization(const WorkaroundFixReduceInitialization &pass) = default;
+  WorkaroundFixReduceInitialization &operator=(const WorkaroundFixReduceInitialization &) = default;
 
  private:
   void findReduceValue(func::FuncOp fop);
@@ -78,7 +78,7 @@ class WorkaroundFixReduceInitialization
 void WorkaroundFixReduceInitialization::findReduceValue(func::FuncOp funcOp) {
   llvm::MapVector<mlir::Value, SmallVector<mlir::Operation *, kExpectedNBUsage>> reduceCandidate;
 
-  funcOp.walk([&](affine::AffineStoreOp storeOp) {
+  funcOp.walk([&reduceCandidate](affine::AffineStoreOp storeOp) {
     mlir::Value candidate = storeOp.getMemref();
     /// if (reduceCandidate.contains(candidate)) { // contains doesn't exist in LLVM 16.0.6
     if (reduceCandidate.count(candidate) != 0) {
