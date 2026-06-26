@@ -193,9 +193,10 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, Ite
   IRRewriter rewriter(ctx->getContext());
   auto storeIf = dyn_cast<affine::AffineIfOp>(replacement.storeOp->getParentOp());
 
+  // replaceInitOperandUsesInLoop = false: keep existing init operand uses intact.
   auto newLoop = cast<affine::AffineForOp>(*replacement.loop.replaceWithAdditionalYields(
     rewriter, replacement.initVal.getResult(),
-    /* replaceInitOperandUsesInLoop= */ false,
+    false,
     [&storeIf, &replacement](OpBuilder &nested, Location loc, ArrayRef<BlockArgument> newBBArgs) -> SmallVector<Value> {
       if (!storeIf) {
         return SmallVector<Value>{replacement.storeOp.getValue()};
@@ -204,8 +205,9 @@ static affine::AffineForOp replaceWithIterArgs(OpBuilder &b, Operation *ctx, Ite
       OpBuilder::InsertionGuard guard(nested);
       nested.setInsertionPoint(storeIf);
 
+      // withElseRegion = true: the if needs an else block to yield a fallback value.
       auto newIf = nested.create<affine::AffineIfOp>(storeIf.getLoc(), TypeRange{resultType}, storeIf.getIntegerSet(),
-                                                     storeIf->getOperands(), /* withElseRegion= */ true);
+                                                     storeIf->getOperands(), true);
 
       Block *oldThen = storeIf.getThenBlock();
       Block *newThen = newIf.getThenBlock();

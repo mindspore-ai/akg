@@ -149,7 +149,7 @@ struct ArithSelectPattern final : public OpRewritePattern<OpTy> {
 };
 
 template <typename IntOp>
-struct IntToFloatMap;
+struct IntToFloatMap {};
 template <>
 struct IntToFloatMap<arith::AddIOp> {
   using type = arith::AddFOp;
