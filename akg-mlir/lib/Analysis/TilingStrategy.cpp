@@ -80,6 +80,7 @@ static constexpr size_t kPairTransposeDimCount = 2;
 static constexpr int64_t kDoubleAlignFactor = 2;
 static constexpr size_t kNpuTileLevels = 2;
 static constexpr int64_t kMinTileSizeMultiplier = 2;
+static constexpr int64_t kUnrollShrinkFactor = 2;
 
 static constexpr unsigned kMaxTileValue = UINT_MAX;
 static constexpr int64_t kInitialMaxConstraintValue = INT_MAX;
@@ -781,7 +782,7 @@ void UnrollStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
         int64_t unrollSize = BEST_UNROLL_NUM;
         int64_t axisSize = axis->range.second;
         while (axisSize % unrollSize != 0 && unrollSize > MIN_UNROLL_NUM) {
-          unrollSize /= 2;
+          unrollSize /= kUnrollShrinkFactor;
         }
 
         if (axisSize % vectorSize == 0) {
@@ -810,7 +811,7 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
     });
 
     for (auto axis : q) {
-      // Multiple axes parallel
+      // Keep the current single-axis parallel handling.
       if (axis->axisIdx != 0) {
         continue;
       }
@@ -2528,7 +2529,7 @@ SmallVector<size_t, kSmallVectorSizeSix> normalizeTransposeTargetAxisOrder(Array
 
   normalized.assign(sourceAxisOrder.begin(), sourceAxisOrder.end());
   if (normalized.size() >= kMinTransposeAxisOrderSize) {
-    std::swap(normalized[normalized.size() - 2], normalized.back());
+    std::swap(normalized[normalized.size() - kMinTransposeAxisOrderSize], normalized.back());
   }
   return normalized;
 }
@@ -3301,10 +3302,11 @@ std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
 }
 
 std::optional<size_t> findReduceYVectorTargetAxis(const NpuBandContext &ctx) {
-  if (!isInnermostAxisReduceY(ctx) || ctx.axes.size() < 2) {
+  if (!isInnermostAxisReduceY(ctx) || ctx.axes.size() < kMinTransposeAxisOrderSize) {
     return std::nullopt;
   }
-  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 2; i >= 0; --i) {
+  for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - static_cast<int64_t>(kMinTransposeAxisOrderSize); i >= 0;
+       --i) {
     size_t axisIdx = static_cast<size_t>(i);
     if (!isReductionAxis(ctx.axes[axisIdx])) {
       return axisIdx;
@@ -3385,7 +3387,7 @@ int64_t findMaxFittingTransposeTargetTile(const NpuBandContext &ctx, const BandT
 
   int64_t targetAlign = axisAlignSize[targetPos];
   int64_t upperTile = axisMaxTileSize[targetPos];
-  auto peakOf = [&](int64_t targetTile) {
+  auto peakOf = [&ctx, &plan, &searchAxisOrder, &searchShape, targetAlign, targetPos](int64_t targetTile) {
     searchShape[targetPos] = std::max<int64_t>(targetTile, targetAlign);
     return computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
   };
@@ -3438,7 +3440,7 @@ int64_t findMaxFittingTransposeTargetTile(const NpuBandContext &ctx, const BandT
 
 bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   std::optional<size_t> outermostTransposeIdx = findOutermostTransposeAxis(ctx);
-  if (!ctx.hasDynamicAxis || !outermostTransposeIdx || ctx.axes.size() < 2) {
+  if (!ctx.hasDynamicAxis || !outermostTransposeIdx || ctx.axes.size() < kMinTransposeAxisOrderSize) {
     return false;
   }
 
