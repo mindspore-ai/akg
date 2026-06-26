@@ -225,10 +225,12 @@ static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind ki
         return b.getFloatAttr(elemType, 1.0);
       case CK::MINNUMF:
       case CK::MINIMUMF:
-        return FloatAttr::get(elemType, APFloat::getInf(sem, /* Negative= */ false));
+        // Negative = false: +inf is the identity for min reduction.
+        return FloatAttr::get(elemType, APFloat::getInf(sem, false));
       case CK::MAXNUMF:
       case CK::MAXIMUMF:
-        return FloatAttr::get(elemType, APFloat::getInf(sem, /* Negative= */ true));
+        // Negative = true: -inf is the identity for max reduction.
+        return FloatAttr::get(elemType, APFloat::getInf(sem, true));
       default:
         return b.getFloatAttr(elemType, 0.0);
     }
@@ -279,9 +281,11 @@ struct TransferReadLowering : public OpConversionPattern<npuv::TransferReadOp> {
     }
     auto permMap = rewriter.getMultiDimIdentityMap(vecType.getRank());
     auto inBounds = rewriter.getBoolArrayAttr(SmallVector<bool>(vecType.getRank(), true));
+    // mask: no mask value (empty).
+    Value emptyMask;
     auto newRead = rewriter.create<vector::TransferReadOp>(op.getLoc(), vecType, adaptor.getSource(),
                                                            adaptor.getIndices(), permMap, adaptor.getPadding(),
-                                                           /* mask= */ Value(), inBounds);
+                                                           emptyMask, inBounds);
     rewriter.replaceOp(op, newRead.getResult());
     return success();
   }
@@ -419,8 +423,9 @@ struct SelectLowering : public OpConversionPattern<npuv::SelectOp> {
 };
 
 struct ElementwiseRetypeLowering : public ConversionPattern {
+  // benefit = 0: default match priority.
   ElementwiseRetypeLowering(const TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /* benefit= */ 0, ctx) {}
+      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), 0, ctx) {}
 
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                                 ConversionPatternRewriter &rewriter) const override {
@@ -655,8 +660,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
                        [&remap](Value idx) { return remap(idx); });
         auto unitPermMap = b.getMultiDimIdentityMap(unitVecTy.getRank());
         auto unitInBounds = b.getBoolArrayAttr(SmallVector<bool>(unitVecTy.getRank(), true));
+        // mask: no mask value (empty).
+        Value emptyMask;
         Value res = b.create<vector::TransferReadOp>(loc, unitVecTy, remap(rd.getSource()), unitIndices, unitPermMap,
-                                                     remap(rd.getPadding()), /* mask= */ Value(), unitInBounds);
+                                                     remap(rd.getPadding()), emptyMask, unitInBounds);
         map.map(rd.getResult(), res);
         return success();
       }
@@ -669,7 +676,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     }
     if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
       int64_t srcRank = sourceRank(wr.getSource());
-      b.create<vector::TransferWriteOp>(loc, /* resultType= */ Type(), remap(wr.getVector()), remap(wr.getSource()),
+      // resultType: void (transfer_write returns no value).
+      b.create<vector::TransferWriteOp>(loc, Type(), remap(wr.getVector()), remap(wr.getSource()),
                                         trailingIndices(srcRank), permMapForRank(srcRank), mask, inBounds);
       return success();
     }
@@ -862,6 +870,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     bounds.reserve(rank);
     TileDesc anchorDesc{anchorType, anchorDynSizes, anchorSource};
     if (failed(collectTileBounds(builder, loc, anchorDesc, bounds))) {
+      return failure();
+    }
+    // Validate the collected bounds cover every dimension before indexing by rank.
+    if (static_cast<int64_t>(bounds.size()) != rank) {
       return failure();
     }
 
@@ -1101,6 +1113,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (failed(collectTileBounds(builder, loc, readDesc, bounds))) {
       return failure();
     }
+    // Validate the collected bounds cover every dimension before indexing by rank.
+    if (static_cast<int64_t>(bounds.size()) != rank) {
+      return failure();
+    }
 
     // Register-wide identity for the element-wise loop accumulator.
     Value regIdent = buildIdentityAccumulator(builder, loc, kind, regVecTy);
@@ -1165,9 +1181,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Value vecAcc = loops[0].getResult(0);
     OpBuilder post(redOp);
     auto rank0Ty = VectorType::get({}, scalarElem);
-    auto rank0Map = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, post.getContext());
+    auto rank0Map = AffineMap::get(1, 0, post.getContext());
+    Value emptyMask;
     Value seedVec = post.create<vector::TransferReadOp>(loc, rank0Ty, accBuf, ValueRange{c0}, rank0Map, idScalar,
-                                                        /* mask= */ Value(), post.getBoolArrayAttr({}));
+                                                        emptyMask, post.getBoolArrayAttr({}));
     Value seed = post.create<vector::ExtractElementOp>(loc, seedVec);
     SmallVector<bool> reductionMask(1, true);
     Value result = post.create<vector::MultiDimReductionOp>(loc, vecAcc, seed, reductionMask, kind);
@@ -1178,7 +1195,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     auto out1Ty = VectorType::get({1}, scalarElem);
     Value bcast = post.create<vector::BroadcastOp>(loc, out1Ty, result);
     Value oneMask = post.create<vector::CreateMaskOp>(loc, VectorType::get({1}, post.getI1Type()), ValueRange{c1});
-    post.create<vector::TransferWriteOp>(loc, /* resultType= */ Type(), bcast, accBuf, ValueRange{c0},
+    post.create<vector::TransferWriteOp>(loc, Type(), bcast, accBuf, ValueRange{c0},
                                          post.getMultiDimIdentityMap(1), oneMask, post.getBoolArrayAttr({true}));
 
     // Drop the original scalar store: the broadcast + transfer_write above is now
@@ -1191,6 +1208,12 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
       (*it)->erase();
     }
 
+    eraseDeadConstOps(entry);
+    return success();
+  }
+
+  // Erase arith::ConstantOp operations in `entry` that have no remaining uses.
+  static void eraseDeadConstOps(Block &entry) {
     SmallVector<Operation *> deadConsts;
     for (Operation &op : entry.without_terminator()) {
       if (isa<arith::ConstantOp>(op) && op.use_empty()) {
@@ -1200,7 +1223,6 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     for (Operation *op : deadConsts) {
       op->erase();
     }
-    return success();
   }
 
   // -------------------------------------------------------------------------

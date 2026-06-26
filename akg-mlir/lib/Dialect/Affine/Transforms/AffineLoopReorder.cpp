@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Affine/Transforms/AffineLoopReorder.h"
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -71,7 +72,10 @@ struct AffineLoopReorder : public impl::AffineLoopReorderBase<AffineLoopReorder>
 };
 
 bool AffineLoopReorder::isPermutation(const std::vector<int> &nums) {
-  int size = nums.size();
+  if (nums.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+  int size = static_cast<int>(nums.size());
   std::vector<bool> seen(size, false);
   for (int num : nums) {
     if (num < 0 || num >= size || seen[num]) {
@@ -177,7 +181,8 @@ void AffineLoopReorder::runOnOperation() {
   builder.setInsertionPointAfter(opList[start]);
   // create new nest-loop
   for (size_t i = start; i < opList.size(); i++) {
-    auto matchedLoop = dyn_cast<affine::AffineForOp>(opList[start + order[i - start]]);
+    size_t matchedIdx = start + static_cast<size_t>(order[i - start]);
+    auto matchedLoop = dyn_cast<affine::AffineForOp>(opList[matchedIdx]);
     auto newLoop = builder.create<mlir::affine::AffineForOp>(
       matchedLoop.getLoc(), matchedLoop.getLowerBoundOperands(), matchedLoop.getLowerBoundMap(),
       matchedLoop.getUpperBoundOperands(), matchedLoop.getUpperBoundMap(), matchedLoop.getStepAsInt());
