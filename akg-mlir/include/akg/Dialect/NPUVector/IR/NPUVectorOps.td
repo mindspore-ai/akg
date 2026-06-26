@@ -113,7 +113,8 @@ def NPUVector_TransferWriteOp :
     Arguments<(ins AnyVectorOrNPUVectorOfAnyRank:$vector,
                    AnyShaped:$source,
                    Variadic<Index>:$indices,
-                   Optional<VectorOf<[I1]>>:$mask)>,
+                   Optional<VectorOf<[I1]>>:$mask,
+                   DefaultValuedAttr<DenseI64ArrayAttr, "{}">:$write_dims)>,
     Results<(outs Optional<AnyRankedTensor>:$result)> {
 
   let summary = "NPU super-vector store to memref/tensor; supports dynamic tile shapes.";
@@ -128,14 +129,20 @@ def NPUVector_TransferWriteOp :
     `permutation_map`, `mask`, and `in_bounds` match upstream `vector.transfer_write`;
     refer to LLVM `VectorOps.td` for the full text.
 
+    Attribute `write_dims` records the destination memref dimension written by each
+    vector dimension and must always be present. For example,
+    `write_dims = array<i64: 1, 3, 4>` means vector dim 0 writes memref dim 1,
+    vector dim 1 writes memref dim 3, and vector dim 2 writes memref dim 4. When
+    vector dims map to trailing memref dims, use the suffix mapping
+    `[rank - vectorRank, ..., rank - 1]`. Rank-0 vectors use `write_dims = {}`.
+
     Example:
 
     ```mlir
-    // Write with dynamic shape support
-    %val = `ssa-value` : vector<?x?xf32>
-    npu_vector.transfer_write %val, %A[%i0, %i1]
-      {permutation_map: (d0, d1) -> (d0, d1)} :
-      vector<?x?xf32>, memref<?x?xf32>
+    %val = `ssa-value` : !npuvector<?x6x64xf32>
+    npuvector.transfer_write %val, %out[%i, %j, %k, %c0, %c0]
+      {write_dims = array<i64: 1, 3, 4>} :
+      !npuvector<?x6x64xf32>, memref<4x197x3x6x64xf32>
     ```
   }];
 
@@ -147,12 +154,38 @@ def NPUVector_TransferWriteOp :
     (`->` type($result)^)?
   }];
 
+  let builders = [
+    OpBuilder<(ins "Type":$resultType, "Value":$vector, "Value":$source, "ValueRange":$indices,
+                   "ArrayRef<int64_t>":$writeDims), [{
+      build($_builder, $_state, resultType, vector, source, indices, Value(),
+            $_builder.getDenseI64ArrayAttr(writeDims));
+    }]>,
+    OpBuilder<(ins "Type":$resultType, "Value":$vector, "Value":$source, "ValueRange":$indices), [{
+      auto shapedType = ::llvm::cast<::mlir::ShapedType>(source.getType());
+      int64_t memRefRank = shapedType.getRank();
+      int64_t dataRank = 0;
+      if (auto npuVecType = ::llvm::dyn_cast<NPUVectorType>(vector.getType())) {
+        dataRank = npuVecType.getRank();
+      } else if (auto vecType = ::llvm::dyn_cast<::mlir::VectorType>(vector.getType())) {
+        dataRank = vecType.getRank();
+      }
+      ::llvm::SmallVector<int64_t> writeDims;
+      if (dataRank > 0) {
+        writeDims.reserve(dataRank);
+        for (int64_t i = 0; i < dataRank; ++i) {
+          writeDims.push_back(memRefRank - dataRank + i);
+        }
+      }
+      build($_builder, $_state, resultType, vector, source, indices, Value(),
+            $_builder.getDenseI64ArrayAttr(writeDims));
+    }]>
+  ];
+
   let extraClassDeclaration = [{
     MutableOperandRange getDpsInitsMutable() {
       return MutableOperandRange(getOperation(), /*start=*/1, /*length=*/1);
     }
 
-    // Helper method to get shaped type
     ShapedType getShapedType() {
       return llvm::cast<ShapedType>(getSource().getType());
     }
