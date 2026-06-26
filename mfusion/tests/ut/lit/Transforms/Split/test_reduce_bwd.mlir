@@ -243,12 +243,13 @@ module {
   // CHECK: %[[INV_STD:.*]] = mfuse.rsqrt
   // CHECK: %[[GAMMA_RESHAPE:.*]] = mfuse.reshape
   // CHECK: mfuse.yield %[[INV_STD]], %[[GAMMA_RESHAPE]]
-  // Second fusedop: masked input path.
-  // CHECK: %[[FUSED1:.*]]:3 = mfuse.fused %arg0, %arg1, %arg4, %arg5, %[[FUSED0]]#1 {fusion_type = "dvm"}
-  // CHECK: %[[INPUT_RESHAPE:.*]] = mfuse.reshape
+  // Second fusedop: masked input path. Single-use entry reshapes are kept outside.
+  // CHECK: %[[INPUT_RESHAPE:.*]] = mfuse.reshape %arg0 : (tensor<4x128xf32>) -> tensor<4x128x1x1xf32>
+  // CHECK: %[[STAT_RESHAPE:.*]] = mfuse.reshape %arg4 : (tensor<128xf32>) -> tensor<1x128x1x1xf32>
+  // CHECK: %[[FUSED1:.*]]:3 = mfuse.fused %[[INPUT_RESHAPE]], %arg1, %[[STAT_RESHAPE]], %arg5, %[[FUSED0]]#1 {fusion_type = "dvm"}
+  // CHECK: mfuse.broadcast_to
   // CHECK: %[[FULL:.*]] = mfuse.full
   // CHECK: %[[SELECT:.*]] = mfuse.select
-  // CHECK: %[[STAT_RESHAPE:.*]] = mfuse.reshape
   // CHECK: %[[SUM1:.*]] = mfuse.reduce_sum %[[SELECT]] {dimensions = [0, 2, 3], keepdim = false}
   // CHECK: %[[SCALED:.*]] = mfuse.mul
   // CHECK: %[[OUT:.*]] = mfuse.mul %[[SELECT]], %{{.*}} : (tensor<4x128x7x7xf32>, tensor<1x128x1x1xf32>) -> tensor<4x128x7x7xf32>
@@ -292,18 +293,20 @@ module {
   // Typical reduce_bwd split shape:
   // 1. vector-prep branch is split out first,
   // 2. masked producer region stays as one fusedop,
-  // 3. input reshapes stay inside the rebuilt producer fusedop,
+  // 3. single-use entry reshapes are hoisted outside the rebuilt producer fusedop,
   // 4. one reduce_sum stays as an output of the producer fusedop,
   // 5. the sibling reduce_sum sinks into its post-reduce mul user.
   // CHECK-LABEL: func.func @test_reduce_bwd_standalone_reduce_sum_with_reshape
   // CHECK: %[[FUSED0:.*]]:3 = mfuse.fused %arg1, %arg4 {fusion_type = "dvm"}
   // CHECK-SAME: : (tensor<184xf32>, tensor<184xf32>) -> (tensor<184x1x1xf32>, tensor<184xf32>, tensor<1x184x1x1xf32>)
-  // CHECK: %[[FUSED1:.*]]:4 = mfuse.fused %arg0, %arg2, %arg3, %[[FUSED0]]#0, %arg4, %arg5, %[[FUSED0]]#2 {fusion_type = "dvm"}
-  // CHECK: ^bb0(%[[IN0:.*]]: tensor<4x184xf32>, %[[MEAN_IN:.*]]: tensor<184xf32>, %[[X_IN:.*]]: tensor<4x184x4x4xf32>, %[[INV_STD0:.*]]: tensor<184x1x1xf32>, %[[SCALE_IN:.*]]: tensor<184xf32>, %[[BIAS_IN:.*]]: tensor<184xf32>, %[[INV_STD1:.*]]: tensor<1x184x1x1xf32>):
-  // CHECK: %[[INPUT_RESHAPE:.*]] = mfuse.reshape %[[IN0]] : (tensor<4x184xf32>) -> tensor<4x184x1x1xf32>
-  // CHECK: %[[BCAST:.*]] = mfuse.broadcast_to %[[INPUT_RESHAPE]] : (tensor<4x184x1x1xf32>) -> tensor<4x184x4x4xf32>
+  // CHECK: %[[INPUT_RESHAPE:.*]] = mfuse.reshape %arg0 : (tensor<4x184xf32>) -> tensor<4x184x1x1xf32>
+  // CHECK: %[[SCALE_RESHAPE:.*]] = mfuse.reshape %arg4 : (tensor<184xf32>) -> tensor<184x1x1xf32>
+  // CHECK: %[[BIAS_RESHAPE:.*]] = mfuse.reshape %arg5 : (tensor<184xf32>) -> tensor<184x1x1xf32>
+  // CHECK: %[[FUSED1:.*]]:4 = mfuse.fused %[[INPUT_RESHAPE]], %arg2, %arg3, %[[FUSED0]]#0, %[[SCALE_RESHAPE]], %[[BIAS_RESHAPE]], %[[FUSED0]]#2 {fusion_type = "dvm"}
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<4x184x1x1xf32>, %[[MEAN_IN:.*]]: tensor<184xf32>, %[[X_IN:.*]]: tensor<4x184x4x4xf32>, %[[INV_STD0:.*]]: tensor<184x1x1xf32>, %[[SCALE_IN:.*]]: tensor<184x1x1xf32>, %[[BIAS_IN:.*]]: tensor<184x1x1xf32>, %[[INV_STD1:.*]]: tensor<1x184x1x1xf32>):
+  // CHECK: %[[BCAST:.*]] = mfuse.broadcast_to %[[IN0]] : (tensor<4x184x1x1xf32>) -> tensor<4x184x4x4xf32>
   // CHECK: %[[MEAN0:.*]] = mfuse.reshape %[[MEAN_IN]] : (tensor<184xf32>) -> tensor<184x1x1xf32>
-  // CHECK: %[[SCALE:.*]] = mfuse.reshape %[[SCALE_IN]] : (tensor<184xf32>) -> tensor<184x1x1xf32>
+  // CHECK: %{{.*}} = mfuse.mul %{{.*}}, %[[SCALE_IN]] : (tensor<4x184x4x4xf32>, tensor<184x1x1xf32>) -> tensor<4x184x4x4xf32>
   // CHECK: %[[SELECT:.*]] = mfuse.select
   // CHECK: %[[MEAN1:.*]] = mfuse.reshape %[[MEAN_IN]] : (tensor<184xf32>) -> tensor<1x184x1x1xf32>
   // CHECK: %[[SUM0:.*]] = mfuse.reduce_sum %[[SELECT]] {dimensions = [0, 2, 3], keepdim = false} : (tensor<4x184x4x4xf32>) -> tensor<184xf32>
@@ -361,6 +364,55 @@ module {
       mfuse.yield %22, %26, %32, %33 : tensor<f32>, tensor<184xf32>, tensor<4x184x4x4xf32>, tensor<184xf32>
     }
     return %0#0, %0#1, %0#2, %0#3 : tensor<f32>, tensor<184xf32>, tensor<4x184x4x4xf32>, tensor<184xf32>
+  }
+
+  // Entry reshape is hoisted even when its result is both yielded and consumed
+  // by a reduce_sum. The reshape after reduce_sum is not an entry reshape, so
+  // it is handled by the normal split rules instead.
+  // CHECK-LABEL: func.func @test_entry_reshape_yielded_and_reduced
+  // CHECK-SAME: %arg0: tensor<4x128x768xf32>
+  // CHECK: %[[ENTRY_RESHAPE:.*]] = mfuse.reshape %arg0 : (tensor<4x128x768xf32>) -> tensor<512x768xf32>
+  // CHECK: %[[FUSED:.*]]:2 = mfuse.fused %[[ENTRY_RESHAPE]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<512x768xf32>) -> (tensor<512x768xf32>, tensor<1x768xf32>)
+  // CHECK: ^bb0(%[[IN:.*]]: tensor<512x768xf32>):
+  // CHECK-NEXT: %[[REDUCE:.*]] = mfuse.reduce_sum %[[IN]] {dimensions = [0], keepdim = true} : (tensor<512x768xf32>) -> tensor<1x768xf32>
+  // CHECK-NEXT: mfuse.yield %[[IN]], %[[REDUCE]] : tensor<512x768xf32>, tensor<1x768xf32>
+  // CHECK: %[[TAIL_RESHAPE:.*]] = mfuse.reshape %[[FUSED]]#1 : (tensor<1x768xf32>) -> tensor<768xf32>
+  // CHECK: return %[[FUSED]]#0, %[[TAIL_RESHAPE]] : tensor<512x768xf32>, tensor<768xf32>
+  func.func @test_entry_reshape_yielded_and_reduced(%arg0: tensor<4x128x768xf32>)
+      -> (tensor<512x768xf32>, tensor<768xf32>) {
+    %0:2 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4x128x768xf32>) -> (tensor<512x768xf32>, tensor<768xf32>) {
+    ^bb0(%arg1: tensor<4x128x768xf32>):
+      %1 = mfuse.reshape %arg1 : (tensor<4x128x768xf32>) -> tensor<512x768xf32>
+      %2 = mfuse.reduce_sum %1 {dimensions = [0], keepdim = true} : (tensor<512x768xf32>) -> tensor<1x768xf32>
+      %3 = mfuse.reshape %2 : (tensor<1x768xf32>) -> tensor<768xf32>
+      mfuse.yield %1, %3 : tensor<512x768xf32>, tensor<768xf32>
+    }
+    return %0#0, %0#1 : tensor<512x768xf32>, tensor<768xf32>
+  }
+
+  // Entry reshape is still hoisted when the original external input also has
+  // users outside the fusedop.
+  // CHECK-LABEL: func.func @test_entry_reshape_with_shared_external_input
+  // CHECK-SAME: %arg0: tensor<4x128x768xf32>, %arg1: tensor<512x768xf32>
+  // CHECK: %[[ENTRY_RESHAPE:.*]] = mfuse.reshape %arg0 : (tensor<4x128x768xf32>) -> tensor<512x768xf32>
+  // CHECK: %[[FUSED:.*]] = mfuse.fused %[[ENTRY_RESHAPE]], %arg1 {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<512x768xf32>, tensor<512x768xf32>) -> tensor<512x768xf32>
+  // CHECK: ^bb0(%[[IN0:.*]]: tensor<512x768xf32>, %[[IN1:.*]]: tensor<512x768xf32>):
+  // CHECK-NEXT: %[[ADD:.*]] = mfuse.add %[[IN0]], %[[IN1]] : (tensor<512x768xf32>, tensor<512x768xf32>) -> tensor<512x768xf32>
+  // CHECK-NEXT: mfuse.yield %[[ADD]] : tensor<512x768xf32>
+  // CHECK: %[[ABS:.*]] = mfuse.abs %arg0 : (tensor<4x128x768xf32>) -> tensor<4x128x768xf32>
+  // CHECK: return %[[FUSED]], %[[ABS]] : tensor<512x768xf32>, tensor<4x128x768xf32>
+  func.func @test_entry_reshape_with_shared_external_input(%arg0: tensor<4x128x768xf32>, %arg1: tensor<512x768xf32>)
+      -> (tensor<512x768xf32>, tensor<4x128x768xf32>) {
+    %0 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<4x128x768xf32>, tensor<512x768xf32>) -> tensor<512x768xf32> {
+    ^bb0(%arg2: tensor<4x128x768xf32>, %arg3: tensor<512x768xf32>):
+      %1 = mfuse.reshape %arg2 : (tensor<4x128x768xf32>) -> tensor<512x768xf32>
+      %2 = mfuse.add %1, %arg3 : (tensor<512x768xf32>, tensor<512x768xf32>) -> tensor<512x768xf32>
+      mfuse.yield %2 : tensor<512x768xf32>
+    }
+    %3 = mfuse.abs %arg0 : (tensor<4x128x768xf32>) -> tensor<4x128x768xf32>
+    return %0, %3 : tensor<512x768xf32>, tensor<4x128x768xf32>
   }
 
 }
