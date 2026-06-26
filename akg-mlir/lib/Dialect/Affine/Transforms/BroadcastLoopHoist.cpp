@@ -166,12 +166,12 @@ FailureOr<affine::AffineForOp> BroadcastLoopHoist::interchangeLoops(affine::Affi
 
   if (insertIf) {
     auto integerSet = IntegerSet::get(
-      /* dimCount= */ 2, /* symbolCount= */ 0, {builder.getAffineDimExpr(0) - builder.getAffineDimExpr(1)},
-      /* eqFlags= */ {false});
+      2, 0, {builder.getAffineDimExpr(0) - builder.getAffineDimExpr(1)},
+      {false});
 
     auto ifOp = builder.create<affine::AffineIfOp>(
       loc, integerSet, ValueRange{newInnerLoop.getInductionVar(), newOuterLoop.getInductionVar()},
-      /* withElseRegion= */ false);
+      false);
 
     builder.setInsertionPointToStart(ifOp.getThenBlock());
   }
