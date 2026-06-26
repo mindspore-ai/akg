@@ -45,11 +45,15 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Conversion/Passes.h.inc"
+
+static constexpr int64_t kDimIndexStride = 2;
+
 #endif
 
 namespace {
@@ -216,8 +220,17 @@ static Value createAddNOpBody(Operation *op, ValueRange args, ArrayRef<Type> res
   return add;
 }
 
-static Value createDivOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
-                             Type elementTy) {
+struct ElementOpBodyParams {
+  ValueRange args;
+  ArrayRef<Type> resultTypes;
+  PatternRewriter &rewriter;
+  Type elementTy;
+};
+static Value createDivOpBody(Operation *op, const ElementOpBodyParams &params) {
+  auto &args = params.args;
+  auto &resultTypes = params.resultTypes;
+  auto &rewriter = params.rewriter;
+  auto &elementTy = params.elementTy;
   if (!isa<mindspore::DivOp>(op)) {
     return nullptr;
   }
@@ -232,8 +245,11 @@ static Value createDivOpBody(Operation *op, ValueRange args, ArrayRef<Type> resu
   return nullptr;
 }
 
-static Value createSqrtOpBody(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter,
-                              Type elementTy) {
+static Value createSqrtOpBody(Operation *op, const ElementOpBodyParams &params) {
+  auto &args = params.args;
+  auto &resultTypes = params.resultTypes;
+  auto &rewriter = params.rewriter;
+  auto &elementTy = params.elementTy;
   if (!isa<mindspore::SqrtOp>(op) || !isa<FloatType>(elementTy)) {
     return nullptr;
   }
@@ -334,11 +350,11 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
     return val;
   }
 
-  if (auto val = createDivOpBody(op, args, resultTypes, rewriter, elementTy)) {
+  if (auto val = createDivOpBody(op, {args, resultTypes, rewriter, elementTy})) {
     return val;
   }
 
-  if (auto val = createSqrtOpBody(op, args, resultTypes, rewriter, elementTy)) {
+  if (auto val = createSqrtOpBody(op, {args, resultTypes, rewriter, elementTy})) {
     return val;
   }
 
@@ -406,11 +422,11 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
     opResultTypes.push_back(result.getType());
   }
 
-  auto bodyResultTypes =
-    llvm::to_vector<4>(llvm::map_range(emptyTensors, [](Value v) { return getElementTypeOrSelf(v); }));
+  auto bodyResultTypes = llvm::to_vector<kSmallVectorSizeFour>(
+    llvm::map_range(emptyTensors, [](Value v) { return getElementTypeOrSelf(v); }));
 
-  SmallVector<Value, 2> operands;
-  SmallVector<AffineMap, 2> indexingMaps;
+  SmallVector<Value, kSmallVectorSizeTwo> operands;
+  SmallVector<AffineMap, kSmallVectorSizeTwo> indexingMaps;
   indexingMaps.reserve(operation->getNumOperands() + bodyResultTypes.size());
 
   // Input indexing maps may be broadcasted.
@@ -422,8 +438,8 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
       continue;
     }
 
-    SmallVector<int64_t, 4> newShape;
-    SmallVector<AffineExpr, 4> affineExprs;
+    SmallVector<int64_t, kSmallVectorSizeFour> newShape;
+    SmallVector<AffineExpr, kSmallVectorSizeFour> affineExprs;
     newShape.reserve(type.getRank());
     for (const auto &it : llvm::enumerate(type.getShape())) {
       if (it.value() == resultTy.getDimSize(it.index())) {
@@ -447,7 +463,8 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
   bool didEncounterError = false;
   auto linalgOp = rewriter.create<linalg::GenericOp>(
     loc, opResultTypes, operands, emptyTensors, indexingMaps, mlir::tosa::getNParallelLoopsAttrs(rank),
-    [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+    [&operation, &rewriter, &didEncounterError, &loc, &bodyResultTypes](OpBuilder &nestedBuilder, Location nestedLoc,
+                                                                        ValueRange blockArgs) {
       Value opResult = createLinalgBodyCalculationForElementwiseOp(
         operation, blockArgs.take_front(operation->getNumOperands()), bodyResultTypes, rewriter);
       if (!opResult) {
@@ -551,7 +568,8 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
     auto genericOp = rewriter.create<linalg::GenericOp>(
       loc, ArrayRef<Type>({output.getType()}), ValueRange{indices}, ValueRange{emptyTensor}, indexingMaps,
       mlir::tosa::getNParallelLoopsAttrs(outputRank),
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+      [&rewriter, &axis, &indicesRank, &outputRank, &data, &loc](OpBuilder &nestedBuilder, Location nestedLoc,
+                                                                 ValueRange blockArgs) {
         auto sliceVal = blockArgs[0];
         SmallVector<Value> dataIndices;
         // out's shape = input shape[: axis] + indices[batchDims:] + input shape[: axis + 1]
@@ -683,7 +701,9 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
       return op.getValue();
     };
 
-    auto buildBody = [&](OpBuilder &builder, Location loc, ValueRange ivs, ValueRange args) -> scf::ValueVector {
+    auto buildBody = [&rewriter, &dataOffsets, &sliceTy, &collapsedData, &toOpFoldResult, &sliceSizes, &dataStrides,
+                      &collapsedIndex, &accOffsets, &accStrides](OpBuilder &builder, Location loc, ValueRange ivs,
+                                                                 ValueRange args) -> scf::ValueVector {
       // data offsets = [{{ivs, ...}}, 0].
       std::copy(ivs.begin(), ivs.end(), dataOffsets.begin());
 
@@ -929,8 +949,15 @@ static SmallVector<int64_t> inferReduceOutShape(SmallVector<int64_t> axes, const
   return reduceOutShape;
 }
 
-SmallVector<Value> inferDynDims(SmallVector<int64_t> axes, const ShapedType inputTy, const Location loc, Value opnd,
-                                ConversionPatternRewriter &rewriter) {
+struct InferDynDimsParams {
+  SmallVector<int64_t> axes;
+  const ShapedType inputTy;
+  const Location loc;
+  Value opnd;
+  ConversionPatternRewriter &rewriter;
+};
+SmallVector<Value> inferDynDims(const InferDynDimsParams &params) {
+  auto &[axes, inputTy, loc, opnd, rewriter] = params;
   SmallVector<Value> dynDims;
   for (unsigned i = 0; i < inputTy.getRank(); i++) {
     if (!llvm::is_contained(axes, int64_t(i)) && inputTy.isDynamicDim(i)) {
@@ -962,7 +989,7 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     }
 
     // Broadcast the newly added dimensions to their appropriate multiple.
-    SmallVector<int64_t, 2> genericShape;
+    SmallVector<int64_t, kSmallVectorSizeTwo> genericShape;
     for (int i = 0; i < rank; i++) {
       int64_t dim = multiples[i];
       genericShape.push_back(dim == kDynamicDimSentinel ? ShapedType::kDynamic : dim);
@@ -979,7 +1006,7 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(op.getLoc(), genericShape, elementTy, dynDims);
 
     // We needs to map the input shape to the non-broadcasted dimensions.
-    SmallVector<AffineExpr, 4> dimExprs;
+    SmallVector<AffineExpr, kSmallVectorSizeFour> dimExprs;
     dimExprs.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
       dimExprs.push_back(rewriter.getAffineDimExpr(i * kTileDimsPerInputDim + kBroadcastOrigDimOffset));
@@ -987,12 +1014,13 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     auto readAffineMap = AffineMap::get(/* dimCount= */ rank * kTileDimsPerInputDim,
                                         /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
 
-    SmallVector<AffineMap, 2> affineMaps = {readAffineMap, rewriter.getMultiDimIdentityMap(genericShape.size())};
+    SmallVector<AffineMap, kSmallVectorSizeTwo> affineMaps = {readAffineMap,
+                                                              rewriter.getMultiDimIdentityMap(genericShape.size())};
 
     auto genericOp = rewriter.create<linalg::GenericOp>(
       loc, RankedTensorType::get(genericShape, elementTy), input, ValueRange{emptyTensor}, affineMaps,
       mlir::tosa::getNParallelLoopsAttrs(genericShape.size()),
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
+      [&op](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
         (void)nestedBuilder.create<linalg::YieldOp>(op.getLoc(), *args.begin());
       });
 
@@ -1000,6 +1028,25 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
                                                             rewriter.getDenseI64ArrayAttr(resultTy.getShape()));
     return success();
   }
+};
+
+struct BroadcastInputInfo {
+  Location loc;
+  Value input;
+  ShapedType inputTy;
+  ShapedType resultTy;
+  Value newShape;
+};
+
+struct BroadcastDimContext {
+  PatternRewriter &rewriter;
+  SmallVector<int64_t, kSmallVectorSizeTwo> &genericShape;
+  SmallVector<int64_t, kSmallVectorSizeTwo> &collapseShape;
+  SmallVector<ReassociationIndices, kSmallVectorSizeFour> &reassociationMap;
+  SmallVector<Value> &dynDims;
+  SmallVector<AffineExpr, kSmallVectorSizeFour> &dimExprs;
+  int64_t &dimIndices;
+  bool &needCastOp;
 };
 
 class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::BroadcastToOp> {
@@ -1080,37 +1127,40 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
 
     // create emptyOp and genericOp
     // genericShape : emptyOp and genericOp's shape
-    SmallVector<int64_t, 2> genericShape;
+    SmallVector<int64_t, kSmallVectorSizeTwo> genericShape;
     SmallVector<Value> dynDims;
     // indexMaping Of input
-    SmallVector<AffineExpr, 4> dimExprs;
+    SmallVector<AffineExpr, kSmallVectorSizeFour> dimExprs;
     dimExprs.reserve(rank);
 
     // create collapseShape Op
     // reassociationMap of tensor.collapse_shape Op
-    SmallVector<ReassociationIndices, 4> reassociationMap;
+    SmallVector<ReassociationIndices, kSmallVectorSizeFour> reassociationMap;
     // collapseShape Op's output shape.
-    SmallVector<int64_t, 2> collapseShape;
+    SmallVector<int64_t, kSmallVectorSizeTwo> collapseShape;
     // if collapseShape != genericShape, tensor.castOp must created.
     bool needCastOp = false;
-
     int64_t dimIndices = 0;
-    buildBroadcastShapesAndMaps(loc, input, inputTy, resultTy, newShape, rank, rewriter, genericShape, collapseShape,
-                                reassociationMap, dynDims, dimExprs, dimIndices, needCastOp);
+    BroadcastInputInfo bcastInfo{loc, input, inputTy, resultTy, newShape};
+    BroadcastDimContext bcastCtx{rewriter, genericShape, collapseShape, reassociationMap,
+                                 dynDims,  dimExprs,     dimIndices,    needCastOp};
+    buildBroadcastShapesAndMaps(bcastInfo, rank, bcastCtx);
 
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(op.getLoc(), genericShape, elementTy, dynDims);
     // We needs to map the input shape to the non-broadcasted dimensions.
     auto readAffineMap =
       AffineMap::get(/* dimCount= */ dimIndices, /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
     assert((int64_t)genericShape.size() == dimIndices);
-    SmallVector<AffineMap, 2> affineMaps = {readAffineMap, rewriter.getMultiDimIdentityMap(genericShape.size())};
+    SmallVector<AffineMap, kSmallVectorSizeTwo> affineMaps = {readAffineMap,
+                                                              rewriter.getMultiDimIdentityMap(genericShape.size())};
 
     auto genericOp = rewriter.create<linalg::GenericOp>(
       loc, RankedTensorType::get(genericShape, elementTy), input, ValueRange{emptyTensor}, affineMaps,
       mlir::tosa::getNParallelLoopsAttrs(genericShape.size()),
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
+      [&op](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
         (void)nestedBuilder.create<linalg::YieldOp>(op.getLoc(), *args.begin());
       });
+    // cppcheck-suppress knownConditionTrueFalse
     if (needCastOp) {
       auto collapseShapeOp = rewriter.create<tensor::CollapseShapeOp>(
         loc, RankedTensorType::get(collapseShape, elementTy), genericOp.getResult(0), reassociationMap);
@@ -1125,206 +1175,156 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     return success();
   }
 
-  static void handleOutDimOne(PatternRewriter &rewriter, int64_t inputDimSize, SmallVector<int64_t, 2> &genericShape,
-                              SmallVector<int64_t, 2> &collapseShape,
-                              SmallVector<ReassociationIndices, 4> &reassociationMap,
-                              SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
+  static void handleOutDimOne(BroadcastDimContext &ctx, int64_t inputDimSize) {
     assert(inputDimSize == kUnitDimSize);
-    genericShape.push_back(inputDimSize);
-    collapseShape.push_back(inputDimSize);
-    ReassociationIndices indices({dimIndices});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices));
-    ++dimIndices;
+    ctx.genericShape.push_back(inputDimSize);
+    ctx.collapseShape.push_back(inputDimSize);
+    ReassociationIndices indices({ctx.dimIndices});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices));
+    ++ctx.dimIndices;
   }
 
-  static void handleOutDimGreaterInputDynamic(Location loc, Value input, int64_t dim, PatternRewriter &rewriter,
-                                              int64_t outDimSize, ArrayRef<int64_t> inputShape,
-                                              SmallVector<int64_t, 2> &genericShape,
-                                              SmallVector<int64_t, 2> &collapseShape,
-                                              SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                              SmallVector<Value> &dynDims, SmallVector<AffineExpr, 4> &dimExprs,
-                                              int64_t &dimIndices, bool &needCastOp) {
-    genericShape.push_back(ShapedType::kDynamic);
-    genericShape.push_back(inputShape[dim]);
-    collapseShape.push_back(ShapedType::kDynamic);
-    Value dimVal = rewriter.create<tensor::DimOp>(loc, input, dim);
-    Value multi = rewriter.create<arith::DivSIOp>(loc, rewriter.getIndexType(),
-                                                  rewriter.create<arith::ConstantIndexOp>(loc, outDimSize), dimVal);
-    dynDims.push_back(multi);
-    dynDims.push_back(dimVal);
-    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
-    dimIndices += 2;
-    needCastOp = true;
+  static void handleOutDimGreaterInputDynamic(BroadcastInputInfo &info, int64_t dim, int64_t outDimSize,
+                                              BroadcastDimContext &ctx) {
+    ctx.genericShape.push_back(ShapedType::kDynamic);
+    ctx.genericShape.push_back(info.inputTy.getShape()[dim]);
+    ctx.collapseShape.push_back(ShapedType::kDynamic);
+    Value dimVal = ctx.rewriter.create<tensor::DimOp>(info.loc, info.input, dim);
+    Value multi = ctx.rewriter.create<arith::DivSIOp>(
+      info.loc, ctx.rewriter.getIndexType(), ctx.rewriter.create<arith::ConstantIndexOp>(info.loc, outDimSize), dimVal);
+    ctx.dynDims.push_back(multi);
+    ctx.dynDims.push_back(dimVal);
+    ReassociationIndices indices({ctx.dimIndices, ctx.dimIndices + kBroadcastOrigDimOffset});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
+    ctx.dimIndices += kDimIndexStride;
+    ctx.needCastOp = true;
   }
 
-  static void handleOutDimEqualInput(PatternRewriter &rewriter, int64_t outDimSize,
-                                     SmallVector<int64_t, 2> &genericShape, SmallVector<int64_t, 2> &collapseShape,
-                                     SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                     SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
-    genericShape.push_back(outDimSize);
-    collapseShape.push_back(outDimSize);
-    ReassociationIndices indices({dimIndices});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices));
-    ++dimIndices;
+  static void handleOutDimEqualInput(BroadcastDimContext &ctx, int64_t outDimSize) {
+    ctx.genericShape.push_back(outDimSize);
+    ctx.collapseShape.push_back(outDimSize);
+    ReassociationIndices indices({ctx.dimIndices});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices));
+    ++ctx.dimIndices;
   }
 
-  static void handleOutDimGreaterInputStatic(PatternRewriter &rewriter, int64_t outDimSize, int64_t inputDimSize,
-                                             SmallVector<int64_t, 2> &genericShape,
-                                             SmallVector<int64_t, 2> &collapseShape,
-                                             SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                             SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
+  static void handleOutDimGreaterInputStatic(BroadcastDimContext &ctx, int64_t outDimSize, int64_t inputDimSize) {
     assert(inputDimSize >= kUnitDimSize && inputDimSize < outDimSize);
-    genericShape.push_back(outDimSize / inputDimSize);
-    genericShape.push_back(inputDimSize);
-    collapseShape.push_back(outDimSize);
-    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
-    dimIndices += 2;
+    ctx.genericShape.push_back(outDimSize / inputDimSize);
+    ctx.genericShape.push_back(inputDimSize);
+    ctx.collapseShape.push_back(outDimSize);
+    ReassociationIndices indices({ctx.dimIndices, ctx.dimIndices + kBroadcastOrigDimOffset});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
+    ctx.dimIndices += kDimIndexStride;
   }
 
-  static void handleDynamicOutInputOne(Location loc, Value newShape, int64_t dim, PatternRewriter &rewriter,
-                                       int64_t inputDimSize, SmallVector<int64_t, 2> &genericShape,
-                                       SmallVector<int64_t, 2> &collapseShape,
-                                       SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                       SmallVector<Value> &dynDims, SmallVector<AffineExpr, 4> &dimExprs,
-                                       int64_t &dimIndices) {
-    genericShape.push_back(ShapedType::kDynamic);
-    genericShape.push_back(inputDimSize);
-    collapseShape.push_back(ShapedType::kDynamic);
-    Value multi = rewriter.create<shape::GetExtentOp>(loc, newShape, dim);
-    dynDims.push_back(multi);
-    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
-    dimIndices += 2;
+  static void handleDynamicOutInputOne(BroadcastInputInfo &info, int64_t dim, int64_t inputDimSize,
+                                       BroadcastDimContext &ctx) {
+    ctx.genericShape.push_back(ShapedType::kDynamic);
+    ctx.genericShape.push_back(inputDimSize);
+    ctx.collapseShape.push_back(ShapedType::kDynamic);
+    Value multi = ctx.rewriter.create<shape::GetExtentOp>(info.loc, info.newShape, dim);
+    ctx.dynDims.push_back(multi);
+    ReassociationIndices indices({ctx.dimIndices, ctx.dimIndices + kBroadcastOrigDimOffset});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
+    ctx.dimIndices += kDimIndexStride;
   }
 
-  static void handleDynamicOutInputGreater(Location loc, Value newShape, ArrayRef<int64_t> inputShape, int64_t dim,
-                                           PatternRewriter &rewriter, int64_t inputDimSize,
-                                           SmallVector<int64_t, 2> &genericShape,
-                                           SmallVector<int64_t, 2> &collapseShape,
-                                           SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                           SmallVector<Value> &dynDims, SmallVector<AffineExpr, 4> &dimExprs,
-                                           int64_t &dimIndices) {
-    genericShape.push_back(ShapedType::kDynamic);
-    genericShape.push_back(inputShape[dim]);
-    collapseShape.push_back(ShapedType::kDynamic);
-    Value multi = rewriter.create<shape::GetExtentOp>(loc, newShape, dim);
-    multi = rewriter.create<arith::DivSIOp>(loc, rewriter.getIndexType(), multi,
-                                            rewriter.create<arith::ConstantIndexOp>(loc, inputDimSize));
-    dynDims.push_back(multi);
-    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
-    dimIndices += 2;
+  static void handleDynamicOutInputGreater(BroadcastInputInfo &info, int64_t dim, int64_t inputDimSize,
+                                           BroadcastDimContext &ctx) {
+    ctx.genericShape.push_back(ShapedType::kDynamic);
+    ctx.genericShape.push_back(info.inputTy.getShape()[dim]);
+    ctx.collapseShape.push_back(ShapedType::kDynamic);
+    Value multi = ctx.rewriter.create<shape::GetExtentOp>(info.loc, info.newShape, dim);
+    multi = ctx.rewriter.create<arith::DivSIOp>(info.loc, ctx.rewriter.getIndexType(), multi,
+                                                ctx.rewriter.create<arith::ConstantIndexOp>(info.loc, inputDimSize));
+    ctx.dynDims.push_back(multi);
+    ReassociationIndices indices({ctx.dimIndices, ctx.dimIndices + kBroadcastOrigDimOffset});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
+    ctx.dimIndices += kDimIndexStride;
   }
 
-  static bool handleDynamicSameSymbolic(Location loc, Value input, ShapedType inputTy, ShapedType resultTy, int64_t dim,
-                                        PatternRewriter &rewriter, SmallVector<int64_t, 2> &genericShape,
-                                        SmallVector<int64_t, 2> &collapseShape,
-                                        SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                        SmallVector<Value> &dynDims, SmallVector<AffineExpr, 4> &dimExprs,
-                                        int64_t &dimIndices) {
+  static bool handleDynamicSameSymbolic(BroadcastInputInfo &info, int64_t dim, BroadcastDimContext &ctx) {
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-    if (!analysis.isSameSymbolicShape(resultTy, inputTy)) {
+    if (!analysis.isSameSymbolicShape(info.resultTy, info.inputTy)) {
       return false;
     }
-    genericShape.push_back(ShapedType::kDynamic);
-    collapseShape.push_back(ShapedType::kDynamic);
-    Value dimVal = rewriter.create<tensor::DimOp>(loc, input, dim);
-    dynDims.push_back(dimVal);
-    ReassociationIndices indices({dimIndices});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices));
-    ++dimIndices;
+    ctx.genericShape.push_back(ShapedType::kDynamic);
+    ctx.collapseShape.push_back(ShapedType::kDynamic);
+    Value dimVal = ctx.rewriter.create<tensor::DimOp>(info.loc, info.input, dim);
+    ctx.dynDims.push_back(dimVal);
+    ReassociationIndices indices({ctx.dimIndices});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices));
+    ++ctx.dimIndices;
     return true;
   }
 
-  static void handleDynamicTiled(Location loc, Value input, Value newShape, ArrayRef<int64_t> inputShape, int64_t dim,
-                                 PatternRewriter &rewriter, SmallVector<int64_t, 2> &genericShape,
-                                 SmallVector<int64_t, 2> &collapseShape,
-                                 SmallVector<ReassociationIndices, 4> &reassociationMap, SmallVector<Value> &dynDims,
-                                 SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices) {
-    genericShape.push_back(ShapedType::kDynamic);
-    genericShape.push_back(inputShape[dim]);
-    collapseShape.push_back(ShapedType::kDynamic);
-    Value dimVal = rewriter.create<tensor::DimOp>(loc, input, dim);
-    Value multi = rewriter.create<shape::GetExtentOp>(loc, newShape, dim);
-    multi = rewriter.create<arith::DivSIOp>(loc, rewriter.getIndexType(), multi, dimVal);
-    dynDims.push_back(multi);
-    dynDims.push_back(dimVal);
-    ReassociationIndices indices({dimIndices, dimIndices + kBroadcastOrigDimOffset});
-    reassociationMap.push_back(indices);
-    dimExprs.push_back(rewriter.getAffineDimExpr(dimIndices + kBroadcastOrigDimOffset));
-    dimIndices += 2;
+  static void handleDynamicTiled(BroadcastInputInfo &info, int64_t dim, BroadcastDimContext &ctx) {
+    ctx.genericShape.push_back(ShapedType::kDynamic);
+    ctx.genericShape.push_back(info.inputTy.getShape()[dim]);
+    ctx.collapseShape.push_back(ShapedType::kDynamic);
+    Value dimVal = ctx.rewriter.create<tensor::DimOp>(info.loc, info.input, dim);
+    Value multi = ctx.rewriter.create<shape::GetExtentOp>(info.loc, info.newShape, dim);
+    multi = ctx.rewriter.create<arith::DivSIOp>(info.loc, ctx.rewriter.getIndexType(), multi, dimVal);
+    ctx.dynDims.push_back(multi);
+    ctx.dynDims.push_back(dimVal);
+    ReassociationIndices indices({ctx.dimIndices, ctx.dimIndices + kBroadcastOrigDimOffset});
+    ctx.reassociationMap.push_back(indices);
+    ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
+    ctx.dimIndices += kDimIndexStride;
   }
 
-  static void processBroadcastDim(Location loc, Value input, ShapedType inputTy, ShapedType resultTy, Value newShape,
-                                  int64_t dim, PatternRewriter &rewriter, SmallVector<int64_t, 2> &genericShape,
-                                  SmallVector<int64_t, 2> &collapseShape,
-                                  SmallVector<ReassociationIndices, 4> &reassociationMap, SmallVector<Value> &dynDims,
-                                  SmallVector<AffineExpr, 4> &dimExprs, int64_t &dimIndices, bool &needCastOp) {
-    auto inputShape = inputTy.getShape();
-    auto resultShape = resultTy.getShape();
+  static void processBroadcastDim(BroadcastInputInfo &info, int64_t dim, BroadcastDimContext &ctx) {
+    auto inputShape = info.inputTy.getShape();
+    auto resultShape = info.resultTy.getShape();
 
     int64_t outDimSize = resultShape[dim];
     int64_t inputDimSize = inputShape[dim];
 
     if (outDimSize == kUnitDimSize) {
-      handleOutDimOne(rewriter, inputDimSize, genericShape, collapseShape, reassociationMap, dimExprs, dimIndices);
+      handleOutDimOne(ctx, inputDimSize);
       return;
     }
 
     if (outDimSize > kUnitDimSize) {
       if (inputDimSize == ShapedType::kDynamic) {
-        handleOutDimGreaterInputDynamic(loc, input, dim, rewriter, outDimSize, inputShape, genericShape, collapseShape,
-                                        reassociationMap, dynDims, dimExprs, dimIndices, needCastOp);
+        handleOutDimGreaterInputDynamic(info, dim, outDimSize, ctx);
         return;
       }
       if (inputDimSize == outDimSize) {
-        handleOutDimEqualInput(rewriter, outDimSize, genericShape, collapseShape, reassociationMap, dimExprs,
-                               dimIndices);
+        handleOutDimEqualInput(ctx, outDimSize);
         return;
       }
-      handleOutDimGreaterInputStatic(rewriter, outDimSize, inputDimSize, genericShape, collapseShape, reassociationMap,
-                                     dimExprs, dimIndices);
+      handleOutDimGreaterInputStatic(ctx, outDimSize, inputDimSize);
       return;
     }
 
     if (inputDimSize == kUnitDimSize) {
-      handleDynamicOutInputOne(loc, newShape, dim, rewriter, inputDimSize, genericShape, collapseShape,
-                               reassociationMap, dynDims, dimExprs, dimIndices);
+      handleDynamicOutInputOne(info, dim, inputDimSize, ctx);
       return;
     }
     if (inputDimSize > kUnitDimSize) {
-      handleDynamicOutInputGreater(loc, newShape, inputShape, dim, rewriter, inputDimSize, genericShape, collapseShape,
-                                   reassociationMap, dynDims, dimExprs, dimIndices);
+      handleDynamicOutInputGreater(info, dim, inputDimSize, ctx);
       return;
     }
 
-    if (handleDynamicSameSymbolic(loc, input, inputTy, resultTy, dim, rewriter, genericShape, collapseShape,
-                                  reassociationMap, dynDims, dimExprs, dimIndices)) {
+    if (handleDynamicSameSymbolic(info, dim, ctx)) {
       return;
     }
 
-    handleDynamicTiled(loc, input, newShape, inputShape, dim, rewriter, genericShape, collapseShape, reassociationMap,
-                       dynDims, dimExprs, dimIndices);
+    handleDynamicTiled(info, dim, ctx);
   }
 
-  static void buildBroadcastShapesAndMaps(Location loc, Value input, ShapedType inputTy, ShapedType resultTy,
-                                          Value newShape, int64_t rank, PatternRewriter &rewriter,
-                                          SmallVector<int64_t, 2> &genericShape, SmallVector<int64_t, 2> &collapseShape,
-                                          SmallVector<ReassociationIndices, 4> &reassociationMap,
-                                          SmallVector<Value> &dynDims, SmallVector<AffineExpr, 4> &dimExprs,
-                                          int64_t &dimIndices, bool &needCastOp) {
+  static void buildBroadcastShapesAndMaps(BroadcastInputInfo &info, int64_t rank, BroadcastDimContext &ctx) {
     for (int64_t i = 0; i < rank; ++i) {
-      processBroadcastDim(loc, input, inputTy, resultTy, newShape, i, rewriter, genericShape, collapseShape,
-                          reassociationMap, dynDims, dimExprs, dimIndices, needCastOp);
+      processBroadcastDim(info, i, ctx);
     }
   }
 };
@@ -1384,7 +1384,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
     }
 
     SmallVector<int64_t> reduceOutShape = inferReduceOutShape(axes, inputTy);
-    SmallVector<Value> dynDims = inferDynDims(axes, inputTy, loc, opnd, rewriter);
+    SmallVector<Value> dynDims = inferDynDims({axes, inputTy, loc, opnd, rewriter});
     Type reduceTy = RankedTensorType::get(reduceOutShape, resultTy.getElementType(), encoding);
     // ElemAny is a type of reduceAnyOp in special scenarios. It's input and result have different element types,
     // and all it's axis are "reduction" types.
@@ -1419,7 +1419,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
     auto maps = AffineMap::inferFromExprList({reduceInputExprs, reduceOutputExprs}, rewriter.getContext());
     auto ReductionOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, opnd, initTensor, maps, iteratorTypes,
-      [&](OpBuilder &nestedBuilder, Location, const ValueRange blockArgs) {
+      [&op, &loc, &resultElementTy](OpBuilder &nestedBuilder, Location, const ValueRange blockArgs) {
         auto res = createCombinerForReduce(op, blockArgs, resultElementTy, nestedBuilder);
         (void)nestedBuilder.create<linalg::YieldOp>(loc, res);
       });

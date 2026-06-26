@@ -30,7 +30,6 @@ namespace mlir {
 #include "akg/Dialect/GPU/Passes.h.inc"
 }  // namespace mlir
 
-using namespace akgglobal;  // NOLINT(build/namespaces)
 namespace mlir {
 namespace gpu {
 
@@ -39,21 +38,21 @@ struct StoreAxisInfoPass : public impl::StoreAxisInfoBase<StoreAxisInfoPass> {
   StoreAxisInfoPass() {}
   void runOnOperation() override {
     std::deque<std::string> newTags;
-    getOperation()->walk([&](Operation *op) {
+    getOperation()->walk([&newTags](Operation *op) {
       if (!isa<affine::AffineForOp, affine::AffineParallelOp>(op)) {
         return;
       }
-      if (op->getAttr(kLoopTag)) {
-        auto loopTag = dyn_cast<StringAttr>(op->getAttr(kLoopTag)).getValue().str();
+      if (op->getAttr(akgglobal::kLoopTag)) {
+        auto loopTag = dyn_cast<StringAttr>(op->getAttr(akgglobal::kLoopTag)).getValue().str();
         newTags.push_front(loopTag);
       } else {
-        newTags.emplace_front(kPlaceHolder);
+        newTags.emplace_front(akgglobal::kPlaceHolder);
       }
     });
     std::vector<std::string> newStructure;
     (void)std::transform(newTags.begin(), newTags.end(), std::back_inserter(newStructure),
                          [](std::string l) { return l; });
-    GpuScheduleTool::getInstance().updateLoopStructure(newStructure);
+    akgglobal::GpuScheduleTool::getInstance().updateLoopStructure(newStructure);
   }
 };
 }  // namespace

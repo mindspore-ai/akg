@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
+#include "akg/ExecutionEngine/AscendLaunchRuntime/ProfileMgr.h"
+
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <string>
-#include "akg/ExecutionEngine/AscendLaunchRuntime/ProfileMgr.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/logger.h"
 
 namespace mlir {

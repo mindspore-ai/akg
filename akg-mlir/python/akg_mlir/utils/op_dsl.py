@@ -1589,6 +1589,22 @@ def torch_bitwise_not_str(inputs, output, attr):
     )
 
 
+def torch_bitwise_and_str(inputs, output, attr):
+    """gen torch bitwise and string"""
+    return (
+        f"{output[0]['tensor_name']} = np.bitwise_and("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
+def torch_bitwise_or_str(inputs, output, attr):
+    """gen torch bitwise or string"""
+    return (
+        f"{output[0]['tensor_name']} = np.bitwise_or("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+    )
+
+
 def torch_sin_str(inputs, output, attr):
     """gen torch sin string"""
     return (
@@ -1618,6 +1634,14 @@ def torch_eq_scalar_str(inputs, output, attr):
     return (
         f"{output[0]['tensor_name']} = np.equal("
         f"{get_input(inputs[0][0])}, {format_py_value(get_input(inputs[1][0]))})"
+    )
+
+
+def torch_eq_tensor_str(inputs, output, attr):
+    """gen torch eq tensor string"""
+    return (
+        f"{output[0]['tensor_name']} = np.equal("
+        f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
     )
 
 
@@ -1678,6 +1702,13 @@ def torch_gather_str(inputs, output, attr):
     )
 
 
+def torch_size_int_str(inputs, output, attr):
+    """gen torch size.int string"""
+    tensor_name = get_input(inputs[0][0])
+    dim = get_input(inputs[1][0])
+    return f"{output[0]['tensor_name']} = {tensor_name}.shape[{dim}]"
+
+
 def get_op_dsl_torch_mlir():
     # #lizard forgives
     """Get DSL for torch-mlir operators."""
@@ -1721,15 +1752,21 @@ def get_op_dsl_torch_mlir():
         "Torch.aten.exp": torch_exp_str,
         "Torch.aten.log": torch_log_str,
         "Torch.aten.bitwiseNot": torch_bitwise_not_str,
+        "Torch.aten.bitwiseAnd": torch_bitwise_and_str,
+        "Torch.aten.bitwiseAnd.tensor": torch_bitwise_and_str,
+        "Torch.aten.bitwiseOr": torch_bitwise_or_str,
+        "Torch.aten.bitwiseOr.tensor": torch_bitwise_or_str,
         "Torch.aten.sin": torch_sin_str,
         "Torch.aten.cos": torch_cos_str,
         "Torch.vtensor.literal": torch_vtensor_literal_str,
         "Torch.aten.eq.scalar": torch_eq_scalar_str,
+        "Torch.aten.eq.tensor": torch_eq_tensor_str,
         "Torch.aten.tanh": torch_tanh_str,
         "Torch.aten.unsqueeze": torch_unsqueeze_str,
         "Torch.aten.gt.tensor": torch_gt_tensor_str,
         "Torch.aten.sliceScatter": torch_slice_scatter_str,
         "Torch.aten.constantPadNd": torch_constant_pad_nd_str,
         "Torch.aten.gather": torch_gather_str,
+        "Torch.aten.size.int": torch_size_int_str,
     }
     return op_dsl

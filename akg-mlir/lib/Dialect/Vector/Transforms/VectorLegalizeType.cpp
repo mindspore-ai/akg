@@ -56,7 +56,7 @@ struct UIToFPLegalizePattern : public OpRewritePattern<arith::UIToFPOp> {
     }
 
     auto intIn = dyn_cast<IntegerType>(inElemType);
-    if (!intIn || intIn.getWidth() != 8) {
+    if (!intIn || intIn.getWidth() != kI8BitWidth) {
       return failure();
     }
     auto floatOut = dyn_cast<FloatType>(outElemType);

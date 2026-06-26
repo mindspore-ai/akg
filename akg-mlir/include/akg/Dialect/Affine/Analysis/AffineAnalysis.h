@@ -38,6 +38,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 
@@ -72,7 +73,7 @@ bool loopBoundsMatch(AffineForOp a, AffineForOp b);
 struct AKGMemRefAccess {
   Value memref;
   Operation *opInst;
-  SmallVector<Value, 4> indices;
+  SmallVector<Value, kSmallVectorSizeFour> indices;
 
   /// Constructs a MemRefAccess from a load or store operation.
   // MemRefAccess, i.e., loadOp->getAccess(), dmaOp->getRead/WriteAccess.
@@ -118,11 +119,11 @@ struct AKGMemRefAccess {
   bool operator!=(const AKGMemRefAccess &rhs) const { return !(*this == rhs); }
 };
 
-DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess,
-                                                unsigned loopDepth,
-                                                FlatAffineValueConstraints *dependenceConstraints = nullptr,
-                                                SmallVector<DependenceComponent, 2> *dependenceComponents = nullptr,
-                                                bool allowRAR = false, bool checkSrcBeforeDst = true);
+DependenceResult checkMemrefAccessDependenceAKG(
+  const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess, unsigned loopDepth,
+  FlatAffineValueConstraints *dependenceConstraints = nullptr,
+  SmallVector<DependenceComponent, kSmallVectorSizeTwo> *dependenceComponents = nullptr, bool allowRAR = false,
+  bool checkSrcBeforeDst = true);
 
 SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
                                             unsigned numCommonLoops, bool isBackwardSlice,

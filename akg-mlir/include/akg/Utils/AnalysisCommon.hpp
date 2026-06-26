@@ -43,6 +43,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 
@@ -121,7 +122,7 @@ const std::vector<unsigned> primeSteps = {kPrimeStep0, kPrimeStep1, kPrimeStep2,
 const std::vector<unsigned> primeTailSteps = {kPrimeTailStep0, kPrimeTailStep1, kPrimeTailStep2, kPrimeTailStep3,
                                               kPrimeTailStep4, kPrimeTailStep5, kPrimeTailStep6, kPrimeTailStep7,
                                               kPrimeTailStep8, kPrimeTailStep9};
-enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduction, Matmul, Conv };
+enum class OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduction, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {
   {static_cast<int>(OperatorTemplate::Default), "Default"},
   {static_cast<int>(OperatorTemplate::Elementwise), "Elementwise"},
@@ -132,7 +133,7 @@ const std::unordered_map<int, std::string> operatorTemplateMap = {
   {static_cast<int>(OperatorTemplate::Matmul), "Matmul"},
   {static_cast<int>(OperatorTemplate::Conv), "Conv"}};
 
-enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
+enum class ReduceDirection { UNKNOWN = 0, X, Y, ALL };
 const std::unordered_map<int, std::string> reduceDirectionMap = {
   {static_cast<int>(ReduceDirection::UNKNOWN), "unknown"},
   {static_cast<int>(ReduceDirection::X), "x"},
@@ -204,7 +205,7 @@ class CommonUtils {
   }
 
   // Obtains the constant variable in the if condition.
-  static void getConstraintValues(IntegerSet set, SmallVector<int64_t, 4> &constraintValues) {
+  static void getConstraintValues(IntegerSet set, SmallVector<int64_t, kSmallVectorSizeFour> &constraintValues) {
     for (auto constraint : set.getConstraints()) {
       int64_t constraintValue = kInvalidConstraintValue;
       // If condition type is other
@@ -245,7 +246,7 @@ class CommonUtils {
       return true;
     }
     affine::AffineIfOp ifOp = dyn_cast<affine::AffineIfOp>(op);
-    SmallVector<int64_t, 4> constraintValues;
+    SmallVector<int64_t, kSmallVectorSizeFour> constraintValues;
     getConstraintValues(ifOp.getIntegerSet(), constraintValues);
     if (constraintValues.empty()) {
       return true;
@@ -265,7 +266,7 @@ class CommonUtils {
 
   // Get the common block of two Ops
   static Block *getCommonBlock(Operation *opA, Operation *opB) {
-    auto getAllAncestorBlocks = [&](Operation *op, SmallVector<Block *, 4> &ancestorBlocks) {
+    auto getAllAncestorBlocks = [](Operation *op, SmallVector<Block *, kSmallVectorSizeFour> &ancestorBlocks) {
       Block *currBlock = op->getBlock();
       while (currBlock) {
         ancestorBlocks.push_back(currBlock);
@@ -275,8 +276,8 @@ class CommonUtils {
     };
 
     // Find the closest common block including those in AffineIf.
-    SmallVector<Block *, 4> srcAncestorBlocks;
-    SmallVector<Block *, 4> dstAncestorBlocks;
+    SmallVector<Block *, kSmallVectorSizeFour> srcAncestorBlocks;
+    SmallVector<Block *, kSmallVectorSizeFour> dstAncestorBlocks;
     getAllAncestorBlocks(opA, srcAncestorBlocks);
     getAllAncestorBlocks(opB, dstAncestorBlocks);
 
@@ -326,7 +327,7 @@ class CommonUtils {
     auto opTypeStr = dyn_cast<StringAttr>(op->getAttr(kOperatorTypeStr)).getValue().str();
     for (auto it = operatorTemplateMap.begin(); it != operatorTemplateMap.end(); ++it) {
       if (it->second == opTypeStr) {
-        return OperatorTemplate(it->first);
+        return static_cast<OperatorTemplate>(it->first);
       }
     }
     return opType;
@@ -345,7 +346,7 @@ class CommonUtils {
 
     for (auto it = reduceDirectionMap.begin(); it != reduceDirectionMap.end(); ++it) {
       if (it->second == directionStr) {
-        return ReduceDirection(it->first);
+        return static_cast<ReduceDirection>(it->first);
       }
     }
     return ReduceDirection::UNKNOWN;
@@ -412,7 +413,7 @@ class CommonUtils {
     return initStoreOp;
   }
 
-  static void collectRelatedAxes(Value value, SmallVector<Operation *, 8> &axes) {
+  static void collectRelatedAxes(Value value, SmallVector<Operation *, kSmallVectorSizeEight> &axes) {
     if (auto blockArg = dyn_cast<BlockArgument>(value)) {
       if (isa<IndexType>(blockArg.getType())) {
         Block *block = blockArg.getOwner();
@@ -439,7 +440,7 @@ class CommonUtils {
           }
         }
       } else if (auto affineIf = dyn_cast<affine::AffineIfOp>(parentOp)) {
-        affineIf.walk([&](affine::AffineYieldOp yieldOp) {
+        affineIf.walk([&axes](affine::AffineYieldOp yieldOp) {
           collectRelatedAxes(yieldOp.getOperands()[kAffineYieldOperandIdx], axes);
         });
       } else {
@@ -541,8 +542,8 @@ class CommonUtils {
   static std::map<int, SmallVector<memref::AllocOp>> findTempBuffer(Operation *funcOp) {
     std::map<int, SmallVector<memref::AllocOp>> tempBuffers;
     SmallVector<Value> globalMemref;
-    funcOp->walk([&](CopyOpInterface copyOp) { globalMemref.push_back(copyOp.getSource()); });
-    funcOp->walk([&](memref::AllocOp allocOp) {
+    funcOp->walk([&globalMemref](CopyOpInterface copyOp) { globalMemref.push_back(copyOp.getSource()); });
+    funcOp->walk([&globalMemref, &tempBuffers](memref::AllocOp allocOp) {
       auto cacheLevel = getCacheLevel(allocOp.getMemref());
       if (cacheLevel != kGlobalCache) {
         tempBuffers[cacheLevel].push_back(allocOp);
@@ -592,7 +593,7 @@ class CommonUtils {
   ///  (2. return the AllocOp with largest rank, i.e. alloc in this case)
   static Operation *getAllocOpOfValue(Operation *funcOp, const Value &value) {
     Operation *ret = nullptr;
-    funcOp->walk([&](memref::AllocOp parentOp) {
+    funcOp->walk([&ret, &value](memref::AllocOp parentOp) {
       for (auto user : parentOp->getUsers()) {
         if (user == value.getDefiningOp()) {
           ret = parentOp.getOperation();
@@ -684,7 +685,7 @@ class CommonUtils {
 
   static SmallVector<Operation *> getReduceOps(Operation *funcOp) {
     SmallVector<Operation *> redOps;
-    funcOp->walk([&](Operation *curOp) {
+    funcOp->walk([&redOps](Operation *curOp) {
       if (curOp->hasAttr(kReductionAxesStr)) {
         redOps.push_back(curOp);
       }
@@ -692,18 +693,20 @@ class CommonUtils {
     return redOps;
   }
 
-  static void collectDestEachDim(SmallVector<Value> &dest, SmallVector<SmallVector<Operation *, 8>> &axesDestEachDim) {
+  static void collectDestEachDim(SmallVector<Value> &dest,
+                                 SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> &axesDestEachDim) {
     for (auto idx : dest) {
-      SmallVector<Operation *, 8> axesDesc;
+      SmallVector<Operation *, kSmallVectorSizeEight> axesDesc;
       collectRelatedAxes(idx, axesDesc);
       (void)std::unique(axesDesc.begin(), axesDesc.end());
       axesDestEachDim.push_back(axesDesc);
     }
   }
 
-  static void collectSrcEachDim(SmallVector<Value> &src, SmallVector<SmallVector<Operation *, 8>> &axesSrcEachDim) {
+  static void collectSrcEachDim(SmallVector<Value> &src,
+                                SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> &axesSrcEachDim) {
     for (auto idx : src) {
-      SmallVector<Operation *, 8> axesSrc;
+      SmallVector<Operation *, kSmallVectorSizeEight> axesSrc;
       collectRelatedAxes(idx, axesSrc);
       (void)std::unique(axesSrc.begin(), axesSrc.end());
       // Skip empty arrays (e.g., from constant indices)
@@ -723,7 +726,8 @@ class CommonUtils {
     }
   }
 
-  static void collectReductionAxesEachDimImpl(Operation *funcOp, SmallVector<SmallVector<Operation *, 8>> &res,
+  static void collectReductionAxesEachDimImpl(Operation *funcOp,
+                                              SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> &res,
                                               SmallVector<Operation *> &redOps) {
     for (auto redOp : redOps) {
       if (!redOp) {
@@ -734,18 +738,18 @@ class CommonUtils {
       auto indexDest = getGlobalIndices(funcOp, redDest);
       auto indexSrc = getGlobalIndices(funcOp, redSrc);
 
-      SmallVector<SmallVector<Operation *, 8>> axesDestEachDim;
-      SmallVector<SmallVector<Operation *, 8>> axesSrcEachDim;
+      SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> axesDestEachDim;
+      SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> axesSrcEachDim;
       collectDestEachDim(indexDest, axesDestEachDim);
       collectSrcEachDim(indexSrc, axesSrcEachDim);
-      SmallVector<Operation *, 8> axesDestFlatten;
+      SmallVector<Operation *, kSmallVectorSizeEight> axesDestFlatten;
       for (auto axesDesc : axesDestEachDim) {
         for (auto axisDest : axesDesc) {
           axesDestFlatten.push_back(axisDest);
         }
       }
       for (auto axesSrc : axesSrcEachDim) {
-        SmallVector<Operation *, 8> subRes;
+        SmallVector<Operation *, kSmallVectorSizeEight> subRes;
         for (Operation *axisSrc : axesSrc) {
           bool is_reduction_axis = true;
           for (Operation *axisDest : axesDestFlatten) {
@@ -775,8 +779,8 @@ class CommonUtils {
     }
   }
 
-  static SmallVector<SmallVector<Operation *, 8>> collectReductionAxesEachDim(Operation *funcOp) {
-    SmallVector<SmallVector<Operation *, 8>> res;
+  static SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> collectReductionAxesEachDim(Operation *funcOp) {
+    SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>> res;
     if (!isa<func::FuncOp>(funcOp)) {
       llvm::errs() << "funcOp should be a func::FuncOp, but got: " << *funcOp << "\n";
       return res;
@@ -786,7 +790,7 @@ class CommonUtils {
     return res;
   }
 
-  static void collectSourceLoads(Value value, llvm::SmallSet<Operation *, 8> &loads) {
+  static void collectSourceLoads(Value value, llvm::SmallSet<Operation *, kSmallVectorSizeEight> &loads) {
     if (auto *defOp = value.getDefiningOp()) {
       if (isa<affine::AffineLoadOp>(defOp)) {
         (void)loads.insert(defOp);
@@ -798,13 +802,14 @@ class CommonUtils {
     }
   }
 
-  static void collectBroadcastAxes(Operation *funcOp, llvm::SmallSet<Operation *, 8> &broadcastAxes) {
-    funcOp->walk([&](affine::AffineStoreOp storeOp) {
+  static void collectBroadcastAxes(Operation *funcOp,
+                                   llvm::SmallSet<Operation *, kSmallVectorSizeEight> &broadcastAxes) {
+    funcOp->walk([&broadcastAxes](affine::AffineStoreOp storeOp) {
       // Collect related axes from store indices
       mlir::ValueRange storeIndices = storeOp.getIndices();
-      llvm::SmallSet<Operation *, 8> storeAxes;
+      llvm::SmallSet<Operation *, kSmallVectorSizeEight> storeAxes;
       for (size_t i = 0; i < storeIndices.size(); ++i) {
-        SmallVector<Operation *, 8> axesVec;
+        SmallVector<Operation *, kSmallVectorSizeEight> axesVec;
         CommonUtils::collectRelatedAxes(storeIndices[i], axesVec);
         for (auto axis : axesVec) {
           (void)storeAxes.insert(axis);
@@ -812,14 +817,14 @@ class CommonUtils {
       }
 
       // Collect related axes from loads that contribute to the stored value
-      llvm::SmallSet<Operation *, 8> loadAxes;
-      llvm::SmallSet<Operation *, 8> sourceLoads;
+      llvm::SmallSet<Operation *, kSmallVectorSizeEight> loadAxes;
+      llvm::SmallSet<Operation *, kSmallVectorSizeEight> sourceLoads;
       collectSourceLoads(storeOp.getValueToStore(), sourceLoads);
       for (auto *loadOp : sourceLoads) {
         if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(loadOp)) {
           mlir::ValueRange loadIndices = affineLoad.getIndices();
           for (size_t i = 0; i < loadIndices.size(); ++i) {
-            SmallVector<Operation *, 8> axesVec;
+            SmallVector<Operation *, kSmallVectorSizeEight> axesVec;
             CommonUtils::collectRelatedAxes(loadIndices[i], axesVec);
             for (auto axis : axesVec) {
               (void)loadAxes.insert(axis);
@@ -841,8 +846,8 @@ class CommonUtils {
     });
   }
 
-  static SmallVector<Operation *, 8> collectReductionAxes(Operation *funcOp) {
-    SmallVector<Operation *, 8> res;
+  static SmallVector<Operation *, kSmallVectorSizeEight> collectReductionAxes(Operation *funcOp) {
+    SmallVector<Operation *, kSmallVectorSizeEight> res;
     auto allRes = collectReductionAxesEachDim(funcOp);
     for (auto eachDim : allRes) {
       for (auto eachAxis : eachDim) {
@@ -852,7 +857,7 @@ class CommonUtils {
     return res;
   }
 
-  static bool isReduceAxis(SmallVector<Operation *, 8> reduceAxes, const Operation *axis) {
+  static bool isReduceAxis(SmallVector<Operation *, kSmallVectorSizeEight> reduceAxes, const Operation *axis) {
     for (const auto reduceAxis : reduceAxes) {
       if (axis == reduceAxis) {
         return true;
@@ -868,18 +873,42 @@ class CommonUtils {
   static Value cloneOpWithNetOperands(mlir::OpBuilder &builder, const Location loc, mlir::Operation *old_op,
                                       mlir::Value new_lhs, mlir::Value new_rhs) {
     return TypeSwitch<Operation *, Value>(old_op)
-      .Case([&](arith::AddFOp) { return builder.create<mlir::arith::AddFOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MulFOp) { return builder.create<mlir::arith::MulFOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::AddIOp) { return builder.create<mlir::arith::AddIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::AndIOp) { return builder.create<mlir::arith::AndIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::OrIOp) { return builder.create<mlir::arith::OrIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MulIOp) { return builder.create<mlir::arith::MulIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MinNumFOp) { return builder.create<mlir::arith::MinNumFOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MaxNumFOp) { return builder.create<mlir::arith::MaxNumFOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MinSIOp) { return builder.create<mlir::arith::MinSIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MaxSIOp) { return builder.create<mlir::arith::MaxSIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MinUIOp) { return builder.create<mlir::arith::MinUIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MaxUIOp) { return builder.create<mlir::arith::MaxUIOp>(loc, new_lhs, new_rhs); });
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::AddFOp) {
+        return builder.create<mlir::arith::AddFOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MulFOp) {
+        return builder.create<mlir::arith::MulFOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::AddIOp) {
+        return builder.create<mlir::arith::AddIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::AndIOp) {
+        return builder.create<mlir::arith::AndIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::OrIOp) {
+        return builder.create<mlir::arith::OrIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MulIOp) {
+        return builder.create<mlir::arith::MulIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MinNumFOp) {
+        return builder.create<mlir::arith::MinNumFOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MaxNumFOp) {
+        return builder.create<mlir::arith::MaxNumFOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MinSIOp) {
+        return builder.create<mlir::arith::MinSIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MaxSIOp) {
+        return builder.create<mlir::arith::MaxSIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MinUIOp) {
+        return builder.create<mlir::arith::MinUIOp>(loc, new_lhs, new_rhs);
+      })
+      .Case([&builder, loc, &new_lhs, &new_rhs](arith::MaxUIOp) {
+        return builder.create<mlir::arith::MaxUIOp>(loc, new_lhs, new_rhs);
+      });
   }
 
   static bool isParallelBlockArgument(const ::mlir::Value &arg) {
@@ -897,7 +926,7 @@ class CommonUtils {
 
   static void getRegionOperandsCollection(scf::IfOp IfOp, ParallelOpSet &set0) {
     Region &region = IfOp.getThenRegion();
-    region.walk([&](mlir::Operation *op) {
+    region.walk([&set0](mlir::Operation *op) {
       for (auto operand : op->getOperands()) {
         if (isParallelBlockArgument(operand)) {
           (void)set0.insert(operand);
@@ -972,7 +1001,7 @@ class CommonUtils {
     return (set0.size() != (size_t)0) ? true : false;
   }
 
-  static void getAllPreviousRelatedOps(mlir::Operation *op, SmallVector<Operation *, 8> &prevOps) {
+  static void getAllPreviousRelatedOps(mlir::Operation *op, SmallVector<Operation *, kSmallVectorSizeEight> &prevOps) {
     mlir::Block *containingBlock = op->getBlock();
     // Avoid duplicate op in vector
     for (auto operand : op->getOperands()) {
@@ -985,7 +1014,7 @@ class CommonUtils {
     }
   }
 
-  static bool isRelatedOpInValueSet(mlir::Operation *op, SmallVector<mlir::Value, 8> &usedValues) {
+  static bool isRelatedOpInValueSet(mlir::Operation *op, SmallVector<mlir::Value, kSmallVectorSizeEight> &usedValues) {
     for (auto uv : usedValues) {
       for (auto operand : op->getOperands()) {
         if (uv == operand) {
@@ -1004,8 +1033,8 @@ class CommonUtils {
     return false;
   }
 
-  static void getAllPreviousRelatedOpsV2(mlir::Operation *op, SmallVector<Operation *, 8> &prevOps,
-                                         SmallVector<mlir::Value, 8> &usedValues) {
+  static void getAllPreviousRelatedOpsV2(mlir::Operation *op, SmallVector<Operation *, kSmallVectorSizeEight> &prevOps,
+                                         SmallVector<mlir::Value, kSmallVectorSizeEight> &usedValues) {
     for (auto operand : op->getOperands()) {
       usedValues.push_back(operand);
     }
@@ -1024,8 +1053,8 @@ class CommonUtils {
     }
   }
 
-  static void getAllNextRelatedOps(mlir::Operation *op, SmallVector<Operation *, 8> &nextOps,
-                                   SmallVector<mlir::Value, 8> &usedValues) {
+  static void getAllNextRelatedOps(mlir::Operation *op, SmallVector<Operation *, kSmallVectorSizeEight> &nextOps,
+                                   SmallVector<mlir::Value, kSmallVectorSizeEight> &usedValues) {
     for (auto operand : op->getOperands()) {
       usedValues.push_back(operand);
     }

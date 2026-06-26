@@ -81,7 +81,7 @@ struct VectorizeEmitter {
    * @param LdStGlobalCache pack of original load/store instructions
    * @return std::string new instruction that use vector load/store
    */
-  [[nodiscard]] std::string tryEmitVectorize(std::deque<std::string> LdStGlobalCache) const {
+  [[nodiscard]] std::string tryEmitVectorize(const std::deque<std::string> &LdStGlobalCache) const {
     if (LdStGlobalCache.size() != vectorizeSize) {
       return "";
     }
@@ -96,8 +96,8 @@ struct VectorizeEmitter {
     auto instPos = 0;
     auto destPos = isLoad ? 2 : 1;
     auto srcPos = isLoad ? 1 : -1;
-    for (const auto &ld : LdStGlobalCache) {
-      std::vector<std::string> result = splitEachLoadStore(ld);
+    for (auto it = LdStGlobalCache.cbegin(); it != LdStGlobalCache.cend(); ++it) {
+      std::vector<std::string> result = splitEachLoadStore(*it);
       if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
         return "";
       }
@@ -179,21 +179,21 @@ struct VectorizeEmitter {
     return finalResult;
   }
 
-  [[nodiscard]] std::pair<std::string, int> emitPackDataStr(std::map<int, std::string> srcIndex) const {
+  [[nodiscard]] std::pair<std::string, int> emitPackDataStr(const std::map<int, std::string> &srcIndex) const {
     std::string delimiter = ", ";
     std::string packDataStr = "{";
     int currSize = -1;
     int firstOffset = -1;
-    for (const auto &it : srcIndex) {
+    for (auto it = srcIndex.cbegin(); it != srcIndex.cend(); ++it) {
       if (firstOffset == -1) {
-        firstOffset = it.first;
+        firstOffset = it->first;
       }
-      if (currSize != -1 && currSize + static_cast<int>(vectorizeSize) != it.first) {
-        std::cout << "Error, vectorize offset should be 4, get " << currSize << " vs " << it.first << "\n";
+      if (currSize != -1 && currSize + static_cast<int>(vectorizeSize) != it->first) {
+        std::cout << "Error, vectorize offset should be 4, get " << currSize << " vs " << it->first << "\n";
         return std::make_pair("", -1);
       }
-      currSize = it.first;
-      packDataStr += (it.second + delimiter);
+      currSize = it->first;
+      packDataStr += (it->second + delimiter);
     }
     // remove last ", "
     (void)packDataStr.erase(packDataStr.end() - delimiter.size());
@@ -423,8 +423,8 @@ bool processLdStCache(ProcessingState &state, const std::string &line) {
   if (!vecInst.empty()) {
     state.oss << vecInst;
   } else {
-    for (const auto &cachedLine : state.ldStCache) {
-      state.oss << cachedLine << "\n";
+    for (auto it = state.ldStCache.cbegin(); it != state.ldStCache.cend(); ++it) {
+      state.oss << *it << "\n";
     }
   }
   state.ldStCache.clear();
@@ -572,8 +572,8 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
     if (!vecInst.empty()) {
       state.oss << vecInst;
     } else {
-      for (const auto &cachedLine : state.ldStCache) {
-        state.oss << cachedLine << "\n";
+      for (auto it = state.ldStCache.cbegin(); it != state.ldStCache.cend(); ++it) {
+        state.oss << *it << "\n";
       }
     }
   }

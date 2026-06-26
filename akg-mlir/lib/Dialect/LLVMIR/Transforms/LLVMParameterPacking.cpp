@@ -34,10 +34,9 @@ namespace LLVM {
 }  // namespace LLVM
 }  // namespace mlir
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace mlir::CPU;  // NOLINT(build/namespaces)
-
-namespace {
 constexpr auto lambdaFuncRealArgIndex = 2;
 constexpr auto kIntType8 = 8;
 constexpr auto kIntType32 = 32;
@@ -198,7 +197,7 @@ struct ParameterPackingPass : public LLVM::impl::ParameterPackingBase<ParameterP
   ParameterPackingPass() {}
   explicit ParameterPackingPass(bool isMindSpore) : isMindSpore(isMindSpore) {}
   void runOnOperation() override {
-    getOperation()->walk([&](Operation *op) {
+    getOperation()->walk([this](Operation *op) {
       auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(op);
       if (funcOp == nullptr || funcOp.getBody().empty() ||
           (op->getAttr("mindspore_kernel") == nullptr && op->getAttr("nvvm.kernel") == nullptr)) {
@@ -241,8 +240,12 @@ struct ParameterPackingPass : public LLVM::impl::ParameterPackingBase<ParameterP
 };
 }  // namespace
 
-std::unique_ptr<Pass> LLVM::createParameterPackingPass() { return std::make_unique<ParameterPackingPass>(); }
+namespace mlir {
+namespace LLVM {
+std::unique_ptr<Pass> createParameterPackingPass() { return std::make_unique<ParameterPackingPass>(); }
 
-std::unique_ptr<Pass> LLVM::createParameterPackingPass(bool isMindSpore) {
+std::unique_ptr<Pass> createParameterPackingPass(bool isMindSpore) {
   return std::make_unique<ParameterPackingPass>(isMindSpore);
 }
+}  // namespace LLVM
+}  // namespace mlir

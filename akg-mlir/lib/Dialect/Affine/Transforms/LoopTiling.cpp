@@ -43,6 +43,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_AKGAFFINELOOPTILING
@@ -104,7 +105,7 @@ class LoopTiling : public impl::AKGAffineLoopTilingBase<LoopTiling> {
   }
 
   LoopTiling(std::string target, bool useAutoTiling, std::string arch, std::string feature,
-             const SmallVector<unsigned, 6> &inputTileSizes)
+             const SmallVector<unsigned, kSmallVectorSizeSix> &inputTileSizes)
       : target(std::move(target)), arch(std::move(arch)), feature(std::move(feature)), inputTileSizes(inputTileSizes) {
     this->useAutoTiling = useAutoTiling;
   }
@@ -153,9 +154,15 @@ class LoopTiling : public impl::AKGAffineLoopTilingBase<LoopTiling> {
   DimensionInfo *selectMappingDimension(SmallVector<DimensionInfo> &dimInfos, int32_t maxNumBlocks);
 
   affine::AffineForOp createKernelLoopAndMapFullBlock(OpBuilder &builder, func::FuncOp funcOp, MappingContext &ctx);
-  void mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp kernelLoop, affine::AffineForOp fullLoop,
-                            affine::AffineForOp tailLoop, int32_t numKernels, Value kernelId);
-  void BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
+  struct TailBlockMappingParams {
+    affine::AffineForOp kernelLoop;
+    affine::AffineForOp fullLoop;
+    affine::AffineForOp tailLoop;
+    int32_t numKernels;
+    Value kernelId;
+  };
+  void mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams params);
+  void BandCheck(const std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> &bands);
   void getTileSizes();
   std::string getHardware();
   [[nodiscard]] bool isDynamicShape() const;
@@ -178,12 +185,13 @@ class LoopTiling : public impl::AKGAffineLoopTilingBase<LoopTiling> {
   LogicalResult createTailBlockDynamic(affine::AffineForOp forOp, AffineSymbolExpr sExpr);
   LogicalResult createTailBlockStatic(affine::AffineForOp forOp, int64_t differenceUbAndLb);
 
-  LogicalResult separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
+  LogicalResult separateFullTilesNoIf(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops);
 
-  LogicalResult perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
-  void updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
+  LogicalResult perfectlyNestedWithIf(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops);
+  void updateInsertIfLoops(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> &newTiledLoops,
                            std::unordered_set<unsigned> inequalityForIndex);
-  affine::AffineIfOp createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops, OpBuilder b);
+  affine::AffineIfOp createperfectlyNestedCondition(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops,
+                                                    OpBuilder b);
 
   // If true, tile sizes are set to avoid max/min in bounds if possible.
   bool avoidMaxMinBounds{true};
@@ -196,8 +204,8 @@ class LoopTiling : public impl::AKGAffineLoopTilingBase<LoopTiling> {
   autotiling::TilingSolverPtr solver{nullptr};
   size_t levelToTile{1};
 
-  SmallVector<unsigned, 6> bandTileSizes;
-  SmallVector<unsigned, 6> inputTileSizes;
+  SmallVector<unsigned, kSmallVectorSizeSix> bandTileSizes;
+  SmallVector<unsigned, kSmallVectorSizeSix> inputTileSizes;
   size_t currentBandIdx = 0;
   MutableArrayRef<affine::AffineForOp> band;
 };
@@ -232,9 +240,11 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::
   return std::make_unique<LoopTiling>(target, useAutoTiling, arch, feature);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(
-  const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature,
-  const llvm::SmallVector<unsigned, 6> &inputTileSizes) {
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
+                                                                     const ArchFeatureInfo &af,
+                                                                     const InputTileSizesParam &params) {
+  auto &[arch, feature] = af;
+  auto &[inputTileSizes] = params;
   return std::make_unique<LoopTiling>(target, useAutoTiling, arch, feature, inputTileSizes);
 }
 
@@ -435,7 +445,7 @@ void LoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops,
   if (insertInequality) {
     affine::AffineBound lastTileUb = newLoops[lastTile].getUpperBound();
     AffineMap lastTileUbMap = lastTileUb.getMap();
-    SmallVector<Value, 4> ubOperands;
+    SmallVector<Value, kSmallVectorSizeFour> ubOperands;
     ubOperands.reserve(lastTileUb.getNumOperands() + kAdditionalDimCount);
     // Add dim operands from upper bound of the last tile.
     for (unsigned k = 0; k < lastTileUbMap.getNumDims(); ++k) {
@@ -458,7 +468,7 @@ void LoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops,
         insertLoopUb = false;
       }
     }
-    SmallVector<AffineExpr, 4> ubExprs;
+    SmallVector<AffineExpr, kSmallVectorSizeFour> ubExprs;
     unsigned newExprSize = kAdditionalDimCount + lastTileUbMap.getNumResults();
     if (insertLoopUb) {
       ++newExprSize;
@@ -486,7 +496,7 @@ void LoopTiling::getTileSizes() {
   // Separately tile axis
   if (useAutoTiling && solver) {
     // Remove levelToTiles
-    SmallVector<affine::AffineForOp, 6> curBand;
+    SmallVector<affine::AffineForOp, kSmallVectorSizeSix> curBand;
     curBand.assign(band.begin(), band.end());
 
     for (size_t level = 0; level < levelToTile; ++level) {
@@ -540,7 +550,7 @@ LogicalResult LoopTiling::createFullBlock(MutableArrayRef<affine::AffineForOp> i
   // that their difference is a constant.
   affine::FlatAffineValueConstraints cst;
   for (auto loop : intraTileLoops) {
-    SmallVector<Operation *, 1> loopOp{loop.getOperation()};
+    SmallVector<Operation *, kSmallVectorSizeOne> loopOp{loop.getOperation()};
     (void)affine::getIndexSet(loopOp, &cst);
     // We will mark everything other than this loop IV as symbol for getting a
     // pair of <lb, ub> with a constant difference.
@@ -796,10 +806,10 @@ LogicalResult LoopTiling::createTailBlockDynamic(affine::AffineForOp forOp, Affi
   return success();
 }
 
-LogicalResult LoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
+LogicalResult LoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops) {
   // full block
   auto intraTileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(band.size());
-  SmallVector<affine::AffineForOp, 4> fullTileLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> fullTileLoops;
   if (failed(createFullBlock(intraTileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
       fullTileLoops.front().erase();
@@ -846,16 +856,16 @@ LogicalResult LoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineForOp,
 //   }
 // }
 // ```
-affine::AffineIfOp LoopTiling::createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops,
-                                                              OpBuilder b) {
+affine::AffineIfOp LoopTiling::createperfectlyNestedCondition(
+  SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops, OpBuilder b) {
   if (tiledLoops.empty()) {
     return nullptr;
   }
 
-  SmallVector<AffineExpr, 4> exprs;
-  SmallVector<bool, 4> eqFlags;
-  SmallVector<Value, 4> dimOperands;
-  SmallVector<Value, 4> symbolOperands;
+  SmallVector<AffineExpr, kSmallVectorSizeFour> exprs;
+  SmallVector<bool, kSmallVectorSizeFour> eqFlags;
+  SmallVector<Value, kSmallVectorSizeFour> dimOperands;
+  SmallVector<Value, kSmallVectorSizeFour> symbolOperands;
   int64_t symbolNum = 0;
   int64_t dimNum = 0;
   for (auto loop : tiledLoops) {
@@ -864,7 +874,7 @@ affine::AffineIfOp LoopTiling::createperfectlyNestedCondition(SmallVector<affine
     // Find the outermost for loop, that is, the for loop before tiling.
     Operation *outerOp = nullptr;
     for (auto value : loop.getOperands()) {
-      SmallVector<Operation *, 8> opAxes;
+      SmallVector<Operation *, kSmallVectorSizeEight> opAxes;
       CommonUtils::collectRelatedAxes(value, opAxes);
       if (opAxes.empty()) {
         continue;
@@ -907,7 +917,7 @@ affine::AffineIfOp LoopTiling::createperfectlyNestedCondition(SmallVector<affine
   return b.create<affine::AffineIfOp>(tiledLoops[0].getLoc(), ifCondSet, dimOperands, false);
 }
 
-void LoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
+void LoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> &newTiledLoops,
                                      std::unordered_set<unsigned> inequalityForIndex) {
   auto it = newTiledLoops.begin();
   unsigned i = 0;
@@ -949,7 +959,7 @@ void LoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTil
 //   }
 // }
 // ```
-LogicalResult LoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
+LogicalResult LoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops) {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   unsigned allTiledForNum = forNum + tileSizesNum;
@@ -972,7 +982,7 @@ LogicalResult LoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp,
 
   // Gets all for loops except the first tiling.
   auto tileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(forNum);
-  SmallVector<affine::AffineForOp, 4> fullTileLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeFour> fullTileLoops;
 
   if (failed(createFullBlock(tileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
@@ -985,11 +995,11 @@ LogicalResult LoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp,
     return success();
   }
 
-  SmallVector<affine::AffineForOp, 6> newTiledLoops;
+  SmallVector<affine::AffineForOp, kSmallVectorSizeSix> newTiledLoops;
   affine::getPerfectlyNestedLoops(newTiledLoops, tiledLoops[0]);
   Block *forBody = newTiledLoops[newTiledLoops.size() - 1].getBody();
   OpBuilder b(forBody, forBody->begin());
-  SmallVector<Operation *, 6> bodyOp;
+  SmallVector<Operation *, kSmallVectorSizeSix> bodyOp;
   // Records all ops in the for loop to facilitate the insertion of if statements.
   for (auto &it : *forBody) {
     Operation *op = &it;
@@ -1020,7 +1030,7 @@ void LoopTiling::tileEachBand() {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   if (forNum == tileSizesNum) {
-    SmallVector<affine::AffineForOp, 6> tiledNest;
+    SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledNest;
     if (failed(affine::tilePerfectlyNested(band, bandTileSizes, &tiledNest))) {
       // An empty band always succeeds.
       assert(!band.empty() && "guaranteed to succeed on empty bands");
@@ -1046,10 +1056,10 @@ void LoopTiling::tileEachBand() {
     // Tiles the specified band of perfectly nested loops.
     affine::AffineForOp rootAffineForOp = band[0];
     unsigned width = tileSizesNum + forNum;
-    SmallVector<affine::AffineForOp, 6> tiledLoops(width);
+    SmallVector<affine::AffineForOp, kSmallVectorSizeSix> tiledLoops(width);
     constructTiledLoop(rootAffineForOp, width, tiledLoops);
     constructTiledIndex(tiledLoops);
-    SmallVector<Value, 8> origLoopIVs;
+    SmallVector<Value, kSmallVectorSizeEight> origLoopIVs;
     extractForInductionVars(band, &origLoopIVs);
 
     for (unsigned i = 0; i < forNum; i++) {
@@ -1079,14 +1089,14 @@ void LoopTiling::runCpuOperation() {
   auto opType = CommonUtils::getOperatorType(funcOp);
   OpBuilder b(funcOp);
   if (opType == OperatorTemplate::Reduction) {
-    SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
+    SmallVector<Operation *, kSmallVectorSizeEight> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
     for (auto reduceLoop : reduceLoops) {
       reduceLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
     }
   } else if (opType == OperatorTemplate::Broadcast) {
-    llvm::SmallSet<affine::AffineForOp, 6> allBroadcastFor;
-    funcOp.walk([&](affine::AffineForOp forOp) {
-      llvm::SmallSet<affine::AffineForOp, 6> multiFor;
+    llvm::SmallSet<affine::AffineForOp, kSmallVectorSizeSix> allBroadcastFor;
+    funcOp.walk([&allBroadcastFor](affine::AffineForOp forOp) {
+      llvm::SmallSet<affine::AffineForOp, kSmallVectorSizeSix> multiFor;
       for (auto op : forOp->getBlock()->getOps<affine::AffineForOp>()) {
         multiFor.insert(op);
       }
@@ -1096,7 +1106,7 @@ void LoopTiling::runCpuOperation() {
       }
     });
 
-    llvm::SmallSet<Operation *, 8> broadcastLoops;
+    llvm::SmallSet<Operation *, kSmallVectorSizeEight> broadcastLoops;
     if (allBroadcastFor.empty()) {
       CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
     } else {
@@ -1129,7 +1139,7 @@ static unsigned getLoopNestingDepth(affine::AffineForOp forOp, func::FuncOp func
 // Helper function to check if a loop is innermost (no nested affine.for inside)
 static bool isInnermostLoop(affine::AffineForOp forOp) {
   return !forOp.getBody()
-            ->walk([&](affine::AffineForOp nestedForOp) { return WalkResult::interrupt(); })
+            ->walk([](affine::AffineForOp nestedForOp) { return WalkResult::interrupt(); })
             .wasInterrupted();
 }
 
@@ -1285,8 +1295,9 @@ LoopTiling::DimensionInfo *LoopTiling::selectMappingDimension(SmallVector<Dimens
   }
 
   // Prefer non-reduction dimension with maximum blocks
-  auto itMax = std::find_if(dimInfos.begin(), dimInfos.end(),
-                            [&](const DimensionInfo &d) { return !d.isReduceAxis && d.numBlocks == maxNumBlocks; });
+  auto itMax = std::find_if(dimInfos.begin(), dimInfos.end(), [&maxNumBlocks](const DimensionInfo &d) {
+    return !d.isReduceAxis && d.numBlocks == maxNumBlocks;
+  });
   if (itMax != dimInfos.end()) {
     return &(*itMax);
   }
@@ -1398,7 +1409,7 @@ affine::AffineForOp LoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &build
     Block *parentBlock = fullLoop->getBlock();
     moveTailBlockAfterFullLoop(fullLoop, ctx.tailBlock);
     builder.setInsertionPoint(parentBlock, fullLoop->getIterator());
-    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, /*hasElse=*/false);
+    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, /* hasElse= */ false);
   }
   fullLoop.setLowerBound(ValueRange{kernelId}, startMap);
   fullLoop.setUpperBound(ValueRange{kernelId}, endMap);
@@ -1407,40 +1418,37 @@ affine::AffineForOp LoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &build
 }
 
 // Map tail block to the last kernel iteration
-void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, affine::AffineForOp kernelLoop, affine::AffineForOp fullLoop,
-                                      affine::AffineForOp tailLoop, int32_t numKernels, Value kernelId) {
-  if (!tailLoop) {
+void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams params) {
+  if (!params.tailLoop) {
     return;
   }
 
-  Block *kernelBody = kernelLoop.getBody();
+  Block *kernelBody = params.kernelLoop.getBody();
 
-  Operation *insertAfterOp = fullLoop.getOperation();
-  Operation *wrappingIfOp = findWrappingAffineIfOp(fullLoop->getParentOp(), kernelBody);
+  Operation *insertAfterOp = params.fullLoop.getOperation();
+  Operation *wrappingIfOp = findWrappingAffineIfOp(params.fullLoop->getParentOp(), kernelBody);
   if (wrappingIfOp != nullptr) {
     insertAfterOp = wrappingIfOp;
   }
-  // Move tail block into kernel body (after full block or its wrapping if)
   builder.setInsertionPointAfter(insertAfterOp);
-  if (tailLoop->getBlock() != kernelBody) {
-    tailLoop->moveBefore(builder.getInsertionBlock(), builder.getInsertionPoint());
+  if (params.tailLoop->getBlock() != kernelBody) {
+    params.tailLoop->moveBefore(builder.getInsertionBlock(), builder.getInsertionPoint());
   }
 
-  // Create condition: kernel_id == numKernels - 1 (last iteration reserved for tail)
   auto lastKernelIdExpr = builder.getAffineDimExpr(kAffineFirstDimIndex);
-  auto numKernelsConstExpr = builder.getAffineConstantExpr(numKernels);
+  auto numKernelsConstExpr = builder.getAffineConstantExpr(params.numKernels);
   auto lastIterExpr =
     lastKernelIdExpr - (numKernelsConstExpr - builder.getAffineConstantExpr(kExclusiveBoundAdjustment));
 
   SmallVector<AffineExpr> exprs = {lastIterExpr};
-  SmallVector<bool> eqFlags = {true};  // Equality condition: kernel_id == numKernels - 1
+  SmallVector<bool> eqFlags = {true};
   auto lastIterSet = IntegerSet::get(kAffineSingleDimCount, kAffineZeroSymbolCount, exprs, eqFlags);
 
-  builder.setInsertionPoint(tailLoop);
-  auto tailIfOp =
-    builder.create<affine::AffineIfOp>(tailLoop.getLoc(), lastIterSet, ValueRange{kernelId}, /*hasElse=*/false);
+  builder.setInsertionPoint(params.tailLoop);
+  auto tailIfOp = builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId},
+                                                     /*hasElse=*/false);
 
-  tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
+  params.tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
 }
 
 // Add outer kernel mapping loop to distribute work across NPU cores
@@ -1468,7 +1476,7 @@ void LoopTiling::addOuterKernelMappingLoop(affine::AffineForOp bandRootLoop) {
   Value kernelId = kernelLoop.getInductionVar();
 
   // Map tail block to last kernel iteration
-  mapTailBlockToKernel(builder, kernelLoop, ctx.fullBlock, ctx.tailBlock, ctx.numKernels, kernelId);
+  mapTailBlockToKernel(builder, {kernelLoop, ctx.fullBlock, ctx.tailBlock, ctx.numKernels, kernelId});
 }
 
 // Find the tiled band root loop after tiling transformation
@@ -1505,7 +1513,7 @@ void LoopTiling::collectAndMarkInnermostLoops(func::FuncOp funcOp) {
   SmallVector<std::pair<affine::AffineForOp, unsigned>> innermostCandidates;
 
   // Collect all innermost loops with their depths
-  funcOp->walk([&](affine::AffineForOp forOp) {
+  funcOp->walk([&innermostCandidates, &funcOp](affine::AffineForOp forOp) {
     unsigned depth = getLoopNestingDepth(forOp, funcOp);
     if (isInnermostLoop(forOp)) {
       innermostCandidates.push_back({forOp, depth});
@@ -1582,7 +1590,7 @@ void LoopTiling::runCudaOperation() {
       funcOp->setAttr(akg::utils::kEnableAtomicAdd,
                       configSolver->modelGraph->globalConfigs[akg::utils::kEnableAtomicAdd]);
     }
-    funcOp->walk([&](Operation *curOp) {
+    funcOp->walk([this, &configSolver](Operation *curOp) {
       if (curOp->hasAttr(kReductionAxesStr)) {
         for (auto it : configSolver->modelGraph->globalConfigs) {
           curOp->setAttr(it.first, it.second);
@@ -1598,12 +1606,12 @@ void LoopTiling::runCudaOperation() {
   }
 }
 
-void LoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
+void LoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> &bands) {
   func::FuncOp funcOp = getOperation();
   // A common checker for CPU/GPU that disables reshape op with empty band.
   if (bands.empty() && (CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reshape ||
                         CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Transpose)) {
-    getOperation()->walk([&](Operation *copyOp) {
+    getOperation()->walk([](Operation *copyOp) {
       if (isa<CopyOpInterface>(copyOp)) {
         llvm::report_fatal_error(
           llvm::StringRef("[BandCheck]: No loop for reshape op, may have performance issue in static shape."));
@@ -1622,7 +1630,7 @@ void LoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>
   }
 
   // 3. single-band + dynamic axis checker cause we cannot map the dynamic axis
-  getOperation()->walk([&](affine::AffineForOp forOp) {
+  getOperation()->walk([](affine::AffineForOp forOp) {
     if (!forOp.hasConstantLowerBound() || !forOp.hasConstantUpperBound()) {
       llvm::report_fatal_error(
         llvm::StringRef("[BandCheck]: Dynamic bound, may have performance issue in static shape."));
@@ -1633,7 +1641,7 @@ void LoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>
 void LoopTiling::runOnOperation() {
   // Bands of loops to tile.
   func::FuncOp funcOp = getOperation();
-  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
+  std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> bands;
   affine::getTileableBands(funcOp, &bands);
   if (getOperation()->getAttr("process")) {
     target = dyn_cast<StringAttr>(getOperation()->getAttr("process")).getValue().str();
@@ -1657,7 +1665,7 @@ void LoopTiling::runOnOperation() {
     }
     if (target == kTargetNpu && !this->multiTileSizes.empty()) {
       OpBuilder builder(funcOp);
-      SmallVector<Attribute, 4> tileSizeAttrs;
+      SmallVector<Attribute, kSmallVectorSizeFour> tileSizeAttrs;
       tileSizeAttrs.reserve(this->multiTileSizes.size());
       std::transform(this->multiTileSizes.begin(), this->multiTileSizes.end(), std::back_inserter(tileSizeAttrs),
                      [&builder](unsigned size) { return builder.getI32IntegerAttr(size); });

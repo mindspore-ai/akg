@@ -40,11 +40,10 @@ namespace mlir {
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace mlir {
 namespace affine {
 namespace {
+using namespace mlir;  // NOLINT(build/namespaces)
 
 constexpr auto kGpuReduceStr = "gpu-reduction";
 constexpr auto kReductionAxesStr = "reduction_axes";

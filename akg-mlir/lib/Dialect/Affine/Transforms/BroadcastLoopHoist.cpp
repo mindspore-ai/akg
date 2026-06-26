@@ -58,7 +58,7 @@ bool BroadcastLoopHoist::isBroadcastLoop(affine::AffineForOp forOp) { return for
 /// Returns true if no other affine.for ops are nested within this op.
 bool BroadcastLoopHoist::isInnermostForOp(affine::AffineForOp forOp) {
   bool innermost = true;
-  forOp.walk([&](affine::AffineForOp nested) {
+  forOp.walk([&innermost, &forOp](affine::AffineForOp nested) {
     if (nested != forOp) {
       innermost = false;
     }
@@ -95,12 +95,11 @@ static int getNumLevelsToHoist(affine::AffineForOp broadcastLoop) {
   Value broadcastIV = broadcastLoop.getInductionVar();
 
   // Find a store operation within the broadcast loop.
-  affine::AffineStoreOp targetStore = [&]() {
+  affine::AffineStoreOp targetStore = [&broadcastLoop]() {
     affine::AffineStoreOp result;
-    broadcastLoop.walk([&](affine::AffineStoreOp storeOp) { result = storeOp; });
+    broadcastLoop.walk([&result](affine::AffineStoreOp storeOp) { result = storeOp; });
     return result;
   }();
-
   if (!targetStore) {
     return 0;
   }
@@ -167,12 +166,12 @@ FailureOr<affine::AffineForOp> BroadcastLoopHoist::interchangeLoops(affine::Affi
 
   if (insertIf) {
     auto integerSet = IntegerSet::get(
-      /*dimCount=*/2, /*symbolCount=*/0, {builder.getAffineDimExpr(0) - builder.getAffineDimExpr(1)},
-      /*eqFlags=*/{false});
+      /* dimCount= */ 2, /* symbolCount= */ 0, {builder.getAffineDimExpr(0) - builder.getAffineDimExpr(1)},
+      /* eqFlags= */ {false});
 
     auto ifOp = builder.create<affine::AffineIfOp>(
       loc, integerSet, ValueRange{newInnerLoop.getInductionVar(), newOuterLoop.getInductionVar()},
-      /*withElseRegion=*/false);
+      /* withElseRegion= */ false);
 
     builder.setInsertionPointToStart(ifOp.getThenBlock());
   }
@@ -208,7 +207,7 @@ bool BroadcastLoopHoist::hoistBroadcastLoops(func::FuncOp funcOp) {
 
     // Find an innermost broadcast loop that needs hoisting.
     affine::AffineForOp target;
-    funcOp.walk([&](affine::AffineForOp forOp) {
+    funcOp.walk([this, &target](affine::AffineForOp forOp) {
       if (!target && isBroadcastLoop(forOp) && isInnermostForOp(forOp) &&
           dyn_cast_or_null<affine::AffineForOp>(forOp->getParentOp()) && getNumLevelsToHoist(forOp) > 0) {
         target = forOp;
@@ -241,7 +240,6 @@ bool BroadcastLoopHoist::hoistBroadcastLoops(func::FuncOp funcOp) {
 }
 void BroadcastLoopHoist::runOnOperation() {
   auto funcOp = getOperation();
-
   if (!funcOp->hasAttr(kOperatorTypeStr)) {
     return;
   }

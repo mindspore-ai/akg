@@ -44,7 +44,7 @@ struct MemrefCopyToLoops : public impl::MemrefCopyToLoopsBase<MemrefCopyToLoops>
     func::FuncOp funcOp = getOperation();
 
     SmallVector<memref::CopyOp> needConvert;
-    (void)funcOp->walk([&](memref::CopyOp copyOp) { needConvert.emplace_back(copyOp); });
+    (void)funcOp->walk([&needConvert](memref::CopyOp copyOp) { needConvert.emplace_back(copyOp); });
     OpBuilder builder(funcOp);
 
     for (auto copyOp : needConvert) {

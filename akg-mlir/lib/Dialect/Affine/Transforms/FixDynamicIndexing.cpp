@@ -30,18 +30,19 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_FIXDYNAMICINDEXING
 #define GEN_PASS_DECL_FIXDYNAMICINDEXING
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
+namespace {
 using namespace mlir;       // NOLINT(build/namespaces)
 using namespace llvm;       // NOLINT(build/namespaces)
 using namespace akgglobal;  // NOLINT(build/namespaces)
-
-namespace {
 
 static std::vector<int> ArrayAttrToVectorInt(ArrayAttr array) {
   std::vector<int> res;
@@ -124,8 +125,8 @@ class FixDynamicIndexing : public impl::FixDynamicIndexingBase<FixDynamicIndexin
 
   std::map<Operation *, std::vector<DynamicDataFlowPtr>> inputsFixPlan;
   std::map<Operation *, std::vector<DynamicDataFlowPtr>> outputsFixPlan;
-  SmallVector<Operation *, 4> redInputs;
-  SmallVector<Operation *, 4> redOutputs;
+  SmallVector<Operation *, kSmallVectorSizeFour> redInputs;
+  SmallVector<Operation *, kSmallVectorSizeFour> redOutputs;
 
  private:
   void CollectNeedFixArgsMapFromAttr();
@@ -142,7 +143,8 @@ class FixDynamicIndexing : public impl::FixDynamicIndexingBase<FixDynamicIndexin
   affine::AffineIfOp createAffineIfOp(T loadOp, const DynamicDataFlowPtr &df, M resultTypes) const;
   template <typename T>
   mlir::Value getOriginalUpperBound(T storeOp, size_t dim, SmallVector<Operation *> allFors);
-  void UpdateFixIndex(size_t argIdx, SmallVector<ReassociationIndices, 4> reassociation, bool reversed);
+  void UpdateFixIndex(size_t argIdx, SmallVector<ReassociationIndices, kSmallVectorSizeFour> reassociation,
+                      bool reversed);
   std::map<size_t, std::vector<DynamicDataFlowPtr>> argumentDataFlows;
   Operation *constZeroOp{nullptr};
 };
@@ -154,13 +156,13 @@ void FixDynamicIndexing::AffineMemrefLowerPass() {
   func::FuncOp funcOp = getOperation();
   OpBuilder builder(funcOp);
   SmallVector<Operation *> toErase;
-  funcOp.walk([&](Operation *op) {
+  funcOp.walk([this, &builder, &toErase](Operation *op) {
     if ((inputsFixPlan.find(op) == inputsFixPlan.end() && outputsFixPlan.find(op) == outputsFixPlan.end() &&
          std::find(redInputs.begin(), redInputs.end(), op) == redInputs.end()) ||
         (std::find(redOutputs.begin(), redOutputs.end(), op) != redOutputs.end())) {
       return;
     }
-    auto updateFixPlan = [&](Operation *newOp) {
+    auto updateFixPlan = [this, &op](Operation *newOp) {
       auto itin = inputsFixPlan.find(op);
       if (itin != inputsFixPlan.end()) {
         inputsFixPlan[newOp] = itin->second;
@@ -196,7 +198,8 @@ void FixDynamicIndexing::AffineMemrefLowerPass() {
 }
 
 // Trace the `No.argIdx` func arg's dimension indexing during reassociation
-void FixDynamicIndexing::UpdateFixIndex(size_t argIdx, SmallVector<ReassociationIndices, 4> reassociation,
+void FixDynamicIndexing::UpdateFixIndex(size_t argIdx,
+                                        SmallVector<ReassociationIndices, kSmallVectorSizeFour> reassociation,
                                         bool reversed) {
   std::set<size_t> needFixIdx;
   auto it = argumentDataFlows.find(argIdx);
@@ -347,7 +350,7 @@ void FixDynamicIndexing::CollectReductionRelatedOps() {
   auto funcOp = getOperation();
   if (!funcOp->hasAttr("OperatorType") ||
       dyn_cast<StringAttr>(funcOp->getAttr("OperatorType")).getValue().str() == "Reduce") {
-    funcOp->walk([&](Operation *op) {
+    funcOp->walk([this, &redArgs](Operation *op) {
       if (op->hasAttr(kReductionTypeStr)) {
         auto operand0 = op->getOperand(0);
         redInputs.push_back(operand0.getDefiningOp());
@@ -373,7 +376,7 @@ void FixDynamicIndexing::CollectReductionRelatedOps() {
       mem = store.getMemref();
     }
     if (mem) {
-      if (std::any_of(redArgs.begin(), redArgs.end(), [&](mlir::Value arg) { return arg == mem; })) {
+      if (std::any_of(redArgs.begin(), redArgs.end(), [&mem](mlir::Value arg) { return arg == mem; })) {
         it = outputsFixPlan.erase(it);  // erase returns the iterator following the last removed element
       } else {
         ++it;
@@ -463,12 +466,12 @@ affine::AffineIfOp FixDynamicIndexing::createAffineIfOp(T loadOp, const DynamicD
   auto context = loadOp.getContext();
   auto expr = mlir::getAffineConstantExpr(1, context);
   auto affineExpr = mlir::getAffineSymbolExpr(0, context) - expr;
-  SmallVector<AffineExpr, 4> exprs = {affineExpr};
-  SmallVector<bool, 4> eqFlags = {true};
+  SmallVector<AffineExpr, kSmallVectorSizeFour> exprs = {affineExpr};
+  SmallVector<bool, kSmallVectorSizeFour> eqFlags = {true};
   // Create an if condition for a symbol and zero dim
   IntegerSet ifCondSet = IntegerSet::get(0, 1, exprs, eqFlags);
 
-  SmallVector<mlir::Value, 4> setOperands = {df->srcDataMemrefDim};
+  SmallVector<mlir::Value, kSmallVectorSizeFour> setOperands = {df->srcDataMemrefDim};
   affine::canonicalizeSetAndOperands(&ifCondSet, &setOperands);
 
   OpBuilder b(loadOp);
@@ -483,7 +486,7 @@ void FixDynamicIndexing::createIfOpWithIndexType(T loadOp, mlir::Value buffer, D
 
   auto loadIndices = loadOp.getIndices();
   auto destIndices = loadIndices[df->destDataDim];
-  SmallVector<mlir::Type, 4> resultTypes = {destIndices.getType()};
+  SmallVector<mlir::Type, kSmallVectorSizeFour> resultTypes = {destIndices.getType()};
   affine::AffineIfOp ifOp = createAffineIfOp(loadOp, df, resultTypes);
   if (!ifOp) {
     return;
@@ -491,16 +494,16 @@ void FixDynamicIndexing::createIfOpWithIndexType(T loadOp, mlir::Value buffer, D
 
   OpBuilder b(loadOp);
   // insert then block
-  SmallVector<mlir::Value, 4> thenYield = {constZeroOp->getResult(0)};
+  SmallVector<mlir::Value, kSmallVectorSizeFour> thenYield = {constZeroOp->getResult(0)};
   b.setInsertionPointToStart(ifOp.getThenBlock());
   b.create<affine::AffineYieldOp>(loadOp.getLoc(), thenYield);
   // insert else block
-  SmallVector<mlir::Value, 4> elseYield = {destIndices};
+  SmallVector<mlir::Value, kSmallVectorSizeFour> elseYield = {destIndices};
   b.setInsertionPointToStart(ifOp.getElseBlock());
   b.create<affine::AffineYieldOp>(loadOp.getLoc(), elseYield);
 
   // Replace the original indice with the result returned by affine.if.
-  SmallVector<mlir::Value, 4> newLoadIndices;
+  SmallVector<mlir::Value, kSmallVectorSizeFour> newLoadIndices;
   newLoadIndices.reserve(loadIndices.size());
   for (auto index : loadIndices) {
     if (index == destIndices) {
@@ -531,7 +534,7 @@ bool FixDynamicIndexing::createIfOpWithVectorType(vector::LoadOp loadOp, mlir::V
   auto destIndices = loadIndices[df->destDataDim];
   // insert then block
   b.setInsertionPointToStart(ifOp.getThenBlock());
-  SmallVector<mlir::Value, 4> newLoadIndices;
+  SmallVector<mlir::Value, kSmallVectorSizeFour> newLoadIndices;
   newLoadIndices.reserve(loadIndices.size());
   for (auto index : loadIndices) {
     if (index == destIndices) {
@@ -542,13 +545,13 @@ bool FixDynamicIndexing::createIfOpWithVectorType(vector::LoadOp loadOp, mlir::V
   }
   mlir::Value memrefLoad = b.create<memref::LoadOp>(loadOp.getLoc(), buffer, newLoadIndices);
   auto broadcastOp = b.create<vector::BroadcastOp>(loadOp.getLoc(), loadOp.getVectorType(), memrefLoad);
-  SmallVector<mlir::Value, 4> thenYield = {broadcastOp};
+  SmallVector<mlir::Value, kSmallVectorSizeFour> thenYield = {broadcastOp};
   b.create<affine::AffineYieldOp>(broadcastOp.getLoc(), thenYield);
 
   // insert else block
   b.setInsertionPointToStart(ifOp.getElseBlock());
   auto elseOp = b.clone(*loadOp.getOperation());
-  SmallVector<mlir::Value, 4> elseYield = {elseOp->getResult(0)};
+  SmallVector<mlir::Value, kSmallVectorSizeFour> elseYield = {elseOp->getResult(0)};
   b.create<affine::AffineYieldOp>(elseOp->getLoc(), elseYield);
 
   loadOp.getOperation()->getResult(0).replaceAllUsesWith(ifOp.getResult(0));
@@ -556,7 +559,7 @@ bool FixDynamicIndexing::createIfOpWithVectorType(vector::LoadOp loadOp, mlir::V
 }
 
 void FixDynamicIndexing::InsertIfOpAndFixIndex() {
-  SmallSet<Operation *, 8> eraseOp;
+  SmallSet<Operation *, kSmallVectorSizeEight> eraseOp;
   for (auto it : inputsFixPlan) {
     // todo(baiji): Temp buffer may use StoreOp, need to support later.
     if (!isa<memref::LoadOp, vector::LoadOp>(it.first)) {
@@ -606,7 +609,7 @@ mlir::Value FixDynamicIndexing::getOriginalUpperBound(T storeOp, size_t dim, Sma
 
 void FixDynamicIndexing::ReplaceInputDimsWithOutput() {
   SmallVector<Operation *> allFors;
-  getOperation()->walk([&](Operation *op) {
+  getOperation()->walk([&allFors](Operation *op) {
     if (!isa<affine::AffineForOp>(op)) {
       return;
     }
@@ -643,7 +646,7 @@ void FixDynamicIndexing::ReplaceInputDimsWithOutput() {
 }
 
 void FixDynamicIndexing::runOnOperation() {
-  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
+  std::vector<SmallVector<affine::AffineForOp, kSmallVectorSizeSix>> bands;
   getTileableBands(getOperation(), &bands);
   std::string target{kTargetCpu};
 
@@ -670,6 +673,8 @@ void FixDynamicIndexing::runOnOperation() {
   InsertIfOpAndFixIndex();
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createFixDynamicIndexingPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createFixDynamicIndexingPass() {
   return std::make_unique<FixDynamicIndexing>();
 }
+}  // namespace mlir

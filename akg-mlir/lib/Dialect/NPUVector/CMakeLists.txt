@@ -14,9 +14,11 @@ add_mlir_dialect_library(AKGNPUVectorPasses
 
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
+  MLIRArithDialect
   MLIRIR
   MLIRPass
   MLIRMemRefDialect
+  MLIRMathDialect
   MLIRSideEffectInterfaces
   MLIRSupport
   MLIRFuncDialect

@@ -38,10 +38,9 @@ namespace mlir {
 #endif
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 struct RemoveRedundantReduce : public impl::RemoveRedundantReduceBase<RemoveRedundantReduce> {
   template <typename SourceOp>
   struct RedundantReducePattern : public OpRewritePattern<SourceOp> {
@@ -90,6 +89,8 @@ struct RemoveRedundantReduce : public impl::RemoveRedundantReduceBase<RemoveRedu
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createRemoveRedundantReducePass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createRemoveRedundantReducePass() {
   return std::make_unique<RemoveRedundantReduce>();
 }
+}  // namespace mlir

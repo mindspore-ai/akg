@@ -34,10 +34,9 @@ namespace mlir {
 #include "akg/Dialect/MindSpore/Passes.h.inc"
 }  // namespace mlir
 
+namespace {
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
-
-namespace {
 
 DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
   ShapedType shapedType = cast<ShapedType>(inputType);
@@ -150,6 +149,6 @@ struct MindsporeMakeBroadcastable : public impl::MindsporeMakeBroadcastableBase<
 };
 }  // namespace
 
-std::unique_ptr<Pass> mlir::createMindsporeMakeBroadcastablePass() {
-  return std::make_unique<MindsporeMakeBroadcastable>();
-}
+namespace mlir {
+std::unique_ptr<Pass> createMindsporeMakeBroadcastablePass() { return std::make_unique<MindsporeMakeBroadcastable>(); }
+}  // namespace mlir

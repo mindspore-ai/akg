@@ -80,9 +80,9 @@ class DumpShapeInfo : public impl::DumpShapeInfoBase<DumpShapeInfo> {
 
 std::string DumpShapeInfo::getAkgKernelName() {
   std::string defaultName = "akg_kernel";
-  func::FuncOp funcOp = [&]() {
+  func::FuncOp funcOp = [this]() {
     func::FuncOp result;
-    getOperation()->walk([&](func::FuncOp op) { result = op; });
+    getOperation()->walk([&result](func::FuncOp op) { result = op; });
     return result;
   }();
   if (!funcOp) {
@@ -117,7 +117,7 @@ bool DumpShapeInfo::save(const std::string &res) {
 
   std::string output_filename = "./akg_kernel_meta/" + fileName;
   llvm::outs() << "Dump to " << output_filename << "\n";
-  if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+  if (llvm::writeToOutput(output_filename, [&res](llvm::raw_ostream &OS) -> llvm::Error {
         OS << res;
         return llvm::Error::success();
       })) {
@@ -158,7 +158,7 @@ void DumpShapeInfo::dumpGpuRuntimeVars(json &jsonResults) const {
 void DumpShapeInfo::dumpGpuSupportInfo(json &jsonResults) {
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   std::string opType{"Unknown"};
-  getOperation()->walk([&](func::FuncOp funcOp) {
+  getOperation()->walk([&opType](func::FuncOp funcOp) {
     auto op = funcOp.getOperation();
     if (op->hasAttr("OperatorType")) {
       opType = dyn_cast<StringAttr>(op->getAttr("OperatorType")).getValue().str();
@@ -202,8 +202,12 @@ void DumpShapeInfo::dumpGpuSchedule(json &jsonResults) const {
   jsonResults["gpuSchedules"] = gpuSchedules;
 }
 
-std::unique_ptr<Pass> mlir::createDumpShapeInfoPass() { return std::make_unique<DumpShapeInfo>(); }
+namespace mlir {
+std::unique_ptr<Pass> createDumpShapeInfoPass() { return std::make_unique<DumpShapeInfo>(); }
+}  // namespace mlir
 
-std::unique_ptr<Pass> mlir::createDumpShapeInfoPass(const std::string &fileName) {
+namespace mlir {
+std::unique_ptr<Pass> createDumpShapeInfoPass(const std::string &fileName) {
   return std::make_unique<DumpShapeInfo>(fileName);
 }
+}  // namespace mlir
