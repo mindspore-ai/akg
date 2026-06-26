@@ -1181,7 +1181,8 @@ func.func @dynamic_npuvector_transfer_write_non_suffix_dims(
   %vec = npuvector.transfer_read %in[%c0, %start, %c0][%c6, %tile, %c64][%c6, %c4096, %c64],
     %padding : memref<6x197x64xf32>, !npuvector<6x?x64xf32>
   %trans = npuvector.transpose %vec, [1, 0, 2] : !npuvector<6x?x64xf32> to !npuvector<?x6x64xf32>
-  npuvector.transfer_write %trans, %out[%outer, %start, %plane, %c0, %c0] {write_dims = array<i64: 1, 3, 4>}
+  npuvector.transfer_write %trans, %out[%outer, %start, %plane, %c0, %c0]
+    {permutation_map = affine_map<(d0, d1, d2, d3, d4) -> (d1, d3, d4)>}
     : !npuvector<?x6x64xf32>, memref<4x197x3x6x64xf32>
   return
 }

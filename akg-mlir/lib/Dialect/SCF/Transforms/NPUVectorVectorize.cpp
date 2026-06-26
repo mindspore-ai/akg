@@ -1303,8 +1303,8 @@ static SmallVector<int> collectStoreDimOrder(memref::StoreOp storeOp, const Loop
   return storeDimOrder;
 }
 
-static FailureOr<DenseI64ArrayAttr> buildTransferWriteDimsAttr(memref::StoreOp storeOp, LoopVectorizationCtx &ctx,
-                                                               Value vectorValue, ArrayRef<int> storeDimOrder) {
+static FailureOr<AffineMap> buildTransferWritePermutationMap(memref::StoreOp storeOp, LoopVectorizationCtx &ctx,
+                                                             Value vectorValue, ArrayRef<int> storeDimOrder) {
   auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
   if (!npuVecType) {
     storeOp.emitError("npuvector-vectorize: transfer_write value must be NPUVectorType");
@@ -1312,8 +1312,9 @@ static FailureOr<DenseI64ArrayAttr> buildTransferWriteDimsAttr(memref::StoreOp s
   }
 
   const int64_t vecRank = npuVecType.getRank();
+  int64_t memRefRank = static_cast<int64_t>(storeOp.getIndices().size());
   if (vecRank == 0) {
-    return ctx.builder.getDenseI64ArrayAttr({});
+    return AffineMap::get(static_cast<unsigned>(memRefRank), /*symbolCount=*/0, ctx.builder.getContext());
   }
 
   SmallVector<int64_t> axisToMemDim(ctx.allVectorSizes.size(), -1);
@@ -1343,31 +1344,38 @@ static FailureOr<DenseI64ArrayAttr> buildTransferWriteDimsAttr(memref::StoreOp s
   }
 
   if (static_cast<int64_t>(valueDimOrder.size()) != vecRank) {
-    storeOp.emitError("npuvector-vectorize: cannot infer transfer_write write_dims from valueDimOrder");
+    storeOp.emitError("npuvector-vectorize: cannot infer transfer_write permutation_map from valueDimOrder");
     return failure();
   }
 
-  SmallVector<int64_t> writeDims;
-  writeDims.reserve(static_cast<size_t>(vecRank));
+  SmallVector<AffineExpr> results;
+  results.reserve(static_cast<size_t>(vecRank));
   for (int axis : valueDimOrder) {
     if (axis < 0 || static_cast<size_t>(axis) >= axisToMemDim.size() || axisToMemDim[static_cast<size_t>(axis)] < 0) {
       storeOp.emitError("npuvector-vectorize: valueDimOrder axis is not present on store indices");
       return failure();
     }
-    writeDims.push_back(axisToMemDim[static_cast<size_t>(axis)]);
+    results.push_back(
+      getAffineDimExpr(static_cast<unsigned>(axisToMemDim[static_cast<size_t>(axis)]), ctx.builder.getContext()));
   }
-  return ctx.builder.getDenseI64ArrayAttr(writeDims);
+  return AffineMap::get(static_cast<unsigned>(memRefRank), /*symbolCount=*/0, results, ctx.builder.getContext());
 }
 
-static bool createTransferWriteWithDims(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
-                                        Value vectorValue, Value mappedMemRef, ValueRange indices,
-                                        ArrayRef<int> storeDimOrder) {
-  FailureOr<DenseI64ArrayAttr> writeDimsAttr = buildTransferWriteDimsAttr(storeOp, ctx, vectorValue, storeDimOrder);
-  if (failed(writeDimsAttr)) {
+static bool createTransferWriteWithPermutationMap(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
+                                                  Value vectorValue, Value mappedMemRef, ValueRange indices,
+                                                  ArrayRef<int> storeDimOrder) {
+  FailureOr<AffineMap> permutationMap = buildTransferWritePermutationMap(storeOp, ctx, vectorValue, storeDimOrder);
+  if (failed(permutationMap)) {
     return false;
   }
-  ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, indices,
-                                                   writeDimsAttr->asArrayRef());
+  auto npuVecType = mlir::cast<npuvector::NPUVectorType>(vectorValue.getType());
+  AffineMap defaultMap = AffineMap::getMinorIdentityMap(
+    static_cast<unsigned>(indices.size()), static_cast<unsigned>(npuVecType.getRank()), ctx.builder.getContext());
+  if (*permutationMap == defaultMap) {
+    ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, indices);
+  } else {
+    ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, indices, *permutationMap);
+  }
   return true;
 }
 
@@ -1398,7 +1406,8 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
 
-  if (!createTransferWriteWithDims(storeOp, ctx, loc, vectorValue, mappedMemRef, ValueRange(indices), storeDimOrder)) {
+  if (!createTransferWriteWithPermutationMap(storeOp, ctx, loc, vectorValue, mappedMemRef, ValueRange(indices),
+                                             storeDimOrder)) {
     return;
   }
 }
@@ -2222,7 +2231,8 @@ static void emitVectorizedStore(memref::StoreOp storeOp, Value vecVal, LoopVecto
   std::transform(rawIndices.begin(), rawIndices.end(), std::back_inserter(indices),
                  [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(storeOp.getMemRef());
-  if (!createTransferWriteWithDims(storeOp, ctx, loc, vecVal, mappedMemRef, ValueRange(indices), storeDimOrder)) {
+  if (!createTransferWriteWithPermutationMap(storeOp, ctx, loc, vecVal, mappedMemRef, ValueRange(indices),
+                                             storeDimOrder)) {
     return;
   }
 }
