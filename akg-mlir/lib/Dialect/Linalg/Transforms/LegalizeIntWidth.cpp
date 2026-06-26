@@ -119,28 +119,40 @@ FailureOr<NarrowedOperands> narrowOperands(ArrayRef<Value> operands, PatternRewr
   }
 
   // Second pass: build narrow operand list.
+  for (Value v : operands) {
+    bool s = false;
+    if (getExtensionSource(v, s)) continue;
+    auto wideTy = dyn_cast<IntegerType>(v.getType());
+    IntegerAttr cstAttr;
+    if (!wideTy || wideTy.getWidth() <= narrowTy.getWidth() ||
+        !matchPattern(v, m_Constant(&cstAttr))) {
+      return failure();
+    }
+    APInt wide = cstAttr.getValue();
+    APInt narrow = wide.trunc(narrowTy.getWidth());
+    APInt roundTrip = *isSigned ? narrow.sext(wideTy.getWidth())
+                                : narrow.zext(wideTy.getWidth());
+    if (roundTrip != wide) return failure();
+  }
+
+  // Third pass: all checks passed.
   NarrowedOperands result;
   result.narrowTy = narrowTy;
   result.isSigned = *isSigned;
+  result.values.reserve(operands.size());
   for (Value v : operands) {
     bool s = false;
     if (Value src = getExtensionSource(v, s)) {
       result.values.push_back(src);
       continue;
     }
-    auto wideTy = dyn_cast<IntegerType>(v.getType());
     IntegerAttr cstAttr;
-    if (!wideTy || wideTy.getWidth() <= narrowTy.getWidth() || !matchPattern(v, m_Constant(&cstAttr))) {
-      return failure();
-    }
-    APInt wide = cstAttr.getValue();
-    APInt narrow = wide.trunc(narrowTy.getWidth());
-    APInt roundTrip = result.isSigned ? narrow.sext(wideTy.getWidth()) : narrow.zext(wideTy.getWidth());
-    if (roundTrip != wide) {
-      return failure();
-    }
-    result.values.push_back(
-      rewriter.create<arith::ConstantOp>(loc, narrowTy, rewriter.getIntegerAttr(narrowTy, narrow)));
+    bool matched = matchPattern(v, m_Constant(&cstAttr));
+    (void)matched;
+    assert(matched && "validated in pass 2");
+    APInt narrow = cstAttr.getValue().trunc(narrowTy.getWidth());
+    result.values.push_back(rewriter.create<arith::ConstantOp>(
+        loc, narrowTy, rewriter.getIntegerAttr(narrowTy, narrow)));
   }
   return result;
 }
@@ -152,14 +164,30 @@ struct NarrowCmpPattern : public OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp, PatternRewriter &rewriter) const override {
     arith::CmpIPredicate pred = cmpOp.getPredicate();
+
+    // Peek signedness from any extension operand WITHOUT touching IR,
+    // and reject mismatched predicates early so narrowOperands is never
+    // invoked for a guaranteed-to-fail rewrite.
+    if (!isEqualityPredicate(pred)) {
+      bool peekedSigned = false;
+      bool found = false;
+      for (Value v : {cmpOp.getLhs(), cmpOp.getRhs()}) {
+        bool s = false;
+        if (getExtensionSource(v, s)) {
+          peekedSigned = s;
+          found = true;
+          break;
+        }
+      }
+      if (!found) return failure();
+      if (isSignedPredicate(pred) != peekedSigned) return failure();
+    }
+
     FailureOr<NarrowedOperands> narrowed = narrowOperands({cmpOp.getLhs(), cmpOp.getRhs()}, rewriter, cmpOp.getLoc());
     if (failed(narrowed)) {
       return failure();
     }
-    // For ordered comparisons, predicate signedness must match extension kind. eq/ne are safe either way.
-    if (!isEqualityPredicate(pred) && isSignedPredicate(pred) != narrowed->isSigned) {
-      return failure();
-    }
+
     rewriter.replaceOpWithNewOp<arith::CmpIOp>(cmpOp, pred, narrowed->values[0], narrowed->values[1]);
     return success();
   }
