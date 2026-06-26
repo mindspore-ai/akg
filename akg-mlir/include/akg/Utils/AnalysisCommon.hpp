@@ -17,12 +17,14 @@
 #ifndef AKG_UTILS_ANALYSISCOMMON_H
 #define AKG_UTILS_ANALYSISCOMMON_H
 
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Module.h"
@@ -411,6 +413,60 @@ class CommonUtils {
       }
     }
     return initStoreOp;
+  }
+
+  static bool valueDependsOnTarget(Value value, Value target, llvm::DenseSet<Value> &visitedValues,
+                                   llvm::SmallPtrSetImpl<Operation *> &visitedOps) {
+    if (value == target) {
+      return true;
+    }
+    if (!visitedValues.insert(value).second) {
+      return false;
+    }
+
+    Operation *defOp = value.getDefiningOp();
+    if (dyn_cast<BlockArgument>(value) || (defOp == nullptr) || !visitedOps.insert(defOp).second) {
+      return false;
+    }
+    if (auto opResult = dyn_cast<OpResult>(value)) {
+      unsigned resultIdx = opResult.getResultNumber();
+      for (Region &region : defOp->getRegions()) {
+        if (region.empty()) {
+          continue;
+        }
+        auto yieldOp = dyn_cast<scf::YieldOp>(region.front().getTerminator());
+        if (yieldOp && resultIdx < yieldOp.getNumOperands() &&
+            valueDependsOnTarget(yieldOp.getOperand(resultIdx), target, visitedValues, visitedOps)) {
+          return true;
+        }
+      }
+    }
+    return std::any_of(defOp->operand_begin(), defOp->operand_end(),
+                       [&target, &visitedValues, &visitedOps](Value operand) {
+                         return valueDependsOnTarget(operand, target, visitedValues, visitedOps);
+                       });
+  }
+
+  static bool valueDependsOnTarget(Value value, Value target) {
+    llvm::DenseSet<Value> visitedValues;
+    llvm::SmallPtrSet<Operation *, kSmallVectorSizeThirtyTwo> visitedOps;
+    return valueDependsOnTarget(value, target, visitedValues, visitedOps);
+  }
+
+  static bool valueDependsOnLoopIV(Value value, scf::ForOp loop) {
+    return value && loop && valueDependsOnTarget(value, loop.getInductionVar());
+  }
+
+  static bool loopIvFeedsIfCondition(scf::ForOp loop) {
+    if (!loop) {
+      return false;
+    }
+    bool found = false;
+    loop.walk([&](scf::IfOp ifOp) {
+      found = valueDependsOnLoopIV(ifOp.getCondition(), loop);
+      return found ? WalkResult::interrupt() : WalkResult::advance();
+    });
+    return found;
   }
 
   static void collectRelatedAxes(Value value, SmallVector<Operation *, kSmallVectorSizeEight> &axes) {
