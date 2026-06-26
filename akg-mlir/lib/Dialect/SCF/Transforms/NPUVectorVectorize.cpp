@@ -1292,9 +1292,7 @@ static bool reorderStoreVectorForIndices(memref::StoreOp storeOp, LoopVectorizat
   return rankLiftStoreVectorIfExtraIndices(storeOp, ctx, loc, storeDimOrder, intersectStoreDimOrder, vectorValue);
 }
 
-static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
-  Location loc = storeOp.getLoc();
-
+static SmallVector<int> collectStoreDimOrder(memref::StoreOp storeOp, const LoopVectorizationCtx &ctx) {
   SmallVector<int> storeDimOrder;
   for (Value idx : storeOp.getIndices()) {
     int dim = getVectorDimForIndex(idx, ctx);
@@ -1302,6 +1300,81 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
       storeDimOrder.push_back(dim);
     }
   }
+  return storeDimOrder;
+}
+
+static FailureOr<DenseI64ArrayAttr> buildTransferWriteDimsAttr(memref::StoreOp storeOp, LoopVectorizationCtx &ctx,
+                                                               Value vectorValue, ArrayRef<int> storeDimOrder) {
+  auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
+  if (!npuVecType) {
+    storeOp.emitError("npuvector-vectorize: transfer_write value must be NPUVectorType");
+    return failure();
+  }
+
+  const int64_t vecRank = npuVecType.getRank();
+  if (vecRank == 0) {
+    return ctx.builder.getDenseI64ArrayAttr({});
+  }
+
+  SmallVector<int64_t> axisToMemDim(ctx.allVectorSizes.size(), -1);
+  for (auto [memDim, idx] : llvm::enumerate(storeOp.getIndices())) {
+    int axis = getVectorDimForIndex(idx, ctx);
+    if (axis < 0) {
+      continue;
+    }
+    if (static_cast<size_t>(axis) >= axisToMemDim.size()) {
+      storeOp.emitError("npuvector-vectorize: store index maps to invalid vector dim");
+      return failure();
+    }
+    int64_t &mappedMemDim = axisToMemDim[static_cast<size_t>(axis)];
+    if (mappedMemDim != -1) {
+      storeOp.emitError("npuvector-vectorize: one vector axis maps to multiple store dimensions");
+      return failure();
+    }
+    mappedMemDim = static_cast<int64_t>(memDim);
+  }
+
+  SmallVector<int> valueDimOrder;
+  auto dimOrderIt = ctx.valueDimOrder.find(vectorValue);
+  if (dimOrderIt != ctx.valueDimOrder.end()) {
+    valueDimOrder = dimOrderIt->second;
+  } else if (vecRank == 1 && storeDimOrder.size() == 1) {
+    valueDimOrder.assign(storeDimOrder.begin(), storeDimOrder.end());
+  }
+
+  if (static_cast<int64_t>(valueDimOrder.size()) != vecRank) {
+    storeOp.emitError("npuvector-vectorize: cannot infer transfer_write write_dims from valueDimOrder");
+    return failure();
+  }
+
+  SmallVector<int64_t> writeDims;
+  writeDims.reserve(static_cast<size_t>(vecRank));
+  for (int axis : valueDimOrder) {
+    if (axis < 0 || static_cast<size_t>(axis) >= axisToMemDim.size() || axisToMemDim[static_cast<size_t>(axis)] < 0) {
+      storeOp.emitError("npuvector-vectorize: valueDimOrder axis is not present on store indices");
+      return failure();
+    }
+    writeDims.push_back(axisToMemDim[static_cast<size_t>(axis)]);
+  }
+  return ctx.builder.getDenseI64ArrayAttr(writeDims);
+}
+
+static bool createTransferWriteWithDims(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
+                                        Value vectorValue, Value mappedMemRef, ValueRange indices,
+                                        ArrayRef<int> storeDimOrder) {
+  FailureOr<DenseI64ArrayAttr> writeDimsAttr = buildTransferWriteDimsAttr(storeOp, ctx, vectorValue, storeDimOrder);
+  if (failed(writeDimsAttr)) {
+    return false;
+  }
+  ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, indices,
+                                                   writeDimsAttr->asArrayRef());
+  return true;
+}
+
+static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
+  Location loc = storeOp.getLoc();
+
+  SmallVector<int> storeDimOrder = collectStoreDimOrder(storeOp, ctx);
 
   Value storeValue = storeOp.getValue();
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
@@ -1325,7 +1398,9 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
 
-  ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vectorValue, mappedMemRef, ValueRange(indices), Value());
+  if (!createTransferWriteWithDims(storeOp, ctx, loc, vectorValue, mappedMemRef, ValueRange(indices), storeDimOrder)) {
+    return;
+  }
 }
 
 static void collectArithVecOperands(Operation *op, LoopVectorizationCtx &ctx, SmallVectorImpl<Value> &vecOperands,
@@ -2132,13 +2207,24 @@ static LogicalResult vectorizeRegionBodyOnly(Region &region, LoopVectorizationCt
 
 static void emitVectorizedStore(memref::StoreOp storeOp, Value vecVal, LoopVectorizationCtx &ctx) {
   Location loc = storeOp.getLoc();
+  SmallVector<int> storeDimOrder = collectStoreDimOrder(storeOp, ctx);
+  if (!mlir::isa<npuvector::NPUVectorType>(vecVal.getType())) {
+    storeOp.emitError("npuvector-vectorize: vectorized store value must be NPUVectorType");
+    return;
+  }
+  if (!reorderStoreVectorForIndices(storeOp, ctx, loc, storeDimOrder, vecVal)) {
+    return;
+  }
+
   SmallVector<Value> indices;
   ValueRange rawIndices = storeOp.getIndices();
   indices.reserve(rawIndices.size());
   std::transform(rawIndices.begin(), rawIndices.end(), std::back_inserter(indices),
                  [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(storeOp.getMemRef());
-  ctx.builder.create<npuvector::TransferWriteOp>(loc, Type(), vecVal, mappedMemRef, ValueRange(indices), Value());
+  if (!createTransferWriteWithDims(storeOp, ctx, loc, vecVal, mappedMemRef, ValueRange(indices), storeDimOrder)) {
+    return;
+  }
 }
 
 static bool emitIfSlice(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc, Value inductionVar,
@@ -2352,51 +2438,6 @@ static memref::StoreOp findUniqueStoreConsumer(scf::IfOp ifOp) {
   return consumer;
 }
 
-static bool emitIfWithElseAndStoreNoSlice(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc, Value cond,
-                                          memref::StoreOp consumerStore) {
-  OpBuilder &b = ctx.builder;
-  auto outerIf = b.create<scf::IfOp>(loc, TypeRange{}, cond, true);
-  {
-    OpBuilder::InsertionGuard g(b);
-    b.setInsertionPointToStart(outerIf.thenBlock());
-    if (failed(vectorizeRegionBodyOnly(ifOp.getThenRegion(), ctx))) {
-      outerIf.erase();
-      return false;
-    }
-    auto thenY = cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
-    Value yieldVec = ctx.valueMapping.lookupOrNull(thenY.getOperand(0));
-    if (!yieldVec) {
-      yieldVec = vectorizeBroadcastScalar(thenY.getOperand(0), ctx);
-      if (!yieldVec) {
-        outerIf.erase();
-        return false;
-      }
-    }
-    emitVectorizedStore(consumerStore, yieldVec, ctx);
-  }
-  {
-    OpBuilder::InsertionGuard g(b);
-    b.setInsertionPointToStart(outerIf.elseBlock());
-    if (failed(vectorizeRegionBodyOnly(ifOp.getElseRegion(), ctx))) {
-      outerIf.erase();
-      return false;
-    }
-    auto elseY = cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
-    Value elseVec = ctx.valueMapping.lookupOrNull(elseY.getOperand(0));
-    if (!elseVec) {
-      elseVec = vectorizeBroadcastScalar(elseY.getOperand(0), ctx);
-      if (!elseVec) {
-        outerIf.erase();
-        return false;
-      }
-    }
-    emitVectorizedStore(consumerStore, elseVec, ctx);
-  }
-  b.setInsertionPointAfter(outerIf);
-  ctx.absorbedOps.insert(consumerStore.getOperation());
-  return true;
-}
-
 static Value resolveIfDependentIV(Value condition, LoopVectorizationCtx &ctx) {
   Value currentIV = ctx.scalarLoop.getInductionVar();
   if (hasVectorizationAttr(ctx.scalarLoop.getOperation()) && definitionGraphContainsValue(condition, currentIV)) {
@@ -2440,6 +2481,19 @@ static Value vectorizeIfElseWithVectorResults(scf::IfOp ifOp, LoopVectorizationC
     }
   }
   ctx.builder.setInsertionPointAfter(vecIfOp);
+
+  auto thenYield = cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
+  auto elseYield = cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
+  for (auto [resultIdx, vecResult] : llvm::enumerate(vecIfOp.getResults())) {
+    Value thenVec = ctx.valueMapping.lookupOrDefault(thenYield.getOperand(resultIdx));
+    Value elseVec = ctx.valueMapping.lookupOrDefault(elseYield.getOperand(resultIdx));
+    auto thenOrderIt = ctx.valueDimOrder.find(thenVec);
+    auto elseOrderIt = ctx.valueDimOrder.find(elseVec);
+    if (thenOrderIt != ctx.valueDimOrder.end() && elseOrderIt != ctx.valueDimOrder.end() &&
+        thenOrderIt->second == elseOrderIt->second) {
+      ctx.valueDimOrder[vecResult] = thenOrderIt->second;
+    }
+  }
   return vecIfOp.getResult(0);
 }
 
@@ -2488,18 +2542,12 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
     }
   }
 
-  // Non-IV-dependent + else + results: prefer `transfer_write` absorption (no npuvector if
-  // result) when the if result has a single memref.store user; otherwise keep a vectorized
-  // `scf.if` that yields npuvector (e.g. tail `if` feeding `npuvector.broadcast` on the result).
+  // Non-IV-dependent + else + results: keep a vectorized `scf.if` result and let
+  // the consumer op (for example, memref.store) handle its own vectorization.
   if (hasElse && hasResults && !dependentIV) {
     Value vecCondition = ctx.valueMapping.lookupOrNull(condition);
     if (!vecCondition) {
       vecCondition = condition;
-    }
-    if (memref::StoreOp consumer = findUniqueStoreConsumer(ifOp)) {
-      if (emitIfWithElseAndStoreNoSlice(ifOp, ctx, loc, vecCondition, consumer)) {
-        return {};
-      }
     }
     return vectorizeIfElseWithVectorResults(ifOp, ctx, loc, vecCondition);
   }
@@ -4606,6 +4654,32 @@ static bool hasRankZeroNpuVectorOperand(Operation *op) {
   return false;
 }
 
+static LogicalResult promoteVF1YieldUsers(Operation *op, Value vecVal) {
+  auto vecType = mlir::dyn_cast<npuvector::NPUVectorType>(vecVal.getType());
+  if (!vecType || vecType.getRank() != 0) {
+    return success();
+  }
+
+  SmallVector<VF1LoopLane> loopLanes;
+  SmallVector<Value> unusedValuesToVisit;
+  for (Operation *user : op->getResult(0).getUsers()) {
+    auto yieldOp = dyn_cast<scf::YieldOp>(user);
+    if (!yieldOp) {
+      continue;
+    }
+    if (failed(followVF1YieldLane(yieldOp, op->getResult(0), loopLanes, unusedValuesToVisit))) {
+      return failure();
+    }
+  }
+  if (loopLanes.empty()) {
+    return success();
+  }
+
+  DenseSet<Operation *> closure;
+  closure.insert(op);
+  return promoteVF1LoopLanes(loopLanes, closure);
+}
+
 static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
   if (!isArithOrMathOp(op) || op->getNumRegions() != 0 || op->getNumResults() != kUnaryOpOperandCount ||
       op->getNumOperands() == 0 || hasIndexResult(*op) || op->hasAttr(kSkipVectorizeAttr) ||
@@ -4627,6 +4701,10 @@ static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
   Value vecVal = ctx.valueMapping.lookupOrNull(op->getResult(0));
   if (!vecVal || vecVal == op->getResult(0) || !mlir::isa<npuvector::NPUVectorType>(vecVal.getType())) {
     return Vf1ChainPromotionResult::Skipped;
+  }
+
+  if (failed(promoteVF1YieldUsers(op, vecVal))) {
+    return Vf1ChainPromotionResult::FatalError;
   }
 
   op->getResult(0).replaceAllUsesWith(vecVal);
