@@ -29,10 +29,12 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "akg/Utils/Constants.h"
 namespace mlir {
 #ifndef GEN_PASS_DEF_UNIFYSHAPE
 #define GEN_PASS_DEF_UNIFYSHAPE
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 }  // namespace mlir
 #define DEBUG_TYPE "unify-shape"
@@ -51,10 +53,26 @@ struct UnifyShapeInfos {
   llvm::MapVector<AffineMap, SmallVector<Value, kVectorSizeFour>> newShapeMap;
 };
 
+struct MapProcessContext {
+  Operation *referenceOp;
+  MemRefType referenceType;
+  MLIRContext *context;
+  unsigned nbSymbolExpr = 0;
+  SmallVector<AffineExpr, kVectorSizeFour> newAccesExpr;
+  UnifyShapeInfos result;
+};
+
+struct DimAccumState {
+  AffineExpr accessRes;
+  AffineExpr shapeRes;
+  SmallVector<Value, kVectorSizeFour> symbolicValue;
+};
+
 class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
  public:
   UnifyShape() = default;
   UnifyShape(const UnifyShape &pass) = default;
+  UnifyShape &operator=(const UnifyShape &) = default;
   UnifyShape(const bool allowNonPolyhedralAccess, const bool keepArg) {
     this->allowNonPolyhedralAccess = allowNonPolyhedralAccess;
     this->keepArgsShape = keepArg;
@@ -147,12 +165,12 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
 
   //  void eraseOpsUsingBlockArguments(mlir::func::FuncOp &fop) {
   void eraseOpsUsingBlockArguments(mlir::ModuleOp &m) {
-    m.walk([&](mlir::func::FuncOp fop) {
+    m.walk([this](mlir::func::FuncOp fop) {
       FunctionType functionType = fop.getFunctionType();
       SmallVector<Type, kVectorSizeEight> newArgTypes;
       SmallVector<Type, kVectorSizeFour> resultTypes;
       FunctionType newFuncType;
-      resultTypes = llvm::to_vector<4>(functionType.getResults());
+      resultTypes = llvm::to_vector<kSmallVectorSizeFour>(functionType.getResults());
 
       assert(resultTypes.empty() &&
              "Function result must be empty due to the call of "
@@ -276,89 +294,76 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     return false;
   }
 
-  bool processDynamicDim(unsigned j, int64_t dim, Operation *referenceOp, MemRefType referenceType,
-                         MLIRContext *context, unsigned &nbSymbolExpr, AffineExpr &accessRes, AffineExpr &shapeRes,
-                         SmallVector<Value, kVectorSizeFour> &symbolicValue, UnifyShapeInfos &result) {
+  bool processDynamicDim(unsigned j, int64_t dim, DimAccumState &accum, MapProcessContext &ctx) {
     if (j > 0 && !this->allowNonPolyhedralAccess) {
       LLVM_DEBUG({
         llvm::dbgs() << DEBUG_TYPE
                      << " allow-non-polyhedral-access=false prevent removing an operation that will imply "
                         "potential non polyhedral access function\n";
       });
-      result.skip = true;
+      ctx.result.skip = true;
       return false;
     }
-    // Note: we cannot create a memref::DimOp, to retrieve the dynamic/symbolic shape
-    // Because there the value of this index will be updated by a bigger value
-    // Since the dimension are expand/collapse... (and only keep the smaller number of dimension)
-    if (auto allocOp = dyn_cast<memref::AllocOp>(referenceOp)) {
-      // For memory referenceType is the MemRefType of allocOp
-      unsigned dynIndex = referenceType.getDynamicDimIndex(dim);
+    if (auto allocOp = dyn_cast<memref::AllocOp>(ctx.referenceOp)) {
+      unsigned dynIndex = ctx.referenceType.getDynamicDimIndex(dim);
       auto dynamicVar = allocOp.getDynamicSizes()[dynIndex];
-      symbolicValue.push_back(dynamicVar);
+      accum.symbolicValue.push_back(dynamicVar);
       if (j > 0) {
-        accessRes = accessRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
+        accum.accessRes = accum.accessRes * mlir::getAffineSymbolExpr(ctx.nbSymbolExpr, ctx.context);
       }
-      shapeRes = shapeRes * mlir::getAffineSymbolExpr(nbSymbolExpr, context);
-      nbSymbolExpr++;
-    } else if (isa<memref::ExpandShapeOp>(referenceOp)) {
+      accum.shapeRes = accum.shapeRes * mlir::getAffineSymbolExpr(ctx.nbSymbolExpr, ctx.context);
+      ctx.nbSymbolExpr++;
+    } else if (isa<memref::ExpandShapeOp>(ctx.referenceOp)) {
       if (j > 0) {
-        // If there is dynamic dimension that are not the outermost dim to expand not ok
-        // example:
-        // NOT OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<1024x?xf16>
-        // OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<?x1024xf16>
-        // OK memref.expand_shape [[0, 1], 2] : memref<?x?xf16> into memref<?x1024x?xf16>
         llvm::errs() << DEBUG_TYPE
                      << " WARNING -- ExpandShapeOp - cannot compute new AffineMap Access function "
                         "because of "
                         "unknown dynamic/symbolic shape\n";
-        result.skip = true;
+        ctx.result.skip = true;
         return false;
       }
-    } else {  // referenceOp is not a  AllocOp or ExpandShapeOp
+    } else {
       llvm::errs() << DEBUG_TYPE << " getNewAffineMapResults- WARNING!!! This case may never happen\n";
       llvm::dbgs() << DEBUG_TYPE
                    << " WARNING -- cannot compute new AffineMap Access function because of unknown "
                       "dynamic/symbolic shape\n";
-      result.skip = true;
+      ctx.result.skip = true;
       return false;
     }
     return true;
   }
 
-  bool processMapEntry(AffineMap map, Operation *referenceOp, MemRefType referenceType, MLIRContext *context,
-                       unsigned &nbSymbolExpr, SmallVector<AffineExpr, kVectorSizeFour> &newAccesExpr,
-                       UnifyShapeInfos &result) {
-    SmallVector<Value, kVectorSizeFour> symbolicValue;
-    AffineExpr accessRes = map.getResult(0);
-    AffineExpr shapeRes = mlir::getAffineConstantExpr(1, context);
-    auto referenceShape = referenceType.getShape();
+  bool processMapEntry(AffineMap map, MapProcessContext &ctx) {
+    DimAccumState accum;
+    accum.accessRes = map.getResult(0);
+    accum.shapeRes = mlir::getAffineConstantExpr(1, ctx.context);
+    auto referenceShape = ctx.referenceType.getShape();
 
     for (unsigned j = 0; j < map.getNumResults(); ++j) {
       int64_t dim = map.getDimPosition(j);
       if (j > 0) {
-        result.deletedDim.push_back(dim);
+        ctx.result.deletedDim.push_back(dim);
       }
       auto upperbound = referenceShape[dim];
       if (::mlir::ShapedType::isDynamic(upperbound)) {
-        if (!processDynamicDim(j, dim, referenceOp, referenceType, context, nbSymbolExpr, accessRes, shapeRes,
-                               symbolicValue, result)) {
+        if (!processDynamicDim(j, dim, accum, ctx)) {
           return false;
         }
-      } else {  // if (::mlir::ShapedType::isDynamic(upperbound))
+      } else {
         if (j > 0) {
-          accessRes = accessRes * upperbound;
+          accum.accessRes = accum.accessRes * upperbound;
         }
-        shapeRes = shapeRes * upperbound;
+        accum.shapeRes = accum.shapeRes * upperbound;
       }
       if (j > 0) {
-        accessRes = accessRes + map.getResult(j);
+        accum.accessRes = accum.accessRes + map.getResult(j);
       }
     }
-    newAccesExpr.push_back(accessRes);
+    ctx.newAccesExpr.push_back(accum.accessRes);
 
-    SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
-    result.newShapeMap[newShapeMap[0]] = symbolicValue;
+    SmallVector<AffineMap, kSmallVectorSizeOne> newShapeMap =
+      AffineMap::inferFromExprList({accum.shapeRes}, ctx.context);
+    ctx.result.newShapeMap[newShapeMap[0]] = accum.symbolicValue;
     return true;
   }
 
@@ -369,9 +374,6 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
   ///                       else an memref::ExpandShapeOp
   /// \param isCollapse if true treat for a collapse, else treat for a expand
   UnifyShapeInfos getNewAffineMapResults(SmallVector<AffineMap, kVectorSizeFour> reshapeMap, Value referenceValue) {
-    // We may be able to already prepare the new map
-    // Each map returns a tuple of dim (d0, ..., dN)
-    // we want to return instead (d0 * M_d1 + d1 * ... + dN-1 * M_dN + dN)
     LLVM_DEBUG({
       llvm::dbgs() << DEBUG_TYPE << " - getNewAffineMapResults:\n";
       llvm::dbgs() << " Initial mapping:\n";
@@ -381,45 +383,41 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
       llvm::dbgs() << " reference Value:\n";
       referenceValue.dump();
     });
-    UnifyShapeInfos result;
-    MemRefType referenceType = cast<MemRefType>(referenceValue.getType());
-    MLIRContext *context = referenceValue.getContext();
-    Operation *referenceOp = referenceValue.getDefiningOp();
-    auto referenceShape = referenceType.getShape();
-    unsigned nbSymbolExpr = 0;
-    SmallVector<AffineExpr, kVectorSizeFour> newAccesExpr;
+    MapProcessContext ctx;
+    ctx.referenceType = cast<MemRefType>(referenceValue.getType());
+    ctx.context = referenceValue.getContext();
+    ctx.referenceOp = referenceValue.getDefiningOp();
+    auto referenceShape = ctx.referenceType.getShape();
 
-    result.dynamicReshape = isDynamicReshape(referenceShape, reshapeMap);
+    ctx.result.dynamicReshape = isDynamicReshape(referenceShape, reshapeMap);
 
-    if (!std::all_of(reshapeMap.begin(), reshapeMap.end(), [&](AffineMap map) {
-          return processMapEntry(map, referenceOp, referenceType, context, nbSymbolExpr, newAccesExpr, result);
-        })) {
-      return result;
+    if (!std::all_of(reshapeMap.begin(), reshapeMap.end(),
+                     [this, &ctx](AffineMap map) { return processMapEntry(map, ctx); })) {
+      return ctx.result;
     }
 
-    // special case, with memref.expand_shape %alloc [] : memref<f32> into memref<1xf32>
-    // need to have similar stuff for collapse_shape???
     if (reshapeMap.empty()) {
-      if (isa<memref::ExpandShapeOp>(referenceOp)) {
-        newAccesExpr.push_back(getAffineConstantExpr(0, context));
+      if (isa<memref::ExpandShapeOp>(ctx.referenceOp)) {
+        ctx.newAccesExpr.push_back(getAffineConstantExpr(0, ctx.context));
       }
     }
 
-    SmallVector<AffineMap, 1> newAccessMap = AffineMap::inferFromExprList(newAccesExpr, context);
+    SmallVector<AffineMap, kSmallVectorSizeOne> newAccessMap =
+      AffineMap::inferFromExprList(ctx.newAccesExpr, ctx.context);
     assert(newAccessMap.size() == 1 && "Generation from a list of AffineExpr must result in only one AffineMap");
     LLVM_DEBUG({
       llvm::dbgs() << " new access map function:\n";
       newAccessMap[0].dump();
       llvm::dbgs() << " new shape map:\n";
-      for (auto shape : result.newShapeMap) {
+      for (auto shape : ctx.result.newShapeMap) {
         llvm::dbgs() << shape.first << "  with \n";
         for (auto dim : shape.second) {
           dim.dump();
         }
       }
     });
-    result.newAccessMap = newAccessMap[0];
-    return result;
+    ctx.result.newAccessMap = newAccessMap[0];
+    return ctx.result;
   }
 
   /// createnewAllocOp
@@ -504,7 +502,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
       SmallVector<Type, kVectorSizeEight> newArgTypes;
       SmallVector<Type, kVectorSizeFour> resultTypes;
       FunctionType newFuncType;
-      resultTypes = llvm::to_vector<4>(functionType.getResults());
+      resultTypes = llvm::to_vector<kSmallVectorSizeFour>(functionType.getResults());
 
       assert(resultTypes.empty() &&
              "Function result must be empty due to the call of "
@@ -599,7 +597,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     // for i, 0 a00
     //     for j, 0 a01
     //         d[i, j] = a[i*a01 + j]
-    (void)m.walk([&](mlir::memref::ExpandShapeOp esop) {
+    (void)m.walk([this](mlir::memref::ExpandShapeOp esop) {
       LLVM_DEBUG({
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         esop.dump();
@@ -689,7 +687,7 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
     //         a[i*a01 + j] = c[i, j]
     // for i, 0 a0
     //     d[i] = a[i]
-    (void)m.walk([&](mlir::memref::CollapseShapeOp csop) {
+    (void)m.walk([this](mlir::memref::CollapseShapeOp csop) {
       LLVM_DEBUG({
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         csop.dump();

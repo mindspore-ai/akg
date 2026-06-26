@@ -29,6 +29,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace affine {
@@ -37,7 +38,7 @@ std::optional<NestedPattern> makePatternAKG(const DenseSet<Operation *> &paralle
                                             ArrayRef<int64_t> fastestVaryingPattern = {});
 
 void computeIntersectionBucketsAKG(ArrayRef<NestedMatch> matches,
-                                   std::vector<SmallVector<NestedMatch, 8>> &intersectionBuckets);
+                                   std::vector<SmallVector<NestedMatch, kSmallVectorSizeEight>> &intersectionBuckets);
 
 LogicalResult analyzeProfitabilityAKG(ArrayRef<NestedMatch> matches, unsigned depthInPattern, unsigned patternDepth,
                                       VectorizationStrategy *strategy);
@@ -45,9 +46,9 @@ LogicalResult analyzeProfitabilityAKG(ArrayRef<NestedMatch> matches, unsigned de
 void vectorizeLoopIfProfitableAKG(Operation *loop, unsigned depthInPattern, unsigned patternDepth,
                                   VectorizationStrategy *strategy);
 
-void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, 2>> &loops);
+void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops);
 
-LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, 2>> &loops,
+LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, kSmallVectorSizeTwo>> &loops,
                                    const VectorizationStrategy &strategy);
 }  // namespace affine
 
@@ -59,8 +60,7 @@ struct VectorizationState {
   /// values. Both operations must have the same number of results.
   /// This utility is used to register the replacement for the vast majority of
   /// the vectorized operations.
-  /// Example:
-  ///   * 'replaced': %0 = arith.addf %1, %2 : f32
+  /// Example  ///   * 'replaced': %0 = arith.addf %1, %2 : f32
   ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
   void registerOpVectorReplacement(Operation *replaced, Operation *replacement);
 
@@ -69,15 +69,13 @@ struct VectorizationState {
   /// This utility is used to register the vector replacement of block arguments
   /// and operation results which are not directly vectorized (i.e., their
   /// scalar version still exists after vectorization), like uniforms.
-  /// Example:
-  ///   * 'replaced': block argument or operation outside of the vectorized
+  /// Example  ///   * 'replaced': block argument or operation outside of the vectorized
   ///     loop.
   ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
   void registerValueVectorReplacement(Value replaced, Operation *replacement);
 
   /// Registers the vector replacement of a block argument (e.g., iter_args).
-  /// Example:
-  ///   * 'replaced': 'iter_arg' block argument.
+  /// Example  ///   * 'replaced': 'iter_arg' block argument.
   ///   * 'replacement': vectorized 'iter_arg' block argument.
   void registerBlockArgVectorReplacement(BlockArgument replaced, BlockArgument replacement);
 
@@ -87,8 +85,7 @@ struct VectorizationState {
   /// This utility is used to register the replacement of block arguments
   /// that are within the loop to be vectorized and will continue being scalar
   /// within the vector loop.
-  /// Example:
-  ///   * 'replaced': induction variable of a loop to be vectorized.
+  /// Example  ///   * 'replaced': induction variable of a loop to be vectorized.
   ///   * 'replacement': new induction variable in the new vector loop.
   void registerValueScalarReplacement(BlockArgument replaced, BlockArgument replacement);
 
@@ -96,8 +93,7 @@ struct VectorizationState {
   /// reduction loop. 'replacement' must be scalar.
   /// This utility is used to register the replacement for scalar results of
   /// vectorized reduction loops with iter_args.
-  /// Example 2:
-  ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
+  /// Example 2  ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
   ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into
   ///   f32
   void registerLoopResultScalarReplacement(Value replaced, Value replacement);

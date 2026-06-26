@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Fusion/IR/Fusion.h"
+#include "akg/Utils/Constants.h"
 
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/IR/Builders.h"
@@ -24,6 +25,7 @@
 using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::fusion;  // NOLINT(build/namespaces)
 
+namespace {
 namespace saturated_arith {
 struct Wrapper {
   static Wrapper stride(int64_t v) { return (ShapedType::isDynamic(v)) ? Wrapper{true, 0} : Wrapper{false, v}; }
@@ -203,6 +205,7 @@ static SliceVerificationResult isRankReducedMemRefType(const MemRefType original
 
   return SliceVerificationResult::Success;
 }
+}  // namespace
 
 // ===----------------------------------------------------------------------=== //
 // LoadOp
@@ -210,7 +213,7 @@ static SliceVerificationResult isRankReducedMemRefType(const MemRefType original
 ::mlir::ParseResult LoadOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
   // parse memref and indices
   OpAsmParser::UnresolvedOperand memrefInfo;
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> indexInfo;
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeEight> indexInfo;
   if (parser.parseOperand(memrefInfo) || parser.parseOperandList(indexInfo, OpAsmParser::Delimiter::Square)) {
     return failure();
   }
@@ -226,14 +229,14 @@ static SliceVerificationResult isRankReducedMemRefType(const MemRefType original
 
   // parse optional attr dict and types
   SMLoc typesLoc;
-  SmallVector<Type, 2> types;
+  SmallVector<Type, kSmallVectorSizeTwo> types;
   if (parser.parseOptionalAttrDict(result.attributes) || parser.getCurrentLocation(&typesLoc) ||
       parser.parseColonTypeList(types)) {
     return failure();
   }
 
   // check validity of type
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 
@@ -298,7 +301,7 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
 ::mlir::ParseResult MultiLoadOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
   // parse memref and indices
   OpAsmParser::UnresolvedOperand memrefInfo;
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> indexInfo;
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeEight> indexInfo;
   if (parser.parseOperand(memrefInfo) || parser.parseOperandList(indexInfo, OpAsmParser::Delimiter::Square)) {
     return failure();
   }
@@ -314,14 +317,14 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
 
   // parse optional attr dict and types
   SMLoc typesLoc;
-  SmallVector<Type, 2> types;
+  SmallVector<Type, kSmallVectorSizeTwo> types;
   if (parser.parseOptionalAttrDict(result.attributes) || parser.getCurrentLocation(&typesLoc) ||
       parser.parseColonTypeList(types)) {
     return failure();
   }
 
   // check validity of type
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 
@@ -462,7 +465,7 @@ Type SubViewOp::inferResultType(MemRefType sourceMemRefType, ArrayRef<int64_t> s
 
   // Compute target stride whose value is:
   //   `sourceStrides_i * staticStrides_i`.
-  SmallVector<int64_t, 4> targetStrides;
+  SmallVector<int64_t, kSmallVectorSizeFour> targetStrides;
   targetStrides.reserve(staticOffsets.size());
   for (auto it : llvm::zip(sourceStrides, staticStrides)) {
     auto sourceStride = std::get<0>(it), staticStride = std::get<1>(it);
@@ -528,7 +531,7 @@ LogicalResult TransposeOp::verify() {
   if (rank != size) {
     return emitOpError("transposition length mismatch: ") << size;
   }
-  SmallVector<bool, 8> seen(rank, false);
+  SmallVector<bool, kSmallVectorSizeEight> seen(rank, false);
   for (const auto &ta : llvm::enumerate(transpAttr)) {
     int64_t i = cast<IntegerAttr>(ta.value()).getInt();
     if (i < 0 || i >= rank) {
@@ -551,20 +554,20 @@ LogicalResult TransposeOp::verify() {
 ::mlir::ParseResult StoreOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
   OpAsmParser::UnresolvedOperand valueInfo;
   OpAsmParser::UnresolvedOperand memrefInfo;
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> indexInfo;
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeEight> indexInfo;
   if (parser.parseOperand(valueInfo) || parser.parseComma() || parser.parseOperand(memrefInfo) ||
       parser.parseOperandList(indexInfo, OpAsmParser::Delimiter::Square)) {
     return failure();
   }
 
   SMLoc typesLoc;
-  SmallVector<Type, 2> types;
+  SmallVector<Type, kSmallVectorSizeTwo> types;
   if (parser.parseOptionalAttrDict(result.attributes) || parser.getCurrentLocation(&typesLoc) ||
       parser.parseColonTypeList(types)) {
     return failure();
   }
 
-  if (types.size() != 2) {
+  if (types.size() != kBinaryOpOperandCount) {
     return parser.emitError(typesLoc, "requires two types");
   }
 

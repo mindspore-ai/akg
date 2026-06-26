@@ -37,20 +37,19 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-
-using namespace akgglobal;  // NOLINT(build/namespaces)
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_GPUUSEALLREDUCEWITHATOMICRETURN
 #define GEN_PASS_DEF_GPUUSEALLREDUCEWITHATOMICRETURN
 #include "akg/Dialect/GPU/Passes.h.inc"
+
 }  // namespace mlir
 
 namespace mlir {
 namespace gpu {
 namespace {
 
-// Convert XXXOp to Atomic kind
 std::optional<arith::AtomicRMWKind> ConvertArithOpToAtomicKind(Operation *op) {
   return TypeSwitch<Operation *, std::optional<arith::AtomicRMWKind>>(op)
     .Case([](arith::AddFOp) { return arith::AtomicRMWKind::addf; })
@@ -68,7 +67,6 @@ std::optional<arith::AtomicRMWKind> ConvertArithOpToAtomicKind(Operation *op) {
     .Default([](Operation *) -> std::optional<arith::AtomicRMWKind> { return std::nullopt; });
 }
 
-// Convert XXXOp to gpu::AllReduceOperation
 std::optional<mlir::gpu::AllReduceOperation> ConvertArithOpToAllReduceOperation(Operation *op) {
   return TypeSwitch<Operation *, std::optional<mlir::gpu::AllReduceOperation>>(op)
     .Case([](arith::AddFOp) { return mlir::gpu::AllReduceOperation::ADD; })
@@ -85,23 +83,20 @@ std::optional<mlir::gpu::AllReduceOperation> ConvertArithOpToAllReduceOperation(
     .Case([](arith::MaxUIOp) { return mlir::gpu::AllReduceOperation::MAXUI; });
 }
 
-// Collect information of reduction ops
 struct ReduceOpInfo {
   mlir::Operation *op = nullptr;
   bool use_atomic_reduce;
 };
 
-// Check whether this kernel is post fusion reduction case. When reduction op is other compute ops'
-// post op, it hints that this kernel is post fusion.
 static bool IsPostFusion(Operation *redOp) {
   auto curOp = redOp->getNextNode();
   while (curOp != nullptr) {
     if (!isa<memref::StoreOp>(curOp) && !isa<memref::LoadOp>(curOp) && !isa<memref::AllocOp>(curOp) &&
         !isa<memref::DeallocOp>(curOp) && !isa<scf::YieldOp>(curOp)) {
-      SmallVector<Operation *, 8> prevOps;
-      SmallVector<mlir::Value, 8> usedValues;
+      SmallVector<Operation *, kSmallVectorSizeEight> prevOps;
+      SmallVector<mlir::Value, kSmallVectorSizeEight> usedValues;
       CommonUtils::getAllPreviousRelatedOpsV2(curOp, prevOps, usedValues);
-      if (std::any_of(prevOps.begin(), prevOps.end(), [&](Operation *op) { return op == redOp; })) {
+      if (std::any_of(prevOps.begin(), prevOps.end(), [&redOp](Operation *op) { return op == redOp; })) {
         return true;
       }
     }
@@ -110,7 +105,6 @@ static bool IsPostFusion(Operation *redOp) {
   return false;
 }
 
-// Match the fixed pattern for reduction stores.
 static std::tuple<Operation *, Operation *, Operation *> matchReductionStorePatterns(Operation *redOp) {
   Operation *localStore = nullptr;
   Operation *localLoad = nullptr;
@@ -131,8 +125,6 @@ static std::tuple<Operation *, Operation *, Operation *> matchReductionStorePatt
   return std::make_tuple(localStore, localLoad, globalStore);
 }
 
-// Main enter for reduction-Y rewrite. `ref`s are reference patterns. Emit atomic ops if
-// block-level parallel reduction is supported.
 static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder &builder) {
   auto loc = redInfo.op->getLoc();
   builder.setInsertionPoint(redInfo.op);
@@ -143,7 +135,6 @@ static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder
   std::tie(localStore, localLoad, globalStore) = matchReductionStorePatterns(redInfo.op);
   builder.setInsertionPointAfter(globalStore);
 
-  // Generate `memref.atomic_rmw` op
   std::optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
   if (atomicKind == std::nullopt) {
     llvm::errs() << "Error: invalid Operation switch to AtomicRMW, please check the type.\n";
@@ -160,7 +151,6 @@ static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder
   return mlir::success();
 }
 
-// Insert ops to build a statement like: if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0)
 static void insertSingleThreadReduction(OpBuilder &builder, mlir::Location loc, Operation *launchOp,
                                         Operation *globalStore) {
   builder.setInsertionPointAfter(globalStore);
@@ -175,8 +165,6 @@ static void insertSingleThreadReduction(OpBuilder &builder, mlir::Location loc, 
   builder.setInsertionPointToStart(&ifThreadsZero.getThenRegion().front());
 }
 
-// Main enter for reduction-X rewrite. Emit thread-level reduction
-// with `AllReduceOperation` op. Emit atomic ops if block-level parallel reduction is supported.
 static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder &builder, Operation *launchOp) {
   Value operand_b = redInfo.op->getOperands()[0];
   auto res_type = redInfo.op->getResultTypes()[0];
@@ -185,14 +173,11 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
   mlir::MLIRContext *context = builder.getContext();
   builder.setInsertionPoint(redInfo.op);
 
-  // Generate `gpu.all_reduce  add %X uniform {}`
   mlir::gpu::AllReduceOperation operationType = *ConvertArithOpToAllReduceOperation(redInfo.op);
   mlir::gpu::AllReduceOperationAttr op_attr = mlir::gpu::AllReduceOperationAttr::get(context, operationType);
   Value redValue = builder.create<gpu::AllReduceOp>(loc, res_type, operand_b, op_attr, true);
   auto allreduceOp = redValue.getDefiningOp();
 
-  // In post fusion cases, we have broadcast reduction result to all threads, which
-  // gpu.all_reduce has already done. so no need to add scf.if here
   bool isPostFusion = IsPostFusion(redInfo.op);
 
   Operation *localStore = nullptr;
@@ -203,7 +188,6 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
   if (!isPostFusion) {
     insertSingleThreadReduction(builder, loc, launchOp, globalStore);
 
-    // Generate `memref.atomic_rmw` op
     if (redInfo.use_atomic_reduce) {
       std::optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
       if (atomicKind == std::nullopt) {
@@ -239,26 +223,23 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
   return mlir::success();
 }
 
-// GpuUseAllReduceWithAtomicReturn rewrite the reduction-related ops to gpu dialect. For example, thread
-// level reduction ops rewrite to gpu.allreduce; block-level reduction rewrite to atomic ops. This pass
-// supports both reduce-X and reduce-Y algorithms
 struct GpuUseAllReduceWithAtomicReturn
     : public impl::GpuUseAllReduceWithAtomicReturnBase<GpuUseAllReduceWithAtomicReturn> {
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
 
-    SmallVector<Operation *, 3> launchOps;
-    funcOp.walk([&](Operation *launchOp) {
+    SmallVector<Operation *, kSmallVectorSizeThree> launchOps;
+    funcOp.walk([&launchOps](Operation *launchOp) {
       if (isa<mlir::gpu::LaunchOp>(launchOp)) {
         launchOps.push_back(launchOp);
       }
     });
 
-    bool isReduceY = GpuScheduleTool::getInstance().getReduceDirection() == (size_t)ReduceDirection::Y;
+    bool isReduceY =
+      akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == static_cast<size_t>(ReduceDirection::Y);
     for (auto launchOp : launchOps) {
-      SmallVector<ReduceOpInfo, 3> redInfos;
-      launchOp->walk([&](mlir::Operation *redOp) {
-        // op name can be: addf, addi, maxf, maxi, ...
+      SmallVector<ReduceOpInfo, kSmallVectorSizeThree> redInfos;
+      launchOp->walk([&redInfos, &isReduceY](mlir::Operation *redOp) {
         bool parallelReduce = (redOp->hasAttr(akg::utils::kEnableParallelReduce) &&
                                redOp->getAttrOfType<BoolAttr>(akg::utils::kEnableParallelReduce).getValue());
         bool atomicAdd = (redOp->hasAttr(akg::utils::kEnableAtomicAdd) &&
@@ -273,13 +254,11 @@ struct GpuUseAllReduceWithAtomicReturn
 
       for (ReduceOpInfo redInfo : redInfos) {
         OpBuilder builder(launchOp);
-        // case 1. reduce-Y
         if (isReduceY && redInfo.use_atomic_reduce) {
           if (mlir::failed(rewritePatternReduceY(redInfo, builder))) {
             signalPassFailure();
           }
         } else {
-          // case 2. reduce-X/All
           if (mlir::failed(rewritePatternReduceX(redInfo, builder, launchOp))) {
             signalPassFailure();
           }

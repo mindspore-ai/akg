@@ -32,24 +32,33 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_GETORDERMAPBEFOREAFTERGPUOUTLINING
 #define GEN_PASS_DEF_GETORDERMAPBEFOREAFTERGPUOUTLINING
 #include "akg/Dialect/GPU/Passes.h.inc"
+
 }  // namespace mlir
 
-using namespace mlir;  // NOLINT(build/namespaces)
-
 namespace mlir {
+using mlir::ArrayRef;
+using mlir::BlockArgument;
+using mlir::dyn_cast;
+using mlir::SmallVector;
+using mlir::Value;
+using mlir::ValueRange;
+
 namespace gpu {
 namespace {
 
-bool IdxIsInVector(size_t funcIdx, SmallVector<int, 8> mapResult) {
-  return std::any_of(mapResult.begin(), mapResult.end(), [&](int idx) { return idx == static_cast<int>(funcIdx); });
+bool IdxIsInVector(size_t funcIdx, SmallVector<int, kSmallVectorSizeEight> mapResult) {
+  return std::any_of(mapResult.begin(), mapResult.end(),
+                     [&funcIdx](int idx) { return idx == static_cast<int>(funcIdx); });
 }
 
-void UpdateMapResultForAlloc(Value alloc, ValueRange operands, SmallVector<int, 8> &mapResult, size_t funcIdx) {
+void UpdateMapResultForAlloc(Value alloc, ValueRange operands, SmallVector<int, kSmallVectorSizeEight> &mapResult,
+                             size_t funcIdx) {
   for (size_t idx = 0; idx < operands.size(); idx++) {
     if (alloc == operands[idx]) {
       mapResult[idx] = static_cast<int>(funcIdx);
@@ -58,8 +67,8 @@ void UpdateMapResultForAlloc(Value alloc, ValueRange operands, SmallVector<int, 
   }
 }
 
-bool isPermutation(const SmallVector<int, 8> vec) {
-  llvm::SmallSet<int, 8> elemSet;
+bool isPermutation(const SmallVector<int, kSmallVectorSizeEight> vec) {
+  llvm::SmallSet<int, kSmallVectorSizeEight> elemSet;
   size_t len = vec.size();
   for (int element : vec) {
     if (element < 0 || element >= static_cast<int>(len)) {
@@ -70,9 +79,9 @@ bool isPermutation(const SmallVector<int, 8> vec) {
   return elemSet.size() == len;
 }
 
-Value FindAllocOpForFuncArg(func::FuncOp funcOp, BlockArgument targetArg) {
-  memref::CopyOp targetCopyOp = nullptr;
-  funcOp.walk([&](memref::CopyOp op) {
+Value FindAllocOpForFuncArg(mlir::func::FuncOp funcOp, BlockArgument targetArg) {
+  mlir::memref::CopyOp targetCopyOp = nullptr;
+  funcOp.walk([&targetArg, &targetCopyOp](mlir::memref::CopyOp op) {
     if (op.getTarget() == targetArg) {
       targetCopyOp = op;
     }
@@ -82,15 +91,15 @@ Value FindAllocOpForFuncArg(func::FuncOp funcOp, BlockArgument targetArg) {
     return {};
   }
   auto prevOp = targetCopyOp.getSource().getDefiningOp();
-  if (auto alloc = dyn_cast<memref::AllocOp>(prevOp)) {
+  if (auto alloc = dyn_cast<mlir::memref::AllocOp>(prevOp)) {
     return alloc.getResult();
   }
   (void)funcOp.emitError("Error: next Op is not memref::AllocOp \n");
   return {};
 }
 
-static void matchOperandIndex(Value v, ArrayRef<BlockArgument> funcArguments, SmallVector<int, 8> &mapResult,
-                              size_t idx) {
+static void matchOperandIndex(Value v, ArrayRef<BlockArgument> funcArguments,
+                              SmallVector<int, kSmallVectorSizeEight> &mapResult, size_t idx) {
   for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
     if (funcArguments[funcIdx] == v) {
       mapResult[idx] = funcIdx;
@@ -100,19 +109,19 @@ static void matchOperandIndex(Value v, ArrayRef<BlockArgument> funcArguments, Sm
 }
 
 struct GetOrderMapBeforeAfterGpuOutlining
-    : public impl::GetOrderMapBeforeAfterGpuOutliningBase<GetOrderMapBeforeAfterGpuOutlining> {
+    : public mlir::impl::GetOrderMapBeforeAfterGpuOutliningBase<GetOrderMapBeforeAfterGpuOutlining> {
   GetOrderMapBeforeAfterGpuOutlining() = default;
   explicit GetOrderMapBeforeAfterGpuOutlining(const std::string &path) { this->path = path; }
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    mlir::func::FuncOp funcOp = getOperation();
 
     auto funcArguments = funcOp.getArguments();
-    SmallVector<int, 8> mapResult(funcArguments.size(), -1);
+    SmallVector<int, kSmallVectorSizeEight> mapResult(funcArguments.size(), -1);
 
-    gpu::LaunchFuncOp launchFuncOp = [&]() {
-      gpu::LaunchFuncOp result;
-      funcOp.walk([&](gpu::LaunchFuncOp op) { result = op; });
+    mlir::gpu::LaunchFuncOp launchFuncOp = [&funcOp]() {
+      mlir::gpu::LaunchFuncOp result;
+      funcOp.walk([&result](mlir::gpu::LaunchFuncOp op) { result = op; });
       return result;
     }();
     if (!launchFuncOp) {

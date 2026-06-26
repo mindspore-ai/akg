@@ -69,7 +69,7 @@ void FoldMemRefSubViewOnlyPass::runOnOperation() {
   // stay intact, matching the "only fold if subview is in the chain" intent.
   llvm::SetVector<Operation *> targetSet;
   auto isReshape = [](Operation *op) { return isa<memref::CollapseShapeOp, memref::ExpandShapeOp>(op); };
-  func.walk([&](memref::SubViewOp subview) {
+  func.walk([&targetSet, &isReshape](memref::SubViewOp subview) {
     SmallVector<Operation *> queue{subview};
     while (!queue.empty()) {
       Operation *op = queue.pop_back_val();

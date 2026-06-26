@@ -37,6 +37,7 @@
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_AKGFUNCOUTLINING
@@ -46,6 +47,7 @@ namespace mlir {
 #ifndef GEN_PASS_CLASSES
 #define GEN_PASS_CLASSES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 #endif
@@ -105,7 +107,7 @@ void tryToSinkOps(Region &parallelRegion) {
   SetVector<Value> sinkCandidatesOps;
   getUsedValuesDefinedAbove(parallelRegion, sinkCandidatesOps);
   SetVector<Operation *> toBeSunk;
-  llvm::SmallPtrSet<Value, 4> availableValues;
+  llvm::SmallPtrSet<Value, kSmallVectorSizeFour> availableValues;
   for (auto opnd : sinkCandidatesOps) {
     Operation *op = opnd.getDefiningOp();
     if (op == nullptr) {
@@ -135,7 +137,7 @@ static func::FuncOp parallelRegionOutLiningImpl(const func::FuncOp &mainFunc, Op
   // Identify uses from values defined outside of the scope of parallel region
   getUsedValuesDefinedAbove(outliningOpBody, operands);
   // create the CPU.parallelLaunch func operandsType
-  SmallVector<Type, 4> newLambdaFuncTypes;
+  SmallVector<Type, kSmallVectorSizeFour> newLambdaFuncTypes;
   // the first two types is (int32, int32)
   Type llvmInt32Type = IntegerType::get(outLiningOp->getContext(), 32);
   (void)newLambdaFuncTypes.emplace_back(llvmInt32Type);
@@ -186,7 +188,7 @@ static func::FuncOp parallelRegionOutLiningImpl(const func::FuncOp &mainFunc, Op
   (void)builder.create<cf::BranchOp>(loc, clonedOutliningOpEntry);
 
   SetVector<Operation *> toBeRemoved;
-  lambdaFunc.walk([&](const scf::YieldOp op) {
+  lambdaFunc.walk([&toBeRemoved](const scf::YieldOp op) {
     if (op->getParentOfType<scf::IfOp>() || op->getParentOfType<scf::ParallelOp>() ||
         op->getParentOfType<scf::ForOp>()) {
       return;
@@ -288,7 +290,7 @@ class FuncOutlining : public impl::AKGFuncOutliningBase<FuncOutlining> {
 void FuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
   for (func::FuncOp funcOp : module.getOps<func::FuncOp>()) {
     // try to find the func, which only the one scf.Parallel
-    funcOp->walk([&](scf::ParallelOp parallelOp) {
+    funcOp->walk([this](scf::ParallelOp parallelOp) {
       hasParallel = true;
       if (parallelOp->getParentOfType<scf::ParallelOp>()) {
         isNestedParallel = true;
@@ -303,10 +305,14 @@ void FuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> 
   }
 }
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createAKGFuncOutliningPass() {
   return std::make_unique<FuncOutlining>();
 }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining) {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining) {
   return std::make_unique<FuncOutlining>(isMindSpore, isOutlining);
 }
+}  // namespace mlir

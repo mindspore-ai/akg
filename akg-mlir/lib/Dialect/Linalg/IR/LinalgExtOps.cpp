@@ -53,10 +53,12 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "akg/Dialect/Linalg/IR/LinalgExtOpsDialect.cpp.inc"
+#include "akg/Utils/Constants.h"
 
 using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::linalg;     // NOLINT(build/namespaces)
 using namespace mlir::linalgExt;  // NOLINT(build/namespaces)
+
 void mlir::linalgExt::LinalgExtDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
@@ -97,8 +99,8 @@ ParseResult GatherOp::parse(OpAsmParser &parser, OperationState &result) {
   Type dataType;
   Type indicesType;
   Type outputType;
-  SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
-  if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeThree> operands;
+  if (parser.parseOperandList(operands, /* requiredOperandCount= */ 3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
       parser.parseType(indicesType) || parser.parseComma() || parser.parseType(outputType)) {
     return failure();
@@ -132,8 +134,8 @@ ParseResult UnsortedSegmentSumOp::parse(OpAsmParser &parser, OperationState &res
   Type dataType;
   Type indicesType;
   Type outputType;
-  SmallVector<OpAsmParser::UnresolvedOperand, 3> operands;
-  if (parser.parseOperandList(operands, /*requiredOperandCount=*/3) ||
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeThree> operands;
+  if (parser.parseOperandList(operands, /* requiredOperandCount= */ 3) ||
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
       parser.parseType(indicesType) || parser.parseComma() || parser.parseType(outputType)) {
     return failure();
@@ -179,7 +181,7 @@ static LogicalResult verifyOperationAttrs(OpAsmParser &parser, OperationState &r
   if (!info) {
     return success();
   }
-  if (failed(info->verifyInherentAttrs(result.attributes, [&]() {
+  if (failed(info->verifyInherentAttrs(result.attributes, [&parser, &result, &attrsLoc]() {
         return parser.emitError(attrsLoc) << "'" << result.name.getStringRef() << "' op ";
       }))) {
     return failure();
@@ -195,8 +197,8 @@ static ParseResult parseCommonStructuredOpParts(OpAsmParser &parser, OperationSt
   SMLoc attrsLoc;
   SMLoc inputsOperandsLoc;
   SMLoc outputsOperandsLoc;
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputsOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> outputsOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeFour> inputsOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeFour> outputsOperands;
 
   if (succeeded(parser.parseOptionalLess())) {
     if (parser.parseAttribute(result.propertiesAttr) || parser.parseGreater()) {
@@ -269,8 +271,8 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange res
     return;
   }
 
-  SmallVector<Type, 4> blockArgTypes;
-  SmallVector<Location, 4> blockArgLocs;
+  SmallVector<Type, kSmallVectorSizeFour> blockArgTypes;
+  SmallVector<Location, kSmallVectorSizeFour> blockArgLocs;
   for (ValueRange container : {inputs, outputs}) {
     for (Value v : container) {
       blockArgTypes.push_back(getElementTypeOrSelf(v));
@@ -292,7 +294,7 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange res
   build(builder, result, resultTensorTypes, inputs, outputs, builder.getAffineMapArrayAttr(indexingMaps),
         // builder.getStrArrayAttr(iteratorTypes),
         builder.getArrayAttr(llvm::to_vector(llvm::map_range(iteratorTypes,
-                                                             [&](utils::IteratorType iter) -> mlir::Attribute {
+                                                             [&builder](utils::IteratorType iter) -> mlir::Attribute {
                                                                return IteratorTypeAttr::get(builder.getContext(), iter);
                                                              }))),
         doc.empty() ? StringAttr() : builder.getStringAttr(doc),
@@ -312,8 +314,8 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, ValueRange in
                        function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
                        ArrayRef<NamedAttribute> attributes) {
   build(builder, result, inputs, outputs, indexingMaps, iteratorTypes,
-        /*doc=*/"",
-        /*libraryCall=*/"", bodyBuild, attributes);
+        /* doc= */ "",
+        /* libraryCall= */ "", bodyBuild, attributes);
 }
 
 void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange resultTensorTypes, ValueRange inputs,
@@ -322,8 +324,8 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange res
                        function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
                        ArrayRef<NamedAttribute> attributes) {
   build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps, iteratorTypes,
-        /*doc=*/"",
-        /*libraryCall=*/"", bodyBuild, attributes);
+        /* doc= */ "",
+        /* libraryCall= */ "", bodyBuild, attributes);
 }
 
 void TemplateOp::print(OpAsmPrinter &p) {
@@ -334,7 +336,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
 
   llvm::StringSet<> genericAttrNamesSet;
   genericAttrNamesSet.insert(genericAttrNames.begin(), genericAttrNames.end());
-  SmallVector<NamedAttribute, 8> genericAttrs;
+  SmallVector<NamedAttribute, kSmallVectorSizeEight> genericAttrs;
   for (auto attr : (*this)->getAttrs()) {
     if (attr.getName() == getIteratorTypesAttrName()) {
       auto iteratorTypes = cast<ArrayAttr>(attr.getValue()).getAsValueRange<IteratorTypeAttr, utils::IteratorType>();
@@ -343,7 +345,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
       // attribute is represented as an array of strings.
       // Remove this conversion once tests are fixed.
       SmallVector<Attribute> iteratorTypeNames =
-        llvm::to_vector(llvm::map_range(iteratorTypes, [&](utils::IteratorType t) -> Attribute {
+        llvm::to_vector(llvm::map_range(iteratorTypes, [this](utils::IteratorType t) -> Attribute {
           return StringAttr::get(getContext(), stringifyIteratorType(t));
         }));
 
@@ -372,7 +374,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
   if (hasExtraAttrs) {
     p << " attrs = ";
     p.printOptionalAttrDict((*this)->getAttrs(),
-                            /*elidedAttrs=*/genericAttrNames);
+                            /* elidedAttrs= */ genericAttrNames);
   }
 
   // Print region.
@@ -415,8 +417,8 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   result.attributes.set(getIteratorTypesAttrName(result.name), parser.getBuilder().getArrayAttr(iteratorTypeAttrs));
 
   // Parsing is shared with named ops, except for the region.
-  SmallVector<Type, 1> inputTypes;
-  SmallVector<Type, 1> outputTypes;
+  SmallVector<Type, kSmallVectorSizeOne> inputTypes;
+  SmallVector<Type, kSmallVectorSizeOne> outputTypes;
   if (parseCommonStructuredOpParts(parser, result, inputTypes, outputTypes)) {
     return failure();
   }
@@ -438,7 +440,7 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   // outputs are specified in the result type.
   // May need to move output parsing before region parsing.
   // Need to wait for declarative assembly resolution to decide.
-  SmallVector<Type, 1> outputTensorsTypes;
+  SmallVector<Type, kSmallVectorSizeOne> outputTensorsTypes;
   if (parseNamedStructuredOpResults(parser, outputTensorsTypes)) {
     return failure();
   }

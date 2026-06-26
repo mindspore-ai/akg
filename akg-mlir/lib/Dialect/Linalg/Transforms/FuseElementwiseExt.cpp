@@ -25,16 +25,44 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DECL_LINALGELEMENTWISEFUSIONEXT
 #define GEN_PASS_DEF_LINALGELEMENTWISEFUSIONEXT
 #include "akg/Dialect/Linalg/Passes.h.inc"
+
 }  // namespace mlir
 
-using namespace llvm;          // NOLINT(build/namespaces)
-using namespace mlir;          // NOLINT(build/namespaces)
-using namespace mlir::linalg;  // NOLINT(build/namespaces)
+namespace {
+using mlir::AffineDimExpr;
+using mlir::AffineMap;
+using mlir::applyPatternsAndFoldGreedily;
+using mlir::ArrayRef;
+using mlir::cast;
+using mlir::DialectRegistry;
+using mlir::DominanceInfo;
+using mlir::dyn_cast;
+using mlir::failed;
+using mlir::failure;
+using mlir::FailureOr;
+using mlir::GreedyRewriteConfig;
+using mlir::isa;
+using mlir::kSmallVectorSizeFour;
+using mlir::LogicalResult;
+using mlir::MLIRContext;
+using mlir::Operation;
+using mlir::OpOperand;
+using mlir::OpResult;
+using mlir::OpRewritePattern;
+using mlir::PatternBenefit;
+using mlir::PatternRewriter;
+using mlir::ReassociationIndices;
+using mlir::ReassociationIndicesRef;
+using mlir::RewritePatternSet;
+using mlir::SmallVector;
+using mlir::succeeded;
+using mlir::success;
 
 /// For a given list of indices in the range of the `indexingMap` that are
 /// folded, return the indices of the corresponding domain. Return
@@ -44,7 +72,7 @@ static ReassociationIndices getDomainReassociation(AffineMap indexingMap, Reasso
   assert(indexingMap.isProjectedPermutation() && "expected projected permutation");
 
   ReassociationIndices domainReassociation =
-    llvm::to_vector<4>(llvm::map_range(rangeReassociation, [&](int64_t pos) -> int64_t {
+    llvm::to_vector<kSmallVectorSizeFour>(llvm::map_range(rangeReassociation, [&indexingMap](int64_t pos) -> int64_t {
       return cast<AffineDimExpr>(indexingMap.getResults()[pos]).getPosition();
     }));
   // The projected permutation semantics ensures that there is no repetition of
@@ -59,11 +87,11 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
   assert(!dimSequence.empty() && "expected non-empty list for dimension sequence");
   assert(indexingMap.isProjectedPermutation() && "expected indexing map to be projected permutation");
 
-  llvm::SmallDenseSet<unsigned, 4> sequenceElements;
+  llvm::SmallDenseSet<unsigned, kSmallVectorSizeFour> sequenceElements;
   sequenceElements.insert(dimSequence.begin(), dimSequence.end());
 
   unsigned dimSequenceStart = dimSequence[0];
-  for (const auto &expr : enumerate(indexingMap.getResults())) {
+  for (const auto &expr : llvm::enumerate(indexingMap.getResults())) {
     unsigned dimInMapStart = cast<AffineDimExpr>(expr.value()).getPosition();
     // 1.  Check if this start of the sequence.
     if (dimInMapStart == dimSequenceStart) {
@@ -71,7 +99,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
         return false;
       }
       // 1a. Check if sequence is preserved.
-      for (const auto &dimInSequence : enumerate(dimSequence)) {
+      for (const auto &dimInSequence : llvm::enumerate(dimSequence)) {
         unsigned dimInMap =
           cast<AffineDimExpr>(indexingMap.getResult(expr.index() + dimInSequence.index())).getPosition();
         if (dimInMap != dimInSequence.value()) {
@@ -98,7 +126,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 // collapsed to allow for fusion with the a producer that is an expand_shape
 // operation. If all dimensions created by expansion can be collapsed in the
 // iteration space then the reshape is defunct.
-// Example:
+// Example
 // ```mlir
 // #map = affine_map<(d0, d1) -> (d0, d1)>
 // %1 = tensor.expand_shape %0 [[0, 1]] : tensor<?xf32> into tensor<?x4xf32>
@@ -134,7 +162,7 @@ static bool isDimSequencePreservedV2(AffineMap indexingMap, ReassociationIndices
 // to preserve the accesses pattern. When no dimensions of the iteration
 // space are collapsible and empty vector is returned.
 static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
-  GenericOp genericOp, OpOperand *fusableOperand, ArrayRef<ReassociationIndices> reassociation) {
+  mlir::linalg::GenericOp genericOp, OpOperand *fusableOperand, ArrayRef<ReassociationIndices> reassociation) {
   // Some basic checks for this fusion to be valid.
   if (!genericOp.hasPureTensorSemantics() || genericOp.getNumDpsInits() != 1) {
     return {};
@@ -148,7 +176,7 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
   SmallVector<unsigned> reductionDims;
   genericOp.getReductionDims(reductionDims);
 
-  llvm::SmallDenseSet<unsigned, 4> processedIterationDims;
+  llvm::SmallDenseSet<unsigned, kSmallVectorSizeFour> processedIterationDims;
   AffineMap indexingMap = genericOp.getMatchingIndexingMap(fusableOperand);
   auto iteratorTypes = genericOp.getIteratorTypesArray();
   SmallVector<ReassociationIndices> iterationSpaceReassociation;
@@ -161,18 +189,20 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     }
 
     ReassociationIndices foldedIterationSpaceDims = getDomainReassociation(indexingMap, foldedRangeDims);
-
     // Check that the folded iteration dims do not contain already processed
     // dims.
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return processedIterationDims.count(dim); })) {
+    if (llvm::any_of(foldedIterationSpaceDims,
+                     [&processedIterationDims](int64_t dim) { return processedIterationDims.count(dim); })) {
       continue;
     }
     // Check that all folded iterator types are all parallel or all reductions.
-    utils::IteratorType startIteratorType = iteratorTypes[foldedIterationSpaceDims[0]];
-    if (!isParallelIterator(startIteratorType) && !isReductionIterator(startIteratorType)) {
+    mlir::utils::IteratorType startIteratorType = iteratorTypes[foldedIterationSpaceDims[0]];
+    if (!mlir::linalg::isParallelIterator(startIteratorType) && !mlir::linalg::isReductionIterator(startIteratorType)) {
       continue;
     }
-    if (llvm::any_of(foldedIterationSpaceDims, [&](int64_t dim) { return iteratorTypes[dim] != startIteratorType; })) {
+    if (llvm::any_of(foldedIterationSpaceDims, [&iteratorTypes, &startIteratorType](int64_t dim) {
+          return iteratorTypes[dim] != startIteratorType;
+        })) {
       continue;
     }
 
@@ -180,7 +210,7 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     // the folded dimensions need to be "in-order". Strictly speaking this is
     // not necessary, for reductions that are associative and commutative,  but
     // using a more strict definition of reduction for now.
-    if (isReductionIterator(startIteratorType)) {
+    if (mlir::linalg::isReductionIterator(startIteratorType)) {
       bool isContiguous = false;
       for (const auto &startDim : llvm::enumerate(reductionDims)) {
         // Move window in `reductionDims` to start of the folded iteration dims.
@@ -195,7 +225,8 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
         // Check that the contiguity is maintained.
         isContiguous = true;
         isContiguous = !std::any_of(llvm::enumerate(foldedIterationSpaceDims).begin(),
-                                    llvm::enumerate(foldedIterationSpaceDims).end(), [&](const auto &foldedDim) {
+                                    llvm::enumerate(foldedIterationSpaceDims).end(),
+                                    [&reductionDims, &startDim](const auto &foldedDim) {
                                       return reductionDims[foldedDim.index() + startDim.index()] != foldedDim.value();
                                     });
         break;
@@ -206,7 +237,7 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
     }
 
     // Check that the sequence is preserved in all indexing maps.
-    if (llvm::any_of(genericOp.getIndexingMapsArray(), [&](AffineMap indexingMap) {
+    if (llvm::any_of(genericOp.getIndexingMapsArray(), [&foldedIterationSpaceDims](AffineMap indexingMap) {
           return !isDimSequencePreservedV2(indexingMap, foldedIterationSpaceDims);
         })) {
       continue;
@@ -219,19 +250,21 @@ static SmallVector<ReassociationIndices> getCollapsableIterationSpaceDims(
   return iterationSpaceReassociation;
 }
 
-class FoldReshapeWithGenericOpByCollapsing : public OpRewritePattern<tensor::CollapseShapeOp> {
+class FoldReshapeWithGenericOpByCollapsing : public OpRewritePattern<mlir::tensor::CollapseShapeOp> {
  public:
-  FoldReshapeWithGenericOpByCollapsing(MLIRContext *context, ControlFusionFn foldReshapes, PatternBenefit benefit = 1)
-      : OpRewritePattern<tensor::CollapseShapeOp>(context, benefit), controlFoldingReshapes(std::move(foldReshapes)) {}
+  FoldReshapeWithGenericOpByCollapsing(MLIRContext *context, mlir::linalg::ControlFusionFn foldReshapes,
+                                       PatternBenefit benefit = 1)
+      : OpRewritePattern<mlir::tensor::CollapseShapeOp>(context, benefit),
+        controlFoldingReshapes(std::move(foldReshapes)) {}
 
-  LogicalResult matchAndRewrite(tensor::CollapseShapeOp collapseOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(mlir::tensor::CollapseShapeOp collapseOp, PatternRewriter &rewriter) const override {
     // Fold only if all constraints of fusing with reshape by expansion are met.
     auto producerResult = dyn_cast<OpResult>(collapseOp.getSrc());
     if (!producerResult) {
       return rewriter.notifyMatchFailure(collapseOp, "source not produced by an operation");
     }
 
-    auto genericOp = dyn_cast<GenericOp>(producerResult.getOwner());
+    auto genericOp = dyn_cast<mlir::linalg::GenericOp>(producerResult.getOwner());
     if (!genericOp) {
       return rewriter.notifyMatchFailure(collapseOp, "producer not a generic op");
     }
@@ -250,10 +283,9 @@ class FoldReshapeWithGenericOpByCollapsing : public OpRewritePattern<tensor::Col
   }
 
  private:
-  ControlFusionFn controlFoldingReshapes;
+  mlir::linalg::ControlFusionFn controlFoldingReshapes;
 };
 
-namespace {
 static bool checkFusedOpDominateAllProducerUsers(Operation *fusedOp, Operation *producer, DominanceInfo &domInfo) {
   for (auto res : producer->getResults()) {
     for (auto user : res.getUsers()) {
@@ -275,7 +307,7 @@ static bool CheckIfMatchDominateInSimplePattern0(Operation *fusedOp, Operation *
     return false;
   }
   // if op is "ReturnOp" or dominated by fusedOp, order-preserving can be tried here.
-  if (isa<func::ReturnOp>(op) || domInfo.properlyDominates(fusedOp, op)) {
+  if (isa<mlir::func::ReturnOp>(op) || domInfo.properlyDominates(fusedOp, op)) {
     return true;
   }
   // check op's user
@@ -283,17 +315,17 @@ static bool CheckIfMatchDominateInSimplePattern0(Operation *fusedOp, Operation *
   return CheckIfMatchDominateInSimplePattern0(fusedOp, userOp, domInfo);
 }
 
-// convert:
+// convert
 //  "A-------->B-------->C-------->ReturnOp"
 //                            |
 //                         fusedOp
-// to:
+// to
 //  "A-------->B-------->C-------->ReturnOp"
 //       |
 //    fusedOp
 static bool TryingtToPreserveOrderInSimplePattern0(Operation *fusedOp, Operation *op, DominanceInfo &domInfo) {
   Operation *userOp = *(op->getResults()[0].getUsers().begin());
-  if (isa<func::ReturnOp>(userOp) || domInfo.properlyDominates(fusedOp, userOp)) {
+  if (isa<mlir::func::ReturnOp>(userOp) || domInfo.properlyDominates(fusedOp, userOp)) {
     op->moveBefore(userOp);
     return true;
   }
@@ -304,15 +336,16 @@ static bool TryingtToPreserveOrderInSimplePattern0(Operation *fusedOp, Operation
   return false;
 }
 
-class FuseElementwiseOpsExt : public OpRewritePattern<GenericOp> {
+class FuseElementwiseOpsExt : public OpRewritePattern<mlir::linalg::GenericOp> {
  public:
-  FuseElementwiseOpsExt(MLIRContext *context, ControlFusionFn fun, DominanceInfo &domInfo, PatternBenefit benefit = 1)
-      : OpRewritePattern<GenericOp>(context, benefit), controlFn(std::move(fun)), domInfo(domInfo) {}
+  FuseElementwiseOpsExt(MLIRContext *context, mlir::linalg::ControlFusionFn fun, DominanceInfo &domInfo,
+                        PatternBenefit benefit = 1)
+      : OpRewritePattern<mlir::linalg::GenericOp>(context, benefit), controlFn(std::move(fun)), domInfo(domInfo) {}
 
-  LogicalResult matchAndRewrite(GenericOp genericOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(mlir::linalg::GenericOp genericOp, PatternRewriter &rewriter) const override {
     // Find the first operand that is defined by another generic op on tensors.
     for (OpOperand &opOperand : genericOp->getOpOperands()) {
-      if (!areElementwiseOpsFusable(&opOperand)) {
+      if (!mlir::linalg::areElementwiseOpsFusable(&opOperand)) {
         continue;
       }
 
@@ -320,7 +353,8 @@ class FuseElementwiseOpsExt : public OpRewritePattern<GenericOp> {
         continue;
       }
 
-      FailureOr<linalg::ElementwiseOpFusionResult> fusionResult = fuseElementwiseOps(rewriter, &opOperand);
+      FailureOr<mlir::linalg::ElementwiseOpFusionResult> fusionResult =
+        mlir::linalg::fuseElementwiseOps(rewriter, &opOperand);
       if (succeeded(fusionResult)) {
         Operation *fusedOp = fusionResult->fusedOp;
         // 1 replace old consumer: Risk-free replacement
@@ -347,11 +381,12 @@ class FuseElementwiseOpsExt : public OpRewritePattern<GenericOp> {
   }
 
  private:
-  ControlFusionFn controlFn;
+  mlir::linalg::ControlFusionFn controlFn;
   DominanceInfo &domInfo;
 };
 
-struct LinalgElementwiseFusionExtPass : public impl::LinalgElementwiseFusionExtBase<LinalgElementwiseFusionExtPass> {
+struct LinalgElementwiseFusionExtPass
+    : public mlir::impl::LinalgElementwiseFusionExtBase<LinalgElementwiseFusionExtPass> {
   LinalgElementwiseFusionExtPass() : LinalgElementwiseFusionExtBase() {
     // alwayTrueControlFn as default ControlFn
     controlFn = [](OpOperand *fusedOperand) {
@@ -371,8 +406,8 @@ struct LinalgElementwiseFusionExtPass : public impl::LinalgElementwiseFusionExtB
     auto &domInfo = getAnalysis<DominanceInfo>();
     (void)patterns.add<FuseElementwiseOpsExt>(context, controlFn, domInfo);
     // Add the patterns that clean up dead operands and results.
-    populateEraseUnusedOperandsAndResultsPatterns(patterns);
-    populateFoldReshapeOpsByExpansionPatterns(patterns, controlFn);
+    mlir::linalg::populateEraseUnusedOperandsAndResultsPatterns(patterns);
+    mlir::linalg::populateFoldReshapeOpsByExpansionPatterns(patterns, controlFn);
     (void)applyPatternsAndFoldGreedily(op, std::move(patterns), grc);
 
     RewritePatternSet patterns1(context);
@@ -381,11 +416,13 @@ struct LinalgElementwiseFusionExtPass : public impl::LinalgElementwiseFusionExtB
   }
 
  private:
-  ControlFusionFn controlFn;
+  mlir::linalg::ControlFusionFn controlFn;
 };
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> mlir::createLinalgElementwiseFusionExtPass() {
+namespace mlir {
+std::unique_ptr<Pass> createLinalgElementwiseFusionExtPass() {
   return std::make_unique<LinalgElementwiseFusionExtPass>();
 }
+}  // namespace mlir

@@ -32,6 +32,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_REDUCTIONSIBLINGRECOMPUTE
@@ -39,6 +40,7 @@ namespace mlir {
 #ifndef GEN_PASS_DECL_REDUCTIONSIBLINGRECOMPUTE
 #define GEN_PASS_DECL_REDUCTIONSIBLINGRECOMPUTE
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
@@ -384,7 +386,7 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   if (!visitingValues.insert(value).second) {
     return {};
   }
-  auto guard = llvm::make_scope_exit([&] { visitingValues.erase(value); });
+  auto guard = llvm::make_scope_exit([&visitingValues, &value] { visitingValues.erase(value); });
 
   Operation *defOp = value.getDefiningOp();
   if ((defOp == nullptr) || !isSupportedCloneOp(defOp)) {
@@ -438,7 +440,7 @@ void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLo
   SmallVector<affine::AffineStoreOp> traceStores;
 
   // Walk all ops including nested inner loops to find candidate loads and stores.
-  childLoop.walk([&](Operation *opPtr) {
+  childLoop.walk([this, &candidateLoads, &traceStores](Operation *opPtr) {
     if (auto loadOp = dyn_cast<affine::AffineLoadOp>(opPtr)) {
       Value memref = loadOp.getMemRef();
       if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref) &&
@@ -573,7 +575,7 @@ void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
   }
 
   SmallVector<Operation *> worklist;
-  llvm::SmallPtrSet<Operation *, 16> erased;
+  llvm::SmallPtrSet<Operation *, kSmallVectorSizeSixteen> erased;
   worklist.push_back(startOp);
 
   while (!worklist.empty()) {
@@ -601,9 +603,9 @@ void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
 // walk() uses PostOrder by default, so inner dead loops are erased before outer ones.
 void ReductionSiblingRecomputePass::eraseDeadLoops(func::FuncOp func) {
   SmallVector<affine::AffineForOp> deadLoops;
-  func.walk([&](affine::AffineForOp forOp) {
+  func.walk([&deadLoops](affine::AffineForOp forOp) {
     bool hasSideEffect = false;
-    forOp.walk([&](Operation *inner) -> WalkResult {
+    forOp.walk([&forOp, &hasSideEffect](Operation *inner) -> WalkResult {
       if (inner == forOp.getOperation()) {
         return WalkResult::advance();
       }
@@ -634,7 +636,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
   scanInfo.retainedMemrefs.clear();
 
   // Collect allocs and identify reduce output memrefs across the entire function.
-  func.walk([&](Operation *op) {
+  func.walk([this](Operation *op) {
     if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
       scanInfo.allocs.push_back(allocOp);
     } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
@@ -651,7 +653,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
 
   // Identify retained local allocs: those reachable from return values
   // (directly or through view-like ops) that must not be eliminated.
-  func.walk([&](func::ReturnOp returnOp) {
+  func.walk([this](func::ReturnOp returnOp) {
     for (Value retVal : returnOp.getOperands()) {
       Value underlying = traceToAlloc(retVal);
       if (FuncScanInfo::isLocalAlloc(underlying)) {
@@ -669,7 +671,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
   processSiblingLoops(func.getBody().front(), rewrittenMemrefs, toErase);
 
   if (!toErase.empty()) {
-    llvm::SmallPtrSet<Operation *, 4> seen;
+    llvm::SmallPtrSet<Operation *, kSmallVectorSizeFour> seen;
     for (Operation *op : toErase) {
       if ((op != nullptr) && seen.insert(op).second) {
         op->erase();

@@ -36,6 +36,7 @@
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "symengine/expression.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_INFERSYMBOLICSHAPES
@@ -43,6 +44,7 @@ namespace mlir {
 #define GEN_PASS_DECL_INFERSYMBOLICSHAPES
 #define GEN_PASS_DEF_INFERSYMBOLICSHAPES
 #include "akg/Transforms/Passes.h.inc"
+
 #endif
 #endif
 }  // namespace mlir
@@ -168,7 +170,7 @@ static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llv
   // Scenario 1.1: ShortShape's dims are all '1'
   // (n, m) + (1) => (n, m)
   // (n, m, k) + (1, 1) => (n, m, k)
-  auto isShortShapeAllOne = [&](const llvm::SmallVector<std::string> &shortShape) -> bool {
+  auto isShortShapeAllOne = [](const llvm::SmallVector<std::string> &shortShape) -> bool {
     return !std::any_of(shortShape.begin(), shortShape.end(),
                         [](const std::string &u) { return u != std::string("1"); });
   };
@@ -834,8 +836,8 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
 
 void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-  llvm::SmallVector<Type, 2> newInTys;
-  llvm::SmallVector<Type, 2> newResTys;
+  llvm::SmallVector<Type, kSmallVectorSizeTwo> newInTys;
+  llvm::SmallVector<Type, kSmallVectorSizeTwo> newResTys;
 
   // func parameters
   Block &entryBlock = func.getBody().front();
@@ -890,7 +892,7 @@ void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
     }
   }
   // func return
-  func.walk([&](func::ReturnOp op) {
+  func.walk([&func, &isFinalInference, &newResTys, &analysis](func::ReturnOp op) {
     uint64_t i = 0;
     for (mlir::Value opnd : op.getOperation()->getOperands()) {
       if (isFinalInference) {
@@ -968,7 +970,7 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
     akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
     std::map<size_t, akgglobal::ShapeInfo> hostShapes = {};
 
-    auto convertToShapeInfo = [&](std::optional<llvm::SmallVector<std::string>> symShape) -> akgglobal::ShapeInfo {
+    auto convertToShapeInfo = [](std::optional<llvm::SmallVector<std::string>> symShape) -> akgglobal::ShapeInfo {
       akgglobal::ShapeInfo record;
       if (symShape.has_value()) {
         std::copy((*symShape).begin(), (*symShape).end(), std::back_inserter(record));
@@ -991,7 +993,7 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
 
     // 2. init outputs and indices
     std::unordered_set<size_t> outputIndices;
-    func.walk([&](func::ReturnOp op) {
+    func.walk([&func, &hostShapes, &analysis, &convertToShapeInfo, &outputIndices, &tool](func::ReturnOp op) {
       for (mlir::Value opnd : op.getOperation()->getOperands()) {
         // Only process memref/tensor types, use empty ShapeInfo for scalar types
         auto outIdx = hostShapes.size();
@@ -1012,4 +1014,6 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::Pass> mlir::createInferSymbolicShapesPass() { return std::make_unique<InferSymbolicShapes>(); }
+namespace mlir {
+std::unique_ptr<mlir::Pass> createInferSymbolicShapesPass() { return std::make_unique<InferSymbolicShapes>(); }
+}  // namespace mlir

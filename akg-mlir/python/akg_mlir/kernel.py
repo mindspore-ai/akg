@@ -96,8 +96,10 @@ class Kernel:
         os.makedirs(work_dir, exist_ok=True)
 
         kernel_bin_name = f"lib{self.kernel_name}.so" if self.dynamic else f"{self.kernel_name}.o"
+        compile_bin_name = f"{self.kernel_name}.so" if self.dynamic else kernel_bin_name
         input_file = os.path.join(work_dir, f"{self.kernel_name}.mlir")
         binary_file = os.path.join(work_dir, kernel_bin_name)
+        compile_output_file = os.path.join(work_dir, compile_bin_name)
 
         if need_compile:
             self._write_mlir(input_mlir, input_file)
@@ -106,7 +108,7 @@ class Kernel:
             try:
                 ascend_compile(
                     input_file=input_file,
-                    output_file=binary_file,
+                    output_file=compile_output_file,
                     dyn_shape=self.dynamic,
                     arch=self.arch,
                     dump_ir=debug,

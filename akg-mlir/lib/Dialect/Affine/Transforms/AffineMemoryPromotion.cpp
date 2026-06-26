@@ -30,21 +30,43 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AFFINEMEMORYPROMOTION
 #define GEN_PASS_DECL_AFFINEMEMORYPROMOTION
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "affine-memory-promotion"
 
-using namespace mlir;       // NOLINT(build/namespaces)
-using namespace mlir::akg;  // NOLINT(build/namespaces)
-
 namespace {
+using mlir::applyOpPatternsAndFold;
+using mlir::Block;
+using mlir::cast;
+using mlir::CommonUtils;
+using mlir::DenseSet;
+using mlir::dyn_cast;
+using mlir::FrozenRewritePatternSet;
+using mlir::GreedyRewriteConfig;
+using mlir::GreedyRewriteStrictness;
+using mlir::isa;
+using mlir::kGlobalCache;
+using mlir::kSmallVectorSizeFour;
+using mlir::kTargetCuda;
+using mlir::MemRefType;
+using mlir::OpBuilder;
+using mlir::Operation;
+using mlir::OperationPass;
+using mlir::ReduceDirection;
+using mlir::RewritePatternSet;
+using mlir::SmallVector;
+using mlir::SmallVectorImpl;
+using mlir::TypedValue;
+using mlir::Value;
 constexpr auto kPrivateCacheLevel = 5;
-struct AKGMemoryPromotion : public impl::AffineMemoryPromotionBase<AKGMemoryPromotion> {
+struct AKGMemoryPromotion : public mlir::impl::AffineMemoryPromotionBase<AKGMemoryPromotion> {
   AKGMemoryPromotion() {}
   explicit AKGMemoryPromotion(std::string target) : target(std::move(target)) {}
 
@@ -55,7 +77,7 @@ struct AKGMemoryPromotion : public impl::AffineMemoryPromotionBase<AKGMemoryProm
   [[nodiscard]] unsigned AutoSetPromoteSpace() const;
   void RemoveGlobalTempBuffer();
   bool DirectlyPromoteGlobalTempBuffer();
-  Value MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Operation *> &toErase,
+  Value MemFlowRemoval(mlir::memref::AllocOp memSrc, SmallVector<Operation *> &toErase,
                        SmallVector<Operation *> &toReplace) const;
 
   [[nodiscard]] DenseSet<Operation *> RemoveEmptyCopyNests(const DenseSet<Operation *> &copyNests) const;
@@ -86,34 +108,34 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
 
   uint64_t fastMemCapacityBytes =
     fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * 1024 : fastMemoryCapacity;
-  affine::AffineCopyOptions copyOptions = {generateDma, slowMemorySpace, fastMemorySpace, tagMemorySpace,
-                                           fastMemCapacityBytes};
+  mlir::affine::AffineCopyOptions copyOptions = {generateDma, slowMemorySpace, fastMemorySpace, tagMemorySpace,
+                                                 fastMemCapacityBytes};
 
   // Every affine.for op in the block starts and ends a block range for copying;
   // in addition, a contiguous sequence of operations starting with a
   // load/store op but not including any copy nests themselves is also
   // identified as a copy block range. Straightline code (a contiguous chunk of
-  // operations excluding affine::AffineForOp's) are always assumed to not exhaust
+  // operations excluding mlir::affine::AffineForOp's) are always assumed to not exhaust
   // memory. As a result, this approach is conservative in some cases at the
   // moment; we do a check later and report an error with location info.
 
-  auto canBePromoted = [&](Operation &op) {
+  auto canBePromoted = [&copyNests](Operation &op) {
     if (copyNests.count(&op) != 0) {
       return false;
     }
     // An 'affine.if' operation is being treated similar to an
     // operation. 'affine.if''s could have 'affine.for's in them;
     // treat them separately.
-    if (auto ifOp = dyn_cast<affine::AffineIfOp>(op)) {
+    if (auto ifOp = dyn_cast<mlir::affine::AffineIfOp>(op)) {
       bool valid = true;
-      ifOp->walk([&](Operation *forOp) {
-        if (isa<affine::AffineForOp>(forOp)) {
+      ifOp->walk([&valid](Operation *forOp) {
+        if (isa<mlir::affine::AffineForOp>(forOp)) {
           valid = false;
         }
       });
       return valid;
     }
-    return isa<affine::AffineLoadOp, affine::AffineStoreOp, affine::AffineForOp>(op);
+    return isa<mlir::affine::AffineLoadOp, mlir::affine::AffineStoreOp, mlir::affine::AffineForOp>(op);
   };
 
   // Get to the first load, store, or for op (that is not a copy nest itself).
@@ -122,15 +144,15 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
   // Create [begin, end) ranges.
   auto it = curBegin;
   while (it != block->end()) {
-    affine::AffineForOp forOp;
+    mlir::affine::AffineForOp forOp;
     // If you hit a non-copy for loop, we will split there.
-    if ((forOp = dyn_cast<affine::AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
+    if ((forOp = dyn_cast<mlir::affine::AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
       // Perform the copying up unti this 'for' op first.
-      (void)affine::affineDataCopyGenerate(curBegin, it, copyOptions, std::nullopt, copyNests);
+      (void)mlir::affine::affineDataCopyGenerate(curBegin, it, copyOptions, std::nullopt, copyNests);
 
       // Returns true if the footprint is known to exceed capacity.
-      auto exceedsCapacity = [&](affine::AffineForOp forOp) {
-        std::optional<int64_t> footprint = getMemoryFootprintBytes(forOp, 0);
+      auto exceedsCapacity = [&fastMemCapacityBytes](mlir::affine::AffineForOp forOp) {
+        std::optional<int64_t> footprint = mlir::affine::getMemoryFootprintBytes(forOp, 0);
         return (footprint.has_value() && static_cast<uint64_t>(*footprint) > fastMemCapacityBytes);
       };
 
@@ -151,7 +173,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
         runOnBlock(forOp.getBody(), copyNests, curDepth);
       } else {
         // todo(baiji): sometimes there is nullptr in copyNest and don't know why,
-        // so remove them before doing affine::affineDataCopyGenerate for now.
+        // so remove them before doing mlir::affine::affineDataCopyGenerate for now.
         copyNests = RemoveEmptyCopyNests(copyNests);
         // We have enough capacity, i.e., copies will be computed for the
         // portion of the block until 'it', and for 'it', which is 'forOp'. Note
@@ -161,7 +183,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
         // Inner loop copies have their own scope - we don't thus update
         // consumed capacity. The footprint check above guarantees this inner
         // loop's footprint fits.
-        (void)affine::affineDataCopyGenerate(it, std::next(it), copyOptions, std::nullopt, copyNests);
+        (void)mlir::affine::affineDataCopyGenerate(it, std::next(it), copyOptions, std::nullopt, copyNests);
       }
       // Get to the next load or store op after 'forOp'.
       curBegin = std::find_if(std::next(it), block->end(), canBePromoted);
@@ -176,9 +198,9 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
   // Generate the copy for the final block range.
   if (curBegin != block->end()) {
     // Can't be a terminator because it would have been skipped above.
-    assert(!curBegin->hasTrait<OpTrait::IsTerminator>() && "can't be a terminator");
+    assert(!curBegin->hasTrait<mlir::OpTrait::IsTerminator>() && "can't be a terminator");
     // Exclude the affine.yield - hence, the std::prev.
-    (void)affine::affineDataCopyGenerate(curBegin, std::prev(block->end()), copyOptions, std::nullopt, copyNests);
+    (void)mlir::affine::affineDataCopyGenerate(curBegin, std::prev(block->end()), copyOptions, std::nullopt, copyNests);
   }
 }
 
@@ -188,11 +210,11 @@ void AKGMemoryPromotion::runOnOperation() {
     llvm::outs() << "No need promotion. exit.\n";
     return;
   }
-  func::FuncOp f = getOperation();
+  mlir::func::FuncOp f = getOperation();
   OpBuilder topBuilder(f.getBody());
-  zeroIndex = topBuilder.create<arith::ConstantIndexOp>(f.getLoc(), 0);
+  zeroIndex = topBuilder.create<mlir::arith::ConstantIndexOp>(f.getLoc(), 0);
 
-  // Nests that are copy-in's or copy-out's; the root affine::AffineForOps of those
+  // Nests that are copy-in's or copy-out's; the root mlir::affine::AffineForOps of those
   // nests are stored herein.
   DenseSet<Operation *> copyNests;
 
@@ -208,14 +230,14 @@ void AKGMemoryPromotion::runOnOperation() {
 
   // Promote any single iteration loops in the copy nests and collect
   // load/stores to simplify.
-  SmallVector<Operation *, 4> copyOps;
+  SmallVector<Operation *, kSmallVectorSizeFour> copyOps;
   for (Operation *nest : copyNests) {
     // With a post order walk, the erasure of loops does not affect
     // continuation of the walk or the collection of load/store ops.
-    nest->walk([&](Operation *op) {
-      if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
-        (void)promoteIfSingleIteration(forOp);
-      } else if (isa<affine::AffineLoadOp, affine::AffineStoreOp>(op)) {
+    nest->walk([&copyOps](Operation *op) {
+      if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(op)) {
+        (void)mlir::affine::promoteIfSingleIteration(forOp);
+      } else if (isa<mlir::affine::AffineLoadOp, mlir::affine::AffineStoreOp>(op)) {
         copyOps.push_back(op);
       }
     });
@@ -225,8 +247,8 @@ void AKGMemoryPromotion::runOnOperation() {
   // contained load's/store's, and the latter could anyway also be
   // canonicalized.
   RewritePatternSet patterns(&getContext());
-  affine::AffineLoadOp::getCanonicalizationPatterns(patterns, &getContext());
-  affine::AffineStoreOp::getCanonicalizationPatterns(patterns, &getContext());
+  mlir::affine::AffineLoadOp::getCanonicalizationPatterns(patterns, &getContext());
+  mlir::affine::AffineStoreOp::getCanonicalizationPatterns(patterns, &getContext());
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
   config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
@@ -236,12 +258,12 @@ void AKGMemoryPromotion::runOnOperation() {
 }
 /// --------------todo(baiji): END COPY FROM AffineDataCopyGeneration.cpp ---------------------
 
-Value AKGMemoryPromotion::MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Operation *> &toErase,
+Value AKGMemoryPromotion::MemFlowRemoval(mlir::memref::AllocOp memSrc, SmallVector<Operation *> &toErase,
                                          SmallVector<Operation *> &toReplace) const {
   Value memDest;
   for (auto user : memSrc->getUsers()) {
     if (user->use_empty()) {
-      if (dyn_cast<affine::AffineStoreOp>(user)) {
+      if (dyn_cast<mlir::affine::AffineStoreOp>(user)) {
         toReplace.push_back(user);
         continue;
       }
@@ -288,11 +310,12 @@ void AKGMemoryPromotion::RemoveGlobalTempBuffer() {
     }
     for (auto user : toReplace) {
       bool isFastMemToGlobal = false;
-      getOperation()->walk([&](affine::AffineLoadOp load) {
+      getOperation()->walk([&isFastMemToGlobal, &user, &tempFastMem](mlir::affine::AffineLoadOp load) {
         isFastMemToGlobal =
-          isFastMemToGlobal || std::any_of(load->getUsers().begin(), load->getUsers().end(), [&](Operation *loadUser) {
-            return loadUser == user && tempFastMem == load.getMemref();
-          });
+          isFastMemToGlobal || std::any_of(load->getUsers().begin(), load->getUsers().end(),
+                                           [&user, &tempFastMem, &load](Operation *loadUser) {
+                                             return loadUser == user && tempFastMem == load.getMemref();
+                                           });
       });
 
       if (isFastMemToGlobal) {
@@ -363,7 +386,7 @@ bool AKGMemoryPromotion::AutoSetPromoteDepth() {
   int lastRedAxisDepth = -1;
   int currDepth = 0;
   // walk from inner to outer ?
-  getOperation()->walk([&](affine::AffineForOp forOp) {
+  getOperation()->walk([this, &lastRedAxisDepth, &currDepth](mlir::affine::AffineForOp forOp) {
     if (lastRedAxisDepth == -1 && CommonUtils::isReduceAxis(getOperation(), forOp)) {
       lastRedAxisDepth = currDepth;
     }
@@ -388,9 +411,13 @@ bool AKGMemoryPromotion::AutoSetPromoteDepth() {
   return true;
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAffineMemoryPromotionPass(const std::string &target) {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::func::FuncOp>> createAffineMemoryPromotionPass(const std::string &target) {
   return std::make_unique<AKGMemoryPromotion>(target);
 }
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAffineMemoryPromotionPass() {
+}  // namespace mlir
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::func::FuncOp>> createAffineMemoryPromotionPass() {
   return std::make_unique<AKGMemoryPromotion>();
 }
+}  // namespace mlir

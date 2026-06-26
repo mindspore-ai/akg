@@ -54,7 +54,7 @@ struct CopyAttributesToGpuPass : public CopyAttributesToGpuBase<CopyAttributesTo
 void CopyAttributesToGpuPass::runOnOperation() {
   Operation *gpuFuncOp = nullptr;
   Operation *funcOp = nullptr;
-  getOperation()->walk([&](Operation *op) {
+  getOperation()->walk([&gpuFuncOp, &funcOp](Operation *op) {
     if (isa<gpu::GPUFuncOp>(op)) {
       gpuFuncOp = op;
     } else if (isa<mlir::func::FuncOp>(op)) {
@@ -74,4 +74,6 @@ void CopyAttributesToGpuPass::runOnOperation() {
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createCopyAttributesToGpuPass() { return std::make_unique<CopyAttributesToGpuPass>(); }
+namespace mlir {
+std::unique_ptr<Pass> createCopyAttributesToGpuPass() { return std::make_unique<CopyAttributesToGpuPass>(); }
+}  // namespace mlir

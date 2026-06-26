@@ -95,7 +95,7 @@ class ParallelLaunch : public impl::AKGParallelLaunchBase<ParallelLaunch> {
 void ParallelLaunch::addFuncConversion(LLVM::LLVMFuncOp &mainFunc,
                                        SmallVector<LLVM::LLVMFuncOp> &calculateFuncs) const {
   SmallVector<CPU::ParallelLaunchOp> CPUParallelLaunchOps;
-  mainFunc.walk([&](CPU::ParallelLaunchOp op) { CPUParallelLaunchOps.push_back(op); });
+  mainFunc.walk([&CPUParallelLaunchOps](CPU::ParallelLaunchOp op) { CPUParallelLaunchOps.push_back(op); });
 
   if (CPUParallelLaunchOps.empty()) {
     return;
@@ -136,10 +136,14 @@ void ParallelLaunch::identifyFuncs(ModuleOp &moduleOp, LLVM::LLVMFuncOp &mainFun
   }
 }
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGParallelLaunchPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createAKGParallelLaunchPass() {
   return std::make_unique<ParallelLaunch>();
 }
+}  // namespace mlir
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> mlir::createAKGParallelLaunchPass(bool isMindSpore, bool isOutlining) {
+namespace mlir {
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createAKGParallelLaunchPass(bool isMindSpore, bool isOutlining) {
   return std::make_unique<ParallelLaunch>(isMindSpore, isOutlining);
 }
+}  // namespace mlir

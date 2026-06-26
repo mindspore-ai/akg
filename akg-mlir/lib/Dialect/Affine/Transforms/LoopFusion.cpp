@@ -52,11 +52,13 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_AKGLOOPFUSION
 #define GEN_PASS_DECL_AKGLOOPFUSION
 #include "akg/Dialect/Affine/Passes.h.inc"
+
 }  // namespace mlir
 
 #define DEBUG_TYPE "akg-loop-fusion"
@@ -172,9 +174,9 @@ SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(Value v) {
 // Collect dim operations from affine.for loop bounds and group them by axis.
 void AKGLoopFusion::collectDimOperationsFromLoops(func::FuncOp funcOp,
                                                   llvm::StringMap<SmallVector<Value>> &axisToDimValues) {
-  funcOp.walk([&](affine::AffineForOp forOp) {
+  funcOp.walk([this, &axisToDimValues](affine::AffineForOp forOp) {
     // Process a single operand from loop bounds
-    auto processBoundOperand = [&](Value operand) {
+    auto processBoundOperand = [this, &axisToDimValues](Value operand) {
       auto *defOp = operand.getDefiningOp();
 
       if (defOp && isa<memref::DimOp>(defOp)) {
@@ -432,9 +434,9 @@ void AKGLoopFusion::runPostProcess() {
 void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
   OpBuilder builder(funcOp.getContext());
   // Step 1: Collect reduction loops from reduction_axes on reduction ops
-  llvm::SmallSet<Operation *, 8> reductionLoops;
+  llvm::SmallSet<Operation *, kSmallVectorSizeEight> reductionLoops;
   if (CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reduction) {
-    funcOp.walk([&](Operation *op) {
+    funcOp.walk([this, &builder, &reductionLoops](Operation *op) {
       if (!op->hasAttr(kReductionTypeStr)) {
         return;
       }
@@ -443,7 +445,7 @@ void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
         return;
       }
 
-      SmallVector<affine::AffineForOp, 4> enclosingLoops;
+      SmallVector<affine::AffineForOp, kSmallVectorSizeFour> enclosingLoops;
       affine::getAffineForIVs(*op, &enclosingLoops);
 
       for (auto axis : axesAttr) {
@@ -459,7 +461,7 @@ void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
   }
 
   // Step 2: Collect broadcast loops via analysis
-  llvm::SmallSet<Operation *, 8> broadcastLoops;
+  llvm::SmallSet<Operation *, kSmallVectorSizeEight> broadcastLoops;
   CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
   for (auto *loop : broadcastLoops) {
     // Skip if this axis is a reduction axis

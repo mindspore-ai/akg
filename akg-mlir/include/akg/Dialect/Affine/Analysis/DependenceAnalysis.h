@@ -24,6 +24,7 @@
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Value.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 namespace akg {
@@ -37,9 +38,9 @@ struct Node {
   // The top-level statement which is (or contains) a load/store.
   Operation *op;
   // List of load operations.
-  SmallVector<Operation *, 4> loads;
+  SmallVector<Operation *, kSmallVectorSizeFour> loads;
   // List of store op insts.
-  SmallVector<Operation *, 4> stores;
+  SmallVector<Operation *, kSmallVectorSizeFour> stores;
   Node(unsigned id, Operation *op) : id(id), op(op) {}
 
   unsigned getLoadOpCount(Value memref) const;
@@ -75,9 +76,9 @@ struct MemRefDependenceGraph {
   // Map from node id to Node.
   DenseMap<unsigned, Node> nodes;
   // Map from node id to list of input edges.
-  DenseMap<unsigned, SmallVector<Edge, 2>> inEdges;
+  DenseMap<unsigned, SmallVector<Edge, kSmallVectorSizeTwo>> inEdges;
   // Map from node id to list of output edges.
-  DenseMap<unsigned, SmallVector<Edge, 2>> outEdges;
+  DenseMap<unsigned, SmallVector<Edge, kSmallVectorSizeTwo>> outEdges;
   // Map from memref to a count on the dependence edges associated with that
   // memref.
   DenseMap<Value, unsigned> memrefEdgeCount;

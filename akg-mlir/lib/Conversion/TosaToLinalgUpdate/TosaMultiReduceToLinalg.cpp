@@ -38,15 +38,15 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "akg/Utils/Constants.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_TOSAMULTIREDUCETOLINALG
 #define GEN_PASS_DEF_TOSAMULTIREDUCETOLINALG
 #include "akg/Conversion/Passes.h.inc"
+
 #endif
 }  // namespace mlir
-
-using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace mlir {
 namespace tosa {
@@ -61,27 +61,32 @@ bool IsTosaReduceOp(Operation *redOp) {
 
 size_t valueUsageCount(Value v, func::FuncOp funcOp) {
   size_t cnt = 0;
-  funcOp.walk([&](Operation *op) {
+  funcOp.walk([&cnt, &v](Operation *op) {
     auto operands = op->getOperands();
-    cnt += (size_t)std::count_if(operands.begin(), operands.end(), [&v](const Value operand) { return operand == v; });
+    cnt += static_cast<size_t>(
+      std::count_if(operands.begin(), operands.end(), [&v](const Value operand) { return operand == v; }));
   });
   return cnt;
 }
 
-void findNextRedOp(size_t currIdx, size_t groupNum, const SmallVector<Operation *, kVectorSizeEight> &redOpList,
-                   SmallVector<bool, kVectorSizeEight> &usedRedOps,
-                   SmallVector<SmallVector<Operation *, kVectorSizeEight>, kVectorSizeEight> &redOpsGroups,
-                   func::FuncOp funcOp) {
-  if (currIdx == redOpList.size()) {
+struct RedOpGroupContext {
+  const SmallVector<Operation *, kVectorSizeEight> &redOpList;
+  SmallVector<bool, kVectorSizeEight> &usedRedOps;
+  SmallVector<SmallVector<Operation *, kVectorSizeEight>, kVectorSizeEight> &redOpsGroups;
+  func::FuncOp funcOp;
+};
+
+void findNextRedOp(size_t currIdx, size_t groupNum, RedOpGroupContext &ctx) {
+  if (currIdx == ctx.redOpList.size()) {
     return;
   }
-  redOpsGroups[groupNum].push_back(redOpList[currIdx]);
-  usedRedOps[currIdx] = true;
-  for (size_t i = currIdx + 1; i < redOpList.size(); i++) {
-    if (redOpList[i]->getOperands()[0] == redOpList[currIdx]->getResults()[0] &&
-        redOpList[i]->getName() == redOpList[currIdx]->getName() &&
-        valueUsageCount(redOpList[currIdx]->getResults()[0], funcOp) == 1) {
-      findNextRedOp(i, groupNum, redOpList, usedRedOps, redOpsGroups, funcOp);
+  ctx.redOpsGroups[groupNum].push_back(ctx.redOpList[currIdx]);
+  ctx.usedRedOps[currIdx] = true;
+  for (size_t i = currIdx + 1; i < ctx.redOpList.size(); i++) {
+    if (ctx.redOpList[i]->getOperands()[0] == ctx.redOpList[currIdx]->getResults()[0] &&
+        ctx.redOpList[i]->getName() == ctx.redOpList[currIdx]->getName() &&
+        valueUsageCount(ctx.redOpList[currIdx]->getResults()[0], ctx.funcOp) == 1) {
+      findNextRedOp(i, groupNum, ctx);
     }
   }
 }
@@ -117,11 +122,11 @@ static TypedAttr getReduceIntInit(Operation *op, Type elementTy, PatternRewriter
   if (isa<tosa::ReduceMaxOp>(op) || isa<tosa::ArgMaxOp>(op)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(width));
   }
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(kBoolBitWidth));
   }
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
-    return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
+    return rewriter.getIntegerAttr(elementTy, APInt::getZero(kBoolBitWidth));
   }
   return {};
 }
@@ -167,10 +172,10 @@ static Value getReduceIntBody(Operation *op, Location loc, ValueRange args, Type
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
   }
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1)) {
+  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::AndIOp>(loc, args);
   }
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
+  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(kBoolBitWidth)) {
     return rewriter.create<arith::OrIOp>(loc, args);
   }
   return {};
@@ -188,34 +193,35 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
   return {};
 }
 
-bool IntInVector(int i, const SmallVector<int, 8> &redAxes) {
+bool IntInVector(int i, const SmallVector<int, kSmallVectorSizeEight> &redAxes) {
   return std::any_of(redAxes.begin(), redAxes.end(), [i](int v) { return v == i; });
 }
 
 static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
   func::FuncOp funcOp = dyn_cast<func::FuncOp>(op->getParentOp());
   SmallVector<Operation *, kVectorSizeEight> redOpList;
-  SmallVector<bool, 8> usedRedOps;
-  SmallVector<SmallVector<Operation *, 8>, 8> redOpsGroups;
+  SmallVector<bool, kSmallVectorSizeEight> usedRedOps;
+  SmallVector<SmallVector<Operation *, kSmallVectorSizeEight>, kSmallVectorSizeEight> redOpsGroups;
 
   // collect all tosa.reduce
-  funcOp.walk([&](Operation *redOp) {
+  funcOp.walk([&redOpList, &usedRedOps](Operation *redOp) {
     if (IsTosaReduceOp(redOp)) {
       redOpList.push_back(redOp);
       usedRedOps.push_back(false);
     }
   });
 
+  RedOpGroupContext ctx{redOpList, usedRedOps, redOpsGroups, funcOp};
   for (size_t i = 0; i < redOpList.size(); i++) {
     if (!usedRedOps[i]) {
-      redOpsGroups.push_back(SmallVector<Operation *, 8>());
-      findNextRedOp(i, redOpsGroups.size() - 1, redOpList, usedRedOps, redOpsGroups, funcOp);
+      redOpsGroups.push_back(SmallVector<Operation *, kSmallVectorSizeEight>());
+      findNextRedOp(i, redOpsGroups.size() - 1, ctx);
     }
   }
 
   // rewrite
   for (auto redOps : redOpsGroups) {
-    SmallVector<int, 8> redAxes;
+    SmallVector<int, kSmallVectorSizeEight> redAxes;
     for (auto redOp : redOps) {
       auto axis = dyn_cast<IntegerAttr>(redOp->getAttr("axis")).getValue().getSExtValue();
       redAxes.push_back(static_cast<int>(axis));
@@ -254,9 +260,9 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
     auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
-    SmallVector<AffineExpr, 2> srcExprs;
-    SmallVector<AffineExpr, 2> dstExprs;
-    SmallVector<utils::IteratorType, 4> iteratorTypes;
+    SmallVector<AffineExpr, kSmallVectorSizeTwo> srcExprs;
+    SmallVector<AffineExpr, kSmallVectorSizeTwo> dstExprs;
+    SmallVector<utils::IteratorType, kSmallVectorSizeFour> iteratorTypes;
     for (int64_t i = 0, rank = inputTy.getRank(); i != rank; ++i) {
       srcExprs.push_back(mlir::getAffineDimExpr(i, rewriter.getContext()));
 
@@ -271,7 +277,8 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs}, rewriter.getContext());
     auto linalgOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, input, filledTensor, maps, iteratorTypes,
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+      [&firstRedOp, &elementTy, &rewriter, &didEncounterError, &loc](OpBuilder &nestedBuilder, Location nestedLoc,
+                                                                     ValueRange blockArgs) {
         auto result = createLinalgBodyCalculationForReduceOp(firstRedOp, blockArgs, elementTy, rewriter);
         if (result) {
           didEncounterError = true;
@@ -283,7 +290,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     if (!didEncounterError) {
       return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
     }
-    SmallVector<ReassociationExprs, 4> reassociationMap;
+    SmallVector<ReassociationExprs, kSmallVectorSizeFour> reassociationMap;
     uint64_t expandInputRank = cast<ShapedType>(linalgOp.getResults()[0].getType()).getRank();
     reassociationMap.resize(expandInputRank);
 
@@ -335,6 +342,8 @@ struct TosaMultiReduceToLinalg : public impl::TosaMultiReduceToLinalgBase<TosaMu
 }  // namespace tosa
 }  // namespace mlir
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createTosaMultiReduceToLinalgPass() {
+namespace mlir {
+std::unique_ptr<OperationPass<func::FuncOp>> createTosaMultiReduceToLinalgPass() {
   return std::make_unique<tosa::TosaMultiReduceToLinalg>();
 }
+}  // namespace mlir
