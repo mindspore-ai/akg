@@ -3083,9 +3083,8 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
 // Multi-dim vec analogue of `markTransposeLoopChainWithVectorAttr`. Walks the
 // ancestor chain from `innermostLoop` upward, converting every loop tagged
 // with `kMultiVecLoopAttr` into the appropriate vec / reduction marker. The
-// strategy is responsible for *not* placing `kMultiVecLoopAttr` on innermost
-// `reduce_y` loops, so this function only needs to handle reduction X / ALL
-// alongside the normal vec case.
+// reduce-y multi-vec intentionally lowers through the reduction-x marker until
+// the vectorize pass grows a dedicated multi-dim reduce-y path.
 static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
     if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
@@ -3095,14 +3094,14 @@ static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, 
       break;
     }
     curLoop->removeAttr(kMultiVecLoopAttr);
+    curLoop->removeAttr(kBroadcastLoopAttr);
+    curLoop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
     if (curLoop->hasAttr(kReductionLoopAttr)) {
       curLoop->removeAttr(kReductionLoopAttr);
       ReduceDirection reduceType = getReduceType(curLoop);
       if (reduceType == ReduceDirection::ALL) {
         curLoop->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
       } else {
-        // reduce_y was banned by the strategy; treat the residual UNKNOWN /
-        // X case as reduction along the contiguous dimension.
         curLoop->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
       }
     } else {
