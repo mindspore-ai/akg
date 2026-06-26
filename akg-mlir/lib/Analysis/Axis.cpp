@@ -64,8 +64,7 @@ Axis::Axis(size_t bandIdx, size_t axisIdx, affine::AffineForOp affineLoop) : ban
   auto nameSuffix = std::to_string(bandIdx) + "_" + std::to_string(axisIdx);
   this->name = "Axis_" + nameSuffix;
   // Use empty deleter since MLIR manages Operation lifetime
-  this->loop =
-    std::shared_ptr<mlir::Operation>(affineLoop.getOperation(), [](Operation *) { /* MLIR manages lifetime */ });
+  this->loop = std::shared_ptr<mlir::Operation>(affineLoop.getOperation(), [](Operation *) {});
   this->initRange();
   this->initConfigs();
 }
@@ -74,8 +73,7 @@ Axis::Axis(size_t bandIdx, size_t axisIdx, mlir::scf::ForOp scfLoop) : bandIdx(b
   auto nameSuffix = std::to_string(bandIdx) + "_" + std::to_string(axisIdx);
   this->name = "Axis_" + nameSuffix;
   // Use empty deleter since MLIR manages Operation lifetime
-  this->loop =
-    std::shared_ptr<mlir::Operation>(scfLoop.getOperation(), [](Operation *) { /* MLIR manages lifetime */ });
+  this->loop = std::shared_ptr<mlir::Operation>(scfLoop.getOperation(), [](Operation *) {});
   this->initRange();
   this->initConfigs();
 }
