@@ -564,60 +564,10 @@ static bool isNoSplitLoop(mlir::scf::ForOp loop) {
 
 static bool isReductionLoop(mlir::scf::ForOp loop) { return loop && loop->hasAttr(kReductionLoopAttr); }
 
-static bool valueDependsOnTarget(Value value, Value target, llvm::DenseSet<Value> &visitedValues,
-                                 llvm::SmallPtrSetImpl<Operation *> &visitedOps) {
-  if (value == target) {
-    return true;
-  }
-
-  if (!visitedValues.insert(value).second) {
-    return false;
-  }
-
-  auto blockArg = dyn_cast<BlockArgument>(value);
-  if (blockArg) {
-    return false;
-  }
-
-  Operation *defOp = value.getDefiningOp();
-  if ((defOp == nullptr) || !visitedOps.insert(defOp).second) {
-    return false;
-  }
-
-  if (auto opResult = dyn_cast<OpResult>(value)) {
-    unsigned resultIdx = opResult.getResultNumber();
-    for (Region &region : defOp->getRegions()) {
-      if (region.empty()) {
-        continue;
-      }
-      auto yieldOp = dyn_cast<scf::YieldOp>(region.front().getTerminator());
-      if (yieldOp && resultIdx < yieldOp.getNumOperands() &&
-          valueDependsOnTarget(yieldOp.getOperand(resultIdx), target, visitedValues, visitedOps)) {
-        return true;
-      }
-    }
-  }
-
-  return std::any_of(defOp->operand_begin(), defOp->operand_end(),
-                     [&target, &visitedValues, &visitedOps](Value operand) {
-                       return valueDependsOnTarget(operand, target, visitedValues, visitedOps);
-                     });
-}
-
-static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
-  if (!value || !loop) {
-    return false;
-  }
-
-  llvm::DenseSet<Value> visitedValues;
-  llvm::SmallPtrSet<Operation *, kSmallVectorSizeThirtyTwo> visitedOps;
-  return valueDependsOnTarget(value, loop.getInductionVar(), visitedValues, visitedOps);
-}
-
 [[maybe_unused]] static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
   return loop
     .walk([&loop](memref::StoreOp store) -> WalkResult {
-      if (store.getIndices().empty() || !valueDependsOnLoopIV(store.getIndices().back(), loop)) {
+      if (store.getIndices().empty() || !CommonUtils::valueDependsOnLoopIV(store.getIndices().back(), loop)) {
         return WalkResult::advance();
       }
 
@@ -630,7 +580,8 @@ static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
         }
 
         if (auto load = value.getDefiningOp<memref::LoadOp>()) {
-          if (llvm::none_of(load.getIndices(), [&loop](Value idx) { return valueDependsOnLoopIV(idx, loop); })) {
+          if (llvm::none_of(load.getIndices(),
+                            [&loop](Value idx) { return CommonUtils::valueDependsOnLoopIV(idx, loop); })) {
             return WalkResult::interrupt();
           }
           continue;
@@ -829,8 +780,11 @@ static void collectParallelPrefixDims(ArrayRef<mlir::scf::ForOp> band, ArrayRef<
     if (!isParallelCandidate(band[dim], tileSizesInt[dim], parallelWork, isDynamicCandidate)) {
       break;
     }
-    parallelDims.push_back(dim);
-    if (dim + 1 == band.size() || !isStrictPerfectLoopEdge(band[dim], band[dim + 1])) {
+    bool hasNextPerfect = dim + 1 < band.size() && isStrictPerfectLoopEdge(band[dim], band[dim + 1]);
+    if (!CommonUtils::loopIvFeedsIfCondition(band[dim])) {
+      parallelDims.push_back(dim);
+    }
+    if (!hasNextPerfect) {
       break;
     }
   }
@@ -2868,9 +2822,7 @@ static void markTransposeOrderPair(const TransposeOrderPairParams &params) {
 
 static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
   auto isDerivedStore = [](memref::StoreOp store, memref::LoadOp load) {
-    llvm::DenseSet<Value> visitedValues;
-    llvm::SmallPtrSet<Operation *, kSmallVectorSizeThirtyTwo> visitedOps;
-    return valueDependsOnTarget(store.getValueToStore(), load.getResult(), visitedValues, visitedOps);
+    return CommonUtils::valueDependsOnTarget(store.getValueToStore(), load.getResult());
   };
   if (auto lhsLoad = dyn_cast<memref::LoadOp>(lhs)) {
     if (auto rhsStore = dyn_cast<memref::StoreOp>(rhs)) {

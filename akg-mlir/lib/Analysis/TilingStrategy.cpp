@@ -3690,8 +3690,12 @@ SmallVector<size_t, kSmallVectorSizeSix> collectParallelPrefixAxes(const NpuBand
     if (!isParallelCandidateAxis(ctx, i)) {
       break;
     }
-    axes.push_back(i);
-    if (i + 1 == ctx.axes.size() || !isStrictPerfectAxisEdge(ctx, i)) {
+    bool hasNextPerfect = i + 1 < ctx.axes.size() && isStrictPerfectAxisEdge(ctx, i);
+    auto loop = dyn_cast_or_null<scf::ForOp>(ctx.axes[i] ? ctx.axes[i]->getLoopOperation() : nullptr);
+    if (!loop || !CommonUtils::loopIvFeedsIfCondition(loop)) {
+      axes.push_back(i);
+    }
+    if (!hasNextPerfect) {
       break;
     }
   }
