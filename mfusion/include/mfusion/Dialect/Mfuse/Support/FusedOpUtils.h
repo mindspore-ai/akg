@@ -47,6 +47,9 @@ struct ClusterBuildInfo {
 /// constant operations should be fused into the cluster (vs extracted as inputs).
 llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *> clusterOps);
 
+/// Set mfuse.full ops with empty or cpu device inside a fused op body to device = "npu".
+void setFullOpsDeviceToNpu(mfuse::FusedOp fusedOp);
+
 llvm::SetVector<Value> findExternalInputs(llvm::ArrayRef<Operation *> clusterOps,
                                           const llvm::DenseSet<Operation *> &clusterOpSet);
 

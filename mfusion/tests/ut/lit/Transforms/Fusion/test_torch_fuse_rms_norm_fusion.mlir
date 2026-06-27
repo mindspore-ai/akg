@@ -340,4 +340,29 @@ module {
 
     return %out : !torch.vtensor<[2,4],f32>
   }
+
+  // Check that we do NOT fuse when x and gamma types mismatch for npu_rms_norm
+  // Should NOT fuse because x(f32) and gamma(bf16) types mismatch for npu_rms_norm
+  // CHECK-NOT: torch.operator "torch.npu.npu_rms_norm"
+  // CHECK: torch.aten.pow.Tensor_Scalar
+  // CHECK: torch.aten.mean.dim
+  // CHECK: torch.aten.add.Scalar
+  // CHECK: torch.aten.rsqrt
+  // CHECK: torch.aten.mul.Tensor
+  func.func @test_rms_norm_no_fuse_type_mismatch(%x_f32: !torch.vtensor<[2,4],f32>, %gamma_bf16: !torch.vtensor<[2,4],bf16>) -> !torch.vtensor<[2,4],f32> {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %pow = torch.aten.pow.Tensor_Scalar %x_f32, %int2 : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %rsqrt = torch.aten.rsqrt %add : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x_f32, %rsqrt : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma_bf16 : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],bf16> -> !torch.vtensor<[2,4],f32>
+    return %out : !torch.vtensor<[2,4],f32>
+  }
 }

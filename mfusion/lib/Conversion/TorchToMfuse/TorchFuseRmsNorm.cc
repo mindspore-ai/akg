@@ -18,6 +18,7 @@
 #include <cmath>
 #include <optional>
 #include "mfusion/Conversion/Passes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -443,6 +444,70 @@ static LogicalResult matchRmsNorm(TorchD::AtenMulTensorOp outMul, MatchState &st
   return success();
 }
 
+// Check if (xDtype, gammaDtype) is one of the supported type combinations
+static bool isSupportedTypeCombination(Type xDtype, Type gammaDtype) {
+  return (xDtype.isa<mlir::Float16Type>() && gammaDtype.isa<mlir::Float32Type>()) ||
+         (xDtype.isa<mlir::BFloat16Type>() && gammaDtype.isa<mlir::Float32Type>()) ||
+         (xDtype.isa<mlir::Float16Type>() && gammaDtype.isa<mlir::Float16Type>()) ||
+         (xDtype.isa<mlir::BFloat16Type>() && gammaDtype.isa<mlir::BFloat16Type>()) ||
+         (xDtype.isa<mlir::Float32Type>() && gammaDtype.isa<mlir::Float32Type>());
+}
+
+// Check if fusedX, gamma, yOut and rstdOut types are compatible for npu_rms_norm
+// Supported type combinations (x, gamma):
+// - (FLOAT16, FLOAT32)
+// - (BFLOAT16, FLOAT32)
+// - (FLOAT16, FLOAT16)
+// - (BFLOAT16, BFLOAT16)
+// - (FLOAT32, FLOAT32)
+// Requirements: yOut must have the same type as x, rstdOut must be FLOAT32
+static LogicalResult checkTypeCompatibility(Value &fusedX, Value &gamma,
+                                             Type yOutType, Type rstdOutType,
+                                             const MatchState &st,
+                                             PatternRewriter &rewriter,
+                                             TorchD::AtenMulTensorOp op) {
+  auto fusedXType = fusedX.getType().dyn_cast<TorchD::ValueTensorType>();
+  auto gammaType = gamma.getType().dyn_cast<TorchD::ValueTensorType>();
+  auto yOutVTType = yOutType.dyn_cast<TorchD::ValueTensorType>();
+  auto rstdOutVTType = rstdOutType.dyn_cast<TorchD::ValueTensorType>();
+  if (!fusedXType || !gammaType || !yOutVTType || !rstdOutVTType) {
+    return success();
+  }
+  auto xDtype = fusedXType.getDtype();
+  auto gammaDtype = gammaType.getDtype();
+  auto yOutDtype = yOutVTType.getDtype();
+  auto rstdOutDtype = rstdOutVTType.getDtype();
+
+  // Check yOut must have the same type as x
+  if (xDtype != yOutDtype) {
+    return rewriter.notifyMatchFailure(op, "yOut type must be the same as x type for npu_rms_norm");
+  }
+
+  // Check rstdOut must be FLOAT32
+  if (!rstdOutDtype.isa<mlir::Float32Type>()) {
+    return rewriter.notifyMatchFailure(op, "rstdOut type must be FLOAT32 for npu_rms_norm");
+  }
+
+  // Try to find gamma's original type if there's a dtype cast (for mixed precision)
+  if (xDtype != gammaDtype && st.dtypeCastBefore) {
+    Value candidateGamma = gamma;
+    if (auto gammaCastOp = gamma.getDefiningOp<TorchD::OperatorOp>()) {
+      if (isNpuDtypeCast(gammaCastOp) && gammaCastOp.getNumOperands() > 0) {
+        candidateGamma = gammaCastOp.getOperand(0);
+      }
+    }
+    if (auto candidateGammaType = candidateGamma.getType().dyn_cast<TorchD::ValueTensorType>()) {
+      gamma = candidateGamma;
+      gammaDtype = candidateGammaType.getDtype();
+    }
+  }
+  // Check if this is one of the supported type combinations
+  if (!isSupportedTypeCombination(xDtype, gammaDtype)) {
+    return rewriter.notifyMatchFailure(op, "unsupported type combination for npu_rms_norm");
+  }
+  return success();
+}
+
 // Explicitly erase the decomposed chain here instead of relying on canonicalize DCE:
 // - The full Torch pipeline runs canonicalize after torch-fusion (see inductor.py:
 //   torch-fusion,canonicalize), but many torch.aten.* ops in torch-mlir carry
@@ -504,7 +569,15 @@ class TorchFuseRmsNormPattern : public OpRewritePattern<TorchD::AtenMulTensorOp>
     assert(scaleVal && "torch-fuse-rms-norm: inverse-scale op must be set");
     SmallVector<Type> resultTypes = {st.outMul.getResult().getType(), scaleVal.getType()};
     Value fusedX = st.dtypeCastBefore ? st.dtypeCastBefore.getOperand(0) : st.x;
-    SmallVector<Value> operands = {fusedX, st.gamma, st.eps};
+    Value gamma = st.gamma;
+
+    // Check if fusedX and gamma types are compatible for npu_rms_norm
+    if (failed(checkTypeCompatibility(fusedX, gamma, resultTypes[0], resultTypes[1],
+                                       st, rewriter, op))) {
+      return failure();
+    }
+
+    SmallVector<Value> operands = {fusedX, gamma, st.eps};
 
     rewriter.setInsertionPoint(st.outMul);
     auto fused = rewriter.create<TorchD::OperatorOp>(st.outMul.getLoc(), resultTypes,
