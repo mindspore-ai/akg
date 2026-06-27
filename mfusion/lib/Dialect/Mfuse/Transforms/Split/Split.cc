@@ -26,6 +26,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -42,6 +43,60 @@ namespace mfuse {
 #define GEN_PASS_DEF_SPLIT
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 
+namespace {
+
+bool isHoistableFusedInputOp(Operation *op) { return isa<mfuse::ReshapeOp>(op); }
+
+void hoistFusedInputOps(FusedOp fusedOp) {
+  Block &body = fusedOp.getBodyBlock();
+  OpBuilder builder(fusedOp);
+
+  for (auto [index, arg] : llvm::enumerate(body.getArguments())) {
+    if (index >= fusedOp.getNumOperands()) {
+      continue;
+    }
+
+    while (true) {
+      Value externalInput = fusedOp.getOperand(index);
+      if (!arg.hasOneUse()) {
+        break;
+      }
+
+      Operation *innerOp = *arg.user_begin();
+      if (!isHoistableFusedInputOp(innerOp) || innerOp->getNumOperands() != 1 || innerOp->getOperand(0) != arg ||
+          innerOp->getNumResults() != 1) {
+        break;
+      }
+
+      IRMapping mapping;
+      mapping.map(arg, externalInput);
+      builder.setInsertionPoint(fusedOp);
+      Operation *outerOp = builder.clone(*innerOp, mapping);
+      Value outerResult = outerOp->getResult(0);
+      Value innerResult = innerOp->getResult(0);
+
+      fusedOp->setOperand(index, outerResult);
+      arg.setType(outerResult.getType());
+      innerResult.replaceAllUsesWith(arg);
+      innerOp->erase();
+    }
+  }
+}
+
+void hoistFusedInputOps(func::FuncOp funcOp, llvm::StringRef fusionType) {
+  SmallVector<FusedOp> fuseOps;
+  funcOp.walk([&](FusedOp fuseOp) { fuseOps.push_back(fuseOp); });
+  for (FusedOp fuseOp : fuseOps) {
+    auto fusedOpType = fuseOp.getFusionType();
+    if (!fusedOpType || fusedOpType.value() != fusionType) {
+      continue;
+    }
+    hoistFusedInputOps(fuseOp);
+  }
+}
+
+}  // namespace
+
 struct SplitPass : public impl::SplitBase<SplitPass> {
   using SplitBase::SplitBase;
 
@@ -55,6 +110,7 @@ struct SplitPass : public impl::SplitBase<SplitPass> {
       MLOG(DEBUG) << "Try split fuseOp: " << fuseOp;
       fuse_op_splitter.trySplit(fuseOp, kernelGenerator);
     }
+    hoistFusedInputOps(func_op, kernelGenerator);
   }
 };
 

@@ -1,6 +1,6 @@
 // RUN: mfusion-opt %s --split | FileCheck %s
 module {
-  // CHECK-LABEL: @test_mfuse_fused_basic
+  // CHECK-LABEL: func.func @test_mfuse_fused_basic
   func.func @test_mfuse_fused_basic(
     %input: tensor<4x128x7x7xf32>,
     %scalar: tensor<f32>,
@@ -18,12 +18,12 @@ module {
     // CHECK: mfuse.mul
     // CHECK: mfuse.reshape
     // CHECK: mfuse.yield
-    // Second fusedop: input path (le, select, reshape, reduce_sum, sub, mul)
+    // Second fusedop: input path (le, select, reduce_sum, sub, mul)
+    // CHECK: mfuse.reshape %{{.*}} {is_squeeze_like = true} : (tensor<128xf32>) -> tensor<1x128x1x1xf32>
     // CHECK: %{{.*}}:3 = mfuse.fused
-    // CHECK: (tensor<4x128x7x7xf32>, tensor<f32>, tensor<4x128x7x7xf32>, tensor<128xf32>, tensor<4x128x7x7xf32>, tensor<1x128x1x1xf32>) -> (tensor<128xf32>, tensor<4x128x7x7xf32>, tensor<4x128x7x7xf32>)
+    // CHECK: (tensor<4x128x7x7xf32>, tensor<f32>, tensor<4x128x7x7xf32>, tensor<1x128x1x1xf32>, tensor<4x128x7x7xf32>, tensor<1x128x1x1xf32>) -> (tensor<128xf32>, tensor<4x128x7x7xf32>, tensor<4x128x7x7xf32>)
     // CHECK: mfuse.le
     // CHECK: mfuse.select
-    // CHECK: mfuse.reshape
     // CHECK: mfuse.reduce_sum
     // CHECK: mfuse.sub
     // CHECK: mfuse.mul
