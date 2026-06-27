@@ -93,7 +93,10 @@ static bool setBufferSizeMark(PatternRewriter &rewriter, Location loc, Value buf
   return true;
 }
 
-static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
+static bool setBufferSizeMarkAtLeast(PatternRewriter &rewriter, Location loc, Value buffer, int64_t bytes);
+
+static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest,
+                                    bool preserveLargerMark = false) {
   for (Operation *user : src.getUsers()) {
     if (auto markOp = dyn_cast<annotation::MarkOp>(user)) {
       if (auto attr = markOp->getAttrOfType<IntegerAttr>(kBufferSizeInByteAttr)) {
@@ -115,11 +118,26 @@ static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
           newSize = alignUpInt64(ceilDivInt64(multiplyAndCap(oldSize, destWidth), srcWidth), kNpuUbAlignBytes);
         }
 
-        return setBufferSizeMark(rewriter, loc, dest, newSize);
+        return preserveLargerMark ? setBufferSizeMarkAtLeast(rewriter, loc, dest, newSize)
+                                  : setBufferSizeMark(rewriter, loc, dest, newSize);
       }
     }
   }
   return false;
+}
+
+static void propagateOperandBufferSizeMarks(ConversionPatternRewriter &rewriter, Location loc,
+                                            ArrayRef<Value> operands, ArrayRef<Value> results) {
+  for (Value src : operands) {
+    for (Value dest : operands) {
+      if (src != dest) {
+        propagateBufferSizeMark(rewriter, loc, src, dest, true);
+      }
+    }
+    for (Value dest : results) {
+      propagateBufferSizeMark(rewriter, loc, src, dest, true);
+    }
+  }
 }
 
 /// Returns one folded upper bound per result rank. Rank-wide maxSizes are kept
@@ -277,10 +295,8 @@ static bool setNPUVectorValueBufferSizeMark(PatternRewriter &rewriter, Location 
 
 static bool setOrPropagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Operation *op,
                                          Value fallbackSrc, Value buffer, Type elemTypeOverride = Type()) {
-  if (setNPUVectorResultBufferSizeMark(rewriter, loc, op, buffer, elemTypeOverride)) {
-    return true;
-  }
-  return propagateBufferSizeMark(rewriter, loc, fallbackSrc, buffer);
+  bool marked = setNPUVectorResultBufferSizeMark(rewriter, loc, op, buffer, elemTypeOverride);
+  return propagateBufferSizeMark(rewriter, loc, fallbackSrc, buffer, marked) || marked;
 }
 
 static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value trueVal,
@@ -874,10 +890,12 @@ static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc
     markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
     rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                             rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
     return;
   }
 
   rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf});
+  propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
 }
 
 template <typename HIVMOp>
@@ -897,11 +915,13 @@ struct HIVMElementwiseBinaryCreator<hivm::VShROp> {
       markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
       rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                                     rewriter.getBoolAttr(true), rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+      propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
       return;
     }
 
     rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
                                   rewriter.getBoolAttr(true));
+    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
   }
 };
 
@@ -1499,6 +1519,7 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
     } else {
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
     }
+    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1612,6 +1633,7 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
     } else {
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr);
     }
+    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1833,6 +1855,7 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
 
       rewriter.create<hivm::VSelOp>(loc, TypeRange{}, ValueRange{cond, *castedTrueVal, *castedFalseVal},
                                     ValueRange{f16ResBuf}, Value(), SmallVector<int64_t>{}, SmallVector<int64_t>{});
+      propagateOperandBufferSizeMarks(rewriter, loc, {*castedTrueVal, *castedFalseVal}, {f16ResBuf});
       auto roundAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::TRUNC);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f16ResBuf, resBuf, roundAttr, hivm::TypeFnAttr{});
 
@@ -1842,6 +1865,7 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
 
     rewriter.create<hivm::VSelOp>(loc, TypeRange{}, ValueRange{cond, trueVal, falseVal}, ValueRange{resBuf}, Value(),
                                   SmallVector<int64_t>{}, SmallVector<int64_t>{});
+    propagateOperandBufferSizeMarks(rewriter, loc, {trueVal, falseVal}, {resBuf});
 
     rewriter.replaceOp(op, resBuf);
     return success();
