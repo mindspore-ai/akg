@@ -14,16 +14,48 @@
  * limitations under the License.
  */
 
+// =============================================================================
+// NPUVectorToVector
+//
+// This pass lowers the `npuvector` ops inside every outlined vector function
+// (`vf`) to community `vector` ops, **and** guarantees that after the pass every
+// op in the vf operates on at most a single physical register worth of data
+// (otherwise the generated kernel blows the stack).
+//
+// To keep the two responsibilities separate (they used to be intertwined, which
+// made every new corner case harder than the last) the pass runs two
+// independent steps per vf, both visible in `runOnOperation`:
+//
+//   Step 1 - convertNpuVectorToVector():
+//     Pure analysis / planning. It computes
+//       * the lane count for the kernel's widest data type (how many elements
+//         fit in one register), and
+//       * for every op the number of `scf.for` layers required to fit the
+//         register, plus the kernel "category" (elementwise / full-reduction /
+//         partial-reduction / transpose).
+//     It also fixes the lowering contract used by step 2: reduction lowers to
+//     `vector.multi_reduction` (unchanged from before), and broadcast must honor
+//     the npuvector broadcast `dimension` mapping.
+//
+//   Step 2 - tileVectorToRegister():
+//     Uses the plan from step 1 to emit the register-sized `scf.for` nest and
+//     the community `vector` ops inside it. Reduction keeps the previous
+//     accumulate-then-horizontal-reduce shape; broadcast and transpose are
+//     re-implemented so the per-iteration tiles always fit a register.
+//
+// =============================================================================
+
 #include "akg/Conversion/NPUVectorToVector/NPUVectorToVector.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <iterator>
 #include <optional>
 
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
-#include "akg/Utils/Constants.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -41,6 +73,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -52,25 +86,12 @@ namespace {
 
 namespace npuv = mlir::npuvector;
 
-struct TileDesc {
-  npuv::NPUVectorType type;
-  ValueRange dynSizes;
-  Value source;
-};
-
-struct ReductionDesc {
-  npuv::ReductionOp redOp;
-  Type scalarElem;
-  Value idScalar;
-  Value c0;
-};
-
 // ===========================================================================
-// Register-width helpers (Step 3)
+// Register-width helpers
 // ===========================================================================
 
 // Get the register vector width (in bytes) of the device described by `func`'s
-// `arch` attribute. Mirrors `getVectorWidth` in OutlineVectorFunction.cpp.
+// `arch` attribute.
 static std::optional<int64_t> getRegisterWidthBytes(func::FuncOp funcOp) {
   if (!funcOp) {
     return std::nullopt;
@@ -91,12 +112,12 @@ static func::FuncOp findArchFunc(func::FuncOp vfFunc) {
   if (vfFunc->hasAttr("arch")) {
     return vfFunc;
   }
-  auto module = vfFunc->getParentOfType<ModuleOp>();
+  ModuleOp module = vfFunc->getParentOfType<ModuleOp>();
   if (!module) {
-    return {};
+    return func::FuncOp();
   }
   func::FuncOp found;
-  module.walk([&found, &vfFunc](func::CallOp call) {
+  module.walk([&](func::CallOp call) {
     if (found) {
       return;
     }
@@ -118,26 +139,20 @@ static unsigned elemByteWidth(Type elemType) {
     return 0;
   }
   unsigned bitWidth = elemType.getIntOrFloatBitWidth();
-  if (bitWidth < kBitsPerByte) {
+  if (bitWidth < 8) {
     return 0;
   }
-  return bitWidth / kBitsPerByte;
+  return bitWidth / 8;
 }
 
-// Compute one lane count for the whole vf kernel so that every dynamic
-// `!npuvector<?x...>` extent resolves to the *same* static size. Because the
-// whole kernel shares a single lane count (one loop / index space), it must be
-// sized for the *widest* (sub-byte excluded) data type so that NO register
-// exceeds the physical width: `regWidthBytes / maxElemBytes`. Using the
-// narrowest type instead would overflow the wider registers, e.g. a kernel
-// mixing i8 (1B) and f32 (4B) on a 256B register would pick 256 lanes and blow
-// the f32 register up to 256*4 = 1024B (4x over budget -> stack overflow).
-// With a 256B register this yields the Step 3 expectation:
-//   pure f32 kernel -> 64 lanes;  pure f16 kernel -> 128 lanes.
-//   mixed f32+i8   -> 64 lanes (f32=256B, i8=64B, both within budget).
+// Compute one lane count for the whole vf kernel so that every register fits the
+// physical width: `regWidthBytes / maxElemBytes`. Sizing for the *widest*
+// (sub-byte excluded) data type guarantees no register overflows. With a 256B
+// register: pure f32 -> 64 lanes; pure f16 -> 128 lanes; mixing i64 (8B) and i8
+// -> 32 lanes (both within budget).
 static int64_t computeLaneCount(func::FuncOp vfFunc, int64_t regWidthBytes) {
   unsigned maxBytes = 0;
-  auto consider = [&maxBytes](Type t) {
+  auto consider = [&](Type t) {
     if (auto vt = llvm::dyn_cast<npuv::NPUVectorType>(t)) {
       unsigned b = elemByteWidth(vt.getElementType());
       if (b > maxBytes) {
@@ -145,7 +160,7 @@ static int64_t computeLaneCount(func::FuncOp vfFunc, int64_t regWidthBytes) {
       }
     }
   };
-  vfFunc.walk([&consider](Operation *op) {
+  vfFunc.walk([&](Operation *op) {
     for (Type t : op->getOperandTypes()) {
       consider(t);
     }
@@ -168,9 +183,10 @@ static bool touchesNpuVector(Operation *op) {
 }
 
 // A "unit" npuvector is fully static and holds exactly one element (e.g.
-// `!npuvector<1xf32>`). Reads producing such values are scalar / broadcast
-// source loads, NOT the kernel's iteration space: the tiler must neither anchor
-// its loop on them nor index them with the tile induction variables.
+// `!npuvector<1xf32>`). Such values are scalar / broadcast source loads that are
+// loop invariant: they must be read at their own fixed index and kept tiny (NOT
+// tiled to register width with the loop IV, which would read out of bounds of
+// their small backing buffer -- the precision bug).
 static bool isUnitNPUVector(Type t) {
   auto vt = llvm::dyn_cast_or_null<npuv::NPUVectorType>(t);
   if (!vt) {
@@ -186,19 +202,25 @@ static bool isUnitNPUVector(Type t) {
   return total == 1;
 }
 
-// True when `v` is consumed *exclusively* by npuvector broadcast ops. Only such
-// a unit read is a pure scalar / broadcast source that may stay vector<1>: the
-// following broadcasts stretch its lone element across all lanes. If `v` has any
-// other (e.g. arith element-wise) consumer it must instead be tiled to the
-// register width, otherwise that consumer would mix a vector<1> operand with the
-// laneCount-wide operands and fail verification.
-static bool onlyFeedsBroadcast(Value v) {
-  return !v.use_empty() && llvm::all_of(v.getUsers(), [](Operation *u) { return isa<npuv::BroadcastOp>(u); });
+static int64_t npuVectorRank(Type t) {
+  auto vt = llvm::dyn_cast_or_null<npuv::NPUVectorType>(t);
+  return vt ? vt.getRank() : 0;
 }
 
 // Convert an `!npuvector` type to a community `vector` type, resolving every
-// dynamic extent to `laneCount` (static extents are preserved). Used by the
-// fallback (non-tiled) lowering path.
+// dynamic extent to `laneCount`. Used by the directConvert fallback and as the
+// canonical npuvector->vector shape mapping.
+//
+// Rank-0 (scalar) npuvector -- the "npuvector+scalar" form -- maps to
+// `vector<1xT>`, NOT a shapeless rank-0 `vector<T>`. Every lowered vector must
+// carry an explicit shape so downstream passes never see 0-D vectors.
+static VectorType shapedVectorType(ArrayRef<int64_t> shape, Type elemType) {
+  if (shape.empty()) {
+    return VectorType::get({1}, elemType);
+  }
+  return VectorType::get(shape, elemType);
+}
+
 static VectorType convertToVectorType(npuv::NPUVectorType vt, int64_t laneCount) {
   SmallVector<int64_t> shape(vt.getShape().begin(), vt.getShape().end());
   for (int64_t &d : shape) {
@@ -206,14 +228,61 @@ static VectorType convertToVectorType(npuv::NPUVectorType vt, int64_t laneCount)
       d = laneCount;
     }
   }
-  if (shape.empty()) {
-    shape.push_back(laneCount);
+  return shapedVectorType(shape, vt.getElementType());
+}
+
+// The rank of a `memref`/`tensor` value; -1 if `src` is not a shaped type.
+static int64_t getShapedSourceRank(Value src) {
+  if (auto st = llvm::dyn_cast<ShapedType>(src.getType())) {
+    return st.getRank();
   }
-  return VectorType::get(shape, vt.getElementType());
+  return -1;
+}
+
+// Drop leading no-op indices when the npuvector transfer op carries more
+// indices than the source memref's rank. The upstream may now emit a
+// placeholder `[%c0]` even for rank-0 memrefs (the "npuvector+scalar" form):
+// the conversion treats those leading entries as 0 and discards them so the
+// generated `vector.transfer_*` op matches the source shape.
+static SmallVector<Value> clampIndicesToSourceRank(ValueRange indices, int64_t srcRank) {
+  SmallVector<Value> result(indices.begin(), indices.end());
+  if (srcRank >= 0 && static_cast<int64_t>(result.size()) > srcRank) {
+    result.erase(result.begin(), result.begin() + (result.size() - srcRank));
+  }
+  return result;
+}
+
+// Build a broadcast-style permutation map for a `vector.transfer_read` whose
+// source is rank 0: every position of the rank-`vecRank` result vector reads
+// the single source element. Emits `affine_map<() -> (0, ..., 0)>`.
+static AffineMap getRank0BroadcastPermMap(OpBuilder &b, unsigned vecRank) {
+  SmallVector<AffineExpr> exprs(vecRank, b.getAffineConstantExpr(0));
+  return AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, exprs, b.getContext());
+}
+
+// Write a (possibly register-sized) vector's leading lane back to a rank-0
+// `memref` using a rank-0 `vector.transfer_write` (never `memref.store`, which
+// the downstream lowering does not accept): extract the scalar lane, wrap it
+// in a rank-0 vector and transfer_write it with zero indices and the rank-0
+// permutation map `() -> ()`.
+static void emitRank0TransferWrite(OpBuilder &b, Location loc, Value vecVal, Value memref) {
+  auto vTy = llvm::cast<VectorType>(vecVal.getType());
+  Value scalar;
+  if (vTy.getRank() == 0) {
+    scalar = b.create<vector::ExtractOp>(loc, vecVal, ArrayRef<int64_t>{});
+  } else {
+    SmallVector<int64_t> zeros(vTy.getRank(), 0);
+    scalar = b.create<vector::ExtractOp>(loc, vecVal, zeros);
+  }
+  auto rank0Ty = VectorType::get({}, vTy.getElementType());
+  Value rank0Vec = b.create<vector::BroadcastOp>(loc, rank0Ty, scalar);
+  auto rank0Map = AffineMap::get(0, 0, b.getContext());
+  b.create<vector::TransferWriteOp>(loc, Type(), rank0Vec, memref, ValueRange{}, rank0Map,
+                                    Value(), b.getBoolArrayAttr({}));
 }
 
 // ===========================================================================
-// Reduction identity helper
+// Reduction identity helpers
 // ===========================================================================
 
 static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind kind, Type elemType) {
@@ -225,11 +294,9 @@ static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind ki
         return b.getFloatAttr(elemType, 1.0);
       case CK::MINNUMF:
       case CK::MINIMUMF:
-        // Negative = false: +inf is the identity for min reduction.
         return FloatAttr::get(elemType, APFloat::getInf(sem, false));
       case CK::MAXNUMF:
       case CK::MAXIMUMF:
-        // Negative = true: -inf is the identity for max reduction.
         return FloatAttr::get(elemType, APFloat::getInf(sem, true));
       default:
         return b.getFloatAttr(elemType, 0.0);
@@ -247,7 +314,6 @@ static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind ki
     case CK::MINSI:
       return IntegerAttr::get(elemType, APInt::getSignedMaxValue(width));
     default:
-      // ADD / OR / XOR / MAXUI all have a zero identity.
       return b.getIntegerAttr(elemType, 0);
   }
 }
@@ -255,18 +321,31 @@ static TypedAttr getCombiningIdentityAttr(OpBuilder &b, vector::CombiningKind ki
 static Value buildIdentityAccumulator(OpBuilder &b, Location loc, vector::CombiningKind kind, Type destType) {
   Type elemType = getElementTypeOrSelf(destType);
   TypedAttr scalarAttr = getCombiningIdentityAttr(b, kind, elemType);
-  // For a vector accumulator emit a splat dense constant directly rather than a
-  // `vector.broadcast` of a scalar: the broadcast op is lowered to an alloc +
-  // VBrc downstream and breaks reduction legalization (the `iter_args` init must
-  // stay a plain constant, matching the working store-after-reduction shape).
   if (auto vt = llvm::dyn_cast<VectorType>(destType)) {
     return b.create<arith::ConstantOp>(loc, DenseElementsAttr::get(vt, scalarAttr));
   }
   return b.create<arith::ConstantOp>(loc, scalarAttr);
 }
 
+// The npuvector broadcast `dimension` mapping: m[i] is the destination dim that
+// source dim i lands on. An empty attribute means the prefix mapping m[i]=i.
+static SmallVector<int64_t> getBroadcastDimMap(npuv::BroadcastOp bc) {
+  SmallVector<int64_t> m;
+  ArrayRef<int64_t> dim = bc.getDimension();
+  int64_t srcRank = npuVectorRank(bc.getSource().getType());
+  if (!dim.empty()) {
+    m.assign(dim.begin(), dim.end());
+  } else {
+    for (int64_t i = 0; i < srcRank; ++i) {
+      m.push_back(i);
+    }
+  }
+  return m;
+}
+
 // ===========================================================================
-// Fallback lowering patterns (used for static / reduction / transpose kernels)
+// Fallback lowering patterns (directConvert path, used for kernels that do not
+// match any tileable category).
 // ===========================================================================
 
 struct TransferReadLowering : public OpConversionPattern<npuv::TransferReadOp> {
@@ -279,13 +358,22 @@ struct TransferReadLowering : public OpConversionPattern<npuv::TransferReadOp> {
     if (!vecType) {
       return rewriter.notifyMatchFailure(op, "result type is not convertible to vector");
     }
-    auto permMap = rewriter.getMultiDimIdentityMap(vecType.getRank());
+    int64_t srcRank = getShapedSourceRank(adaptor.getSource());
+    if (srcRank < 0) {
+      return rewriter.notifyMatchFailure(op, "transfer_read source is not a shaped type");
+    }
+    SmallVector<Value> indices = clampIndicesToSourceRank(adaptor.getIndices(), srcRank);
+    // For a rank-0 source memref with a rank>0 result vector, every lane reads
+    // the single source element: emit a broadcast permutation map. Otherwise
+    // use the minor-identity map that matches the source/result rank pair.
+    AffineMap permMap =
+      (srcRank == 0 && vecType.getRank() > 0)
+        ? getRank0BroadcastPermMap(rewriter, vecType.getRank())
+        : AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), vecType.getRank(), rewriter.getContext());
     auto inBounds = rewriter.getBoolArrayAttr(SmallVector<bool>(vecType.getRank(), true));
-    // mask: no mask value (empty).
-    Value emptyMask;
-    auto newRead = rewriter.create<vector::TransferReadOp>(op.getLoc(), vecType, adaptor.getSource(),
-                                                           adaptor.getIndices(), permMap, adaptor.getPadding(),
-                                                           emptyMask, inBounds);
+    auto newRead = rewriter.create<vector::TransferReadOp>(op.getLoc(), vecType, adaptor.getSource(), indices, permMap,
+                                                           adaptor.getPadding(),
+                                                           Value(), inBounds);
     rewriter.replaceOp(op, newRead.getResult());
     return success();
   }
@@ -300,10 +388,24 @@ struct TransferWriteLowering : public OpConversionPattern<npuv::TransferWriteOp>
     if (!vecType) {
       return rewriter.notifyMatchFailure(op, "stored value is not a vector");
     }
-    auto permMap = AffineMapAttr::get(rewriter.getMultiDimIdentityMap(vecType.getRank()));
+    int64_t srcRank = getShapedSourceRank(adaptor.getSource());
+    if (srcRank < 0) {
+      return rewriter.notifyMatchFailure(op, "transfer_write source is not a shaped type");
+    }
+    SmallVector<Value> indices = clampIndicesToSourceRank(adaptor.getIndices(), srcRank);
+    // Writing a rank>0 vector to a rank-0 memref: the destination only holds a
+    // single element. Extract the leading vector lane (the kernel is expected
+    // to have computed a broadcast scalar) and write it back with a rank-0
+    if (srcRank == 0 && vecType.getRank() > 0) {
+      emitRank0TransferWrite(rewriter, op.getLoc(), adaptor.getVector(), adaptor.getSource());
+      rewriter.eraseOp(op);
+      return success();
+    }
+    auto permMap = AffineMapAttr::get(
+      AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), vecType.getRank(), rewriter.getContext()));
     auto inBounds = rewriter.getBoolArrayAttr(SmallVector<bool>(vecType.getRank(), true));
-    rewriter.create<vector::TransferWriteOp>(op.getLoc(), adaptor.getVector(), adaptor.getSource(),
-                                             adaptor.getIndices(), permMap, inBounds);
+    rewriter.create<vector::TransferWriteOp>(op.getLoc(), adaptor.getVector(), adaptor.getSource(), indices, permMap,
+                                             inBounds);
     rewriter.eraseOp(op);
     return success();
   }
@@ -423,9 +525,8 @@ struct SelectLowering : public OpConversionPattern<npuv::SelectOp> {
 };
 
 struct ElementwiseRetypeLowering : public ConversionPattern {
-  // benefit = 0: default match priority.
   ElementwiseRetypeLowering(const TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), 0, ctx) {}
+      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /*benefit=*/0, ctx) {}
 
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                                 ConversionPatternRewriter &rewriter) const override {
@@ -468,14 +569,30 @@ struct ElementwiseRetypeLowering : public ConversionPattern {
 };
 
 // ===========================================================================
+// KernelPlan -- produced by step 1, consumed by step 2.
+// ===========================================================================
+
+enum class KernelCategory { Elementwise, FullReduction, PartialReduction, Transpose, Fallback };
+
+struct KernelPlan {
+  int64_t laneCount = 1;
+  KernelCategory category = KernelCategory::Fallback;
+  // Number of scf.for layers the kernel needs to fit a register (the iteration
+  // space rank). The innermost layer is register-tiled (step = laneCount).
+  int64_t loopRank = 0;
+  // Per-op loop layers metadata (the rank of each op's tile). Used to document
+  // the plan; step 2 derives the concrete tiles from the npuvector types.
+  llvm::DenseMap<Operation *, int64_t> opLayers;
+};
+
+// ===========================================================================
 // Pass
 // ===========================================================================
 
-class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> {
+class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVectorPass> {
  public:
-  NPUVectorToVector() = default;
-  NPUVectorToVector(const NPUVectorToVector &) = default;
-  NPUVectorToVector &operator=(const NPUVectorToVector &) = default;
+  NPUVectorToVectorPass() = default;
+  NPUVectorToVectorPass(const NPUVectorToVectorPass &) = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, math::MathDialect, npuv::NPUVectorDialect, vector::VectorDialect,
@@ -483,71 +600,881 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   }
 
   // -------------------------------------------------------------------------
-  // Tiling path: 1-D dynamic elementwise kernels are split into a register
-  // width loop, e.g. for f32 (256B register, 64 lanes):
-  //   scf.for %iv = 0 to %len step 64 {
-  //     %n    = minsi (%len - %iv), 64
-  //     %mask = vector.create_mask %n : vector<64xi1>
-  //     %a    = vector.transfer_read %arg0[%iv], %pad, %mask : ... vector<64xf32>
-  //     ...
-  //     vector.transfer_write %res, %arg3[%iv], %mask
-  //   }
+  // Small shared helpers used by the tilers.
   // -------------------------------------------------------------------------
 
-  // A kernel is tileable when its compute chain is purely element-wise (any
-  // rank, static or dynamic; no reduction / transpose / non-splat constant)
-  // and has a transfer_read to anchor the tile shape. Reduction / transpose
-  // need a different loop structure and go through the fallback path.
-  static bool isTileable(func::FuncOp vfFunc) {
-    if (vfFunc.getBody().empty()) {
-      return false;
-    }
-    bool ok = true;
-    bool hasAnchor = false;
-    vfFunc.walk([&ok, &hasAnchor](Operation *op) {
-      if (isa<npuv::ReductionOp, npuv::TransposeOp>(op)) {
-        ok = false;
-      }
-      if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
-        if (isNpuVectorType(cst.getType())) {
-          auto dense = llvm::dyn_cast<DenseElementsAttr>(cst.getValue());
-          if (!dense || !dense.isSplat()) {
-            ok = false;
-          }
-        }
-      }
-      if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
-        auto vt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
-        hasAnchor = true;
-        // Every dynamic extent needs a matching dynamicSizes operand to bound
-        // the corresponding loop.
-        if (vt.getNumDynamicDims() > rd.getDynamicSizes().size()) {
-          ok = false;
-        }
-      }
-      if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
-        if (isNpuVectorType(wr.getVector().getType())) {
-          hasAnchor = true;
-        }
-      }
-    });
-    return ok && hasAnchor;
+  static bool isConstantZeroIndex(Value v) {
+    auto cst = v.getDefiningOp<arith::ConstantIndexOp>();
+    return cst && cst.value() == 0;
   }
 
-  // A kernel goes through the tiled reduction path when it contains exactly one
-  // full reduction-to-scalar (no transpose / partial reduction), the producers
-  // feeding it are tileable element-wise ops, and the ops consuming the scalar
-  // result do not touch npuvector (so they can stay after the loop unchanged).
-  // Walk the kernel collecting the single reduction op while validating the
-  // structural preconditions shared by every tileable reduction: no transpose,
-  // npuvector constants must be splats, and dynamic reads must be fully bounded.
-  // Returns true only when exactly one reduction and at least one read are found
-  // and no precondition is violated; `redOp` is set to that reduction.
-  static bool scanReductionCandidate(func::FuncOp vfFunc, npuv::ReductionOp &redOp) {
+  // index = base + iv (folds base==0).
+  static Value addIndex(OpBuilder &b, Location loc, Value base, Value iv) {
+    if (!iv) {
+      return base;
+    }
+    if (!base || isConstantZeroIndex(base)) {
+      return iv;
+    }
+    return b.create<arith::AddIOp>(loc, base, iv);
+  }
+
+  // Per-dimension loop bounds derived from an anchor npuvector value. Static
+  // extents become index constants; dynamic extents take the matching runtime
+  // size from the producing transfer_read / broadcast.
+  LogicalResult getPerDimBounds(OpBuilder &b, Location loc, Value anchorVal, SmallVectorImpl<Value> &bounds) const {
+    auto vt = llvm::dyn_cast<npuv::NPUVectorType>(anchorVal.getType());
+    if (!vt) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = vt.getShape();
+    int64_t rank = vt.getRank();
+    unsigned numDyn = vt.getNumDynamicDims();
+
+    SmallVector<Value> dynSizes;
+    Value source;
+    if (auto rd = anchorVal.getDefiningOp<npuv::TransferReadOp>()) {
+      dynSizes.assign(rd.getDynamicSizes().begin(), rd.getDynamicSizes().end());
+      source = rd.getSource();
+    } else if (auto bc = anchorVal.getDefiningOp<npuv::BroadcastOp>()) {
+      dynSizes.assign(bc.getDynamicSizes().begin(), bc.getDynamicSizes().end());
+    }
+
+    // A broadcast lists one size per result dim; a transfer_read lists one per
+    // dynamic dim only.
+    if (static_cast<int64_t>(dynSizes.size()) == rank) {
+      bounds.assign(dynSizes.begin(), dynSizes.end());
+      return success();
+    }
+
+    unsigned dynIdx = 0;
+    for (int64_t d = 0; d < rank; ++d) {
+      if (!ShapedType::isDynamic(shape[d])) {
+        bounds.push_back(b.create<arith::ConstantIndexOp>(loc, shape[d]));
+      } else if (dynSizes.size() == numDyn && dynIdx < dynSizes.size()) {
+        bounds.push_back(dynSizes[dynIdx++]);
+      } else if (source && llvm::isa<MemRefType>(source.getType())) {
+        bounds.push_back(b.create<memref::DimOp>(loc, source, d));
+      } else {
+        return failure();
+      }
+    }
+    return success();
+  }
+
+  // -------------------------------------------------------------------------
+  // Dimension mapping: per npuvector value, which loop dim each value dim maps
+  // to. This is what makes broadcast-with-dimension and multi-rank kernels
+  // correct.
+  // -------------------------------------------------------------------------
+
+  using DimMap = llvm::DenseMap<Value, SmallVector<int64_t>>;
+
+  // Per-loop-dim bounds, aggregated across every transfer in the kernel. Each
+  // transfer value contributes its own per-dim extent to the loop dim it maps
+  // to (via its dim map). This generalizes getPerDimBounds to permuted kernels
+  // (transpose), where no single value is identity-aligned to the loop nest:
+  // the contiguous write supplies the static extents while the read supplies
+  // the dynamic ones, etc.
+  LogicalResult getLoopBounds(OpBuilder &b, Location loc, Block &entry, const DimMap &dimMap, int64_t loopRank,
+                              SmallVectorImpl<Value> &loopBounds) const {
+    loopBounds.assign(loopRank, Value());
+    auto tryFill = [&](Value v) {
+      auto it = dimMap.find(v);
+      if (it == dimMap.end()) {
+        return;
+      }
+      ArrayRef<int64_t> m = it->second;
+      SmallVector<Value> ext;
+      if (failed(getPerDimBounds(b, loc, v, ext)) || ext.size() != m.size()) {
+        return;
+      }
+      for (size_t d = 0; d < m.size(); ++d) {
+        int64_t ld = m[d];
+        if (ld >= 0 && ld < loopRank && !loopBounds[ld]) {
+          loopBounds[ld] = ext[d];
+        }
+      }
+    };
+    for (Operation &op : entry) {
+      if (auto rd = dyn_cast<npuv::TransferReadOp>(&op)) {
+        tryFill(rd.getResult());
+      } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        tryFill(wr.getVector());
+      }
+    }
+    for (int64_t d = 0; d < loopRank; ++d) {
+      if (!loopBounds[d]) {
+        return failure();
+      }
+    }
+    return success();
+  }
+
+  // One fixpoint relaxation step over `op`, deriving any newly-known maps.
+  static bool relaxDimMap(Operation *op, int64_t loopRank, DimMap &dimMap, llvm::DenseSet<Value> &unitVals) {
+    bool changed = false;
+    auto known = [&](Value v) { return dimMap.count(v) != 0; };
+    auto setMap = [&](Value v, ArrayRef<int64_t> m) {
+      if (!isNpuVectorType(v.getType()) || unitVals.count(v) || dimMap.count(v)) {
+        return;
+      }
+      dimMap[v] = SmallVector<int64_t>(m.begin(), m.end());
+      changed = true;
+    };
+
+    if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
+      return relaxBroadcast(bc, dimMap, unitVals, known, setMap) || changed;
+    }
+    if (auto tr = dyn_cast<npuv::TransposeOp>(op)) {
+      return relaxTranspose(tr, dimMap, known, setMap) || changed;
+    }
+    if (auto red = dyn_cast<npuv::ReductionOp>(op)) {
+      return relaxReduction(red, dimMap, known, setMap) || changed;
+    }
+    // Transfer writes are seeded separately and transfer-read result maps are
+    // learned from consumers; neither has anything to relax here.
+    if (isa<npuv::TransferWriteOp, npuv::TransferReadOp>(op)) {
+      return changed;
+    }
+    relaxElementwiseDimMap(op, dimMap, unitVals, setMap);
+    return changed;
+  }
+
+  // Relaxation helper for elementwise-like ops (arith/math/cmp/select/cast on
+  // npuvector): every npuvector operand and result shares the same shape, hence
+  // the same map.
+  static void relaxElementwiseDimMap(Operation *op, DimMap &dimMap, const llvm::DenseSet<Value> &unitVals,
+                                     const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    SmallVector<Value> vecVals;
+    for (Value v : op->getOperands()) {
+      if (isNpuVectorType(v.getType()) && !unitVals.count(v)) {
+        vecVals.push_back(v);
+      }
+    }
+    for (Value v : op->getResults()) {
+      if (isNpuVectorType(v.getType()) && !unitVals.count(v)) {
+        vecVals.push_back(v);
+      }
+    }
+    SmallVector<int64_t> *anyMap = nullptr;
+    for (Value v : vecVals) {
+      if (dimMap.count(v)) {
+        anyMap = &dimMap[v];
+        break;
+      }
+    }
+    if (anyMap) {
+      SmallVector<int64_t> m = *anyMap;
+      for (Value v : vecVals) {
+        setMap(v, m);
+      }
+    }
+  }
+
+  // Relaxation helper for `npuv::BroadcastOp`.
+  static bool relaxBroadcast(npuv::BroadcastOp bc, DimMap &dimMap, const llvm::DenseSet<Value> &unitVals,
+                             const std::function<bool(Value)> &known,
+                             const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    if (!known(bc.getResult())) {
+      return false;
+    }
+    SmallVector<int64_t> m = getBroadcastDimMap(bc);
+    if (!isNpuVectorType(bc.getSource().getType()) || unitVals.count(bc.getSource())) {
+      return false;
+    }
+    SmallVector<int64_t> &resMap = dimMap[bc.getResult()];
+    SmallVector<int64_t> srcMap;
+    for (int64_t i = 0; i < static_cast<int64_t>(m.size()); ++i) {
+      if (m[i] >= 0 && m[i] < static_cast<int64_t>(resMap.size())) {
+        srcMap.push_back(resMap[m[i]]);
+      }
+    }
+    setMap(bc.getSource(), srcMap);
+    return true;
+  }
+
+  // Relaxation helper for `npuv::TransposeOp`.
+  static bool relaxTranspose(npuv::TransposeOp tr, DimMap &dimMap, const std::function<bool(Value)> &known,
+                             const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    // result dim i == source dim perm[i]; so result and source maps are a
+    // permutation of one another. Derive whichever side is still unknown.
+    ArrayRef<int64_t> perm = tr.getPermutation();
+    int64_t n = static_cast<int64_t>(perm.size());
+    if (known(tr.getVector()) && !known(tr.getResult())) {
+      SmallVector<int64_t> &srcMap = dimMap[tr.getVector()];
+      if (static_cast<int64_t>(srcMap.size()) == n) {
+        SmallVector<int64_t> resMap(n);
+        for (int64_t i = 0; i < n; ++i) {
+          resMap[i] = srcMap[perm[i]];
+        }
+        setMap(tr.getResult(), resMap);
+      }
+    }
+    if (known(tr.getResult()) && !known(tr.getVector())) {
+      SmallVector<int64_t> &resMap = dimMap[tr.getResult()];
+      if (static_cast<int64_t>(resMap.size()) == n) {
+        SmallVector<int64_t> srcMap(n);
+        for (int64_t i = 0; i < n; ++i) {
+          srcMap[perm[i]] = resMap[i];
+        }
+        setMap(tr.getVector(), srcMap);
+      }
+    }
+    return true;
+  }
+
+  // Relaxation helper for `npuv::ReductionOp`.
+  static bool relaxReduction(npuv::ReductionOp red, const DimMap &dimMap, const std::function<bool(Value)> &known,
+                             const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    // Derive source from result + reduced dims (reduced source dim d maps to
+    // loop dim d, since the reduction source spans the full grid).
+    int64_t srcRank = npuVectorRank(red.getVector().getType());
+    SmallVector<bool> reduced(srcRank, false);
+    if (auto dims = red.getReductionDims(); dims && !dims->empty()) {
+      for (int64_t d : *dims) {
+        if (d >= 0 && d < srcRank) {
+          reduced[d] = true;
+        }
+      }
+    } else {
+      reduced.assign(srcRank, true);
+    }
+    SmallVector<int64_t> resMap;
+    if (isNpuVectorType(red.getDest().getType()) && known(red.getDest())) {
+      resMap = dimMap.find(red.getDest())->second;
+    } else if (!isNpuVectorType(red.getDest().getType())) {
+      resMap = {};  // scalar destination
+    } else {
+      return false;
+    }
+    SmallVector<int64_t> srcMap;
+    unsigned ri = 0;
+    for (int64_t d = 0; d < srcRank; ++d) {
+      if (reduced[d]) {
+        srcMap.push_back(d);
+      } else if (ri < resMap.size()) {
+        srcMap.push_back(resMap[ri++]);
+      } else {
+        srcMap.push_back(d);
+      }
+    }
+    setMap(red.getVector(), srcMap);
+    return true;
+  }
+
+  // Compute dimMap for every non-unit npuvector value in the kernel.
+  // `seedAnchor` controls whether the anchor (a transfer value spanning the
+  // whole grid) is identity-seeded. It must be false for transpose kernels,
+  // where the read side is a permutation of the (identity-seeded) write side
+  // and must be derived instead of forced to identity.
+  void computeDimMap(Block &entry, Value anchorVal, int64_t loopRank, DimMap &dimMap, llvm::DenseSet<Value> &unitVals,
+                     bool seedAnchor = true) const {
+    // 1. Classify unit values.
+    for (Operation &op : entry) {
+      for (Value v : op.getResults()) {
+        if (isUnitNPUVector(v.getType())) {
+          unitVals.insert(v);
+        }
+      }
+    }
+    // 2. Seed: the anchor spans the full iteration space, and every write value
+    //    is identity-aligned to the trailing loop dims.
+    auto identityFor = [&](int64_t rank) {
+      SmallVector<int64_t> m;
+      for (int64_t d = loopRank - rank; d < loopRank; ++d) {
+        m.push_back(d);
+      }
+      return m;
+    };
+    if (seedAnchor && anchorVal && !unitVals.count(anchorVal)) {
+      dimMap[anchorVal] = identityFor(npuVectorRank(anchorVal.getType()));
+    }
+    for (Operation &op : entry) {
+      if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        Value v = wr.getVector();
+        if (isNpuVectorType(v.getType()) && !unitVals.count(v) && !dimMap.count(v)) {
+          dimMap[v] = identityFor(npuVectorRank(v.getType()));
+        }
+      }
+    }
+    // 3. Relax to a fixpoint (small straight-line kernels converge quickly).
+    bool changed = true;
+    int64_t guard = 0;
+    int64_t maxIter = static_cast<int64_t>(entry.getOperations().size()) + 2;
+    while (changed && guard++ <= maxIter) {
+      changed = false;
+      for (Operation &op : entry) {
+        changed |= relaxDimMap(&op, loopRank, dimMap, unitVals);
+      }
+    }
+  }
+
+  // True when one of the value's dims is the register (innermost loop) dim.
+  // For elementwise/broadcast that dim is always the trailing one; for a
+  // transpose-fed read it can be an interior dim (the read becomes strided),
+  // hence the membership test rather than a back() comparison.
+  bool isRegTiled(Value v, const DimMap &dimMap, const llvm::DenseSet<Value> &unitVals, int64_t loopRank) const {
+    if (unitVals.count(v)) {
+      return false;
+    }
+    auto it = dimMap.find(v);
+    if (it == dimMap.end() || it->second.empty()) {
+      return false;
+    }
+    return llvm::is_contained(it->second, loopRank - 1);
+  }
+
+  // The value dim that carries the register (innermost loop) axis, or -1.
+  static int64_t regTiledDim(ArrayRef<int64_t> m, int64_t loopRank) {
+    for (int64_t k = 0; k < static_cast<int64_t>(m.size()); ++k) {
+      if (m[k] == loopRank - 1) {
+        return k;
+      }
+    }
+    return -1;
+  }
+
+  // -------------------------------------------------------------------------
+  // Per-op emission inside a (already-built) loop body.
+  // -------------------------------------------------------------------------
+
+  struct TileCtx {
+    int64_t loopRank = 0;
+    int64_t laneCount = 1;
+    ArrayRef<Value> ivs;  // one induction var per loop dim; empty for hoisted units
+    Value mask;           // register mask for the innermost dim
+    const DimMap *dimMap = nullptr;
+    const llvm::DenseSet<Value> *unitVals = nullptr;
+  };
+
+  int64_t widthOf(Value v, const TileCtx &ctx) const {
+    if (ctx.unitVals->count(v)) {
+      return 1;
+    }
+    auto it = ctx.dimMap->find(v);
+    if (it == ctx.dimMap->end() || it->second.empty()) {
+      return 1;
+    }
+    return llvm::is_contained(it->second, ctx.loopRank - 1) ? ctx.laneCount : 1;
+  }
+
+  // Permutation map for a transfer whose value has dimMap `m`. The 1-D register
+  // vector maps to the memref dim that carries the register (innermost loop)
+  // axis. For elementwise/broadcast transfers that is the trailing dim, yielding
+  // the usual minor-identity map; for a transpose-fed read it is an interior dim
+  // and the transfer becomes a strided (gather/scatter) access -- still a single
+  // register-sized vector, so the register-size invariant holds.
+  //
+  // Special case: when the source memref is rank 0 (npuvector+scalar form), the
+  // 1-D vector cannot reference any source dim, so the map collapses to a
+  // broadcast (`() -> (0)`) -- the single source element is replicated across
+  // every lane.
+  AffineMap transferPermMap(OpBuilder &b, unsigned memRank, ArrayRef<int64_t> m, int64_t w, const TileCtx &ctx) const {
+    if (memRank == 0) {
+      return getRank0BroadcastPermMap(b, /*vecRank=*/1);
+    }
+    if (w == ctx.laneCount) {
+      int64_t vecDim = regTiledDim(m, ctx.loopRank);
+      if (vecDim >= 0 && vecDim < static_cast<int64_t>(memRank)) {
+        return AffineMap::get(memRank, 0, b.getAffineDimExpr(static_cast<unsigned>(vecDim)), b.getContext());
+      }
+    }
+    return AffineMap::getMinorIdentityMap(memRank, 1, b.getContext());
+  }
+
+  // Build the per-memref-dim indices for a transfer whose value has dimMap `m`.
+  SmallVector<Value> buildTransferIndices(OpBuilder &b, Location loc, ValueRange origIndices, ArrayRef<int64_t> m,
+                                          IRMapping &map, const TileCtx &ctx) const {
+    SmallVector<Value> indices;
+    for (size_t k = 0; k < origIndices.size(); ++k) {
+      Value base = map.lookupOrDefault(origIndices[k]);
+      Value iv;
+      if (!ctx.ivs.empty() && k < m.size() && m[k] >= 0 && m[k] < static_cast<int64_t>(ctx.ivs.size())) {
+        iv = ctx.ivs[m[k]];
+      }
+      indices.push_back(addIndex(b, loc, base, iv));
+    }
+    return indices;
+  }
+
+  // Lower one op into its register-sized vector form, recording the result(s)
+  // in `map`. Handles transfer_read/write, broadcast (dimension-aware),
+  // elementwise, casts, cmp, select and constants. Reduction/transpose are
+  // handled by their dedicated tilers.
+  LogicalResult emitTiledOp(OpBuilder &b, Operation *op, IRMapping &map, const TileCtx &ctx) const {
+    Location loc = op->getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+
+    if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
+      return emitTiledTransferRead(b, rd, map, ctx);
+    }
+    if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
+      return emitTiledTransferWrite(b, wr, map, ctx);
+    }
+    if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
+      return emitTiledBroadcast(b, bc, map, ctx);
+    }
+    if (auto tr = dyn_cast<npuv::TransposeOp>(op)) {
+      // The transpose is fully realized by the (permuted) dim maps of its
+      // producers/consumers: the source and result share the same register-lane
+      // data, so the register tile passes straight through. The reordering of
+      // the non-register dims is carried by the loop indices that surrounding
+      // transfers build from their own dim maps.
+      map.map(tr.getResult(), remap(tr.getVector()));
+      return success();
+    }
+    if (auto ci = dyn_cast<npuv::CmpIOp>(op)) {
+      Value res = b.create<arith::CmpIOp>(loc, ci.getPredicate(), remap(ci.getLhs()), remap(ci.getRhs()));
+      map.map(ci.getResult(), res);
+      return success();
+    }
+    if (auto cf = dyn_cast<npuv::CmpFOp>(op)) {
+      Value res = b.create<arith::CmpFOp>(loc, cf.getPredicate(), remap(cf.getLhs()), remap(cf.getRhs()));
+      map.map(cf.getResult(), res);
+      return success();
+    }
+    if (auto sel = dyn_cast<npuv::SelectOp>(op)) {
+      Value res = b.create<arith::SelectOp>(loc, remap(sel.getCondition()), remap(sel.getTrueValue()),
+                                            remap(sel.getFalseValue()));
+      map.map(sel.getResult(), res);
+      return success();
+    }
+    if (succeeded(emitTiledUnaryCast(b, op, map, ctx))) {
+      return success();
+    }
+    if (llvm::isa_and_nonnull<arith::ArithDialect, math::MathDialect>(op->getDialect())) {
+      return emitTiledArithMath(b, op, map, ctx);
+    }
+    return op->emitError("npuvector-to-vector: unsupported op inside tileable kernel");
+  }
+
+  // `emitTiledOp` helper: lower a `npuv::TransferReadOp`.
+  LogicalResult emitTiledTransferRead(OpBuilder &b, npuv::TransferReadOp rd, IRMapping &map, const TileCtx &ctx) const {
+    Location loc = rd.getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    auto vt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
+    Type elemType = vt.getElementType();
+    int64_t w = widthOf(rd.getResult(), ctx);
+    ArrayRef<int64_t> m = ctx.dimMap->count(rd.getResult())
+                            ? ArrayRef<int64_t>(ctx.dimMap->find(rd.getResult())->second)
+                            : ArrayRef<int64_t>();
+    SmallVector<Value> indices = buildTransferIndices(b, loc, rd.getIndices(), m, map, ctx);
+    int64_t srcRank = getShapedSourceRank(rd.getSource());
+    if (srcRank >= 0 && static_cast<int64_t>(indices.size()) > srcRank) {
+      indices.erase(indices.begin(), indices.begin() + (indices.size() - srcRank));
+    }
+    auto memRank = static_cast<unsigned>(indices.size());
+    auto flatTy = VectorType::get({w}, elemType);
+
+    // When the register axis falls on an interior memref dim (the transpose
+    // case), transferPermMap produces a 1-D projection map like
+    // (d0,d1)->(d0). That map is not a permutation, so the downstream
+    // transfer_read→gather lowering (which requires permMap.isPermutation())
+    // never fires.
+    int64_t vecDim = (w == ctx.laneCount) ? regTiledDim(m, ctx.loopRank) : -1;
+    bool needPermute = (vecDim >= 0 && vecDim < static_cast<int64_t>(memRank) &&
+                        static_cast<unsigned>(vecDim) != memRank - 1 && memRank > 1);
+
+    Value res;
+    if (needPermute) {
+      SmallVector<int64_t> vecShape(memRank, 1);
+      vecShape.back() = w;
+      auto multiTy = VectorType::get(vecShape, elemType);
+
+      SmallVector<AffineExpr> exprs(memRank);
+      for (unsigned d = 0; d < memRank; ++d) {
+        exprs[d] = b.getAffineDimExpr(d);
+      }
+      std::swap(exprs[vecDim], exprs[memRank - 1]);
+      AffineMap permMap = AffineMap::get(memRank, 0, exprs, b.getContext());
+
+      res = b.create<vector::TransferReadOp>(loc, multiTy, remap(rd.getSource()), indices, permMap,
+                                             remap(rd.getPadding()), /*mask=*/Value(),
+                                             b.getBoolArrayAttr(SmallVector<bool>(memRank, true)));
+      res = b.create<vector::ShapeCastOp>(loc, flatTy, res);
+    } else {
+      AffineMap permMap = transferPermMap(b, memRank, m, w, ctx);
+      // Rank-0 sources can never overflow their (single) element; the broadcast
+      // permutation map already replicates the value, so masking is unnecessary
+      // and would mismatch the (rank-0) source.
+      Value mask = (memRank > 0 && w == ctx.laneCount) ? ctx.mask : Value();
+      res = b.create<vector::TransferReadOp>(loc, flatTy, remap(rd.getSource()), indices, permMap,
+                                             remap(rd.getPadding()), mask, b.getBoolArrayAttr({true}));
+    }
+    map.map(rd.getResult(), res);
+    return success();
+  }
+
+  // `emitTiledOp` helper: lower a `npuv::TransferWriteOp`.
+  LogicalResult emitTiledTransferWrite(OpBuilder &b, npuv::TransferWriteOp wr,
+                                       IRMapping &map, const TileCtx &ctx) const {
+    Location loc = wr.getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    Value val = wr.getVector();
+    int64_t w = widthOf(val, ctx);
+    ArrayRef<int64_t> m =
+      ctx.dimMap->count(val) ? ArrayRef<int64_t>(ctx.dimMap->find(val)->second) : ArrayRef<int64_t>();
+    SmallVector<Value> indices = buildTransferIndices(b, loc, wr.getIndices(), m, map, ctx);
+    int64_t srcRank = getShapedSourceRank(wr.getSource());
+    if (srcRank >= 0 && static_cast<int64_t>(indices.size()) > srcRank) {
+      indices.erase(indices.begin(), indices.begin() + (indices.size() - srcRank));
+    }
+
+    Value vecVal = remap(val);
+    if (srcRank == 0) {
+      emitRank0TransferWrite(b, loc, vecVal, remap(wr.getSource()));
+      return success();
+    }
+    auto memRank = static_cast<unsigned>(indices.size());
+    AffineMap permMap = transferPermMap(b, memRank, m, w, ctx);
+    Value mask = (w == ctx.laneCount) ? ctx.mask : Value();
+    b.create<vector::TransferWriteOp>(loc, Type(), vecVal, remap(wr.getSource()), indices, permMap,
+                                      mask, b.getBoolArrayAttr({true}));
+    return success();
+  }
+
+  // `emitTiledOp` helper: lower a `npuv::BroadcastOp` (dimension-aware).
+  LogicalResult emitTiledBroadcast(OpBuilder &b, npuv::BroadcastOp bc, IRMapping &map, const TileCtx &ctx) const {
+    Location loc = bc.getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    Type elemType = llvm::cast<npuv::NPUVectorType>(bc.getResult().getType()).getElementType();
+    int64_t w = widthOf(bc.getResult(), ctx);
+    Value src = bc.getSource();
+    Value srcVal = remap(src);
+    bool srcRegTiled = isNpuVectorType(src.getType()) && widthOf(src, ctx) == ctx.laneCount;
+    // When both the source and result carry the register axis, the broadcast
+    // is the identity along that axis (the extra broadcast dims are handled by
+    // the surrounding loop): pass the source register tile straight through.
+    if (w == ctx.laneCount && srcRegTiled) {
+      map.map(bc.getResult(), srcVal);
+      return success();
+    }
+    // Otherwise the result's register axis is a *new* broadcast dim: splat the
+    // (scalar / unit) source value across all lanes.
+    auto vecTy = VectorType::get({w}, elemType);
+    Value res = b.create<vector::BroadcastOp>(loc, vecTy, srcVal);
+    map.map(bc.getResult(), res);
+    return success();
+  }
+
+  LogicalResult emitTiledUnaryCast(OpBuilder &b, Operation *op, IRMapping &map, const TileCtx &ctx) const {
+    if (!isUnaryNpuvCast(op)) {
+      return failure();
+    }
+    Location loc = op->getLoc();
+    int64_t w = widthOf(op->getResult(0), ctx);
+    Type outElem = llvm::cast<npuv::NPUVectorType>(op->getResult(0).getType()).getElementType();
+    Type outTy = VectorType::get({w}, outElem);
+    Value res = emitCastFromNpuv(b, loc, op, outTy, map.lookupOrDefault(op->getOperand(0)));
+    if (!res) {
+      return failure();
+    }
+    map.map(op->getResult(0), res);
+    return success();
+  }
+
+  LogicalResult emitTiledArithMath(OpBuilder &b, Operation *op, IRMapping &map, const TileCtx &ctx) const {
+    Location loc = op->getLoc();
+    if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
+      auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(cst.getType());
+      if (!nvt) {
+        Operation *cloned = b.clone(*op);
+        map.map(cst.getResult(), cloned->getResult(0));
+        return success();
+      }
+      int64_t w = widthOf(cst.getResult(), ctx);
+      auto vecType = VectorType::get({w}, nvt.getElementType());
+      auto dense = llvm::dyn_cast<DenseElementsAttr>(cst.getValue());
+      if (!dense || !dense.isSplat()) {
+        return op->emitError("npuvector-to-vector: only splat npuvector constants are supported");
+      }
+      Value res = b.create<arith::ConstantOp>(loc, DenseElementsAttr::get(vecType, dense.getSplatValue<Attribute>()));
+      map.map(cst.getResult(), res);
+      return success();
+    }
+
+    SmallVector<Type> resultTypes;
+    for (Value r : op->getResults()) {
+      if (auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(r.getType())) {
+        resultTypes.push_back(VectorType::get({widthOf(r, ctx)}, nvt.getElementType()));
+      } else {
+        resultTypes.push_back(r.getType());
+      }
+    }
+    SmallVector<Value> operands(op->getNumOperands());
+    std::transform(op->operand_begin(), op->operand_end(), operands.begin(),
+                   [&](Value v) { return map.lookupOrDefault(v); });
+    OperationState state(loc, op->getName().getStringRef());
+    state.addOperands(operands);
+    state.addTypes(resultTypes);
+    state.addAttributes(op->getAttrs());
+    Operation *newOp = b.create(state);
+    for (auto [oldRes, newRes] : llvm::zip(op->getResults(), newOp->getResults())) {
+      map.map(oldRes, newRes);
+    }
+    return success();
+  }
+
+  // Emit all unit (loop-invariant) ops once, before the loop nest.
+  LogicalResult emitUnitOps(OpBuilder &b, Block &entry, IRMapping &map, const TileCtx &ctx,
+                            SmallVectorImpl<Operation *> &emitted) const {
+    for (Operation &op : entry.without_terminator()) {
+      bool isUnit = !op.getResults().empty() && llvm::all_of(op.getResults(), [&](Value v) {
+        return ctx.unitVals->count(v) || !isNpuVectorType(v.getType());
+      }) && touchesNpuVector(&op);
+      if (!isUnit) {
+        continue;
+      }
+      if (failed(emitTiledOp(b, &op, map, ctx))) {
+        return failure();
+      }
+      emitted.push_back(&op);
+    }
+    return success();
+  }
+
+  // -------------------------------------------------------------------------
+  // Anchor selection: the highest-rank npuvector transfer value, which spans
+  // the full iteration space (output for broadcast kernels, input otherwise).
+  // -------------------------------------------------------------------------
+  static Value findAnchorValue(Block &entry) {
+    Value anchor;
+    int64_t bestRank = -1;
+    auto consider = [&](Value v) {
+      if (!isNpuVectorType(v.getType()) || isUnitNPUVector(v.getType())) {
+        return;
+      }
+      int64_t r = npuVectorRank(v.getType());
+      if (r > bestRank) {
+        bestRank = r;
+        anchor = v;
+      }
+    };
+    for (Operation &op : entry) {
+      if (auto rd = dyn_cast<npuv::TransferReadOp>(&op)) {
+        consider(rd.getResult());
+      } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        consider(wr.getVector());
+      }
+    }
+    return anchor;
+  }
+
+  // Drop the npuvector compute ops (and any now-dead constants) once they have
+  // been replaced by the tiled loop.
+  static void eraseComputeOps(Block &entry, ArrayRef<Operation *> computeOps) {
+    for (auto it = computeOps.rbegin(); it != computeOps.rend(); ++it) {
+      (*it)->erase();
+    }
+    SmallVector<Operation *> deadConsts;
+    for (Operation &op : entry.without_terminator()) {
+      if (isa<arith::ConstantOp>(op) && op.use_empty()) {
+        deadConsts.push_back(&op);
+      }
+    }
+    for (Operation *op : deadConsts) {
+      op->erase();
+    }
+  }
+
+  // =========================================================================
+  // Elementwise / broadcast kernel tiler
+  // =========================================================================
+  LogicalResult tileElementwiseKernel(func::FuncOp vfFunc, const KernelPlan &plan) {
+    Block &entry = vfFunc.getBody().front();
+    Location loc = vfFunc.getLoc();
+    int64_t lanes = plan.laneCount;
+
+    Value anchor = findAnchorValue(entry);
+    if (!anchor) {
+      return failure();
+    }
+    int64_t R = plan.loopRank;
+    if (R == 0) {
+      return failure();
+    }
+
+    DimMap dimMap;
+    llvm::DenseSet<Value> unitVals;
+    computeDimMap(entry, anchor, R, dimMap, unitVals);
+
+    OpBuilder builder(entry.getTerminator());
+    SmallVector<Value> bounds;
+    if (failed(getPerDimBounds(builder, loc, anchor, bounds)) || static_cast<int64_t>(bounds.size()) != R) {
+      return failure();
+    }
+
+    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
+
+    // Collect compute ops, emit unit ops once before the loop.
+    SmallVector<Operation *> computeOps;
+    for (Operation &op : entry.without_terminator()) {
+      if (touchesNpuVector(&op)) {
+        computeOps.push_back(&op);
+      }
+    }
+    if (computeOps.empty()) {
+      return success();
+    }
+
+    IRMapping map;
+    TileCtx unitCtx;
+    unitCtx.loopRank = R;
+    unitCtx.laneCount = lanes;
+    unitCtx.dimMap = &dimMap;
+    unitCtx.unitVals = &unitVals;
+    SmallVector<Operation *> unitEmitted;
+    if (failed(emitUnitOps(builder, entry, map, unitCtx, unitEmitted))) {
+      return failure();
+    }
+
+    // Build the loop nest (outer dims step 1, innermost step lanes).
+    SmallVector<Value> ivs;
+    OpBuilder body = builder;
+    for (int64_t d = 0; d < R - 1; ++d) {
+      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
+      ivs.push_back(forOp.getInductionVar());
+      body = OpBuilder::atBlockBegin(forOp.getBody());
+    }
+    auto innerFor = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
+    ivs.push_back(innerFor.getInductionVar());
+    body = OpBuilder::atBlockBegin(innerFor.getBody());
+
+    Value remaining = body.create<arith::SubIOp>(loc, bounds[R - 1], ivs.back());
+    Value activeLen = body.create<arith::MinSIOp>(loc, remaining, cLane);
+    auto maskTy = VectorType::get({lanes}, body.getI1Type());
+    Value mask = body.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen});
+
+    TileCtx ctx = unitCtx;
+    ctx.ivs = ivs;
+    ctx.mask = mask;
+
+    for (Operation *op : computeOps) {
+      if (llvm::is_contained(unitEmitted, op)) {
+        continue;
+      }
+      if (failed(emitTiledOp(body, op, map, ctx))) {
+        return failure();
+      }
+    }
+
+    eraseComputeOps(entry, computeOps);
+    return success();
+  }
+
+  // =========================================================================
+  // Transpose kernel tiler
+  //
+  // The transpose is treated as a permutation of the per-value dim maps rather
+  // than a data-shuffling op: the register-lane axis is shared by the transpose
+  // source and result, so the register tile passes straight through while the
+  // reordering of the remaining axes is carried by the loop indices that each
+  // transfer builds from its own (permuted) dim map.
+  //
+  // This reuses the general per-op emission engine, so it transparently covers:
+  //   * any number of transposes in one vf;
+  //   * arbitrary permutations, including inner-axis transposes (the producing
+  //     read simply becomes a strided/gather transfer of a register-sized
+  //     vector -- never an oversized vector.transpose);
+  //   * transposes fused with surrounding elementwise / broadcast / cast ops.
+  // No oversized vector is ever materialized, so the register-size invariant
+  // (and hence the no-stack-overflow guarantee) always holds.
+  // =========================================================================
+  LogicalResult tileTransposeKernel(func::FuncOp vfFunc, const KernelPlan &plan) {
+    Block &entry = vfFunc.getBody().front();
+    Location loc = vfFunc.getLoc();
+    int64_t lanes = plan.laneCount;
+    int64_t R = plan.loopRank;
+    if (R == 0) {
+      return failure();
+    }
+
+    // Dim maps: seed from the (identity-aligned) writes and derive the read /
+    // transpose sides; do NOT identity-seed the read anchor, since under a
+    // transpose it is a permutation of the write side.
+    Value anchor = findAnchorValue(entry);
+    DimMap dimMap;
+    llvm::DenseSet<Value> unitVals;
+    computeDimMap(entry, anchor, R, dimMap, unitVals, /*seedAnchor=*/false);
+
+    OpBuilder builder(entry.getTerminator());
+    SmallVector<Value> bounds;
+    if (failed(getLoopBounds(builder, loc, entry, dimMap, R, bounds))) {
+      return failure();
+    }
+
+    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
+
+    SmallVector<Operation *> computeOps;
+    for (Operation &op : entry.without_terminator()) {
+      if (touchesNpuVector(&op)) {
+        computeOps.push_back(&op);
+      }
+    }
+    if (computeOps.empty()) {
+      return success();
+    }
+
+    IRMapping map;
+    TileCtx unitCtx;
+    unitCtx.loopRank = R;
+    unitCtx.laneCount = lanes;
+    unitCtx.dimMap = &dimMap;
+    unitCtx.unitVals = &unitVals;
+    SmallVector<Operation *> unitEmitted;
+    if (failed(emitUnitOps(builder, entry, map, unitCtx, unitEmitted))) {
+      return failure();
+    }
+
+    // Build the loop nest over the output index space (outer dims step 1,
+    // innermost step lanes).
+    SmallVector<Value> ivs;
+    OpBuilder body = builder;
+    for (int64_t d = 0; d < R - 1; ++d) {
+      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
+      ivs.push_back(forOp.getInductionVar());
+      body = OpBuilder::atBlockBegin(forOp.getBody());
+    }
+    auto innerFor = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
+    ivs.push_back(innerFor.getInductionVar());
+    body = OpBuilder::atBlockBegin(innerFor.getBody());
+
+    Value remaining = body.create<arith::SubIOp>(loc, bounds[R - 1], ivs.back());
+    Value activeLen = body.create<arith::MinSIOp>(loc, remaining, cLane);
+    auto maskTy = VectorType::get({lanes}, body.getI1Type());
+    Value mask = body.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen});
+
+    TileCtx ctx = unitCtx;
+    ctx.ivs = ivs;
+    ctx.mask = mask;
+
+    for (Operation *op : computeOps) {
+      if (llvm::is_contained(unitEmitted, op)) {
+        continue;
+      }
+      if (failed(emitTiledOp(body, op, map, ctx))) {
+        return failure();
+      }
+    }
+
+    eraseComputeOps(entry, computeOps);
+    return success();
+  }
+
+  // =========================================================================
+  // Full reduction kernel tiler (unchanged shape -- kept for NormalizeVector
+  // compatibility and the existing tests).
+  // =========================================================================
+  static bool scanFullReductionCandidate(func::FuncOp vfFunc, npuv::ReductionOp &redOp) {
     int redCount = 0;
     bool ok = true;
     bool hasRead = false;
-    vfFunc.walk([&ok, &redOp, &redCount, &hasRead](Operation *op) {
+    vfFunc.walk([&](Operation *op) {
       if (isa<npuv::TransposeOp>(op)) {
         ok = false;
       }
@@ -574,371 +1501,125 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     return redCount == 1 && ok && hasRead;
   }
 
-  static bool isReductionTileable(func::FuncOp vfFunc) {
+  // True for the unary `!npuvector`-typed cast ops that may sit between a full
+  // reduction and the final memref delivery in the upstream npuvector form.
+  static bool isUnaryNpuvCast(Operation *op) {
+    return isa<npuv::ExtFOp, npuv::TruncFOp, npuv::ExtSIOp, npuv::ExtUIOp, npuv::TruncIOp, npuv::SIToFPOp,
+               npuv::UIToFPOp, npuv::FPToSIOp, npuv::FPToUIOp, npuv::BitcastOp, npuv::IndexCastOp, npuv::IndexCastUIOp>(
+      op);
+  }
+
+  // Reduction delivery chain: from `npuvector.reduction`'s result down through
+  // (optional) unary `!npuvector` cast ops to a final store.
+  struct ReductionDelivery {
+    SmallVector<Operation *> castChain;  // unary npuv casts, in producer->sink order
+    Operation *finalWrite = nullptr;     // memref::StoreOp OR npuv::TransferWriteOp
+  };
+
+  static bool traceReductionDelivery(npuv::ReductionOp redOp, ReductionDelivery &delivery) {
+    Value cur = redOp.getResult();
+    // Bound the walk to a reasonable depth so a malformed chain cannot loop.
+    constexpr int kMaxChain = 32;
+    for (int step = 0; step < kMaxChain; ++step) {
+      if (!cur.hasOneUse()) {
+        return false;
+      }
+      Operation *user = *cur.getUsers().begin();
+      if (isa<memref::StoreOp>(user) || isa<npuv::TransferWriteOp>(user)) {
+        delivery.finalWrite = user;
+        return true;
+      }
+      if (!isUnaryNpuvCast(user) || user->getNumResults() != 1) {
+        return false;
+      }
+      delivery.castChain.push_back(user);
+      cur = user->getResult(0);
+    }
+    return false;
+  }
+
+  static bool isFullReductionTileable(func::FuncOp vfFunc) {
     if (vfFunc.getBody().empty()) {
       return false;
     }
     npuv::ReductionOp redOp;
-    if (!scanReductionCandidate(vfFunc, redOp)) {
+    if (!scanFullReductionCandidate(vfFunc, redOp)) {
       return false;
     }
-    // Only full reduction (all dims -> scalar) is tiled here; partial reduction
-    // keeps a lower-rank vector result and stays on the fallback path.
-    if (auto dims = redOp.getReductionDims(); dims && !dims->empty()) {
+    if (!isFullReductionShape(redOp)) {
       return false;
     }
-    if (isNpuVectorType(redOp.getDest().getType())) {
+
+    ReductionDelivery delivery;
+    if (!traceReductionDelivery(redOp, delivery)) {
       return false;
     }
-    // The scalar result must be consumed by non-npuvector ops only.
+
     Block &entry = vfFunc.getBody().front();
+    llvm::DenseSet<Operation *> allowedAfter;
+    for (Operation *o : delivery.castChain) {
+      allowedAfter.insert(o);
+    }
+    allowedAfter.insert(delivery.finalWrite);
     bool afterReduction = false;
     for (Operation &op : entry.without_terminator()) {
       if (&op == redOp.getOperation()) {
         afterReduction = true;
         continue;
       }
-      if (afterReduction && touchesNpuVector(&op)) {
+      if (afterReduction && touchesNpuVector(&op) && !allowedAfter.count(&op)) {
         return false;
       }
     }
     return true;
   }
 
-  // Rebuild one npuvector / arith-on-npuvector op as a `laneCount`-wide vector
-  // op inside the tiling loop nest. `indices` is the running offset per memref
-  // dimension (one induction var per dimension, innermost last), `mask` masks
-  // the active lanes of the innermost (register) dimension.
-  LogicalResult tileComputeOp(OpBuilder &b, Operation *op, IRMapping &map, ValueRange indices, Value mask,
-                              int64_t laneCount) const {
-    Location loc = op->getLoc();
-    auto remap = [&map](Value v) { return map.lookupOrDefault(v); };
-    auto vecTypeOf = [laneCount](Type elemType) { return VectorType::get({laneCount}, elemType); };
-    // The register vector is always 1-D (vector<laneCount>); the permutation
-    // map projects the n-D memref index space onto its innermost dimension.
-    // A memref source may have FEWER dims than the anchor iteration space when
-    // it is a broadcast operand that aligns with the innermost dims (e.g. a 1-D
-    // bias added to a 2-D tensor). Such an op must be indexed with exactly its
-    // own source rank, using the trailing induction variables, so the emitted
-    // vector.transfer_{read,write} carries the right number of indices.
-    auto sourceRank = [&indices](Value src) -> int64_t {
-      auto mt = llvm::dyn_cast<MemRefType>(src.getType());
-      return mt ? mt.getRank() : static_cast<int64_t>(indices.size());
-    };
-    auto trailingIndices = [&indices](int64_t srcRank) {
-      SmallVector<Value> result(indices.begin(), indices.end());
-      auto n = static_cast<int64_t>(result.size());
-      if (srcRank < n) {
-        result.erase(result.begin(), result.begin() + (n - srcRank));
+  // `isFullReductionTileable` helper: validate that the reduction reduces every
+  // source dim and that the dest is a scalar / rank-0 npuvector.
+  static bool isFullReductionShape(npuv::ReductionOp redOp) {
+    // Full reduction = every source dim is reduced. The old form leaves
+    // `reduction_dims` absent (or empty) -- meaning "reduce all dims" by the
+    // op's contract. The new form lists every source dim explicitly.
+    int64_t srcRank = npuVectorRank(redOp.getVector().getType());
+    if (auto dims = redOp.getReductionDims(); dims && !dims->empty()) {
+      if (static_cast<int64_t>(dims->size()) != srcRank) {
+        return false;  // partial reduction goes through the partial-reduction path
       }
-      return result;
-    };
-    auto permMapForRank = [&b](int64_t srcRank) {
-      return AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), 1, b.getContext());
-    };
-    auto inBounds = b.getBoolArrayAttr({true});
-
-    if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
-      auto nvt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
-      auto elemType = nvt.getElementType();
-      // A unit (single-element) read whose ONLY consumers are broadcasts is a
-      // scalar load. Read it at its OWN fixed indices and keep its static shape
-      // so the following broadcast can stretch the lone element across all
-      // `laneCount` lanes. Tiling it as a register-wide masked read would (a)
-      // index out of its small buffer with the loop IV and (b) degrade the
-      // broadcast into an identity op, corrupting every lane but the first.
-      // If the read also feeds a direct (non-broadcast) element-wise op, it
-      // must be tiled to the register width instead: keeping it vector<1> would
-      // mix a vector<1> operand with laneCount-wide operands (e.g. arith.mulf)
-      // and fail verification. The broadcast consumers then become legal
-      // identity broadcasts (vector<laneCountxT> -> vector<laneCountxT>).
-      if (isUnitNPUVector(nvt) && onlyFeedsBroadcast(rd.getResult())) {
-        SmallVector<int64_t> shape(nvt.getShape().begin(), nvt.getShape().end());
-        auto unitVecTy = VectorType::get(shape, elemType);
-        SmallVector<Value> unitIndices(rd.getIndices().size());
-        std::transform(rd.getIndices().begin(), rd.getIndices().end(), unitIndices.begin(),
-                       [&remap](Value idx) { return remap(idx); });
-        auto unitPermMap = b.getMultiDimIdentityMap(unitVecTy.getRank());
-        auto unitInBounds = b.getBoolArrayAttr(SmallVector<bool>(unitVecTy.getRank(), true));
-        // mask: no mask value (empty).
-        Value emptyMask;
-        Value res = b.create<vector::TransferReadOp>(loc, unitVecTy, remap(rd.getSource()), unitIndices, unitPermMap,
-                                                     remap(rd.getPadding()), emptyMask, unitInBounds);
-        map.map(rd.getResult(), res);
-        return success();
+      llvm::SmallDenseSet<int64_t, 8> seen;
+      for (int64_t d : *dims) {
+        if (d < 0 || d >= srcRank) {
+          return false;
+        }
+        seen.insert(d);
       }
-      int64_t srcRank = sourceRank(rd.getSource());
-      Value res =
-        b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()), trailingIndices(srcRank),
-                                         permMapForRank(srcRank), remap(rd.getPadding()), mask, inBounds);
-      map.map(rd.getResult(), res);
-      return success();
+      if (static_cast<int64_t>(seen.size()) != srcRank) {
+        return false;
+      }
     }
-    if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
-      int64_t srcRank = sourceRank(wr.getSource());
-      // resultType: void (transfer_write returns no value).
-      b.create<vector::TransferWriteOp>(loc, Type(), remap(wr.getVector()), remap(wr.getSource()),
-                                        trailingIndices(srcRank), permMapForRank(srcRank), mask, inBounds);
-      return success();
+    // The dest is either a pure scalar (old form) or a rank-0 `!npuvector`
+    // (new "npuvector+scalar" form). Anything else is a partial reduction.
+    Type destTy = redOp.getDest().getType();
+    if (auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(destTy)) {
+      if (nvt.getRank() != 0) {
+        return false;
+      }
+    } else if (!destTy.isIntOrIndexOrFloat()) {
+      return false;
     }
-    if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
-      auto elemType = llvm::cast<npuv::NPUVectorType>(bc.getResult().getType()).getElementType();
-      Value res = b.create<vector::BroadcastOp>(loc, vecTypeOf(elemType), remap(bc.getSource()));
-      map.map(bc.getResult(), res);
-      return success();
-    }
-    if (auto ci = dyn_cast<npuv::CmpIOp>(op)) {
-      Value res = b.create<arith::CmpIOp>(loc, ci.getPredicate(), remap(ci.getLhs()), remap(ci.getRhs()));
-      map.map(ci.getResult(), res);
-      return success();
-    }
-    if (auto cf = dyn_cast<npuv::CmpFOp>(op)) {
-      Value res = b.create<arith::CmpFOp>(loc, cf.getPredicate(), remap(cf.getLhs()), remap(cf.getRhs()));
-      map.map(cf.getResult(), res);
-      return success();
-    }
-    if (auto sel = dyn_cast<npuv::SelectOp>(op)) {
-      Value res = b.create<arith::SelectOp>(loc, remap(sel.getCondition()), remap(sel.getTrueValue()),
-                                            remap(sel.getFalseValue()));
-      map.map(sel.getResult(), res);
-      return success();
-    }
-    if (succeeded(tileUnaryCast(b, op, map, laneCount))) {
-      return success();
-    }
-    if (llvm::isa_and_nonnull<arith::ArithDialect, math::MathDialect>(op->getDialect())) {
-      return tileArithMath(b, op, map, laneCount);
-    }
-    return op->emitError("npuvector-to-vector: unsupported op inside tileable kernel");
+    return true;
   }
 
-  // Lower npuvector cast ops (extf/truncf/.../index_castui) to the matching
-  // arith cast at `laneCount` width.
-  LogicalResult tileUnaryCast(OpBuilder &b, Operation *op, IRMapping &map, int64_t laneCount) const {
-    Location loc = op->getLoc();
-    auto outElem = [](Operation *o) {
-      return llvm::cast<npuv::NPUVectorType>(o->getResult(0).getType()).getElementType();
-    };
-    auto castTo = [&map, laneCount, &outElem](Operation *o, auto creator) -> LogicalResult {
-      Value res = creator(VectorType::get({laneCount}, outElem(o)));
-      map.map(o->getResult(0), res);
-      return success();
-    };
-
-    if (auto c = dyn_cast<npuv::ExtFOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::ExtFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::TruncFOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::TruncFOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::ExtSIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::ExtSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::ExtUIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::ExtUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::TruncIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::TruncIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::SIToFPOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::SIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::UIToFPOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::UIToFPOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::FPToSIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::FPToSIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::FPToUIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::FPToUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::BitcastOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::BitcastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::IndexCastOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::IndexCastOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    if (auto c = dyn_cast<npuv::IndexCastUIOp>(op)) {
-      return castTo(op, [&b, loc, &map, &c](Type ty) {
-        return b.create<arith::IndexCastUIOp>(loc, ty, map.lookupOrDefault(c.getIn())).getResult();
-      });
-    }
-    return failure();
-  }
-
-  // Rebuild a generic arith/math op (binary elementwise, dense constant, ...)
-  // with `laneCount`-wide vector operand/result types.
-  LogicalResult tileArithMath(OpBuilder &b, Operation *op, IRMapping &map, int64_t laneCount) const {
-    Location loc = op->getLoc();
-    if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
-      auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(cst.getType());
-      if (!nvt) {
-        Operation *cloned = b.clone(*op);
-        map.map(cst.getResult(), cloned->getResult(0));
-        return success();
-      }
-      auto vecType = VectorType::get({laneCount}, nvt.getElementType());
-      auto dense = llvm::dyn_cast<DenseElementsAttr>(cst.getValue());
-      if (!dense || !dense.isSplat()) {
-        return op->emitError("npuvector-to-vector: only splat npuvector constants are supported");
-      }
-      Value res = b.create<arith::ConstantOp>(loc, DenseElementsAttr::get(vecType, dense.getSplatValue<Attribute>()));
-      map.map(cst.getResult(), res);
-      return success();
-    }
-
-    SmallVector<Type> resultTypes;
-    for (Type t : op->getResultTypes()) {
-      if (auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(t)) {
-        resultTypes.push_back(VectorType::get({laneCount}, nvt.getElementType()));
-      } else {
-        resultTypes.push_back(t);
-      }
-    }
-    SmallVector<Value> operands(op->getNumOperands());
-    std::transform(op->operand_begin(), op->operand_end(), operands.begin(),
-                   [&map](Value v) { return map.lookupOrDefault(v); });
-    OperationState state(loc, op->getName().getStringRef());
-    state.addOperands(operands);
-    state.addTypes(resultTypes);
-    state.addAttributes(op->getAttrs());
-    Operation *newOp = b.create(state);
-    for (auto [oldRes, newRes] : llvm::zip(op->getResults(), newOp->getResults())) {
-      map.map(oldRes, newRes);
-    }
-    return success();
-  }
-
-  LogicalResult tileKernel(func::FuncOp vfFunc, int64_t laneCount) {
-    Block &entry = vfFunc.getBody().front();
-    Location loc = vfFunc.getLoc();
-
-    // Anchor the tile shape on a transfer_read (or transfer_write): its rank
-    // gives the loop-nest depth and its static dims / dynamicSizes the bounds.
-    npuv::NPUVectorType anchorType;
-    SmallVector<Value> anchorDynSizes;
-    Value anchorSource;
-    if (failed(findTileAnchor(entry, anchorType, anchorDynSizes, anchorSource))) {
-      return failure();
-    }
-    int64_t rank = anchorType.getRank();
-    if (rank == 0) {
-      return failure();
-    }
-
-    // The compute chain to move into the loop (anything touching npuvector).
-    SmallVector<Operation *> computeOps;
-    for (Operation &op : entry.without_terminator()) {
-      if (touchesNpuVector(&op)) {
-        computeOps.push_back(&op);
-      }
-    }
-    if (computeOps.empty()) {
-      return success();
-    }
-
-    OpBuilder builder(entry.getTerminator());
-    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
-    Value cLane = builder.create<arith::ConstantIndexOp>(loc, laneCount);
-
-    // Per-dimension upper bound: static extent -> constant, dynamic -> the
-    // matching dynamicSizes operand (consumed in shape order).
-    SmallVector<Value> bounds;
-    bounds.reserve(rank);
-    TileDesc anchorDesc{anchorType, anchorDynSizes, anchorSource};
-    if (failed(collectTileBounds(builder, loc, anchorDesc, bounds))) {
-      return failure();
-    }
-    // Validate the collected bounds cover every dimension before indexing by rank.
-    if (static_cast<int64_t>(bounds.size()) != rank) {
-      return failure();
-    }
-
-    // Build the loop nest: outer dims iterate one element at a time, the
-    // innermost (register) dim iterates `laneCount` lanes at a time.
-    SmallVector<Value> ivs;
-    ivs.reserve(rank);
-    OpBuilder bodyBuilder = builder;
-    for (int64_t d = 0; d < rank - 1; ++d) {
-      auto forOp = bodyBuilder.create<scf::ForOp>(loc, c0, bounds[d], c1);
-      ivs.push_back(forOp.getInductionVar());
-      bodyBuilder = OpBuilder::atBlockBegin(forOp.getBody());
-    }
-    auto innerFor = bodyBuilder.create<scf::ForOp>(loc, c0, bounds[rank - 1], cLane);
-    ivs.push_back(innerFor.getInductionVar());
-    bodyBuilder = OpBuilder::atBlockBegin(innerFor.getBody());
-
-    // Active lanes of the current innermost iteration: min(laneCount, ub - iv).
-    Value remaining = bodyBuilder.create<arith::SubIOp>(loc, bounds[rank - 1], ivs.back());
-    Value activeLen = bodyBuilder.create<arith::MinSIOp>(loc, remaining, cLane);
-    auto maskType = VectorType::get({laneCount}, bodyBuilder.getI1Type());
-    Value mask = bodyBuilder.create<vector::CreateMaskOp>(loc, maskType, ValueRange{activeLen});
-
-    IRMapping map;
-    if (std::any_of(computeOps.begin(), computeOps.end(),
-                    [this, &bodyBuilder, &map, &ivs, &mask, laneCount](Operation *op) {
-                      return failed(tileComputeOp(bodyBuilder, op, map, ivs, mask, laneCount));
-                    })) {
-      return failure();
-    }
-
-    for (auto it = computeOps.rbegin(); it != computeOps.rend(); ++it) {
-      (*it)->erase();
-    }
-
-    // Drop constants that became dead once the npuvector ops were removed
-    // (e.g. the old [index]/[maxSizes] constants).
-    SmallVector<Operation *> deadConsts;
-    for (Operation &op : entry.without_terminator()) {
-      if (isa<arith::ConstantOp>(op) && op.use_empty()) {
-        deadConsts.push_back(&op);
-      }
-    }
-    for (Operation *op : deadConsts) {
-      op->erase();
-    }
-    return success();
-  }
-
-  // Resolve the per-dimension loop bounds for a tile of type `type`: static
-  // extents become index constants; dynamic extents take the matching
-  // `dynSizes` operand (consumed in shape order, e.g. from transfer_read) and,
-  // failing that, a `memref.dim` of the backing `source` memref. `builder`
-  // inserts the freshly created ops.
-  static LogicalResult collectTileBounds(OpBuilder &builder, Location loc, TileDesc desc,
-                                         SmallVectorImpl<Value> &bounds) {
-    ArrayRef<int64_t> shape = desc.type.getShape();
+  static LogicalResult collectTileBounds(OpBuilder &builder, Location loc, npuv::NPUVectorType type,
+                                         ValueRange dynSizes, Value source, SmallVectorImpl<Value> &bounds) {
+    ArrayRef<int64_t> shape = type.getShape();
     unsigned dynIdx = 0;
-    for (int64_t d = 0, rank = desc.type.getRank(); d < rank; ++d) {
+    for (int64_t d = 0, rank = type.getRank(); d < rank; ++d) {
       if (!ShapedType::isDynamic(shape[d])) {
         bounds.push_back(builder.create<arith::ConstantIndexOp>(loc, shape[d]));
-      } else if (dynIdx < desc.dynSizes.size()) {
-        bounds.push_back(desc.dynSizes[dynIdx++]);
-      } else if (desc.source && llvm::isa<MemRefType>(desc.source.getType())) {
-        bounds.push_back(builder.create<memref::DimOp>(loc, desc.source, d));
+      } else if (dynIdx < dynSizes.size()) {
+        bounds.push_back(dynSizes[dynIdx++]);
+      } else if (source && llvm::isa<MemRefType>(source.getType())) {
+        bounds.push_back(builder.create<memref::DimOp>(loc, source, d));
       } else {
         return failure();
       }
@@ -946,67 +1627,6 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     return success();
   }
 
-  // Anchor the tile shape: prefer a transfer_read (carries dynamicSizes), else
-  // fall back to a transfer_write whose stored value is an npuvector.
-  static LogicalResult findTileAnchor(Block &entry, npuv::NPUVectorType &type, SmallVectorImpl<Value> &dynSizes,
-                                      Value &source) {
-    npuv::TransferReadOp refRead;
-    npuv::TransferReadOp unitRead;
-    npuv::TransferWriteOp refWrite;
-    int64_t refReadRank = -1;
-    for (Operation &op : entry) {
-      if (auto rd = dyn_cast<npuv::TransferReadOp>(&op)) {
-        // Unit reads are scalar / broadcast-source loads, never the iteration
-        // space; only fall back to one if the kernel offers nothing better.
-        if (isUnitNPUVector(rd.getVector().getType())) {
-          if (!unitRead) {
-            unitRead = rd;
-          }
-          continue;
-        }
-        // Anchor on the highest-rank read: it spans the full iteration space.
-        // A lower-rank read (e.g. a 1-D bias broadcast onto a 2-D tensor) would
-        // under-count the loop nest and leave higher-rank reads/writes with too
-        // few indices.
-        int64_t rank = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType()).getRank();
-        if (!refRead || rank > refReadRank) {
-          refRead = rd;
-          refReadRank = rank;
-        }
-      } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
-        if (!refWrite && isNpuVectorType(wr.getVector().getType())) {
-          refWrite = wr;
-        }
-      }
-    }
-    if (refRead) {
-      type = llvm::cast<npuv::NPUVectorType>(refRead.getVector().getType());
-      dynSizes.assign(refRead.getDynamicSizes().begin(), refRead.getDynamicSizes().end());
-      source = refRead.getSource();
-      return success();
-    }
-    if (refWrite) {
-      type = llvm::cast<npuv::NPUVectorType>(refWrite.getVector().getType());
-      source = refWrite.getSource();
-      return success();
-    }
-    if (unitRead) {
-      type = llvm::cast<npuv::NPUVectorType>(unitRead.getVector().getType());
-      dynSizes.assign(unitRead.getDynamicSizes().begin(), unitRead.getDynamicSizes().end());
-      source = unitRead.getSource();
-      return success();
-    }
-    return failure();
-  }
-
-  // Identify the reduction anchor and the ops that feed it:
-  //   - `redOp`   : the single reduction being tiled.
-  //   - `refRead` : the read supplying the loop extent. Scalar / broadcast-source
-  //                 unit reads are skipped in favour of a real read; a unit read
-  //                 is used only as a fallback.
-  //   - `producers`: the element-wise ops before the reduction that move into the
-  //                 loop body.
-  // Returns failure when there is no usable rank>0 anchor.
   static LogicalResult analyzeReductionKernel(func::FuncOp vfFunc, npuv::ReductionOp &redOp,
                                               npuv::TransferReadOp &refRead, SmallVector<Operation *> &producers) {
     Block &entry = vfFunc.getBody().front();
@@ -1034,7 +1654,6 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (llvm::cast<npuv::NPUVectorType>(refRead.getVector().getType()).getRank() == 0) {
       return failure();
     }
-    // Producers (element-wise ops before the reduction) move into the loop.
     for (Operation &op : entry.without_terminator()) {
       if (&op == redOp.getOperation()) {
         break;
@@ -1046,48 +1665,234 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     return success();
   }
 
-  // Locate the result memref this reduction writes into (the output buffer the
-  // outlining provides, e.g. `memref<1xf32>`), tracing the scalar result to its
-  // memref.store. That buffer doubles as the seed/accumulator store: storing
-  // then reading the identity back makes the multi_reduction acc a real
-  // (non-foldable) memory value, which is what lets NormalizeVector legalize the
-  // op. Fall back to a scratch alloc when the kernel returns the scalar instead.
-  // The seed (the op's existing acc or `idScalar`) is stored into the buffer and
-  // the delivering store is reported back so the caller can drop it later.
-  static Value prepareAccumulatorBuffer(OpBuilder &builder, Location loc, ReductionDesc desc,
-                                        memref::StoreOp &deliveryStore) {
-    Value outBuf;
-    for (Operation *user : desc.redOp.getResult().getUsers()) {
-      if (auto st = dyn_cast<memref::StoreOp>(user)) {
-        auto mt = llvm::dyn_cast<MemRefType>(st.getMemRef().getType());
-        if (mt && mt.getRank() == 1 && mt.getElementType() == desc.scalarElem) {
-          outBuf = st.getMemRef();
-          deliveryStore = st;
-          break;
-        }
-      }
-    }
+  // Resolve the actual output memref the delivery chain writes into, along
+  // with its element type and rank.
+  struct DeliveryTarget {
+    Value memref;
+    Type elemType;
+    int64_t rank = 0;
+    bool isStore = false;  // true for memref::StoreOp, false for npuv::TransferWriteOp
+  };
 
-    Value seedInit = desc.redOp.getAcc() ? desc.redOp.getAcc() : desc.idScalar;
-    Value accBuf = outBuf;
-    if (!accBuf) {
-      auto seedMemTy = MemRefType::get({1}, desc.scalarElem);
-      accBuf = builder.create<memref::AllocOp>(loc, seedMemTy);
+  static DeliveryTarget resolveDeliveryTarget(const ReductionDelivery &delivery) {
+    DeliveryTarget out;
+    if (auto store = dyn_cast<memref::StoreOp>(delivery.finalWrite)) {
+      out.memref = store.getMemRef();
+      out.isStore = true;
+    } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(delivery.finalWrite)) {
+      out.memref = wr.getSource();
+      out.isStore = false;
     }
-    builder.create<memref::StoreOp>(loc, seedInit, accBuf, ValueRange{desc.c0});
-    return accBuf;
+    if (out.memref) {
+      auto mt = llvm::cast<MemRefType>(out.memref.getType());
+      out.elemType = mt.getElementType();
+      out.rank = mt.getRank();
+    }
+    return out;
   }
 
-  // Tiled full-reduction for performance and NormalizeVector compatibility:
-  //   - Inside scf.for: element-wise style accumulation (iter_args holding
-  //     vector<laneCountxT>, lane-wise combine via arith ops + mask select).
-  //   - After the loop: one horizontal vector.multi_reduction of the register
-  //     tile to a scalar, with a scalar acc materialised via
-  //     extractelement(rank-0 read of a 1-element seed buffer) and its result
-  //     fed to a vector.broadcast — the shape NormalizeVector lowers to HIVM.
-  LogicalResult tileReductionKernel(func::FuncOp vfFunc, int64_t laneCount) {
+  // Lower a single npuvector unary cast op into the matching `arith` cast,
+  // producing a result of `outTy` (scalar element type for the scalar form,
+  // vector type for the vector form).
+  static Value emitCastFromNpuv(OpBuilder &b, Location loc, Operation *castOp, Type outTy, Value input) {
+    return llvm::TypeSwitch<Operation *, Value>(castOp)
+        .Case<npuv::ExtFOp>([&](auto) { return b.create<arith::ExtFOp>(loc, outTy, input); })
+        .Case<npuv::TruncFOp>([&](auto) { return b.create<arith::TruncFOp>(loc, outTy, input); })
+        .Case<npuv::ExtSIOp>([&](auto) { return b.create<arith::ExtSIOp>(loc, outTy, input); })
+        .Case<npuv::ExtUIOp>([&](auto) { return b.create<arith::ExtUIOp>(loc, outTy, input); })
+        .Case<npuv::TruncIOp>([&](auto) { return b.create<arith::TruncIOp>(loc, outTy, input); })
+        .Case<npuv::SIToFPOp>([&](auto) { return b.create<arith::SIToFPOp>(loc, outTy, input); })
+        .Case<npuv::UIToFPOp>([&](auto) { return b.create<arith::UIToFPOp>(loc, outTy, input); })
+        .Case<npuv::FPToSIOp>([&](auto) { return b.create<arith::FPToSIOp>(loc, outTy, input); })
+        .Case<npuv::FPToUIOp>([&](auto) { return b.create<arith::FPToUIOp>(loc, outTy, input); })
+        .Case<npuv::BitcastOp>([&](auto) { return b.create<arith::BitcastOp>(loc, outTy, input); })
+        .Case<npuv::IndexCastOp>([&](auto) { return b.create<arith::IndexCastOp>(loc, outTy, input); })
+        .Case<npuv::IndexCastUIOp>([&](auto) { return b.create<arith::IndexCastUIOp>(loc, outTy, input); })
+        .Default(Value());
+  }
+
+  // Lower a single npuvector unary cast op into the matching scalar arith op
+  // (operating on a scalar input).
+  static Value emitScalarCastFromNpuv(OpBuilder &b, Location loc, Operation *castOp, Value input) {
+    Type outElem = getElementTypeOrSelf(castOp->getResult(0).getType());
+    return emitCastFromNpuv(b, loc, castOp, outElem, input);
+  }
+
+  // Vector-typed counterpart to `emitScalarCastFromNpuv`: lowers an npuvector
+  // unary cast to the matching `arith` cast on a community vector of `outTy`.
+  static Value emitVectorCastFromNpuv(OpBuilder &b, Location loc, Operation *castOp, Type outTy, Value input) {
+    return emitCastFromNpuv(b, loc, castOp, outTy, input);
+  }
+
+  // Tile a single producer op of the full-reduction kernel into the loop body.
+  // This mirrors the elementwise emission but uses a trailing-dim alignment for
+  // the indices (producers feed one full-grid reduction).
+  LogicalResult tileReductionProducer(OpBuilder &b, Operation *op, IRMapping &map, ValueRange indices, Value mask,
+                                      int64_t laneCount) const {
+    Location loc = op->getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    auto vecTypeOf = [&](Type elemType) { return VectorType::get({laneCount}, elemType); };
+    auto sourceRank = [&](Value src) -> int64_t {
+      auto mt = llvm::dyn_cast<MemRefType>(src.getType());
+      return mt ? mt.getRank() : static_cast<int64_t>(indices.size());
+    };
+    auto trailingIndices = [&](int64_t srcRank) {
+      SmallVector<Value> result(indices.begin(), indices.end());
+      int64_t n = static_cast<int64_t>(result.size());
+      if (srcRank < n) {
+        result.erase(result.begin(), result.begin() + (n - srcRank));
+      }
+      return result;
+    };
+    auto permMapForRank = [&](int64_t srcRank) {
+      return AffineMap::getMinorIdentityMap(static_cast<unsigned>(srcRank), 1, b.getContext());
+    };
+    auto inBounds = b.getBoolArrayAttr({true});
+
+    if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
+      auto nvt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
+      Type elemType = nvt.getElementType();
+      if (isUnitNPUVector(nvt)) {
+        SmallVector<int64_t> shape(nvt.getShape().begin(), nvt.getShape().end());
+        auto unitVecTy = VectorType::get(shape, elemType);
+        SmallVector<Value> unitIndices(rd.getIndices().size());
+        std::transform(rd.getIndices().begin(), rd.getIndices().end(), unitIndices.begin(),
+                       [&](Value idx) { return remap(idx); });
+        // Discard any leading placeholder indices that overshoot the actual
+        // source memref rank (the npuvector+scalar form can attach a `[%c0]`
+        // even to a rank-0 memref).
+        int64_t srcRank = sourceRank(rd.getSource());
+        if (static_cast<int64_t>(unitIndices.size()) > srcRank) {
+          unitIndices.erase(unitIndices.begin(), unitIndices.begin() + (unitIndices.size() - srcRank));
+        }
+        // Rank-0 source feeding a rank>0 unit vector: broadcast permutation
+        // map (`() -> (0, ..., 0)`); otherwise the standard identity map.
+        AffineMap unitPermMap = (srcRank == 0 && unitVecTy.getRank() > 0)
+                                  ? getRank0BroadcastPermMap(b, unitVecTy.getRank())
+                                  : b.getMultiDimIdentityMap(unitVecTy.getRank());
+        auto unitInBounds = b.getBoolArrayAttr(SmallVector<bool>(unitVecTy.getRank(), true));
+        Value res = b.create<vector::TransferReadOp>(loc, unitVecTy, remap(rd.getSource()), unitIndices, unitPermMap,
+                                                     remap(rd.getPadding()), /*mask=*/Value(), unitInBounds);
+        map.map(rd.getResult(), res);
+        return success();
+      }
+      int64_t srcRank = sourceRank(rd.getSource());
+      Value res =
+        b.create<vector::TransferReadOp>(loc, vecTypeOf(elemType), remap(rd.getSource()), trailingIndices(srcRank),
+                                         permMapForRank(srcRank), remap(rd.getPadding()), mask, inBounds);
+      map.map(rd.getResult(), res);
+      return success();
+    }
+    if (auto wr = dyn_cast<npuv::TransferWriteOp>(op)) {
+      int64_t srcRank = sourceRank(wr.getSource());
+      // Rank-0 destination: extract the leading lane and write it back with a
+      // rank-0 `vector.transfer_write`
+      if (srcRank == 0) {
+        emitRank0TransferWrite(b, loc, remap(wr.getVector()), remap(wr.getSource()));
+        return success();
+      }
+      b.create<vector::TransferWriteOp>(loc, Type(), remap(wr.getVector()), remap(wr.getSource()),
+                                        trailingIndices(srcRank), permMapForRank(srcRank), mask, inBounds);
+      return success();
+    }
+    if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
+      Type elemType = llvm::cast<npuv::NPUVectorType>(bc.getResult().getType()).getElementType();
+      Value srcVal = remap(bc.getSource());
+      if (llvm::isa<VectorType>(srcVal.getType()) &&
+          llvm::cast<VectorType>(srcVal.getType()).getShape() == ArrayRef<int64_t>({laneCount})) {
+        map.map(bc.getResult(), srcVal);
+        return success();
+      }
+      Value res = b.create<vector::BroadcastOp>(loc, vecTypeOf(elemType), srcVal);
+      map.map(bc.getResult(), res);
+      return success();
+    }
+    // npuvector unary casts feeding the reduction (e.g. `npuvector.extf` widening
+    // a bf16 read up to the f32 accumulator before squaring + summing)
+    if (isUnaryNpuvCast(op)) {
+      Type outElem = llvm::cast<npuv::NPUVectorType>(op->getResult(0).getType()).getElementType();
+      auto outTy = vecTypeOf(outElem);
+      Value in = remap(op->getOperand(0));
+      Value res = emitVectorCastFromNpuv(b, loc, op, outTy, in);
+      if (!res) {
+        return op->emitError("npuvector-to-vector: unsupported npuvector cast in reduction producer");
+      }
+      map.map(op->getResult(0), res);
+      return success();
+    }
+    // Fall back to the generic dim-agnostic emission (cmp / select / cast /
+    // arith / math / constant) at register width.
+    return tileReductionProducerFallback(b, op, map, laneCount);
+  }
+
+  // `tileReductionProducer` helper: emit the generic dim-agnostic producer ops
+  // (cmp / select / cast / arith / math / constant) at register width.
+  LogicalResult tileReductionProducerFallback(OpBuilder &b, Operation *op, IRMapping &map, int64_t laneCount) const {
+    Location loc = op->getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    TileCtx ctx;
+    ctx.loopRank = 1;
+    ctx.laneCount = laneCount;
+    static const llvm::DenseSet<Value> kEmptyUnit;
+    static const DimMap kEmptyMap;
+    ctx.dimMap = &kEmptyMap;
+    ctx.unitVals = &kEmptyUnit;
+    // For these ops widthOf falls back to laneCount only when reg-tiled; with an
+    // empty map it returns 1, which is wrong here, so emit directly at lanes.
+    if (auto ci = dyn_cast<npuv::CmpIOp>(op)) {
+      map.map(ci.getResult(), b.create<arith::CmpIOp>(loc, ci.getPredicate(), remap(ci.getLhs()), remap(ci.getRhs())));
+      return success();
+    }
+    if (auto cf = dyn_cast<npuv::CmpFOp>(op)) {
+      map.map(cf.getResult(), b.create<arith::CmpFOp>(loc, cf.getPredicate(), remap(cf.getLhs()), remap(cf.getRhs())));
+      return success();
+    }
+    if (auto sel = dyn_cast<npuv::SelectOp>(op)) {
+      map.map(sel.getResult(), b.create<arith::SelectOp>(loc, remap(sel.getCondition()), remap(sel.getTrueValue()),
+                                                         remap(sel.getFalseValue())));
+      return success();
+    }
+    if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
+      auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(cst.getType());
+      if (!nvt) {
+        map.map(cst.getResult(), b.clone(*op)->getResult(0));
+        return success();
+      }
+      auto dense = llvm::dyn_cast<DenseElementsAttr>(cst.getValue());
+      if (!dense || !dense.isSplat()) {
+        return op->emitError("npuvector-to-vector: only splat npuvector constants are supported");
+      }
+      auto vecType = VectorType::get({laneCount}, nvt.getElementType());
+      map.map(cst.getResult(),
+              b.create<arith::ConstantOp>(loc, DenseElementsAttr::get(vecType, dense.getSplatValue<Attribute>())));
+      return success();
+    }
+    // Generic arith/math at lanes width.
+    SmallVector<Type> resultTypes;
+    for (Value r : op->getResults()) {
+      if (auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(r.getType())) {
+        resultTypes.push_back(VectorType::get({laneCount}, nvt.getElementType()));
+      } else {
+        resultTypes.push_back(r.getType());
+      }
+    }
+    SmallVector<Value> operands(op->getNumOperands());
+    std::transform(op->operand_begin(), op->operand_end(), operands.begin(), [&](Value v) { return remap(v); });
+    OperationState state(loc, op->getName().getStringRef());
+    state.addOperands(operands);
+    state.addTypes(resultTypes);
+    state.addAttributes(op->getAttrs());
+    Operation *newOp = b.create(state);
+    for (auto [oldRes, newRes] : llvm::zip(op->getResults(), newOp->getResults())) {
+      map.map(oldRes, newRes);
+    }
+    return success();
+  }
+
+  LogicalResult tileFullReductionKernel(func::FuncOp vfFunc, const KernelPlan &plan) {
     Block &entry = vfFunc.getBody().front();
     Location loc = vfFunc.getLoc();
+    int64_t laneCount = plan.laneCount;
 
     npuv::ReductionOp redOp;
     npuv::TransferReadOp refRead;
@@ -1098,7 +1903,19 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     auto nvt = llvm::cast<npuv::NPUVectorType>(refRead.getVector().getType());
     int64_t rank = nvt.getRank();
 
+    // Trace the post-reduction delivery chain
+    ReductionDelivery delivery;
+    if (!traceReductionDelivery(redOp, delivery)) {
+      return redOp.emitError("npuvector-to-vector: unable to resolve full-reduction delivery chain");
+    }
+    DeliveryTarget target = resolveDeliveryTarget(delivery);
+    if (!target.memref) {
+      return redOp.emitError("npuvector-to-vector: full-reduction delivery target is not a memref");
+    }
+
     auto kind = redOp.getKind();
+    // The reduction's element type drives the accumulator width; it can differ
+    // from the *output* memref element type
     Type scalarElem = getElementTypeOrSelf(redOp.getDest().getType());
     auto regVecTy = VectorType::get({laneCount}, scalarElem);
 
@@ -1109,26 +1926,100 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
 
     SmallVector<Value> bounds;
     bounds.reserve(rank);
-    TileDesc readDesc{nvt, refRead.getDynamicSizes(), refRead.getSource()};
-    if (failed(collectTileBounds(builder, loc, readDesc, bounds))) {
-      return failure();
-    }
-    // Validate the collected bounds cover every dimension before indexing by rank.
-    if (static_cast<int64_t>(bounds.size()) != rank) {
+    if (failed(collectTileBounds(builder, loc, nvt, refRead.getDynamicSizes(), refRead.getSource(), bounds))) {
       return failure();
     }
 
-    // Register-wide identity for the element-wise loop accumulator.
     Value regIdent = buildIdentityAccumulator(builder, loc, kind, regVecTy);
-
     TypedAttr idAttr = getCombiningIdentityAttr(builder, kind, scalarElem);
-    Value idScalar = builder.create<arith::ConstantOp>(loc, idAttr);
-    memref::StoreOp deliveryStore;
-    ReductionDesc redDesc{redOp, scalarElem, idScalar, c0};
-    Value accBuf = prepareAccumulatorBuffer(builder, loc, redDesc, deliveryStore);
 
-    // Build the loop nest with a vector<laneCountxT> iter_arg threaded through
-    // every level; outer dims step 1, innermost step laneCount.
+    // Accumulator (seed) shape.  we materialize the seed as a rank-0
+    // `vector<scalarElem>` so the post-loop sequence is the canonical
+    // `extractelement -> multi_reduction -> broadcast` chain.
+    auto rank0Ty = VectorType::get({}, scalarElem);
+    bool reuseTargetAsAccBuf = false;
+    Value accBuf;    // legacy path only: scalar seed lives in a memref<1xT>
+    Value idScalar;  // legacy path only: scalar identity (also pads transfer_read)
+    Value seedVec;   // new path only: rank-0 vector seed
+    buildFullReductionSeed(builder, loc, redOp, kind, scalarElem, idAttr, target, delivery, c0, reuseTargetAsAccBuf,
+                           accBuf, idScalar, seedVec);
+
+    Value vecAcc;
+    if (failed(buildFullReductionLoopNest(builder, loc, rank, bounds, c0, c1, cLane, regIdent, regVecTy, laneCount,
+                                          producers, redOp, kind, vecAcc))) {
+      return failure();
+    }
+
+    OpBuilder post(redOp);
+    // Pull the seed scalar out of its rank-0 carrier. Legacy keeps the
+    // memref<1xT> + transfer_read shape; the new path goes straight from the
+    // rank-0 vector constant (or broadcast acc) into `extractelement`.
+    Value seedScalarVec;
+    if (reuseTargetAsAccBuf) {
+      auto rank0Map = AffineMap::get(1, 0, post.getContext());
+      seedScalarVec = post.create<vector::TransferReadOp>(loc, rank0Ty, accBuf, ValueRange{c0}, rank0Map, idScalar,
+                                                          Value(), post.getBoolArrayAttr({}));
+    } else {
+      seedScalarVec = seedVec;
+    }
+    Value seed = post.create<vector::ExtractElementOp>(loc, seedScalarVec);
+    SmallVector<bool> reductionMask(1, true);
+    Value reduced = post.create<vector::MultiDimReductionOp>(loc, vecAcc, seed, reductionMask, kind);
+
+    if (!llvm::isa<npuv::NPUVectorType>(redOp.getResult().getType())) {
+      redOp.getResult().replaceAllUsesWith(reduced);
+    }
+
+    if (reuseTargetAsAccBuf) {
+      if (failed(emitFullReductionLegacyWrite(post, loc, reduced, scalarElem, delivery, accBuf, c0, c1))) {
+        return failure();
+      }
+    } else {
+      if (failed(emitFullReductionNewWrite(post, loc, reduced, scalarElem, target, delivery, c0))) {
+        return failure();
+      }
+    }
+
+    eraseFullReductionKernel(entry, redOp, delivery, producers);
+    return success();
+  }
+
+  // `tileFullReductionKernel` helper: materialize the accumulator seed. Decides
+  // whether the output memref can be reused as the scalar accumulator buffer
+  // (legacy `memref<1xT>` path) and, depending on that, sets up either the
+  // legacy scalar identity / scratch store or the new rank-0 vector seed.
+  void buildFullReductionSeed(OpBuilder &builder, Location loc, npuv::ReductionOp redOp, vector::CombiningKind kind,
+                              Type scalarElem, TypedAttr idAttr, const DeliveryTarget &target,
+                              const ReductionDelivery &delivery, Value c0, bool &reuseTargetAsAccBuf, Value &accBuf,
+                              Value &idScalar, Value &seedVec) const {
+    reuseTargetAsAccBuf = false;
+    if (target.isStore && target.rank == 1) {
+      auto mt = llvm::cast<MemRefType>(target.memref.getType());
+      if (mt.getShape()[0] == 1 && mt.getElementType() == scalarElem && delivery.castChain.empty()) {
+        reuseTargetAsAccBuf = true;
+      }
+    }
+    auto rank0Ty = VectorType::get({}, scalarElem);
+    if (reuseTargetAsAccBuf) {
+      idScalar = builder.create<arith::ConstantOp>(loc, idAttr);
+      accBuf = target.memref;
+      Value seedInit = redOp.getAcc() ? redOp.getAcc() : idScalar;
+      builder.create<memref::StoreOp>(loc, seedInit, accBuf, ValueRange{c0});
+    } else if (Value acc = redOp.getAcc()) {
+      seedVec = builder.create<vector::BroadcastOp>(loc, rank0Ty, acc);
+    } else {
+      seedVec = buildIdentityAccumulator(builder, loc, kind, rank0Ty);
+    }
+  }
+
+  // `tileFullReductionKernel` helper: build the register-tiled scf.for nest, tile
+  // the reduction producers inside it, accumulate the masked register reduction
+  // and wire up the per-level yields. Returns the rank-0/register accumulator in
+  // `vecAcc`.
+  LogicalResult buildFullReductionLoopNest(const OpBuilder &builder, Location loc, int64_t rank, ArrayRef<Value> bounds,
+                                           Value c0, Value c1, Value cLane, Value regIdent, VectorType regVecTy,
+                                           int64_t laneCount, ArrayRef<Operation *> producers, npuv::ReductionOp redOp,
+                                           vector::CombiningKind kind, Value &vecAcc) const {
     SmallVector<Value> ivs(rank);
     SmallVector<scf::ForOp> loops(rank);
     OpBuilder lb = builder;
@@ -1142,15 +2033,14 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
       lb = OpBuilder::atBlockBegin(forOp.getBody());
     }
 
-    // Innermost body: mask, replay producers, lane-wise accumulate.
     Value remaining = lb.create<arith::SubIOp>(loc, bounds[rank - 1], ivs.back());
     Value activeLen = lb.create<arith::MinSIOp>(loc, remaining, cLane);
     auto tileMaskTy = VectorType::get({laneCount}, lb.getI1Type());
     Value tileMask = lb.create<vector::CreateMaskOp>(loc, tileMaskTy, ValueRange{activeLen});
 
     IRMapping map;
-    if (std::any_of(producers.begin(), producers.end(), [this, &lb, &map, &ivs, &tileMask, laneCount](Operation *op) {
-          return failed(tileComputeOp(lb, op, map, ivs, tileMask, laneCount));
+    if (std::any_of(producers.begin(), producers.end(), [&](Operation *op) {
+          return failed(tileReductionProducer(lb, op, map, ivs, tileMask, laneCount));
         })) {
       return failure();
     }
@@ -1158,62 +2048,33 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (redInput.getType() != regVecTy) {
       return redOp.emitError("npuvector-to-vector: reduction input register type mismatch");
     }
-    // Inactive lanes carry the identity so they do not affect the accumulator.
     Value masked = lb.create<arith::SelectOp>(loc, tileMask, redInput, regIdent);
     Value innerAcc = loops[rank - 1].getRegionIterArgs().front();
     Value combined = vector::makeArithReduction(lb, loc, kind, innerAcc, masked);
     lb.create<scf::YieldOp>(loc, combined);
 
-    // Yield the inner result up through enclosing loops.
     for (int64_t d = rank - 2; d >= 0; --d) {
       OpBuilder yb = OpBuilder::atBlockEnd(loops[d].getBody());
       yb.create<scf::YieldOp>(loc, loops[d + 1].getResult(0));
     }
 
-    // After the loop: reduce the register tile to a scalar in the exact shape
-    // NormalizeVector's UnitDimMultiReductionToReduction expects:
-    //   %seed = vector.extractelement (rank-0 transfer_read of accBuf)
-    //   %r    = vector.multi_reduction <kind>, %vecAcc, %seed [0] : vector<NxT> to T
-    //   %bc   = vector.broadcast %r : T to vector<1xT>
-    //   vector.transfer_write %bc, %accBuf[0]   (keeps the broadcast consumer live)
-    // The acc MUST come from an extractelement and the result MUST feed a
-    // broadcast, otherwise the pattern bails and the op stays illegal.
-    Value vecAcc = loops[0].getResult(0);
-    OpBuilder post(redOp);
-    auto rank0Ty = VectorType::get({}, scalarElem);
-    auto rank0Map = AffineMap::get(1, 0, post.getContext());
-    Value emptyMask;
-    Value seedVec = post.create<vector::TransferReadOp>(loc, rank0Ty, accBuf, ValueRange{c0}, rank0Map, idScalar,
-                                                        emptyMask, post.getBoolArrayAttr({}));
-    Value seed = post.create<vector::ExtractElementOp>(loc, seedVec);
-    SmallVector<bool> reductionMask(1, true);
-    Value result = post.create<vector::MultiDimReductionOp>(loc, vecAcc, seed, reductionMask, kind);
+    vecAcc = loops[0].getResult(0);
+    return success();
+  }
 
-    // Route the scalar to existing consumers first, THEN add the broadcast so it
-    // is the first user the NormalizeVector pattern inspects.
-    redOp.getResult().replaceAllUsesWith(result);
-    auto out1Ty = VectorType::get({1}, scalarElem);
-    Value bcast = post.create<vector::BroadcastOp>(loc, out1Ty, result);
-    Value oneMask = post.create<vector::CreateMaskOp>(loc, VectorType::get({1}, post.getI1Type()), ValueRange{c1});
-    post.create<vector::TransferWriteOp>(loc, Type(), bcast, accBuf, ValueRange{c0},
-                                         post.getMultiDimIdentityMap(1), oneMask, post.getBoolArrayAttr({true}));
-
-    // Drop the original scalar store: the broadcast + transfer_write above is now
-    // the canonical write into the output buffer (avoids a double store).
-    if (deliveryStore) {
-      deliveryStore.erase();
+  // `tileFullReductionKernel` helper: erase the original delivery chain
+  // (write -> casts), the reduction, its producers, and any now-dead constants
+  // so the unused npuvector values are gone after tiling.
+  void eraseFullReductionKernel(Block &entry, npuv::ReductionOp redOp, const ReductionDelivery &delivery,
+                                ArrayRef<Operation *> producers) const {
+    delivery.finalWrite->erase();
+    for (auto it = delivery.castChain.rbegin(); it != delivery.castChain.rend(); ++it) {
+      (*it)->erase();
     }
     redOp.erase();
     for (auto it = producers.rbegin(); it != producers.rend(); ++it) {
       (*it)->erase();
     }
-
-    eraseDeadConstOps(entry);
-    return success();
-  }
-
-  // Erase arith::ConstantOp operations in `entry` that have no remaining uses.
-  static void eraseDeadConstOps(Block &entry) {
     SmallVector<Operation *> deadConsts;
     for (Operation &op : entry.without_terminator()) {
       if (isa<arith::ConstantOp>(op) && op.use_empty()) {
@@ -1225,8 +2086,568 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     }
   }
 
+  // `tileFullReductionKernel` helper: legacy delivery write -- scalar cast chain,
+  // then vector<1xT> + masked transfer_write to memref<1xT> (matches the prior
+  // lowering the existing UT depends on).
+  LogicalResult emitFullReductionLegacyWrite(OpBuilder &post, Location loc, Value reduced, Type scalarElem,
+                                             const ReductionDelivery &delivery, Value accBuf,
+                                             Value c0, Value c1) const {
+    Value scalarVal = reduced;
+    for (Operation *castOp : delivery.castChain) {
+      Value next = emitScalarCastFromNpuv(post, loc, castOp, scalarVal);
+      if (!next) {
+        return castOp->emitError("npuvector-to-vector: unsupported cast in full-reduction delivery chain");
+      }
+      scalarVal = next;
+    }
+    auto out1Ty = VectorType::get({1}, scalarElem);
+    Value bcast = post.create<vector::BroadcastOp>(loc, out1Ty, scalarVal);
+    Value oneMask = post.create<vector::CreateMaskOp>(loc, VectorType::get({1}, post.getI1Type()), ValueRange{c1});
+    post.create<vector::TransferWriteOp>(loc, /*resultType=*/Type(), bcast, accBuf, ValueRange{c0},
+                                         post.getMultiDimIdentityMap(1), oneMask, post.getBoolArrayAttr({true}));
+    return success();
+  }
+
+  // `tileFullReductionKernel` helper: new delivery write -- broadcast right
+  // after the multi_reduction, then apply the npuvector cast chain as vector
+  // ops on the broadcast vector. Produces the canonical
+  // `multi_reduction -> broadcast -> (vector casts) -> transfer_write` shape
+  // with no scratch memref and no single-lane mask on the final write.
+  LogicalResult emitFullReductionNewWrite(OpBuilder &post, Location loc, Value reduced, Type scalarElem,
+                                          const DeliveryTarget &target, const ReductionDelivery &delivery,
+                                          Value c0) const {
+    int64_t writeRank = std::max<int64_t>(target.rank, 1);
+    auto wrapElem = [&](Type elem) {
+      return (target.rank == 0) ? VectorType::get({}, elem) : VectorType::get({1}, elem);
+    };
+    Value vecVal = post.create<vector::BroadcastOp>(loc, wrapElem(scalarElem), reduced);
+    for (Operation *castOp : delivery.castChain) {
+      Type outElem = getElementTypeOrSelf(castOp->getResult(0).getType());
+      Value next = emitVectorCastFromNpuv(post, loc, castOp, wrapElem(outElem), vecVal);
+      if (!next) {
+        return castOp->emitError("npuvector-to-vector: unsupported cast in full-reduction delivery chain");
+      }
+      vecVal = next;
+    }
+
+    if (target.rank == 0) {
+      auto rank0WriteMap = AffineMap::get(0, 0, post.getContext());
+      post.create<vector::TransferWriteOp>(loc, Type(), vecVal, target.memref, ValueRange{},
+                                           rank0WriteMap, Value(), post.getBoolArrayAttr({}));
+      return success();
+    }
+    // Preserve original indices when possible (a `npuv::TransferWriteOp`
+    // may write at a runtime index other than 0).
+    SmallVector<Value> indices;
+    if (auto wr = dyn_cast<npuv::TransferWriteOp>(delivery.finalWrite)) {
+      std::copy(wr.getIndices().begin(), wr.getIndices().end(), std::back_inserter(indices));
+    } else if (auto st = dyn_cast<memref::StoreOp>(delivery.finalWrite)) {
+      std::copy(st.getIndices().begin(), st.getIndices().end(), std::back_inserter(indices));
+    }
+    if (static_cast<int64_t>(indices.size()) > target.rank) {
+      indices.erase(indices.begin(), indices.begin() + (indices.size() - target.rank));
+    }
+    if (indices.empty()) {
+      indices.push_back(c0);
+    }
+    post.create<vector::TransferWriteOp>(loc, Type(), vecVal, target.memref, indices,
+                                         post.getMultiDimIdentityMap(writeRank), /*mask=*/Value(),
+                                         post.getBoolArrayAttr(SmallVector<bool>(writeRank, true)));
+    return success();
+  }
+
+  // =========================================================================
+  // Partial (last-axis) reduction kernel tiler.
+  //
+  // Structure per outer (row) iteration:
+  //   * pass 1 over the register/reduction axis with one accumulator iter_arg
+  //     per reduction: emit the reduction producers, accumulate, and write any
+  //     pure-elementwise outputs that do not depend on a reduction result.
+  //   * finalize each reduction to a per-row scalar, then run the per-row
+  //     compute.
+  //   * pass 2 over the register axis: recompute the register-wide inputs and
+  //     emit the outputs that broadcast the per-row results back across the row.
+  // =========================================================================
+  static bool isPartialLastAxisReductionTileable(func::FuncOp vfFunc, int64_t loopRank) {
+    if (vfFunc.getBody().empty()) {
+      return false;
+    }
+    Block &entry = vfFunc.getBody().front();
+    bool hasReduction = false;
+    bool ok = true;
+    entry.walk([&](Operation *op) {
+      if (isa<npuv::TransposeOp>(op)) {
+        ok = false;
+      }
+      if (auto red = dyn_cast<npuv::ReductionOp>(op)) {
+        hasReduction = true;
+        auto dims = red.getReductionDims();
+        if (!dims || dims->empty()) {
+          ok = false;  // full reduction handled elsewhere
+          return;
+        }
+        // Only last-axis reduction is supported here.
+        int64_t srcRank = npuVectorRank(red.getVector().getType());
+        if (dims->size() != 1 || (*dims)[0] != srcRank - 1) {
+          ok = false;
+        }
+      }
+    });
+    return hasReduction && ok && loopRank >= 1;
+  }
+
+  LogicalResult tilePartialReductionKernel(func::FuncOp vfFunc, const KernelPlan &plan) {
+    Block &entry = vfFunc.getBody().front();
+    Location loc = vfFunc.getLoc();
+    int64_t lanes = plan.laneCount;
+    int64_t R = plan.loopRank;
+    if (R < 1) {
+      return failure();
+    }
+
+    Value anchor = findAnchorValue(entry);
+    if (!anchor) {
+      return failure();
+    }
+    DimMap dimMap;
+    llvm::DenseSet<Value> unitVals;
+    computeDimMap(entry, anchor, R, dimMap, unitVals);
+
+    // Classify ops and run the reduction taint analysis.
+    SmallVector<npuv::ReductionOp> reductions;
+    llvm::DenseSet<Operation *> dependsOnReduction;
+    if (failed(collectPartialReductions(entry, reductions, dependsOnReduction))) {
+      return failure();
+    }
+
+    // Build outer (row) loops first.
+    OpBuilder builder(entry.getTerminator());
+    SmallVector<Value> bounds;
+    if (failed(getPerDimBounds(builder, loc, anchor, bounds)) || static_cast<int64_t>(bounds.size()) != R) {
+      return failure();
+    }
+    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
+
+    // Emit unit ops once before everything.
+    IRMapping shared;
+    TileCtx baseCtx;
+    baseCtx.loopRank = R;
+    baseCtx.laneCount = lanes;
+    baseCtx.dimMap = &dimMap;
+    baseCtx.unitVals = &unitVals;
+    SmallVector<Operation *> unitEmitted;
+    if (failed(emitUnitOps(builder, entry, shared, baseCtx, unitEmitted))) {
+      return failure();
+    }
+
+    SmallVector<Value> outerIvs;
+    OpBuilder body = builder;
+    for (int64_t d = 0; d < R - 1; ++d) {
+      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
+      outerIvs.push_back(forOp.getInductionVar());
+      body = OpBuilder::atBlockBegin(forOp.getBody());
+    }
+
+    // Per-reduction identity / accumulators.
+    SmallVector<vector::CombiningKind> redKinds;
+    SmallVector<Value> redIdents;
+    SmallVector<Type> redElems;
+    for (auto red : reductions) {
+      Type elem = getElementTypeOrSelf(red.getDest().getType());
+      redElems.push_back(elem);
+      redKinds.push_back(red.getKind());
+      redIdents.push_back(buildIdentityAccumulator(body, loc, red.getKind(), VectorType::get({lanes}, elem)));
+    }
+
+    // ---- Pass 1: accumulation + pure-elementwise outputs ----
+    scf::ForOp pass1;
+    if (failed(runPartialPass1(body, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, lanes, R, unitEmitted,
+                               dependsOnReduction, reductions, redIdents, redKinds, pass1))) {
+      return failure();
+    }
+
+    // ---- Finalize reductions to per-row scalars, then run the per-row compute
+    //      (scalar ops not reg-tiled, depending on reductions) ----
+    OpBuilder pr = body;  // continue in the outer-row body, after pass1
+    pr.setInsertionPointAfter(pass1);
+    if (failed(finalizePartialReductions(pr, loc, entry, shared, reductions, redKinds, redElems, pass1, outerIvs,
+                                         dimMap, unitVals, unitEmitted, R))) {
+      return failure();
+    }
+
+    // ---- Pass 2: recompute reg-tiled inputs and emit reduction-dependent
+    //      outputs (broadcasting the per-row scalars back across the row) ----
+    if (failed(runPartialPass2(pr, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, lanes, R, unitEmitted,
+                               dependsOnReduction))) {
+      return failure();
+    }
+
+    // Erase original compute ops.
+    SmallVector<Operation *> computeOps;
+    for (Operation &op : entry.without_terminator()) {
+      if (touchesNpuVector(&op)) {
+        computeOps.push_back(&op);
+      }
+    }
+    eraseComputeOps(entry, computeOps);
+    return success();
+  }
+
+  // `tilePartialReductionKernel` helper: collect all reduction ops and run the
+  // taint analysis (an op depends on a reduction if it transitively uses a
+  // reduction result). Fails when the kernel has no reduction.
+  LogicalResult collectPartialReductions(Block &entry, SmallVectorImpl<npuv::ReductionOp> &reductions,
+                                         llvm::DenseSet<Operation *> &dependsOnReduction) const {
+    for (Operation &op : entry) {
+      if (auto r = dyn_cast<npuv::ReductionOp>(&op)) {
+        reductions.push_back(r);
+      }
+    }
+    if (reductions.empty()) {
+      return failure();
+    }
+    for (Operation &op : entry) {
+      bool dep = false;
+      for (Value v : op.getOperands()) {
+        Operation *def = v.getDefiningOp();
+        if (def && (isa<npuv::ReductionOp>(def) || dependsOnReduction.count(def))) {
+          dep = true;
+          break;
+        }
+      }
+      if (dep) {
+        dependsOnReduction.insert(&op);
+      }
+    }
+    return success();
+  }
+
+  // `tilePartialReductionKernel` helper: build the pass-1 register loop (with one
+  // accumulator iter_arg per reduction), seed the op map with the hoisted unit
+  // values, then emit the pass-1 body. Returns the loop in `pass1`.
+  LogicalResult runPartialPass1(OpBuilder &body, Location loc, Block &entry, IRMapping &shared, const TileCtx &baseCtx,
+                                ArrayRef<Value> bounds, ArrayRef<Value> outerIvs, Value c0, Value cLane, int64_t lanes,
+                                int64_t R, ArrayRef<Operation *> unitEmitted,
+                                const llvm::DenseSet<Operation *> &dependsOnReduction,
+                                ArrayRef<npuv::ReductionOp> reductions, ArrayRef<Value> redIdents,
+                                ArrayRef<vector::CombiningKind> redKinds, scf::ForOp &pass1) const {
+    SmallVector<Value> iterInit(redIdents.begin(), redIdents.end());
+    pass1 = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane, iterInit);
+    Value regIv = pass1.getInductionVar();
+    OpBuilder p1 = OpBuilder::atBlockBegin(pass1.getBody());
+
+    Value remaining1 = p1.create<arith::SubIOp>(loc, bounds[R - 1], regIv);
+    Value activeLen1 = p1.create<arith::MinSIOp>(loc, remaining1, cLane);
+    auto maskTy = VectorType::get({lanes}, p1.getI1Type());
+    Value mask1 = p1.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen1});
+
+    SmallVector<Value> ivs1(outerIvs.begin(), outerIvs.end());
+    ivs1.push_back(regIv);
+
+    IRMapping map1;
+    // seed with unit values
+    for (Operation *u : unitEmitted) {
+      for (Value r : u->getResults()) {
+        if (Value mapped = shared.lookupOrDefault(r); mapped != r) {
+          map1.map(r, mapped);
+        }
+      }
+    }
+    TileCtx ctx1 = baseCtx;
+    ctx1.ivs = ivs1;
+    ctx1.mask = mask1;
+
+    return emitPartialPass1(p1, loc, entry, map1, ctx1, unitEmitted, dependsOnReduction, reductions, redIdents,
+                            redKinds, mask1, pass1);
+  }
+
+  // `tilePartialReductionKernel` helper: build the pass-2 register loop, seed its
+  // op map with the per-row scalars / unit values, then emit the pass-2 body.
+  LogicalResult runPartialPass2(OpBuilder p2builder, Location loc, Block &entry, IRMapping &shared,
+                                const TileCtx &baseCtx, ArrayRef<Value> bounds, ArrayRef<Value> outerIvs, Value c0,
+                                Value cLane, int64_t lanes, int64_t R, ArrayRef<Operation *> unitEmitted,
+                                const llvm::DenseSet<Operation *> &dependsOnReduction) const {
+    auto pass2 = p2builder.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
+    Value regIv2 = pass2.getInductionVar();
+    OpBuilder p2 = OpBuilder::atBlockBegin(pass2.getBody());
+    Value remaining2 = p2.create<arith::SubIOp>(loc, bounds[R - 1], regIv2);
+    Value activeLen2 = p2.create<arith::MinSIOp>(loc, remaining2, cLane);
+    auto maskTy = VectorType::get({lanes}, p2.getI1Type());
+    Value mask2 = p2.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen2});
+
+    SmallVector<Value> ivs2(outerIvs.begin(), outerIvs.end());
+    ivs2.push_back(regIv2);
+
+    IRMapping map2(shared);  // per-row scalars + unit values available
+    TileCtx ctx2 = baseCtx;
+    ctx2.ivs = ivs2;
+    ctx2.mask = mask2;
+
+    return emitPartialPass2(p2, entry, map2, ctx2, unitEmitted, dependsOnReduction);
+  }
+
+  // `tilePartialReductionKernel` helper: pass 1 body -- emit every reg-tiled op
+  // that does NOT depend on a reduction (producers feeding reductions + pure
+  // elementwise outputs), accumulate each reduction into its iter_arg, and yield
+  // the running accumulators.
+  LogicalResult emitPartialPass1(OpBuilder &p1, Location loc, Block &entry, IRMapping &map1, const TileCtx &ctx1,
+                                 ArrayRef<Operation *> unitEmitted,
+                                 const llvm::DenseSet<Operation *> &dependsOnReduction,
+                                 ArrayRef<npuv::ReductionOp> reductions, ArrayRef<Value> redIdents,
+                                 ArrayRef<vector::CombiningKind> redKinds, Value mask1, scf::ForOp pass1) const {
+    auto regTiled = [&](Value v) { return isRegTiled(v, *ctx1.dimMap, *ctx1.unitVals, ctx1.loopRank); };
+    llvm::DenseMap<npuv::ReductionOp, int> redIndex;
+    for (auto [i, red] : llvm::enumerate(reductions)) {
+      redIndex[red] = static_cast<int>(i);
+    }
+    SmallVector<Value> redAccumulated(reductions.size());
+
+    for (Operation &op : entry.without_terminator()) {
+      if (llvm::is_contained(unitEmitted, &op) || !touchesNpuVector(&op)) {
+        continue;
+      }
+      if (auto red = dyn_cast<npuv::ReductionOp>(&op)) {
+        Value src = map1.lookupOrDefault(red.getVector());
+        int idx = redIndex[red];
+        Value masked = p1.create<arith::SelectOp>(loc, mask1, src, redIdents[idx]);
+        Value acc = pass1.getRegionIterArgs()[idx];
+        redAccumulated[idx] = vector::makeArithReduction(p1, loc, redKinds[idx], acc, masked);
+        continue;
+      }
+      if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        // Pure-elementwise output (independent of any reduction) is written here.
+        if (!dependsOnReduction.count(&op) && regTiled(wr.getVector())) {
+          if (failed(emitTiledOp(p1, &op, map1, ctx1))) {
+            return failure();
+          }
+        }
+        continue;
+      }
+      // Reg-tiled producer not depending on a reduction.
+      if (!dependsOnReduction.count(&op) && !op.getResults().empty() && regTiled(op.getResult(0))) {
+        if (failed(emitTiledOp(p1, &op, map1, ctx1))) {
+          return failure();
+        }
+      }
+    }
+    // Carry the running accumulators (fall back to incoming iter arg if a
+    // reduction was not reached, which should not happen).
+    SmallVector<Value> yields(reductions.size());
+    for (size_t i = 0; i < reductions.size(); ++i) {
+      yields[i] = redAccumulated[i] ? redAccumulated[i] : pass1.getRegionIterArgs()[i];
+    }
+    p1.create<scf::YieldOp>(loc, yields);
+    return success();
+  }
+
+  // `tilePartialReductionKernel` helper: horizontally reduce each register
+  // accumulator to a per-row scalar (recording it in `shared`), then emit the
+  // per-row scalar compute for the non-reg-tiled, reduction-dependent ops.
+  LogicalResult finalizePartialReductions(OpBuilder &pr, Location loc, Block &entry, IRMapping &shared,
+                                          ArrayRef<npuv::ReductionOp> reductions,
+                                          ArrayRef<vector::CombiningKind> redKinds, ArrayRef<Type> redElems,
+                                          scf::ForOp pass1, ValueRange outerIvs, const DimMap &dimMap,
+                                          const llvm::DenseSet<Value> &unitVals, ArrayRef<Operation *> unitEmitted,
+                                          int64_t R) const {
+    auto regTiled = [&](Value v) { return isRegTiled(v, dimMap, unitVals, R); };
+    for (size_t i = 0; i < reductions.size(); ++i) {
+      auto red = reductions[i];
+      Value acc = pass1.getResult(i);
+      Value identScalar = pr.create<arith::ConstantOp>(loc, getCombiningIdentityAttr(pr, redKinds[i], redElems[i]));
+      // Horizontal reduce the register accumulator (vector<lanes>) to a scalar,
+      // using the same shape as the full-reduction path.
+      SmallVector<bool> rmask(1, true);
+      Value scalar = pr.create<vector::MultiDimReductionOp>(loc, acc, identScalar, rmask, redKinds[i]);
+      // Per-row values are represented as scalars; record into shared map.
+      shared.map(red.getResult(), scalar);
+    }
+
+    for (Operation &op : entry.without_terminator()) {
+      if (llvm::is_contained(unitEmitted, &op) || !touchesNpuVector(&op)) {
+        continue;
+      }
+      if (isa<npuv::ReductionOp>(&op)) {
+        continue;
+      }
+      if (op.getResults().empty()) {
+        continue;
+      }
+      // per-row scalar op: result not reg-tiled (i.e. a row scalar).
+      if (!regTiled(op.getResult(0))) {
+        if (failed(emitPerRowScalarOp(pr, &op, shared, outerIvs, dimMap))) {
+          return failure();
+        }
+      }
+    }
+    return success();
+  }
+
+  // `tilePartialReductionKernel` helper: pass 2 body -- recompute reg-tiled
+  // inputs and emit the reduction-dependent outputs (broadcasting the per-row
+  // scalars back across the row).
+  LogicalResult emitPartialPass2(OpBuilder &p2, Block &entry, IRMapping &map2, const TileCtx &ctx2,
+                                 ArrayRef<Operation *> unitEmitted,
+                                 const llvm::DenseSet<Operation *> &dependsOnReduction) const {
+    auto regTiled = [&](Value v) { return isRegTiled(v, *ctx2.dimMap, *ctx2.unitVals, ctx2.loopRank); };
+    for (Operation &op : entry.without_terminator()) {
+      if (llvm::is_contained(unitEmitted, &op) || !touchesNpuVector(&op)) {
+        continue;
+      }
+      if (isa<npuv::ReductionOp>(&op)) {
+        continue;
+      }
+      if (op.getResults().empty()) {
+        // a transfer_write
+      }
+      if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        if (dependsOnReduction.count(&op) && regTiled(wr.getVector())) {
+          if (failed(emitTiledOp(p2, &op, map2, ctx2))) {
+            return failure();
+          }
+        }
+        continue;
+      }
+      // Reg-tiled op: either a reduction-dependent compute (needed for pass2) or
+      // a pure input that pass2 must recompute (because its pass1 value lives in
+      // a different loop). Emit if reg-tiled and not already mapped.
+      if (!op.getResults().empty() && regTiled(op.getResult(0))) {
+        if (!map2.contains(op.getResult(0))) {
+          if (failed(emitTiledOp(p2, &op, map2, ctx2))) {
+            return failure();
+          }
+        }
+      }
+    }
+    return success();
+  }
+
+  // `emitPerRowScalarOp` helper: lower a per-row `npuv::TransferReadOp` into a
+  // shape-1 `vector.transfer_read` at the row index, then extract the scalar
+  // lane for the downstream scalar ops.
+  LogicalResult emitPerRowTransferRead(OpBuilder &b, npuv::TransferReadOp rd, IRMapping &map, ValueRange outerIvs,
+                                       const DimMap &dimMap) const {
+    Location loc = rd.getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    auto vt = llvm::cast<npuv::NPUVectorType>(rd.getVector().getType());
+    Type elem = vt.getElementType();
+    ArrayRef<int64_t> m =
+      dimMap.count(rd.getResult()) ? ArrayRef<int64_t>(dimMap.find(rd.getResult())->second) : ArrayRef<int64_t>();
+    SmallVector<Value> indices;
+    for (size_t k = 0; k < rd.getIndices().size(); ++k) {
+      Value base = remap(rd.getIndices()[k]);
+      Value iv;
+      if (k < m.size() && m[k] >= 0 && m[k] < static_cast<int64_t>(outerIvs.size())) {
+        iv = outerIvs[m[k]];
+      }
+      indices.push_back(addIndex(b, loc, base, iv));
+    }
+    // Drop leading placeholder indices that exceed the actual source rank
+    // (npuvector+scalar form may emit a `[%c0]` even on a rank-0 memref).
+    int64_t srcRank = getShapedSourceRank(rd.getSource());
+    if (srcRank >= 0 && static_cast<int64_t>(indices.size()) > srcRank) {
+      indices.erase(indices.begin(), indices.begin() + (indices.size() - srcRank));
+    }
+    // Read the single element with a shape-1 `vector.transfer_read` (never
+    // memref.load) and extract the scalar lane for the downstream scalar
+    // ops. We avoid emitting a shapeless rank-0 vector here so every
+    // vector value in the lowered IR carries an explicit shape; for a
+    // rank-0 source memref the read uses a `() -> (0)` broadcast
+    // permutation map, otherwise the standard minor-identity map.
+    auto vec1Ty = VectorType::get({1}, elem);
+    AffineMap permMap;
+    if (indices.empty()) {
+      permMap = AffineMap::get(0, 0, b.getAffineConstantExpr(0), b.getContext());
+    } else {
+      permMap = AffineMap::getMinorIdentityMap(static_cast<unsigned>(indices.size()), 1, b.getContext());
+    }
+    Value vec1 =
+      b.create<vector::TransferReadOp>(loc, vec1Ty, remap(rd.getSource()), indices, permMap, remap(rd.getPadding()),
+                                       Value(), b.getBoolArrayAttr({true}));
+    Value scalar = b.create<vector::ExtractOp>(loc, vec1, ArrayRef<int64_t>{0});
+    // Represent per-row value as a scalar; downstream scalar ops use it.
+    map.map(rd.getResult(), scalar);
+    return success();
+  }
+
+  // Emit a per-row (scalar) op: reads become memref.load at the row index,
+  // elementwise/cmp/select/cast become scalar arith. Broadcast of a scalar to a
+  // per-row scalar stays a scalar (identity).
+  LogicalResult emitPerRowScalarOp(OpBuilder &b, Operation *op, IRMapping &map, ValueRange outerIvs,
+                                   const DimMap &dimMap) const {
+    Location loc = op->getLoc();
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+
+    if (auto rd = dyn_cast<npuv::TransferReadOp>(op)) {
+      return emitPerRowTransferRead(b, rd, map, outerIvs, dimMap);
+    }
+    if (auto bc = dyn_cast<npuv::BroadcastOp>(op)) {
+      // scalar -> per-row scalar: identity passthrough.
+      map.map(bc.getResult(), remap(bc.getSource()));
+      return success();
+    }
+    if (auto ci = dyn_cast<npuv::CmpIOp>(op)) {
+      map.map(ci.getResult(), b.create<arith::CmpIOp>(loc, ci.getPredicate(), remap(ci.getLhs()), remap(ci.getRhs())));
+      return success();
+    }
+    if (auto cf = dyn_cast<npuv::CmpFOp>(op)) {
+      map.map(cf.getResult(), b.create<arith::CmpFOp>(loc, cf.getPredicate(), remap(cf.getLhs()), remap(cf.getRhs())));
+      return success();
+    }
+    if (auto sel = dyn_cast<npuv::SelectOp>(op)) {
+      map.map(sel.getResult(), b.create<arith::SelectOp>(loc, remap(sel.getCondition()), remap(sel.getTrueValue()),
+                                                         remap(sel.getFalseValue())));
+      return success();
+    }
+    // scalar casts: reuse the shared `emitCastFromNpuv` dispatch (covers all
+    // unary npuvector casts, not just the six historically listed here).
+    if (isUnaryNpuvCast(op)) {
+      Type outElem = getElementTypeOrSelf(op->getResult(0).getType());
+      Value casted = emitCastFromNpuv(b, loc, op, outElem, remap(op->getOperand(0)));
+      if (!casted) {
+        return op->emitError("npuvector-to-vector: unsupported per-row cast in partial reduction kernel");
+      }
+      map.map(op->getResult(0), casted);
+      return success();
+    }
+
+    if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
+      auto nvt = llvm::dyn_cast<npuv::NPUVectorType>(cst.getType());
+      if (!nvt) {
+        map.map(cst.getResult(), b.clone(*op)->getResult(0));
+        return success();
+      }
+      auto dense = llvm::dyn_cast<DenseElementsAttr>(cst.getValue());
+      if (!dense || !dense.isSplat()) {
+        return op->emitError("npuvector-to-vector: only splat npuvector constants are supported");
+      }
+      map.map(cst.getResult(), b.create<arith::ConstantOp>(loc, cast<TypedAttr>(dense.getSplatValue<Attribute>())));
+      return success();
+    }
+
+    if (llvm::isa_and_nonnull<arith::ArithDialect, math::MathDialect>(op->getDialect())) {
+      SmallVector<Type> resultTypes;
+      std::transform(op->result_begin(), op->result_end(), std::back_inserter(resultTypes),
+                     [](Value r) { return getElementTypeOrSelf(r.getType()); });
+      SmallVector<Value> operands(op->getNumOperands());
+      std::transform(op->operand_begin(), op->operand_end(), operands.begin(), [&](Value v) { return remap(v); });
+      OperationState state(loc, op->getName().getStringRef());
+      state.addOperands(operands);
+      state.addTypes(resultTypes);
+      state.addAttributes(op->getAttrs());
+      Operation *newOp = b.create(state);
+      for (auto [oldRes, newRes] : llvm::zip(op->getResults(), newOp->getResults())) {
+        map.map(oldRes, newRes);
+      }
+      return success();
+    }
+    return op->emitError("npuvector-to-vector: unsupported per-row op in partial reduction kernel");
+  }
+
   // -------------------------------------------------------------------------
-  // Fallback path: direct per-op type conversion (no register tiling).
+  // Fallback: direct per-op type conversion (no register tiling). Used only for
+  // kernels that match no tileable category.
   // -------------------------------------------------------------------------
   LogicalResult directConvert(func::FuncOp vfFunc, int64_t laneCount) {
     TypeConverter typeConverter;
@@ -1257,46 +2678,115 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     return applyPartialConversion(vfFunc, target, std::move(patterns));
   }
 
-  LogicalResult convertKernel(func::FuncOp vfFunc) {
+  // =========================================================================
+  // Step 1: convertNpuVectorToVector -- compute lane count, kernel category and
+  // per-op loop layers. This is the planning step; it determines how each op
+  // converts (reduction -> multi_reduction, broadcast honors `dimension`) and
+  // how many register loop layers it needs.
+  // =========================================================================
+  LogicalResult convertNpuVectorToVector(func::FuncOp vfFunc, KernelPlan &plan) {
     func::FuncOp archFunc = findArchFunc(vfFunc);
     std::optional<int64_t> regWidth = getRegisterWidthBytes(archFunc);
     if (!regWidth) {
       vfFunc.emitError(
-        "cannot determine register vector width: missing 'arch' attribute on the kernel "
-        "or any of its callers");
+        "cannot determine register vector width: missing 'arch' attribute on the kernel or any of its callers");
       return failure();
     }
-    int64_t laneCount = computeLaneCount(vfFunc, *regWidth);
+    plan.laneCount = computeLaneCount(vfFunc, *regWidth);
 
-    if (isTileable(vfFunc)) {
-      return tileKernel(vfFunc, laneCount);
+    if (vfFunc.getBody().empty()) {
+      plan.category = KernelCategory::Fallback;
+      return success();
     }
-    if (isReductionTileable(vfFunc)) {
-      return tileReductionKernel(vfFunc, laneCount);
+    Block &entry = vfFunc.getBody().front();
+
+    // Loop layers = the iteration-space rank (highest-rank npuvector transfer).
+    Value anchor = findAnchorValue(entry);
+    plan.loopRank = anchor ? npuVectorRank(anchor.getType()) : 0;
+
+    // Per-op loop layers metadata.
+    for (Operation &op : entry.without_terminator()) {
+      if (!touchesNpuVector(&op)) {
+        continue;
+      }
+      int64_t layers = 0;
+      for (Value r : op.getResults()) {
+        layers = std::max<int64_t>(layers, npuVectorRank(r.getType()));
+      }
+      plan.opLayers[&op] = layers;
     }
-    return directConvert(vfFunc, laneCount);
+
+    // Category detection.
+    bool hasTranspose = false;
+    entry.walk([&](npuv::TransposeOp) { hasTranspose = true; });
+    if (hasTranspose) {
+      plan.category = KernelCategory::Transpose;
+      return success();
+    }
+    if (isFullReductionTileable(vfFunc)) {
+      plan.category = KernelCategory::FullReduction;
+      return success();
+    }
+    bool hasReduction = false;
+    entry.walk([&](npuv::ReductionOp) { hasReduction = true; });
+    if (hasReduction) {
+      plan.category = isPartialLastAxisReductionTileable(vfFunc, plan.loopRank) ? KernelCategory::PartialReduction
+                                                                                : KernelCategory::Fallback;
+      return success();
+    }
+    plan.category = (anchor && plan.loopRank > 0) ? KernelCategory::Elementwise : KernelCategory::Fallback;
+    return success();
+  }
+
+  // =========================================================================
+  // Step 2: tileVectorToRegister -- emit the register-fitted scf.for nest using
+  // the plan from step 1.
+  // =========================================================================
+  LogicalResult tileVectorToRegister(func::FuncOp vfFunc, const KernelPlan &plan) {
+    switch (plan.category) {
+      case KernelCategory::Elementwise:
+        return tileElementwiseKernel(vfFunc, plan);
+      case KernelCategory::FullReduction:
+        return tileFullReductionKernel(vfFunc, plan);
+      case KernelCategory::PartialReduction:
+        return tilePartialReductionKernel(vfFunc, plan);
+      case KernelCategory::Transpose:
+        return tileTransposeKernel(vfFunc, plan);
+      case KernelCategory::Fallback:
+      default:
+        return directConvert(vfFunc, plan.laneCount);
+    }
   }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    // Step 1: collect the functions tagged as vector kernels.
     SmallVector<func::FuncOp> vfFuncs;
-    module.walk([&vfFuncs](func::FuncOp f) {
+    module.walk([&](func::FuncOp f) {
       if (f->hasAttr(kVectorFunctionAttr)) {
         vfFuncs.push_back(f);
       }
     });
 
-    // Steps 2 & 3: lower npuvector to community vector inside each kernel.
-    if (std::any_of(vfFuncs.begin(), vfFuncs.end(), [this](func::FuncOp f) { return failed(convertKernel(f)); })) {
-      signalPassFailure();
-      return;
+    for (func::FuncOp f : vfFuncs) {
+      // Step 1: plan the conversion (lane count, loop layers, category).
+      KernelPlan plan;
+      if (failed(convertNpuVectorToVector(f, plan))) {
+        signalPassFailure();
+        return;
+      }
+      // Step 2: generate the register-sized scf.for nest.
+      if (failed(tileVectorToRegister(f, plan))) {
+        signalPassFailure();
+        return;
+      }
     }
   }
 };
 
 }  // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> createNPUVectorToVectorPass() { return std::make_unique<NPUVectorToVector>(); }
+std::unique_ptr<OperationPass<ModuleOp>> createNPUVectorToVectorPass() {
+  return std::make_unique<NPUVectorToVectorPass>();
+}
 }  // namespace mlir

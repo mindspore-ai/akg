@@ -2,56 +2,56 @@
 
 // CHECK-LABEL: func.func private @Fused_ReduceSum_split_18237984148215155593_outlined_vf_0
 // CHECK-SAME: (%arg0: memref<4096xf32>, %arg1: memref<4096xf32>)
-// CHECK:         %[[CST_F32:.*]] = arith.constant 0.000000e+00 : f32
-// CHECK:         %[[CST_F32_0:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK:         %[[CST:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK:         %[[C4096:.*]] = arith.constant 4096 : index
+// CHECK:         %[[CST_0:.*]] = arith.constant 0.000000e+00 : f32
 // CHECK:         %[[C0:.*]] = arith.constant 0 : index
 // CHECK:         %[[C64:.*]] = arith.constant 64 : index
-// CHECK:         %[[C4096:.*]] = arith.constant 4096 : index
-// CHECK:         scf.for %[[IV:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] {
-// CHECK:           %[[REM:.*]] = arith.subi %[[C4096]], %[[IV]] : index
-// CHECK:           %[[LEN:.*]] = arith.minsi %[[REM]], %[[C64]] : index
-// CHECK:           %[[MASK:.*]] = vector.create_mask %[[LEN]] : vector<64xi1>
-// CHECK:           %[[V1:.*]] = vector.transfer_read %arg0[%[[IV]]], %[[CST_F32]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
-// CHECK:           %[[V2:.*]] = vector.transfer_read %arg1[%[[IV]]], %[[CST_F32_0]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
+// CHECK:         scf.for %[[ARG2:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] {
+// CHECK:           %[[VAL_0:.*]] = arith.subi %[[C4096]], %[[ARG2]] : index
+// CHECK:           %[[VAL_1:.*]] = arith.minsi %[[VAL_0]], %[[C64]] : index
+// CHECK:           %[[MASK:.*]] = vector.create_mask %[[VAL_1]] : vector<64xi1>
+// CHECK:           %[[V1:.*]] = vector.transfer_read %arg0[%[[ARG2]]], %[[CST]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
+// CHECK:           %[[V2:.*]] = vector.transfer_read %arg1[%[[ARG2]]], %[[CST_0]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
 // CHECK:           %[[ADD:.*]] = arith.addf %[[V2]], %[[V1]] {reduction_axes = [0 : index], reduction_type = "all"} : vector<64xf32>
-// CHECK:           vector.transfer_write %[[ADD]], %arg0[%[[IV]]], %[[MASK]] {in_bounds = [true]} : vector<64xf32>, memref<4096xf32>
+// CHECK:           vector.transfer_write %[[ADD]], %arg0[%[[ARG2]]], %[[MASK]] {in_bounds = [true]} : vector<64xf32>, memref<4096xf32>
 // CHECK:         }
 // CHECK:         return
 
 // CHECK-LABEL: func.func private @Fused_ReduceSum_split_18237984148215155593_outlined_vf_1
 // CHECK-SAME: (%arg0: memref<4096xf32>)
+// CHECK:         %[[C4096:.*]] = arith.constant 4096 : index
 // CHECK:         %[[C0:.*]] = arith.constant 0 : index
 // CHECK:         %[[C64:.*]] = arith.constant 64 : index
-// CHECK:         %[[C4096:.*]] = arith.constant 4096 : index
-// CHECK:         scf.for %[[IV:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] {
-// CHECK:           %[[REM:.*]] = arith.subi %[[C4096]], %[[IV]] : index
-// CHECK:           %[[LEN:.*]] = arith.minsi %[[REM]], %[[C64]] : index
-// CHECK:           %[[MASK:.*]] = vector.create_mask %[[LEN]] : vector<64xi1>
-// CHECK:           %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : vector<64xf32>
-// CHECK:           vector.transfer_write %[[ZERO]], %arg0[%[[IV]]], %[[MASK]] {in_bounds = [true]} : vector<64xf32>, memref<4096xf32>
+// CHECK:         scf.for %[[ARG1:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] {
+// CHECK:           %[[VAL_0:.*]] = arith.subi %[[C4096]], %[[ARG1]] : index
+// CHECK:           %[[VAL_1:.*]] = arith.minsi %[[VAL_0]], %[[C64]] : index
+// CHECK:           %[[MASK:.*]] = vector.create_mask %[[VAL_1]] : vector<64xi1>
+// CHECK:           %[[ZERO_VEC:.*]] = arith.constant dense<0.000000e+00> : vector<64xf32>
+// CHECK:           vector.transfer_write %[[ZERO_VEC]], %arg0[%[[ARG1]]], %[[MASK]] {in_bounds = [true]} : vector<64xf32>, memref<4096xf32>
 // CHECK:         }
 // CHECK:         return
 
 // CHECK-LABEL: func.func private @Fused_ReduceSum_split_18237984148215155593_outlined_vf_2
 // CHECK-SAME: (%arg0: memref<4096xf32>, %arg1: memref<1xf32>)
-// CHECK:         %[[CST_F32:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK:         %[[CST:.*]] = arith.constant 0.000000e+00 : f32
 // CHECK:         %[[C0:.*]] = arith.constant 0 : index
 // CHECK:         %[[C1:.*]] = arith.constant 1 : index
 // CHECK:         %[[C64:.*]] = arith.constant 64 : index
 // CHECK:         %[[C4096:.*]] = arith.constant 4096 : index
 // CHECK:         %[[ZERO_VEC:.*]] = arith.constant dense<0.000000e+00> : vector<64xf32>
-// CHECK:         %[[CST_F32_1:.*]] = arith.constant 0.000000e+00 : f32
-// CHECK:         memref.store %[[CST_F32_1]], %arg1[%[[C0]]] : memref<1xf32>
-// CHECK:         %[[ACC:.*]] = scf.for %[[IV:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] iter_args(%[[ITER:.*]] = %[[ZERO_VEC]]) -> (vector<64xf32>) {
-// CHECK:           %[[REM:.*]] = arith.subi %[[C4096]], %[[IV]] : index
-// CHECK:           %[[LEN:.*]] = arith.minsi %[[REM]], %[[C64]] : index
-// CHECK:           %[[MASK:.*]] = vector.create_mask %[[LEN]] : vector<64xi1>
-// CHECK:           %[[V:.*]] = vector.transfer_read %arg0[%[[IV]]], %[[CST_F32]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
+// CHECK:         %[[CST_1:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK:         memref.store %[[CST_1]], %arg1[%[[C0]]] : memref<1xf32>
+// CHECK:         %[[ACC:.*]] = scf.for %[[ARG2:.*]] = %[[C0]] to %[[C4096]] step %[[C64]] iter_args(%[[ARG3:.*]] = %[[ZERO_VEC]]) -> (vector<64xf32>) {
+// CHECK:           %[[VAL_0:.*]] = arith.subi %[[C4096]], %[[ARG2]] : index
+// CHECK:           %[[VAL_1:.*]] = arith.minsi %[[VAL_0]], %[[C64]] : index
+// CHECK:           %[[MASK:.*]] = vector.create_mask %[[VAL_1]] : vector<64xi1>
+// CHECK:           %[[V:.*]] = vector.transfer_read %arg0[%[[ARG2]]], %[[CST]], %[[MASK]] {in_bounds = [true]} : memref<4096xf32>, vector<64xf32>
 // CHECK:           %[[SELECT:.*]] = arith.select %[[MASK]], %[[V]], %[[ZERO_VEC]] : vector<64xi1>, vector<64xf32>
-// CHECK:           %[[ADD:.*]] = arith.addf %[[ITER]], %[[SELECT]] : vector<64xf32>
+// CHECK:           %[[ADD:.*]] = arith.addf %[[ARG3]], %[[SELECT]] : vector<64xf32>
 // CHECK:           scf.yield %[[ADD]] : vector<64xf32>
 // CHECK:         }
-// CHECK:         %[[SCALAR_VEC:.*]] = vector.transfer_read %arg1[%[[C0]]], %[[CST_F32_1]] : memref<1xf32>, vector<f32>
+// CHECK:         %[[SCALAR_VEC:.*]] = vector.transfer_read %arg1[%[[C0]]], %[[CST_1]] : memref<1xf32>, vector<f32>
 // CHECK:         %[[SCALAR:.*]] = vector.extractelement %[[SCALAR_VEC]][] : vector<f32>
 // CHECK:         %[[REDUCED:.*]] = vector.multi_reduction <add>, %[[ACC]], %[[SCALAR]] [0] : vector<64xf32> to f32
 // CHECK:         %[[BCAST:.*]] = vector.broadcast %[[REDUCED]] : f32 to vector<1xf32>
