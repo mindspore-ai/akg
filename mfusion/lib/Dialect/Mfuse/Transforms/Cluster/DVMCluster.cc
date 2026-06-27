@@ -211,15 +211,6 @@ bool isDvmSupportedScalarOperand(Value operand) {
   return isSafeRankZeroProducer(operand.getDefiningOp());
 }
 
-bool hasUnsupportedRankZeroTensorOperand(Operation *op) {
-  return llvm::any_of(op->getOperands(), [](Value operand) {
-    if (!isRankZeroTensor(operand.getType())) {
-      return false;
-    }
-    return !isSafeRankZeroProducer(operand.getDefiningOp());
-  });
-}
-
 /// DvmSupportChecker - Singleton class for checking DVM operator support.
 class DvmSupportChecker {
  public:
@@ -268,11 +259,11 @@ class DvmSupportChecker {
     auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
-    auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
+    auto floatOutputCheck = [](Operation *op) { return floatOutputCheckFunc(op); };
+    auto floatIntOutputCheck = [](Operation *op) { return floatIntOutputCheckFunc(op); };
+    auto floatIntBoolOutputCheck = [](Operation *op) { return floatIntBoolOutputCheckFunc(op); };
     auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
     auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
-    auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
-    auto fullOpCheck = [](Operation *op) { return fullCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
@@ -280,30 +271,30 @@ class DvmSupportChecker {
     // reduce sum op
     checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    checkFunc_["mfuse.eq"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.ne"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.gt"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.ge"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.lt"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.le"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.is_finite"] = {compareCheck, isFiniteOpCheckFunc};
+    checkFunc_["mfuse.eq"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.ne"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.gt"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.ge"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.lt"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.le"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.is_finite"] = {boolOpCheck, isFiniteOpCheckFunc};
     // select op
     checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
-    // int op
-    checkFunc_["mfuse.add"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.sub"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.relu"] = {intOpCheck, inputCheckAll};
+    // float/int output ops
+    checkFunc_["mfuse.add"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.sub"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.relu"] = {floatOutputCheck, inputCheckAll};
     checkFunc_["mfuse.mul"] = {mulOpCheck};
-    checkFunc_["mfuse.maximum"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.neg"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.maximum"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.minimum"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.neg"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.abs"] = {floatIntOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.logical_and"] = {boolOpCheck, boolTensorInputCheck};
     checkFunc_["mfuse.logical_or"] = {boolOpCheck, boolTensorInputCheck};
     checkFunc_["mfuse.logical_not"] = {boolOpCheck, boolTensorInputCheck};
     // Should add Assign check. There is no corresponding op in aten.
-    checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
-    checkFunc_["mfuse.full"] = {fullOpCheck};
+    checkFunc_["mfuse.broadcast_to"] = {floatIntBoolOutputCheck, inputCheckFirst};
+    checkFunc_["mfuse.full"] = {floatIntBoolOutputCheck};
     // slice op
     checkFunc_["mfuse.slice"] = {sliceSupported, inputCheckFirst};
     // Should add StridedSlice check. There is no corresponding op in aten.
@@ -311,7 +302,7 @@ class DvmSupportChecker {
     checkFunc_["mfuse.matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.batch_matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.grouped_matmul"] = {groupedMatmulOpCheck, inputCheckAll};
-    checkFunc_["mfuse.reshape"] = {reshapeOpCheck};
+    checkFunc_["mfuse.reshape"] = {floatIntOutputCheckFunc, inputCheckFirst};
   }
 
   static bool isCastTypeSupported(Type type) {
@@ -349,14 +340,9 @@ class DvmSupportChecker {
     return true;
   }
 
-  static bool compareCheckFunc(Operation *op) {
-    Type inputType = getElementType(op->getOperand(0).getType());
-    return inputType && isFloatIntType(inputType);
-  }
-
   static bool isFiniteOpCheckFunc(Operation *op) {
     Type inputType = getElementType(op->getOperand(0).getType());
-    return inputType && !inputType.isInteger(32);
+    return inputType && isFloatType(inputType);
   }
 
   static bool selectOpCheck(Operation *op) {
@@ -371,9 +357,19 @@ class DvmSupportChecker {
     return outputType && isFloatType(outputType);
   }
 
-  static bool intOpCheckFunc(Operation *op) {
+  static bool floatIntOutputCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     return outputType && isFloatIntType(outputType);
+  }
+
+  static bool floatOutputCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isFloatType(outputType);
+  }
+
+  static bool floatIntBoolOutputCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && (isFloatIntType(outputType) || isBoolType(outputType));
   }
 
   static bool boolOpCheckFunc(Operation *op) {
@@ -393,11 +389,6 @@ class DvmSupportChecker {
       }
     }
     return true;
-  }
-
-  static bool fullCheckFunc(Operation *op) {
-    Type outputType = getElementType(op->getResult(0).getType());
-    return outputType && (isFloatType(outputType) || outputType.isInteger(32) || outputType.isInteger(1));
   }
 
   static bool mulOpCheck(Operation *op) {
@@ -526,48 +517,6 @@ class DvmSupportChecker {
       return false;
     }
     return checkDimensionConstraints(op);
-  }
-
-  /// Check if largerShape matches smallerShape when ignoring all dimensions of size 1
-  static bool shapesDifferByMultiDimOne(const llvm::ArrayRef<int64_t> largerShape,
-                                        const llvm::ArrayRef<int64_t> smallerShape) {
-    std::vector<int64_t> filterLargerShape;
-    std::copy_if(largerShape.begin(), largerShape.end(), std::back_inserter(filterLargerShape),
-                 [](int64_t dim) { return dim != 1; });
-    std::vector<int64_t> filterSmallerShape;
-    std::copy_if(smallerShape.begin(), smallerShape.end(), std::back_inserter(filterSmallerShape),
-                 [](int64_t dim) { return dim != 1; });
-    return filterLargerShape == filterSmallerShape;
-  }
-
-  static bool squeezeLikeOpCheck(Operation *op) {
-    auto outputType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-    if (!outputType || !inputType) {
-      return false;
-    }
-
-    const auto &outputShape = outputType.getShape();
-    const auto &inputShape = inputType.getShape();
-    return shapesDifferByMultiDimOne(inputShape, outputShape);
-  }
-
-  static bool reshapeOpCheck(Operation *op) {
-    // Check if this is a reshape from unsqueeze/squeeze
-    if (squeezeLikeOpCheck(op)) {
-      return true;
-    }
-    Value input = op->getOperand(0);
-    Operation *producer = input.getDefiningOp();
-    if (!producer) {
-      return false;
-    }
-    StringRef name = producer->getName().getStringRef();
-    if (name != "mfuse.matmul" && name != "mfuse.batch_matmul" && name != "mfuse.grouped_matmul") {
-      return false;
-    }
-
-    return DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), producer);
   }
 
   /// MatMul shape check helper
@@ -711,11 +660,17 @@ class DvmSupportChecker {
     if (op->getNumOperands() != 2) {
       return false;
     }
-    Value rhs = op->getOperand(1);
-    if (!isRankZeroTensor(rhs.getType()) && !hasScalarMarker(rhs.getType())) {
-      return true;
+    Type lhsElemType = getElementType(op->getOperand(0).getType());
+    if (!lhsElemType || !isFloatIntType(lhsElemType)) {
+      return false;
     }
-    return isDvmSupportedScalarOperand(rhs);
+
+    Value rhs = op->getOperand(1);
+    if (hasScalarMarker(rhs.getType())) {
+      return isDvmSupportedScalarOperand(rhs);
+    }
+    Type rhsElemType = getElementType(rhs.getType());
+    return rhsElemType && isFloatIntType(rhsElemType);
   }
 
   static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
@@ -775,11 +730,6 @@ bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList,
 
   if (hasZeroShape(op)) {
     MLOG(DEBUG) << "Op has zero shape: " << opName;
-    return false;
-  }
-
-  if (hasUnsupportedRankZeroTensorOperand(op)) {
-    MLOG(DEBUG) << "Op has unsafe rank-zero tensor operand: " << opName;
     return false;
   }
 
