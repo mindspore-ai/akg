@@ -1854,12 +1854,13 @@ struct GenericAdapter final : OpAdapter {
         if (unifiedAxesNames[inputDimMap[i]].empty()) {
           unifiedAxesNames[inputDimMap[i]] = SymShape[i];
         } else {
-          std::string updatedAxis = state.globalReplaceAxis(SymShape[i], unifiedAxesNames[inputDimMap[i]]);
-          // else: could use axisRenameMap
+          SmallVector<std::string> SymShapeList = { SymShape[i] };
+          state.applyRecordedAxisRenames(SymShapeList);
+          std::string updatedAxis = state.globalReplaceAxis(SymShapeList[0], unifiedAxesNames[inputDimMap[i]]);
           std::replace_if(
             unifiedAxesNames.begin(), unifiedAxesNames.end(),
-            [&SymShape, &unifiedAxesNames, &inputDimMap, i](const std::string &affineMapName) {
-              return affineMapName == SymShape[i] || affineMapName == unifiedAxesNames[inputDimMap[i]];
+            [&SymShapeList, &unifiedAxesNames, &inputDimMap, i](const std::string &affineMapName) {
+              return affineMapName == SymShapeList[0] || affineMapName == unifiedAxesNames[inputDimMap[i]];
             },
             updatedAxis);
         }
