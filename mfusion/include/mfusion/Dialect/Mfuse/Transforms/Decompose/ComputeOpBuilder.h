@@ -79,18 +79,16 @@ class ComputeOpBuilder {
 
   Value tanh(Value x) { return rewriter.create<AclnnTanhOp>(loc, x); }
 
-  Value clamp(Value a, Value b, Value c) {
-    auto resultType = a.getType();
-    return rewriter.create<AclnnClampOp>(loc, resultType, a, b, c);
-  }
-
+  /// Scalar-bounds clamp via mfuse.maximum/minimum (maps to clamp_min/clamp_max on roundtrip).
+  /// Avoid mfuse.aclnn.clamp, whose Mfuse→Torch lowering expands to isnan/where.
   template <typename T>
-  Value clamp(Value a, T b, T c) {
-    auto resultType = a.getType();
+  Value clampMinMax(Value input, T minVal, T maxVal) {
+    auto resultType = input.getType();
     auto elemType = mlir::cast<RankedTensorType>(resultType).getElementType();
-    auto value_b = createScalarRankTensor(b, elemType);
-    auto value_c = createScalarRankTensor(c, elemType);
-    return rewriter.create<AclnnClampOp>(loc, resultType, a, value_b, value_c);
+    auto minScalar = createScalarRankTensor(minVal, elemType);
+    auto maxScalar = createScalarRankTensor(maxVal, elemType);
+    Value x = rewriter.create<MaximumOp>(loc, resultType, input, minScalar);
+    return rewriter.create<MinimumOp>(loc, resultType, x, maxScalar);
   }
 
   template <typename T>

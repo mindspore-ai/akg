@@ -156,6 +156,16 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
   return constantsToCluster;
 }
 
+void setFullOpsDeviceToNpu(mfuse::FusedOp fusedOp) {
+  fusedOp.getBody().walk([&](mfuse::FullOp fullOp) {
+    auto deviceAttr = fullOp.getDeviceAttr();
+    if (deviceAttr && deviceAttr.getValue() != "cpu") {
+      return;
+    }
+    fullOp.setDeviceAttr(StringAttr::get(fullOp.getContext(), "npu"));
+  });
+}
+
 /// Find external inputs (values defined outside the cluster).
 llvm::SetVector<Value> findExternalInputs(llvm::ArrayRef<Operation *> clusterOps,
                                           const llvm::DenseSet<Operation *> &clusterOpSet) {
