@@ -3586,8 +3586,10 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   plan.innerTiles.front() = firstAxisTile;
   int64_t ubLimitBytes = getVectorUbBytes(ctx);
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
+  plan.multiVecAxisMask.assign(ctx.axes.size(), false);
   for (auto i = static_cast<size_t>(outermostTransposeIdx); i < ctx.axes.size(); ++i) {
     searchAxisOrder.push_back(i);
+    plan.multiVecAxisMask[i] = true;
   }
   // NPU vectorization materializes the full suffix starting at the outermost
   // transpose axis; non-transpose suffix axes participate in UB search with align=1.
