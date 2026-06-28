@@ -73,7 +73,11 @@ static Type GetCastedShape(Type target, Type oprand, SmallVector<int64_t> &needC
   SmallVector<int64_t> targetStaticShape(cast<ShapedType>(target).getShape());
   auto elementTy = cast<ShapedType>(oprand).getElementType();
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-  llvm::SmallVector<std::string> castedSymbolShape = *(analysis.getSymbolicShape(target));
+  auto symbolicShapeOpt = analysis.getSymbolicShape(target);
+  if (!symbolicShapeOpt.has_value()) {
+    return target;
+  }
+  llvm::SmallVector<std::string> castedSymbolShape = *symbolicShapeOpt;
   if (targetRank - opndRank > 0) {
     (void)castedSymbolShape.erase(castedSymbolShape.begin(), castedSymbolShape.begin() + (targetRank - opndRank));
     (void)targetStaticShape.erase(targetStaticShape.begin(), targetStaticShape.begin() + (targetRank - opndRank));
@@ -134,8 +138,9 @@ struct EnableTosaBroadCastOp : public OpRewritePattern<OpTy> {
     if (lhsNeedInsertBroadCastOrCast && rhsNeedInsertBroadCastOrCast) {
       Value shapeof1 = rewriter.create<shape::ShapeOfOp>(loc, input1);
       Value shapeof2 = rewriter.create<shape::ShapeOfOp>(loc, input2);
+      // error= nullptr
       Value bs = rewriter.create<shape::BroadcastOp>(loc, shape::getExtentTensorType(rewriter.getContext(), rank),
-                                                     shapeof1, shapeof2, /* error= */ nullptr);
+                                                     shapeof1, shapeof2, nullptr);
       Value newInput1 = rewriter.create<mindspore::BroadcastToOp>(loc, output.getType(), input1, bs);
       Value newInput2 = rewriter.create<mindspore::BroadcastToOp>(loc, output.getType(), input2, bs);
       // update operands
@@ -165,7 +170,7 @@ namespace {
  *          }
  *        `%cast_0` shows there is a shape-cast from "s1" to "s23" and that is the `dim1` of `%0`
  *        The MakeDynamicBroadcastableTracer will trace `dim1` of `%0` all the way to func arguments and returns `dim0`
- * of `%arg1`
+ *        of `%arg1`
  */
 class MakeDynamicBroadcastableTracer {
  public:
@@ -193,8 +198,13 @@ class MakeDynamicBroadcastableTracer {
   void ReassociateShape(const Type before, const Type after, SmallVector<int64_t> beforeNeedCast,
                         SmallVector<int64_t> &afterNeedCast) const {
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-    llvm::SmallVector<std::string> castedSymbolShapeBefore = *(analysis.getSymbolicShape(before));
-    llvm::SmallVector<std::string> castedSymbolShapeAfter = *(analysis.getSymbolicShape(after));
+    auto beforeOpt = analysis.getSymbolicShape(before);
+    auto afterOpt = analysis.getSymbolicShape(after);
+    if (!beforeOpt.has_value() || !afterOpt.has_value()) {
+      return;
+    }
+    llvm::SmallVector<std::string> castedSymbolShapeBefore = *beforeOpt;
+    llvm::SmallVector<std::string> castedSymbolShapeAfter = *afterOpt;
     assert(castedSymbolShapeBefore.size() == beforeNeedCast.size());
     assert(castedSymbolShapeAfter.size() == afterNeedCast.size());
     for (auto [shp, cast] : llvm::zip(castedSymbolShapeBefore, beforeNeedCast)) {

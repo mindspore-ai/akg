@@ -59,7 +59,6 @@ struct kMsprofApi {
   uint16_t level;
   uint32_t type;
   uint32_t threadId;
-  // cppcheck-suppress unusedStructMember
   uint32_t reserve;
   uint64_t beginTime;
   uint64_t endTime;
@@ -99,6 +98,7 @@ void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_n
   api.level = kMsprofReportNodeLevel;
   api.type = kMsprofReportNodeLaunchType;
   api.threadId = thread_id;
+  api.reserve = 0;
   api.beginTime = begin_time;
   api.endTime = end_time;
   api.itemId = op_name;
@@ -232,7 +232,10 @@ struct KernelFuncCache {
     void *handle = nullptr;
     void *func = nullptr;
     if (is_dynamic) {
-      handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
+      if (file_str.empty()) {
+        return nullptr;
+      }
+      handle = dlopen(file_str.c_str(), static_cast<unsigned>(RTLD_LAZY) | static_cast<unsigned>(RTLD_LOCAL));
       CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
 
       func = dlsym(handle, func_str.c_str());
@@ -264,6 +267,9 @@ struct BlockDimCache {
       return it->second;
     }
 
+    if (key.empty()) {
+      return 0;
+    }
     std::ifstream json_stream(key);
     nlohmann::json json_data;
     json_stream >> json_data;
@@ -508,6 +514,9 @@ bool AscendLaunchRuntime::Run(const std::string &path, const std::string &kernel
     }
     for (size_t idx = 0; idx < input_size; idx++) {
       auto base = input_tensors[idx];
+      if (idx >= input_shape_args.size()) {
+        continue;
+      }
       auto shape = input_shape_args[idx];
 
       auto tensor = mlir::runtime::AsTensorDevice(base);

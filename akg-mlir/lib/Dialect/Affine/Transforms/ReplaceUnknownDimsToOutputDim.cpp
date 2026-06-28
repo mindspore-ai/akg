@@ -146,7 +146,7 @@ class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDim
     Operation *moduleOp = funcOp->getParentOp();
     MLIRContext *context = &getContext();
     auto dict = DictionaryAttr::get(context);
-    if (isa<ModuleOp>(moduleOp)) {
+    if (moduleOp != nullptr && isa<ModuleOp>(moduleOp)) {
       if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) {
         dict = dyn_cast<DictionaryAttr>(moduleOp->getAttr("mindspore.symbol_calc_expr"));
       }

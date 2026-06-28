@@ -30,6 +30,23 @@ namespace {
 constexpr auto kShouldRemove = -9999999;
 constexpr auto kShouldKeep = -10000000;
 
+// Split result sizes for load/store instructions: "instruction, dest, (offset), src"
+constexpr int kSplitResultSizeWithoutOffset = 3;  // instruction, dest, src
+constexpr int kSplitResultSizeWithOffset = 4;     // instruction, dest, offset, src
+// Regex match group index for the param number in getRegFromLoadParamGlobal
+constexpr int kParamNumMatchGroup = 2;
+// Length of the "ld.global" substring replaced in addNcMarkForLdg
+constexpr int kLdGlobalStrLen = 9;
+// Processing step value for param loads and nc flag
+constexpr int kStepProcessParamLoads = 2;
+// Argument count and index constants for main()
+constexpr int kMinArgc = 4;
+constexpr int kShapeArgIndex = 2;
+constexpr int kOutputFileIndex = 3;
+constexpr int kNcFlagArgc = 5;
+constexpr int kNcFlagIndex = 4;
+constexpr int kDynShapeArgc = 6;
+constexpr int kDynShapeIndex = 5;
 std::vector<std::string> splitString(const std::string &str, char delimiter) {
   std::vector<std::string> tokens;
   std::string token;
@@ -93,16 +110,20 @@ struct VectorizeEmitter {
     // Note that we use map to sort the load/store src in a ascending
     std::map<int, std::string> srcIndex;
     auto isLoad = LdStGlobalCache.front().find("ld.global") != std::string::npos;
-    auto instPos = 0;
     auto destPos = isLoad ? 2 : 1;
     auto srcPos = isLoad ? 1 : -1;
+    size_t instPos = 0;
     for (auto it = LdStGlobalCache.cbegin(); it != LdStGlobalCache.cend(); ++it) {
       std::vector<std::string> result = splitEachLoadStore(*it);
       if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
         return "";
       }
       if (instruction.empty()) {
-        instruction = result[instPos];
+        if (instPos < result.size()) {
+          instruction = result[instPos];
+        } else {
+          return "";
+        }
       }
       if (instruction != result[instPos]) {
         // mismatch instruction
@@ -117,9 +138,9 @@ struct VectorizeEmitter {
       }
 
       int offset = -1;
-      if (result.size() == 3) {
+      if (result.size() == kSplitResultSizeWithoutOffset) {
         offset = 0;
-      } else if (result.size() == 4) {
+      } else if (result.size() == kSplitResultSizeWithOffset) {
         try {
           offset = std::stoi(result[destPos + 1]);
         } catch (const std::exception &e) {
@@ -293,7 +314,7 @@ std::tuple<std::string, std::string> getRegFromLoadParamGlobal(const std::string
   std::regex pattern(patternStr);
   std::smatch match;
   if (std::regex_search(line, match, pattern)) {
-    return std::make_tuple(match[1].str(), match[2].str());
+    return std::make_tuple(match[1].str(), match[kParamNumMatchGroup].str());
   }
   return std::make_tuple("", "");
 }
@@ -320,7 +341,7 @@ std::string addNcMarkForLdg(std::string str) {
 
   size_t pos = str.find("ld.global");
   if (pos != std::string::npos) {
-    (void)str.replace(pos, 9, "ld.global.nc");
+    (void)str.replace(pos, kLdGlobalStrLen, "ld.global.nc");
   }
 
   return str;
@@ -442,7 +463,7 @@ void processStep0(ProcessingState &state, const std::string &line) {
 // Handle step 1: process .param lines
 bool processStep1(ProcessingState &state, const std::string &line) {
   if (!containsInstruction(line, ".param")) {
-    state.step = 2;
+    state.step = kStepProcessParamLoads;
     return false;
   }
 
@@ -527,7 +548,7 @@ void processLine(ProcessingState &state, const std::string &line) {
     case 1:
       handled = processStep1(state, line);
       break;
-    case 2:
+    case kStepProcessParamLoads:
       handled = processStep2(state, line);
       break;
   }
@@ -610,23 +631,23 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
 }  // namespace
 
 int main(int argc, char *argv[]) {
-  if (argc < 4) {
+  if (argc < kMinArgc) {
     std::cerr << "Usage: " << argv[0] << " <input file> <shape_arg file> <output file>\n";
     return 1;
   }
 
   std::string inputFilename(argv[1]);
-  std::string shapeArgFilename(argv[2]);
-  std::string outputFilename(argv[3]);
+  std::string shapeArgFilename(argv[kShapeArgIndex]);
+  std::string outputFilename(argv[kOutputFileIndex]);
   bool ncFlag = false;
   bool dynFlag = false;
-  if (argc >= 5) {
-    std::string nonCoherent(argv[4]);
+  if (argc >= kNcFlagArgc) {
+    std::string nonCoherent(argv[kNcFlagIndex]);
     ncFlag = (nonCoherent == "nc");
   }
 
-  if (argc >= 6) {
-    std::string dynamicShape(argv[5]);
+  if (argc >= kDynShapeArgc) {
+    std::string dynamicShape(argv[kDynShapeIndex]);
     dynFlag = (dynamicShape == "dynamic_shape");
   }
 

@@ -109,8 +109,10 @@ int getMaxIntConst(mlir::Value value) {
 }  // namespace
 
 namespace {
-// todo(baiji): -----Start COPY from ParallelLoopMapper.cpp -----
 static constexpr int kNumHardwareIds = 3;
+static constexpr int kDimX = 0;
+static constexpr int kDimY = 1;
+static constexpr int kDimZ = 2;
 
 /// Computed the hardware id to use for a given mapping level. Will
 /// assign x,y and z hardware ids for the first 3 dimensions and use
@@ -125,11 +127,11 @@ static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
   switch (level) {
     case mlir::akg::utils::MappingLevel::MapGrid:
       switch (dimension) {
-        case 0:
+        case kDimX:
           return Processor::BlockX;
-        case 1:
+        case kDimY:
           return Processor::BlockY;
-        case 2:
+        case kDimZ:
           return Processor::BlockZ;
         default:
           return Processor::Sequential;
@@ -137,11 +139,11 @@ static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
       break;
     case mlir::akg::utils::MappingLevel::MapBlock:
       switch (dimension) {
-        case 0:
+        case kDimX:
           return Processor::ThreadX;
-        case 1:
+        case kDimY:
           return Processor::ThreadY;
-        case 2:
+        case kDimZ:
           return Processor::ThreadZ;
         default:
           return Processor::Sequential;
@@ -151,9 +153,7 @@ static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
   }
   return Processor::Sequential;
 }
-// todo(baiji): ----- End COPY from ParallelLoopMapper.cpp -----
-}  // namespace
-namespace {
+
 struct MappingTask {
   MappingTask(ParallelOp op, mlir::Value loopVar, int problemSize, int reductionDim = -1)
       : op(op), loopVar(loopVar), problemSize(problemSize), reductionDim(reductionDim) {}
@@ -270,7 +270,7 @@ bool hasNonZeroConstant(Operation *op) {
       if (isa<arith::AddIOp>(op) && isNonZeroConstantOp(prevOp)) {
         return true;
       }
-      flag |= (!hasNonZeroConstant(prevOp) ? 0 : 1);
+      flag |= static_cast<unsigned int>(!hasNonZeroConstant(prevOp) ? 0 : 1);
     }
   }
   return static_cast<bool>(flag);
@@ -463,7 +463,6 @@ static void FixForLogicToGpuParallel(Region &region) {
         if (isa<scf::ParallelOp>(parentOp)) {
           break;
         }
-        // todo(yanzhi): what' else?
         parentOp = parentOp->getParentOp();
       }
       // nested scf.if cases
@@ -802,7 +801,6 @@ void AKGGPUMappingLoops::runOnOperation() {
     // all of ops and rewrite some of them as SIMT code.
     FixForLogicToGpuParallel(region);
 
-    // 6. todo(baji): use a option to control `If is dynamic:`
     (void)saveMappingResultToJson();
   }
 }
@@ -971,7 +969,7 @@ void AKGGPUMappingLoops::mapParallelOp(ParallelOp parallelOp, const std::vector<
                  << mapResults.size();
     return;
   }
-  for (int i = 0, e = parallelOp.getNumLoops(); i < e; ++i) {
+  for (int i = 0, e = static_cast<int>(parallelOp.getNumLoops()); i < e; ++i) {
     auto mapLevel = result[i].level;
     auto mapDim = result[i].mapDim;
     auto problemSize = result[i].problemSize;

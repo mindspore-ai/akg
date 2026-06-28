@@ -291,7 +291,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
       return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
     }
     SmallVector<ReassociationExprs, kSmallVectorSizeFour> reassociationMap;
-    uint64_t expandInputRank = cast<ShapedType>(linalgOp.getResults()[0].getType()).getRank();
+    uint64_t expandInputRank = static_cast<uint64_t>(cast<ShapedType>(linalgOp.getResults()[0].getType()).getRank());
     reassociationMap.resize(expandInputRank);
 
     if (expandInputRank != 0) {
