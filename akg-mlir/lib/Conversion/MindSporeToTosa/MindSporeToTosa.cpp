@@ -349,8 +349,8 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     SmallVector<int64_t> lowPadding(rank, 0);
     SmallVector<int64_t> highPadding(rank, 0);
     for (uint64_t i = 0; i < padRank; i++) {
-      lowPadding[rank - i - 1] = padInts[i * doubleSize];
-      highPadding[rank - i - 1] = padInts[i * doubleSize + 1];
+      lowPadding[rank - static_cast<int64_t>(i) - 1] = padInts[i * doubleSize];
+      highPadding[rank - static_cast<int64_t>(i) - 1] = padInts[i * doubleSize + 1];
     }
 
     SmallVector<int64_t> paddingList;

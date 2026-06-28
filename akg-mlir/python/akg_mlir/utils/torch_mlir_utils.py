@@ -136,7 +136,7 @@ def get_named_op_str(
 
         processed_mlir = _inject_func_attrs(processed_mlir, func_attr)
 
-        with open(output_file_path, "w", encoding="utf=8") as f:
+        with open(os.path.realpath(output_file_path), "w", encoding="utf=8") as f:
             f.write(processed_mlir)
 
         logging.debug("wrote named-op mlir to %s", output_file_path)

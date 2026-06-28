@@ -444,7 +444,7 @@ void SubViewOp::build(OpBuilder &b, OperationState &result, MemRefType resultTyp
 /// encode the dynamic case.
 Type SubViewOp::inferResultType(MemRefType sourceMemRefType, ArrayRef<int64_t> staticOffsets,
                                 ArrayRef<int64_t> staticSizes, ArrayRef<int64_t> staticStrides) {
-  unsigned rank = sourceMemRefType.getRank();
+  unsigned rank = static_cast<unsigned>(sourceMemRefType.getRank());
   (void)rank;
   assert(staticOffsets.size() == rank && "staticOffsets length mismatch");
   assert(staticSizes.size() == rank && "staticSizes length mismatch");

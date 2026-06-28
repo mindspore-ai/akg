@@ -642,7 +642,7 @@ void AllocBufferShrinkPass::eraseOldOps(memref::AllocOp allocOp) {
 // dimensions, then creates a smaller alloc and rewrites all uses.
 bool AllocBufferShrinkPass::processAlloc(memref::AllocOp allocOp) {
   auto memrefType = allocOp.getType();
-  rank = memrefType.getRank();
+  rank = static_cast<unsigned>(memrefType.getRank());
   if (rank == 0) {
     return false;
   }

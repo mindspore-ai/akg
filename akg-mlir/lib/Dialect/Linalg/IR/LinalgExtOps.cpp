@@ -59,6 +59,7 @@ using namespace mlir;             // NOLINT(build/namespaces)
 using namespace mlir::linalg;     // NOLINT(build/namespaces)
 using namespace mlir::linalgExt;  // NOLINT(build/namespaces)
 
+static constexpr int kRequiredOperandCount = 3;
 void mlir::linalgExt::LinalgExtDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
@@ -100,9 +101,10 @@ ParseResult GatherOp::parse(OpAsmParser &parser, OperationState &result) {
   Type indicesType;
   Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeThree> operands;
-  if (parser.parseOperandList(operands, /* requiredOperandCount= */ 3) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
-      parser.parseType(indicesType) || parser.parseComma() || parser.parseType(outputType)) {
+  // requiredOperandCount= kRequiredOperandCount
+  if (parser.parseOperandList(operands, kRequiredOperandCount) || parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(dataType) || parser.parseComma() || parser.parseType(indicesType) || parser.parseComma() ||
+      parser.parseType(outputType)) {
     return failure();
   }
 
@@ -135,9 +137,10 @@ ParseResult UnsortedSegmentSumOp::parse(OpAsmParser &parser, OperationState &res
   Type indicesType;
   Type outputType;
   SmallVector<OpAsmParser::UnresolvedOperand, kSmallVectorSizeThree> operands;
-  if (parser.parseOperandList(operands, /* requiredOperandCount= */ 3) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColonType(dataType) || parser.parseComma() ||
-      parser.parseType(indicesType) || parser.parseComma() || parser.parseType(outputType)) {
+  // requiredOperandCount= kRequiredOperandCount
+  if (parser.parseOperandList(operands, kRequiredOperandCount) || parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(dataType) || parser.parseComma() || parser.parseType(indicesType) || parser.parseComma() ||
+      parser.parseType(outputType)) {
     return failure();
   }
 
@@ -313,9 +316,8 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, ValueRange in
                        ArrayRef<AffineMap> indexingMaps, ArrayRef<utils::IteratorType> iteratorTypes,
                        function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
                        ArrayRef<NamedAttribute> attributes) {
-  build(builder, result, inputs, outputs, indexingMaps, iteratorTypes,
-        /* doc= */ "",
-        /* libraryCall= */ "", bodyBuild, attributes);
+  // doc= "", libraryCall= ""
+  build(builder, result, inputs, outputs, indexingMaps, iteratorTypes, "", "", bodyBuild, attributes);
 }
 
 void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange resultTensorTypes, ValueRange inputs,
@@ -323,9 +325,9 @@ void TemplateOp::build(OpBuilder &builder, OperationState &result, TypeRange res
                        ArrayRef<utils::IteratorType> iteratorTypes,
                        function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
                        ArrayRef<NamedAttribute> attributes) {
-  build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps, iteratorTypes,
-        /* doc= */ "",
-        /* libraryCall= */ "", bodyBuild, attributes);
+  // doc= "", libraryCall= ""
+  build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps, iteratorTypes, "", "", bodyBuild,
+        attributes);
 }
 
 void TemplateOp::print(OpAsmPrinter &p) {
@@ -373,8 +375,8 @@ void TemplateOp::print(OpAsmPrinter &p) {
   }
   if (hasExtraAttrs) {
     p << " attrs = ";
-    p.printOptionalAttrDict((*this)->getAttrs(),
-                            /* elidedAttrs= */ genericAttrNames);
+    // elidedAttrs= genericAttrNames
+    p.printOptionalAttrDict((*this)->getAttrs(), genericAttrNames);
   }
 
   // Print region.
