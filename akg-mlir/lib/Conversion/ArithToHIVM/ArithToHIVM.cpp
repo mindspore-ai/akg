@@ -3345,58 +3345,51 @@ static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(npuvector::Transf
   return success();
 }
 
-static LogicalResult collectTransferWriteDims(npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank,
-                                              PatternRewriter &rewriter, SmallVectorImpl<int64_t> &writeDims) {
-  ArrayRef<int64_t> rawWriteDims = op.getWriteDims();
-  writeDims.clear();
-  if (dataRank == 0) {
-    return success();
+static LogicalResult collectTransferWriteMappedDims(npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank,
+                                                    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &mappedDims) {
+  mappedDims.clear();
+  AffineMap permutationMap = op.getPermutationMap().value_or(AffineMap::getMinorIdentityMap(
+    static_cast<unsigned>(memRefRank), static_cast<unsigned>(dataRank), rewriter.getContext()));
+  if (permutationMap.getNumDims() != static_cast<unsigned>(memRefRank)) {
+    return rewriter.notifyMatchFailure(op, "permutation_map input rank must match transfer_write destination rank");
   }
-
-  if (rawWriteDims.empty()) {
-    writeDims.reserve(static_cast<size_t>(dataRank));
-    for (int64_t i = 0; i < dataRank; ++i) {
-      writeDims.push_back(memRefRank - dataRank + i);
-    }
-    return success();
+  if (permutationMap.getNumSymbols() != 0) {
+    return rewriter.notifyMatchFailure(op, "permutation_map for transfer_write must not use symbols");
   }
-
-  if (static_cast<int64_t>(rawWriteDims.size()) != dataRank) {
-    return rewriter.notifyMatchFailure(op, "write_dims length must match transfer_write data rank");
+  if (permutationMap.getNumResults() != static_cast<unsigned>(dataRank)) {
+    return rewriter.notifyMatchFailure(op, "permutation_map result rank must match transfer_write data rank");
   }
 
   SmallVector<char> seenDims(static_cast<size_t>(memRefRank), false);
-  writeDims.clear();
-  writeDims.reserve(static_cast<size_t>(dataRank));
-  for (int64_t memRefDim : rawWriteDims) {
-    if (memRefDim < 0 || memRefDim >= memRefRank) {
-      return rewriter.notifyMatchFailure(op, "write_dims contains an out-of-range memref dimension");
+  mappedDims.clear();
+  mappedDims.reserve(static_cast<size_t>(dataRank));
+  for (AffineExpr result : permutationMap.getResults()) {
+    auto dimExpr = dyn_cast<AffineDimExpr>(result);
+    if (!dimExpr) {
+      return rewriter.notifyMatchFailure(op, "permutation_map results must be destination dimensions");
+    }
+    int64_t memRefDim = static_cast<int64_t>(dimExpr.getPosition());
+    if (memRefDim >= memRefRank) {
+      return rewriter.notifyMatchFailure(op, "permutation_map contains an out-of-range destination dimension");
     }
     if (seenDims[static_cast<size_t>(memRefDim)]) {
-      return rewriter.notifyMatchFailure(op, "write_dims contains duplicate memref dimensions");
+      return rewriter.notifyMatchFailure(op, "permutation_map contains duplicate destination dimensions");
     }
     seenDims[static_cast<size_t>(memRefDim)] = true;
-    writeDims.push_back(memRefDim);
+    mappedDims.push_back(memRefDim);
   }
   return success();
 }
 
-static bool hasNonSuffixTransferWriteDims(npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank) {
-  ArrayRef<int64_t> rawWriteDims = op.getWriteDims();
-  if (dataRank == 0 || rawWriteDims.empty()) {
+static bool hasNonSuffixTransferWritePermutationMap(npuvector::TransferWriteOp op, int64_t memRefRank,
+                                                    int64_t dataRank) {
+  auto permutationMap = op.getPermutationMap();
+  if (dataRank == 0 || !permutationMap) {
     return false;
   }
-  if (static_cast<int64_t>(rawWriteDims.size()) != dataRank) {
-    return true;
-  }
-  int64_t vectorDim = 0;
-  for (int64_t memRefDim : rawWriteDims) {
-    if (memRefDim != memRefRank - dataRank + vectorDim) {
-      return true;
-    }
-    ++vectorDim;
-  }
-  return false;
+  AffineMap suffixMap =
+    AffineMap::getMinorIdentityMap(static_cast<unsigned>(memRefRank), static_cast<unsigned>(dataRank), op.getContext());
+  return *permutationMap != suffixMap;
 }
 
 static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::TransferWriteOp op, Value dataToWrite,
@@ -3404,8 +3397,8 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
                                                              int64_t dataRank, ConversionPatternRewriter &rewriter,
                                                              SmallVectorImpl<OpFoldResult> &sizes,
                                                              SmallVectorImpl<OpFoldResult> &strides) {
-  SmallVector<int64_t> writeDims;
-  if (failed(collectTransferWriteDims(op, memRefRank, dataRank, rewriter, writeDims))) {
+  SmallVector<int64_t> mappedDims;
+  if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
     return failure();
   }
 
@@ -3426,7 +3419,7 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
     } else {
       dimSize = rewriter.getIndexAttr(dataMemRefType.getDimSize(i));
     }
-    sizes[static_cast<size_t>(writeDims[static_cast<size_t>(i)])] = dimSize;
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = dimSize;
   }
   return success();
 }
@@ -3437,8 +3430,8 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
                                                              int64_t dataRank, ConversionPatternRewriter &rewriter,
                                                              SmallVectorImpl<OpFoldResult> &sizes,
                                                              SmallVectorImpl<OpFoldResult> &strides) {
-  SmallVector<int64_t> writeDims;
-  if (failed(collectTransferWriteDims(op, memRefRank, dataRank, rewriter, writeDims))) {
+  SmallVector<int64_t> mappedDims;
+  if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
     return failure();
   }
 
@@ -3459,7 +3452,7 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
     } else {
       dimSize = rewriter.getIndexAttr(npuVecType.getDimSize(i));
     }
-    sizes[static_cast<size_t>(writeDims[static_cast<size_t>(i)])] = dimSize;
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = dimSize;
   }
   return success();
 }
@@ -4038,7 +4031,7 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     auto resultType =
       memref::SubViewOp::inferRankReducedResultType(dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
 
-    if (destIsAllocRoot && !hasNonSuffixTransferWriteDims(op, memRefRank, dataRank) &&
+    if (destIsAllocRoot && !hasNonSuffixTransferWritePermutationMap(op, memRefRank, dataRank) &&
         succeeded(forwardAllocViewCopyTransferWrite(op, loc, dataToWrite, dest, offsets, rewriter))) {
       return success();
     }
