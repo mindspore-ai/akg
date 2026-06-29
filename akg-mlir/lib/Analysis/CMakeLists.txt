@@ -9,6 +9,7 @@ add_mlir_library(AKGMLIRAnalysis
   TilingSolver.cpp
   TilingStrategy.cpp
   TypeUtils.cpp
+  MemoryAnalysis.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${AKG_MLIR_SOURCE_DIR}/akg/Analysis

@@ -121,7 +121,8 @@ static bool buildCone(Operation *rootOp, const DenseSet<Operation *> &sliceSet, 
     // Every indexing map must be a projected permutation so that
     // computeOperandSlice's iter-space reasoning is valid.
     for (AffineMap m : gen.getIndexingMapsArray()) {
-      if (!m.isProjectedPermutation(/* allowZeroInResults= */ true)) {
+      // allowZeroInResults= true
+      if (!m.isProjectedPermutation(true)) {
         return false;
       }
     }

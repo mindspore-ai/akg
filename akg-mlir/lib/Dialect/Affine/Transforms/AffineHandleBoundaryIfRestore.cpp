@@ -192,6 +192,9 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
   }
   keepArgs->erase();
   if (!isa<scf::IfOp>(boundaryIf)) {
+    if (funcOp == nullptr) {
+      return;
+    }
     funcOp->emitError("AffineHandleBoundaryIfRestore cannot get proper BoundaryIf");
     return;
   }

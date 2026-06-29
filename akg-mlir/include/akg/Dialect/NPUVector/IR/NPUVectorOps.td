@@ -114,7 +114,7 @@ def NPUVector_TransferWriteOp :
                    AnyShaped:$source,
                    Variadic<Index>:$indices,
                    Optional<VectorOf<[I1]>>:$mask,
-                   DefaultValuedAttr<DenseI64ArrayAttr, "{}">:$write_dims)>,
+                   OptionalAttr<AffineMapAttr>:$permutation_map)>,
     Results<(outs Optional<AnyRankedTensor>:$result)> {
 
   let summary = "NPU super-vector store to memref/tensor; supports dynamic tile shapes.";
@@ -129,19 +129,21 @@ def NPUVector_TransferWriteOp :
     `permutation_map`, `mask`, and `in_bounds` match upstream `vector.transfer_write`;
     refer to LLVM `VectorOps.td` for the full text.
 
-    Attribute `write_dims` records the destination memref dimension written by each
-    vector dimension and must always be present. For example,
-    `write_dims = array<i64: 1, 3, 4>` means vector dim 0 writes memref dim 1,
-    vector dim 1 writes memref dim 3, and vector dim 2 writes memref dim 4. When
-    vector dims map to trailing memref dims, use the suffix mapping
-    `[rank - vectorRank, ..., rank - 1]`. Rank-0 vectors use `write_dims = {}`.
+    The optional `permutation_map` follows upstream `vector.transfer_write`:
+    it maps destination memref/tensor dimensions to vector dimensions and may
+    be omitted for the canonical minor identity map. For example,
+    `affine_map<(d0, d1, d2, d3, d4) -> (d1, d3, d4)>` means vector dim 0
+    writes memref dim 1, vector dim 1 writes memref dim 3, and vector dim 2
+    writes memref dim 4. When the attribute is omitted, vector dims map to the
+    trailing memref dims `[rank - vectorRank, ..., rank - 1]`. Rank-0 vectors
+    use an empty-result map.
 
     Example:
 
     ```mlir
     %val = `ssa-value` : !npuvector<?x6x64xf32>
     npuvector.transfer_write %val, %out[%i, %j, %k, %c0, %c0]
-      {write_dims = array<i64: 1, 3, 4>} :
+      {permutation_map = affine_map<(d0, d1, d2, d3, d4) -> (d1, d3, d4)>} :
       !npuvector<?x6x64xf32>, memref<4x197x3x6x64xf32>
     ```
   }];
@@ -156,28 +158,18 @@ def NPUVector_TransferWriteOp :
 
   let builders = [
     OpBuilder<(ins "Type":$resultType, "Value":$vector, "Value":$source, "ValueRange":$indices,
-                   "ArrayRef<int64_t>":$writeDims), [{
+                   "AffineMap":$permutationMap), [{
       build($_builder, $_state, resultType, vector, source, indices, Value(),
-            $_builder.getDenseI64ArrayAttr(writeDims));
+            ::mlir::AffineMapAttr::get(permutationMap));
     }]>,
     OpBuilder<(ins "Type":$resultType, "Value":$vector, "Value":$source, "ValueRange":$indices), [{
-      auto shapedType = ::llvm::cast<::mlir::ShapedType>(source.getType());
-      int64_t memRefRank = shapedType.getRank();
-      int64_t dataRank = 0;
-      if (auto npuVecType = ::llvm::dyn_cast<NPUVectorType>(vector.getType())) {
-        dataRank = npuVecType.getRank();
-      } else if (auto vecType = ::llvm::dyn_cast<::mlir::VectorType>(vector.getType())) {
-        dataRank = vecType.getRank();
-      }
-      ::llvm::SmallVector<int64_t> writeDims;
-      if (dataRank > 0) {
-        writeDims.reserve(dataRank);
-        for (int64_t i = 0; i < dataRank; ++i) {
-          writeDims.push_back(memRefRank - dataRank + i);
-        }
-      }
       build($_builder, $_state, resultType, vector, source, indices, Value(),
-            $_builder.getDenseI64ArrayAttr(writeDims));
+            ::mlir::AffineMapAttr());
+    }]>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "Value":$vector, "Value":$source, "ValueRange":$indices,
+                   "Value":$mask), [{
+      build($_builder, $_state, resultTypes, vector, source, indices, mask,
+            ::mlir::AffineMapAttr());
     }]>
   ];
 

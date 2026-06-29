@@ -101,6 +101,9 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
     """
     res = np.allclose(acu_output, exp_output, rtol, atol, equal_nan)
     if not res:
+        if exp_output.dtype == np.bool_:
+            acu_output = acu_output.astype(np.int32)
+            exp_output = exp_output.astype(np.int32)
         absolute_err = np.abs(acu_output - exp_output)
         max_err = np.max(absolute_err)
         index = np.argmax(absolute_err)

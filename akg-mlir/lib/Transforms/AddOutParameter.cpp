@@ -186,7 +186,7 @@ static LogicalResult collectShapeChainToAlloc(Value v, SmallVectorImpl<ShapeOpIn
 static Value buildReshapeFromOut(OpBuilder &b, Location loc, MemRefType tmpTy, Value outArg,
                                  ArrayRef<int64_t> staticDims) {
   MLIRContext *ctx = b.getContext();
-  unsigned rank = tmpTy.getRank();
+  unsigned rank = static_cast<unsigned>(tmpTy.getRank());
 
   auto idxTy = IndexType::get(ctx);
   auto shapeMemrefTy = MemRefType::get({static_cast<int64_t>(rank)}, idxTy);
@@ -783,7 +783,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
   unsigned origNumInputs = origInputs.size();
   unsigned origNumResults = origResults.size();
   if (origNumResults == 0) {
-    setHaccIOArgAttrs(func, origNumInputs, /* nOutputs= */ 0, builder);
+    // nOutputs = 0
+    setHaccIOArgAttrs(func, origNumInputs, 0, builder);
     return success();
   }
 
@@ -794,7 +795,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     newInputs.append(origResults.begin(), origResults.end());
 
     // Function no longer returns anything.
-    auto newFuncTy = FunctionType::get(ctx, newInputs, /* results= */ {});
+    // results=
+    auto newFuncTy = FunctionType::get(ctx, newInputs, {});
     func.setFunctionType(newFuncTy);
 
     setHaccIOArgAttrs(func, origNumInputs, origNumResults, builder);
@@ -808,7 +810,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
     }
   });
   if (!reprRet) {
-    setHaccIOArgAttrs(func, origNumInputs, /* nOutputs= */ 0, builder);
+    // nOutputs = 0
+    setHaccIOArgAttrs(func, origNumInputs, 0, builder);
     return success();
   }
 
@@ -835,7 +838,8 @@ static LogicalResult transformFunc(func::FuncOp func, OpBuilder &builder) {
   }
 
   // Function no longer returns anything.
-  auto newFuncTy = FunctionType::get(ctx, newInputs, /* results= */ {});
+  // results=
+  auto newFuncTy = FunctionType::get(ctx, newInputs, {});
   func.setFunctionType(newFuncTy);
 
   Block &entry = func.front();

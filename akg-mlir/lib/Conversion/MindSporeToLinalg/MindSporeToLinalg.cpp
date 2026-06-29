@@ -454,8 +454,8 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
     }
 
     operands.push_back(operand);
-    indexingMaps.push_back(AffineMap::get(
-      /* dimCount= */ rank, /* symbolCount= */ kAffineNoSymbols, affineExprs, rewriter.getContext()));
+    // dimCount= rank, symbolCount= kAffineNoSymbols
+    indexingMaps.push_back(AffineMap::get(rank, kAffineNoSymbols, affineExprs, rewriter.getContext()));
   }
 
   indexingMaps.append(operation->getNumResults(), rewriter.getMultiDimIdentityMap(rank));
@@ -1011,8 +1011,8 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
     for (unsigned i = 0; i < rank; ++i) {
       dimExprs.push_back(rewriter.getAffineDimExpr(i * kTileDimsPerInputDim + kBroadcastOrigDimOffset));
     }
-    auto readAffineMap = AffineMap::get(/* dimCount= */ rank * kTileDimsPerInputDim,
-                                        /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
+    // dimCount= rank * kTileDimsPerInputDim, symbolCount= kAffineNoSymbols
+    auto readAffineMap = AffineMap::get(rank * kTileDimsPerInputDim, kAffineNoSymbols, dimExprs, rewriter.getContext());
 
     SmallVector<AffineMap, kSmallVectorSizeTwo> affineMaps = {readAffineMap,
                                                               rewriter.getMultiDimIdentityMap(genericShape.size())};
@@ -1046,7 +1046,6 @@ struct BroadcastDimContext {
   SmallVector<Value> &dynDims;
   SmallVector<AffineExpr, kSmallVectorSizeFour> &dimExprs;
   int64_t &dimIndices;
-  bool &needCastOp;
 };
 
 class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::BroadcastToOp> {
@@ -1073,7 +1072,11 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     // broadcasts input tensor to a given shape. The dim of input shape must be smaller than or equal
     // to that of target shape. Suppose input shape is (x1,x2,...,xm), target shape is (*, y1,y2,...,ym),
     // where * means any additional dimension.
-    llvm::ArrayRef<int64_t> newShape = *(op.getNewShape());
+    auto newShapeOpt = op.getNewShape();
+    if (!newShapeOpt.has_value()) {
+      return failure();
+    }
+    llvm::ArrayRef<int64_t> newShape = *newShapeOpt;
     llvm::ArrayRef<int64_t> inputShape = inputTy.getShape();
     // 1.If the value pairs at a specific dim are equal, then that value goes right into
     // that dim of output shape.
@@ -1139,17 +1142,16 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     // collapseShape Op's output shape.
     SmallVector<int64_t, kSmallVectorSizeTwo> collapseShape;
     // if collapseShape != genericShape, tensor.castOp must created.
-    bool needCastOp = false;
     int64_t dimIndices = 0;
     BroadcastInputInfo bcastInfo{loc, input, inputTy, resultTy, newShape};
     BroadcastDimContext bcastCtx{rewriter, genericShape, collapseShape, reassociationMap,
-                                 dynDims,  dimExprs,     dimIndices,    needCastOp};
+                                 dynDims,  dimExprs,     dimIndices};
     buildBroadcastShapesAndMaps(bcastInfo, rank, bcastCtx);
 
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(op.getLoc(), genericShape, elementTy, dynDims);
     // We needs to map the input shape to the non-broadcasted dimensions.
-    auto readAffineMap =
-      AffineMap::get(/* dimCount= */ dimIndices, /* symbolCount= */ kAffineNoSymbols, dimExprs, rewriter.getContext());
+    // dimCount= dimIndices, symbolCount= kAffineNoSymbols
+    auto readAffineMap = AffineMap::get(dimIndices, kAffineNoSymbols, dimExprs, rewriter.getContext());
     assert((int64_t)genericShape.size() == dimIndices);
     SmallVector<AffineMap, kSmallVectorSizeTwo> affineMaps = {readAffineMap,
                                                               rewriter.getMultiDimIdentityMap(genericShape.size())};
@@ -1160,8 +1162,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
       [&op](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
         (void)nestedBuilder.create<linalg::YieldOp>(op.getLoc(), *args.begin());
       });
-    // cppcheck-suppress knownConditionTrueFalse
-    if (needCastOp) {
+    if (collapseShape != genericShape) {
       auto collapseShapeOp = rewriter.create<tensor::CollapseShapeOp>(
         loc, RankedTensorType::get(collapseShape, elementTy), genericOp.getResult(0), reassociationMap);
       collapseShapeOp.getOperation()->setAttr("AttachDynTile", UnitAttr::get(rewriter.getContext()));
@@ -1199,7 +1200,6 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     ctx.reassociationMap.push_back(indices);
     ctx.dimExprs.push_back(ctx.rewriter.getAffineDimExpr(ctx.dimIndices + kBroadcastOrigDimOffset));
     ctx.dimIndices += kDimIndexStride;
-    ctx.needCastOp = true;
   }
 
   static void handleOutDimEqualInput(BroadcastDimContext &ctx, int64_t outDimSize) {

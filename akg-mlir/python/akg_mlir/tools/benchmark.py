@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Module for kernel test and profiling"""
+
 import os
 import sys
 import argparse
@@ -222,7 +223,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
             input_file = dump_dir / f"{kernel_name}_hfusion.mlir"
             get_named_op_str(file_path, input_file, f"{kernel_name}", False, str(dump_dir))
 
-    with open(info_file, "r", encoding='utf-8') as f:
+    with open(os.path.realpath(info_file), "r", encoding='utf-8') as f:
         desc = f.read()
         kernel_name = _get_kernel_name(desc)
         input_shape, is_dyn_shape = _get_input_shape(desc)
@@ -356,7 +357,8 @@ def main(args=None):
             logging.info("Skip static info")
             logging.info("precision correct")
         else:
-            _run_single_file(args.file, args)
+            if not _run_single_file(args.file, args):
+                return 1
     return 0
 
 

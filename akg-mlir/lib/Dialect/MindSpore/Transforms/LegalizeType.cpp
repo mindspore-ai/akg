@@ -125,7 +125,9 @@ struct LegalizeType : public impl::LegalizeTypeBase<LegalizeType> {
     RewritePatternSet patterns(func.getContext());
     MLIRContext *ctx = func.getContext();
     auto moduleOp = func.getOperation()->getParentOp();
-    moduleOp->removeAttr("mindspore.symbol_calc_expr");
+    if (moduleOp != nullptr) {
+      moduleOp->removeAttr("mindspore.symbol_calc_expr");
+    }
     // Add the generated patterns to the list.
     patterns.add<ConvertSubOp>(ctx);
     (void)applyPatternsAndFoldGreedily(func, std::move(patterns));

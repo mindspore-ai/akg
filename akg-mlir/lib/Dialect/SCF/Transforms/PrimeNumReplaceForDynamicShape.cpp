@@ -149,11 +149,11 @@ static void UpdateRuntimeVars(func::FuncOp &mainFunc, std::map<int, mlir::Value>
       allConstsMap[primeNum].replaceAllUsesWith(newArg);
       if (gpuTool.isRuntimeVar(primeNum)) {
         auto oldVar = gpuTool.getRuntimeArgument(primeNum);
-        oldVar.argIndex = currArgSize;
+        oldVar.argIndex = static_cast<int>(currArgSize);
         gpuTool.updateRuntimeArgument(oldVar);
       } else {
         auto newVar = gpuTool.addRuntimeArgument(primeNum);
-        newVar.argIndex = currArgSize;
+        newVar.argIndex = static_cast<int>(currArgSize);
         gpuTool.updateRuntimeArgument(newVar);
       }
       currArgSize++;
