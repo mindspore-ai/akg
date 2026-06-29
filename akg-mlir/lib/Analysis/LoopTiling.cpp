@@ -1378,6 +1378,7 @@ static mlir::scf::ForOp createParallelMapLoop(func::FuncOp funcOp, mlir::scf::Fo
 struct ParallelTileCoordMapParams {
   ArrayRef<unsigned> parallelDims;
   ArrayRef<Value> tileCountsByDim;
+  mutable mlir::scf::ForOp parallelMapLoop;
   mutable mlir::scf::ForOp parallelTileLoop;
   mutable mlir::scf::ForOp insertBeforeLoop;
   OpBuilder &builder;
@@ -1388,16 +1389,21 @@ static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
   const auto &parallelDims = params.parallelDims;
   const auto &tileCountsByDim = params.tileCountsByDim;
   const auto &insertBeforeLoop = params.insertBeforeLoop;
+  auto &parallelMapLoop = params.parallelMapLoop;
   auto &parallelTileLoop = params.parallelTileLoop;
   auto &builder = params.builder;
-  if (!parallelTileLoop || !insertBeforeLoop || parallelDims.empty()) {
+  if (!parallelMapLoop || !parallelTileLoop || !insertBeforeLoop || parallelDims.empty()) {
     return;
   }
 
   OpBuilder::InsertionGuard guard(builder);
   mlir::Location loc = parallelTileLoop.getLoc();
   builder.setInsertionPoint(insertBeforeLoop);
-  Value remaining = parallelTileLoop.getInductionVar();
+  AffineExpr taskLoopExpr = builder.getAffineDimExpr(0);
+  AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
+  auto taskIdMap = AffineMap::get(2, 0, taskLoopExpr + mapLoopExpr, builder.getContext());
+  Value remaining = builder.create<affine::AffineApplyOp>(
+    loc, taskIdMap, ValueRange{parallelTileLoop.getInductionVar(), parallelMapLoop.getInductionVar()});
   AffineExpr remainingExpr = builder.getAffineDimExpr(0);
   AffineExpr tileCountExpr = builder.getAffineSymbolExpr(0);
   auto remMap = AffineMap::get(1, 1, remainingExpr % tileCountExpr, builder.getContext());
@@ -1444,9 +1450,15 @@ static mlir::scf::ForOp createParallelTileLoop(const ParallelTileLoopParams &par
   OpBuilder::InsertionGuard guard(builder);
   mlir::Location loc = bandRoot.getLoc();
   builder.setInsertionPoint(bandRoot);
+  Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value step = builder.create<arith::ConstantIndexOp>(loc, useCore);
+  AffineExpr taskNumExpr = builder.getAffineDimExpr(0);
+  AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
+  auto taskUbMap = AffineMap::get(2, 0, taskNumExpr - mapLoopExpr, builder.getContext());
+  Value taskUb = builder.create<affine::AffineApplyOp>(
+    loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
   auto tileLoop =
-    builder.create<mlir::scf::ForOp>(loc, mapLoop.getInductionVar(), totalTiles, step, ValueRange{},
+    builder.create<mlir::scf::ForOp>(loc, c0, taskUb, step, ValueRange{},
                                      [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value,
                                         mlir::ValueRange) { nestedBuilder.create<mlir::scf::YieldOp>(nestedLoc); });
   bandRoot->moveBefore(tileLoop.getBody()->getTerminator());
@@ -1545,7 +1557,8 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
   }
 
   parallelTileLoop = createParallelTileLoop({parallelMapLoop, root, totalTilesValue, parallelUseCore, builder});
-  buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelTileLoop, root, builder}, parallelTileCoordByDim);
+  buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder},
+                            parallelTileCoordByDim);
 }
 
 // Build the LoopBounds for a no-split origLoop at the requested level.
