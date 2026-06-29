@@ -46,8 +46,8 @@ using namespace mlir::mindspore;  // NOLINT(build/namespaces)
 static LogicalResult computeReshapeOutput(ArrayRef<int64_t> higherRankShape, ArrayRef<int64_t> lowerRankShape,
                                           SmallVectorImpl<int64_t> &reshapeOutputShape) {
   // Initialize new shapes with [1] * higherRank.
-  int64_t higherRank = higherRankShape.size();
-  int64_t lowerRank = lowerRankShape.size();
+  int64_t higherRank = static_cast<int64_t>(higherRankShape.size());
+  int64_t lowerRank = static_cast<int64_t>(lowerRankShape.size());
 
   reshapeOutputShape.assign(higherRank, 1);
 

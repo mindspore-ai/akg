@@ -63,8 +63,10 @@ class AffineForToSCFPattern : public OpRewritePattern<affine::AffineForOp> {
     Location loc = op.getLoc();
 
     // Compute lower and upper bounds using affine.max / affine.min
-    Value lowerBound = lowerBoundWithAffineMinMax(op, /* isLowerBound= */ true, rewriter);
-    Value upperBound = lowerBoundWithAffineMinMax(op, /* isLowerBound= */ false, rewriter);
+    // isLowerBound= true
+    Value lowerBound = lowerBoundWithAffineMinMax(op, true, rewriter);
+    // isLowerBound= false
+    Value upperBound = lowerBoundWithAffineMinMax(op, false, rewriter);
     if (!lowerBound || !upperBound) {
       return failure();
     }
@@ -132,9 +134,8 @@ class AffineIfToSCFPattern : public OpRewritePattern<affine::AffineIfOp> {
       }()
                   : cmpVal;
     }
-    cond = cond ? cond
-                : rewriter.create<arith::ConstantIntOp>(loc, /* value= */ 1,
-                                                        /* width= */ 1);
+    // value= 1, width= 1
+    cond = cond ? cond : rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
 
     bool hasElseRegion = !op.getElseRegion().empty();
     auto scfIfOp = rewriter.create<scf::IfOp>(loc, op.getResultTypes(), cond, hasElseRegion);

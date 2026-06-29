@@ -14,13 +14,48 @@
 # ============================================================================
 """Op summary parser module."""
 
-from .op_summary_headers import OpSummaryHeaders
 from .file_manager import FileManager
-from .op_summary_bean import OpSummaryBean
 from .cann_file_parser import CANNFileParser, CANNDataEnum
 from .path_manager import PathManager
 
 MAX_TIME_CONSUME = 9999999999
+
+
+class OpSummaryHeaders():
+    # op_summary
+    TASK_START_TIME = "Task Start Time(us)"
+    AIC_TOTAL_CYCLES = "aic_total_cycles"
+    AIV_TOTAL_CYCLES = "aiv_total_cycles"
+    TASK_DURATION = "Task Duration(us)"
+    OP_SUMMARY_SHOW_HEADERS = ["Op Name", "OP Type", "Task Type", TASK_START_TIME, TASK_DURATION,
+                               "Task Wait Time(us)", "Block Dim" ,AIC_TOTAL_CYCLES, AIV_TOTAL_CYCLES]
+
+
+class OpSummaryBean:
+    """Op summary bean."""
+    headers = []
+
+    def __init__(self, data: list):
+        self._data = data
+
+    @property
+    def row(self) -> list:
+        """Get profiling data as a row of values."""
+        row = []
+        read_headers = OpSummaryBean.headers if OpSummaryBean.headers else self._data.keys()
+        for field_name in read_headers:
+            row.append(self._data.get(field_name, ""))
+        return row
+
+    @property
+    def ts(self) -> float:
+        """Get the start timestamp of the op."""
+        return float(self._data.get(OpSummaryHeaders.TASK_START_TIME, 0))
+
+    @property
+    def all_headers(self) -> list:
+        """Get all headers."""
+        return list(self._data.keys())
 
 
 class OpSummaryParser():

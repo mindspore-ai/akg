@@ -60,13 +60,15 @@ def get_shape_args_list(device_shape, is_dyn_shape, fake_output_indices):
 
 def _build_input_code(input_for_mod, output_indexes, fake_output_indices, shape_args_list):
     """Build code fragments for each input tensor."""
-    params_list = []
-    mem_alloc = []
-    mem_copy_htod = []
-    mem_copy_dtoh = []
-    free_d_mem = []
-    set_args_params = []
-    init_memref_params = []
+    code = {
+        "params_list": [],
+        "mem_alloc": [],
+        "mem_copy_htod": [],
+        "mem_copy_dtoh": [],
+        "free_d_mem": [],
+        "set_args_params": [],
+        "init_memref_params": [],
+    }
 
     for idx, d in enumerate(input_for_mod):
         if idx in fake_output_indices:
@@ -74,42 +76,34 @@ def _build_input_code(input_for_mod, output_indexes, fake_output_indices, shape_
 
         for j, param in enumerate(shape_args_list[idx]):
             if param == "remove":
-                set_args_params.append("&dev_ptr_fake")
+                code["set_args_params"].append("&dev_ptr_fake")
             elif param == "pointer":
-                set_args_params.append(f"&dev_ptr_{idx}")
+                code["set_args_params"].append(f"&dev_ptr_{idx}")
             else:
                 param_name = f"param_{idx}_{j}"
-                init_memref_params.append(f"size_t {param_name} = {param};")
-                set_args_params.append(f"&{param_name}")
+                code["init_memref_params"].append(f"size_t {param_name} = {param};")
+                code["set_args_params"].append(f"&{param_name}")
 
         dtype = get_cpptype_from_pytype(str(d.dtype))
         size = reduce(lambda x, y: x * y, d.shape)
 
-        params_list.append(f"{dtype}* data_{idx}")
-        mem_alloc.extend([
+        code["params_list"].append(f"{dtype}* data_{idx}")
+        code["mem_alloc"].extend([
             f"    CUdeviceptr dev_ptr_{idx};",
             f"    checkCudaDrvErrors(cuMemAlloc(&dev_ptr_{idx}, {size} * sizeof({dtype})));"
         ])
-        mem_copy_htod.append(
+        code["mem_copy_htod"].append(
             f"    checkCudaDrvErrors(cuMemcpyHtoD(dev_ptr_{idx}, data_{idx}, {size} * sizeof({dtype})));"
         )
 
         if idx in output_indexes or (idx - len(input_for_mod)) in output_indexes:
-            mem_copy_dtoh.append(
+            code["mem_copy_dtoh"].append(
                 f"    checkCudaDrvErrors(cuMemcpyDtoH(data_{idx}, dev_ptr_{idx}, {size} * sizeof({dtype})));"
             )
 
-        free_d_mem.append(f"    checkCudaDrvErrors(cuMemFree(dev_ptr_{idx}));")
+        code["free_d_mem"].append(f"    checkCudaDrvErrors(cuMemFree(dev_ptr_{idx}));")
 
-    return {
-        "params_list": params_list,
-        "mem_alloc": mem_alloc,
-        "mem_copy_htod": mem_copy_htod,
-        "mem_copy_dtoh": mem_copy_dtoh,
-        "free_d_mem": free_d_mem,
-        "set_args_params": set_args_params,
-        "init_memref_params": init_memref_params,
-    }
+    return code
 
 
 def _build_dyn_tiling_code(dyn_tiling_args, set_args_params, init_memref_params):
@@ -131,6 +125,27 @@ def _build_grid_block_params(dim):
     return set_grid_params, set_block_params
 
 
+def _load_dyn_tiling_args(runtime_arg_file, is_dyn_shape):
+    """Load dynamic tiling args from the runtime arg file."""
+    if not is_dyn_shape:
+        return {}
+    with open(os.path.realpath(runtime_arg_file), "r", encoding='utf-8') as file:
+        return json.loads(file.read())
+
+
+def _apply_replacements(template_src, replacements):
+    """Apply replacement mappings to the template source."""
+    for old, new in replacements.items():
+        template_src = template_src.replace(old, new)
+    return template_src
+
+
+def _write_runtime_code(output_file, template_src):
+    """Write the generated runtime code to file."""
+    with open(os.path.realpath(output_file), "wt", encoding='utf-8') as file:
+        file.writelines(template_src)
+
+
 def gen_cuda_runtime_code(kernel_name,
                           input_for_mod,
                           output_indexes,
@@ -138,17 +153,14 @@ def gen_cuda_runtime_code(kernel_name,
                           fake_output_indices,
                           path="./akg_kernel_meta/"):
     """Generate cuda runtime code"""
-    device_shape, symbol_map, support_info = get_device_shape(input_for_mod, kernel_name, is_dyn_shape)
-    mapping_file = os.path.join(path, f"{kernel_name}.json")
-    runtime_arg_file = os.path.join(path, f"{kernel_name}_runtime_arg.txt")
-    dim = get_gpu_setting_by_input(symbol_map, mapping_file, support_info)
+    device_info = get_device_shape(input_for_mod, kernel_name, is_dyn_shape)
+    dim = get_gpu_setting_by_input(
+        device_info[1], os.path.join(path, f"{kernel_name}.json"), device_info[2])
 
-    dyn_tiling_args = {}
-    if is_dyn_shape:
-        with open(runtime_arg_file, "r", encoding='utf-8') as file:
-            dyn_tiling_args = json.loads(file.read())
+    dyn_tiling_args = _load_dyn_tiling_args(
+        os.path.join(path, f"{kernel_name}_runtime_arg.txt"), is_dyn_shape)
 
-    shape_args_list = get_shape_args_list(device_shape, is_dyn_shape, fake_output_indices)
+    shape_args_list = get_shape_args_list(device_info[0], is_dyn_shape, fake_output_indices)
 
     input_code = _build_input_code(input_for_mod, output_indexes, fake_output_indices, shape_args_list)
 
@@ -157,26 +169,21 @@ def gen_cuda_runtime_code(kernel_name,
 
     _build_dyn_tiling_code(dyn_tiling_args, input_code["set_args_params"], input_code["init_memref_params"])
 
-    set_grid_params, set_block_params = _build_grid_block_params(dim)
+    grid_block = _build_grid_block_params(dim)
 
-    replacements = {
+    template_src = _apply_replacements(CUDA_RUNTIME_TEMPLATE, {
         "rt_code_ptx_path": f'"{path}/{kernel_name}.ptx"',
         "rt_code_kernel_name": f'"{kernel_name}_kernel"',
         "rt_code_params_list": ", ".join(input_code["params_list"]),
         "rt_code_mem_alloc": "\n".join(input_code["mem_alloc"]),
         "rt_code_mem_copy_htod": "\n".join(input_code["mem_copy_htod"]),
-        "rt_code_set_grid_params": set_grid_params,
-        "rt_code_set_block_params": set_block_params,
+        "rt_code_set_grid_params": grid_block[0],
+        "rt_code_set_block_params": grid_block[1],
         "rt_code_set_args_params": ", ".join(input_code["set_args_params"]),
         "rt_code_mem_copy_dtoh": "\n".join(input_code["mem_copy_dtoh"]),
         "rt_code_free_d_mem": "\n".join(input_code["free_d_mem"]),
         "rt_code_init_memref_params": "\n".join(input_code["init_memref_params"]),
-    }
-
-    template_src = CUDA_RUNTIME_TEMPLATE
-    for old, new in replacements.items():
-        template_src = template_src.replace(old, new)
+    })
 
     output_file = os.path.join(path, "tmp_files", f"gen_func_{kernel_name}.cu")
-    with open(output_file, "wt", encoding='utf-8') as file:
-        file.writelines(template_src)
+    _write_runtime_code(output_file, template_src)

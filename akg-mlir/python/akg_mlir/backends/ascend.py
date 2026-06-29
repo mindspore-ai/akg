@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ akg launch and compile utils """
+
 import os
 import re
-import sys
 import hashlib
 import pathlib
 import json
@@ -22,14 +22,22 @@ import logging
 import subprocess
 import numpy as np
 
-flags = sys.getdlopenflags()
-sys.setdlopenflags(flags | os.RTLD_GLOBAL)
-# pylint: disable=wrong-import-position
-# pylint: disable=wrong-import-order
-from akg.ascend_launch import akg_ascend_run
-sys.setdlopenflags(flags)
-from akg.utils.dynamic_utils import get_device_shape
+from ..ascend_launch import akg_ascend_run
+from ..utils.dynamic_utils import get_device_shape
 
+__all__ = [
+    "REG_BASED_ARCH_PREFIXES",
+    "write_code",
+    "get_block_dim_from_mlir",
+    "set_ascend_info",
+    "get_akg_opt_path",
+    "akg_opt",
+    "check_ascend_compile",
+    "bisheng_compile",
+    "ascend_compile",
+    "benchmark_launch",
+    "dump_ascend_meta_data",
+]
 
 REG_BASED_ARCH_PREFIXES = ("Ascend910_95", "Ascend950DT", "Ascend950PR")
 # Matches device func attrs like: hacc.block_dim = 40 : i64
@@ -103,6 +111,26 @@ def get_akg_opt_path(akg_tools_dir=None):
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
 
 
+def _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch):
+    """Build the --ascend-opt option string, resolving arch if needed."""
+    options = []
+    if dyn_shape:
+        options.append("dynamic-shape=true")
+    if not enable_loop_fusion:
+        options.append("enable-loop-fusion=false")
+    if not arch:
+        try:
+            import acl  # pylint: disable=import-outside-toplevel
+            arch = acl.get_soc_name()
+        except ImportError as err:
+            raise ImportError("Please run 'source set_env.sh' in the CANN installation path.") from err
+    options.append(f"arch={arch}")
+    ascend_opt_option = "--ascend-opt"
+    if options:
+        ascend_opt_option += "=" + " ".join(options)
+    return ascend_opt_option
+
+
 def akg_opt(
     input_file,
     output_file,
@@ -132,24 +160,7 @@ def akg_opt(
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    # Build ascend-opt option
-    ascend_opt_option = "--ascend-opt"
-    options = []
-
-    if dyn_shape:
-        options.append("dynamic-shape=true")
-    if not enable_loop_fusion:
-        options.append("enable-loop-fusion=false")
-    if not arch:
-        try:
-            import acl  # pylint: disable=import-outside-toplevel
-            arch = acl.get_soc_name()
-        except ImportError as err:
-            raise ImportError("Please run 'source set_env.sh' in the CANN installation path.") from err
-    options.append(f"arch={arch}")
-
-    if options:
-        ascend_opt_option += "=" + " ".join(options)
+    ascend_opt_option = _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch)
 
     cmd = [get_akg_opt_path(), input_file, ascend_opt_option, "-o", output_file]
 

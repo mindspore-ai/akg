@@ -28,8 +28,9 @@ using llvm::SmallVectorImpl;
 
 namespace mlir {
 
+static constexpr unsigned kInputTileSizesCapacity = 6;
 struct InputTileSizesParam {
-  SmallVector<unsigned, 6> inputTileSizes;
+  SmallVector<unsigned, kInputTileSizesCapacity> inputTileSizes;
 };
 
 struct ArchFeatureInfo {

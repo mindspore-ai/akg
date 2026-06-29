@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <unordered_map>
 #include <utility>
 
 #include "akg/Target/PTX/Passes.h"
@@ -49,54 +50,30 @@ using namespace mlir;  // NOLINT(build/namespaces)
 
 namespace {
 
+static constexpr unsigned kOptLevelDefault = 2;
+static constexpr unsigned kOptLevelAggressive = 3;
+static constexpr int kMaxSizeLevel = 2;
 static llvm::CodeGenOptLevel LLVMCodeGenOpt(unsigned optLevel) {
-  llvm::CodeGenOptLevel codegenOptLevel;
-  switch (optLevel) {
-    case 0:
-      codegenOptLevel = llvm::CodeGenOptLevel::None;
-      break;
-    case 1:
-      codegenOptLevel = llvm::CodeGenOptLevel::Less;
-      break;
-    case 2:
-      codegenOptLevel = llvm::CodeGenOptLevel::Default;
-      break;
-    case 3:
-      codegenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-      break;
-    default:
-      codegenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-      break;
-  }
-  return codegenOptLevel;
+  static const std::unordered_map<unsigned, llvm::CodeGenOptLevel> kOptLevelMap = {
+    {0, llvm::CodeGenOptLevel::None},
+    {1, llvm::CodeGenOptLevel::Less},
+    {kOptLevelDefault, llvm::CodeGenOptLevel::Default},
+    {kOptLevelAggressive, llvm::CodeGenOptLevel::Aggressive}};
+  auto it = kOptLevelMap.find(optLevel);
+  return it != kOptLevelMap.end() ? it->second : llvm::CodeGenOptLevel::Aggressive;
 }
 
 static llvm::OptimizationLevel mapToLevel(unsigned optLevel) {
-  switch (optLevel) {
-    default:
-      llvm_unreachable("Invalid optimization level!");
-    case 0:
-      return llvm::OptimizationLevel::O0;
-    case 1:
-      return llvm::OptimizationLevel::O1;
-    case 2:
-      return llvm::OptimizationLevel::O2;
-    case 3:
-      return llvm::OptimizationLevel::O3;
+  static const std::unordered_map<unsigned, llvm::OptimizationLevel> kOptLevelMap = {
+    {0, llvm::OptimizationLevel::O0},
+    {1, llvm::OptimizationLevel::O1},
+    {kOptLevelDefault, llvm::OptimizationLevel::O2},
+    {kOptLevelAggressive, llvm::OptimizationLevel::O3}};
+  auto it = kOptLevelMap.find(optLevel);
+  if (it == kOptLevelMap.end()) {
+    llvm_unreachable("Invalid optimization level!");
   }
-}
-
-static void addOptimizationPasses(llvm::FunctionPassManager &fPM, llvm::ModulePassManager &mPM,
-                                  const llvm::OptimizationLevel &optLevel) {
-  fPM.addPass(llvm::VerifierPass());  // Verify that input is correct
-
-  if (optLevel.getSpeedupLevel() > 1 && optLevel.getSizeLevel() < 2) {
-    fPM.addPass(llvm::LoopVectorizePass());
-    fPM.addPass(llvm::SLPVectorizerPass());
-  }
-
-  fPM.addPass(llvm::DCEPass());
-  mPM.addPass(llvm::AlwaysInlinerPass());
+  return it->second;
 }
 
 class GPUKernelToPTX : public PassWrapper<GPUKernelToPTX, OperationPass<gpu::GPUModuleOp>> {
@@ -206,7 +183,13 @@ void GPUKernelToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
 
   (void)fAM.registerPass([&targetMachine] { return targetMachine.getTargetIRAnalysis(); });
 
-  addOptimizationPasses(fPM, mPM, optLevel);
+  fPM.addPass(llvm::VerifierPass());  // Verify that input is correct
+  if (optLevel.getSpeedupLevel() > 1 && optLevel.getSizeLevel() < kMaxSizeLevel) {
+    fPM.addPass(llvm::LoopVectorizePass());
+    fPM.addPass(llvm::SLPVectorizerPass());
+  }
+  fPM.addPass(llvm::DCEPass());
+  mPM.addPass(llvm::AlwaysInlinerPass());
 
   (void)mPM.run(llvmModule, mAM);
   for (auto &f : llvmModule) {

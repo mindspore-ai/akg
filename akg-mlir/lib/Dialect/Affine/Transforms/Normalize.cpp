@@ -43,6 +43,9 @@ namespace mlir {
 static constexpr int kTaylerExpansionNum = 5;
 static constexpr int kTaylerOrderSub = 2;
 static constexpr double kBaseTwo = 2.0;
+static constexpr double kSinTaylerC1 = -0.166666582;
+static constexpr int kTaylerSeriesStep = 2;
+static constexpr int kF32ExponentOffset = 30;
 
 #define DEBUG_TYPE "math-normalize"
 
@@ -85,8 +88,8 @@ static Value buildNaNConst(PatternRewriter &rewriter, Location loc, FloatType fT
 }
 
 static Value buildInfConst(PatternRewriter &rewriter, Location loc, FloatType fTy) {
-  llvm::APFloat val = llvm::APFloat::getInf(fTy.getFloatSemantics(),
-                                            /* Negative= */ false);
+  // Negative= false
+  llvm::APFloat val = llvm::APFloat::getInf(fTy.getFloatSemantics(), false);
   return rewriter.create<arith::ConstantOp>(loc, fTy, rewriter.getFloatAttr(fTy, val));
 }
 
@@ -175,7 +178,7 @@ static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpa
       taylerParams.push_back(1.0);
       double acc = 1.0;
       for (int i = 1; i < taylerExpansionNum; ++i) {
-        acc = acc * (2 * i) * (2 * i + 1) * (-1);
+        acc = acc * (kTaylerSeriesStep * i) * (kTaylerSeriesStep * i + 1) * (-1);
         taylerParams.push_back(1.0 / acc);
       }
       return taylerParams;
@@ -254,14 +257,14 @@ static Value buildSinSign(PatternRewriter &rewriter, Location loc, Value x) {
 
 static double getFPMAX(FloatType fType) {
   if (fType.isF32()) {
-    return std::pow(kBaseTwo, fType.getWidth() + 30);
+    return std::pow(kBaseTwo, fType.getWidth() + kF32ExponentOffset);
   }
   return std::pow(kBaseTwo, fType.getWidth() - 1);
 }
 
 static double getFPMIN(FloatType fType) {
   if (fType.isF32()) {
-    return std::pow(kBaseTwo, -static_cast<int>(fType.getWidth() + 30));
+    return std::pow(kBaseTwo, -static_cast<int>(fType.getWidth() + kF32ExponentOffset));
   }
   return std::pow(kBaseTwo, -static_cast<int>(fType.getWidth() - 1));
 }
