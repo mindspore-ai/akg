@@ -109,3 +109,45 @@ func.func @test_div_tensor(%arg0: !torch.vtensor<[2,3,32,32],f32>, %arg1: !torch
   %3 = builtin.unrealized_conversion_cast %2 : tensor<2x3x32x32xf32> to !torch.vtensor<[2,3,32,32],f32>
   return %3 : !torch.vtensor<[2,3,32,32],f32>
 }
+
+// CHECK-LABEL: func.func @test_add_scalar_lhs
+// CHECK: torch.aten.add.Scalar
+func.func @test_add_scalar_lhs(%arg0: !torch.vtensor<[2,3,32,32],f32>) -> !torch.vtensor<[2,3,32,32],f32> {
+  %cst = mfuse.constant dense<3.0> : tensor<f64, {is_scalar = ""}>
+  %0 = builtin.unrealized_conversion_cast %arg0 : !torch.vtensor<[2,3,32,32],f32> to tensor<2x3x32x32xf32>
+  %1 = mfuse.add %cst, %0 : (tensor<f64, {is_scalar = ""}>, tensor<2x3x32x32xf32>) -> tensor<2x3x32x32xf32>
+  %2 = builtin.unrealized_conversion_cast %1 : tensor<2x3x32x32xf32> to !torch.vtensor<[2,3,32,32],f32>
+  return %2 : !torch.vtensor<[2,3,32,32],f32>
+}
+
+// CHECK-LABEL: func.func @test_mul_scalar_lhs
+// CHECK: torch.aten.mul.Scalar
+func.func @test_mul_scalar_lhs(%arg0: !torch.vtensor<[2,3,32,32],f32>) -> !torch.vtensor<[2,3,32,32],f32> {
+  %cst = mfuse.constant dense<2.5> : tensor<f64, {is_scalar = ""}>
+  %0 = builtin.unrealized_conversion_cast %arg0 : !torch.vtensor<[2,3,32,32],f32> to tensor<2x3x32x32xf32>
+  %1 = mfuse.mul %cst, %0 : (tensor<f64, {is_scalar = ""}>, tensor<2x3x32x32xf32>) -> tensor<2x3x32x32xf32>
+  %2 = builtin.unrealized_conversion_cast %1 : tensor<2x3x32x32xf32> to !torch.vtensor<[2,3,32,32],f32>
+  return %2 : !torch.vtensor<[2,3,32,32],f32>
+}
+
+// CHECK-LABEL: func.func @test_sub_scalar_lhs
+// CHECK: torch.operator "torch.aten.sub.Tensor"
+func.func @test_sub_scalar_lhs(%arg0: !torch.vtensor<[2,3,32,32],f32>) -> !torch.vtensor<[2,3,32,32],f32> {
+  %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
+  %0 = builtin.unrealized_conversion_cast %arg0 : !torch.vtensor<[2,3,32,32],f32> to tensor<2x3x32x32xf32>
+  %1 = mfuse.sub %cst, %0 : (tensor<i64, {is_scalar = ""}>, tensor<2x3x32x32xf32>) -> tensor<2x3x32x32xf32>
+  %2 = builtin.unrealized_conversion_cast %1 : tensor<2x3x32x32xf32> to !torch.vtensor<[2,3,32,32],f32>
+  return %2 : !torch.vtensor<[2,3,32,32],f32>
+}
+
+// CHECK-LABEL: func.func @test_div_scalar_lhs
+// CHECK: torch.operator "torch.aten.div.Tensor"
+// CHECK-NOT: torch.aten.reciprocal
+// CHECK-NOT: torch.aten.mul
+func.func @test_div_scalar_lhs(%arg0: !torch.vtensor<[2,3,32,32],f32>) -> !torch.vtensor<[2,3,32,32],f32> {
+  %cst = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = builtin.unrealized_conversion_cast %arg0 : !torch.vtensor<[2,3,32,32],f32> to tensor<2x3x32x32xf32>
+  %1 = mfuse.div %cst, %0 : (tensor<f64, {is_scalar = ""}>, tensor<2x3x32x32xf32>) -> tensor<2x3x32x32xf32>
+  %2 = builtin.unrealized_conversion_cast %1 : tensor<2x3x32x32xf32> to !torch.vtensor<[2,3,32,32],f32>
+  return %2 : !torch.vtensor<[2,3,32,32],f32>
+}

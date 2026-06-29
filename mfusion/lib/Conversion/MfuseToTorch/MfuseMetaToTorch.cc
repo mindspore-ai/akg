@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <iterator>
 #include <optional>
+#include <type_traits>
 
 #include "MfuseToTorchUtils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -604,10 +605,14 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
 };
 
 // Common logic for binary op conversion
-// Returns a tuple of (lhs, processedRhs, isRhsScalar, torchResultType) if successful
+static bool isTorchScalarType(mlir::Type type) {
+  return mlir::isa<TorchD::FloatType>(type) || mlir::isa<TorchD::IntType>(type);
+}
+
+// Returns a tuple of (lhs, rhs, isLhsScalar, isRhsScalar, torchResultType) if successful
 // Returns failure otherwise
 template <typename SourceOp>
-static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, mlir::Type>> convertBinaryOpCommon(
+static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, bool, mlir::Type>> convertBinaryOpCommon(
   SourceOp op, typename SourceOp::Adaptor adaptor, ConversionPatternRewriter &rewriter,
   const OpConversionPattern<SourceOp> *pattern) {
   auto operands = adaptor.getOperands();
@@ -624,8 +629,9 @@ static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, mlir::Type>> c
   if (!torchResultType) {
     return mlir::failure();
   }
-  bool isRhsScalar = mlir::isa<TorchD::FloatType>(rhs.getType()) || mlir::isa<TorchD::IntType>(rhs.getType());
-  return std::make_tuple(lhs, rhs, isRhsScalar, torchResultType);
+  bool isLhsScalar = isTorchScalarType(lhs.getType());
+  bool isRhsScalar = isTorchScalarType(rhs.getType());
+  return std::make_tuple(lhs, rhs, isLhsScalar, isRhsScalar, torchResultType);
 }
 
 // Convert binary ops with tensor and scalar operands to corresponding torch ops (without alpha parameter)
@@ -641,12 +647,27 @@ class ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
       return failure();
     }
 
-    auto [lhs, processedRhs, isRhsScalar, torchResultType] = commonResult.value();
+    auto [lhs, rhs, isLhsScalar, isRhsScalar, torchResultType] = commonResult.value();
 
-    if (!isRhsScalar) {
-      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, processedRhs);
+    if (isLhsScalar && isRhsScalar) {
+      return rewriter.notifyMatchFailure(op, "scalar-scalar binary fallback is not supported");
+    }
+
+    if (isLhsScalar) {
+      if constexpr (std::is_same_v<SourceOp, mfuse::MulOp>) {
+        rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, rhs, lhs);
+      } else if constexpr (std::is_same_v<SourceOp, mfuse::DivOp>) {
+        mlir::SmallVector<mlir::Value> operands = {lhs, rhs};
+        mlir::SmallVector<mlir::Type> resultTypes = {torchResultType};
+        rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
+          op, resultTypes, rewriter.getStringAttr("torch.aten.div.Tensor"), operands, 0);
+      } else {
+        return rewriter.notifyMatchFailure(op, "lhs scalar fallback is not supported for this binary op");
+      }
+    } else if (isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, rhs);
     } else {
-      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, processedRhs);
+      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, rhs);
     }
     return mlir::success();
   }
@@ -665,15 +686,30 @@ class ConvertBinaryOpWithAlphaPattern : public OpConversionPattern<SourceOp> {
       return failure();
     }
 
-    auto [lhs, processedRhs, isRhsScalar, torchResultType] = commonResult.value();
+    auto [lhs, rhs, isLhsScalar, isRhsScalar, torchResultType] = commonResult.value();
 
     // Add and sub have alpha input
     constexpr int64_t kAlphaOne = 1;
     auto alpha = rewriter.create<TorchD::ConstantIntOp>(op->getLoc(), rewriter.getI64IntegerAttr(kAlphaOne));
-    if (!isRhsScalar) {
-      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, processedRhs, alpha);
+    if (isLhsScalar && isRhsScalar) {
+      return rewriter.notifyMatchFailure(op, "scalar-scalar binary fallback is not supported");
+    }
+
+    if (isLhsScalar) {
+      if constexpr (std::is_same_v<SourceOp, mfuse::AddOp>) {
+        rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, rhs, lhs, alpha);
+      } else if constexpr (std::is_same_v<SourceOp, mfuse::SubOp>) {
+        mlir::SmallVector<mlir::Value> operands = {lhs, rhs, alpha};
+        mlir::SmallVector<mlir::Type> resultTypes = {torchResultType};
+        rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
+          op, resultTypes, rewriter.getStringAttr("torch.aten.sub.Tensor"), operands, 0);
+      } else {
+        return rewriter.notifyMatchFailure(op, "lhs scalar fallback is not supported for this binary op");
+      }
+    } else if (isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, rhs, alpha);
     } else {
-      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, processedRhs, alpha);
+      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, rhs, alpha);
     }
     return mlir::success();
   }
