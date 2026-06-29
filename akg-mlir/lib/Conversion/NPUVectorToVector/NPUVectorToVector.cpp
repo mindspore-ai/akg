@@ -57,6 +57,7 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -595,8 +596,8 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
   NPUVectorToVectorPass(const NPUVectorToVectorPass &) = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect, math::MathDialect, npuv::NPUVectorDialect, vector::VectorDialect,
-                    memref::MemRefDialect, func::FuncDialect, scf::SCFDialect>();
+    registry.insert<affine::AffineDialect, arith::ArithDialect, math::MathDialect, npuv::NPUVectorDialect,
+                    vector::VectorDialect, memref::MemRefDialect, func::FuncDialect, scf::SCFDialect>();
   }
 
   // -------------------------------------------------------------------------
@@ -608,6 +609,14 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     return cst && cst.value() == 0;
   }
 
+  // The constant value of an index `Value`, when it is an `arith.constant`.
+  static std::optional<int64_t> getConstantIndex(Value v) {
+    if (auto cst = v.getDefiningOp<arith::ConstantIndexOp>()) {
+      return cst.value();
+    }
+    return std::nullopt;
+  }
+
   // index = base + iv (folds base==0).
   static Value addIndex(OpBuilder &b, Location loc, Value base, Value iv) {
     if (!iv) {
@@ -617,6 +626,69 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       return iv;
     }
     return b.create<arith::AddIOp>(loc, base, iv);
+  }
+
+  // -------------------------------------------------------------------------
+  // Register-tile loop splitting (main aligned loop + masked tail loop)
+  //
+  // The upstream pass aligns elementwise/transpose extents to the lane count,
+  // but a reduction tile may be an arbitrary length (e.g. a `!npuvector<16xf32>`
+  // reduced with 64 lanes). Reading/accumulating a full register there would
+  // pull in out-of-range lanes and corrupt the result. To keep the common
+  // aligned case fast we split the innermost (register) loop in two:
+  //   * a main loop over [0, alignedBound) with full, unmasked tiles, and
+  //   * a tail loop over [alignedBound, bound) (at most one trip) whose lanes
+  //     are masked to the < lane-count remainder.
+  // The split uses affine maps for the bounds and relies on the tail loop's
+  // natural 0/1 trip count instead of an `scf.if`.
+  // -------------------------------------------------------------------------
+
+  // alignedBound = (bound floordiv lanes) * lanes, via an affine map.
+  Value alignedRegBound(OpBuilder &b, Location loc, Value bound, int64_t lanes) const {
+    AffineExpr d0 = b.getAffineDimExpr(0);
+    AffineMap m = AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, d0.floorDiv(lanes) * lanes, b.getContext());
+    return b.create<affine::AffineApplyOp>(loc, m, ValueRange{bound});
+  }
+
+  // Mask for the tail iteration: the active lane count is `bound - iv` (always
+  // < lanes because the tail range is shorter than one register).
+  Value tailRegMask(OpBuilder &b, Location loc, Value bound, Value iv, int64_t lanes) const {
+    AffineExpr d0 = b.getAffineDimExpr(0);
+    AffineExpr d1 = b.getAffineDimExpr(1);
+    AffineMap m = AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0, d0 - d1, b.getContext());
+    Value len = b.create<affine::AffineApplyOp>(loc, m, ValueRange{bound, iv});
+    return b.create<vector::CreateMaskOp>(loc, VectorType::get({lanes}, b.getI1Type()), ValueRange{len});
+  }
+
+  // Plan for splitting a register loop of extent `bound`. When `bound` is a
+  // static multiple of `lanes` the tail is elided (preserving the fast aligned
+  // lowering); when it is statically smaller than one register the main loop is
+  // elided (a single masked loop). Dynamic extents emit both halves.
+  struct RegSplit {
+    bool emitMain = true;
+    bool emitTail = true;
+    Value alignedBound;  // lower bound of the tail / upper bound of the main loop
+  };
+  RegSplit planRegSplit(OpBuilder &b, Location loc, Value bound, int64_t lanes) const {
+    RegSplit s;
+    if (auto bc = getConstantIndex(bound)) {
+      int64_t aligned = (*bc / lanes) * lanes;
+      s.emitMain = aligned > 0;
+      s.emitTail = aligned < *bc;
+      if (aligned == *bc) {
+        // Already aligned: reuse the extent so the fast path lowers
+        // byte-identically (no redundant constant, tail elided).
+        s.alignedBound = bound;
+      } else if (aligned == 0) {
+        // Shorter than one register: only the tail loop runs, starting at c0.
+        s.alignedBound = Value();
+      } else {
+        s.alignedBound = b.create<arith::ConstantIndexOp>(loc, aligned);
+      }
+    } else {
+      s.alignedBound = alignedRegBound(b, loc, bound, lanes);
+    }
+    return s;
   }
 
   // Per-dimension loop bounds derived from an anchor npuvector value. Static
@@ -943,7 +1015,9 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     int64_t loopRank = 0;
     int64_t laneCount = 1;
     ArrayRef<Value> ivs;  // one induction var per loop dim; empty for hoisted units
-    Value mask;           // register mask for the innermost dim
+    // Optional register mask for the innermost dim. Left null in the aligned
+    // (full-tile) main loops; only the masked remainder/tail loops set it.
+    Value mask;
     const DimMap *dimMap = nullptr;
     const llvm::DenseSet<Value> *unitVals = nullptr;
   };
@@ -1095,9 +1169,9 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       res = b.create<vector::ShapeCastOp>(loc, flatTy, res);
     } else {
       AffineMap permMap = transferPermMap(b, memRank, m, w, ctx);
-      // Rank-0 sources can never overflow their (single) element; the broadcast
-      // permutation map already replicates the value, so masking is unnecessary
-      // and would mismatch the (rank-0) source.
+      // Aligned main loops carry no mask (ctx.mask is null); only the masked
+      // tail loop restricts the active lanes. Rank-0 sources can never overflow
+      // their single element, so they stay unmasked regardless.
       Value mask = (memRank > 0 && w == ctx.laneCount) ? ctx.mask : Value();
       res = b.create<vector::TransferReadOp>(loc, flatTy, remap(rd.getSource()), indices, permMap,
                                              remap(rd.getPadding()), mask, b.getBoolArrayAttr({true}));
@@ -1128,6 +1202,8 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     }
     auto memRank = static_cast<unsigned>(indices.size());
     AffineMap permMap = transferPermMap(b, memRank, m, w, ctx);
+    // Aligned main loops carry no mask (ctx.mask is null); only the masked tail
+    // loop restricts the active lanes written back.
     Value mask = (w == ctx.laneCount) ? ctx.mask : Value();
     b.create<vector::TransferWriteOp>(loc, Type(), vecVal, remap(wr.getSource()), indices, permMap,
                                       mask, b.getBoolArrayAttr({true}));
@@ -1343,14 +1419,8 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     ivs.push_back(innerFor.getInductionVar());
     body = OpBuilder::atBlockBegin(innerFor.getBody());
 
-    Value remaining = body.create<arith::SubIOp>(loc, bounds[R - 1], ivs.back());
-    Value activeLen = body.create<arith::MinSIOp>(loc, remaining, cLane);
-    auto maskTy = VectorType::get({lanes}, body.getI1Type());
-    Value mask = body.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen});
-
     TileCtx ctx = unitCtx;
     ctx.ivs = ivs;
-    ctx.mask = mask;
 
     for (Operation *op : computeOps) {
       if (llvm::is_contained(unitEmitted, op)) {
@@ -1444,14 +1514,8 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     ivs.push_back(innerFor.getInductionVar());
     body = OpBuilder::atBlockBegin(innerFor.getBody());
 
-    Value remaining = body.create<arith::SubIOp>(loc, bounds[R - 1], ivs.back());
-    Value activeLen = body.create<arith::MinSIOp>(loc, remaining, cLane);
-    auto maskTy = VectorType::get({lanes}, body.getI1Type());
-    Value mask = body.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen});
-
     TileCtx ctx = unitCtx;
     ctx.ivs = ivs;
-    ctx.mask = mask;
 
     for (Operation *op : computeOps) {
       if (llvm::is_contained(unitEmitted, op)) {
@@ -2012,53 +2076,88 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     }
   }
 
-  // `tileFullReductionKernel` helper: build the register-tiled scf.for nest, tile
-  // the reduction producers inside it, accumulate the masked register reduction
-  // and wire up the per-level yields. Returns the rank-0/register accumulator in
-  // `vecAcc`.
-  LogicalResult buildFullReductionLoopNest(const OpBuilder &builder, Location loc, int64_t rank, ArrayRef<Value> bounds,
-                                           Value c0, Value c1, Value cLane, Value regIdent, VectorType regVecTy,
-                                           int64_t laneCount, ArrayRef<Operation *> producers, npuv::ReductionOp redOp,
-                                           vector::CombiningKind kind, Value &vecAcc) const {
-    SmallVector<Value> ivs(rank);
-    SmallVector<scf::ForOp> loops(rank);
-    OpBuilder lb = builder;
-    Value curInit = regIdent;
-    for (int64_t d = 0; d < rank; ++d) {
-      Value step = (d == rank - 1) ? cLane : c1;
-      auto forOp = lb.create<scf::ForOp>(loc, c0, bounds[d], step, ValueRange{curInit});
-      loops[d] = forOp;
-      ivs[d] = forOp.getInductionVar();
-      curInit = forOp.getRegionIterArgs().front();
-      lb = OpBuilder::atBlockBegin(forOp.getBody());
-    }
+  // `buildFullReductionLoopNest` helper: emit one register-tiled reduction loop
+  // over [lbv, ubv) step lanes, accumulating `init`. When `masked`, the tail
+  // lanes are masked (transfer reads padded + a select against the identity) so
+  // out-of-range lanes never reach the reduction. Returns the loop result.
+  LogicalResult buildReductionRegLoop(OpBuilder &b, Location loc, Value lbv, Value ubv, Value cLane, Value init,
+                                      ArrayRef<Value> outerIvs, Value bound, int64_t laneCount,
+                                      ArrayRef<Operation *> producers, npuv::ReductionOp redOp,
+                                      vector::CombiningKind kind, Value regIdent, VectorType regVecTy, bool masked,
+                                      Value &result) const {
+    auto forOp = b.create<scf::ForOp>(loc, lbv, ubv, cLane, ValueRange{init});
+    Value iv = forOp.getInductionVar();
+    Value acc = forOp.getRegionIterArgs().front();
+    OpBuilder lb = OpBuilder::atBlockBegin(forOp.getBody());
 
-    Value remaining = lb.create<arith::SubIOp>(loc, bounds[rank - 1], ivs.back());
-    Value activeLen = lb.create<arith::MinSIOp>(loc, remaining, cLane);
-    auto tileMaskTy = VectorType::get({laneCount}, lb.getI1Type());
-    Value tileMask = lb.create<vector::CreateMaskOp>(loc, tileMaskTy, ValueRange{activeLen});
+    SmallVector<Value> ivs(outerIvs.begin(), outerIvs.end());
+    ivs.push_back(iv);
 
+    Value mask = masked ? tailRegMask(lb, loc, bound, iv, laneCount) : Value();
     IRMapping map;
-    if (std::any_of(producers.begin(), producers.end(), [&](Operation *op) {
-          return failed(tileReductionProducer(lb, op, map, ivs, tileMask, laneCount));
-        })) {
+    if (std::any_of(producers.begin(), producers.end(),
+                    [&](Operation *op) { return failed(tileReductionProducer(lb, op, map, ivs, mask, laneCount)); })) {
       return failure();
     }
     Value redInput = map.lookupOrDefault(redOp.getVector());
     if (redInput.getType() != regVecTy) {
       return redOp.emitError("npuvector-to-vector: reduction input register type mismatch");
     }
-    Value masked = lb.create<arith::SelectOp>(loc, tileMask, redInput, regIdent);
-    Value innerAcc = loops[rank - 1].getRegionIterArgs().front();
-    Value combined = vector::makeArithReduction(lb, loc, kind, innerAcc, masked);
+    Value contrib = masked ? lb.create<arith::SelectOp>(loc, mask, redInput, regIdent) : redInput;
+    Value combined = vector::makeArithReduction(lb, loc, kind, acc, contrib);
     lb.create<scf::YieldOp>(loc, combined);
+    result = forOp.getResult(0);
+    return success();
+  }
 
-    for (int64_t d = rank - 2; d >= 0; --d) {
-      OpBuilder yb = OpBuilder::atBlockEnd(loops[d].getBody());
-      yb.create<scf::YieldOp>(loc, loops[d + 1].getResult(0));
+  // `tileFullReductionKernel` helper: build the register-tiled scf.for nest, tile
+  // the reduction producers inside it, accumulate the register reduction and wire
+  // up the per-level yields. The innermost (register) dim is split into an
+  // aligned main loop and a masked tail loop. Returns the accumulator in
+  // `vecAcc`.
+  LogicalResult buildFullReductionLoopNest(const OpBuilder &builder, Location loc, int64_t rank, ArrayRef<Value> bounds,
+                                           Value c0, Value c1, Value cLane, Value regIdent, VectorType regVecTy,
+                                           int64_t laneCount, ArrayRef<Operation *> producers, npuv::ReductionOp redOp,
+                                           vector::CombiningKind kind, Value &vecAcc) const {
+    SmallVector<Value> outerIvs;
+    SmallVector<scf::ForOp> outerLoops;
+    OpBuilder lb = builder;
+    Value curInit = regIdent;
+    for (int64_t d = 0; d < rank - 1; ++d) {
+      auto forOp = lb.create<scf::ForOp>(loc, c0, bounds[d], c1, ValueRange{curInit});
+      outerLoops.push_back(forOp);
+      outerIvs.push_back(forOp.getInductionVar());
+      curInit = forOp.getRegionIterArgs().front();
+      lb = OpBuilder::atBlockBegin(forOp.getBody());
     }
 
-    vecAcc = loops[0].getResult(0);
+    // Split the innermost (register) dim into aligned main + masked tail loops.
+    Value bound = bounds[rank - 1];
+    RegSplit split = planRegSplit(lb, loc, bound, laneCount);
+    Value acc = curInit;
+    if (split.emitMain) {
+      if (failed(buildReductionRegLoop(lb, loc, c0, split.alignedBound, cLane, acc, outerIvs, bound, laneCount,
+                                       producers, redOp, kind, regIdent, regVecTy, /*masked=*/false, acc))) {
+        return failure();
+      }
+    }
+    if (split.emitTail) {
+      Value tailLb = split.emitMain ? split.alignedBound : c0;
+      if (failed(buildReductionRegLoop(lb, loc, tailLb, bound, cLane, acc, outerIvs, bound, laneCount, producers, redOp,
+                                       kind, regIdent, regVecTy, /*masked=*/true, acc))) {
+        return failure();
+      }
+    }
+
+    // Thread the innermost accumulator back up through the outer loops.
+    Value innerResult = acc;
+    for (int64_t d = rank - 2; d >= 0; --d) {
+      OpBuilder yb = OpBuilder::atBlockEnd(outerLoops[d].getBody());
+      yb.create<scf::YieldOp>(loc, innerResult);
+      innerResult = outerLoops[d].getResult(0);
+    }
+
+    vecAcc = innerResult;
     return success();
   }
 
@@ -2263,7 +2362,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
 
     // ---- Pass 1: accumulation + pure-elementwise outputs ----
     scf::ForOp pass1;
-    if (failed(runPartialPass1(body, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, lanes, R, unitEmitted,
+    if (failed(runPartialPass1(body, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, R, unitEmitted,
                                dependsOnReduction, reductions, redIdents, redKinds, pass1))) {
       return failure();
     }
@@ -2279,7 +2378,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
 
     // ---- Pass 2: recompute reg-tiled inputs and emit reduction-dependent
     //      outputs (broadcasting the per-row scalars back across the row) ----
-    if (failed(runPartialPass2(pr, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, lanes, R, unitEmitted,
+    if (failed(runPartialPass2(pr, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, R, unitEmitted,
                                dependsOnReduction))) {
       return failure();
     }
@@ -2324,24 +2423,53 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     return success();
   }
 
-  // `tilePartialReductionKernel` helper: build the pass-1 register loop (with one
-  // accumulator iter_arg per reduction), seed the op map with the hoisted unit
-  // values, then emit the pass-1 body. Returns the loop in `pass1`.
+  // `tilePartialReductionKernel` helper: build the pass-1 register loops (with one
+  // accumulator iter_arg per reduction). The register dim is split into an
+  // aligned main loop and a masked tail loop; the accumulators thread from main
+  // into tail. Returns the final loop (whose results are the accumulators) in
+  // `pass1`.
   LogicalResult runPartialPass1(OpBuilder &body, Location loc, Block &entry, IRMapping &shared, const TileCtx &baseCtx,
-                                ArrayRef<Value> bounds, ArrayRef<Value> outerIvs, Value c0, Value cLane, int64_t lanes,
+                                ArrayRef<Value> bounds, ArrayRef<Value> outerIvs, Value c0, Value cLane,
                                 int64_t R, ArrayRef<Operation *> unitEmitted,
                                 const llvm::DenseSet<Operation *> &dependsOnReduction,
                                 ArrayRef<npuv::ReductionOp> reductions, ArrayRef<Value> redIdents,
                                 ArrayRef<vector::CombiningKind> redKinds, scf::ForOp &pass1) const {
-    SmallVector<Value> iterInit(redIdents.begin(), redIdents.end());
-    pass1 = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane, iterInit);
-    Value regIv = pass1.getInductionVar();
-    OpBuilder p1 = OpBuilder::atBlockBegin(pass1.getBody());
+    Value bound = bounds[R - 1];
+    RegSplit split = planRegSplit(body, loc, bound, baseCtx.laneCount);
+    SmallVector<Value> curInit(redIdents.begin(), redIdents.end());
+    bool any = false;
+    if (split.emitMain) {
+      if (failed(emitPartialPass1Loop(body, loc, entry, shared, baseCtx, c0, split.alignedBound, cLane, bound, outerIvs,
+                                      curInit, unitEmitted, dependsOnReduction, reductions, redIdents, redKinds,
+                                      /*masked=*/false, pass1))) {
+        return failure();
+      }
+      curInit.assign(pass1.getResults().begin(), pass1.getResults().end());
+      any = true;
+    }
+    if (split.emitTail) {
+      Value tailLb = split.emitMain ? split.alignedBound : c0;
+      if (failed(emitPartialPass1Loop(body, loc, entry, shared, baseCtx, tailLb, bound, cLane, bound, outerIvs, curInit,
+                                      unitEmitted, dependsOnReduction, reductions, redIdents, redKinds, /*masked=*/true,
+                                      pass1))) {
+        return failure();
+      }
+      any = true;
+    }
+    return success(any);
+  }
 
-    Value remaining1 = p1.create<arith::SubIOp>(loc, bounds[R - 1], regIv);
-    Value activeLen1 = p1.create<arith::MinSIOp>(loc, remaining1, cLane);
-    auto maskTy = VectorType::get({lanes}, p1.getI1Type());
-    Value mask1 = p1.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen1});
+  // `runPartialPass1` helper: emit one pass-1 register loop over [lbv, ubv).
+  LogicalResult emitPartialPass1Loop(OpBuilder &body, Location loc, Block &entry, IRMapping &shared,
+                                     const TileCtx &baseCtx, Value lbv, Value ubv, Value cLane, Value bound,
+                                     ArrayRef<Value> outerIvs, ArrayRef<Value> initAccs,
+                                     ArrayRef<Operation *> unitEmitted,
+                                     const llvm::DenseSet<Operation *> &dependsOnReduction,
+                                     ArrayRef<npuv::ReductionOp> reductions, ArrayRef<Value> redIdents,
+                                     ArrayRef<vector::CombiningKind> redKinds, bool masked, scf::ForOp &loopOut) const {
+    loopOut = body.create<scf::ForOp>(loc, lbv, ubv, cLane, initAccs);
+    Value regIv = loopOut.getInductionVar();
+    OpBuilder p1 = OpBuilder::atBlockBegin(loopOut.getBody());
 
     SmallVector<Value> ivs1(outerIvs.begin(), outerIvs.end());
     ivs1.push_back(regIv);
@@ -2357,25 +2485,47 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     }
     TileCtx ctx1 = baseCtx;
     ctx1.ivs = ivs1;
-    ctx1.mask = mask1;
+    if (masked) {
+      ctx1.mask = tailRegMask(p1, loc, bound, regIv, baseCtx.laneCount);
+    }
 
     return emitPartialPass1(p1, loc, entry, map1, ctx1, unitEmitted, dependsOnReduction, reductions, redIdents,
-                            redKinds, mask1, pass1);
+                            redKinds, loopOut);
   }
 
-  // `tilePartialReductionKernel` helper: build the pass-2 register loop, seed its
-  // op map with the per-row scalars / unit values, then emit the pass-2 body.
+  // `tilePartialReductionKernel` helper: build the pass-2 register loops (aligned
+  // main loop + masked tail loop), seed each op map with the per-row scalars /
+  // unit values, then emit the pass-2 body in each.
   LogicalResult runPartialPass2(OpBuilder p2builder, Location loc, Block &entry, IRMapping &shared,
                                 const TileCtx &baseCtx, ArrayRef<Value> bounds, ArrayRef<Value> outerIvs, Value c0,
-                                Value cLane, int64_t lanes, int64_t R, ArrayRef<Operation *> unitEmitted,
+                                Value cLane, int64_t R, ArrayRef<Operation *> unitEmitted,
                                 const llvm::DenseSet<Operation *> &dependsOnReduction) const {
-    auto pass2 = p2builder.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
+    Value bound = bounds[R - 1];
+    RegSplit split = planRegSplit(p2builder, loc, bound, baseCtx.laneCount);
+    if (split.emitMain) {
+      if (failed(emitPartialPass2Loop(p2builder, loc, entry, shared, baseCtx, c0, split.alignedBound, cLane, bound,
+                                      outerIvs, unitEmitted, dependsOnReduction, /*masked=*/false))) {
+        return failure();
+      }
+    }
+    if (split.emitTail) {
+      Value tailLb = split.emitMain ? split.alignedBound : c0;
+      if (failed(emitPartialPass2Loop(p2builder, loc, entry, shared, baseCtx, tailLb, bound, cLane, bound, outerIvs,
+                                      unitEmitted, dependsOnReduction, /*masked=*/true))) {
+        return failure();
+      }
+    }
+    return success();
+  }
+
+  // `runPartialPass2` helper: emit one pass-2 register loop over [lbv, ubv).
+  LogicalResult emitPartialPass2Loop(OpBuilder &p2builder, Location loc, Block &entry, IRMapping &shared,
+                                     const TileCtx &baseCtx, Value lbv, Value ubv, Value cLane, Value bound,
+                                     ArrayRef<Value> outerIvs, ArrayRef<Operation *> unitEmitted,
+                                     const llvm::DenseSet<Operation *> &dependsOnReduction, bool masked) const {
+    auto pass2 = p2builder.create<scf::ForOp>(loc, lbv, ubv, cLane);
     Value regIv2 = pass2.getInductionVar();
     OpBuilder p2 = OpBuilder::atBlockBegin(pass2.getBody());
-    Value remaining2 = p2.create<arith::SubIOp>(loc, bounds[R - 1], regIv2);
-    Value activeLen2 = p2.create<arith::MinSIOp>(loc, remaining2, cLane);
-    auto maskTy = VectorType::get({lanes}, p2.getI1Type());
-    Value mask2 = p2.create<vector::CreateMaskOp>(loc, maskTy, ValueRange{activeLen2});
 
     SmallVector<Value> ivs2(outerIvs.begin(), outerIvs.end());
     ivs2.push_back(regIv2);
@@ -2383,7 +2533,9 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     IRMapping map2(shared);  // per-row scalars + unit values available
     TileCtx ctx2 = baseCtx;
     ctx2.ivs = ivs2;
-    ctx2.mask = mask2;
+    if (masked) {
+      ctx2.mask = tailRegMask(p2, loc, bound, regIv2, baseCtx.laneCount);
+    }
 
     return emitPartialPass2(p2, entry, map2, ctx2, unitEmitted, dependsOnReduction);
   }
@@ -2396,7 +2548,7 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
                                  ArrayRef<Operation *> unitEmitted,
                                  const llvm::DenseSet<Operation *> &dependsOnReduction,
                                  ArrayRef<npuv::ReductionOp> reductions, ArrayRef<Value> redIdents,
-                                 ArrayRef<vector::CombiningKind> redKinds, Value mask1, scf::ForOp pass1) const {
+                                 ArrayRef<vector::CombiningKind> redKinds, scf::ForOp pass1) const {
     auto regTiled = [&](Value v) { return isRegTiled(v, *ctx1.dimMap, *ctx1.unitVals, ctx1.loopRank); };
     llvm::DenseMap<npuv::ReductionOp, int> redIndex;
     for (auto [i, red] : llvm::enumerate(reductions)) {
@@ -2411,9 +2563,11 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       if (auto red = dyn_cast<npuv::ReductionOp>(&op)) {
         Value src = map1.lookupOrDefault(red.getVector());
         int idx = redIndex[red];
-        Value masked = p1.create<arith::SelectOp>(loc, mask1, src, redIdents[idx]);
+        // In the masked tail loop, zero out the inactive lanes (to the reduction
+        // identity) so they do not pollute the accumulator.
+        Value contrib = ctx1.mask ? p1.create<arith::SelectOp>(loc, ctx1.mask, src, redIdents[idx]) : src;
         Value acc = pass1.getRegionIterArgs()[idx];
-        redAccumulated[idx] = vector::makeArithReduction(p1, loc, redKinds[idx], acc, masked);
+        redAccumulated[idx] = vector::makeArithReduction(p1, loc, redKinds[idx], acc, contrib);
         continue;
       }
       if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
