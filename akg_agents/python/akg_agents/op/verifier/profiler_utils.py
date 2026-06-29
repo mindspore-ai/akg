@@ -146,8 +146,8 @@ def run_msprof(script_path: str, op_name: str = "", task_id: str = "0", timeout:
     """
     try:
         process = subprocess.run(
-            f'msprof --application="python {script_path}"',
-            shell=True, capture_output=True, text=True, timeout=timeout
+            ["msprof", "--application", f"python {script_path}"],
+            capture_output=True, text=True, timeout=timeout
         )
 
         for line in process.stdout.split('\n'):
@@ -230,9 +230,9 @@ def run_nsys(script_path: str, op_name: str = "", task_id: str = "0", timeout: i
     """
     try:
         output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
-        cmd = f'nsys profile --output={output_name} python {script_path}'
+        cmd = ["nsys", "profile", f"--output={output_name}", "python", script_path]
         logger.debug(f"[{task_id}:{op_name}] Running nsys profile: {cmd}")
-        process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
 
         if os.path.exists(report_path):
@@ -266,9 +266,21 @@ def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int, profile_
         csv_path = dir_plib / csv_base
         
         # 导出csv
-        cmd = f'nsys stats --report gputrace --timeunit us --format csv --output {csv_path} {rep_path}'
+        cmd = [
+            "nsys",
+            "stats",
+            "--report",
+            "gputrace",
+            "--timeunit",
+            "us",
+            "--format",
+            "csv",
+            "--output",
+            str(csv_path),
+            rep_path,
+        ]
         logger.debug(f"[{task_id}:{op_name}] Running nsys stats: {cmd}")
-        subprocess.run(cmd, shell=True, check=True)
+        subprocess.run(cmd, check=True)
         csv_path = dir_plib / f"{csv_base}_gputrace.csv"
 
         if not os.path.exists(csv_path):
@@ -320,4 +332,3 @@ def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int, profile_
     except Exception as e:
         logger.error(f"[{task_id}:{op_name}] 分析nsys数据时出错: {e}")
         return False, f"分析nsys数据时出错: {str(e)}", float('inf')
-
