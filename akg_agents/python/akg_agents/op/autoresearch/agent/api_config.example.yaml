@@ -9,13 +9,13 @@
 
 # --- OpenAI-compatible provider ---
 # provider: openai
-# model: <YOUR_MODEL_NAME>
-# base_url: <YOUR_BASE_URL>
-# api_key: <YOUR_KEY_HERE>
+# model: gpt-4o
+# base_url: https://example.invalid/v1
+# api_key: ${AKG_AGENTS_API_KEY}
 # reasoning_effort: high
 
 # --- Anthropic-compatible provider ---
 provider: anthropic
-model: <YOUR_MODEL_OR_ENDPOINT_ID>
-base_url: <YOUR_BASE_URL>
-api_key: <YOUR_KEY_HERE>
+model: your-model-or-endpoint
+base_url: https://example.invalid/api/compatible
+api_key: ${AKG_AGENTS_API_KEY}
