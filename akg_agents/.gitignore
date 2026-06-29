@@ -45,3 +45,6 @@ tmp/
 
 # Thirdparty dependencies and datasets
 thirdparty/*
+
+# Agent API key config — never commit (contains secrets)
+python/akg_agents/op/autoresearch/agent/api_config.yaml

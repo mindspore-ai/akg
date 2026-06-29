@@ -103,15 +103,19 @@ class EmbeddingConfig:
     api_key: str = ""
     model_name: str = ""
     timeout: int = 60
+    verify_ssl: bool = True
+    _verify_ssl_set: bool = field(default=False, repr=False, compare=False)
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EmbeddingConfig":
+    def from_dict(cls, data: Dict[str, Any], use_defaults: bool = True) -> "EmbeddingConfig":
         """从字典创建"""
         return cls(
             base_url=data.get("base_url", ""),
             api_key=data.get("api_key", ""),
             model_name=data.get("model_name", ""),
             timeout=data.get("timeout", 60),
+            verify_ssl=data.get("verify_ssl", True),
+            _verify_ssl_set="verify_ssl" in data,
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -121,6 +125,7 @@ class EmbeddingConfig:
             "api_key": self.api_key,
             "model_name": self.model_name,
             "timeout": self.timeout,
+            "verify_ssl": self.verify_ssl,
         }
     
     def is_configured(self) -> bool:
@@ -134,6 +139,8 @@ class EmbeddingConfig:
             api_key=other.api_key if other.api_key else self.api_key,
             model_name=other.model_name if other.model_name else self.model_name,
             timeout=other.timeout if other.timeout != 60 else self.timeout,
+            verify_ssl=other.verify_ssl if other._verify_ssl_set else self.verify_ssl,
+            _verify_ssl_set=self._verify_ssl_set or other._verify_ssl_set,
         )
 
 
@@ -149,6 +156,8 @@ class ModelConfig:
     frequency_penalty: Optional[float] = None  # 可选，来自配置文件
     presence_penalty: Optional[float] = None   # 可选，来自配置文件
     timeout: int = 300
+    verify_ssl: bool = True
+    _verify_ssl_set: bool = field(default=False, repr=False, compare=False)
     extra_body: Dict[str, Any] = field(default_factory=dict)  # 透传到 API 请求的额外参数（如 thinking/reasoning）
     extra: Dict[str, Any] = field(default_factory=dict)       # 其他扩展字段（不透传到 API）
     provider_type: str = "openai"  # Provider 类型: "openai" (OpenAI 兼容协议) 或 "anthropic" (Anthropic 协议)
@@ -196,6 +205,8 @@ class ModelConfig:
                 frequency_penalty=data.get("frequency_penalty"),
                 presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
+                verify_ssl=data.get("verify_ssl", True),
+                _verify_ssl_set="verify_ssl" in data,
                 extra_body=extra_body,
                 extra=data.get("extra", {}),
                 provider_type=data.get("provider_type", "openai"),
@@ -211,6 +222,8 @@ class ModelConfig:
                 frequency_penalty=data.get("frequency_penalty"),
                 presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
+                verify_ssl=data.get("verify_ssl", True),
+                _verify_ssl_set="verify_ssl" in data,
                 extra_body=extra_body,
                 extra=data.get("extra", {}),
                 provider_type=data.get("provider_type", "openai"),
@@ -228,6 +241,7 @@ class ModelConfig:
         env_temp = get_akg_env_var(f"{prefix}TEMPERATURE")
         env_max_tokens = get_akg_env_var(f"{prefix}MAX_TOKENS")
         env_timeout = get_akg_env_var(f"{prefix}TIMEOUT")
+        env_verify_ssl = get_akg_env_var(f"{prefix}VERIFY_SSL")
         
         # 环境变量模式下，thinking_enabled 生成默认的 extra_body
         extra_body: Dict[str, Any] = {}
@@ -241,6 +255,8 @@ class ModelConfig:
             temperature=float(env_temp) if env_temp else 0.2,
             max_tokens=int(env_max_tokens) if env_max_tokens else 8192,
             timeout=int(env_timeout) if env_timeout else 300,
+            verify_ssl=_parse_bool_env(env_verify_ssl, True),
+            _verify_ssl_set=env_verify_ssl is not None,
             extra_body=extra_body,
             provider_type=get_akg_env_var(f"{prefix}PROVIDER_TYPE", "openai"),
         )
@@ -255,6 +271,7 @@ class ModelConfig:
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "timeout": self.timeout,
+            "verify_ssl": self.verify_ssl,
             "extra": self.extra,
             "provider_type": self.provider_type,
         }
@@ -278,6 +295,8 @@ class ModelConfig:
             frequency_penalty=other.frequency_penalty if other.frequency_penalty is not None else self.frequency_penalty,
             presence_penalty=other.presence_penalty if other.presence_penalty is not None else self.presence_penalty,
             timeout=other.timeout if other.timeout != 300 else self.timeout,
+            verify_ssl=other.verify_ssl if other._verify_ssl_set else self.verify_ssl,
+            _verify_ssl_set=self._verify_ssl_set or other._verify_ssl_set,
             extra_body={**self.extra_body, **other.extra_body},
             extra={**self.extra, **other.extra},
             provider_type=other.provider_type if other.provider_type != "openai" else self.provider_type,
@@ -398,7 +417,7 @@ class AKGSettings:
         # 解析 embedding 配置
         embedding = EmbeddingConfig()
         if "embedding" in data:
-            embedding = EmbeddingConfig.from_dict(data["embedding"])
+            embedding = EmbeddingConfig.from_dict(data["embedding"], use_defaults=use_defaults)
         
         return cls(
             models=models,
@@ -529,6 +548,13 @@ def _parse_thinking_enabled(env_value: Optional[str]) -> bool:
     return env_value.lower() in ("enabled", "true", "1", "yes", "on")
 
 
+def _parse_bool_env(env_value: Optional[str], default: bool) -> bool:
+    """解析布尔环境变量"""
+    if not env_value:
+        return default
+    return env_value.lower() in ("enabled", "true", "1", "yes", "on")
+
+
 def _load_env_config(settings: AKGSettings) -> AKGSettings:
     """
     从环境变量加载配置（最高优先级）
@@ -541,26 +567,62 @@ def _load_env_config(settings: AKGSettings) -> AKGSettings:
        -> 分别设置 complex/standard/fast
     """
     thinking_enabled = _parse_thinking_enabled(get_akg_env_var("MODEL_ENABLE_THINK"))
+    global_verify_ssl = get_akg_env_var("VERIFY_SSL")
+    if global_verify_ssl is not None:
+        settings.extra["_verify_ssl_env"] = _parse_bool_env(global_verify_ssl, True)
     
     # 方式 1：单模型配置（兼容旧版，自动覆盖所有级别：complex/standard/fast）
-    if get_akg_env_var("BASE_URL") or get_akg_env_var("API_KEY") or get_akg_env_var("MODEL_NAME"):
+    has_single_model_env = (
+        get_akg_env_var("BASE_URL")
+        or get_akg_env_var("API_KEY")
+        or get_akg_env_var("MODEL_NAME")
+    )
+    if has_single_model_env:
         single_config = ModelConfig.from_env("", thinking_enabled)
-        prefix = _detect_env_prefix("BASE_URL", "API_KEY", "MODEL_NAME")
+        prefix = _detect_env_prefix("BASE_URL", "API_KEY", "MODEL_NAME", "VERIFY_SSL")
         source = f"env: {prefix}_*"
         for level in ["complex", "standard", "fast"]:
             settings.models[level] = single_config
             settings._model_sources[level] = source
         logger.debug(f"Loaded single model config from env ({source}), applied to all levels")
+    elif global_verify_ssl is not None:
+        verify_ssl = _parse_bool_env(global_verify_ssl, True)
+        prefix = _detect_env_prefix("VERIFY_SSL")
+        for level, model_config in settings.models.items():
+            model_config.verify_ssl = verify_ssl
+            settings._model_sources[level] = f"env: {prefix}_VERIFY_SSL"
+        logger.debug(f"Applied global verify_ssl={verify_ssl} from env to existing model configs")
     
     # 方式 2：多模型配置（优先级高于单模型，会覆盖方式 1 的设置）
     for level in ["complex", "standard", "fast"]:
         level_upper = level.upper()
-        if get_akg_env_var(f"{level_upper}_BASE_URL") or get_akg_env_var(f"{level_upper}_API_KEY"):
+        has_level_model_env = (
+            get_akg_env_var(f"{level_upper}_BASE_URL")
+            or get_akg_env_var(f"{level_upper}_API_KEY")
+            or get_akg_env_var(f"{level_upper}_MODEL_NAME")
+        )
+        level_verify_ssl = get_akg_env_var(f"{level_upper}_VERIFY_SSL")
+        if level_verify_ssl is not None:
+            settings.extra.setdefault("_model_verify_ssl_env", {})[level] = _parse_bool_env(level_verify_ssl, True)
+        if has_level_model_env:
             # 多模型模式也继承全局 thinking_enabled 设置
             settings.models[level] = ModelConfig.from_env(f"{level_upper}_", thinking_enabled)
-            prefix = _detect_env_prefix(f"{level_upper}_BASE_URL", f"{level_upper}_API_KEY")
+            if level_verify_ssl is None and global_verify_ssl is not None:
+                settings.models[level].verify_ssl = _parse_bool_env(global_verify_ssl, True)
+            prefix = _detect_env_prefix(
+                f"{level_upper}_BASE_URL",
+                f"{level_upper}_API_KEY",
+                f"{level_upper}_MODEL_NAME",
+                f"{level_upper}_VERIFY_SSL",
+            )
             settings._model_sources[level] = f"env: {prefix}_{level_upper}_*"
             logger.debug(f"Loaded '{level}' model config from env")
+        elif level_verify_ssl is not None and level in settings.models:
+            verify_ssl = _parse_bool_env(level_verify_ssl, True)
+            settings.models[level].verify_ssl = verify_ssl
+            prefix = _detect_env_prefix(f"{level_upper}_VERIFY_SSL")
+            settings._model_sources[level] = f"env: {prefix}_{level_upper}_VERIFY_SSL"
+            logger.debug(f"Applied '{level}' verify_ssl={verify_ssl} from env")
     
     # AKG_AGENTS_DEFAULT_MODEL / AIKG_DEFAULT_MODEL
     if default_model := get_akg_env_var("DEFAULT_MODEL"):
@@ -576,6 +638,7 @@ def _load_env_config(settings: AKGSettings) -> AKGSettings:
     env_emb_base_url = get_akg_env_var("EMBEDDING_BASE_URL")
     env_emb_model_name = get_akg_env_var("EMBEDDING_MODEL_NAME")
     env_emb_api_key = get_akg_env_var("EMBEDDING_API_KEY")
+    env_emb_verify_ssl = get_akg_env_var("EMBEDDING_VERIFY_SSL")
     
     if env_emb_base_url or env_emb_model_name or env_emb_api_key:
         settings.embedding = EmbeddingConfig(
@@ -583,10 +646,16 @@ def _load_env_config(settings: AKGSettings) -> AKGSettings:
             api_key=env_emb_api_key or "",
             model_name=env_emb_model_name or "",
             timeout=int(get_akg_env_var("EMBEDDING_TIMEOUT", "60")),
+            verify_ssl=_parse_bool_env(env_emb_verify_ssl, True),
         )
-        prefix = _detect_env_prefix("EMBEDDING_BASE_URL", "EMBEDDING_API_KEY")
+        prefix = _detect_env_prefix("EMBEDDING_BASE_URL", "EMBEDDING_API_KEY", "EMBEDDING_VERIFY_SSL")
         settings._embedding_source = f"env: {prefix}_EMBEDDING_*"
         logger.debug(f"Loaded embedding config from env: model={env_emb_model_name}")
+    elif env_emb_verify_ssl is not None:
+        settings.embedding.verify_ssl = _parse_bool_env(env_emb_verify_ssl, True)
+        prefix = _detect_env_prefix("EMBEDDING_VERIFY_SSL")
+        settings._embedding_source = f"env: {prefix}_EMBEDDING_VERIFY_SSL"
+        logger.debug(f"Applied embedding verify_ssl={settings.embedding.verify_ssl} from env")
     
     return settings
 
