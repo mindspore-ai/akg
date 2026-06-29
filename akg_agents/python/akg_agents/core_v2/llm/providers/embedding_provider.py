@@ -45,7 +45,7 @@ class OpenAICompatibleEmbeddings(Embeddings):
         api_url: str,
         model_name: str,
         api_key: Optional[str] = None,
-        verify_ssl: bool = False,
+        verify_ssl: bool = True,
         timeout: int = 60
     ):
         """
@@ -55,7 +55,7 @@ class OpenAICompatibleEmbeddings(Embeddings):
             api_url: Embedding API 的完整 URL（如 http://localhost:8001/v1/embeddings）
             model_name: 模型名称
             api_key: API 密钥（可选，远程 API 需要）
-            verify_ssl: 是否验证 SSL 证书（默认 False）
+            verify_ssl: 是否验证 SSL 证书（默认 True）
             timeout: 超时时间（秒）
         """
         self.api_url = api_url
