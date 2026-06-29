@@ -28,6 +28,7 @@ class ThinkingAwareChatDeepSeek(ChatDeepSeek):
         self,
         *,
         timeout: Optional[httpx.Timeout] = None,
+        verify_ssl: bool = True,
         **kwargs: Any,
     ):
         if timeout is None:
@@ -37,9 +38,9 @@ class ThinkingAwareChatDeepSeek(ChatDeepSeek):
         http_async_client = kwargs.pop("http_async_client", None)
         
         if http_client is None:
-            http_client = httpx.Client(verify=False, timeout=timeout)
+            http_client = httpx.Client(verify=verify_ssl, timeout=timeout)
         if http_async_client is None:
-            http_async_client = httpx.AsyncClient(verify=False, timeout=timeout)
+            http_async_client = httpx.AsyncClient(verify=verify_ssl, timeout=timeout)
         
         super().__init__(
             http_client=http_client,

@@ -133,6 +133,7 @@ def create_llm_client(
         final_timeout = kwargs.pop("timeout", model_config.timeout)
         final_extra_body = kwargs.pop("extra_body", model_config.extra_body)
         final_provider_type = kwargs.pop("provider_type", model_config.provider_type)
+        final_verify_ssl = kwargs.pop("verify_ssl", model_config.verify_ssl)
     else:
         # 无配置，使用显式参数
         final_base_url = base_url
@@ -146,6 +147,11 @@ def create_llm_client(
         final_timeout = kwargs.pop("timeout", 300)
         final_extra_body = kwargs.pop("extra_body", {})
         final_provider_type = kwargs.pop("provider_type", "openai")
+        verify_ssl_default = settings.extra.get("_model_verify_ssl_env", {}).get(
+            model_level,
+            settings.extra.get("_verify_ssl_env", True),
+        )
+        final_verify_ssl = kwargs.pop("verify_ssl", verify_ssl_default)
 
     # 向后兼容：thinking_enabled=True → 默认 extra_body
     if not final_extra_body and kwargs.pop("thinking_enabled", False):
@@ -164,6 +170,7 @@ def create_llm_client(
             base_url=final_base_url,
             timeout=final_timeout,
             extra_body=final_extra_body,
+            verify_ssl=final_verify_ssl,
             **kwargs
         )
     else:
@@ -174,6 +181,7 @@ def create_llm_client(
             base_url=final_base_url,
             timeout=final_timeout,
             extra_body=final_extra_body,
+            verify_ssl=final_verify_ssl,
             **kwargs
         )
 
@@ -205,6 +213,7 @@ def create_embedding_model(
     api_key: Optional[str] = None,
     model_name: Optional[str] = None,
     timeout: Optional[int] = None,
+    verify_ssl: Optional[bool] = None,
 ) -> Embeddings:
     """
     根据配置创建 Embedding 模型
@@ -219,6 +228,7 @@ def create_embedding_model(
         api_key: API 密钥（直接指定，覆盖配置）
         model_name: 模型名称（直接指定，覆盖配置）
         timeout: 超时时间（秒）
+        verify_ssl: 是否验证 SSL 证书（直接指定，覆盖配置，默认 True）
 
     Returns:
         Embeddings: LangChain 兼容的 Embedding 模型实例
@@ -251,6 +261,7 @@ def create_embedding_model(
     final_api_key = api_key or settings.embedding.api_key
     final_model_name = model_name or settings.embedding.model_name
     final_timeout = timeout if timeout is not None else settings.embedding.timeout
+    final_verify_ssl = verify_ssl if verify_ssl is not None else settings.embedding.verify_ssl
 
     # 检查配置是否完整
     if not final_base_url or not final_api_key or not final_model_name:
@@ -276,6 +287,6 @@ def create_embedding_model(
         api_url=embedding_url,
         model_name=final_model_name,
         api_key=final_api_key,
-        verify_ssl=False,
+        verify_ssl=final_verify_ssl,
         timeout=final_timeout,
     )
