@@ -62,8 +62,12 @@ void BroadcastToOp::build(mlir::OpBuilder &odsBuilder, mlir::OperationState &ods
 LogicalResult BroadcastToOp::verify() {
   uint64_t newRankSize = getNewRankSize();
   if (getNewShapeValue() == nullptr && getNewShapeAttr() != nullptr) {
-    llvm::ArrayRef<int64_t> newShape = *getNewShape();
-    uint64_t inputRank = cast<ShapedType>(getInput().getType()).getRank();
+    auto newShapeOpt = getNewShape();
+    if (!newShapeOpt.has_value()) {
+      return emitOpError("unexpected mindspore.broadcast_to op error");
+    }
+    llvm::ArrayRef<int64_t> newShape = *newShapeOpt;
+    uint64_t inputRank = static_cast<uint64_t>(cast<ShapedType>(getInput().getType()).getRank());
     for (uint64_t i = 0; i < newRankSize - inputRank; i++) {
       if (newShape[i] == -1) {
         return emitOpError(
@@ -84,7 +88,11 @@ uint64_t BroadcastToOp::getNewRankSize() {
     return cast<mlir::ShapedType>(getNewShapeValue().getType()).getShape()[0];
   }
   if (getNewShapeAttr() != nullptr) {
-    return (*getNewShape()).size();
+    auto newShapeOpt = getNewShape();
+    if (!newShapeOpt.has_value()) {
+      return 0;
+    }
+    return (*newShapeOpt).size();
   }
   return 0;
 }

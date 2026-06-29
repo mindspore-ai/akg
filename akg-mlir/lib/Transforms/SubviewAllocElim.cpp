@@ -366,7 +366,7 @@ static bool isValidSubviewForPartition(memref::SubViewOp subviewOp, MemRefType a
 // along exactly one axis. Results are stored in member variables: partitionAxis, partitions.
 bool SubviewAllocElimPass::analyzeAxisPartition(memref::AllocOp allocOp) {
   auto allocType = allocOp.getType();
-  unsigned rank = allocType.getRank();
+  unsigned rank = static_cast<unsigned>(allocType.getRank());
   if (subviewOps.empty() || rank == 0) {
     return false;
   }
@@ -502,7 +502,7 @@ static bool delinearizeCollapseGroup(memref::CollapseShapeOp cs, unsigned groupI
   auto reassoc = cs.getReassociationIndices();
   auto srcType = cs.getSrcType();
   const auto &group = reassoc[groupIdx];
-  for (int i = group.size() - 1; i >= 0; i--) {
+  for (int i = static_cast<int>(group.size()) - 1; i >= 0; i--) {
     int64_t dimSize = srcType.getDimSize(group[i]);
     if (ShapedType::isDynamic(dimSize)) {
       return false;
@@ -564,7 +564,7 @@ static AffineExpr computeCombinedExprForGroup(memref::ExpandShapeOp es, unsigned
 
 static bool applyExpandShapeToExprs(memref::ExpandShapeOp es, SmallVectorImpl<AffineExpr> &exprs, MLIRContext *ctx) {
   auto reassoc = es.getReassociationIndices();
-  unsigned srcRank = es.getSrcType().getRank();
+  unsigned srcRank = static_cast<unsigned>(es.getSrcType().getRank());
   SmallVector<AffineExpr> newExprs(srcRank);
   for (unsigned k = 0; k < reassoc.size(); k++) {
     AffineExpr combined = computeCombinedExprForGroup(es, k, reassoc, exprs, ctx);
@@ -592,7 +592,7 @@ AffineMap SubviewAllocElimPass::buildViewChainToAllocMap(Value loadMemref, Value
     cur = cast<ViewLikeOpInterface>(defOp).getViewSource();
   }
 
-  unsigned loadRank = cast<MemRefType>(loadMemref.getType()).getRank();
+  unsigned loadRank = static_cast<unsigned>(cast<MemRefType>(loadMemref.getType()).getRank());
   SmallVector<AffineExpr> exprs;
   for (unsigned i = 0; i < loadRank; i++) {
     exprs.push_back(getAffineDimExpr(i, ctx));
@@ -1137,7 +1137,7 @@ bool SubviewAllocElimPass::processTransposeAlloc(memref::AllocOp allocOp) {
     return false;
   }
 
-  unsigned allocRank = allocOp.getType().getRank();
+  unsigned allocRank = static_cast<unsigned>(allocOp.getType().getRank());
   auto *ctx = &getContext();
 
   // Replace each view-chain load with a direct load from the source.

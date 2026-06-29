@@ -171,6 +171,9 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *op, PatternRewr
   Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
 
   auto namedOp = createElemwiseOp(op, emptyTensor, attrs, rewriter);
+  if (namedOp == nullptr) {
+    return failure();
+  }
   rewriter.replaceOp(op, namedOp->getResults());
   return success();
 }
@@ -228,10 +231,12 @@ static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, Pa
       return rewriter.getFloatAttr(floatTy, 1.0);
     }
     if (isa<mindspore::ReduceMinOp>(op)) {
-      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /* Negative= */ false));
+      // Negative= false
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), false));
     }
     if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op)) {
-      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /* Negative= */ true));
+      // Negative= true
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), true));
     }
     return {};
   }
@@ -438,7 +443,7 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
                                                bool isDynamic) {
   if (isDynamic) {
     SmallVector<AffineExpr, kSmallVectorSizeTwo> exprs;
-    for (int i = 0, s = srcShape.size(); i < s; ++i) {
+    for (int i = 0, s = static_cast<int>(srcShape.size()); i < s; ++i) {
       exprs.push_back(rewriter.getAffineDimExpr(i));
     }
     reassociationMap = {exprs};
@@ -557,7 +562,7 @@ static std::vector<int> ArrayAttrToVectorInt(ArrayAttr array) {
   std::vector<int> res;
   for (auto v : array.getValue()) {
     if (auto intAttr = dyn_cast<StringAttr>(v)) {
-      int value = atoi(intAttr.getValue().str().c_str());
+      int value = static_cast<int>(strtol(intAttr.getValue().str().c_str(), nullptr, 10));
       res.push_back(value);
     }
   }
@@ -638,6 +643,9 @@ static DenseI64ArrayAttr computeDimension(mindspore::BroadcastToOp brcOp) {
 static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
   SmallVector<Operation *, kSmallVectorSizeEight> msOps;
   auto func = brcOp->getParentOp();
+  if (func == nullptr) {
+    return Value();
+  }
   func->walk([&msOps](Operation *op) {
     if (isa<mindspore::AddOp, mindspore::MulOp, mindspore::SubOp, mindspore::DivOp, mindspore::PowOp,
             mindspore::MaximumOp, mindspore::MinimumOp, mindspore::EqualOp, mindspore::GreaterOp,

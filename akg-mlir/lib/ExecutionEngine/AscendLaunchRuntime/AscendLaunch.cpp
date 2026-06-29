@@ -68,7 +68,7 @@ mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
   } else if (py::isinstance<py::float_>(arg)) {
     auto val = arg.cast<double>();
     static_assert(sizeof(double) == sizeof(void *), "double size mismatch");
-    std::memcpy(&data_ptr, &val, sizeof(void *));
+    std::copy_n(reinterpret_cast<char *>(&val), sizeof(void *), reinterpret_cast<char *>(&data_ptr));
   } else if (py::isinstance<py::bool_>(arg)) {
     bool val = arg.cast<bool>();
     data_ptr = reinterpret_cast<void *>(static_cast<intptr_t>(val));  // NOLINT
@@ -193,9 +193,11 @@ static void processTilingWithSize(const std::string &kernel_name, void *handle, 
 
 void ProcessDynamicTiling(const std::string &path, const std::string &kernel_name, TilingParams &params) {
   std::string so_path = path + "/lib" + kernel_name + ".so";
-  void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  if (so_path.empty()) {
+    return;
+  }
+  void *handle = dlopen(so_path.c_str(), static_cast<unsigned>(RTLD_LAZY) | static_cast<unsigned>(RTLD_LOCAL));
   CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
-
   std::string tiling_size_func_name = kernel_name + kTilingSizeFuncName;
   void *tiling_size_func = dlsym(handle, tiling_size_func_name.data());
   CHECK(tiling_size_func != nullptr) << "dlsym failed, symbol: " << tiling_size_func_name << " error:" << dlerror();
@@ -329,7 +331,10 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
     }
     std::string so_path = torch_path + "/lib/libtorch_npu.so";
     std::string func_name = "_Z14opcommand_callPKcSt8functionIFivEE";
-    void *handle = dlopen(so_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    if (so_path.empty()) {
+      return;
+    }
+    void *handle = dlopen(so_path.c_str(), static_cast<unsigned>(RTLD_LAZY) | static_cast<unsigned>(RTLD_LOCAL));
     CHECK(handle != nullptr) << "dlopen failed, file: " << so_path << ", Error:" << dlerror();
     torch_run_func = dlsym(handle, func_name.data());
     CHECK(torch_run_func != nullptr) << "dlsym failed, symbol: opcommand_call, error:" << dlerror();
@@ -353,10 +358,11 @@ PYBIND11_MODULE(ascend_launch, m) {
   m.def("akg_ascend_run", &akg_ascend_run);
   m.def("get_host_functions", &GetHostFunctions);
   m.def("get_device_function", &mlir::runtime::GetKernelFunction);
-  m.def("launch",
-        py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool,
-                          const py::args &>(&Launch),
-        "Launch kernel with tiling support");
+  m.def(
+    "launch",
+    py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, bool, const py::args &>(
+      &Launch),
+    "Launch kernel with tiling support");
   m.def("launch", py::overload_cast<const std::string &, uint64_t, uint64_t, uint64_t, bool, const py::args &>(&Launch),
         "Launch kernel without tiling support");
   m.def("torch_launch", &TorchLaunch, "Launch kernel for torch_npu");

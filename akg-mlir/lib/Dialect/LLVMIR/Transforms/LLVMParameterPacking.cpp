@@ -96,7 +96,7 @@ void packParamsDynamicShape(LLVM::LLVMFuncOp &funcOp) {
   constexpr auto kDoubleSize = 2;
   size_t ptrParamsNum =
     llvm::count_if(funcType.getParams(), [](const Type argType) { return isa<LLVM::LLVMPointerType>(argType); });
-  if (ptrParamsNum % kDoubleSize != 0) {
+  if (ptrParamsNum % static_cast<size_t>(kDoubleSize) != 0) {
     // The number of ptr inputs should be even, which is the double of the
     // number of input tensors. Otherwise we will not deal with this case
     return;

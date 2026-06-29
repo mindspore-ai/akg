@@ -142,6 +142,9 @@ static constexpr const int kDestination = 2;
 void WorkaroundFixReduceInitialization::moveInitializationOp() {
   for (auto r : this->reduceValue) {
     mlir::Operation *initOp = r.second[0]->getParentOp();
+    if (initOp == nullptr) {
+      continue;
+    }
     initOp->moveBefore(r.second[kDestination]);
   }
 }

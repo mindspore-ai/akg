@@ -79,6 +79,45 @@ void updateFuncTypes(func::FuncOp funcOp) {
   funcOp.setType(newFuncTy);
 }
 
+static void eliminateReturnReshape(func::FuncOp funcOp, size_t &argIdx, akgglobal::ShapeAlignTool &tool,
+                                   const llvm::SmallVector<std::string, kVectorInitSize4> &originalFuncSymbols) {
+  SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+  funcOp.walk([&argIdx, &tool, &analysis, &originalFuncSymbols](func::ReturnOp op) {
+    for (auto returnArg : op.getOperation()->getOperands()) {
+      argIdx++;
+      if (auto ownerOp = returnArg.getDefiningOp()) {
+        if (!(isa<mindspore::ReshapeOp>(ownerOp) || isa<tosa::ReshapeOp>(ownerOp))) {
+          continue;
+        }
+        if (!ownerOp->getResult(0).hasOneUse()) {
+          continue;
+        }
+        auto reshapeInput = ownerOp->getOperand(0);
+        auto newTy = reshapeInput.getType();
+        auto symbolShape = analysis.getSymbolicShape(newTy);
+        auto hasSymbolNotInOriginalFuncArgs = false;
+        if (symbolShape) {
+          for (auto symbol : (*symbolShape)) {
+            // A Reshape op cannot be removed if exposing a symbol not in the original inputs and outputs
+            if (std::find(originalFuncSymbols.begin(), originalFuncSymbols.end(), symbol) ==
+                originalFuncSymbols.end()) {
+              hasSymbolNotInOriginalFuncArgs = true;
+            }
+          }
+        }
+        if (hasSymbolNotInOriginalFuncArgs) {
+          continue;
+        }
+        auto reshapeOutput = ownerOp->getResult(0);
+        auto oldTy = reshapeOutput.getType();
+        tool.alignStaticShapeReconstruct(argIdx - 1, oldTy, newTy);
+        reshapeOutput.replaceAllUsesWith(reshapeInput);
+        ownerOp->erase();
+      }
+    }
+  });
+}
+
 void preprocessReshape(func::FuncOp funcOp) {
   // func arg's ONLY user is ReshapeOp, then modify func arg's shape and erase ReshapeOp
 
@@ -120,11 +159,14 @@ void preprocessReshape(func::FuncOp funcOp) {
       // update NeedFixIndices and ShapeInfo for dumpping correct device shapes
       auto newTy = userOp->getResult(0).getType();
       if (analysis.hasSymbolicShape(newTy)) {
-        llvm::SmallVector<std::string, kVectorInitSize4> symbolShape = *analysis.getSymbolicShape(newTy);
-        std::vector<std::string> newShape;
-        (void)std::transform(symbolShape.begin(), symbolShape.end(), std::back_inserter(newShape),
-                             [](std::string s) { return s; });
-        tool.updateCurrShapeInfo(argIdx - 1, newShape);
+        auto symbolShapeOpt = analysis.getSymbolicShape(newTy);
+        if (symbolShapeOpt.has_value()) {
+          auto symbolShape = *symbolShapeOpt;
+          std::vector<std::string> newShape;
+          (void)std::transform(symbolShape.begin(), symbolShape.end(), std::back_inserter(newShape),
+                               [](std::string s) { return s; });
+          tool.updateCurrShapeInfo(argIdx - 1, newShape);
+        }
       }
       SmallVector<int64_t> newNeedFixIndices{dyn_cast<ShapedType>(newTy).getRank(), 0};
       tool.recordNeedFixIndice(argIdx - 1, newNeedFixIndices);
@@ -155,40 +197,7 @@ void preprocessReshape(func::FuncOp funcOp) {
   auto originalFuncSymbols = RecordFuncArgSymbols(funcOp);
 
   // find ReshapeOp that can be eliminated
-  funcOp.walk([&argIdx, &tool, &analysis, &originalFuncSymbols](func::ReturnOp op) {
-    for (auto returnArg : op.getOperation()->getOperands()) {
-      argIdx++;
-      if (auto ownerOp = returnArg.getDefiningOp()) {
-        if (!(isa<mindspore::ReshapeOp>(ownerOp) || isa<tosa::ReshapeOp>(ownerOp))) {
-          continue;
-        }
-        if (!ownerOp->getResult(0).hasOneUse()) {
-          continue;
-        }
-        auto reshapeInput = ownerOp->getOperand(0);
-        auto newTy = reshapeInput.getType();
-        auto symbolShape = analysis.getSymbolicShape(newTy);
-        auto hasSymbolNotInOriginalFuncArgs = false;
-        if (symbolShape) {
-          for (auto symbol : (*symbolShape)) {
-            // A Reshape op cannot be removed if exposing a symbol not in the original inputs and outputs
-            if (std::find(originalFuncSymbols.begin(), originalFuncSymbols.end(), symbol) ==
-                originalFuncSymbols.end()) {
-              hasSymbolNotInOriginalFuncArgs = true;
-            }
-          }
-        }
-        if (hasSymbolNotInOriginalFuncArgs) {
-          continue;
-        }
-        auto reshapeOutput = ownerOp->getResult(0);
-        auto oldTy = reshapeOutput.getType();
-        tool.alignStaticShapeReconstruct(argIdx - 1, oldTy, newTy);
-        reshapeOutput.replaceAllUsesWith(reshapeInput);
-        ownerOp->erase();
-      }
-    }
-  });
+  eliminateReturnReshape(funcOp, argIdx, tool, originalFuncSymbols);
 
   updateFuncTypes(funcOp);
 }

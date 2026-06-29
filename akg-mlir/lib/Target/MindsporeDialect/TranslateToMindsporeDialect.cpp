@@ -1293,7 +1293,11 @@ void MindBuilder::convertReduceOp(ConvertOpParams params) {
 
   bool enableAtomicAdd = (getAttrFromJson<bool>(opNode.attrs, kEnableAtomicAdd, false) || (opNode.opName == "ElemAny"));
   if (enableAtomicAdd) {
-    op->getParentOp()->setAttr(kEnableAtomicAdd, BoolAttr::get(context, true));
+    auto parentOp = op->getParentOp();
+    if (parentOp == nullptr) {
+      return;
+    }
+    parentOp->setAttr(kEnableAtomicAdd, BoolAttr::get(context, true));
   }
 }
 
@@ -1369,7 +1373,7 @@ DenseElementsAttr MindBuilder::buildDenseElementsAttr(OpBuilder builder, SmallVe
 
     if (valueType == "int") {
       for (double v : value) {
-        (void)values.emplace_back(builder.getIntegerAttr(getIntType(dataType, builder), v));
+        (void)values.emplace_back(builder.getIntegerAttr(getIntType(dataType, builder), static_cast<int64_t>(v)));
       }
     } else if (valueType == "float") {
       for (double v : value) {
@@ -1377,7 +1381,7 @@ DenseElementsAttr MindBuilder::buildDenseElementsAttr(OpBuilder builder, SmallVe
       }
     } else if (valueType == "index") {
       for (double v : value) {
-        (void)values.emplace_back(builder.getIndexAttr(v));
+        (void)values.emplace_back(builder.getIndexAttr(static_cast<int64_t>(v)));
       }
     }
     DenseElementsAttr attr = DenseElementsAttr::get(AttrType, ArrayRef<Attribute>(values));

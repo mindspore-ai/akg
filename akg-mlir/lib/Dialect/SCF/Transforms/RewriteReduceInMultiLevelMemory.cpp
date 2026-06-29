@@ -117,7 +117,9 @@ static std::tuple<Operation *, Operation *, Operation *, Operation *, Operation 
     }
     return WalkResult::advance();
   });
-  initLoadLocalA = initStoreLocalA->getOperand(0).getDefiningOp();
+  if (initStoreLocalA != nullptr) {
+    initLoadLocalA = initStoreLocalA->getOperand(0).getDefiningOp();
+  }
   if ((allocLocalA == nullptr) || (initLoadLocalA == nullptr) || (initStoreLocalA == nullptr) ||
       (loadLocalA == nullptr) || (storeLocalA == nullptr)) {
     (void)redOp->emitError("matchReductionRelatedOps cannot match all ops, plz check this pattern.");

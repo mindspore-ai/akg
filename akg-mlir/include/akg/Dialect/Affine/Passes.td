@@ -266,34 +266,6 @@ def ReductionSiblingRecompute : Pass<"reduction-sibling-recompute", "func::FuncO
   ];
 }
 
-def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::FuncOp"> {
-  let summary = "Generate explicit copying for affine memory operations";
-  let constructor = "mlir::affine::createAKGAffineDataCopyGenerationPass()";
-  let dependentDialects = ["memref::MemRefDialect"];
-  let options = [
-    Option<"fastMemoryCapacity", "fast-mem-capacity", "uint64_t",
-           /*default=*/"std::numeric_limits<uint64_t>::max()",
-           "Set fast memory space capacity in KiB (default: unlimited)">,
-    Option<"fastMemorySpace", "fast-mem-space", "unsigned",
-           /*default=*/"1",
-           "Fast memory space identifier for copy generation (default: 1)">,
-    Option<"generateDma", "generate-dma", "bool",
-           /*default=*/"true", "Generate DMA instead of point-wise copy">,
-    Option<"minDmaTransferSize", "min-dma-transfer", "int",
-           /*default=*/"1024",
-           "Minimum DMA transfer size supported by the target in bytes">,
-    Option<"slowMemorySpace", "slow-mem-space", "unsigned",
-           /*default=*/"0",
-           "Slow memory space identifier for copy generation (default: 0)">,
-    Option<"skipNonUnitStrideLoops", "skip-non-unit-stride-loops", "bool",
-           /*default=*/"false", "Testing purposes: avoid non-unit stride loop "
-                                "choice depths for copy placement">,
-    Option<"tagMemorySpace", "tag-mem-space", "unsigned",
-           /*default=*/"0",
-           "Tag memory space identifier for copy generation (default: 0)">,
-  ];
-}
-
 def LegalizeTypeForAscend : Pass<"legalize-type-for-ascend", "func::FuncOp"> {
   let summary = "Legalize bf16 and float types for Ascend (affine + arith)";
   let description = [{
