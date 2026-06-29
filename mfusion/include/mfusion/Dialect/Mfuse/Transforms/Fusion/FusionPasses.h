@@ -18,6 +18,7 @@
 #define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_FUSION_PASSES_H
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/CanonicalizeBinaryScalarOperands.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseGelu.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseNumToTensor.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseSwiGlu.h"
