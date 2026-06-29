@@ -63,7 +63,7 @@ class AnthropicProvider:
         base_url: str = "https://api.anthropic.com",
         timeout: int = 300,
         extra_body: Optional[Dict[str, Any]] = None,
-        verify_ssl: bool = False,
+        verify_ssl: bool = True,
         **kwargs
     ):
         """
@@ -77,7 +77,7 @@ class AnthropicProvider:
                      - Claude: https://api.anthropic.com
             timeout: 超时时间（秒）
             extra_body: 额外请求参数（Anthropic 协议中较少使用）
-            verify_ssl: 是否验证 SSL 证书（默认 False，用于企业代理环境）
+            verify_ssl: 是否验证 SSL 证书（默认 True）
             **kwargs: 其他配置
         """
         self.model_name = model_name
