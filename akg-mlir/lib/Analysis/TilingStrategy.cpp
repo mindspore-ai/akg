@@ -23,6 +23,7 @@
 #include <numeric>
 #include <optional>
 #include <utility>
+#include "akg/Analysis/MemoryAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -879,7 +880,7 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
 namespace {
 constexpr int64_t kBytesPerKb = 1024;
 constexpr int64_t kNpuFallbackUbSizeKb = 192;
-constexpr int64_t kUbGuardReserveKb = 64;
+constexpr int64_t kUbGuardReserveKb = 0;
 
 constexpr unsigned kNpuTargetBlocks = 48;
 constexpr int64_t kNpuFallbackUbSizeInBytes = kNpuFallbackUbSizeKb * kBytesPerKb;
@@ -925,6 +926,7 @@ struct TransposeVectorInfo {
 };
 
 struct NpuBandContext {
+  func::FuncOp func;
   size_t bandIdx{0};
   SmallVector<AxisPtr, kSmallVectorSizeFour> axes;
   SmallVector<int64_t, kSmallVectorSizeFour> extents;
@@ -1915,6 +1917,9 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
   if (!npuGraph) {
     return ctx;
   }
+  if (npuGraph->funcOp) {
+    ctx.func = dyn_cast<func::FuncOp>(npuGraph->funcOp);
+  }
 
   ctx.graphTemplate = npuGraph->graphTemplate;
   ctx.targetBlocks =
@@ -2186,17 +2191,21 @@ bool satisfiesStrideAlignWithoutExpansion(const NpuBandContext &ctx, const Vecto
   return computeReserveBytes(ctx, reserve, axisTiles) <= computeLogicalReserveBytes(reserve, axisTiles);
 }
 int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
-  int64_t peakBytes = 0;
-  for (const VectorPeakReserveSet &set : ctx.vectorPeakReserveSets) {
-    int64_t bytes = 0;
-    for (const VectorLiveReserve &reserve : set.liveBuffers) {
-      int64_t reserveBytes = computeReserveBytes(ctx, reserve, axisTiles);
-      bytes = (bytes > LLONG_MAX - reserveBytes) ? LLONG_MAX : bytes + reserveBytes;
-    }
-    peakBytes = std::max(peakBytes, bytes);
+  PeakAnalysisInput input;
+  input.func = ctx.func;
+  for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
+    Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
+    auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
+    if (!forOp) continue;
+    int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
+    int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
+    tile = std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1));
+    setTileUpperBoundForLoop(input, forOp, tile);
+    input.isReduceXorAllVectorizeLoop[forOp] = false;
   }
-  int64_t reductionExtraBytes = computeReductionBackendExtraReserveBytes(ctx, axisTiles);
-  return (peakBytes > LLONG_MAX - reductionExtraBytes) ? LLONG_MAX : peakBytes + reductionExtraBytes;
+  PeakAnalysisResult result;
+  estimatePeakForTiling(input, result);
+  return result.PeakBits/8;
 }
 int64_t computeAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes, int64_t elemBytes) {
   int64_t elems = 1;
