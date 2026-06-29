@@ -59,6 +59,7 @@ class LLMProvider:
         base_url: str = "https://api.openai.com/v1",
         timeout: int = 300,
         extra_body: Optional[Dict[str, Any]] = None,
+        verify_ssl: bool = True,
         **kwargs
     ):
         """
@@ -73,10 +74,12 @@ class LLMProvider:
                         用于配置各 provider 的 thinking/reasoning 等特殊参数。
                         例如 DeepSeek: {"thinking": {"type": "enabled"}}
                         例如 OpenAI o3: {"reasoning_effort": "high"}
+            verify_ssl: 是否验证 SSL 证书（默认 True）
             **kwargs: 其他配置
         """
         self.model_name = model_name
         self.extra_body = extra_body or {}
+        self.verify_ssl = verify_ssl
         self.config = kwargs
         
         if AsyncOpenAI is None:
@@ -88,13 +91,13 @@ class LLMProvider:
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
-            http_client=httpx.AsyncClient(verify=False, timeout=timeout),
+            http_client=httpx.AsyncClient(verify=verify_ssl, timeout=timeout),
             default_headers={'User-Agent': 'python-httpx/0.28.1'},
         )
         
         logger.info(
             f"Initialized LLMProvider: model={model_name}, base_url={base_url}, "
-            f"extra_body={bool(self.extra_body)}"
+            f"extra_body={bool(self.extra_body)}, verify_ssl={verify_ssl}"
         )
 
     async def generate(

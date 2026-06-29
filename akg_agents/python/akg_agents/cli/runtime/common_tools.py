@@ -4,6 +4,7 @@ import fnmatch
 import glob
 import json
 import os
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -345,18 +346,22 @@ class BashTool:
     @staticmethod
     def _execute(command: str, cwd: str | None, timeout: float) -> str:
         try:
+            argv = shlex.split(command)
+            if not argv:
+                return "[ERROR] command: command is empty"
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
                 cwd=cwd,
                 text=True,
                 capture_output=True,
                 timeout=timeout,
             )
+        except ValueError as exc:
+            return f"[ERROR] command: invalid syntax: {exc}"
         except subprocess.TimeoutExpired:
-            return f"[ERROR] bash: command timed out after {timeout}s"
+            return f"[ERROR] command: timed out after {timeout}s"
         except Exception as exc:
-            return f"[ERROR] bash: {type(exc).__name__}: {exc}"
+            return f"[ERROR] command: {type(exc).__name__}: {exc}"
         output = "\n".join([p for p in [result.stdout, result.stderr] if p])
         output_text = output.strip() or "[EMPTY]"
         return f"[exit_code={result.returncode}]\n{output_text}"

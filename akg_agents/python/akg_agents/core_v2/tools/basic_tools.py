@@ -620,12 +620,12 @@ def check_markdown(
         output_parts = []
         check_mdlint = subprocess.run(
             ["markdownlint", "--version"],
-            capture_output=True, text=True, shell=True)
+            capture_output=True, text=True)
 
         if check_mdlint.returncode != 0:
             check_npx = subprocess.run(
                 ["npx", "markdownlint-cli", "--version"],
-                capture_output=True, text=True, shell=True)
+                capture_output=True, text=True)
             if check_npx.returncode != 0:
                 return {"status": "error", "output": "",
                         "error_information": (
@@ -641,7 +641,7 @@ def check_markdown(
             mdlint_cmd.append(str(path))
 
         result = subprocess.run(
-            mdlint_cmd, capture_output=True, text=True, timeout=30, shell=True)
+            mdlint_cmd, capture_output=True, text=True, timeout=30)
 
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
