@@ -269,8 +269,13 @@ static Block *getCommonBlockInAffineScope(Operation *opA, Operation *opB) {
   getChainOfAncestorBlocks(opB, dstAncestorBlocks);
 
   Block *commonBlock = nullptr;
-  for (int i = srcAncestorBlocks.size() - kLastIndexOffset, j = dstAncestorBlocks.size() - kLastIndexOffset;
-       i >= 0 && j >= 0 && srcAncestorBlocks[i] == dstAncestorBlocks[j]; i--, j--) {
+  // Use size_t indices to avoid mixing signed and unsigned types in arithmetic
+  // on SmallVector::size() (which returns size_t).
+  for (size_t i = srcAncestorBlocks.size() - kLastIndexOffset,
+                j = dstAncestorBlocks.size() - kLastIndexOffset;
+       i < srcAncestorBlocks.size() && j < dstAncestorBlocks.size() &&
+           srcAncestorBlocks[i] == dstAncestorBlocks[j];
+       i--, j--) {
     commonBlock = srcAncestorBlocks[i];
   }
 
@@ -343,8 +348,9 @@ static void computeDirectionVector(const FlatAffineValueConstraints &srcDomain,
   unsigned numIdsToEliminate = dependenceDomain->getNumVars();
   // Add new variables to 'dependenceDomain' to represent the direction
   // constraints for each shared loop.
-  dependenceDomain->insertVar(VarKind::SetDim, /* pos= */ kStartPos,
-                              /* num= */ numCommonLoops);
+  // pos: insertion start position (kStartPos).
+  // num: number of variables to insert (numCommonLoops).
+  dependenceDomain->insertVar(VarKind::SetDim, kStartPos, numCommonLoops);
 
   // Add equality constraints for each common loop, setting newly introduced
   // variable at column 'j' to the 'dst' IV minus the 'src IV.
@@ -699,7 +705,8 @@ static LogicalResult mergeSliceStateIntoUnion(ComputationSliceState &tmpSliceSta
       tmpSliceIVs.insert(tmpSliceCst.getValue(k));
     }
 
-    sliceUnionCst.mergeAndAlignVarsWithOther(/* offset= */ kStartPos, &tmpSliceCst);
+    // offset: start position for var alignment (kStartPos).
+    sliceUnionCst.mergeAndAlignVarsWithOther(kStartPos, &tmpSliceCst);
 
     // Post-constraint var alignment: add loop IV bounds missing after
     // var alignment to constraint systems. This can occur if one constraint
@@ -933,9 +940,10 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
     }
 
     MLIRContext *ctx = loop->getContext();
-    slice.lbs[k] = AffineMap::get(/* dimCount= */ kZeroDimCount, /* symbolCount= */ kZeroSymbolCount,
+    // dimCount = 0, symbolCount = 0: constant affine map (no dims/symbols).
+    slice.lbs[k] = AffineMap::get(kZeroDimCount, kZeroSymbolCount,
                                   getAffineConstantExpr(loopLb, ctx));
-    slice.ubs[k] = AffineMap::get(/* dimCount= */ kZeroDimCount, /* symbolCount= */ kZeroSymbolCount,
+    slice.ubs[k] = AffineMap::get(kZeroDimCount, kZeroSymbolCount,
                                   getAffineConstantExpr(loopUb, ctx));
     slice.lbOperands[k].clear();
     slice.ubOperands[k].clear();
@@ -1387,7 +1395,8 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   sliceUnion->ubs.resize(numSliceLoopIVs, AffineMap());
 
   // Get slice bounds from slice union constraints 'sliceUnionCst'.
-  sliceUnionCst.getSliceBounds(/* offset= */ kStartPos, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs,
+  // offset: start position of slice loop IVs (kStartPos).
+  sliceUnionCst.getSliceBounds(kStartPos, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs,
                                &sliceUnion->ubs);
 
   // Add slice bound operands of union.

@@ -128,7 +128,7 @@ static void initOperandOrder(mlir::func::FuncOp funcOp, SetVector<Value> &operan
       if (funcArguments[funcIdx] != operands[idx]) {
         continue;
       }
-      mapResult[idx] = funcIdx;
+      mapResult[idx] = static_cast<int>(funcIdx);
       break;
     }
   }
@@ -155,7 +155,7 @@ static void getAdditionalOperandOrder(mlir::func::FuncOp funcOp, SetVector<Value
       if (funcArguments[funcIdx] != rhs) {
         continue;
       }
-      additionalArgs[funcIdx] = idx;
+      additionalArgs[static_cast<int>(funcIdx)] = static_cast<int>(idx);
       break;
     }
   }

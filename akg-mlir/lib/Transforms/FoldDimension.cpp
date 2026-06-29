@@ -174,6 +174,10 @@ void FoldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, con
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   auto symbolShape0 = analysis.getSymbolicShape(ty0);
   auto symbolShape1 = analysis.getSymbolicShape(ty1);
+  if (!symbolShape0.has_value() || !symbolShape1.has_value()) {
+    foldable = false;
+    return;
+  }
   auto shape0 = ty0.getShape();
   auto shape1 = ty1.getShape();
   // (2,3,4) * (2,3,1) = (2,3,4)
@@ -514,7 +518,11 @@ void FoldDimensionAnalyser::getFoldedTypeWithSymbol(SymbolicShapeAnalysis &analy
                                                     const llvm::SmallVector<int64_t> foldableInfo,
                                                     llvm::SmallVector<int64_t> *flattenedShape,
                                                     llvm::SmallVector<std::string> *flattenedSymbolShape) const {
-  llvm::SmallVector<std::string> symbolShape = *analysis.getSymbolicShape(inputTy);
+  auto symbolShapeOpt = analysis.getSymbolicShape(inputTy);
+  if (!symbolShapeOpt.has_value()) {
+    return;
+  }
+  llvm::SmallVector<std::string> symbolShape = *symbolShapeOpt;
   std::string currentSymbol;
   auto shape = inputTy.getShape();
   auto currentDim = (inputTy.isDynamicDim(0)) ? ShapedType::kDynamic : shape[0];
@@ -791,7 +799,7 @@ struct FoldDimension : public impl::FoldDimensionBase<FoldDimension> {
   void runOnOperation() override {
     auto funcOp = getOperation();
     auto moduleOp = funcOp->getParentOp();
-    if (moduleOp->hasAttr("mindspore.symbol_calc_expr")) {
+    if (moduleOp != nullptr && moduleOp->hasAttr("mindspore.symbol_calc_expr")) {
       return;
     }
     auto opTypeAttr = funcOp->getAttrOfType<StringAttr>("OperatorType");

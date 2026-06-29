@@ -99,12 +99,12 @@ void GpuTemplateTilingSolver::SolveRedAxesWithoutThreadReduction(std::vector<Axi
                                                                  const std::vector<int> &dynFlags) {
   auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
-  int num = axes.size();
+  int num = static_cast<int>(axes.size());
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
     if (redFlags[i] != 0) {
       auto a = axes[i];
-      auto fullTile = (dynFlags[i] != 0) ? tool.getOnePrimeWithIdxUpdate() : a->range.second;
+      auto fullTile = (dynFlags[i] != 0) ? static_cast<int64_t>(tool.getOnePrimeWithIdxUpdate()) : a->range.second;
       if (dynFlags[i] != 0) {
         auto arg = gpuTool.addRuntimeArgument(fullTile);
         arg.mark = "reduce-small-seq";
@@ -112,8 +112,11 @@ void GpuTemplateTilingSolver::SolveRedAxesWithoutThreadReduction(std::vector<Axi
       }
       a->doExtraTile();
       auto tilel0 = a->tryGetConfig(1);
-      tilel0->value = fullTile;
       auto tilel1 = a->tryGetConfig(0);
+      if (tilel0 == nullptr || tilel1 == nullptr) {
+        continue;
+      }
+      tilel0->value = fullTile;
       tilel1->value = fullTile;
       std::vector<std::string> axisMap = {kGpuSeqCfg, kGpuSeqCfg, kGpuSeqCfg};
       a->setMappings(axisMap);
@@ -122,14 +125,17 @@ void GpuTemplateTilingSolver::SolveRedAxesWithoutThreadReduction(std::vector<Axi
 }
 
 void GpuTemplateTilingSolver::SolveAxesLeft(std::vector<AxisPtr> &axes) {
-  int num = axes.size();
+  int num = static_cast<int>(axes.size());
   for (int i = 0; i < num; i++) {
     if (axes[i]->mappings.empty()) {
       auto a = axes[i];
       a->doExtraTile();
       auto tilel0 = a->tryGetConfig(1);
-      tilel0->value = a->range.second;
       auto tilel1 = a->tryGetConfig(0);
+      if (tilel0 == nullptr || tilel1 == nullptr) {
+        continue;
+      }
+      tilel0->value = a->range.second;
       tilel1->value = a->range.second;
       // mark left axes as sequential
       std::vector<std::string> axisMap = {kGpuSeqCfg, kGpuSeqCfg, kGpuSeqCfg};
@@ -281,7 +287,7 @@ void GpuTemplateTilingSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<Axi
                                                                  const bool &handleRedAxis) {
   // since we do reorder thread/seq later for coalescing access, inner-tile maps to thread and outer-tile maps to
   // sequential
-  int num = axes.size();
+  int num = static_cast<int>(axes.size());
   auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
@@ -296,6 +302,9 @@ void GpuTemplateTilingSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<Axi
     std::vector<std::string> axisMap = {kGpuSeqCfg, kGpuSeqCfg, kGpuSeqCfg};
     int len = a->range.second;
     auto threadTile = a->tryGetConfig(1);
+    if (threadTile == nullptr) {
+      continue;
+    }
     threadTile->value = 1;
     std::vector<int> primes;
     bool isDynamic = dynFlags[i] != 0;
@@ -324,7 +333,7 @@ void GpuTemplateTilingSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<Axi
 static void processYDynamicBlock(AxisPtr &a, akgglobal::PrimeNumTool &tool, std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("Manual");
   auto dynTile = tool.getOnePrimeWithIdxUpdate();
-  gridcfg->value = dynTile;  // a placeholder prime for blockidx
+  gridcfg->value = static_cast<int>(dynTile);  // a placeholder prime for blockidx
   a->configs[gridcfg->type].push_back(gridcfg);
   axisMap[0] = kGpuGridCfg;
 }
@@ -345,6 +354,9 @@ static void processYFullBlock(AxisPtr &a, int &len, int &blockNum, std::vector<s
 
 static void processFakeMapThread(AxisPtr &a, std::vector<std::string> &axisMap) {
   auto seqOuterTile = a->tryGetConfig(1);
+  if (seqOuterTile == nullptr) {
+    return;
+  }
   seqOuterTile->value = 1;
   auto blockcfg = std::make_shared<GpuBlock>("Manual");
   blockcfg->value = 1;
@@ -359,7 +371,7 @@ void GpuTemplateTilingSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &a
                                                          const std::vector<int> &redFlags,
                                                          const std::vector<int> &dynFlags, int blockNum,
                                                          int &gridDimsLeft) {
-  int num = axes.size();
+  int num = static_cast<int>(axes.size());
   auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
@@ -388,8 +400,11 @@ void GpuTemplateTilingSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &a
 
     // 2. left length to sequential
     auto seqInnerTile = a->tryGetConfig(0);
+    if (seqInnerTile == nullptr) {
+      continue;
+    }
     if (dynFlags[i] != 0) {
-      seqInnerTile->value = tool.getOnePrimeWithIdxUpdate();
+      seqInnerTile->value = static_cast<int>(tool.getOnePrimeWithIdxUpdate());
       auto arg0 = gpuTool.addRuntimeArgument(seqInnerTile->value);
       arg0.mark = "reduce-y-seq";
       gpuTool.updateRuntimeArgument(arg0);
@@ -433,7 +448,7 @@ void GpuTemplateTilingSolver::collectReduceAxesSize(const std::vector<AxisPtr> &
   for (size_t i = 0; i < axes.size(); i++) {
     if (redFlags[i] != 0) {
       reductionSize *= axes[i]->range.second;
-      hasDynamicRedAxes |= dynamicFlags[i];
+      hasDynamicRedAxes = hasDynamicRedAxes || static_cast<bool>(dynamicFlags[i]);
     } else {
       parallelSize *= axes[i]->range.second;
     }
@@ -442,7 +457,7 @@ void GpuTemplateTilingSolver::collectReduceAxesSize(const std::vector<AxisPtr> &
 
 void GpuTemplateTilingSolver::SolveScheduleForReductionOps(std::vector<AxisPtr> &axes, bool &enableParallelReduction,
                                                            bool &enableAtomicReduction, bool &useReorder) {
-  int num = axes.size();
+  int num = static_cast<int>(axes.size());
   int gridDimsLeft = 3;
   int blockDimsLeft = 3;
   int reductionSize = 1;

@@ -102,7 +102,7 @@ static void matchOperandIndex(Value v, ArrayRef<BlockArgument> funcArguments,
                               SmallVector<int, kSmallVectorSizeEight> &mapResult, size_t idx) {
   for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
     if (funcArguments[funcIdx] == v) {
-      mapResult[idx] = funcIdx;
+      mapResult[idx] = static_cast<int>(funcIdx);
       return;
     }
   }
@@ -151,6 +151,9 @@ struct GetOrderMapBeforeAfterGpuOutlining
       return;
     }
 
+    if (this->path.empty()) {
+      return;
+    }
     std::ofstream output(this->path);
     for (size_t idx = 0; idx < operands.size(); idx++) {
       output << mapResult[idx] << " ";

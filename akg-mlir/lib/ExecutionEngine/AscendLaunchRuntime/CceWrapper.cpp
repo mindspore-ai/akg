@@ -42,7 +42,7 @@ CceWrapper *CceWrapper::GetInstance() {
 
 CceWrapper::CceWrapper() { LoadLibraries(); }
 
-CceWrapper::~CceWrapper() {
+CceWrapper::~CceWrapper() noexcept {
   if (cce_wrapper_singleton_.get() == nullptr) {
     return;
   }
@@ -88,7 +88,7 @@ bool CceWrapper::IsMsprofAvailable() const {
 
 bool CceWrapper::LoadAscendCL() {
   std::string library_path = "libascendcl.so";
-  void *handle_ptr = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  void *handle_ptr = dlopen(library_path.c_str(), static_cast<unsigned>(RTLD_NOW) | static_cast<unsigned>(RTLD_LOCAL));
   if (handle_ptr == nullptr) {
     LOG(ERROR) << "load library " << library_path << " failed!";
     return false;
@@ -127,7 +127,10 @@ bool CceWrapper::LoadAscendCL() {
 
 bool CceWrapper::LoadRuntime() {
   std::string library_path = "libruntime.so";
-  void *handle_ptr = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (library_path.empty()) {
+    return false;
+  }
+  void *handle_ptr = dlopen(library_path.c_str(), static_cast<unsigned>(RTLD_NOW) | static_cast<unsigned>(RTLD_LOCAL));
   if (handle_ptr == nullptr) {
     LOG(ERROR) << "load library " << library_path << " failed!";
     return false;

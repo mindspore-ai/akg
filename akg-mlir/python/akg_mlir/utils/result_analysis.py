@@ -253,45 +253,63 @@ def bisect_sum(a, axis=0, keepdims=True):
     return s
 
 
+def _find_unequal_index(data_expected, data_actual, rtol, atol):
+    """Find indices where data_actual and data_expected differ."""
+    if data_expected.dtype == np.bool_ and data_actual.dtype == np.bool_:
+        return np.where(np.not_equal(data_expected, data_actual))
+    return np.where(np.logical_not(np.isclose(data_actual, data_expected,
+                                               atol=atol, rtol=rtol, equal_nan=False)))
+
+
+def _is_bool_or_nan(actual_val, expected_val):
+    """Check if either value is bool or nan."""
+    return (isinstance(actual_val, np.bool_) or
+            isinstance(expected_val, np.bool_) or
+            np.isnan(actual_val) or np.isnan(expected_val))
+
+
+def _log_single_mismatch(index, data_actual, data_expected, unequal_index, count):
+    """Log a single mismatch at the given count index."""
+    actual_val = data_actual[unequal_index][count]
+    expected_val = data_expected[unequal_index][count]
+    if _is_bool_or_nan(actual_val, expected_val):
+        logging.error("%s: Actual[%s] Expected[%s]", str(index),
+                      str(actual_val), str(expected_val))
+    else:
+        b_1 = expected_val + 1e-10 if expected_val == 0.0 else expected_val
+        logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]", str(index),
+                      str(actual_val), str(expected_val),
+                      str(abs(actual_val - expected_val) / abs(b_1)))
+
+
+def _log_mismatch_summary(count, total_size):
+    """Log summary of mismatches."""
+    if count == 0:
+        return
+    if total_size > 32:
+        logging.error("...")
+        logging.error("Total %s mismatch detected!!!, Only print 32...", str(total_size))
+    else:
+        logging.error("Total %s mismatch detected!!!", str(total_size))
+
+
 def count_unequal_element(data_expected, data_actual, rtol, atol):
     """Function for asserting unequal elements in data_actual and data_expected."""
     if not data_expected.shape == data_actual.shape:
         raise AssertionError("'data_expected' and 'data_actual' should have the same shape")
-    count = 0
-    if data_expected.dtype == np.bool_ and data_actual.dtype == np.bool_:
-        unequal_index = np.where(np.not_equal(data_expected, data_actual))
-    else:
-        unequal_index = np.where(np.logical_not(np.isclose(data_actual, data_expected,
-                                                           atol=atol, rtol=rtol, equal_nan=False)))
+    unequal_index = _find_unequal_index(data_expected, data_actual, rtol, atol)
     if not isinstance(unequal_index, tuple):
         raise ValueError(f"unequal_index should be tuple but get {type(unequal_index)}")
+    count = 0
     while count < unequal_index[0].size:
         if count >= 32:
             break
         index = []
         for idx in unequal_index:
             index.append(idx[count])
-        if (isinstance(data_actual[unequal_index][count], np.bool_) or
-                isinstance(data_expected[unequal_index][count], np.bool_) or
-                np.isnan(data_actual[unequal_index][count]) or
-                np.isnan(data_expected[unequal_index][count])):
-            logging.error("%s: Actual[%s] Expected[%s]", str(index),
-                          str(data_actual[unequal_index][count]), str(data_expected[unequal_index][count]))
-        else:
-            b_1 = (data_expected[unequal_index][count] + 1e-10 if data_expected[unequal_index][count] == 0.0
-                   else data_expected[unequal_index][count])
-            logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]", str(index),
-                          str(data_actual[unequal_index][count]),
-                          str(data_expected[unequal_index][count]),
-                          str(abs(data_actual[unequal_index][count] - data_expected[unequal_index][count]) / abs(b_1)))
+        _log_single_mismatch(index, data_actual, data_expected, unequal_index, count)
         count += 1
-
-    if count != 0:
-        if unequal_index[0].size > 32:
-            logging.error("...")
-            logging.error("Total %s mismatch detected!!!, Only print 32...", str(unequal_index[0].size))
-        else:
-            logging.error("Total %s mismatch detected!!!", str(unequal_index[0].size))
+    _log_mismatch_summary(count, unequal_index[0].size)
 
 
 def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):

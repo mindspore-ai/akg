@@ -279,7 +279,10 @@ class RefineNPUVectorStaticShape
     constexpr unsigned kMaxIterations = 16;
     for (unsigned iteration = 0; iteration < kMaxIterations; ++iteration) {
       bool changed = false;
-      funcOp.walk([&](Operation *op) { changed |= refineOneOp(op); });
+      funcOp.walk([&](Operation *op) {
+        const bool opChanged = refineOneOp(op);
+        changed = changed || opChanged;
+      });
       if (!changed) {
         return;
       }

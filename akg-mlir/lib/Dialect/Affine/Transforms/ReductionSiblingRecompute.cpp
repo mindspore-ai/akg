@@ -393,8 +393,10 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
     return {};
   }
 
-  // Value defined at the outer loop body level or above: directly accessible from dstLoop.
   Operation *outerLoop = dstLoop->getParentOp();
+  if (outerLoop == nullptr) {
+    return {};
+  }
   if (defOp->getParentOp() == outerLoop || !outerLoop->isProperAncestor(defOp)) {
     remap[value] = value;
     return value;

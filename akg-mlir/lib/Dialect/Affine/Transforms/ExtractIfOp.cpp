@@ -81,27 +81,27 @@ class ExtractIfOp : public impl::ExtractIfOpBase<ExtractIfOp> {
 // Determines whether the statements in thenBlock need to be retained.
 // affine.if affine_set<() : (1 == 0)>()
 // affine.if affine_set<() : (1 >= 0)>()
-static uint64_t isInConstantEqualityRange(IntegerSet set) {
+static int64_t isInConstantEqualityRange(IntegerSet set) {
   if (set.getNumInputs() != 0) {
     return -1;
   }
 
-  uint64_t needRetained = 0;
+  int64_t needRetained = 0;
   for (unsigned i = 0; i < set.getNumConstraints(); ++i) {
     auto constraint = set.getConstraint(i);
     if (constraint.getKind() == AffineExprKind::Constant) {
       int64_t constraintValue = llvm::dyn_cast<AffineConstantExpr>(constraint).getValue();
       if (set.isEq(i)) {
         // affine.if affine_set<() : (1 == 0)>()
-        needRetained |= (uint64_t)(constraintValue == 0);
+        needRetained |= static_cast<int64_t>(constraintValue == 0);
       } else {
         // affine.if affine_set<() : (1 >= 0)>()
-        needRetained |= (uint64_t)(constraintValue >= 0);
+        needRetained |= static_cast<int64_t>(constraintValue >= 0);
       }
     }
   }
 
-  return static_cast<uint64_t>(needRetained);
+  return needRetained;
 }
 
 Operation *ExtractIfOp::getInsertPoint(mlir::Operation *op, bool isForward) {
@@ -131,7 +131,8 @@ Operation *ExtractIfOp::getInsertPoint(mlir::Operation *op, bool isForward) {
       for (auto axes : opAxes) {
         outerOp = CommonUtils::getInnerOrOuterOp(outerOp, axes, false);
       }
-      if (Operation *parentOp2 = outerOp->getParentOp()) {
+      if (outerOp != nullptr && outerOp->getParentOp() != nullptr) {
+        Operation *parentOp2 = outerOp->getParentOp();
         if (isa<affine::AffineForOp>(parentOp2)) {
           outerOp = parentOp2;
         } else {

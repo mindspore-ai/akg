@@ -47,6 +47,11 @@ namespace npuvector {
 
 namespace {
 
+// Index operands layout for NPUVector transfer ops: for each dimension, the
+// operand list carries two groups (sizes then maxSizes), so the total operand
+// count is 2 * rank. Used to slice out the per-dim size/maxSize operands.
+constexpr int kSizeGroupsPerRank = 2;
+
 // =============================================================================
 // Pass: ElimScfIterArgs
 // This pass rewrites every scf.for whose iter_args contain values of
@@ -90,10 +95,10 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     SmallVector<Value> idxOpnds;
     collectIndexOperands(rd, idxOpnds);
     int n = static_cast<int>(idxOpnds.size());
-    if (n >= 2 * rank) {
+    if (n >= kSizeGroupsPerRank * rank) {
       sizes.clear();
       for (int i = 0; i < rank; ++i) {
-        sizes.push_back(idxOpnds[n - 2 * rank + i]);
+        sizes.push_back(idxOpnds[n - kSizeGroupsPerRank * rank + i]);
       }
       if (maxSizes.empty()) {
         for (int i = 0; i < rank; ++i) {
@@ -109,11 +114,11 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     SmallVector<Value> idxOpnds;
     collectIndexOperands(defOp, idxOpnds);
     int n = static_cast<int>(idxOpnds.size());
-    if (n < 2 * rank) {
+    if (n < kSizeGroupsPerRank * rank) {
       return false;
     }
     for (int i = 0; i < rank; ++i) {
-      sizes.push_back(idxOpnds[n - 2 * rank + i]);
+      sizes.push_back(idxOpnds[n - kSizeGroupsPerRank * rank + i]);
     }
     for (int i = 0; i < rank; ++i) {
       maxSizes.push_back(idxOpnds[n - rank + i]);
@@ -286,14 +291,15 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
     SmallVector<Value> idx(shape.size(), zeroIdx);
     Value padding = b.create<arith::ConstantOp>(loc, vt.getElementType(), b.getZeroAttr(vt.getElementType()));
-    return b.create<mlir::npuvector::TransferReadOp>(loc, vt, buffer, idx, padding, /* mask= */ Value(), sizes,
-                                                     maxSizes);
+    Value emptyMask;
+    return b.create<mlir::npuvector::TransferReadOp>(loc, vt, buffer, idx, padding, emptyMask, sizes, maxSizes);
   }
 
   static void writeVectorToBuffer(OpBuilder &b, Location loc, Value vec, Value buffer, Value zeroIdx) {
     auto npuVec = llvm::cast<mlir::npuvector::NPUVectorType>(vec.getType());
     SmallVector<Value> idx(npuVec.getShape().size(), zeroIdx);
-    b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, buffer, idx, /* mask= */ Value());
+    Value emptyMask;
+    b.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, buffer, idx, emptyMask);
   }
 
   void writeSeedValues(OpBuilder &builder, Location loc, scf::ForOp forOp, ArrayRef<Value> buffers, Value zeroIdx) {
