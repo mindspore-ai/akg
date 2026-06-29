@@ -160,6 +160,31 @@ func.func @test_vadd_npuvector_vector_broadcast_otf(%arg0 : memref<32x10x10xf32>
 
 // -----
 
+func.func @test_npuvector_i1_broadcast_lowers_via_f16(%arg0 : memref<4xi1>, %arg1 : memref<4x8xi1>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @test_npuvector_i1_broadcast_lowers_via_f16
+  // CHECK: %[[SRC_I1:.*]] = memref.alloc() : memref<4xi1>
+  // CHECK: hivm.hir.load {{.*}} outs(%[[SRC_I1]] : memref<4xi1>)
+  // CHECK: %[[SRC_F16:.*]] = memref.alloc() : memref<4xf16>
+  // CHECK: hivm.hir.vcast ins(%[[SRC_I1]] : memref<4xi1>) outs(%[[SRC_F16]] : memref<4xf16>)
+  // CHECK: %[[DST_I1:.*]] = memref.alloc() : memref<4x8xi1>
+  // CHECK: %[[DST_F16:.*]] = memref.alloc() : memref<4x8xf16>
+  // CHECK: %[[EXPAND:.*]] = memref.expand_shape %[[SRC_F16]]
+  // CHECK-SAME: into memref<4x1xf16>
+  // CHECK: hivm.hir.vbrc ins(%[[EXPAND]] : memref<4x1xf16>) outs(%[[DST_F16]] : memref<4x8xf16>)
+  // CHECK: hivm.hir.vcmp ins(%[[DST_F16]], %{{.*}} : memref<4x8xf16>, f16) outs(%[[DST_I1]] : memref<4x8xi1>) compare_mode = <ne>
+  // CHECK: hivm.hir.store ins(%[[DST_I1]] : memref<4x8xi1>)
+  %c0 = arith.constant 0 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %false = arith.constant false
+  %mask = npuvector.transfer_read %arg0[%c0] [%c4] [%c4], %false : memref<4xi1>, !npuvector<4xi1>
+  %brc = npuvector.broadcast %mask[%c4, %c8] [%c4, %c8] : !npuvector<4xi1> to !npuvector<4x8xi1> {dimension = array<i64: 0>}
+  npuvector.transfer_write %brc, %arg1[%c0, %c0] : !npuvector<4x8xi1>, memref<4x8xi1>
+  return
+}
+
+// -----
+
 func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs(%arg0 : memref<?x1024xf32>, %arg1 : memref<1024xf32>, %arg2 : memref<?x1024xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
   // CHECK-LABEL: func.func @test_npuvector_broadcast_fold_lhs_alloc_from_rhs
   // CHECK-SAME: (%[[ARG0:.*]]: memref<?x1024xf32>, %[[ARG1:.*]]: memref<1024xf32>, %[[ARG2:.*]]: memref<?x1024xf32>)

@@ -3537,7 +3537,8 @@ static LogicalResult tryLowerBroadcastNPUVectorTransferWrite(npuvector::Transfer
                                                              ConversionPatternRewriter &rewriter) {
   auto broadcast = op.getVector().getDefiningOp<npuvector::BroadcastOp>();
   auto npuVecType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
-  if (!broadcast || !npuVecType || !isScalarType(broadcast.getSource().getType()) ||
+  if (!broadcast || !npuVecType || npuVecType.getElementType().isInteger(kBoolBitWidth) ||
+      !isScalarType(broadcast.getSource().getType()) ||
       broadcast.getSource().getType() != npuVecType.getElementType()) {
     return failure();
   }
@@ -4444,17 +4445,40 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     }
 
     Type elemType = npuVecType.getElementType();
+    bool isI1Broadcast = elemType.isInteger(kBoolBitWidth);
     if (elemType.isIndex()) {
       elemType = rewriter.getI64Type();
       source = rewriter.create<arith::IndexCastOp>(loc, elemType, source);
     }
     auto memRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
-    if (tryFoldScalarBroadcast(op, source, rewriter)) {
-      return success();
+    Type vbrcElemType = isI1Broadcast ? rewriter.getF16Type() : elemType;
+    auto vbrcMemRefType = MemRefType::get(npuVecType.getShape(), vbrcElemType);
+    if (isI1Broadcast) {
+      if (auto srcMemTy = dyn_cast<MemRefType>(source.getType())) {
+        auto srcF16Ty = MemRefType::get(srcMemTy.getShape(), vbrcElemType);
+        auto srcF16 = allocMemRef(rewriter, loc, srcF16Ty, source);
+        if (failed(srcF16)) {
+          return failure();
+        }
+        propagateBufferSizeMark(rewriter, loc, source, *srcF16);
+        auto roundAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::RINT);
+        rewriter.create<hivm::VCastOp>(loc, TypeRange{}, source, *srcF16, roundAttr, hivm::TypeFnAttr{});
+        source = *srcF16;
+      } else if (isScalarType(source.getType())) {
+        source = rewriter.create<arith::UIToFPOp>(loc, vbrcElemType, source);
+      } else {
+        return failure();
+      }
     }
-    if (tryFoldVectorBroadcast(op, source, memRefType, npuVecType, elemType, loc, rewriter)) {
-      return success();
+
+    if (!isI1Broadcast) {
+      if (tryFoldScalarBroadcast(op, source, rewriter)) {
+        return success();
+      }
+      if (tryFoldVectorBroadcast(op, source, memRefType, npuVecType, elemType, loc, rewriter)) {
+        return success();
+      }
     }
 
     Value resultBuf;
@@ -4462,17 +4486,29 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
                                     resultBuf))) {
       return failure();
     }
+    Value vbrcResultBuf = resultBuf;
+    if (isI1Broadcast &&
+        failed(allocBroadcastBuffer(op, loc, vbrcMemRefType, npuVecType, vbrcElemType, adaptor.getDynamicSizes(),
+                                    rewriter, vbrcResultBuf))) {
+      return failure();
+    }
 
     DenseI64ArrayAttr broadcastDimsAttr;
     Value vbrcSrc;
     int64_t rankExtendedSourceBytes = 0;
-    if (failed(prepareMemrefVbrc(op, source, memRefType, npuVecType, elemType, loc, rewriter, vbrcSrc,
+    if (failed(prepareMemrefVbrc(op, source, vbrcMemRefType, npuVecType, vbrcElemType, loc, rewriter, vbrcSrc,
                                  broadcastDimsAttr, &rankExtendedSourceBytes))) {
       return failure();
     }
 
     markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, source, op.getOperation(), rankExtendedSourceBytes);
-    rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, vbrcSrc, resultBuf, broadcastDimsAttr);
+    rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, vbrcSrc, vbrcResultBuf, broadcastDimsAttr);
+    if (isI1Broadcast) {
+      Value zero = rewriter.create<arith::ConstantOp>(loc, rewriter.getFloatAttr(vbrcElemType, 0.0));
+      auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(hivm::CompareMode::NE);
+      rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{vbrcResultBuf, zero}, ValueRange{resultBuf},
+                                    predicateAttr);
+    }
 
     rewriter.replaceOp(op, resultBuf);
     return success();
