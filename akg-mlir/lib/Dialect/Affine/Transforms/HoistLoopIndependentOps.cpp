@@ -113,6 +113,51 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     root->walk([&set](Operation *nested) { set.insert(nested); });
   }
 
+  // Collect the set of memrefs that are read/written by op (including its
+  // nested ops). These are used to detect memory dependencies that are not
+  // visible through SSA value chains.
+  static void collectMemRefEffects(Operation *root, llvm::DenseSet<Value> &readMemRefs,
+                                   llvm::DenseSet<Value> &writtenMemRefs) {
+    root->walk([&readMemRefs, &writtenMemRefs](Operation *op) {
+      if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
+        readMemRefs.insert(affineLoad.getMemRef());
+      } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
+        writtenMemRefs.insert(affineStore.getMemRef());
+      } else if (auto memLoad = dyn_cast<memref::LoadOp>(op)) {
+        readMemRefs.insert(memLoad.getMemRef());
+      } else if (auto memStore = dyn_cast<memref::StoreOp>(op)) {
+        writtenMemRefs.insert(memStore.getMemRef());
+      }
+    });
+  }
+
+  // Checks whether op has a memory dependency (RAW/WAR/WAW) with the memory
+  // footprint of the ops that must stay after the first affine.for.
+  // Conservatively compares memref SSA values by identity.
+  static bool opHasMemoryDepWithStaySet(Operation *op, const llvm::DenseSet<Value> &stayReadMemRefs,
+                                        const llvm::DenseSet<Value> &stayWrittenMemRefs) {
+    llvm::DenseSet<Value> opReadMemRefs;
+    llvm::DenseSet<Value> opWrittenMemRefs;
+    collectMemRefEffects(op, opReadMemRefs, opWrittenMemRefs);
+
+    // Read-after-write: op reads a memref written inside the stay set.
+    for (Value readMemRef : opReadMemRefs) {
+      if (stayWrittenMemRefs.contains(readMemRef)) {
+        return true;
+      }
+    }
+
+    // Write-after-write / write-after-read: op writes a memref that the stay
+    // set reads or writes.
+    for (Value writtenMemRef : opWrittenMemRefs) {
+      if (stayWrittenMemRefs.contains(writtenMemRef) || stayReadMemRefs.contains(writtenMemRef)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   void moveIndependentOpsBeforeFirstAffineFor(func::FuncOp funcOp) {
     Block &block = funcOp.getBody().front();
 
@@ -130,10 +175,20 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       return;
     }
 
-    // seenAffineForOps: all top-level affine.for ops encountered so far
-    // during scanning (including their nested operations).
-    llvm::DenseSet<Operation *> seenAffineForOps;
-    collectNestedOps(firstAffineFor, seenAffineForOps);
+    // stayOps: all ops that must remain after firstAffineFor because they
+    // (transitively) depend on the loop computations. This includes the
+    // top-level affine.for ops encountered so far (with their nested ops) as
+    // well as any non-loop op that is found to depend on them through SSA
+    // values or through memory. Accumulating non-loop ops here is required so
+    // that their downstream consumers are also kept in place.
+    llvm::DenseSet<Operation *> stayOps;
+    collectNestedOps(firstAffineFor, stayOps);
+
+    // Memory footprint of the stay set, used to detect memory dependencies
+    // (load/store on the same memref) that SSA dependency analysis misses.
+    llvm::DenseSet<Value> stayReadMemRefs;
+    llvm::DenseSet<Value> stayWrittenMemRefs;
+    collectMemRefEffects(firstAffineFor, stayReadMemRefs, stayWrittenMemRefs);
 
     SmallVector<Operation *, kSmallVectorSizeEight> toMove;
     llvm::DenseMap<Value, bool> valueDepCache;
@@ -145,16 +200,24 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
         continue;
       }
 
-      // If another top-level affine.for is encountered, include it
-      // in the "previous affine.for set" and continue scanning.
+      // Another top-level affine.for must stay; fold it into the stay set.
       if (isa<affine::AffineForOp>(op)) {
-        collectNestedOps(op, seenAffineForOps);
+        collectNestedOps(op, stayOps);
+        collectMemRefEffects(op, stayReadMemRefs, stayWrittenMemRefs);
+        // The dependency cache is relative to the stay set, which just grew.
+        valueDepCache.clear();
         continue;
       }
 
-      // For non-affine.for ops: move only if independent of all
-      // previously encountered affine.for computations.
-      if (opDependsOnSeenAffineFors(op, seenAffineForOps, valueDepCache)) {
+      // Keep the op in place if it depends on the stay set either through SSA
+      // values or through memory; otherwise it is safe to hoist.
+      bool mustStay = opDependsOnSeenAffineFors(op, stayOps, valueDepCache) ||
+                      opHasMemoryDepWithStaySet(op, stayReadMemRefs, stayWrittenMemRefs);
+
+      if (mustStay) {
+        collectNestedOps(op, stayOps);
+        collectMemRefEffects(op, stayReadMemRefs, stayWrittenMemRefs);
+        valueDepCache.clear();
         continue;
       }
 
