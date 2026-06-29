@@ -1,0 +1,14 @@
+# Agent API Configuration Example
+# Copy this file to api_config.yaml for local debugging.
+# Do not commit api_config.yaml; it may contain API keys.
+
+# provider: openai
+# model: gpt-4o
+# base_url: https://example.invalid/v1
+# api_key: ${AKG_AGENTS_API_KEY}
+# reasoning_effort: high
+
+provider: anthropic
+model: your-model-or-endpoint
+base_url: https://example.invalid/api/compatible
+api_key: ${AKG_AGENTS_API_KEY}
