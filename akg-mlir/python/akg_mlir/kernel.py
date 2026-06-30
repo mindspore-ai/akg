@@ -17,7 +17,12 @@ import logging
 import json
 
 from .backends.ascend import ascend_compile
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | os.RTLD_GLOBAL)
+# pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-order
 from .ascend_launch import get_host_functions, get_device_function, torch_launch
+sys.setdlopenflags(flags)
 
 __all__ = ["Kernel"]
 
