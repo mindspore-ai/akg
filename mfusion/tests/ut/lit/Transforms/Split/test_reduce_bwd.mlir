@@ -367,18 +367,18 @@ module {
   }
 
   // Entry reshape is hoisted even when its result is both yielded and consumed
-  // by a reduce_sum. The reshape after reduce_sum is not an entry reshape, so
-  // it is handled by the normal split rules instead.
+  // by a reduce_sum. The passthrough yielded reshape result is rewired to the
+  // hoisted value, so the DVM fused region only returns the computed reduce.
   // CHECK-LABEL: func.func @test_entry_reshape_yielded_and_reduced
   // CHECK-SAME: %arg0: tensor<4x128x768xf32>
   // CHECK: %[[ENTRY_RESHAPE:.*]] = mfuse.reshape %arg0 : (tensor<4x128x768xf32>) -> tensor<512x768xf32>
-  // CHECK: %[[FUSED:.*]]:2 = mfuse.fused %[[ENTRY_RESHAPE]] {fusion_type = "dvm"}
-  // CHECK-SAME: : (tensor<512x768xf32>) -> (tensor<512x768xf32>, tensor<1x768xf32>)
+  // CHECK: %[[FUSED:.*]] = mfuse.fused %[[ENTRY_RESHAPE]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<512x768xf32>) -> tensor<1x768xf32>
   // CHECK: ^bb0(%[[IN:.*]]: tensor<512x768xf32>):
   // CHECK-NEXT: %[[REDUCE:.*]] = mfuse.reduce_sum %[[IN]] {dimensions = [0], keepdim = true} : (tensor<512x768xf32>) -> tensor<1x768xf32>
-  // CHECK-NEXT: mfuse.yield %[[IN]], %[[REDUCE]] : tensor<512x768xf32>, tensor<1x768xf32>
-  // CHECK: %[[TAIL_RESHAPE:.*]] = mfuse.reshape %[[FUSED]]#1 : (tensor<1x768xf32>) -> tensor<768xf32>
-  // CHECK: return %[[FUSED]]#0, %[[TAIL_RESHAPE]] : tensor<512x768xf32>, tensor<768xf32>
+  // CHECK-NEXT: mfuse.yield %[[REDUCE]] : tensor<1x768xf32>
+  // CHECK: %[[TAIL_RESHAPE:.*]] = mfuse.reshape %[[FUSED]] : (tensor<1x768xf32>) -> tensor<768xf32>
+  // CHECK: return %[[ENTRY_RESHAPE]], %[[TAIL_RESHAPE]] : tensor<512x768xf32>, tensor<768xf32>
   func.func @test_entry_reshape_yielded_and_reduced(%arg0: tensor<4x128x768xf32>)
       -> (tensor<512x768xf32>, tensor<768xf32>) {
     %0:2 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4x128x768xf32>) -> (tensor<512x768xf32>, tensor<768xf32>) {

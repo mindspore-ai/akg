@@ -47,6 +47,59 @@ namespace {
 
 bool isHoistableFusedInputOp(Operation *op) { return isa<mfuse::ReshapeOp>(op); }
 
+bool prunePassthroughFusedResults(FusedOp fusedOp) {
+  Block &body = fusedOp.getBodyBlock();
+  auto yieldOp = dyn_cast<YieldOp>(body.getTerminator());
+  if (!yieldOp || fusedOp.getNumResults() == 0) {
+    return false;
+  }
+
+  SmallVector<Value> replacements(fusedOp.getNumResults());
+  SmallVector<Value> keptYieldValues;
+  SmallVector<Type> keptResultTypes;
+
+  for (auto [index, yielded] : llvm::enumerate(yieldOp.getValues())) {
+    Value replacement;
+    if (auto blockArg = dyn_cast<BlockArgument>(yielded)) {
+      if (blockArg.getOwner() == &body && blockArg.getArgNumber() < fusedOp.getNumOperands()) {
+        replacement = fusedOp.getOperand(blockArg.getArgNumber());
+      }
+    }
+
+    if (replacement && replacement.getType() == fusedOp.getResult(index).getType()) {
+      replacements[index] = replacement;
+      continue;
+    }
+
+    keptYieldValues.push_back(yielded);
+    keptResultTypes.push_back(fusedOp.getResult(index).getType());
+  }
+
+  if (keptYieldValues.size() == yieldOp.getNumOperands() || keptYieldValues.empty()) {
+    return false;
+  }
+
+  OpBuilder builder(fusedOp);
+  auto newFusedOp = builder.create<FusedOp>(fusedOp.getLoc(), keptResultTypes, fusedOp.getInputs(),
+                                           fusedOp.getFusionTypeAttr(), fusedOp.getKernelNameAttr());
+  newFusedOp->setAttrs(fusedOp->getAttrDictionary());
+  newFusedOp.getBody().takeBody(fusedOp.getBody());
+
+  auto newYieldOp = cast<YieldOp>(newFusedOp.getBodyBlock().getTerminator());
+  newYieldOp->setOperands(keptYieldValues);
+
+  unsigned keptIndex = 0;
+  for (auto [index, oldResult] : llvm::enumerate(fusedOp.getResults())) {
+    if (replacements[index]) {
+      oldResult.replaceAllUsesWith(replacements[index]);
+      continue;
+    }
+    oldResult.replaceAllUsesWith(newFusedOp.getResult(keptIndex++));
+  }
+  fusedOp.erase();
+  return true;
+}
+
 void hoistFusedInputOps(FusedOp fusedOp) {
   Block &body = fusedOp.getBodyBlock();
   OpBuilder builder(fusedOp);
@@ -81,6 +134,7 @@ void hoistFusedInputOps(FusedOp fusedOp) {
       innerOp->erase();
     }
   }
+  prunePassthroughFusedResults(fusedOp);
 }
 
 void hoistFusedInputOps(func::FuncOp funcOp, llvm::StringRef fusionType) {
