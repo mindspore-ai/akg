@@ -128,12 +128,50 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     return true;
   }
 
+  // Reorder `sizes` in place by `perm` (out[i] = in[perm[i]]). A no-op when the
+  // arities disagree (e.g. a shape-changing op broke the rank correspondence),
+  // which keeps the previous best-effort behavior instead of crashing.
+  static void permuteSizesInPlace(ArrayRef<int64_t> perm, SmallVectorImpl<Value> &sizes) {
+    if (perm.empty() || sizes.size() != perm.size()) {
+      return;
+    }
+    SmallVector<Value> tmp(sizes.begin(), sizes.end());
+    for (size_t i = 0; i < perm.size(); ++i) {
+      sizes[i] = tmp[perm[i]];
+    }
+  }
+
+  // If `defOp` is an npuvector.transpose, compose its permutation into `perm`
+  // (perm'[i] = tperm[perm[i]]) so that sizes recovered above the transpose are
+  // mapped back into the top-level value's layout. Left unchanged on arity
+  // mismatch (a shape-changing op broke the rank correspondence).
+  static void composeTransposePerm(Operation *defOp, SmallVectorImpl<int64_t> &perm) {
+    auto tp = llvm::dyn_cast<npuvector::TransposeOp>(defOp);
+    if (!tp) {
+      return;
+    }
+    ArrayRef<int64_t> tperm = tp.getPermutation();
+    if (tperm.size() != perm.size()) {
+      return;
+    }
+    SmallVector<int64_t> composed(perm.size());
+    for (size_t i = 0; i < perm.size(); ++i) {
+      composed[i] = tperm[perm[i]];
+    }
+    perm.assign(composed.begin(), composed.end());
+  }
+
   static bool tryExtractVecSizes(Value v, SmallVectorImpl<Value> &sizes, SmallVectorImpl<Value> &maxSizes) {
     sizes.clear();
     maxSizes.clear();
 
     llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
     Value cur = v;
+    // Accumulated permutation mapping the top-level dims to `cur`'s dim space
+    // (top[i] == cur[perm[i]]). It is composed with every npuvector.transpose
+    // met while walking up the def chain, so the sizes recovered at the source
+    // transfer_read are reordered back into the top-level value's layout.
+    SmallVector<int64_t> perm;
 
     while (cur) {
       auto vt = llvm::dyn_cast<npuvector::NPUVectorType>(cur.getType());
@@ -145,6 +183,11 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
       if (rank == 0) {
         return true;
       }
+      if (perm.empty()) {
+        for (int i = 0; i < rank; ++i) {
+          perm.push_back(i);
+        }
+      }
 
       Operation *defOp = cur.getDefiningOp();
       if ((defOp == nullptr) || !visited.insert(defOp).second) {
@@ -153,16 +196,24 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
       if (auto rd = llvm::dyn_cast<npuvector::TransferReadOp>(defOp)) {
         if (extractFromTransferRead(rd, rank, sizes, maxSizes)) {
+          permuteSizesInPlace(perm, sizes);
+          permuteSizesInPlace(perm, maxSizes);
           return true;
         }
       }
       if ((defOp->getDialect() != nullptr) && defOp->getDialect()->getNamespace() == "npuvector") {
         if (extractFromGenericNpuOp(defOp, rank, sizes, maxSizes)) {
+          permuteSizesInPlace(perm, sizes);
+          permuteSizesInPlace(perm, maxSizes);
           return true;
         }
         sizes.clear();
         maxSizes.clear();
       }
+
+      // Compose the transpose permutation before descending into its source, so
+      // sizes recovered further up the chain are mapped back through it.
+      composeTransposePerm(defOp, perm);
 
       // Prefer NPUVector operands that have a defining op (i.e., not a block
       // argument such as an scf.for iter_arg). Falling back to a block argument
