@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -33,6 +34,7 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "akg/Dialect/NPUVector/Passes.h"
@@ -162,14 +164,25 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
         maxSizes.clear();
       }
 
+      // Prefer NPUVector operands that have a defining op (i.e., not a block
+      // argument such as an scf.for iter_arg). Falling back to a block argument
+      // would abort the walk since it has no defining op, but might occur if
+      // the operand order places the iter_arg before an in-block producer.
       Value next;
+      Value fallback;
       for (Value opnd : defOp->getOperands()) {
-        if (isNpuVectorType(opnd.getType())) {
+        if (!isNpuVectorType(opnd.getType())) {
+          continue;
+        }
+        if (opnd.getDefiningOp() != nullptr) {
           next = opnd;
           break;
         }
+        if (!fallback) {
+          fallback = opnd;
+        }
       }
-      cur = next;
+      cur = next ? next : fallback;
     }
     return false;
   }
@@ -308,6 +321,50 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     }
   }
 
+  // Compute the transitive set of in-body ops that produce the loop-carried
+  // size / maxSize values referenced by `loopSizes` and `loopMaxSizes` (only
+  // for entries where `useLoopSize[i]` is true). Traversal stops at iter_arg
+  // block arguments, which never participate in size definition here.
+  static void collectSizeDefiningOps(Block *oldBody, ArrayRef<SmallVector<Value>> loopSizes,
+                                     ArrayRef<SmallVector<Value>> loopMaxSizes, ArrayRef<bool> useLoopSize,
+                                     llvm::SetVector<Operation *> &sizeDefs) {
+    auto isIterArg = [&](Value v) {
+      for (unsigned k = 1; k < oldBody->getNumArguments(); ++k) {
+        if (oldBody->getArgument(k) == v) {
+          return true;
+        }
+      }
+      return false;
+    };
+    SmallVector<Operation *> worklist;
+    auto pushDef = [&](Value v) {
+      if (!v || isIterArg(v)) {
+        return;
+      }
+      Operation *def = v.getDefiningOp();
+      if ((def != nullptr) && def->getBlock() == oldBody && sizeDefs.insert(def)) {
+        worklist.push_back(def);
+      }
+    };
+    for (size_t i = 0; i < loopSizes.size(); ++i) {
+      if (!useLoopSize[i]) {
+        continue;
+      }
+      for (Value v : loopSizes[i]) {
+        pushDef(v);
+      }
+      for (Value v : loopMaxSizes[i]) {
+        pushDef(v);
+      }
+    }
+    while (!worklist.empty()) {
+      Operation *op = worklist.pop_back_val();
+      for (Value opnd : op->getOperands()) {
+        pushDef(opnd);
+      }
+    }
+  }
+
   void buildNewLoopBody(scf::ForOp oldFor, scf::ForOp newFor, ArrayRef<Value> buffers,
                         ArrayRef<SmallVector<Value>> allSizes, ArrayRef<SmallVector<Value>> allMaxSizes) {
     Block *oldBody = oldFor.getBody();
@@ -320,19 +377,64 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     // Remap the induction variable.
     map.map(oldBody->getArgument(0), newBody->getArgument(0));
 
-    for (size_t i = 0; i < oldFor.getInitArgs().size(); ++i) {
+    auto yield = cast<scf::YieldOp>(oldBody->getTerminator());
+    size_t nIter = oldFor.getInitArgs().size();
+
+    // Recover per-iter_arg sizes from the *yielded* value rather than from the
+    // initial value. The yielded value's size is what actually gets written
+    // back to the buffer at the end of each iteration (tail-block aware), so
+    // the readback at the start of the next iteration must use the same size.
+    // If recovery fails, fall back to the init-value derived sizes.
+    SmallVector<SmallVector<Value>> loopSizes(nIter);
+    SmallVector<SmallVector<Value>> loopMaxSizes(nIter);
+    SmallVector<bool> useLoopSize(nIter, false);
+    for (size_t i = 0; i < nIter; ++i) {
+      SmallVector<Value> s;
+      SmallVector<Value> ms;
+      if (tryExtractVecSizes(yield.getOperand(i), s, ms) && !s.empty()) {
+        loopSizes[i] = std::move(s);
+        loopMaxSizes[i] = std::move(ms);
+        useLoopSize[i] = true;
+      }
+    }
+
+    // Compute size-defining ops (must be cloned before iter_arg readbacks).
+    llvm::SetVector<Operation *> sizeDefs;
+    collectSizeDefiningOps(oldBody, loopSizes, loopMaxSizes, useLoopSize, sizeDefs);
+
+    // Clone the size-defining ops first, in original program order.
+    for (Operation &op : oldBody->without_terminator()) {
+      if (sizeDefs.contains(&op)) {
+        bb.clone(op, map);
+      }
+    }
+
+    // Now emit the iter_arg readbacks using loop-carried (yield-derived) sizes
+    // when available, or the init-value sizes as a fallback.
+    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
+    for (size_t i = 0; i < nIter; ++i) {
       auto vt = llvm::cast<mlir::npuvector::NPUVectorType>(oldFor.getInitArgs()[i].getType());
-      Value loaded = readBufferAsVector({bb, loc, vt, buffers[i], c0, allSizes[i], allMaxSizes[i]});
+      SmallVector<Value> rs;
+      SmallVector<Value> rms;
+      if (useLoopSize[i]) {
+        std::transform(loopSizes[i].begin(), loopSizes[i].end(), std::back_inserter(rs), remap);
+        std::transform(loopMaxSizes[i].begin(), loopMaxSizes[i].end(), std::back_inserter(rms), remap);
+      } else {
+        rs.assign(allSizes[i].begin(), allSizes[i].end());
+        rms.assign(allMaxSizes[i].begin(), allMaxSizes[i].end());
+      }
+      Value loaded = readBufferAsVector({bb, loc, vt, buffers[i], c0, rs, rms});
       map.map(oldBody->getArgument(i + 1), loaded);
     }
 
-    // Clone all original ops except the terminator (the yield).
+    // Clone the remaining ops (those not already cloned as size defs).
     for (Operation &op : oldBody->without_terminator()) {
-      bb.clone(op, map);
+      if (!sizeDefs.contains(&op)) {
+        bb.clone(op, map);
+      }
     }
 
     // Translate the yield into TransferWriteOps that update the buffers.
-    auto yield = cast<scf::YieldOp>(oldBody->getTerminator());
     for (size_t i = 0; i < yield.getNumOperands(); ++i) {
       Value v = map.lookup(yield.getOperand(i));
       writeVectorToBuffer(bb, loc, v, buffers[i], c0);

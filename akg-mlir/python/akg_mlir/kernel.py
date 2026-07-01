@@ -15,6 +15,7 @@
 import os
 import logging
 import json
+import sys
 
 from .backends.ascend import ascend_compile
 flags = sys.getdlopenflags()
