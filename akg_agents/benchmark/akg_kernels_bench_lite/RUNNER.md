@@ -422,7 +422,7 @@ Phase 4: Report
 | 3 | 共享模块仍位于 `examples/kernel_related/`，因为当前只被 runner 使用 |
 | 4 | `--mode full` 下的性能评测是串行的，不支持并发性能测量 |
 | 5 | 性能评测的 `--timeout` 基于子进程隔离（`multiprocessing` spawn 模式），超时后通过 `terminate()` / `kill()` 终止工作进程并释放 GPU/NPU 资源。超时错误信息包含 `last phase` 用于诊断（可能的阶段：`startup` / `loading_modules` / `model_init` / `correctness_check` / `measuring_baseline` / `measuring_solution`） |
-| 6 | 二次正确性验证使用严格 AND 语义（`max_abs_diff <= atol` 且 `max_rel_diff <= rtol` 必须同时满足），比 `torch.allclose` 更严格 |
+| 6 | 二次正确性验证使用严格 AND 语义（`max_abs_diff <= atol` 且 `max_rel_diff <= rtol` 必须同时满足），比 `torch.allclose` 更严格；reference 与 solution 使用相同 seed 重新生成的独立输入，避免 stateful / in-place 输入互相污染；任一 reference、solution 或 diff 中出现 NaN/Inf 都直接判定失败 |
 
 ## 9. 推荐使用方式
 
