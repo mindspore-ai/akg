@@ -15,6 +15,7 @@
 
 import os
 import re
+import sys
 import hashlib
 import pathlib
 import json
@@ -22,7 +23,12 @@ import logging
 import subprocess
 import numpy as np
 
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | os.RTLD_GLOBAL)
+# pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-order
 from ..ascend_launch import akg_ascend_run
+sys.setdlopenflags(flags)
 from ..utils.dynamic_utils import get_device_shape
 
 __all__ = [
