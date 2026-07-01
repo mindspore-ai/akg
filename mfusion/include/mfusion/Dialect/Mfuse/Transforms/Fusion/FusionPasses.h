@@ -20,6 +20,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/CanonicalizeBinaryScalarOperands.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseGelu.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseLogicalNotCompare.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseNumToTensor.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseSwiGlu.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseBiasaddConv.h"
