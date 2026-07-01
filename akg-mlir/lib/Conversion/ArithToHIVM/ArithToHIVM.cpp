@@ -84,6 +84,8 @@ using akg::getElementBitWidth;
 using akg::kNpuUbAlignBytes;
 using akg::multiplyAndCap;
 
+constexpr int64_t kDefaultDynamicAllocSize = 32 * 1024;
+
 static bool setBufferSizeMark(PatternRewriter &rewriter, Location loc, Value buffer, int64_t bytes) {
   if (bytes <= 0 || bytes == LLONG_MAX || !isa<MemRefType>(buffer.getType())) {
     return false;
@@ -3968,6 +3970,22 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
                                             domInfo, rewriter);
 }
 
+// Attach a conservative default buffer-size mark to a fully-dynamic alloc/allocation root
+// (rank > 0, every dim dynamic) so the BiShengIR backend can still plan UB storage when no
+// shape/maxSizes-derived size is available. Marking only inserts/adjusts an annotation.mark
+// on the root and never mutates the root's defining op, so callers may keep using destRoot.
+static void markFullyDynamicAllocRootDefaultSize(PatternRewriter &rewriter, Location loc, Value destRoot,
+                                                 bool destIsAllocRoot) {
+  auto rootType = dyn_cast<MemRefType>(destRoot.getType());
+  if (!destIsAllocRoot || !rootType || rootType.getRank() <= 0 ||
+      !llvm::all_of(rootType.getShape(), ShapedType::isDynamic)) {
+    return;
+  }
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointAfter(destRoot.getDefiningOp());
+  setBufferSizeMarkAtLeast(rewriter, loc, destRoot, kDefaultDynamicAllocSize);
+}
+
 struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
   using OpConversionPattern<npuvector::TransferWriteOp>::OpConversionPattern;
 
@@ -3977,6 +3995,9 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
 
     Value dataToWrite = adaptor.getVector();
     Value dest = adaptor.getSource();
+    Value destRoot = traceMemRefToRoot(dest);
+    const bool destIsAllocRoot = isRootFromAlloc(destRoot);
+    markFullyDynamicAllocRootDefaultSize(rewriter, loc, destRoot, destIsAllocRoot);
     if (succeeded(tryLowerDenseConstantNPUVectorTransferWrite(op, dest, rewriter))) {
       return success();
     }
@@ -3985,10 +4006,12 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     }
 
     // No-op when data and dest share the same alloc root (for results: map through init args).
+    // destRoot/destIsAllocRoot are computed once above and remain valid here: the default-size
+    // marking above only inserts/adjusts an annotation.mark on the root and never replaces or
+    // erases dest's defining op, so SSA identity and op type are unchanged.
     if (isa<MemRefType>(dataToWrite.getType()) && isa<MemRefType>(dest.getType())) {
       Value dataRoot = traceDataToWriteRoot(dataToWrite);
-      Value destRoot = traceMemRefToRoot(dest);
-      if (dataRoot == destRoot && isRootFromAlloc(destRoot)) {
+      if (dataRoot == destRoot && destIsAllocRoot) {
         rewriter.eraseOp(op);
         return success();
       }
@@ -4006,9 +4029,6 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
 
     int64_t memRefRank = destMemRefType.getRank();
     int64_t dataRank = dataMemRefType.getRank();
-
-    Value destRoot = traceMemRefToRoot(dest);
-    const bool destIsAllocRoot = isRootFromAlloc(destRoot);
 
     // Preserve the historical rank-1 vector-to-scalar write. Equal-rank
     // transfers, including rank-0, use the common subview/fusion path below.
