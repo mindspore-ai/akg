@@ -2435,30 +2435,6 @@ bool fitsVectorUb(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
   return computeVectorPeakReserveBytes(ctx, axisTiles) <= getVectorUbBytes(ctx);
 }
 
-int64_t findMaxFittingCommonFactorTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisTiles, size_t axisIdx,
-                                       int64_t candidate) {
-  int64_t extent = axisIdx < ctx.extents.size() ? std::max<int64_t>(ctx.extents[axisIdx], 1) : 1;
-  int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
-  int64_t fitTile = 1;
-  for (int64_t q = std::max<int64_t>(candidate, 1); q >= 1;) {
-    int64_t tile = candidate / q;
-    q = candidate / (tile + 1);
-    if (tile <= 1 || candidate % tile != 0 || extent % tile != 0) {
-      continue;
-    }
-    if (tile % alignUnit != 0) {
-      continue;
-    }
-    axisTiles[axisIdx] = tile;
-    if (!fitsVectorUb(ctx, axisTiles)) {
-      break;
-    }
-    fitTile = tile;
-  }
-  axisTiles[axisIdx] = 1;
-  return fitTile;
-}
-
 int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisTiles, size_t axisIdx,
                            int64_t upper) {
   int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
@@ -3149,7 +3125,7 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
     int64_t candidate = std::max<int64_t>(static_cast<int64_t>(plan.outerTiles[idx]), 1);
     bool isPrimaryAxis = idx == primaryAxis;
     if (!isPrimaryAxis) {
-      int64_t fitTile = findMaxFittingCommonFactorTile(ctx, axisTiles, idx, candidate);
+      int64_t fitTile = findMaxFittingTile(ctx, axisTiles, idx, candidate);
       plan.innerTiles[idx] = saturateToTileValue(fitTile);
       axisTiles[idx] = fitTile;
       plan.multiVecAxisMask[idx] = (fitTile > 1) || reductionAxisMask[idx];
