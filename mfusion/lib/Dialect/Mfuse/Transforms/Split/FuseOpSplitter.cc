@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include "mfusion/Analysis/Split/Area.h"
+#include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
 #include "mfusion/Analysis/Split/SplitModel.h"
 #include "mfusion/Analysis/Split/SplitModelFactory.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/FuseOpRebuilder.h"
@@ -170,6 +171,9 @@ mlir::mfuse::split::SplitSchemerPtr FuseOpSplitter::getSplitSchema(const std::st
 }
 
 bool FuseOpSplitter::trySplit(mlir::mfuse::FusedOp op, const std::string &kernelGenerator) {
+  if (mlir::mfuse::fusion_region::shouldSkipSplitForMatcherFusedIsland(op)) {
+    return false;
+  }
   auto schm = getSplitSchema(kernelGenerator);
   auto splitter = mlir::mfuse::split::Splitter::makeSplitter(op, schm);
   bool result = splitter->split();

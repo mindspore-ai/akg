@@ -88,6 +88,14 @@ Pattern ConvertAtenReciprocal {
   replace root with op<mfuse.reciprocal>(convertValue(input)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenSoftmax {
+  let root = op<torch.aten._softmax>(operands: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.softmax>(convertValue(Get0(operands))) {
+    dim = GetI64Attr(Get1(operands)),
+    half_to_float = GetI1Attr(Get2(operands))
+  } -> (convertType(resType));
+}
+
 Pattern ConvertAtenRelu {
   let root = op<torch.aten.relu>(input: Value) -> (resType: Type);
   replace root with op<mfuse.relu>(convertValue(input)) -> (convertType(resType));

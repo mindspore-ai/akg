@@ -955,6 +955,51 @@ def Mfuse_ReduceSumOp : Mfuse_ReduceOp<"reduce_sum", [Pure]> {
   }];
 }
 
+def Mfuse_SoftmaxOp : Mfuse_Op<"softmax", [
+    Pure,
+    SameOperandsAndResultShape
+  ]> {
+  let summary = "Softmax along a single dimension (maps to torch.aten._softmax).";
+  let description = [{
+    Computes softmax on the input tensor along `dim`. The `half_to_float` flag
+    matches torch.aten._softmax and is preserved for round-trip lowering.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64Attr:$dim,
+    BoolAttr:$half_to_float
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_ReduceMaxOp : Mfuse_ReduceOp<"reduce_max", [Pure]> {
+  let summary = "Max reduction operation";
+  let description = [{
+    Computes the maximum of tensor elements along specified dimensions.
+    The boolean parameter controls whether to keep dimensions.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64ArrayAttr:$dimensions,
+    BoolAttr:$keepdim
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_ReluOp : Mfuse_Op<"relu", [
     Pure,
     SameOperandsAndResultType,

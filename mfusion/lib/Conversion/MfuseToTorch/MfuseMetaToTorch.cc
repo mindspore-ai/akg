@@ -582,6 +582,41 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
   }
 };
 
+struct ConvertMfuseReduceMax : public mlir::OpConversionPattern<mlir::mfuse::ReduceMaxOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::ReduceMaxOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+
+    mlir::Value dimList = buildTorchIntListFromI64ArrayAttr(op.getDimensions(), op.getLoc(), rewriter);
+
+    bool keepdim = op.getKeepdim();
+    mlir::Value keepdimVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), keepdim);
+
+    rewriter.replaceOpWithNewOp<TorchD::AtenAmaxOp>(op, resultType, input, dimList, keepdimVal);
+    return mlir::success();
+  }
+};
+
+struct ConvertMfuseSoftmax : public mlir::OpConversionPattern<mlir::mfuse::SoftmaxOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::SoftmaxOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    mlir::Value dimVal = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), op.getDim());
+    mlir::Value halfVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), op.getHalfToFloat());
+    rewriter.replaceOpWithNewOp<TorchD::Aten_SoftmaxOp>(op, resultType, input, dimVal, halfVal);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.reshape -> torch.aten.reshape.
 /// Shape is derived from reshape result type. A dynamic dim is mapped to -1.
 class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::ReshapeOp> {
@@ -740,6 +775,8 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   patterns.add<ConvertMfusePermute>(converter, context);
   patterns.add<ConvertMfuseReduceMean>(converter, context);
   patterns.add<ConvertMfuseReduceSum>(converter, context);
+  patterns.add<ConvertMfuseReduceMax>(converter, context);
+  patterns.add<ConvertMfuseSoftmax>(converter, context);
   patterns.add<ConvertMfuseReshape>(converter, context);
 }
 
