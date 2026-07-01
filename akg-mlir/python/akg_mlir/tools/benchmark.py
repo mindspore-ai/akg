@@ -230,7 +230,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
         static_desc = None
         if is_dyn_shape:
             static_info_path = info_file.with_name(info_file.stem + "_static" + info_file.suffix)
-            if static_info_path.exists():
+            if not static_info_path.exists():
                 raise ValueError("Dynamic shape info must come with static shape info.")
             static_desc = static_info_path.read_text('utf-8')
         if compile_args.profiling:
