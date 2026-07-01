@@ -58,6 +58,7 @@ DEFAULT_WARMUP_RUNS = 10
 DEFAULT_ITERATIONS = 100
 DEFAULT_NUM_TRIALS = 3
 DEFAULT_TIMEOUT = 300  # 每个 case 最大执行秒数
+EVAL_SEED = 0
 
 
 # ──────────────────────────── 动态加载模块 ─────────────────────────────────────
@@ -69,6 +70,40 @@ def _load_module(py_path: Path, module_name: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _set_eval_seed(seed: int = EVAL_SEED):
+    """Reset torch RNGs so ref/solution inputs are value-identical."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    npu_mod = getattr(torch, "npu", None)
+    if npu_mod is not None and hasattr(npu_mod, "manual_seed_all"):
+        try:
+            npu_mod.manual_seed_all(seed)
+        except Exception:
+            pass
+
+
+def _move_to_device(obj: Any, device: str) -> Any:
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    if isinstance(obj, list):
+        return [_move_to_device(x, device) for x in obj]
+    if isinstance(obj, tuple):
+        return tuple(_move_to_device(x, device) for x in obj)
+    if isinstance(obj, dict):
+        return {k: _move_to_device(v, device) for k, v in obj.items()}
+    return obj
+
+
+def _make_seeded_inputs(get_inputs, device: str) -> Any:
+    _set_eval_seed()
+    inputs = get_inputs()
+    if device != "cpu":
+        inputs = _move_to_device(inputs, device)
+    return inputs
 
 
 # ──────────────────────────── 精度验证 ─────────────────────────────────────────
@@ -127,8 +162,45 @@ def check_correctness(
 
         ref_f = ref_t.float()
         sol_f = sol_t.float()
+
+        ref_non_finite = ~torch.isfinite(ref_f)
+        if ref_non_finite.any().item():
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": f"输出[{i}] reference 包含 NaN/Inf: count={int(ref_non_finite.sum().item())}",
+            }
+
+        sol_non_finite = ~torch.isfinite(sol_f)
+        if sol_non_finite.any().item():
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": f"输出[{i}] solution 包含 NaN/Inf: count={int(sol_non_finite.sum().item())}",
+            }
+
         abs_diff = (ref_f - sol_f).abs()
         rel_diff = abs_diff / (ref_f.abs() + 1e-8)
+
+        abs_non_finite = ~torch.isfinite(abs_diff)
+        if abs_non_finite.any().item():
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": f"输出[{i}] abs_diff 包含 NaN/Inf: count={int(abs_non_finite.sum().item())}",
+            }
+
+        rel_non_finite = ~torch.isfinite(rel_diff)
+        if rel_non_finite.any().item():
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": f"输出[{i}] rel_diff 包含 NaN/Inf: count={int(rel_non_finite.sum().item())}",
+            }
 
         max_abs = max(max_abs, abs_diff.max().item())
         max_rel = max(max_rel, rel_diff.max().item())
@@ -234,17 +306,13 @@ def run_single_case(
         ref_model.eval()
         sol_model.eval()
 
-        inputs = get_inputs()
-        if device != "cpu":
-            inputs = [
-                x.to(device) if isinstance(x, torch.Tensor) else x
-                for x in inputs
-            ]
+        ref_inputs = _make_seeded_inputs(get_inputs, device)
+        sol_inputs = _make_seeded_inputs(get_inputs, device)
 
         # ── 正确性验证 ──
         with torch.no_grad():
-            ref_out = ref_model(*inputs)
-            sol_out = sol_model(*inputs)
+            ref_out = ref_model(*ref_inputs)
+            sol_out = sol_model(*sol_inputs)
 
         corr = check_correctness(ref_out, sol_out, rtol=rtol, atol=atol)
         result["correctness"] = corr["correct"]
@@ -266,15 +334,18 @@ def run_single_case(
         def sol_fn(*a):
             return sol_model(*a)
 
+        ref_perf_inputs = _make_seeded_inputs(get_inputs, device)
+        sol_perf_inputs = _make_seeded_inputs(get_inputs, device)
+
         with torch.no_grad():
             baseline = measure_latency(
-                ref_fn, inputs,
+                ref_fn, ref_perf_inputs,
                 warmup_runs=warmup_runs,
                 iterations=iterations,
                 num_trials=num_trials,
             )
             solution = measure_latency(
-                sol_fn, inputs,
+                sol_fn, sol_perf_inputs,
                 warmup_runs=warmup_runs,
                 iterations=iterations,
                 num_trials=num_trials,
