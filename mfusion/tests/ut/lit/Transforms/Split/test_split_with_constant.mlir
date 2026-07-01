@@ -62,9 +62,12 @@ func.func @test_split_with_bool_constant(%arg0: tensor<4x4xf32>, %arg1: tensor<4
 // Test no split with infinity constant
 // CHECK-LABEL: func @test_split_with_infinity_constant
 // CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0 {fusion_type = "dvm"}
+// CHECK-NEXT: ^bb0(%[[ARG1:.*]]: tensor<4x4xf32>):
 // CHECK: %[[CST:.*]] = mfuse.constant dense<0x7FF0000000000000> : tensor<f64, {is_scalar = ""}>
-// CHECK: %[[MUL:.*]] = mfuse.mul %arg0, %[[CST]]
-// CHECK: return %[[MUL]]
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[ARG1]], %[[CST]]
+// CHECK: mfuse.yield %[[MUL]]
+// CHECK: return %[[FUSED]]
 func.func @test_split_with_infinity_constant(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4x4xf32>) -> tensor<4x4xf32> {
   ^bb0(%arg1: tensor<4x4xf32>):
