@@ -892,7 +892,7 @@ IMPL_BINARY_OP_FUNCTION(LtOp, true)
 IMPL_BINARY_OP_FUNCTION(MaximumOp, false)
 IMPL_BINARY_OP_FUNCTION(MinimumOp, false)
 IMPL_BINARY_OP_FUNCTION(MulOp, false)
-IMPL_BINARY_OP_FUNCTION(NeOp, false)
+IMPL_BINARY_OP_FUNCTION(NeOp, true)
 IMPL_BINARY_OP_FUNCTION(PowOp, false)
 IMPL_BINARY_OP_FUNCTION(RealDivOp, false)
 IMPL_BINARY_OP_FUNCTION(SubOp, false)
@@ -935,6 +935,27 @@ mlir::FailureOr<mlir::Type> ReduceSumOp::inferSymbolicShapes(mlir::OpBuilder &bu
 }
 
 mlir::LogicalResult ReduceSumOp::verify() {
+  auto dimensions = getDimensions();
+  for (auto dimAttr : dimensions.getValue()) {
+    auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();
+    if (dim < 0) {
+      return emitOpError("dimensions must be non-negative, got ") << dim;
+    }
+  }
+  return mlir::success();
+}
+
+mlir::Type ReduceMaxOp::inferResultType(mlir::Value input, mlir::ArrayAttr dimensions, mlir::BoolAttr keepdim,
+                                        mlir::Type elementType) {
+  return ReduceOpCommonInfer::inferResultType(input, dimensions, keepdim, elementType);
+}
+
+mlir::FailureOr<mlir::Type> ReduceMaxOp::inferSymbolicShapes(mlir::OpBuilder &builder,
+                                                             const mlir::OperationState &state, mlir::Type resultType) {
+  return ReduceOpCommonInfer::inferSymbolicShapes(builder, state, resultType);
+}
+
+mlir::LogicalResult ReduceMaxOp::verify() {
   auto dimensions = getDimensions();
   for (auto dimAttr : dimensions.getValue()) {
     auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();

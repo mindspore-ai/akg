@@ -67,6 +67,10 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-layernorm", []() { return createFuseLayerNormPass(); }},
       {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
       {"fuse-num-to-tensor", []() { return createFuseNumToTensorPass(); }},
+      // Safe-softmax fusion must run last: it relies on all preceding fusion
+      // passes having completed so softmax producers are in their final form,
+      // and it creates its own mfuse.fused regions.
+      {"fuse-safe-softmax-dvm", []() { return createFuseSafeSoftmaxDvmPass(); }},
     };
 
     PassManager pm(&getContext());

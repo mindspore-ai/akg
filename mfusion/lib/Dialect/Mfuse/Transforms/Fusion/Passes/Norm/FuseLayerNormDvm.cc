@@ -16,8 +16,8 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNormDvm.h"
 
-#include "mfusion/Analysis/Split/FusionRegionTag.h"
-#include "mfusion/Analysis/Split/LayerNormDvmUtils.h"
+#include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
+#include "mfusion/Analysis/DvmFusion/LayerNorm/LayerNormDvmUtils.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
 #include "mfusion/Support/Logging.h"
@@ -128,7 +128,7 @@ struct FuseLayerNormDvmPass : public impl::FuseLayerNormDvmBase<FuseLayerNormDvm
   void runOnOperation() override {
     fusion_region::resetGroupIdAllocator();
     RewritePatternSet patterns(&getContext());
-    fusion_region::registerAllFusionRegionMatchers(patterns);
+    layernorm_dvm::registerLayerNormDvmRegionPatterns(patterns);
     if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
@@ -144,14 +144,6 @@ void registerLayerNormDvmRegionPatterns(RewritePatternSet &patterns) {
 }
 
 }  // namespace layernorm_dvm
-
-namespace fusion_region {
-
-void registerAllFusionRegionMatchers(RewritePatternSet &patterns) {
-  layernorm_dvm::registerLayerNormDvmRegionPatterns(patterns);
-}
-
-}  // namespace fusion_region
 
 std::unique_ptr<Pass> createFuseLayerNormDvmPass() { return std::make_unique<FuseLayerNormDvmPass>(); }
 
