@@ -2867,41 +2867,6 @@ static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferRe
   return success();
 }
 
-static LogicalResult buildTransferReadSizesAndStrides(int64_t memRefRank, int64_t vecRank,
-                                                      npuvector::NPUVectorType npuVecType, ValueRange dynamicSizes,
-                                                      ConversionPatternRewriter &rewriter,
-                                                      SmallVectorImpl<OpFoldResult> &sizes,
-                                                      SmallVectorImpl<OpFoldResult> &strides) {
-  for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
-    sizes.push_back(rewriter.getIndexAttr(1));
-    strides.push_back(rewriter.getIndexAttr(1));
-  }
-
-  const bool perAxis = static_cast<int64_t>(dynamicSizes.size()) == vecRank;
-  size_t compressedIdx = 0;
-  for (int64_t i = 0; i < vecRank; ++i) {
-    if (npuVecType.isDynamicDim(i)) {
-      if (perAxis) {
-        sizes.push_back(dynamicSizes[static_cast<unsigned>(i)]);
-      } else {
-        if (compressedIdx >= dynamicSizes.size()) {
-          return failure();
-        }
-        sizes.push_back(dynamicSizes[compressedIdx++]);
-      }
-    } else {
-      sizes.push_back(rewriter.getIndexAttr(npuVecType.getDimSize(i)));
-    }
-    strides.push_back(rewriter.getIndexAttr(1));
-  }
-
-  if (!perAxis && compressedIdx != dynamicSizes.size()) {
-    return failure();
-  }
-
-  return success();
-}
-
 static Value traceMemRefToRoot(Value v, int maxSteps = 32) {
   Value current = v;
   for (int i = 0; i < maxSteps; ++i) {
@@ -3236,6 +3201,96 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
   return success();
 }
 
+static LogicalResult collectTransferMappedDims(Operation *op, std::optional<AffineMap> permutationMap,
+                                               int64_t memRefRank, int64_t dataRank, PatternRewriter &rewriter,
+                                               SmallVectorImpl<int64_t> &mappedDims) {
+  mappedDims.clear();
+  if (dataRank > memRefRank) {
+    return rewriter.notifyMatchFailure(op, "permutation_map result rank exceeds source rank");
+  }
+
+  AffineMap map = permutationMap.value_or(AffineMap::getMinorIdentityMap(
+    static_cast<unsigned>(memRefRank), static_cast<unsigned>(dataRank), rewriter.getContext()));
+  if (map.getNumDims() != static_cast<unsigned>(memRefRank)) {
+    return rewriter.notifyMatchFailure(op, "permutation_map input rank must match source rank");
+  }
+  if (map.getNumSymbols() != 0) {
+    return rewriter.notifyMatchFailure(op, "permutation_map must not use symbols");
+  }
+  if (map.getNumResults() != static_cast<unsigned>(dataRank)) {
+    return rewriter.notifyMatchFailure(op, "permutation_map result rank must match data rank");
+  }
+
+  SmallVector<char> seenDims(static_cast<size_t>(memRefRank), false);
+  mappedDims.reserve(static_cast<size_t>(dataRank));
+  for (AffineExpr result : map.getResults()) {
+    auto dimExpr = dyn_cast<AffineDimExpr>(result);
+    if (!dimExpr) {
+      return rewriter.notifyMatchFailure(op, "permutation_map results must be source dimensions");
+    }
+    int64_t memRefDim = static_cast<int64_t>(dimExpr.getPosition());
+    if (memRefDim >= memRefRank) {
+      return rewriter.notifyMatchFailure(op, "permutation_map contains an out-of-range source dimension");
+    }
+    if (seenDims[static_cast<size_t>(memRefDim)]) {
+      return rewriter.notifyMatchFailure(op, "permutation_map contains duplicate source dimensions");
+    }
+    seenDims[static_cast<size_t>(memRefDim)] = true;
+    mappedDims.push_back(memRefDim);
+  }
+  return success();
+}
+
+static LogicalResult collectTransferReadMappedDims(npuvector::TransferReadOp op, int64_t memRefRank, int64_t dataRank,
+                                                   PatternRewriter &rewriter, SmallVectorImpl<int64_t> &mappedDims) {
+  if (failed(collectTransferMappedDims(op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter,
+                                       mappedDims))) {
+    return failure();
+  }
+  if (!llvm::is_sorted(mappedDims)) {
+    return rewriter.notifyMatchFailure(op, "transfer_read permutation_map mapped dims must be increasing");
+  }
+  return success();
+}
+
+static FailureOr<OpFoldResult> getNPUVectorDimSize(npuvector::NPUVectorType npuVecType, ValueRange dynamicSizes,
+                                                   int64_t dim, PatternRewriter &rewriter) {
+  if (npuVecType.isDynamicDim(dim)) {
+    auto dimVal = getNPUVectorDimFromDynamicSizes(npuVecType, dynamicSizes, dim);
+    if (failed(dimVal)) {
+      return failure();
+    }
+    return OpFoldResult(*dimVal);
+  }
+  return OpFoldResult(rewriter.getIndexAttr(npuVecType.getDimSize(dim)));
+}
+
+static LogicalResult buildTransferReadSizesAndStrides(npuvector::TransferReadOp op, int64_t memRefRank, int64_t vecRank,
+                                                      npuvector::NPUVectorType npuVecType, ValueRange dynamicSizes,
+                                                      ConversionPatternRewriter &rewriter,
+                                                      SmallVectorImpl<OpFoldResult> &sizes,
+                                                      SmallVectorImpl<OpFoldResult> &strides,
+                                                      SmallVectorImpl<int64_t> &mappedDims) {
+  if (failed(collectTransferReadMappedDims(op, memRefRank, vecRank, rewriter, mappedDims))) {
+    return failure();
+  }
+
+  sizes.clear();
+  strides.clear();
+  for (int64_t i = 0; i < memRefRank; ++i) {
+    sizes.push_back(rewriter.getIndexAttr(1));
+    strides.push_back(rewriter.getIndexAttr(1));
+  }
+  for (int64_t i = 0; i < vecRank; ++i) {
+    auto dimSize = getNPUVectorDimSize(npuVecType, dynamicSizes, i, rewriter);
+    if (failed(dimSize)) {
+      return failure();
+    }
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = *dimSize;
+  }
+  return success();
+}
+
 struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::TransferReadOp> {
   using OpConversionPattern<npuvector::TransferReadOp>::OpConversionPattern;
 
@@ -3267,8 +3322,9 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
       return rewriteRank0MemRefToVectorTransferRead(op, adaptor, source, npuVecType, dynamicSizes, rewriter);
     }
 
-    if (failed(
-          buildTransferReadSizesAndStrides(memRefRank, vecRank, npuVecType, dynamicSizes, rewriter, sizes, strides))) {
+    SmallVector<int64_t> mappedDims;
+    if (failed(buildTransferReadSizesAndStrides(op, memRefRank, vecRank, npuVecType, dynamicSizes, rewriter, sizes,
+                                                strides, mappedDims))) {
       return failure();
     }
 
@@ -3281,7 +3337,14 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
       return failure();
     }
     ArrayRef<int64_t> fs = fullTy.getShape();
-    SmallVector<int64_t> reducedShape(fs.begin() + (fs.size() - static_cast<size_t>(vecRank)), fs.end());
+    SmallVector<int64_t> reducedShape;
+    reducedShape.reserve(mappedDims.size());
+    for (int64_t memRefDim : mappedDims) {
+      if (memRefDim < 0 || static_cast<size_t>(memRefDim) >= fs.size()) {
+        return failure();
+      }
+      reducedShape.push_back(fs[static_cast<size_t>(memRefDim)]);
+    }
 
     Type subViewResultType =
       memref::SubViewOp::inferRankReducedResultType(reducedShape, memRefType, offsets, sizes, strides);
@@ -3347,38 +3410,8 @@ static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(npuvector::Transf
 
 static LogicalResult collectTransferWriteMappedDims(npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank,
                                                     PatternRewriter &rewriter, SmallVectorImpl<int64_t> &mappedDims) {
-  mappedDims.clear();
-  AffineMap permutationMap = op.getPermutationMap().value_or(AffineMap::getMinorIdentityMap(
-    static_cast<unsigned>(memRefRank), static_cast<unsigned>(dataRank), rewriter.getContext()));
-  if (permutationMap.getNumDims() != static_cast<unsigned>(memRefRank)) {
-    return rewriter.notifyMatchFailure(op, "permutation_map input rank must match transfer_write destination rank");
-  }
-  if (permutationMap.getNumSymbols() != 0) {
-    return rewriter.notifyMatchFailure(op, "permutation_map for transfer_write must not use symbols");
-  }
-  if (permutationMap.getNumResults() != static_cast<unsigned>(dataRank)) {
-    return rewriter.notifyMatchFailure(op, "permutation_map result rank must match transfer_write data rank");
-  }
-
-  SmallVector<char> seenDims(static_cast<size_t>(memRefRank), false);
-  mappedDims.clear();
-  mappedDims.reserve(static_cast<size_t>(dataRank));
-  for (AffineExpr result : permutationMap.getResults()) {
-    auto dimExpr = dyn_cast<AffineDimExpr>(result);
-    if (!dimExpr) {
-      return rewriter.notifyMatchFailure(op, "permutation_map results must be destination dimensions");
-    }
-    int64_t memRefDim = static_cast<int64_t>(dimExpr.getPosition());
-    if (memRefDim >= memRefRank) {
-      return rewriter.notifyMatchFailure(op, "permutation_map contains an out-of-range destination dimension");
-    }
-    if (seenDims[static_cast<size_t>(memRefDim)]) {
-      return rewriter.notifyMatchFailure(op, "permutation_map contains duplicate destination dimensions");
-    }
-    seenDims[static_cast<size_t>(memRefDim)] = true;
-    mappedDims.push_back(memRefDim);
-  }
-  return success();
+  return collectTransferMappedDims(op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter,
+                                   mappedDims);
 }
 
 static bool hasNonSuffixTransferWritePermutationMap(npuvector::TransferWriteOp op, int64_t memRefRank,
@@ -3442,17 +3475,11 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
     strides.push_back(rewriter.getIndexAttr(1));
   }
   for (int64_t i = 0; i < dataRank; ++i) {
-    OpFoldResult dimSize;
-    if (npuVecType.isDynamicDim(i)) {
-      auto dimVal = getNPUVectorDimFromDynamicSizes(npuVecType, dynamicSizes, i);
-      if (failed(dimVal)) {
-        return failure();
-      }
-      dimSize = *dimVal;
-    } else {
-      dimSize = rewriter.getIndexAttr(npuVecType.getDimSize(i));
+    auto dimSize = getNPUVectorDimSize(npuVecType, dynamicSizes, i, rewriter);
+    if (failed(dimSize)) {
+      return failure();
     }
-    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = dimSize;
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = *dimSize;
   }
   return success();
 }
