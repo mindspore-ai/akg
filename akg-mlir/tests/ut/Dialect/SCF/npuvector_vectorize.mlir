@@ -1,5 +1,7 @@
 // RUN: akg-opt %s --npuvector-vectorize --mlir-disable-threading --allow-unregistered-dialect | FileCheck %s
 
+// CHECK-DAG: #[[SKIP_MIDDLE_MAP:map[0-9]*]] = affine_map<(d0, d1, d2) -> (d0, d2)>
+
 // ============================================================================
 // 1. 1-D Elementwise static and dynamic
 // ============================================================================
@@ -692,6 +694,62 @@ func.func @test_multidim_elementwise_dynamic(
       %vc = arith.addf %va, %vb : f32
       memref.store %vc, %c[%i, %j] : memref<?x?xf32>
     } {vector=4096}
+  } {vector=4096}
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_multidim_elementwise_skip_middle_axis_static
+func.func @test_multidim_elementwise_skip_middle_axis_static(
+    %a: memref<4x8x16xf32>, %b: memref<4x8x16xf32>, %c: memref<4x8x16xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+
+  // CHECK: scf.for %[[J:.*]] =
+  // CHECK: %[[A_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}, %[[J]], %{{.*}}]{{.*}}, %{{.*}} {permutation_map = #[[SKIP_MIDDLE_MAP]]} : memref<4x8x16xf32>, !npuvector<4x16xf32>
+  // CHECK: %[[B_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}, %[[J]], %{{.*}}]{{.*}}, %{{.*}} {permutation_map = #[[SKIP_MIDDLE_MAP]]} : memref<4x8x16xf32>, !npuvector<4x16xf32>
+  // CHECK: %[[C_VEC:.*]] = arith.addf %[[A_VEC]], %[[B_VEC]] : !npuvector<4x16xf32>
+  // CHECK: npuvector.transfer_write %[[C_VEC]], %{{.*}}[%{{.*}}, %[[J]], %{{.*}}] {permutation_map = #[[SKIP_MIDDLE_MAP]]} : !npuvector<4x16xf32>, memref<4x8x16xf32>
+  scf.for %i = %c0 to %c4 step %c1 {
+    scf.for %j = %c0 to %c8 step %c1 {
+      scf.for %k = %c0 to %c16 step %c1 {
+        %va = memref.load %a[%i, %j, %k] : memref<4x8x16xf32>
+        %vb = memref.load %b[%i, %j, %k] : memref<4x8x16xf32>
+        %vc = arith.addf %va, %vb : f32
+        memref.store %vc, %c[%i, %j, %k] : memref<4x8x16xf32>
+      } {vector=16}
+    }
+  } {vector=4}
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_multidim_elementwise_skip_middle_axis_dynamic
+func.func @test_multidim_elementwise_skip_middle_axis_dynamic(
+    %a: memref<?x?x?xf32>, %b: memref<?x?x?xf32>, %c: memref<?x?x?xf32>,
+    %M: index, %N: index, %K: index) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  // CHECK: scf.for %[[J:.*]] =
+  // CHECK: npuvector.transfer_read %{{.*}}[%{{.*}}, %[[J]], %{{.*}}]{{.*}}, %{{.*}} {permutation_map = #[[SKIP_MIDDLE_MAP]]} : memref<?x?x?xf32>, !npuvector<?x?xf32>
+  // CHECK: npuvector.transfer_read %{{.*}}[%{{.*}}, %[[J]], %{{.*}}]{{.*}}, %{{.*}} {permutation_map = #[[SKIP_MIDDLE_MAP]]} : memref<?x?x?xf32>, !npuvector<?x?xf32>
+  // CHECK: arith.addf
+  // CHECK: npuvector.transfer_write %{{.*}}, %{{.*}}[%{{.*}}, %[[J]], %{{.*}}] {permutation_map = #[[SKIP_MIDDLE_MAP]]} : !npuvector<?x?xf32>, memref<?x?x?xf32>
+  scf.for %i = %c0 to %M step %c1 {
+    scf.for %j = %c0 to %N step %c1 {
+      scf.for %k = %c0 to %K step %c1 {
+        %va = memref.load %a[%i, %j, %k] : memref<?x?x?xf32>
+        %vb = memref.load %b[%i, %j, %k] : memref<?x?x?xf32>
+        %vc = arith.addf %va, %vb : f32
+        memref.store %vc, %c[%i, %j, %k] : memref<?x?x?xf32>
+      } {vector=4096}
+    }
   } {vector=4096}
   return
 }
