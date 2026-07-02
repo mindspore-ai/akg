@@ -19,15 +19,19 @@
 // CHECK-NEXT:    scf.for %arg4 = %c0 to %c1024 step %c128_0 {
 // CHECK-NEXT:      %c0_11 = arith.constant 0 : index
 // CHECK-NEXT:      %c128_12 = arith.constant 128 : index
-// CHECK-NEXT:      %cst_13 = arith.constant 0.000000e+00 : f32
-// CHECK-NEXT:      %4 = npuvector.transfer_read %alloc[%c0_11] [%c128_12] [%c128], %cst_13 : memref<128xf32>, !npuvector<128xf32>
+// CHECK-NEXT:      %c128_13 = arith.constant 128 : index
 // CHECK-NEXT:      %cst_14 = arith.constant 0.000000e+00 : f32
-// CHECK-NEXT:      %5 = npuvector.transfer_read %alloc_1[%c0_11] [%c128_12] [%c128], %cst_14 : memref<128xf32>, !npuvector<128xf32>
-// CHECK-NEXT:      %cst_15 = arith.constant 0.000000e+00 : f32
-// CHECK-NEXT:      %6 = npuvector.transfer_read %arg0[%arg4] [%c128_12] [%c128], %cst_15 : memref<1024xf32>, !npuvector<128xf32>
-// CHECK-NEXT:      %cst_16 = arith.constant 0.000000e+00 : f32
-// CHECK-NEXT:      %c128_17 = arith.constant 128 : index
-// CHECK-NEXT:      %7 = npuvector.transfer_read %arg1[%arg4] [%c128_17] [%c128], %cst_16 : memref<1024xf32>, !npuvector<128xf32>
+// CHECK-NEXT:      %4 = npuvector.transfer_read %alloc[%c0_11] [%c128_12] [%c128_13], %cst_14 : memref<128xf32>, !npuvector<128xf32>
+// CHECK-NEXT:      %c128_15 = arith.constant 128 : index
+// CHECK-NEXT:      %c128_16 = arith.constant 128 : index
+// CHECK-NEXT:      %cst_17 = arith.constant 0.000000e+00 : f32
+// CHECK-NEXT:      %5 = npuvector.transfer_read %alloc_1[%c0_11] [%c128_15] [%c128_16], %cst_17 : memref<128xf32>, !npuvector<128xf32>
+// CHECK-NEXT:      %cst_18 = arith.constant 0.000000e+00 : f32
+// CHECK-NEXT:      %c128_19 = arith.constant 128 : index
+// CHECK-NEXT:      %6 = npuvector.transfer_read %arg0[%arg4] [%c128_19] [%c128], %cst_18 : memref<1024xf32>, !npuvector<128xf32>
+// CHECK-NEXT:      %cst_20 = arith.constant 0.000000e+00 : f32
+// CHECK-NEXT:      %c128_21 = arith.constant 128 : index
+// CHECK-NEXT:      %7 = npuvector.transfer_read %arg1[%arg4] [%c128_21] [%c128], %cst_20 : memref<1024xf32>, !npuvector<128xf32>
 // CHECK-NEXT:      %8 = arith.mulf %6, %7 : !npuvector<128xf32>
 // CHECK-NEXT:      %9 = arith.mulf %6, %6 : !npuvector<128xf32>
 // CHECK-NEXT:      %10 = arith.addf %4, %8 {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<128xf32>
