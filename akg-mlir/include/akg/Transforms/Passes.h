@@ -35,7 +35,7 @@ namespace mlir {
 
 std::unique_ptr<Pass> createLoadGlobalConfigPass(const std::string &fileName);
 std::unique_ptr<Pass> createLoadGlobalConfigPass();
-std::unique_ptr<Pass> createDumpShapeInfoPass(const std::string &fileName);
+std::unique_ptr<Pass> createDumpShapeInfoPass(const std::string &outputPath, const std::string &fileName);
 std::unique_ptr<Pass> createDumpShapeInfoPass();
 std::unique_ptr<Pass> createCopyAttributesToGpuPass();
 std::unique_ptr<Pass> createPromoteTempBufferPass();

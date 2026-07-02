@@ -302,10 +302,11 @@ namespace {
 /// symbol of the cubin accessor function.
 class KernelOutliningExt : public mlir::impl::GpuKernelOutliningExtBase<KernelOutliningExt> {
  public:
-  explicit KernelOutliningExt(StringRef dlStr) {
+  explicit KernelOutliningExt(StringRef dlStr, const std::string &path) {
     if (!dlStr.empty() && !dataLayoutStr.hasValue()) {
       dataLayoutStr = dlStr.str();
     }
+    outputPath = path;
   }
 
   KernelOutliningExt(const KernelOutliningExt &other)
@@ -411,8 +412,8 @@ class KernelOutliningExt : public mlir::impl::GpuKernelOutliningExtBase<KernelOu
       }
       return WalkResult::advance();
     });
-    (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
-    std::string output_filename = "./akg_kernel_meta/" + kernelName + "_shape_arg.txt";
+    (void)IOHelper::CheckOrCreateDirectory(outputPath);
+    std::string output_filename = outputPath + "/" + kernelName + "_shape_arg.txt";
     if (llvm::writeToOutput(output_filename, [&j](llvm::raw_ostream &OS) -> llvm::Error {
           OS << j.dump();
           return llvm::Error::success();
@@ -509,7 +510,7 @@ class KernelOutliningExt : public mlir::impl::GpuKernelOutliningExtBase<KernelOu
 }  // namespace
 
 namespace mlir {
-std::unique_ptr<OperationPass<ModuleOp>> createGpuKernelOutliningExt(StringRef dataLayoutStr) {
-  return std::make_unique<KernelOutliningExt>(dataLayoutStr);
+std::unique_ptr<OperationPass<ModuleOp>> createGpuKernelOutliningExt(const std::string &path, StringRef dataLayoutStr) {
+  return std::make_unique<KernelOutliningExt>(dataLayoutStr, path);
 }
 }  // namespace mlir
