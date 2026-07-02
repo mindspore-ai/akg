@@ -126,9 +126,9 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp 
   if (elementType.isF64()) {
     double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
-    if (!std::isfinite(value) || value < -kMaxFloat || value > kMaxFloat) {
+    if (std::isfinite(value) && (value < -kMaxFloat || value > kMaxFloat)) {
       return op->emitError() << "cannot convert f64 scalar constant to f32 for " << errorContext
-                             << ": value is not finite or is out of range";
+                             << ": finite value is out of range";
     }
     auto f32Type = Float32Type::get(op.getContext());
     return cast<TypedAttr>(FloatAttr::get(f32Type, static_cast<float>(value)));

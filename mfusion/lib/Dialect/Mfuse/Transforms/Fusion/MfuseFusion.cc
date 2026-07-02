@@ -62,6 +62,7 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-batchmatmul-to-mul", []() { return createFuseBatchMatMulToMulPass(); }},
       {"fuse-matmul-reshape-bias-add", []() { return createFuseMatmulReshapeBiasAddPass(); }},
       {"fuse-gelu", []() { return createFuseGeluPass(); }},
+      {"fuse-logical-not-compare", []() { return createFuseLogicalNotComparePass(); }},
       // RmsNorm is fused on Torch dialect (torch-fusion) before convert-torch-to-mfuse.
       // fuse-addrmsnorm can then fold adjacent add ops with the resulting aclnn.rms_norm.
       {"fuse-addrmsnorm", []() { return createFuseAddRmsNormPass(); }},

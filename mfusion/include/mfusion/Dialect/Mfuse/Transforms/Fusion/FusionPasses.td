@@ -108,6 +108,27 @@ def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// FuseLogicalNotCompare pass
+//===----------------------------------------------------------------------===//
+
+def FuseLogicalNotCompare : Pass<"fuse-logical-not-compare", "::mlir::ModuleOp"> {
+  let summary = "Fold logical_not(compare(x, y)) into the opposite comparison";
+  let description = [{
+    Rewrites logical_not over comparison ops into the opposite comparison:
+    eq<->ne always, and gt<->le / ge<->lt only when operands are provably
+    NaN-free. In practice this includes integer/index operands and floating-point
+    constants that can be shown not to contain NaN. External floating-point
+    inputs are left unchanged unless their defining ops prove they are NaN-free,
+    so IEEE 754 NaN semantics are preserved.
+  }];
+  let constructor = "mlir::mfuse::createFuseLogicalNotComparePass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // MatMul fusion passes
 //===----------------------------------------------------------------------===//
 
