@@ -167,19 +167,19 @@ bool CceWrapper::LoadMsprof() {
   return true;
 }
 
-void *CceWrapper::FindMsprofSymbol(const char *symbol) {
-  void *func = dlsym(RTLD_DEFAULT, symbol);
+void *CceWrapper::FindMsprofSymbol(const std::string symbol) {
+  void *func = dlsym(RTLD_DEFAULT, symbol.c_str());
   if (func != nullptr) {
     return func;
   }
   for (void *handle_ptr : msprof_handles_) {
-    func = dlsym(handle_ptr, symbol);
+    func = dlsym(handle_ptr, symbol.c_str());
     if (func != nullptr) {
       return func;
     }
   }
   if (ascendcl_handle_ != nullptr) {
-    func = dlsym(ascendcl_handle_, symbol);
+    func = dlsym(ascendcl_handle_, symbol.c_str());
   }
   return func;
 }
