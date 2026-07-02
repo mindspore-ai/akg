@@ -22,6 +22,12 @@ profile_settings:
 # Verification configuration
 verify_timeout: 600  # Timeout for verification in seconds (default 5 minutes)
 
+# CodeChecker non-blocking Triton diagnostics
+code_diagnostic_checker:
+  enabled: true
+  only_errors: true
+  dedup: true
+
 # Multi-case testing configuration
 enable_multi_case_verification: false  # Master switch for multi-case verification (set to false to only generate space_config without verification)
 enable_hint_mode: false  # Enable hint mode (user provides @hint, Designer generates space_config)

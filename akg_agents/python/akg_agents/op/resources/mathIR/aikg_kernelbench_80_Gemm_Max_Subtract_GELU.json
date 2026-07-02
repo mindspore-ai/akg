@@ -1,0 +1,143 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": ["channel_max"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, 权重 W_gemm ∈ R^{O×I}, 偏置 B_gemm ∈ R^{O}。Y1 ∈ R^{N×O}: Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i]。本题 N=128, I=512, O=1024。",
+        "boundary_treatment": "全连接 GEMM，无空间边界；bias 加在 o 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "512", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(512, 1024) 在 eval 模式 forward。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=I=512，ε_total ≈ 1.2e-7·sqrt(512)·10 ≈ 2.7e-5；步骤 2，参考 nn.Linear → cuBLAS TF32，rtol=atol=max(2.7e-5, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) shape=(128,1024)；(b) bias 在 o 维；(c) 小尺寸 (2,4)→(2,8) 对拍。失败诊断：(i) 1e-4~1e-3 误差 → cuBLAS TF32，放宽；(ii) 远超 1e-3 → W 转置；(iii) 列偏移 → bias 错位。"
+      },
+      {
+        "name": "channel_max",
+        "next_expressions": ["submean_gelu_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}。沿 dim=1 取最大并 keepdim：Y2[n,0] = max_{o=0}^{O-1} Y1[n,o]，得 Y2 ∈ R^{N×1}。本题 N=128, O=1024。",
+        "boundary_treatment": "在完整 O=1024 维上 max；keepdim=True 保留维 1；torch.max(.,dim,keepdim=True).values 取 values。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.channel_max.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y2(n, 0) = Y2_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.max(Y1, dim=1, keepdim=True).values。精度模式：纯比较型 max reduction，IEEE fp32 bitwise。rtol/atol 推导：步骤 1，ε_op=0，K 不适用，取下限 rtol_base=atol_base=1e-6；步骤 2，不触发；步骤 3，不触发。最终单 expression rtol=atol=1e-6；整链路含上游 cuBLAS 时整体 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) shape=(128,1)；(b) 每个 Y2[n,0]=max(Y1[n,:])；(c) 验证 .values 而非 .indices；(d) 小尺寸手算对拍。失败诊断：(i) shape=(128,) → keepdim 丢；(ii) 出现整数 → 取了 indices；(iii) 偏小 → 取了 min。"
+      },
+      {
+        "name": "submean_gelu_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×1}。先沿 dim=1 求均值 keepdim：m[n,0] = (1/1) · Σ_{o=0}^{0} Y2[n,o] = Y2[n,0]（注意维数 1 上均值等于本身）。然后减去均值：Z[n,0] = Y2[n,0] - m[n,0] = 0。再做 GELU (精确 erf 实现): Y[n,0] = C_half · Z[n,0] · (1 + erf(Z[n,0] / C_sqrt2)) = 0.5 · 0 · (1 + erf(0)) = 0。即对本题 Y 恒为 0。但语义上仍需如实执行：Y[n,0] = 0.5·(Y2[n,0]-mean(Y2[n,:]))·(1 + erf((Y2[n,0]-mean(Y2[n,:]))/sqrt(2)))。本题 N=128。",
+        "boundary_treatment": "维数 1 上求 mean 退化为该值本身；减自身得 0；GELU(0)=0。整个 expression 在本题特定 shape 下恒输出 0，但要按一般公式实现以保证 PyTorch 数值一致。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, 1)", "binding": "static", "value": "1" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.channel_max.output",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y2(n, 0) = Y2_ptr + n"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 (Y2 - Y2.mean(dim=1, keepdim=True)) 接 torch.nn.functional.gelu(approximate='none')。精度模式：纯逐元素运算，IEEE fp32；erf 调用 libdevice 约 1 ULP 误差。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=1（dim=1 size=1 reduction），ε_total ≈ 1.2e-6，取 rtol_base=atol_base=1e-6；步骤 2，不走 cuDNN/cuBLAS，不触发；步骤 3，不触发。最终单 expression rtol=atol=1e-6（理论上输出恒为 0，对拍可直接 atol=1e-6），整链路 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,1)；(b) 由于 dim=1 size=1，期望 Y 全部恒等于 0（可作为强检查）；(c) 验证 GELU 使用精确 erf 默认实现；(d) 单独验证 mean(.,dim=1,keepdim=True) 在 size=1 维返回本身。失败诊断：(i) Y 不全为 0 → mean dim 写错（如沿 dim=0 求 mean 不再退化）；(ii) shape=(128,) → keepdim 丢失；(iii) GELU 用了 tanh 近似 → 与 PyTorch 默认精确版不一致。"
+      }
+    ]
+  }
+}

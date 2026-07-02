@@ -1,0 +1,179 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": ["batchnorm_scale_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, 权重 W_gemm ∈ R^{O×I}, 偏置 B_gemm ∈ R^{O}。Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i]·W_gemm[o,i]。本题 N=128, I=1024, O=512。",
+        "boundary_treatment": "全连接 GEMM，无空间边界；bias 加在 o 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024, 512) eval forward。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=I=1024，ε_total ≈ 1.2e-7·sqrt(1024)·10 ≈ 3.8e-5；步骤 2，参考 nn.Linear → cuBLAS TF32，rtol=atol=max(3.8e-5, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3。主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) shape=(128,512)；(b) bias 加在 o 维；(c) 小尺寸对拍。失败诊断：(i) 1e-4~1e-3 误差 → cuBLAS TF32，放宽；(ii) 远超 1e-3 → W 转置错；(iii) 列偏移 → bias 错位。"
+      },
+      {
+        "name": "batchnorm_scale_fused",
+        "next_expressions": ["softmax"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "running_mean", "kind": "tensor" },
+          { "name": "running_var", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "scale", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}, BatchNorm1d 参数 running_mean μ ∈ R^{O}, running_var σ² ∈ R^{O}, gamma, beta ∈ R^{O}, eps=1e-5; scale ∈ R^{1}（标量参数）。BatchNorm1d 在 eval 模式：Z[n,o] = gamma[o]·(Y1[n,o]-μ[o])/sqrt(σ²[o]+eps) + beta[o]。然后乘 scale：Y2[n,o] = scale[0] · Z[n,o]。本题 N=128, O=512。融合 BatchNorm + 标量乘（无 reduction）。",
+        "boundary_treatment": "eval 模式使用 running_*；scale 是 shape=(1,) 标量广播；eps 加在 sqrt 内。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          },
+          "running_mean": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_mean",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_running_mean(o) = running_mean_ptr + o"
+          },
+          "running_var": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_var",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_running_var(o) = running_var_ptr + o"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(o) = gamma_ptr + o"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(o) = beta_ptr + o"
+          },
+          "scale": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.scale",
+            "layout": "(1)",
+            "stride": "(1)",
+            "address_mapping": "addr_scale(0) = scale_ptr"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.batchnorm_scale_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y2(n, o) = Y2_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.BatchNorm1d(512, eps=1e-5) eval 接 self.scale 标量乘。精度模式：纯逐元素 FMA + rsqrt，IEEE fp32。rtol/atol 推导：步骤 1，K=1，ε_op=1.2e-7，ε_total≈1.2e-6，取 rtol_base=atol_base=1e-6；步骤 2，nn.BatchNorm1d 在 eval 模式 ATen 实现，可能调用 cuDNN inference，参考路径可能有 TF32 影响。保险起见 rtol=atol=max(1e-6, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3。主导因素是步骤 2 BatchNorm cuDNN 参考路径。结构性检查：(a) shape=(128,512)；(b) eval 模式 BN；(c) 单通道手算 gamma·(z-μ)/sqrt(var+eps)+beta 然后乘 scale；(d) scale.shape=(1,) 验证标量广播。失败诊断：(i) NaN → eps 漏；(ii) 量级与 scale 不符 → scale 索引错；(iii) train 模式偏差 → 用了 batch 统计。"
+      },
+      {
+        "name": "softmax",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×O}。沿 dim=1 做 softmax，使用数值稳定的 max-subtraction trick：先求行最大 m[n] = max_{o} Y2[n,o]；再 e[n,o] = exp(Y2[n,o] - m[n])；再行和 s[n] = Σ_{o=0}^{O-1} e[n,o]；最后 Y[n,o] = e[n,o] / s[n]。本题 N=128, O=512。Softmax 包含 max-reduce、sum-reduce 与 exp/div 逐元素，但作为单一语义 softmax 视为一个 expression。",
+        "boundary_treatment": "在完整 dim=1 上做 reduction；exp 输入已经减去 max 避免上溢；s ≥ 1（至少有一个 e=1 项）避免除零。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "k", "range": "[0, O)", "binding": "static", "value": "512", "reduction_type": "softmax", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.batchnorm_scale_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y2(n, o) = Y2_ptr + n*O + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.Softmax(dim=1)。精度模式：手写 FMA + fp32 累加器，exp 调用 libdevice 约 1 ULP，IEEE fp32。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=O=512，ε_total ≈ 1.2e-7·sqrt(512)·10 ≈ 2.7e-5；步骤 2，softmax 不走 cuDNN/cuBLAS，不触发；步骤 3，softmax 输出 ∈ (0, 1) 且行和=1，量级稳定，不触发。最终单 expression rtol=atol=3e-5，整链路含上游 cuDNN/cuBLAS 时 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) shape=(128,512)；(b) 每一行 Σ_o Y[n,o] = 1（允许 1e-5 误差）；(c) 每个 Y[n,o] ∈ (0, 1)；(d) 必须先减 max；(e) 小尺寸对拍。失败诊断：(i) 行和远离 1 → 没归一化或 sum 错；(ii) NaN → 没减 max 导致 exp 上溢；(iii) 输出 sign 错 → 维度选错（沿 dim=0 而非 dim=1）。"
+      }
+    ]
+  }
+}

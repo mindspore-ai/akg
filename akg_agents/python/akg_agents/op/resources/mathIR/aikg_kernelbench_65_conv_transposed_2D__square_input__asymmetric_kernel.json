@@ -1,0 +1,107 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对于 n ∈ [0, 7], o ∈ [0, 63], i ∈ [0, 513], j ∈ [0, 517] : Y[n, o, i, j] = Σ_{c=0}^{63} Σ_{kh=0}^{2} Σ_{kw=0}^{6} ( W[c, o, kh, kw] * X[n, c, i - kh, j - kw] )，其中当 i - kh < 0 或 i - kh >= 512 或 j - kw < 0 或 j - kw >= 512 时，X[n, c, i - kh, j - kw] 取 0。",
+        "boundary_treatment": "padding=0，无显式边界填充。输出尺寸由转置卷积公式计算：H_out = (512 - 1)*1 - 2*0 + 1*(3 - 1) + 0 + 1 = 514，W_out = (512 - 1)*1 - 2*0 + 1*(7 - 1) + 0 + 1 = 518。output_padding=0 不增加额外单侧尺寸。在计算 Y 时，对于每个输出位置 (i,j) 和每个卷积核偏移 (kh,kw)，如果计算得到的输入索引 (i - kh, j - kw) 超出 X 的有效索引范围 [0, 511]×[0, 511]，则对应的乘积累加项贡献为 0（隐式零填充）。没有输出裁剪。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, 514)",
+              "binding": "static",
+              "value": "514"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 518)",
+              "binding": "static",
+              "value": "518"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 7)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(8, 64, 512, 512)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "n * 16777216 + c * 262144 + h * 512 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose2d.weight",
+            "layout": "(64, 64, 3, 7)",
+            "stride": "(1344, 21, 7, 1)",
+            "address_mapping": "c * 1344 + o * 21 + kh * 7 + kw",
+            "unpack_hint": "ConvTranspose2d.weight 维度顺序为 (in_channels, out_channels, kernel_height, kernel_width)，与常规 Conv2d 的 (out_channels, in_channels, ...) 相反，注意地址映射中第一维为 in_channels。"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(8, 64, 514, 518)",
+            "stride": "(17040128, 266252, 518, 1)",
+            "address_mapping": "n * 17040128 + o * 266252 + i * 518 + j"
+          }
+        },
+        "TDD_requirement": "以 PyTorch eager 模式输出为参考进行数值对拍。重点验证输出形状 (8,64,514,518) 是否正确；验证边界位置（i<2 或 i>511 等导致的负索引或越界索引）的隐式零填充行为是否与 PyTorch 一致；确保多 batch 和多通道间的独立性。建议先用小尺寸（如 batch=1, in_channels=2, out_channels=3, H=4, W=5, kernel_size=(2,3)）冒烟测试，检查越界处理；再使用原始尺寸 (8,64,512,512) 全量对拍。容忍值可设为 fp32 相对误差 1e-5。"
+      }
+    ]
+  }
+}

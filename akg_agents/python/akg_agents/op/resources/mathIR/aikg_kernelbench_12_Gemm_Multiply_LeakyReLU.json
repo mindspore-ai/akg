@@ -1,0 +1,70 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_multiply_leakyrelu_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" },
+          { "name": "multiplier", "kind": "scalar" },
+          { "name": "negative_slope", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}，权重 W_gemm ∈ R^{O×I}，偏置 B_gemm ∈ R^{O}，N=128, I=1024, O=512。第一步 Linear: Z1[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]。第二步逐元素乘以 multiplier (=2.0): Z2[n,o] = Z1[n,o] · multiplier。第三步 LeakyReLU(negative_slope=0.1): Y[n,o] = Z2[n,o] if Z2[n,o] > 0 else negative_slope · Z2[n,o]，即 Y[n,o] = max(Z2[n,o], 0) + negative_slope · min(Z2[n,o], 0)，等价于 Y[n,o] = Z2[n,o] · (1 if Z2[n,o]>0 else negative_slope)。该 expression 融合 GEMM + scalar 乘法 + LeakyReLU 三步逐元素后操作。",
+        "boundary_treatment": "全连接逐元素链，无空间边界；LeakyReLU 在 0 处 piecewise，0 处取右极限（PyTorch 把 x=0 归到 x ≥ 0 分支，结果为 0）。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "multiplier": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.multiplier (= 2.0)"
+          },
+          "negative_slope": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.leaky_relu.negative_slope (= 0.1)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024,512) -> mul(2.0) -> nn.LeakyReLU(0.1) 的前向输出，eval 模式。精度模式：核心是 GEMM，参考是 nn.Linear (cuBLAS) 通常在 A100 默认 TF32；本 kernel 若走 tl.dot 必须显式声明 input_precision='tf32' 与参考匹配，或 'ieee'/'tf32x3' 更严格；不走 tl.dot 时手写 FMA + fp32 累加器，IEEE fp32 语义。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7（fp32 FMA），K = I = 1024，ε_total ≈ 1.2e-7·sqrt(1024) = 3.84e-6，加 10x 余量 rtol_base = atol_base = 4e-5；步骤 2（cuBLAS 修正，关键）参考是 nn.Linear，走 cuBLAS，A100 默认 TF32，参考自身 ~1e-3 截断误差，rtol = atol = max(4e-5, 1e-3) = 1e-3；步骤 3（量级修正）后置仅乘 2.0 与 LeakyReLU（保留范围），不显著放大量级，不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,512)；(b) Y 的负值部分必须等于 (negative_slope × Z2) 区域，斜率比为 0.1；(c) Y 非负部分 = Z2；(d) 验证 multiplier 在 LeakyReLU 之前生效。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuBLAS TF32 主导，正常；(ii) Y 负区域斜率不是 0.1 → negative_slope 参数错；(iii) 整体放大或缩小固定倍 → multiplier 顺序错或没乘；(iv) 整体不对 → W^T 与 W 混淆（PyTorch nn.Linear: y = x·W^T + b，W shape (O,I)）。"
+      }
+    ]
+  }
+}

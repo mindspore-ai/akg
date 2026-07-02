@@ -1,0 +1,162 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["leaky_relu_multiply_leaky_relu_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 D_out = (D_in-1)*S-2P+K_d+OP = (16-1)*2-2+3+1 = 32，H_out = W_out = (32-1)*2-2+3+1 = 64。Y1[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i,k_d,k_h,k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，三者必须能被 S 整除且落在合法输入范围内。本题 N=16, C_in=16, C_out=32, D_in=16, H_in=W_in=32, K_d=K_h=K_w=3。",
+        "boundary_treatment": "仅当反推 (d_i,h_i,w_i) 均为整数且落在 [0,D_in)×[0,H_in)×[0,W_in) 内时累加；output_padding=1 使 D/H/W 各加 1。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "32" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "32" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "64" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "16", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 16, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (262144, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*262144 + c_i*16384 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (16, 32, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (864, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*864 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ 转置卷积 3D 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (32)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 32, 32, 64, 64)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (4194304, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*4194304 + c_o*131072 + d_o*4096 + h_o*64 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.ConvTranspose3d(16,32,3,stride=2,padding=1,output_padding=1) 前向，eval 模式。精度模式：手写 FMA + fp32 累加器，IEEE fp32；走 tl.dot 需 input_precision='ieee' 或 'tf32x3'。容忍值推导：步骤 1 ε_op = 1.2e-7，K = C_in × K_d × K_h × K_w = 16×27 = 432，ε_total ≈ 1.2e-7 × sqrt(432) ≈ 2.5e-6，留 10x = 2.5e-5；步骤 2（关键）参考含 nn.ConvTranspose3d → cuDNN/TF32，rtol = atol = max(2.5e-5, 1e-3) = 1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导是步骤 2。结构性检查：(a) shape=(16,32,32,64,64)，公式 (D_in-1)*S-2P+K+OP；(b) weight 解包顺序；(c) 边界点 d_o=0/31, h_o=0/63 单独对拍。失败诊断：(i) 误差 ~1e-4~1e-3 → TF32 主导，不是 bug；(ii) 极大误差 → weight 反序。"
+      },
+      {
+        "name": "leaky_relu_multiply_leaky_relu_fused",
+        "next_expressions": ["maxpool3d_op"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "M_mult", "kind": "tensor" },
+          { "name": "neg_slope", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "对 Y1 ∈ R^{N×C×D×H×W} = R^{16×32×32×64×64}，先做 LeakyReLU：Z1[n,c,d,h,w] = Y1>0 ? Y1 : neg_slope·Y1（neg_slope=0.2）；再乘以可学习参数 M_mult ∈ R^{C×1×1×1}，按 PyTorch 广播：Z2[n,c,d,h,w] = Z1[n,c,d,h,w] · M_mult[c,0,0,0]；再做 LeakyReLU：Y2[n,c,d,h,w] = Z2>0 ? Z2 : neg_slope·Z2。该 expression 融合两次 LeakyReLU 与乘法。",
+        "boundary_treatment": "全部为逐元素操作，无空间边界处理；广播将 M_mult 沿 N/D/H/W 复制。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "32" },
+            { "symbol": "d", "range": "[0, D)", "binding": "static", "value": "32" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "64" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "64" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C, D, H, W) = (16, 32, 32, 64, 64)",
+            "stride": "(4194304, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y1(n, c, d, h, w) = Y1_ptr + n*4194304 + c*131072 + d*4096 + h*64 + w"
+          },
+          "M_mult": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.multiplier",
+            "layout": "(C, 1, 1, 1) = (32, 1, 1, 1)",
+            "stride": "(1, 1, 1, 1)",
+            "address_mapping": "addr_M_mult(c, 0, 0, 0) = M_mult_ptr + c"
+          },
+          "neg_slope": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.leaky_relu.negative_slope (= 0.2)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.leaky_relu_multiply_leaky_relu_fused.output",
+            "layout": "(N, C, D, H, W) = (16, 32, 32, 64, 64)",
+            "stride": "(4194304, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y2(n, c, d, h, w) = Y2_ptr + n*4194304 + c*131072 + d*4096 + h*64 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：nn.LeakyReLU(0.2) → 乘 self.multiplier → nn.LeakyReLU(0.2)，eval 模式。精度模式：纯逐元素 FMA，IEEE fp32 语义。容忍值推导：步骤 1 ε_op = 1.2e-7，K=1，ε_total = 1.2e-7，留 10x = 1.2e-6；步骤 2 不触发；步骤 3 不触发；上游 Y1 含 cuDNN 影响传播，最终 rtol = atol = max(1.2e-6, 1e-3) = 1e-3。最终 **rtol = atol = 1e-3**，主导因素是步骤 2（来自上游 conv-transpose）。结构性检查：(a) shape 保持；(b) negative_slope=0.2 验证 (Y2/Z2 在负区 ≈ 0.2)；(c) multiplier 广播沿 c 维。失败诊断：(i) 误差 ~1e-3 → 上游传播；(ii) 负值不衰减 → leaky_relu 缺失或 slope=0；(iii) 通道乘错维 → multiplier 广播维错。"
+      },
+      {
+        "name": "maxpool3d_op",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "对 Y2 ∈ R^{N×C×D×H×W} = R^{16×32×32×64×64}，做 MaxPool3d(kernel_size=2, stride=2)：Y[n,c,d,h,w] = max_{δ_d,δ_h,δ_w∈[0,2)} Y2[n,c,2*d+δ_d,2*h+δ_h,2*w+δ_w]。输出 D_out=16, H_out=W_out=32。",
+        "boundary_treatment": "PyTorch MaxPool3d 默认 ceil_mode=False，输出尺寸 = floor((In-K)/S)+1 = (D-2)/2+1 = 16, 32, 32；无空区域。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "32" },
+            { "symbol": "d", "range": "[0, D_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "32" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "32" }
+          ],
+          "reduction": [
+            { "symbol": "δ_d", "range": "[0, 2)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δ_h", "range": "[0, 2)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δ_w", "range": "[0, 2)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.leaky_relu_multiply_leaky_relu_fused.output",
+            "layout": "(N, C, D, H, W) = (16, 32, 32, 64, 64)",
+            "stride": "(4194304, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y2(n, c, d_in, h_in, w_in) = Y2_ptr + n*4194304 + c*131072 + d_in*4096 + h_in*64 + w_in"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, D_out, H_out, W_out) = (16, 32, 16, 32, 32)",
+            "stride": "(C*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (524288, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*524288 + c*16384 + d*1024 + h*32 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.MaxPool3d(kernel_size=2) 作用于 Y2。精度模式：纯比较型 reduction，无浮点误差。容忍值推导：步骤 1 纯比较型 ε_op=0，rtol_base = atol_base = 1e-6；步骤 2 不触发；步骤 3 不触发；上游含 cuDNN 影响传播，rtol = atol = max(1e-6, 1e-3) = 1e-3。最终 **rtol = atol = 1e-3**，主导是来自上游 conv-transpose 的 TF32 传播；若仅看本 expression 数值忠实度，可放紧到 1e-6。结构性检查：(a) shape=(16,32,16,32,32)；(b) 输出值必须等于上游 Y2 在 2×2×2 窗口最大值。失败诊断：(i) 误差 ~1e-3 → 来自上游传播；(ii) shape 错 → ceil_mode 错配；(iii) 大误差且与 PyTorch 显著不同 → 索引或步长错。"
+      }
+    ]
+  }
+}

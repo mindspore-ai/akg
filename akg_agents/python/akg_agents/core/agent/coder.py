@@ -21,9 +21,10 @@ warnings.warn(
     stacklevel=2,
 )
 
+import json
 import logging
 import re
-from typing import Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 from pathlib import Path
 from akg_agents.op.database.coder_database import CoderDatabase
 from akg_agents.op.utils.triton_ascend_api_docs import (
@@ -37,6 +38,14 @@ from akg_agents import get_project_root
 from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
 
 logger = logging.getLogger(__name__)
+
+
+class CoderMode:
+    """Internal generation modes used by MathIR multi-expression orchestration."""
+
+    SUB_EXPR_GEN = "sub_expr_gen"
+    SUB_EXPR_REPAIR = "sub_expr_repair"
+    COMBINE = "combine"
 
 
 @register_agent
@@ -106,8 +115,13 @@ class Coder(AgentBase):
         else:
             self.func_name = f"{self.op_name}_{self.dsl}_{self.framework}"
 
+        backend_prompt_vars = self._build_backend_prompt_vars()
+
         # 初始化coder生成模板
         self.coder_prompt = self.load_template("coder/codegen.j2")
+        self.coder_sub_expr_prompt = self.load_template("coder/codegen_expr_gen.j2")
+        self.coder_sub_expr_repair_prompt = self.load_template("coder/codegen_expr_repair.j2")
+        self.coder_combine_prompt = self.load_template("coder/codegen_expr_combine.j2")
         self.api_docs_prompt = self.load_template("utils/api_gen_template.j2")
         self.user_examples_prompt = self.load_template("utils/examples_compression_template.j2")
 
@@ -125,6 +139,7 @@ class Coder(AgentBase):
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
             "expert_suggestion_debug": self.load_doc("suggestion_docsdebug.md"),
+            "mathir_lowering_docs": self.load_doc("mathir_lowering_docs.md"),
             "backend": self.backend,
 
             # 可选参数
@@ -134,6 +149,7 @@ class Coder(AgentBase):
             # 跨后端转换参数
             "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
             "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
+            **backend_prompt_vars,
         }
         ## 添加详细算子信息
         try:
@@ -176,6 +192,43 @@ class Coder(AgentBase):
                 arch=self.arch,
             )
         return self.base_doc["api_docs"]
+
+    def _build_backend_prompt_vars(self) -> Dict[str, Any]:
+        """Build normalized backend variables used by multi-expression prompts."""
+        backend_lower = (self.backend or "").lower()
+        dsl_lower = (self.dsl or "").lower()
+        framework_lower = (self.framework or "").lower()
+
+        ascend_dsls = {"triton_ascend", "tilelang_npuir", "ascendc", "swft"}
+        cuda_dsls = {"triton_cuda", "cuda_c", "tilelang_cuda"}
+        is_ascend_backend = backend_lower in {"ascend", "npu"} or dsl_lower in ascend_dsls
+        is_cuda_backend = backend_lower == "cuda" or dsl_lower in cuda_dsls
+        is_cpu_backend = backend_lower == "cpu"
+
+        if is_ascend_backend:
+            target_device = "npu"
+        elif is_cuda_backend:
+            target_device = "cuda"
+        elif is_cpu_backend:
+            target_device = "cpu"
+        else:
+            target_device = backend_lower or "cpu"
+
+        return {
+            "backend_lower": backend_lower,
+            "dsl_lower": dsl_lower,
+            "framework_lower": framework_lower,
+            "is_ascend_backend": is_ascend_backend,
+            "is_cuda_backend": is_cuda_backend,
+            "is_cpu_backend": is_cpu_backend,
+            "target_device": target_device,
+            "target_device_expr": f'"{target_device}"',
+            "backend_imports": (
+                "import torch_npu"
+                if framework_lower == "torch" and is_ascend_backend
+                else ""
+            ),
+        }
         
 
 
@@ -258,55 +311,220 @@ class Coder(AgentBase):
             code = max(matches, key=len).strip()
         return code
 
-    async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
-        """
-        生成API文档，如果原始API文档过长则使用LLM进行内容压缩
+    @staticmethod
+    def _extract_json_object(raw_output: str) -> Dict[str, Any]:
+        """Best-effort JSON object extraction for repair outputs."""
+        if not raw_output:
+            return {}
+        try:
+            data = json.loads(raw_output)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+        try:
+            extracted = ParserFactory._extract_json_comprehensive(raw_output)
+            data = json.loads(extracted)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
-        Args:
-            sketch: AUL代码作为sketch
-            conductor_suggestion: Conductor建议
-            task_info: 任务信息字典
-
-        Returns:
-            str: 适合的API文档内容
-        """
-        api_docs = await self._ensure_api_docs_loaded()
-
-        if len(api_docs) > 6000:  # 如果api文档过长，使用llm进行content压缩
-            api_parser = ParserFactory.get_api_parser()
-            format_api_instructions = api_parser.get_format_instructions()
-            api_input_data = {
-                **self.base_doc,
-                "api_docs": api_docs,
-                "sketch": sketch,  # AUL代码作为sketch
-                "llm_suggestions": conductor_suggestion,  # Conductor建议
-                "error_log": task_info.get('verifier_error', ''),
-                "format_instructions": format_api_instructions
+    def _update_codegen_context(
+        self,
+        task_info: dict,
+        agent_name: str = "coder",
+        hash_prefix: str = "",
+    ) -> None:
+        self.codegen_step_count += 1
+        self.context.update(
+            {
+                "agent_name": agent_name,
+                "hash": (
+                    task_info.get("task_id", "Coder")
+                    + "@"
+                    + hash_prefix
+                    + str(self.codegen_step_count)
+                ),
+                "task_id": task_info.get("task_id", ""),
+                "step": self.codegen_step_count,
+                "workflow_name": task_info.get("workflow_name", ""),
             }
+        )
 
-            self.api_step_count += 1
-            to_update_api_details = {
-                "agent_name": "api",
-                "hash": task_info.get("task_id", "Api") + "@" + str(self.api_step_count),
-                "task_id": "",
-                "step": self.api_step_count,
+    async def run_mode(self, mode: str, **kwargs) -> Dict[str, Any]:
+        """Run an internal multi-expression generation mode.
+
+        Existing callers should continue using ``run(task_info=...)``. This
+        method is intentionally scoped to MathIR multi-expression orchestration.
+        """
+        if mode == CoderMode.SUB_EXPR_GEN:
+            return await self._run_sub_expr_gen(**kwargs)
+        if mode == CoderMode.SUB_EXPR_REPAIR:
+            return await self._run_sub_expr_repair(**kwargs)
+        if mode == CoderMode.COMBINE:
+            return await self._run_combine(**kwargs)
+        raise ValueError(f"Unsupported CoderMode: {mode}")
+
+    async def _build_sub_expr_input(self, task_info: dict) -> dict:
+        sketch = task_info.get("designer_code", "")
+        conductor_suggestion = task_info.get("conductor_suggestion", "")
+        expression = task_info.get("current_expr", {}) or {}
+
+        api_docs_suitable = await self._generate_api_docs(
+            sketch,
+            conductor_suggestion,
+            task_info,
+        )
+        dsl_examples = await self._select_optimal_examples(task_info)
+
+        enable_hint_mode = self.config.get("enable_hint_mode", False)
+        has_space_config = bool(task_info.get("space_config_code"))
+
+        return {
+            **self.base_doc,
+            "sketch": sketch,
+            "llm_suggestions": conductor_suggestion,
+            "coder_code": task_info.get("coder_code", ""),
+            "previous_code": task_info.get("coder_code", ""),
+            "error_log": task_info.get("verifier_error", ""),
+            "code_check_errors": task_info.get("code_check_errors", ""),
+            "code_diagnostic_errors": task_info.get("code_diagnostic_errors", ""),
+            "api_docs_suitable": api_docs_suitable,
+            "dsl_examples": dsl_examples,
+            "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),
+            "enable_hint_mode": enable_hint_mode,
+            "has_param_space": enable_hint_mode and has_space_config,
+            "current_expr": expression,
+            "expression": expression,
+            "all_expressions": task_info.get("all_expressions", []),
+            "total_expressions": task_info.get("total_expressions", 1),
+            "expr_index": task_info.get("expr_index", 0),
+            "expression_name": expression.get("name", ""),
+            "consumes": expression.get("consumes", []),
+            "produces": expression.get("produces", []),
+            "next_expressions": expression.get("next_expressions", []),
+            "formula": expression.get("formula", ""),
+            "boundary_treatment": expression.get("boundary_treatment", ""),
+            "axis_mapping": expression.get("axis_mapping", {}),
+            "symbol_binding": expression.get("symbol_binding", {}),
+            "TDD_requirement": expression.get("TDD_requirement", ""),
+            "is_timeout_error": bool(task_info.get("is_timeout_error", False)),
+            "is_numerical_error": bool(task_info.get("is_numerical_error", False)),
+        }
+
+    async def _run_sub_expr_gen(self, task_info: dict, **_) -> Dict[str, Any]:
+        input_data = await self._build_sub_expr_input(task_info)
+        self._update_codegen_context(task_info, agent_name="coder_sub_expr")
+        raw_output, prompt, reasoning = await self.run_llm(
+            self.coder_sub_expr_prompt,
+            input_data,
+            self.model_config.get("coder") or "standard",
+        )
+        return {
+            "code": self._extract_code(raw_output, self.dsl),
+            "prompt": prompt,
+            "reasoning": reasoning,
+            "raw_output": raw_output,
+            "error_summary": "",
+        }
+
+    async def _run_sub_expr_repair(
+        self,
+        task_info: dict,
+        repair_error_type: str = "logic",
+        **_,
+    ) -> Dict[str, Any]:
+        input_data = await self._build_sub_expr_input(task_info)
+        input_data.update(
+            {
+                "repair_error_type": repair_error_type,
+                "error_history": task_info.get("error_history") or [],
+                "previous_code": task_info.get("coder_code", ""),
+                "is_numerical_error": repair_error_type == "numerical",
             }
-            self.context.update(to_update_api_details)
+        )
+        self._update_codegen_context(task_info, agent_name="coder_sub_expr_repair")
+        raw_output, prompt, reasoning = await self.run_llm(
+            self.coder_sub_expr_repair_prompt,
+            input_data,
+            self.model_config.get("coder") or "standard",
+        )
+        data = self._extract_json_object(raw_output)
+        code = data.get("code")
+        if not isinstance(code, str) or not code.strip():
+            code = self._extract_code(raw_output, self.dsl)
+        error_summary = data.get("error_summary", "")
+        if error_summary is None:
+            error_summary = ""
+        return {
+            "code": code,
+            "prompt": prompt,
+            "reasoning": reasoning,
+            "raw_output": raw_output,
+            "error_summary": str(error_summary).strip(),
+        }
 
-            api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator") or "standard")
-            parsed_content = api_parser.parse(api_docs_json)
-            api_docs_suitable = "\n\n".join(
-                f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
-                for name, desc, impl in zip(
-                    parsed_content.api_name,
-                    parsed_content.api_desc,
-                    parsed_content.api_example
-                )
+    async def _run_combine(
+        self,
+        task_info: dict,
+        sub_kernel_results: List[str],
+        expressions: List[dict],
+        **_,
+    ) -> Dict[str, Any]:
+        sub_kernels = []
+        for i, code in enumerate(sub_kernel_results):
+            expr = expressions[i] if i < len(expressions) and isinstance(expressions[i], dict) else {}
+            sub_kernels.append(
+                {
+                    "expression_name": expr.get("name", f"expr_{i}"),
+                    "code": code,
+                }
             )
-        else:
-            api_docs_suitable = api_docs
 
-        return api_docs_suitable
+        input_data = {
+            **self.base_doc,
+            "sub_kernels": sub_kernels,
+            "expressions": expressions,
+            "error_log": task_info.get("verifier_error", ""),
+            "llm_suggestions": task_info.get("conductor_suggestion", ""),
+            "allow_framework_fallback": self.config.get("allow_framework_fallback", False),
+            "performance_lowering_docs": self.config.get("performance_lowering_docs", ""),
+        }
+        self._update_codegen_context(
+            task_info,
+            agent_name="coder_combine",
+            hash_prefix="combine_",
+        )
+        raw_output, prompt, reasoning = await self.run_llm(
+            self.coder_combine_prompt,
+            input_data,
+            self.model_config.get("coder") or "standard",
+        )
+        return {
+            "code": self._extract_code(raw_output, self.dsl),
+            "prompt": prompt,
+            "reasoning": reasoning,
+            "raw_output": raw_output,
+            "error_summary": "",
+        }
+
+    async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
+        """Load API docs prepared by api_recall, falling back to static docs only."""
+        docs_path = str((task_info or {}).get("api_recall_docs_path") or "").strip()
+        if docs_path:
+            try:
+                path = Path(docs_path).expanduser()
+                if path.is_file():
+                    api_recall_docs = path.read_text(encoding="utf-8")
+                    if api_recall_docs.strip():
+                        logger.info("[Coder] Using api_recall docs from %s", path)
+                        return api_recall_docs
+                else:
+                    logger.warning("[Coder] api_recall_docs_path not found: %s", path)
+            except Exception as exc:
+                logger.warning("[Coder] failed to read api_recall docs %s: %s", docs_path, exc)
+
+        self.base_doc["api_docs"] = await self._ensure_api_docs_loaded()
+        return self.base_doc["api_docs"]
 
     def load_doc(self, doc_path: str) -> str:
         """
@@ -569,6 +787,7 @@ class Coder(AgentBase):
                 "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', ''),
                 "code_check_errors": task_info.get('code_check_errors', ''),  # CodeChecker静态检查错误
+                "code_diagnostic_errors": task_info.get('code_diagnostic_errors', ''),  # CodeChecker非阻塞诊断
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples": dsl_examples,
                 "strategy_glossary": strategy_glossary,  # 注入策略锚点词典
@@ -576,7 +795,13 @@ class Coder(AgentBase):
                 "enable_hint_mode": enable_hint_mode,  # Hint模式
                 "has_param_space": has_param_space,  # 是否有参数空间
                 "user_requirements": task_info.get('user_requirements', ''),  # 用户额外需求（来自 ReAct）
+                "mathIR": False,
+                "mathIR_code": {},
             }
+
+            if task_info.get("mathIR_code"):
+                input_data["mathIR"] = True
+                input_data["mathIR_code"] = task_info["mathIR_code"]
 
             # 执行LLM生成前更新context，确保正确性
             self.codegen_step_count += 1

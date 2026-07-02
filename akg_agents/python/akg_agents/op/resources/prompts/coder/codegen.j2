@@ -67,6 +67,11 @@
 **注意：上述问题是基于编程规范的静态检查，请严格按照建议修改。**
 {% endif %}
 
+{% if code_diagnostic_errors %}
+### CodeChecker 非阻塞 Triton 诊断（请结合错误日志修复）
+{{ code_diagnostic_errors }}
+{% endif %}
+
 {% if error_log %}
 ### 错误日志
 当前任务执行失败，请分析错误原因
@@ -100,6 +105,75 @@
 **重要**：用户在多轮对话交互中明确提出了以下需求，请在生成代码时必须满足：
 
 {{ user_requirements }}
+{% endif %}
+
+{% if mathIR %}
+### 算子逻辑表达
+你需要参考以下算子数学逻辑与代码的对应关系，确保生成的代码正确实现了算子语义。MathIR 只描述 expression DAG、axis_mapping、边界和数据绑定；具体后端 lowering 仍需结合 {{dsl}}、{{backend}} 和硬件约束决定。
+
+{% set mathIR_payload = mathIR_code.get("code", mathIR_code) if mathIR_code else {} %}
+{% for expr in mathIR_payload.get("expressions", []) %}
+#### Expression {{ loop.index }}: {{ expr.get("name", "unnamed") }}
+
+##### 数学表达式
+{{ expr.get("formula", "") }}
+
+{% if expr.get("consumes") %}
+输入: {% for c in expr.get("consumes", []) %}{{ c.get("name", "?") }}({{ c.get("kind", "?") }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% if expr.get("produces") %}
+输出: {% for p in expr.get("produces", []) %}{{ p.get("name", "?") }}({{ p.get("kind", "?") }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% if expr.get("next_expressions") %}
+后续表达式: {{ expr.get("next_expressions", []) | join(", ") }}
+{% endif %}
+
+{% if expr.get("boundary_treatment") %}
+##### 边界处理
+{{ expr.get("boundary_treatment", "") }}
+{% endif %}
+
+{% set axis_mapping = expr.get("axis_mapping", {}) %}
+{% if axis_mapping.get("parallel") or axis_mapping.get("reduction") %}
+##### 轴映射
+{% for axis in axis_mapping.get("parallel", []) %}
+- 并行轴: symbol={{ axis.get("symbol", "") }}, range={{ axis.get("range", "") }}, binding={{ axis.get("binding", "") }}{% if axis.get("value") not in (none, "") %}, value={{ axis.get("value") }}{% endif %}
+{% endfor %}
+{% for axis in axis_mapping.get("reduction", []) %}
+- 归约轴: symbol={{ axis.get("symbol", "") }}, range={{ axis.get("range", "") }}, binding={{ axis.get("binding", "") }}{% if axis.get("value") not in (none, "") %}, value={{ axis.get("value") }}{% endif %}{% if axis.get("reduction_type") %}, reduction_type={{ axis.get("reduction_type") }}{% endif %}{% if axis.get("accumulator_precision") %}, accumulator_precision={{ axis.get("accumulator_precision") }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if expr.get("symbol_binding") %}
+##### 张量内存布局与符号绑定
+{% for sym, binding in expr.get("symbol_binding", {}).items() %}
+- {{ sym }} -> {{ binding.get("code_binding", "") }}{% if binding.get("binding_kind") %}, binding_kind={{ binding.get("binding_kind", "") }}{% endif %}{% if binding.get("layout") %}, layout={{ binding.get("layout", "") }}{% endif %}{% if binding.get("stride") %}, stride={{ binding.get("stride", "") }}{% endif %}{% if binding.get("address_mapping") %}, address_mapping={{ binding.get("address_mapping", "") }}{% endif %}
+{% if binding.get("unpack_hint") %}
+  unpack_hint: {{ binding.get("unpack_hint", "") }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if expr.get("lowering_contract") or expr.get("lowering_strategy") %}
+##### MathIR lowering hints for Coder
+{% if expr.get("lowering_contract") %}
+lowering_contract: {{ expr.get("lowering_contract") }}
+{% endif %}
+{% if expr.get("lowering_strategy") %}
+lowering_strategy: {{ expr.get("lowering_strategy") }}
+{% endif %}
+{% endif %}
+
+{% if expr.get("TDD_requirement") %}
+TDD_requirement: {{ expr.get("TDD_requirement", "") }}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if mathIR and mathir_lowering_docs %}
+## MathIR Lowering Guide
+{{ mathir_lowering_docs }}
 {% endif %}
 
 {% if api_debug_docs %}
@@ -913,6 +987,75 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 {{ user_requirements }}
 {% endif %}
 
+{% if mathIR %}
+### 算子逻辑表达
+你需要参考以下算子数学逻辑与代码的对应关系，确保生成的代码正确实现了算子语义。MathIR 只描述 expression DAG、axis_mapping、边界和数据绑定；具体后端 lowering 仍需结合 {{dsl}}、{{backend}} 和硬件约束决定。
+
+{% set mathIR_payload = mathIR_code.get("code", mathIR_code) if mathIR_code else {} %}
+{% for expr in mathIR_payload.get("expressions", []) %}
+#### Expression {{ loop.index }}: {{ expr.get("name", "unnamed") }}
+
+##### 数学表达式
+{{ expr.get("formula", "") }}
+
+{% if expr.get("consumes") %}
+输入: {% for c in expr.get("consumes", []) %}{{ c.get("name", "?") }}({{ c.get("kind", "?") }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% if expr.get("produces") %}
+输出: {% for p in expr.get("produces", []) %}{{ p.get("name", "?") }}({{ p.get("kind", "?") }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% if expr.get("next_expressions") %}
+后续表达式: {{ expr.get("next_expressions", []) | join(", ") }}
+{% endif %}
+
+{% if expr.get("boundary_treatment") %}
+##### 边界处理
+{{ expr.get("boundary_treatment", "") }}
+{% endif %}
+
+{% set axis_mapping = expr.get("axis_mapping", {}) %}
+{% if axis_mapping.get("parallel") or axis_mapping.get("reduction") %}
+##### 轴映射
+{% for axis in axis_mapping.get("parallel", []) %}
+- 并行轴: symbol={{ axis.get("symbol", "") }}, range={{ axis.get("range", "") }}, binding={{ axis.get("binding", "") }}{% if axis.get("value") not in (none, "") %}, value={{ axis.get("value") }}{% endif %}
+{% endfor %}
+{% for axis in axis_mapping.get("reduction", []) %}
+- 归约轴: symbol={{ axis.get("symbol", "") }}, range={{ axis.get("range", "") }}, binding={{ axis.get("binding", "") }}{% if axis.get("value") not in (none, "") %}, value={{ axis.get("value") }}{% endif %}{% if axis.get("reduction_type") %}, reduction_type={{ axis.get("reduction_type") }}{% endif %}{% if axis.get("accumulator_precision") %}, accumulator_precision={{ axis.get("accumulator_precision") }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if expr.get("symbol_binding") %}
+##### 张量内存布局与符号绑定
+{% for sym, binding in expr.get("symbol_binding", {}).items() %}
+- {{ sym }} -> {{ binding.get("code_binding", "") }}{% if binding.get("binding_kind") %}, binding_kind={{ binding.get("binding_kind", "") }}{% endif %}{% if binding.get("layout") %}, layout={{ binding.get("layout", "") }}{% endif %}{% if binding.get("stride") %}, stride={{ binding.get("stride", "") }}{% endif %}{% if binding.get("address_mapping") %}, address_mapping={{ binding.get("address_mapping", "") }}{% endif %}
+{% if binding.get("unpack_hint") %}
+  unpack_hint: {{ binding.get("unpack_hint", "") }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if expr.get("lowering_contract") or expr.get("lowering_strategy") %}
+##### MathIR lowering hints for Coder
+{% if expr.get("lowering_contract") %}
+lowering_contract: {{ expr.get("lowering_contract") }}
+{% endif %}
+{% if expr.get("lowering_strategy") %}
+lowering_strategy: {{ expr.get("lowering_strategy") }}
+{% endif %}
+{% endif %}
+
+{% if expr.get("TDD_requirement") %}
+TDD_requirement: {{ expr.get("TDD_requirement", "") }}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if mathIR and mathir_lowering_docs %}
+## MathIR Lowering Guide
+{{ mathir_lowering_docs }}
+{% endif %}
+
 {% if enable_hint_mode and has_param_space %}
 ---
 
@@ -1039,6 +1182,11 @@ class ModelNew(nn.Cell):
 {{ code_check_errors }}
 
 **注意：上述问题是基于编程规范的静态检查，请严格按照建议修改。**
+{% endif %}
+
+{% if code_diagnostic_errors %}
+### CodeChecker 非阻塞 Triton 诊断（请结合错误日志修复）
+{{ code_diagnostic_errors }}
 {% endif %}
 
 {% if error_log %}

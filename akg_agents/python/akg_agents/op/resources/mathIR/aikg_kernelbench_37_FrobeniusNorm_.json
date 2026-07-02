@@ -1,0 +1,103 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "frobenius_norm_normalization",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n,c,h,w] = X[n,c,h,w] / sqrt( sum_{i=0}^{111} sum_{j=0}^{63} sum_{k=0}^{511} sum_{l=0}^{511} X[i,j,k,l]^2 ), for n=0..111, c=0..63, h=0..511, w=0..511.",
+        "boundary_treatment": "无特殊边界处理；若输入全零导致范数为零，则除法产生 Inf/NaN。所有循环均在张量边界内。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 112)",
+              "binding": "static",
+              "value": "112"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 112)",
+              "binding": "static",
+              "value": "112",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "l",
+              "range": "[0, 512)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "addr = base + i*16777216 + j*262144 + k*512 + l"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W)",
+            "stride": "(16777216, 262144, 512, 1)",
+            "address_mapping": "addr = base + n*16777216 + c*262144 + h*512 + w"
+          }
+        },
+        "TDD_requirement": "正确性验证需与 PyTorch 参考 x / torch.norm(x, p='fro') 进行数值对拍，允许相对误差 1e-5。重点检查所有元素的平方和归约及除法广播行为。建议冒烟测试用小形状 (2,3,4,4)，完整测试用 (112,64,512,512)。"
+      }
+    ]
+  }
+}

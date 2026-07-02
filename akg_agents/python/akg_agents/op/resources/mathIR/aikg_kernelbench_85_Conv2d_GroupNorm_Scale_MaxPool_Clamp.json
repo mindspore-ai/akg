@@ -1,0 +1,186 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_fused",
+        "next_expressions": ["groupnorm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}, 权重 W_conv ∈ R^{C_out×C_in×K_h×K_w}, 偏置 B_conv ∈ R^{C_out}。stride=1, padding=0, dilation=1, groups=1。输出 H_out=H_in-K_h+1=30, W_out=30。Y1[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h} Σ_{k_w} X[n,c_i,h+k_h,w+k_w] · W_conv[c_o,c_i,k_h,k_w]。本题 N=128, C_in=3, C_out=16, H_in=W_in=32, K=3。",
+        "boundary_treatment": "padding=0 → 卷积窗口完整落在输入；bias 加在 c_o 维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_in, w_in) = X_ptr + n*3072 + c_i*1024 + h_in*32 + w_in"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_h, K_w) = (16, 3, 3, 3)",
+            "stride": "(C_in*K_h*K_w, K_h*K_w, K_w, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_h, k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h, w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv2d(3,16,kernel_size=3) eval forward。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_in·K_h·K_w=27，ε_total ≈ 1.2e-7·sqrt(27)·10 ≈ 6.2e-6；步骤 2，参考 nn.Conv2d → cuDNN TF32，rtol=atol=max(6.2e-6, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) shape=(128,16,30,30)；(b) padding=0；(c) 单通道单样本对拍。失败诊断：(i) 1e-4~1e-3 + shape 正确 → cuDNN TF32，放宽；(ii) 远超 → W 对调；(iii) 通道偏移 → bias 错位。"
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": ["scale_maxpool_clamp_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C×H×W}, num_groups=G=8, C_g=C/G=2, gamma, beta ∈ R^{C}, eps=1e-5。对每个 (n, g)，I_g = {g·C_g, …, (g+1)·C_g-1}，组内空间元素总数 M = C_g·H·W = 2·30·30 = 1800。均值 μ_{n,g} = (1/M) · Σ_{c∈I_g} Σ_{h,w} Y1[n,c,h,w]；方差 σ²_{n,g} = (1/M) · Σ_{c∈I_g} Σ_{h,w} (Y1[n,c,h,w]-μ_{n,g})²。输出 Y2[n,c,h,w] = gamma[c]·(Y1[n,c,h,w]-μ_{n,g})/sqrt(σ²_{n,g}+eps) + beta[c], 其中 g=⌊c/C_g⌋。本题 N=128, C=16, H=W=30, G=8, C_g=2。",
+        "boundary_treatment": "G=8 整除 C=16；组内 reduction 在 C_g·H·W 个元素上做；eps 加在 sqrt 内。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "k_c", "range": "[0, C_g)", "binding": "static", "value": "2", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, H)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, W)", "binding": "static", "value": "30", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_fused.output",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, h, w) = Y2_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 nn.GroupNorm(num_groups=8, num_channels=16, eps=1e-5) eval 作用于上游 Y1。精度模式：手写 FMA + fp32 累加器，IEEE fp32；rsqrt 1 ULP。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=C_g·H·W=1800，ε_total ≈ 1.2e-7·sqrt(1800)·10 ≈ 5.1e-5，取 rtol_base=atol_base=1e-4；步骤 2，nn.GroupNorm 不走 cuDNN/cuBLAS，不强制 1e-3；步骤 3，归一化后量级稳定，不触发；最终单 expression rtol=atol=1e-4，整链路含上游 cuDNN 时 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) shape 不变；(b) 每个 (n,g) mean(Y2)≈0, var(Y2)≈gamma²；(c) eps 在 sqrt 内；(d) gamma/beta 按 c 索引；(e) G 整除 C；(f) 小尺寸对拍。失败诊断：(i) NaN → eps 漏；(ii) 偏移 → 均值/beta 错；(iii) 倍数错 → 除错 C_g·H·W 因子。"
+      },
+      {
+        "name": "scale_maxpool_clamp_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "scale", "kind": "tensor" },
+          { "name": "clamp_min", "kind": "scalar" },
+          { "name": "clamp_max", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×C×H×W}, scale ∈ R^{C×1×1}, clamp_min=0.0, clamp_max=1.0。步骤 1 按通道乘 scale：Z[n,c,h,w] = Y2[n,c,h,w] · scale[c,0,0]。步骤 2 MaxPool2d(kernel=2, stride=2)：P[n,c,h,w] = max_{δ_h, δ_w ∈ [0,2)} Z[n,c, h*2+δ_h, w*2+δ_w]。步骤 3 clamp：Y[n,c,h,w] = min(max(P[n,c,h,w], clamp_min), clamp_max)。输出空间 H_pool=W_pool=⌊H/2⌋=15。本题 N=128, C=16, H=W=30, H_pool=W_pool=15。融合 scale + maxpool + clamp。",
+        "boundary_treatment": "scale 按 c 维广播；MaxPool 2×2 stride=2 整齐覆盖 30 → 15 块无残余；clamp 截断到 [0,1]。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_pool)", "binding": "static", "value": "15" },
+            { "symbol": "w", "range": "[0, W_pool)", "binding": "static", "value": "15" }
+          ],
+          "reduction": [
+            { "symbol": "δ_h", "range": "[0, 2)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" },
+            { "symbol": "δ_w", "range": "[0, 2)", "binding": "static", "value": "2", "reduction_type": "max", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, C, H, W) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y2(n, c, h_in, w_in) = Y2_ptr + n*14400 + c*900 + h_in*30 + w_in"
+          },
+          "scale": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.scale",
+            "layout": "(C, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_scale(c, 0, 0) = scale_ptr + c"
+          },
+          "clamp_min": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.clamp_min (0.0)"
+          },
+          "clamp_max": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.clamp_max (1.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H_pool, W_pool) = (128, 16, 15, 15)",
+            "stride": "(C*H_pool*W_pool, H_pool*W_pool, W_pool, 1) = (3600, 225, 15, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*3600 + c*225 + h*15 + w"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 (Y2 * self.scale) → nn.MaxPool2d(2) → torch.clamp(.,0,1)。精度模式：乘法是单次 FMA, max 是比较型, clamp 是比较型, IEEE fp32。rtol/atol 推导：步骤 1，ε_op=1.2e-7（仅来自单次乘法），K=1，ε_total≈1.2e-6，取 rtol_base=atol_base=1e-6；步骤 2，不走 cuDNN/cuBLAS，不触发；步骤 3，clamp 后 ∈ [0,1]，不触发。最终单 expression rtol=atol=1e-6（实质 bitwise 在乘法之后），整链路含上游 cuDNN 时 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,16,15,15)；(b) 所有 Y[n,c,h,w] ∈ [0, 1]；(c) MaxPool 输出 floor(30/2)=15；(d) scale 按 c 维；(e) 小尺寸对拍。失败诊断：(i) Y 超出 [0,1] → clamp 没生效；(ii) shape 计算错 → ceil 误用；(iii) 通道整体偏移 → scale 索引错。"
+      }
+    ]
+  }
+}

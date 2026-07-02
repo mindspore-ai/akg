@@ -1,0 +1,100 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "batch_matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[n, m, l] = sum_{k=0}^{K-1} A[n, m, k] * B[k, l]  for n in [0, N), m in [0, M), l in [0, L)",
+        "boundary_treatment": "所有索引均在合法范围内，无 padding、mask 等特殊处理。输入维度约束：A 的最后一维大小等于 B 的第一维大小 K。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "m",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "1024"
+            },
+            {
+              "symbol": "l",
+              "range": "[0, L)",
+              "binding": "static",
+              "value": "768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "2048",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(N, M, K)",
+            "stride": "(M*K, K, 1)",
+            "address_mapping": "n * M * K + m * K + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "k * L + l"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, M, L)",
+            "stride": "(M*L, L, 1)",
+            "address_mapping": "n * M * L + m * L + l"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 16"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1024"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 2048"
+          },
+          "L": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 768"
+          }
+        },
+        "TDD_requirement": "需对拍验证输出形状 (16, 1024, 768) 和数值。重点检查沿 K 维的归约求和是否正确，索引映射是否存在偏差。建议先用小形状（如 N=1,M=2,K=3,L=4）做冒烟测试，再用完整形状对拍。由于 float32 累加顺序可能不同，容忍值建议 atol=1e-4, rtol=1e-4。"
+      }
+    ]
+  }
+}

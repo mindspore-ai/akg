@@ -1,0 +1,58 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "swish_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = X[i, j] * (1 / (1 + exp(-X[i, j]))) for i in [0, N-1], j in [0, D-1], where N=4096, D=393216",
+        "boundary_treatment": "Element-wise operation, no padding or boundary constraints. Input and output shapes are identical. For numerical stability, torch.sigmoid internally handles extreme input values without overflow.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          }
+        },
+        "TDD_requirement": "以 PyTorch 的 x * torch.sigmoid(x) 为参考实现。对拍时使用小尺寸张量（如 (3,4)）验证形状无关性，再用原始尺寸 (4096, 393216) 验证完整数据路径。检查逐元素数值一致性，尤其关注极端正值（如 10、100）和极端负值（如 -100）下的结果，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

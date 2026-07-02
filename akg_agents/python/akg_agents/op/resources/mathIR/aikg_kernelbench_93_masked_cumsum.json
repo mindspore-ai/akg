@@ -1,0 +1,83 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "masked_cumsum_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "mask",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[b, i] = sum_{k=0}^{i} X[b, k] * M[b, k], for b in [0, B), i in [0, L), where the cumulative sum is taken along dimension dim (axis corresponding to index i).",
+        "boundary_treatment": "No padding or out-of-bound access. Cumulative sum includes indices k from 0 to i inclusive. When M[b, k] = False, the contribution is zero.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, B)",
+              "binding": "runtime"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, L)",
+              "binding": "runtime"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, i]",
+              "binding": "runtime",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(B, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "b * L + i"
+          },
+          "M": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.mask",
+            "layout": "(B, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "b * L + i"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "b * L + i"
+          }
+        },
+        "TDD_requirement": "对拍参考实现为 PyTorch 的 torch.cumsum(x * mask, dim)。重点验证：(1) dim=1 的累积和方向正确；(2) mask 的布尔语义（False 位置贡献为 0）；(3) 累积边界 i=0 与 i=L-1 的数值正确性；(4) 不同 batch 完全独立。建议先用小 shape（如 B=2, L=3）冒烟测试，再用 get_inputs() 的完整尺寸 (32768, 32768) 做数值对拍。由于累加操作，可接受相对容差 1e-5 或绝对容差 1e-6。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "M",
+            "kind": "scalar"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i, 0] = sum_{j=0}^{K-1} A[i, j] * B[j, 0]   for i in [0, M)",
+        "boundary_treatment": "No boundary treatment required; all indices are valid within tensor shapes.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "2048"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "j",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "1048576",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "i * K + j"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "i"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "constant 2048"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "constant 1048576"
+          }
+        },
+        "TDD_requirement": "数值对拍应使用 PyTorch 的 torch.matmul(A, B) 作为参考实现。重点检查输出形状 (M,1)，归约轴 K 的求和正确性。验证输入张量是否为连续布局（若不是，需确认 address_mapping 中的 stride 处理）。建议先以小尺寸（如 M=4, K=8）进行冒烟测试，再以完整尺寸（M=2048, K=1048576）对拍。fp32 精度下容忍误差约 1e-5。"
+      }
+    ]
+  }
+}

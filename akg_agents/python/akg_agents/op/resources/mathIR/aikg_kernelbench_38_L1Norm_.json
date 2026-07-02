@@ -1,0 +1,79 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "l1_norm",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i,j] = X[i,j] / ((1/D) * sum_{k=0}^{D-1} |X[i,k]|)  for i in [0,N), j in [0,D)",
+        "boundary_treatment": "无特殊边界处理；归约轴大小 D>0 保证除零不会发生；输入 X 形状为 (N,D)，keepdim=True 保证广播正确；所有操作均为逐元素或沿 dim=1 归约，不涉及 padding、越界或空路径。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "65535"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "65535",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size = 32768"
+          },
+          "D": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "dim = 65535"
+          }
+        },
+        "TDD_requirement": "需要对拍数值，参考实现为 PyTorch eager 的 x / torch.mean(torch.abs(x), dim=1, keepdim=True)。重点检查形状 (N,D)、归约轴 dim=1 的正确性、广播语义和 fp32 精度。建议先以 (3,4) 等小形状冒烟，再用完整 (32768,65535) 对拍，容忍差值 1e-5。"
+      }
+    ]
+  }
+}

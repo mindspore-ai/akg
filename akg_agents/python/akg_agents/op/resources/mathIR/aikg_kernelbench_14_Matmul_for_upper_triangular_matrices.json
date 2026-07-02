@@ -1,0 +1,86 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_triu_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "diagonal",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i,j] = ( Σ_{k=0}^{4095} A[i,k] * B[k,j] ) if i ≤ j else 0，其中 diagonal = 0",
+        "boundary_treatment": "上三角保留：对于满足 i ≤ j 的位置，输出矩阵乘法结果；对于 i > j 的位置，输出 0。对角线 (i == j) 包含在上三角内。矩阵乘法本身不涉及 padding，A、B 均为 4096×4096 方阵。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(4096, 4096)",
+            "stride": "[4096, 1]",
+            "address_mapping": "i * 4096 + j"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(4096, 4096)",
+            "stride": "[4096, 1]",
+            "address_mapping": "i * 4096 + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(4096, 4096)",
+            "stride": "[4096, 1]",
+            "address_mapping": "i * 4096 + j"
+          },
+          "diagonal": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "torch.triu 的 diagonal 参数，值为 0"
+          }
+        },
+        "TDD_requirement": "对拍参考：以 PyTorch eager 模式执行 forward(A, B) 的结果作为参考。需重点检查 shape 为 (4096, 4096)、上三角区域数值与 matmul 一致、下三角区域全为 0。建议先用 N=4 小规模随机上三角矩阵做冒烟测试，验证边界对角线。完整测试使用 N=4096 随机上三角输入，采用 fp32 精度，atol=1e-5, rtol=1e-5。"
+      }
+    ]
+  }
+}

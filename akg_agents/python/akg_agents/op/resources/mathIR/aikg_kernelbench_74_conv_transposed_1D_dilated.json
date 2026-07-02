@@ -1,0 +1,109 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose1d_dilated",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, c_out, i] = sum_{c_in=0}^{C_in-1} sum_{k=0}^{K-1} ( if 0 <= i - D*k < L_in then X[n, c_in, i - D*k] * W[c_in, c_out, k] else 0 ), where N=32, C_in=32, C_out=64, L_in=131072, D=3, K=5, L_out=131084 (computed as L_in + D*(K-1) = 131084).",
+        "boundary_treatment": "当索引 j = i - D*k 超出有效范围 [0, L_in) 时，对应乘积项贡献为0。MLIR 实现通过在输入 X 两侧各填充 12 个零（pad = D*(K-1) - padding = 12）的方式处理边界，任何越界访问自动得到 0，与公式等价。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "c_out",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, L_out)",
+              "binding": "static",
+              "value": "131084"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_in",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, L_in) with N=32, C_in=32, L_in=131072",
+            "stride": "(4194304, 131072, 1)",
+            "address_mapping": "offset = n * 4194304 + c_in * 131072 + l"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d_transpose.weight",
+            "layout": "(C_in, C_out, K) with C_in=32, C_out=64, K=5",
+            "stride": "(320, 5, 1)",
+            "address_mapping": "offset = c_in * 320 + c_out * 5 + k",
+            "unpack_hint": "注意：ConvTranspose1d 的权重形状为 (in_channels, out_channels, kernel_size)，与普通 Conv1d 的 (out_channels, in_channels, kernel_size) 相反，使用时请勿混淆。"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.dilation"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.kernel_size"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, L_out) with N=32, C_out=64, L_out=131084",
+            "stride": "(8389376, 131084, 1)",
+            "address_mapping": "offset = n * 8389376 + c_out * 131084 + i"
+          }
+        },
+        "TDD_requirement": "需要数值对拍，参考实现为 PyTorch eager 执行结果。重点检查输出形状 L_out=131084 是否正确（相比输入长度增加12），边界填充是否正确（两侧各pad 12），索引 i - D*k 是否在有效范围内，c_in 和 k 的归约求和是否正确。建议先用小型形状（如 batch=2, in_c=3, out_c=4, length=10, kernel=3, dilation=2, stride=1, padding=0）做冒烟测试，验证输出长度和数值无误；再使用给定的完整形状进行全量对拍，容忍值建议 atol=1e-4, rtol=1e-4。"
+      }
+    ]
+  }
+}

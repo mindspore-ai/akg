@@ -1,0 +1,81 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "mse_loss",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "predictions",
+            "kind": "tensor"
+          },
+          {
+            "name": "targets",
+            "kind": "tensor"
+          },
+          {
+            "name": "total_elements",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "loss",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "loss = (1 / total_elements) * sum_{i=0}^{32767} sum_{j=0}^{32767} (predictions[i,j] - targets[i,j])^2",
+        "boundary_treatment": "无特殊边界处理；归约覆盖全部元素。",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "predictions": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          },
+          "targets": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          },
+          "total_elements": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1073741824 (32768*32768)"
+          },
+          "loss": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "0"
+          }
+        },
+        "TDD_requirement": "需要验证 MSE 损失计算正确性。重点检查输入形状 (32768, 32768) 下的归约结果，确保数值与 PyTorch eager 模式一致。建议先用小形状（如 (2, 3)）冒烟，验证归约轴、平方与除法正确性；再使用 (32768, 32768) 完整输入对拍。容忍值建议：1e-5 相对误差（考虑浮点累加误差）。"
+      }
+    ]
+  }
+}

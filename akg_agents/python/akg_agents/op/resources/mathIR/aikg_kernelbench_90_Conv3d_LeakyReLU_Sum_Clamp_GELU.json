@@ -1,0 +1,270 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d_leakyrelu_fused",
+        "next_expressions": [
+          "sum_clamp_gelu_fused"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "alpha",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ R^{N×C_in×D_in×H_in×W_in}，3D 卷积权重 W_conv ∈ R^{C_out×C_in×K_d×K_h×K_w}，偏置 B_conv ∈ R^{C_out}，LeakyReLU 负斜率 alpha=0.2。先做标准 Conv3d (stride=1, padding=0, dilation=1): Z[n,c_o,d_o,h_o,w_o] = B_conv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} X[n,c_i,d_o+k_d,h_o+k_h,w_o+k_w] · W_conv[c_o,c_i,k_d,k_h,k_w]。再做 LeakyReLU: Y1[n,c_o,d_o,h_o,w_o] = Z[n,c_o,d_o,h_o,w_o] if Z ≥ 0 else alpha · Z。本题 N=128, C_in=3, C_out=16, D_in=16, H_in=W_in=32, K_d=K_h=K_w=3，D_out=14, H_out=W_out=30。",
+        "boundary_treatment": "Conv3d stride=1 padding=0，输出尺寸为 D_out=D_in-K_d+1=14, H_out=H_in-K_h+1=30, W_out=W_in-K_w+1=30；输入索引 (d_o+k_d, h_o+k_h, w_o+k_w) 必落在合法范围内，无需 mask；LeakyReLU 为逐元素无边界问题；eval 模式无随机。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d_o",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h_o",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w_o",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 3, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (49152, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d, h, w) = X_ptr + n*49152 + c_i*16384 + d*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K_d, K_h, K_w) = (16, 3, 3, 3, 3)",
+            "stride": "(C_in*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (81, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o, c_i, k_d, k_h, k_w) = W_conv_ptr + c_o*81 + c_i*27 + k_d*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "alpha": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.2 (negative_slope)"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_leakyrelu_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d_o, h_o, w_o) = Y1_ptr + n*201600 + c_o*12600 + d_o*900 + h_o*30 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下构造的 nn.Conv3d(3, 16, kernel_size=3) 前向 + F.leaky_relu(., 0.2)，eval 模式。精度模式：本 expression 为 Conv3d 累加 + 逐元素 LeakyReLU，未走 tl.dot 时手写 FMA + fp32 累加器，天然 IEEE fp32；若 codegen 决定走 tl.dot + fp32 输入，必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=C_in*K_d*K_h*K_w=3*3*3*3=81，ε_total ≈ 1.2e-7*sqrt(81)=1.08e-6，留 10x 余量得 rtol_base=atol_base=1.1e-5；步骤 2（cuDNN 修正，关键）参考是 nn.Conv3d，走 cuDNN，A100 默认开 TF32，rtol=max(1.1e-5, 1e-3)=1e-3，atol 同理 1e-3；步骤 3（量级修正）不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,16,14,30,30)，等于 (D_in-K, H_in-K, W_in-K) + 1 = (14,30,30)；(b) 验证 LeakyReLU 在 Z<0 处的负斜率为 0.2；(c) bias 加在通道维。冒烟输入：先用 (2,3,4,8,8) 跑 atol/rtol 校验，再用 (128,3,16,32,32) 完整对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 且 shape 正确 → 是 cuDNN TF32 主导的预期范围，不是 kernel bug；(ii) diff ≫ 1e-3 → 检查 weight 解包 (C_out, C_in, K_d, K_h, K_w) 是否对调；(iii) 仅负数区域偏差 → LeakyReLU 负斜率 alpha 写错；(iv) 通道整体偏移恒定值 → bias 索引错位。\n【子表达式自测容忍度】Conv/ConvTranspose 与 PyTorch cuDNN/TF32 参考对拍时，正确的 shape/layout/边界实现也可能出现 1e-3 量级绝对误差；Conv3d+activation 或长归约链路可到约 6e-3。子表达式 smoke test 请使用 torch.allclose(rtol=5e-3, atol=5e-3)（必要时 6e-3），不要用单一 max_abs < 1e-3 拦截正确实现；最终 verifier 仍做端到端判定。",
+        "lowering_contract": {
+          "preferred_schedule": "For small static Conv2d/Conv3d with small C_in and C_out, compute a tile of flattened output positions and a vector of output channels. Prefer a packed-weight (K_total, C_out) outer-product loop with fp32 accumulators; create the packed weight once in ModelNew.__init__. If the expression also has a min/sum/mean over producer positions, compute each producer tile once and reduce it instead of recomputing Conv per final scalar.",
+          "suggested_tile": {
+            "preferred_variant": "small_static_outer_product",
+            "BLOCK_M": 32,
+            "BLOCK_C": 16,
+            "K_TOTAL": 81,
+            "C_OUT": 16
+          },
+          "forbidden_lowerings": [
+            "Repack or transpose convolution weights inside forward on every call.",
+            "Use original ConvNd weight strides after passing a packed (K_total, C_out) weight tensor.",
+            "Launch one program per final scalar while recomputing the full convolution reduction.",
+            "Treat K_total as a non-power-of-two tl.arange tile bound without padding/masking."
+          ]
+        }
+      },
+      {
+        "name": "sum_clamp_gelu_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "S_tensor",
+            "kind": "tensor"
+          },
+          {
+            "name": "C_min",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_max",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_half",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_sqrt2",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×D_out×H_out×W_out}，可学习张量 S_tensor ∈ R^{C_out×1×1×1}。先做加法（按 PyTorch 广播将 S_tensor 沿 N,D,H,W 维复制）：A[n,c_o,d,h,w] = Y1[n,c_o,d,h,w] + S_tensor[c_o,0,0,0]。再做 clamp 到 [C_min=-1, C_max=1]: B[n,c_o,d,h,w] = min(max(A[n,c_o,d,h,w], C_min), C_max)。最后做 GELU（精确 erf 实现）: Y[n,c_o,d,h,w] = C_half · B[n,c_o,d,h,w] · (1 + erf(B[n,c_o,d,h,w] / C_sqrt2))。本题 N=128, C_out=16, D_out=14, H_out=W_out=30。",
+        "boundary_treatment": "纯逐元素 + 广播；clamp 将所有值限制于 [-1, 1]；GELU 全域有定义；无空间边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "14"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "30"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "30"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv3d_leakyrelu_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n, c_o, d, h, w) = Y1_ptr + n*201600 + c_o*12600 + d*900 + h*30 + w"
+          },
+          "S_tensor": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.sum_tensor",
+            "layout": "(C_out, 1, 1, 1) = (16, 1, 1, 1)",
+            "stride": "(1, 1, 1, 1)",
+            "address_mapping": "addr_S_tensor(c_o, 0, 0, 0) = S_tensor_ptr + c_o"
+          },
+          "C_min": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 -1.0"
+          },
+          "C_max": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1.0"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (128, 16, 14, 30, 30)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (201600, 12600, 900, 30, 1)",
+            "address_mapping": "addr_Y(n, c_o, d, h, w) = Y_ptr + n*201600 + c_o*12600 + d*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为上游 Y1 + self.sum_tensor，然后 torch.clamp(., -1, 1)，再 F.gelu（精确 erf 实现），eval 模式。精度模式：纯逐元素 + 广播 + GELU 超越函数，未使用 tl.dot，IEEE fp32 语义；erf 调用 libdevice ~1 ULP 误差。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7，K=1（无 reduction），ε_total ≈ 1.2e-6（10x 余量），rtol_base=atol_base=1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发，clamp 后量级 ≤ 1。最终 rtol=atol=1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,16,14,30,30)；(b) 中间 clamp 后所有值 ∈ [-1, 1]；(c) 最终 Y 落在 GELU([-1,1]) ≈ [-0.158, 0.841] 范围内；(d) 验证 sum_tensor 广播在通道维。失败诊断：(i) 数值整体偏移 → 加法广播写错；(ii) 出现超出 [-1, 1] 的中间值 → clamp 未生效或顺序写反；(iii) GELU 数值整体偏小 → 错用 tanh 近似而非精确 erf。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。"
+      }
+    ]
+  }
+}

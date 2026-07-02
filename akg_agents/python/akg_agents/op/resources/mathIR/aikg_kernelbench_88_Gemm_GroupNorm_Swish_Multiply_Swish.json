@@ -1,0 +1,168 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm",
+        "next_expressions": ["groupnorm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，N=128, I=512；权重 W_gemm ∈ R^{O×I}，O=1024；偏置 B_gemm ∈ R^{O}。nn.Linear: Y1[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]。",
+        "boundary_treatment": "纯 GEMM + bias，无边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "512", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(512, 1024) 前向（eval）。精度模式：tl.dot+fp32 累加器，input_precision='ieee' 或 'tf32x3'，禁用默认 TF32。容忍值推导三步：步骤 1 ε_op=1.2e-7, K=512, ε_total ≈ 2.7e-6, 留 10x 余量得 rtol_base=atol_base ≈ 3e-5；步骤 2 参考含 nn.Linear (cuBLAS)，rtol=atol=max(3e-5, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,1024)；(b) bias 沿通道维加。失败诊断：(i) diff~1e-4~1e-3 → cuBLAS TF32 主导，非 bug；(ii) 行偏移 → bias 错位。"
+      },
+      {
+        "name": "groupnorm",
+        "next_expressions": ["swish_mul_swish_fused"],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "G", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y2", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C}，N=128, C=1024；分组数 G=16，每组通道数 C_g = C/G = 64；可学习 gamma ∈ R^{C}，beta ∈ R^{C}；eps=1e-5。对每个 (n,g)，定义 I_g = {g·C_g, …, (g+1)·C_g - 1}。μ_{n,g} = (1/C_g) Σ_{c∈I_g} Y1[n,c]；σ²_{n,g} = (1/C_g) Σ_{c∈I_g} (Y1[n,c] - μ_{n,g})²。Y2[n,c] = gamma[c] · (Y1[n,c] - μ_{n,g}) / √(σ²_{n,g} + eps) + beta[c]，其中 g = c / C_g（整除）。",
+        "boundary_treatment": "G=16 整除 C=1024，无残余；reduction 完整覆盖每组；eval 模式用当前 batch 统计量（GroupNorm 无 running stats）。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "k", "range": "[0, C_g)", "binding": "static", "value": "64", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm.output",
+            "layout": "(N, C) = (128, 1024)",
+            "stride": "(C, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, c) = Y1_ptr + n*C + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "G": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.group_norm.num_groups (16)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, C) = (128, 1024)",
+            "stride": "(C, 1) = (1024, 1)",
+            "address_mapping": "addr_Y2(n, c) = Y2_ptr + n*C + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.GroupNorm(num_groups=16, num_channels=1024, eps=1e-5)（eval）。精度模式：mean/var reduction 用 fp32 累加器；纯计算无 cuBLAS/cuDNN。容忍值推导三步：步骤 1 ε_op=1.2e-7, K=C_g=64, ε_total ≈ 1.2e-7 × sqrt(64) = 9.6e-7, 留 10x 余量得 rtol_base=atol_base ≈ 1e-5；步骤 2 GroupNorm 不走 cuDNN，不触发；步骤 3 不触发。最终 rtol=atol=1e-5，主导因素是步骤 1。注意：若上游有 cuBLAS 输入误差累积，建议放宽到 1e-4。结构性检查：(a) 输出 shape=(128,1024)；(b) eps 在 sqrt 之前；(c) 每组 (n,g) 单组手算均值、方差对齐 PyTorch；(d) affine: gamma、beta 沿 C 维生效。失败诊断：(i) 方差为 0 时 NaN → eps 缺失；(ii) 整体偏移恒值 → beta/bias 错位；(iii) 整体缩放 → gamma 错位。"
+      },
+      {
+        "name": "swish_mul_swish_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y2", "kind": "tensor" },
+          { "name": "W_mul", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y2 ∈ R^{N×O}，N=128, O=1024；可学习 multiply_weight W_mul ∈ R^{O}。逐元素：先 Swish u = Y2 · sigmoid(Y2)；再乘以广播权重 v[n,o] = u[n,o] · W_mul[o]；再做一次 Swish: Y[n,o] = v[n,o] · sigmoid(v[n,o])。即 Y[n,o] = (Y2[n,o] · sigmoid(Y2[n,o]) · W_mul[o]) · sigmoid(Y2[n,o] · sigmoid(Y2[n,o]) · W_mul[o])。",
+        "boundary_treatment": "纯逐元素，无边界；W_mul 沿 N 维广播。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.groupnorm.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y2(n, o) = Y2_ptr + n*O + o"
+          },
+          "W_mul": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.multiply_weight",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_W_mul(o) = W_mul_ptr + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 (g · sigmoid(g)) * W_mul, 再乘 sigmoid 自身 (eval)。精度模式：纯逐元素 sigmoid（约 1-2 ULP），无 reduction。容忍值推导三步：步骤 1 ε_op=1.2e-7, K=1, rtol_base=atol_base ≈ 1e-6；步骤 2 不触发；步骤 3 不触发。最终 rtol=atol=1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,1024)；(b) W_mul 广播沿 N 维；(c) Swish 满足 swish(0)=0；(d) 两次 sigmoid 独立、第二个 sigmoid 接 v 而非 Y2。失败诊断：(i) 第二次 sigmoid 误接 Y2 → 整体偏差；(ii) W_mul 形状误广播为 (1,O,1) → shape mismatch；(iii) 计算顺序错（先乘 W_mul 再 swish）→ 数值偏。"
+      }
+    ]
+  }
+}

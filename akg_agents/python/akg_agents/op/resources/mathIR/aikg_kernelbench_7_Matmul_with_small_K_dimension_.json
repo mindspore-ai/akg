@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = sum_{k=0}^{K-1} A[i, k] * B[k, j], where i ∈ [0, M), j ∈ [0, N), M = 32768, N = 32768, K = 64",
+        "boundary_treatment": "Standard dense matrix multiplication; iteration ranges [0, M) × [0, N) × [0, K) guarantee no out-of-bound access. No padding or special boundary conditions.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "i * K + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "k * N + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "i * N + j"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "constant 32768"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "constant 32768"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "constant 64"
+          }
+        },
+        "TDD_requirement": "需数值对拍，参考实现为 PyTorch 的 torch.matmul。重点验证：输入形状 (M,K) 与 (K,N) 下输出形状 (M,N) 的正确性；索引范围无越界；fp32 累加精度。建议先用小形状 (2,3)×(3,2) 冒烟，再用完整输入 (32768,64)×(64,32768) 端到端对拍，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

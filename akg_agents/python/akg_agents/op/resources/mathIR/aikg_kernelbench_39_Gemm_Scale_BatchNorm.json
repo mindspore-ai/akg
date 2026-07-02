@@ -1,0 +1,143 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_scale_fused",
+        "next_expressions": ["batchnorm1d"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" },
+          { "name": "S_scale", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}，权重 W_gemm ∈ R^{O×I}，偏置 B_gemm ∈ R^{O}，scale 参数 S_scale ∈ R^{O}。先线性变换再逐元素缩放：Y1[n,o] = (Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]) · S_scale[o]。本题 N=128, I=1024, O=512。融合 Linear + 缩放两阶段。",
+        "boundary_treatment": "全连接 + 逐元素 mul，无边界处理；S_scale 沿 batch 维广播；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "S_scale": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.scale",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_S_scale(o) = S_scale_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_scale_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 self.gemm(x) * self.scale（eval 模式）。精度模式：未走 tl.dot 时为手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 走 tl.dot+fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1 ε_op=1.2e-7（fp32 FMA），K=I=1024，ε_total≈1.2e-7×sqrt(1024)=3.84e-6，留 10x 得 rtol_base=atol_base=4e-5；步骤 2 参考含 nn.Linear 走 cuBLAS，A100 默认开 TF32，rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) shape=(128,512)；(b) scale 沿 batch 广播；(c) bias 在 reduction 后加。冒烟：(2,4,8) → 完整 (128,1024,512)。失败诊断：diff 1e-4~1e-3 → cuBLAS TF32 预期；某 o 整列偏 → bias 或 scale 索引错；量级倍数偏差 → scale 漏乘或多乘。"
+      },
+      {
+        "name": "batchnorm1d",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "running_mean", "kind": "tensor" },
+          { "name": "running_var", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 Y1 ∈ R^{N×C}，BatchNorm1d 在 training 模式下用当前 batch 统计量；在 eval 模式用 running_mean、running_var。本题模型未显式 eval()，按 KernelBench 通常默认 training=True：对每个通道 c∈[0,C-1]，μ_c=(1/N) Σ_{n=0}^{N-1} Y1[n,c]；σ²_c=(1/N) Σ_{n=0}^{N-1} (Y1[n,c]-μ_c)²。输出 Y[n,c] = gamma[c] · (Y1[n,c]-μ_c) / √(σ²_c+ε) + beta[c]。本题 N=128, C=512, ε=1e-5, momentum=0.1。",
+        "boundary_treatment": "BN1d 在通道维做归一化，沿 batch 维 reduce；training/eval 行为不同；KernelBench 对拍按模型默认行为。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "k", "range": "[0, N)", "binding": "static", "value": "128", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_scale_fused.output",
+            "layout": "(N, C) = (128, 512)",
+            "stride": "(C, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, c) = Y1_ptr + n*512 + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "running_mean": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_mean",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_running_mean(c) = running_mean_ptr + c"
+          },
+          "running_var": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_var",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_running_var(c) = running_var_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C) = (128, 512)",
+            "stride": "(C, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, c) = Y_ptr + n*512 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.BatchNorm1d(512, eps=1e-5, momentum=0.1)(Y1)，按模型默认 training 模式。精度模式：均值/方差的 sum 走 fp32 累加器，IEEE fp32 语义。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=N=128，ε_total≈1.2e-7×sqrt(128)≈1.36e-6，留 10x 得 1.4e-5；步骤 2 参考含 BatchNorm 强制 rtol=atol=max(1.4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,512)；(b) 每通道均值≈0、方差≈1（gamma=1, beta=0 时）；(c) eps 在 sqrt 内部；(d) affine 是否生效。冒烟：(8, 16) → 完整 (128,512)。失败诊断：(i) diff 1e-3 → 预期；(ii) 数值全偏 → 用错 training/eval 统计源；(iii) 个别通道异常 → eps 漏加或 sqrt 顺序错。"
+      }
+    ]
+  }
+}

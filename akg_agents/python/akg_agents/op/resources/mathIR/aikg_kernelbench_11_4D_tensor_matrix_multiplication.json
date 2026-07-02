@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "tensor_matrix_mul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[b,i,j,k] = Σ_{l} A[b,i,j,l] * B[l,k]",
+        "boundary_treatment": "No boundary treatment required; all indices are within valid bounds.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, b)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, i)",
+              "binding": "static",
+              "value": "256"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, j)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, k)",
+              "binding": "static",
+              "value": "768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "l",
+              "range": "[0, l)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(B, I, J, L)",
+            "stride": "(I*J*L, J*L, L, 1)",
+            "address_mapping": "b * (I*J*L) + i * (J*L) + j * L + l"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(L, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "l * K + k"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, I, J, K)",
+            "stride": "(I*J*K, J*K, K, 1)",
+            "address_mapping": "b * (I*J*K) + i * (J*K) + j * K + k"
+          }
+        },
+        "TDD_requirement": "需要对拍 PyTorch eager 结果。重点验证输出形状 (8,256,512,768)，收缩轴 l 求和正确。建议用小形状 (2,3,4,5,6) 冒烟，完整形状对拍，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

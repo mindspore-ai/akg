@@ -1,0 +1,78 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i,j] = sum_{k=0}^{K-1} A[i,k] * B[k,j]",
+        "boundary_treatment": "All indices are within bounds; no padding or masking required.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "2048"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "8192",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(K, 1)",
+            "address_mapping": "row-major: base + i * K + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "row-major: base + k * N + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(N, 1)",
+            "address_mapping": "row-major: base + i * N + j"
+          }
+        },
+        "TDD_requirement": "使用 torch.matmul(A, B) 作为参考实现进行数值对拍；重点检查输出形状为 (2048, 4096)，逐元素相对误差建议 1e-5 以内；冒烟测试可用小形状 (2,3)@(3,4)，完整测试用给出的输入形状。"
+      }
+    ]
+  }
+}

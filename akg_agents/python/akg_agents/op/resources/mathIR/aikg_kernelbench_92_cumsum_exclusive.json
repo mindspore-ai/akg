@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "exclusive_cumsum",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given input tensor X of shape (N, L) with N = 32768, L = 32768, and cumulative axis dim = 1. For each batch index i in [0, N) and sequence index j in [0, L): Y[i, j] = 0 if j == 0 else sum_{k=0}^{j-1} X[i, k]. All sums are computed in float32.",
+        "boundary_treatment": "When j = 0, the output is always 0. For j >= 1, the sum includes indices 0 to j-1. The implementation discards the last column (index L-1) via narrow, computes inclusive cumsum on the remaining L-1 columns, then prepends a zero column, so the final output Y has the same shape as X with the exclusive prefix sum property.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, L)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, j)",
+              "binding": "runtime",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "i * L + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, L)",
+            "stride": "(L, 1)",
+            "address_mapping": "i * L + j"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "以 PyTorch eager 执行结果为参考进行数值对拍。重点检查：输入形状 (32768, 32768) 下的输出正确性；边界索引 j=0 处是否为 0；最后一列 j=L-1 是否等于前 L-1 列的前缀和。建议先用小形状 (例如 (2,5)) 冒烟验证索引与边界逻辑，再用完整形状对拍。由于仅涉及精确的浮点累加，允许累加顺序带来的微小舍入差异，但公式语义必须一致。"
+      }
+    ]
+  }
+}

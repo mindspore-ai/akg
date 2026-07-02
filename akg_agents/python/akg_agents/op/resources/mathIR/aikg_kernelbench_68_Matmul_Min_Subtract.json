@@ -1,0 +1,101 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_fused",
+        "next_expressions": ["min_subtract_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_fc", "kind": "tensor" },
+          { "name": "B_fc", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "全连接：X ∈ R^{N×I} (N=128, I=10)，W_fc ∈ R^{O×I} (O=5)，B_fc ∈ R^{O}。Y1[n,o] = B_fc[o] + Σ_{i=0}^{I-1} X[n,i] · W_fc[o,i]。",
+        "boundary_treatment": "完整 reduction I=10；bias 加在 O 维；eval 无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "5" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (5, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W_fc(o, i) = W_fc_ptr + o*10 + i"
+          },
+          "B_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (5)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_fc(o) = B_fc_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 5)",
+            "stride": "(O, 1) = (5, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*5 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(10, 5)（eval 模式）。精度模式：tl.dot + fp32 输入须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32；FMA 走 IEEE。容忍值推导：步骤 1 ε_op=1.2e-7，K=I=10，ε_total ≈ 1.2e-7 * sqrt(10) ≈ 3.8e-7，10x 余量 base ≈ 4e-6；步骤 2（cuBLAS 修正，关键）参考 nn.Linear 强制 rtol=atol=max(4e-6, 1e-3)=1e-3；步骤 3 不触发。最终 rtol=atol=1e-3，主导步骤 2 cuBLAS TF32。结构性检查：(a) shape=(128,5)；(b) weight (O=5, I=10) 非转置；(c) bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 cuBLAS 正常；(ii) 转置错位 → W 形状反；(iii) 偏 bias → 索引错。"
+      },
+      {
+        "name": "min_subtract_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "constant", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "逐元素 torch.min(Y1, constant) 接减常数：先 Z[n,o] = min(Y1[n,o], constant)；再 Y[n,o] = Z[n,o] - constant = min(Y1[n,o], constant) - constant = min(Y1[n,o] - constant, 0)。本题 constant=2.0，shape=(128,5)。该 expression 融合两个逐元素操作。",
+        "boundary_treatment": "纯逐元素；torch.min 与标量比较等价于逐元素 min；输出 = min(Y1 - constant, 0) ≤ 0。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "5" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 5)",
+            "stride": "(O, 1) = (5, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*5 + o"
+          },
+          "constant": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.constant (nn.Parameter(torch.tensor(2.0)))"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 5)",
+            "stride": "(O, 1) = (5, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*5 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.min(Y1, self.constant) 后减 self.constant（eval 模式）。精度模式：纯逐元素 IEEE fp32；torch.min 是比较型，浮点减法 IEEE 单 ULP。容忍值推导：步骤 1 ε_op=1.2e-7（fp32），K=1，base=1e-6；步骤 2 不触发；步骤 3 不触发。最终 rtol=atol=1e-6，主导步骤 1。结构性检查：(a) shape=(128,5)；(b) 所有输出 Y[n,o] ≤ 0（min - constant 必非正）；(c) Y1[n,o] >= constant 时 Y=0；(d) Y1[n,o] < constant 时 Y = Y1 - constant。失败诊断：(i) 输出正值 → min/subtract 顺序写反；(ii) 整体偏 constant → 漏减或减了两次；(iii) constant 视为 tensor 时形状广播错。"
+      }
+    ]
+  }
+}

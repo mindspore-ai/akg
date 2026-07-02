@@ -25,6 +25,9 @@ CodeChecker 单元测试
 
 import pytest
 from akg_agents.op.utils.code_checker import CodeChecker
+from akg_agents.op.utils.code_checker import CheckContext
+from akg_agents.op.utils.code_checker.triton_checkers import run_diagnostic_checkers
+from akg_agents.op.utils.code_checker.triton_checkers.ast_utils import extract_triton_info
 
 
 @pytest.fixture
@@ -678,6 +681,254 @@ class ModelNew(torch.nn.Module):
     passed, error_message, errors = await checker_no_dsl.check(code)
     assert passed is True
     assert len(errors) == 0
+
+
+# ============================================================
+# Triton 非阻塞诊断检查
+# ============================================================
+
+def _triton_bad_jit_kwargs_code() -> str:
+    return '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit(num_stages=2, num_warps=4)
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, y):
+        out = torch.empty_like(x)
+        n = x.numel()
+        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]),)
+        add_kernel[grid](x, y, out, n, BLOCK_SIZE=1024)
+        return out
+'''
+
+
+def _triton_mixed_scalar_slice_code() -> str:
+    return '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def slice_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    tile = tl.load(x_ptr + offsets[:, None] * BLOCK_SIZE + offsets[None, :])
+    row = tile[0, :]
+    tl.store(y_ptr + offsets, row)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        y = torch.empty_like(x)
+        grid = lambda meta: (1,)
+        slice_kernel[grid](x, y, BLOCK_SIZE=1024)
+        return y
+'''
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_triton_jit_bad_kwargs_are_non_blocking_diagnostics(checker):
+    """@triton.jit(num_stages=...) 应诊断出来，但不影响 blocking pass。"""
+    code = _triton_bad_jit_kwargs_code()
+    passed, error_message, errors = await checker.check(code)
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert checker.last_diagnostic_passed is False
+    assert any(
+        item["rule_id"] == "TRITON_API_BAD_KWARG"
+        for item in checker.last_diagnostic_errors
+    )
+    assert "num_stages" in checker.last_diagnostic_error_message
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_triton_diagnostics_can_be_disabled_by_yaml_config():
+    """code_diagnostic_checker.enabled=false 时诊断不运行，blocking 语义不变。"""
+    checker = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={"code_diagnostic_checker": {"enabled": False}},
+    )
+    passed, error_message, errors = await checker.check(_triton_bad_jit_kwargs_code())
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert checker.last_diagnostic_passed is True
+    assert checker.last_diagnostic_errors == []
+    assert checker.last_diagnostic_error_message == ""
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_triton_diagnostics_legacy_disable_config_still_works():
+    """兼容旧的 enable_code_diagnostic_checker 顶层开关。"""
+    checker = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={"enable_code_diagnostic_checker": False},
+    )
+    passed, _, errors = await checker.check(_triton_bad_jit_kwargs_code())
+    assert passed is True
+    assert errors == []
+    assert checker.last_diagnostic_errors == []
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_base_checker_pipeline_can_select_individual_checkers():
+    """base_checkers 列表只运行指定 blocking checker。"""
+    checker = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={
+            "code_checker": {
+                "base_checkers": ["empty_code"],
+                "triton_checkers": [],
+            },
+        },
+    )
+    code = "import torch\n\ndef forward(x):\n    return torch.relu(x)\n"
+    passed, error_message, errors = await checker.check(code)
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert checker.last_diagnostic_errors == []
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_triton_checker_pipeline_can_disable_or_select_diagnostics():
+    """triton_checkers 支持空列表关闭，也支持按 checker 名称选择。"""
+    disabled = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={"code_checker": {"triton_checkers": []}},
+    )
+    passed, _, errors = await disabled.check(_triton_bad_jit_kwargs_code())
+    assert passed is True
+    assert errors == []
+    assert disabled.last_diagnostic_errors == []
+
+    selected = CodeChecker(
+        backend="cuda",
+        dsl="triton_cuda",
+        config={"code_checker": {"triton_checkers": ["api_signature"]}},
+    )
+    passed, _, errors = await selected.check(_triton_bad_jit_kwargs_code())
+    assert passed is True
+    assert errors == []
+    assert any(
+        item["rule_id"] == "TRITON_API_BAD_KWARG"
+        for item in selected.last_diagnostic_errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_ascend_semantics_checker_is_not_registered_for_cuda_all():
+    """CUDA all 只包含原有 Triton diagnostics，不包含 Ascend-only checker。"""
+    checker = CodeChecker(backend="cuda", dsl="triton_cuda")
+    passed, error_message, errors = await checker.check(_triton_mixed_scalar_slice_code())
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert not any(
+        item["rule_id"] == "TRITON_ASCEND_MIXED_SCALAR_SLICE_INDEX"
+        for item in checker.last_diagnostic_errors
+    )
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_ascend_semantics_checker_is_registered_for_ascend_all():
+    """Ascend all 会额外启用 Ascend-only lowering diagnostics。"""
+    checker = CodeChecker(backend="ascend", dsl="triton_ascend")
+    passed, error_message, errors = await checker.check(_triton_mixed_scalar_slice_code())
+    assert passed is True
+    assert errors == []
+    assert error_message == ""
+    assert any(
+        item["rule_id"] == "TRITON_ASCEND_MIXED_SCALAR_SLICE_INDEX"
+        for item in checker.last_diagnostic_errors
+    )
+
+
+@pytest.mark.level0
+def test_triton_api_extractor_covers_alias_decorator_launch_and_attributes():
+    code = '''\
+import triton as tri
+import triton.language as tl
+from triton import jit as tjit
+from triton.language import load as ld
+
+@tjit
+def kernel(x, y, BLOCK: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    data = ld(x + offsets)
+    tl.store(y + offsets, data)
+
+def launch(x, y):
+    kernel[(1,)](x, y, BLOCK=16, num_warps=4)
+    return tri.cdiv(17, 16)
+'''
+    info = extract_triton_info(code)
+    uses = {(item.kind, item.canonical, item.raw) for item in info.uses}
+    assert ("decorator", "triton.jit", "tjit") in uses
+    assert ("call", "triton.language.load", "ld") in uses
+    assert ("call", "triton.language.arange", "tl.arange") in uses
+    assert ("attribute", "triton.language.constexpr", "tl.constexpr") in uses
+    assert any(item.kind == "launch" and item.kernel_name == "kernel" for item in info.uses)
+
+
+@pytest.mark.level0
+def test_triton_default_diagnostics_high_confidence_rules():
+    code = '''\
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(x, y, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(axis=axis_id)
+    dyn = n - pid
+    acc = tl.zeros((dyn,), dtype=tl.float32)
+    for i in tl.static_range(dyn):
+        if tl.load(x + i) > 0:
+            break
+    z = tl.expand_dims(acc, (0, 1))
+    tl.store(y + pid, z)
+
+def launch(x, y, n):
+    kernel[(1,)](x, y, n, 16, n=n, BLOCK=16)
+'''
+    issues = run_diagnostic_checkers(
+        code,
+        ctx=CheckContext(backend="cuda", dsl="triton_cuda", only_errors=True),
+    )
+    rule_ids = {item.rule_id for item in issues}
+    assert "TRITON_PROGRAM_ID_AXIS" in rule_ids
+    assert "TRITON_DYNAMIC_SHAPE_IN_ALLOC" in rule_ids
+    assert "TRITON_STATIC_RANGE_NON_CONSTEXPR" in rule_ids
+    assert "TRITON_RUNTIME_PY_IF" in rule_ids
+    assert "TRITON_UNSUPPORTED_CONTROL_FLOW" in rule_ids
+    assert "TRITON_EXPAND_DIMS_TUPLE_AXIS" in rule_ids
+    assert "TRITON_DUPLICATE_KERNEL_ARGUMENT" in rule_ids
 
 
 @pytest.mark.level0

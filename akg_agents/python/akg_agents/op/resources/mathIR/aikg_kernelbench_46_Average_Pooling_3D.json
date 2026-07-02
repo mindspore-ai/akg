@@ -1,0 +1,125 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "avgpool3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n,c,d,h,w] = (1 / K^3) * sum_{kd=0}^{K-1} sum_{kh=0}^{K-1} sum_{kw=0}^{K-1} X[n, c, d*S + kd - P, h*S + kh - P, w*S + kw - P]",
+        "boundary_treatment": "输入 X 在深度、高度、宽度维度上未显式填充，但公式中索引 d*S + kd - P 等可能越界。越界时 X 值视为 0（等价于 zero-padding 模式）。分母恒为 K^3（即 count_include_pad=True），表示平均考虑所有 kernel 内的位置，包括填充的零值位置。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "128"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "kd",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, D, H, W)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1)",
+            "address_mapping": "n * (C*D*H*W) + c * (D*H*W) + d_in * (H*W) + h_in * W + w_in"
+          },
+          "Y": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.avgpool3d.output",
+            "layout": "(N, C, D_out, H_out, W_out)",
+            "stride": "(C*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1)",
+            "address_mapping": "n * (C*D_out*H_out*W_out) + c * (D_out*H_out*W_out) + d * (H_out*W_out) + h * W_out + w"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.padding"
+          }
+        },
+        "TDD_requirement": "需要对拍 PyTorch AvgPool3d 输出。先用小尺寸 (batch=2, channels=1, depth=5, height=5, width=5) 且 kernel=3, stride=2, padding=1 验证输出形状和边界值；再使用全尺寸 (16,32,128,128,256) 对拍。重点检查边界填充零是否正确参与平均（分母始终为27）。fp32 容忍值建议 1e-5。"
+      }
+    ]
+  }
+}

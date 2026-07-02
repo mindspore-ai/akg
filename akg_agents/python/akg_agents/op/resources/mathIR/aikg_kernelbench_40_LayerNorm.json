@@ -1,0 +1,117 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "layer_norm_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 x ∈ ℝ^{N×C×H×W}，其中 N=16, C=64, H=256, W=256。LayerNorm 的可学习参数为 γ, β ∈ ℝ^{C×H×W}（对应 weight 与 bias），稳定项 ε=1e-5。对每个样本 n∈[0,N-1]，定义均值 μ[n] = (1/(C*H*W)) * Σ_{c=0}^{C-1} Σ_{h=0}^{H-1} Σ_{w=0}^{W-1} x[n,c,h,w]，方差 σ²[n] = (1/(C*H*W)) * Σ_{c=0}^{C-1} Σ_{h=0}^{H-1} Σ_{w=0}^{W-1} (x[n,c,h,w] - μ[n])²。则输出 y ∈ ℝ^{N×C×H×W} 为：y[n,c,h,w] = γ[c,h,w] * ( (x[n,c,h,w] - μ[n]) / √(σ²[n] + ε) ) + β[c,h,w]。其中 ε = 1e-5。",
+        "boundary_treatment": "该算子对每个样本独立地沿最后三维 (C,H,W) 进行标准化与仿射变换，不涉及空间邻域访问或溢出处理。确保分母 √(σ²+ε) 大于零（ε 保障数值稳定）。eval() 模式下使用当前输入的统计量，不依赖缓冲统计量。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W) = (16, 64, 256, 256)",
+            "stride": "(C*H*W, H*W, W, 1) = (4194304, 65536, 256, 1)",
+            "address_mapping": "addr_x(n, c, h, w) = x_ptr + n*4194304 + c*65536 + h*256 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.ln.weight",
+            "layout": "(C, H, W) = (64, 256, 256)",
+            "stride": "(H*W, W, 1) = (65536, 256, 1)",
+            "address_mapping": "addr_gamma(c, h, w) = gamma_ptr + c*65536 + h*256 + w"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.ln.bias",
+            "layout": "(C, H, W) = (64, 256, 256)",
+            "stride": "(H*W, W, 1) = (65536, 256, 1)",
+            "address_mapping": "addr_beta(c, h, w) = beta_ptr + c*65536 + h*256 + w"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W) = (16, 64, 256, 256)",
+            "stride": "(C*H*W, H*W, W, 1) = (4194304, 65536, 256, 1)",
+            "address_mapping": "addr_y(n, c, h, w) = y_ptr + n*4194304 + c*65536 + h*256 + w"
+          },
+          "μ": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "mean per sample",
+            "layout": "",
+            "stride": "",
+            "address_mapping": ""
+          },
+          "σ²": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "variance per sample",
+            "layout": "",
+            "stride": "",
+            "address_mapping": ""
+          },
+          "ε": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.ln.eps"
+          }
+        },
+        "TDD_requirement": "验证输出 shape 为 (16,64,256,256)；对随机输入计算手工 mean/var 并与 nn.LayerNorm 输出逐元素对拍；故意输入全零检查标准化后是否接近 gamma*0+beta；测试 eps 对分母的贡献；验证 affine=False 时 gamma=1,beta=0 的效果（当前代码默认为 True 但不影响公式本质）。"
+      }
+    ]
+  }
+}

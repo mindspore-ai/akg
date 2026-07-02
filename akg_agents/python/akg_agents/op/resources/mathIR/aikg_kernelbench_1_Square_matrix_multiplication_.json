@@ -1,0 +1,78 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = Σ_{k=0}^{4095} A[i, k] * B[k, j]",
+        "boundary_treatment": "No boundary treatment; all indices i, j, k are within [0, 4095].",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(4096, 4096)",
+            "stride": "(4096, 1)",
+            "address_mapping": "i * 4096 + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(4096, 4096)",
+            "stride": "(4096, 1)",
+            "address_mapping": "k * 4096 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(4096, 4096)",
+            "stride": "(4096, 1)",
+            "address_mapping": "i * 4096 + j"
+          }
+        },
+        "TDD_requirement": "对拍参考：使用PyTorch的torch.matmul(A, B)作为参考实现。重点验证形状(4096, 4096)的结果数值正确性，建议容忍误差1e-5。可使用小形状(4,4)和(16,16)做冒烟测试，再用完整(4096,4096)做对拍。检查索引i、j、k的范围和归约求和是否正确。"
+      }
+    ]
+  }
+}

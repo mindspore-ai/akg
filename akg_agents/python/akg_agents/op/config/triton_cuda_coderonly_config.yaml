@@ -13,6 +13,11 @@ docs_dir:
   designer: "op/resources/docs/sketch_docs"
   coder: "op/resources/docs/triton_cuda_docs"
 
+# API docs prompt configuration
+api_docs:
+  llm_compress_enabled: false
+  llm_compress_threshold: 24000
+
 # Performance analysis configuration
 profile_settings:
   run_times: 50
@@ -21,3 +26,13 @@ profile_settings:
 # Verification configuration
 verify_timeout: 600  # Timeout for verification in seconds (default 10 minutes)
 
+# CodeChecker non-blocking Triton diagnostics
+code_checker:
+  triton_checkers:
+    - api_signature
+    - high_confidence_semantics
+
+code_diagnostic_checker:
+  enabled: true
+  only_errors: true
+  dedup: true

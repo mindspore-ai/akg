@@ -1,0 +1,58 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "relu",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = max(X[i, j], 0)",
+        "boundary_treatment": "逐元素操作，无边界条件。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "[393216, 1]",
+            "address_mapping": "i * 393216 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "[393216, 1]",
+            "address_mapping": "i * 393216 + j"
+          }
+        },
+        "TDD_requirement": "对拍参考：使用 PyTorch torch.relu 结果。重点检查 shape 一致性（4096, 393216）、dtype float32、无越界。建议用小 shape (2,3) 冒烟，再用完整输入对拍，容忍值 0。"
+      }
+    ]
+  }
+}

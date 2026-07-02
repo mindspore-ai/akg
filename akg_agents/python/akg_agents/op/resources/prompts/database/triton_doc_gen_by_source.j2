@@ -1,0 +1,17 @@
+## 可能用到的 Triton API（按 PyTorch API 分组，来自本地 Triton API database）
+
+以下候选按用户代码中实际出现的 PyTorch API 分组。
+同一组内的候选只是 embedding 召回的结果，**不一定每条都合适**；
+请结合签名 / 文档 / tag 自行判断哪一条更贴合当前算子语义。
+{% for pytorch_api, group in recall_by_source.items() %}
+### 来源 PyTorch API: `{{ pytorch_api }}`（共 {{ group.candidates|length }} 条候选）
+已展示: {% if group.displayed_apis %}{% for api in group.displayed_apis %}`{{ api.triton_qualname }}`{% if not loop.last %}, {% endif %}{% endfor %}{% else %}无{% endif %}
+补充API: {% if group.supplemental_apis %}{% for api in group.supplemental_apis %}`{{ api.triton_qualname }}`{% if not loop.last %}, {% endif %}{% endfor %}{% else %}无{% endif %}
+{% if group.supplemental_apis %}{% for api in group.supplemental_apis %}
+- {{ loop.index }}. Triton API: `{{ api.triton_qualname }}` / `{{ api.triton_name }}`
+  - Tags: {{ api.tags }}
+  - Triton 函数签名: {{ api.signature }}
+  - Triton 函数文档: {{ api.doc }}
+{% endfor %}{% else %}
+（本 PyTorch API 的召回候选已由基础 API 文档或前文召回覆盖）
+{% endif %}{% endfor %}

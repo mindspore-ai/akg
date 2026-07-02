@@ -1,0 +1,144 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          },
+          {
+            "name": "kernel_d",
+            "kind": "scalar"
+          },
+          {
+            "name": "kernel_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "kernel_w",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[n, oc, d, h, w] = Σ_{ic=0}^{C_in-1} Σ_{kd=0}^{K_d-1} Σ_{kh=0}^{K_h-1} Σ_{kw=0}^{K_w-1} x[n, ic, d + kd, h + kh, w + kw] * weight[oc, ic, kd, kh, kw], 其中 K_d = kernel_d, K_h = kernel_h, K_w = kernel_w, C_in 为 x 的第二维大小, 输出空间尺寸 D_out = D_in - K_d + 1 = 62, H_out = H_in - K_h + 1 = 60, W_out = W_in - K_w + 1 = 58.",
+        "boundary_treatment": "无填充（valid convolution）。输入索引 d+kd 等始终在有效范围内，无需填充，输出尺寸由公式保证不越界。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "62"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "60"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "58"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kd",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "7",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in)",
+            "stride": "(786432, 262144, 4096, 64, 1)",
+            "address_mapping": "offset(n, ic, d_in, h_in, w_in) = n*786432 + ic*262144 + d_in*4096 + h_in*64 + w_in"
+          },
+          "weight": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv3d.weight",
+            "layout": "(C_out, C_in, K_d, K_h, K_w)",
+            "stride": "(315, 105, 35, 7, 1)",
+            "address_mapping": "offset(oc, ic, kd, kh, kw) = oc*315 + ic*105 + kd*35 + kh*7 + kw"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out)",
+            "stride": "(13808640, 215760, 3480, 58, 1)",
+            "address_mapping": "offset(n, oc, d, h, w) = n*13808640 + oc*215760 + d*3480 + h*58 + w"
+          },
+          "kernel_d": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.kernel_size[0]"
+          },
+          "kernel_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.kernel_size[1]"
+          },
+          "kernel_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.kernel_size[2]"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch eager mode 的 nn.Conv3d 输出进行数值对拍。重点检查：输出形状 (16,64,62,60,58)，valid 卷积无 padding 的边界处理，不同 batch、通道、空间位置的计算正确性。建议先用小尺寸随机张量（如 batch=2, in=2, out=3, 输入空间 10x10x10, 核 3x5x7）进行冒烟测试，再用给定的完整输入 (16,3,64,64,64) 对拍。容忍值设为浮点相对误差 1e-5，绝对误差 1e-6。"
+      }
+    ]
+  }
+}

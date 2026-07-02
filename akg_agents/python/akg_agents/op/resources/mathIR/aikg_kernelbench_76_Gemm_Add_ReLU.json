@@ -1,0 +1,60 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_biasadd_relu_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, 无偏置权重 W_gemm ∈ R^{O×I}, 可学习 bias B_extra ∈ R^{O}。先计算 GEMM 加 bias：Z[n,o] = B_extra[o] + Σ_{i=0}^{I-1} X[n,i]·W_gemm[o,i]。再做 ReLU：Y[n,o] = max(0, Z[n,o])。本题 N=128, I=1024, O=512。融合 GEMM + bias 广播 + ReLU。",
+        "boundary_treatment": "全连接 GEMM 无空间边界处理；bias 沿 batch 维广播；ReLU 是逐元素 max(0,·) 无越界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_extra(o) = B_extra_ptr + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024, 512, bias=False) 接 self.bias 广播加法接 torch.relu。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；若走 tl.dot，必须显式声明 input_precision='ieee' 或 'tf32x3' 避免默认 TF32。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=I=1024，ε_total ≈ 1.2e-7·sqrt(1024)·10 ≈ 3.8e-5；步骤 2，参考含 nn.Linear（cuBLAS TF32），rtol=atol=max(3.8e-5, 1e-3)=1e-3；步骤 3，ReLU 后只保留非负但量级不放大，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,512)；(b) 所有 Y[n,o]≥0；(c) 单独跑 (2,4)→(2,8) 小尺寸对拍；(d) bias_shape=(out_features,) 验证只按 o 维加。失败诊断：(i) 1e-4~1e-3 误差 + shape 正确 → cuBLAS TF32 主导，放宽 tolerance；(ii) 误差远超 1e-3 → 检查 W_gemm 是否对调转置；(iii) 出现负值 → ReLU 未生效或加 bias 顺序错。"
+      }
+    ]
+  }
+}

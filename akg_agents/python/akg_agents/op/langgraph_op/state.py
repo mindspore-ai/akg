@@ -45,6 +45,20 @@ class KernelGenState(BaseState, total=False):
     designer_code: Optional[str]
     designer_prompt: Optional[str]
     designer_reasoning: Optional[str]
+
+    # === MathIR 输出 ===
+    mathIR_code: Optional[Dict[str, Any]]
+    mathIR_prompt: Optional[str]
+    mathIR_reasoning: Optional[str]
+    mathIR_error: Optional[str]
+    mlir: Optional[bool]
+    mlir_compile_code: Optional[str]
+    pytorch_doc_string: Optional[str]
+    standard_formula: Optional[str]
+    preset_ir_json: Optional[str]
+    preset_ir_path: Optional[str]
+    multi_kernel_gen: Optional[bool]
+    multi_kernel_max_retries: Optional[int]
     
     # === Coder 输出 ===
     coder_code: Optional[str]
@@ -59,6 +73,25 @@ class KernelGenState(BaseState, total=False):
     
     # === 多 case 验证 ===
     multi_case_error: Optional[str]
+
+    # === MathIR multi-expression 子 kernel 生成 ===
+    multi_expr_error: Optional[str]
+    multi_expr_attempt_counts: Optional[List[int]]
+    multi_expr_success: Optional[List[bool]]
+
+    # === Triton API database recall ===
+    api_database_enabled: Optional[bool]
+    api_database_status: Optional[str]
+    api_database_recall_hash: Optional[str]
+    api_database_source_kind: Optional[str]
+    api_database_source_apis: Optional[List[str]]
+    api_database_embed_cache_folder: Optional[str]
+    api_recall_json_path: Optional[str]
+    api_recall_docs_path: Optional[str]
+    api_recall_llm_called: Optional[bool]
+    api_recall_step_delta: Optional[int]
+    triton_api_recall: Optional[List[Dict[str, Any]]]
+    triton_api_recall_by_source: Optional[Dict[str, List[Dict[str, Any]]]]
     
     # === 历史记录（算子专用格式，累积）===
     history_attempts: Annotated[List[Dict[str, Any]], add]
@@ -67,6 +100,9 @@ class KernelGenState(BaseState, total=False):
     code_check_passed: Optional[bool]
     code_check_errors: Optional[str]  # 格式化的错误信息
     code_check_details: Optional[List[Dict[str, Any]]]  # 详细错误列表
+    code_diagnostic_passed: Optional[bool]
+    code_diagnostic_errors: Optional[str]  # 非阻塞 Triton 诊断信息
+    code_diagnostic_details: Optional[List[Dict[str, Any]]]
 
     # === 代码生成异常（max_tokens 截断等）===
     codegen_invalid: Optional[bool]

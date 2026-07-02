@@ -1,0 +1,143 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_mish_mul_fused",
+        "next_expressions": ["batchnorm2d"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_conv", "kind": "tensor" },
+          { "name": "B_conv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}, N=128, C_in=3, H_in=W_in=32。Conv2d 权重 W_conv ∈ R^{C_out×C_in×K×K} (C_out=16, K=3), 偏置 B_conv ∈ R^{C_out}, stride=1, padding=0。输出 H_o=W_o=H_in-K+1=30。先计算 conv: Z[n,c_o,h,w] = B_conv[c_o] + Σ_{c_i,k_h,k_w} X[n,c_i,h+k_h,w+k_w]·W_conv[c_o,c_i,k_h,k_w]。然后做 Mish 等价的形式：torch.multiply(torch.tanh(F.softplus(Z)), Z) = Z · tanh(ln(1 + exp(Z))) (与 Mish 完全等价)。Y1[n,c_o,h,w] = Z[n,c_o,h,w] · tanh(softplus(Z[n,c_o,h,w]))。该 expression 融合 conv2d 与 Mish 形式的激活。",
+        "boundary_treatment": "Conv2d valid 模式，padding=0；Mish 逐元素，softplus 数值稳定 (x>20 时退化为 x)。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_o)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_o)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 3, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (3072, 1024, 32, 1)",
+            "address_mapping": "addr_X(n,c_i,h,w) = X_ptr + n*3072 + c_i*1024 + h*32 + w"
+          },
+          "W_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(C_out, C_in, K, K) = (16, 3, 3, 3)",
+            "stride": "(C_in*K*K, K*K, K, 1) = (27, 9, 3, 1)",
+            "address_mapping": "addr_W_conv(c_o,c_i,k_h,k_w) = W_conv_ptr + c_o*27 + c_i*9 + k_h*3 + k_w"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_conv(c_o) = B_conv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_mish_mul_fused.output",
+            "layout": "(N, C_out, H_o, W_o) = (128, 16, 30, 30)",
+            "stride": "(C_out*H_o*W_o, H_o*W_o, W_o, 1) = (14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n,c_o,h,w) = Y1_ptr + n*14400 + c_o*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Conv2d(3,16,3) 前向, 然后 torch.multiply(torch.tanh(F.softplus(.)), .) (等价于 F.mish)，eval 模式。精度模式：含 conv 阶段，tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'；softplus/tanh 各 ~1 ULP。容忍值三步：步骤 1 ε_op=1.2e-7, K=C_in·K^2=27, ε_total≈6.2e-7, rtol_base=atol_base=6.2e-6；步骤 2（cuDNN 修正）参考 nn.Conv2d 走 cuDNN+TF32, rtol=atol=max(6.2e-6, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,16,30,30)；(b) bias 在 c_o；(c) 验证 multiply(tanh(softplus(x)), x) 与 F.mish(x) 一致。失败诊断：(i) NaN → softplus 未做数值稳定；(ii) diff 1e-4~1e-3 → cuDNN TF32 正常；(iii) Mish 写错 → 比较 F.mish 与手写式。"
+      },
+      {
+        "name": "batchnorm2d",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "mu", "kind": "tensor" },
+          { "name": "var", "kind": "tensor" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_o×W_o}, N=128, C_out=16, H_o=W_o=30。BatchNorm2d 在 train 模式下使用当前 batch 统计、在 eval 模式下使用 running stats。然而 KernelBench 默认在 model.train() 下运行 forward（PyTorch 默认 nn.Module 处于 train 模式）。train 模式公式：μ[c] = (1/(N·H_o·W_o)) · Σ_{n,h,w} Y1[n,c,h,w]; σ²[c] = (1/(N·H_o·W_o)) · Σ_{n,h,w} (Y1[n,c,h,w] - μ[c])²; Y[n,c,h,w] = γ[c]·(Y1[n,c,h,w] - μ[c]) / sqrt(σ²[c] + eps) + β[c]。参数：γ=self.bn.weight, β=self.bn.bias, eps=1e-5。",
+        "boundary_treatment": "BN 在 (N, H_o, W_o) 维上做 reduction (每个 channel 独立)；num_groups 不适用 (per-channel)；空间 reduction 完整覆盖；train 模式使用 unbiased=False 方差。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_o)", "binding": "static", "value": "30" },
+            { "symbol": "w", "range": "[0, W_o)", "binding": "static", "value": "30" }
+          ],
+          "reduction": [
+            { "symbol": "n_r", "range": "[0, N)", "binding": "static", "value": "128", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "h_r", "range": "[0, H_o)", "binding": "static", "value": "30", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "w_r", "range": "[0, W_o)", "binding": "static", "value": "30", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_mish_mul_fused.output",
+            "layout": "(N, C_out, H_o, W_o) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y1(n,c,h,w) = Y1_ptr + n*14400 + c*900 + h*30 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "mu": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_mean (eval) or 当前 batch mean (train)",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_mu(c) = mu_ptr + c"
+          },
+          "var": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.running_var (eval) or 当前 batch var (train)",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_var(c) = var_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (= 1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_o, W_o) = (128, 16, 30, 30)",
+            "stride": "(14400, 900, 30, 1)",
+            "address_mapping": "addr_Y(n,c,h,w) = Y_ptr + n*14400 + c*900 + h*30 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.BatchNorm2d(16) 作用于 Y1，调用时与 KernelBench 默认 train/eval 模式一致 (PyTorch nn.Module 默认 train=True)。精度模式：BN 在 train 模式下含两次 reduction (mean+var), 每个 channel 单独；天然 IEEE fp32。容忍值三步：步骤 1 ε_op=1.2e-7, K=N·H_o·W_o=128·30·30=115200, ε_total≈1.2e-7·sqrt(115200)≈4.1e-5, rtol_base=atol_base=4.1e-4；步骤 2（cuDNN 修正，关键）BatchNorm 走 cuDNN 路径，强制 rtol=atol=max(4.1e-4, 1e-3)=1e-3；步骤 3 不触发，归一化后 ~N(0,1) 量级。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape 与 Y1 一致；(b) 每个 channel 输出应近似 0 均值单位方差 (训练时)；(c) gamma/beta 在 c 维。失败诊断：(i) diff 1e-4~1e-3 → cuDNN BN 正常；(ii) 整体偏 √eps 倍 → 忘加 eps；(iii) 输出量级 ≫ 1 → reduction 维度选错或 running stats 用错。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X 的形状为 (N, C_in, L)，权重张量 W 的形状为 (C_in, C_out, K)，其中 N=16, C_in=32, L=131072, C_out=64, K=3。转置卷积参数：stride S=2, padding P=1, dilation D=2。输出张量 Y 的形状为 (N, C_out, L_out)，其中 L_out = (L - 1) * S - 2 * P + D * (K - 1) + 1 = 262145。对于每个 batch 索引 n (0 ≤ n < N)，输出通道 o (0 ≤ o < C_out)，输出位置 i (0 ≤ i < L_out)，计算公式为：Y[n, o, i] = Σ_{c=0}^{C_in-1} Σ_{k=0}^{K-1} W[c, o, k] * X_ext[n, c, i * S + k * D - P]，其中 X_ext 定义为对输入 X 进行上采样和零填充的扩展张量：对于任意整数索引 idx，若 idx % S == 0 且 0 ≤ idx // S < L，则 X_ext[n, c, idx] = X[n, c, idx // S]；否则 X_ext[n, c, idx] = 0。",
+        "boundary_treatment": "当 i * S + k * D - P < 0 或 ≥ L * S 时，X_ext 取 0；当 idx 不是 S 的整数倍时取 0（对应于输入元素之间插入的零）。这等价于在输入信号的每两个元素间插入 S-1 个零，并在序列两端各填充 P' = (K-1)*D - P = 3 个零，然后再进行标准互相关。所有边界外的访问返回零，无裁剪或镜像。输出大小 L_out 由公式确保整数，无 output_padding 调整。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, L_out)",
+              "binding": "static",
+              "value": "262145"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, L)",
+            "stride": "(C_in * L, L, 1)",
+            "address_mapping": "addr = n * (C_in * L) + c * L + l"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d_transpose.weight",
+            "layout": "(C_in, C_out, K)",
+            "stride": "(C_out * K, K, 1)",
+            "address_mapping": "addr = c * (C_out * K) + o * K + k"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, L_out)",
+            "stride": "(C_out * L_out, L_out, 1)",
+            "address_mapping": "addr = n * (C_out * L_out) + o * L_out + i"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.dilation"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv1d_transpose.kernel_size"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch eager 结果进行数值对拍。重点检查：输入上采样与零填充的正确性，指数整除和非整除位置的零值，边界零填充（前后各3个零），Dilation间隔的正确性，以及多通道批处理下的正确性。建议先用小 shape（如 N=1, C_in=2, C_out=3, L=5, K=3, S=2, P=1, D=2）做冒烟测试，再用原始 shape 进行完整对拍。容忍误差 1e-5（fp32）。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          },
+          {
+            "name": "S_H",
+            "kind": "scalar"
+          },
+          {
+            "name": "S_W",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_H",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_W",
+            "kind": "scalar"
+          },
+          {
+            "name": "D_H",
+            "kind": "scalar"
+          },
+          {
+            "name": "D_W",
+            "kind": "scalar"
+          },
+          {
+            "name": "G",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_H",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_W",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given X of shape (N, C_in, H, W), W of shape (C_in, C_out_per_group, K_H, K_W), parameters: stride=(S_H, S_W), padding=(P_H, P_W), dilation=(D_H, D_W), groups G. Let C_in_g = C_in // G, C_out_g = C_out // G. Output Y has shape (N, C_out, H_out, W_out) where H_out = (H-1)*S_H - 2*P_H + D_H*(K_H-1) + 1, W_out = (W-1)*S_W - 2*P_W + D_W*(K_W-1) + 1. For n in [0,N-1], oc in [0,C_out-1], i in [0,H_out-1], j in [0,W_out-1]: g = oc // C_out_g; Y[n,oc,i,j] = Σ_{ic=0}^{C_in_g-1} Σ_{kh=0}^{K_H-1} Σ_{kw=0}^{K_W-1} W[g*C_in_g+ic, oc%C_out_g, kh, kw] * X[n, g*C_in_g+ic, (i+P_H - kh*D_H)/S_H, (j+P_W - kw*D_W)/S_W] when (i+P_H - kh*D_H) is multiple of S_H and (j+P_W - kw*D_W) is multiple of S_W and the computed indices are within [0,H-1] and [0,W-1] respectively; otherwise the term is 0.",
+        "boundary_treatment": "The convolution uses zero-padding implicitly: for any computed source index (h_src, w_src) that falls outside [0, H-1] x [0, W-1], the contribution is zero. Additionally, if the source index is not integer (i.e., (i+P_H - kh*D_H) not divisible by S_H or (j+P_W - kw*D_W) not divisible by S_W), the term is zero. The output size formula ensures all valid contributions are accounted for.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "257"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "766"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, C_in_g)",
+              "binding": "static",
+              "value": "8",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K_H)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K_W)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W)",
+            "stride": "(1048576, 32768, 256, 1)",
+            "address_mapping": "n * 1048576 + c * 32768 + h * 256 + w"
+          },
+          "weight": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose2d.weight",
+            "layout": "(C_in, C_out_per_group, K_H, K_W)",
+            "stride": "(240, 15, 5, 1)",
+            "address_mapping": "ci * 240 + co * 15 + kh * 5 + kw"
+          },
+          "output": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "(12599168, 196862, 766, 1)",
+            "address_mapping": "n * 12599168 + oc * 196862 + i * 766 + j"
+          },
+          "S_H": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.stride[0]"
+          },
+          "S_W": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.stride[1]"
+          },
+          "P_H": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.padding[0]"
+          },
+          "P_W": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.padding[1]"
+          },
+          "D_H": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.dilation[0]"
+          },
+          "D_W": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.dilation[1]"
+          },
+          "G": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.groups"
+          },
+          "K_H": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.kernel_size[0]"
+          },
+          "K_W": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.kernel_size[1]"
+          }
+        },
+        "TDD_requirement": "需要对拍 PyTorch eager 结果。重点检查输出形状 (16, 64, 257, 766)、分组逻辑、stride/padding/dilation 组合下的边界处理。建议先用小尺寸（如 batch=1, C_in=2, C_out=4, H=3, W=3, kernel=2, stride=1, padding=0, dilation=1, groups=1）进行冒烟测试验证基础正确性，再用本文的完整参数进行对拍。允许的数值误差容忍值 atol=1e-4, rtol=1e-5。"
+      }
+    ]
+  }
+}

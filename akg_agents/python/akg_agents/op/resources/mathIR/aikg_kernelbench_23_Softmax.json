@@ -1,0 +1,69 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "softmax",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y_{i,j} = \\frac{\\exp(X_{i,j} - \\max_k X_{i,k})}{\\sum_l \\exp(X_{i,l} - \\max_k X_{i,l})}",
+        "boundary_treatment": "Standard softmax behavior: numerical stability is ensured by subtracting row-wise maximum. For rows where all elements are -inf, result may be NaN. Inputs here are random normal, so no special boundary treatment is needed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "j",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "393216",
+              "reduction_type": "softmax",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "dim": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "dim=1"
+          }
+        },
+        "TDD_requirement": "对拍参考为 PyTorch 的 torch.softmax(x, dim=1)。重点检查不同 batch 和特征维度的正确性，验证数值稳定性（极值情况不出现 NaN 或溢出），以及 fp32 精度。建议先用小 shape (2,4) 做冒烟测试，再用完整输入 (4096, 393216) 对拍，容忍少量 ulp 误差。"
+      }
+    ]
+  }
+}

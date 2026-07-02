@@ -1,0 +1,111 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_fused",
+        "next_expressions": ["swish_div_clamp_tanh_clamp_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "B_gemm", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, 权重 W_gemm ∈ R^{O×I}, 偏置 B_gemm ∈ R^{O}。Y1 ∈ R^{N×O}: Y1[n,o] = B_gemm[o] + Σ_{i=0}^{I-1} X[n,i]·W_gemm[o,i]。本题 N=128, I=1024, O=512。",
+        "boundary_treatment": "全连接 GEMM，无空间边界；bias 加在 o 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "1024", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*I + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*I + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(1024, 512) 在 eval 模式 forward。精度模式：手写 FMA + fp32 累加器自然 IEEE fp32；走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=I=1024，ε_total ≈ 1.2e-7·sqrt(1024)·10 ≈ 3.8e-5；步骤 2，参考 nn.Linear → cuBLAS TF32，rtol=atol=max(3.8e-5, 1e-3)=1e-3；步骤 3，不触发。最终 rtol=atol=1e-3，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) shape=(128,512)；(b) bias 在 o 维；(c) 小尺寸对拍。失败诊断：(i) 1e-4~1e-3 误差 → cuBLAS TF32 主导，放宽；(ii) 远超 1e-3 → W 转置；(iii) 列偏移 → bias 错位。"
+      },
+      {
+        "name": "swish_div_clamp_tanh_clamp_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "divisor", "kind": "scalar" },
+          { "name": "clamp_min", "kind": "scalar" },
+          { "name": "clamp_max", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}, divisor=2.0, clamp_min=-1.0, clamp_max=1.0。逐元素链式：步骤 1 Swish/SiLU：S[n,o] = Y1[n,o] · sigmoid(Y1[n,o]) = Y1[n,o] / (1 + exp(-Y1[n,o]))；步骤 2 除法：D[n,o] = S[n,o] / divisor；步骤 3 第一次 clamp：C1[n,o] = min(max(D[n,o], clamp_min), clamp_max)；步骤 4 Tanh：T[n,o] = tanh(C1[n,o])；步骤 5 第二次 clamp：Y[n,o] = min(max(T[n,o], clamp_min), clamp_max)。注意 tanh 已经将值映射到 (-1, 1)，第二次 clamp 实际不会改变值（恒等）。本题 N=128, O=512。融合 5 步纯逐元素 epilogue。",
+        "boundary_treatment": "纯逐元素链式，无空间边界；clamp 截断到 [-1, 1]；tanh 输出本就 ⊂ (-1, 1)；第二次 clamp 为恒等。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "512" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*O + o"
+          },
+          "divisor": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 2.0"
+          },
+          "clamp_min": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 -1.0"
+          },
+          "clamp_max": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1.0"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*O + o"
+          }
+        },
+        "TDD_requirement": "需要对拍。参考实现为：x*sigmoid(x) → /2.0 → clamp(-1,1) → tanh → clamp(-1,1)，对应 PyTorch 链路。精度模式：纯逐元素 FMA + sigmoid/tanh libdevice 调用，IEEE fp32；sigmoid/tanh 约 1-2 ULP 误差。rtol/atol 推导：步骤 1，ε_op=1.2e-7，K=1，叠加 5 个逐元素 op 取 5·ε_op·10 ≈ 6e-6，取 rtol_base=atol_base=1e-5；步骤 2，不走 cuDNN/cuBLAS，不触发；步骤 3，tanh 之后 ∈ (-1,1)，量级稳定，不触发。最终单 expression rtol=atol=1e-5，整链路含上游 cuBLAS 时 rtol=atol=1e-3。主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,512)；(b) 所有 Y[n,o] ∈ (-1, 1)（tanh 自带界限）；(c) 验证 Swish=x·sigmoid(x) 而非 ReLU 等；(d) 验证两次 clamp 的 min/max 顺序。失败诊断：(i) 部分元素 >1 或 <-1 → tanh 没生效或 clamp 顺序写反；(ii) 量级整体偏小 2x → 除以了 4 而非 2；(iii) 远超 tolerance → swish 写成 sigmoid 或 x*x*sigmoid。"
+      }
+    ]
+  }
+}

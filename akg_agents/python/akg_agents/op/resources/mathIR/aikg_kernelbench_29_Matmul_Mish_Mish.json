@@ -1,0 +1,79 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_mish_mish_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_lin", "kind": "tensor" },
+          { "name": "B_lin", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，权重 W_lin ∈ R^{O×I}，偏置 B_lin ∈ R^{O}。先计算线性映射 Z1[n,o] = B_lin[o] + Σ_{i=0}^{I-1} X[n,i] · W_lin[o,i]。再施加 Mish：M1[n,o] = Z1[n,o] · tanh(softplus(Z1[n,o])) = Z1[n,o] · tanh(log(1 + exp(Z1[n,o])))。再施加一次 Mish：Y[n,o] = M1[n,o] · tanh(log(1 + exp(M1[n,o])))。本题 N=128, I=10, O=20。该 expression 融合 GEMM + 两次 Mish。",
+        "boundary_treatment": "Mish 内部 softplus 在 z ≫ 0 时 softplus(z) ≈ z，PyTorch 默认 threshold=20，当 z > 20 直接返回 z；逐元素无空间边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "20" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.weight",
+            "layout": "(O, I) = (20, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W_lin(o, i) = W_lin_ptr + o*10 + i"
+          },
+          "B_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear.bias",
+            "layout": "(O) = (20)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_lin(o) = B_lin_ptr + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O) = (128, 20)",
+            "stride": "(O, 1) = (20, 1)",
+            "address_mapping": "addr_Y(n, o) = Y_ptr + n*20 + o"
+          }
+        },
+        "lowering_contract": {
+          "target": "single_triton_fused_gemm_epilogue_preferred",
+          "must_fuse": ["Linear", "Mish", "Mish"],
+          "must_not_materialize": ["Z1", "M1"],
+          "preferred_schedule": "Use one Triton GEMM tile over output axes (n,o): A tile X[n,i] shaped (BLOCK_M,BLOCK_K), B tile from original PyTorch Linear weight W_lin[o,i] shaped (BLOCK_K,BLOCK_O), then bias and two Mish activations in registers. Because W_lin is stored as (O,I), B tile address is W_ptr + offs_o[None, :]*10 + offs_i[:, None]; do not index original W_lin as i*O+o unless W_lin is explicitly prepacked/transposed. Use power-of-two tile meta values; logical O=20 and I=10 are masked tails.",
+          "suggested_tile": {
+            "BLOCK_M": 32,
+            "BLOCK_O": 32,
+            "BLOCK_K": 16,
+            "preferred_variant": "linear_tl_dot_epilogue_mish"
+          },
+          "forbidden_lowerings": [
+            "Use tl.tanh/tl.math.tanh/tl.math.log1p for Mish on a backend where these APIs are unavailable.",
+            "Treat original nn.Linear weight layout (O,I) as contiguous (I,O).",
+            "Use non-power-of-two tl.arange tile bounds such as BLOCK_O=20 or BLOCK_K=10.",
+            "Define nested helper functions inside @triton.jit kernels.",
+            "Materialize intermediate Z1 or M1 tensors."
+          ]
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 self.linear(x); torch.nn.functional.mish(.); torch.nn.functional.mish(.) 串行，eval 模式。精度模式：手写 FMA + fp32 累加器，IEEE fp32；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=I=10，ε_total≈1.2e-7*sqrt(10)≈3.8e-7，10x 余量后 rtol_base=atol_base=4e-6；步骤 2（cuBLAS 修正，关键）参考是 nn.Linear 走 cuBLAS TF32，rtol=atol=max(4e-6,1e-3)=1e-3；步骤 3 不触发。最终 **rtol=atol=1e-3**，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,20)；(b) Mish 单调（z>0 时输出>0）；(c) Mish(0)=0；(d) z 非常大时 Mish(z)≈z。失败诊断：(i) diff~1e-3 → cuBLAS TF32 预期；(ii) softplus 在 z 很大时溢出 → 没用稳定形式（z>thr 时返回 z）；(iii) 漏写一次 Mish → 与单次 Mish 参考不符；(iv) 输出 NaN → exp(Z1) 在 Z1≫0 时溢出，必须用 softplus 稳定实现。"
+      }
+    ]
+  }
+}

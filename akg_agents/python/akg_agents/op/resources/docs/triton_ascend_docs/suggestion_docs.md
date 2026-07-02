@@ -250,16 +250,79 @@ Ascend 后端对`tl.where`生成的复杂指针运算支持不完全。复杂条
 
 ### 切分设置
 **Ascend后端**
-- BLOCK_SIZE必须小于65536，并且线程块所占内存必须符合硬件限制
+- BLOCK_SIZE/`tl.arange`对应的是单program内的tile大小，仍需受UB/L0和编译器限制约束；不要把它和grid总数混淆
 - 若shape过大，单次切分后超过硬件缓存，并且BLOCK_SIZE超过限制，可以对循环进行多次切分
 
 ### Grid设置规范
 - **维度限制**：grid必须是tuple类型，最多3维，如`(x,)`、`(x, y)`或`(x, y, z)`
-- **大小限制**：各维度乘积不超过65535，即`x * y * z <= 65535`
+- **大grid策略**：当前910B运行脚本默认设置`TRITON_ALL_BLOCKS_PARALLEL=1`，可以使用超过65535的**一维逻辑grid**。若逻辑grid来自2D/3D tile，请优先展平成1D，例如`grid=(num_m_tiles * num_n_tiles,)`，在kernel内用`pid // num_n_tiles`、`pid % num_n_tiles`反解；不要直接依赖超大的2D/3D grid。
+
+### Grid与UB联合约束
+- Ascend后端的主要资源风险是单program UB/L0容量。不要为了减少grid数量而盲目增大`BLOCK_SIZE`、`BLOCK_M`、`BLOCK_N`或`BLOCK_K`。
+- 当逻辑tile很多时，优先保持小tile并使用1D flattened grid；若仍需限制物理并发，则使用固定核心数grid-stride循环或连续分块处理。每次实际处理的子块仍需满足UB/L0限制。
+- 估算UB占用时，除输入/输出tile外，还要包含accumulator、mask、反解索引、cast/reshape/broadcast临时量，以及`tl.static_range`展开后同时存活的临时结果。
+- 若编译或验证日志出现`ub overflow`、`requires ... bits while ... bits available`，说明单program live data过大；应减小tile、拆分sub-block、分片accumulator，或改成更小的K-block/reduction循环，而不是继续增大block来降低grid数量。
+
+### Ascend调度选择优先级
+
+Ascend Triton后端上，生成成功率优先级高于套用CUDA式implicit-GEMM。按下面顺序选择实现：
+
+1. 纯elementwise或简单逐点计算：用连续tile或固定核心数grid-stride，保持每个program处理多个连续元素。
+2. 规则Matmul、Linear、1x1 Conv：优先`tl.dot`，从小tile开始，确认UB/L0和grid约束后再扩大。
+3. 普通Conv2d/Conv3d：只有反解input patch简单、`K_total`可分块、`BLOCK_M/BLOCK_N/BLOCK_K`不造成UB压力时使用`tl.dot`；否则用output-centric小tile加outer-product循环。
+4. ConvTranspose：不要默认`tl.dot`。先判断shape和per-program work，优先选择能让单program live data稳定落入UB/L0的schedule。
+5. 只有中小shape且性能不敏感时，才使用一输出点或一输出行的标量grid-stride fallback。大shape不要退化成每个输出元素长串行循环。
+
+### ConvTranspose大shape策略
+
+- 2D大shape首选有界output-centric tile：grid显式覆盖batch、H tile、W tile，例如`grid=(N, ceil(H_out/BLOCK_OH), ceil(W_out/BLOCK_OW))`。program内对`C_out`、`C_in`、`K_h`、`K_w`做小循环，`acc`只保留`(BLOCK_OH, BLOCK_OW)`，不要在单program内循环所有`W_out` block。
+- 不要用`grid=(N,H_out)`后在单个program内循环所有`W_out` block；这会把过多空间位置、mask和临时反解索引同时放进UB。
+- 2D权重布局是`(C_in, C_out, K_h, K_w)`。若使用output-centric tile，可在`__init__`中一次性沿空间维翻转并`contiguous()`，kernel中按翻转后的权重读取，减少每次反向索引。
+- 2D若`C_out`很大、单program循环输出通道造成超时，改为把`C_out` block也纳入逻辑grid。
+- 3D大shape或空间tile accumulator覆盖多个空间轴导致UB/编译超时，优先input-centric scatter-accum：先用独立zero kernel清零输出，再按每个kernel offset顺序launch scatter kernel。
+- input-centric scatter-accum中，单个kernel offset内input到output是唯一映射，可避免`tl.atomic_add`；不同offset之间用host侧顺序launch做累加。不要在同一kernel中并发写同一输出位置。
+- ConvTranspose反推masked load触发root-alloc/UB问题时，不要继续调大/调小`tl.dot` tile。2D先切到有界H/W output tile；3D或仍超资源时切到input-centric scatter-accum。
+
+ConvTranspose output-centric模板要点：
+- 2D stride=1/padding=0时，`ih = oh - kh`、`iw = ow - kw`；通用情况先算`num_h = oh + padding_h - kh * dilation_h`，满足`num_h % stride_h == 0`后`ih = num_h // stride_h`，W方向同理。
+- input load mask同时包含stride整除、输入bounds、M/W tail；无效贡献用`other=0.0`。
+- store地址必须包含block起点，不能只写相对offset：
+
+```python
+y_ptr = (
+    y_base
+    + (co_start + co_offsets)[:, None] * stride_y_c
+    + (w_start + w_offsets)[None, :] * stride_y_w
+)
+store_mask = co_mask[:, None] & w_mask[None, :]
+tl.store(y_ptr, acc, mask=store_mask)
+```
+
+### Ascend Triton索引限制
+- 不要在`@triton.jit` kernel内写`tensor[0, :]`、`tensor[:, 0]`或`acc[i, :]`这类scalar+slice tensor indexing。Ascend Triton可能报`unsupported tensor index`；应直接构造一维tensor、保留广播维，或使用`tl.reshape`。
 
 #### 大shape算子的Grid处理策略
 
-对于输入shape较大的算子，直接按照`BLOCK_SIZE`切分得到的grid总数可能超过65535，这在Triton-Ascend中是不支持的。有两种解决方案：
+对于输入shape较大的算子，直接按照`BLOCK_SIZE`切分得到的逻辑grid总数可能超过65535。当前910B运行脚本已开启`TRITON_ALL_BLOCKS_PARALLEL=1`，优先保留小tile并用一维逻辑grid或grid-stride覆盖所有逻辑块；不要通过放大tile来压低grid数量。有两种推荐方案：
+
+**方案0：一维flattened逻辑grid（推荐，适用于原本想使用2D/3D tile grid的场景）**
+
+将多维逻辑tile展平成一维grid，kernel内反解逻辑坐标。这样可以保留小tile，降低UB压力：
+
+```python
+num_m_tiles = triton.cdiv(M, BLOCK_M)
+num_n_tiles = triton.cdiv(N, BLOCK_N)
+grid = (num_m_tiles * num_n_tiles,)
+
+@triton.jit
+def kernel(..., NUM_N_TILES: tl.constexpr, ...):
+    pid = tl.program_id(0)
+    pid_m = pid // NUM_N_TILES
+    pid_n = pid - pid_m * NUM_N_TILES
+    # 继续按(pid_m, pid_n)处理一个小tile
+```
+
+不要直接把超大的`grid=(num_m_tiles, num_n_tiles)`交给`TRITON_ALL_BLOCKS_PARALLEL`，当前后端只对超大一维逻辑grid更可靠。
 
 **方案1：交错循环处理（强烈推荐，适用于按行/按块独立处理的场景）**
 
@@ -436,8 +499,9 @@ class ModelNew(torch.nn.Module):
 - [ ] tl.constexpr是否只在内核参数中使用？
 
 ### Grid与Block配置检查
-- [ ] Grid总大小是否不超过65535？
-- [ ] 对于大shape算子，是否采用了交错循环`for i in range(pid, total, core_num)`处理？
+- [ ] 大shape是否使用1D flattened grid或grid-stride，而不是为了降低grid数量增大tile？
+- [ ] 是否检查了单program的UB/L0占用，避免大`BLOCK_SIZE`/`BLOCK_M`/`BLOCK_N`/`BLOCK_K`导致`ub overflow`？
+- [ ] 对于按行/按块独立的大shape算子，是否采用了交错循环`for i in range(pid, total, core_num)`处理？
 - [ ] Grid维度是否为tuple类型且不超过3维？
 
 ### 并发与原子操作检查
@@ -459,7 +523,7 @@ class ModelNew(torch.nn.Module):
 | 错误类型 | 典型症状 | 常见原因 | 解决方案 |
 |---------|---------|---------|---------|
 | 内存越界访问 | 运行时错误、结果异常、随机崩溃 | load/store缺少mask或boundary_check | 添加正确的mask或boundary_check保护 |
-| Grid超限 | 编译失败或运行时错误 | grid总大小超过65535 | 使用交错循环`for i in range(pid, total, core_num)`或连续分块处理 |
+| Grid超限 | 编译失败或运行时错误，日志包含`grid should be less than 65536` | 未开启`TRITON_ALL_BLOCKS_PARALLEL=1`或直接使用超大2D/3D grid | 确认运行环境已设置该变量；将多维逻辑grid展平成1D，或使用交错循环`for i in range(pid, total, core_num)` |
 | 控制流错误 | 编译失败、语法错误 | 使用了return/break/continue | 移除禁用语句，使用mask控制流程 |
 | while循环错误 | 编译失败（Ascend后端） | 使用了while循环 | 改用for + if替代：`for i in range(MAX): if i < n:` |
 | 切片语法错误 | 编译失败 | 使用了`b[0]`或`b[i:j]`直接切片 | 使用`tl.get_element`或`tl.extract_slice` |
@@ -469,6 +533,8 @@ class ModelNew(torch.nn.Module):
 | Stride设置错误 | 计算结果错误、数据错位 | stride参数计算或传递错误 | 验证stride设置，检查tensor.stride() |
 | 数值不稳定 | 结果为NaN或Inf | softmax/sqrt等操作溢出 | 减去最大值、检查非负、使用float32 |
 | 数据竞争 | 结果不确定、每次运行不同 | 多program并发写入同一位置 | 使用tl.atomic_add等原子操作 |
-| BLOCK_SIZE过大 | 编译失败或运行时错误 | BLOCK_SIZE超过65536或硬件限制 | 减小BLOCK_SIZE，使用循环处理 |
+| BLOCK_SIZE过大 | 编译失败或运行时错误 | 单program内BLOCK_SIZE/tile超过UB/L0或编译器限制 | 减小BLOCK/SUB_BLOCK，使用循环处理 |
+| UB溢出 | 编译或验证失败，日志包含`ub overflow`或`requires ... bits while ... bits available` | 单program内tile、accumulator、mask、broadcast临时量过大 | 减小BLOCK/SUB_BLOCK，拆分accumulator或K-block，避免大`static_range`展开 |
+| root alloc分析失败 | 编译失败，日志包含`Unsupported op for finding the root alloc` | 复杂指针表达式、`tl.where`参与offset、复杂broadcast临时量 | load前计算合法mask，避免在内存偏移中使用`tl.where`，简化指针表达式 |
 | tl.where偏移计算 | 编译失败（Ascend后端） | 在内存偏移中使用tl.where | 改用if-else静态分支处理 |
 | 性能低下 | 运行缓慢 | 内存访问不连续、切分不合理 | 优化内存布局、调整BLOCK_SIZE、使用block_ptr |

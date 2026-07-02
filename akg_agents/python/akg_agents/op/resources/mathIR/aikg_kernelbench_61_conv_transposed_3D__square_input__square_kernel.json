@@ -1,0 +1,161 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP",
+            "kind": "scalar"
+          },
+          {
+            "name": "DIL",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Let the input x have shape (N, C_in, D, H, W) = (8, 48, 64, 64, 64) and weight have shape (C_in, C_out, K, K, K) = (48, 48, 3, 3, 3). Let S = 1 (stride), P = 0 (padding), OP = 0 (output_padding), DIL = 1 (dilation). Then output spatial sizes: D_out = (D - 1)*S - 2*P + DIL*(K - 1) + OP + 1 = 66, H_out = 66, W_out = 66. Define X_pad by zero-padding x with P_pad = DIL*(K - 1) - P = 2 on each side of the last three dims, so X_pad has shape (N, C_in, D + 2*P_pad, H + 2*P_pad, W + 2*P_pad) = (8, 48, 68, 68, 68). Define W_eff[oc, ic, kd, kh, kw] = weight[ic, oc, K-1 - kd, K-1 - kh, K-1 - kw] for oc in [0, C_out-1], ic in [0, C_in-1], kd,kh,kw in [0, K-1]. Then the output Y (shape (N, C_out, D_out, H_out, W_out)) is given by: Y[n, oc, d, h, w] = sum_{ic=0}^{C_in-1} sum_{kd=0}^{K-1} sum_{kh=0}^{K-1} sum_{kw=0}^{K-1} X_pad[n, ic, d + kd, h + kh, w + kw] * W_eff[oc, ic, kd, kh, kw] for n in [0, N-1], oc in [0, C_out-1], d in [0, D_out-1], h in [0, H_out-1], w in [0, W_out-1].",
+        "boundary_treatment": "The input x is zero-padded with 2 on each side of the last three spatial dimensions before the convolution. This ensures that for all valid output positions and kernel offsets the indices d+kd, h+kh, w+kw fall within the padded tensor X_pad (0..67 inclusive). Out-of-bound accesses correspond to the zero padding, correctly implementing the transposed convolution boundary semantics without explicit conditionals.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 48)",
+              "binding": "static",
+              "value": "48"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 66)",
+              "binding": "static",
+              "value": "66"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 66)",
+              "binding": "static",
+              "value": "66"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 66)",
+              "binding": "static",
+              "value": "66"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 48)",
+              "binding": "static",
+              "value": "48",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kd",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D, H, W) = (8, 48, 64, 64, 64)",
+            "stride": "[12582912, 262144, 4096, 64, 1]",
+            "address_mapping": "n*12582912 + c_in*262144 + d*4096 + h*64 + w"
+          },
+          "weight": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(C_in, C_out, Kd, Kh, Kw) = (48, 48, 3, 3, 3)",
+            "stride": "[1296, 27, 9, 3, 1]",
+            "address_mapping": "ic*1296 + oc*27 + kd*9 + kh*3 + kw",
+            "unpack_hint": "Note: weight layout is (in_channels, out_channels, D, H, W), unlike regular Conv3d weight (out_channels, in_channels, ...)."
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (8, 48, 66, 66, 66)",
+            "stride": "[13799808, 287496, 4356, 66, 1]",
+            "address_mapping": "n*13799808 + oc*287496 + d*4356 + h*66 + w"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.kernel_size[0]"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.stride[0]"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.padding[0]"
+          },
+          "OP": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.output_padding[0]"
+          },
+          "DIL": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose3d.dilation[0]"
+          }
+        },
+        "TDD_requirement": "正确性验证需要与 PyTorch eager 模式的 ConvTranspose3d 输出进行数值对拍。重点检查：输出尺寸 (8,48,66,66,66) 是否正确；零填充及核翻转对应的坐标映射是否正确；多通道归约求和无遗漏。建议用小尺寸（如 batch=1, C_in=2, C_out=2, D=H=W=4, K=2）做冒烟测试，验证边界坐标和输出尺寸公式。使用完整尺寸 (8,48,64,64,64) 做对拍，允许浮点误差容忍 1e-5。"
+      }
+    ]
+  }
+}

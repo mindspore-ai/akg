@@ -1,0 +1,103 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "avg_pool2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, c, i, j] = (1 / (K * K)) * \\sum_{p=0}^{K-1} \\sum_{q=0}^{K-1} X[n, c, S * i + p, S * j + q], where i in [0, H_out), j in [0, W_out), H_out = floor((H - K) / S + 1), W_out = floor((W - K) / S + 1).",
+        "boundary_treatment": "Padding = 0. When (H - K) % S != 0, the last few rows/columns at the right and bottom of the input are ignored because ceil_mode=False, so the output size uses floor division. For H=W=2048, K=11, S=11, (2048-11)=2037, 2037 % 11 = 2, so the last two rows and columns are ignored. All pooling windows stay completely within the valid input region; no out-of-bound access occurs.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "186"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "186"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "p",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "11",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "q",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "11",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(C*H*W, H*W, W, 1)",
+            "address_mapping": "n * C*H*W + c * H*W + h * W + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H_out, W_out)",
+            "stride": "(C*H_out*W_out, H_out*W_out, W_out, 1)",
+            "address_mapping": "n * C*H_out*W_out + c * H_out*W_out + i * W_out + j"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.stride"
+          }
+        },
+        "TDD_requirement": "需对拍验证输出数值与 PyTorch eager 结果完全一致。重点检查：输出形状 H_out=186, W_out=186；窗口求和除以 121 的归一化；边界忽略最后 2 行/列。建议用较小形状（如 H=5, W=5, K=2, S=2）测试边界忽略和整除情况，并用完整形状测试 fp32 精度，容忍相对误差 1e-5。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_divide_sum_scale_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_gemm", "kind": "tensor" },
+          { "name": "scaling_factor", "kind": "scalar" },
+          { "name": "divisor", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "输入 X ∈ R^{N×I}，参数权重 W_gemm ∈ R^{H×I}（注意 forward 中以 W_gemm.T 进行 matmul，等价于 Linear without bias），N=128, I=10, H=20。第一步 GEMM: Z1[n,h] = Σ_{i=0}^{I-1} X[n,i] · W_gemm[h,i]。第二步逐元素除以 divisor (= 2): Z2[n,h] = Z1[n,h] / divisor。第三步对 hidden 维求和 keepdim=True: Z3[n,0] = Σ_{h=0}^{H-1} Z2[n,h]。第四步缩放: Y[n,0] = Z3[n,0] · scaling_factor (= 1.5)。融合 matmul + 标量除 + sum + 标量乘。由于 (Σ_h Z1[n,h] / 2) · 1.5 = (1.5/2) · Σ_h Σ_i X[n,i] · W_gemm[h,i]，可视为对 W_gemm 行和（按 h 求和）的内积，但保持显式两阶段顺序以便对拍。",
+        "boundary_treatment": "全连接 + 标量除 + reduction + 标量乘的链路；reduction 总长度 I·H = 10·20 = 200 在 fp32 完全安全；无空间边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "20", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.weight",
+            "layout": "(H, I) = (20, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W_gemm(h, i) = W_gemm_ptr + h*10 + i"
+          },
+          "scaling_factor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor (= 1.5)"
+          },
+          "divisor": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "PyTorch 源码 x / 2 中的常数 2"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1) = (1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 Z = x @ self.weight.T; Z = Z/2; Z = Z.sum(dim=1, keepdim=True); Y = Z * 1.5，eval 模式。精度模式：参考 torch.matmul 走 cuBLAS，A100 默认 TF32；若 codegen 用 tl.dot 则声明 input_precision='tf32'（与参考一致）或更严格 'tf32x3'/'ieee'。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K_total = I·H = 200，ε_total ≈ 1.2e-7·sqrt(200) ≈ 1.7e-6，加 10x 余量 rtol_base = atol_base = 2e-5；步骤 2（cuBLAS 修正，关键）参考含 torch.matmul，走 cuBLAS TF32，rtol = atol = max(2e-5, 1e-3) = 1e-3；步骤 3（量级修正）H·standard_deviation 的 sum 之后量级 ~ sqrt(H)·sigma_input，再乘 1.5/2，仍 O(few)，不触发显著放大。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) 输出 shape=(128,1)，keepdim=True；(b) 验证除法常数确实为 2；(c) 验证 W_gemm.T 而非 W_gemm 参与 matmul（W_gemm shape (H,I)）；(d) 验证 scaling_factor=1.5。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuBLAS TF32 主导，正常；(ii) shape (128,) 而非 (128,1) → keepdim 漏；(iii) 整体倍率错 → 1.5/2 = 0.75 顺序写反或常数错；(iv) GEMM 维度不匹配 → W_gemm.T 与 W_gemm 混淆。"
+      }
+    ]
+  }
+}

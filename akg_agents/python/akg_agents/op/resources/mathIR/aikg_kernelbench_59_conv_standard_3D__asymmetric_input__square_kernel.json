@@ -1,0 +1,112 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "weight",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, oc, oh, ow, od] = Σ_{ic=0}^{2} Σ_{kh=0}^{2} Σ_{kw=0}^{2} X[n, ic, oh + kh, ow + kw, od] * W[oc, ic, kh, kw, 0]",
+        "boundary_treatment": "valid convolution: padding=0, stride=1, dilation=1. Output sizes: H_out = H_in - K_h + 1 = 254, W_out = W_in - K_w + 1 = 254, D_out = D_in = 10. All indices stay within X’s valid range, so no special boundary handling is needed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "oh",
+              "range": "[0, 254)",
+              "binding": "static",
+              "value": "254"
+            },
+            {
+              "symbol": "ow",
+              "range": "[0, 254)",
+              "binding": "static",
+              "value": "254"
+            },
+            {
+              "symbol": "od",
+              "range": "[0, 10)",
+              "binding": "static",
+              "value": "10"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W, D)",
+            "stride": "(C_in*H*W*D, H*W*D, W*D, D, 1)",
+            "address_mapping": "addr = base + n*C_in*H*W*D + ic*H*W*D + (oh+kh)*W*D + (ow+kw)*D + od"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv3d.weight",
+            "layout": "(C_out, C_in, K_h, K_w, K_d)",
+            "stride": "(C_in*K_h*K_w*K_d, K_h*K_w*K_d, K_w*K_d, K_d, 1)",
+            "address_mapping": "addr = base + oc*C_in*K_h*K_w*K_d + ic*K_h*K_w*K_d + kh*K_w*K_d + kw*K_d + 0"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out, D_out)",
+            "stride": "(C_out*H_out*W_out*D_out, H_out*W_out*D_out, W_out*D_out, D_out, 1)",
+            "address_mapping": "addr = base + n*C_out*H_out*W_out*D_out + oc*H_out*W_out*D_out + oh*W_out*D_out + ow*D_out + od"
+          }
+        },
+        "TDD_requirement": "对拍参考：PyTorch eager模式Model.forward(x)的输出。重点验证输出形状是否为(16,64,254,254,10)；确认卷积核深度维为1且无深度归约；验证valid卷积无padding，输出尺寸计算正确。建议用小尺寸（如batch=1,in=3,out=2,kernel=3,H=W=5,D=2）进行冒烟测试并与PyTorch结果对比。数值容忍：fp32相对误差<1e-5。"
+      }
+    ]
+  }
+}

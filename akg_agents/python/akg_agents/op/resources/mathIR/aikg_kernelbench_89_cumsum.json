@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "cumsum",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given input tensor X of shape (32768, 32768) and scalar parameter dim=1 indicating the axis along which to compute the cumulative sum. The output tensor Y has the same shape. For all b ∈ [0, 32768) and i ∈ [0, 32768): Y[b, i] = Σ_{j=0}^{i} X[b, j].",
+        "boundary_treatment": "No special boundary conditions; the cumulative sum is well-defined for all indices, with the sum over an empty range for i < 0 never occurring since i starts from 0.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "j",
+              "range": "[0, i]",
+              "binding": "runtime",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "b * 32768 + i"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "b * 32768 + i"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "需与PyTorch的torch.cumsum结果对齐。重点检查dim=1时的累积求和正确性，尤其是边界i=0的情况。使用小形状如(2,3)进行冒烟测试，使用完整形状(32768,32768)进行对拍。浮点累加可能产生轻微误差，容忍值建议1e-5。"
+      }
+    ]
+  }
+}

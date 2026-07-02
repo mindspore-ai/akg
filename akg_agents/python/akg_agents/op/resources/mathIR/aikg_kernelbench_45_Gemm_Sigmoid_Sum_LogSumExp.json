@@ -1,0 +1,149 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear1_sigmoid_fused",
+        "next_expressions": ["linear2_row_sum_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W1", "kind": "tensor" },
+          { "name": "B1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "H", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}, N=128, I=10。Linear1 权重 W1 ∈ R^{Hd×I} (Hd=20), 偏置 B1 ∈ R^{Hd}。先计算 Z1[n,h] = Σ_{i=0}^{I-1} X[n,i]·W1[h,i] + B1[h]。再对 Z1 做逐元素 sigmoid 得 H ∈ R^{N×Hd}: H[n,h] = 1 / (1 + exp(-Z1[n,h]))。该 expression 融合了第一层 GEMM 与 sigmoid 激活。",
+        "boundary_treatment": "全连接 + 逐元素，无空间边界；sigmoid 数学上对所有实数定义，无越界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "h", "range": "[0, Hd)", "binding": "static", "value": "20" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "10", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*10 + i"
+          },
+          "W1": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear1.weight",
+            "layout": "(Hd, I) = (20, 10)",
+            "stride": "(I, 1) = (10, 1)",
+            "address_mapping": "addr_W1(h, i) = W1_ptr + h*10 + i"
+          },
+          "B1": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear1.bias",
+            "layout": "(Hd) = (20)",
+            "stride": "(1)",
+            "address_mapping": "addr_B1(h) = B1_ptr + h"
+          },
+          "H": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear1_sigmoid_fused.output",
+            "layout": "(N, Hd) = (128, 20)",
+            "stride": "(Hd, 1) = (20, 1)",
+            "address_mapping": "addr_H(n, h) = H_ptr + n*20 + h"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.Linear(10, 20) 前向 + torch.sigmoid，eval 模式。精度模式：本 expression 含 GEMM 阶段，若走 tl.dot+fp32 必须声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32；sigmoid 是逐元素超越函数（~1 ULP 误差，可忽略）。容忍值推导分三步：步骤 1（基础公式）ε_op=1.2e-7（fp32 FMA），K=I=10，ε_total≈1.2e-7·sqrt(10)≈3.8e-7，留 10x 余量得 rtol_base=atol_base=4e-6；步骤 2（cuBLAS 参考修正，关键）参考是 nn.Linear，走 cuBLAS，A100 默认 TF32，参考自身有 ~1e-3 截断误差，rtol = atol = max(4e-6, 1e-3) = 1e-3；步骤 3（量级修正）不触发，sigmoid 输出在 (0,1)，量级小。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,20)；(b) 所有 H ∈ (0,1)（sigmoid 单调有界）；(c) bias 加在 hidden 维。失败诊断：(i) diff 1e-4~1e-3 + shape 对 → cuBLAS TF32 正常；(ii) 输出超出 (0,1) → sigmoid 实现错误；(iii) 整体偏移恒定 → bias 索引错位。"
+      },
+      {
+        "name": "linear2_row_sum_fused",
+        "next_expressions": ["scalar_logsumexp"],
+        "consumes": [
+          { "name": "H", "kind": "tensor" },
+          { "name": "W2", "kind": "tensor" },
+          { "name": "B2", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "S", "kind": "tensor" }
+        ],
+        "formula": "设隐层激活 H ∈ R^{N×Hd}，N=128, Hd=20。Linear2 权重 W2 ∈ R^{O×Hd} (O=5)，偏置 B2 ∈ R^{O}。先得 Z2[n,o] = Σ_{h=0}^{Hd-1} H[n,h]·W2[o,h] + B2[o]。然后沿 dim=1 (即 O 维) 求和得 S ∈ R^{N}: S[n] = Σ_{o=0}^{O-1} Z2[n,o]。该 expression 融合 Linear2 与 row-wise sum reduction。",
+        "boundary_treatment": "全连接 + sum reduction，无空间边界；sum 覆盖完整 O 维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "5", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "h", "range": "[0, Hd)", "binding": "static", "value": "20", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "H": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear1_sigmoid_fused.output",
+            "layout": "(N, Hd) = (128, 20)",
+            "stride": "(Hd, 1) = (20, 1)",
+            "address_mapping": "addr_H(n, h) = H_ptr + n*20 + h"
+          },
+          "W2": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear2.weight",
+            "layout": "(O, Hd) = (5, 20)",
+            "stride": "(Hd, 1) = (20, 1)",
+            "address_mapping": "addr_W2(o, h) = W2_ptr + o*20 + h"
+          },
+          "B2": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.linear2.bias",
+            "layout": "(O) = (5)",
+            "stride": "(1)",
+            "address_mapping": "addr_B2(o) = B2_ptr + o"
+          },
+          "S": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear2_row_sum_fused.output",
+            "layout": "(N) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_S(n) = S_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.Linear(20,5) 前向后接 torch.sum(., dim=1)，eval 模式。精度模式：含 GEMM 阶段，tl.dot+fp32 时声明 input_precision='ieee' 或 'tf32x3'。容忍值三步：步骤 1 ε_op=1.2e-7, K=Hd*O=20*5=100，ε_total≈1.2e-7·sqrt(100)=1.2e-6，rtol_base=atol_base=1.2e-5；步骤 2 cuBLAS 修正，rtol=atol=max(1.2e-5, 1e-3)=1e-3；步骤 3 不触发，sigmoid 上游量级 ≤1。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,)；(b) torch.sum(dim=1) 不保留维度。失败诊断：(i) 偶发 1e-4 级别差异 → cuBLAS TF32；(ii) shape 变 (128,1) → keepdim 误开；(iii) 整体偏小 5 倍 → 把 sum 写成 mean。"
+      },
+      {
+        "name": "scalar_logsumexp",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "S", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设 S ∈ R^{N}, N=128。LogSumExp 沿 dim=0 得 0-d 标量 Y: 先取 m = max_{n=0..N-1} S[n]；然后 Y = m + log( Σ_{n=0}^{N-1} exp(S[n] - m) )。输出为 0-d tensor (scalar)。",
+        "boundary_treatment": "数值稳定 logsumexp 需先减最大值；输出 0-d 标量；无空间边界。",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "S": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear2_row_sum_fused.output",
+            "layout": "(N) = (128)",
+            "stride": "(1)",
+            "address_mapping": "addr_S(n) = S_ptr + n"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "() 标量",
+            "stride": "()",
+            "address_mapping": "addr_Y = Y_ptr"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.logsumexp(S, dim=0)，eval 模式。精度模式：无 GEMM，手写 FMA + fp32 累加器，天然 IEEE fp32；exp/log 是逐元素超越函数 (~1 ULP)。容忍值三步：步骤 1 ε_op=1.2e-7, K=128，ε_total≈1.2e-7·sqrt(128)≈1.4e-6，rtol_base=atol_base=1.4e-5；步骤 2 不触发，logsumexp 不走 cuDNN/cuBLAS；步骤 3（量级修正）logsumexp 包含 sum-after-exp，但已减 max 数值稳定，输出 ~ log(N) + 平均值，量级合理；用 ε_op·K·|output| 估算 ≈ 1.2e-7·128·log(128)≈7e-5 < 步骤 1。最终 **rtol = atol = 1.4e-5**，主导因素是步骤 1。结构性检查：(a) 输出为 0-d scalar；(b) 必须先 -max 再 exp（数值稳定）；(c) Y ≥ max(S)（logsumexp 下界）。失败诊断：(i) 输出 NaN → 未减 max 导致 exp 溢出；(ii) Y < max(S) → reduction 实现错误。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_tanh_scale_bias_fused",
+        "next_expressions": [
+          "maxpool2d"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_conv",
+            "kind": "tensor"
+          },
+          {
+            "name": "scale",
+            "kind": "scalar"
+          },
+          {
+            "name": "B_user",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y_fused",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y_fused[n, o, h, w] = tanh( sum_{i=0}^{7} sum_{dh=0}^{2} sum_{dw=0}^{2} X[n, i, h+dh, w+dw] * W[o, i, dh, dw] + B_conv[o] ) * scale + B_user[o, 0, 0]\nwhere n ∈ [0, 128), o ∈ [0, 64), h ∈ [0, 254), w ∈ [0, 254)\noutput spatial size H_out = 254, W_out = 254.",
+        "boundary_treatment": "无填充，输入空间尺寸256x256，卷积核3x3，步长1，膨胀1，输出尺寸254x254；卷积窗口始终在输入内，不越界。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 254)",
+              "binding": "static",
+              "value": "254"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 254)",
+              "binding": "static",
+              "value": "254"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "dh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "dw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(128, 8, 256, 256)",
+            "stride": "(524288, 65536, 256, 1)",
+            "address_mapping": "n * 524288 + i * 65536 + h * 256 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.weight",
+            "layout": "(64, 8, 3, 3)",
+            "stride": "(72, 9, 3, 1)",
+            "address_mapping": "o * 72 + i * 9 + dh * 3 + dw"
+          },
+          "B_conv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv.bias",
+            "layout": "(64,)",
+            "stride": "(1,)",
+            "address_mapping": "o"
+          },
+          "scale": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scaling_factor"
+          },
+          "B_user": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(64, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "o"
+          },
+          "Y_fused": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_tanh_scale_bias_fused.output",
+            "layout": "(128, 64, 254, 254)",
+            "stride": "(4129024, 64516, 254, 1)",
+            "address_mapping": "n * 4129024 + o * 64516 + h * 254 + w"
+          }
+        },
+        "TDD_requirement": "需数值对拍，以PyTorch eager计算结果为参考。重点验证卷积累加、tanh激活、标量缩放、bias加法的融合计算正确性；检查多通道累加精度、广播语义；建议小shape冒烟（如N=2, C_in=3, C_out=4, H=W=8）和完整shape对拍，关注输出空间尺寸254x254是否与PyTorch一致。"
+      },
+      {
+        "name": "maxpool2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y_fused",
+            "kind": "tensor"
+          },
+          {
+            "name": "K_pool",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Z",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Z[n, o, i, j] = max_{dh=0}^{K_pool-1} max_{dw=0}^{K_pool-1} Y_fused[n, o, i*K_pool + dh, j*K_pool + dw]\nwhere i ∈ [0, 63), j ∈ [0, 63), K_pool = 4\noutput spatial size H_pool = 63, W_pool = 63.",
+        "boundary_treatment": "无填充，池化窗口大小4x4，步长4，输入空间尺寸254x254，窗口不越界，输出尺寸63x63。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 63)",
+              "binding": "static",
+              "value": "63"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "dh",
+              "range": "[0, 4)",
+              "binding": "static",
+              "value": "4",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "dw",
+              "range": "[0, 4)",
+              "binding": "static",
+              "value": "4",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y_fused": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv2d_tanh_scale_bias_fused.output",
+            "layout": "(128, 64, 254, 254)",
+            "stride": "(4129024, 64516, 254, 1)",
+            "address_mapping": "n * 4129024 + o * 64516 + h * 254 + w"
+          },
+          "K_pool": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.max_pool.kernel_size"
+          },
+          "Z": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(128, 64, 63, 63)",
+            "stride": "(254016, 3969, 63, 1)",
+            "address_mapping": "n * 254016 + o * 3969 + i * 63 + j"
+          }
+        },
+        "TDD_requirement": "需数值对拍，以PyTorch eager MaxPool2d结果为参考。重点验证池化窗口滑动、最大值选取的正确性，步长等于窗口大小的情况；建议小shape冒烟（如输入8x8，池化2x2）和完整shape对拍，关注输出尺寸63x63是否与PyTorch一致。"
+      }
+    ]
+  }
+}

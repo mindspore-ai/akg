@@ -1,0 +1,117 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "groupnorm_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "G",
+            "kind": "scalar"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given input tensor X of shape (N, C, H, W) with N=112, C=64, H=512, W=512; number of groups G=8; let C_g = C // G = 8; K = C_g * H * W = 2097152. For each sample n in [0,N) and group g in [0,G), define a flat index k in [0,K) that maps to coordinates (c, h, w) within group g via: c = g*C_g + (k // (H*W)), h = (k % (H*W)) // W, w = (k % (H*W)) % W. Compute mean and variance: mean[n,g] = (1/K) * sum_{k=0}^{K-1} X[n, c, h, w]; var[n,g] = (1/K) * sum_{k=0}^{K-1} (X[n,c,h,w] - mean[n,g])^2. Then for each n, c, h, w: g = c // C_g; Y[n,c,h,w] = ((X[n,c,h,w] - mean[n,g]) / sqrt(var[n,g] + eps)) * W[c] + B[c], where W and B are learnable weight and bias of shape (C,), and eps = 1e-5.",
+        "boundary_treatment": "The number of channels C must be divisible by the number of groups G. No padding or special boundary handling; all spatial and channel elements within a group are used.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "112"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "2097152",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(C*H*W, H*W, W, 1)",
+            "address_mapping": "offset = n*(C*H*W) + c*(H*W) + h*W + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gn.weight",
+            "layout": "(C,)",
+            "stride": "(1,)",
+            "address_mapping": "offset = c"
+          },
+          "B": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gn.bias",
+            "layout": "(C,)",
+            "stride": "(1,)",
+            "address_mapping": "offset = c"
+          },
+          "G": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.gn.num_groups"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1e-5"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W)",
+            "stride": "(C*H*W, H*W, W, 1)",
+            "address_mapping": "offset = n*(C*H*W) + c*(H*W) + h*W + w"
+          }
+        },
+        "TDD_requirement": "需要对拍参考实现：PyTorch eager 模式下 nn.GroupNorm(num_groups=8, num_channels=64) 的前向传播。检查输入形状 (112,64,512,512)，分组正确，均值和方差使用有偏估计（除以组内元素总数），eps=1e-5。验证仿射参数 weight/bias 的应用。建议使用小输入 (2,4,3,3) 进行冒烟测试，确保形状处理、归约轴选择正确。与 eager 输出对比，fp32 下允许 1e-5 以内的相对误差。"
+      }
+    ]
+  }
+}

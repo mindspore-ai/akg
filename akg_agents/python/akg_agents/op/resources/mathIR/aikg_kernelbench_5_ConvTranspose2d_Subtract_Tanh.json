@@ -1,0 +1,111 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_fused",
+        "next_expressions": ["bias_sub_tanh_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}，stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 H_out=W_out=(H_in-1)*S - 2*P + K + OP = (16-1)*2 - 2 + 4 + 1 = 33。Y1[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i=0}^{C_in-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} I_valid · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，其中 h_i = (h_o+P-k_h)/S, w_i = (w_o+P-k_w)/S，仅当二者均能被 S 整除且 h_i∈[0,H_in), w_i∈[0,W_in) 时项有效。本题 N=128, C_in=32, C_out=16, H_in=W_in=16, K_h=K_w=4, S=2, P=1, OP=1, H_out=W_out=33。",
+        "boundary_treatment": "仅当反推索引 (h_i,w_i) 为整数且落在合法范围 [0,H_in)×[0,W_in) 内时累加；output_padding=1 使输出空间额外加 1 行 1 列；bias 加在通道维 c_o；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "33" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "33" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 32, 16, 16)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (8192, 256, 16, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*(C_in*H_in*W_in) + c_i*(H_in*W_in) + h_i*W_in + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (32, 16, 4, 4)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (256, 16, 4, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*(C_out*K_h*K_w) + c_o*(K_h*K_w) + k_h*K_w + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (17424, 1089, 33, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*(C_out*H_out*W_out) + c_o*(H_out*W_out) + h_o*W_out + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为在 torch.manual_seed(0) 下构造 nn.ConvTranspose2d(32,16,kernel_size=4,stride=2,padding=1,output_padding=1) 的前向，eval 模式。精度模式：未走 tl.dot 时手写 FMA + fp32 累加器天然 IEEE fp32；若 codegen 走 tl.dot 必须声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = C_in × K_h × K_w = 32×4×4 = 512，ε_total ≈ 1.2e-7 × sqrt(512) ≈ 2.7e-6，留 10x 得 rtol_base = atol_base = 3e-5；步骤 2（cuDNN 修正，关键）参考含 nn.ConvTranspose2d 走 cuDNN，A100 默认开 TF32，rtol = max(3e-5, 1e-3) = 1e-3，atol 同理 = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape (128,16,33,33) = (H_in-1)*S - 2P + K + OP = 33；(b) output_padding=1 对输出尺寸贡献；(c) weight 解包 (C_in=32, C_out=16) 不可对调；(d) bias 加在通道维。冒烟输入：(2,32,4,4) 小尺寸 + (128,32,16,16) 完整对拍。失败诊断：(i) diff ≈ 1e-4~1e-3 → cuDNN TF32 预期；(ii) diff ≫ 1e-3 → weight 解包前两维对调；(iii) 仅边界元素偏差 → 反推索引整除/范围错；(iv) 某通道整体偏移 → bias 错位。"
+      },
+      {
+        "name": "bias_sub_tanh_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×H_out×W_out}，额外可学习 bias B_extra ∈ R^{C_out×1×1}。先做 bias 广播减法 A[n,c,h,w] = Y1[n,c,h,w] - B_extra[c,0,0]，再做 tanh：Y[n,c,h,w] = tanh(A[n,c,h,w])。本题 N=128, C_out=16, H_out=W_out=33。该 expression 融合 bias 广播减法与逐元素 tanh。",
+        "boundary_treatment": "纯逐元素减法 + 广播 + tanh，无空间边界问题；tanh 对所有实数定义良好且有界 (-1, 1)；广播将 B_extra 的 (C_out,1,1) 沿 N、H、W 复制。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "h", "range": "[0, H_out)", "binding": "static", "value": "33" },
+            { "symbol": "w", "range": "[0, W_out)", "binding": "static", "value": "33" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (17424, 1089, 33, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1) = (16, 1, 1)",
+            "stride": "(1, 1, 1)",
+            "address_mapping": "addr_B_extra(c, 0, 0) = B_extra_ptr + c"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out) = (128, 16, 33, 33)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (17424, 1089, 33, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*(C_out*H_out*W_out) + c*(H_out*W_out) + h*W_out + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为对上游 Y1 直接 - self.bias 后 torch.tanh，eval 模式。精度模式：纯逐元素 减法 + tanh，tanh 调 libdevice ~1 ULP；无 tl.dot；IEEE fp32 语义。容忍值推导分三步：步骤 1（基础公式）ε_op ≈ 1.2e-7（减法）+ ~1 ULP（tanh），K=1（无 reduction），总误差 ≈ 2.5e-7，留 10x 得 rtol_base = atol_base = 5e-6；步骤 2（cuDNN 修正）不触发，本步无 cuDNN；步骤 3（量级修正）tanh 输出 ∈ (-1, 1) 有界，不放大。最终本步内 rtol = atol = 5e-6；但上游 Y1 来自 ConvTranspose2d 已带 cuDNN TF32 误差 ~1e-3，端到端建议 rtol = atol = 1e-3。最终端到端 rtol = atol = 1e-3，主导因素是上游 cuDNN TF32 传播。结构性检查：(a) 输出 shape (128,16,33,33)；(b) 所有 Y 元素严格落在 (-1, 1)；(c) 减法是 Y1 - B_extra 而非 B_extra - Y1；(d) 广播沿 N/H/W 三维复制。冒烟输入：(2,16,3,3) 设置 Y1 含正负值验证 tanh 单调性、对称性 tanh(-x) = -tanh(x)；完整对拍 (128,32,16,16)。失败诊断：(i) 输出超出 (-1,1) → tanh 未生效；(ii) 输出符号反 → 减法顺序写反 (B_extra - Y1)；(iii) 某通道整体偏差恒定 → bias 索引错位；(iv) 端到端 diff ≈ 1e-3 → cuDNN TF32 上游传播。"
+      }
+    ]
+  }
+}

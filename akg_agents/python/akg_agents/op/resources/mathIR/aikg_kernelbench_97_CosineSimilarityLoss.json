@@ -1,0 +1,85 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "cosine_similarity_loss_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "predictions",
+            "kind": "tensor"
+          },
+          {
+            "name": "targets",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "L",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "给定输入张量 p,t ∈ ℝ^{N×F}，其中 N=batch_size=128，F=input_shape[0]=4096。对每个样本 i∈[0,N-1]，定义点积 dot_i = Σ_{f=0}^{F-1} p[i,f]·t[i,f]，L2范数乘积 norm_product_i = (Σ_{f=0}^{F-1} p[i,f]^2)^{1/2}·(Σ_{f=0}^{F-1} t[i,f]^2)^{1/2}。余弦相似度 cos_sim_i = dot_i / (norm_product_i + ε)，其中 ε=1e-8（PyTorch cosine_similarity 默认 eps）。单样本损失 loss_i = 1 - cos_sim_i。最终输出标量 L = (1/N)·Σ_{i=0}^{N-1} loss_i。该表达式将余弦相似度计算、逐元素减法与平均归约融合为一个算子。",
+        "boundary_treatment": "数值稳定性处理：在分母中加入 ε=1e-8 防止除零。无其他边界处理（无卷积/池化等越界访问）。",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "f",
+              "range": "[0, F)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "p": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(N, F) = (128, 4096)",
+            "stride": "(4096, 1)",
+            "address_mapping": "addr_p(i, f) = p_ptr + i*4096 + f"
+          },
+          "t": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(N, F) = (128, 4096)",
+            "stride": "(4096, 1)",
+            "address_mapping": "addr_t(i, f) = t_ptr + i*4096 + f"
+          },
+          "L": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "() 标量张量",
+            "stride": "()",
+            "address_mapping": "ptr_L = output_ptr"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size = 128"
+          },
+          "F": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "input_shape[0] = 4096"
+          },
+          "ε": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "torch.nn.functional.cosine_similarity 默认 eps=1e-8"
+          }
+        },
+        "TDD_requirement": "使用 PyTorch 的 torch.nn.functional.cosine_similarity 与 torch.mean(1 - ...) 对拍：创建随机输入 (128,4096)，确保本 expression 输出标量与 eager 结果一致（误差 < 1e-5）；验证形状（输出为 scala r）；测试极端值（全零输入）时损失应为 1（cosine_sim=0），验证 eps 防除零；对拍多个随机种子。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,269 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_fused",
+        "next_expressions": [
+          "group_norm"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_fc",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_fc",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "全连接 (GEMM)：输入 X ∈ R^{N×I} (N=128, I=512)，权重 W_fc ∈ R^{O×I} (O=256)，偏置 B_fc ∈ R^{O}。输出 Y1 ∈ R^{N×O}：Y1[n,o] = B_fc[o] + Σ_{i=0}^{I-1} X[n,i] · W_fc[o,i]。",
+        "boundary_treatment": "全连接对完整 I=512 求和；bias 加在输出维 O；无空间边界处理；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, I)",
+              "binding": "static",
+              "value": "512",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*512 + i"
+          },
+          "W_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.fc.weight",
+            "layout": "(O, I) = (256, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_fc(o, i) = W_fc_ptr + o*512 + i"
+          },
+          "B_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.fc.bias",
+            "layout": "(O) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_fc(o) = B_fc_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 256)",
+            "stride": "(O, 1) = (256, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*256 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(512, 256)（eval 模式）。精度模式：tl.dot + fp32 输入必须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32；手写 FMA + fp32 累加为 IEEE。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = I = 512，ε_total ≈ 1.2e-7 * sqrt(512) ≈ 2.7e-6，10x 余量 rtol_base = atol_base = 3e-5；步骤 2（cuBLAS 参考修正，关键）参考含 nn.Linear，cuBLAS+TF32 引入 ~1e-3 误差，强制 rtol = atol = max(3e-5, 1e-3) = 1e-3；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-3，主导因素是步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,256)；(b) 验证 weight 布局 (O=256, I=512) 非转置；(c) 验证 bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 → cuBLAS TF32 正常；(ii) 整体转置错位 → W 转置；(iii) 整体偏 bias 量级 → bias 索引错。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Use a tiled tl.dot GEMM for Linear/Matmul producer and fuse only cheap declared epilogues on the accumulator. PyTorch nn.Linear weight layout is (O, I); load the B tile as W[o, i] with output features on columns and reduction i on rows.",
+          "suggested_tile": {
+            "preferred_variant": "linear_tl_dot_epilogue",
+            "BLOCK_M": 32,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "O": 256,
+            "I": 512
+          },
+          "forbidden_lowerings": [
+            "Manual tl.static_range over BLOCK_K with a[:, k] or b[k, :] tensor indexing.",
+            "Treat original Linear weight pointer as contiguous (I, O) without explicitly packing/transposing it.",
+            "Use non-power-of-two tl.arange tile extents such as O=20 or I=10 directly.",
+            "Fuse a training-mode BatchNorm into a single GEMM epilogue without computing batch statistics over N."
+          ]
+        }
+      },
+      {
+        "name": "group_norm",
+        "next_expressions": [
+          "leaky_relu_double"
+        ],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "GroupNorm: 输入 Y1 ∈ R^{N×C} (N=128, C=256)，G=num_groups=8，C_g=C/G=32；gamma, beta ∈ R^{C}，eps=1e-5。每个 (n,g)，组内索引 I_g={g*C_g..(g+1)*C_g-1}，元素数 M=C_g=32（无空间维）。均值 μ_{n,g}=(1/M) Σ_{c∈I_g} Y1[n,c]；有偏方差 σ²_{n,g}=(1/M) Σ_{c∈I_g} (Y1[n,c]-μ_{n,g})²。Y2[n,c] = gamma[c] * (Y1[n,c] - μ_{n,g(c)}) / sqrt(σ²_{n,g(c)} + eps) + beta[c]，g(c)=c//C_g。",
+        "boundary_treatment": "组规约对完整 C_g=32 通道；G=8 整除 C=256；eval 模式使用当前输入统计量；无空间维。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_k",
+              "range": "[0, C_g)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, C) = (128, 256)",
+            "stride": "(C, 1) = (256, 1)",
+            "address_mapping": "addr_Y1(n, c) = Y1_ptr + n*256 + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gn.weight",
+            "layout": "(C) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gn.bias",
+            "layout": "(C) = (256)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.gn.eps (1e-5)"
+          },
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.group_norm.output",
+            "layout": "(N, C) = (128, 256)",
+            "stride": "(C, 1) = (256, 1)",
+            "address_mapping": "addr_Y2(n, c) = Y2_ptr + n*256 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：nn.GroupNorm(num_groups=8, num_channels=256, eps=1e-5)（eval 模式）。精度模式：手写 FMA + fp32 累加，IEEE 语义；建议 Welford 单遍。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = C_g = 32，ε_total ≈ 1.2e-7 * sqrt(32) ≈ 6.8e-7，10x 余量 rtol_base = atol_base ≈ 7e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发。最终 rtol = atol = 1e-5（保守取整），主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,256)；(b) 同 (n,g) 内 affine 前近似 0 均值单位方差；(c) eps 加在 sqrt 内；(d) g(c)=c//32 而非 c%G。失败诊断：(i) NaN → 某组方差为 0，eps 位置错；(ii) 数值偏移 → 通道分组索引错。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Normalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      },
+      {
+        "name": "leaky_relu_double",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y2",
+            "kind": "tensor"
+          },
+          {
+            "name": "negative_slope",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "LeakyReLU 后做 x+x（即 2x）的融合逐元素操作：先计算 Z[n,c] = Y2[n,c] if Y2[n,c] > 0 else negative_slope * Y2[n,c]（其中 negative_slope=0.01），然后 Y[n,c] = Z[n,c] + Z[n,c] = 2 * Z[n,c]。本题 N=128, C=256。融合 LeakyReLU 与 self-add (2x) 为一个逐元素 expression。",
+        "boundary_treatment": "纯逐元素，无边界条件；LeakyReLU 对全实数稳定；x+x 等同于 2x。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "256"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Y2": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.group_norm.output",
+            "layout": "(N, C) = (128, 256)",
+            "stride": "(C, 1) = (256, 1)",
+            "address_mapping": "addr_Y2(n, c) = Y2_ptr + n*256 + c"
+          },
+          "negative_slope": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.leaky_relu.negative_slope (0.01)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C) = (128, 256)",
+            "stride": "(C, 1) = (256, 1)",
+            "address_mapping": "addr_Y(n, c) = Y_ptr + n*256 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.nn.functional.leaky_relu(Y2, negative_slope=0.01) 然后 + 自身。精度模式：纯逐元素 IEEE fp32；x+x 是一次浮点加（IEEE）。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K=1，base = 1e-6；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）不触发（2x 量级仅放大 2 倍）。最终 rtol = atol = 1e-6，主导因素是步骤 1。结构性检查：(a) 输出 shape=(128,256)；(b) Y2[n,c] >= 0 时 Y[n,c] = 2*Y2[n,c]；(c) Y2[n,c] < 0 时 Y[n,c] = 2*0.01*Y2[n,c] = 0.02*Y2[n,c]。失败诊断：(i) 负数斜率错 → 整体偏 0.01 倍数；(ii) 漏 x+x → 数值缩小一倍。"
+      }
+    ]
+  }
+}

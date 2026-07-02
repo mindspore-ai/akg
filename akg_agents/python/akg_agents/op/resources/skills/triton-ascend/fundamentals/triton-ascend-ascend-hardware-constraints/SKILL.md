@@ -63,7 +63,7 @@ for k in range(0, N, BLOCK_K):  # N 和 BLOCK_K 都是 constexpr
 - `while` 循环 → 用 `for` + `if` 替代
 - `return` / `break` / `continue` → 用 mask 控制
 - 复杂 `tl.where` 用于内存偏移 → 拆分为 if-else 静态分支
-- BLOCK_SIZE 必须 < 65536
+- BLOCK_SIZE/`tl.arange`对应单program内tile大小，必须满足UB/L0和编译器限制；不要为了减少grid数量而放大tile
 
 ## 3. Strided memory access 的性能代价
 
