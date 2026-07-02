@@ -205,9 +205,53 @@ static bool refineReduction(npuvector::ReductionOp op) {
   return setResultType(op.getDest(), npuvector::NPUVectorType::get(newShape, oldType.getElementType()));
 }
 
+static bool refineExtractSlice(npuvector::ExtractSliceOp op) {
+  auto oldType = dyn_cast<npuvector::NPUVectorType>(op.getResult().getType());
+  if (oldType == nullptr || oldType.hasStaticShape()) {
+    return false;
+  }
+
+  ArrayRef<int64_t> keepDims = op.getKeepDims();
+  if (keepDims.size() != static_cast<size_t>(oldType.getRank())) {
+    return false;
+  }
+
+  ValueRange sizes = op.getSizes();
+  SmallVector<int64_t> newShape(oldType.getShape().begin(), oldType.getShape().end());
+  bool changed = false;
+  for (auto [resultDim, sourceDim] : llvm::enumerate(keepDims)) {
+    if (sourceDim < 0 || sourceDim >= static_cast<int64_t>(sizes.size())) {
+      return false;
+    }
+    if (!ShapedType::isDynamic(newShape[resultDim])) {
+      continue;
+    }
+    std::optional<int64_t> size = getConstantIndex(sizes[static_cast<unsigned>(sourceDim)]);
+    if (!size) {
+      continue;
+    }
+    newShape[resultDim] = *size;
+    changed = true;
+  }
+
+  if (!changed) {
+    return false;
+  }
+  return setResultType(op.getResult(), npuvector::NPUVectorType::get(newShape, oldType.getElementType()));
+}
+
+static bool refineInsertSlice(npuvector::InsertSliceOp op) {
+  auto destType = dyn_cast<npuvector::NPUVectorType>(op.getDest().getType());
+  auto oldType = dyn_cast<npuvector::NPUVectorType>(op.getResult().getType());
+  if (destType == nullptr || oldType == nullptr || oldType.hasStaticShape()) {
+    return false;
+  }
+  return setResultType(op.getResult(), destType);
+}
+
 static bool isShapePreservingElementwiseOp(Operation *op) {
   if (isa<npuvector::TransferReadOp, npuvector::TransferWriteOp, npuvector::BroadcastOp, npuvector::TransposeOp,
-          npuvector::ReductionOp>(op)) {
+          npuvector::ReductionOp, npuvector::ExtractSliceOp, npuvector::InsertSliceOp>(op)) {
     return false;
   }
   Dialect *dialect = op->getDialect();
@@ -263,6 +307,12 @@ static bool refineOneOp(Operation *op) {
   }
   if (auto reductionOp = dyn_cast<npuvector::ReductionOp>(op)) {
     return refineReduction(reductionOp);
+  }
+  if (auto extractSliceOp = dyn_cast<npuvector::ExtractSliceOp>(op)) {
+    return refineExtractSlice(extractSliceOp);
+  }
+  if (auto insertSliceOp = dyn_cast<npuvector::InsertSliceOp>(op)) {
+    return refineInsertSlice(insertSliceOp);
   }
   return refineShapePreservingElementwise(op);
 }
