@@ -794,5 +794,52 @@ def NPUVector_ExtractSliceOp :
   }];
 }
 
-#endif // NPUVECTOR_OPS
+//===----------------------------------------------------------------------===//
+// InsertSliceOp
+//===----------------------------------------------------------------------===//
 
+def NPUVector_InsertSliceOp :
+  NPUVector_Op<"insert_slice", [Pure, AttrSizedOperandSegments,
+    TypesMatchWith<"result type matches destination type", "dest", "result", "$_self">]>,
+    Arguments<(ins NPUVectorOfAnyRank:$source,
+                   NPUVectorOfAnyRank:$dest,
+                   Variadic<Index>:$offsets,
+                   Variadic<Index>:$sizes,
+                   Variadic<Index>:$strides)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "Insert an !npuvector sub-tile into a destination tile.";
+  let description = [{
+    Functionally updates `dest` with `source` at the given slice coordinates,
+    analogous to `tensor.insert_slice` but acting on SSA NPU vector tiles.
+
+    `offsets`, `sizes`, and `strides` describe the destination slice. The result
+    has the same type as `dest`; elements outside the slice are preserved from
+    `dest`, and elements inside the slice come from `source`.
+
+    Example:
+
+    ```mlir
+    %out = npuvector.insert_slice %tile into %acc[%c0] [%tile_size] [%c1]
+             : !npuvector<?xf32> into !npuvector<?xf32>
+    ```
+  }];
+
+  let assemblyFormat = [{
+    $source `into` $dest `[` $offsets `]` `[` $sizes `]` `[` $strides `]` attr-dict
+    `:` qualified(type($source)) `into` qualified(type($dest))
+  }];
+
+  let extraClassDeclaration = [{
+    NPUVectorType getSourceVectorType() {
+      return ::llvm::cast<NPUVectorType>(getSource().getType());
+    }
+    NPUVectorType getDestVectorType() {
+      return ::llvm::cast<NPUVectorType>(getDest().getType());
+    }
+    NPUVectorType getResultVectorType() {
+      return ::llvm::cast<NPUVectorType>(getResult().getType());
+    }
+  }];
+}
+
+#endif // NPUVECTOR_OPS
