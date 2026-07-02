@@ -84,6 +84,15 @@ class AscendLaunchRuntime {
 uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin_path);
 void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t block_num, rtStream_t stream,
                   std::vector<void *> args, bool is_dynamic = false);
+
+/// Open a shared library and resolve a symbol by name.
+/// Ensures the current module's extern "C" symbols are globally visible
+/// before loading the library, so that symbols like rtDevBinaryRegister
+/// can be resolved by the loaded library.
+/// \param lib_path Path to the shared library (.so).
+/// \param symbol_name Name of the symbol to resolve.
+/// \return Pointer to the symbol, or nullptr on failure.
+void *DlsymSymbol(const std::string &lib_path, const std::string &symbol_name);
 }  // namespace runtime
 }  // namespace mlir
 
