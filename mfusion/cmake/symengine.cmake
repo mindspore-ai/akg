@@ -37,8 +37,3 @@ find_library(GMP_LIB gmp)
 if(GMP_LIB)
   target_link_libraries(symengine::symengine INTERFACE ${GMP_LIB})
 endif()
-
-find_library(GMPXX_LIB gmpxx)
-if(GMPXX_LIB)
-  target_link_libraries(symengine::symengine INTERFACE ${GMPXX_LIB})
-endif()
