@@ -123,7 +123,7 @@ void createGpuDynOptPipeline(OpPassManager &pm, const GPUDynPipelineOptions &opt
   pm.addPass(createLoadAxisInfoPass());
   OpPassManager &nestedFunctionPM5 = pm.nest<func::FuncOp>();
   nestedFunctionPM5.addPass(createConvertLinalgToParallelLoopsPass());
-  nestedFunctionPM5.addPass(createAKGGPUMapping());
+  nestedFunctionPM5.addPass(createAKGGPUMapping(options.outputDir));
   nestedFunctionPM5.addPass(createPrimeNumReplaceForDynamicShapePass("replace"));
 
   nestedFunctionPM5.addPass(createRewriteReduceInMultiLevelMemoryPass());
@@ -134,12 +134,11 @@ void createGpuDynOptPipeline(OpPassManager &pm, const GPUDynPipelineOptions &opt
   pm.addPass(createGpuLauchSinkIndexComputationsPass());
   OpPassManager &nestedFunctionPM6 = pm.nest<func::FuncOp>();
   nestedFunctionPM6.addPass(createGpuUseAllReduceWithAtomicReturnPass());
-  pm.addPass(createGpuKernelOutliningExt());
+  pm.addPass(createGpuKernelOutliningExt(options.outputDir));
   pm.addPass(createAffineHandleBoundaryIfRestore());
   pm.addPass(createLowerAffinePass());
   pm.addPass(createPromoteTempBufferPass());
   pm.addPass(createCopyAttributesToGpuPass());
-
-  pm.addPass(createDumpShapeInfoPass(options.jsonFileName));
+  pm.addPass(createDumpShapeInfoPass(options.outputDir, options.jsonFileName));
 }
 }  // namespace mlir

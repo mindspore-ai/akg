@@ -29,7 +29,8 @@ namespace mlir {
 
 /// Replaces `gpu.launch` with `gpu.launch_func` by moving the region into
 /// a separate kernel function.
-std::unique_ptr<OperationPass<ModuleOp>> createGpuKernelOutliningExt(StringRef dataLayoutStr = StringRef());
+std::unique_ptr<OperationPass<ModuleOp>> createGpuKernelOutliningExt(const std::string &path = "",
+                                                                     StringRef dataLayoutStr = StringRef());
 
 }  // namespace mlir
 #endif  // AKG_DIALECT_GPU_TRANSFORMS_GPUKERNELOUTLININGEXT_H_

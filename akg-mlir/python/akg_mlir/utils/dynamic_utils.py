@@ -107,7 +107,7 @@ def get_device_shape(input_for_mod, kernel_name, is_dyn_shape, cur_dir=""):
     if not is_dyn_shape:
         return host_shape, {}, {}
 
-    shape_info_file = os.path.join(cur_dir, "akg_kernel_meta", kernel_name + "_shape_info.json")
+    shape_info_file = os.path.join(cur_dir, kernel_name + "_shape_info.json")
     if not os.path.exists(shape_info_file):
         logging.warning(
             "Dynamic shape needs file %s to get the device shape. Please use "
@@ -154,9 +154,8 @@ def dump_shape_arg_list(data, kernel_name, cur_dir):
             raise TypeError("wrong data to cytpes, current type is '", type(d),
                             "'")
         shape_arg_list.append(shape_list)
-    with os.fdopen(os.open(os.path.join(
-            cur_dir, "akg_kernel_meta", kernel_name + "_shape_arg.txt"),
-            os.O_WRONLY | os.O_CREAT, 0o400), 'wt') as f:
+    with os.fdopen(os.open(os.path.join(cur_dir, kernel_name + "_shape_arg.txt"), os.O_WRONLY | os.O_CREAT, 0o400),
+                   'wt') as f:
         f.write(str(shape_arg_list))
 
 
