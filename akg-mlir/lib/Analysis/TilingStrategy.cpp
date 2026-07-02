@@ -56,6 +56,7 @@ using mlir::akg::autotiling::GpuTemplateTilingSolver;
 static constexpr int64_t kDynamicShapeValue = -1;
 static constexpr int64_t kDynamicAllocationSize = -1;
 static constexpr int64_t kInvalidAxisIndex = -1;
+static constexpr int64_t kInvalidTileSize = -1;
 static constexpr int kDynamicTileMarker = -1;
 
 static constexpr int kOneDynamicInnerTileSize = 1024;
@@ -965,13 +966,15 @@ struct BandTilePlan {
   // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
   bool usesMultiVecScheme{false};
   bool preserveWholeBandTiles{false};
+  bool preferCoreMultipleOuterTiles{false};
 };
 
 int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
 void applyF32LastDimDoubleAlign(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisAlignUnits);
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx);
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
-                                                                        bool alignParallelTiles);
+                                                                        bool alignParallelTiles,
+                                                                        bool preferCoreMultiples = false);
 
 static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes,
                                     unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
@@ -2056,7 +2059,6 @@ static SmallVector<int64_t, kSmallVectorSizeSixteen> collectAlignAwareTileCandid
       }
     }
   } else {
-    candidates.push_back(1);
     for (int64_t tile = alignUnit; tile <= extent; tile += alignUnit) {
       candidates.push_back(tile);
     }
@@ -2066,9 +2068,33 @@ static SmallVector<int64_t, kSmallVectorSizeSixteen> collectAlignAwareTileCandid
   return candidates;
 }
 
+static bool tryAssignExactPrefixTasks(ArrayRef<int64_t> extents, ArrayRef<int64_t> alignUnits, size_t axisIdx,
+                                      int64_t remainingTasks, SmallVectorImpl<unsigned> &tiles) {
+  if (axisIdx == extents.size()) {
+    return remainingTasks == 1;
+  }
+  int64_t extent = std::max<int64_t>(extents[axisIdx], 1);
+  int64_t alignUnit = axisIdx < alignUnits.size() ? std::max<int64_t>(alignUnits[axisIdx], 1) : 1;
+  for (int64_t blocks = std::min(extent, remainingTasks); blocks >= 1; --blocks) {
+    if (remainingTasks % blocks != 0) {
+      continue;
+    }
+    int64_t tile = alignUpInt64(ceilDivInt64(extent, blocks), alignUnit);
+    if (ceilDivInt64(extent, tile) != blocks) {
+      continue;
+    }
+    tiles.push_back(saturateToTileValue(tile));
+    if (tryAssignExactPrefixTasks(extents, alignUnits, axisIdx + 1, remainingTasks / blocks, tiles)) {
+      return true;
+    }
+    tiles.pop_back();
+  }
+  return false;
+}
+
 SmallVector<unsigned, kSmallVectorSizeFour> assignPrefixOuterTiles(ArrayRef<int64_t> prefixExtents,
                                                                    ArrayRef<int64_t> prefixAlignUnits,
-                                                                   int64_t targetBlocks) {
+                                                                   int64_t targetBlocks, bool preferCoreMultiples) {
   constexpr int64_t kMaxSmallPrefixTileCount = 2;
   SmallVector<unsigned, kSmallVectorSizeFour> outerTiles;
   outerTiles.reserve(prefixExtents.size());
@@ -2110,6 +2136,19 @@ SmallVector<unsigned, kSmallVectorSizeFour> assignPrefixOuterTiles(ArrayRef<int6
     }
     outerTiles.push_back(saturateToTileValue(bestTile));
     producedTiles = multiplyAndCap(producedTiles, ceilDivInt64(extent, bestTile));
+  }
+  if (preferCoreMultiples) {
+    // Prefer the smallest reachable whole-core wave and place its parallel
+    // blocks on outer axes first, preserving wider inner vector tiles.
+    SmallVector<unsigned, kSmallVectorSizeFour> exactTiles;
+    int64_t maxMultiple = ceilDivInt64(producedTiles, std::max<int64_t>(targetBlocks, 1));
+    for (int64_t multiple = 1; multiple <= maxMultiple; ++multiple) {
+      exactTiles.clear();
+      if (tryAssignExactPrefixTasks(prefixExtents, prefixAlignUnits, 0, multiplyAndCap(targetBlocks, multiple),
+                                    exactTiles)) {
+        return exactTiles;
+      }
+    }
   }
   return outerTiles;
 }
@@ -2443,7 +2482,7 @@ int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &
   // which is intentional: BiSheng pads stride-aligned vector buffers to that logical
   // tile shape, so the schedule-side tile must preserve the same aligned extent.
   int64_t high = ceilDivInt64(safeUpper, alignUnit);
-  int64_t best = alignUnit;
+  int64_t best = kInvalidTileSize;
   int64_t low = 1;
   while (low <= high) {
     int64_t cell = (low + high) / 2;
@@ -2456,7 +2495,7 @@ int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &
       high = cell - 1;
     }
   }
-  axisTiles[axisIdx] = best;
+  axisTiles[axisIdx] = std::max<int64_t>(best, 1);
   return best;
 }
 void fillPrefixSuffixTiles(const NpuBandContext &ctx, ArrayRef<unsigned> prefixOuter, int64_t requestedPointRows,
@@ -2472,7 +2511,7 @@ void fillPrefixSuffixTiles(const NpuBandContext &ctx, ArrayRef<unsigned> prefixO
   for (int64_t pointRows = std::max<int64_t>(maxPointRows, 1); pointRows >= 1; --pointRows) {
     axisTiles.front() = pointRows;
     axisTiles[innermost] = innerUpper;
-    int64_t innerTile = findMaxFittingTile(ctx, axisTiles, innermost, innerUpper);
+    int64_t innerTile = std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, innermost, innerUpper), 1);
     if (fitsVectorUb(ctx, axisTiles)) {
       plan.innerTiles.front() = saturateToTileValue(pointRows);
       plan.innerTiles[innermost] = saturateToTileValue(innerTile);
@@ -2877,7 +2916,7 @@ static void emitAlignedTransposeMinTileExceedsUb(const AlignedTransposeMinTileEx
 // of `axisAlignSize`, satisfaction of `satisfiesTransposeAlignConstraints` is
 // guaranteed by construction; we only assert it as an invariant.
 // Strategy (matches the agreed plan)
-//   1. Compute `axisAlignSize[i]` and `axisMaxTileSize[i] = alignUp(extent, alignSize)`
+//   1. Compute `axisAlignSize[i]` and `axisMaxTileSize[i] = alignUp(outerTile, alignSize)`
 //      for every axis in `searchAxisOrder`.
 //   2. Initialize tiles to `[axisAlignSize, ..., axisAlignSize, axisMaxTileSize_last]`
 //      -- bias toward keeping the innermost axis full (best vector intrinsic
@@ -2907,16 +2946,14 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
   }
   for (size_t i = 0; i < n; ++i) {
     size_t axisIdx = searchAxisOrder[i];
-    int64_t extent = std::max<int64_t>(ctx.extents[axisIdx], 1);
-    axisMaxTileSize[i] = alignUpInt64(extent, axisAlignSize[i]);
+    int64_t outerTile = std::max<int64_t>(plan.outerTiles[axisIdx], 1);
+    axisMaxTileSize[i] = alignUpInt64(outerTile, axisAlignSize[i]);
   }
 
-  // Reset plan tiles for search-axis-order before peak computation.
+  // Reset inner tiles for search-axis-order before peak computation.
   // `computeTransposeSearchCandidatePeak` builds axisTiles from plan + the
-  // provided searchShape; axes outside `searchAxisOrder` must already be set by
-  // the caller (tryBuildTransposePlan handles axis 0 multi-core split there).
+  // provided searchShape; outer tiles remain the search upper bounds.
   for (size_t i = 0; i < n; ++i) {
-    plan.outerTiles[searchAxisOrder[i]] = 1;
     plan.innerTiles[searchAxisOrder[i]] = 1;
   }
 
@@ -2994,7 +3031,6 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
 
   for (size_t i = 0; i < n; ++i) {
     unsigned tile = saturateToTileValue(tiles[i]);
-    plan.outerTiles[searchAxisOrder[i]] = tile;
     plan.innerTiles[searchAxisOrder[i]] = tile;
   }
   return true;
@@ -3126,6 +3162,10 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
     bool isPrimaryAxis = idx == primaryAxis;
     if (!isPrimaryAxis) {
       int64_t fitTile = findMaxFittingTile(ctx, axisTiles, idx, candidate);
+      if (fitTile == kInvalidTileSize) {
+        stopped = true;
+        continue;
+      }
       plan.innerTiles[idx] = saturateToTileValue(fitTile);
       axisTiles[idx] = fitTile;
       plan.multiVecAxisMask[idx] = (fitTile > 1) || reductionAxisMask[idx];
@@ -3180,7 +3220,7 @@ bool tryBuildTargetFirstMultiVecPlan(const NpuBandContext &ctx, BandTilePlan &pl
     return false;
   }
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx), targetAxis);
   if (!hasActiveVectorSuffix(plan, targetAxis)) {
     initWholeBandPlan(ctx, plan);
@@ -3471,7 +3511,8 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
 
   initDynamicSingleAxisPlan(ctx, plan);
   SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
-  int64_t tile = findMaxFittingTile(ctx, axisTiles, *targetAxis, getAxisSearchUpper(ctx, *targetAxis));
+  int64_t tile =
+    std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, *targetAxis, getAxisSearchUpper(ctx, *targetAxis)), 1);
   plan.innerTiles[*targetAxis] = saturateToTileValue(tile);
   return true;
 }
@@ -3523,7 +3564,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
 
   if (!isInnermostAxisReduceY(ctx)) {
     initWholeBandPlan(ctx, plan);
-    assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true);
+    assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
@@ -3537,14 +3578,15 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false);
+  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
 
   size_t innermost = ctx.extents.size() - 1;
   SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
   for (size_t i = 0; i < suffixStart; ++i) {
     axisTiles[i] = 1;
   }
-  unsigned innerTile = saturateToTileValue(findMaxFittingTile(ctx, axisTiles, innermost, plan.outerTiles[innermost]));
+  unsigned innerTile = saturateToTileValue(
+    std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, innermost, plan.outerTiles[innermost]), 1));
   plan.outerTiles[innermost] = innerTile;
   plan.innerTiles[innermost] = innerTile;
   return true;
@@ -3573,9 +3615,10 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
     std::lcm(transposeCtx.axesAlignUnits.back(), std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
 
   initWholeBandPlan(ctx, plan);
-  unsigned firstAxisTile = saturateToTileValue(ceilDivInt64(ctx.extents.front(), ctx.targetBlocks));
-  plan.outerTiles.front() = firstAxisTile;
-  plan.innerTiles.front() = firstAxisTile;
+  assignParallelPrefixOuterTiles(transposeCtx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+  for (size_t i = 0; i < static_cast<size_t>(outermostTransposeIdx); ++i) {
+    plan.innerTiles[i] = plan.outerTiles[i];
+  }
   int64_t ubLimitBytes = getVectorUbBytes(ctx);
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
   plan.multiVecAxisMask.assign(ctx.axes.size(), false);
@@ -3608,7 +3651,7 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false);
+  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
   SmallVector<unsigned, kSmallVectorSizeFour> prefixPlaceholder(plan.outerTiles.begin(),
                                                                 plan.outerTiles.begin() + suffixStart);
   fillPrefixSuffixTiles(ctx, prefixPlaceholder, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
@@ -3622,7 +3665,8 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
         (!loopOp->hasAttr(kBroadcastLoopAttr) && !loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr))) {
       break;
     }
-    unsigned tile = saturateToTileValue(findMaxFittingTile(ctx, axisTiles, idx, plan.outerTiles[idx]));
+    unsigned tile =
+      saturateToTileValue(std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, idx, plan.outerTiles[idx]), 1));
     plan.outerTiles[idx] = tile;
     plan.innerTiles[idx] = tile;
   }
@@ -3635,7 +3679,7 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
   plan.usesMultiVecScheme = true;
   return true;
@@ -3700,7 +3744,7 @@ SmallVector<size_t, kSmallVectorSizeSix> collectParallelPrefixAxes(const NpuBand
 void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-    if (alignUnit <= 1) {
+    if (alignUnit <= 1 || (i < plan.multiVecAxisMask.size() && !plan.multiVecAxisMask[i])) {
       continue;
     }
     plan.outerTiles[i] = saturateToTileValue(alignUpInt64(std::max<int64_t>(plan.outerTiles[i], 1), alignUnit));
@@ -3708,8 +3752,18 @@ void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 }
 
-bool tryBuildSmallMathLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
+int64_t findSmallMathDivisibleCoreTile(int64_t extent, int64_t alignUnit) {
   constexpr int64_t kSmallMathTargetCores = 3;
+  for (int64_t targetCores = kSmallMathTargetCores; targetCores > 1; --targetCores) {
+    int64_t targetCoreTile = extent / targetCores;
+    if (extent % targetCores == 0 && targetCoreTile % alignUnit == 0) {
+      return targetCoreTile;
+    }
+  }
+  return extent;
+}
+
+bool tryBuildSmallMathLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   int64_t minMathScore = ctx.hasReduction ? kReduceMathComplexityScore : kMediumMathComplexityScore;
   if (ctx.hasDynamicAxis || ctx.axes.empty() || ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP ||
       ctx.graphTemplate == GraphTemplate::BROADCAST_OP || ctx.mathComplexityScore < minMathScore ||
@@ -3728,7 +3782,7 @@ bool tryBuildSmallMathLimitedCorePlan(const NpuBandContext &ctx, BandTilePlan &p
     }
     int64_t extent = std::max<int64_t>(ctx.extents[i], 1);
     int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-    int64_t targetCoreTile = alignUpInt64(ceilDivInt64(extent, kSmallMathTargetCores), alignUnit);
+    int64_t targetCoreTile = findSmallMathDivisibleCoreTile(extent, alignUnit);
     if (targetCoreTile < extent) {
       plan.outerTiles[i] = saturateToTileValue(targetCoreTile);
       plan.innerTiles[i] = plan.outerTiles[i];
@@ -3756,7 +3810,9 @@ int64_t getParallelTileAlignUnit(const NpuBandContext &ctx, size_t axisIdx, bool
 }
 
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
-                                                                        bool alignParallelTiles) {
+                                                                        bool alignParallelTiles,
+                                                                        bool preferCoreMultiples) {
+  plan.preferCoreMultipleOuterTiles |= preferCoreMultiples;
   SmallVector<size_t, kSmallVectorSizeSix> parallelAxes = collectParallelPrefixAxes(ctx);
   if (parallelAxes.empty()) {
     return parallelAxes;
@@ -3771,7 +3827,7 @@ SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const Np
     parallelAlignUnits.push_back(getParallelTileAlignUnit(ctx, axisIdx, alignParallelTiles));
   }
   SmallVector<unsigned, kSmallVectorSizeFour> outerCaps =
-    assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks);
+    assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks, preferCoreMultiples);
 
   for (auto [pos, axisIdx] : llvm::enumerate(parallelAxes)) {
     int64_t alignUnit = getParallelTileAlignUnit(ctx, axisIdx, alignParallelTiles);
@@ -3791,12 +3847,15 @@ int64_t countParallelPrefixTasks(const NpuBandContext &ctx, const BandTilePlan &
   return tasks;
 }
 
-void syncParallelPrefixInnerOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
+void syncParallelPrefixInnerOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan, ArrayRef<size_t> parallelAxes) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     if (!isParallelPrefixVectorAxis(ctx, plan, i)) {
       plan.innerTiles[i] = plan.outerTiles[i];
     }
-    plan.outerTiles[i] = plan.innerTiles[i];
+    if (!plan.preferCoreMultipleOuterTiles || !llvm::is_contained(parallelAxes, i) ||
+        plan.innerTiles[i] > plan.outerTiles[i]) {
+      plan.outerTiles[i] = plan.innerTiles[i];
+    }
   }
 }
 
@@ -3848,7 +3907,7 @@ void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &pla
 
   bool scalarInnerVectorMode = usesScalarInnerVectorMode(ctx, plan);
   SmallVector<size_t, kSmallVectorSizeSix> parallelAxes =
-    assignParallelPrefixOuterTiles(ctx, plan, !scalarInnerVectorMode);
+    assignParallelPrefixOuterTiles(ctx, plan, !scalarInnerVectorMode, plan.preferCoreMultipleOuterTiles);
   if (parallelAxes.empty()) {
     return;
   }
@@ -3861,7 +3920,7 @@ void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &pla
       plan.multiVecAxisMask[axisIdx] = false;
     }
   }
-  syncParallelPrefixInnerOuterTiles(ctx, plan);
+  syncParallelPrefixInnerOuterTiles(ctx, plan, parallelAxes);
   compensateParallelPrefixTaskCount(ctx, plan, parallelAxes, !scalarInnerVectorMode);
 }
 
