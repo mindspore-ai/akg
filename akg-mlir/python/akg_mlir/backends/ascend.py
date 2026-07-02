@@ -13,24 +13,6 @@
 # limitations under the License.
 """ akg launch and compile utils """
 
-import os
-import re
-import sys
-import hashlib
-import pathlib
-import json
-import logging
-import subprocess
-import numpy as np
-
-flags = sys.getdlopenflags()
-sys.setdlopenflags(flags | os.RTLD_GLOBAL)
-# pylint: disable=wrong-import-position
-# pylint: disable=wrong-import-order
-from ..ascend_launch import akg_ascend_run
-sys.setdlopenflags(flags)
-from ..utils.dynamic_utils import get_device_shape
-
 __all__ = [
     "REG_BASED_ARCH_PREFIXES",
     "write_code",
@@ -44,6 +26,18 @@ __all__ = [
     "benchmark_launch",
     "dump_ascend_meta_data",
 ]
+
+import os
+import re
+import hashlib
+import pathlib
+import json
+import logging
+import subprocess
+import numpy as np
+
+from ..ascend_launch import akg_ascend_run
+from ..utils.dynamic_utils import get_device_shape
 
 REG_BASED_ARCH_PREFIXES = ("Ascend910_95", "Ascend950DT", "Ascend950PR")
 # Matches device func attrs like: hacc.block_dim = 40 : i64

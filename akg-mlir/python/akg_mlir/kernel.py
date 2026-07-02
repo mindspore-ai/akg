@@ -12,20 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ Module for akg support ascend_npu_ir test """
+
+__all__ = ["Kernel"]
+
 import os
 import logging
 import json
-import sys
 
 from .backends.ascend import ascend_compile
-flags = sys.getdlopenflags()
-sys.setdlopenflags(flags | os.RTLD_GLOBAL)
-# pylint: disable=wrong-import-position
-# pylint: disable=wrong-import-order
 from .ascend_launch import get_host_functions, get_device_function, torch_launch
-sys.setdlopenflags(flags)
 
-__all__ = ["Kernel"]
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
