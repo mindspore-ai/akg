@@ -146,15 +146,6 @@ bool hasScalarMarker(Type type) {
   return dictAttr && dictAttr.contains(mfuse::kScalarMarkerAttr);
 }
 
-bool isFiniteScalarConstant(DenseElementsAttr denseAttr) {
-  Type elementType = denseAttr.getElementType();
-  if (!isa<FloatType>(elementType)) {
-    return true;
-  }
-  auto value = *denseAttr.getValues<APFloat>().begin();
-  return !value.isNaN() && !value.isInfinity();
-}
-
 // Keep DVM clusters aligned with the runtime scalar API surface in dvm.h.
 // f64/i64 scalar constants are allowed only when convert-mfuse-to-dvm can
 // safely normalize them to f32/i32; bool scalar constants are not supported.
@@ -165,7 +156,7 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
   }
 
   auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValueAttr());
-  if (!denseAttr || denseAttr.getNumElements() != 1 || !isFiniteScalarConstant(denseAttr)) {
+  if (!denseAttr || denseAttr.getNumElements() != 1) {
     return false;
   }
 
@@ -176,7 +167,7 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
   if (elementType.isF64()) {
     double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
-    return std::isfinite(value) && value >= -kMaxFloat && value <= kMaxFloat;
+    return !std::isfinite(value) || (value >= -kMaxFloat && value <= kMaxFloat);
   }
   if (elementType.isInteger(64)) {
     int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
