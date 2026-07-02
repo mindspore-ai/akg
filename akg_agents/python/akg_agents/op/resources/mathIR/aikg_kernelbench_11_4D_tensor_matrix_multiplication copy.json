@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "einsum_tensor_matrix_mul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 A ∈ ℝ^{b×i×j×l}，输入矩阵 B ∈ ℝ^{l×k}。输出张量 C ∈ ℝ^{b×i×j×k} 定义为：C[b,i,j,k] = Σ_{l=0}^{l-1} A[b,i,j,l] · B[l,k]。其中 b=16, i=256, j=512, l=256, k=768。",
+        "boundary_treatment": "该算子为标准的批量张量-矩阵收缩（einsum 求和），在 l 维度上做全归约，无任何边界填充、裁剪或越界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, b)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, i)",
+              "binding": "static",
+              "value": "256"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, j)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, k)",
+              "binding": "static",
+              "value": "768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "l",
+              "range": "[0, l)",
+              "binding": "static",
+              "value": "256",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(b, i, j, l) = (16, 256, 512, 256)",
+            "stride": "(i*j*l, j*l, l, 1) = (256*512*256, 512*256, 256, 1) = (33554432, 131072, 256, 1)",
+            "address_mapping": "addr_A(b, i, j, l) = A_ptr + b*33554432 + i*131072 + j*256 + l"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(l, k) = (256, 768)",
+            "stride": "(k, 1) = (768, 1)",
+            "address_mapping": "addr_B(l, k) = B_ptr + l*768 + k"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(b, i, j, k) = (16, 256, 512, 768)",
+            "stride": "(i*j*k, j*k, k, 1) = (256*512*768, 512*768, 768, 1) = (100663296, 393216, 768, 1)",
+            "address_mapping": "addr_C(b, i, j, k) = C_ptr + b*100663296 + i*393216 + j*768 + k"
+          }
+        },
+        "TDD_requirement": "与 PyTorch 的 torch.einsum('bijl,lk->bijk', A, B) 直接对拍。验证输出 shape 为 (16,256,512,768)；可随机选取 (b,i,j,k) 位置手工计算 Σ_l A[b,i,j,l]*B[l,k] 并与 PyTorch 结果比较；同时验证所有 l 的贡献正确求和。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "hardtanh",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "min_val",
+            "kind": "scalar"
+          },
+          {
+            "name": "max_val",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y[i][j] = min(max(x[i][j], min_val), max_val) for i in [0, 4096), j in [0, 393216)",
+        "boundary_treatment": "No boundary treatment; the operation is fully element-wise.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "min_val": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 -1.0"
+          },
+          "max_val": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1.0"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          }
+        },
+        "TDD_requirement": "数值对拍：以 PyTorch F.hardtanh 为参考实现，验证输入张量形状 (4096, 393216) 下输出是否一致。重点检查边界值 ±1 附近的输入（如 -1.0001, -1.0, 0.9999, 1.0, 1.0001）以及随机值。建议使用小形状（如 (2, 3)）进行冒烟测试，再使用完整形状对拍。容忍值可取 1e-6（fp32 精度）。"
+      }
+    ]
+  }
+}

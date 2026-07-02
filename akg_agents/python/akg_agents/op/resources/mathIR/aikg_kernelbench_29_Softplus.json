@@ -1,0 +1,66 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "softplus",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "T",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i,j] = X[i,j] if X[i,j] > T else log(1 + exp(X[i,j]))",
+        "boundary_treatment": "当 X[i,j] > T 时，直接使用 X[i,j] 作为输出；否则使用 log(1+exp(X[i,j]))。其中 T=20，这是为了数值稳定性，避免 exp 在较大输入时溢出。对于 NaN 或 Inf 输入，按 PyTorch 默认行为传播。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "Y": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softplus.output",
+            "layout": "(4096, 393216)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "T": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 20"
+          }
+        },
+        "TDD_requirement": "数值对拍参考：使用 PyTorch 的 F.softplus(x) 作为参考实现。重点验证：输出形状与输入一致；阈值条件边界（x 在 20 附近）的处理是否与 PyTorch 一致；对于较大 x，输出应等于 x，避免数值溢出；对于较小 x，log(1+exp(x)) 的计算精度。推荐使用小形状 (2,3) 进行冒烟测试，并使用完整形状 (4096, 393216) 进行对拍。浮点误差容忍值建议相对误差 1e-5。"
+      }
+    ]
+  }
+}

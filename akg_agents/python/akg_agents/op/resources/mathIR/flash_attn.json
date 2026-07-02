@@ -1,0 +1,134 @@
+{
+    "code": {
+        "expressions": [
+            {
+                "name": "flash_attention_tiled_online_softmax",
+                "next_expressions": [],
+                "consumes": [
+                    {
+                        "name": "Q",
+                        "kind": "tensor"
+                    },
+                    {
+                        "name": "K",
+                        "kind": "tensor"
+                    },
+                    {
+                        "name": "V",
+                        "kind": "tensor"
+                    },
+                    {
+                        "name": "M",
+                        "kind": "tensor"
+                    },
+                    {
+                        "name": "scale",
+                        "kind": "scalar"
+                    }
+                ],
+                "produces": [
+                    {
+                        "name": "O",
+                        "kind": "tensor"
+                    }
+                ],
+                "formula": "设 Q, K, V ∈ R^{B×H×N×D}, 可选 mask M ∈ {0,1}^{B×N}, scale = 1/sqrt(D)。FlashAttention 通过 tiling 与 online softmax rescaling 计算 exact attention，其最终输出在数值上等价于标准注意力：S[b,h,i,j] = scale · Σ_{d=0}^{D-1} Q[b,h,i,d] · K[b,h,j,d]；若提供 mask，则 S_masked[b,h,i,j] = S[b,h,i,j] if M[b,j]=1 else -∞；m_row[b,h,i] = max_{j∈[0,N)} S_masked[b,h,i,j]；P[b,h,i,j] = exp(S_masked[b,h,i,j] - m_row[b,h,i])（被 mask 位置置 0）；l_row[b,h,i] = Σ_{j=0}^{N-1} P[b,h,i,j]；O[b,h,i,d] = (1/l_row[b,h,i]) · Σ_{j=0}^{N-1} P[b,h,i,j] · V[b,h,j,d]。实现层面采用双层分块循环：Q 沿 seq 维切为 Tr 块（块大小 Br=min(block_size,D)），K/V 沿 seq 维切为 Tc 块（块大小 Bc=block_size）。对每个 KV 块 j 和 Q 块 i，计算 S_ij = (Q_i · scale) @ K_j^T ∈ R^{B×H×Br×Bc}，应用 mask 得 S_ij_masked，取 m_block_ij = max_{j'} S_ij_masked，P_ij = exp(S_ij_masked - m_block_ij)（被 mask 位置清零），l_block_ij = Σ_{j'} P_ij + ε，PV_ij = P_ij @ V_j。用 online softmax 更新：mi_new = max(m_block_ij, mi)；li_new = exp(mi - mi_new) · li + exp(m_block_ij - mi_new) · l_block_ij；O_i ← (li / li_new) · exp(mi - mi_new) · O_i + (exp(m_block_ij - mi_new) / li_new) · PV_ij；mi ← mi_new, li ← li_new。所有 KV 块遍历完后得到最终 O。对输入 shape (B,H,N,D)，其中 B=batch, H=heads, N=seq_len, D=head_dim，block_size 为运行时参数（默认 256）。",
+                "boundary_treatment": "Mask 处理：若提供 mask M ∈ R^{B×N}，则在 S_ij 上通过 torch.where(M>0, S_ij, NEG_INF) 把无效 key 位置的分数置为 NEG_INF=-1e10；exp 后再通过 torch.where(M>0, P_ij, 0.0) 把被 mask 的概率严格清零，避免数值漂移。分块边界：torch.split 在 seq 维上若 N 不能被 block_size 整除，最后一块可能更小，公式中各块的实际长度 Br_i, Bc_j 取决于 split 结果；累加遍历所有 Tc 个 KV 块覆盖 [0,N) 整段。数值稳定：running max m 初始化为 NEG_INF，l 初始化为 0；使用 online softmax 的\"减去当前最大值再指数\"技巧保证 exp 不上溢。除零保护：l_block_ij 加 ε=1e-10 避免分母为 0（例如整个 KV 块都被 mask）。Q_BLOCK_SIZE = min(block_size, D)，KV_BLOCK_SIZE = block_size；本实现中最终 O = cat(O_blocks, dim=2) 沿 seq 维拼回 (B,H,N,D)。",
+                "axis_mapping": {
+                    "parallel": [
+                        {
+                            "symbol": "b",
+                            "range": "[0, B)",
+                            "binding": "runtime"
+                        },
+                        {
+                            "symbol": "h",
+                            "range": "[0, H)",
+                            "binding": "runtime"
+                        },
+                        {
+                            "symbol": "i",
+                            "range": "[0, N)",
+                            "binding": "runtime"
+                        },
+                        {
+                            "symbol": "d",
+                            "range": "[0, D)",
+                            "binding": "runtime"
+                        }
+                    ],
+                    "reduction": [
+                        {
+                            "symbol": "j",
+                            "range": "[0, N)",
+                            "binding": "runtime",
+                            "reduction_type": "softmax_with_lse",
+                            "accumulator_precision": "fp32"
+                        },
+                        {
+                            "symbol": "k",
+                            "range": "[0, D)",
+                            "binding": "runtime",
+                            "reduction_type": "sum",
+                            "accumulator_precision": "fp32"
+                        }
+                    ]
+                },
+                "symbol_binding": {
+                    "Q": {
+                        "binding_kind": "input_tensor",
+                        "code_binding": "flash_attention.Q",
+                        "layout": "(B, H, N, D)",
+                        "stride": "(HND, ND, D, 1)",
+                        "address_mapping": "addr_Q(b, h, i, d) = Q_ptr + b(HND) + h*(ND) + iD + d"
+                    },
+                    "K": {
+                        "binding_kind": "input_tensor",
+                        "code_binding": "flash_attention.K",
+                        "layout": "(B, H, N, D)",
+                        "stride": "(HND, ND, D, 1)",
+                        "address_mapping": "addr_K(b, h, j, d) = K_ptr + b(HND) + h*(ND) + jD + d"
+                    },
+                    "V": {
+                        "binding_kind": "input_tensor",
+                        "code_binding": "flash_attention.V",
+                        "layout": "(B, H, N, D)",
+                        "stride": "(HND, ND, D, 1)",
+                        "address_mapping": "addr_V(b, h, j, d) = V_ptr + b(HND) + h*(ND) + jD + d"
+                    },
+                    "M": {
+                        "binding_kind": "input_tensor",
+                        "code_binding": "flash_attention.mask",
+                        "layout": "(B, N)",
+                        "stride": "(N, 1)",
+                        "address_mapping": "addr_M(b, j) = M_ptr + bN + j"
+                    },
+                    "scale": {
+                        "binding_kind": "scalar_constant",
+                        "code_binding": "1.0 / np.sqrt(D)"
+                    },
+                    "NEG_INF": {
+                        "binding_kind": "scalar_constant",
+                        "code_binding": "-1e10"
+                    },
+                    "EPSILON": {
+                        "binding_kind": "scalar_constant",
+                        "code_binding": "1e-10"
+                    },
+                    "block_size": {
+                        "binding_kind": "scalar_parameter",
+                        "code_binding": "flash_attention.block_size (default 256)"
+                    },
+                    "O": {
+                        "binding_kind": "model_output",
+                        "code_binding": "flash_attention.return",
+                        "layout": "(B, H, N, D)",
+                        "stride": "(HND, ND, D, 1)",
+                        "address_mapping": "addr_O(b, h, i, d) = O_ptr + b*(HND) + h*(ND) + iD + d"
+                    }
+                },
+                "TDD_requirement": "1) 形状检查：输出 O.shape == Q.shape == (B,H,N,D)。2) 与参考实现对拍：无 mask 情况下与 torch.nn.functional.scaled_dot_product_attention(Q,K,V) 或手写 softmax(Q@K^T/sqrt(D)) @ V 的结果在 fp32 下 atol=1e-5 一致。3) Mask 正确性：构造部分 mask（如 M[b, j>=N/2]=0），结果应等价于 reference 中对相同位置置 -∞ 后做 softmax。4) 分块不变性：对同一组 Q/K/V，分别用 block_size=16, 64, 256 运行，输出应完全一致（验证 online softmax rescaling 的正确性）。5) 数值稳定性：构造大尺度 Q/K（幅值 ~100）输入，验证不出现 NaN/Inf。6) 边界情形：N 不能被 block_size 整除时（如 N=300, block_size=256）仍应与 reference 一致。7) 全 mask 行：若某 batch 中所有 key 被 mask，分母加 EPSILON 保证结果为 0 而非 NaN。"
+            }
+        ]
+    }
+}

@@ -29,22 +29,47 @@ logger = logging.getLogger(__name__)
 
 class RouterFactory:
     """算子路由工厂：实现算子场景的智能决策逻辑"""
+
+    @staticmethod
+    def _compose_error_with_diagnostics(verifier_error: str, diagnostic_error: str) -> str:
+        verifier_error = verifier_error or ""
+        diagnostic_error = diagnostic_error or ""
+        if not diagnostic_error:
+            return verifier_error
+        if not verifier_error:
+            return "## CodeChecker 非阻塞诊断\n\n" + diagnostic_error
+        return "\n\n".join([
+            "## Verifier Runtime Error",
+            verifier_error,
+            "## CodeChecker Non-Blocking Triton Diagnostics",
+            diagnostic_error,
+        ])
     
     @staticmethod
-    def create_verifier_router_with_conductor(config: dict):
-        """Verifier 后的路由（决定是否需要 Conductor 分析）"""
+    def create_verifier_router(config: dict, failure_agent: str):
+        """Verifier 后的路由（验证失败时交给 failure_agent 处理）"""
         
         async def route_after_verifier(state: KernelGenState) -> str:
             # 1. 验证通过 → 直接结束，不需要 Conductor 分析
             if state.get("verifier_result"):
                 logger.info("Verification passed, skipping conductor analysis, finishing task")
                 return "finish"
+
+            max_step = config.get("max_step", 20)
+            step_count = state.get("step_count", 0)
+            if check_step_limit(step_count, max_step):
+                logger.info(f"Reached max_step {max_step}, finishing task")
+                return "finish"
             
-            # 2. 验证失败 → 进入 Conductor 分析
-            logger.info("Verification failed, routing to conductor for analysis")
-            return "conductor"
+            logger.info("Verification failed, routing to %s", failure_agent)
+            return failure_agent
         
         return route_after_verifier
+
+    @staticmethod
+    def create_verifier_router_with_conductor(config: dict, failure_agent: str = "conductor"):
+        """Verifier 后的路由（兼容旧 workflow：验证失败时默认进入 conductor）"""
+        return RouterFactory.create_verifier_router(config, failure_agent)
     
     @staticmethod
     def create_conductor_router(config: dict, code_gen_agent: str = "coder"):
@@ -165,9 +190,14 @@ class RouterFactory:
             format_instructions = conductor_parser.get_format_instructions()
             
             raw_error = state.get('verifier_error', '')
-            error_for_prompt = raw_error
-            if raw_error and len(raw_error) > 4000:
-                error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+            raw_diagnostic = state.get('code_diagnostic_errors', '')
+            combined_error = RouterFactory._compose_error_with_diagnostics(
+                raw_error,
+                raw_diagnostic,
+            )
+            error_for_prompt = combined_error
+            if combined_error and len(combined_error) > 4000:
+                error_for_prompt = "... (前面省略) ...\n" + combined_error[-4000:]
 
             input_data = {
                 'dsl': state.get('dsl', ''),
@@ -285,22 +315,35 @@ class RouterFactory:
         return route_after_code_checker
 
     @staticmethod
-    def create_codegen_router(next_agent: str, code_gen_agent: str = "coder"):
+    def create_codegen_router(
+        next_agent: str,
+        code_gen_agent: str = "coder",
+        invalid_agent: str = "conductor",
+        config: dict = None,
+    ):
         """代码生成后的路由（处理 max_tokens 截断等异常）
 
         Args:
             next_agent: 正常情况下的下一节点（"verifier" 或 "code_checker"）
             code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+            invalid_agent: 代码生成异常时的下一节点，默认交给 conductor 分析
         """
         async def route_after_codegen(state: KernelGenState) -> str:
             task_id = state.get('task_id', '0')
             if state.get("codegen_invalid"):
+                if config is not None and invalid_agent == code_gen_agent:
+                    max_step = config.get("max_step", 20)
+                    step_count = state.get("step_count", 0)
+                    if check_step_limit(step_count, max_step):
+                        logger.info(f"Reached max_step {max_step}, finishing task")
+                        return "finish"
+
                 reason = state.get("codegen_invalid_reason", "")
                 logger.warning(
-                    f"[Task {task_id}] {code_gen_agent} 输出异常，路由至 conductor。"
+                    f"[Task {task_id}] {code_gen_agent} 输出异常，路由至 {invalid_agent}。"
                     f"{(' 原因: ' + reason) if reason else ''}"
                 )
-                return "conductor"
+                return invalid_agent
             logger.info(f"[Task {task_id}] {code_gen_agent} 输出正常，路由至 {next_agent}")
             return next_agent
 

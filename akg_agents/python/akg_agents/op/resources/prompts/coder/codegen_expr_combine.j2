@@ -1,0 +1,110 @@
+You are combining independently verified sub-expression kernels into one final {{ dsl }} implementation.
+
+Return pure Python code only. Do not return JSON, Markdown fences, or explanations.
+The final file must define `class ModelNew` with the same callable behavior as the original framework `Model`.
+
+Core rule: the verified sub-kernel math is already validated. Treat combine as glue-code generation, not kernel rewriting.
+
+## Target
+- op_name: {{ op_name }}
+- framework: {{ framework }}
+- backend: {{ backend }}{% if arch_name %}({{ arch_name }}){% endif %}
+- target_device: {{ target_device }}
+- allow_framework_fallback: {{ allow_framework_fallback | default(false) }}
+
+{% if backend_imports %}
+## Required Backend Imports
+{{ backend_imports }}
+{% endif %}
+
+{% if performance_lowering_docs and "triton" in dsl %}
+## Combine-Stage Lowering Notes
+{{ performance_lowering_docs }}
+{% endif %}
+
+## Original Framework Code
+The original code is the source of truth for `ModelNew.__init__`, `forward` signature, learned parameter initialization, host-side state, helper classes, loops, and side effects.
+```python
+{{ task_desc }}
+```
+
+## Expression DAG
+{% for expr in expressions %}
+### Expression {{ loop.index }}: {{ expr.name }}
+- formula: {{ expr.formula }}
+{% if expr.consumes %}- consumes: {% for c in expr.consumes %}{{ c.name }}({{ c.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if expr.produces %}- produces: {% for p in expr.produces %}{{ p.name }}({{ p.kind }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% if expr.next_expressions %}- next: {{ expr.next_expressions | join(", ") }}{% else %}- next: final output{% endif %}
+{% if expr.symbol_binding %}
+- symbol binding:
+{% for sym, binding in expr.symbol_binding.items() %}
+  - {{ sym }} -> {{ binding.code_binding }} ({{ binding.binding_kind }}){% if binding.layout %}, layout={{ binding.layout }}{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+## Verified Sub-Kernel Scripts
+{% for sub in sub_kernels %}
+### Sub-kernel {{ loop.index }}: {{ sub.expression_name }}
+```python
+{{ sub.code }}
+```
+{% endfor %}
+
+## Combine Rules
+1. Preserve every `@triton.jit` kernel body from sub-kernel scripts. You may rename wrapper functions or kernel symbols only when needed to avoid collisions, but do not alter kernel math, masks, offsets, signatures, variable names inside the kernel body, or comments.
+2. Merge imports and keep all required backend imports.
+3. Write glue code: allocate intermediate tensors, call wrappers in DAG order, and return the final model output.
+4. Recreate `ModelNew.__init__` parameters, random seeds, learned parameters, buffers, and host-side state from the original `Model`.
+5. Preserve host-side control flow and side effects from the original `forward`, including loops and cache/state calls that may not appear in the sub-kernels.
+6. Use the expression `symbol_binding` to map inputs, parameters, expression outputs, scalar constants, and final outputs.
+7. Do not replace verified sub-kernels with framework fallback unless the existing sub-kernel code itself already uses it, `allow_framework_fallback=True`, or the task explicitly allows fallback.
+8. Keep wrapper functions from sub-kernels when possible. Adjust wrapper signatures only when needed to connect `ModelNew.forward` inputs, parameters, scalars, or upstream expression outputs.
+9. The final code must be self-contained and ready for the existing main verifier, which imports and instantiates `ModelNew`.
+
+## ModelNew Construction Rules
+{% if framework == "torch" %}
+1. Define `class ModelNew(torch.nn.Module)` or `class ModelNew(nn.Module)`.
+2. In `__init__`, call `super().__init__()` first.
+3. Use `torch.manual_seed(0)` before constructing learned parameters or reference `nn` modules when the original `Model` relies on random initialization.
+4. If the original `Model.__init__` constructs `nn.Module` layers, recreate the same modules or clone their parameters in the same initialization order.
+5. Move host-side reference modules or assigned tensors to `{{ target_device }}` before using them with device tensors.
+{% elif framework == "mindspore" %}
+1. Define `class ModelNew(nn.Cell)`.
+2. In `__init__`, call `super().__init__()` first.
+3. Use `ms.set_seed(0)` before constructing learned parameters when the original `Model` relies on random initialization.
+{% endif %}
+
+## Shape And Dataflow Rules
+1. Derive dynamic shape values from `forward` inputs rather than hard-coding them, unless the value is fixed by `get_init_inputs`, class-level constants, or the original code.
+2. Allocate intermediate tensors with the correct shape, dtype, and device before calling wrappers.
+3. Follow the expression DAG order. A `binding_kind == "expression_output"` input must come from the corresponding upstream wrapper output.
+4. `binding_kind == "model_output"` identifies the final returned tensor or tuple element.
+5. Preserve tuple/list return structure if the original `forward` returns multiple outputs.
+
+## Host-Side Logic Rules
+Sub-kernels cover numerical computation only. The original framework code may contain host-side logic that must remain in `ModelNew`.
+
+Scan `task_desc` for:
+- helper classes or functions outside `Model`
+- non-`nn.Module` state created in `Model.__init__`
+- Python lists, dicts, tuples, caches, trees, queues, or counters
+- host-side loops around numerical computation, especially per-batch loops
+- method calls whose return values are unused but may have side effects
+
+When such logic exists:
+1. Copy required helper classes/functions before `ModelNew`.
+2. Recreate non-kernel `self.<name> = ...` state in `ModelNew.__init__`.
+3. Preserve outer Python control flow from the original `forward`.
+4. Place pre-kernel side-effect calls before the corresponding wrapper calls and post-kernel side-effect calls after them.
+5. Do not remove unused-looking host calls; they may update cache or state.
+
+## Final Self-Check
+Before returning code, verify:
+1. All verified kernel bodies are preserved.
+2. Imports from sub-kernels, backend requirements, and copied helper code are present.
+3. Wrapper calls follow DAG dependencies and `symbol_binding`.
+4. `ModelNew.__init__` and `forward` signatures match the original task requirements.
+5. Parameters, buffers, scalar constants, and fixed init inputs are handled.
+6. Host-side helper classes, state, loops, and side effects are preserved when present.
+7. The file does not depend on undefined names from the original source file.

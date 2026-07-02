@@ -1,0 +1,102 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_transposed_A_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "M",
+            "kind": "scalar"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[m, n] = sum_{k=0}^{K-1} A[k, m] * B[k, n], for m = 0..M-1, n = 0..N-1, where A is (K, M), B is (K, N), Y is (M, N).",
+        "boundary_treatment": "Standard matrix multiplication; all index ranges are valid, no padding or out-of-bound access.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "m",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "2048"
+            },
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "8192",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(K, M)",
+            "stride": "(2048, 1)",
+            "address_mapping": "k * 2048 + m"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, N)",
+            "stride": "(4096, 1)",
+            "address_mapping": "k * 4096 + n"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(4096, 1)",
+            "address_mapping": "m * 4096 + n"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "M = 2048"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "K = 8192"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "N = 4096"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch eager 的 torch.matmul(A.T, B) 结果数值对拍。重点检查输出形状 (2048, 4096)、A 转置语义是否正确（k 维度归约在 A 的第 0 维、B 的第 0 维）、累加维度长度 K=8192 是否匹配。建议先用小形状（如 M=2, K=3, N=4）冒烟，再用完整 M=2048, K=8192, N=4096 对拍。float32 下建议 atol=1e-5。"
+      }
+    ]
+  }
+}

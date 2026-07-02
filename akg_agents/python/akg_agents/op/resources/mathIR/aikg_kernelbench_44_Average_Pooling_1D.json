@@ -1,0 +1,97 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "avgpool1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "令 N=64, C=128, L_in=65536, K=8, S=1, P=4。则输出长度 L_out = floor((L_in + 2*P - K) / S + 1) = 65537。对于 0 <= n < N, 0 <= c < C, 0 <= l < L_out，Y[n,c,l] = (1/K) * sum_{k=0}^{K-1} ( X[n,c, l*S + k - P] 若 0 <= l*S + k - P < L_in 否则为 0 )。",
+        "boundary_treatment": "在输入 X 的最后一维两侧各填充 P=4 个零值，然后在此填充张量上以 kernel_size=8, stride=1 进行滑动窗口求和，最后除以 K=8 得到平均值。当窗口索引超出原始输入范围时，对应位置贡献为 0。分母固定为 K=8，即 count_include_pad=True 语义。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "l",
+              "range": "[0, 65537)",
+              "binding": "static",
+              "value": "65537"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, L_in)",
+            "stride": "[8388608, 65536, 1]",
+            "address_mapping": "n * 8388608 + c * 65536 + i"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, L_out)",
+            "stride": "[8388736, 65537, 1]",
+            "address_mapping": "n * 8388736 + c * 65537 + l"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.avg_pool.padding"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch eager 模式下的 AvgPool1d 结果进行数值对拍。重点检查输出形状 (64,128,65537) 是否正确；边界位置（l=0 和 l=65536）的平均值计算是否因包含填充零而正确；验证 count_include_pad=True 语义（分母始终为8）。建议用小尺寸 (batch=1, channels=1, input_length=10, kernel_size=3, stride=2, padding=1) 冒烟测试，再用完整尺寸对拍。容忍误差为 fp32 常规误差 1e-5。"
+      }
+    ]
+  }
+}

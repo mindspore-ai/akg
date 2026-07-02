@@ -33,6 +33,7 @@ from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.op.utils.config_utils import check_task_config, check_task_type
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.core_v2.config.settings import get_akg_env_var
+from akg_agents.database.api_helper import maybe_retrieve_and_store_triton_apis
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflo
 from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
 from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
 from akg_agents.op.workflows.default_workflow_v2 import DefaultWorkflowV2
+from akg_agents.op.workflows.mathir_coder_workflow import MathIRCoderWorkflow
+from akg_agents.op.workflows.mathir_multi_kernel_gen_workflow import MathIRMultiKernelGenWorkflow
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
@@ -66,6 +69,12 @@ WORKFLOW_REGISTRY = {
     "adaptive_search_workflow": AdaptiveSearchWorkflow,
     "default_v2": DefaultWorkflowV2,
     "default_workflow_v2": DefaultWorkflowV2,
+    "mathir_coder": MathIRCoderWorkflow,
+    "mathir_coder_workflow": MathIRCoderWorkflow,
+    "mathIR_coder_workflow": MathIRCoderWorkflow,
+    "mathir_multi_kernel_gen": MathIRMultiKernelGenWorkflow,
+    "mathir_multi_kernel_gen_workflow": MathIRMultiKernelGenWorkflow,
+    "mathIR_multi_kernel_gen_workflow": MathIRMultiKernelGenWorkflow,
 }
 
 
@@ -142,6 +151,10 @@ class LangGraphTask(BaseLangGraphTask):
         
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
+
+        # mathIR 相关配置
+        self.mathIR_save = config.get("mathir_save", True)
+        self.mathIR_overwrite = config.get("mathir_overwrite", True)
         
         # 兼容旧代码：如果提供了 device_pool，创建私有 Worker
         self._private_worker = None
@@ -194,6 +207,43 @@ class LangGraphTask(BaseLangGraphTask):
         self._init_workflow()
         
         logger.info(f"LangGraphTask initialized with workflow: {self.workflow_name}")
+
+    def _get_bool_config(
+        self,
+        key: str,
+        default: bool = False,
+        aliases: Tuple[str, ...] = (),
+    ) -> bool:
+        """Read a boolean option from top-level config or mathIR_config."""
+        mathir_config = self.config.get("mathIR_config", {})
+        raw_value = default
+        for option_key in (key, *aliases):
+            if option_key in mathir_config:
+                raw_value = mathir_config[option_key]
+            if option_key in self.config:
+                raw_value = self.config[option_key]
+        if isinstance(raw_value, str):
+            return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(raw_value)
+
+    def _get_int_config(
+        self,
+        key: str,
+        default: int = 0,
+        aliases: Tuple[str, ...] = (),
+    ) -> int:
+        """Read an integer option from top-level config or mathIR_config."""
+        mathir_config = self.config.get("mathIR_config", {})
+        raw_value = default
+        for option_key in (key, *aliases):
+            if option_key in mathir_config:
+                raw_value = mathir_config[option_key]
+            if option_key in self.config:
+                raw_value = self.config[option_key]
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return int(default)
     
     def _init_agents(self) -> dict:
         """初始化算子 Agent（Designer, Coder, Verifier）"""
@@ -238,6 +288,26 @@ class LangGraphTask(BaseLangGraphTask):
             logger.warning(f"Failed to initialize Coder: {e}")
             import traceback
             logger.debug(traceback.format_exc())
+
+        # MathIR (only needed for mathIR workflows or explicit opt-in)
+        if "mathir" in self.workflow_name.lower():
+            try:
+                from akg_agents.core.agent.mathIR import MathIR
+
+                agents['mathIR'] = MathIR(
+                    op_name=self.op_name,
+                    task_desc=self.task_desc,
+                    dsl=self.dsl,
+                    framework=self.framework,
+                    backend=self.backend,
+                    arch=self.arch,
+                    parser_config_path=parser_config_path,
+                    config=self.config,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize MathIR: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
         
         # KernelGen (基于 Skill 系统的代码生成)
         # adaptive_search / evolve 流程使用 default_workflow（Designer+Coder+Verifier），
@@ -341,15 +411,51 @@ class LangGraphTask(BaseLangGraphTask):
             "backend": self.backend,
             "arch": self.arch,
             "task_type": self.task_type,
-            "bench_type": self.config.get("bench_type", "kernelbench"),
+            "bench_type": self.bench_type,
+            "workflow_name": self.workflow_name,
+            "multi_kernel_gen": self._get_bool_config("multi_kernel_gen", True),
+            "multi_kernel_max_retries": self._get_int_config("multi_kernel_max_retries", 15),
             "verifier_result": False,
             "verifier_error": "",
+            "code_check_passed": None,
+            "code_check_errors": None,
+            "code_check_details": None,
+            "code_diagnostic_passed": None,
+            "code_diagnostic_errors": None,
+            "code_diagnostic_details": None,
+            "multi_expr_error": "",
+            "multi_expr_attempt_counts": [],
+            "multi_expr_success": [],
             "history_attempts": [],
             "inspirations": self.inspirations,
             "meta_prompts": self.meta_prompts,
             "handwrite_suggestions": self.handwrite_suggestions,
             "user_requirements": self.user_requirements,
+            "api_database_enabled": False,
+            "api_database_status": "disabled",
+            "api_database_recall_hash": "",
+            "api_database_source_kind": "",
+            "api_database_source_apis": [],
+            "api_database_embed_cache_folder": "",
+            "api_recall_json_path": "",
+            "api_recall_docs_path": "",
+            "triton_api_recall": [],
+            "triton_api_recall_by_source": {},
         }
+
+        is_mathir_workflow = "mathir" in str(self.workflow_name or "").lower()
+        if not is_mathir_workflow and "triton" in self.dsl and self.framework == "torch":
+            try:
+                maybe_retrieve_and_store_triton_apis(
+                    task_info=state,
+                    task_desc=self.task_desc,
+                    target_backend=self.backend,
+                    config=self.config,
+                )
+            except Exception as exc:
+                state["api_database_enabled"] = False
+                state["api_database_status"] = f"{type(exc).__name__}: {exc}"
+                logger.warning("[api_database] retrieval failed, continue without API database: %s", exc)
 
         cache_mode = str(self.config.get("cache_mode") or "off").strip().lower()
         if cache_mode not in {"off", "record", "replay"}:
@@ -405,6 +511,41 @@ class LangGraphTask(BaseLangGraphTask):
         }
         normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+    def _save_mathIR_resource_sync(self, final_state: Dict[str, Any]) -> None:
+        """Persist successful MathIR output as a reusable preset when enabled."""
+        if not self.mathIR_save:
+            return
+        if "mathIR" not in self.agents:
+            return
+        if not self.op_name:
+            logger.warning("[%s] missing op_name, skip MathIR preset persistence", self.op_name)
+            return
+
+        mathIR_code = final_state.get("mathIR_code")
+        if mathIR_code is None:
+            logger.warning("[%s] final_state missing mathIR_code, skip MathIR preset persistence", self.op_name)
+            return
+
+        save_obj = {"code": mathIR_code}
+        try:
+            from akg_agents.core.agent.mathIR import ir_resource_json_path
+
+            save_path = ir_resource_json_path(self.op_name)
+            if os.path.exists(save_path) and not self.mathIR_overwrite:
+                logger.info(
+                    "[%s] MathIR preset exists and overwrite is disabled, skip persistence: %s",
+                    self.op_name,
+                    save_path,
+                )
+                return
+
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(save_obj, f, ensure_ascii=False, indent=2)
+            logger.info("[%s] MathIR preset persisted: %s", self.op_name, save_path)
+        except Exception as exc:
+            logger.warning("[%s] MathIR preset persistence failed: %s", self.op_name, exc)
     
     async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool, dict]:
         """执行任务（API 兼容现有 Task）
@@ -435,6 +576,8 @@ class LangGraphTask(BaseLangGraphTask):
             final_state.setdefault("cache_session_hash", initial_state.get("cache_session_hash", ""))
             # 处理结果
             success = final_state.get("verifier_result", False)
+            if success:
+                self._save_mathIR_resource_sync(final_state)
             
             logger.info(f"Task {self.task_id}, op_name: {self.op_name}, completed, success: {success}")
             
@@ -460,4 +603,3 @@ class LangGraphTask(BaseLangGraphTask):
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
-

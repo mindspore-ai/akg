@@ -1,0 +1,154 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "scaled_qk_matmul_masked",
+        "next_expressions": ["softmax_attention"],
+        "consumes": [
+          { "name": "Q", "kind": "tensor" },
+          { "name": "K", "kind": "tensor" },
+          { "name": "M", "kind": "tensor" },
+          { "name": "scale", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "S", "kind": "tensor" }
+        ],
+        "formula": "设输入 Q ∈ R^{B×H×N×D}, K ∈ R^{B×H×N×D}, 掩码 M ∈ R^{B×N}, 缩放 scale = 1/sqrt(D)。先计算带缩放的 QK^T 得分：S_raw[b,h,i,j] = Σ_{d=0}^{D-1} (Q[b,h,i,d] · scale) · K[b,h,j,d]。再按 mask 写入屏蔽值（NEG_INF = -1e10）：S[b,h,i,j] = S_raw[b,h,i,j] 若 M[b,j] > 0，否则 S[b,h,i,j] = NEG_INF。本题 B=2, H=4, N=128, D=64, scale = 1/sqrt(64) = 0.125。注：源码中涉及 PagedKVCache 的 write/read 过程在语义上等价于恒等变换（K_g = K[b], V_g = V[b]），因为 cache 将 K/V 按 token 拆分并按页存回后再按顺序读出，未改变数值。",
+        "boundary_treatment": "mask 的语义为：当 M[b,j] > 0 时保留 S_raw[b,h,i,j]，否则置为 NEG_INF（-1e10）以在后续 softmax 中产生近乎零权重。Paged KV cache 的分页/分配/释放过程对 K、V 仅是内存布局重排，所有 N 个 token 完整写入并完整读出，因此在数学上无边界剪裁。归约维 d 覆盖完整 [0, D)。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "b", "range": "[0, B)", "binding": "static", "value": "2" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "4" },
+            { "symbol": "i", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "j", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "d", "range": "[0, D)", "binding": "static", "value": "64", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Q": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.Q",
+            "layout": "(B, H, N, D) = (2, 4, 128, 64)",
+            "stride": "(H*N*D, N*D, D, 1) = (32768, 8192, 64, 1)",
+            "address_mapping": "addr_Q(b, h, i, d) = Q_ptr + b*(H*N*D) + h*(N*D) + i*D + d"
+          },
+          "K": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.K",
+            "layout": "(B, H, N, D) = (2, 4, 128, 64)",
+            "stride": "(H*N*D, N*D, D, 1) = (32768, 8192, 64, 1)",
+            "address_mapping": "addr_K(b, h, j, d) = K_ptr + b*(H*N*D) + h*(N*D) + j*D + d"
+          },
+          "M": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.mask",
+            "layout": "(B, N) = (2, 128)",
+            "stride": "(N, 1) = (128, 1)",
+            "address_mapping": "addr_M(b, j) = M_ptr + b*N + j"
+          },
+          "scale": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "1.0 / np.sqrt(D) = 0.125"
+          },
+          "S": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.scaled_qk_matmul_masked.output",
+            "layout": "(B, H, N, N) = (2, 4, 128, 128)",
+            "stride": "(H*N*N, N*N, N, 1) = (65536, 16384, 128, 1)",
+            "address_mapping": "addr_S(b, h, i, j) = S_ptr + b*(H*N*N) + h*(N*N) + i*N + j"
+          }
+        },
+        "TDD_requirement": "用小尺寸 (B=1, H=1, N=4, D=8) 与 PyTorch eager 对拍：先构造 Q、K、mask，直接用 torch.einsum('bhid,bhjd->bhij', Q*scale, K) 再按 mask 替换为 NEG_INF，与本 expression 输出逐元素比较（atol=1e-5）。验证：(1) 输出 shape=(B,H,N,N)；(2) mask=0 的位置 S 等于 -1e10；(3) mask=1 的位置与未掩码的 QK^T*scale 一致；(4) 确认 PagedKVCache 的写读链路在数值上是恒等映射，可通过 cache.read_kv_sequence 的返回与原始 K/V 比对验证。"
+      },
+      {
+        "name": "softmax_attention",
+        "next_expressions": ["attention_value_matmul"],
+        "consumes": [
+          { "name": "S", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "A", "kind": "tensor" }
+        ],
+        "formula": "对最后一维做 softmax：A[b,h,i,j] = exp(S[b,h,i,j] - max_k S[b,h,i,k]) / Σ_{k=0}^{N-1} exp(S[b,h,i,k] - max_k S[b,h,i,k])。数学上等价于 A[b,h,i,j] = exp(S[b,h,i,j]) / Σ_{k=0}^{N-1} exp(S[b,h,i,k])，减去 max 为数值稳定实现。被 mask 的位置 S = -1e10，经 softmax 后权重近似为 0。",
+        "boundary_treatment": "softmax 在最后一维 [0, N) 上做完整归一化。若某行所有位置都被 mask（M[b,:] 全 0），则 S 该行全为 -1e10，softmax 退化为均匀分布 1/N（数值稳定性约束下的自然行为），与 PyTorch torch.softmax 一致。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "b", "range": "[0, B)", "binding": "static", "value": "2" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "4" },
+            { "symbol": "i", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "j", "range": "[0, N)", "binding": "static", "value": "128", "reduction_type": "softmax", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "S": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.scaled_qk_matmul_masked.output",
+            "layout": "(B, H, N, N) = (2, 4, 128, 128)",
+            "stride": "(H*N*N, N*N, N, 1) = (65536, 16384, 128, 1)",
+            "address_mapping": "addr_S(b, h, i, j) = S_ptr + b*(H*N*N) + h*(N*N) + i*N + j"
+          },
+          "A": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_attention.output",
+            "layout": "(B, H, N, N) = (2, 4, 128, 128)",
+            "stride": "(H*N*N, N*N, N, 1) = (65536, 16384, 128, 1)",
+            "address_mapping": "addr_A(b, h, i, j) = A_ptr + b*(H*N*N) + h*(N*N) + i*N + j"
+          }
+        },
+        "TDD_requirement": "用 torch.softmax(S, dim=-1) 作为 ground truth 进行对拍，atol=1e-6。验证：(1) 每一行 A[b,h,i,:] 的和为 1；(2) 非法位置（mask=0 对应 j）的权重接近 0（<1e-4）；(3) shape=(B,H,N,N)；(4) 对 mask 全 0 的极端行，检查是否退化为均匀分布。"
+      },
+      {
+        "name": "attention_value_matmul",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "A", "kind": "tensor" },
+          { "name": "V", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "O", "kind": "tensor" }
+        ],
+        "formula": "设 A ∈ R^{B×H×N×N} 为注意力权重，V ∈ R^{B×H×N×D} 为值张量。输出 O ∈ R^{B×H×N×D} 定义为：O[b,h,i,d] = Σ_{j=0}^{N-1} A[b,h,i,j] · V[b,h,j,d]。本题 B=2, H=4, N=128, D=64。注：V 同样经过 PagedKVCache 的写读，等价于恒等映射。",
+        "boundary_treatment": "归约维 j 覆盖完整 [0, N)，无边界剪裁。被 mask 的 j 位置由上游 softmax 将权重降为近零，自然抑制其贡献，无需在本 expression 中额外处理。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "b", "range": "[0, B)", "binding": "static", "value": "2" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "4" },
+            { "symbol": "i", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "d", "range": "[0, D)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "j", "range": "[0, N)", "binding": "static", "value": "128", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.softmax_attention.output",
+            "layout": "(B, H, N, N) = (2, 4, 128, 128)",
+            "stride": "(H*N*N, N*N, N, 1) = (65536, 16384, 128, 1)",
+            "address_mapping": "addr_A(b, h, i, j) = A_ptr + b*(H*N*N) + h*(N*N) + i*N + j"
+          },
+          "V": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.V",
+            "layout": "(B, H, N, D) = (2, 4, 128, 64)",
+            "stride": "(H*N*D, N*D, D, 1) = (32768, 8192, 64, 1)",
+            "address_mapping": "addr_V(b, h, j, d) = V_ptr + b*(H*N*D) + h*(N*D) + j*D + d"
+          },
+          "O": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, H, N, D) = (2, 4, 128, 64)",
+            "stride": "(H*N*D, N*D, D, 1) = (32768, 8192, 64, 1)",
+            "address_mapping": "addr_O(b, h, i, d) = O_ptr + b*(H*N*D) + h*(N*D) + i*D + d"
+          }
+        },
+        "TDD_requirement": "与 torch.einsum('bhij,bhjd->bhid', A, V) 逐元素对拍，atol=1e-5。验证：(1) 输出 shape=(B,H,N,D)=(2,4,128,64)；(2) 对整个模型做端到端对拍：O_ref = torch.matmul(torch.softmax(masked_S, dim=-1), V)，与 Model.forward 输出差异 <1e-5；(3) 确认 PagedKVCache 路径确实不改变 V 的数值（通过直接用 V[b] 代替 V_g 的结果对比）。"
+      }
+    ]
+  }
+}

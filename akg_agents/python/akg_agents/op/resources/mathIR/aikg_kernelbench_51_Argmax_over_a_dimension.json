@@ -1,0 +1,76 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "argmax_reduction",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{B×D1×D2}，其中 B=128, D1=4096, D2=4095，get_init_inputs() 返回 dim=1。输出张量 Y ∈ ℤ^{B×D2}，dtype 为 torch.int64，定义为：Y[b,w] = argmax_{h∈[0,D1)} X[b,h,w]。即沿第 1 维做 argmax 并删除该维，输出 shape 为 (128,4095)。若同一 (b,w) 下多个 h 具有相同最大值，返回最小 h，即 PyTorch 的 first-index tie break 行为。",
+        "boundary_treatment": "argmax 遍历完整 h ∈ [0,4096) 归约域，不涉及 padding 或空间越界。输出列 w 的全局范围是 [0,4095)，实现按列分块时必须用全局列索引 w_global = block_start + local_w 参与 load/store，不能只用块内 local_w；tail 列用 mask 处理。若使用 tl.argmax/tl.max 分块归约，tie_break_left=True 或手写比较必须保持相等时保留更小索引。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 4095)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "h",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "argmax",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(B, D1, D2) = (128, 4096, 4095)",
+            "stride": "(D1*D2, D2, 1) = (16773120, 4095, 1)",
+            "address_mapping": "addr_X(b, h, w) = X_ptr + b*16773120 + h*4095 + w"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim (= 1, 来自 get_init_inputs())"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, D2) = (128, 4095), dtype=torch.int64",
+            "stride": "(D2, 1) = (4095, 1)",
+            "address_mapping": "addr_Y(b, w) = Y_ptr + b*4095 + w"
+          }
+        },
+        "lowering_contract": "This is a large strided-column reduction over D1=4096. A practical Triton lowering should map programs over (batch b, output-column block w), accumulate best value and best h for each global w, and store int64 indices to Y. If columns are blocked, all X and Y addresses must use global w offsets. Use masked loads for tail w and use -inf for invalid max lanes. Do not reduce over D2 and do not return values.",
+        "TDD_requirement": "使用小尺寸输入（如 B=2, D1=3, D2=4）与 torch.argmax(x, dim=1) 对拍，验证输出 shape 为 (2,4) 且每个位置索引正确；在真实静态 shape (128,4096,4095) 上验证输出 shape 为 (128,4095)、dtype 为 int64，并测试多个相同最大值时是否返回第一个索引。"
+      }
+    ]
+  }
+}

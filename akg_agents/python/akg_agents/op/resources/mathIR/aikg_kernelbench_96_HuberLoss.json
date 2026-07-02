@@ -1,0 +1,81 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "smooth_l1_loss",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "predictions",
+            "kind": "tensor"
+          },
+          {
+            "name": "targets",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "loss",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Let beta = 1.0. For i in [0, 32768) and j in [0, 32768): diff_{i,j} = predictions[i,j] - targets[i,j]; loss_{i,j} = if |diff_{i,j}| < beta then 0.5 * diff_{i,j}^2 / beta else |diff_{i,j}| - 0.5 * beta. Output L = (1 / (32768 * 32768)) * sum_{i=0}^{32767} sum_{j=0}^{32767} loss_{i,j}.",
+        "boundary_treatment": "The condition |diff| < beta uses the quadratic branch, otherwise (including equality) uses the linear branch. Input shapes are assumed identical; no broadcasting is needed. The input is non-empty under given get_inputs(), thus empty-tensor NaN is not considered.",
+        "axis_mapping": {
+          "parallel": [],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "predictions": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.predictions",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          },
+          "targets": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.targets",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "i * 32768 + j"
+          },
+          "beta": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "default beta value 1.0 in torch.nn.functional.smooth_l1_loss"
+          },
+          "loss": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "()",
+            "stride": "()",
+            "address_mapping": "0"
+          }
+        },
+        "TDD_requirement": "对拍参考为 PyTorch eager 的 smooth_l1_loss(..., reduction='mean')。需验证所有元素贡献是否正确，尤其关注 |diff|=beta 处的边界行为。建议使用小形状 (如 2x3) 冒烟测试，再用完整形状 (32768, 32768) 进行数值对拍，容忍值可设为 1e-5 (fp32)。"
+      }
+    ]
+  }
+}

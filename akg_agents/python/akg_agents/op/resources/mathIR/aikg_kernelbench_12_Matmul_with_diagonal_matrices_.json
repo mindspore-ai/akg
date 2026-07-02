@@ -1,0 +1,85 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "diag_matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          },
+          {
+            "name": "M",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "output[i, j] = A[i] * B[i, j] for 0 <= i < N, 0 <= j < M",
+        "boundary_treatment": "无边界处理，所有索引均在张量有效范围内，广播规则自动对齐。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "4096"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(N,)",
+            "stride": "(1,)",
+            "address_mapping": "i"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(N, M)",
+            "stride": "(M, 1)",
+            "address_mapping": "i * M + j"
+          },
+          "output": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, M)",
+            "stride": "(M, 1)",
+            "address_mapping": "i * M + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 4096"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 4096"
+          }
+        },
+        "TDD_requirement": "正确性验证需比对PyTorch eager计算结果。构造小形状（如N=3, M=4）利用固定种子生成随机输入，检查输出数值是否与A.unsqueeze(1)*B一致。重点关注广播行为、索引对应关系以及contiguous布局假设。必要时检查大形状（N=4096, M=4096）全量对拍，容忍浮点精度1e-5。"
+      }
+    ]
+  }
+}

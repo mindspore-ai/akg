@@ -1,0 +1,100 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "bmm",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[b,i,j] = sum_{k=0}^{K-1} A[b,i,k] * B[b,k,j]",
+        "boundary_treatment": "所有索引均在有效范围内，无 padding 或越界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, batch)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "512"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "2048"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "1024",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(batch, M, K)",
+            "stride": "(524288, 1024, 1)",
+            "address_mapping": "b * 524288 + i * 1024 + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(batch, K, N)",
+            "stride": "(2097152, 2048, 1)",
+            "address_mapping": "b * 2097152 + k * 2048 + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(batch, M, N)",
+            "stride": "(1048576, 2048, 1)",
+            "address_mapping": "b * 1048576 + i * 2048 + j"
+          },
+          "batch": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size = 128"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "m = 512"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "k = 1024"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "n = 2048"
+          }
+        },
+        "TDD_requirement": "以 torch.bmm 为参考实现，对完整输入进行数值对比（容忍相对误差 1e-5）。重点检查 shapes 兼容（batch 维度相等，A 的列与 B 的行相等）。建议用小 shape（batch=2, M=3, K=4, N=5）冒烟测试。"
+      }
+    ]
+  }
+}

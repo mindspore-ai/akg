@@ -19,10 +19,22 @@
 
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.core_v2.langgraph_base.node_tracker import track_node
+from akg_agents.utils.stream_output import stream_output_override
+from akg_agents.database.api_helper import (
+    compose_api_docs_block,
+    extract_documented_triton_apis,
+    filter_api_doc_blocks,
+    maybe_retrieve_and_store_triton_apis,
+    persist_api_recall_artifacts,
+    render_triton_recall,
+)
 import logging
 import asyncio
+import copy
 import json
+import os
 import time
+from akg_agents.utils.common_utils import ParserFactory
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +97,46 @@ def format_inspirations(inspirations: list) -> str:
 
 class NodeFactory:
     """算子节点工厂：将算子 Agent 包装成 LangGraph 节点"""
+
+    @staticmethod
+    async def _load_coder_api_docs_for_recall(config: dict, dsl: str, backend: str = "", arch: str = "") -> str:
+        """Load the base API docs that used to be prepared by Coder."""
+        dsl_lower = (dsl or "").lower()
+        if dsl_lower == "triton_ascend":
+            try:
+                from akg_agents.op.utils.triton_ascend_api_docs import resolve_triton_ascend_api_docs
+
+                return await resolve_triton_ascend_api_docs(backend=backend, arch=arch)
+            except Exception as exc:
+                logger.warning("[api_recall] failed to load Triton Ascend API docs: %s", exc)
+                return ""
+
+        try:
+            from akg_agents import get_project_root
+
+            docs_dir = ((config or {}).get("docs_dir") or {}).get("coder", "")
+            candidates = []
+            if docs_dir:
+                candidates.append(os.path.join(get_project_root(), docs_dir, "api", "api.md"))
+            if dsl:
+                candidates.append(
+                    os.path.join(
+                        get_project_root(),
+                        "op",
+                        "resources",
+                        "docs",
+                        f"{dsl}_docs",
+                        "api",
+                        "api.md",
+                    )
+                )
+            for path in candidates:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as handle:
+                        return handle.read()
+        except Exception as exc:
+            logger.warning("[api_recall] failed to load base API docs: %s", exc)
+        return ""
     
     @staticmethod
     def _extract_codegen_status(agent_instance, agent_label: str, task_id: str) -> tuple:
@@ -121,6 +173,115 @@ class NodeFactory:
                 f"reasoning_len={llm_info.get('reasoning_len')}。"
             )
         return codegen_invalid, codegen_invalid_reason
+
+    @staticmethod
+    def _coerce_bool(raw_value, default: bool = False) -> bool:
+        if isinstance(raw_value, str):
+            return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+        if raw_value is None:
+            return bool(default)
+        return bool(raw_value)
+
+    @staticmethod
+    def _get_bool_config(config: dict, key: str, default: bool = False) -> bool:
+        mathir_config = (config or {}).get("mathIR_config", {}) or {}
+        raw_value = default
+        if key in mathir_config:
+            raw_value = mathir_config[key]
+        if key in (config or {}):
+            raw_value = config[key]
+        return NodeFactory._coerce_bool(raw_value, default)
+
+    @staticmethod
+    def _get_int_config(config: dict, key: str, default: int = 0) -> int:
+        mathir_config = (config or {}).get("mathIR_config", {}) or {}
+        raw_value = default
+        if key in mathir_config:
+            raw_value = mathir_config[key]
+        if key in (config or {}):
+            raw_value = config[key]
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    @staticmethod
+    def _extract_mathir_expressions(mathIR_code) -> list:
+        if not isinstance(mathIR_code, dict):
+            return []
+        expressions = mathIR_code.get("expressions", [])
+        if not isinstance(expressions, list):
+            return []
+        return [expr for expr in expressions if isinstance(expr, dict)]
+
+    @staticmethod
+    def _is_numerical_mismatch_error(error_log: str) -> bool:
+        numerical_error_patterns = [
+            "failed: diff is too large",
+            "验证失败，输出不一致",
+            "验证失败，输出形状不一致",
+            "验证失败，输出数量不一致",
+            "验证失败，NaN位置不匹配",
+            "验证失败，检测到NaN值",
+            "验证失败，Inf位置不匹配",
+            "验证失败，Inf符号不匹配",
+            "验证失败，布尔值不匹配",
+        ]
+        return any(pattern in (error_log or "") for pattern in numerical_error_patterns)
+
+    @staticmethod
+    def _classify_verifier_error(error_log: str) -> dict:
+        error_log = error_log or ""
+        has_error = bool(error_log)
+        is_timeout = has_error and "timed out" in error_log.lower()
+        is_numerical = has_error and NodeFactory._is_numerical_mismatch_error(error_log)
+        is_performance = has_error and "PERFORMANCE_REGRESSION" in error_log
+        is_numeric_or_timeout = is_numerical or is_timeout or is_performance
+        return {
+            "has_error": has_error,
+            "is_timeout": is_timeout,
+            "is_numerical": is_numerical,
+            "is_performance": is_performance,
+            "is_numeric_or_timeout": is_numeric_or_timeout,
+            "repair_error_type": "numerical" if is_numeric_or_timeout else "logic",
+        }
+
+    @staticmethod
+    def _compose_error_with_diagnostics(verifier_error: str, diagnostic_error: str) -> str:
+        verifier_error = verifier_error or ""
+        diagnostic_error = diagnostic_error or ""
+        if not diagnostic_error:
+            return verifier_error
+        if not verifier_error:
+            return "## CodeChecker 非阻塞诊断\n\n" + diagnostic_error
+        return "\n\n".join([
+            "## Verifier Runtime Error",
+            verifier_error,
+            "## CodeChecker Non-Blocking Triton Diagnostics",
+            diagnostic_error,
+        ])
+
+    @staticmethod
+    def _device_env_prologue(backend: str, device_id) -> str:
+        try:
+            device_id_int = int(device_id)
+        except (TypeError, ValueError):
+            return ""
+        if device_id_int < 0:
+            return ""
+        backend = (backend or "").lower()
+        if backend == "cuda":
+            return (
+                "import os\n"
+                f"os.environ.setdefault('CUDA_VISIBLE_DEVICES', '{device_id_int}')\n\n"
+            )
+        if backend in {"ascend", "npu"}:
+            return (
+                "import os\n"
+                f"os.environ.setdefault('DEVICE_ID', '{device_id_int}')\n"
+                f"os.environ.setdefault('ASCEND_DEVICE_ID', '{device_id_int}')\n\n"
+            )
+        return ""
     
     @staticmethod
     def create_designer_node(designer_instance, trace_instance, config: dict):
@@ -182,6 +343,240 @@ class NodeFactory:
         return track_node("designer")(designer_node)
 
     @staticmethod
+    def create_mathIR_node(mathIR_instance, trace_instance, config: dict):
+        """创建 MathIR 节点函数"""
+        async def mathIR_node(state: KernelGenState) -> dict:
+            """MathIR 节点：生成算子数学语义表达"""
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: mathIR")
+
+            task_info = dict(state)
+            task_info["multi_kernel_gen"] = NodeFactory._coerce_bool(
+                state.get(
+                    "multi_kernel_gen",
+                    NodeFactory._get_bool_config(config, "multi_kernel_gen", True),
+                ),
+                True,
+            )
+            task_info["multi_kernel_max_retries"] = state.get(
+                "multi_kernel_max_retries",
+                NodeFactory._get_int_config(config, "multi_kernel_max_retries", 15),
+            )
+
+            t0 = time.time()
+            result, prompt, reasoning = await mathIR_instance.run(
+                task_info=task_info,
+            )
+            elapsed = time.time() - t0
+            logger.info(f"[Task {task_id}] MathIR completed in {elapsed:.2f}s")
+
+            mathir_from_preset = (
+                bool(task_info.get("preset_ir_path"))
+                and str(prompt or "").startswith("(skipped LLM; preset from ")
+            )
+            mathir_record = [
+                ('result', result),
+                ('prompt', prompt),
+                ('reasoning', reasoning),
+            ]
+            if mathir_from_preset:
+                # Preset reuse is a cache hit, not a generation attempt. Keep it
+                # visible in logs without consuming the repair step budget.
+                trace_instance.write_record("mathIR", mathir_record)
+            else:
+                trace_instance.log_record("mathIR", mathir_record)
+
+            mathIR_code = None
+            mathIR_error = ""
+            try:
+                parser = ParserFactory.get_parser("mathIR_parser")
+                parsed_result = ParserFactory.robust_parse(result, parser)
+                mathIR_code = getattr(parsed_result, "code", None) if parsed_result else None
+                if not isinstance(mathIR_code, dict):
+                    raise ValueError("MathIR parser did not produce a dict code field")
+            except Exception as exc:
+                mathIR_error = str(exc)
+                logger.warning(
+                    "[Task %s] MathIR parse failed, coder will run without MathIR: %s",
+                    task_id,
+                    exc,
+                )
+
+            updates = {
+                "mathIR_code": mathIR_code,
+                "mathIR_prompt": prompt,
+                "mathIR_reasoning": reasoning,
+                "mathIR_error": mathIR_error,
+                "mlir": task_info.get("mlir", False),
+                "mlir_compile_code": task_info.get("mlir_compile_code", ""),
+                "pytorch_doc_string": task_info.get("pytorch_doc_string", ""),
+                "standard_formula": task_info.get("standard_formula", ""),
+                "preset_ir_json": task_info.get("preset_ir_json"),
+                "preset_ir_path": task_info.get("preset_ir_path"),
+                "multi_kernel_gen": task_info.get("multi_kernel_gen", True),
+                "multi_kernel_max_retries": task_info.get("multi_kernel_max_retries", 15),
+                "iteration": state.get("iteration", 0) + (0 if mathir_from_preset else 1),
+                "step_count": state.get("step_count", 0) + (0 if mathir_from_preset else 1),
+                "agent_history": ["mathIR"],
+            }
+
+            return updates
+
+        return track_node("mathIR")(mathIR_node)
+
+    @staticmethod
+    def create_api_recall_node(trace_instance, config: dict, backend=None):
+        """Create a node that performs one task-level Triton API database recall."""
+        async def api_recall_node(state: KernelGenState) -> dict:
+            task_id = state.get("task_id", "0")
+            op_name = state.get("op_name", "unknown")
+            logger.info("Task %s, op_name: %s, current_agent: api_recall", task_id, op_name)
+
+            task_info = copy.deepcopy(dict(state))
+            task_info.setdefault("api_database_enabled", False)
+            task_info.setdefault("api_database_status", "disabled")
+            task_info.setdefault("api_database_source_kind", "")
+            task_info.setdefault("api_database_source_apis", [])
+            task_info.setdefault("api_database_embed_cache_folder", "")
+            task_info.setdefault("triton_api_recall", [])
+            task_info.setdefault("triton_api_recall_by_source", {})
+
+            dsl = str(task_info.get("dsl") or "").lower()
+            framework = str(task_info.get("framework") or "").lower()
+            if "triton" not in dsl or framework != "torch":
+                task_info["api_database_enabled"] = False
+                task_info["api_database_status"] = (
+                    f"skipped for dsl={task_info.get('dsl', '')}, "
+                    f"framework={task_info.get('framework', '')}"
+                )
+            else:
+                try:
+                    maybe_retrieve_and_store_triton_apis(
+                        task_info=task_info,
+                        task_desc=state.get("task_desc", ""),
+                        target_backend=backend or state.get("backend", ""),
+                        config=config,
+                    )
+                    if not task_info.get("api_database_enabled"):
+                        task_info.setdefault("api_database_status", "disabled")
+                except Exception as exc:
+                    task_info["api_database_enabled"] = False
+                    task_info["api_database_status"] = f"{type(exc).__name__}: {exc}"
+                    task_info["triton_api_recall"] = []
+                    task_info["triton_api_recall_by_source"] = {}
+                    logger.warning(
+                        "[Task %s] api_recall failed, continue with base API docs: %s",
+                        task_id,
+                        exc,
+                    )
+
+            base_api_docs = await NodeFactory._load_coder_api_docs_for_recall(
+                config,
+                state.get("dsl", ""),
+                backend=state.get("backend", ""),
+                arch=state.get("arch", ""),
+            )
+            filtered_base_api_docs = filter_api_doc_blocks(base_api_docs)
+            documented_triton_apis = extract_documented_triton_apis(filtered_base_api_docs)
+            task_info["documented_triton_apis"] = documented_triton_apis
+            recall_block = render_triton_recall(
+                task_info,
+                verify_runtime=True,
+                documented_apis=documented_triton_apis,
+            )
+            rendered = compose_api_docs_block(
+                filtered_base_api_docs,
+                recall_block,
+            )
+            json_path = ""
+            docs_path = ""
+            try:
+                json_path, docs_path = persist_api_recall_artifacts(
+                    task_info=task_info,
+                    log_dir=(config or {}).get("log_dir", ""),
+                    op_name=op_name,
+                    rendered_text=rendered,
+                )
+                task_info["api_recall_json_path"] = json_path
+                task_info["api_recall_docs_path"] = docs_path
+            except Exception as exc:
+                task_info["api_database_status"] = (
+                    f"{task_info.get('api_database_status', '')}; "
+                    f"persist failed: {type(exc).__name__}: {exc}"
+                ).strip("; ")
+                logger.warning("[Task %s] api_recall artifact persist failed: %s", task_id, exc)
+
+            api_docs_cfg = (config or {}).get("api_docs", {}) or {}
+            llm_compress_enabled = NodeFactory._coerce_bool(
+                api_docs_cfg.get("llm_compress_enabled", False),
+                False,
+            )
+            # api_recall currently performs local retrieval/rendering. If a future
+            # path invokes LLM compression here, set this flag before accounting.
+            api_recall_llm_called = bool(
+                task_info.get("api_recall_llm_called", False)
+                or task_info.get("api_docs_llm_compress_used", False)
+            )
+            api_recall_step_delta = 1 if llm_compress_enabled and api_recall_llm_called else 0
+            api_recall_record = [
+                ("status", task_info.get("api_database_status", "")),
+                ("structured_path", json_path),
+                ("docs_path", docs_path),
+                (
+                    "summary",
+                    json.dumps(
+                        {
+                            "enabled": task_info.get("api_database_enabled", False),
+                            "source_kind": task_info.get("api_database_source_kind", ""),
+                            "source_apis": task_info.get("api_database_source_apis", []),
+                            "embed_cache_folder": task_info.get(
+                                "api_database_embed_cache_folder",
+                                "",
+                            ),
+                            "recall_sources": list(
+                                (task_info.get("triton_api_recall_by_source") or {}).keys()
+                            ),
+                            "recall_flat_count": len(task_info.get("triton_api_recall") or []),
+                            "rendered_docs_len": len(rendered or ""),
+                            "llm_compress_enabled": llm_compress_enabled,
+                            "llm_called": api_recall_llm_called,
+                            "step_delta": api_recall_step_delta,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                ),
+            ]
+            if api_recall_step_delta:
+                trace_instance.log_record("api_recall", api_recall_record)
+            else:
+                trace_instance.write_record("api_recall", api_recall_record)
+
+            return {
+                "api_database_enabled": task_info.get("api_database_enabled", False),
+                "api_database_status": task_info.get("api_database_status", ""),
+                "api_database_recall_hash": task_info.get("api_database_recall_hash", ""),
+                "api_database_source_kind": task_info.get("api_database_source_kind", ""),
+                "api_database_source_apis": task_info.get("api_database_source_apis", []),
+                "api_database_embed_cache_folder": task_info.get(
+                    "api_database_embed_cache_folder",
+                    "",
+                ),
+                "api_recall_json_path": json_path,
+                "api_recall_docs_path": docs_path,
+                "triton_api_recall": task_info.get("triton_api_recall", []),
+                "triton_api_recall_by_source": task_info.get("triton_api_recall_by_source", {}),
+                "api_recall_llm_called": api_recall_llm_called,
+                "api_recall_step_delta": api_recall_step_delta,
+                "iteration": state.get("iteration", 0) + api_recall_step_delta,
+                "step_count": state.get("step_count", 0) + api_recall_step_delta,
+                "agent_history": ["api_recall"],
+            }
+
+        return track_node("api_recall")(api_recall_node)
+
+    @staticmethod
     def create_coder_node(coder_instance, trace_instance):
         """创建 Coder 节点函数"""
         async def coder_node(state: KernelGenState) -> dict:
@@ -195,6 +590,7 @@ class NodeFactory:
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
+            code_diagnostic_errors = state.get('code_diagnostic_errors', '')
             
             if verifier_error:
                 task_id = state.get('task_id', '0')
@@ -210,6 +606,11 @@ class NodeFactory:
                 task_id = state.get('task_id', '0')
                 logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
+
+            if code_diagnostic_errors:
+                task_id = state.get('task_id', '0')
+                logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 非阻塞诊断 (长度: {len(code_diagnostic_errors)})")
+                logger.debug(f"[Task {task_id}] 诊断详情: {code_diagnostic_errors[:300]}...")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
             t0 = time.time()
@@ -240,6 +641,9 @@ class NodeFactory:
                 "code_check_errors": None,     # 清除旧的检查错误
                 "code_check_passed": None,     # 重置检查状态
                 "code_check_details": None,    # 清除旧的检查详情
+                "code_diagnostic_errors": None,
+                "code_diagnostic_passed": None,
+                "code_diagnostic_details": None,
                 "codegen_invalid": codegen_invalid,
                 "codegen_invalid_reason": codegen_invalid_reason,
                 "verifier_result": False if codegen_invalid else state.get("verifier_result"),
@@ -247,6 +651,471 @@ class NodeFactory:
             }
 
         return track_node("coder")(coder_node)
+
+    @staticmethod
+    async def _run_sub_expr_verify(
+        state: KernelGenState,
+        verifier_instance,
+        code: str,
+        expr_index: int,
+        attempt: int,
+        config: dict,
+        private_worker=None,
+        worker_manager=None,
+        backend=None,
+        arch=None,
+    ) -> tuple:
+        """Run a self-contained sub-expression verify script through a worker."""
+        op_name = state.get("op_name", getattr(verifier_instance, "op_name", "unknown"))
+        task_id = str(state.get("task_id", getattr(verifier_instance, "task_id", "0")))
+        verify_task_id = f"{task_id}_subexpr{expr_index}_attempt{attempt}"
+        verify_timeout = int(config.get("verify_timeout", 300))
+
+        worker = private_worker
+        selected_from_manager = False
+        if worker is None and worker_manager is not None:
+            worker = await worker_manager.select(backend=backend, arch=arch)
+            selected_from_manager = worker is not None
+        if worker is None:
+            return False, (
+                f"No available worker for backend={backend}, arch={arch}. "
+                "Please register a worker first."
+            )
+
+        acquired_device = None
+        actual_device_id = -1
+        try:
+            from akg_agents.core.worker.local_worker import LocalWorker
+            from akg_agents.core.worker.remote_worker import RemoteWorker
+
+            if isinstance(worker, LocalWorker):
+                acquired_device = await worker.device_pool.acquire_device()
+                actual_device_id = acquired_device
+            elif isinstance(worker, RemoteWorker):
+                acquired_device = await worker.acquire_device(task_id=verify_task_id)
+                actual_device_id = acquired_device
+
+            log_dir = config.get("log_dir") or getattr(verifier_instance, "log_dir", "") or "tmp"
+            expanded_log_dir = os.path.expanduser(log_dir)
+            unique_dir = (
+                f"Iteration{task_id}_multi_expr{expr_index}_"
+                f"Attempt{attempt:02d}_verify"
+            )
+            verify_dir = os.path.join(expanded_log_dir, op_name, unique_dir)
+            os.makedirs(verify_dir, exist_ok=True)
+
+            script_path = os.path.join(verify_dir, f"verify_{op_name}.py")
+            prologue = NodeFactory._device_env_prologue(backend or state.get("backend", ""), actual_device_id)
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(prologue + (code or ""))
+
+            if isinstance(worker, LocalWorker):
+                package_data = verify_dir
+            else:
+                package_data = verifier_instance._pack_directory(verify_dir)
+
+            success, log, artifacts = await worker.verify(
+                package_data,
+                verify_task_id,
+                op_name,
+                verify_timeout,
+            )
+            if artifacts:
+                try:
+                    from akg_agents.op.verifier.kernel_verifier import sync_artifacts_to_directory
+
+                    sync_artifacts_to_directory(artifacts, verify_dir, verify_task_id)
+                except Exception as exc:
+                    logger.warning(
+                        "[Task %s] failed to sync sub-expression artifacts: %s",
+                        task_id,
+                        exc,
+                    )
+
+            marker_ok = "Kernel syntax check PASSED." in (log or "")
+            if success and marker_ok:
+                return True, log
+            if success and not marker_ok:
+                log = (log or "") + "\nMissing success marker: Kernel syntax check PASSED."
+            return False, log or "Sub-expression verification failed"
+        except Exception as exc:
+            return False, f"Sub-expression verification exception: {type(exc).__name__}: {exc}"
+        finally:
+            if acquired_device is not None:
+                try:
+                    from akg_agents.core.worker.local_worker import LocalWorker
+                    from akg_agents.core.worker.remote_worker import RemoteWorker
+
+                    if isinstance(worker, LocalWorker):
+                        await worker.device_pool.release_device(acquired_device)
+                    elif isinstance(worker, RemoteWorker):
+                        await worker.release_device(acquired_device, task_id=verify_task_id)
+                except Exception as exc:
+                    logger.warning(
+                        "[Task %s] failed to release sub-expression device %s: %s",
+                        task_id,
+                        acquired_device,
+                        exc,
+                    )
+            if selected_from_manager and worker_manager is not None:
+                await worker_manager.release(worker)
+
+    @staticmethod
+    def create_multi_expr_coder_node(
+        coder_instance,
+        verifier_instance,
+        trace_instance,
+        config: dict,
+        private_worker=None,
+        worker_manager=None,
+        backend=None,
+        arch=None,
+        code_checker_instance=None,
+    ):
+        """Create a MathIR multi-expression generation/verify/combine node."""
+
+        async def multi_expr_coder_node(state: KernelGenState) -> dict:
+            task_id = state.get("task_id", "0")
+            op_name = state.get("op_name", "unknown")
+            logger.info(
+                "Task %s, op_name: %s, current_agent: multi_expr_coder",
+                task_id,
+                op_name,
+            )
+
+            expressions = NodeFactory._extract_mathir_expressions(state.get("mathIR_code"))
+            raw_max_retries = state.get(
+                "multi_kernel_max_retries",
+                NodeFactory._get_int_config(config, "multi_kernel_max_retries", 15),
+            )
+            try:
+                max_retries = max(1, int(raw_max_retries))
+            except (TypeError, ValueError):
+                max_retries = max(
+                    1,
+                    NodeFactory._get_int_config(
+                        config,
+                        "multi_kernel_max_retries",
+                        15,
+                    ),
+                )
+            num_exprs = len(expressions)
+            if num_exprs <= 1:
+                return {
+                    "multi_expr_error": "",
+                    "multi_expr_attempt_counts": [],
+                    "multi_expr_success": [],
+                    "agent_history": ["multi_expr_coder"],
+                }
+
+            sub_task_infos = []
+            for i, expr in enumerate(expressions):
+                task_info = copy.deepcopy(dict(state))
+                task_info["current_expr"] = expr
+                task_info["all_expressions"] = expressions
+                task_info["total_expressions"] = num_exprs
+                task_info["partial_task_name"] = expr.get("name", f"expr_{i}")
+                task_info["expr_index"] = i
+                task_info["error_history"] = []
+                task_info.pop("mathIR_code", None)
+                sub_task_infos.append(task_info)
+
+            expr_results = [None] * num_exprs
+            expr_success = [False] * num_exprs
+            expr_attempt_counts = [0] * num_exprs
+            expr_last_error = [""] * num_exprs
+            total_attempts = 0
+
+            async def _generate_one(index: int) -> dict:
+                task_info = sub_task_infos[index]
+                attempt = expr_attempt_counts[index]
+                err_info = NodeFactory._classify_verifier_error(
+                    task_info.get("verifier_error", "")
+                )
+                task_info["is_timeout_error"] = err_info["is_timeout"]
+                task_info["is_numerical_error"] = err_info["is_numerical"]
+                task_info["is_performance_error"] = err_info["is_performance"]
+                mode = "sub_expr_repair" if err_info["has_error"] else "sub_expr_gen"
+                kwargs = {"task_info": task_info}
+                if err_info["has_error"]:
+                    kwargs["repair_error_type"] = err_info["repair_error_type"]
+                try:
+                    with stream_output_override(False):
+                        result = await coder_instance.run_mode(mode, **kwargs)
+                    return {
+                        "index": index,
+                        "attempt": attempt,
+                        "ok": True,
+                        "mode": mode,
+                        **result,
+                    }
+                except Exception as exc:
+                    return {
+                        "index": index,
+                        "attempt": attempt,
+                        "ok": False,
+                        "mode": mode,
+                        "error": f"generation exception: {type(exc).__name__}: {exc}",
+                    }
+
+            while total_attempts < max_retries:
+                pending = [i for i in range(num_exprs) if not expr_success[i]]
+                if not pending:
+                    break
+                budget = max_retries - total_attempts
+                batch = pending[:budget]
+
+                gen_results = await asyncio.gather(
+                    *[_generate_one(i) for i in batch],
+                    return_exceptions=False,
+                )
+
+                for gen in gen_results:
+                    index = gen["index"]
+                    attempt = gen["attempt"]
+                    task_info = sub_task_infos[index]
+                    mode = gen.get("mode", "")
+                    phase_agent = (
+                        "multi_expr_repair"
+                        if mode == "sub_expr_repair"
+                        else "multi_expr_gen"
+                    )
+                    total_attempts += 1
+                    expr_attempt_counts[index] += 1
+
+                    if not gen.get("ok"):
+                        err = gen.get("error", "generation failed")
+                        task_info["verifier_error"] = err
+                        expr_last_error[index] = err
+                        trace_instance.write_record(
+                            phase_agent,
+                            [("error_log", err)],
+                            subdirectory=f"sub_expr_{index}_attempt_{attempt}",
+                        )
+                        continue
+
+                    code = gen.get("code", "") or ""
+                    task_info["coder_code"] = code
+                    task_info[f"coder_sub_expr_{index}_attempt_{attempt}_code"] = code
+                    error_summary = gen.get("error_summary", "")
+                    if error_summary:
+                        task_info.setdefault("error_history", []).append(error_summary)
+
+                    trace_instance.write_record(
+                        phase_agent,
+                        [
+                            ("result", code),
+                            ("prompt", gen.get("prompt", "")),
+                            ("reasoning", gen.get("reasoning", "")),
+                            ("mode", mode),
+                        ],
+                        subdirectory=f"sub_expr_{index}_attempt_{attempt}",
+                    )
+
+                    if not code.strip():
+                        err = "Sub-expression generation returned empty code"
+                        task_info["verifier_error"] = err
+                        expr_last_error[index] = err
+                        continue
+
+                    if code_checker_instance is not None:
+                        try:
+                            check_passed, check_error, check_details = (
+                                await code_checker_instance.check(code, task_info)
+                            )
+                        except Exception as exc:
+                            check_passed = False
+                            check_error = (
+                                "Sub-expression CodeChecker exception: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                            check_details = []
+                        diagnostic_passed = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_passed",
+                            True,
+                        )
+                        diagnostic_error = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_error_message",
+                            "",
+                        )
+                        diagnostic_details = getattr(
+                            code_checker_instance,
+                            "last_diagnostic_errors",
+                            [],
+                        )
+
+                        trace_instance.write_record(
+                            "multi_expr_code_checker",
+                            [
+                                (
+                                    "result",
+                                    json.dumps(
+                                        {
+                                            "passed": check_passed,
+                                            "error_count": len(check_details),
+                                            "errors": check_details[:5],
+                                            "diagnostic_passed": diagnostic_passed,
+                                            "diagnostic_error_count": len(diagnostic_details),
+                                            "diagnostic_errors": diagnostic_details[:5],
+                                        },
+                                        ensure_ascii=False,
+                                    ),
+                                ),
+                                ("error_log", check_error or ""),
+                            ],
+                            subdirectory=f"sub_expr_{index}_attempt_{attempt}",
+                        )
+
+                        task_info["code_check_passed"] = check_passed
+                        task_info["code_check_details"] = check_details
+                        task_info["code_diagnostic_passed"] = diagnostic_passed
+                        task_info["code_diagnostic_errors"] = diagnostic_error
+                        task_info["code_diagnostic_details"] = diagnostic_details
+                        if not check_passed:
+                            err = (
+                                "Sub-expression CodeChecker failed:\n"
+                                f"{check_error or 'Static code check failed'}"
+                            )
+                            task_info["code_check_errors"] = check_error
+                            task_info["verifier_error"] = err
+                            task_info["coder_code"] = code
+                            expr_last_error[index] = err
+                            continue
+
+                        task_info["code_check_errors"] = ""
+
+                    verify_res, verify_log = await NodeFactory._run_sub_expr_verify(
+                        state=state,
+                        verifier_instance=verifier_instance,
+                        code=code,
+                        expr_index=index,
+                        attempt=attempt,
+                        config=config,
+                        private_worker=private_worker,
+                        worker_manager=worker_manager,
+                        backend=backend,
+                        arch=arch,
+                    )
+                    trace_instance.write_record(
+                        "multi_expr_verifier",
+                        [
+                            ("result", str(verify_res)),
+                            ("error_log", verify_log or ""),
+                        ],
+                        subdirectory=f"sub_expr_{index}_attempt_{attempt}",
+                    )
+
+                    if verify_res:
+                        expr_success[index] = True
+                        expr_results[index] = code
+                        expr_last_error[index] = ""
+                    else:
+                        task_info["verifier_error"] = verify_log
+                        task_info["coder_code"] = code
+                        expr_last_error[index] = verify_log
+
+            if all(expr_success):
+                with stream_output_override(False):
+                    combine = await coder_instance.run_mode(
+                        "combine",
+                        task_info=dict(state),
+                        sub_kernel_results=[code or "" for code in expr_results],
+                        expressions=expressions,
+                    )
+                combined_code = combine.get("code", "") or ""
+                trace_instance.log_record(
+                    "multi_expr_combine",
+                    [
+                        ("result", combined_code),
+                        ("prompt", combine.get("prompt", "")),
+                        ("reasoning", combine.get("reasoning", "")),
+                        (
+                            "summary",
+                            json.dumps(
+                                {
+                                    "expr_success": expr_success,
+                                    "expr_attempt_counts": expr_attempt_counts,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    ],
+                )
+                codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
+                    coder_instance,
+                    "CoderCombine",
+                    str(task_id),
+                )
+                if not combined_code.strip():
+                    codegen_invalid = True
+                    codegen_invalid_reason = "CoderCombine returned empty code"
+                new_step_count = state.get("step_count", 0) + 1
+                return {
+                    "coder_code": combined_code,
+                    "coder_prompt": combine.get("prompt", ""),
+                    "coder_reasoning": combine.get("reasoning", ""),
+                    "multi_expr_error": "",
+                    "multi_expr_attempt_counts": expr_attempt_counts,
+                    "multi_expr_success": expr_success,
+                    "iteration": state.get("iteration", 0) + 1,
+                    "step_count": new_step_count,
+                    "agent_history": ["multi_expr_coder"],
+                    "conductor_suggestion": None,
+                    "code_check_errors": None,
+                    "code_check_passed": None,
+                    "code_check_details": None,
+                    "code_diagnostic_errors": None,
+                    "code_diagnostic_passed": None,
+                    "code_diagnostic_details": None,
+                    "codegen_invalid": codegen_invalid,
+                    "codegen_invalid_reason": codegen_invalid_reason,
+                    "verifier_result": False if codegen_invalid else state.get("verifier_result"),
+                    "verifier_error": codegen_invalid_reason if codegen_invalid else "",
+                }
+
+            failed = [
+                {
+                    "index": i,
+                    "attempts": expr_attempt_counts[i],
+                    "error": expr_last_error[i],
+                }
+                for i in range(num_exprs)
+                if not expr_success[i]
+            ]
+            error_log = "Multi-expression sub-kernels did not all verify: " + json.dumps(
+                failed,
+                ensure_ascii=False,
+            )
+            trace_instance.log_record(
+                "multi_expr_coder",
+                [
+                    ("error_log", error_log),
+                    (
+                        "summary",
+                        json.dumps(
+                            {
+                                "expr_success": expr_success,
+                                "expr_attempt_counts": expr_attempt_counts,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                ],
+            )
+            return {
+                "multi_expr_error": error_log,
+                "multi_expr_attempt_counts": expr_attempt_counts,
+                "multi_expr_success": expr_success,
+                "verifier_result": False,
+                "verifier_error": error_log,
+                "iteration": state.get("iteration", 0) + 1,
+                "step_count": state.get("step_count", 0) + 1,
+                "agent_history": ["multi_expr_coder"],
+            }
+
+        return track_node("multi_expr_coder")(multi_expr_coder_node)
 
     @staticmethod
     def create_kernel_designer_node(kernel_designer_instance, trace_instance, config: dict):
@@ -334,6 +1203,7 @@ class NodeFactory:
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
+            code_diagnostic_errors = state.get('code_diagnostic_errors', '')
             
             if verifier_error:
                 logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
@@ -345,6 +1215,10 @@ class NodeFactory:
             if code_check_errors:
                 logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
+
+            if code_diagnostic_errors:
+                logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 非阻塞诊断 (长度: {len(code_diagnostic_errors)})")
+                logger.debug(f"[Task {task_id}] 诊断详情: {code_diagnostic_errors[:300]}...")
             
             # 将 state 中的 session_id 注入到 kernel_gen_instance.context
             # 使 KernelGen 的 run_llm 能正确创建带 session_id 的 LLMClient，支持流式输出到 CLI
@@ -381,6 +1255,11 @@ class NodeFactory:
                     designer_code=designer_code,
                     inspirations=inspirations_text,
                     code_check_errors=code_check_errors,
+                    code_diagnostic_errors=code_diagnostic_errors,
+                    triton_api_recall=state.get('triton_api_recall', []),
+                    triton_api_recall_by_source=state.get('triton_api_recall_by_source', {}),
+                    api_database_enabled=state.get('api_database_enabled', False),
+                    api_database_status=state.get('api_database_status', ''),
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")
@@ -414,6 +1293,9 @@ class NodeFactory:
                 "code_check_errors": None,     # 清除旧的检查错误
                 "code_check_passed": None,     # 重置检查状态
                 "code_check_details": None,    # 清除旧的检查详情
+                "code_diagnostic_errors": None,
+                "code_diagnostic_passed": None,
+                "code_diagnostic_details": None,
                 "codegen_invalid": codegen_invalid,
                 "codegen_invalid_reason": codegen_invalid_reason,
                 "verifier_result": False if codegen_invalid else state.get("verifier_result"),
@@ -611,9 +1493,14 @@ class NodeFactory:
                 valid_options_set = {code_gen_agent, "finish"}
                 
                 raw_error = state.get('verifier_error', '')
-                error_for_prompt = raw_error
-                if raw_error and len(raw_error) > 4000:
-                    error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+                raw_diagnostic = state.get('code_diagnostic_errors', '')
+                combined_error = NodeFactory._compose_error_with_diagnostics(
+                    raw_error,
+                    raw_diagnostic,
+                )
+                error_for_prompt = combined_error
+                if combined_error and len(combined_error) > 4000:
+                    error_for_prompt = "... (前面省略) ...\n" + combined_error[-4000:]
 
                 input_data = {
                     'dsl': state.get('dsl', ''),
@@ -679,7 +1566,7 @@ class NodeFactory:
                 if state.get('coder_code') and state.get('verifier_error'):
                     history_entry = {
                         'code': state.get('coder_code', ''),
-                        'error': state.get('verifier_error', ''),
+                        'error': combined_error,
                         'suggestion': suggestion if suggestion else '',
                         'task_desc': state.get('task_desc', '')
                     }
@@ -1049,17 +1936,30 @@ class NodeFactory:
                     "code_check_passed": True,
                     "code_check_errors": "",
                     "code_check_details": [],
+                    "code_diagnostic_passed": True,
+                    "code_diagnostic_errors": "",
+                    "code_diagnostic_details": [],
                     "agent_history": ["code_checker"]
                 }
             
             # 执行检查
             passed, error_message, errors = await checker_instance.check(code, state)
+            diagnostic_passed = getattr(checker_instance, "last_diagnostic_passed", True)
+            diagnostic_errors = getattr(checker_instance, "last_diagnostic_errors", [])
+            diagnostic_error_message = getattr(
+                checker_instance,
+                "last_diagnostic_error_message",
+                "",
+            )
             
             # 记录到 Trace（write_record: 不自增 step，与 kernel_gen 共享编号）
             check_result = {
                 "passed": passed,
                 "error_count": len(errors),
-                "errors": errors[:5]
+                "errors": errors[:5],
+                "diagnostic_passed": diagnostic_passed,
+                "diagnostic_error_count": len(diagnostic_errors),
+                "diagnostic_errors": diagnostic_errors[:5],
             }
             trace_instance.write_record("code_checker", [
                 ('result', json.dumps(check_result, ensure_ascii=False)),
@@ -1099,6 +1999,9 @@ class NodeFactory:
                 "code_check_passed": passed,
                 "code_check_errors": error_message,
                 "code_check_details": errors,
+                "code_diagnostic_passed": diagnostic_passed,
+                "code_diagnostic_errors": diagnostic_error_message,
+                "code_diagnostic_details": diagnostic_errors,
                 "agent_history": ["code_checker"]
             }
         

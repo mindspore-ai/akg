@@ -1,0 +1,114 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_fused",
+        "next_expressions": ["bias_residual_polynomial_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Z", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}，3D 转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_d×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=P=1, output_padding=OP=1, dilation=1, groups=1。输出 D_out=H_out=W_out=(D_in-1)*S - 2P + K + OP，本题 D_in=16, H_in=W_in=32 → D_out=32, H_out=W_out=64。Z ∈ R^{N×C_out×D_out×H_out×W_out}: Z[n,c_o,d_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i} Σ_{k_d} Σ_{k_h} Σ_{k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]，其中 d_i=(d_o+P-k_d)/S, h_i=(h_o+P-k_h)/S, w_i=(w_o+P-k_w)/S，仅当三个除法均能整除且对应索引落在合法范围内时项有效。本题 N=16, C_in=32, C_out=64, K_d=K_h=K_w=3, D_out=32, H_out=W_out=64。",
+        "boundary_treatment": "仅当反推索引 (d_i, h_i, w_i) 均为整数且落在合法 [0,D_in)×[0,H_in)×[0,W_in) 范围内时累加；output_padding=1 使每个空间维额外加 1；bias 加在通道维。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "d_o", "range": "[0, D_out)", "binding": "static", "value": "32" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "64" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "64" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K_d)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 32, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (524288, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, d_i, h_i, w_i) = X_ptr + n*524288 + c_i*16384 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (32, 64, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (1728, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_d, k_h, k_w) = W_deconv_ptr + c_i*1728 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ 3D 转置卷积权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, K_d, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 64, 32, 64, 64)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Z(n, c_o, d_o, h_o, w_o) = Z_ptr + n*8388608 + c_o*131072 + d_o*4096 + h_o*64 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.ConvTranspose3d(32, 64, kernel_size=3, stride=2, padding=1, output_padding=1) eval 前向。精度模式：手写 FMA + fp32 累加器为 IEEE fp32 语义；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_in*K_d*K_h*K_w=32*27=864，ε_total≈1.2e-7*sqrt(864)≈3.5e-6，10x 余量 rtol_base=atol_base=4e-5；步骤 2 参考含 nn.ConvTranspose3d 走 cuDNN，A100 默认 TF32，强制 rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(16,64,32,64,64)，验证 (D_in-1)*S-2P+K+OP=32、(H_in-1)*S-2P+K+OP=64；(b) weight 解包必须 (C_in=32, C_out=64) 顺序；(c) bias 加在通道维；(d) 反推索引整除条件。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 预期；(ii) diff≫1e-3 → weight (C_in, C_out) 对调；(iii) shape 错 → 检查 OP 公式。"
+      },
+      {
+        "name": "bias_residual_polynomial_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Z", "kind": "tensor" },
+          { "name": "B_extra", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Z ∈ R^{N×C×D×H×W}（上游 conv-transpose 输出），可学习 bias B_extra ∈ R^{C×1×1×1}。源代码逐元素链路：original = Z；x1 = Z + B_extra；x2 = x1 + original = 2·Z + B_extra；x3 = x2 · original = (2·Z + B_extra)·Z = 2·Z² + B_extra·Z；x4 = x3 + original = 2·Z² + B_extra·Z + Z。最终 Y[n,c,d,h,w] = 2·Z[n,c,d,h,w]² + B_extra[c,0,0,0]·Z[n,c,d,h,w] + Z[n,c,d,h,w] = Z[n,c,d,h,w] · (2·Z[n,c,d,h,w] + B_extra[c,0,0,0] + 1)。本题 N=16, C=64, D=32, H=W=64。该 expression 融合 bias-add、两个 residual-add、一个 element-wise multiply 为一个多项式映射。",
+        "boundary_treatment": "全为逐元素运算，broadcast bias 沿 N/D/H/W 维复制；无空间边界。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "16" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "64" },
+            { "symbol": "d", "range": "[0, D)", "binding": "static", "value": "32" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "64" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "64" }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "Z": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_fused.output",
+            "layout": "(N, C, D, H, W) = (16, 64, 32, 64, 64)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1) = (8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Z(n, c, d, h, w) = Z_ptr + n*8388608 + c*131072 + d*4096 + h*64 + w"
+          },
+          "B_extra": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C, 1, 1, 1) = (64, 1, 1, 1)",
+            "stride": "(1, 1, 1, 1)",
+            "address_mapping": "addr_B_extra(c, 0, 0, 0) = B_extra_ptr + c"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, D, H, W) = (16, 64, 32, 64, 64)",
+            "stride": "(C*D*H*W, D*H*W, H*W, W, 1) = (8388608, 131072, 4096, 64, 1)",
+            "address_mapping": "addr_Y(n, c, d, h, w) = Y_ptr + n*8388608 + c*131072 + d*4096 + h*64 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：original=Z.clone(); x=Z+B_extra; x=x+original; x=x*original; x=x+original，等价于 Z*(2Z + B_extra + 1)。eval 模式无随机性。精度模式：纯逐元素，IEEE fp32 语义；无超越函数。容忍值推导分三步：步骤 1 ε_op=1.2e-7，无 reduction K=1，ε_total=1.2e-7，10x 余量 rtol_base=atol_base=1.2e-6；步骤 2 不触发；步骤 3 上游 Z 来自 cuDNN 已有 ~1e-3 噪声，并经过 Z² 放大量级，应允许 |Y| 级别 atol；考虑 |Z|≤O(几)，|Y|≤O(20)，传播误差需放宽到 1e-3。最终 **rtol = atol = 1e-3**，主导因素是上游 cuDNN 输入误差经多项式放大。结构性检查：(a) 输出 shape=(16,64,32,64,64)；(b) 验证 Y == Z*(2Z + B_extra + 1) 恒等代数（小输入手算）；(c) broadcast 维：B_extra (64,1,1,1) 沿 N/D/H/W 复制。失败诊断：(i) 整体偏差较大 → 上游 cuDNN TF32 噪声经平方放大，预期；(ii) 通道整体偏移 → B_extra 索引错位；(iii) 数值符号错 → 减号/加号写反；(iv) NaN → 无（无除法或对数）。"
+      }
+    ]
+  }
+}

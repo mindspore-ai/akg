@@ -1,0 +1,155 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          },
+          {
+            "name": "OP",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_w",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "定义输入张量 X ∈ R^{N×C_in×H_in×W_in} = R^{8×32×512×1024}，权重张量 W ∈ R^{C_in×C_out×K_h×K_w} = R^{32×32×3×3}。标量参数：S = 1, P = 0, D = 1, OP = 0, K_h = K_w = 3。等效填充量 pad = D·(K_h - 1) - P = 2。令 X_pad 为 X 在 H 和 W 维度上四周各填充 pad 个零后的张量，形状 (N, C_in, H_in+2·pad, W_in+2·pad) = (8,32,516,1028)，越界处取零。输出 Y ∈ R^{N×C_out×H_out×W_out}，H_out = (H_in - 1)·S - 2·P + D·(K_h - 1) + OP + 1 = 514，W_out = 1026。对于 n ∈ [0,N), o ∈ [0,C_out), i ∈ [0,H_out), j ∈ [0,W_out)：Y[n,o,i,j] = Σ_{c=0}^{C_in-1} Σ_{kh=0}^{K_h-1} Σ_{kw=0}^{K_w-1} X_pad[n, c, i·S + kh - P, j·S + kw - P] · W[c, o, K_h-1-kh, K_w-1-kw]。因 S=1,P=0，可简化为 Y[n,o,i,j] = Σ_c Σ_kh Σ_kw X_pad[n, c, i+kh, j+kw] · W[c, o, 2-kh, 2-kw]。",
+        "boundary_treatment": "通过显式构造 X_pad（在输入 X 的 H 和 W 维度四周各填充 2 个零）并定义越界部分为零，实现转置卷积的边界处理。填充量由 pad = D·(K_h-1) - P = 2 决定，确保对任意有效输出索引 i+kh（或 j+kw）不会越出 X_pad 的范围。输出尺寸计算遵循标准公式，与 PyTorch eager 行为一致。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 8)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, 514)",
+              "binding": "static",
+              "value": "514"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 1026)",
+              "binding": "static",
+              "value": "1026"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in)",
+            "stride": "(16777216, 524288, 1024, 1)",
+            "address_mapping": "n * 16777216 + c * 524288 + h * 1024 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose2d.weight",
+            "layout": "(C_in, C_out, K_h, K_w)",
+            "stride": "(288, 9, 3, 1)",
+            "address_mapping": "c * 288 + o * 9 + kh * 3 + kw",
+            "unpack_hint": "注意权重布局为 (C_in, C_out, K_h, K_w)，与常规 Conv2d 的 (C_out, C_in, K_h, K_w) 不同"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "(16875648, 527364, 1026, 1)",
+            "address_mapping": "n * 16875648 + o * 527364 + i * 1026 + j"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.dilation"
+          },
+          "OP": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.output_padding"
+          },
+          "K_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.kernel_size[0]"
+          },
+          "K_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv_transpose2d.kernel_size[1]"
+          }
+        },
+        "TDD_requirement": "参考实现为 PyTorch nn.ConvTranspose2d 在 eval 模式下的前向计算。需验证输出形状为 (8,32,514,1026)，数值与 PyTorch eager 完全一致。重点检查：输入 X 的 zero padding 边界处理（上下左右各填充 2 个零），权重沿空间维度翻转（W[c, o, 2-kh, 2-kw]）的正确性，以及求和维度 c、kh、kw 的核算。建议先用小形状（如 batch=1, in=2, out=3, H_in=3, W_in=4, kernel=2, stride=2, padding=1）冒烟测试边界条件与插值逻辑，再用完整输入 (8,32,512,1024) 做对拍。fp32 下可接受逐元素相对/绝对误差 1e-5。"
+      }
+    ]
+  }
+}

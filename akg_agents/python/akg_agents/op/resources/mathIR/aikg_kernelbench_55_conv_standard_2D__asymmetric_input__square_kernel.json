@@ -1,0 +1,134 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n,o,oh,ow] = sum_{c=0}^{C-1} sum_{r=0}^{R-1} sum_{s=0}^{S-1} X[n,c,oh+r,ow+s] * W[o,c,r,s]",
+        "boundary_treatment": "采用valid卷积，无padding，输入空间维度H=512,W=1024，kernel_size=R=S=3，stride=1，输出空间维度OH=H-2=510,OW=W-2=1022。所有输出位置的卷积核窗口均在输入有效范围内，无越界访问，无需特殊边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "oh",
+              "range": "[0, OH)",
+              "binding": "static",
+              "value": "510"
+            },
+            {
+              "symbol": "ow",
+              "range": "[0, OW)",
+              "binding": "static",
+              "value": "1022"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "r",
+              "range": "[0, R)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "s",
+              "range": "[0, S)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(33554432, 524288, 1024, 1)",
+            "address_mapping": "n * 33554432 + c * 524288 + h * 1024 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(O, C, R, S)",
+            "stride": "(576, 9, 3, 1)",
+            "address_mapping": "o * 576 + c * 9 + r * 3 + s"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, O, OH, OW)",
+            "stride": "(66754560, 521220, 1022, 1)",
+            "address_mapping": "n * 66754560 + o * 521220 + oh * 1022 + ow"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 8"
+          },
+          "C": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 64"
+          },
+          "O": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 128"
+          },
+          "R": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 3"
+          },
+          "S": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 3"
+          },
+          "OH": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 510"
+          },
+          "OW": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 1022"
+          }
+        },
+        "TDD_requirement": "需验证卷积计算正确性：重点检查输出形状(N=8,O=128,OH=510,OW=1022)无误；归约轴c(64),r(3),s(3)累加顺序不影响最终数值；无padding边界处理确保所有输出位置均在输入有效范围。建议使用小尺寸（如N=2,C=2,O=2,H=5,W=5）进行手工对拍，并用完整尺寸（8,64,512,1024）与PyTorch eager结果对比，容忍误差1e-5（fp32）。"
+      }
+    ]
+  }
+}

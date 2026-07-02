@@ -1,0 +1,75 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "max_reduction",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given dim=1, output[i, j] = max_{k=0}^{D1-1} X[i, k, j] for i in [0, N), j in [0, D2), with N=128, D1=4096, D2=4095.",
+        "boundary_treatment": "标准最大归约，沿 dim=1 轴对整个范围求最大值，无 padding 或掩码处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D2)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, D1)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D1, D2)",
+            "stride": "(4096*4095, 4095, 1)",
+            "address_mapping": "offset = i * (4096*4095) + k * 4095 + j"
+          },
+          "output": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D2)",
+            "stride": "(4095, 1)",
+            "address_mapping": "offset = i * 4095 + j"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch 的 torch.max(x, dim=1).values 进行数值对拍。重点检查输出形状是否为 (128, 4095)，最大值是否沿 dim=1 正确归约，以及浮点精度。建议使用小形状例如 (2,3,4) 冒烟测试，然后用完整输入 (128,4096,4095) 对拍，容忍误差参考 fp32 精度。"
+      }
+    ]
+  }
+}

@@ -14,6 +14,16 @@
 {{ aggregated_api_docs }}
 {% endif %}
 
+{% if database_api_docs %}
+---
+
+## Triton API Database 召回
+
+{{ database_api_docs }}
+
+请严格按照上述 API 文档的使用方法和约束生成对应代码；召回候选不一定全部适用，需要结合当前算子语义选择。
+{% endif %}
+
 ---
 {%- if designer_code %}
 
@@ -57,7 +67,7 @@
 ---
 {%- endif %}
 
-{% if verifier_error or conductor_suggestion or code_check_errors %}
+{% if verifier_error or conductor_suggestion or code_check_errors or code_diagnostic_errors %}
 ## 执行历史和反馈
 
 {% if code_check_errors %}
@@ -68,6 +78,14 @@
 {{ code_check_errors }}
 
 **注意：上述问题是基于静态检查发现的确定性错误，请严格按照建议修改。**
+{% endif %}
+
+{% if code_diagnostic_errors %}
+### CodeChecker 非阻塞 Triton 诊断（请结合 Verifier 错误修复）
+
+{{ code_diagnostic_errors }}
+
+**注意：上述诊断不会阻止 verifier 运行，但通常指向当前 Triton 代码的 API 或语义风险。**
 {% endif %}
 
 {% if verifier_error %}

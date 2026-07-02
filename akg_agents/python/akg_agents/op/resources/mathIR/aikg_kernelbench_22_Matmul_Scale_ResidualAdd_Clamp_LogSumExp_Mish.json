@@ -1,0 +1,112 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul_scale_add_clamp_fused",
+        "next_expressions": ["logsumexp_mishmul_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_lin", "kind": "tensor" },
+          { "name": "B_lin", "kind": "tensor" },
+          { "name": "scale_factor", "kind": "scalar" },
+          { "name": "clamp_min", "kind": "scalar" },
+          { "name": "clamp_max", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×I}，线性层权重 W_lin ∈ R^{O×I}，偏置 B_lin ∈ R^{O}，scale_factor=2.0, clamp_min=-10.0, clamp_max=10.0。先计算 Z[n,o] = Σ_{i=0}^{I-1} X[n,i] · W_lin[o,i] + B_lin[o]。然后乘 scale: A1=Z·scale_factor。然后 x+x: A2=A1+A1=2·A1=2·scale_factor·Z。最后 clamp: Y1[n,o]=min(max(A2[n,o], clamp_min), clamp_max)。代数上等价于 Y1[n,o] = clamp(2·scale_factor·Z[n,o], clamp_min, clamp_max)，其中 Z[n,o] = (X·W_lin^T + B_lin)[n,o]。本题 N=128, I=512, O=1024, scale_factor=2.0 → 总乘子=4.0。",
+        "boundary_treatment": "纯线性 + 逐元素 scale/add/clamp，无空间边界；clamp 截断到 [-10, 10]。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "512", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*512 + i"
+          },
+          "W_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (1024, 512)",
+            "stride": "(I, 1) = (512, 1)",
+            "address_mapping": "addr_W_lin(o, i) = W_lin_ptr + o*512 + i"
+          },
+          "B_lin": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (1024)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_lin(o) = B_lin_ptr + o"
+          },
+          "scale_factor": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scale_factor (= 2.0)"
+          },
+          "clamp_min": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.clamp_min (= -10.0)"
+          },
+          "clamp_max": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.clamp_max (= 10.0)"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_scale_add_clamp_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*1024 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 self.matmul(x) * 2.0 + (重复加) → clamp(-10, 10) eval。精度模式：手写 FMA + fp32 累加器为 IEEE fp32 语义；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=I=512，ε_total≈1.2e-7*sqrt(512)≈2.7e-6，10x 余量 rtol_base=atol_base=3e-5；步骤 2 参考含 nn.Linear 走 cuBLAS，A100 默认 TF32，强制 rtol=atol=max(3e-5, 1e-3)=1e-3；步骤 3 不触发（clamp 限值后输出 ≤10）。最终 **rtol = atol = 1e-3**，主导因素步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,1024)；(b) 所有 Y1 ∈ [-10, 10]；(c) 等价代数 Y1 = clamp(4·(X·W^T + B), -10, 10) 单独验证。失败诊断：(i) diff≈1e-4~1e-3 → cuBLAS TF32 预期；(ii) Y1 超出 [-10,10] → clamp 阈值或顺序错；(iii) 整体幅度差 2x → scale_factor 应用一次而非两次（注意 x+x 也等同 *2，总倍数应为 4）。"
+      },
+      {
+        "name": "logsumexp_mishmul_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×O}（已被 clamp 到 [-10, 10]）。先沿 dim=1 求 logsumexp keepdim=True，使用减最大值稳定形式：L[n,0] = max_{o} Y1[n,o] + log(Σ_{o=0}^{O-1} exp(Y1[n,o] - max_{o} Y1[n,o]))，得 L ∈ R^{N×1}。然后做 x * mish(x): Y[n,0] = L[n,0] · L[n,0] · tanh(softplus(L[n,0])) = L[n,0] · L[n,0] · tanh(ln(1 + exp(L[n,0])))。注：源代码 `x = x * F.mish(x)` 既未使用残差，也未改变形状，等价于 Y[n,0] = L[n,0]^2 · tanh(softplus(L[n,0]))。本题 N=128, O=1024。融合 LogSumExp 与 x*Mish(x) 后处理。",
+        "boundary_treatment": "LogSumExp 必须使用减最大值稳定形式以保证数值稳定（输入 ≤10，可能上溢的范围已被 clamp 限制，但仍应规范实现）；softplus 使用稳定形式 softplus(x)=max(x,0)+log(1+exp(-|x|))；keepdim=True 保持 (N,1)。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "1024", "reduction_type": "logsumexp", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.matmul_scale_add_clamp_fused.output",
+            "layout": "(N, O) = (128, 1024)",
+            "stride": "(O, 1) = (1024, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*1024 + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.logsumexp(Y1, dim=1, keepdim=True) 后 x*F.mish(x) eval。精度模式：LogSumExp 使用 fp32 累加器减最大值稳定形式；exp/log/tanh 走 libdevice ~1 ULP。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=O=1024，ε_total≈1.2e-7*sqrt(1024)≈3.8e-6，10x 余量 rtol_base=atol_base=4e-5；步骤 2 不触发；步骤 3 量级修正触发：L 量级最大可达 max + log(1024) ≈ 10 + 6.93 ≈ 17，且 Mish 在 L≈17 时近似 L，导致 Y≈L²≈300。ε_op·K·|Y| ≈ 1.2e-7·1024·300 ≈ 3.7e-2，过于宽松；使用 ε_op·sqrt(K)·|Y| ≈ 1.2e-7·32·300 ≈ 1.2e-3。最终 **rtol = atol = 1e-3**，主导因素步骤 3 量级修正（输出量级 ~O(100) 经平方放大）。结构性检查：(a) 输出 shape=(128,1)；(b) LogSumExp 必须减最大值稳定（用 Y1 全=10 输入检验：L=10+log(1024)≈16.93）；(c) Y 与 L^2·tanh(softplus(L)) 一致；(d) keepdim=True。失败诊断：(i) 上溢 inf → LogSumExp 未减最大值；(ii) shape (128,) → keepdim 丢失；(iii) 大 L 处 Mish 失常 → softplus 未用稳定实现；(iv) 与 PyTorch 偏差大 → 量级 ~300 时绝对误差可达 1e-3，预期。"
+      }
+    ]
+  }
+}

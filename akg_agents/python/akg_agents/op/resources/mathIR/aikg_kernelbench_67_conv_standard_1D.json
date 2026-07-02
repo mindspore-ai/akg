@@ -1,0 +1,92 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "对于 n = 0,...,31, c_out = 0,...,127, l = 0,...,131069: Y[n, c_out, l] = Σ_{c_in=0}^{63} Σ_{k=0}^{2} X[n, c_in, l + k] * W[c_out, c_in, k]",
+        "boundary_treatment": "由于 padding=0, stride=1, dilation=1, L_in=131072, L_out=131070, K=3，对于任意 l∈[0,131069], k∈[0,2]，索引 l+k∈[0,131071] 均在有效输入范围内，无边界越界。通用情况下，当索引超出输入范围时，对应输入视为 0（零填充）。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "c_out",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "l",
+              "range": "[0, 131070)",
+              "binding": "static",
+              "value": "131070"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_in",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, L_in)",
+            "stride": "(8388608, 131072, 1)",
+            "address_mapping": "n * 8388608 + c_in * 131072 + l_in"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d.weight",
+            "layout": "(C_out, C_in, K)",
+            "stride": "(192, 3, 1)",
+            "address_mapping": "c_out * 192 + c_in * 3 + k"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, L_out)",
+            "stride": "(16776960, 131070, 1)",
+            "address_mapping": "n * 16776960 + c_out * 131070 + l"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch nn.Conv1d 对拍。重点检查输出形状 (32,128,131070)，多通道累加正确性，权重布局无换位。建议先用小尺寸 (batch=2, in=3, out=4, len=5, kernel=3) 冒烟，再用完整尺寸对拍，fp32 ulp 容忍。"
+      }
+    ]
+  }
+}

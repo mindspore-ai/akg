@@ -1,0 +1,66 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "elu",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "alpha",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "y_{i,j} = x_{i,j} if x_{i,j} > 0 else alpha * (exp(x_{i,j}) - 1)",
+        "boundary_treatment": "No boundary treatment; element-wise operation.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, 4096)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 393216)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(B, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(B, D)",
+            "stride": "(393216, 1)",
+            "address_mapping": "i * 393216 + j"
+          },
+          "alpha": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.alpha"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch eager 模式下的 F.elu(x, alpha=self.alpha) 进行数值对拍。重点检查：所有元素的正负分支是否正确，x=0 时输出为 0。建议用小形状 (3,5) 做冒烟测试，再用完整输入 (4096,393216) 做对拍。容忍误差建议 1e-5（float32）。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "linear_fused",
+        "next_expressions": ["dropout_mean_softmax_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_fc", "kind": "tensor" },
+          { "name": "B_fc", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "全连接 (matmul + bias)：X ∈ R^{N×I} (N=128, I=100)，W_fc ∈ R^{O×I} (O=50)，B_fc ∈ R^{O}。Y1[n,o] = B_fc[o] + Σ_{i=0}^{I-1} X[n,i] · W_fc[o,i]。",
+        "boundary_treatment": "全连接 reduction 完整 I=100；bias 加在 O 维；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "50" }
+          ],
+          "reduction": [
+            { "symbol": "i", "range": "[0, I)", "binding": "static", "value": "100", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 100)",
+            "stride": "(I, 1) = (100, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*100 + i"
+          },
+          "W_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.weight",
+            "layout": "(O, I) = (50, 100)",
+            "stride": "(I, 1) = (100, 1)",
+            "address_mapping": "addr_W_fc(o, i) = W_fc_ptr + o*100 + i"
+          },
+          "B_fc": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.matmul.bias",
+            "layout": "(O) = (50)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_fc(o) = B_fc_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 50)",
+            "stride": "(O, 1) = (50, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*50 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：torch.manual_seed(0) 下 nn.Linear(100, 50)（eval 模式）。精度模式：tl.dot + fp32 输入须声明 input_precision='ieee' 或 'tf32x3'，禁默认 TF32；手写 FMA + fp32 累加为 IEEE。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = 100，ε_total ≈ 1.2e-7 * 10 = 1.2e-6，10x 余量 base ≈ 1.2e-5；步骤 2（cuBLAS 修正，关键）参考含 nn.Linear，强制 rtol = atol = max(1.2e-5, 1e-3) = 1e-3；步骤 3 不触发。最终 rtol = atol = 1e-3，主导步骤 2 cuBLAS TF32。结构性检查：(a) 输出 shape=(128,50)；(b) weight 布局 (O=50, I=100) 非转置；(c) bias 加在 O 维。失败诊断：(i) diff 1e-4~1e-3 cuBLAS TF32 正常；(ii) 转置错位 → W 形状写反；(iii) bias 偏移 → 索引错。"
+      },
+      {
+        "name": "dropout_mean_softmax_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "在 eval 模式下 Dropout(p=0.2) 等同 identity；故计算简化为：先沿 dim=1 求 mean 并 keepdim=True，M[n,0] = (1/O) Σ_{o=0}^{O-1} Y1[n,o]，得 shape=(N,1)=(128,1)。然后沿 dim=1 做 softmax，但 dim=1 仅含 1 个元素，因此 exp(M)/exp(M) = 1，输出 Y[n,0] = 1 对所有 n 成立。本题 N=128, O=50。该 expression 融合 dropout (eval=identity)、mean、softmax 三阶段。",
+        "boundary_treatment": "Dropout 在 eval 模式 (self.eval()) 下为 identity，不引入随机性；mean 对完整 O=50 求平均；softmax 沿 dim=1 单元素维退化为常数 1；输出元素恒为 1。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" }
+          ],
+          "reduction": [
+            { "symbol": "o", "range": "[0, O)", "binding": "static", "value": "50", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.linear_fused.output",
+            "layout": "(N, O) = (128, 50)",
+            "stride": "(O, 1) = (50, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*50 + o"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1) = (128, 1)",
+            "stride": "(1, 1)",
+            "address_mapping": "addr_Y(n, 0) = Y_ptr + n"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现：(eval 模式) torch.softmax(torch.mean(self.dropout(Y1), dim=1, keepdim=True), dim=1)，等价于全 1 输出。精度模式：手写 FMA + fp32 累加；mean 走 fp32 求和后除 O；softmax 在单元素维退化为 1（无需 exp/log）。容忍值推导分三步：步骤 1（基础公式）ε_op = 1.2e-7，K = O = 50，ε_total ≈ 1.2e-7 * sqrt(50) ≈ 8.5e-7，10x 余量 base ≈ 1e-5；步骤 2（cuDNN 修正）不触发；步骤 3（量级修正）输出恒为 1，量级稳定。最终 rtol = atol = 1e-5（实际应当 bitwise 接近全 1，但允许浮点误差），主导步骤 1。结构性检查：(a) 输出 shape=(128,1)，keepdim=True 保留；(b) Y 所有元素恒为 1.0；(c) Dropout 在 eval 模式不应改变 Y1。失败诊断：(i) 输出不是 1 → softmax 在错误 dim 上做；(ii) shape 错为 (128,) → keepdim 漏；(iii) 训练态触发了随机 mask → self.eval() 未调用或 dropout 行为错。注意：此 expression 退化时输出恒为 1，对拍主要验证逻辑正确性而非具体数值。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matrix_scalar_mul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "s",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i, j] = A[i, j] * s,  for i ∈ [0, M), j ∈ [0, N)",
+        "boundary_treatment": "No boundary treatment; elementwise operation applied to the entire input tensor.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "65536"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16384"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, N)",
+            "stride": "(16384, 1)",
+            "address_mapping": "i * 16384 + j"
+          },
+          "s": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "forward.s"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(16384, 1)",
+            "address_mapping": "i * 16384 + j"
+          }
+        },
+        "TDD_requirement": "数值对拍以 PyTorch eager 结果为参考；重点检查 shape (65536, 16384) 是否一致，输入与输出 dtype 均为 float32；无边界、reduction 等特殊处理，仅需验证元素乘法正确性。建议先用小 shape (如 (2,3)) 冒烟测试，再用完整 shape 对拍，容忍数值误差在 1e-5 级别。"
+      }
+    ]
+  }
+}

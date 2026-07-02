@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d_pointwise",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, oc, h, w] = Σ_{ic=0}^{C_in-1} X[n, ic, h, w] * W[oc, ic, 0, 0]",
+        "boundary_treatment": "kernel_size=1, stride=1, padding=0，无空间边界填充。输入和输出空间尺寸相同。归约通道维度无越界条件。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, OC)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H)",
+              "binding": "static",
+              "value": "1024"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W)",
+              "binding": "static",
+              "value": "1024"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, IC)",
+              "binding": "static",
+              "value": "64",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W)",
+            "stride": "(C_in*H*W, H*W, W, 1)",
+            "address_mapping": "n * (C_in * H * W) + ic * (H * W) + h * W + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv1d.weight",
+            "layout": "(OC, IC, KH, KW)",
+            "stride": "(IC*KH*KW, KH*KW, KW, 1)",
+            "address_mapping": "oc * (IC * KH * KW) + ic * (KH * KW) + kh * KW + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, OC, H, W)",
+            "stride": "(OC*H*W, H*W, W, 1)",
+            "address_mapping": "n * (OC * H * W) + oc * (H * W) + h * W + w"
+          }
+        },
+        "TDD_requirement": "对拍参考为 PyTorch 的 nn.Conv2d(kernel=1,stride=1,padding=0,bias=False) 输出。重点检查 batch、out_channels、height、width 各维度的输出数值一致性，确认归约通道维度的累加精度为 fp32，无偏置。建议使用小形状 (batch=2, in_channels=3, out_channels=5, height=4, width=4) 进行冒烟测试，再用完整形状 (16,64,128,1024,1024) 进行对拍验证。容忍误差：rtol=1e-5, atol=1e-5。"
+      }
+    ]
+  }
+}

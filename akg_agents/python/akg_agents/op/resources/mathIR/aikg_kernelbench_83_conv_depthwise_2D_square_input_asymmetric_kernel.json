@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "depthwise_conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n,c,i,j] = Σ_{kh=0}^{2} X[n, c, i + kh, j] * W[c, 0, kh, 0]",
+        "boundary_treatment": "Valid convolution with zero padding, stride=1, dilation=1, kernel_size=(3,1). Output spatial dimensions are H_out = H - 2, W_out = W. For each n, c, i, j, the sum over kh from 0 to 2 accesses X at positions [n, c, i+kh, j], which are always within bounds because i ∈ [0, H_out-1] and H_out = H - 2, so i+kh ≤ H-1. No padding or clamping is required.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "510"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "kh",
+              "range": "[0, K_H)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C, H, W)",
+            "stride": "(2097152, 262144, 512, 1)",
+            "address_mapping": "offset(n, c, h, w) = n * 2097152 + c * 262144 + h * 512 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C, 1, 3, 1)",
+            "stride": "(3, 3, 1, 1)",
+            "address_mapping": "offset(c, _, kh, _) = c * 3 + kh"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H_out, W_out)",
+            "stride": "(2088960, 261120, 512, 1)",
+            "address_mapping": "offset(n, c, i, j) = n * 2088960 + c * 261120 + i * 512 + j"
+          }
+        },
+        "TDD_requirement": "需与 PyTorch eager 模式的 depthwise conv2d 输出进行数值对拍。重点检查输出形状 (64,8,510,512)，验证高度维度上的卷积计算（i+kh 索引）是否正确，边界无越界。建议使用小尺寸（如 batch=2, channels=2, H=5, W=5, kernel=3）进行冒烟测试，再用完整尺寸对拍。浮点比较可接受 1e-5 相对误差。"
+      }
+    ]
+  }
+}

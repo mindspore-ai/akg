@@ -1,0 +1,122 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "w",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 x ∈ ℝ^{N×C_in×D_in×H_in×W_in}，权重张量 w ∈ ℝ^{C_in×C_out×K_d×K_h×K_w}，其中 K_d=K_h=K_w=3。偏置未使用 (bias=False)。输出 y ∈ ℝ^{N×C_out×D_out×H_out×W_out}，其中 D_out=(D_in-1)*s_d - 2*pad_d + dil_d*(K_d-1) + 1 = (16-1)*2 - 2*1 + 2*2 + 1 = 30 -2 +4 +1 = 33；类似地 H_out=65, W_out=65。\n\n对任意 n∈[0,N-1], c_o∈[0,C_out-1], o_d∈[0,D_out-1], o_h∈[0,H_out-1], o_w∈[0,W_out-1]，输出定义为：\ny[n,c_o,o_d,o_h,o_w] = Σ_{c_i=0}^{C_in-1} Σ_{k_d=0}^{K_d-1} Σ_{k_h=0}^{K_h-1} Σ_{k_w=0}^{K_w-1} 1_V(o_d,o_h,o_w,k_d,k_h,k_w) * x[n,c_i,i_d,i_h,i_w] * w[c_i,c_o,k_d,k_h,k_w]。\n\n其中逆映射输入坐标为：i_d = (o_d + pad_d - k_d * dil_d) / s_d，i_h = (o_h + pad_h - k_h * dil_h) / s_h，i_w = (o_w + pad_w - k_w * dil_w) / s_w。此处 s_d=s_h=s_w=2, pad_d=pad_h=pad_w=1, dil_d=dil_h=dil_w=2。有效指示函数 1_V 条件：整除条件 (o_d+1-2k_d) % 2 == 0, (o_h+1-2k_h) % 2 == 0, (o_w+1-2k_w) % 2 == 0，且 ((i_d >= 0) AND (i_d < D_in)), ((i_h >= 0) AND (i_h < H_in)), ((i_w >= 0) AND (i_w < W_in))；否则该项贡献为 0。",
+        "boundary_treatment": "转置卷积通过逆映射决定每个输出位置对应输入区域的有效性。只有当逆映射得到的输入索引 (i_d,i_h,i_w) 为整数且落在输入张量范围内时，才累加对应的乘积；否则忽略。padding=1 影响逆映射中的偏移，dilation=2 使核权重在输入空间上以间隔 2 采样，但核形状仍为 3×3×3。无显式输出填充 (output_padding=0)。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c_o",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "o_d",
+              "range": "[0, D_out)",
+              "binding": "static",
+              "value": "33"
+            },
+            {
+              "symbol": "o_h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "65"
+            },
+            {
+              "symbol": "o_w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "65"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "c_i",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_d",
+              "range": "[0, K_d)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_h",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k_w",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (16, 32, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (32*16*32*32, 16*32*32, 32*32, 32, 1) = (524288, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_x(n, c_i, i_d, i_h, i_w) = x_ptr + n*stride_n + c_i*stride_c + i_d*stride_d + i_h*stride_h + i_w, 其中 stride_n=524288, stride_c=16384, stride_d=1024, stride_h=32, stride_w=1。"
+          },
+          "w": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose3d.weight",
+            "layout": "(C_in, C_out, K_d, K_h, K_w) = (32, 64, 3, 3, 3)",
+            "stride": "(C_out*K_d*K_h*K_w, K_d*K_h*K_w, K_h*K_w, K_w, 1) = (64*3*3*3, 3*3*3, 3*3, 3, 1) = (1728, 27, 9, 3, 1)",
+            "address_mapping": "addr_w(c_i, c_o, k_d, k_h, k_w) = w_ptr + c_i*stride_c_i + c_o*stride_c_o + k_d*stride_k_d + k_h*stride_k_h + k_w, 其中 stride_c_i=1728, stride_c_o=27, stride_k_d=9, stride_k_h=3, stride_k_w=1。",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为：(c_in, c_out, k_d, k_h, k_w) = self.conv_transpose3d.weight.shape；切勿误写成 (c_out, c_in, ...) = self.conv_transpose3d.weight.shape。"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_out, H_out, W_out) = (16, 64, 33, 65, 65)",
+            "stride": "(C_out*D_out*H_out*W_out, D_out*H_out*W_out, H_out*W_out, W_out, 1) = (64*33*65*65, 33*65*65, 65*65, 65, 1) = (8923200, 139425, 4225, 65, 1)",
+            "address_mapping": "addr_y(n, c_o, o_d, o_h, o_w) = y_ptr + n*stride_n + c_o*stride_c_o + o_d*stride_d + o_h*stride_h + o_w, 其中 stride_n=8923200, stride_c_o=139425, stride_d=4225, stride_h=65, stride_w=1。"
+          }
+        },
+        "lowering_contract": "Lower as implicit-GEMM ConvTranspose3d with M=16*33*65*65, N=64, K=32*3*3*3=864. K_TOTAL=864, K_d/K_h/K_w=3, and padded static loop bounds must be passed as tl.constexpr meta values if used in tl.static_range/tl.arange/tl.zeros shapes. Do not use a tuple stride/padding/dilation object in kernel arithmetic; pass scalar constexpr values stride_d=stride_h=stride_w=2, pad_d=pad_h=pad_w=1, dil_d=dil_h=dil_w=2. The inverse coordinate numerators are od+1-2*kd, oh+1-2*kh, ow+1-2*kw; mask divisibility by 2 and input bounds before tl.load.",
+        "TDD_requirement": "使用小尺寸输入测试，例如 batch=1, C_in=1, C_out=1, D=H=W=4, kernel=3, stride=2, padding=1, dilation=2，手工计算输出形状并验证数值正确性；与 PyTorch eager 的 nn.ConvTranspose3d 结果对拍；重点验证 dilation 导致的逆映射间隔以及输出形状边界。"
+      }
+    ]
+  }
+}

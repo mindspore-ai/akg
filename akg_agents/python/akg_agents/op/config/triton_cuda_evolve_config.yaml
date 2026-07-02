@@ -14,6 +14,11 @@ docs_dir:
   coder: "op/resources/docs/triton_cuda_docs"
   sketch: "op/resources/docs/sketch_docs"
 
+# API docs prompt configuration
+api_docs:
+  llm_compress_enabled: false
+  llm_compress_threshold: 24000
+
 # 可选，给出元提示文档目录绝对路径
 # custom_meta_prompts_dir: "~/aikg/akg_agents/python/akg_agents/op/resources/custom_meta_prompts" 
 
@@ -25,10 +30,44 @@ profile_settings:
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
+# CodeChecker non-blocking Triton diagnostics
+code_checker:
+  triton_checkers:
+    - api_signature
+    - high_confidence_semantics
+
+code_diagnostic_checker:
+  enabled: true
+  only_errors: true
+  dedup: true
+
 # Multi-case testing configuration
 enable_multi_case_verification: false  # For Hint mode only: controls whether to run verification (false = only generate space_config file without verification)
 enable_hint_mode: false  # Hint mode: user provides @hint, Designer generates space_config
 enable_llm_range_inference: false  # LLM inference mode: LLM infers parameter ranges and generates test cases (always runs verification when enabled)
+
+# Triton API database configuration
+api_database:
+  enabled: true
+  qdrant_host: "localhost"
+  qdrant_port: 6333
+  triton_collection: "triton_api"
+  torch_collection: "torch_api"
+  target_backend: "cuda"
+  embed_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embed_cache_folder: "python/akg_agents/database/api/embed_model_cache"
+  force_rebuild: false
+  force_rebuild_triton: false
+  force_rebuild_torch: false
+  topk_per_query: 32
+  filter_tags: ["tl"]
+  enable_keyword_recall: true
+  min_keep: 2
+  max_keep: 10
+  elbow_min_gap_ratio: 0.15
+  relative_decay: 0.90
+  keyword_fallback_qdrant: true
+  keyword_fallback_limit_per_kw: 4
 
 # Hint mode sampling configuration (only used when enable_hint_mode=true and enable_multi_case_verification=true)
 multi_case_num: 10  # Number of test cases to sample

@@ -1,0 +1,168 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_in",
+            "kind": "scalar"
+          },
+          {
+            "name": "C_out",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, oc, d, h, w] = Sum_{ic=0}^{C_in-1} Sum_{kd=0}^{K-1} Sum_{kh=0}^{K-1} Sum_{kw=0}^{K-1} X[n, ic, S*d + D*kd - P, S*h + D*kh - P, S*w + D*kw - P] * W[oc, ic, kd, kh, kw]",
+        "boundary_treatment": "Valid convolution without padding (P=0). The output spatial dimensions are computed as D_out = floor((D_in + 2*P - D*(K-1) - 1) / S + 1) = 62 for input spatial size 64, K=3, S=1, D=1. The index mapping ensures all kernel accesses are within bounds [0, D_in-1] for all valid output positions. No padding or clamping is performed.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, 64)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kd",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D, H, W)",
+            "stride": "(786432, 262144, 4096, 64, 1)",
+            "address_mapping": "n*786432 + ic*262144 + d*4096 + h*64 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv3d.weight",
+            "layout": "(OC, IC, KD, KH, KW)",
+            "stride": "(81, 27, 9, 3, 1)",
+            "address_mapping": "oc*81 + ic*27 + kd*9 + kh*3 + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, OC, D_out, H_out, W_out)",
+            "stride": "(15252992, 238328, 3844, 62, 1)",
+            "address_mapping": "n*15252992 + oc*238328 + d*3844 + h*62 + w"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.kernel_size[0]"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.stride[0]"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.padding[0]"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv3d.dilation[0]"
+          },
+          "C_in": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "in_channels = 3"
+          },
+          "C_out": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "out_channels = 64"
+          }
+        },
+        "TDD_requirement": "数值对拍参考：PyTorch nn.Conv3d 或 F.conv3d。重点检查输出形状(16,64,62,62,62)，以及边界位置（如d,h,w=0,61）的输出值，确保与参考一致。建议使用小形状（如batch=1, in_c=1, out_c=1, input=4, kernel=3, stride=1, pad=0）冒烟验证形状(1,1,2,2,2)和数值。fp32累加容忍相对误差1e-5，绝对误差1e-6。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "matmul",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "A",
+            "kind": "tensor"
+          },
+          {
+            "name": "B",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "C",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "C[i, j] = sum_{k=0}^{K-1} A[i, k] * B[k, j], with i in [0, M-1], j in [0, N-1].",
+        "boundary_treatment": "All indices are within valid bounds; no special boundary handling.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "8205"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "5921"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, K)",
+              "binding": "static",
+              "value": "2949",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "A": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.A",
+            "layout": "(M, K)",
+            "stride": "(2949, 1)",
+            "address_mapping": "i * 2949 + k"
+          },
+          "B": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.B",
+            "layout": "(K, N)",
+            "stride": "(5921, 1)",
+            "address_mapping": "k * 5921 + j"
+          },
+          "C": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(M, N)",
+            "stride": "(5921, 1)",
+            "address_mapping": "i * 5921 + j"
+          },
+          "M": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 8205"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 5921"
+          },
+          "K": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 2949"
+          }
+        },
+        "TDD_requirement": "需通过数值对拍验证矩阵乘法结果。重点检查不同M、N、K下的形状正确性和数值精度（容忍度1e-5）。建议用小形状如(2,3)*(3,4)冒烟测试，再用完整形状(8205,2949)*(2949,5921)对拍。"
+      }
+    ]
+  }
+}

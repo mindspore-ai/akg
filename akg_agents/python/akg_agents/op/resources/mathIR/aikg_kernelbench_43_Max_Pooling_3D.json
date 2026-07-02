@@ -1,0 +1,133 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "maxpool3d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "K",
+            "kind": "scalar"
+          },
+          {
+            "name": "S",
+            "kind": "scalar"
+          },
+          {
+            "name": "P",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入 X ∈ ℝ^{16×32×128×128×128}，输出 Y ∈ ℝ^{16×32×62×62×62}。参数：K=3 (kernel_size), S=2 (stride), P=1 (padding), D=3 (dilation)。对于 n∈[0,16), c∈[0,32), d∈[0,62), h∈[0,62), w∈[0,62)：\nY[n,c,d,h,w] = max_{i=0}^{2} max_{j=0}^{2} max_{k=0}^{2} X̂[n,c, d·S + i·D - P, h·S + j·D - P, w·S + k·D - P]\n其中 X̂[n,c,x,y,z] 定义为：若 0≤x<128, 0≤y<128, 0≤z<128 则 X̂[n,c,x,y,z]=X[n,c,x,y,z]；否则为 -∞。",
+        "boundary_treatment": "输出空间尺寸按 floor 模式（ceil_mode=False）计算：D_out = floor((128 + 2*1 - 3*(3-1) - 1)/2 + 1) = 62，同理 H_out=62, W_out=62。使用 -∞ 填充输入边界，因此窗口超出输入范围的元素贡献被忽略。MLIR 实现中，先分配填充张量（各维增加 2*P），初始化为 0xFF800000（即 -inf），再将原输入复制到中心区域。核内索引通过 affine_map (d0*2 + d1*3) 计算实际读取位置，对应 d_out*S + k*D，结合填充偏移后恰好对应上述公式。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, 16)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, 32)",
+              "binding": "static",
+              "value": "32"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, 62)",
+              "binding": "static",
+              "value": "62"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, 3)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "max",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(16, 32, 128, 128, 128)",
+            "stride": "连续布局，步长为 (32*128^3, 128^3, 128^2, 128, 1) = (67108864, 2097152, 16384, 128, 1)，假设偏移为0",
+            "address_mapping": "address(n,c,d,h,w) = n*67108864 + c*2097152 + d*16384 + h*128 + w"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(16, 32, 62, 62, 62)",
+            "stride": "连续布局，步长为 (32*62^3, 62^3, 62^2, 62, 1) = (7626496, 238328, 3844, 62, 1)，假设偏移为0",
+            "address_mapping": "address(n,c,d,h,w) = n*7626496 + c*238328 + d*3844 + h*62 + w"
+          },
+          "K": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.kernel_size"
+          },
+          "S": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.stride"
+          },
+          "P": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.padding"
+          },
+          "D": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.maxpool.dilation"
+          }
+        },
+        "TDD_requirement": "需要与 PyTorch 的 nn.MaxPool3d 在相同参数下进行数值对拍。重点验证：输出形状是否为 (16,32,62,62,62)；边界窗口（如空间坐标 0 和 61）的 max 计算是否正确，尤其 dilation=3 时窗口元素的选取；-inf 填充是否被正确处理，不引入 NaN 或错误 max；多通道和批次间是否独立。建议使用 N=1,C=1 的小尺寸（如 D=5,H=5,W=5）手动验证窗口计算，再用完整输入大小对比。容忍误差为0（fp32 max 无累积误差）。"
+      }
+    ]
+  }
+}

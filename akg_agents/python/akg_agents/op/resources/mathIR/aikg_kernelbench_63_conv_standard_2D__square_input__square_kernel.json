@@ -1,0 +1,106 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n][oc][i][j] = Σ_{ic=0}^{15} Σ_{kh=0}^{2} Σ_{kw=0}^{2} X[n][ic][i+kh][j+kw] * W[oc][ic][kh][kw]",
+        "boundary_treatment": "Zero padding; stride=1, dilation=1. Output spatial size H_out=W_out=1022. All input indices accessed (i+kh, j+kw) for i∈[0,1021], kh∈[0,2] remain within [0,1023], which is strictly less than 1024, thus no out-of-bound access.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "16"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "i",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "1022"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "1022"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "16",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "3",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H, W)",
+            "stride": "(16777216, 1048576, 1024, 1)",
+            "address_mapping": "n * 16777216 + c_in * 1048576 + h * 1024 + w"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C_out, C_in, K_h, K_w)",
+            "stride": "(144, 9, 3, 1)",
+            "address_mapping": "oc * 144 + ic * 9 + kh * 3 + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "(133693952, 1044484, 1022, 1)",
+            "address_mapping": "n * 133693952 + oc * 1044484 + i * 1022 + j"
+          }
+        },
+        "TDD_requirement": "参考 PyTorch nn.Conv2d eager 实现进行数值对拍。重点验证输出形状 (16,128,1022,1022) 正确性，卷积滑窗索引无越界。由于无 bias，fp32 累加可能因并行度产生舍入，单线程下应与 PyTorch 严格一致。建议先用小尺寸 (batch=2, in_ch=3, out_ch=4, H=5, W=5, K=3) 冒烟测试通道与空间映射，再用完整尺寸对拍。容忍误差建议 ≤1e-5 相对误差。"
+      }
+    ]
+  }
+}

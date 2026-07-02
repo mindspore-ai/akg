@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "reverse_cumsum_fused",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "给定输入 x ∈ ℝ^{32768×32768}，dim = 1。输出 y 与 x 同形。对于任意 b ∈ [0, 32767]（第0维批次索引），d ∈ [0, 32767]（dim=1维索引），有：y[b,d] = Σ_{k=d}^{32767} x[b,k]",
+        "boundary_treatment": "若输入沿 dim 的维度大小为 0，则输出 y 在该维度也为 0，得到空张量；否则对于任意有效索引，求和无越界，范围固定为从当前 dim 索引到末尾。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "b",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "d",
+              "range": "[0, 32768)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[d, 32768)",
+              "binding": "runtime",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "x": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "b * 32768 + d"
+          },
+          "y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(32768, 32768)",
+            "stride": "(32768, 1)",
+            "address_mapping": "b * 32768 + d"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "与 PyTorch eager 结果数值对拍。重点检查不同 dim 值（0、1）、不同形状（如 (1,1)、(2,3) 及 (32768,32768)）下的正确性。验证逆序累加语义，即 y[i]=Σ_{j>=i}x[j]。容忍值 0。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose3d_scale1_fused",
+        "next_expressions": ["avgpool3d_bias_scale2_fused"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" },
+          { "name": "S1", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×D_in×H_in×W_in}, N=128, C_in=3, D_in=16, H_in=W_in=32。ConvTranspose3d 权重 W_deconv ∈ R^{C_in×C_out×K×K×K} (C_out=16, K=3), 偏置 B_deconv ∈ R^{C_out}, stride=S_c=2, padding=P=1, output_padding=0, dilation=1。输出 D_o=(D_in-1)*S_c-2P+K = (16-1)*2-2+3 = 31, 同理 H_o=W_o=(32-1)*2-2+3=63。先做 deconv：Z[n,c_o,d,h,w] = B_deconv[c_o] + Σ_{c_i,k_d,k_h,k_w} I_valid · X[n,c_i,d_i,h_i,w_i] · W_deconv[c_i,c_o,k_d,k_h,k_w]。然后乘以 scalar S1（learnable parameter, 标量 tensor）：Y1[n,c_o,d,h,w] = Z[n,c_o,d,h,w] · S1。",
+        "boundary_treatment": "仅当反推得 (d_i,h_i,w_i) 三者均能被 S_c 整除且落在合法范围内时累加；bias 加在 c_o 维；S1 是 0-d 标量参数，对全张量乘法。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d", "range": "[0, D_o)", "binding": "static", "value": "31" },
+            { "symbol": "h", "range": "[0, H_o)", "binding": "static", "value": "63" },
+            { "symbol": "w", "range": "[0, W_o)", "binding": "static", "value": "63" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_d", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K)", "binding": "static", "value": "3", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, D_in, H_in, W_in) = (128, 3, 16, 32, 32)",
+            "stride": "(C_in*D_in*H_in*W_in, D_in*H_in*W_in, H_in*W_in, W_in, 1) = (49152, 16384, 1024, 32, 1)",
+            "address_mapping": "addr_X(n,c_i,d_i,h_i,w_i) = X_ptr + n*49152 + c_i*16384 + d_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K, K, K) = (3, 16, 3, 3, 3)",
+            "stride": "(C_out*K*K*K, K*K*K, K*K, K, 1) = (432, 27, 9, 3, 1)",
+            "address_mapping": "addr_W_deconv(c_i,c_o,k_d,k_h,k_w) = W_deconv_ptr + c_i*432 + c_o*27 + k_d*9 + k_h*3 + k_w",
+            "unpack_hint": "⚠️ ConvTranspose3d 权重布局为 (C_in, C_out, K_d, K_h, K_w)，与 Conv3d 的 (C_out, C_in, ...) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_d, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (16)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "S1": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scale1 (= 0.5)"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_scale1_fused.output",
+            "layout": "(N, C_out, D_o, H_o, W_o) = (128, 16, 31, 63, 63)",
+            "stride": "(C_out*D_o*H_o*W_o, D_o*H_o*W_o, H_o*W_o, W_o, 1) = (1968624, 123039, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n,c_o,d,h,w) = Y1_ptr + n*1968624 + c_o*123039 + d*3969 + h*63 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 nn.ConvTranspose3d(3,16,3,stride=2,padding=1) 前向乘 self.scale1，eval 模式。精度模式：含 conv-transpose 阶段，tl.dot+fp32 时声明 input_precision='ieee' 或 'tf32x3'。容忍值三步：步骤 1 ε_op=1.2e-7, K=C_in·K^3=81, ε_total≈1.1e-6, rtol_base=atol_base=1.1e-5；步骤 2（cuDNN 修正）参考走 cuDNN+TF32, rtol=atol=max(1.1e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,16,31,63,63)，验证 D_o=(D_in-1)*S-2P+K=31；(b) weight 解包顺序 (C_in,C_out,K,K,K)；(c) bias 在 c_o；(d) scale 对所有元素乘 0.5。失败诊断：(i) 数值整体偏 2 倍 → scale1 未应用或位置错；(ii) shape 错 → output_padding 取 1 而非 0；(iii) diff 1e-4~1e-3 → cuDNN TF32 正常。"
+      },
+      {
+        "name": "avgpool3d_bias_scale2_fused",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "B_bias", "kind": "tensor" },
+          { "name": "S2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C_out×D_o×H_o×W_o}, D_o=31, H_o=W_o=63。AvgPool3d kernel=2 stride=2 padding=0。输出 D_p=⌊D_o/2⌋=15, H_p=W_p=⌊63/2⌋=31。P[n,c,d,h,w] = (1/8) · Σ_{δ_d,δ_h,δ_w∈[0,2)} Y1[n,c,d·2+δ_d, h·2+δ_h, w·2+δ_w]。再加 bias 并乘 S2: Y[n,c,d,h,w] = (P[n,c,d,h,w] + B_bias[c,0,0,0]) · S2。B_bias 形状 (C_out,1,1,1) 沿空间广播；S2 为 0-d 标量参数。该 expression 融合 AvgPool3d、bias 加法和 scaling。",
+        "boundary_treatment": "AvgPool3d 在完整 2×2×2 窗口取平均；31/63 输入除 2 向下取整，余 1 行/列/层被丢弃 (PyTorch 默认 ceil_mode=False)；逐元素加法和乘法无边界问题。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C_out)", "binding": "static", "value": "16" },
+            { "symbol": "d", "range": "[0, D_p)", "binding": "static", "value": "15" },
+            { "symbol": "h", "range": "[0, H_p)", "binding": "static", "value": "31" },
+            { "symbol": "w", "range": "[0, W_p)", "binding": "static", "value": "31" }
+          ],
+          "reduction": [
+            { "symbol": "δ_d", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "δ_h", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "mean", "accumulator_precision": "fp32" },
+            { "symbol": "δ_w", "range": "[0, K_p)", "binding": "static", "value": "2", "reduction_type": "mean", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose3d_scale1_fused.output",
+            "layout": "(N, C_out, D_o, H_o, W_o) = (128, 16, 31, 63, 63)",
+            "stride": "(1968624, 123039, 3969, 63, 1)",
+            "address_mapping": "addr_Y1(n,c,d_in,h_in,w_in) = Y1_ptr + n*1968624 + c*123039 + d_in*3969 + h_in*63 + w_in"
+          },
+          "B_bias": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bias",
+            "layout": "(C_out, 1, 1, 1) = (16, 1, 1, 1)",
+            "stride": "(1, 1, 1, 1)",
+            "address_mapping": "addr_B_bias(c,0,0,0) = B_bias_ptr + c"
+          },
+          "S2": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.scale2 (= 1.0)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, D_p, H_p, W_p) = (128, 16, 15, 31, 31)",
+            "stride": "(C_out*D_p*H_p*W_p, D_p*H_p*W_p, H_p*W_p, W_p, 1) = (230640, 14415, 961, 31, 1)",
+            "address_mapping": "addr_Y(n,c,d,h,w) = Y_ptr + n*230640 + c*14415 + d*961 + h*31 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.AvgPool3d(kernel_size=2)(Y1) + self.bias 后乘 self.scale2，eval 模式。精度模式：手写 FMA + fp32 累加，纯逐元素 + 小 K reduction (8)。容忍值三步：步骤 1 ε_op=1.2e-7, K=8, ε_total≈1.2e-7·sqrt(8)=3.4e-7, rtol_base=atol_base=3.4e-6；步骤 2 不触发；步骤 3 不触发。最终 **rtol = atol = 1e-6**（纯逐元素+小 K 池化）。结构性检查：(a) shape=(128,16,15,31,31)，验证 D_p=⌊31/2⌋=15, H_p=W_p=⌊63/2⌋=31；(b) bias 沿空间广播；(c) ceil_mode=False 丢弃残余。失败诊断：(i) shape 多 1 维 → ceil_mode 取 True；(ii) 整体偏移恒定 → bias 索引错；(iii) 整体偏 8 倍 → mean 除数错。"
+      }
+    ]
+  }
+}

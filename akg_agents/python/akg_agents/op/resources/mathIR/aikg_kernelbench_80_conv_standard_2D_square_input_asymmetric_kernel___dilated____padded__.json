@@ -1,0 +1,170 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv2d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W",
+            "kind": "tensor"
+          },
+          {
+            "name": "P_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "P_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "S_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "S_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "D_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "D_w",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_h",
+            "kind": "scalar"
+          },
+          {
+            "name": "K_w",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Given input X with shape (N, C_in, H_in, W_in) and weight W with shape (C_out, C_in, K_h, K_w), the output Y is computed as a 2D convolution with stride (S_h, S_w), dilation (D_h, D_w), and zero-padding (P_h, P_w). The output spatial dimensions are:\nH_out = floor((H_in + 2*P_h - D_h*(K_h - 1) - 1) / S_h + 1)\nW_out = floor((W_in + 2*P_w - D_w*(K_w - 1) - 1) / S_w + 1)\nFor n in [0, N-1], oc in [0, C_out-1], h in [0, H_out-1], w in [0, W_out-1]:\n  Y[n, oc, h, w] = sum_{ic=0}^{C_in-1} sum_{kh=0}^{K_h-1} sum_{kw=0}^{K_w-1} \n      X[n, ic, h*S_h + kh*D_h - P_h, w*S_w + kw*D_w - P_w] * W[oc, ic, kh, kw]\nwhere X[n, ic, ih, iw] is taken as 0 if ih < 0 or ih >= H_in or iw < 0 or iw >= W_in (zero padding).",
+        "boundary_treatment": "The input X is implicitly zero-padded. Specifically, P_h rows of zeros are added above and below, and P_w columns of zeros are added to the left and right. Any convolution window accessing indices outside [0, H_in-1] × [0, W_in-1] receives zero values. This corresponds to the standard 'zeros' padding mode in PyTorch. There is no output padding or other boundary adjustments.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "8"
+            },
+            {
+              "symbol": "oc",
+              "range": "[0, C_out)",
+              "binding": "static",
+              "value": "64"
+            },
+            {
+              "symbol": "h",
+              "range": "[0, H_out)",
+              "binding": "static",
+              "value": "508"
+            },
+            {
+              "symbol": "w",
+              "range": "[0, W_out)",
+              "binding": "static",
+              "value": "496"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "ic",
+              "range": "[0, C_in)",
+              "binding": "static",
+              "value": "32",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kh",
+              "range": "[0, K_h)",
+              "binding": "static",
+              "value": "5",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "kw",
+              "range": "[0, K_w)",
+              "binding": "static",
+              "value": "9",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in)",
+            "stride": "[8388608, 262144, 512, 1]",
+            "address_mapping": "offset = n * 8388608 + ic * 262144 + ih * 512 + iw"
+          },
+          "W": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv2d.weight",
+            "layout": "(C_out, C_in, K_h, K_w)",
+            "stride": "[1440, 45, 9, 1]",
+            "address_mapping": "offset = oc * 1440 + ic * 45 + kh * 9 + kw"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C_out, H_out, W_out)",
+            "stride": "[16125952, 251968, 496, 1]",
+            "address_mapping": "offset = n * 16125952 + oc * 251968 + h * 496 + w"
+          },
+          "P_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.padding[0]"
+          },
+          "P_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.padding[1]"
+          },
+          "S_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.stride[0]"
+          },
+          "S_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.stride[1]"
+          },
+          "D_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.dilation[0]"
+          },
+          "D_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.dilation[1]"
+          },
+          "K_h": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.kernel_size[0]"
+          },
+          "K_w": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.conv2d.kernel_size[1]"
+          }
+        },
+        "TDD_requirement": "使用PyTorch eager模式作为参考实现进行数值对拍。重点检查：1) 输入/输出shape正确性(N=8, C_in=32, H=512, W=512 -> H_out=508, W_out=496)；2) 带dilation和padding的坐标计算是否正确，尤其是边界索引(ih<0, ih>=512, iw<0, iw>=512)的处理（需返回0）；3) 权重布局(C_out, C_in, K_h, K_w)与求和顺序一致；4) 累加器精度为fp32，逐一乘加无融合损失。建议用小shape(如H=W=16, kernel=3, dilation=2, padding=1)冒烟，覆盖越界和中心区域，再使用完整尺寸对拍。容忍值可设为与PyTorch eager结果完全一致（bit-wise），因全为fp32且无随机性。"
+      }
+    ]
+  }
+}

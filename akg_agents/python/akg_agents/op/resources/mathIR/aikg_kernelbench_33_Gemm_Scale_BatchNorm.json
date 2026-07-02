@@ -1,0 +1,229 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "gemm_scale_fused",
+        "next_expressions": [
+          "batchnorm1d"
+        ],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "W_gemm",
+            "kind": "tensor"
+          },
+          {
+            "name": "B_gemm",
+            "kind": "tensor"
+          },
+          {
+            "name": "S_scale",
+            "kind": "tensor"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "输入 X ∈ R^{N×I}，权重 W_gemm ∈ R^{O×I}，偏置 B_gemm ∈ R^{O}，scale 参数 S_scale ∈ R^{O}。先线性变换再逐元素缩放：Y1[n,o] = (Σ_{i=0}^{I-1} X[n,i] · W_gemm[o,i] + B_gemm[o]) · S_scale[o]。本题 N=128, I=1024, O=512。融合 Linear + 缩放两阶段。",
+        "boundary_treatment": "全连接 + 逐元素 mul，无边界处理；S_scale 沿 batch 维广播；eval 模式无随机性。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "o",
+              "range": "[0, O)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "i",
+              "range": "[0, I)",
+              "binding": "static",
+              "value": "1024",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, I) = (128, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_X(n, i) = X_ptr + n*1024 + i"
+          },
+          "W_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.weight",
+            "layout": "(O, I) = (512, 1024)",
+            "stride": "(I, 1) = (1024, 1)",
+            "address_mapping": "addr_W_gemm(o, i) = W_gemm_ptr + o*1024 + i"
+          },
+          "B_gemm": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.gemm.bias",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_gemm(o) = B_gemm_ptr + o"
+          },
+          "S_scale": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.scale",
+            "layout": "(O) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_S_scale(o) = S_scale_ptr + o"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_scale_fused.output",
+            "layout": "(N, O) = (128, 512)",
+            "stride": "(O, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, o) = Y1_ptr + n*512 + o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 torch.manual_seed(0) 下 self.gemm(x) * self.scale（eval 模式）。精度模式：未走 tl.dot 时为手写 FMA + fp32 累加器，天然 IEEE fp32 语义；若 codegen 走 tl.dot+fp32 必须显式声明 input_precision='ieee' 或 'tf32x3'，禁止默认 TF32。容忍值推导分三步：步骤 1 ε_op=1.2e-7（fp32 FMA），K=I=1024，ε_total≈1.2e-7×sqrt(1024)=3.84e-6，留 10x 得 rtol_base=atol_base=4e-5；步骤 2 参考含 nn.Linear 走 cuBLAS，A100 默认开 TF32，rtol=atol=max(4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2 的 cuBLAS TF32。结构性检查：(a) shape=(128,512)；(b) scale 沿 batch 广播；(c) bias 在 reduction 后加。冒烟：(2,4,8) → 完整 (128,1024,512)。失败诊断：diff 1e-4~1e-3 → cuBLAS TF32 预期；某 o 整列偏 → bias 或 scale 索引错；量级倍数偏差 → scale 漏乘或多乘。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "Use a tiled tl.dot GEMM for Linear/Matmul producer and fuse only cheap declared epilogues on the accumulator. PyTorch nn.Linear weight layout is (O, I); load the B tile as W[o, i] with output features on columns and reduction i on rows.",
+          "suggested_tile": {
+            "preferred_variant": "linear_tl_dot_epilogue",
+            "BLOCK_M": 32,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "O": 512,
+            "I": 1024
+          },
+          "forbidden_lowerings": [
+            "Manual tl.static_range over BLOCK_K with a[:, k] or b[k, :] tensor indexing.",
+            "Treat original Linear weight pointer as contiguous (I, O) without explicitly packing/transposing it.",
+            "Use non-power-of-two tl.arange tile extents such as O=20 or I=10 directly.",
+            "Fuse a training-mode BatchNorm into a single GEMM epilogue without computing batch statistics over N."
+          ]
+        }
+      },
+      {
+        "name": "batchnorm1d",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "Y1",
+            "kind": "tensor"
+          },
+          {
+            "name": "gamma",
+            "kind": "tensor"
+          },
+          {
+            "name": "beta",
+            "kind": "tensor"
+          },
+          {
+            "name": "eps",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。输入 Y1 ∈ R^{N×C}，BatchNorm1d 在 training=True 模式下使用当前 batch 统计量；在 eval 模式使用 running_mean、running_var。本题模型未显式调用 .eval()，按 KernelBench 通常 training 默认值，采用 training=True 公式：对每个通道 c∈[0,C-1]，μ_c = (1/N) · Σ_{n=0}^{N-1} Y1[n,c]；σ²_c = (1/N) · Σ_{n=0}^{N-1} (Y1[n,c] - μ_c)²。输出 Y[n,c] = gamma[c] · (Y1[n,c] - μ_c) / √(σ²_c + ε) + beta[c]。本题 N=128, C=512, ε=1e-5, momentum=0.1。",
+        "boundary_treatment": "BN1d 在通道维做归一化，沿 batch 维 reduce；无空间维；training/eval 行为不同：training 用 batch 统计、eval 用 running 统计；KernelBench 对拍按模型默认行为。\n【BatchNorm verifier 语义，以此为准】当前 KernelBench/AIKG verifier 实例化模型后不调用 model.eval()；BatchNorm{1,2,3}d 按 training=True 前向，输出使用当前输入 batch 统计量而不是 running_mean/running_var。均值/方差按每个通道在 N 以及空间维上规约，方差使用 unbiased=False；running stats 只由 PyTorch 模块更新，不参与输出对拍。因此如果本条 formula 或旧描述中仍出现 eval/running_mean/running_var/μ_bn/var_bn，请按 μ_batch/var_batch 的当前输入统计量替换。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "c",
+              "range": "[0, C)",
+              "binding": "static",
+              "value": "512"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "k",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            },
+            {
+              "symbol": "n_bn",
+              "range": "[0, 128)",
+              "binding": "static",
+              "value": "128",
+              "reduction_type": "mean",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.gemm_scale_fused.output",
+            "layout": "(N, C) = (128, 512)",
+            "stride": "(C, 1) = (512, 1)",
+            "address_mapping": "addr_Y1(n, c) = Y1_ptr + n*512 + c"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.weight",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.bn.bias",
+            "layout": "(C) = (512)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.bn.eps (1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C) = (128, 512)",
+            "stride": "(C, 1) = (512, 1)",
+            "address_mapping": "addr_Y(n, c) = Y_ptr + n*512 + c"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现为 nn.BatchNorm1d(out_features, eps=1e-5, momentum=0.1)(Y1)，按模型默认 training 模式（KernelBench 默认 training=True 时用 batch 统计）。精度模式：均值/方差的 sum 走 fp32 累加器，IEEE fp32 语义。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=N=128，ε_total≈1.2e-7×sqrt(128)≈1.36e-6，留 10x 得 1.4e-5；步骤 2 参考含 BatchNorm 强制 rtol=atol=max(1.4e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素是步骤 2。结构性检查：(a) shape=(128,512)；(b) 每通道均值≈0、方差≈1（gamma=1, beta=0 时）；(c) eps 在 sqrt 内部；(d) affine 是否生效。冒烟：(8, 16) → 完整 (128,512)。失败诊断：(i) diff 1e-3 量级 → 预期；(ii) 数值全偏 → 用错 training/eval 统计源；(iii) 个别通道异常 → eps 漏加或 sqrt 顺序错。\n【BatchNorm 自测要求】参考实现保持模型默认 training=True，不要调用 eval()；按当前输入计算 batch mean/var（unbiased=False），不要读取 running_mean/running_var 作为输出统计源。\n【归约自测容忍度】若输入来自 Conv/ConvTranspose/GEMM 参考，upstream cuDNN/cuBLAS TF32 误差会传播到后续 min/sum/mean/pool；子表达式对拍使用 torch.allclose 并保留 rtol/atol 至少 1e-3，不要用过严的 1e-5 单点 max_abs 作为失败条件。",
+        "lowering_contract": {
+          "preferred_schedule": "BatchNorm in this verifier is a training-mode normalization stage. Compute per-channel batch statistics over N and spatial axes with fp32 tl.sum; then apply affine and any declared cheap elementwise/pool consumer. Do not use running_mean/running_var as output statistics.\nNormalization is a reduction/statistics stage, not a GEMM. Use vectorized tl.sum/tl.max over the logical normalized axes with fp32 accumulators; keep batch/channel/spatial broadcasting exactly as MathIR formula and apply affine parameters after statistics.",
+          "forbidden_lowerings": [
+            "Use running_mean/running_var for BatchNorm output when source verifier runs training mode.",
+            "Call model.eval() in the self-test reference for this BatchNorm expression.",
+            "Use tl.dot for BatchNorm mean/variance statistics.",
+            "Drop keepdim/broadcast dimensions required by the formula.",
+            "Use tl.dot for BatchNorm/GroupNorm/InstanceNorm/LayerNorm statistics.",
+            "Normalize over channel when MathIR says the last dimension, or vice versa."
+          ]
+        }
+      }
+    ]
+  }
+}

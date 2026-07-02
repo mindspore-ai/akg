@@ -1,0 +1,143 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "conv_transpose2d_gelu_fused",
+        "next_expressions": ["group_norm"],
+        "consumes": [
+          { "name": "X", "kind": "tensor" },
+          { "name": "W_deconv", "kind": "tensor" },
+          { "name": "B_deconv", "kind": "tensor" },
+          { "name": "C_half", "kind": "scalar" },
+          { "name": "C_sqrt2", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y1", "kind": "tensor" }
+        ],
+        "formula": "设输入 X ∈ R^{N×C_in×H_in×W_in}，转置卷积权重 W_deconv ∈ R^{C_in×C_out×K_h×K_w}，偏置 B_deconv ∈ R^{C_out}。stride=S=2, padding=0, output_padding=0, dilation=1, groups=1。输出 H_out=W_out=(H_in-1)*S - 2*0 + K + 0 = (32-1)*2 + 4 = 66。先做 ConvTranspose2d: Z[n,c_o,h_o,w_o] = B_deconv[c_o] + Σ_{c_i} Σ_{k_h} Σ_{k_w} I_valid · X[n,c_i,h_i,w_i] · W_deconv[c_i,c_o,k_h,k_w]，其中 h_i=(h_o-k_h)/S, w_i=(w_o-k_w)/S，仅当二者均能被 S 整除且落在 [0,H_in)×[0,W_in) 内时项有效。再逐元素做 GELU (精确 erf): Y1[n,c_o,h_o,w_o] = C_half · Z[n,c_o,h_o,w_o] · (1 + erf(Z[n,c_o,h_o,w_o] / C_sqrt2))。本题 N=128, C_in=32, C_out=64, H_in=W_in=32, K_h=K_w=4, H_out=W_out=66, C_half=0.5, C_sqrt2=√2≈1.41421356。融合 ConvTranspose 与 GELU。",
+        "boundary_treatment": "ConvTranspose 仅在反推索引 (h_i,w_i) 为整数且落在合法范围 [0,H_in)×[0,W_in) 内时累加；padding=0/output_padding=0；GELU 对所有实数定义良好。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c_o", "range": "[0, C_out)", "binding": "static", "value": "64" },
+            { "symbol": "h_o", "range": "[0, H_out)", "binding": "static", "value": "66" },
+            { "symbol": "w_o", "range": "[0, W_out)", "binding": "static", "value": "66" }
+          ],
+          "reduction": [
+            { "symbol": "c_i", "range": "[0, C_in)", "binding": "static", "value": "32", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, K_h)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, K_w)", "binding": "static", "value": "4", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, C_in, H_in, W_in) = (128, 32, 32, 32)",
+            "stride": "(C_in*H_in*W_in, H_in*W_in, W_in, 1) = (32768, 1024, 32, 1)",
+            "address_mapping": "addr_X(n, c_i, h_i, w_i) = X_ptr + n*32768 + c_i*1024 + h_i*32 + w_i"
+          },
+          "W_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.weight",
+            "layout": "(C_in, C_out, K_h, K_w) = (32, 64, 4, 4)",
+            "stride": "(C_out*K_h*K_w, K_h*K_w, K_w, 1) = (1024, 16, 4, 1)",
+            "address_mapping": "addr_W_deconv(c_i, c_o, k_h, k_w) = W_deconv_ptr + c_i*1024 + c_o*16 + k_h*4 + k_w",
+            "unpack_hint": "⚠️ 转置卷积权重布局为 (C_in, C_out, K_h, K_w)，与 Conv2d 的 (C_out, C_in, K_h, K_w) 顺序相反。PyTorch 解包必须为 (c_in, c_out, k_h, k_w) = self.conv_transpose.weight.shape，切勿对调前两维。"
+          },
+          "B_deconv": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.conv_transpose.bias",
+            "layout": "(C_out) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_B_deconv(c_o) = B_deconv_ptr + c_o"
+          },
+          "C_half": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "常数 0.5"
+          },
+          "C_sqrt2": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "math.sqrt(2.0) ≈ 1.4142135623730951"
+          },
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_gelu_fused.output",
+            "layout": "(N, C_out, H_out, W_out) = (128, 64, 66, 66)",
+            "stride": "(C_out*H_out*W_out, H_out*W_out, W_out, 1) = (278784, 4356, 66, 1)",
+            "address_mapping": "addr_Y1(n, c_o, h_o, w_o) = Y1_ptr + n*278784 + c_o*4356 + h_o*66 + w_o"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 torch.manual_seed(0) 下 nn.ConvTranspose2d(32, 64, kernel_size=4, stride=2) 前向 + F.gelu(precise erf) eval 模式。精度模式：ConvTranspose 累加用 fp32，GELU 逐元素调用 libdevice erf 约 1 ULP；走 tl.dot+fp32 必须 input_precision='ieee' 或 'tf32x3'。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_in*K_h*K_w=32*4*4=512，ε_total≈1.2e-7*sqrt(512)≈2.7e-6，10x 余量 rtol_base=atol_base=3e-5；步骤 2 参考含 nn.ConvTranspose2d 走 cuDNN，A100 默认 TF32，强制 rtol=atol=max(3e-5, 1e-3)=1e-3；步骤 3 不触发。最终 **rtol = atol = 1e-3**，主导因素步骤 2 cuDNN TF32。结构性检查：(a) 输出 shape=(128,64,66,66)，验证 (H_in-1)*S+K=66；(b) weight 解包必须 (C_in, C_out)=(32, 64) 顺序；(c) GELU 使用精确 erf（PyTorch 默认 approximate='none'）；(d) 验证 GELU(0)=0 数值精度。失败诊断：(i) diff≈1e-4~1e-3 → cuDNN TF32 预期；(ii) diff≫1e-3 → weight 解包顺序对调；(iii) GELU 数值与 PyTorch 偏差大 → 误用 tanh 近似。"
+      },
+      {
+        "name": "group_norm",
+        "next_expressions": [],
+        "consumes": [
+          { "name": "Y1", "kind": "tensor" },
+          { "name": "gamma", "kind": "tensor" },
+          { "name": "beta", "kind": "tensor" },
+          { "name": "num_groups", "kind": "scalar" },
+          { "name": "eps", "kind": "scalar" }
+        ],
+        "produces": [
+          { "name": "Y", "kind": "tensor" }
+        ],
+        "formula": "设输入 Y1 ∈ R^{N×C×H×W}，GroupNorm 把 C 通道分成 G 组，每组 C_g=C/G。可学习参数 gamma ∈ R^{C}, beta ∈ R^{C}, eps=1e-5。对每个 (n, g)，组内索引集合 I_g={g·C_g, ..., (g+1)·C_g-1}。组内均值 μ[n,g]=(1/(C_g·H·W))·Σ_{c∈I_g}Σ_{h,w} Y1[n,c,h,w]；组内方差 σ²[n,g]=(1/(C_g·H·W))·Σ_{c∈I_g}Σ_{h,w} (Y1[n,c,h,w]-μ[n,g])²。输出 Y ∈ R^{N×C×H×W}: 对任意 c∈I_g, Y[n,c,h,w] = gamma[c] · (Y1[n,c,h,w] - μ[n,g]) / sqrt(σ²[n,g] + eps) + beta[c]。本题 N=128, C=64, G=8, C_g=8, H=W=66。",
+        "boundary_treatment": "在组内 (C_g, H, W) 上做完整 reduction，eps 加在 sqrt 内防止除零；G=8 整除 C=64，分组完整；nn.GroupNorm 默认 affine=True。",
+        "axis_mapping": {
+          "parallel": [
+            { "symbol": "n", "range": "[0, N)", "binding": "static", "value": "128" },
+            { "symbol": "c", "range": "[0, C)", "binding": "static", "value": "64" },
+            { "symbol": "h", "range": "[0, H)", "binding": "static", "value": "66" },
+            { "symbol": "w", "range": "[0, W)", "binding": "static", "value": "66" }
+          ],
+          "reduction": [
+            { "symbol": "k_c", "range": "[0, C_g)", "binding": "static", "value": "8", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_h", "range": "[0, H)", "binding": "static", "value": "66", "reduction_type": "sum", "accumulator_precision": "fp32" },
+            { "symbol": "k_w", "range": "[0, W)", "binding": "static", "value": "66", "reduction_type": "sum", "accumulator_precision": "fp32" }
+          ]
+        },
+        "symbol_binding": {
+          "Y1": {
+            "binding_kind": "expression_output",
+            "code_binding": "expr.conv_transpose2d_gelu_fused.output",
+            "layout": "(N, C, H, W) = (128, 64, 66, 66)",
+            "stride": "(C*H*W, H*W, W, 1) = (278784, 4356, 66, 1)",
+            "address_mapping": "addr_Y1(n, c, h, w) = Y1_ptr + n*278784 + c*4356 + h*66 + w"
+          },
+          "gamma": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.weight",
+            "layout": "(C) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_gamma(c) = gamma_ptr + c"
+          },
+          "beta": {
+            "binding_kind": "parameter_tensor",
+            "code_binding": "self.group_norm.bias",
+            "layout": "(C) = (64)",
+            "stride": "(1)",
+            "address_mapping": "addr_beta(c) = beta_ptr + c"
+          },
+          "num_groups": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.group_norm.num_groups (= 8)"
+          },
+          "eps": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "self.group_norm.eps (默认 1e-5)"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, C, H, W) = (128, 64, 66, 66)",
+            "stride": "(C*H*W, H*W, W, 1) = (278784, 4356, 66, 1)",
+            "address_mapping": "addr_Y(n, c, h, w) = Y_ptr + n*278784 + c*4356 + h*66 + w"
+          }
+        },
+        "TDD_requirement": "需要数值对拍。参考实现 nn.GroupNorm(num_groups=8, num_channels=64) eval 前向（affine=True，使用当前 batch 统计量）。精度模式：mean/var 用 fp32 累加（welford 或两遍法）；rsqrt 走 libdevice ~1 ULP。容忍值推导分三步：步骤 1 ε_op=1.2e-7，K=C_g*H*W=8*66*66=34848，ε_total≈1.2e-7*sqrt(34848)≈2.2e-5，10x 余量 rtol_base=atol_base=2.2e-4；步骤 2 不触发（GroupNorm 自身不走 cuDNN/cuBLAS）；步骤 3 不触发。最终 **rtol = atol = 1e-3**（适当放宽涵盖 var 数值稳定性差异 + 上游 cuDNN 输入容差传播）。结构性检查：(a) 输出 shape=(128,64,66,66)；(b) 每组 (n,g) 输出均值≈0、方差≈γ²；(c) eps 加在 sqrt 内；(d) γ/β 沿通道维生效；(e) G=8 整除 C=64。失败诊断：(i) NaN/inf → 未加 eps 或 var 公式溢出；(ii) 跨组串扰 → 错把 reduction 包含 group 间通道；(iii) γ/β 错位 → 检查通道索引；(iv) 与 PyTorch 偏差 1e-4~1e-3 → var 数值方法差异 + 上游 TF32 噪声传播，属预期。"
+      }
+    ]
+  }
+}

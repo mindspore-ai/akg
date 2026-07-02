@@ -1,0 +1,75 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "sum_reduction_keepdim",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "x",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "output",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[n, 0, m] = sum_{d=0}^{D-1} X[n, d, m] for n in [0, N), m in [0, M), where X has shape (N, D, M) and dim=1.",
+        "boundary_treatment": "All indices are within valid ranges; no padding or boundary conditions required.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "n",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "128"
+            },
+            {
+              "symbol": "m",
+              "range": "[0, M)",
+              "binding": "static",
+              "value": "4095"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "d",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "4096",
+              "reduction_type": "sum",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D, M)",
+            "stride": "(D*M, M, 1)",
+            "address_mapping": "offset = n * (D * M) + d * M + m"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, 1, M)",
+            "stride": "(M, M, 1)",
+            "address_mapping": "offset = n * M + m"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          }
+        },
+        "TDD_requirement": "对拍参考 PyTorch torch.sum。重点检查输出形状为 (N,1,M) 确保 keepdim=True，归约轴为 dim=1。无越界风险。建议小形状 (2,3,4) 冒烟，完整形状 (128,4096,4095) 对拍，fp32 允差 1e-5。"
+      }
+    ]
+  }
+}

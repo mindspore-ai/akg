@@ -1,0 +1,82 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "cumprod",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "dim",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "设输入张量 X ∈ ℝ^{N×D}，其中 N = batch_size = 32768, D = input_shape[0] = 32768。沿维度 dim (此处 dim=1) 计算累积乘积。输出张量 Y ∈ ℝ^{N×D}，其元素定义为：Y[i][k] = ∏_{j=0}^{k} X[i][j]，其中 i ∈ [0, N), k ∈ [0, D)。",
+        "boundary_treatment": "输入张量 X 至少为 dim+1 维。若 dim 维度大小为 0，则输出为空张量。当 k=0 时，Y[i][0] = X[i][0]；当 k>0 时，Y[i][k] = Y[i][k-1] * X[i][k]。无其他边界处理。",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "32768"
+            },
+            {
+              "symbol": "k",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "32768"
+            }
+          ],
+          "reduction": [
+            {
+              "symbol": "j",
+              "range": "[0, k]",
+              "binding": "runtime",
+              "reduction_type": "prod",
+              "accumulator_precision": "fp32"
+            }
+          ]
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + k"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + k"
+          },
+          "dim": {
+            "binding_kind": "scalar_parameter",
+            "code_binding": "self.dim"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size = 32768"
+          },
+          "D": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "input_shape[0] = 32768"
+          }
+        },
+        "TDD_requirement": "需与 torch.cumprod 直接对拍。重点检查形状正确性、dim 轴边界（k=0 和 k=D-1 处）的数值、不同 batch 间的独立性。建议用小形状 (N=3, D=4) 进行冒烟测试，再用完整形状 (N=32768, D=32768) 进行数值对拍，容忍相对误差 1e-5（fp32 累积）。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "code": {
+    "expressions": [
+      {
+        "name": "tanh",
+        "next_expressions": [],
+        "consumes": [
+          {
+            "name": "X",
+            "kind": "tensor"
+          },
+          {
+            "name": "N",
+            "kind": "scalar"
+          },
+          {
+            "name": "D",
+            "kind": "scalar"
+          }
+        ],
+        "produces": [
+          {
+            "name": "Y",
+            "kind": "tensor"
+          }
+        ],
+        "formula": "Y[i, j] = tanh(X[i, j]), for i in [0, N), j in [0, D)",
+        "boundary_treatment": "Element-wise operation with no boundary effects. The output shape is identical to the input shape; there is no padding, stride, or dilation.",
+        "axis_mapping": {
+          "parallel": [
+            {
+              "symbol": "i",
+              "range": "[0, N)",
+              "binding": "static",
+              "value": "4096"
+            },
+            {
+              "symbol": "j",
+              "range": "[0, D)",
+              "binding": "static",
+              "value": "393216"
+            }
+          ],
+          "reduction": []
+        },
+        "symbol_binding": {
+          "X": {
+            "binding_kind": "input_tensor",
+            "code_binding": "forward.x",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          },
+          "Y": {
+            "binding_kind": "model_output",
+            "code_binding": "forward.return",
+            "layout": "(N, D)",
+            "stride": "(D, 1)",
+            "address_mapping": "i * D + j"
+          },
+          "N": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "batch_size"
+          },
+          "D": {
+            "binding_kind": "scalar_constant",
+            "code_binding": "dim"
+          }
+        },
+        "TDD_requirement": "数值对拍参考 PyTorch 的 torch.tanh 函数。重点检查输出形状与输入一致（4096, 393216）。边界无特殊处理。建议先用小形状如 (2, 3) 冒烟测试，再用全尺寸输入对拍，误差容忍 fp32 下 1e-6。"
+      }
+    ]
+  }
+}
