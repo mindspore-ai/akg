@@ -15,7 +15,6 @@
  */
 
 #include <algorithm>
-#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -34,7 +33,6 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "akg/Dialect/NPUVector/Passes.h"
@@ -128,50 +126,12 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     return true;
   }
 
-  // Reorder `sizes` in place by `perm` (out[i] = in[perm[i]]). A no-op when the
-  // arities disagree (e.g. a shape-changing op broke the rank correspondence),
-  // which keeps the previous best-effort behavior instead of crashing.
-  static void permuteSizesInPlace(ArrayRef<int64_t> perm, SmallVectorImpl<Value> &sizes) {
-    if (perm.empty() || sizes.size() != perm.size()) {
-      return;
-    }
-    SmallVector<Value> tmp(sizes.begin(), sizes.end());
-    for (size_t i = 0; i < perm.size(); ++i) {
-      sizes[i] = tmp[perm[i]];
-    }
-  }
-
-  // If `defOp` is an npuvector.transpose, compose its permutation into `perm`
-  // (perm'[i] = tperm[perm[i]]) so that sizes recovered above the transpose are
-  // mapped back into the top-level value's layout. Left unchanged on arity
-  // mismatch (a shape-changing op broke the rank correspondence).
-  static void composeTransposePerm(Operation *defOp, SmallVectorImpl<int64_t> &perm) {
-    auto tp = llvm::dyn_cast<npuvector::TransposeOp>(defOp);
-    if (!tp) {
-      return;
-    }
-    ArrayRef<int64_t> tperm = tp.getPermutation();
-    if (tperm.size() != perm.size()) {
-      return;
-    }
-    SmallVector<int64_t> composed(perm.size());
-    for (size_t i = 0; i < perm.size(); ++i) {
-      composed[i] = tperm[perm[i]];
-    }
-    perm.assign(composed.begin(), composed.end());
-  }
-
   static bool tryExtractVecSizes(Value v, SmallVectorImpl<Value> &sizes, SmallVectorImpl<Value> &maxSizes) {
     sizes.clear();
     maxSizes.clear();
 
     llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
     Value cur = v;
-    // Accumulated permutation mapping the top-level dims to `cur`'s dim space
-    // (top[i] == cur[perm[i]]). It is composed with every npuvector.transpose
-    // met while walking up the def chain, so the sizes recovered at the source
-    // transfer_read are reordered back into the top-level value's layout.
-    SmallVector<int64_t> perm;
 
     while (cur) {
       auto vt = llvm::dyn_cast<npuvector::NPUVectorType>(cur.getType());
@@ -183,11 +143,6 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
       if (rank == 0) {
         return true;
       }
-      if (perm.empty()) {
-        for (int i = 0; i < rank; ++i) {
-          perm.push_back(i);
-        }
-      }
 
       Operation *defOp = cur.getDefiningOp();
       if ((defOp == nullptr) || !visited.insert(defOp).second) {
@@ -196,44 +151,25 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
 
       if (auto rd = llvm::dyn_cast<npuvector::TransferReadOp>(defOp)) {
         if (extractFromTransferRead(rd, rank, sizes, maxSizes)) {
-          permuteSizesInPlace(perm, sizes);
-          permuteSizesInPlace(perm, maxSizes);
           return true;
         }
       }
       if ((defOp->getDialect() != nullptr) && defOp->getDialect()->getNamespace() == "npuvector") {
         if (extractFromGenericNpuOp(defOp, rank, sizes, maxSizes)) {
-          permuteSizesInPlace(perm, sizes);
-          permuteSizesInPlace(perm, maxSizes);
           return true;
         }
         sizes.clear();
         maxSizes.clear();
       }
 
-      // Compose the transpose permutation before descending into its source, so
-      // sizes recovered further up the chain are mapped back through it.
-      composeTransposePerm(defOp, perm);
-
-      // Prefer NPUVector operands that have a defining op (i.e., not a block
-      // argument such as an scf.for iter_arg). Falling back to a block argument
-      // would abort the walk since it has no defining op, but might occur if
-      // the operand order places the iter_arg before an in-block producer.
       Value next;
-      Value fallback;
       for (Value opnd : defOp->getOperands()) {
-        if (!isNpuVectorType(opnd.getType())) {
-          continue;
-        }
-        if (opnd.getDefiningOp() != nullptr) {
+        if (isNpuVectorType(opnd.getType())) {
           next = opnd;
           break;
         }
-        if (!fallback) {
-          fallback = opnd;
-        }
       }
-      cur = next ? next : fallback;
+      cur = next;
     }
     return false;
   }
@@ -372,50 +308,6 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     }
   }
 
-  // Compute the transitive set of in-body ops that produce the loop-carried
-  // size / maxSize values referenced by `loopSizes` and `loopMaxSizes` (only
-  // for entries where `useLoopSize[i]` is true). Traversal stops at iter_arg
-  // block arguments, which never participate in size definition here.
-  static void collectSizeDefiningOps(Block *oldBody, ArrayRef<SmallVector<Value>> loopSizes,
-                                     ArrayRef<SmallVector<Value>> loopMaxSizes, ArrayRef<bool> useLoopSize,
-                                     llvm::SetVector<Operation *> &sizeDefs) {
-    auto isIterArg = [&](Value v) {
-      for (unsigned k = 1; k < oldBody->getNumArguments(); ++k) {
-        if (oldBody->getArgument(k) == v) {
-          return true;
-        }
-      }
-      return false;
-    };
-    SmallVector<Operation *> worklist;
-    auto pushDef = [&](Value v) {
-      if (!v || isIterArg(v)) {
-        return;
-      }
-      Operation *def = v.getDefiningOp();
-      if ((def != nullptr) && def->getBlock() == oldBody && sizeDefs.insert(def)) {
-        worklist.push_back(def);
-      }
-    };
-    for (size_t i = 0; i < loopSizes.size(); ++i) {
-      if (!useLoopSize[i]) {
-        continue;
-      }
-      for (Value v : loopSizes[i]) {
-        pushDef(v);
-      }
-      for (Value v : loopMaxSizes[i]) {
-        pushDef(v);
-      }
-    }
-    while (!worklist.empty()) {
-      Operation *op = worklist.pop_back_val();
-      for (Value opnd : op->getOperands()) {
-        pushDef(opnd);
-      }
-    }
-  }
-
   void buildNewLoopBody(scf::ForOp oldFor, scf::ForOp newFor, ArrayRef<Value> buffers,
                         ArrayRef<SmallVector<Value>> allSizes, ArrayRef<SmallVector<Value>> allMaxSizes) {
     Block *oldBody = oldFor.getBody();
@@ -428,64 +320,19 @@ class ElimScfIterArgs : public mlir::npuvector::impl::ElimScfIterArgsBase<ElimSc
     // Remap the induction variable.
     map.map(oldBody->getArgument(0), newBody->getArgument(0));
 
-    auto yield = cast<scf::YieldOp>(oldBody->getTerminator());
-    size_t nIter = oldFor.getInitArgs().size();
-
-    // Recover per-iter_arg sizes from the *yielded* value rather than from the
-    // initial value. The yielded value's size is what actually gets written
-    // back to the buffer at the end of each iteration (tail-block aware), so
-    // the readback at the start of the next iteration must use the same size.
-    // If recovery fails, fall back to the init-value derived sizes.
-    SmallVector<SmallVector<Value>> loopSizes(nIter);
-    SmallVector<SmallVector<Value>> loopMaxSizes(nIter);
-    SmallVector<bool> useLoopSize(nIter, false);
-    for (size_t i = 0; i < nIter; ++i) {
-      SmallVector<Value> s;
-      SmallVector<Value> ms;
-      if (tryExtractVecSizes(yield.getOperand(i), s, ms) && !s.empty()) {
-        loopSizes[i] = std::move(s);
-        loopMaxSizes[i] = std::move(ms);
-        useLoopSize[i] = true;
-      }
-    }
-
-    // Compute size-defining ops (must be cloned before iter_arg readbacks).
-    llvm::SetVector<Operation *> sizeDefs;
-    collectSizeDefiningOps(oldBody, loopSizes, loopMaxSizes, useLoopSize, sizeDefs);
-
-    // Clone the size-defining ops first, in original program order.
-    for (Operation &op : oldBody->without_terminator()) {
-      if (sizeDefs.contains(&op)) {
-        bb.clone(op, map);
-      }
-    }
-
-    // Now emit the iter_arg readbacks using loop-carried (yield-derived) sizes
-    // when available, or the init-value sizes as a fallback.
-    auto remap = [&](Value v) { return map.lookupOrDefault(v); };
-    for (size_t i = 0; i < nIter; ++i) {
+    for (size_t i = 0; i < oldFor.getInitArgs().size(); ++i) {
       auto vt = llvm::cast<mlir::npuvector::NPUVectorType>(oldFor.getInitArgs()[i].getType());
-      SmallVector<Value> rs;
-      SmallVector<Value> rms;
-      if (useLoopSize[i]) {
-        std::transform(loopSizes[i].begin(), loopSizes[i].end(), std::back_inserter(rs), remap);
-        std::transform(loopMaxSizes[i].begin(), loopMaxSizes[i].end(), std::back_inserter(rms), remap);
-      } else {
-        rs.assign(allSizes[i].begin(), allSizes[i].end());
-        rms.assign(allMaxSizes[i].begin(), allMaxSizes[i].end());
-      }
-      Value loaded = readBufferAsVector({bb, loc, vt, buffers[i], c0, rs, rms});
+      Value loaded = readBufferAsVector({bb, loc, vt, buffers[i], c0, allSizes[i], allMaxSizes[i]});
       map.map(oldBody->getArgument(i + 1), loaded);
     }
 
-    // Clone the remaining ops (those not already cloned as size defs).
+    // Clone all original ops except the terminator (the yield).
     for (Operation &op : oldBody->without_terminator()) {
-      if (!sizeDefs.contains(&op)) {
-        bb.clone(op, map);
-      }
+      bb.clone(op, map);
     }
 
     // Translate the yield into TransferWriteOps that update the buffers.
+    auto yield = cast<scf::YieldOp>(oldBody->getTerminator());
     for (size_t i = 0; i < yield.getNumOperands(); ++i) {
       Value v = map.lookup(yield.getOperand(i));
       writeVectorToBuffer(bb, loc, v, buffers[i], c0);
