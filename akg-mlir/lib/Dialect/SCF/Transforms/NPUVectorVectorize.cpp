@@ -118,6 +118,14 @@ struct ScratchTileMeta {
   int allocRank = 0;
 };
 
+struct CurrentTileSliceInfo {
+  Value fullVector;
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+  SmallVector<Value> strides;
+  SmallVector<int> dimToAxis;
+};
+
 struct LoopVectorizationCtx {
   OpBuilder &builder;
 
@@ -141,6 +149,7 @@ struct LoopVectorizationCtx {
   /// Per `iter_arg` / loop result for ReductionX/Y (order matches `scalarLoop` init args).
   SmallVector<arith::AtomicRMWKind> reductionKinds;
   SmallVector<Value> origInits;
+  DenseMap<unsigned, CurrentTileSliceInfo> iterArgTileSlices;
 
   Value vectorizationAxis;
   std::optional<unsigned> vectorAxisVectorDim;
@@ -326,6 +335,7 @@ static void ensureReductionYield(LoopVectorizationCtx &ctx);
 static LogicalResult vectorizeOneOp(Operation &op, LoopVectorizationCtx &ctx);
 static void processLoop(LoopVectorizationCtx &ctx);
 static bool definitionGraphContainsValue(Value conditionSsaValue, Value targetSsaValue);
+static Value getRuntimeVectorSizeValue(LoopVectorizationCtx &ctx, unsigned axisIdx, Location loc);
 
 static bool hasVectorizationAttr(Operation *op) {
   return op->hasAttr(kVectorAttr) || op->hasAttr(kBroadcastLoopAttr) || op->hasAttr(kReductionXLoopAttr) ||
@@ -498,11 +508,7 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
     SmallVector<Value> maxSizes;
     for (unsigned i = 0; i < ctx.allVectorSizes.size(); ++i) {
       maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[i]));
-      if (ctx.allVectorSizeValues[i]) {
-        dynamicSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allVectorSizeValues[i]));
-      } else {
-        dynamicSizes.push_back(ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.allVectorSizes[i]));
-      }
+      dynamicSizes.push_back(getRuntimeVectorSizeValue(ctx, i, loc));
     }
     neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
                                                             ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
@@ -823,9 +829,8 @@ static std::optional<MergedReductionGroup> tryBuildMergedReductionGroup(scf::For
   }
 
   MergedReductionGroup group;
-  if (std::any_of(loops.begin(), loops.end(), [&](scf::ForOp loop) {
-        return !appendLoopToMergedReductionGroup(loop, root, builder, group);
-      })) {
+  if (std::any_of(loops.begin(), loops.end(),
+                  [&](scf::ForOp loop) { return !appendLoopToMergedReductionGroup(loop, root, builder, group); })) {
     return std::nullopt;
   }
   return group;
@@ -1078,6 +1083,90 @@ static void reconcileValueDimOrderWithTileExtents(Value loadedVector, SmallVecto
     return;
   }
   sortedDims = std::move(fromExtents);
+}
+
+static bool axisHasCurrentTileSize(const LoopVectorizationCtx &ctx, int axis) {
+  return axis >= 0 && static_cast<unsigned>(axis) < ctx.currentVectorSizeValues.size() &&
+         ctx.currentVectorSizeValues[static_cast<unsigned>(axis)] != nullptr;
+}
+
+static std::optional<unsigned> getCurrentReductionTileAxis(LoopVectorizationCtx &ctx) {
+  if (ctx.mode != VectorizationMode::ReductionX) {
+    return std::nullopt;
+  }
+  auto dimIter = ctx.allLoopToVectorDim.find(ctx.scalarLoop.getOperation());
+  if (dimIter == ctx.allLoopToVectorDim.end()) {
+    return std::nullopt;
+  }
+  unsigned axis = dimIter->second;
+  if (!axisHasCurrentTileSize(ctx, static_cast<int>(axis))) {
+    return std::nullopt;
+  }
+  return axis;
+}
+
+static Value createCurrentTileSlice(Value vecArg, LoopVectorizationCtx &ctx, ArrayRef<int> dimToAxis, unsigned tileAxis,
+                                    CurrentTileSliceInfo *sliceInfo = nullptr) {
+  auto nvt = mlir::dyn_cast<npuvector::NPUVectorType>(vecArg.getType());
+  const unsigned rank = nvt ? static_cast<unsigned>(nvt.getRank()) : 0;
+  if (!nvt || rank == 0 || dimToAxis.size() != rank || !llvm::is_contained(dimToAxis, static_cast<int>(tileAxis))) {
+    return vecArg;
+  }
+
+  Location loc = vecArg.getLoc();
+  SmallVector<Value> sizes;
+  SmallVector<int64_t> keepDims;
+  SmallVector<int64_t> resultShape(nvt.getShape().begin(), nvt.getShape().end());
+  sizes.reserve(rank);
+  keepDims.reserve(rank);
+
+  for (auto [dim, axis] : llvm::enumerate(dimToAxis)) {
+    if (axis < 0) {
+      return vecArg;
+    }
+    Value size = getRuntimeVectorSizeValue(ctx, static_cast<unsigned>(axis), loc);
+    if (!size) {
+      return vecArg;
+    }
+    sizes.push_back(size);
+    if (static_cast<unsigned>(axis) == tileAxis) {
+      resultShape[dim] = ShapedType::kDynamic;
+    }
+    keepDims.push_back(static_cast<int64_t>(dim));
+  }
+
+  Value c0 = ctx.builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value c1 = ctx.builder.create<arith::ConstantIndexOp>(loc, 1);
+  // Slice the accumulator by vector lane. The memory-space offset is already carried by transfer_read's IV.
+  SmallVector<Value> offsets(rank, c0);
+  SmallVector<Value> strides(rank, c1);
+
+  auto sliceType = npuvector::NPUVectorType::get(resultShape, nvt.getElementType());
+  Value slice =
+    ctx.builder.create<npuvector::ExtractSliceOp>(loc, sliceType, vecArg, ValueRange(offsets), ValueRange(sizes),
+                                                  ValueRange(strides), ctx.builder.getDenseI64ArrayAttr(keepDims));
+  ctx.valueDimOrder[slice] = SmallVector<int>(dimToAxis.begin(), dimToAxis.end());
+  if (sliceInfo != nullptr) {
+    sliceInfo->fullVector = vecArg;
+    sliceInfo->offsets = offsets;
+    sliceInfo->sizes = sizes;
+    sliceInfo->strides = strides;
+    sliceInfo->dimToAxis.assign(dimToAxis.begin(), dimToAxis.end());
+  }
+  return slice;
+}
+
+static Value insertCurrentTileSlice(Value tileValue, LoopVectorizationCtx &ctx, const CurrentTileSliceInfo &sliceInfo,
+                                    Location loc) {
+  auto destType = mlir::dyn_cast<npuvector::NPUVectorType>(sliceInfo.fullVector.getType());
+  if (!destType) {
+    return tileValue;
+  }
+  Value fullValue = ctx.builder.create<npuvector::InsertSliceOp>(
+    loc, destType, tileValue, sliceInfo.fullVector, ValueRange(sliceInfo.offsets), ValueRange(sliceInfo.sizes),
+    ValueRange(sliceInfo.strides));
+  ctx.valueDimOrder[fullValue] = sliceInfo.dimToAxis;
+  return fullValue;
 }
 
 static void collectVectorAxes(const LoopVectorizationCtx &ctx, SmallVectorImpl<std::pair<Value, int>> &axes) {
@@ -3745,16 +3834,25 @@ static LogicalResult vectorizeLoopBody(LoopVectorizationCtx &ctx) {
   }
 
   if (ctx.mode == VectorizationMode::ReductionX || ctx.mode == VectorizationMode::ReductionY) {
+    std::optional<unsigned> currentTileAxis = getCurrentReductionTileAxis(ctx);
     for (unsigned idx = 0, e = ctx.scalarLoop.getNumRegionIterArgs(); idx < e; ++idx) {
       Value scalarArg = ctx.scalarLoop.getRegionIterArgs()[idx];
       Value vecArg = ctx.vecLoop.getRegionIterArgs()[idx];
-      ctx.valueMapping.map(scalarArg, vecArg);
+      Value mappedArg = vecArg;
 
       Value vecInit = ctx.vecLoop.getInitArgs()[idx];
       auto dimOrderIter = ctx.valueDimOrder.find(vecInit);
       if (dimOrderIter != ctx.valueDimOrder.end()) {
         ctx.valueDimOrder[vecArg] = dimOrderIter->second;
+        if (currentTileAxis) {
+          CurrentTileSliceInfo sliceInfo;
+          mappedArg = createCurrentTileSlice(vecArg, ctx, dimOrderIter->second, *currentTileAxis, &sliceInfo);
+          if (mappedArg != vecArg) {
+            ctx.iterArgTileSlices[idx] = std::move(sliceInfo);
+          }
+        }
       }
+      ctx.valueMapping.map(scalarArg, mappedArg);
     }
   }
 
@@ -4102,6 +4200,40 @@ static void finalizeReductionXOutputs(LoopVectorizationCtx &ctx, ArrayRef<Value>
   }
 }
 
+static LogicalResult collectReductionXYieldValues(LoopVectorizationCtx &ctx, scf::YieldOp scalarYield,
+                                                  SmallVectorImpl<Value> &vecYieldVals) {
+  Block *body = ctx.vecLoop.getBody();
+  if (!body->empty() && isa<scf::YieldOp>(body->back())) {
+    body->back().erase();
+  }
+  ctx.builder.setInsertionPointToEnd(body);
+
+  vecYieldVals.reserve(scalarYield.getNumOperands());
+  for (auto [idx, scalarVal] : llvm::enumerate(scalarYield.getOperands())) {
+    Value mapped = ctx.valueMapping.lookupOrNull(scalarVal);
+    if (!mapped) {
+      return failure();
+    }
+    auto sliceIt = ctx.iterArgTileSlices.find(static_cast<unsigned>(idx));
+    if (sliceIt != ctx.iterArgTileSlices.end()) {
+      mapped = insertCurrentTileSlice(mapped, ctx, sliceIt->second, mapped.getLoc());
+    }
+    vecYieldVals.push_back(mapped);
+  }
+  return success();
+}
+
+static void recordReductionXResultDimOrders(LoopVectorizationCtx &ctx, ArrayRef<Value> vecYieldVals) {
+  for (auto [vecResult, yieldVal] : llvm::zip(ctx.vecLoop.getResults(), vecYieldVals)) {
+    auto outNvt = mlir::dyn_cast<npuvector::NPUVectorType>(vecResult.getType());
+    auto ordIter = ctx.valueDimOrder.find(yieldVal);
+    if (outNvt && ordIter != ctx.valueDimOrder.end() &&
+        ordIter->second.size() == static_cast<unsigned>(outNvt.getRank())) {
+      ctx.valueDimOrder[vecResult] = ordIter->second;
+    }
+  }
+}
+
 static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
   if (ctx.parent == nullptr) {
     ctx.builder.setInsertionPoint(ctx.scalarLoop);
@@ -4123,30 +4255,11 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
   }
 
   SmallVector<Value> vecYieldVals;
-  vecYieldVals.reserve(numResults);
-  for (unsigned idx = 0; idx < numResults; ++idx) {
-    Value mapped = ctx.valueMapping.lookupOrNull(scalarYield.getOperand(idx));
-    if (!mapped) {
-      return failure();
-    }
-    vecYieldVals.push_back(mapped);
+  if (failed(collectReductionXYieldValues(ctx, scalarYield, vecYieldVals))) {
+    return failure();
   }
-
-  Block *body = ctx.vecLoop.getBody();
-  if (!body->empty() && isa<scf::YieldOp>(body->back())) {
-    body->back().erase();
-  }
-  ctx.builder.setInsertionPointToEnd(body);
   ctx.builder.create<scf::YieldOp>(loc, vecYieldVals);
-
-  for (auto [vecResult, yieldVal] : llvm::zip(ctx.vecLoop.getResults(), vecYieldVals)) {
-    auto outNvt = mlir::dyn_cast<npuvector::NPUVectorType>(vecResult.getType());
-    auto ordIter = ctx.valueDimOrder.find(yieldVal);
-    if (outNvt && ordIter != ctx.valueDimOrder.end() &&
-        ordIter->second.size() == static_cast<unsigned>(outNvt.getRank())) {
-      ctx.valueDimOrder[vecResult] = ordIter->second;
-    }
-  }
+  recordReductionXResultDimOrders(ctx, vecYieldVals);
 
   ctx.builder.setInsertionPointAfter(ctx.vecLoop);
 
