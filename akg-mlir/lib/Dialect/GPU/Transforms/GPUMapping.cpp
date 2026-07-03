@@ -188,7 +188,7 @@ struct MappingState {
 };
 
 struct AKGGPUMappingLoops : public impl::AKGGPUMappingBase<AKGGPUMappingLoops> {
-  AKGGPUMappingLoops() {}
+  explicit AKGGPUMappingLoops(const std::string &path) { outputPath = path; }
   void runOnOperation() override;
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -690,8 +690,8 @@ bool AKGGPUMappingLoops::saveMappingResultToJson() {
     llvm::report_fatal_error(llvm::StringRef("Infer config failed."));
   }
   auto kernelName = getAkgKernelName();
-  (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
-  std::string output_filename = "./akg_kernel_meta/" + kernelName + ".json";
+  (void)IOHelper::CheckOrCreateDirectory(outputPath);
+  std::string output_filename = outputPath + "/" + kernelName + ".json";
   if (llvm::writeToOutput(output_filename, [&res](llvm::raw_ostream &OS) -> llvm::Error {
         OS << res;
         return llvm::Error::success();
@@ -991,6 +991,6 @@ void AKGGPUMappingLoops::mapParallelOp(ParallelOp parallelOp, const std::vector<
 }  // namespace gpu
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGGPUMapping() {
-  return std::make_unique<gpu::AKGGPUMappingLoops>();
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGGPUMapping(const std::string &dirName) {
+  return std::make_unique<gpu::AKGGPUMappingLoops>(dirName);
 }

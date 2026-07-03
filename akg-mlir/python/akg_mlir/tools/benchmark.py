@@ -20,12 +20,12 @@ import json
 import logging
 import multiprocessing
 import pathlib
-import shutil
 import time
 import distutils
 import numpy as np
 
 from akg import MlirDriver
+from akg.mlir_driver import get_kernel_meta_path
 from akg.utils.composite_op_helper import compare_tensor, gen_json_data
 from akg.utils.result_analysis import get_compare_tolerance
 from akg.utils.torch_mlir_utils import (find_first_func_name, run_torch_mlir_to_json,
@@ -71,38 +71,6 @@ def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
         logging.info("%s precision correct", kernel_name)
 
 
-def _get_kernel_meta_dir():
-    kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
-    return kernel_meta_dir
-
-
-def _get_tmp_dir():
-    return os.path.join(_get_kernel_meta_dir(), "tmp_files")
-
-
-def _create_dirs():
-    dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
-    for file_path in dir_paths:
-        if not os.path.exists(file_path):
-            os.makedirs(file_path)
-
-
-def _clear_tmp_dirs(kernel_name):
-    """clear tmp dirs"""
-    dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
-    for file_path in dir_paths:
-        if not os.path.exists(file_path):
-            continue
-        for file_name in os.listdir(file_path):
-            if kernel_name not in file_name:
-                continue
-            target = os.path.join(file_path, file_name)
-            if os.path.isfile(target):
-                os.remove(target)
-            elif os.path.isdir(target):
-                shutil.rmtree(target)
-
-
 def _auto_get_target(desc):
     process_map = {'cpu':'cpu', 'cuda':'gpu', 'aicore':'ascend'}
     desc_d = json.loads(desc)
@@ -134,14 +102,15 @@ def run_a_kernel(desc, file_path, compile_args, static_desc=None):
         raise RuntimeError("MatMul is not supported on ascend backend with akg fusion")
 
     kernel_name = _get_kernel_name(desc)
+    dump_dir = pathlib.Path(get_kernel_meta_path()) / kernel_name
+    dump_dir.mkdir(parents=True, exist_ok=True)
     arch = _get_arch_name(desc)
     # Generate data
-    input_for_mod, expect, output_indexes = gen_json_data(
-        static_desc if is_dyn_shape else desc, with_compute=True)
+    input_for_mod, expect, output_indexes = gen_json_data(static_desc if is_dyn_shape else desc, with_compute=True)
     # Init MlirDriver
     mlir_driver = MlirDriver(kernel_name=kernel_name,
                              input_file=file_path,
-                             output_dir=_get_kernel_meta_dir(),
+                             output_dir=dump_dir,
                              backend=backend,
                              llvm_tools_dir=os.getenv("LLVM_HOME", ""),
                              dynamic_shape=is_dyn_shape,
@@ -159,9 +128,6 @@ def run_a_kernel(desc, file_path, compile_args, static_desc=None):
     for idx, d in enumerate(expect):
         expect[idx] = d.astype(np.float32) if d.dtype.name == "bfloat16" else d
     compare_results(kernel_name, desc, input_for_mod, output_indexes, expect)
-
-    if compile_args.clear_tmp:
-        _clear_tmp_dirs(kernel_name)
 
 
 def _get_compute(desc):
@@ -205,13 +171,14 @@ def _get_input_dtype(desc):
 
 def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
     """run single info."""
-    dump_dir = pathlib.Path(_get_kernel_meta_dir())
     info_file = pathlib.Path(file_path)
     input_file = file_path
 
     input_file = pathlib.Path(file_path)
     if info_file.suffix == ".mlir":
         kernel_name = find_first_func_name(info_file)
+        dump_dir = pathlib.Path(get_kernel_meta_path()) / kernel_name
+        dump_dir.mkdir(parents=True, exist_ok=True)
         if not kernel_name:
             raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
         info_file = dump_dir / f"{kernel_name}_.info"
@@ -241,7 +208,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
         try:
             logging.info("Start running %s", kernel_name)
             run_a_kernel(desc, str(input_file), compile_args, static_desc=static_desc)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             logging.error("run %s get an error, error message: %s", kernel_name, e)
             if run_res is not None and run_idx is not None:
                 run_res[run_idx] = False
@@ -307,7 +274,6 @@ def main(args=None):
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
     args = parser.parse_args()
-    _create_dirs()
     if args.dir:
         files = [
             f for f in os.listdir(args.dir)

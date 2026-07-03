@@ -46,7 +46,7 @@ PROF_ERROR_CODE = 9999999999
 
 def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
-    kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
+    kernel_meta_dir = os.getenv("KERNEL_META_DIR", default=os.path.expanduser("~/.akg"))
     return os.path.join(
         os.path.realpath(os.getenv("MS_COMPILER_CACHE_PATH", "")),
         kernel_meta_dir,
@@ -131,7 +131,7 @@ def get_npucompiler_path():
     return npu_compiler_path
 
 
-def _compile_lib(kernel_name, file_path="./tmp_files/"):
+def _compile_lib(kernel_name, file_path="./"):
     """Compile cuda runtime source."""
     so_file = os.path.join(file_path, "gen_func_" + kernel_name + ".so")
     gen_lib_file = os.path.join(file_path, "gen_func_" + kernel_name + ".cu")
@@ -152,8 +152,7 @@ def create_executable(kernel_name,
                       is_dyn_shape):
     """Generate executable files"""
     cur_path = get_kernel_meta_path()
-    tmp_file_path = os.path.join(cur_path, "tmp_files")
-    tmp_file_name = os.path.join(tmp_file_path, "gen_func_" + kernel_name + ".so")
+    tmp_file_name = os.path.join(cur_path, "gen_func_" + kernel_name + ".so")
     fake_output_indices = []
     gen_cuda_runtime_code(kernel_name,
                           input_for_mod,
@@ -162,7 +161,7 @@ def create_executable(kernel_name,
                           fake_output_indices,
                           path=cur_path)
     try:
-        _compile_lib(kernel_name, file_path=tmp_file_path)
+        _compile_lib(kernel_name, file_path=cur_path)
     except Exception as e:
         raise RuntimeError("Compile cuda runtime lib fail") from e
     try:
@@ -174,9 +173,7 @@ def create_executable(kernel_name,
 
 def profiling_analyse(arch):
     """Analyse Ascend kernel profiling data and return task duration."""
-    public_path = os.getenv('PROFILING_DIR')
-    if public_path is None:
-        raise RuntimeError("Environment PROFILING_DIR not set!")
+    public_path = os.getenv('AKG_PROFILING_DIR', default=os.path.expanduser("~/.akg/profiling"))
     public_path = validate_and_normalize_path(public_path)
     CANNFileParser(public_path).export_cann_profiling()
 
@@ -278,7 +275,7 @@ class MlirDriver:
 
         self.kernel_name = kernel_name
         self.input_file = input_file
-        self.output_dir = get_kernel_meta_path() if output_dir == "" else output_dir
+        self.output_dir = get_kernel_meta_path() if output_dir == "" else str(output_dir)
         self.akg_tools_dir = (
             os.path.dirname(os.path.abspath(__file__))
             if akg_tools_dir == ""
@@ -695,11 +692,11 @@ class MlirDriver:
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_gpu.mlir")
         opt_pipeline = "--gpu-dyn-opt" if dyn_shape else "--gpu-opt"
-        opt_options = ""
+        opt_options = "output-dir=" + self.output_dir
         if dyn_shape:
             if tiling_mode is None:
                 tiling_mode = os.environ.get("MLIR_TILING_MODE", "auto")
-            opt_options += "tiling-mode=" + tiling_mode
+            opt_options += " tiling-mode=" + tiling_mode
 
         if os.path.exists(self.repo_path):
             opt_options += " global-config-file=" + self.repo_path

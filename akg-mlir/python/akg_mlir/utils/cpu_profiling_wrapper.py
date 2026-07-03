@@ -14,6 +14,7 @@
 # ============================================================================
 
 """CPU Profiling Wrapper Function"""
+from pathlib import Path
 from .code_template import CPU_PROFILING_TEMPLATE
 
 
@@ -49,7 +50,8 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     module_func = "".join(file_src[:kernel_func_line_id])
     kernel_func = "".join(file_src[kernel_func_line_id:])
     wrapped_timer_src = "\n".join([module_func, template_src, kernel_func])
-    timer_file = file.split(".")[0] + "_wrapped_timer." + file.split(".")[1]
+    file_path = Path(file)
+    timer_file = file_path.with_name(file_path.stem + "_wrapped_timer" + file_path.suffix)
     with open(timer_file, "wt", encoding='utf-8') as f:
         f.writelines(wrapped_timer_src)
     return timer_file

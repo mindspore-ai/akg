@@ -31,6 +31,7 @@ def AKGGPUMapping
   let options = [
     Option<"singleProcess", "single-process", "bool", /*default=*/"false",
         "Whether to use single process (default: false)">,
+    Option<"outputPath", "output-path", "std::string", /*default=*/"", "output file save directory.">,
   ];
 
 }
@@ -63,6 +64,9 @@ def GpuKernelOutliningExt : Pass<"gpu-kernel-outlining-ext", "ModuleOp"> {
   let summary = "Outline gpu.launch bodies to kernel functions(ext version)";
   let constructor = "mlir::createGpuKernelOutliningExt()";
   let dependentDialects = ["mlir::DLTIDialect"];
+  let options = [
+    Option<"outputPath", "output-path", "std::string", /*default=*/"", "output file save directory.">,
+  ];
 }
 
 def StoreAxisInfo : Pass<"store-axis-info", "mlir::func::FuncOp"> {

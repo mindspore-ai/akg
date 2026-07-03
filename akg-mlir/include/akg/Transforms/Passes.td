@@ -103,8 +103,8 @@ def DumpShapeInfo : Pass<"dump-shape-info"> {
   let summary = "This pass will dump the global shape info for dynamic pipeline";
   let constructor = "mlir::createDumpShapeInfoPass()";
   let options = [
-    Option<"fileName", "file-name", "std::string", /*default=*/"",
-           "mindspore json file name.">,
+    Option<"outputPath", "output-path", "std::string", /*default=*/"", "json file save directory.">,
+    Option<"fileName", "file-name", "std::string", /*default=*/"", "mindspore json file name.">,
   ];
 }
 
@@ -112,8 +112,7 @@ def LoadGlobalConfig : Pass<"load-global-config"> {
   let summary = "This pass will load the global configs";
   let constructor = "mlir::createLoadGlobalConfigPass()";
   let options = [
-    Option<"fileName", "file-name", "std::string", /*default=*/"",
-           "tuned repository file path.">,
+    Option<"fileName", "file-name", "std::string", /*default=*/"", "tuned repository file path.">,
   ];
 }
 

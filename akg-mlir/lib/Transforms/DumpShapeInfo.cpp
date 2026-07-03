@@ -67,7 +67,10 @@ constexpr auto kKernelNameAttrKey = "sym_name";
 class DumpShapeInfo : public impl::DumpShapeInfoBase<DumpShapeInfo> {
  public:
   DumpShapeInfo() {}
-  explicit DumpShapeInfo(const std::string &jsonFileName) { fileName = jsonFileName; }
+  explicit DumpShapeInfo(const std::string &path, const std::string &jsonFileName) {
+    outputPath = path;
+    fileName = jsonFileName;
+  }
   void runOnOperation() override;
   bool save(const std::string &res);
   std::string getAkgKernelName();
@@ -103,7 +106,7 @@ bool DumpShapeInfo::save(const std::string &res) {
     llvm::errs() << "Save json failed: string empty.\n";
     return false;
   }
-  (void)IOHelper::CheckOrCreateDirectory("./akg_kernel_meta/");
+  (void)IOHelper::CheckOrCreateDirectory(outputPath);
   if (!fileName.empty()) {
     std::string search = ".info";
     std::string replacement = "_shape_info.json";
@@ -115,8 +118,8 @@ bool DumpShapeInfo::save(const std::string &res) {
     fileName = getAkgKernelName() + "_shape_info.json";
   }
 
-  std::string output_filename = "./akg_kernel_meta/" + fileName;
-  llvm::outs() << "Dump to " << output_filename << "\n";
+  std::string output_filename = outputPath + "/" + fileName;
+  llvm::dbgs() << "Dump to " << output_filename << "\n";
   if (llvm::writeToOutput(output_filename, [&res](llvm::raw_ostream &OS) -> llvm::Error {
         OS << res;
         return llvm::Error::success();
@@ -207,7 +210,7 @@ std::unique_ptr<Pass> createDumpShapeInfoPass() { return std::make_unique<DumpSh
 }  // namespace mlir
 
 namespace mlir {
-std::unique_ptr<Pass> createDumpShapeInfoPass(const std::string &fileName) {
-  return std::make_unique<DumpShapeInfo>(fileName);
+std::unique_ptr<Pass> createDumpShapeInfoPass(const std::string &dirName, const std::string &fileName) {
+  return std::make_unique<DumpShapeInfo>(dirName, fileName);
 }
 }  // namespace mlir
