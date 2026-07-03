@@ -343,10 +343,13 @@ class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulO
     }
 
     mlir::Location loc = op.getLoc();
-    const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
     const bool dvm = isDvmKernelGenerator(kernelGenerator_);
 
-    if (twoD && dvm && isInsideDvmCopiedSubgraph(op)) {
+    // In DVM copied subgraphs, keep matmul transpose semantics on the lowered
+    // torch op instead of materializing explicit permutes. These clustered
+    // kernels are lowered to aten.mm and preserve trans_x1/trans_x2 as
+    // dvm_trans_a/dvm_trans_b.
+    if (dvm && isInsideDvmCopiedSubgraph(op)) {
       auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other);
       newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(trans1));
       newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(trans2));
@@ -368,6 +371,7 @@ class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulO
       }
       other = *permOr;
     }
+    const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
     if (twoD) {
       rewriter.replaceOpWithNewOp<TorchD::AtenMmOp>(op, resultType, self, other);
     } else {
@@ -402,11 +406,13 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
     }
 
     mlir::Location loc = op.getLoc();
-    const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
     const bool dvm = isDvmKernelGenerator(kernelGenerator_);
-
     mlir::Value matmulResult;
-    if (twoD && dvm && isInsideDvmCopiedSubgraph(op)) {
+    // In DVM copied subgraphs, keep matmul transpose semantics on the lowered
+    // torch op instead of materializing explicit permutes. These clustered
+    // kernels are lowered to aten.mm and preserve trans_x1/trans_x2 as
+    // dvm_trans_a/dvm_trans_b before the bias add is rebuilt.
+    if (dvm && isInsideDvmCopiedSubgraph(op)) {
       auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other);
       newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(trans1));
       newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(trans2));
@@ -426,6 +432,8 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
         }
         other = *permOr;
       }
+
+      const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
       if (twoD) {
         matmulResult = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other).getResult();
       } else {
