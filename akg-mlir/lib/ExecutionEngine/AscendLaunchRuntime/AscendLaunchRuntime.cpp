@@ -210,6 +210,30 @@ void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t b
   }
 }
 
+void *DlsymSymbol(const std::string &lib_path, const std::string &symbol_name) {
+  // Re-open this module with RTLD_GLOBAL once, so that extern "C" symbols become globally visible
+  // and can be resolved by the library loaded below.
+  static const void *self_global = []() -> void * {
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void *>(&DlsymSymbol), &info) != 0 && info.dli_fname != nullptr) {
+      return dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL);
+    }
+    return nullptr;
+  }();
+  (void)self_global;
+
+  void *handle = dlopen(lib_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  if (handle == nullptr) {
+    LOG(ERROR) << "dlopen failed, file: " << lib_path << ", Error:" << dlerror();
+  }
+
+  void *sym = dlsym(handle, symbol_name.c_str());
+  if (sym == nullptr) {
+    LOG(ERROR) << "dlsym failed, symbol: " << symbol_name << " error:" << dlerror();
+  }
+  return sym;
+}
+
 namespace {
 // key: so_path::symbol_name, value: (handle, func_ptr)
 struct KernelFuncCache {
@@ -229,22 +253,17 @@ struct KernelFuncCache {
       return it->second.second;
     }
 
-    void *handle = nullptr;
     void *func = nullptr;
     if (is_dynamic) {
       if (file_str.empty()) {
         return nullptr;
       }
-      handle = dlopen(file_str.c_str(), static_cast<unsigned>(RTLD_LAZY) | static_cast<unsigned>(RTLD_LOCAL));
-      CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
-
-      func = dlsym(handle, func_str.c_str());
-      CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
+      func = DlsymSymbol(file_str, func_str);
     } else {
       func = reinterpret_cast<void *>(GetKernelFunction(kernel_name, file_str));
     }
 
-    cache[key] = {handle, func};
+    cache[key] = {nullptr, func};
     return func;
   }
 };

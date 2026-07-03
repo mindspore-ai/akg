@@ -163,29 +163,18 @@ func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) a
   // CHECK: %[[VEC_SIZE:.*]] = affine.min
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[NEUTRAL:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[VF]]] : f32 to !npuvector<?xf32>
-  // CHECK: %{{.*}} = affine.apply
-  // CHECK: %[[DIV:.*]] = arith.divsi %{{.*}}, %[[VEC_SIZE]] : index
-  // CHECK: %[[MUL:.*]] = arith.muli %[[DIV]], %[[VEC_SIZE]] : index
-  // CHECK: %[[ALIGNED_UB:.*]] = affine.apply
-  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK-NOT: arith.divsi
+  // CHECK: %[[SUM_VEC:.*]] = scf.for %[[IV:.*]] = %{{.*}} to %[[DIM]] step %[[VEC_SIZE]] iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
+  // CHECK:   %[[REMAIN:.*]] = affine.apply
+  // CHECK:   %[[TILE:.*]] = affine.min
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
   // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] {reduction_type = "all"} : !npuvector<?xf32>
   // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<?xf32>
   // CHECK: }
   // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK: %{{.*}} = affine.apply
-  // CHECK: %[[REMAINDER:.*]] = arith.remsi %{{.*}}, %[[VEC_SIZE]] : index
-  // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[NEED_TAIL:.*]] = arith.cmpi ne, %[[REMAINDER]], %[[C0]] : index
-  // CHECK: %[[FINAL:.*]] = scf.if %[[NEED_TAIL]] -> (!npuvector.f32) {
-  // CHECK:   %[[TAIL_READ:.*]] = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%[[REMAINDER]]] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   %[[TAIL_REDUCED:.*]] = npuvector.reduction <add>, %[[TAIL_READ]] {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK:   %[[MERGED:.*]] = arith.addf %[[SUM]], %[[TAIL_REDUCED]] : !npuvector.f32
-  // CHECK:   scf.yield %[[MERGED]] : !npuvector.f32
-  // CHECK: } else {
-  // CHECK:   scf.yield %[[SUM]] : !npuvector.f32
-  // CHECK: }
-  // CHECK: npuvector.transfer_write %[[FINAL]], %{{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
+  // CHECK-NOT: arith.remsi
+  // CHECK-NOT: scf.if
+  // CHECK: npuvector.transfer_write %[[SUM]], %{{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
 
   %sum = scf.for %i = %c0 to %N step %c1 iter_args(%acc = %init) -> f32 {
     %v = memref.load %input[%i] : memref<?xf32>
@@ -245,7 +234,7 @@ func.func @test_reduction_x_two_results(
 }
 
 // -----
-// Two reduction_x lanes; static trip 300, VF 128 -> main 256 + tail 44 per lane (same remainder for both).
+// Two reduction_x lanes; static trip 300, VF 128 -> in-loop min handles the last 44 elements.
 
 // CHECK-LABEL: func.func @test_reduction_x_two_results_static_tail
 func.func @test_reduction_x_two_results_static_tail(
@@ -258,31 +247,28 @@ func.func @test_reduction_x_two_results_static_tail(
   %c1 = arith.constant 1 : index
   %init = arith.constant 0.0 : f32
 
+  // CHECK: %[[UB:.*]] = arith.constant 300 : index
   // CHECK: %[[VF:.*]] = arith.constant 128 : index
-  // CHECK: %[[N0:.*]] = arith.constant dense<0.000000e+00> : !npuvector<128xf32>
-  // CHECK: %[[N1:.*]] = arith.constant dense<0.000000e+00> : !npuvector<128xf32>
-  // CHECK: %[[ALIGNED_UB:.*]] = arith.constant 256 : index
-  // CHECK: %{{.*}}:2 = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%[[ACC0:.*]] = %[[N0]], %[[ACC1:.*]] = %[[N1]]) -> (!npuvector<128xf32>, !npuvector<128xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%{{.*}}] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<128xf32>
-  // CHECK:   %[[M_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%{{.*}}] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<128xf32>
-  // CHECK:   arith.mulf %[[V_VEC]], %[[M_VEC]] : !npuvector<128xf32>
-  // CHECK:   arith.mulf %[[V_VEC]], %[[V_VEC]] : !npuvector<128xf32>
-  // CHECK:   arith.addf %[[ACC0]], {{.*}} {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<128xf32>
-  // CHECK:   arith.addf %[[ACC1]], {{.*}} {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<128xf32>
-  // CHECK:   scf.yield {{.*}} : !npuvector<128xf32>, !npuvector<128xf32>
+  // CHECK: %[[N0:.*]] = npuvector.broadcast %{{.*}}[%[[VF]]] [%[[VF]]] : f32 to !npuvector<?xf32>
+  // CHECK: %[[N1:.*]] = npuvector.broadcast %{{.*}}[%[[VF]]] [%[[VF]]] : f32 to !npuvector<?xf32>
+  // CHECK-NOT: arith.constant 256 : index
+  // CHECK: %{{.*}}:2 = scf.for %[[IV:.*]] = %{{.*}} to %[[UB]] step %[[VF]] iter_args(%[[ACC0:.*]] = %[[N0]], %[[ACC1:.*]] = %[[N1]]) -> (!npuvector<?xf32>, !npuvector<?xf32>) {
+  // CHECK:   %[[REMAIN:.*]] = affine.apply
+  // CHECK:   %[[TILE:.*]] = affine.min
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<?xf32>
+  // CHECK:   %[[M_VEC:.*]] = npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<?xf32>
+  // CHECK:   arith.mulf %[[V_VEC]], %[[M_VEC]] : !npuvector<?xf32>
+  // CHECK:   arith.mulf %[[V_VEC]], %[[V_VEC]] : !npuvector<?xf32>
+  // CHECK:   arith.addf %[[ACC0]], {{.*}} {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<?xf32>
+  // CHECK:   arith.addf %[[ACC1]], {{.*}} {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<?xf32>
+  // CHECK:   scf.yield {{.*}} : !npuvector<?xf32>, !npuvector<?xf32>
   // CHECK: }
-  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<128xf32> into !npuvector.f32
-  // CHECK: arith.constant 44 : index
-  // CHECK: npuvector.transfer_read {{.*}} : memref<300xf32>, !npuvector<44xf32>
-  // CHECK: npuvector.transfer_read {{.*}} : memref<300xf32>, !npuvector<44xf32>
-  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<44xf32> into !npuvector.f32
-  // CHECK: arith.addf {{.*}} : !npuvector.f32
-  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<128xf32> into !npuvector.f32
-  // CHECK: arith.constant 44 : index
-  // CHECK: npuvector.transfer_read {{.*}} : memref<300xf32>, !npuvector<44xf32>
-  // CHECK: npuvector.transfer_read {{.*}} : memref<300xf32>, !npuvector<44xf32>
-  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<44xf32> into !npuvector.f32
-  // CHECK: arith.addf {{.*}} : !npuvector.f32
+  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<?xf32> into !npuvector.f32
+  // CHECK-NOT: arith.constant 44 : index
+  // CHECK-NOT: !npuvector<44xf32>
+  // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<?xf32> into !npuvector.f32
+  // CHECK-NOT: arith.constant 44 : index
+  // CHECK-NOT: !npuvector<44xf32>
   // CHECK: npuvector.transfer_write {{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
   // CHECK: npuvector.transfer_write {{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
 
@@ -302,7 +288,7 @@ func.func @test_reduction_x_two_results_static_tail(
 }
 
 // -----
-// Two reduction_x lanes; dynamic dim — aligned main loop + optional tail each lane (may duplicate index math IR).
+// Two reduction_x lanes; dynamic dim uses in-loop min instead of per-lane tail replay.
 
 // CHECK-LABEL: func.func @test_reduction_x_two_results_dynamic_tail
 func.func @test_reduction_x_two_results_dynamic_tail(
@@ -323,13 +309,12 @@ func.func @test_reduction_x_two_results_dynamic_tail(
   // CHECK: %[[N0:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[VF]]] : f32 to !npuvector<?xf32>
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[N1:.*]] = npuvector.broadcast %{{.*}}[%[[VEC_SIZE]]] [%[[VF]]] : f32 to !npuvector<?xf32>
-  // CHECK: %{{.*}} = affine.apply
-  // CHECK: %[[DIV:.*]] = arith.divsi %{{.*}}, %[[VEC_SIZE]] : index
-  // CHECK: %[[MUL:.*]] = arith.muli %[[DIV]], %[[VEC_SIZE]] : index
-  // CHECK: %[[ALIGNED_UB:.*]] = affine.apply
-  // CHECK: %{{.*}}:2 = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%{{.*}} = %[[N0]], %{{.*}} = %[[N1]]) -> (!npuvector<?xf32>, !npuvector<?xf32>) {
-  // CHECK:   npuvector.transfer_read {{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   npuvector.transfer_read {{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK-NOT: arith.divsi
+  // CHECK: %{{.*}}:2 = scf.for %[[IV:.*]] = %{{.*}} to %[[DIM]] step %[[VEC_SIZE]] iter_args(%{{.*}} = %[[N0]], %{{.*}} = %[[N1]]) -> (!npuvector<?xf32>, !npuvector<?xf32>) {
+  // CHECK:   %[[REMAIN:.*]] = affine.apply
+  // CHECK:   %[[TILE:.*]] = affine.min
+  // CHECK:   npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK:   npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
   // CHECK:   arith.mulf {{.*}} : !npuvector<?xf32>
   // CHECK:   arith.mulf {{.*}} : !npuvector<?xf32>
   // CHECK:   arith.addf {{.*}} {reduction_axes = [0 : index], reduction_type = "x"} : !npuvector<?xf32>
@@ -337,31 +322,11 @@ func.func @test_reduction_x_two_results_dynamic_tail(
   // CHECK:   scf.yield {{.*}} : !npuvector<?xf32>, !npuvector<?xf32>
   // CHECK: }
   // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK: %{{.*}} = affine.apply
-  // CHECK: arith.remsi %{{.*}}, %[[VEC_SIZE]] : index
-  // CHECK: scf.if %{{.*}} -> (!npuvector.f32) {
-  // CHECK:   %{{.*}} = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   %{{.*}} = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   arith.mulf {{.*}} : !npuvector<?xf32>
-  // CHECK:   arith.mulf {{.*}} : !npuvector<?xf32>
-  // CHECK:   npuvector.reduction <add>, {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK:   arith.addf {{.*}} : !npuvector.f32
-  // CHECK:   scf.yield {{.*}} : !npuvector.f32
-  // CHECK: } else {
-  // CHECK:   scf.yield {{.*}} : !npuvector.f32
-  // CHECK: }
+  // CHECK-NOT: arith.remsi
+  // CHECK-NOT: scf.if
   // CHECK: npuvector.reduction <add>, %{{.*}} {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK: %{{.*}} = affine.apply
-  // CHECK: arith.remsi %{{.*}}, %[[VEC_SIZE]] : index
-  // CHECK: scf.if %{{.*}} -> (!npuvector.f32) {
-  // CHECK:   %{{.*}} = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   %{{.*}} = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
-  // CHECK:   npuvector.reduction <add>, {{.*}} : !npuvector<?xf32> into !npuvector.f32
-  // CHECK:   arith.addf {{.*}} : !npuvector.f32
-  // CHECK:   scf.yield {{.*}} : !npuvector.f32
-  // CHECK: } else {
-  // CHECK:   scf.yield {{.*}} : !npuvector.f32
-  // CHECK: }
+  // CHECK-NOT: arith.remsi
+  // CHECK-NOT: scf.if
   // CHECK: npuvector.transfer_write {{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
   // CHECK: npuvector.transfer_write {{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
 
@@ -384,7 +349,7 @@ func.func @test_reduction_x_two_results_dynamic_tail(
 
 // ============================================================================
 // 3. 1-D tail handling static and dynamic
-// Static: 300 elements, vf=128 -> 256+44 tail; dynamic tail see test_reduction_dynamic (section 2)
+// Static: 300 elements, vf=128 -> in-loop min handles the last 44 elements.
 // ============================================================================
 
 // CHECK-LABEL: func.func @test_reduction_static_with_tail
@@ -394,20 +359,21 @@ func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: mem
   %c1 = arith.constant 1 : index
   %init = arith.constant 0.0 : f32
 
+  // CHECK: %[[UB:.*]] = arith.constant 300 : index
   // CHECK: %[[VF:.*]] = arith.constant 128 : index
-  // CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<128xf32>
-  // CHECK: %[[ALIGNED_UB:.*]] = arith.constant 256 : index
-  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<128xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%{{.*}}] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<128xf32>
-  // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] {reduction_type = "all"} : !npuvector<128xf32>
-  // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<128xf32>
+  // CHECK: %[[NEUTRAL:.*]] = npuvector.broadcast %{{.*}}[%[[VF]]] [%[[VF]]] : f32 to !npuvector<?xf32>
+  // CHECK-NOT: arith.constant 256 : index
+  // CHECK: %[[SUM_VEC:.*]] = scf.for %[[IV:.*]] = %{{.*}} to %[[UB]] step %[[VF]] iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
+  // CHECK:   %[[REMAIN:.*]] = affine.apply
+  // CHECK:   %[[TILE:.*]] = affine.min
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%[[IV]]] [%[[TILE]]] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<?xf32>
+  // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] {reduction_type = "all"} : !npuvector<?xf32>
+  // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<?xf32>
   // CHECK: }
-  // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] {{.*}} : !npuvector<128xf32> into !npuvector.f32
-  // CHECK: %[[TAIL_SIZE:.*]] = arith.constant 44 : index
-  // CHECK: %[[TAIL_READ:.*]] = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]], %{{.*}} : memref<300xf32>, !npuvector<44xf32>
-  // CHECK: %[[TAIL_REDUCED:.*]] = npuvector.reduction <add>, %[[TAIL_READ]] {{.*}} : !npuvector<44xf32> into !npuvector.f32
-  // CHECK: %[[FINAL:.*]] = arith.addf %[[SUM]], %[[TAIL_REDUCED]] : !npuvector.f32
-  // CHECK: npuvector.transfer_write %[[FINAL]], %{{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
+  // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] {{.*}} : !npuvector<?xf32> into !npuvector.f32
+  // CHECK-NOT: arith.constant 44 : index
+  // CHECK-NOT: !npuvector<44xf32>
+  // CHECK: npuvector.transfer_write %[[SUM]], %{{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
 
   %sum = scf.for %i = %c0 to %c300 step %c1 iter_args(%acc = %init) -> f32 {
     %v = memref.load %input[%i] : memref<300xf32>
@@ -416,6 +382,82 @@ func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: mem
   } {reduction_all=128}
 
   memref.store %sum, %output[] : memref<f32>
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_nested_reduction_all_x_merge_to_single_multidim_reduce
+// CHECK: scf.for {{.*}} -> (!npuvector<4x8x16xf32>) {
+// CHECK: scf.for {{.*}} -> (!npuvector<4x8x16xf32>) {
+// CHECK: scf.for {{.*}} -> (!npuvector<4x8x16xf32>) {
+// CHECK: npuvector.transfer_read {{.*}} : memref<4x8x16xf32>, !npuvector<4x8x16xf32>
+// CHECK-NOT: npuvector.reduction
+// CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %{{.*}} {reduction_dims = array<i64: 0, 1, 2>} : !npuvector<4x8x16xf32> into !npuvector.f32
+// CHECK-NOT: npuvector.reduction
+// CHECK: npuvector.transfer_write %[[SUM]], %{{.*}}[]{{.*}}: !npuvector.f32, memref<f32>
+func.func @test_nested_reduction_all_x_merge_to_single_multidim_reduce(
+    %input: memref<4x8x16xf32>,
+    %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+  %zero = arith.constant 0.000000e+00 : f32
+
+  %sum_i = scf.for %i = %c0 to %c4 step %c1 iter_args(%acc_i = %zero) -> f32 {
+    %sum_j = scf.for %j = %c0 to %c8 step %c1 iter_args(%acc_j = %zero) -> f32 {
+      %sum_k = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc_k = %zero) -> f32 {
+        %value = memref.load %input[%i, %j, %k] : memref<4x8x16xf32>
+        %next_k = arith.addf %acc_k, %value {reduction_type = "all"} : f32
+        scf.yield %next_k : f32
+      } {reduction_all=16}
+      %next_j = arith.addf %acc_j, %sum_k {reduction_axes = [1 : index], reduction_type = "x"} : f32
+      scf.yield %next_j : f32
+    } {reduction_x = 8 : i64}
+    %next_i = arith.addf %acc_i, %sum_j {reduction_type = "all"} : f32
+    scf.yield %next_i : f32
+  } {reduction_all=4}
+
+  memref.store %sum_i, %output[] : memref<f32>
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_nested_reduction_no_merge_when_child_result_is_not_direct_operand
+// CHECK-NOT: {reduction_dims = array<i64: 0, 1, 2>}
+// CHECK: npuvector.reduction <add>
+// CHECK-NOT: {reduction_dims = array<i64: 0, 1, 2>}
+// CHECK: return
+func.func @test_nested_reduction_no_merge_when_child_result_is_not_direct_operand(
+    %input: memref<4x8x16xf32>,
+    %output: memref<f32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+  %zero = arith.constant 0.000000e+00 : f32
+  %scale = arith.constant 2.000000e+00 : f32
+
+  %sum_i = scf.for %i = %c0 to %c4 step %c1 iter_args(%acc_i = %zero) -> f32 {
+    %sum_j = scf.for %j = %c0 to %c8 step %c1 iter_args(%acc_j = %zero) -> f32 {
+      %sum_k = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc_k = %zero) -> f32 {
+        %value = memref.load %input[%i, %j, %k] : memref<4x8x16xf32>
+        %next_k = arith.addf %acc_k, %value {reduction_type = "all"} : f32
+        scf.yield %next_k : f32
+      } {reduction_all=16}
+      %scaled = arith.mulf %sum_k, %scale : f32
+      %next_j = arith.addf %acc_j, %scaled {reduction_axes = [1 : index], reduction_type = "x"} : f32
+      scf.yield %next_j : f32
+    } {reduction_x = 8 : i64}
+    %next_i = arith.addf %acc_i, %sum_j {reduction_type = "all"} : f32
+    scf.yield %next_i : f32
+  } {reduction_all=4}
+
+  memref.store %sum_i, %output[] : memref<f32>
   return
 }
 

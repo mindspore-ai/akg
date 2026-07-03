@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ Module for akg support ascend_npu_ir test """
+
+__all__ = ["Kernel"]
+
 import os
 import logging
 import json
@@ -19,7 +22,6 @@ import json
 from .backends.ascend import ascend_compile
 from .ascend_launch import get_host_functions, get_device_function, torch_launch
 
-__all__ = ["Kernel"]
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')

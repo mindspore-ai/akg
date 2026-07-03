@@ -47,6 +47,7 @@
 
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Analysis/MemoryAnalysis.h"
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
 namespace mlir {
 
@@ -113,7 +114,7 @@ struct OpRecord {
   int64_t opType = -1;
   llvm::SmallVector<int64_t> inputBufferIndexes;
   int64_t outputBufferIndex;
-  int64_t extraBufferSize = 0;
+  llvm::SmallVector<int64_t, 2> extraBufferSizes;
   Operation *forOPRegion = nullptr;
   llvm::SmallVector<int64_t> generatedBufferIndexes;
   llvm::SmallVector<int64_t> killedBufferIndexes;
@@ -229,13 +230,43 @@ static void accumulateBufferIntoChainSummary(InplaceChainSummary &chain, const B
   chain.maxMultiNum = std::max(chain.maxMultiNum, info.multiNum);
 }
 
+constexpr int64_t kExtraBufferKeyStride = 64;
+
+static int64_t extraBufferChainKey(int64_t opRecordIndex, unsigned extraSlot) {
+  return -((opRecordIndex + 1) * kExtraBufferKeyStride + static_cast<int64_t>(extraSlot) + 1);
+}
+
+static std::pair<int64_t, unsigned> decodeExtraBufferChainKey(int64_t chainKey) {
+  const int64_t encoded = -chainKey - 1;
+  const int64_t opRecordIndex = encoded / kExtraBufferKeyStride - 1;
+  const unsigned extraSlot = static_cast<unsigned>(encoded % kExtraBufferKeyStride);
+  return {opRecordIndex, extraSlot};
+}
+
 static void registerExtraBufferChainSummary(InplaceChainSummary &chain, const OpRecord &opRecord,
+                                            int64_t extraBufferSizeBits, unsigned extraSlot,
                                             ArrayRef<BufferInfo> bufferList) {
   chain.isTempBuffer = true;
   chain.earliestAllocTime = opRecord.opTimeIndex;
   chain.latestFreeTime = opRecord.opTimeIndex;
-  chain.maxBufferSizeBits = opRecord.extraBufferSize;
+  chain.maxBufferSizeBits = extraBufferSizeBits;
   chain.maxMultiNum = 1;
+
+  if (isa<memref::StoreOp>(opRecord.sourceOp) && !opRecord.extraBufferSizes.empty()) {
+    const int64_t maxExtraBits =
+      *std::max_element(opRecord.extraBufferSizes.begin(), opRecord.extraBufferSizes.end());
+    if (extraBufferSizeBits == maxExtraBits) {
+      const auto firstMaxIt =
+        std::find(opRecord.extraBufferSizes.begin(), opRecord.extraBufferSizes.end(), maxExtraBits);
+      const unsigned firstMaxSlot =
+        static_cast<unsigned>(std::distance(opRecord.extraBufferSizes.begin(), firstMaxIt));
+      if (extraSlot == firstMaxSlot) {
+        chain.maxMultiNum = MULTI_BUFFER_NUM;
+        return;
+      }
+    }
+  }
+
   if (opRecord.outputBufferIndex < 0 || opRecord.outputBufferIndex >= static_cast<int64_t>(bufferList.size())) {
     return;
   }
@@ -287,43 +318,157 @@ static void placeChainPlanningEntry(const ChainPlanningEntry &planEntry,
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct EquivalentLoadKey {
-  Operation *enclosingFor = nullptr;
-  llvm::SmallVector<Value, 4> operands;
-  DictionaryAttr attrs;
+constexpr int64_t kOpTypeUnknown = -1;
+constexpr int64_t kOpTypeMemRefLoad = 1;
+constexpr int64_t kOpTypeMemRefStore = 2;
+constexpr int64_t kOpTypeArithNegF = 3;
+constexpr int64_t kOpTypeArithElemwise = 4;
+constexpr int64_t kOpTypeArithReduce = 5;
+constexpr int64_t kOpTypeArithTranspose = 6;
+constexpr int64_t kOpTypeArithBroadcast = 7;
+constexpr int64_t kOpTypeArithExt = 8;
+constexpr int64_t kOpTypeScfIf = 9;
+constexpr int64_t kOpTypeArithSelect = 10;
+constexpr int64_t kOpTypeScfFor = 11;
 
-  bool operator==(const EquivalentLoadKey &other) const {
-    return enclosingFor == other.enclosingFor && operands == other.operands && attrs == other.attrs;
+struct OperandEquivalenceEntry {
+  int64_t bufferIndex = -1;
+  Value value;
+  // Canonical signature for load index operands; compared instead of `value` when non-empty.
+  std::string indexSig;
+
+  bool operator==(const OperandEquivalenceEntry &other) const {
+    if (bufferIndex >= 0 || other.bufferIndex >= 0) {
+      return bufferIndex >= 0 && other.bufferIndex >= 0 && bufferIndex == other.bufferIndex;
+    }
+    if (!indexSig.empty() || !other.indexSig.empty()) {
+      return !indexSig.empty() && !other.indexSig.empty() && indexSig == other.indexSig;
+    }
+    return value == other.value;
   }
 };
 
-static EquivalentLoadKey makeEquivalentLoadKey(memref::LoadOp loadOp, Operation *enclosingFor) {
-  EquivalentLoadKey key;
-  key.enclosingFor = enclosingFor;
-  key.operands.assign(loadOp->operand_begin(), loadOp->operand_end());
-  key.attrs = loadOp->getAttrDictionary();
-  return key;
-}
+struct EquivalentOpKey {
+  Operation *enclosingFor = nullptr;
+  int64_t opType = kOpTypeUnknown;
+  StringRef opName;
+  llvm::SmallVector<OperandEquivalenceEntry, 4> inputOperands;
+  DictionaryAttr normalizedAttrs;
 
-static int64_t findEquivalentLoadBufferIndex(ArrayRef<std::pair<EquivalentLoadKey, int64_t>> entries,
-                                             const EquivalentLoadKey &key) {
+  bool operator==(const EquivalentOpKey &other) const {
+    if (enclosingFor != other.enclosingFor || opType != other.opType || normalizedAttrs != other.normalizedAttrs ||
+        inputOperands != other.inputOperands) {
+      return false;
+    }
+    if (opType != kOpTypeUnknown) {
+      return true;
+    }
+    return opName == other.opName;
+  }
+};
+
+struct BrcCstKey {
+  Value cst;
+  llvm::SmallVector<int64_t, 4> dimLoopIndices;
+
+  bool operator==(const BrcCstKey &other) const {
+    return cst == other.cst && dimLoopIndices == other.dimLoopIndices;
+  }
+};
+
+static std::optional<int64_t> findBrcCstBufferIndex(ArrayRef<std::pair<BrcCstKey, int64_t>> entries,
+                                                    const BrcCstKey &key) {
   for (const auto &[entry, bufIdx] : entries) {
     if (entry == key) {
       return bufIdx;
     }
   }
-  return -1;
+  return std::nullopt;
 }
 
-static void dumpEquivalentLoadKey(llvm::raw_ostream &os, const EquivalentLoadKey &key, OpPrintingFlags printFlags) {
-  os << " operands=[";
-  for (size_t i = 0; i < key.operands.size(); ++i) {
+static bool isConstantSsaValue(Value val) {
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp) {
+    return false;
+  }
+  return isa<arith::ConstantOp, arith::ConstantIndexOp, arith::ConstantIntOp, arith::ConstantFloatOp>(defOp);
+}
+
+static Attribute normalizeAttrForEquivalence(
+  Attribute attr, Operation *op, llvm::function_ref<std::optional<int64_t>(Value)> resolveValueBuffer) {
+  if (auto arr = dyn_cast<ArrayAttr>(attr)) {
+    llvm::SmallVector<Attribute, 4> elems;
+    elems.reserve(arr.size());
+    std::transform(arr.begin(), arr.end(), std::back_inserter(elems),
+                   [&](Attribute elem) { return normalizeAttrForEquivalence(elem, op, resolveValueBuffer); });
+    return ArrayAttr::get(arr.getContext(), elems);
+  }
+  if (auto dict = dyn_cast<DictionaryAttr>(attr)) {
+    llvm::SmallVector<NamedAttribute, 4> entries;
+    entries.reserve(dict.size());
+    std::transform(dict.begin(), dict.end(), std::back_inserter(entries),
+                   [&](NamedAttribute na) {
+                     return NamedAttribute(
+                       na.getName(), normalizeAttrForEquivalence(na.getValue(), op, resolveValueBuffer));
+                   });
+    return DictionaryAttr::get(dict.getContext(), entries);
+  }
+  for (Value operand : op->getOperands()) {
+    if (auto constOp = operand.getDefiningOp<arith::ConstantOp>()) {
+      if (constOp.getValue() == attr) {
+        if (std::optional<int64_t> bufIdx = resolveValueBuffer(operand)) {
+          return IntegerAttr::get(IntegerType::get(op->getContext(), 64), *bufIdx);
+        }
+      }
+    }
+  }
+  return attr;
+}
+
+static DictionaryAttr normalizeOpAttrDictionary(
+  DictionaryAttr attrs, Operation *op, llvm::function_ref<std::optional<int64_t>(Value)> resolveValueBuffer) {
+  llvm::SmallVector<NamedAttribute, 4> entries;
+  entries.reserve(attrs.size());
+  std::transform(attrs.begin(), attrs.end(), std::back_inserter(entries),
+                 [&](NamedAttribute na) {
+                   return NamedAttribute(
+                     na.getName(), normalizeAttrForEquivalence(na.getValue(), op, resolveValueBuffer));
+                 });
+  return DictionaryAttr::get(attrs.getContext(), entries);
+}
+
+static std::optional<int64_t> findEquivalentOpBufferIndex(ArrayRef<std::pair<EquivalentOpKey, int64_t>> entries,
+                                                          const EquivalentOpKey &key) {
+  for (const auto &[entry, bufIdx] : entries) {
+    if (entry == key) {
+      return bufIdx;
+    }
+  }
+  return std::nullopt;
+}
+
+static void dumpEquivalentOpKey(llvm::raw_ostream &os, const EquivalentOpKey &key, OpPrintingFlags printFlags) {
+  (void)printFlags;
+  os << " opType=" << key.opType;
+  if (key.opType == kOpTypeUnknown) {
+    os << " opName=" << key.opName;
+  }
+  os << " inputOperands=[";
+  for (size_t i = 0; i < key.inputOperands.size(); ++i) {
     if (i > 0) {
       os << ',';
     }
-    key.operands[i].print(os);
+    const OperandEquivalenceEntry &entry = key.inputOperands[i];
+    if (entry.bufferIndex >= 0) {
+      os << "buf:" << entry.bufferIndex;
+    } else if (!entry.indexSig.empty()) {
+      os << "sig:" << entry.indexSig;
+    } else {
+      os << "val:";
+      entry.value.print(os);
+    }
   }
-  os << "] attrs=" << key.attrs;
+  os << "] attrs=" << key.normalizedAttrs;
 }
 
 static void dumpInplaceChainSummaryLine(llvm::raw_ostream &os, const InplaceChainSummary &summary) {
@@ -345,12 +490,18 @@ static void dumpInplaceChainSummaryLine(llvm::raw_ostream &os, const InplaceChai
 
 static void dumpTempBufferChainLine(llvm::raw_ostream &os, int64_t chainRoot, ArrayRef<OpRecord> perOpList,
                                     OpPrintingFlags printFlags) {
-  const int64_t opIdx = -chainRoot - 1;
+  const auto [opIdx, extraSlot] = decodeExtraBufferChainKey(chainRoot);
   if (opIdx < 0 || opIdx >= static_cast<int64_t>(perOpList.size())) {
     return;
   }
   const OpRecord &opRecord = perOpList[static_cast<size_t>(opIdx)];
-  os << "  extra-buffer totalBits=" << opRecord.extraBufferSize << " op:";
+  os << "  extra-buffer[" << extraSlot << "] totalBits=";
+  if (extraSlot < opRecord.extraBufferSizes.size()) {
+    os << opRecord.extraBufferSizes[extraSlot];
+  } else {
+    os << '?';
+  }
+  os << " op:";
   if (opRecord.sourceOp) {
     opRecord.sourceOp->print(os, printFlags);
   } else {
@@ -382,13 +533,95 @@ static void dumpChainBufferLine(llvm::raw_ostream &os, int64_t bufIdx, const Buf
   os << '\n';
 }
 
-static void dumpEquivalentLoadDedupSection(llvm::raw_ostream &os,
-                                           ArrayRef<std::pair<EquivalentLoadKey, int64_t>> entries,
-                                           ArrayRef<BufferInfo> bufferList, OpPrintingFlags printFlags) {
+static void dumpInt64IndexList(llvm::raw_ostream &os, ArrayRef<int64_t> values) {
+  os << '[';
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      os << ',';
+    }
+    os << values[i];
+  }
+  os << ']';
+}
+
+static void dumpBufferIndexSummary(llvm::raw_ostream &os, int64_t bufIdx, ArrayRef<BufferInfo> bufferList) {
+  os << bufIdx;
+  if (bufIdx < 0 || bufIdx >= static_cast<int64_t>(bufferList.size())) {
+    return;
+  }
+  const BufferInfo &info = bufferList[static_cast<size_t>(bufIdx)];
+  os << "{bits=" << info.totalBufferSize << " scalar=" << (info.isScalar ? 1 : 0)
+     << " valid=" << (info.isValid ? 1 : 0) << " virtual=" << (info.isVirtual ? 1 : 0)
+     << " multiNum=" << info.multiNum << " alloc=" << info.allocTime << " free=" << info.freeTime
+     << " originOpRec=" << info.OriginOpRecordIndex << " dimLoops=";
+  dumpInt64IndexList(os, info.dimLoopIndices);
+  os << '}';
+}
+
+static void dumpBufferIndexListSummary(llvm::raw_ostream &os, ArrayRef<int64_t> bufIdxs,
+                                       ArrayRef<BufferInfo> bufferList) {
+  os << '[';
+  for (size_t i = 0; i < bufIdxs.size(); ++i) {
+    if (i > 0) {
+      os << ',';
+    }
+    dumpBufferIndexSummary(os, bufIdxs[i], bufferList);
+  }
+  os << ']';
+}
+
+static void dumpOpRecordLine(llvm::raw_ostream &os, const OpRecord &rec, ArrayRef<BufferInfo> bufferList,
+                             OpPrintingFlags printFlags) {
+  os << "       opRecord[" << rec.Index << "] opType=" << rec.opType << " opTime=" << rec.opTimeIndex
+     << " isVirtual=" << (rec.isVirtualOp ? 1 : 0) << " virtualIndex=" << rec.VirtualIndex
+     << " virtualOpIndexes=";
+  dumpInt64IndexList(os, rec.VirtualopIndexes);
+  os << " extraBufferSizes=";
+  dumpInt64IndexList(os, rec.extraBufferSizes);
+  os << " op:";
+  if (rec.sourceOp) {
+    rec.sourceOp->print(os, printFlags);
+  } else {
+    os << "<unknown>";
+  }
+  os << '\n';
+  os << "         inputBuffers=";
+  dumpBufferIndexListSummary(os, rec.inputBufferIndexes, bufferList);
+  os << " outputBuffer=";
+  dumpBufferIndexSummary(os, rec.outputBufferIndex, bufferList);
+  os << " generated=";
+  dumpBufferIndexListSummary(os, rec.generatedBufferIndexes, bufferList);
+  os << " killed=";
+  dumpBufferIndexListSummary(os, rec.killedBufferIndexes, bufferList);
+  os << '\n';
+}
+
+static void dumpOpRecordsSection(llvm::raw_ostream &os, ArrayRef<OpRecord> perOpList, ArrayRef<BufferInfo> bufferList,
+                                 OpPrintingFlags printFlags) {
+  llvm::SmallVector<const OpRecord *, 0> records;
+  records.reserve(perOpList.size());
+  for (const OpRecord &rec : perOpList) {
+    if (rec.opType == kOpTypeScfFor) {
+      continue;
+    }
+    if (rec.sourceOp && isa<scf::ForOp>(rec.sourceOp)) {
+      continue;
+    }
+    records.push_back(&rec);
+  }
+
+  os << "     op-records(excl-for) count=" << records.size() << '\n';
+  for (const OpRecord *rec : records) {
+    dumpOpRecordLine(os, *rec, bufferList, printFlags);
+  }
+}
+
+static void dumpEquivalentOpDedupSection(llvm::raw_ostream &os, ArrayRef<std::pair<EquivalentOpKey, int64_t>> entries,
+                                       ArrayRef<BufferInfo> bufferList, OpPrintingFlags printFlags) {
   if (entries.empty()) {
     return;
   }
-  os << "     equivalent-load-dedup entries=" << entries.size() << '\n';
+  os << "     equivalent-op-dedup entries=" << entries.size() << '\n';
   for (const auto &[key, bufIdx] : entries) {
     os << "       bufferIdx=" << bufIdx;
     if (bufIdx >= 0 && bufIdx < static_cast<int64_t>(bufferList.size())) {
@@ -396,7 +629,7 @@ static void dumpEquivalentLoadDedupSection(llvm::raw_ostream &os,
       os << " lifetime=[" << info.allocTime << ',' << info.freeTime << ']';
     }
     os << ' ';
-    dumpEquivalentLoadKey(os, key, printFlags);
+    dumpEquivalentOpKey(os, key, printFlags);
     os << '\n';
   }
 }
@@ -409,13 +642,15 @@ class MemoryPeakEstimator {
   void run(PeakAnalysisResult &out);
 
   void dumpInplaceChains(llvm::raw_ostream &os) const;
+  void dumpOpRecords(llvm::raw_ostream &os) const;
 
   const llvm::DenseMap<Operation *, int64_t> &getPerOpIndexMap() const { return perOpIndexMap_; }
   const llvm::SmallVector<OpRecord, 0> &getPerOpList() const { return perOpList_; }
 
   bool hasInlineBroadcastLoopDims(Operation *op) const;
   bool hasInlineTransposeLoopDims(Operation *op) const;
-  int64_t getDimBound(const BufferInfo &info, size_t dimIdx) const;
+  bool isMaterializedCstBufferIndex(int64_t bufIdx) const;
+  int64_t findMaterializedCstBufferIndex(Value cst, ArrayRef<int64_t> dimLoopIndices) const;
 
  private:
   PeakAnalysisInput input_;
@@ -428,7 +663,8 @@ class MemoryPeakEstimator {
 
   llvm::DenseMap<Operation *, int64_t> perOpIndexMap_;
   llvm::DenseMap<Value, int64_t> bufferInfoIndexMap_;
-  llvm::SmallVector<std::pair<EquivalentLoadKey, int64_t>, 16> equivalentLoadBufferMap_;
+  llvm::SmallVector<std::pair<EquivalentOpKey, int64_t>, 16> equivalentOpBufferMap_;
+  llvm::SmallVector<std::pair<BrcCstKey, int64_t>, 16> brcCstBufferMap_;
 
   SmallVector<int64_t, 4> TimelineOpIndexList;
 
@@ -449,17 +685,38 @@ class MemoryPeakEstimator {
   void InferOutputBufferShape_(BufferInfo &outputBufferInfo, Operation *op, OpRecord &rec);
   void buildForOpWalkOrder_();
   int64_t totalBitsfromBuffer(const BufferInfo &info) const;
+  void alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType);
+  void assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex);
+  int64_t totalBitsFromMemRefValue_(Value memref) const;
   void DimLoopIndicesToShape(ArrayRef<int64_t> dimLoopIndices, SmallVectorImpl<int64_t> &outBounds) const;
   void inferEnclosingDimLoopIndices_(Operation *op, SmallVectorImpl<int64_t> &outIndices) const;
+  int64_t resolveOperandBufferIndex_(Value input, Operation *op);
   int64_t getOrCreateBlockInputBufferIndex_(Value input, const OpRecord &rec, Operation *op);
+  int64_t getOrCreateBrcCstBuffer_(Value cst, ArrayRef<int64_t> dimLoopIndices, OpRecord &rec, Operation *op);
+  EquivalentOpKey buildEquivalentOpKeyFromRecord_(Operation *op, Operation *enclosingFor,
+                                                  ArrayRef<int64_t> orderedInputBufferIndexes);
+  void registerEquivalentOpBuffer_(Operation *op, Operation *enclosingFor, int64_t outputBufferIndex,
+                                   ArrayRef<int64_t> orderedInputBufferIndexes);
   void analyzeConditionalControlFlow_();
+  void assignOpTimeline_(Operation *op, int64_t &opTimeIndex);
+  void assignGenBuffersAllocTime_(OpRecord &opRecord, int64_t opTimeIndex);
+  void assignVirtualOpTimeline_(const OpRecord &opRecord, int64_t &opTimeIndex);
 
   void modelVirtualOps();
   void eliminateRedundantOps();
 
   void computeBufferLifetimes();
   void modelReduceExtraBuffer();
+  void modelSelectExtraBuffer();
+  void modelNegExtraBuffer();
+  void modelLoadExtraBuffer();
+  void modelStoreExtraBuffer();
   void markMultiBuffer();
+  void invalidateFullyInlinedBrcCstBuffers_();
+
+  int64_t scaledBufferBitsForStoreBroadcastChain_(const BufferInfo &info) const;
+  void replaceExtraBufferSizesMatching_(int64_t oldSize, int64_t newSize);
+  void propagateStoreBroadcastInputChainResize_(int64_t startBufIdx);
 
   void analyzeIntraOpInplace();
   void analyzeInterOpInplace();
@@ -621,22 +878,8 @@ ReduceOpKind reduceKindFromOp(Operation *op) {
     .Case<arith::XOrIOp>([](auto) { return ReduceOpKind::XorI; })
     .Default([](Operation *) { return ReduceOpKind::Sum; });
 }
-
-namespace {
-constexpr int64_t kOpTypeUnknown = -1;
-constexpr int64_t kOpTypeMemRefLoad = 1;
-constexpr int64_t kOpTypeMemRefStore = 2;
-constexpr int64_t kOpTypeArithNegF = 3;
-constexpr int64_t kOpTypeArithElemwise = 4;
-constexpr int64_t kOpTypeArithReduce = 5;
-constexpr int64_t kOpTypeArithTranspose = 6;
-constexpr int64_t kOpTypeArithBroadcast = 7;
-constexpr int64_t kOpTypeArithExt = 8;
-constexpr int64_t kOpTypeScfIf = 9;
-constexpr int64_t kOpTypeArithSelect = 10;
-constexpr int64_t kOpTypeScfFor = 11;
 }  // namespace
-
+namespace {
 static int64_t OpTypeCode(Operation *op) {
   if (!op) {
     return kOpTypeUnknown;
@@ -750,8 +993,37 @@ static bool isReusableArithSelectInplace(arith::SelectOp selectOp, const BufferI
   return true;
 }
 
+static bool shouldBlockBrcCstInplaceReuse(Operation *op, unsigned operandIndex) {
+  if (operandIndex == 1) {
+    return true;
+  }
+  return isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp>(op);
+}
+
+static bool isKillBrcCst(const MemoryPeakEstimator &est, Operation *op, const OpRecord &opRecord,
+                                        int64_t killBufIdx, ArrayRef<BufferInfo> bufferList) {
+  if (!est.isMaterializedCstBufferIndex(killBufIdx)) {
+    return false;
+  }
+  if (killBufIdx < 0 || killBufIdx >= static_cast<int64_t>(bufferList.size())) {
+    return false;
+  }
+  const BufferInfo &killInfo = bufferList[static_cast<size_t>(killBufIdx)];
+  for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+    Value operand = op->getOperand(i);
+    if (!isConstantSsaValue(operand) || operand != killInfo.originalValue) {
+      continue;
+    }
+    const int64_t matIdx = est.findMaterializedCstBufferIndex(operand, killInfo.dimLoopIndices);
+    if (matIdx == killBufIdx && shouldBlockBrcCstInplaceReuse(op, i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool isOpSupportingIntraOpInplace(const MemoryPeakEstimator &est, Operation *op, int64_t opType,
-                                         const BufferInfo &gen, const BufferInfo &kill,
+                                         const OpRecord &opRecord, const BufferInfo &gen, const BufferInfo &kill,
                                          const llvm::DenseMap<Value, int64_t> &bufMap,
                                          llvm::ArrayRef<BufferInfo> bufferList) {
   if (!op || op->hasAttr(kReductionAxesStr)) {
@@ -760,6 +1032,11 @@ static bool isOpSupportingIntraOpInplace(const MemoryPeakEstimator &est, Operati
 
   if (isIsaInplaceElemwiseOp(op) && !est.hasInlineBroadcastLoopDims(op) && !est.hasInlineTransposeLoopDims(op)) {
     return true;
+  }
+
+  if (opRecord.extraBufferSizes.size() > 1 ||
+      (opRecord.extraBufferSizes.size() == 1 && !est.hasInlineBroadcastLoopDims(op) && opType != kOpTypeArithNegF)) {
+    return false;
   }
 
   if (!isArithOp(opType)) {
@@ -771,6 +1048,9 @@ static bool isOpSupportingIntraOpInplace(const MemoryPeakEstimator &est, Operati
   }
 
   if (est.hasInlineBroadcastLoopDims(op)) {
+    if (isKillBrcCst(est, op, opRecord, kill.Index, bufferList)) {
+      return false;
+    }
     return gen.dimLoopIndices == kill.dimLoopIndices;
   }
 
@@ -784,16 +1064,8 @@ static bool isOpSupportingIntraOpInplace(const MemoryPeakEstimator &est, Operati
 
   const unsigned genBits = getElementTypeOrSelf(gen.elementType).getIntOrFloatBitWidth();
   const unsigned killBits = getElementTypeOrSelf(kill.elementType).getIntOrFloatBitWidth();
-
-  if (killBits == genBits) {
-    return true;
-  }
-
-  if (killBits % genBits != 0) {
-    return false;
-  }
-
-  return !(gen.dimLoopIndices.size() > 1 && est.getDimBound(gen, 0) != 1 && est.getDimBound(kill, 0) != 1);
+  return (killBits % genBits == 0);
+  // For dynamic axes, check if it will be collapsed later. If so, check if shape.size is greater than 1.
 }
 
 static bool areConditionallyAliased(int64_t a, int64_t b, llvm::ArrayRef<ConditionalAliasEdge> edges) {
@@ -808,8 +1080,9 @@ static bool areConditionallyAliased(int64_t a, int64_t b, llvm::ArrayRef<Conditi
   return false;
 }
 
-static bool canIntraOpInplaceReuse(const MemoryPeakEstimator &est, Operation *op, int64_t opType, const BufferInfo &gen,
-                                   const BufferInfo &kill, const llvm::DenseMap<Value, int64_t> &bufMap,
+static bool canIntraOpInplaceReuse(const MemoryPeakEstimator &est, Operation *op, int64_t opType,
+                                   const OpRecord &opRecord, const BufferInfo &gen, const BufferInfo &kill,
+                                   const llvm::DenseMap<Value, int64_t> &bufMap,
                                    llvm::ArrayRef<BufferInfo> bufferList) {
   if (gen.ignoreInplace || kill.ignoreInplace) {
     return false;
@@ -817,7 +1090,7 @@ static bool canIntraOpInplaceReuse(const MemoryPeakEstimator &est, Operation *op
   if (!isBufferEligibleForIntraOpInplace(gen) || !isBufferEligibleForIntraOpInplace(kill)) {
     return false;
   }
-  return isOpSupportingIntraOpInplace(est, op, opType, gen, kill, bufMap, bufferList);
+  return isOpSupportingIntraOpInplace(est, op, opType, opRecord, gen, kill, bufMap, bufferList);
 }
 
 //  buffers defined in `region` but not as results of ops in `siblingRegion`.
@@ -1051,6 +1324,15 @@ static int64_t totalBitsFromShape(ArrayRef<int64_t> shape, Type elementType, boo
   return ceilFactor(bits, kVectorBlockSizeBit);
 }
 
+// 32B = 256bit alignment on last axis element count: f16/bf16 -> 16, f32/i32 -> 8, i8 -> 32, etc.
+static int64_t lastAxis32ByteAlignElems(Type elementType) {
+  const unsigned bitWidth = getElementTypeOrSelf(elementType).getIntOrFloatBitWidth();
+  if (bitWidth == 0 || (256 % bitWidth) != 0) {
+    return 1;
+  }
+  return 256 / static_cast<int64_t>(bitWidth);
+}
+
 static int64_t bufferTotalBitsFromDimLoopIndices(ArrayRef<int64_t> dimLoopIndices, Type elementType,
                                                  ArrayRef<scf::ForOp> orderedForOps,
                                                  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
@@ -1063,6 +1345,9 @@ static int64_t bufferTotalBitsFromDimLoopIndices(ArrayRef<int64_t> dimLoopIndice
   std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(bounds), [&](int64_t loopIndex) {
     return DimLoopIndexToBound(loopIndex, orderedForOps, tileUpperBoundPerLoop);
   });
+  if (!bounds.empty()) {
+    bounds.back() = ceilFactor(bounds.back(), lastAxis32ByteAlignElems(elementType));
+  }
   return totalBitsFromShape(bounds, elementType, alignBufferSizeTo256Bits);
 }
 
@@ -1077,7 +1362,8 @@ static void collectInputShapeInfo(ArrayRef<int64_t> inputBufferIndexes, ArrayRef
       continue;
     }
     const BufferInfo &inputInfo = bufferList[static_cast<size_t>(index)];
-    if (inputInfo.isScalar) {
+    // Materialized broadcast constants keep output dimLoopIndices but originate from scalar SSA.
+    if (inputInfo.isScalar || isConstantSsaValue(inputInfo.originalValue)) {
       hasScalarInput = true;
       continue;
     }
@@ -1118,32 +1404,39 @@ static void assignOutputDimLoopIndices(ArrayRef<ArrayRef<int64_t>> nonScalarDimL
 }
 
 static void setInlineBroadcastExtraBufferSize(ArrayRef<int64_t> inputBufferIndexes, ArrayRef<BufferInfo> bufferList,
-                                              ArrayRef<int64_t> outputDimLoopIndices, bool needExtraBuffer,
-                                              OpRecord &rec, ArrayRef<scf::ForOp> orderedForOps,
+                                              ArrayRef<int64_t> outputDimLoopIndices, Type outputElementType,
+                                              bool needExtraBuffer, OpRecord &rec, Operation *op,
+                                              const MemoryPeakEstimator &est, ArrayRef<scf::ForOp> orderedForOps,
                                               const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
                                               bool alignBufferSizeTo256Bits) {
-  if (!needExtraBuffer || rec.extraBufferSize != 0) {
+  if (!needExtraBuffer || !op) {
     return;
   }
 
-  int64_t extraBufferSize = 0;
+  const int64_t outputTotalBits =
+    bufferTotalBitsFromDimLoopIndices(outputDimLoopIndices, outputElementType, orderedForOps, tileUpperBoundPerLoop,
+                                      alignBufferSizeTo256Bits);
+
   for (int64_t index : inputBufferIndexes) {
     if (index < 0 || index >= static_cast<int64_t>(bufferList.size())) {
       continue;
     }
     const BufferInfo &inputInfo = bufferList[static_cast<size_t>(index)];
-    if (ArrayRef(inputInfo.dimLoopIndices) != outputDimLoopIndices) {
-      extraBufferSize += bufferTotalBitsFromDimLoopIndices(outputDimLoopIndices, inputInfo.elementType, orderedForOps,
-                                                           tileUpperBoundPerLoop, alignBufferSizeTo256Bits);
+    if (isKillBrcCst(est, op, rec, index, bufferList)) {
+      rec.extraBufferSizes.push_back(outputTotalBits);
+      continue;
     }
-  }
-  if (extraBufferSize > 0) {
-    rec.extraBufferSize = extraBufferSize;
+    if (ArrayRef(inputInfo.dimLoopIndices) != outputDimLoopIndices) {
+      rec.extraBufferSizes.push_back(bufferTotalBitsFromDimLoopIndices(outputDimLoopIndices, inputInfo.elementType,
+                                                                       orderedForOps, tileUpperBoundPerLoop,
+                                                                       alignBufferSizeTo256Bits));
+    }
   }
 }
 
 static void InferShapeFromInput(ArrayRef<int64_t> inputBufferIndexes, ArrayRef<BufferInfo> bufferList,
-                                BufferInfo &outputBufferInfo, OpRecord &rec, ArrayRef<scf::ForOp> orderedForOps,
+                                BufferInfo &outputBufferInfo, OpRecord &rec, Operation *op,
+                                const MemoryPeakEstimator &est, ArrayRef<scf::ForOp> orderedForOps,
                                 const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
                                 bool alignBufferSizeTo256Bits) {
   outputBufferInfo.isScalar = true;
@@ -1162,8 +1455,9 @@ static void InferShapeFromInput(ArrayRef<int64_t> inputBufferIndexes, ArrayRef<B
   assignOutputDimLoopIndices(nonScalarDimLoopIndices, outputBufferInfo.dimLoopIndices, allSame);
 
   const bool needExtraBuffer = (hasScalarInput && hasVectorInput) || (nonScalarDimLoopIndices.size() >= 2 && !allSame);
-  setInlineBroadcastExtraBufferSize(inputBufferIndexes, bufferList, outputBufferInfo.dimLoopIndices, needExtraBuffer,
-                                    rec, orderedForOps, tileUpperBoundPerLoop, alignBufferSizeTo256Bits);
+  setInlineBroadcastExtraBufferSize(inputBufferIndexes, bufferList, outputBufferInfo.dimLoopIndices,
+                                    outputBufferInfo.elementType, needExtraBuffer, rec, op, est, orderedForOps,
+                                    tileUpperBoundPerLoop, alignBufferSizeTo256Bits);
 }
 
 struct ScfForBoundSignature {
@@ -1247,15 +1541,6 @@ void MemoryPeakEstimator::DimLoopIndicesToShape(ArrayRef<int64_t> dimLoopIndices
   });
 }
 
-int64_t MemoryPeakEstimator::getDimBound(const BufferInfo &info, size_t dimIdx) const {
-  if (dimIdx >= info.dimLoopIndices.size()) {
-    return 1;
-  }
-  SmallVector<int64_t, 4> bounds;
-  DimLoopIndicesToShape(info.dimLoopIndices, bounds);
-  return bounds[dimIdx];
-}
-
 int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   if (info.isScalar || info.dimLoopIndices.empty()) {
     return static_cast<int64_t>(getElementTypeOrSelf(info.elementType).getIntOrFloatBitWidth());
@@ -1263,6 +1548,40 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   SmallVector<int64_t, 4> bounds;
   DimLoopIndicesToShape(info.dimLoopIndices, bounds);
   return totalBitsFromShape(bounds, info.elementType, input_.alignBufferSizeTo256Bits);
+}
+
+void MemoryPeakEstimator::alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType) {
+  if (dimLoopIndices.empty()) {
+    return;
+  }
+  const int64_t lastLoop = dimLoopIndices.back();
+  if (lastLoop <= 0 || lastLoop > static_cast<int64_t>(orderedForOps_.size())) {
+    return;
+  }
+  scf::ForOp forOp = orderedForOps_[static_cast<size_t>(lastLoop - 1)];
+  const int64_t currentBound = DimLoopIndexToBound(lastLoop, orderedForOps_, input_.tileUpperBoundPerLoop);
+  const int64_t alignElems = lastAxis32ByteAlignElems(elementType);
+  const int64_t aligned = ceilFactor(currentBound, alignElems);
+  if (aligned != currentBound) {
+    input_.tileUpperBoundPerLoop[forOp] = aligned;
+  }
+}
+
+void MemoryPeakEstimator::assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex) {
+  Block &body = forOp.getRegion().front();
+  for (BlockArgument arg : body.getArguments()) {
+    if (arg.getArgNumber() == 0) {
+      continue;  // induction var has no buffer
+    }
+    auto it = bufferInfoIndexMap_.find(arg);
+    if (it == bufferInfoIndexMap_.end()) {
+      continue;
+    }
+    BufferInfo &info = bufferInfoList_[static_cast<size_t>(it->second)];
+    if (info.allocTime < 0) {
+      info.allocTime = opTimeIndex;
+    }
+  }
 }
 
 static bool isInsideScfForBody(Operation *op) {
@@ -1300,7 +1619,7 @@ void MemoryPeakEstimator::inferEnclosingDimLoopIndices_(Operation *op, SmallVect
   }
 }
 
-int64_t MemoryPeakEstimator::getOrCreateBlockInputBufferIndex_(Value input, const OpRecord &rec, Operation *op) {
+int64_t MemoryPeakEstimator::resolveOperandBufferIndex_(Value input, Operation *op) {
   if (auto mapIt = bufferInfoIndexMap_.find(input); mapIt != bufferInfoIndexMap_.end()) {
     return mapIt->second;
   }
@@ -1312,15 +1631,181 @@ int64_t MemoryPeakEstimator::getOrCreateBlockInputBufferIndex_(Value input, cons
   bufferInfoList_.push_back(BufferInfo{});
   BufferInfo &inputBufferInfo = bufferInfoList_[static_cast<size_t>(valIndex)];
   inputBufferInfo.Index = valIndex;
-  inputBufferInfo.OriginOpRecordIndex = rec.Index;
+  inputBufferInfo.OriginOpRecordIndex = -1;
   inputBufferInfo.elementType = input.getType();
   inputBufferInfo.originalValue = input;
   inferEnclosingDimLoopIndices_(op, inputBufferInfo.dimLoopIndices);
   inputBufferInfo.isScalar = inputBufferInfo.dimLoopIndices.empty();
   inputBufferInfo.isValid = isInsideScfForBody(op);
+  alignLastAxisTileBoundInMap_(inputBufferInfo.dimLoopIndices, inputBufferInfo.elementType);
   inputBufferInfo.totalBufferSize = totalBitsfromBuffer(inputBufferInfo);
   bufferInfoIndexMap_[input] = valIndex;
   return valIndex;
+}
+
+int64_t MemoryPeakEstimator::getOrCreateBlockInputBufferIndex_(Value input, const OpRecord &rec, Operation *op) {
+  const int64_t valIndex = resolveOperandBufferIndex_(input, op);
+  if (valIndex < 0) {
+    return -1;
+  }
+  if (bufferInfoList_[static_cast<size_t>(valIndex)].OriginOpRecordIndex < 0) {
+    bufferInfoList_[static_cast<size_t>(valIndex)].OriginOpRecordIndex = rec.Index;
+  }
+  return valIndex;
+}
+
+int64_t MemoryPeakEstimator::getOrCreateBrcCstBuffer_(Value cst, ArrayRef<int64_t> dimLoopIndices, OpRecord &rec,
+                                                      Operation *op) {
+  BrcCstKey key;
+  key.cst = cst;
+  key.dimLoopIndices.assign(dimLoopIndices.begin(), dimLoopIndices.end());
+  if (std::optional<int64_t> existingIdx = findBrcCstBufferIndex(brcCstBufferMap_, key)) {
+    return *existingIdx;
+  }
+
+  const int64_t valIndex = static_cast<int64_t>(bufferInfoList_.size());
+  bufferInfoList_.push_back(BufferInfo{});
+  BufferInfo &materializedInfo = bufferInfoList_[static_cast<size_t>(valIndex)];
+  materializedInfo.Index = valIndex;
+  materializedInfo.OriginOpRecordIndex = rec.Index;
+  materializedInfo.originalValue = cst;
+  materializedInfo.elementType = getElementTypeOrSelf(cst.getType());
+  materializedInfo.dimLoopIndices.assign(dimLoopIndices.begin(), dimLoopIndices.end());
+  materializedInfo.isScalar = dimLoopIndices.empty();
+  materializedInfo.isValid = true;
+  alignLastAxisTileBoundInMap_(materializedInfo.dimLoopIndices, materializedInfo.elementType);
+  materializedInfo.totalBufferSize = totalBitsfromBuffer(materializedInfo);
+  brcCstBufferMap_.push_back({key, valIndex});
+  rec.generatedBufferIndexes.push_back(valIndex);
+  return valIndex;
+}
+
+bool MemoryPeakEstimator::isMaterializedCstBufferIndex(int64_t bufIdx) const {
+  for (const auto &[key, idx] : brcCstBufferMap_) {
+    (void)key;
+    if (idx == bufIdx) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int64_t MemoryPeakEstimator::findMaterializedCstBufferIndex(Value cst, ArrayRef<int64_t> dimLoopIndices) const {
+  BrcCstKey key;
+  key.cst = cst;
+  key.dimLoopIndices.assign(dimLoopIndices.begin(), dimLoopIndices.end());
+  if (std::optional<int64_t> idx = findBrcCstBufferIndex(brcCstBufferMap_, key)) {
+    return *idx;
+  }
+  return -1;
+}
+
+// Forward declarations for load index canonicalization.
+static std::string loadIndexValueSig(Value v);
+static std::string scfForLoopSig(scf::ForOp forOp);
+
+static std::string loadIndexValueSig(Value v) {
+  if (!v) {
+    return "null";
+  }
+  if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+    Block *block = blockArg.getOwner();
+    if (block && block->isEntryBlock()) {
+      if (auto forOp = dyn_cast<scf::ForOp>(block->getParentOp())) {
+        // Induction var (arg 0) or iter_args (arg >= 1) of a scf.for body block.
+        return "larg" + std::to_string(blockArg.getArgNumber()) + "(" + scfForLoopSig(forOp) + ")";
+      }
+    }
+    return "ba" + std::to_string(blockArg.getArgNumber());
+  }
+  if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+    std::string s;
+    llvm::raw_string_ostream os(s);
+    constOp.getValue().print(os);
+    os << ":" << v.getType();
+    return "cst<" + os.str() + ">";
+  }
+  if (Operation *defOp = v.getDefiningOp()) {
+    std::string s = "op<" + defOp->getName().getStringRef().str() + ">#" +
+                    std::to_string(v.cast<OpResult>().getResultNumber());
+    return s;
+  }
+  return "val<" + std::to_string(reinterpret_cast<uintptr_t>(v.getAsOpaquePointer())) + ">";
+}
+
+static std::string scfForLoopSig(scf::ForOp forOp) {
+  SmallVector<scf::ForOp, 8> chain;
+  scf::ForOp cur = forOp;
+  while (cur) {
+    chain.push_back(cur);
+    Operation *parent = cur->getParentRegion() ? cur->getParentRegion()->getParentOp() : nullptr;
+    cur = parent ? dyn_cast<scf::ForOp>(parent) : scf::ForOp();
+  }
+  std::string s;
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    s += "(" + loadIndexValueSig((*it).getLowerBound()) + "," + loadIndexValueSig((*it).getUpperBound()) + "," +
+         loadIndexValueSig((*it).getStep()) + ")";
+  }
+  return s;
+}
+
+EquivalentOpKey MemoryPeakEstimator::buildEquivalentOpKeyFromRecord_(Operation *op, Operation *enclosingFor,
+                                                                     ArrayRef<int64_t> orderedInputBufferIndexes) {
+  EquivalentOpKey key;
+  // key.enclosingFor = enclosingFor;
+  key.opType = OpTypeCode(op);
+  key.opName = op->getName().getStringRef();
+
+  auto appendOperandEntry = [&](unsigned operandIndex) {
+    OperandEquivalenceEntry entry;
+    const int64_t bufIdx =
+      operandIndex < orderedInputBufferIndexes.size() ? orderedInputBufferIndexes[operandIndex] : -1;
+    if (bufIdx >= 0) {
+      entry.bufferIndex = bufIdx;
+    } else {
+      entry.value = op->getOperand(operandIndex);
+    }
+    key.inputOperands.push_back(entry);
+  };
+
+  if (isa<memref::LoadOp>(op)) {
+    auto loadOp = cast<memref::LoadOp>(op);
+    key.inputOperands.reserve(1 + loadOp.getIndices().size());
+    appendOperandEntry(0);
+    for (Value idx : loadOp.getIndices()) {
+      OperandEquivalenceEntry entry;
+      entry.indexSig = loadIndexValueSig(idx);
+      key.inputOperands.push_back(entry);
+    }
+  } else {
+    key.inputOperands.reserve(op->getNumOperands());
+    for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+      appendOperandEntry(i);
+    }
+  }
+
+  auto resolveValueBuffer = [&](Value val) -> std::optional<int64_t> {
+    const int64_t idx = resolveOperandBufferIndex_(val, op);
+    if (idx < 0) {
+      return std::nullopt;
+    }
+    return idx;
+  };
+  key.normalizedAttrs = normalizeOpAttrDictionary(op->getAttrDictionary(), op, resolveValueBuffer);
+  return key;
+}
+
+void MemoryPeakEstimator::registerEquivalentOpBuffer_(Operation *op, Operation *enclosingFor,
+                                                      int64_t outputBufferIndex,
+                                                      ArrayRef<int64_t> orderedInputBufferIndexes) {
+  if (!enclosingFor || op->hasAttr(kReductionAxesStr) || op->getNumResults() > 1) {
+    return;
+  }
+  const EquivalentOpKey key = buildEquivalentOpKeyFromRecord_(op, enclosingFor, orderedInputBufferIndexes);
+  if (findEquivalentOpBufferIndex(equivalentOpBufferMap_, key)) {
+    return;
+  }
+  equivalentOpBufferMap_.push_back({key, outputBufferIndex});
 }
 
 Operation *MemoryPeakEstimator::innermostEnclosingScfFor(Operation *op) {
@@ -1440,7 +1925,7 @@ void MemoryPeakEstimator::InferOutputBufferShape_(BufferInfo &outputBufferInfo, 
     return;
   }
 
-  InferShapeFromInput(rec.inputBufferIndexes, bufferInfoList_, outputBufferInfo, rec, orderedForOps_,
+  InferShapeFromInput(rec.inputBufferIndexes, bufferInfoList_, outputBufferInfo, rec, op, *this, orderedForOps_,
                       input_.tileUpperBoundPerLoop, input_.alignBufferSizeTo256Bits);
 }
 
@@ -1471,6 +1956,7 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
   int64_t virtualReduceOpIndex = perOpList_.size();
   perOpList_.push_back(OpRecord{});
   OpRecord &virtualReduceOpRec = perOpList_[virtualReduceOpIndex];
+  rec.VirtualopIndexes.push_back(virtualReduceOpIndex);
   virtualReduceOpRec.Index = virtualReduceOpIndex;
   virtualReduceOpRec.sourceOp = op;
   virtualReduceOpRec.isVirtualOp = true;
@@ -1503,60 +1989,86 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
 }
 
 void MemoryPeakEstimator::initPerOpForGenericOp_(Operation *op) {
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-    if (Operation *enclosingFor = innermostEnclosingScfFor(op)) {
-      const EquivalentLoadKey key = makeEquivalentLoadKey(loadOp, enclosingFor);
-      if (int64_t existingIdx = findEquivalentLoadBufferIndex(equivalentLoadBufferMap_, key); existingIdx >= 0) {
-        bufferInfoIndexMap_[loadOp.getResult()] = existingIdx;
-        return;
-      }
-    }
-  }
+  Operation *enclosingFor = innermostEnclosingScfFor(op);
 
   OpRecord &rec = createBaseOpRecord_(op);
 
+  llvm::SmallVector<int64_t, 4> orderedInputBuffers;
+  orderedInputBuffers.reserve(op->getNumOperands());
+  rec.inputBufferIndexes.clear();
   for (Value input : op->getOperands()) {
-    if (int64_t bufIdx = getOrCreateBlockInputBufferIndex_(input, rec, op); bufIdx >= 0) {
+    if (isConstantSsaValue(input)) {
+      orderedInputBuffers.push_back(-1);
+      continue;
+    }
+    const int64_t bufIdx = getOrCreateBlockInputBufferIndex_(input, rec, op);
+    orderedInputBuffers.push_back(bufIdx);
+    if (bufIdx >= 0) {
       rec.inputBufferIndexes.push_back(bufIdx);
     }
   }
 
   if (op->getNumResults() == 0) {
+    registerEquivalentOpBuffer_(op, enclosingFor, -1, orderedInputBuffers);
     return;
   }
 
   Value output = op->getResults()[0];
-  int64_t valIndex = bufferInfoList_.size();
-  bufferInfoList_.push_back(BufferInfo{});
-  BufferInfo &outputBufferInfo = bufferInfoList_[valIndex];
+  BufferInfo shapeProbe;
+  shapeProbe.elementType = output.getType();
+  InferOutputBufferShape_(shapeProbe, op, rec);
 
-  bufferInfoIndexMap_[output] = valIndex;
-  outputBufferInfo.OriginOpRecordIndex = rec.Index;
-  outputBufferInfo.Index = valIndex;
-  outputBufferInfo.elementType = output.getType();
-
-  InferOutputBufferShape_(outputBufferInfo, op, rec);
-  outputBufferInfo.elementType = output.getType();
-  outputBufferInfo.originalValue = output;
-  outputBufferInfo.totalBufferSize = totalBitsfromBuffer(outputBufferInfo);
-
-  if (!isInsideScfForBody(op)) {
-    outputBufferInfo.isValid = false;
-  }
-
-  rec.outputBufferIndex = valIndex;
-
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-    if (Operation *enclosingFor = innermostEnclosingScfFor(op)) {
-      equivalentLoadBufferMap_.push_back({makeEquivalentLoadKey(loadOp, enclosingFor), valIndex});
+  rec.inputBufferIndexes.clear();
+  for (size_t i = 0; i < op->getNumOperands(); ++i) {
+    Value input = op->getOperand(i);
+    int64_t bufIdx = orderedInputBuffers[i];
+    if (isConstantSsaValue(input)) {
+      bufIdx = getOrCreateBrcCstBuffer_(input, shapeProbe.dimLoopIndices, rec, op);
+      orderedInputBuffers[i] = bufIdx;
+    }
+    if (bufIdx >= 0) {
+      rec.inputBufferIndexes.push_back(bufIdx);
     }
   }
+
+  int64_t valIndex = -1;
+  if (enclosingFor && !op->hasAttr(kReductionAxesStr)) {
+    const EquivalentOpKey key = buildEquivalentOpKeyFromRecord_(op, enclosingFor, orderedInputBuffers);
+    if (std::optional<int64_t> existingIdx = findEquivalentOpBufferIndex(equivalentOpBufferMap_, key);
+        existingIdx && *existingIdx >= 0) {
+      valIndex = *existingIdx;
+    }
+  }
+
+  if (valIndex < 0) {
+    valIndex = bufferInfoList_.size();
+    bufferInfoList_.push_back(BufferInfo{});
+    BufferInfo &outputBufferInfo = bufferInfoList_[valIndex];
+
+    outputBufferInfo.OriginOpRecordIndex = rec.Index;
+    outputBufferInfo.Index = valIndex;
+    outputBufferInfo.elementType = output.getType();
+
+    InferOutputBufferShape_(outputBufferInfo, op, rec);
+    outputBufferInfo.elementType = output.getType();
+    outputBufferInfo.originalValue = output;
+    outputBufferInfo.totalBufferSize = totalBitsfromBuffer(outputBufferInfo);
+
+    if (!isInsideScfForBody(op)) {
+      outputBufferInfo.isValid = false;
+    }
+
+    registerEquivalentOpBuffer_(op, enclosingFor, valIndex, orderedInputBuffers);
+  }
+
+  bufferInfoIndexMap_[output] = valIndex;
+  rec.outputBufferIndex = valIndex;
 
   if (!op->hasAttr(kReductionAxesStr)) {
     return;
   }
 
-  initReduceOps_(rec, outputBufferInfo, op);
+  initReduceOps_(rec, bufferInfoList_[valIndex], op);
 }
 
 static void walkFuncBodyUntilReturn(func::FuncOp func, llvm::function_ref<void(Operation *)> callback) {
@@ -1569,7 +2081,8 @@ static void walkFuncBodyUntilReturn(func::FuncOp func, llvm::function_ref<void(O
 }
 
 void MemoryPeakEstimator::initPerOp_() {
-  equivalentLoadBufferMap_.clear();
+  equivalentOpBufferMap_.clear();
+  brcCstBufferMap_.clear();
   buildForOpWalkOrder_();
   walkFuncBodyUntilReturn(input_.func, [&](Operation *op) {
     if (isa<scf::YieldOp>(op) || isa<func::ReturnOp>(op)) {
@@ -1690,6 +2203,8 @@ void MemoryPeakEstimator::dumpInplaceChains(llvm::raw_ostream &os) const {
   OpPrintingFlags printFlags;
   printFlags.elideLargeElementsAttrs();
 
+  dumpOpRecordsSection(os, perOpList_, bufferInfoList_, printFlags);
+
   unsigned chainId = 0;
   for (int64_t chainRoot : sortedRoots) {
     const llvm::SmallVectorImpl<int64_t> &buffers = chainBuffers[chainRoot];
@@ -1710,64 +2225,104 @@ void MemoryPeakEstimator::dumpInplaceChains(llvm::raw_ostream &os) const {
     }
   }
 
-  dumpEquivalentLoadDedupSection(os, equivalentLoadBufferMap_, bufferInfoList_, printFlags);
+  dumpEquivalentOpDedupSection(os, equivalentOpBufferMap_, bufferInfoList_, printFlags);
+}
+
+void MemoryPeakEstimator::dumpOpRecords(llvm::raw_ostream &os) const {
+  OpPrintingFlags printFlags;
+  printFlags.elideLargeElementsAttrs();
+  dumpOpRecordsSection(os, perOpList_, bufferInfoList_, printFlags);
 }
 
 void MemoryPeakEstimator::modelVirtualOps() { return; }
 
 void MemoryPeakEstimator::eliminateRedundantOps() { return; }
 
+void MemoryPeakEstimator::assignGenBuffersAllocTime_(OpRecord &opRecord, int64_t opTimeIndex) {
+  for (int64_t genIdx : opRecord.generatedBufferIndexes) {
+    if (genIdx < 0 || genIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
+      continue;
+    }
+    BufferInfo &genBuffer = bufferInfoList_[static_cast<size_t>(genIdx)];
+    if (genBuffer.allocTime < 0) {
+      genBuffer.allocTime = opTimeIndex;
+    }
+  }
+  if (opRecord.outputBufferIndex >= 0) {
+    BufferInfo &outputBuffer = bufferInfoList_[opRecord.outputBufferIndex];
+    if (outputBuffer.allocTime < 0) {
+      if (!llvm::is_contained(opRecord.generatedBufferIndexes, opRecord.outputBufferIndex)) {
+        opRecord.generatedBufferIndexes.push_back(opRecord.outputBufferIndex);
+      }
+      outputBuffer.allocTime = opTimeIndex;
+    }
+  }
+}
+
+void MemoryPeakEstimator::assignVirtualOpTimeline_(const OpRecord &opRecord, int64_t &opTimeIndex) {
+  for (int64_t index : opRecord.VirtualopIndexes) {
+    TimelineOpIndexList.push_back(index);
+    BufferInfo &virtualOutputBuffer = bufferInfoList_[perOpList_[index].outputBufferIndex];
+    if (virtualOutputBuffer.allocTime < 0) {
+      perOpList_[index].generatedBufferIndexes.push_back(perOpList_[index].outputBufferIndex);
+      virtualOutputBuffer.allocTime = opTimeIndex;
+    }
+
+    for (int64_t inputIndex : perOpList_[index].inputBufferIndexes) {
+      bufferInfoList_[inputIndex].freeTime = opTimeIndex;
+    }
+
+    perOpList_[index].opTimeIndex = opTimeIndex++;
+  }
+}
+
+void MemoryPeakEstimator::assignOpTimeline_(Operation *op, int64_t &opTimeIndex) {
+  auto opIt = perOpIndexMap_.find(op);
+  if (opIt == perOpIndexMap_.end()) {
+    return;
+  }
+  OpRecord &opRecord = perOpList_[opIt->second];
+
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    assignBlockInputBufferAllocTime_(forOp, opTimeIndex);
+  }
+
+  if (opRecord.outputBufferIndex != -1 && !bufferInfoList_[opRecord.outputBufferIndex].isValid) {
+    return;
+  }
+
+  // handle if's bufferlifeTimeline
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    if (ifOp.getNumResults() == 0 && !isInsideScfForBody(op)) {
+      return;
+    }
+  }
+
+  if (opRecord.VirtualopIndexes.size() > 0) {
+    assignVirtualOpTimeline_(opRecord, opTimeIndex);
+    return;
+  }
+
+  TimelineOpIndexList.push_back(opRecord.Index);
+
+  // scf.for / scf.if results alias buffers allocated inside the region; do not
+  // treat them as gen at the for/if op (allocTime stays at the real producer).
+  const bool skipGenAtControlFlowHeader = isa<scf::ForOp>(op) || isa<scf::IfOp>(op);
+  if (!skipGenAtControlFlowHeader) {
+    assignGenBuffersAllocTime_(opRecord, opTimeIndex);
+  }
+
+  for (int64_t inputIndex : opRecord.inputBufferIndexes) {
+    bufferInfoList_[inputIndex].freeTime = opTimeIndex;
+  }
+  opRecord.opTimeIndex = opTimeIndex++;
+}
+
 void MemoryPeakEstimator::computeBufferLifetimes() {
   // record TimelineOpIndexList, only record op whose output bufferinfo
   // update generatedBufferIndexes、killedBufferIndexes、allocTime、freeTime、opTimeIndex
   int64_t opTimeIndex = 0;
-  walkFuncBodyUntilReturn(input_.func, [&](Operation *op) {
-    auto opIt = perOpIndexMap_.find(op);
-    if (opIt == perOpIndexMap_.end()) {
-      return;
-    }
-    OpRecord &opRecord = perOpList_[opIt->second];
-    if (opRecord.outputBufferIndex != -1 && !bufferInfoList_[opRecord.outputBufferIndex].isValid) {
-      return;
-    }
-
-    // handle if's bufferlifeTimeline
-    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      if (ifOp.getNumResults() == 0 && !isInsideScfForBody(op)) {
-        return;
-      }
-    }
-
-    if (!opRecord.isVirtualOp) {
-      TimelineOpIndexList.push_back(opRecord.Index);
-
-      // scf.for / scf.if results alias buffers allocated inside the region; do not
-      // treat them as gen at the for/if op (allocTime stays at the real producer).
-      const bool skipGenAtControlFlowHeader = isa<scf::ForOp>(op) || isa<scf::IfOp>(op);
-      if (!skipGenAtControlFlowHeader && opRecord.outputBufferIndex >= 0) {
-        opRecord.generatedBufferIndexes.push_back(opRecord.outputBufferIndex);
-        bufferInfoList_[opRecord.outputBufferIndex].allocTime = opTimeIndex;
-      }
-
-      for (int64_t inputIndex : opRecord.inputBufferIndexes) {
-        bufferInfoList_[inputIndex].freeTime = opTimeIndex;
-      }
-      opRecord.opTimeIndex = opTimeIndex++;
-    } else {
-      for (int64_t index : opRecord.VirtualopIndexes) {
-        TimelineOpIndexList.push_back(index);
-        perOpList_[index].generatedBufferIndexes.push_back(perOpList_[index].outputBufferIndex);
-
-        bufferInfoList_[perOpList_[index].outputBufferIndex].allocTime = opTimeIndex;
-
-        for (int64_t inputIndex : perOpList_[index].inputBufferIndexes) {
-          bufferInfoList_[inputIndex].freeTime = opTimeIndex;
-        }
-
-        perOpList_[index].opTimeIndex = opTimeIndex++;
-      }
-    }
-  });
+  walkFuncBodyUntilReturn(input_.func, [&](Operation *op) { assignOpTimeline_(op, opTimeIndex); });
 
   for (int64_t index : TimelineOpIndexList) {
     OpRecord &opRecord = perOpList_[index];
@@ -1776,6 +2331,279 @@ void MemoryPeakEstimator::computeBufferLifetimes() {
         opRecord.killedBufferIndexes.push_back(inputIndex);
       }
     }
+  }
+}
+
+// Mirrors HIVM VSelOp::allocExtraBuffersIfPossible() for tiled arith.select.
+static int64_t getExtraBufferSizeBitsForArithSelect(arith::SelectOp selectOp) {
+  const bool src0ScalarType = selectOp.getTrueValue().getType().isIntOrFloat();
+  const bool src1ScalarType = selectOp.getFalseValue().getType().isIntOrFloat();
+  const Type condType = getElementTypeOrSelf(selectOp.getCondition().getType());
+  const Type srcType = getElementTypeOrSelf(selectOp.getTrueValue().getType());
+  const unsigned srcBitWidth = srcType.getIntOrFloatBitWidth();
+
+  if (srcType.isInteger(64) && (condType.isInteger(1) || src0ScalarType || src1ScalarType)) {
+    return 0;
+  }
+
+  // VSel uses INTR_BYTES_PER_REPEAT / resWidth with resWidth in bits (256-bit vector block).
+  const int64_t numElemsPerStride = 256 / static_cast<int64_t>(srcBitWidth);
+
+  if (!srcType.isInteger(64)) {
+    int64_t buffSize = numElemsPerStride;
+    if (src0ScalarType) {
+      buffSize += numElemsPerStride;
+    }
+    if (src1ScalarType) {
+      buffSize += numElemsPerStride;
+    }
+    return buffSize * static_cast<int64_t>(srcBitWidth);
+  }
+
+  // Mirrors VSelOp::getExtraBufferSize() for i64 vector condition + vector src.
+  return numElemsPerStride * static_cast<int64_t>(srcBitWidth);
+}
+
+void MemoryPeakEstimator::modelSelectExtraBuffer() {
+  for (int64_t index : TimelineOpIndexList) {
+    OpRecord &opRecord = perOpList_[index];
+    if (opRecord.opType != kOpTypeArithSelect) {
+      continue;
+    }
+    auto selectOp = dyn_cast<arith::SelectOp>(opRecord.sourceOp);
+    if (!selectOp) {
+      continue;
+    }
+    const int64_t selectExtraBits = getExtraBufferSizeBitsForArithSelect(selectOp);
+    if (selectExtraBits > 0) {
+      opRecord.extraBufferSizes.push_back(selectExtraBits);
+    }
+  }
+}
+
+int64_t MemoryPeakEstimator::totalBitsFromMemRefValue_(Value memref) const {
+  auto memTy = dyn_cast<MemRefType>(memref.getType());
+  if (!memTy) {
+    return 0;
+  }
+  int64_t elems = 1;
+  for (int64_t dim : memTy.getShape()) {
+    if (ShapedType::isDynamic(dim)) {
+      if (auto it = bufferInfoIndexMap_.find(memref); it != bufferInfoIndexMap_.end()) {
+        const BufferInfo &info = bufferInfoList_[static_cast<size_t>(it->second)];
+        if (info.totalBufferSize > 0) {
+          return info.totalBufferSize;
+        }
+      }
+      return 0;
+    }
+    elems *= dim;
+  }
+  int64_t bits = elems * static_cast<int64_t>(getElementTypeOrSelf(memTy.getElementType()).getIntOrFloatBitWidth());
+  if (input_.alignBufferSizeTo256Bits && bits > 0) {
+    bits = ((bits + 255) / 256) * 256;
+  }
+  return bits;
+}
+
+static bool memRefLastAxisStrideNotOne(MemRefType memTy) {
+  if (!memTy || memTy.getRank() == 0) {
+    return false;
+  }
+  SmallVector<int64_t, 4> strides;
+  int64_t offset = 0;
+  if (failed(getStridesAndOffset(memTy, strides, offset)) || strides.empty()) {
+    return false;
+  }
+  const int64_t lastStride = strides.back();
+  return lastStride != ShapedType::kDynamic && lastStride != 1;
+}
+
+void MemoryPeakEstimator::modelLoadExtraBuffer() {
+  for (int64_t index : TimelineOpIndexList) {
+    OpRecord &opRecord = perOpList_[index];
+    if (opRecord.opType != kOpTypeMemRefLoad) {
+      continue;
+    }
+    auto loadOp = dyn_cast<memref::LoadOp>(opRecord.sourceOp);
+    if (!loadOp) {
+      continue;
+    }
+
+    auto loadMemTy = dyn_cast<MemRefType>(loadOp.getMemRef().getType());
+    if (!memRefLastAxisStrideNotOne(loadMemTy)) {
+      continue;
+    }
+
+    const Value rootMemref = affine::getSourceMemRef(loadOp.getMemRef());
+    const int64_t rootBufferBits = totalBitsFromMemRefValue_(rootMemref);
+    if (rootBufferBits > 0) {
+      opRecord.extraBufferSizes.push_back(rootBufferBits);
+    }
+  }
+}
+
+static llvm::SmallDenseSet<int64_t, 4> inputDimLoopIndexSet(ArrayRef<int64_t> inputDimLoopIndices) {
+  llvm::SmallDenseSet<int64_t, 4> inputLoops;
+  for (int64_t loopIdx : inputDimLoopIndices) {
+    if (loopIdx > 0) {
+      inputLoops.insert(loopIdx);
+    }
+  }
+  return inputLoops;
+}
+
+static bool storeBroadcastsOnLastAxis(ArrayRef<int64_t> storeDimLoopIndices,
+                                      ArrayRef<int64_t> inputDimLoopIndices) {
+  if (storeDimLoopIndices.empty()) {
+    return false;
+  }
+  const llvm::SmallDenseSet<int64_t, 4> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
+  const int64_t lastLoop = storeDimLoopIndices.back();
+  return lastLoop > 0 && !inputLoops.contains(lastLoop);
+}
+
+static int64_t computeStoreBroadcastExtraBits(ArrayRef<int64_t> storeDimLoopIndices,
+                                              ArrayRef<int64_t> inputDimLoopIndices, Type elementType,
+                                              ArrayRef<scf::ForOp> orderedForOps,
+                                              const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
+                                              bool alignBufferSizeTo256Bits) {
+  SmallVector<int64_t, 4> bounds;
+  bounds.reserve(storeDimLoopIndices.size());
+  std::transform(storeDimLoopIndices.begin(), storeDimLoopIndices.end(), std::back_inserter(bounds),
+                 [&](int64_t loopIdx) {
+                   return DimLoopIndexToBound(loopIdx, orderedForOps, tileUpperBoundPerLoop);
+                 });
+  if (storeBroadcastsOnLastAxis(storeDimLoopIndices, inputDimLoopIndices) && !bounds.empty()) {
+    int64_t &lastBound = bounds.back();
+    const int64_t alignElems = lastAxis32ByteAlignElems(elementType);
+    lastBound = ceilFactor(lastBound, alignElems);
+  }
+  return totalBitsFromShape(bounds, elementType, alignBufferSizeTo256Bits);
+}
+
+static bool storeTargetHasBroadcastDimLoopIndices(ArrayRef<int64_t> storeDimLoopIndices,
+                                                  ArrayRef<int64_t> inputDimLoopIndices) {
+  const llvm::SmallDenseSet<int64_t, 4> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
+  for (int64_t loopIdx : storeDimLoopIndices) {
+    if (loopIdx > 0 && !inputLoops.contains(loopIdx)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int64_t MemoryPeakEstimator::scaledBufferBitsForStoreBroadcastChain_(const BufferInfo &info) const {
+  if (info.isScalar || info.dimLoopIndices.empty()) {
+    int64_t bits = static_cast<int64_t>(getElementTypeOrSelf(info.elementType).getIntOrFloatBitWidth());
+    bits *= 8;
+    if (input_.alignBufferSizeTo256Bits && bits > 0) {
+      bits = ceilFactor(bits, kVectorBlockSizeBit);
+    }
+    return bits;
+  }
+  SmallVector<int64_t, 4> bounds;
+  DimLoopIndicesToShape(info.dimLoopIndices, bounds);
+  int64_t bits = totalBitsFromShape(bounds, info.elementType, false);
+  bits *= 8;
+  if (input_.alignBufferSizeTo256Bits && bits > 0) {
+    bits = ceilFactor(bits, kVectorBlockSizeBit);
+  }
+  return bits;
+}
+
+void MemoryPeakEstimator::replaceExtraBufferSizesMatching_(int64_t oldSize, int64_t newSize) {
+  if (oldSize <= 0 || oldSize == newSize) {
+    return;
+  }
+  for (OpRecord &rec : perOpList_) {
+    std::replace_if(rec.extraBufferSizes.begin(), rec.extraBufferSizes.end(),
+                    [oldSize](int64_t extraBits) { return extraBits == oldSize; }, newSize);
+  }
+}
+
+void MemoryPeakEstimator::propagateStoreBroadcastInputChainResize_(int64_t startBufIdx) {
+  llvm::SmallDenseSet<int64_t> visited;
+  SmallVector<int64_t, 8> worklist;
+  worklist.push_back(startBufIdx);
+  while (!worklist.empty()) {
+    const int64_t bufIdx = worklist.pop_back_val();
+    if (!visited.insert(bufIdx).second) {
+      continue;
+    }
+    if (bufIdx < 0 || bufIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
+      continue;
+    }
+    BufferInfo &info = bufferInfoList_[static_cast<size_t>(bufIdx)];
+    const int64_t oldSize = info.totalBufferSize;
+    const int64_t newSize = scaledBufferBitsForStoreBroadcastChain_(info);
+    if (newSize != oldSize) {
+      replaceExtraBufferSizesMatching_(oldSize, newSize);
+      info.totalBufferSize = newSize;
+    }
+    if (info.OriginOpRecordIndex < 0 || info.OriginOpRecordIndex >= static_cast<int64_t>(perOpList_.size())) {
+      continue;
+    }
+    const OpRecord &originRec = perOpList_[static_cast<size_t>(info.OriginOpRecordIndex)];
+    std::copy(originRec.inputBufferIndexes.begin(), originRec.inputBufferIndexes.end(),
+              std::back_inserter(worklist));
+  }
+}
+
+void MemoryPeakEstimator::modelStoreExtraBuffer() {
+  for (int64_t index : TimelineOpIndexList) {
+    OpRecord &opRecord = perOpList_[index];
+    if (opRecord.opType != kOpTypeMemRefStore) {
+      continue;
+    }
+    auto storeOp = dyn_cast<memref::StoreOp>(opRecord.sourceOp);
+    if (!storeOp) {
+      continue;
+    }
+
+    const auto memTy = cast<MemRefType>(storeOp.getMemRef().getType());
+    if (memTy.getRank() == 0) {
+      continue;
+    }
+    SmallVector<int64_t, 4> storeDimLoopIndices;
+    inferDimLoopIndices(storeOp, memTy.getRank(), forOpToIndex_, storeDimLoopIndices);
+
+    auto valueIt = bufferInfoIndexMap_.find(storeOp.getValue());
+    if (valueIt == bufferInfoIndexMap_.end()) {
+      continue;
+    }
+    const BufferInfo &inputInfo = bufferInfoList_[static_cast<size_t>(valueIt->second)];
+    if (!storeTargetHasBroadcastDimLoopIndices(storeDimLoopIndices, inputInfo.dimLoopIndices)) {
+      continue;
+    }
+
+    propagateStoreBroadcastInputChainResize_(valueIt->second);
+
+    const int64_t extraBits =
+      computeStoreBroadcastExtraBits(storeDimLoopIndices, inputInfo.dimLoopIndices, storeOp.getValue().getType(),
+                                     orderedForOps_, input_.tileUpperBoundPerLoop, input_.alignBufferSizeTo256Bits);
+    if (extraBits <= 0) {
+      continue;
+    }
+    const bool broadcastOnLastAxis = storeBroadcastsOnLastAxis(storeDimLoopIndices, inputInfo.dimLoopIndices);
+    opRecord.extraBufferSizes.push_back(extraBits);
+    if (broadcastOnLastAxis) {
+      opRecord.extraBufferSizes.push_back(extraBits);
+    }
+  }
+}
+
+void MemoryPeakEstimator::modelNegExtraBuffer() {
+  for (int64_t index : TimelineOpIndexList) {
+    OpRecord &opRecord = perOpList_[index];
+    if (opRecord.opType != kOpTypeArithNegF) {
+      continue;
+    }
+    const int64_t outputIdx = opRecord.outputBufferIndex;
+    if (outputIdx < 0 || outputIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
+      continue;
+    }
+    opRecord.extraBufferSizes.push_back(bufferInfoList_[static_cast<size_t>(outputIdx)].totalBufferSize);
   }
 }
 
@@ -1801,9 +2629,13 @@ void MemoryPeakEstimator::modelReduceExtraBuffer() {
       RankedTensorType effTy =
         RankedTensorType::get(inputShape, bufferInfoList_[opRecord.inputBufferIndexes[0]].elementType);
       int64_t extraBufferElems = getExtraBufferSizeForReduceOp(loopAxes, effTy, srcAllocElems, rkind);
+      if (static_cast<int64_t>(loopAxes.size()) == static_cast<int64_t>(inputShape.size()) &&
+          !inputShape.empty()) {
+        extraBufferElems *= static_cast<int64_t>(inputShape.size());
+      }
       int64_t elementBitWidth = static_cast<int64_t>(
         getElementTypeOrSelf(bufferInfoList_[opRecord.inputBufferIndexes[0]].elementType).getIntOrFloatBitWidth());
-      opRecord.extraBufferSize = extraBufferElems * elementBitWidth;
+      opRecord.extraBufferSizes.push_back(extraBufferElems * elementBitWidth);
     }
   }
 }
@@ -1830,7 +2662,8 @@ bool MemoryPeakEstimator::hasInlineBroadcastLoopDims(Operation *op) const {
   if (opIt->second < 0 || opIt->second >= static_cast<int64_t>(perOpList_.size())) {
     return false;
   }
-  const llvm::SmallVectorImpl<int64_t> &inputBufferIndexes = perOpList_[opIt->second].inputBufferIndexes;
+  const OpRecord &opRecord = perOpList_[opIt->second];
+  const llvm::SmallVectorImpl<int64_t> &inputBufferIndexes = opRecord.inputBufferIndexes;
   if (inputBufferIndexes.size() <= 1) {
     return false;
   }
@@ -1840,7 +2673,13 @@ bool MemoryPeakEstimator::hasInlineBroadcastLoopDims(Operation *op) const {
       rhsIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
     return false;
   }
-  return bufferInfoList_[lhsIdx].dimLoopIndices.size() != bufferInfoList_[rhsIdx].dimLoopIndices.size();
+  if (bufferInfoList_[lhsIdx].dimLoopIndices.size() != bufferInfoList_[rhsIdx].dimLoopIndices.size()) {
+    return true;
+  }
+
+  // brc cst is materialized to output shape but still lowered as broadcast constant.
+  return std::any_of(inputBufferIndexes.begin(), inputBufferIndexes.end(),
+                     [&](int64_t bufIdx) { return isKillBrcCst(*this, op, opRecord, bufIdx, bufferInfoList_); });
 }
 
 bool MemoryPeakEstimator::hasInlineTransposeLoopDims(Operation *op) const {
@@ -1868,6 +2707,37 @@ bool MemoryPeakEstimator::hasInlineTransposeLoopDims(Operation *op) const {
     return false;
   }
   return bufferInfoList_[lhsIdx].dimLoopIndices != bufferInfoList_[rhsIdx].dimLoopIndices;
+}
+
+void MemoryPeakEstimator::invalidateFullyInlinedBrcCstBuffers_() {
+  for (const auto &[key, brcCstBufIdx] : brcCstBufferMap_) {
+    (void)key;
+    if (brcCstBufIdx < 0 || brcCstBufIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
+      continue;
+    }
+
+    bool hasUsage = false;
+    bool allUsagesInlineBroadcast = true;
+    for (const OpRecord &rec : perOpList_) {
+      if (rec.isVirtualOp || !rec.sourceOp) {
+        continue;
+      }
+      bool usedAsInput = std::any_of(rec.inputBufferIndexes.begin(), rec.inputBufferIndexes.end(),
+                                     [brcCstBufIdx](int64_t inputIdx) { return inputIdx == brcCstBufIdx; });
+      if (!usedAsInput) {
+        continue;
+      }
+      hasUsage = true;
+      if (!isKillBrcCst(*this, rec.sourceOp, rec, brcCstBufIdx, bufferInfoList_)) {
+        allUsagesInlineBroadcast = false;
+        break;
+      }
+    }
+
+    if (hasUsage && allUsagesInlineBroadcast) {
+      bufferInfoList_[static_cast<size_t>(brcCstBufIdx)].isValid = false;
+    }
+  }
 }
 
 void MemoryPeakEstimator::analyzeIntraOpInplace() {
@@ -1914,6 +2784,9 @@ void MemoryPeakEstimator::analyzeIntraOpInplace() {
       if (bufferInfoList_[genIdx].ignoreInplace) {
         continue;
       }
+      if (isMaterializedCstBufferIndex(genIdx)) {
+        continue;
+      }
       for (int64_t killIdx : opRecord.killedBufferIndexes) {
         if (bufferInfoList_[killIdx].ignoreInplace) {
           continue;
@@ -1921,8 +2794,8 @@ void MemoryPeakEstimator::analyzeIntraOpInplace() {
         if (areConditionallyAliased(genIdx, killIdx, conditionalAliasEdges_)) {
           continue;
         }
-        if (!canIntraOpInplaceReuse(*this, op, opRecord.opType, bufferInfoList_[genIdx], bufferInfoList_[killIdx],
-                                    bufferInfoIndexMap_, bufferInfoList_)) {
+        if (!canIntraOpInplaceReuse(*this, op, opRecord.opType, opRecord, bufferInfoList_[genIdx],
+                                    bufferInfoList_[killIdx], bufferInfoIndexMap_, bufferInfoList_)) {
           continue;
         }
         uniteBuffersByTimeline(bufferInfoUnionFind_, bufferInfoList_, killIdx, genIdx);
@@ -1950,10 +2823,17 @@ void MemoryPeakEstimator::analyzeInterOpInplace() {
 
   for (int64_t index : TimelineOpIndexList) {
     const OpRecord &opRecord = perOpList_[index];
-    if (opRecord.extraBufferSize <= 0 || opRecord.opTimeIndex < 0) {
+    if (opRecord.opTimeIndex < 0 || opRecord.extraBufferSizes.empty()) {
       continue;
     }
-    registerExtraBufferChainSummary(inplaceChainSummary_[-(index + 1)], opRecord, bufferInfoList_);
+    for (unsigned extraSlot = 0; extraSlot < opRecord.extraBufferSizes.size(); ++extraSlot) {
+      const int64_t extraBits = opRecord.extraBufferSizes[extraSlot];
+      if (extraBits <= 0) {
+        continue;
+      }
+      registerExtraBufferChainSummary(inplaceChainSummary_[extraBufferChainKey(index, extraSlot)], opRecord, extraBits,
+                                        extraSlot, bufferInfoList_);
+    }
   }
 
   llvm::SmallVector<ChainPlanningEntry, 8> planningEntries;
@@ -2003,9 +2883,14 @@ void MemoryPeakEstimator::run(PeakAnalysisResult &out) {
 
   computeBufferLifetimes();
   modelReduceExtraBuffer();
+  modelSelectExtraBuffer();
+  modelNegExtraBuffer();
+  modelLoadExtraBuffer();
+  modelStoreExtraBuffer();
   if (input_.enableMultibuffer) {
     markMultiBuffer();
   }
+  invalidateFullyInlinedBrcCstBuffers_();
   analyzeIntraOpInplace();
   analyzeInterOpInplace();
 
