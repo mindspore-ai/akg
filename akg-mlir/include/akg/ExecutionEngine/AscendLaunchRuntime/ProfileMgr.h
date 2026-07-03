@@ -31,7 +31,7 @@ class ProfileMgr {
 
   static ProfileMgr &GetInstance();
 
-  bool StartupProfiling(const uint32_t device_id = 0);
+  bool StartupProfiling(const std::string &profiling_dir, const uint32_t device_id = 0);
 
   bool StopProfiling();
 
@@ -41,9 +41,9 @@ class ProfileMgr {
 
 using ProfileMgrPtr = std::shared_ptr<ProfileMgr>;
 
-extern "C" void ascend_start_profiling(int device_id);
+void ascend_start_profiling(const std::string &profiling_dir, int device_id);
 
-extern "C" void ascend_stop_profiling();
+void ascend_stop_profiling();
 
 }  // namespace runtime
 }  // namespace mlir

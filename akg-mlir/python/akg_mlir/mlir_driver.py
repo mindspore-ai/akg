@@ -175,6 +175,7 @@ def profiling_analyse(arch):
     """Analyse Ascend kernel profiling data and return task duration."""
     public_path = os.getenv('AKG_PROFILING_DIR', default=os.path.expanduser("~/.akg/profiling"))
     public_path = validate_and_normalize_path(public_path)
+    os.makedirs(public_path, exist_ok=True)
     CANNFileParser(public_path).export_cann_profiling()
 
     cann_file_parser = OpSummaryParser(public_path, arch)
@@ -381,7 +382,9 @@ class MlirDriver:
             launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                    use_mem_pool=True, output_indexes=output_indexes)
         else:
-            ascend_start_profiling(device_id)
+            profiling_dir = os.getenv('AKG_PROFILING_DIR', default=os.path.expanduser("~/.akg/profiling"))
+            os.makedirs(profiling_dir, exist_ok=True)
+            ascend_start_profiling(profiling_dir, device_id)
             for _ in range(5):
                 launch(self.output_dir, self.kernel_name, device_id, self.dynamic_shape, *input_for_mod,
                        use_mem_pool=True, output_indexes=output_indexes)
