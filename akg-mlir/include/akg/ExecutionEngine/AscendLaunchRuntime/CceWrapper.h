@@ -53,7 +53,7 @@ class CceWrapper : public SymbolsWrapper {
   bool LoadAscendCL();
   bool LoadRuntime();
   bool LoadMsprof();
-  void *FindMsprofSymbol(const char *symbol);
+  void *FindMsprofSymbol(const std::string symbol);
   static std::shared_ptr<CceWrapper> cce_wrapper_singleton_;
   void *ascendcl_handle_{nullptr};
   void *runtime_handle_{nullptr};
