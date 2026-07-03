@@ -685,6 +685,8 @@ class MemoryPeakEstimator {
   void InferOutputBufferShape_(BufferInfo &outputBufferInfo, Operation *op, OpRecord &rec);
   void buildForOpWalkOrder_();
   int64_t totalBitsfromBuffer(const BufferInfo &info) const;
+  void alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType);
+  void assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex);
   int64_t totalBitsFromMemRefValue_(Value memref) const;
   void DimLoopIndicesToShape(ArrayRef<int64_t> dimLoopIndices, SmallVectorImpl<int64_t> &outBounds) const;
   void inferEnclosingDimLoopIndices_(Operation *op, SmallVectorImpl<int64_t> &outIndices) const;
@@ -1322,6 +1324,15 @@ static int64_t totalBitsFromShape(ArrayRef<int64_t> shape, Type elementType, boo
   return ceilFactor(bits, kVectorBlockSizeBit);
 }
 
+// 32B = 256bit alignment on last axis element count: f16/bf16 -> 16, f32/i32 -> 8, i8 -> 32, etc.
+static int64_t lastAxis32ByteAlignElems(Type elementType) {
+  const unsigned bitWidth = getElementTypeOrSelf(elementType).getIntOrFloatBitWidth();
+  if (bitWidth == 0 || (256 % bitWidth) != 0) {
+    return 1;
+  }
+  return 256 / static_cast<int64_t>(bitWidth);
+}
+
 static int64_t bufferTotalBitsFromDimLoopIndices(ArrayRef<int64_t> dimLoopIndices, Type elementType,
                                                  ArrayRef<scf::ForOp> orderedForOps,
                                                  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
@@ -1334,6 +1345,9 @@ static int64_t bufferTotalBitsFromDimLoopIndices(ArrayRef<int64_t> dimLoopIndice
   std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(bounds), [&](int64_t loopIndex) {
     return DimLoopIndexToBound(loopIndex, orderedForOps, tileUpperBoundPerLoop);
   });
+  if (!bounds.empty()) {
+    bounds.back() = ceilFactor(bounds.back(), lastAxis32ByteAlignElems(elementType));
+  }
   return totalBitsFromShape(bounds, elementType, alignBufferSizeTo256Bits);
 }
 
@@ -1536,6 +1550,40 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   return totalBitsFromShape(bounds, info.elementType, input_.alignBufferSizeTo256Bits);
 }
 
+void MemoryPeakEstimator::alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType) {
+  if (dimLoopIndices.empty()) {
+    return;
+  }
+  const int64_t lastLoop = dimLoopIndices.back();
+  if (lastLoop <= 0 || lastLoop > static_cast<int64_t>(orderedForOps_.size())) {
+    return;
+  }
+  scf::ForOp forOp = orderedForOps_[static_cast<size_t>(lastLoop - 1)];
+  const int64_t currentBound = DimLoopIndexToBound(lastLoop, orderedForOps_, input_.tileUpperBoundPerLoop);
+  const int64_t alignElems = lastAxis32ByteAlignElems(elementType);
+  const int64_t aligned = ceilFactor(currentBound, alignElems);
+  if (aligned != currentBound) {
+    input_.tileUpperBoundPerLoop[forOp] = aligned;
+  }
+}
+
+void MemoryPeakEstimator::assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex) {
+  Block &body = forOp.getRegion().front();
+  for (BlockArgument arg : body.getArguments()) {
+    if (arg.getArgNumber() == 0) {
+      continue;  // induction var has no buffer
+    }
+    auto it = bufferInfoIndexMap_.find(arg);
+    if (it == bufferInfoIndexMap_.end()) {
+      continue;
+    }
+    BufferInfo &info = bufferInfoList_[static_cast<size_t>(it->second)];
+    if (info.allocTime < 0) {
+      info.allocTime = opTimeIndex;
+    }
+  }
+}
+
 static bool isInsideScfForBody(Operation *op) {
   Region *region = op->getParentRegion();
   while (region) {
@@ -1589,6 +1637,7 @@ int64_t MemoryPeakEstimator::resolveOperandBufferIndex_(Value input, Operation *
   inferEnclosingDimLoopIndices_(op, inputBufferInfo.dimLoopIndices);
   inputBufferInfo.isScalar = inputBufferInfo.dimLoopIndices.empty();
   inputBufferInfo.isValid = isInsideScfForBody(op);
+  alignLastAxisTileBoundInMap_(inputBufferInfo.dimLoopIndices, inputBufferInfo.elementType);
   inputBufferInfo.totalBufferSize = totalBitsfromBuffer(inputBufferInfo);
   bufferInfoIndexMap_[input] = valIndex;
   return valIndex;
@@ -1624,6 +1673,7 @@ int64_t MemoryPeakEstimator::getOrCreateBrcCstBuffer_(Value cst, ArrayRef<int64_
   materializedInfo.dimLoopIndices.assign(dimLoopIndices.begin(), dimLoopIndices.end());
   materializedInfo.isScalar = dimLoopIndices.empty();
   materializedInfo.isValid = true;
+  alignLastAxisTileBoundInMap_(materializedInfo.dimLoopIndices, materializedInfo.elementType);
   materializedInfo.totalBufferSize = totalBitsfromBuffer(materializedInfo);
   brcCstBufferMap_.push_back({key, valIndex});
   rec.generatedBufferIndexes.push_back(valIndex);
@@ -1906,6 +1956,7 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
   int64_t virtualReduceOpIndex = perOpList_.size();
   perOpList_.push_back(OpRecord{});
   OpRecord &virtualReduceOpRec = perOpList_[virtualReduceOpIndex];
+  rec.VirtualopIndexes.push_back(virtualReduceOpIndex);
   virtualReduceOpRec.Index = virtualReduceOpIndex;
   virtualReduceOpRec.sourceOp = op;
   virtualReduceOpRec.isVirtualOp = true;
@@ -2231,6 +2282,11 @@ void MemoryPeakEstimator::assignOpTimeline_(Operation *op, int64_t &opTimeIndex)
     return;
   }
   OpRecord &opRecord = perOpList_[opIt->second];
+
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    assignBlockInputBufferAllocTime_(forOp, opTimeIndex);
+  }
+
   if (opRecord.outputBufferIndex != -1 && !bufferInfoList_[opRecord.outputBufferIndex].isValid) {
     return;
   }
@@ -2242,7 +2298,7 @@ void MemoryPeakEstimator::assignOpTimeline_(Operation *op, int64_t &opTimeIndex)
     }
   }
 
-  if (opRecord.isVirtualOp) {
+  if (opRecord.VirtualopIndexes.size() > 0) {
     assignVirtualOpTimeline_(opRecord, opTimeIndex);
     return;
   }
@@ -2420,9 +2476,8 @@ static int64_t computeStoreBroadcastExtraBits(ArrayRef<int64_t> storeDimLoopIndi
                  });
   if (storeBroadcastsOnLastAxis(storeDimLoopIndices, inputDimLoopIndices) && !bounds.empty()) {
     int64_t &lastBound = bounds.back();
-    if (lastBound % 8 != 0) {
-      lastBound = ((lastBound + 7) / 8) * 8;
-    }
+    const int64_t alignElems = lastAxis32ByteAlignElems(elementType);
+    lastBound = ceilFactor(lastBound, alignElems);
   }
   return totalBitsFromShape(bounds, elementType, alignBufferSizeTo256Bits);
 }
@@ -2574,6 +2629,10 @@ void MemoryPeakEstimator::modelReduceExtraBuffer() {
       RankedTensorType effTy =
         RankedTensorType::get(inputShape, bufferInfoList_[opRecord.inputBufferIndexes[0]].elementType);
       int64_t extraBufferElems = getExtraBufferSizeForReduceOp(loopAxes, effTy, srcAllocElems, rkind);
+      if (static_cast<int64_t>(loopAxes.size()) == static_cast<int64_t>(inputShape.size()) &&
+          !inputShape.empty()) {
+        extraBufferElems *= static_cast<int64_t>(inputShape.size());
+      }
       int64_t elementBitWidth = static_cast<int64_t>(
         getElementTypeOrSelf(bufferInfoList_[opRecord.inputBufferIndexes[0]].elementType).getIntOrFloatBitWidth());
       opRecord.extraBufferSizes.push_back(extraBufferElems * elementBitWidth);
