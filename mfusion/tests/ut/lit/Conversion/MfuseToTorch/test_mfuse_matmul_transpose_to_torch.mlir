@@ -60,6 +60,30 @@ module {
   // CHECK: %[[AKG_RHS:.*]] = torch.aten.permute %arg1
   // CHECK: torch.aten.mm %arg0, %[[AKG_RHS]]
   // CHECK-NOT: dvm_trans
+
+  // CHECK-LABEL: func.func @copied_dvm_batch_matmul(
+  func.func @copied_dvm_batch_matmul(%arg0: tensor<80x64x204xf32>, %arg1: tensor<80x128x64xf32>)
+      -> tensor<80x204x128xf32> attributes {mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x1 = true, trans_x2 = true}
+        : (tensor<80x64x204xf32>, tensor<80x128x64xf32>) -> tensor<80x204x128xf32>
+    return %0 : tensor<80x204x128xf32>
+  }
+
+  // CHECK-NOT: torch.aten.permute
+  // CHECK: torch.aten.bmm{{.*}}dvm_trans_a = true{{.*}}dvm_trans_b = true
+
+  // CHECK-LABEL: func.func private @outlined_dvm_batch_matmul(
+  func.func private @outlined_dvm_batch_matmul(%arg0: tensor<80x64x204xf32>, %arg1: tensor<80x128x64xf32>)
+      -> tensor<80x204x128xf32> attributes {mfusion.fusion_type = "dvm", mfusion.outlined} {
+    %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 {trans_x1 = true, trans_x2 = true}
+        : (tensor<80x64x204xf32>, tensor<80x128x64xf32>) -> tensor<80x204x128xf32>
+    return %0 : tensor<80x204x128xf32>
+  }
+
+  // CHECK: %[[OBM_LHS:.*]] = torch.aten.permute %arg0
+  // CHECK: %[[OBM_RHS:.*]] = torch.aten.permute %arg1
+  // CHECK: torch.aten.bmm %[[OBM_LHS]], %[[OBM_RHS]]
+  // CHECK-NOT: dvm_trans
 }
 
 // CHECK-NOT: still has transpose flags after cleanup
