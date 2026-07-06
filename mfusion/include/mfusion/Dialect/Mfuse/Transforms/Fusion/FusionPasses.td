@@ -203,20 +203,6 @@ def FuseMatmulUnsqueezeSqueeze : Pass<"fuse-matmul-unsqueeze-squeeze", "::mlir::
   ];
 }
 
-def FuseMatmulTransposeWeight : Pass<"fuse-matmul-transpose-weight", "::mlir::ModuleOp"> {
-  let summary = "Insert permute for unaligned MatMul inputs; set trans_x1/trans_x2";
-  let description = [{
-    For MatMulOp, if an input's inner axis (last dim * element size) is not
-    a multiple of 512 bytes, inserts mfuse.permute and sets trans_x1/trans_x2 accordingly.
-    Does not re-match on outputs of its own transformations.
-  }];
-  let constructor = "mlir::mfuse::createFuseMatmulTransposeWeightPass()";
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
 def FuseMatmulReshapeBiasAdd : Pass<"fuse-matmul-reshape-bias-add", "::mlir::ModuleOp"> {
   let summary = "Fuse MatMul -> Reshape -> Add(bias) into MatMul(with bias) -> Reshape";
   let description = [{
