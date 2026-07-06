@@ -343,9 +343,9 @@ void TorchLaunch(std::string kernel_name, std::string torch_path, uint64_t kerne
   };
   reinterpret_cast<TorchRunFunc>(torch_run_func)(kernel_name.c_str(), launch_call);
 }
-}  // namespace
 
 // PYBIND interface
+// cppcheck-suppress syntaxError
 PYBIND11_MODULE(ascend_launch, m) {
   mlir::runtime::akg_log_init();
   if (!google::IsGoogleLoggingInitialized()) {
@@ -364,3 +364,4 @@ PYBIND11_MODULE(ascend_launch, m) {
         "Launch kernel without tiling support");
   m.def("torch_launch", &TorchLaunch, "Launch kernel for torch_npu");
 }
+}  // namespace

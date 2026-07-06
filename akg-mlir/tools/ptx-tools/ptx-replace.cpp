@@ -28,15 +28,6 @@
 #include <algorithm>
 
 namespace {
-/// Validate a file path: reject empty paths and paths containing "..".
-bool validateFilePath(const std::string &path) {
-  if (path.empty() || path.find("..") != std::string::npos) {
-    return false;
-  }
-  struct stat st {};
-  return stat(path.c_str(), &st) == 0;
-}
-
 constexpr auto kShouldRemove = -9999999;
 constexpr auto kShouldKeep = -10000000;
 
@@ -57,6 +48,19 @@ constexpr int kNcFlagArgc = 5;
 constexpr int kNcFlagIndex = 4;
 constexpr int kDynShapeArgc = 6;
 constexpr int kDynShapeIndex = 5;
+
+/// Validate a file path: reject empty paths and paths containing "..".
+bool validateFilePath(const std::string &path, bool check_exist = true) {
+  if (path.empty() || path.find("..") != std::string::npos) {
+    return false;
+  }
+  if (!check_exist) {
+    return true;
+  }
+  std::ifstream f(path);
+  return f.good();
+}
+
 std::vector<std::string> splitString(const std::string &str, char delimiter) {
   std::vector<std::string> tokens;
   std::string token;
@@ -593,6 +597,10 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
     return;
   }
 
+  if (!validateFilePath(outputFilename)) {
+    std::cout << "[ERROR] invalid output file path, replacement exit. the path is '" << outputFilename << "'.\n";
+    return;
+  }
   std::ofstream outFile(outputFilename);
   if (!outFile) {
     std::cerr << "Failed to open " << outputFilename << " for writing.\n";
