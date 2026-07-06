@@ -61,3 +61,23 @@ func.func @refine_partial_reduction_extf_transpose(%input: memref<32x64xf16>, %o
   npuvector.transfer_write %trans, %out[%c0, %c0] : !npuvector<?x?xf32>, memref<64x32xf32>
   return
 }
+
+// CHECK-LABEL: func.func @refine_extract_slice_keeps_dynamic_slice_dim
+func.func @refine_extract_slice_keeps_dynamic_slice_dim(%input: memref<21x64x16xf16>, %out: memref<21x64x16xf16>, %tile: index) {
+  // CHECK: %[[READ:.*]] = npuvector.transfer_read {{.*}} : memref<21x64x16xf16>, !npuvector<21x64x16xf16>
+  // CHECK: %[[SLICE:.*]] = npuvector.extract_slice %[[READ]]{{.*}} : !npuvector<21x64x16xf16> to !npuvector<?x64x16xf16>
+  // CHECK: %[[BCAST:.*]] = npuvector.broadcast {{.*}} : f16 to !npuvector<?x64x16xf16>
+  // CHECK: arith.addf %[[SLICE]], %[[BCAST]] : !npuvector<?x64x16xf16>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c16 = arith.constant 16 : index
+  %c21 = arith.constant 21 : index
+  %c64 = arith.constant 64 : index
+  %pad = arith.constant 0.000000e+00 : f16
+  %read = npuvector.transfer_read %input[%c0, %c0, %c0] [%c21, %c64, %c16] [%c21, %c64, %c16], %pad : memref<21x64x16xf16>, !npuvector<?x64x16xf16>
+  %slice = npuvector.extract_slice %read[%c0, %c0, %c0] [%tile, %c64, %c16] [%c1, %c1, %c1] {keep_dims = array<i64: 0, 1, 2>} : !npuvector<?x64x16xf16> to !npuvector<?x64x16xf16>
+  %bcast = npuvector.broadcast %pad[%tile, %c64, %c16] [%c21, %c64, %c16] : f16 to !npuvector<?x64x16xf16>
+  %add = arith.addf %slice, %bcast : !npuvector<?x64x16xf16>
+  npuvector.transfer_write %add, %out[%c0, %c0, %c0] : !npuvector<?x64x16xf16>, memref<21x64x16xf16>
+  return
+}

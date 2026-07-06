@@ -331,8 +331,7 @@ def _gen_uniq_file_name(op_name):
         op_hash = str(time.time())
 
     uni_file_name_suffix = ".json_data_" + op_hash + ".py"
-    file_descriptor, uni_file_name = tempfile.mkstemp(
-        suffix=uni_file_name_suffix)
+    file_descriptor, uni_file_name = tempfile.mkstemp(suffix=uni_file_name_suffix)
     os.close(file_descriptor)
     return uni_file_name
 
@@ -806,10 +805,10 @@ def _update_inplace_tensors(infos, output_indexes, commands):
         output_indexes.extend(inplace_tensors_index)
 
 
-def _update_workspace_data(kernel_name, input_for_mod, output_indexes):
+def _update_workspace_data(kernel_name, input_for_mod, output_indexes, cur_dir="./"):
     """Update workspace tensors."""
     workspace_tensors = []
-    json_file = os.path.join(os.path.realpath('./'), 'akg_kernel_meta', kernel_name + "_split.json")
+    json_file = os.path.join(cur_dir, kernel_name + "_split.json")
     if os.path.isfile(json_file):
         with open(json_file, 'r', encoding='utf-8') as f:
             kernel_json = f.read()
@@ -871,8 +870,7 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     # Update inplace tensors
     _update_inplace_tensors(infos, output_indexes, commands)
     # Update workspace
-    output_indexes = _update_workspace_data(
-        desc.get("op"), input_for_mod, output_indexes)
+    output_indexes = _update_workspace_data(desc.get("op"), input_for_mod, output_indexes)
 
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
