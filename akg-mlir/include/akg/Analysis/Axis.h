@@ -70,8 +70,8 @@ class Axis {
   mlir::Operation *getLoopOperation() const;
 
   std::string name;
-  size_t bandIdx;
-  size_t axisIdx;
+  size_t bandIdx{0};
+  size_t axisIdx{0};
   bool isInnerMost{false};
   std::shared_ptr<mlir::Operation> loop{nullptr};
   std::pair<int64_t, int64_t> range{std::make_pair(0, 0)};
