@@ -93,32 +93,21 @@ class GPUKernelToPTX : public PassWrapper<GPUKernelToPTX, OperationPass<gpu::GPU
   void runOnOperation() override;
 
  private:
-  /// Creates the LLVM target machine to generate the ISA.
-  std::unique_ptr<llvm::TargetMachine> createTargetMachine();
-
   void translateToISA(llvm::Module &llvmModule, llvm::TargetMachine &targetMachine);
-
-  /// Translates the 'getOperation()' result to an LLVM module.
-  std::unique_ptr<llvm::Module> translateToLLVMIR(llvm::LLVMContext &llvmContext);
-
+  std::unique_ptr<llvm::TargetMachine> createTargetMachine();
   LogicalResult linkLibdevice(llvm::Module &llvmModule, llvm::LLVMContext &llvmContext);
 
   unsigned optLevelAsInt;
-
   std::string libdeviceFile;
-
   std::string triple;
-
   std::string chip;
-
   std::string features;
-
   std::string &targetISA;
 };
 
 void GPUKernelToPTX::runOnOperation() {
   llvm::LLVMContext llvmContext;
-  std::unique_ptr<llvm::Module> llvmModule = translateToLLVMIR(llvmContext);
+  std::unique_ptr<llvm::Module> llvmModule = translateModuleToLLVMIR(getOperation(), llvmContext, "LLVMDialectModule");
 
   if (!llvmModule) {
     return signalPassFailure();
@@ -136,37 +125,15 @@ void GPUKernelToPTX::runOnOperation() {
   translateToISA(*llvmModule, *targetMachine);
 }
 
-std::unique_ptr<llvm::TargetMachine> GPUKernelToPTX::createTargetMachine() {
-  const Location loc = getOperation().getLoc();
-  std::string error;
-  const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, error);
-
-  if (target == nullptr) {
-    (void)emitError(loc, Twine("failed to lookup target: ") + error);
-    return {};
-  }
-
-  llvm::TargetMachine *machine =
-    target->createTargetMachine(triple, chip, features, {}, {}, std::nullopt, LLVMCodeGenOpt(optLevelAsInt));
-  if (machine == nullptr) {
-    (void)emitError(loc, "failed to create target machine");
-    return {};
-  }
-
-  return std::unique_ptr<llvm::TargetMachine>{machine};
-}
-
 void GPUKernelToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachine &targetMachine) {
   llvmModule.setDataLayout(targetMachine.createDataLayout());
 
   llvm::raw_string_ostream stream(targetISA);
   llvm::buffer_ostream pstream(stream);
 
-  // new
   llvm::OptimizationLevel optLevel = mapToLevel(optLevelAsInt);
   llvm::PassBuilder pB(&targetMachine);
 
-  // Register all basic analyses
   llvm::LoopAnalysisManager lAM;
   llvm::FunctionAnalysisManager fAM;
   llvm::CGSCCAnalysisManager cGAM;
@@ -204,8 +171,24 @@ void GPUKernelToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
   (void)codegenPasses.run(llvmModule);
 }
 
-std::unique_ptr<llvm::Module> GPUKernelToPTX::translateToLLVMIR(llvm::LLVMContext &llvmContext) {
-  return translateModuleToLLVMIR(getOperation(), llvmContext, "LLVMDialectModule");
+std::unique_ptr<llvm::TargetMachine> GPUKernelToPTX::createTargetMachine() {
+  const Location loc = getOperation().getLoc();
+  std::string error;
+  const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, error);
+
+  if (target == nullptr) {
+    (void)emitError(loc, Twine("failed to lookup target: ") + error);
+    return {};
+  }
+
+  llvm::TargetMachine *machine =
+    target->createTargetMachine(triple, chip, features, {}, {}, std::nullopt, LLVMCodeGenOpt(optLevelAsInt));
+  if (machine == nullptr) {
+    (void)emitError(loc, "failed to create target machine");
+    return {};
+  }
+
+  return std::unique_ptr<llvm::TargetMachine>{machine};
 }
 
 LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVMContext &llvmContext) {
@@ -227,20 +210,16 @@ LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
   }
 
   std::unique_ptr<llvm::Module> libdeviceModule = std::move(moduleOrErr.get());
-  // Setup the same function attributes as those used by compiling a cuda
-  // code with ``clang -O3''. The default function attributes are retrieved
-  // based on the values from CodeGenModule::getDefaultFunctionAttributes
   for (llvm::Function &F : *libdeviceModule.get()) {
-    // intrinsic not use attr
     if (F.isIntrinsic()) {
       continue;
     }
 
     llvm::AttrBuilder FuncAttrs(llvmContext);
-    (void)FuncAttrs.addAttribute("frame-pointer", /* FramePointerKind */ "all");
+    // FramePointerKind = "all"
+    (void)FuncAttrs.addAttribute("frame-pointer", "all");
     (void)FuncAttrs.addAttribute("less-precise-fpmad", "false");
     (void)FuncAttrs.addAttribute("no-trapping-math", "true");
-
     (void)FuncAttrs.addAttribute(llvm::Attribute::Convergent);
     // no exceptions for cuda device code
     (void)FuncAttrs.addAttribute(llvm::Attribute::NoUnwind);
@@ -249,8 +228,9 @@ LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
   }
 
   // libdevice module is of an ``internalize'' module
+  // LinkFlags = LinkOnlyNeeded
   if (llvm::Linker::linkModules(llvmModule, std::move(libdeviceModule),
-                                /* LinkFlags */ (unsigned)llvm::Linker::Flags::LinkOnlyNeeded,
+                                static_cast<unsigned>(llvm::Linker::Flags::LinkOnlyNeeded),
                                 [](llvm::Module &M, const llvm::StringSet<> &GS) {
                                   (void)llvm::internalizeModule(M, [&GS](const llvm::GlobalValue &GV) {
                                     return !GV.hasName() || (GS.count(GV.getName()) == 0);
@@ -259,7 +239,6 @@ LogicalResult GPUKernelToPTX::linkLibdevice(llvm::Module &llvmModule, llvm::LLVM
     llvm::errs() << "failed to link libdevice module\n";
     return failure();
   }
-
   return success();
 }
 

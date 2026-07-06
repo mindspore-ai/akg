@@ -565,9 +565,12 @@ static FilterFunctionType isVectorizableLoopPtrFactory(const DenseSet<Operation 
 static std::optional<NestedPattern> makePattern(const DenseSet<Operation *> &parallelLoops, int vectorRank,
                                                 ArrayRef<int64_t> fastestVaryingPattern) {
   using affine::matcher::For;
-  int64_t d0 = fastestVaryingPattern.empty() ? -1 : fastestVaryingPattern[0];
-  int64_t d1 = fastestVaryingPattern.size() < 2 ? -1 : fastestVaryingPattern[1];
-  int64_t d2 = fastestVaryingPattern.size() < 3 ? -1 : fastestVaryingPattern[2];
+  constexpr int64_t kInvalidDim = -1;
+  constexpr size_t kPatternSizeTwo = 2;
+  constexpr size_t kPatternSizeThree = 3;
+  int64_t d0 = fastestVaryingPattern.empty() ? kInvalidDim : fastestVaryingPattern[0];
+  int64_t d1 = fastestVaryingPattern.size() < kPatternSizeTwo ? kInvalidDim : fastestVaryingPattern[1];
+  int64_t d2 = fastestVaryingPattern.size() < kPatternSizeThree ? kInvalidDim : fastestVaryingPattern[2];
   switch (vectorRank) {
     case 1:
       return For(isVectorizableLoopPtrFactory(parallelLoops, d0));
@@ -1107,7 +1110,7 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   // If we are vectorizing a vector dimension, compute a new step for the new
   // vectorized loop using the vectorization factor for the vector dimension.
   // Otherwise, propagate the step of the scalar loop.
-  unsigned newStep;
+  int64_t newStep;
   if (isLoopVecDim) {
     unsigned vectorDim = loopToVecDimIt->second;
     assert(vectorDim < strategy.vectorSizes.size() && "vector dim overflow");
@@ -1145,7 +1148,7 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp, VectorizationState &st
   auto vecForOp =
     state.builder.create<AffineForOp>(forOp.getLoc(), forOp.getLowerBoundOperands(), forOp.getLowerBoundMap(),
                                       forOp.getUpperBoundOperands(), forOp.getUpperBoundMap(), newStep, vecIterOperands,
-                                      /* bodyBuilder= */ [](OpBuilder &, Location, Value, ValueRange) {
+                                      [](OpBuilder &, Location, Value, ValueRange) {
                                         // Make sure we don't create a default terminator in the loop body as
                                         // the proper terminator will be added during vectorization.
                                       });
@@ -1434,7 +1437,7 @@ static void computeIntersectionBuckets(
   for (const NestedMatch &match : matches) {
     AffineForOp matchRoot = cast<AffineForOp>(match.getMatchedOperation());
     bool intersects = false;
-    for (int i = 0, end = intersectionBuckets.size(); i < end; ++i) {
+    for (size_t i = 0, end = intersectionBuckets.size(); i < end; ++i) {
       AffineForOp bucketRoot = bucketRoots[i];
       // Add match to the bucket if the bucket root encloses the match root.
       if (bucketRoot->isAncestor(matchRoot)) {
