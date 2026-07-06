@@ -3860,7 +3860,7 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
 
   SmallVector<Operation *> writers;
   for (Operation *user : actualBuf.getUsers()) {
-    if (user == anchor) {
+    if (user == anchor || isa<annotation::MarkOp>(user)) {
       continue;
     }
     auto dpsUser = dyn_cast<DestinationStyleOpInterface>(user);
