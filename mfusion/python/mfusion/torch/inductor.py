@@ -181,7 +181,7 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     runner.run(
         pipeline=(
             f"builtin.module(convert-mfuse-to-dvm,convert-fused-subgraph-to-custom-call"
-            f"{{kernel-generator={kernel_generator}}},mfuse-fold-redundant-matmul-transpose,canonicalize)"
+            f"{{kernel-generator={kernel_generator}}},canonicalize)"
         ),
         stage="Lower Fused Subgraphs to CustomOp Calls",
     )
