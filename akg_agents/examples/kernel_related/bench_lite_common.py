@@ -750,6 +750,7 @@ DEFAULT_PERF_WARMUP = 10
 DEFAULT_PERF_ITERATIONS = 100
 DEFAULT_PERF_NUM_TRIALS = 3
 DEFAULT_PERF_TIMEOUT = 300
+DEFAULT_CORRECTNESS_TRIALS = 3
 CV_STABLE_THRESHOLD = 0.10
 
 TIER_WEIGHTS: Dict[str, float] = {
@@ -957,8 +958,12 @@ def _move_to_torch_device(obj: Any, device: str) -> Any:
     return obj
 
 
-def _make_seeded_torch_inputs(get_inputs: Any, device: str) -> Any:
-    _set_eval_seed()
+def _make_seeded_torch_inputs(
+    get_inputs: Any,
+    device: str,
+    seed: int = EVAL_SEED,
+) -> Any:
+    _set_eval_seed(seed)
     inputs = get_inputs()
     if device != "cpu":
         inputs = _move_to_torch_device(inputs, device)
@@ -1031,6 +1036,49 @@ def _check_correctness(
             return {"correct": False, "max_abs_diff": max_abs, "max_rel_diff": max_rel, "detail": detail}
 
     return {"correct": True, "max_abs_diff": max_abs, "max_rel_diff": max_rel, "detail": "PASS"}
+
+
+def _check_correctness_trials(
+    ref_model: Any,
+    sol_model: Any,
+    get_inputs: Any,
+    device: str,
+    rtol: float,
+    atol: float,
+    trials: int = DEFAULT_CORRECTNESS_TRIALS,
+) -> Dict[str, Any]:
+    """Run correctness on multiple random input sets using the same model instances."""
+    import torch  # type: ignore
+
+    max_abs = 0.0
+    max_rel = 0.0
+
+    for trial_idx in range(trials):
+        seed = EVAL_SEED + trial_idx
+        ref_inputs = _make_seeded_torch_inputs(get_inputs, device, seed=seed)
+        sol_inputs = _make_seeded_torch_inputs(get_inputs, device, seed=seed)
+
+        with torch.no_grad():
+            ref_out = ref_model(*ref_inputs)
+            sol_out = sol_model(*sol_inputs)
+
+        corr = _check_correctness(ref_out, sol_out, rtol=rtol, atol=atol)
+        max_abs = max(max_abs, corr["max_abs_diff"])
+        max_rel = max(max_rel, corr["max_rel_diff"])
+        if not corr["correct"]:
+            return {
+                "correct": False,
+                "max_abs_diff": corr["max_abs_diff"],
+                "max_rel_diff": corr["max_rel_diff"],
+                "detail": f"trial={trial_idx + 1}/{trials}, seed={seed}: {corr['detail']}",
+            }
+
+    return {
+        "correct": True,
+        "max_abs_diff": max_abs,
+        "max_rel_diff": max_rel,
+        "detail": f"PASS ({trials} random trials)",
+    }
 
 
 def _use_cuda_events(device: str) -> bool:
@@ -1181,15 +1229,15 @@ def _eval_single_case_inner(
         ref_model.eval()
         sol_model.eval()
 
-        ref_inputs = _make_seeded_torch_inputs(get_inputs, device)
-        sol_inputs = _make_seeded_torch_inputs(get_inputs, device)
-
         _track("correctness_check")
-        with torch.no_grad():
-            ref_out = ref_model(*ref_inputs)
-            sol_out = sol_model(*sol_inputs)
-
-        corr = _check_correctness(ref_out, sol_out, rtol=rtol, atol=atol)
+        corr = _check_correctness_trials(
+            ref_model,
+            sol_model,
+            get_inputs,
+            device,
+            rtol=rtol,
+            atol=atol,
+        )
         result["correctness"] = corr["correct"]
         result["max_abs_diff"] = corr["max_abs_diff"]
         result["max_rel_diff"] = corr["max_rel_diff"]
