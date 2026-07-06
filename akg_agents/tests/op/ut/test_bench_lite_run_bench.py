@@ -48,6 +48,51 @@ def _load_bench_lite_common():
     return module
 
 
+def _write_cached_output_case(tmp_path):
+    ref_path = tmp_path / "cached_output.py"
+    sol_path = tmp_path / "cached_output_sol.py"
+
+    ref_path.write_text(
+        """
+import torch
+import torch.nn as nn
+
+
+class Model(nn.Module):
+    def forward(self, x):
+        return x * 2.0
+
+
+def get_inputs():
+    return [torch.randn(8, dtype=torch.float32)]
+
+
+def get_init_inputs():
+    return []
+""",
+        encoding="utf-8",
+    )
+    sol_path.write_text(
+        """
+import torch
+import torch.nn as nn
+
+
+class ModelNew(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self._out = None
+
+    def forward(self, x):
+        if self._out is None:
+            self._out = x * 2.0
+        return self._out
+""",
+        encoding="utf-8",
+    )
+    return ref_path, sol_path
+
+
 def test_check_correctness_rejects_solution_nan():
     run_bench = _load_run_bench()
 
@@ -142,6 +187,28 @@ class ModelNew(nn.Module):
     assert result["max_rel_diff"] == 0.0
 
 
+def test_run_single_case_rejects_cached_output_across_random_trials(tmp_path, monkeypatch):
+    run_bench = _load_run_bench()
+    monkeypatch.setattr(run_bench, "_get_device", lambda: "cpu")
+    ref_path, sol_path = _write_cached_output_case(tmp_path)
+
+    result = run_bench.run_single_case(
+        ref_path=ref_path,
+        sol_path=sol_path,
+        tier="t1",
+        rtol=1e-2,
+        atol=1e-2,
+        warmup_runs=0,
+        iterations=1,
+        num_trials=1,
+        timeout=30,
+    )
+
+    assert result["status"] == "fail"
+    assert result["correctness"] is False
+    assert "trial=2/3" in result["correctness_detail"]
+
+
 def test_common_eval_single_case_replays_seed_for_stateful_inputs(tmp_path, monkeypatch):
     common = _load_bench_lite_common()
     monkeypatch.setattr(common, "_get_torch_device", lambda _backend=None: "cpu")
@@ -202,3 +269,25 @@ class ModelNew(nn.Module):
     assert result["correctness"] is True
     assert result["max_abs_diff"] == 0.0
     assert result["max_rel_diff"] == 0.0
+
+
+def test_common_eval_single_case_rejects_cached_output_across_random_trials(tmp_path, monkeypatch):
+    common = _load_bench_lite_common()
+    monkeypatch.setattr(common, "_get_torch_device", lambda _backend=None: "cpu")
+    ref_path, sol_path = _write_cached_output_case(tmp_path)
+
+    result = common._eval_single_case_inner(
+        ref_path=ref_path,
+        sol_path=sol_path,
+        tier="t1",
+        rtol=1e-2,
+        atol=1e-2,
+        warmup_runs=0,
+        iterations=1,
+        num_trials=1,
+        backend="cpu",
+    )
+
+    assert result["status"] == "fail"
+    assert result["correctness"] is False
+    assert "trial=2/3" in result["correctness_detail"]
