@@ -34,9 +34,6 @@ std::unique_ptr<Pass> createRaiseReductionPrecisionPass();
 /// Create a pass to promote binary operations to ensure consistent input types.
 std::unique_ptr<Pass> createPromoteBinaryOpsPass();
 
-/// Create a pass to fold redundant matmul transpose pairs in @main.
-std::unique_ptr<Pass> createFoldRedundantMatmulTransposePass();
-
 }  // namespace mfuse
 }  // namespace mlir
 
