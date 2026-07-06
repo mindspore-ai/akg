@@ -148,7 +148,7 @@ struct Resource {
   std::map<AxisPtr, int64_t> allocSize;
   std::string resourceType;
   int64_t currSize{1};
-  int64_t totalAvailableSize;  // only for gpu block
+  int64_t totalAvailableSize{0};  // only for gpu block
   int64_t rest();
   bool canApply(int64_t size);
   ConfigPtr alloc(const AxisPtr axis, int64_t size);

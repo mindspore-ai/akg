@@ -17,7 +17,6 @@
 #include <dlfcn.h>
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <iterator>
 #include <iostream>
 #include <fstream>
@@ -69,7 +68,13 @@ mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
   } else if (py::isinstance<py::float_>(arg)) {
     auto val = arg.cast<double>();
     static_assert(sizeof(double) == sizeof(void *), "double size mismatch");
-    std::copy_n(reinterpret_cast<char *>(&val), sizeof(void *), reinterpret_cast<char *>(&data_ptr));
+    union DoublePtr {
+      double d;
+      void *p;
+    };
+    DoublePtr dp;
+    dp.d = val;
+    data_ptr = dp.p;
   } else if (py::isinstance<py::bool_>(arg)) {
     bool val = arg.cast<bool>();
     data_ptr = reinterpret_cast<void *>(static_cast<intptr_t>(val));  // NOLINT

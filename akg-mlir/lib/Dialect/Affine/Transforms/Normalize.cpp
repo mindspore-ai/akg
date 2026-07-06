@@ -44,8 +44,18 @@ static constexpr int kTaylerExpansionNum = 5;
 static constexpr int kTaylerOrderSub = 2;
 static constexpr double kBaseTwo = 2.0;
 static constexpr double kSinTaylerC1 = -0.166666582;
+static constexpr double kSinTaylerC2 = 8.333050e-03;
+static constexpr double kSinTaylerC3 = -1.98089445e-4;
+static constexpr double kSinTaylerC4 = 2.60492652e-6;
 static constexpr int kTaylerSeriesStep = 2;
 static constexpr int kF32ExponentOffset = 30;
+static constexpr double kXRoundSplitBase = 2048.0;
+static constexpr double kHalf = 0.5;
+static constexpr double kSinSignScale = 4.0;
+static constexpr double kNegTwo = -2.0;
+static constexpr double kTanhClipBound = 8.8;
+static constexpr double kCosClipMax = 1.0;
+static constexpr double kCosClipMin = -1.0;
 
 #define DEBUG_TYPE "math-normalize"
 
@@ -148,8 +158,8 @@ struct XRoundSplitInfo {
 static std::tuple<Value, Value, Value> buildXRoundSplit(PatternRewriter &rewriter, Location loc, Value inputDivPi,
                                                         const XRoundSplitInfo &info) {
   auto &[xRound, elemTy] = info;
-  Value invSplit = buildFloatConst(rewriter, loc, elemTy, 1.0 / 2048.0);
-  Value split = buildFloatConst(rewriter, loc, elemTy, 2048.0);
+  Value invSplit = buildFloatConst(rewriter, loc, elemTy, 1.0 / kXRoundSplitBase);
+  Value split = buildFloatConst(rewriter, loc, elemTy, kXRoundSplitBase);
   Value scaled = rewriter.create<arith::MulFOp>(loc, inputDivPi, invSplit);
 
   Value scaledRound = buildRoundWithMath(rewriter, loc, scaled);
@@ -168,10 +178,10 @@ static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpa
       //   tayler(x) ≈ x * (1 + c1*x^2 + c2*x^4 + c3*x^6 + c4*x^8)
       if (taylerExpansionNum == kTaylerExpansionNum) {
         taylerParams.push_back(1.0);             // index 0
-        taylerParams.push_back(-0.166666582);    // c1
-        taylerParams.push_back(8.333050e-03);    // c2
-        taylerParams.push_back(-1.98089445e-4);  // c3
-        taylerParams.push_back(2.60492652e-6);   // c4
+        taylerParams.push_back(kSinTaylerC1);    // c1
+        taylerParams.push_back(kSinTaylerC2);    // c2
+        taylerParams.push_back(kSinTaylerC3);    // c3
+        taylerParams.push_back(kSinTaylerC4);    // c4
         return taylerParams;
       }
       // Fallback: standard Taylor expansion.
@@ -239,17 +249,17 @@ static Value buildTayler(PatternRewriter &rewriter, Location loc, Value x, const
 static Value buildSinSign(PatternRewriter &rewriter, Location loc, Value x) {
   auto elemTy = getElementTypeOrSelf(x.getType());
 
-  Value half = buildFloatConst(rewriter, loc, elemTy, 0.5);
-  Value kHalf = rewriter.create<arith::MulFOp>(loc, x, half);
-  Value kHalfFloor = rewriter.create<math::FloorOp>(loc, kHalf);
+  Value half = buildFloatConst(rewriter, loc, elemTy, kHalf);
+  Value xHalf = rewriter.create<arith::MulFOp>(loc, x, half);
+  Value xHalfFloor = rewriter.create<math::FloorOp>(loc, xHalf);
 
-  Value four = buildFloatConst(rewriter, loc, elemTy, 4.0);
-  Value kHalfFloor4 = rewriter.create<arith::MulFOp>(loc, kHalfFloor, four);
+  Value four = buildFloatConst(rewriter, loc, elemTy, kSinSignScale);
+  Value xHalfFloor4 = rewriter.create<arith::MulFOp>(loc, xHalfFloor, four);
 
-  Value minusTwo = buildFloatConst(rewriter, loc, elemTy, -2.0);
-  Value k2 = rewriter.create<arith::MulFOp>(loc, x, minusTwo);
+  Value minusTwo = buildFloatConst(rewriter, loc, elemTy, kNegTwo);
+  Value xMulNegTwo = rewriter.create<arith::MulFOp>(loc, x, minusTwo);
 
-  Value sign = rewriter.create<arith::AddFOp>(loc, kHalfFloor4, k2);
+  Value sign = rewriter.create<arith::AddFOp>(loc, xHalfFloor4, xMulNegTwo);
   Value one = buildFloatConst(rewriter, loc, elemTy, 1.0);
   Value res = rewriter.create<arith::AddFOp>(loc, sign, one);
   return res;
@@ -362,7 +372,7 @@ struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
       buildNormSplit(rewriter, loc, {input, xRoundHigh, xRoundLow, fTy, piApproParams, std::nullopt, std::nullopt});
 
     // sinTayler(norm_x), 5 terms
-    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, {5, TaylerMode::SIN});
+    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, {kTaylerExpansionNum, TaylerMode::SIN});
 
     // sign(xRound) = floor(xRound/2)*4 - xRound*2 + 1
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
@@ -413,7 +423,7 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
     Value inputDivPi = rewriter.create<arith::MulFOp>(loc, input, piRec);
 
     // xRound = round(inputDivPi + 0.5)
-    Value half = buildFloatConst(rewriter, loc, fTy, 0.5);
+    Value half = buildFloatConst(rewriter, loc, fTy, kHalf);
     Value xPlusHalf = rewriter.create<arith::AddFOp>(loc, inputDivPi, half);
     Value xRound = buildRoundWithMath(rewriter, loc, xPlusHalf);
 
@@ -429,14 +439,14 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
       buildNormSplit(rewriter, loc, {input, xRoundHigh, xRoundLow, fTy, piApproParams, kPiOver2High, kPiOver2Low});
 
     // sinTayler is reused for cos via the offset shift.
-    Value cosTayler = buildTayler(rewriter, loc, normInput, {5, TaylerMode::SIN});
+    Value cosTayler = buildTayler(rewriter, loc, normInput, {kTaylerExpansionNum, TaylerMode::SIN});
 
     Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
 
     Value res = rewriter.create<arith::MulFOp>(loc, cosTayler, signX);
 
     // Clip result to [-1, 1] (cos's mathematical range).
-    res = clipInput(rewriter, loc, res, {1.0, -1.0});
+    res = clipInput(rewriter, loc, res, {kCosClipMax, kCosClipMin});
 
     if (needCastBack) {
       auto f16Ty = rewriter.getF16Type();
@@ -477,10 +487,10 @@ struct NormalizeTanhOp : public OpRewritePattern<math::TanhOp> {
     }
 
     // step 1: clip to [-8.8, 8.8] to avoid exp(2x) overflow; epsilon ~ 1e-8.
-    Value clippedInput = clipInput(rewriter, loc, input, {8.8, -8.8});
+    Value clippedInput = clipInput(rewriter, loc, input, {kTanhClipBound, -kTanhClipBound});
 
     // step 2: y = exp(2x)
-    Value two = buildFloatConst(rewriter, loc, fTy, 2.0);
+    Value two = buildFloatConst(rewriter, loc, fTy, kBaseTwo);
     Value mul2x = rewriter.create<arith::MulFOp>(loc, clippedInput, two);
     Value exp2x = rewriter.create<math::ExpOp>(loc, mul2x);
 
@@ -577,8 +587,8 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
     auto fTy = cast<FloatType>(y.getType());
 
     Value one = buildFloatConst(rewriter, loc, fTy, 1.0);
-    Value two = buildFloatConst(rewriter, loc, fTy, 2.0);
-    Value negTwo = buildFloatConst(rewriter, loc, fTy, -2.0);
+    Value two = buildFloatConst(rewriter, loc, fTy, kBaseTwo);
+    Value negTwo = buildFloatConst(rewriter, loc, fTy, kNegTwo);
 
     Value absY = buildAbs(rewriter, loc, y);
     Value mod = rewriter.create<arith::RemFOp>(loc, absY, two);
