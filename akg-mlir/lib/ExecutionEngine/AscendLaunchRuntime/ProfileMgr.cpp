@@ -24,7 +24,7 @@
 namespace mlir {
 namespace runtime {
 
-bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
+bool ProfileMgr::StartupProfiling(const std::string &profiling_dir, const uint32_t device_id) {
   LOG(INFO) << "Start to profile";
 
   int32_t current_device = -1;
@@ -56,13 +56,7 @@ bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
     return false;
   }
 
-  std::string profile_dir(std::getenv("PROFILING_DIR") ? std::getenv("PROFILING_DIR") : "");
-  if (profile_dir.empty()) {
-    LOG(ERROR) << "Environment PROFILING_DIR not set";
-    return false;
-  }
-
-  ret = aclprofInit(profile_dir.c_str(), profile_dir.length());
+  ret = aclprofInit(profiling_dir.c_str(), profiling_dir.length());
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "aclprofInit failed, ret = " << ret;
     return false;
@@ -111,8 +105,8 @@ ProfileMgr &ProfileMgr::GetInstance() {
   return mgr;
 }
 
-void ascend_start_profiling(int device_id) {
-  ProfileMgr::GetInstance().StartupProfiling(device_id);
+void ascend_start_profiling(const std::string &profiling_dir, int device_id) {
+  ProfileMgr::GetInstance().StartupProfiling(profiling_dir, device_id);
   return;
 }
 
@@ -124,6 +118,10 @@ void ascend_stop_profiling() {
 // PYBIND interface
 // cppcheck-suppress syntaxError
 PYBIND11_MODULE(profile_mgr, m) {
+  mlir::runtime::akg_log_init();
+  if (!google::IsGoogleLoggingInitialized()) {
+    google::InitGoogleLogging("akg");
+  }
   m.doc() = "pybind ascend profiling";  // optional module docstring
   m.def("ascend_start_profiling", &ascend_start_profiling);
   m.def("ascend_stop_profiling", &ascend_stop_profiling);

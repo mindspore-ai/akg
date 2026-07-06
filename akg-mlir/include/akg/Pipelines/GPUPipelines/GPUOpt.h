@@ -37,6 +37,7 @@ struct GPUPipelineOptions : public PassPipelineOptions<GPUPipelineOptions> {
                            llvm::cl::init("sm_70")};
   Option<std::string> jsonFileName{*this, "json-file-name", llvm::cl::desc("mindspore json file name"),
                                    llvm::cl::init("")};
+  Option<std::string> outputDir{*this, "output-dir", llvm::cl::desc("output directory"), llvm::cl::init(".akg/")};
   Option<std::string> globalConfigFile{*this, "global-config-file", llvm::cl::desc("tuned repository file path"),
                                        llvm::cl::init("")};
 };

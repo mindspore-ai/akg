@@ -33,7 +33,7 @@ class Kernel:
         self.kernel_name = kernel_name
         self.dynamic = kernel_meta.get('dynamic')
         self.arch = kernel_meta.get('device_name')
-        self.work_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
+        self.work_dir = os.getenv("KERNEL_META_DIR", default=os.path.expanduser("~/.akg"))
         self.torch_path = str(torch_path)
         self.launcher = None
 

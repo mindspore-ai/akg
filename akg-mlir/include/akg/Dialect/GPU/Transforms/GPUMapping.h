@@ -23,7 +23,7 @@
 
 namespace mlir {
 
-std::unique_ptr<OperationPass<func::FuncOp>> createAKGGPUMapping();
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGGPUMapping(const std::string &outputDir = "");
 
 }  // namespace mlir
 #endif  // AKG_DIALECT_GPU_TRANSFORMS_GPUMAPPING_H_

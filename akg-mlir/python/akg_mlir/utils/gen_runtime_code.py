@@ -151,7 +151,7 @@ def gen_cuda_runtime_code(kernel_name,
                           output_indexes,
                           is_dyn_shape,
                           fake_output_indices,
-                          path="./akg_kernel_meta/"):
+                          path=os.path.expanduser("~/.akg")):
     """Generate cuda runtime code"""
     device_info = get_device_shape(input_for_mod, kernel_name, is_dyn_shape)
     dim = get_gpu_setting_by_input(

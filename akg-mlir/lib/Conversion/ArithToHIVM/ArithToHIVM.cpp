@@ -128,8 +128,8 @@ static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Locatio
   return false;
 }
 
-static void propagateOperandBufferSizeMarks(ConversionPatternRewriter &rewriter, Location loc,
-                                            ArrayRef<Value> operands, ArrayRef<Value> results) {
+static void propagateOperandBufferSizeMarks(ConversionPatternRewriter &rewriter, Location loc, ArrayRef<Value> operands,
+                                            ArrayRef<Value> results) {
   for (Value src : operands) {
     for (Value dest : operands) {
       if (src != dest) {
@@ -201,6 +201,9 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
       transposed.push_back((*sourceMaxShape)[static_cast<size_t>(dim)]);
     }
     return transposed;
+  }
+  if (auto insertSliceOp = dyn_cast<npuvector::InsertSliceOp>(defOp)) {
+    return inferNPUVectorMaxShape(insertSliceOp.getDest(), depth - 1);
   }
 
   for (Value operand : defOp->getOperands()) {
@@ -686,6 +689,9 @@ static FailureOr<Value> getNPUVectorDimValue(Value vector, int64_t dim, unsigned
   }
   if (auto broadcastOp = dyn_cast<npuvector::BroadcastOp>(defOp)) {
     return getNPUVectorDimFromDynamicSizes(npuVecType, broadcastOp.getDynamicSizes(), dim);
+  }
+  if (auto insertSliceOp = dyn_cast<npuvector::InsertSliceOp>(defOp)) {
+    return getNPUVectorDimValue(insertSliceOp.getDest(), dim, depth - 1, rewriter);
   }
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
     return traceScfIfResultDim(ifOp, vector, dim, depth, rewriter);
@@ -4507,9 +4513,8 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
       return failure();
     }
     Value vbrcResultBuf = resultBuf;
-    if (isI1Broadcast &&
-        failed(allocBroadcastBuffer(op, loc, vbrcMemRefType, npuVecType, vbrcElemType, adaptor.getDynamicSizes(),
-                                    rewriter, vbrcResultBuf))) {
+    if (isI1Broadcast && failed(allocBroadcastBuffer(op, loc, vbrcMemRefType, npuVecType, vbrcElemType,
+                                                     adaptor.getDynamicSizes(), rewriter, vbrcResultBuf))) {
       return failure();
     }
 
@@ -4588,6 +4593,55 @@ struct NPUVectorExtractSliceToHIVM : public OpConversionPattern<npuvector::Extra
     Value result = rewriter.create<memref::SubViewOp>(loc, resultType, src, offsets, sizes, strides);
     propagateBufferSizeMark(rewriter, loc, src, result);
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct NPUVectorInsertSliceToHIVM : public OpConversionPattern<npuvector::InsertSliceOp> {
+  using OpConversionPattern<npuvector::InsertSliceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::InsertSliceOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value source = adaptor.getSource();
+    Value dest = adaptor.getDest();
+    auto sourceMemRef = dyn_cast<MemRefType>(source.getType());
+    auto destMemRef = dyn_cast<MemRefType>(dest.getType());
+    if (!sourceMemRef || !destMemRef) {
+      return rewriter.notifyMatchFailure(op, "expected memref source and destination");
+    }
+
+    SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getOffsets());
+    SmallVector<OpFoldResult> sizes = getAsOpFoldResult(adaptor.getSizes());
+    SmallVector<OpFoldResult> strides = getAsOpFoldResult(adaptor.getStrides());
+    if (offsets.size() != static_cast<size_t>(destMemRef.getRank()) ||
+        sizes.size() != static_cast<size_t>(destMemRef.getRank()) ||
+        strides.size() != static_cast<size_t>(destMemRef.getRank())) {
+      return rewriter.notifyMatchFailure(op, "slice ranges must match destination rank");
+    }
+
+    auto subViewType = dyn_cast_or_null<MemRefType>(
+      memref::SubViewOp::inferRankReducedResultType(sourceMemRef.getShape(), destMemRef, offsets, sizes, strides));
+    if (!subViewType) {
+      return rewriter.notifyMatchFailure(op, "failed to infer inserted subview type");
+    }
+
+    Value resultBuf = tryGetInPlaceInitIfResultIsYieldOperand(op.getOperation());
+    if (!resultBuf) {
+      auto allocated = allocMemRef(rewriter, loc, destMemRef, dest);
+      if (failed(allocated)) {
+        return failure();
+      }
+      resultBuf = *allocated;
+      if (!setNPUVectorResultBufferSizeMark(rewriter, loc, op.getOperation(), resultBuf)) {
+        propagateBufferSizeMark(rewriter, loc, dest, resultBuf);
+      }
+      rewriter.create<memref::CopyOp>(loc, dest, resultBuf);
+    }
+
+    Value subView = rewriter.create<memref::SubViewOp>(loc, subViewType, resultBuf, offsets, sizes, strides);
+    rewriter.create<memref::CopyOp>(loc, source, subView);
+    rewriter.replaceOp(op, resultBuf);
     return success();
   }
 };
@@ -4913,8 +4967,9 @@ void hivm::populateArithToHIVMConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<MathAbsIToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
-  patterns.add<NPUVectorTransferReadToHIVM, NPUVectorTransferWriteToHIVM, NPUVectorBroadcastToHIVM,
-               NPUVectorTransposeToHIVM, NPUVectorExtractSliceToHIVM, NPUVectorIndexCastToHIVM>(patterns.getContext());
+  patterns
+    .add<NPUVectorTransferReadToHIVM, NPUVectorTransferWriteToHIVM, NPUVectorBroadcastToHIVM, NPUVectorTransposeToHIVM,
+         NPUVectorExtractSliceToHIVM, NPUVectorInsertSliceToHIVM, NPUVectorIndexCastToHIVM>(patterns.getContext());
   patterns.add<UnaryNPUVectorToHIVMCast<npuvector::ExtFOp>, UnaryNPUVectorToHIVMCast<npuvector::TruncFOp>,
                UnaryNPUVectorToHIVMCast<npuvector::ExtSIOp>, UnaryNPUVectorToHIVMCast<npuvector::ExtUIOp>,
                UnaryNPUVectorToHIVMCast<npuvector::TruncIOp>, UnaryNPUVectorToHIVMCast<npuvector::SIToFPOp>,
@@ -4985,11 +5040,12 @@ void ArithToHIVMConversionPass::runOnOperation() {
     [](scf::IfOp op) { return llvm::none_of(op.getResultTypes(), isVectorOrNPUVectorType); });
   target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp, vector::TransferWriteOp, vector::BroadcastOp>();
-  target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::TransferWriteOp,
-                      npuvector::BroadcastOp, npuvector::TransposeOp, npuvector::ExtractSliceOp, npuvector::ExtFOp,
-                      npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp,
-                      npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp,
-                      npuvector::BitcastOp, npuvector::CmpIOp, npuvector::CmpFOp, npuvector::SelectOp>();
+  target
+    .addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::TransferWriteOp, npuvector::BroadcastOp,
+                  npuvector::TransposeOp, npuvector::ExtractSliceOp, npuvector::InsertSliceOp, npuvector::ExtFOp,
+                  npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp, npuvector::SIToFPOp,
+                  npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp, npuvector::BitcastOp,
+                  npuvector::CmpIOp, npuvector::CmpFOp, npuvector::SelectOp>();
 
   RewritePatternSet patterns(&getContext());
   hivm::populateArithToHIVMConversionPatterns(patterns);
