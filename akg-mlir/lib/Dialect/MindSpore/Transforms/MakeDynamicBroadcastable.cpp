@@ -47,6 +47,8 @@ using namespace akgglobal;        // NOLINT(build/namespaces)
 using namespace mlir::tosa;       // NOLINT(build/namespaces)
 using namespace mlir::shape;      // NOLINT(build/namespaces)
 using namespace mlir::mindspore;  // NOLINT(build/namespaces)
+
+namespace {
 static bool ignoreImplicitBroadcast = false;
 
 static bool needInsertBroadCastOrCast(const Type &oprand, const Type &target) {
@@ -98,7 +100,6 @@ static Type GetCastedShape(Type target, Type oprand, SmallVector<int64_t> &needC
   return analysis.updateSymbolicShape(castedTy, castedSymbolShape);
 }
 
-namespace {
 template <typename OpTy>
 struct EnableTosaBroadCastOp : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
@@ -338,10 +339,12 @@ struct MakeDynamicBroadcastable : public impl::MakeDynamicBroadcastableBase<Make
 };
 }  // namespace
 
-std::unique_ptr<Pass> mlir::createMakeDynamicBroadcastablePass() {
+namespace mlir {
+std::unique_ptr<Pass> createMakeDynamicBroadcastablePass() {
   return std::make_unique<MakeDynamicBroadcastable>();
 }
 
-std::unique_ptr<Pass> mlir::createMakeDynamicBroadcastablePass(bool ignoreImplicitBroadcast) {
+std::unique_ptr<Pass> createMakeDynamicBroadcastablePass(bool ignoreImplicitBroadcast) {
   return std::make_unique<MakeDynamicBroadcastable>(ignoreImplicitBroadcast);
 }
+}  // mlir

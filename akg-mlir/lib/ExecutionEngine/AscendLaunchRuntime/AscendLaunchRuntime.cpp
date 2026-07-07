@@ -42,17 +42,11 @@ using std::vector;
 using CallFunc = void (*)(uint32_t, void *, void *, void **);
 
 namespace {
-constexpr uint16_t kMsprofReportDataMagicNum = 0x5a5a;
 
 /// Validate a file path. Returns true if the path is non-empty and contains no "..".
 bool validateFilePath(const std::string &path) {
   return !path.empty() && path.find("..") == std::string::npos;
 }
-constexpr uint16_t kMsprofReportNodeLevel = 10000;
-constexpr uint32_t kMsprofReportNodeBasicInfoType = 0;
-constexpr uint32_t kMsprofReportNodeLaunchType = 5;
-constexpr uint32_t kMsprofGeTaskTypeAiCore = 0;
-constexpr uint32_t kMsprofCompactInfoDataLength = 40;
 constexpr auto kDynamicSuffix = ".so";
 constexpr auto kStaticSuffix = ".o";
 constexpr auto kAiCoreStr = "AiCore";
@@ -61,46 +55,16 @@ static thread_local aclrtContext thread_local_rt_context{nullptr};
 uint64_t kDevRegStub = 0xbadbeefULL;
 std::mutex kDevRegStubMutex;
 
-struct kMsprofApi {
-  uint16_t magicNumber;
-  uint16_t level;
-  uint32_t type;
-  uint32_t threadId;
-  uint32_t reserve;
-  uint64_t beginTime;
-  uint64_t endTime;
-  uint64_t itemId;
-};
-
-#pragma pack(push, 1)
-struct kMsprofNodeBasicInfo {
-  uint64_t opName;
-  uint32_t taskType;
-  uint64_t opType;
-  uint32_t blockDim;
-  uint32_t opFlag;
-};
-#pragma pack(pop)
-
-struct kMsprofCompactInfo {
-  uint16_t magicNumber;
-  uint16_t level;
-  uint32_t type;
-  uint32_t threadId;
-  uint32_t dataLen;
-  uint64_t timeStamp;
-  union {
-    uint8_t info[kMsprofCompactInfoDataLength];
-    kMsprofNodeBasicInfo nodeBasicInfo;
-  } data;
-};
-
-void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_name, uint64_t block_num,
-                            uint64_t begin_time, uint64_t end_time) {
+void ReportDynamicLaunch(const std::string &kernel_name, uint64_t block_num, uint64_t begin_time, uint64_t end_time) {
+  constexpr uint16_t kMsprofReportDataMagicNum = 0x5a5a;
+  constexpr uint16_t kMsprofReportNodeLevel = 10000;
+  constexpr uint32_t kMsprofReportNodeBasicInfoType = 0;
+  constexpr uint32_t kMsprofReportNodeLaunchType = 5;
+  constexpr uint32_t kMsprofGeTaskTypeAiCore = 0;
   auto thread_id = static_cast<uint32_t>(syscall(SYS_gettid));
-  auto op_name = cce_wrapper->MsprofGetHashId(kernel_name.c_str(), kernel_name.size());
+  auto op_name = MsprofGetHashId(kernel_name.c_str(), kernel_name.size());
 
-  kMsprofApi api{};
+  MsprofApi api{};
   api.magicNumber = kMsprofReportDataMagicNum;
   api.level = kMsprofReportNodeLevel;
   api.type = kMsprofReportNodeLaunchType;
@@ -109,9 +73,10 @@ void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_n
   api.beginTime = begin_time;
   api.endTime = end_time;
   api.itemId = op_name;
-  cce_wrapper->MsprofReportApi(0, &api);
 
-  kMsprofCompactInfo node_basic_info{};
+  MsprofReportApi(0, &api);
+
+  MsprofCompactInfo node_basic_info{};
   node_basic_info.magicNumber = kMsprofReportDataMagicNum;
   node_basic_info.level = kMsprofReportNodeLevel;
   node_basic_info.type = kMsprofReportNodeBasicInfoType;
@@ -123,7 +88,7 @@ void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_n
   node_basic_info.data.nodeBasicInfo.opType = op_name;
   node_basic_info.data.nodeBasicInfo.blockDim = static_cast<uint32_t>(block_num);
   node_basic_info.data.nodeBasicInfo.opFlag = 0;
-  cce_wrapper->MsprofReportCompactInfo(0, &node_basic_info, sizeof(kMsprofCompactInfo));
+  MsprofReportCompactInfo(0, &node_basic_info, sizeof(MsprofCompactInfo));
 }
 }  // namespace
 
@@ -196,14 +161,10 @@ uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin
 
 void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t block_num, rtStream_t stream,
                   std::vector<void *> args, bool is_dynamic) {
-  CceWrapper *cce_wrapper = nullptr;
-  if (is_dynamic && !func_name.empty()) {
-    cce_wrapper = CceWrapper::GetInstance();
-  }
-  bool report_msprof = cce_wrapper != nullptr && cce_wrapper->IsMsprofAvailable();
-  uint64_t begin_time = report_msprof ? cce_wrapper->MsprofSysCycleTime() : 0;
+  uint64_t begin_time = 0;
 
   if (is_dynamic) {
+    begin_time = MsprofSysCycleTime();
     auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);  // NOLINT
     if (kernel_func_ptr == nullptr) {
       LOG(FATAL) << "kernel_func is null, func_name: " << func_name;
@@ -217,8 +178,8 @@ void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t b
     }
   }
 
-  if (report_msprof) {
-    ReportAkgDynamicLaunch(cce_wrapper, func_name, block_num, begin_time, cce_wrapper->MsprofSysCycleTime());
+  if (is_dynamic) {
+    ReportDynamicLaunch(func_name, block_num, begin_time, MsprofSysCycleTime());
   }
 }
 
