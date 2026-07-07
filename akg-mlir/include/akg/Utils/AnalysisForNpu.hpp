@@ -447,6 +447,20 @@ inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankD
     elementBits);
 }
 
+inline int64_t computeBishengRank1StrideAlignedStorageBytes(ArrayRef<int64_t> maxPerRankDim,
+                                                            ArrayRef<int64_t> typeShape, Type elemType) {
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (typeShape.size() != 1 || maxPerRankDim.size() != 1 || elementBits <= 0) {
+    return 0;
+  }
+
+  int64_t dim = ShapedType::isDynamic(typeShape.front()) ? maxPerRankDim.front() : typeShape.front();
+  SmallVector<int64_t, kSmallVectorSizeOne> shape{dim};
+  SmallVector<char, kSmallVectorSizeOne> staticDims{static_cast<char>(!ShapedType::isDynamic(typeShape.front()))};
+  SmallVector<int32_t, kSmallVectorSizeOne> alignDims{0};
+  return computeBishengStrideAlignedStorageBytesWithTrailingUnit(shape, staticDims, alignDims, elementBits);
+}
+
 inline int64_t computeBishengInlineBroadcastSourceStorageBytes(ArrayRef<int64_t> maxPerRankDim,
                                                                ArrayRef<int64_t> typeShape, Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
