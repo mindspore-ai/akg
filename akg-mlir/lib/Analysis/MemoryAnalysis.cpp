@@ -1005,6 +1005,10 @@ static bool isReusableArithSelectInplace(arith::SelectOp selectOp, const BufferI
 }
 
 static bool shouldBlockBrcCstInplaceReuse(Operation *op, unsigned operandIndex) {
+  if (isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::MulSIExtendedOp, arith::MulUIExtendedOp,
+          arith::DivFOp>(op)) {
+    return false;
+  }
   if (operandIndex == 1) {
     return true;
   }
