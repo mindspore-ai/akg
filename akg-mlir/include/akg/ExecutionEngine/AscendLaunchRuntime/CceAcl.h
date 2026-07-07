@@ -227,6 +227,9 @@ typedef enum {
 #define RT_DEV_BINARY_MAGIC_ELF 0x43554245U
 #define RT_DEV_BINARY_MAGIC_ELF_AICPU 0x41415243U
 #define RT_DEV_BINARY_MAGIC_ELF_AIVEC 0x41415246U
+#define MSPROF_REPORT_DATA_MAGIC_NUM 0x5A5AU
+#define MSPROF_COMPACT_INFO_DATA_LENGTH 40
+#define MSPROF_ADDITIONAL_INFO_DATA_LENGTH 232
 
 typedef struct tagRtDevBinary {
   uint32_t magic;    // magic number
@@ -254,6 +257,60 @@ typedef struct tagRtSmCtrl {
   uint8_t l2_in_main;
   uint8_t reserved[3];
 } rtSmDesc_t;
+
+struct MsprofApi {
+#ifdef __cplusplus
+    uint16_t magicNumber = MSPROF_REPORT_DATA_MAGIC_NUM;
+#else
+    uint16_t magicNumber;
+#endif
+    uint16_t level;
+    uint32_t type;
+    uint32_t threadId;
+    uint32_t reserve;
+    uint64_t beginTime;
+    uint64_t endTime;
+    uint64_t itemId;
+};
+
+struct MsprofNodeBasicInfo {
+    uint64_t opName;
+    uint32_t taskType;
+    uint64_t opType;
+    uint32_t blockDim;
+    uint32_t opFlag;
+};
+
+struct MsprofCompactInfo {
+#ifdef __cplusplus
+    uint16_t magicNumber = MSPROF_REPORT_DATA_MAGIC_NUM;
+#else
+    uint16_t magicNumber;
+#endif
+    uint16_t level;
+    uint32_t type;
+    uint32_t threadId;
+    uint32_t dataLen;
+    uint64_t timeStamp;
+    union {
+        uint8_t info[MSPROF_COMPACT_INFO_DATA_LENGTH];
+        struct MsprofNodeBasicInfo nodeBasicInfo;
+    } data;
+};
+
+struct MsprofAdditionalInfo {
+#ifdef __cplusplus
+    uint16_t magicNumber = MSPROF_REPORT_DATA_MAGIC_NUM;
+#else
+    uint16_t magicNumber;
+#endif
+    uint16_t level;
+    uint32_t type;
+    uint32_t threadId;
+    uint32_t dataLen;
+    uint64_t timeStamp;
+    uint8_t data[MSPROF_ADDITIONAL_INFO_DATA_LENGTH];
+};
 
 namespace mlir {
 namespace runtime {
@@ -299,6 +356,11 @@ int rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t 
                    rtStream_t stm);
 int rtLaunch(const void *stubFunc);
 int rtSetupArgument(const void *args, uint32_t size, uint32_t offset);
+
+int32_t MsprofReportApi(uint32_t nonPersistantFlag, const struct MsprofApi *api);
+int32_t MsprofReportCompactInfo(uint32_t nonPersistantFlag, const void *data, uint32_t length);
+uint64_t MsprofGetHashId(const char *hashInfo, size_t length);
+uint64_t MsprofSysCycleTime(void);
 }
 
 #endif  // AKG_EXECUTIONENGINE_ASCENDLAUNCHRUNTIME_CCEACL_H_

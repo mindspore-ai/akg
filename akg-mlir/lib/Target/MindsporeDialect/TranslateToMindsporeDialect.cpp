@@ -866,6 +866,10 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
       NamedAttribute(StringAttr::get(context, kPtrAddress), StringAttr::get(context, opNode.ptrAddress)));
   }
   std::string opName = opNode.opName;
+  if (opNode.outputDesc.empty()) {
+    llvm::report_fatal_error(
+      llvm::StringRef("Error occurs when converting json to mlir: op name: " + opName + " has empty outputDesc\n"));
+  }
   ConvertOpParams params{builder, opNode, inputTys, outputTys, operands, allAttrs};
   if (this->mindOpFactory.count(opName) == 0) {
     MindBuilder::convertUnknownOp(params);
