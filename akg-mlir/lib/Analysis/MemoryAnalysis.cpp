@@ -707,7 +707,7 @@ class MemoryPeakEstimator {
   void analyzeConditionalControlFlow_();
   void assignForEntryTimeline_(scf::ForOp forOp, int64_t &opTimeIndex);
   void assignForExitTimeline_(Operation *op, int64_t &opTimeIndex);
-  void assignInputBufferFreeTime_(ArrayRef<int64_t> inputBufferIndexes, int64_t opTimeIndex);
+  void assignInputBufferFreeTime_(const OpRecord &opRecord, int64_t opTimeIndex);
   void assignIterArgFreeTimeAtForExit_(scf::ForOp forOp, int64_t opTimeIndex, OpRecord &forOpRecord);
   void assignOpTimeline_(Operation *op, int64_t &opTimeIndex);
   void assignGenBuffersAllocTime_(OpRecord &opRecord, int64_t opTimeIndex);
@@ -2354,12 +2354,16 @@ void MemoryPeakEstimator::assignGenBuffersAllocTime_(OpRecord &opRecord, int64_t
   }
 }
 
-void MemoryPeakEstimator::assignInputBufferFreeTime_(ArrayRef<int64_t> inputBufferIndexes, int64_t opTimeIndex) {
-  for (int64_t inputIndex : inputBufferIndexes) {
+void MemoryPeakEstimator::assignInputBufferFreeTime_(const OpRecord &opRecord, int64_t opTimeIndex) {
+  for (int64_t inputIndex : opRecord.inputBufferIndexes) {
     if (inputIndex < 0 || inputIndex >= static_cast<int64_t>(bufferInfoList_.size())) {
       continue;
     }
     if (isScfRegionIterArgBuffer_(bufferInfoList_[static_cast<size_t>(inputIndex)])) {
+      continue;
+    }
+    if (isMaterializedCstBufferIndex(inputIndex) &&
+        isKillBrcCst(*this, opRecord.sourceOp, opRecord, inputIndex, bufferInfoList_)) {
       continue;
     }
     bufferInfoList_[static_cast<size_t>(inputIndex)].freeTime = opTimeIndex;
@@ -2391,7 +2395,7 @@ void MemoryPeakEstimator::assignVirtualOpTimeline_(const OpRecord &opRecord, int
       virtualOutputBuffer.allocTime = opTimeIndex;
     }
 
-    assignInputBufferFreeTime_(perOpList_[index].inputBufferIndexes, opTimeIndex);
+    assignInputBufferFreeTime_(perOpList_[index], opTimeIndex);
 
     perOpList_[index].opTimeIndex = opTimeIndex++;
   }
@@ -2458,7 +2462,7 @@ void MemoryPeakEstimator::assignOpTimeline_(Operation *op, int64_t &opTimeIndex)
     assignGenBuffersAllocTime_(opRecord, opTimeIndex);
   }
 
-  assignInputBufferFreeTime_(opRecord.inputBufferIndexes, opTimeIndex);
+  assignInputBufferFreeTime_(opRecord, opTimeIndex);
   opRecord.opTimeIndex = opTimeIndex++;
 }
 
