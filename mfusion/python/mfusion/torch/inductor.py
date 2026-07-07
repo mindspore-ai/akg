@@ -84,6 +84,7 @@ def _run_composite_fusion_stage(
 
 
 def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> str:
+    # #lizard forgives
     """
     Fuse and optimize the given Torch dialect MLIR string.
 
@@ -147,9 +148,17 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
         stage="Tag LayerNorm subgraphs for DVM",
     )
 
-    cluster_passes = [f"mfuse-{kernel_generator}-cluster"]
     if kernel_generator == "dvm":
-        cluster_passes.insert(0, "mfuse-decompose-matmul-with-bias-for-dvm-cluster")
+        cluster_passes = [
+            "mfuse-decompose-matmul-with-bias-for-dvm-cluster",
+            "canonicalize",
+            # Run after matmul_with_bias decomposition to expose more DVM fusion opportunities.
+            "mfuse-fold-bnsd-flatten-sum{guard=true}",
+            "canonicalize",
+            "mfuse-dvm-cluster",
+        ]
+    else:
+        cluster_passes = [f"mfuse-{kernel_generator}-cluster"]
     runner.run(
         pipeline=f"builtin.module(func.func({','.join(cluster_passes)}),canonicalize)",
         stage=f"Mfuse {kernel_generator} Clustering",
