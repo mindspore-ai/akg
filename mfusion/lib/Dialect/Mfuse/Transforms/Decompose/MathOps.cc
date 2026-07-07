@@ -305,16 +305,17 @@ class ReduceMeanDecomposePattern : public OpRewritePattern<mfuse::ReduceMeanOp> 
       return rewriter.notifyMatchFailure(meanOp, "result element type must be floating point");
     }
 
-    // Mirror torch._inductor mean lowering for f16/bf16: compute in f32, then cast back.
+    // Compute f16/bf16 means in f32 and cast back. Cast the input directly to
+    // the compute type to avoid overflowing large values through f16 first.
     const bool computeInF32 = shouldComputeMeanInF32(resultElementType);
+    Type computeElementType = computeInF32 ? rewriter.getF32Type() : resultElementType;
     Value reduceInput = meanOp.getInput();
-    RankedTensorType sumResultType = resultType;
+    RankedTensorType sumResultType =
+      computeInF32 ? getSameShapeWithElementType(resultType, computeElementType) : resultType;
 
-    if (computeInF32) {
-      auto f32Type = rewriter.getF32Type();
-      auto f32InputType = getSameShapeWithElementType(inputType, f32Type);
-      reduceInput = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), f32InputType, meanOp.getInput()).getResult();
-      sumResultType = getSameShapeWithElementType(resultType, f32Type);
+    if (inputType.getElementType() != computeElementType) {
+      RankedTensorType reduceInputType = getSameShapeWithElementType(inputType, computeElementType);
+      reduceInput = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), reduceInputType, reduceInput).getResult();
     }
 
     auto reduceSum = rewriter.create<mfuse::ReduceSumOp>(meanOp.getLoc(), sumResultType, reduceInput,

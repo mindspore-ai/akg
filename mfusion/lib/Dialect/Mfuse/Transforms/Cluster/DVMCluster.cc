@@ -251,7 +251,6 @@ class DvmSupportChecker {
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
     auto floatOutputCheck = [](Operation *op) { return floatOutputCheckFunc(op); };
-    auto floatIntOutputCheck = [](Operation *op) { return floatIntOutputCheckFunc(op); };
     auto floatIntBoolOutputCheck = [](Operation *op) { return floatIntBoolOutputCheckFunc(op); };
     auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
     auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
@@ -276,6 +275,7 @@ class DvmSupportChecker {
     checkFunc_["mfuse.sub"] = {floatIntOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.relu"] = {floatOutputCheck, inputCheckAll};
     checkFunc_["mfuse.mul"] = {mulOpCheck};
+    checkFunc_["mfuse.div"] = {divOpCheck};
     checkFunc_["mfuse.maximum"] = {floatOutputCheck, inputCheckAll};
     checkFunc_["mfuse.minimum"] = {floatOutputCheck, inputCheckAll};
     checkFunc_["mfuse.neg"] = {floatIntOutputCheckFunc, inputCheckAll};
@@ -384,6 +384,10 @@ class DvmSupportChecker {
 
   static bool mulOpCheck(Operation *op) {
     return mixTypeCheck(op, [](Type type) { return isFloatIntType(type); }, {});
+  }
+
+  static bool divOpCheck(Operation *op) {
+    return mixTypeCheck(op, [](Type type) { return isFloatType(type); }, {});
   }
 
   static bool matmulOpCheck(Operation *op) {
