@@ -820,7 +820,7 @@ static int getNestedNum(Operation *op) {
 void AKGGPUMappingLoops::createMappingTask(ParallelOp parallelOp) {
   for (auto [loopVar, lowerBoundVar, upperBoundVar, stepVar] : llvm::zip(
          parallelOp.getInductionVars(), parallelOp.getLowerBound(), parallelOp.getUpperBound(), parallelOp.getStep())) {
-    size_t dim = getNestedNum(parallelOp.getOperation());
+    size_t dim = static_cast<size_t>(getNestedNum(parallelOp.getOperation()));
     bool isReduceAxis = parallelOp.getOperation()->hasAttr(kReductionLoopAttr);
     int reductionDim = isReduceAxis ? static_cast<int>(dim) : -1;
     auto lbConst = getMaxIntConst(lowerBoundVar);

@@ -168,12 +168,18 @@ class ReplaceUnknownDimsToOutputDim : public impl::ReplaceUnknownDimsToOutputDim
       auto firstDim = dimPack[i][0];
       auto pos = getPos(firstDim->getOperands()[1]);
       auto argIdx = getArgIdx(funcOp, dyn_cast<BlockArgument>(firstDim->getOperands()[0]));
-      auto symbol = tool.getCurrShapeInfo(argIdx)[pos];
+      if (argIdx < 0 || pos < 0) {
+        continue;
+      }
+      auto symbol = tool.getCurrShapeInfo(static_cast<size_t>(argIdx))[static_cast<size_t>(pos)];
       auto outSymbol = getOutputSymbol(dict, symbol);
       int outPos = -1;
       int outArgIdx = -1;
       std::tie(outArgIdx, outPos) = getOutputFromSymbol(outSymbol, tool.getDeviceShapesList());
-      auto output = funcOp.getBody().front().getArgument(outArgIdx);
+      if (outArgIdx < 0 || outPos < 0) {
+        continue;
+      }
+      auto output = funcOp.getBody().front().getArgument(static_cast<size_t>(outArgIdx));
       // 2. replace those memref.dim to output dim
       builder.setInsertionPoint(firstDim);
       auto outDim = builder.create<memref::DimOp>(firstDim->getLoc(), output, static_cast<int64_t>(outPos));

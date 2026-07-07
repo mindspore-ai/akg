@@ -18,6 +18,23 @@ from pathlib import Path
 from .code_template import CPU_PROFILING_TEMPLATE
 
 
+def _find_kernel_func_line(file_src):
+    """Find the line index of the kernel function in the MLIR source."""
+    for idx, line in enumerate(file_src):
+        if "llvm.func @Fused_" in line:
+            return idx
+    return 0
+
+
+def _apply_template(template_src, kernel_name, inputs_name, inputs_ptr, profiling_trails):
+    """Apply replacements to the template source."""
+    template_src = template_src.replace("KERNEL_NAME", kernel_name)
+    template_src = template_src.replace("INPUTS_NAME", inputs_name)
+    template_src = template_src.replace("INPUTS_PTR", inputs_ptr)
+    template_src = template_src.replace("CTIMES", str(profiling_trails))
+    return template_src
+
+
 def wrap_timer_func(file, kernel_name, profiling_trails):
     """generate the file for cpu profiling
 
@@ -31,22 +48,12 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     """
     if not file.endswith(".mlir"):
         return file
-    inputs_name = ""
-    inputs_ptr = ""
-    file_src = ""
-    kernel_func_line_id = 0
-    template_src = CPU_PROFILING_TEMPLATE
     with open(file, 'r', encoding='utf-8') as f:
         file_src = f.readlines()
-        for idx, line in enumerate(file_src):
-            if "llvm.func @Fused_" in line:
-                kernel_func_line_id = idx
-                break
+    kernel_func_line_id = _find_kernel_func_line(file_src)
     inputs_name, inputs_ptr = file_src[kernel_func_line_id].split("(")[1].split(")")[0].split(": ")
-    template_src = template_src.replace("KERNEL_NAME", kernel_name)
-    template_src = template_src.replace("INPUTS_NAME", inputs_name)
-    template_src = template_src.replace("INPUTS_PTR", inputs_ptr)
-    template_src = template_src.replace("CTIMES", str(profiling_trails))
+    template_src = _apply_template(CPU_PROFILING_TEMPLATE, kernel_name, inputs_name, inputs_ptr,
+                                   profiling_trails)
     module_func = "".join(file_src[:kernel_func_line_id])
     kernel_func = "".join(file_src[kernel_func_line_id:])
     wrapped_timer_src = "\n".join([module_func, template_src, kernel_func])

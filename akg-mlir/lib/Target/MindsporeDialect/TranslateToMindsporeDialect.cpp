@@ -1267,7 +1267,7 @@ void MindBuilder::convertReduceOp(ConvertOpParams params) {
     if (opNode.inputDesc[1][0].at(kValue).is_number()) {
       auto axis = opNode.inputDesc[1][0].at(kValue).get<int64_t>();
       if (axis < 0) {
-        axis = opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size() + axis;
+        axis = static_cast<int64_t>(opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size()) + axis;
       }
       (void)axes.emplace_back(axis);
     } else {
@@ -1275,7 +1275,7 @@ void MindBuilder::convertReduceOp(ConvertOpParams params) {
     }
   } else if (opNode.opName == "ElemAny") {
     // for ElemAny Op, all axis are "reduction" types.
-    int64_t rank = opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size();
+    int64_t rank = static_cast<int64_t>(opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size());
     for (int64_t i = 0; i < rank; i++) {
       (void)axes.emplace_back(i);
     }
