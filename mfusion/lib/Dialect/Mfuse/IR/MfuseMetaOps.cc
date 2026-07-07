@@ -72,6 +72,48 @@ mlir::LogicalResult verifyReduceDimensions(mlir::Operation *op, mlir::ArrayAttr 
   return mlir::success();
 }
 
+static mlir::DenseElementsAttr getSplatDenseAttr(mlir::Value value) {
+  auto cst = value.getDefiningOp<mlir::mfuse::ConstantOp>();
+  if (!cst) {
+    return {};
+  }
+  auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
+  if (!dense || !dense.isSplat()) {
+    return {};
+  }
+  return dense;
+}
+
+static bool isIntegerOrIndexSplatZero(mlir::Value value) {
+  auto dense = getSplatDenseAttr(value);
+  if (!dense) {
+    return false;
+  }
+  auto elementType = dense.getElementType();
+  // Keep zero-folding restricted to integer/index splats. For floating-point,
+  // APFloat::isZero() treats +0.0 and -0.0 the same, which is not strictly
+  // semantics-preserving for add/sub without no-signed-zero style guarantees.
+  if (elementType.isIntOrIndex()) {
+    return dense.getSplatValue<llvm::APInt>().isZero();
+  }
+  return false;
+}
+
+static bool isSplatOne(mlir::Value value) {
+  auto dense = getSplatDenseAttr(value);
+  if (!dense) {
+    return false;
+  }
+  auto elementType = dense.getElementType();
+  if (mlir::isa<mlir::FloatType>(elementType)) {
+    return dense.getSplatValue<llvm::APFloat>().isExactlyValue(1.0);
+  }
+  if (elementType.isIntOrIndex()) {
+    return dense.getSplatValue<llvm::APInt>() == 1;
+  }
+  return false;
+}
+
 }  // namespace
 
 namespace mlir::mfuse {
@@ -660,6 +702,40 @@ mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
     if (newCastOpt) {
       return *newCastOpt;
     }
+  }
+  return {};
+}
+
+mlir::OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
+  if (getY().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getX())) {
+    return getY();
+  }
+  if (getX().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getY())) {
+    return getX();
+  }
+  return {};
+}
+
+mlir::OpFoldResult DivOp::fold(FoldAdaptor adaptor) {
+  if (getSelf().getType() == getResult().getType() && isSplatOne(getOther())) {
+    return getSelf();
+  }
+  return {};
+}
+
+mlir::OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
+  if (getRhs().getType() == getResult().getType() && isSplatOne(getLhs())) {
+    return getRhs();
+  }
+  if (getLhs().getType() == getResult().getType() && isSplatOne(getRhs())) {
+    return getLhs();
+  }
+  return {};
+}
+
+mlir::OpFoldResult SubOp::fold(FoldAdaptor adaptor) {
+  if (getX().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getY())) {
+    return getX();
   }
   return {};
 }
