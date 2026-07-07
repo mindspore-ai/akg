@@ -37,22 +37,29 @@
 
 namespace mlir {
 namespace runtime {
-using std::vector;
 
-constexpr auto kDynamicSuffix = ".so";
-constexpr auto kStaticSuffix = ".o";
-constexpr auto kAiCoreStr = "AiCore";
-constexpr auto kMIXStr = "MIX";
-static thread_local aclrtContext thread_local_rt_context{nullptr};
+using std::vector;
 using CallFunc = void (*)(uint32_t, void *, void *, void **);
 
 namespace {
 constexpr uint16_t kMsprofReportDataMagicNum = 0x5a5a;
+
+/// Validate a file path. Returns true if the path is non-empty and contains no "..".
+bool validateFilePath(const std::string &path) {
+  return !path.empty() && path.find("..") == std::string::npos;
+}
 constexpr uint16_t kMsprofReportNodeLevel = 10000;
 constexpr uint32_t kMsprofReportNodeBasicInfoType = 0;
 constexpr uint32_t kMsprofReportNodeLaunchType = 5;
 constexpr uint32_t kMsprofGeTaskTypeAiCore = 0;
 constexpr uint32_t kMsprofCompactInfoDataLength = 40;
+constexpr auto kDynamicSuffix = ".so";
+constexpr auto kStaticSuffix = ".o";
+constexpr auto kAiCoreStr = "AiCore";
+constexpr auto kMIXStr = "MIX";
+static thread_local aclrtContext thread_local_rt_context{nullptr};
+uint64_t kDevRegStub = 0xbadbeefULL;
+std::mutex kDevRegStubMutex;
 
 struct kMsprofApi {
   uint16_t magicNumber;
@@ -105,12 +112,12 @@ void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_n
   cce_wrapper->MsprofReportApi(0, &api);
 
   kMsprofCompactInfo node_basic_info{};
-  std::memset(node_basic_info.data.info, 0, sizeof(node_basic_info.data.info));
   node_basic_info.magicNumber = kMsprofReportDataMagicNum;
   node_basic_info.level = kMsprofReportNodeLevel;
   node_basic_info.type = kMsprofReportNodeBasicInfoType;
   node_basic_info.threadId = thread_id;
   node_basic_info.timeStamp = end_time;
+  node_basic_info.data.info[0] = 0;
   node_basic_info.data.nodeBasicInfo.opName = op_name;
   node_basic_info.data.nodeBasicInfo.taskType = kMsprofGeTaskTypeAiCore;
   node_basic_info.data.nodeBasicInfo.opType = op_name;
@@ -120,18 +127,20 @@ void ReportAkgDynamicLaunch(CceWrapper *cce_wrapper, const std::string &kernel_n
 }
 }  // namespace
 
-uint64_t kDevRegStub = 0xbadbeefULL;
-std::mutex kDevRegStubMutex;
 
 /// Read a device binary file into memory. Returns empty vector if open/read fails.
 std::vector<char> ReadDeviceBinaryFile(const std::string &bin_path) {
+  if (!validateFilePath(bin_path)) {
+    return {};
+  }
   std::ifstream ifs(bin_path, std::ios::binary);
   if (!ifs) {
     return {};
   }
   ifs.seekg(0, std::ios::end);
   const auto end = ifs.tellg();
-  if (end <= 0) {
+  constexpr size_t kMaxBinarySize = 256 * 1024 * 1024;  // 256MB limit
+  if (end <= 0 || static_cast<size_t>(end) > kMaxBinarySize) {
     return {};
   }
   ifs.seekg(0, std::ios::beg);
@@ -196,6 +205,9 @@ void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t b
 
   if (is_dynamic) {
     auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);  // NOLINT
+    if (kernel_func_ptr == nullptr) {
+      LOG(FATAL) << "kernel_func is null, func_name: " << func_name;
+    }
     kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
   } else {
     int ret = rtKernelLaunch((void *)kernel_func, block_num, args.data(), args.size() * sizeof(void *), nullptr,
@@ -213,7 +225,7 @@ void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t b
 void *DlsymSymbol(const std::string &lib_path, const std::string &symbol_name) {
   // Re-open this module with RTLD_GLOBAL once, so that extern "C" symbols become globally visible
   // and can be resolved by the library loaded below.
-  static const void *self_global = []() -> void * {
+  static void *const self_global = []() -> void * {
     Dl_info info{};
     if (dladdr(reinterpret_cast<void *>(&DlsymSymbol), &info) != 0 && info.dli_fname != nullptr) {
       return dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL);
@@ -222,6 +234,10 @@ void *DlsymSymbol(const std::string &lib_path, const std::string &symbol_name) {
   }();
   (void)self_global;
 
+  if (!validateFilePath(lib_path)) {
+    LOG(ERROR) << "Invalid library path: " << lib_path;
+    return nullptr;
+  }
   void *handle = dlopen(lib_path.c_str(), RTLD_LAZY | RTLD_LOCAL);
   if (handle == nullptr) {
     LOG(ERROR) << "dlopen failed, file: " << lib_path << ", Error:" << dlerror();
@@ -286,7 +302,7 @@ struct BlockDimCache {
       return it->second;
     }
 
-    if (key.empty()) {
+    if (key.empty() || !validateFilePath(key)) {
       return 0;
     }
     std::ifstream json_stream(key);
