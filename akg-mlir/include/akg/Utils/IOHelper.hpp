@@ -42,8 +42,16 @@ class IOHelper {
     }
   }
 
+  /// Validate a file path. Returns true if the path is non-empty and contains no "..".
+  static bool validateFilePath(const std::string &path) {
+    return !path.empty() && path.find("..") == std::string::npos;
+  }
+
   static nlohmann::json checkAndReadJson(const std::string &input_file_name) {
     nlohmann::json j;
+    if (!validateFilePath(input_file_name)) {
+      llvm::report_fatal_error(llvm::StringRef("Error: invalid json file path"));
+    }
     std::ifstream jfile(input_file_name);
     if (!jfile.good()) {
       llvm::report_fatal_error(llvm::StringRef("Error occurs when converting json to mlir: json file does not exist"));

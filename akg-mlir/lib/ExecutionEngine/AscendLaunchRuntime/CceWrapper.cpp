@@ -51,13 +51,6 @@ CceWrapper::~CceWrapper() noexcept {
 
 bool CceWrapper::UnLoadLibraries() {
   bool success = true;
-  for (void *handle_ptr : msprof_handles_) {
-    if (dlclose(handle_ptr) != 0) {
-      success = false;
-    }
-  }
-  msprof_handles_.clear();
-
   if (ascendcl_handle_ != nullptr) {
     if (dlclose(ascendcl_handle_) != 0) {
       success = false;
@@ -71,6 +64,14 @@ bool CceWrapper::UnLoadLibraries() {
     }
   }
   runtime_handle_ = nullptr;
+
+  if (msprof_handle_ != nullptr) {
+    if (dlclose(msprof_handle_) != 0) {
+      success = false;
+    }
+  }
+  msprof_handle_ = nullptr;
+
   return success;
 }
 
@@ -79,11 +80,6 @@ bool CceWrapper::LoadLibraries() {
   LoadRuntime();
   LoadMsprof();
   return true;
-}
-
-bool CceWrapper::IsMsprofAvailable() const {
-  return MsprofSysCycleTime != nullptr && MsprofGetHashId != nullptr && MsprofReportApi != nullptr &&
-         MsprofReportCompactInfo != nullptr;
 }
 
 bool CceWrapper::LoadAscendCL() {
@@ -127,9 +123,6 @@ bool CceWrapper::LoadAscendCL() {
 
 bool CceWrapper::LoadRuntime() {
   std::string library_path = "libruntime.so";
-  if (library_path.empty()) {
-    return false;
-  }
   void *handle_ptr = dlopen(library_path.c_str(), static_cast<unsigned>(RTLD_NOW) | static_cast<unsigned>(RTLD_LOCAL));
   if (handle_ptr == nullptr) {
     LOG(ERROR) << "load library " << library_path << " failed!";
@@ -151,39 +144,20 @@ bool CceWrapper::LoadRuntime() {
 }
 
 bool CceWrapper::LoadMsprof() {
-  constexpr const char *kMsprofLibraries[] = {"libmsprofiler.so", "libprofapi.so"};
-  for (const char *library_path : kMsprofLibraries) {
-    void *handle_ptr = dlopen(library_path, RTLD_LAZY | RTLD_LOCAL);
-    if (handle_ptr != nullptr) {
-      msprof_handles_.push_back(handle_ptr);
-    }
+  std::string library_path = "libprofapi.so";
+  void *handle_ptr = dlopen(library_path.c_str(), static_cast<unsigned>(RTLD_NOW) | static_cast<unsigned>(RTLD_LOCAL));
+  if (handle_ptr == nullptr) {
+    LOG(ERROR) << "load library " << library_path << " failed!";
+    return false;
   }
+  msprof_handle_ = handle_ptr;
 
-  this->MsprofSysCycleTime = reinterpret_cast<MsprofSysCycleTimeFunc>(FindMsprofSymbol("MsprofSysCycleTime"));
-  this->MsprofGetHashId = reinterpret_cast<MsprofGetHashIdFunc>(FindMsprofSymbol("MsprofGetHashId"));
-  this->MsprofReportApi = reinterpret_cast<MsprofReportApiFunc>(FindMsprofSymbol("MsprofReportApi"));
-  this->MsprofReportCompactInfo =
-    reinterpret_cast<MsprofReportCompactInfoFunc>(FindMsprofSymbol("MsprofReportCompactInfo"));
+  LOAD_FUNCTION_PTR(MsprofReportApi);
+  LOAD_FUNCTION_PTR(MsprofReportCompactInfo);
+  LOAD_FUNCTION_PTR(MsprofGetHashId);
+  LOAD_FUNCTION_PTR(MsprofSysCycleTime);
   return true;
 }
-
-void *CceWrapper::FindMsprofSymbol(const std::string symbol) {
-  void *func = dlsym(RTLD_DEFAULT, symbol.c_str());
-  if (func != nullptr) {
-    return func;
-  }
-  for (void *handle_ptr : msprof_handles_) {
-    func = dlsym(handle_ptr, symbol.c_str());
-    if (func != nullptr) {
-      return func;
-    }
-  }
-  if (ascendcl_handle_ != nullptr) {
-    func = dlsym(ascendcl_handle_, symbol.c_str());
-  }
-  return func;
-}
-
 }  // namespace runtime
 }  // namespace mlir
 
@@ -383,14 +357,40 @@ int rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t 
   CHECK_NOTNULL(func);
   return func(stubFunc, blockDim, arg, argsSize, smDesc, stm);
 }
+
 int rtLaunch(const void *stubFunc) {
   auto func = mlir::runtime::CceWrapper::GetInstance()->rtLaunch;
   CHECK_NOTNULL(func);
   return func(stubFunc);
 }
+
 int rtSetupArgument(const void *args, uint32_t size, uint32_t offset) {
   auto func = mlir::runtime::CceWrapper::GetInstance()->rtSetupArgument;
   CHECK_NOTNULL(func);
   return func(args, size, offset);
+}
+
+int32_t MsprofReportApi(uint32_t nonPersistantFlag, const struct MsprofApi *api) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->MsprofReportApi;
+  CHECK_NOTNULL(func);
+  return func(nonPersistantFlag, api);
+}
+
+int32_t MsprofReportCompactInfo(uint32_t nonPersistantFlag, const void *data, uint32_t length) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->MsprofReportCompactInfo;
+  CHECK_NOTNULL(func);
+  return func(nonPersistantFlag, data, length);
+}
+
+uint64_t MsprofGetHashId(const char *hashInfo, size_t length) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->MsprofGetHashId;
+  CHECK_NOTNULL(func);
+  return func(hashInfo, length);
+}
+
+uint64_t MsprofSysCycleTime(void) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->MsprofSysCycleTime;
+  CHECK_NOTNULL(func);
+  return func();
 }
 }

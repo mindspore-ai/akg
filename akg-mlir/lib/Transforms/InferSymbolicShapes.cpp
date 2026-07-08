@@ -58,6 +58,7 @@ static const uint64_t kDimIdx0 = 0;
 static const uint64_t kDimIdx1 = 1;
 static const uint64_t kDimIdx2 = 2;
 static const uint64_t kDimIdx3 = 3;
+static constexpr int64_t kMaxDynamicDims = 2;
 
 static std::optional<NamedAttribute> getSymbolicShapeFromFrontend(Operation *op, StringRef &key) {
   if (!op->hasAttr(getFrontendSymbolAttrName())) {
@@ -258,6 +259,9 @@ struct PropagateMemRefAllocOp : public OpRewritePattern<memref::AllocOp> {
       }
       std::optional<llvm::SmallVector<std::string>> srcSymShape =
         analysis.getSymbolicShape(dimOp.getSource().getType());
+      if (!srcSymShape) {
+        continue;
+      }
       (*symShape)[i] = (*srcSymShape)[attr.getInt()];
     }
     resVal.setType(analysis.updateSymbolicShape(resVal.getType(), *symShape));
@@ -580,6 +584,10 @@ struct PropagateMemRefSubviewOp : public OpRewritePattern<memref::SubViewOp> {
     }
 
     std::optional<NamedAttribute> srcNamedAttr = analysis.getSymbolShapeNamedAttr(srcVal.getType());
+    if (!srcNamedAttr) {
+      resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
+      return success();
+    }
     Type subViewResWithSrcSym = analysis.updateSymbolicShape(resVal.getType(), *srcNamedAttr);
     resVal.setType(subViewResWithSrcSym);
 
@@ -805,11 +813,14 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     // If two dimensions of the output shape are dynamic, the Op semantics are ambiguous or illegal. And symbolic
     // information cannot be deduced here.
     auto rankType = dyn_cast<RankedTensorType>(resVal.getType());
-    if (rankType == nullptr || rankType.getNumDynamicDims() >= 2 || rankType.getNumDynamicDims() == 0) {
+    if (rankType == nullptr || rankType.getNumDynamicDims() >= kMaxDynamicDims || rankType.getNumDynamicDims() == 0) {
       return success();
     }
     std::optional<llvm::SmallVector<std::string>> opndShape = analysis.getSymbolicShape(opnd.getType());
     std::optional<llvm::SmallVector<std::string>> resShape = analysis.getSymbolicShape(resVal.getType());
+    if (!opndShape || !resShape) {
+      return success();
+    }
 
     std::string intermediateShape =
       std::accumulate((*opndShape).begin(), (*opndShape).end(), std::string("1"),

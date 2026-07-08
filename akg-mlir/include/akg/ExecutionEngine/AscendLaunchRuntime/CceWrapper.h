@@ -46,18 +46,16 @@ class CceWrapper : public SymbolsWrapper {
   ~CceWrapper();
   bool LoadLibraries() override;
   bool UnLoadLibraries() override;
-  bool IsMsprofAvailable() const;
 
  private:
   CceWrapper();
   bool LoadAscendCL();
   bool LoadRuntime();
   bool LoadMsprof();
-  void *FindMsprofSymbol(const std::string symbol);
   static std::shared_ptr<CceWrapper> cce_wrapper_singleton_;
   void *ascendcl_handle_{nullptr};
   void *runtime_handle_{nullptr};
-  std::vector<void *> msprof_handles_;
+  void *msprof_handle_{nullptr};
 
  public:
   using aclrtSetCurrentContextFunc = int (*)(aclrtContext);
@@ -139,10 +137,10 @@ class CceWrapper : public SymbolsWrapper {
   DEFINE_FUNC_PTR(rtSetupArgument);
 
   // msprof report
-  DEFINE_FUNC_PTR(MsprofSysCycleTime);
-  DEFINE_FUNC_PTR(MsprofGetHashId);
   DEFINE_FUNC_PTR(MsprofReportApi);
   DEFINE_FUNC_PTR(MsprofReportCompactInfo);
+  DEFINE_FUNC_PTR(MsprofGetHashId);
+  DEFINE_FUNC_PTR(MsprofSysCycleTime);
 };
 
 }  // namespace runtime

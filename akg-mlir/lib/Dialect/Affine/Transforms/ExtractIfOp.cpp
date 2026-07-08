@@ -86,22 +86,22 @@ static int64_t isInConstantEqualityRange(IntegerSet set) {
     return -1;
   }
 
-  int64_t needRetained = 0;
+  uint64_t needRetained = 0;
   for (unsigned i = 0; i < set.getNumConstraints(); ++i) {
     auto constraint = set.getConstraint(i);
     if (constraint.getKind() == AffineExprKind::Constant) {
       int64_t constraintValue = llvm::dyn_cast<AffineConstantExpr>(constraint).getValue();
       if (set.isEq(i)) {
         // affine.if affine_set<() : (1 == 0)>()
-        needRetained |= static_cast<int64_t>(constraintValue == 0);
+        needRetained |= static_cast<uint64_t>(constraintValue == 0);
       } else {
         // affine.if affine_set<() : (1 >= 0)>()
-        needRetained |= static_cast<int64_t>(constraintValue >= 0);
+        needRetained |= static_cast<uint64_t>(constraintValue >= 0);
       }
     }
   }
 
-  return needRetained;
+  return static_cast<int64_t>(needRetained);
 }
 
 Operation *ExtractIfOp::getInsertPoint(mlir::Operation *op, bool isForward) {

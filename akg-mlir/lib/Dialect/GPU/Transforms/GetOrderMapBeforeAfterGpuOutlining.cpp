@@ -17,6 +17,7 @@
 #include "akg/Dialect/GPU/Transforms/GetOrderMapBeforeAfterGpuOutlining.h"
 
 #include <fstream>
+#include "akg/Utils/IOHelper.hpp"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
@@ -151,7 +152,7 @@ struct GetOrderMapBeforeAfterGpuOutlining
       return;
     }
 
-    if (this->path.empty()) {
+    if (!mlir::IOHelper::validateFilePath(this->path)) {
       return;
     }
     std::ofstream output(this->path);
