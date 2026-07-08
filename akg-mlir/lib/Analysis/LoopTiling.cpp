@@ -245,6 +245,8 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<m
                                                                       func::FuncOp originalKernel);
 static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
                                          TilingMetadata &metadata);
+static void captureMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                 TilingMetadata &metadata);
 static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
                                              ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse,
                                              const TilingMetadata &baseMetadata, TilingMetadata &metadata);
@@ -442,9 +444,7 @@ static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::For
                                                    llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                    unsigned tileSizesNum, mlir::IRMapping &mapping,
                                                    mlir::OpBuilder &builder);
-static bool isTransposePointLoop(mlir::scf::ForOp loop);
 static bool isMultiVecPointLoop(mlir::scf::ForOp loop);
-static void sinkTransposePointLoops(func::FuncOp funcOp);
 static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
@@ -1455,8 +1455,8 @@ static mlir::scf::ForOp createParallelTileLoop(const ParallelTileLoopParams &par
   AffineExpr taskNumExpr = builder.getAffineDimExpr(0);
   AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
   auto taskUbMap = AffineMap::get(2, 0, taskNumExpr - mapLoopExpr, builder.getContext());
-  Value taskUb = builder.create<affine::AffineApplyOp>(
-    loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
+  Value taskUb =
+    builder.create<affine::AffineApplyOp>(loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
   auto tileLoop =
     builder.create<mlir::scf::ForOp>(loc, c0, taskUb, step, ValueRange{},
                                      [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value,
@@ -2654,7 +2654,6 @@ static Value stripIndexLikeCasts(Value value) {
 struct TransposeOrderPairInfo {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
-  size_t commonPrefix = 0;
 };
 
 static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder, ArrayRef<mlir::scf::ForOp> rhsOrder,
@@ -2691,21 +2690,13 @@ static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder,
   return lhsCommonOrder.size() >= kSmallVectorSizeTwo && lhsCommonOrder.size() == rhsCommonOrder.size();
 }
 
-static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(ArrayRef<mlir::scf::ForOp> band,
-                                                                             ArrayRef<mlir::scf::ForOp> lhsOrder,
-                                                                             ArrayRef<mlir::scf::ForOp> rhsOrder,
-                                                                             bool linearBand) {
+static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(ArrayRef<mlir::scf::ForOp> lhsOrder,
+                                                                             ArrayRef<mlir::scf::ForOp> rhsOrder) {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
   if (!intersectLoopOrdersForTranspose(lhsOrder, rhsOrder, lhsCommonOrder, rhsCommonOrder)) {
     return std::nullopt;
   }
-  // Tree bands keep the strict rule: the innermost index must actually participate in the permutation,
-  // otherwise downstream tree-aware tiling cannot use the transpose path safely.
-  if (!linearBand && lhsCommonOrder.back() == rhsCommonOrder.back()) {
-    return std::nullopt;
-  }
-
   size_t commonPrefix = 0;
   while (commonPrefix < lhsCommonOrder.size() && lhsCommonOrder[commonPrefix] == rhsCommonOrder[commonPrefix]) {
     ++commonPrefix;
@@ -2718,12 +2709,7 @@ static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(Arr
     return std::nullopt;
   }
 
-  if (!linearBand &&
-      std::find(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(), band.back()) == lhsCommonOrder.end()) {
-    return std::nullopt;
-  }
-
-  return TransposeOrderPairInfo{std::move(lhsCommonOrder), std::move(rhsCommonOrder), commonPrefix};
+  return TransposeOrderPairInfo{std::move(lhsCommonOrder), std::move(rhsCommonOrder)};
 }
 
 static void clearBandBroadcastAttrsForTranspose(ArrayRef<mlir::scf::ForOp> band) {
@@ -2733,82 +2719,26 @@ static void clearBandBroadcastAttrsForTranspose(ArrayRef<mlir::scf::ForOp> band)
   }
 }
 
-// Non-tree (single-chain) band: mark every loop from the outermost permuted loop down to band.back(),
-// keeping a contiguous transpose suffix that applyBandTiling's transpose path requires.
-static void markTransposeAttrsLinearBandSuffix(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
-                                               UnitAttr transposeAttr) {
-  const size_t commonPrefix = info.commonPrefix;
+static void markActualTransposeLoops(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
+                                     UnitAttr transposeAttr) {
   const auto &lhsCommonOrder = info.lhsCommonOrder;
   const auto &rhsCommonOrder = info.rhsCommonOrder;
 
   llvm::DenseSet<Operation *> permutedLoops;
-  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    permutedLoops.insert(loopOp.getOperation());
+  for (size_t i = 0; i < lhsCommonOrder.size(); ++i) {
+    if (lhsCommonOrder[i] == rhsCommonOrder[i]) {
+      continue;
+    }
+    mlir::scf::ForOp lhsLoop = lhsCommonOrder[i];
+    mlir::scf::ForOp rhsLoop = rhsCommonOrder[i];
+    permutedLoops.insert(lhsLoop.getOperation());
+    permutedLoops.insert(rhsLoop.getOperation());
   }
-  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    permutedLoops.insert(loopOp.getOperation());
-  }
-  size_t startIdx = band.size();
-  for (size_t i = 0; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
+  for (mlir::scf::ForOp loop : band) {
     if (permutedLoops.contains(loop.getOperation())) {
-      startIdx = i;
-      break;
+      loop->setAttr(kTransposeLoopAttr, transposeAttr);
     }
   }
-  for (size_t i = startIdx; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
-    if (loop->hasAttr(kReductionLoopAttr) && !isLeafForLoop(loop)) {
-      for (mlir::scf::ForOp bandLoop : band) {
-        bandLoop->removeAttr(kTransposeLoopAttr);
-      }
-      return;
-    }
-  }
-  for (size_t i = startIdx; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
-    loop->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-}
-
-static void markTransposeAttrsTreeCommonSuffix(const TransposeOrderPairInfo &info, UnitAttr transposeAttr) {
-  const size_t commonPrefix = info.commonPrefix;
-  const auto &lhsCommonOrder = info.lhsCommonOrder;
-  const auto &rhsCommonOrder = info.rhsCommonOrder;
-
-  auto hasBlockingReduction = [&commonPrefix](ArrayRef<mlir::scf::ForOp> order) {
-    for (auto it = order.begin() + commonPrefix; it != order.end(); ++it) {
-      mlir::scf::ForOp loopOp = *it;
-      if (loopOp->hasAttr(kReductionLoopAttr) && !isLeafForLoop(loopOp)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  if (hasBlockingReduction(lhsCommonOrder) || hasBlockingReduction(rhsCommonOrder)) {
-    return;
-  }
-
-  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-}
-
-static void applyTransposeLoopAttrsForOrderPair(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
-                                                UnitAttr transposeAttr, bool linearBand) {
-  clearBandBroadcastAttrsForTranspose(band);
-  if (linearBand) {
-    markTransposeAttrsLinearBandSuffix(band, info, transposeAttr);
-    return;
-  }
-  markTransposeAttrsTreeCommonSuffix(info, transposeAttr);
 }
 
 // Bundled params for markTransposeOrderPair to stay under readability-function-size_parameters limit.
@@ -2817,7 +2747,6 @@ struct TransposeOrderPairParams {
   ArrayRef<mlir::scf::ForOp> lhsOrder;
   ArrayRef<mlir::scf::ForOp> rhsOrder;
   UnitAttr transposeAttr;
-  bool linearBand;
 };
 
 static void markTransposeOrderPair(const TransposeOrderPairParams &params) {
@@ -2825,12 +2754,12 @@ static void markTransposeOrderPair(const TransposeOrderPairParams &params) {
   const auto &lhsOrder = params.lhsOrder;
   const auto &rhsOrder = params.rhsOrder;
   const auto &transposeAttr = params.transposeAttr;
-  const auto &linearBand = params.linearBand;
-  std::optional<TransposeOrderPairInfo> info = buildTransposeOrderPairAnalysis(band, lhsOrder, rhsOrder, linearBand);
+  std::optional<TransposeOrderPairInfo> info = buildTransposeOrderPairAnalysis(lhsOrder, rhsOrder);
   if (!info) {
     return;
   }
-  applyTransposeLoopAttrsForOrderPair(band, *info, transposeAttr, linearBand);
+  clearBandBroadcastAttrsForTranspose(band);
+  markActualTransposeLoops(band, *info, transposeAttr);
 }
 
 static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
@@ -2881,17 +2810,14 @@ static void reconcileTransposeAttrsAfterBranchScan(
     llvm::any_of(leafBands, [](const SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &band) {
       return !band.empty() && band.back()->hasAttr(kTransposeLoopAttr);
     });
+  if (!hasTransposeLeaf) {
+    return;
+  }
   for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
     if (band.empty()) {
       continue;
     }
-    if (hasTransposeLeaf) {
-      band.back()->setAttr(kTransposeLoopAttr, transposeAttr);
-      continue;
-    }
-    for (mlir::scf::ForOp loop : band) {
-      loop->removeAttr(kTransposeLoopAttr);
-    }
+    band.back()->setAttr(kTransposeLoopAttr, transposeAttr);
   }
 }
 
@@ -2904,6 +2830,11 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
                                                                   plan.representativeBand.end());
       peerBand.back() = peerLeaf;
       leafBands.push_back(std::move(peerBand));
+    }
+  }
+  for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
+    for (mlir::scf::ForOp loop : band) {
+      loop->removeAttr(kTransposeLoopAttr);
     }
   }
 
@@ -2933,7 +2864,7 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
           continue;
         }
         SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsOrder = extractMemrefLoopOrder(memOps[j], band);
-        markTransposeOrderPair({band, lhsOrder, rhsOrder, transposeAttr, linearBand});
+        markTransposeOrderPair({band, lhsOrder, rhsOrder, transposeAttr});
       }
     }
   }
@@ -3048,22 +2979,44 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
   }
 }
 
-// Multi-dim vec analogue of `markTransposeLoopChainWithVectorAttr`. Walks the
-// ancestor chain from `innermostLoop` upward, converting every loop tagged
-// with `kMultiVecLoopAttr` into the appropriate vec / reduction marker. The
-// reduce-y multi-vec intentionally lowers through the reduction-x marker until
-// the vectorize pass grows a dedicated multi-dim reduce-y path.
+static mlir::scf::ForOp findOutermostTransposeAncestor(mlir::scf::ForOp loop) {
+  mlir::scf::ForOp outermost;
+  for (mlir::scf::ForOp cur = loop->getParentOfType<mlir::scf::ForOp>(); cur;
+       cur = cur->getParentOfType<mlir::scf::ForOp>()) {
+    if (cur->hasAttr(kTransposeLoopAttr)) {
+      outermost = cur;
+    }
+  }
+  return outermost;
+}
+
+static bool hasMultiVecLoopInAncestorChain(mlir::scf::ForOp loop) {
+  for (mlir::scf::ForOp cur = loop; cur; cur = cur->getParentOfType<mlir::scf::ForOp>()) {
+    if (cur->hasAttr(kMultiVecLoopAttr)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Consume sparse multi-vec markers without requiring every intervening point
+// loop to participate. Markers are cleared after all leaf chains are visited so
+// a shared leaf-branch prefix remains visible to every peer leaf.
 static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    curLoop->removeAttr(kTransposeLoopAttr);
     if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
       continue;
     }
     if (!curLoop->hasAttr(kMultiVecLoopAttr)) {
-      break;
+      continue;
     }
-    curLoop->removeAttr(kMultiVecLoopAttr);
     curLoop->removeAttr(kBroadcastLoopAttr);
     curLoop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+    if (curLoop->hasAttr(kVectorAttr) || curLoop->hasAttr(kReductionXLoopAttr) ||
+        curLoop->hasAttr(kReductionYLoopAttr) || curLoop->hasAttr(kReductionAllLoopAttr)) {
+      continue;
+    }
     if (curLoop->hasAttr(kReductionLoopAttr)) {
       curLoop->removeAttr(kReductionLoopAttr);
       ReduceDirection reduceType = getReduceType(curLoop);
@@ -3134,77 +3087,75 @@ static void markBroadcastLoopChainWithVectorAttr(mlir::scf::ForOp vectorTarget, 
   });
 }
 
+static void markReduceYParentWithVectorAttr(mlir::scf::ForOp loop, OpBuilder &builder) {
+  bool restrictToPointLoops = hasPointLoopInAncestorChain(loop);
+  for (mlir::scf::ForOp curLoop = loop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (curLoop->hasAttr(kReductionLoopAttr)) {
+      curLoop->removeAttr(kReductionLoopAttr);
+      continue;
+    }
+    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
+      continue;
+    }
+    curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
+    break;
+  }
+}
+
 // Mark all innermost scf.for loops with vector attribute.
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder) {
   funcOp->walk([&builder](mlir::scf::ForOp forOp) {
-    if (isInnermostScfLoop(forOp)) {
-      auto reduceType = ReduceDirection::UNKNOWN;
-      const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
-      // Multi-dim vec is consumed first: when an innermost point loop is part
-      // of a `kMultiVecLoopAttr` chain, the whole chain owns the vec marking.
-      // The strategy guarantees this branch is mutually exclusive with the
-      // transpose / broadcast paths below, so the early-return is safe.
-      if (forOp->hasAttr(kMultiVecLoopAttr)) {
-        markMultiVecLoopChainWithVectorAttr(forOp, builder);
-        return;
-      }
-      if (forOp->hasAttr(kTransposeLoopAttr)) {
-        markTransposeLoopChainWithVectorAttr(forOp, builder);
-        return;
-      }
-      // set vector attribute to innermost loops
-      if (!hasReductionAttr) {
-        for (auto curLoop = forOp->getParentOfType<mlir::scf::ForOp>(); curLoop;
-             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
-          if (curLoop->hasAttr(kTransposeLoopAttr)) {
-            markTransposeLoopChainWithVectorAttr(forOp, builder, curLoop);
-            return;
-          }
-        }
-        if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
-          if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
-            markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
-            vectorTarget->removeAttr(kBroadcastLoopAttr);
-          }
-          vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(vectorTarget)));
-        }
-      } else {
-        forOp->removeAttr(kReductionLoopAttr);
-        reduceType = getReduceType(forOp);
-        if (reduceType == ReduceDirection::X) {
-          forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
-        } else if (reduceType == ReduceDirection::Y) {
-          forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
-        } else if (reduceType == ReduceDirection::ALL) {
-          forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
-        }
-
-        forOp = forOp->getParentOfType<mlir::scf::ForOp>();
-      }
-
-      // For reduce-y: clear reduction tags outward and set vector tag on the first non-reduction parent loop.
-      if (reduceType == ReduceDirection::Y) {
-        mlir::scf::ForOp curLoop = forOp;
-        bool restrictToPointLoops = hasPointLoopInAncestorChain(curLoop);
-        while (curLoop) {
-          if (curLoop->hasAttr(kReductionLoopAttr)) {
-            curLoop->removeAttr(kReductionLoopAttr);
-            curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
-            continue;
-          }
-          if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
-            curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
-            continue;
-          }
-          curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
-          break;
-        }
-      }
-    } else {
+    if (!isInnermostScfLoop(forOp)) {
       if (forOp->hasAttr(kReductionLoopAttr)) {
         forOp->removeAttr(kReductionLoopAttr);
       }
+      return;
     }
+
+    auto reduceType = ReduceDirection::UNKNOWN;
+    const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
+    // Multi-dim vec is consumed first, including sparse marked ancestors.
+    if (hasMultiVecLoopInAncestorChain(forOp)) {
+      markMultiVecLoopChainWithVectorAttr(forOp, builder);
+      return;
+    }
+    if (forOp->hasAttr(kTransposeLoopAttr)) {
+      markTransposeLoopChainWithVectorAttr(forOp, builder);
+      return;
+    }
+    // set vector attribute to innermost loops
+    if (!hasReductionAttr) {
+      if (mlir::scf::ForOp transposeAncestor = findOutermostTransposeAncestor(forOp)) {
+        markTransposeLoopChainWithVectorAttr(forOp, builder, transposeAncestor);
+        return;
+      }
+      if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
+        if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
+          markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
+          vectorTarget->removeAttr(kBroadcastLoopAttr);
+        }
+        vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(vectorTarget)));
+      }
+      return;
+    }
+
+    forOp->removeAttr(kReductionLoopAttr);
+    reduceType = getReduceType(forOp);
+    if (reduceType == ReduceDirection::X) {
+      forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
+    } else if (reduceType == ReduceDirection::Y) {
+      forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
+    } else if (reduceType == ReduceDirection::ALL) {
+      forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
+    }
+
+    if (reduceType == ReduceDirection::Y) {
+      markReduceYParentWithVectorAttr(forOp->getParentOfType<mlir::scf::ForOp>(), builder);
+    }
+  });
+  funcOp.walk([](mlir::scf::ForOp loop) {
+    loop->removeAttr(kMultiVecLoopAttr);
+    loop->removeAttr(kTransposeLoopAttr);
   });
 }
 
@@ -3504,7 +3455,7 @@ static LogicalResult createTilingFuncDefault(const CreateTilingFuncParams &param
         metadata->tilingKey = tilingKey;
         metadata->bandTileSizes = allBandTileSizes;
         metadata->bandConstraintMaxs = allBandConstraintMaxs;
-        initializeEmptyMultiVecMasks(bandsToUse, *metadata);
+        captureMultiVecMasks(bandsToUse, *metadata);
       }
 
       tilingStructMemrefSize =
@@ -3656,6 +3607,17 @@ static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 
   }
 }
 
+static void captureMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                 TilingMetadata &metadata) {
+  initializeEmptyMultiVecMasks(bands, metadata);
+  for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
+    for (size_t axisIdx = 0; axisIdx < bands[bandIdx].size(); ++axisIdx) {
+      metadata.bandMultiVecAxisMasks[bandIdx][axisIdx] =
+        static_cast<char>(bands[bandIdx][axisIdx]->hasAttr(kMultiVecLoopAttr));
+    }
+  }
+}
+
 static bool isZeroBasedUnitStepLoop(mlir::scf::ForOp loop) {
   std::optional<int64_t> lb = getConstantIndexValue(loop.getLowerBound());
   std::optional<int64_t> step = getConstantIndexValue(loop.getStep());
@@ -3688,8 +3650,7 @@ static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
   const auto &baseTileSizes = baseMetadata.bandTileSizes.front();
   size_t bandSize = band.size();
   if (bandSize < kSmallVectorSizeTwo || baseTileSizes.size() != bandSize * kSmallVectorSizeTwo ||
-      !isZeroBasedUnitStepLoop(band[bandSize - kSmallVectorSizeTwo]) ||
-      !isZeroBasedUnitStepLoop(band.back())) {
+      !isZeroBasedUnitStepLoop(band[bandSize - kSmallVectorSizeTwo]) || !isZeroBasedUnitStepLoop(band.back())) {
     return false;
   }
   if (std::any_of(band.begin(), band.end(), [](mlir::scf::ForOp loop) { return loop->hasAttr(kTransposeLoopAttr); })) {
@@ -4157,7 +4118,13 @@ static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchPara
 
   branchLeafNodeIds.clear();
   branchLeafNodeIds.reserve(branchLeaves.size());
+  bool leafUsesMultiVec = representativeLeaf->hasAttr(kMultiVecLoopAttr);
   for (mlir::scf::ForOp leafLoop : branchLeaves) {
+    if (leafUsesMultiVec) {
+      leafLoop->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+    } else {
+      leafLoop->removeAttr(kMultiVecLoopAttr);
+    }
     int64_t nodeId = nextNodeId++;
     leafLoop->setAttr(kTreeNodeIdAttr, builder.getI64IntegerAttr(nodeId));
     leafLoop->setAttr(kTreeLeafAttr, builder.getUnitAttr());
@@ -4290,7 +4257,6 @@ static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &build
   // Step 5: Post-processing - mark attributes.
   clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
   inlineDeleteMarkedLoops(originalKernel, builder);
-  sinkTransposePointLoops(originalKernel);
   sinkMultiVecPointLoops(originalKernel);
   markInnermostLoopsWithVectorAttr(originalKernel, builder);
   inlineParallelNonVectorPointLoops(originalKernel, builder);
@@ -4566,10 +4532,6 @@ static mlir::scf::ForOp getUniqueChildLoop(mlir::scf::ForOp loop) {
   return childLoop;
 }
 
-static bool isTransposePointLoop(mlir::scf::ForOp loop) {
-  return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kTransposeLoopAttr);
-}
-
 static bool isMultiVecPointLoop(mlir::scf::ForOp loop) {
   return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kMultiVecLoopAttr);
 }
@@ -4594,6 +4556,21 @@ static void clearPointLoopChain(mlir::scf::ForOp loop, llvm::StringRef chainAttr
   }
 }
 
+static mlir::scf::ForOp findNextContiguousPointLoop(mlir::scf::ForOp pointLoop,
+                                                    llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop,
+                                                    mlir::scf::ForOp &nextPointParent) {
+  for (mlir::scf::ForOp loop = getUniqueChildLoop(pointLoop); loop; loop = getUniqueChildLoop(loop)) {
+    if (isPointLoop(loop)) {
+      return loop;
+    }
+    if (loop->hasAttr(kInnerLoopAttr)) {
+      return {};
+    }
+    nextPointParent = loop;
+  }
+  return {};
+}
+
 // Walk down `pointLoop`'s unique-child chain to locate the nearest matching
 // inner point loop. If their bodies allow it (no iter_args / no side-effecting
 // non-load ops in between), hoist the independent ops up past `pointLoop` and
@@ -4601,15 +4578,8 @@ static void clearPointLoopChain(mlir::scf::ForOp loop, llvm::StringRef chainAttr
 // `true` when one sink step actually happened, `false` otherwise.
 static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainAttr,
                               llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
-  mlir::scf::ForOp nextPointLoop;
   mlir::scf::ForOp nextPointParent;
-  for (mlir::scf::ForOp loop = getUniqueChildLoop(pointLoop); loop; loop = getUniqueChildLoop(loop)) {
-    if (isPointLoop(loop)) {
-      nextPointLoop = loop;
-      break;
-    }
-    nextPointParent = loop;
-  }
+  mlir::scf::ForOp nextPointLoop = findNextContiguousPointLoop(pointLoop, isPointLoop, nextPointParent);
   if (!nextPointLoop || !nextPointParent) {
     return false;
   }
@@ -4654,9 +4624,8 @@ static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainA
   return true;
 }
 
-// Generic point-loop sink driver. `chainAttr` is the marker that identifies a
-// chain (`kTransposeLoopAttr` for transpose, `kMultiVecLoopAttr` for
-// multi-dim vectorization). `isPointLoop` recognises members of the chain.
+// Sink only contiguous multi-vec point loops. A non-marked point loop is a
+// semantic gap and must keep the original nesting order.
 static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chainAttr,
                                       llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeEight> pointLoops;
@@ -4670,10 +4639,6 @@ static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chain
     while (isPointLoop(pointLoop) && sinkPointLoopOnce(pointLoop, chainAttr, isPointLoop)) {
     }
   }
-}
-
-static void sinkTransposePointLoops(func::FuncOp funcOp) {
-  sinkPointLoopsByPredicate(funcOp, kTransposeLoopAttr, isTransposePointLoop);
 }
 
 static void sinkMultiVecPointLoops(func::FuncOp funcOp) {
