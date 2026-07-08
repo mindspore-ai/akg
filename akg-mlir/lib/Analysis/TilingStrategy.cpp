@@ -3138,14 +3138,13 @@ TransposeTileSearchState buildSingleAxisTransposeFallback(const TransposeTileSea
 }
 
 TransposeTileSearchState selectTransposeMinState(const TransposeTileSearchParams &params, ArrayRef<bool> targetMask,
-                                                 bool &usedFallback, int64_t &peak) {
+                                                 int64_t &peak) {
   TransposeTileSearchState state = buildTransposeMinTileState(params, targetMask);
   peak = getTransposeTileSearchPeak(params, state);
   while (peak > params.ubLimitBytes) {
     if (state.wholeFromAxis >= params.ctx.axes.size()) {
       break;
     }
-    usedFallback = true;
     size_t wholeFromAxis = state.wholeFromAxis;
     auto outerTargetIt =
       std::find_if(params.searchAxisOrder.begin(), params.searchAxisOrder.end(), [&](size_t axisIdx) {
@@ -3176,7 +3175,6 @@ TransposeTileSearchState selectTransposeMinState(const TransposeTileSearchParams
   if (peak <= params.ubLimitBytes) {
     return state;
   }
-  usedFallback = true;
   state = buildSingleAxisTransposeFallback(params);
   peak = getTransposeTileSearchPeak(params, state);
   return state;
@@ -3199,19 +3197,16 @@ void emitTransposeMinTileExceedsUb(const TransposeTileSearchParams &params, cons
 }
 
 SmallVector<size_t, kSmallVectorSizeSix> buildTransposeMaximizeOrder(const TransposeTileSearchParams &params,
-                                                                     const TransposeTileSearchState &state,
-                                                                     bool usedFallback) {
+                                                                     const TransposeTileSearchState &state) {
   SmallVector<size_t, kSmallVectorSizeSix> maximizeOrder;
   for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
     if (state.activeAxisMask[*it]) {
       maximizeOrder.push_back(*it);
     }
   }
-  if (!usedFallback) {
-    for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
-      if (!state.activeAxisMask[*it]) {
-        maximizeOrder.push_back(*it);
-      }
+  for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
+    if (!state.activeAxisMask[*it]) {
+      maximizeOrder.push_back(*it);
     }
   }
   return maximizeOrder;
@@ -3286,14 +3281,13 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
     activeAxisMask[searchAxisOrder.back()] = true;
   }
 
-  bool usedFallback = false;
   int64_t peak = 0;
-  TransposeTileSearchState state = selectTransposeMinState(params, activeAxisMask, usedFallback, peak);
+  TransposeTileSearchState state = selectTransposeMinState(params, activeAxisMask, peak);
   if (peak > ubLimitBytes) {
     emitTransposeMinTileExceedsUb(params, state, peak);
   }
 
-  for (size_t axisIdx : buildTransposeMaximizeOrder(params, state, usedFallback)) {
+  for (size_t axisIdx : buildTransposeMaximizeOrder(params, state)) {
     tryMaximizeTransposeAxis(params, axisIdx, state);
   }
 
