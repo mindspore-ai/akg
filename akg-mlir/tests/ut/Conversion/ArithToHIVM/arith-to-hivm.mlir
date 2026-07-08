@@ -1214,6 +1214,31 @@ func.func @dynamic_npuvector_transfer_write_non_suffix_dims(
 
 // -----
 
+func.func @dynamic_npuvector_transfer_read_non_suffix_dims(
+    %in: memref<4x197x3x6x64xf32>, %out: memref<?x6x64xf32>, %start: index, %outer: index,
+    %plane: index, %tile: index) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_non_suffix_dims
+  // CHECK-SAME: (%[[IN:.*]]: memref<4x197x3x6x64xf32>, %[[OUT:.*]]: memref<?x6x64xf32>
+  // CHECK-SAME: %[[START:.*]]: index, %[[OUTER:.*]]: index, %[[PLANE:.*]]: index, %[[TILE:.*]]: index)
+  // CHECK: %[[SV_IN:.*]] = memref.subview %[[IN]][%[[OUTER]], %[[START]], %[[PLANE]], 0, 0]
+  // CHECK-SAME: [1, %[[TILE]], 1, 6, 64] [1, 1, 1, 1, 1]
+  // CHECK: %[[ALLOC:.*]] = memref.alloc(%[[TILE]]) : memref<?x6x64xf32>
+  // CHECK: hivm.hir.load ins(%[[SV_IN]]
+  // CHECK-SAME: outs(%[[ALLOC]] : memref<?x6x64xf32>)
+  %c0 = arith.constant 0 : index
+  %c6 = arith.constant 6 : index
+  %c64 = arith.constant 64 : index
+  %c4096 = arith.constant 4096 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%outer, %start, %plane, %c0, %c0][%tile, %c6, %c64][%c4096, %c6, %c64],
+    %padding {permutation_map = affine_map<(d0, d1, d2, d3, d4) -> (d1, d3, d4)>}
+    : memref<4x197x3x6x64xf32>, !npuvector<?x6x64xf32>
+  npuvector.transfer_write %vec, %out[%c0, %c0, %c0] : !npuvector<?x6x64xf32>, memref<?x6x64xf32>
+  return
+}
+
+// -----
+
 func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max(%in: memref<1024x1024x12xf32>, %out: memref<1024x1024x12xf32>) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>} {
   // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_static_dim_uses_rank_max
   // CHECK: %[[ALLOC:.*]] = memref.alloc(%{{.*}}, %{{.*}}) : memref<?x?x12xf32>
