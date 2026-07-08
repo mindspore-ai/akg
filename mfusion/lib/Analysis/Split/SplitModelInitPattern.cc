@@ -29,7 +29,7 @@ namespace mlir {
 namespace mfuse {
 namespace split {
 namespace ascend {
-constexpr size_t kReduceFusionDepth = 10;
+constexpr size_t kReduceFusionDepth = 20;
 constexpr size_t kBroadcastFusionDepth = 6;
 constexpr size_t kReduceBwdMaxAreaSize = 10;
 constexpr size_t kReduceBwdMaxAreaOutputs = 3;
@@ -148,7 +148,7 @@ class FuseReduceBwd : public FusePattern {
     }
 
     auto reduce = mlir::dyn_cast<mlir::mfuse::ReduceSumOp>(area->dom()->op());
-    if (!reduce || !reduce.getKeepdim()) {
+    if (!reduce) {
       return false;
     }
 
@@ -178,7 +178,7 @@ class FuseReduceBwd : public FusePattern {
   }
 
   bool check(const AreaPtr &area) override {
-    // Match a single-user keepdim reduce neighborhood so the reduce can sink
+    // Match a single-user reduce neighborhood so the reduce can sink
     // into its post-reduce pointwise/broadcast area.
     return area->userNum() == 1 && CheckReduceArea(area);
   }

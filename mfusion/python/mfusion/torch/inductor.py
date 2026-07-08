@@ -146,8 +146,12 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
         pipeline="builtin.module(fuse-layer-norm-dvm,canonicalize)",
         stage="Tag LayerNorm subgraphs for DVM",
     )
+
+    cluster_passes = [f"mfuse-{kernel_generator}-cluster"]
+    if kernel_generator == "dvm":
+        cluster_passes.insert(0, "mfuse-decompose-matmul-with-bias-for-dvm-cluster")
     runner.run(
-        pipeline=f"builtin.module(func.func(mfuse-{kernel_generator}-cluster),canonicalize)",
+        pipeline=f"builtin.module(func.func({','.join(cluster_passes)}),canonicalize)",
         stage=f"Mfuse {kernel_generator} Clustering",
     )
 
@@ -177,7 +181,7 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     runner.run(
         pipeline=(
             f"builtin.module(convert-mfuse-to-dvm,convert-fused-subgraph-to-custom-call"
-            f"{{kernel-generator={kernel_generator}}},mfuse-fold-redundant-matmul-transpose,canonicalize)"
+            f"{{kernel-generator={kernel_generator}}},canonicalize)"
         ),
         stage="Lower Fused Subgraphs to CustomOp Calls",
     )

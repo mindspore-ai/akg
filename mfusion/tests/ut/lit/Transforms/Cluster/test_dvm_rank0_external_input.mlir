@@ -3,14 +3,13 @@
 module {
 // CHECK-LABEL: func @test_skip_cluster_with_rank0_external_inputs
 // CHECK: %[[CAST:.*]] = mfuse.cast %arg1 : (tensor<f64>) -> tensor<f32>
-// CHECK-NOT: mfuse.fused
-// CHECK-NOT: mfuse.reshape
-// CHECK: %[[DIV:.*]] = mfuse.div %arg0, %[[CAST]] : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
-// CHECK-NOT: mfuse.fused
-// CHECK-NOT: mfuse.reshape
-// CHECK: %[[SELECT:.*]] = mfuse.select %arg2, %arg3, %[[DIV]] : (tensor<4x4xi1>, tensor<f32>, tensor<4x4xf32>) -> tensor<4x4xf32>
-// CHECK-NOT: mfuse.fused
-// CHECK: return %[[SELECT]]
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %[[CAST]], %arg2, %arg3 {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<f32>, tensor<4x4xi1>, tensor<f32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[IN0:.*]]: tensor<4x4xf32>, %[[IN1:.*]]: tensor<f32>, %[[MASK:.*]]: tensor<4x4xi1>, %[[IN2:.*]]: tensor<f32>):
+// CHECK: %[[DIV:.*]] = mfuse.div %[[IN0]], %[[IN1]] : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+// CHECK: %[[SELECT:.*]] = mfuse.select %[[MASK]], %[[IN2]], %[[DIV]] : (tensor<4x4xi1>, tensor<f32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[SELECT]] : tensor<4x4xf32>
+// CHECK: return %[[FUSED]]
 func.func @test_skip_cluster_with_rank0_external_inputs(
     %arg0: tensor<4x4xf32>,
     %arg1: tensor<f64>,
@@ -23,11 +22,13 @@ func.func @test_skip_cluster_with_rank0_external_inputs(
 }
 
 // CHECK-LABEL: func @test_skip_cluster_with_full_wrapping_external_rank0
-// CHECK: %[[FULL:.*]] = mfuse.full
-// CHECK-NOT: mfuse.fused
-// CHECK: %[[MUL:.*]] = mfuse.mul %arg0, %[[FULL]]
-// CHECK-NOT: mfuse.fused
-// CHECK: return %[[MUL]]
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg1, %arg0 {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<f32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[SCALAR:.*]]: tensor<f32>, %[[IN0:.*]]: tensor<4x4xf32>):
+// CHECK: %[[FULL:.*]] = mfuse.full %[[SCALAR]] : (tensor<f32>) -> tensor<f32>
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[IN0]], %[[FULL]] : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[MUL]] : tensor<4x4xf32>
+// CHECK: return %[[FUSED]]
 func.func @test_skip_cluster_with_full_wrapping_external_rank0(
     %arg0: tensor<4x4xf32>,
     %arg1: tensor<f32>) -> tensor<4x4xf32> {

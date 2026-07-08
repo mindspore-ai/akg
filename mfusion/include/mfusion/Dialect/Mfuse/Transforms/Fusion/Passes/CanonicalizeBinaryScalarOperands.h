@@ -14,23 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_INCLUDE_DIALECT_MFUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
-#define MFUSION_INCLUDE_DIALECT_MFUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_CANONICALIZE_BINARY_SCALAR_OPERANDS_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_CANONICALIZE_BINARY_SCALAR_OPERANDS_H
 
 #include <memory>
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace mfuse {
 
-/// Create a pass to cluster Mfuse operations checked by DVM backend into mfuse.fused.
-std::unique_ptr<Pass> createDVMClusterPass();
+/// Create a pass to recover and canonicalize scalar operands of binary ops.
+std::unique_ptr<Pass> createCanonicalizeBinaryScalarOperandsPass();
 
-/// Create a pass to decompose mfuse.matmul_with_bias before DVM clustering.
-std::unique_ptr<Pass> createDecomposeMatmulWithBiasForDvmClusterPass();
-
+}  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_INCLUDE_DIALECT_MFUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_CANONICALIZE_BINARY_SCALAR_OPERANDS_H
