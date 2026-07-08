@@ -122,8 +122,8 @@ void SymbolRemovalPass::runOnOperation() {
       AffineExpr newExpr = replaceSymbolExpr(expr, b, map.getNumDims());
       exprs.push_back(newExpr);
     }
-    auto newMap = AffineMap::get(/* dimCount= */ loadOp.getIndices().size(),
-                                 /* symbolCount= */ 0, exprs, map.getContext());
+    // dimCount = loadOp.getIndices().size(), symbolCount = 0
+    auto newMap = AffineMap::get(loadOp.getIndices().size(), 0, exprs, map.getContext());
     b.setInsertionPoint(loadOp);
     auto newLoadOp = b.create<affine::AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), newMap, loadOp.getIndices());
     loadOp.getOperation()->replaceAllUsesWith(newLoadOp.getOperation());
@@ -137,8 +137,8 @@ void SymbolRemovalPass::runOnOperation() {
       AffineExpr newExpr = replaceSymbolExpr(expr, b, map.getNumDims());
       exprs.push_back(newExpr);
     }
-    auto newMap = AffineMap::get(/* dimCount= */ storeOp.getIndices().size(),
-                                 /* symbolCount= */ 0, exprs, map.getContext());
+    // dimCount = storeOp.getIndices().size(), symbolCount = 0
+    auto newMap = AffineMap::get(storeOp.getIndices().size(), 0, exprs, map.getContext());
     b.setInsertionPoint(storeOp);
     b.create<affine::AffineStoreOp>(storeOp.getLoc(), storeOp.getValue(), storeOp.getMemRef(), newMap,
                                     storeOp.getIndices());

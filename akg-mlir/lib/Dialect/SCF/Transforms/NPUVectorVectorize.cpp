@@ -1322,6 +1322,54 @@ static void collectLoadIndexVectorDims(memref::LoadOp loadOp, const LoopVectoriz
   }
 }
 
+static LogicalResult collectAccessAxisToMemDim(Operation *op, ValueRange indices, const LoopVectorizationCtx &ctx,
+                                               StringRef accessName, SmallVectorImpl<int64_t> &axisToMemDim) {
+  axisToMemDim.assign(ctx.allVectorSizes.size(), -1);
+  for (auto [memDim, idx] : llvm::enumerate(indices)) {
+    int axis = getVectorDimForIndex(idx, ctx);
+    if (axis < 0) {
+      continue;
+    }
+    if (static_cast<size_t>(axis) >= axisToMemDim.size()) {
+      op->emitError("npuvector-vectorize: ") << accessName << " index maps to invalid vector dim";
+      return failure();
+    }
+    int64_t &mappedMemDim = axisToMemDim[static_cast<size_t>(axis)];
+    if (mappedMemDim != -1) {
+      op->emitError("npuvector-vectorize: one vector axis maps to multiple ") << accessName << " dimensions";
+      return failure();
+    }
+    mappedMemDim = static_cast<int64_t>(memDim);
+  }
+  return success();
+}
+
+static FailureOr<AffineMap> buildPermutationMapFromAxisOrder(Operation *op, ArrayRef<int> axisOrder,
+                                                             ArrayRef<int64_t> axisToMemDim, unsigned memRefRank,
+                                                             MLIRContext *context, StringRef opName) {
+  SmallVector<AffineExpr> results;
+  results.reserve(axisOrder.size());
+  for (int axis : axisOrder) {
+    if (axis < 0 || static_cast<size_t>(axis) >= axisToMemDim.size() || axisToMemDim[static_cast<size_t>(axis)] < 0) {
+      op->emitError("npuvector-vectorize: cannot infer ") << opName << " permutation_map from access indices";
+      return failure();
+    }
+    results.push_back(getAffineDimExpr(static_cast<unsigned>(axisToMemDim[static_cast<size_t>(axis)]), context));
+  }
+  return AffineMap::get(memRefRank, /*symbolCount=*/0, results, context);
+}
+
+static FailureOr<AffineMap> buildTransferReadPermutationMap(memref::LoadOp loadOp, LoopVectorizationCtx &ctx,
+                                                            ArrayRef<int> activeInAppearOrder) {
+  SmallVector<int64_t> axisToMemDim;
+  if (failed(collectAccessAxisToMemDim(loadOp.getOperation(), loadOp.getIndices(), ctx, "load", axisToMemDim))) {
+    return failure();
+  }
+  return buildPermutationMapFromAxisOrder(loadOp.getOperation(), activeInAppearOrder, axisToMemDim,
+                                          static_cast<unsigned>(loadOp.getIndices().size()), ctx.builder.getContext(),
+                                          "transfer_read");
+}
+
 static bool loadIndicesAreLoopInvariant(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
   if (ctx.vf1FuncLevelNoAnchor) {
     return false;
@@ -1427,9 +1475,19 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
     dynamicSizes.push_back(getRuntimeVectorSizeValue(ctx, static_cast<unsigned>(gid), loc));
   }
 
+  FailureOr<AffineMap> permutationMap = buildTransferReadPermutationMap(loadOp, ctx, activeInAppearOrder);
+  if (failed(permutationMap)) {
+    return {};
+  }
+  AffineMap defaultMap =
+    AffineMap::getMinorIdentityMap(static_cast<unsigned>(indices.size()), subRank, ctx.builder.getContext());
   auto transferRead =
-    ctx.builder.create<npuvector::TransferReadOp>(loc, readVecType, mappedMemRef, ValueRange(indices), padding, Value(),
-                                                  ValueRange(dynamicSizes), ValueRange(maxSizes));
+    (*permutationMap == defaultMap)
+      ? ctx.builder.create<npuvector::TransferReadOp>(loc, readVecType, mappedMemRef, ValueRange(indices), padding,
+                                                      Value(), ValueRange(dynamicSizes), ValueRange(maxSizes))
+      : ctx.builder.create<npuvector::TransferReadOp>(loc, readVecType, mappedMemRef, ValueRange(indices), padding,
+                                                      Value(), ValueRange(dynamicSizes), ValueRange(maxSizes),
+                                                      *permutationMap);
 
   Value result = transferRead.getResult();
   SmallVector<int64_t> transposePerm;
@@ -1668,22 +1726,9 @@ static FailureOr<AffineMap> buildTransferWritePermutationMap(memref::StoreOp sto
     return AffineMap::get(static_cast<unsigned>(memRefRank), /*symbolCount=*/0, ctx.builder.getContext());
   }
 
-  SmallVector<int64_t> axisToMemDim(ctx.allVectorSizes.size(), -1);
-  for (auto [memDim, idx] : llvm::enumerate(storeOp.getIndices())) {
-    int axis = getVectorDimForIndex(idx, ctx);
-    if (axis < 0) {
-      continue;
-    }
-    if (static_cast<size_t>(axis) >= axisToMemDim.size()) {
-      storeOp.emitError("npuvector-vectorize: store index maps to invalid vector dim");
-      return failure();
-    }
-    int64_t &mappedMemDim = axisToMemDim[static_cast<size_t>(axis)];
-    if (mappedMemDim != -1) {
-      storeOp.emitError("npuvector-vectorize: one vector axis maps to multiple store dimensions");
-      return failure();
-    }
-    mappedMemDim = static_cast<int64_t>(memDim);
+  SmallVector<int64_t> axisToMemDim;
+  if (failed(collectAccessAxisToMemDim(storeOp.getOperation(), storeOp.getIndices(), ctx, "store", axisToMemDim))) {
+    return failure();
   }
 
   SmallVector<int> valueDimOrder;
@@ -1699,17 +1744,9 @@ static FailureOr<AffineMap> buildTransferWritePermutationMap(memref::StoreOp sto
     return failure();
   }
 
-  SmallVector<AffineExpr> results;
-  results.reserve(static_cast<size_t>(vecRank));
-  for (int axis : valueDimOrder) {
-    if (axis < 0 || static_cast<size_t>(axis) >= axisToMemDim.size() || axisToMemDim[static_cast<size_t>(axis)] < 0) {
-      storeOp.emitError("npuvector-vectorize: valueDimOrder axis is not present on store indices");
-      return failure();
-    }
-    results.push_back(
-      getAffineDimExpr(static_cast<unsigned>(axisToMemDim[static_cast<size_t>(axis)]), ctx.builder.getContext()));
-  }
-  return AffineMap::get(static_cast<unsigned>(memRefRank), /*symbolCount=*/0, results, ctx.builder.getContext());
+  return buildPermutationMapFromAxisOrder(storeOp.getOperation(), valueDimOrder, axisToMemDim,
+                                          static_cast<unsigned>(memRefRank), ctx.builder.getContext(),
+                                          "transfer_write");
 }
 
 static bool createTransferWriteWithPermutationMap(memref::StoreOp storeOp, LoopVectorizationCtx &ctx, Location loc,
@@ -3075,10 +3112,58 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
   }
 }
 
+static bool hasTaggedDescendant(scf::ForOp loop) {
+  bool found = false;
+  loop->walk([&](scf::ForOp forOp) {
+    if (forOp == loop) {
+      return WalkResult::advance();
+    }
+    if (hasVectorizationAttr(forOp)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static LogicalResult vectorizeScalarCarrierLoop(scf::ForOp nestedForOp, LoopVectorizationCtx &ctx) {
+  if (nestedForOp.getNumRegionIterArgs() != 0 || nestedForOp.getNumResults() != 0) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  Value mappedLB = ctx.valueMapping.lookupOrDefault(nestedForOp.getLowerBound());
+  Value mappedUB = ctx.valueMapping.lookupOrDefault(nestedForOp.getUpperBound());
+  Value mappedStep = ctx.valueMapping.lookupOrDefault(nestedForOp.getStep());
+
+  auto carrierLoop = ctx.builder.create<scf::ForOp>(nestedForOp.getLoc(), mappedLB, mappedUB, mappedStep);
+  {
+    OpBuilder::InsertionGuard guard(ctx.builder);
+    ctx.builder.setInsertionPointToStart(carrierLoop.getBody());
+
+    LoopVectorizationCtx carrierCtx = ctx;
+    carrierCtx.valueMapping.map(nestedForOp.getInductionVar(), carrierLoop.getInductionVar());
+    if (failed(vectorizeRegion(nestedForOp.getRegion(), carrierCtx))) {
+      carrierLoop.erase();
+      return failure();
+    }
+  }
+  ctx.builder.setInsertionPointAfter(carrierLoop);
+  return success();
+}
+
 static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorizationCtx &ctx) {
   int64_t nestedMaxStep = -1;
   VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
-  if (nestedMode == VectorizationMode::None || nestedMaxStep <= 0) {
+  if (nestedMode == VectorizationMode::None) {
+    if (hasTaggedDescendant(nestedForOp)) {
+      return vectorizeScalarCarrierLoop(nestedForOp, ctx);
+    }
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+  if (nestedMaxStep <= 0) {
     cloneScalarOp(*nestedForOp.getOperation(), ctx);
     return success();
   }

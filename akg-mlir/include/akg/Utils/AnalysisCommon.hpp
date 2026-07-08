@@ -284,7 +284,8 @@ class CommonUtils {
     getAllAncestorBlocks(opB, dstAncestorBlocks);
 
     Block *commonBlock = nullptr;
-    for (int i = srcAncestorBlocks.size() - 1, j = dstAncestorBlocks.size() - 1;
+    for (int64_t i = static_cast<int64_t>(srcAncestorBlocks.size()) - 1,
+                 j = static_cast<int64_t>(dstAncestorBlocks.size()) - 1;
          i >= 0 && j >= 0 && srcAncestorBlocks[i] == dstAncestorBlocks[j]; i--, j--) {
       commonBlock = srcAncestorBlocks[i];
     }
@@ -567,8 +568,7 @@ class CommonUtils {
       for (unsigned i = 0; i < numSyms; ++i) {
         symReplacements.push_back(getAffineDimExpr(numDims + i, map.getContext()));
       }
-      map = map.replaceDimsAndSymbols(/* dimReplacements= */ {}, symReplacements,
-                                      /* numResultDims= */ numDims + numSyms, /* numResultSyms= */ 0);
+      map = map.replaceDimsAndSymbols({}, symReplacements, numDims + numSyms, 0);
     }
 
     // Simplify and canonicalize.

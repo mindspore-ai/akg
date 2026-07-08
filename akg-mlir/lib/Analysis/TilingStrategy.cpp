@@ -960,9 +960,8 @@ struct BandTilePlan {
   SmallVector<unsigned, kSmallVectorSizeFour> outerTiles;
   SmallVector<unsigned, kSmallVectorSizeFour> innerTiles;
   // True for axes that participate in multi-dimensional vectorization.
-  // When set, the corresponding inner-tile (point) loop receives
-  // `kMultiVecLoopAttr` so the apply phase can sink them together and
-  // consume them as a unified vec chain.
+  // The mask may be sparse; apply consumes each marked point loop without
+  // requiring all intervening axes to participate.
   SmallVector<bool, kSmallVectorSizeSix> multiVecAxisMask;
   // When true, the plan used multi-dimensional vectorization greedy search;
   // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
@@ -974,6 +973,7 @@ struct BandTilePlan {
 int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
 void applyF32LastDimDoubleAlign(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisAlignUnits);
 bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx);
+bool isStrictPerfectAxisEdge(const NpuBandContext &ctx, size_t parentIdx);
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
                                                                         bool alignParallelTiles,
                                                                         bool preferCoreMultiples = false);
@@ -1296,6 +1296,22 @@ void pushUniqueTransposeInfo(SmallVectorImpl<TransposeVectorInfo> &infos, Transp
   }
   infos.push_back(std::move(info));
 }
+
+Operation *findTransposeInfoScanRoot(const NpuBandContext &ctx) {
+  auto transposeAxisIt = llvm::find_if(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
+  if (transposeAxisIt == ctx.axes.end()) {
+    return !ctx.axes.empty() && ctx.axes.front() ? ctx.axes.front()->getLoopOperation() : nullptr;
+  }
+
+  Operation *scanRoot = (*transposeAxisIt)->getLoopOperation();
+  if (transposeAxisIt + 1 != ctx.axes.end()) {
+    return scanRoot;
+  }
+  auto leafLoop = dyn_cast_or_null<scf::ForOp>(scanRoot);
+  scf::ForOp parentLoop = leafLoop ? leafLoop->getParentOfType<scf::ForOp>() : scf::ForOp();
+  return parentLoop ? parentLoop.getOperation() : scanRoot;
+}
+
 SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> findTransposeVectorInfos(const NpuBandContext &ctx) {
   SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> infos;
   const bool hasTaggedTransposeAxis = llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
@@ -1316,13 +1332,7 @@ SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> findTransposeVectorInfos(c
                             TransposeVectorInfo{loadCommon, storeCommon, getValueElementBits(loadOp->getResult(0)),
                                                 loadOp->getResult(0).getType().isF32()});
   };
-  Operation *scanRoot = nullptr;
-  auto transposeAxisIt = llvm::find_if(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
-  if (transposeAxisIt != ctx.axes.end()) {
-    scanRoot = (*transposeAxisIt)->getLoopOperation();
-  } else if (!ctx.axes.empty() && ctx.axes.front()) {
-    scanRoot = ctx.axes.front()->getLoopOperation();
-  }
+  Operation *scanRoot = findTransposeInfoScanRoot(ctx);
   SmallVector<memref::LoadOp, kSmallVectorSizeEight> loads;
   SmallVector<memref::StoreOp, kSmallVectorSizeEight> stores;
   if (scanRoot != nullptr) {
@@ -2244,7 +2254,7 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
-  return result.PeakBits/8;
+  return result.PeakBits / 8;
 }
 int64_t computeAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes, int64_t elemBytes) {
   int64_t elems = 1;
@@ -2560,6 +2570,54 @@ SmallVector<size_t, kSmallVectorSizeSix> normalizeTransposeTargetAxisOrder(Array
   }
   return normalized;
 }
+
+std::optional<TransposeVectorInfo> projectTransposeInfo(const TransposeVectorInfo &info,
+                                                        ArrayRef<bool> activeAxisMask) {
+  TransposeVectorInfo projected;
+  projected.elementBits = info.elementBits;
+  projected.isF32 = info.isF32;
+  for (size_t axisIdx : info.sourceAxisOrder) {
+    if (axisIdx < activeAxisMask.size() && activeAxisMask[axisIdx]) {
+      projected.sourceAxisOrder.push_back(axisIdx);
+    }
+  }
+  for (size_t axisIdx : info.targetAxisOrder) {
+    if (axisIdx < activeAxisMask.size() && activeAxisMask[axisIdx]) {
+      projected.targetAxisOrder.push_back(axisIdx);
+    }
+  }
+  if (projected.sourceAxisOrder.size() < kMinTransposeAxisOrderSize ||
+      projected.sourceAxisOrder.size() != projected.targetAxisOrder.size() ||
+      projected.sourceAxisOrder == projected.targetAxisOrder ||
+      !std::is_permutation(projected.sourceAxisOrder.begin(), projected.sourceAxisOrder.end(),
+                           projected.targetAxisOrder.begin())) {
+    return std::nullopt;
+  }
+  return projected;
+}
+
+SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> collectActiveTransposeInfos(
+  const NpuBandContext &ctx, ArrayRef<bool> activeAxisMask, ArrayRef<size_t> fallbackSourceAxisOrder) {
+  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> activeInfos;
+  if (!ctx.transposeInfos.empty()) {
+    for (const TransposeVectorInfo &info : ctx.transposeInfos) {
+      if (std::optional<TransposeVectorInfo> projected = projectTransposeInfo(info, activeAxisMask)) {
+        activeInfos.push_back(std::move(*projected));
+      }
+    }
+    return activeInfos;
+  }
+
+  TransposeVectorInfo fallback{
+    SmallVector<size_t, kSmallVectorSizeSix>(fallbackSourceAxisOrder.begin(), fallbackSourceAxisOrder.end()),
+    normalizeTransposeTargetAxisOrder(fallbackSourceAxisOrder, ctx.transposeTargetAxisOrder), ctx.transposeElementBits,
+    ctx.transposeElementIsF32};
+  if (std::optional<TransposeVectorInfo> projected = projectTransposeInfo(fallback, activeAxisMask)) {
+    activeInfos.push_back(std::move(*projected));
+  }
+  return activeInfos;
+}
+
 // Bundled parameters for computeTransposeTempReserveBytes to stay under readability-function-size_parameters limit.
 struct TransposeTempReserveParams {
   const NpuBandContext &ctx;
@@ -2609,7 +2667,8 @@ int64_t computeTransposeTempReserveBytes(const TransposeTempReserveParams &param
                    computeStrideAlignedTransposeBytes(sourceShape, sourceOrder, normalizedTargetAxisOrder, elemBytes));
   return std::max(strideReserveBytes, std::max(allocReserveBytes, adjacentStrideBytes));
 }
-bool satisfiesVectorReserveAlignConstraints(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
+bool satisfiesVectorReserveAlignConstraints(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles,
+                                            bool includeTransposeCoLive) {
   if (std::any_of(ctx.vectorPeakReserveSets.begin(), ctx.vectorPeakReserveSets.end(),
                   [&ctx, &axisTiles](const VectorPeakReserveSet &set) {
                     return std::any_of(set.liveBuffers.begin(), set.liveBuffers.end(),
@@ -2619,7 +2678,8 @@ bool satisfiesVectorReserveAlignConstraints(const NpuBandContext &ctx, ArrayRef<
                   })) {
     return false;
   }
-  if (std::any_of(ctx.transposeCoLiveReserveSets.begin(), ctx.transposeCoLiveReserveSets.end(),
+  if (includeTransposeCoLive &&
+      std::any_of(ctx.transposeCoLiveReserveSets.begin(), ctx.transposeCoLiveReserveSets.end(),
                   [&ctx, &axisTiles](const SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour> &liveSet) {
                     return std::any_of(
                       liveSet.begin(), liveSet.end(), [&ctx, &axisTiles](const TransposeCoLiveReserve &reserve) {
@@ -2650,16 +2710,14 @@ bool satisfiesSingleTransposeAlignConstraints(ArrayRef<int64_t> axisTiles, Array
          satisfiesStrideAlignedTranspose(sourceShape, sourceAxisOrder, normalizedTargetAxisOrder, elemBytes);
 }
 bool satisfiesTransposeAlignConstraints(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles,
-                                        ArrayRef<size_t> fallbackSourceAxisOrder) {
-  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles)) {
+                                        ArrayRef<TransposeVectorInfo> activeTransposeInfos) {
+  if (activeTransposeInfos.empty()) {
+    return true;
+  }
+  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles, /*includeTransposeCoLive=*/true)) {
     return false;
   }
-  if (ctx.transposeInfos.empty()) {
-    return satisfiesSingleTransposeAlignConstraints(axisTiles, fallbackSourceAxisOrder, ctx.transposeTargetAxisOrder,
-                                                    ctx.transposeElementBits, ctx.transposeElementIsF32);
-  }
-
-  return llvm::all_of(ctx.transposeInfos, [&axisTiles, &ctx](const TransposeVectorInfo &info) {
+  return llvm::all_of(activeTransposeInfos, [&axisTiles](const TransposeVectorInfo &info) {
     return satisfiesSingleTransposeAlignConstraints(axisTiles, info.sourceAxisOrder, info.targetAxisOrder,
                                                     info.elementBits, info.isF32);
   });
@@ -2864,25 +2922,23 @@ static SmallVector<int64_t, kSmallVectorSizeSix> buildTransposeSearchAxisTiles(c
 }
 
 static int64_t computeTransposeSearchCandidatePeak(const NpuBandContext &ctx, const BandTilePlan &plan,
-                                                   ArrayRef<size_t> searchAxisOrder, ArrayRef<int64_t> searchShape) {
+                                                   ArrayRef<size_t> searchAxisOrder, ArrayRef<int64_t> searchShape,
+                                                   ArrayRef<bool> activeAxisMask) {
   SmallVector<int64_t, kSmallVectorSizeSix> axisTiles =
     buildTransposeSearchAxisTiles(ctx, plan, searchAxisOrder, searchShape);
-  if (!satisfiesTransposeAlignConstraints(ctx, axisTiles, searchAxisOrder)) {
+  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> activeTransposeInfos =
+    collectActiveTransposeInfos(ctx, activeAxisMask, searchAxisOrder);
+  if (!satisfiesTransposeAlignConstraints(ctx, axisTiles, activeTransposeInfos)) {
     return static_cast<int64_t>(LLONG_MAX);
   }
   int64_t vectorBytes = computeVectorPeakReserveBytes(ctx, axisTiles);
   int64_t transposeBytes = 0;
-  if (ctx.transposeInfos.empty()) {
-    transposeBytes = computeTransposeTempReserveBytes({ctx, axisTiles, searchAxisOrder, ctx.transposeTargetAxisOrder,
-                                                       ctx.transposeElementBits, ctx.transposeElementIsF32});
-  } else {
-    for (const TransposeVectorInfo &info : ctx.transposeInfos) {
-      transposeBytes = std::max(
-        transposeBytes, computeTransposeTempReserveBytes(
-                          {ctx, axisTiles, info.sourceAxisOrder, info.targetAxisOrder, info.elementBits, info.isF32}));
-    }
+  for (const TransposeVectorInfo &info : activeTransposeInfos) {
+    transposeBytes =
+      std::max(transposeBytes, computeTransposeTempReserveBytes({ctx, axisTiles, info.sourceAxisOrder,
+                                                                 info.targetAxisOrder, info.elementBits, info.isF32}));
   }
-  int64_t coLiveBytes = computeTransposeCoLiveReserveBytes(ctx, axisTiles);
+  int64_t coLiveBytes = activeTransposeInfos.empty() ? int64_t{0} : computeTransposeCoLiveReserveBytes(ctx, axisTiles);
   transposeBytes = (transposeBytes > static_cast<int64_t>(LLONG_MAX) - coLiveBytes) ? static_cast<int64_t>(LLONG_MAX)
                                                                                     : transposeBytes + coLiveBytes;
   return std::max<int64_t>(vectorBytes, transposeBytes);
@@ -2916,131 +2972,337 @@ static void emitAlignedTransposeMinTileExceedsUb(const AlignedTransposeMinTileEx
   }
 }
 
-// Greedy transpose tile selection.
-// Replaces the previous DFS over per-axis candidate sets. The new algorithm
-// is built around `ctx.axesAlignUnits`, which aggregates the per-axis LCM
-// alignment requirement across every TransposeVectorInfo
-// (32B size-align on last-dim transpose dims, f32 64B double-align, 32B inner
-// stride for non-last-dim transposes). Because every tile we emit is a multiple
-// of `axisAlignSize`, satisfaction of `satisfiesTransposeAlignConstraints` is
-// guaranteed by construction; we only assert it as an invariant.
-// Strategy (matches the agreed plan)
-//   1. Compute `axisAlignSize[i]` and `axisMaxTileSize[i] = alignUp(outerTile, alignSize)`
-//      for every axis in `searchAxisOrder`.
-//   2. Initialize tiles to `[axisAlignSize, ..., axisAlignSize, axisMaxTileSize_last]`
-//      -- bias toward keeping the innermost axis full (best vector intrinsic
-//      throughput).
-//   3. If that already exceeds UB, shrink only the innermost axis by
-//      `axisAlignSize_last` each step until it fits. If we hit
-//      `tiles[n-1] == axisAlignSize_last` and still don't fit -- "boundary 1"
-//      -- keep the minimum legal aligned tile instead of falling back to a
-//      generic unaligned split.
-//   4. Otherwise, walk from the second-innermost axis outward and try to lift
-//      each tile to its `axisMaxTileSize`; revert per-axis if it would
-//      exceed UB. No DFS; no LLONG_MAX silent fallback.
-// Always returns the best aligned transpose tile it can construct.
+int64_t getTransposeVectorAlignUnit(const NpuBandContext &ctx, size_t axisIdx) {
+  int64_t alignUnit = 1;
+  for (const TransposeVectorInfo &info : ctx.transposeInfos) {
+    if (!llvm::is_contained(info.sourceAxisOrder, axisIdx)) {
+      continue;
+    }
+    int64_t elemBytes = std::max<int64_t>(ceilDivInt64(std::max<int64_t>(info.elementBits, 1), kBitsPerByte), 1);
+    alignUnit = std::lcm(alignUnit, std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
+  }
+  if (alignUnit == 1) {
+    int64_t elemBytes =
+      std::max<int64_t>(ceilDivInt64(std::max<int64_t>(ctx.transposeElementBits, 1), kBitsPerByte), 1);
+    alignUnit = std::max<int64_t>(kUbAlignBytes / elemBytes, 1);
+  }
+  return alignUnit;
+}
+
+SmallVector<int64_t, kSmallVectorSizeSix> buildActiveTransposeAlignUnits(const NpuBandContext &ctx,
+                                                                         ArrayRef<bool> activeAxisMask,
+                                                                         ArrayRef<size_t> fallbackSourceAxisOrder) {
+  NpuBandContext projectedCtx = ctx;
+  projectedCtx.transposeInfos = collectActiveTransposeInfos(ctx, activeAxisMask, fallbackSourceAxisOrder);
+  SmallVector<int64_t, kSmallVectorSizeSix> alignUnits(ctx.axes.size(), 1);
+  for (size_t i = 0; i < ctx.axes.size(); ++i) {
+    if (i >= activeAxisMask.size() || !activeAxisMask[i]) {
+      continue;
+    }
+    alignUnits[i] = std::lcm(getTransposeVectorAlignUnit(ctx, i), computeAxisAlignSize(i, projectedCtx));
+  }
+  applyF32LastDimDoubleAlign(projectedCtx, alignUnits);
+  return alignUnits;
+}
+
+int64_t getAlignedTransposeAxisUpper(const BandTilePlan &plan, size_t axisIdx, int64_t alignUnit, bool mandatoryAxis) {
+  int64_t rawUpper =
+    axisIdx < plan.outerTiles.size() ? std::max<int64_t>(static_cast<int64_t>(plan.outerTiles[axisIdx]), 1) : 1;
+  int64_t alignedUpper = (rawUpper / alignUnit) * alignUnit;
+  return mandatoryAxis ? std::max<int64_t>(alignedUpper, alignUnit) : alignedUpper;
+}
+
+struct TransposeTileSearchParams {
+  const NpuBandContext &ctx;
+  const BandTilePlan &plan;
+  ArrayRef<size_t> searchAxisOrder;
+  ArrayRef<bool> targetAxisMask;
+  ArrayRef<bool> transposeAxisMask;
+  int64_t ubLimitBytes;
+};
+
+struct TransposeTileSearchState {
+  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask;
+  SmallVector<int64_t, kSmallVectorSizeSix> alignUnits;
+  SmallVector<int64_t, kSmallVectorSizeSix> tiles;
+  size_t wholeFromAxis{std::numeric_limits<size_t>::max()};
+};
+
+void constrainNonPerfectTransposeSuffix(const TransposeTileSearchParams &params, TransposeTileSearchState &state) {
+  bool activeOuter = false;
+  bool wholeSuffix = false;
+  state.wholeFromAxis = params.ctx.axes.size();
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t axisIdx = params.searchAxisOrder[i];
+    if (wholeSuffix && state.activeAxisMask[axisIdx]) {
+      int64_t alignUnit = std::max<int64_t>(state.alignUnits[axisIdx], 1);
+      state.wholeFromAxis = std::min(state.wholeFromAxis, axisIdx);
+      state.tiles[i] = alignUpInt64(std::max<int64_t>(params.ctx.extents[axisIdx], 1), alignUnit);
+    }
+    activeOuter |= state.activeAxisMask[axisIdx];
+    if (activeOuter && i + 1 < params.searchAxisOrder.size() && !isStrictPerfectAxisEdge(params.ctx, axisIdx)) {
+      wholeSuffix = true;
+    }
+  }
+}
+
+TransposeTileSearchState buildTransposeMinTileState(const TransposeTileSearchParams &params,
+                                                    ArrayRef<bool> activeAxisMask) {
+  TransposeTileSearchState state;
+  state.activeAxisMask.assign(activeAxisMask.begin(), activeAxisMask.end());
+  state.alignUnits = buildActiveTransposeAlignUnits(params.ctx, state.activeAxisMask, params.searchAxisOrder);
+  state.tiles.assign(params.searchAxisOrder.size(), 1);
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t axisIdx = params.searchAxisOrder[i];
+    if (state.activeAxisMask[axisIdx]) {
+      state.tiles[i] = std::max<int64_t>(state.alignUnits[axisIdx], 1);
+    }
+  }
+  constrainNonPerfectTransposeSuffix(params, state);
+  return state;
+}
+
+int64_t getTransposeTileSearchPeak(const TransposeTileSearchParams &params, const TransposeTileSearchState &state) {
+  return computeTransposeSearchCandidatePeak(params.ctx, params.plan, params.searchAxisOrder, state.tiles,
+                                             state.activeAxisMask);
+}
+
+struct MaximizeAlignedTransposeAxisParams {
+  const TransposeTileSearchParams &search;
+  TransposeTileSearchState &state;
+  size_t axisPos;
+  int64_t alignUnit;
+  int64_t upper;
+};
+
+int64_t maximizeAlignedTransposeAxis(const MaximizeAlignedTransposeAxisParams &params) {
+  auto &state = params.state;
+  int64_t current = state.tiles[params.axisPos];
+  int64_t upper = params.upper;
+  if (upper <= current) {
+    return current;
+  }
+  auto peakOf = [&params, &state](int64_t candidate) {
+    state.tiles[params.axisPos] = candidate;
+    return getTransposeTileSearchPeak(params.search, state);
+  };
+
+  int64_t upperPeak = peakOf(upper);
+  if (upperPeak <= params.search.ubLimitBytes) {
+    return upper;
+  }
+
+  int64_t low = current / params.alignUnit + 1;
+  int64_t high = upper / params.alignUnit - 1;
+  int64_t best = current;
+  bool useLinearScan = upperPeak == static_cast<int64_t>(LLONG_MAX);
+  while (!useLinearScan && low <= high) {
+    int64_t cell = low + (high - low) / 2;
+    int64_t candidate = cell * params.alignUnit;
+    int64_t candidatePeak = peakOf(candidate);
+    if (candidatePeak == static_cast<int64_t>(LLONG_MAX)) {
+      useLinearScan = true;
+      break;
+    }
+    if (candidatePeak <= params.search.ubLimitBytes) {
+      best = candidate;
+      low = cell + 1;
+    } else {
+      high = cell - 1;
+    }
+  }
+
+  if (useLinearScan) {
+    for (int64_t candidate = upper; candidate > current; candidate -= params.alignUnit) {
+      if (peakOf(candidate) <= params.search.ubLimitBytes) {
+        best = candidate;
+        break;
+      }
+    }
+  }
+  state.tiles[params.axisPos] = best;
+  return best;
+}
+
+TransposeTileSearchState buildSingleAxisTransposeFallback(const TransposeTileSearchParams &params) {
+  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask(params.ctx.axes.size(), false);
+  size_t fallbackAxis = params.searchAxisOrder.back();
+  for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
+    if (*it < params.transposeAxisMask.size() && params.transposeAxisMask[*it]) {
+      fallbackAxis = *it;
+      break;
+    }
+  }
+  activeAxisMask[fallbackAxis] = true;
+  return buildTransposeMinTileState(params, activeAxisMask);
+}
+
+TransposeTileSearchState selectTransposeMinState(const TransposeTileSearchParams &params, ArrayRef<bool> targetMask,
+                                                 bool &usedFallback, int64_t &peak) {
+  TransposeTileSearchState state = buildTransposeMinTileState(params, targetMask);
+  peak = getTransposeTileSearchPeak(params, state);
+  while (peak > params.ubLimitBytes) {
+    if (state.wholeFromAxis >= params.ctx.axes.size()) {
+      break;
+    }
+    usedFallback = true;
+    size_t wholeFromAxis = state.wholeFromAxis;
+    auto outerTargetIt =
+      std::find_if(params.searchAxisOrder.begin(), params.searchAxisOrder.end(), [&](size_t axisIdx) {
+        return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
+      });
+    if (outerTargetIt != params.searchAxisOrder.end()) {
+      state.activeAxisMask[*outerTargetIt] = false;
+    }
+    state = buildTransposeMinTileState(params, state.activeAxisMask);
+    bool hasOuterTarget = llvm::any_of(params.searchAxisOrder, [&](size_t axisIdx) {
+      return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
+    });
+    if (!hasOuterTarget) {
+      for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+        size_t axisIdx = params.searchAxisOrder[i];
+        if (state.activeAxisMask[axisIdx]) {
+          state.tiles[i] = alignUpInt64(params.ctx.extents[axisIdx], state.alignUnits[axisIdx]);
+        }
+      }
+      peak = getTransposeTileSearchPeak(params, state);
+      if (peak <= params.ubLimitBytes) {
+        return state;
+      }
+      state = buildTransposeMinTileState(params, state.activeAxisMask);
+    }
+    peak = getTransposeTileSearchPeak(params, state);
+  }
+  if (peak <= params.ubLimitBytes) {
+    return state;
+  }
+  usedFallback = true;
+  state = buildSingleAxisTransposeFallback(params);
+  peak = getTransposeTileSearchPeak(params, state);
+  return state;
+}
+
+void emitTransposeMinTileExceedsUb(const TransposeTileSearchParams &params, const TransposeTileSearchState &state,
+                                   int64_t peak) {
+  SmallVector<int64_t, kSmallVectorSizeSix> maxTiles(params.searchAxisOrder.size(), 1);
+  SmallVector<int64_t, kSmallVectorSizeSix> searchAlignUnits;
+  searchAlignUnits.reserve(params.searchAxisOrder.size());
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t axisIdx = params.searchAxisOrder[i];
+    int64_t alignUnit = std::max<int64_t>(state.alignUnits[axisIdx], 1);
+    maxTiles[i] = std::max<int64_t>(
+      getAlignedTransposeAxisUpper(params.plan, axisIdx, alignUnit, state.activeAxisMask[axisIdx]), state.tiles[i]);
+    searchAlignUnits.push_back(alignUnit);
+  }
+  emitAlignedTransposeMinTileExceedsUb(
+    {params.ctx, params.searchAxisOrder, searchAlignUnits, maxTiles, state.tiles, params.ubLimitBytes, peak});
+}
+
+SmallVector<size_t, kSmallVectorSizeSix> buildTransposeMaximizeOrder(const TransposeTileSearchParams &params,
+                                                                     const TransposeTileSearchState &state,
+                                                                     bool usedFallback) {
+  SmallVector<size_t, kSmallVectorSizeSix> maximizeOrder;
+  for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
+    if (state.activeAxisMask[*it]) {
+      maximizeOrder.push_back(*it);
+    }
+  }
+  if (!usedFallback) {
+    for (auto it = params.searchAxisOrder.rbegin(); it != params.searchAxisOrder.rend(); ++it) {
+      if (!state.activeAxisMask[*it]) {
+        maximizeOrder.push_back(*it);
+      }
+    }
+  }
+  return maximizeOrder;
+}
+
+bool prepareTransposeAxisActivation(const TransposeTileSearchParams &params, size_t axisIdx,
+                                    TransposeTileSearchState &state) {
+  state.activeAxisMask[axisIdx] = true;
+  state.alignUnits = buildActiveTransposeAlignUnits(params.ctx, state.activeAxisMask, params.searchAxisOrder);
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t activeAxis = params.searchAxisOrder[i];
+    if (!state.activeAxisMask[activeAxis]) {
+      continue;
+    }
+    int64_t activeAlign = std::max<int64_t>(state.alignUnits[activeAxis], 1);
+    state.tiles[i] = alignUpInt64(state.tiles[i], activeAlign);
+  }
+  constrainNonPerfectTransposeSuffix(params, state);
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t activeAxis = params.searchAxisOrder[i];
+    if (!state.activeAxisMask[activeAxis] || activeAxis >= state.wholeFromAxis) {
+      continue;
+    }
+    bool mandatory = activeAxis < params.targetAxisMask.size() && params.targetAxisMask[activeAxis];
+    if (state.tiles[i] >
+        getAlignedTransposeAxisUpper(params.plan, activeAxis, state.alignUnits[activeAxis], mandatory)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void tryMaximizeTransposeAxis(const TransposeTileSearchParams &params, size_t axisIdx,
+                              TransposeTileSearchState &state) {
+  size_t axisPos = static_cast<size_t>(llvm::find(params.searchAxisOrder, axisIdx) - params.searchAxisOrder.begin());
+  bool wasActive = state.activeAxisMask[axisIdx];
+  TransposeTileSearchState savedState = state;
+  if (!wasActive && !prepareTransposeAxisActivation(params, axisIdx, state)) {
+    state = std::move(savedState);
+    return;
+  }
+
+  int64_t alignUnit = std::max<int64_t>(state.alignUnits[axisIdx], 1);
+  int64_t upper = getAlignedTransposeAxisUpper(params.plan, axisIdx, alignUnit, wasActive);
+  if (getTransposeTileSearchPeak(params, state) > params.ubLimitBytes) {
+    if (!wasActive) {
+      state = std::move(savedState);
+    }
+    return;
+  }
+  if (upper <= 1) {
+    return;
+  }
+  maximizeAlignedTransposeAxis({params, state, axisPos, alignUnit, upper});
+  if (!wasActive && state.tiles[axisPos] <= 1) {
+    state = std::move(savedState);
+  }
+}
+
 bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, ArrayRef<size_t> searchAxisOrder,
+                                 ArrayRef<bool> targetAxisMask, ArrayRef<bool> transposeAxisMask,
                                  int64_t ubLimitBytes) {
   if (searchAxisOrder.empty()) {
     return true;
   }
-
-  const size_t n = searchAxisOrder.size();
-  SmallVector<int64_t, kSmallVectorSizeSix> axisAlignSize(n, 1);
-  SmallVector<int64_t, kSmallVectorSizeSix> axisMaxTileSize(n, 1);
-  for (size_t i = 0; i < n; ++i) {
-    size_t axisIdx = searchAxisOrder[i];
-    int64_t alignSize = axisIdx < ctx.axesAlignUnits.size() ? ctx.axesAlignUnits[axisIdx] : 1;
-    axisAlignSize[i] = std::max<int64_t>(alignSize, 1);
+  TransposeTileSearchParams params{ctx, plan, searchAxisOrder, targetAxisMask, transposeAxisMask, ubLimitBytes};
+  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask(ctx.axes.size(), false);
+  for (size_t axisIdx : searchAxisOrder) {
+    activeAxisMask[axisIdx] = axisIdx < targetAxisMask.size() && targetAxisMask[axisIdx];
   }
-  for (size_t i = 0; i < n; ++i) {
-    size_t axisIdx = searchAxisOrder[i];
-    int64_t outerTile = std::max<int64_t>(plan.outerTiles[axisIdx], 1);
-    axisMaxTileSize[i] = alignUpInt64(outerTile, axisAlignSize[i]);
+  if (llvm::none_of(activeAxisMask, [](bool active) { return active; })) {
+    activeAxisMask[searchAxisOrder.back()] = true;
   }
 
-  // Reset inner tiles for search-axis-order before peak computation.
-  // `computeTransposeSearchCandidatePeak` builds axisTiles from plan + the
-  // provided searchShape; outer tiles remain the search upper bounds.
-  for (size_t i = 0; i < n; ++i) {
-    plan.innerTiles[searchAxisOrder[i]] = 1;
-  }
-
-  // Initial tile: outer axes minimal, innermost maximal.
-  SmallVector<int64_t, kSmallVectorSizeSix> tiles(n, 1);
-  for (size_t i = 0; i + 1 < n; ++i) {
-    tiles[i] = axisAlignSize[i];
-  }
-  tiles[n - 1] = axisMaxTileSize[n - 1];
-
-  auto peakOf = [&ctx, &plan, &searchAxisOrder](ArrayRef<int64_t> shape) {
-    return computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, shape);
-  };
-
-  int64_t peak = peakOf(tiles);
+  bool usedFallback = false;
+  int64_t peak = 0;
+  TransposeTileSearchState state = selectTransposeMinState(params, activeAxisMask, usedFallback, peak);
   if (peak > ubLimitBytes) {
-    // Path A: shrink innermost only. The byte footprint is monotonic for
-    // aligned candidates, but the stride-align predicate can have holes when a
-    // candidate crosses the full-extent/static-dim boundary. If that happens,
-    // fall back to the old descending scan to preserve exact tile selection.
-    int64_t align = axisAlignSize[n - 1];
-    int64_t highCell = std::max<int64_t>(axisMaxTileSize[n - 1] / align, 1);
-    int64_t low = 1;
-    int64_t high = highCell - 1;  // full aligned tile was checked above and does not fit.
-    int64_t bestCell = 1;
-    bool useLinearScan = peak == static_cast<int64_t>(LLONG_MAX);
-
-    while (!useLinearScan && low <= high) {
-      int64_t cell = low + (high - low) / 2;
-      tiles[n - 1] = cell * align;
-      int64_t candidatePeak = peakOf(tiles);
-      if (candidatePeak == static_cast<int64_t>(LLONG_MAX)) {
-        useLinearScan = true;
-        break;
-      }
-      if (candidatePeak <= ubLimitBytes) {
-        bestCell = cell;
-        low = cell + 1;
-      } else {
-        high = cell - 1;
-      }
-    }
-
-    if (useLinearScan) {
-      tiles[n - 1] = axisMaxTileSize[n - 1];
-      peak = peakOf(tiles);
-      while (peak > ubLimitBytes && tiles[n - 1] > align) {
-        tiles[n - 1] -= align;
-        peak = peakOf(tiles);
-      }
-    } else {
-      tiles[n - 1] = bestCell * align;
-    }
-    peak = peakOf(tiles);
-    if (peak > ubLimitBytes) {
-      // Boundary 1: even the minimum aligned tile exceeds the UB model. Keep it
-      // to preserve transpose alignment instead of falling back to generic.
-      emitAlignedTransposeMinTileExceedsUb(
-        {ctx, searchAxisOrder, axisAlignSize, axisMaxTileSize, tiles, ubLimitBytes, peak});
-    }
-  } else {
-    // Path B: walk from second-innermost outward, try lifting each tile to
-    // its axisMaxTileSize.
-    for (size_t i = n - 1; i-- > 0;) {
-      int64_t saved = tiles[i];
-      tiles[i] = axisMaxTileSize[i];
-      int64_t newPeak = peakOf(tiles);
-      if (newPeak > ubLimitBytes) {
-        tiles[i] = saved;
-      } else {
-        peak = newPeak;
-      }
-    }
+    emitTransposeMinTileExceedsUb(params, state, peak);
   }
 
-  for (size_t i = 0; i < n; ++i) {
-    unsigned tile = saturateToTileValue(tiles[i]);
-    plan.innerTiles[searchAxisOrder[i]] = tile;
+  for (size_t axisIdx : buildTransposeMaximizeOrder(params, state, usedFallback)) {
+    tryMaximizeTransposeAxis(params, axisIdx, state);
+  }
+
+  plan.multiVecAxisMask.assign(state.activeAxisMask.begin(), state.activeAxisMask.end());
+  plan.usesMultiVecScheme = true;
+  for (size_t i = 0; i < searchAxisOrder.size(); ++i) {
+    size_t axisIdx = searchAxisOrder[i];
+    plan.innerTiles[axisIdx] =
+      state.activeAxisMask[axisIdx] ? saturateToTileValue(state.tiles[i]) : plan.outerTiles[axisIdx];
   }
   return true;
 }
@@ -3331,6 +3593,45 @@ std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
   return std::nullopt;
 }
 
+struct TransposeAxisMasks {
+  SmallVector<bool, kSmallVectorSizeSix> transpose;
+  SmallVector<bool, kSmallVectorSizeSix> target;
+};
+
+TransposeAxisMasks collectTransposeAxisMasks(const NpuBandContext &ctx) {
+  TransposeAxisMasks masks;
+  masks.transpose.assign(ctx.axes.size(), false);
+  masks.target.assign(ctx.axes.size(), false);
+  for (const TransposeVectorInfo &info : ctx.transposeInfos) {
+    if (info.sourceAxisOrder.size() == info.targetAxisOrder.size()) {
+      for (size_t i = 0; i < info.sourceAxisOrder.size(); ++i) {
+        if (info.sourceAxisOrder[i] == info.targetAxisOrder[i]) {
+          continue;
+        }
+        if (info.sourceAxisOrder[i] < masks.transpose.size()) {
+          masks.transpose[info.sourceAxisOrder[i]] = true;
+        }
+        if (info.targetAxisOrder[i] < masks.transpose.size()) {
+          masks.transpose[info.targetAxisOrder[i]] = true;
+        }
+      }
+    }
+    if (!info.sourceAxisOrder.empty() && info.sourceAxisOrder.back() < masks.target.size()) {
+      masks.target[info.sourceAxisOrder.back()] = true;
+    }
+    if (!info.targetAxisOrder.empty() && info.targetAxisOrder.back() < masks.target.size()) {
+      masks.target[info.targetAxisOrder.back()] = true;
+    }
+  }
+  for (size_t i = 0; i < ctx.axes.size(); ++i) {
+    masks.transpose[i] = masks.transpose[i] || isTransposeAxis(ctx.axes[i]);
+  }
+  if (llvm::none_of(masks.target, [](bool target) { return target; }) && !masks.target.empty()) {
+    masks.target.back() = true;
+  }
+  return masks;
+}
+
 std::optional<size_t> findReduceYVectorTargetAxis(const NpuBandContext &ctx) {
   if (!isInnermostAxisReduceY(ctx) || ctx.axes.size() < kMinTransposeAxisOrderSize) {
     return std::nullopt;
@@ -3408,73 +3709,27 @@ int64_t findMaxFittingTransposeTargetTile(const NpuBandContext &ctx, const BandT
     return 1;
   }
   size_t targetPos = static_cast<size_t>(targetPosIt - searchAxisOrder.begin());
-
-  SmallVector<int64_t, kSmallVectorSizeSix> axisAlignSize;
-  SmallVector<int64_t, kSmallVectorSizeSix> axisMaxTileSize;
-  SmallVector<int64_t, kSmallVectorSizeSix> searchShape;
-  axisAlignSize.reserve(searchAxisOrder.size());
-  axisMaxTileSize.reserve(searchAxisOrder.size());
-  searchShape.reserve(searchAxisOrder.size());
-
-  for (size_t axisIdx : searchAxisOrder) {
-    int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
-    int64_t maxTile = (axisIdx == targetAxis) ? alignUpInt64(getAxisSearchUpper(ctx, axisIdx), alignUnit) : alignUnit;
-    axisAlignSize.push_back(alignUnit);
-    axisMaxTileSize.push_back(std::max<int64_t>(maxTile, alignUnit));
-    searchShape.push_back(alignUnit);
-  }
-
-  int64_t targetAlign = axisAlignSize[targetPos];
-  int64_t upperTile = axisMaxTileSize[targetPos];
-  auto peakOf = [&ctx, &plan, &searchAxisOrder, &searchShape, targetAlign, targetPos](int64_t targetTile) {
-    searchShape[targetPos] = std::max<int64_t>(targetTile, targetAlign);
-    return computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
-  };
-
-  int64_t peak = peakOf(upperTile);
-  if (peak <= ubLimitBytes) {
-    return upperTile;
-  }
-
-  int64_t highCell = std::max<int64_t>(upperTile / targetAlign, 1);
-  int64_t low = 1;
-  int64_t high = highCell - 1;
-  int64_t bestCell = 1;
-  bool useLinearScan = peak == static_cast<int64_t>(LLONG_MAX);
-
-  while (!useLinearScan && low <= high) {
-    int64_t cell = low + (high - low) / 2;
-    int64_t candidate = cell * targetAlign;
-    int64_t candidatePeak = peakOf(candidate);
-    if (candidatePeak == static_cast<int64_t>(LLONG_MAX)) {
-      useLinearScan = true;
-      break;
-    }
-    if (candidatePeak <= ubLimitBytes) {
-      bestCell = cell;
-      low = cell + 1;
-    } else {
-      high = cell - 1;
-    }
-  }
-
-  if (useLinearScan) {
-    searchShape[targetPos] = upperTile;
-    peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
-    while (peak > ubLimitBytes && searchShape[targetPos] > targetAlign) {
-      searchShape[targetPos] -= targetAlign;
-      peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
-    }
-  } else {
-    searchShape[targetPos] = bestCell * targetAlign;
-    peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape);
-  }
-
+  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask(ctx.axes.size(), false);
+  activeAxisMask[targetAxis] = true;
+  SmallVector<int64_t, kSmallVectorSizeSix> alignUnits =
+    buildActiveTransposeAlignUnits(ctx, activeAxisMask, searchAxisOrder);
+  SmallVector<int64_t, kSmallVectorSizeSix> searchShape(searchAxisOrder.size(), 1);
+  int64_t targetAlign = std::max<int64_t>(alignUnits[targetAxis], 1);
+  searchShape[targetPos] = targetAlign;
+  int64_t upperTile = std::max<int64_t>((getAxisSearchUpper(ctx, targetAxis) / targetAlign) * targetAlign, targetAlign);
+  int64_t peak = computeTransposeSearchCandidatePeak(ctx, plan, searchAxisOrder, searchShape, activeAxisMask);
   if (peak > ubLimitBytes) {
+    SmallVector<int64_t, kSmallVectorSizeSix> axisAlignSize(searchAxisOrder.size(), 1);
+    SmallVector<int64_t, kSmallVectorSizeSix> axisMaxTileSize(searchAxisOrder.size(), 1);
+    axisAlignSize[targetPos] = targetAlign;
+    axisMaxTileSize[targetPos] = upperTile;
     emitAlignedTransposeMinTileExceedsUb(
       {ctx, searchAxisOrder, axisAlignSize, axisMaxTileSize, searchShape, ubLimitBytes, peak});
+    return targetAlign;
   }
-  return std::max<int64_t>(searchShape[targetPos], targetAlign);
+  TransposeTileSearchParams params{ctx, plan, searchAxisOrder, activeAxisMask, activeAxisMask, ubLimitBytes};
+  TransposeTileSearchState state{activeAxisMask, alignUnits, searchShape};
+  return maximizeAlignedTransposeAxis({params, state, targetPos, targetAlign, upperTile});
 }
 
 bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
@@ -3483,25 +3738,18 @@ bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTileP
     return false;
   }
 
-  NpuBandContext transposeCtx = ctx;
-  int64_t elemBytes =
-    std::max<int64_t>(ceilDivInt64(std::max<int64_t>(transposeCtx.transposeElementBits, 1), kBitsPerByte), 1);
-  transposeCtx.axesAlignUnits.back() =
-    std::lcm(transposeCtx.axesAlignUnits.back(), std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
-
-  initDynamicSingleAxisPlan(transposeCtx, plan);
+  initDynamicSingleAxisPlan(ctx, plan);
 
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
-  for (size_t i = *outermostTransposeIdx; i < transposeCtx.axes.size(); ++i) {
+  for (size_t i = *outermostTransposeIdx; i < ctx.axes.size(); ++i) {
     searchAxisOrder.push_back(i);
-    plan.innerTiles[i] =
-      saturateToTileValue(i < transposeCtx.axesAlignUnits.size() ? transposeCtx.axesAlignUnits[i] : 1);
   }
 
   size_t targetAxis = searchAxisOrder.back();
-  int64_t targetTile =
-    findMaxFittingTransposeTargetTile(transposeCtx, plan, searchAxisOrder, targetAxis, getVectorUbBytes(transposeCtx));
+  int64_t targetTile = findMaxFittingTransposeTargetTile(ctx, plan, searchAxisOrder, targetAxis, getVectorUbBytes(ctx));
   plan.innerTiles[targetAxis] = saturateToTileValue(targetTile);
+  plan.multiVecAxisMask[targetAxis] = true;
+  plan.usesMultiVecScheme = true;
   return true;
 }
 
@@ -3606,38 +3854,24 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
     return false;
   }
 
-  int64_t outermostTransposeIdx = kInvalidAxisIndex;
-  for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    if (isTransposeAxis(ctx.axes[i])) {
-      outermostTransposeIdx = static_cast<int64_t>(i);
-      break;
-    }
-  }
-  if (outermostTransposeIdx < 0) {
+  TransposeAxisMasks axisMasks = collectTransposeAxisMasks(ctx);
+  auto outermostTransposeIt = llvm::find(axisMasks.transpose, true);
+  if (outermostTransposeIt == axisMasks.transpose.end()) {
     return false;
   }
-
-  NpuBandContext transposeCtx = ctx;
-  int64_t elemBytes =
-    std::max<int64_t>(ceilDivInt64(std::max<int64_t>(transposeCtx.transposeElementBits, 1), kBitsPerByte), 1);
-  transposeCtx.axesAlignUnits.back() =
-    std::lcm(transposeCtx.axesAlignUnits.back(), std::max<int64_t>(kUbAlignBytes / elemBytes, 1));
+  size_t outermostTransposeIdx = static_cast<size_t>(outermostTransposeIt - axisMasks.transpose.begin());
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(transposeCtx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
-  for (size_t i = 0; i < static_cast<size_t>(outermostTransposeIdx); ++i) {
+  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  for (size_t i = 0; i < outermostTransposeIdx; ++i) {
     plan.innerTiles[i] = plan.outerTiles[i];
   }
   int64_t ubLimitBytes = getVectorUbBytes(ctx);
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
-  plan.multiVecAxisMask.assign(ctx.axes.size(), false);
-  for (auto i = static_cast<size_t>(outermostTransposeIdx); i < ctx.axes.size(); ++i) {
+  for (size_t i = outermostTransposeIdx; i < ctx.axes.size(); ++i) {
     searchAxisOrder.push_back(i);
-    plan.multiVecAxisMask[i] = true;
   }
-  // NPU vectorization materializes the full suffix starting at the outermost
-  // transpose axis; non-transpose suffix axes participate in UB search with align=1.
-  chooseAlignedTransposeTiles(transposeCtx, plan, searchAxisOrder, ubLimitBytes);
+  chooseAlignedTransposeTiles(ctx, plan, searchAxisOrder, axisMasks.target, axisMasks.transpose, ubLimitBytes);
   return true;
 }
 
@@ -3750,9 +3984,21 @@ SmallVector<size_t, kSmallVectorSizeSix> collectParallelPrefixAxes(const NpuBand
   return axes;
 }
 
+bool isTransposeMultiVecPlan(const NpuBandContext &ctx, const BandTilePlan &plan) {
+  return plan.usesMultiVecScheme && (!ctx.transposeInfos.empty() ||
+                                     llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); }));
+}
+
+int64_t getPlanAxisAlignUnit(const NpuBandContext &ctx, const BandTilePlan &plan, size_t axisIdx) {
+  if (isTransposeMultiVecPlan(ctx, plan)) {
+    return 1;
+  }
+  return axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+}
+
 void alignPlanTiles(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
-    int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+    int64_t alignUnit = getPlanAxisAlignUnit(ctx, plan, i);
     if (alignUnit <= 1 || (i < plan.multiVecAxisMask.size() && !plan.multiVecAxisMask[i])) {
       continue;
     }
@@ -3811,11 +4057,12 @@ bool isParallelPrefixVectorAxis(const NpuBandContext &ctx, const BandTilePlan &p
   return axisIdx + 1 == ctx.axes.size();
 }
 
-int64_t getParallelTileAlignUnit(const NpuBandContext &ctx, size_t axisIdx, bool alignParallelTiles) {
+int64_t getParallelTileAlignUnit(const NpuBandContext &ctx, const BandTilePlan &plan, size_t axisIdx,
+                                 bool alignParallelTiles) {
   if (!alignParallelTiles || axisIdx >= ctx.axesAlignUnits.size()) {
     return 1;
   }
-  return std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1);
+  return getPlanAxisAlignUnit(ctx, plan, axisIdx);
 }
 
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
@@ -3833,13 +4080,13 @@ SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const Np
   parallelAlignUnits.reserve(parallelAxes.size());
   for (size_t axisIdx : parallelAxes) {
     parallelExtents.push_back(std::max<int64_t>(ctx.extents[axisIdx], 1));
-    parallelAlignUnits.push_back(getParallelTileAlignUnit(ctx, axisIdx, alignParallelTiles));
+    parallelAlignUnits.push_back(getParallelTileAlignUnit(ctx, plan, axisIdx, alignParallelTiles));
   }
   SmallVector<unsigned, kSmallVectorSizeFour> outerCaps =
     assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks, preferCoreMultiples);
 
   for (auto [pos, axisIdx] : llvm::enumerate(parallelAxes)) {
-    int64_t alignUnit = getParallelTileAlignUnit(ctx, axisIdx, alignParallelTiles);
+    int64_t alignUnit = getParallelTileAlignUnit(ctx, plan, axisIdx, alignParallelTiles);
     int64_t outerCap = pos < outerCaps.size() ? std::max<int64_t>(outerCaps[pos], 1) : 1;
     plan.outerTiles[axisIdx] = saturateToTileValue(alignUpInt64(outerCap, alignUnit));
   }
@@ -3891,7 +4138,7 @@ void compensateParallelPrefixTaskCount(const NpuBandContext &ctx, BandTilePlan &
     }
 
     int64_t tile = std::max<int64_t>(extent / needBlocks, 1);
-    int64_t alignUnit = getParallelTileAlignUnit(ctx, axisIdx, alignParallelTiles);
+    int64_t alignUnit = getParallelTileAlignUnit(ctx, plan, axisIdx, alignParallelTiles);
     if (alignUnit > 1 && tile > 1) {
       tile = std::max<int64_t>((tile / alignUnit) * alignUnit, 1);
     }

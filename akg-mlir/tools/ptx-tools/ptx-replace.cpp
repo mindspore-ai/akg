@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <sys/stat.h>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -47,6 +48,19 @@ constexpr int kNcFlagArgc = 5;
 constexpr int kNcFlagIndex = 4;
 constexpr int kDynShapeArgc = 6;
 constexpr int kDynShapeIndex = 5;
+
+/// Validate a file path: reject empty paths and paths containing "..".
+bool validateFilePath(const std::string &path, bool check_exist = true) {
+  if (path.empty() || path.find("..") != std::string::npos) {
+    return false;
+  }
+  if (!check_exist) {
+    return true;
+  }
+  std::ifstream f(path);
+  return f.good();
+}
+
 std::vector<std::string> splitString(const std::string &str, char delimiter) {
   std::vector<std::string> tokens;
   std::string token;
@@ -102,57 +116,16 @@ struct VectorizeEmitter {
     if (LdStGlobalCache.size() != vectorizeSize) {
       return "";
     }
-    // We start to analyze each load/store instruction to get the final
-    // vectorized instruction. During this process, we may exit due to
-    // unsupported case.
     std::string instruction;
     std::string dest;
-    // Note that we use map to sort the load/store src in a ascending
     std::map<int, std::string> srcIndex;
     auto isLoad = LdStGlobalCache.front().find("ld.global") != std::string::npos;
     auto destPos = isLoad ? 2 : 1;
     auto srcPos = isLoad ? 1 : -1;
     size_t instPos = 0;
     for (auto it = LdStGlobalCache.cbegin(); it != LdStGlobalCache.cend(); ++it) {
-      std::vector<std::string> result = splitEachLoadStore(*it);
-      if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
+      if (!parseLoadStoreEntry(*it, instruction, dest, srcIndex, instPos, destPos, srcPos)) {
         return "";
-      }
-      if (instruction.empty()) {
-        if (instPos < result.size()) {
-          instruction = result[instPos];
-        } else {
-          return "";
-        }
-      }
-      if (instruction != result[instPos]) {
-        // mismatch instruction
-        return "";
-      }
-      if (dest.empty()) {
-        dest = result[destPos];
-      }
-      if (dest != result[destPos]) {
-        // mismatch dest
-        return "";
-      }
-
-      int offset = -1;
-      if (result.size() == kSplitResultSizeWithoutOffset) {
-        offset = 0;
-      } else if (result.size() == kSplitResultSizeWithOffset) {
-        try {
-          offset = std::stoi(result[destPos + 1]);
-        } catch (const std::exception &e) {
-          // offset is not a number
-          std::cerr << "convert to int error, numStr is " << result[destPos + 1] << std::endl;
-          return "";
-        }
-      }
-      if (srcPos == -1) {
-        srcIndex[offset] = result.back();
-      } else {
-        srcIndex[offset] = result[srcPos];
       }
     }
 
@@ -175,6 +148,51 @@ struct VectorizeEmitter {
   }
 
  private:
+  /// Parse a single load/store entry, updating instruction/dest/srcIndex.
+  /// Returns false if the entry is invalid or mismatches.
+  bool parseLoadStoreEntry(const std::string &entry, std::string &instruction, std::string &dest,
+                           std::map<int, std::string> &srcIndex, size_t instPos, size_t destPos,
+                           int srcPos) const {
+    std::vector<std::string> result = splitEachLoadStore(entry);
+    if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
+      return false;
+    }
+    if (instruction.empty()) {
+      if (instPos < result.size()) {
+        instruction = result[instPos];
+      } else {
+        return false;
+      }
+    }
+    if (instruction != result[instPos]) {
+      return false;
+    }
+    if (dest.empty()) {
+      dest = result[destPos];
+    }
+    if (dest != result[destPos]) {
+      return false;
+    }
+
+    int offset = -1;
+    if (result.size() == kSplitResultSizeWithoutOffset) {
+      offset = 0;
+    } else if (result.size() == kSplitResultSizeWithOffset) {
+      try {
+        offset = std::stoi(result[destPos + 1]);
+      } catch (const std::exception &e) {
+        std::cerr << "convert to int error, numStr is " << result[destPos + 1] << std::endl;
+        return false;
+      }
+    }
+    if (srcPos == -1) {
+      srcIndex[offset] = result.back();
+    } else {
+      srcIndex[offset] = result[srcPos];
+    }
+    return true;
+  }
+
   // currently we only support vectorize length = 4;
   size_t vectorizeSize = 4;
   size_t maxSplitLen = 4;  // "instruction, dest, (offset), src"
@@ -262,6 +280,9 @@ std::vector<int> parseRow(const std::string &rowStr) {
 }
 
 std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) {
+  if (!validateFilePath(filename)) {
+    return {};
+  }
   std::ifstream infile(filename);
   std::string line;
   std::string fileContent;
@@ -391,6 +412,9 @@ void concatPtx(std::string &result, const std::vector<std::string> &vec, const s
 }
 
 void copyFile(const std::string &inputFilename, const std::string &outputFilename) {
+  if (!validateFilePath(inputFilename)) {
+    return;
+  }
   std::ifstream inFile(inputFilename, std::ios::binary);
   std::ofstream outFile(outputFilename, std::ios::binary);
   outFile << inFile.rdbuf();
@@ -563,12 +587,20 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
                     const std::string &outputFilename, const bool &ncFlag, const bool &dynFlag) {
   auto shapeArgs = parse2DArrayFromFile(shapeArgFilename);
 
+  if (!validateFilePath(inputFilename)) {
+    std::cerr << "Invalid input file path: " << inputFilename << "\n";
+    return;
+  }
   std::ifstream inFile(inputFilename);
   if (!inFile) {
     std::cerr << "Failed to open " << inputFilename << " for reading.\n";
     return;
   }
 
+  if (!validateFilePath(outputFilename)) {
+    std::cout << "[ERROR] invalid output file path, replacement exit. the path is '" << outputFilename << "'.\n";
+    return;
+  }
   std::ofstream outFile(outputFilename);
   if (!outFile) {
     std::cerr << "Failed to open " << outputFilename << " for writing.\n";
@@ -651,12 +683,20 @@ int main(int argc, char *argv[]) {
     dynFlag = (dynamicShape == "dynamic_shape");
   }
 
+  if (!validateFilePath(inputFilename)) {
+    std::cout << "[ERROR] invalid input file path, replacement exit. the path is '" << inputFilename << "'.\n";
+    return 0;
+  }
   std::ifstream fInput(inputFilename.c_str());
   if (!fInput.good()) {
     std::cout << "[ERROR] input file is not found, replacement exit. the path is '" << inputFilename << "'.\n";
     return 0;
   }
 
+  if (!validateFilePath(shapeArgFilename)) {
+    copyFile(inputFilename, outputFilename);
+    return 0;
+  }
   std::ifstream fShape(shapeArgFilename.c_str());
   if (!fShape.good()) {
     copyFile(inputFilename, outputFilename);
