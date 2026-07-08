@@ -2023,7 +2023,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
         newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
       }
       if (i == tileNum) {
-        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+        newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
       }
       return;
     }
@@ -2035,7 +2035,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
 
     // For inner point loop: preserve reduction attribute from original loop.
     if (i == tileNum && j == (bandSize - 1)) {
-      newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+      newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
     }
     return;
   }
