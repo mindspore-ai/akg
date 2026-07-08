@@ -175,6 +175,12 @@ bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
   return true;
 }
 
+llvm::SmallVector<int64_t, 4> getAllReductionDims(int64_t inputRank) {
+  llvm::SmallVector<int64_t, 4> dims(inputRank);
+  std::iota(dims.begin(), dims.end(), 0);
+  return dims;
+}
+
 template <typename OpTy>
 FailureOr<llvm::SmallVector<int64_t, 4>> getReductionDims(OpTy op, Value dimsValue, int64_t inputRank,
                                                           ConversionPatternRewriter &rewriter) {
@@ -211,8 +217,7 @@ FailureOr<llvm::SmallVector<int64_t, 4>> getReductionDims(OpTy op, Value dimsVal
   }
 
   if (reduceAll) {
-    dims.resize(inputRank);
-    std::iota(dims.begin(), dims.end(), 0);
+    dims = getAllReductionDims(inputRank);
   }
 
   return dims;
@@ -239,6 +244,36 @@ FailureOr<int64_t> getStaticReductionSize(OpTy op, ArrayRef<int64_t> dims, Ranke
     reductionSize *= dimSize;
   }
   return reductionSize;
+}
+
+template <typename OpTy>
+LogicalResult replaceWithReduceMean(OpTy op, const TypeConverter *typeConverter, Value self, ArrayRef<int64_t> dims,
+                                    bool keepdimValue, ConversionPatternRewriter &rewriter) {
+  auto inType = dyn_cast<RankedTensorType>(self.getType());
+  if (!inType) {
+    return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
+  }
+
+  auto outType = dyn_cast<RankedTensorType>(typeConverter->convertType(op.getType()));
+  if (!outType) {
+    return rewriter.notifyMatchFailure(op, "result type conversion failed");
+  }
+
+  Type resultElementType = outType.getElementType();
+  if (!isa<FloatType>(resultElementType)) {
+    return rewriter.notifyMatchFailure(op, "result element type must be floating point");
+  }
+
+  // Keep the current static-size restriction so reduce_mean can still be
+  // decomposed to reduce_sum + div later in the pipeline.
+  if (failed(getStaticReductionSize(op, dims, inType, rewriter))) {
+    return failure();
+  }
+
+  auto dimsAttr = rewriter.getI64ArrayAttr(dims);
+  auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
+  rewriter.replaceOpWithNewOp<mfuse::ReduceMeanOp>(op, outType, self, dimsAttr, keepdimAttr);
+  return success();
 }
 
 }  // namespace
@@ -516,6 +551,22 @@ struct ConvertAtenExpand : public OpConversionPattern<TorchD::AtenExpandOp> {
   }
 };
 
+struct ConvertAtenMean : public OpConversionPattern<TorchD::AtenMeanOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenMeanOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+    auto inType = dyn_cast<RankedTensorType>(self.getType());
+    if (!inType) {
+      return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
+    }
+
+    llvm::SmallVector<int64_t, 4> dims = getAllReductionDims(inType.getRank());
+    return replaceWithReduceMean(op, getTypeConverter(), self, dims, false, rewriter);
+  }
+};
+
 struct ConvertAtenMeanDim : public OpConversionPattern<TorchD::AtenMeanDimOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -523,7 +574,7 @@ struct ConvertAtenMeanDim : public OpConversionPattern<TorchD::AtenMeanDimOp> {
                                 ConversionPatternRewriter &rewriter) const override {
     Value self = adaptor.getSelf();
     auto inType = dyn_cast<RankedTensorType>(self.getType());
-    if (!inType || !inType.hasRank()) {
+    if (!inType) {
       return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
     }
 
@@ -537,26 +588,7 @@ struct ConvertAtenMeanDim : public OpConversionPattern<TorchD::AtenMeanDimOp> {
       return rewriter.notifyMatchFailure(op, "keepdim must be constant bool");
     }
 
-    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
-    if (!outType) {
-      return rewriter.notifyMatchFailure(op, "result type conversion failed");
-    }
-
-    Type resultElementType = outType.getElementType();
-    if (!isa<FloatType>(resultElementType)) {
-      return rewriter.notifyMatchFailure(op, "result element type must be floating point");
-    }
-
-    // Keep the current static-size restriction so reduce_mean can still be
-    // decomposed to reduce_sum + div later in the pipeline.
-    if (failed(getStaticReductionSize(op, *dimsOr, inType, rewriter))) {
-      return failure();
-    }
-
-    auto dimsAttr = rewriter.getI64ArrayAttr(*dimsOr);
-    auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
-    rewriter.replaceOpWithNewOp<mfuse::ReduceMeanOp>(op, outType, self, dimsAttr, keepdimAttr);
-    return success();
+    return replaceWithReduceMean(op, getTypeConverter(), self, *dimsOr, keepdimValue, rewriter);
   }
 };
 
@@ -585,7 +617,7 @@ struct ConvertAtenVarCorrection : public OpConversionPattern<TorchD::AtenVarCorr
                                 ConversionPatternRewriter &rewriter) const override {
     Value self = adaptor.getSelf();
     auto inType = dyn_cast<RankedTensorType>(self.getType());
-    if (!inType || !inType.hasRank()) {
+    if (!inType) {
       return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
     }
 
@@ -656,7 +688,7 @@ struct ConvertAtenVarMeanCorrection : public OpConversionPattern<TorchD::AtenVar
                                 ConversionPatternRewriter &rewriter) const override {
     Value self = adaptor.getSelf();
     auto inType = dyn_cast<RankedTensorType>(self.getType());
-    if (!inType || !inType.hasRank()) {
+    if (!inType) {
       return rewriter.notifyMatchFailure(op, "input must be ranked tensor");
     }
 
@@ -1059,10 +1091,11 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   patterns.add<ConvertAtenConvolution>(converter, context);
   patterns.add<ConvertAtenExpand>(converter, context);
   patterns.add<ConvertAtenFull>(converter, context);
+  patterns.add<ConvertAtenMean>(converter, context);
+  patterns.add<ConvertAtenMeanDim>(converter, context);
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
-  patterns.add<ConvertAtenMeanDim>(converter, context);
   // aten.permute -> mfuse.permute so fuse-batch-matmul can fold swap-last-two-dims + matmul into trans_x*.
   // (transpose.int is handled by ConvertAtenTransposeInt; graphs that use permute need this too.)
   patterns.add<ConvertAtenPermute>(converter, context);

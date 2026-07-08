@@ -1,5 +1,32 @@
 // RUN: mfusion-opt %s --convert-torch-to-mfuse --convert-torch-symbol-to-mfuse --canonicalize | FileCheck %s
 
+// CHECK-LABEL: func.func @convert_mean_reduce_all_keepdim_false
+// CHECK: %[[MEAN:.*]] = mfuse.reduce_mean %{{.*}} {dimensions = [0, 1, 2], keepdim = false} : (tensor<2x3x4xf32>) -> tensor<f32>
+// CHECK-NOT: torch.aten.mean %
+func.func @convert_mean_reduce_all_keepdim_false(%input: !torch.vtensor<[2,3,4],f32>) -> !torch.vtensor<[],f32> {
+  %none = torch.constant.none
+  %mean = torch.aten.mean %input, %none : !torch.vtensor<[2,3,4],f32>, !torch.none -> !torch.vtensor<[],f32>
+  return %mean : !torch.vtensor<[],f32>
+}
+
+// CHECK-LABEL: func.func @convert_mean_reduce_all_int_input_float_dtype
+// CHECK: %[[MEAN:.*]] = mfuse.reduce_mean %{{.*}} {dimensions = [0, 1], keepdim = false} : (tensor<2x4xsi32>) -> tensor<f32>
+// CHECK-NOT: torch.aten.mean %
+func.func @convert_mean_reduce_all_int_input_float_dtype(%input: !torch.vtensor<[2,4],si32>) -> !torch.vtensor<[],f32> {
+  %dtype = torch.constant.int 6
+  %mean = torch.aten.mean %input, %dtype : !torch.vtensor<[2,4],si32>, !torch.int -> !torch.vtensor<[],f32>
+  return %mean : !torch.vtensor<[],f32>
+}
+
+// CHECK-LABEL: func.func @convert_mean_reduce_all_scalar
+// CHECK: %[[MEAN:.*]] = mfuse.reduce_mean %{{.*}} {dimensions = [], keepdim = false} : (tensor<f32>) -> tensor<f32>
+// CHECK-NOT: torch.aten.mean %
+func.func @convert_mean_reduce_all_scalar(%input: !torch.vtensor<[],f32>) -> !torch.vtensor<[],f32> {
+  %none = torch.constant.none
+  %mean = torch.aten.mean %input, %none : !torch.vtensor<[],f32>, !torch.none -> !torch.vtensor<[],f32>
+  return %mean : !torch.vtensor<[],f32>
+}
+
 // CHECK-LABEL: func.func @convert_mean_suffix_dims_keepdim_true
 // CHECK: %[[MEAN:.*]] = mfuse.reduce_mean %{{.*}} {dimensions = [3, 2], keepdim = true}
 // CHECK-NOT: torch.aten.mean.dim

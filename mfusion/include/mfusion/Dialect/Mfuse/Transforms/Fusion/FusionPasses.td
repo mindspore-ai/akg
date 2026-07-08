@@ -17,6 +17,25 @@
 include "mlir/Pass/PassBase.td"
 
 //===----------------------------------------------------------------------===//
+// CanonicalizeBinaryScalarOperands pass
+//===----------------------------------------------------------------------===//
+
+def CanonicalizeBinaryScalarOperands : Pass<"mfuse-canonicalize-binary-scalar-operands", "::mlir::ModuleOp"> {
+  let summary = "Recover NumToTensor scalar operands feeding binary ops and canonicalize commutative scalar side";
+  let description = [{
+    Recovers mfuse scalar constants from constant -> num_to_tensor -> binary
+    patterns before FuseNumToTensor can materialize them as full tensors. For
+    commutative binary ops, scalar lhs is canonicalized to rhs. Non-commutative
+    ops preserve operand side.
+  }];
+  let constructor = "mlir::mfuse::createCanonicalizeBinaryScalarOperandsPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseAddRmsNorm pass
 //===----------------------------------------------------------------------===//
 
@@ -82,6 +101,27 @@ def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
     into a single mfuse.gelu operator.
   }];
   let constructor = "mlir::mfuse::createFuseGeluPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// FuseLogicalNotCompare pass
+//===----------------------------------------------------------------------===//
+
+def FuseLogicalNotCompare : Pass<"fuse-logical-not-compare", "::mlir::ModuleOp"> {
+  let summary = "Fold logical_not(compare(x, y)) into the opposite comparison";
+  let description = [{
+    Rewrites logical_not over comparison ops into the opposite comparison:
+    eq<->ne always, and gt<->le / ge<->lt only when operands are provably
+    NaN-free. In practice this includes integer/index operands and floating-point
+    constants that can be shown not to contain NaN. External floating-point
+    inputs are left unchanged unless their defining ops prove they are NaN-free,
+    so IEEE 754 NaN semantics are preserved.
+  }];
+  let constructor = "mlir::mfuse::createFuseLogicalNotComparePass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
@@ -157,20 +197,6 @@ def FuseMatmulUnsqueezeSqueeze : Pass<"fuse-matmul-unsqueeze-squeeze", "::mlir::
     mfuse.reshape to emulate unsqueeze before inputs and squeeze after output.
   }];
   let constructor = "mlir::mfuse::createFuseMatmulUnsqueezeSqueezePass()";
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
-def FuseMatmulTransposeWeight : Pass<"fuse-matmul-transpose-weight", "::mlir::ModuleOp"> {
-  let summary = "Insert permute for unaligned MatMul inputs; set trans_x1/trans_x2";
-  let description = [{
-    For MatMulOp, if an input's inner axis (last dim * element size) is not
-    a multiple of 512 bytes, inserts mfuse.permute and sets trans_x1/trans_x2 accordingly.
-    Does not re-match on outputs of its own transformations.
-  }];
-  let constructor = "mlir::mfuse::createFuseMatmulTransposeWeightPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"

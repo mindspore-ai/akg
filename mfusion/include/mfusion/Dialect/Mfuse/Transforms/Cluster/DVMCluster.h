@@ -28,6 +28,9 @@ namespace mlir {
 /// Create a pass to cluster Mfuse operations checked by DVM backend into mfuse.fused.
 std::unique_ptr<Pass> createDVMClusterPass();
 
+/// Create a pass to decompose mfuse.matmul_with_bias before DVM clustering.
+std::unique_ptr<Pass> createDecomposeMatmulWithBiasForDvmClusterPass();
+
 }  // namespace mlir
 
 #endif  // MFUSION_INCLUDE_DIALECT_MFUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_

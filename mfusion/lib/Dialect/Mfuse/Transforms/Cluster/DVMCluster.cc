@@ -39,7 +39,7 @@ namespace mfuse {
 
 namespace {
 constexpr int64_t kMaxDimSize = UINT16_MAX - UINT8_MAX;
-constexpr int64_t kMinDimSize = 512;
+constexpr int64_t kSmallOutputMax = 256;
 constexpr int64_t kReduceSumNonReduceAxisSizeLimit = 100000;
 
 bool isProductOfTwoPrimes(int64_t value) {
@@ -146,15 +146,6 @@ bool hasScalarMarker(Type type) {
   return dictAttr && dictAttr.contains(mfuse::kScalarMarkerAttr);
 }
 
-bool isFiniteScalarConstant(DenseElementsAttr denseAttr) {
-  Type elementType = denseAttr.getElementType();
-  if (!isa<FloatType>(elementType)) {
-    return true;
-  }
-  auto value = *denseAttr.getValues<APFloat>().begin();
-  return !value.isNaN() && !value.isInfinity();
-}
-
 // Keep DVM clusters aligned with the runtime scalar API surface in dvm.h.
 // f64/i64 scalar constants are allowed only when convert-mfuse-to-dvm can
 // safely normalize them to f32/i32; bool scalar constants are not supported.
@@ -165,7 +156,7 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
   }
 
   auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValueAttr());
-  if (!denseAttr || denseAttr.getNumElements() != 1 || !isFiniteScalarConstant(denseAttr)) {
+  if (!denseAttr || denseAttr.getNumElements() != 1) {
     return false;
   }
 
@@ -176,7 +167,7 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
   if (elementType.isF64()) {
     double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
-    return std::isfinite(value) && value >= -kMaxFloat && value <= kMaxFloat;
+    return !std::isfinite(value) || (value >= -kMaxFloat && value <= kMaxFloat);
   }
   if (elementType.isInteger(64)) {
     int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
@@ -209,15 +200,6 @@ bool isDvmSupportedScalarOperand(Value operand) {
     return true;
   }
   return isSafeRankZeroProducer(operand.getDefiningOp());
-}
-
-bool hasUnsupportedRankZeroTensorOperand(Operation *op) {
-  return llvm::any_of(op->getOperands(), [](Value operand) {
-    if (!isRankZeroTensor(operand.getType())) {
-      return false;
-    }
-    return !isSafeRankZeroProducer(operand.getDefiningOp());
-  });
 }
 
 /// DvmSupportChecker - Singleton class for checking DVM operator support.
@@ -268,11 +250,10 @@ class DvmSupportChecker {
     auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
-    auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
+    auto floatOutputCheck = [](Operation *op) { return floatOutputCheckFunc(op); };
+    auto floatIntBoolOutputCheck = [](Operation *op) { return floatIntBoolOutputCheckFunc(op); };
     auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
     auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
-    auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
-    auto fullOpCheck = [](Operation *op) { return fullCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
@@ -280,38 +261,38 @@ class DvmSupportChecker {
     // reduce sum op
     checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    checkFunc_["mfuse.eq"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.ne"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.gt"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.ge"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.lt"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.le"] = {compareCheck, compareInputSupported};
-    checkFunc_["mfuse.is_finite"] = {compareCheck, isFiniteOpCheckFunc};
+    checkFunc_["mfuse.eq"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.ne"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.gt"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.ge"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.lt"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.le"] = {boolOpCheck, compareInputSupported};
+    checkFunc_["mfuse.is_finite"] = {boolOpCheck, isFiniteOpCheckFunc};
     // select op
     checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
-    // int op
-    checkFunc_["mfuse.add"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.sub"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.relu"] = {intOpCheck, inputCheckAll};
+    // float/int output ops
+    checkFunc_["mfuse.add"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.sub"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.relu"] = {floatOutputCheck, inputCheckAll};
     checkFunc_["mfuse.mul"] = {mulOpCheck};
-    checkFunc_["mfuse.maximum"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.neg"] = {intOpCheck, inputCheckAll};
-    checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.div"] = {divOpCheck};
+    checkFunc_["mfuse.maximum"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.minimum"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.neg"] = {floatIntOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.abs"] = {floatIntOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.logical_and"] = {boolOpCheck, boolTensorInputCheck};
     checkFunc_["mfuse.logical_or"] = {boolOpCheck, boolTensorInputCheck};
     checkFunc_["mfuse.logical_not"] = {boolOpCheck, boolTensorInputCheck};
     // Should add Assign check. There is no corresponding op in aten.
-    checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
-    checkFunc_["mfuse.full"] = {fullOpCheck};
+    checkFunc_["mfuse.broadcast_to"] = {floatIntBoolOutputCheck, inputCheckFirst};
+    checkFunc_["mfuse.full"] = {floatIntBoolOutputCheck};
     // slice op
     checkFunc_["mfuse.slice"] = {sliceSupported, inputCheckFirst};
     // Should add StridedSlice check. There is no corresponding op in aten.
     //  matmul op
     checkFunc_["mfuse.matmul"] = {matmulOpCheck, inputCheckAll};
-    checkFunc_["mfuse.batch_matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.grouped_matmul"] = {groupedMatmulOpCheck, inputCheckAll};
-    checkFunc_["mfuse.reshape"] = {reshapeOpCheck};
+    checkFunc_["mfuse.reshape"] = {floatIntOutputCheckFunc, inputCheckFirst};
   }
 
   static bool isCastTypeSupported(Type type) {
@@ -349,14 +330,9 @@ class DvmSupportChecker {
     return true;
   }
 
-  static bool compareCheckFunc(Operation *op) {
-    Type inputType = getElementType(op->getOperand(0).getType());
-    return inputType && isFloatIntType(inputType);
-  }
-
   static bool isFiniteOpCheckFunc(Operation *op) {
     Type inputType = getElementType(op->getOperand(0).getType());
-    return inputType && !inputType.isInteger(32);
+    return inputType && isFloatType(inputType);
   }
 
   static bool selectOpCheck(Operation *op) {
@@ -371,9 +347,19 @@ class DvmSupportChecker {
     return outputType && isFloatType(outputType);
   }
 
-  static bool intOpCheckFunc(Operation *op) {
+  static bool floatIntOutputCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     return outputType && isFloatIntType(outputType);
+  }
+
+  static bool floatOutputCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isFloatType(outputType);
+  }
+
+  static bool floatIntBoolOutputCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && (isFloatIntType(outputType) || isBoolType(outputType));
   }
 
   static bool boolOpCheckFunc(Operation *op) {
@@ -395,13 +381,12 @@ class DvmSupportChecker {
     return true;
   }
 
-  static bool fullCheckFunc(Operation *op) {
-    Type outputType = getElementType(op->getResult(0).getType());
-    return outputType && (isFloatType(outputType) || outputType.isInteger(32) || outputType.isInteger(1));
-  }
-
   static bool mulOpCheck(Operation *op) {
     return mixTypeCheck(op, [](Type type) { return isFloatIntType(type); }, {});
+  }
+
+  static bool divOpCheck(Operation *op) {
+    return mixTypeCheck(op, [](Type type) { return isFloatType(type); }, {});
   }
 
   static bool matmulOpCheck(Operation *op) {
@@ -528,69 +513,56 @@ class DvmSupportChecker {
     return checkDimensionConstraints(op);
   }
 
-  /// Check if largerShape matches smallerShape when ignoring all dimensions of size 1
-  static bool shapesDifferByMultiDimOne(const llvm::ArrayRef<int64_t> largerShape,
-                                        const llvm::ArrayRef<int64_t> smallerShape) {
-    std::vector<int64_t> filterLargerShape;
-    std::copy_if(largerShape.begin(), largerShape.end(), std::back_inserter(filterLargerShape),
-                 [](int64_t dim) { return dim != 1; });
-    std::vector<int64_t> filterSmallerShape;
-    std::copy_if(smallerShape.begin(), smallerShape.end(), std::back_inserter(filterSmallerShape),
-                 [](int64_t dim) { return dim != 1; });
-    return filterLargerShape == filterSmallerShape;
+  static bool isSupportedMatmulRank(RankedTensorType lhsType, RankedTensorType rhsType, RankedTensorType outType) {
+    const int64_t lhsRank = lhsType.getRank();
+    if (lhsRank != rhsType.getRank() || lhsRank != outType.getRank() || (lhsRank != 2 && lhsRank != 3)) {
+      return false;
+    }
+    if (lhsRank == 3 && lhsType.getDimSize(0) != rhsType.getDimSize(0)) {
+      return false;
+    }
+    return true;
   }
 
-  static bool squeezeLikeOpCheck(Operation *op) {
-    auto outputType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-    if (!outputType || !inputType) {
-      return false;
-    }
-
-    const auto &outputShape = outputType.getShape();
-    const auto &inputShape = inputType.getShape();
-    return shapesDifferByMultiDimOne(inputShape, outputShape);
-  }
-
-  static bool reshapeOpCheck(Operation *op) {
-    // Check if this is a reshape from unsqueeze/squeeze
-    if (squeezeLikeOpCheck(op)) {
-      return true;
-    }
-    Value input = op->getOperand(0);
-    Operation *producer = input.getDefiningOp();
-    if (!producer) {
-      return false;
-    }
-    StringRef name = producer->getName().getStringRef();
-    if (name != "mfuse.matmul" && name != "mfuse.batch_matmul" && name != "mfuse.grouped_matmul") {
-      return false;
-    }
-
-    return DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), producer);
+  static bool hasSmallStaticOutput(RankedTensorType type) {
+    const int64_t rank = type.getRank();
+    const int64_t dim0 = type.getDimSize(rank - 2);
+    const int64_t dim1 = type.getDimSize(rank - 1);
+    return dim0 <= kSmallOutputMax && dim1 <= kSmallOutputMax;
   }
 
   /// MatMul shape check helper
   static bool matMulShapeCheck(Operation *op) {
-    auto outputTypeTensor = dyn_cast<TensorType>(op->getResult(0).getType());
-    auto input1TypeTensor = dyn_cast<TensorType>(op->getOperand(0).getType());
-    auto input2TypeTensor = dyn_cast<TensorType>(op->getOperand(1).getType());
+    auto matmulOp = dyn_cast<mfuse::MatmulOp>(op);
+    if (!matmulOp) {
+      return false;
+    }
+
+    auto outputTypeTensor = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    auto input1TypeTensor = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    auto input2TypeTensor = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
 
     // Check tensor types
     if (!outputTypeTensor || !input1TypeTensor || !input2TypeTensor) {
       return false;
     }
-    auto aShape = input1TypeTensor.getShape();
-    auto bShape = input2TypeTensor.getShape();
-    auto cShape = outputTypeTensor.getShape();
-    if (aShape.back() > kMaxDimSize || bShape.back() > kMaxDimSize) {
+    // aten.mm ==> mfuse.matmul(NxK, KxM) = NxM
+    // aten.bmm ==> mfuse.matmul(BxNxK, BxKxM) = BxNxM
+    if (!isSupportedMatmulRank(input1TypeTensor, input2TypeTensor, outputTypeTensor)) {
       return false;
     }
-    if (op->getName().getStringRef() == "mfuse.matmul" && cShape.back() <= kMinDimSize && cShape.size() >= 2 &&
-        cShape[cShape.size() - 2] <= kMinDimSize) {
+
+    const bool transX1 = matmulOp.getTransX1();
+    const bool transX2 = matmulOp.getTransX2();
+    const auto getInnerAxis = [](RankedTensorType type, bool transposed) {
+      return type.getDimSize(type.getRank() - (transposed ? 2 : 1));
+    };
+    const int64_t lhsInnerAxis = getInnerAxis(input1TypeTensor, transX1);
+    const int64_t rhsInnerAxis = getInnerAxis(input2TypeTensor, transX2);
+    if (lhsInnerAxis > kMaxDimSize || rhsInnerAxis > kMaxDimSize) {
       return false;
     }
-    if (op->getName().getStringRef() == "mfuse.batch_matmul" && cShape.size() > 4) {
+    if (hasSmallStaticOutput(outputTypeTensor)) {
       return false;
     }
     return true;
@@ -711,11 +683,17 @@ class DvmSupportChecker {
     if (op->getNumOperands() != 2) {
       return false;
     }
-    Value rhs = op->getOperand(1);
-    if (!isRankZeroTensor(rhs.getType()) && !hasScalarMarker(rhs.getType())) {
-      return true;
+    Type lhsElemType = getElementType(op->getOperand(0).getType());
+    if (!lhsElemType || !isFloatIntType(lhsElemType)) {
+      return false;
     }
-    return isDvmSupportedScalarOperand(rhs);
+
+    Value rhs = op->getOperand(1);
+    if (hasScalarMarker(rhs.getType())) {
+      return isDvmSupportedScalarOperand(rhs);
+    }
+    Type rhsElemType = getElementType(rhs.getType());
+    return rhsElemType && isFloatIntType(rhsElemType);
   }
 
   static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
@@ -745,7 +723,7 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.logical_not", "mfuse.select",       "mfuse.assign",
     "mfuse.reduce_sum",  "mfuse.is_finite",    "mfuse.reshape",
     "mfuse.floor",       "mfuse.ceil",         "mfuse.trunc",
-    "mfuse.matmul",      "mfuse.batch_matmul", "mfuse.grouped_matmul",
+    "mfuse.matmul",      "mfuse.grouped_matmul",
   });
 }
 
@@ -775,11 +753,6 @@ bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList,
 
   if (hasZeroShape(op)) {
     MLOG(DEBUG) << "Op has zero shape: " << opName;
-    return false;
-  }
-
-  if (hasUnsupportedRankZeroTensorOperand(op)) {
-    MLOG(DEBUG) << "Op has unsafe rank-zero tensor operand: " << opName;
     return false;
   }
 
