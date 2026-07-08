@@ -30,23 +30,6 @@ namespace mlir {
 namespace mfuse {
 
 namespace {
-/// Check if constant value is finite based on its type
-bool isFiniteValue(DenseElementsAttr denseAttr) {
-  // Handle dense attributes (tensor constants)
-  // Get element type and check accordingly
-  Type elementType = denseAttr.getElementType();
-  if (isa<FloatType>(elementType)) {
-    // For all floating point types, use APFloat to check if finite
-    auto apfloatValues = denseAttr.getValues<APFloat>();
-    if (!apfloatValues.empty()) {
-      APFloat value = *apfloatValues.begin();
-      return !value.isNaN() && !value.isInfinity();
-    }
-  }
-  // For non-floating point types or if we can't check, consider finite
-  return true;
-}
-
 bool checkForGroupedMatmul(const std::string &opName, DenseElementsAttr denseAttr, size_t idx) {
   // Special case: bool type or grouped_matmul's int64 group_list parameter
   Type elementType = denseAttr.getElementType();
@@ -136,9 +119,9 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
         continue;
       }
 
-      // Check if it's a single-element finite tensor constant
+      // Check if it's a single-element tensor constant
       auto denseAttr = dyn_cast<DenseElementsAttr>(valueAttr);
-      if (!denseAttr || denseAttr.getNumElements() != 1 || !isFiniteValue(denseAttr)) {
+      if (!denseAttr || denseAttr.getNumElements() != 1) {
         continue;
       }
 
@@ -148,7 +131,7 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
 
       // Include it in the cluster
       MLOG(DEBUG) << "Constant at index " << idx << " for " << opName
-                  << " is single-element finite value, keeping in cluster";
+                  << " is single-element value, keeping in cluster";
       constantsToCluster.insert(defOp);
     }
   }

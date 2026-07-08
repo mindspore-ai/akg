@@ -111,10 +111,14 @@ class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse
   }
 };
 
-/// Converts mfuse.aclnn.batch_matmul -> torch.aten.bmm/matmul, materializing transpose flags as permutes.
+/// Converts mfuse.aclnn.batch_matmul -> torch.aten.bmm/matmul.
+/// DVM copied subgraph functions preserve trans_x1/trans_x2 as dvm_trans_a/dvm_trans_b attrs;
+/// other contexts materialize transpose flags as explicit torch.aten.permute ops.
 class ConvertMfuseAclnnBatchMatmul : public mlir::OpConversionPattern<mlir::mfuse::AclnnBatchMatmulOp> {
  public:
-  using OpConversionPattern::OpConversionPattern;
+  ConvertMfuseAclnnBatchMatmul(mlir::TypeConverter &converter, mlir::MLIRContext *context,
+                               llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, context), kernelGenerator_(kernelGenerator.str()) {}
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnBatchMatmulOp op, OpAdaptor adaptor,
                                       mlir::ConversionPatternRewriter &rewriter) const override {
@@ -125,8 +129,20 @@ class ConvertMfuseAclnnBatchMatmul : public mlir::OpConversionPattern<mlir::mfus
       return mlir::failure();
     }
 
+    // In DVM copied subgraphs, keep batch_matmul transpose semantics on the
+    // lowered torch op instead of materializing explicit permutes. These
+    // clustered kernels are rank-3 batch matmuls, so lower them to aten.bmm
+    // and preserve trans_x1/trans_x2 as dvm_trans_a/dvm_trans_b.
     mlir::Location loc = op.getLoc();
-    bool useBmm = areRank3ValueTensors(self, mat2);
+    bool dvm = isDvmKernelGenerator(kernelGenerator_);
+    if (dvm && isInsideDvmCopiedSubgraph(op)) {
+      Operation *newOp = rewriter.create<TorchD::AtenBmmOp>(loc, resultType, self, mat2).getOperation();
+      newOp->setAttr("dvm_trans_a", rewriter.getBoolAttr(op.getTransX1()));
+      newOp->setAttr("dvm_trans_b", rewriter.getBoolAttr(op.getTransX2()));
+      rewriter.replaceOp(op, newOp->getResults());
+      return mlir::success();
+    }
+
     if (op.getTransX1()) {
       auto permOr = buildSwapLastTwoDimsPermute(loc, self, rewriter);
       if (mlir::failed(permOr)) {
@@ -142,6 +158,7 @@ class ConvertMfuseAclnnBatchMatmul : public mlir::OpConversionPattern<mlir::mfus
       mat2 = *permOr;
     }
 
+    bool useBmm = areRank3ValueTensors(self, mat2);
     if (useBmm) {
       rewriter.replaceOpWithNewOp<TorchD::AtenBmmOp>(op, resultType, self, mat2);
     } else {
@@ -149,6 +166,9 @@ class ConvertMfuseAclnnBatchMatmul : public mlir::OpConversionPattern<mlir::mfus
     }
     return mlir::success();
   }
+
+ private:
+  std::string kernelGenerator_;
 };
 
 /// Converts mfuse.aclnn.batch_norm -> torch.aten.batch_norm (same operand order as Torch-MLIR).
@@ -497,7 +517,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
-  patterns.add<ConvertMfuseAclnnBatchMatmul>(converter, context);
+  patterns.add<ConvertMfuseAclnnBatchMatmul>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnBatchNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);

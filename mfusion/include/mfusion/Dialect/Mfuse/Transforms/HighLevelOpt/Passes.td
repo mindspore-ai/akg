@@ -61,20 +61,4 @@ def PromoteBinaryOpsPass : Pass<"mfuse-promote-binary-ops", "::mlir::ModuleOp"> 
   let constructor = "mlir::mfuse::createPromoteBinaryOpsPass()";
 }
 
-
-def FoldRedundantMatmulTransposePass : Pass<"mfuse-fold-redundant-matmul-transpose", "::mlir::ModuleOp"> {
-  let summary = "Fold redundant matmul transpose pairs";
-  let description = [{
-    This pass runs after fused subgraphs have been lowered to custom calls. It removes immediately
-    adjacent swap-last-two mfuse.permute operations that are paired with trans_x=true on
-    matmul-like operations. Copied DVM subgraph functions are left untouched so their trans_x
-    metadata can still be consumed by DVM codegen.
-  }];
-  let constructor = "mlir::mfuse::createFoldRedundantMatmulTransposePass()";
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
 #endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_HIGH_LEVEL_OPT_PASSES_TD

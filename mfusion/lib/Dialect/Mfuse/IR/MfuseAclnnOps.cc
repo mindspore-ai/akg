@@ -60,7 +60,7 @@ mlir::LogicalResult AclnnVarOp::verify() {
     return emitOpError("result element type must be floating point");
   }
 
-  auto correction = getCorrection();
+  int64_t correction = getCorrectionAttr().getValue().getSExtValue();
   if (correction < 0) {
     return emitOpError("correction must be non-negative, got ") << correction;
   }
@@ -103,7 +103,7 @@ mlir::LogicalResult AclnnVarMeanOp::verify() {
     return emitOpError("result element types must be floating point");
   }
 
-  auto correction = getCorrection();
+  int64_t correction = getCorrectionAttr().getValue().getSExtValue();
   if (correction < 0) {
     return emitOpError("correction must be non-negative, got ") << correction;
   }

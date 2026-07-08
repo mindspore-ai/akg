@@ -39,6 +39,26 @@ func.func @test_logical_not_and(%arg0: tensor<4x4xi1>, %arg1: tensor<4x4xi1>) ->
   return %1 : tensor<4x4xi1>
 }
 
+// Test scenario: eq followed by logical_not clusters with a non-finite
+// rank-0 f64 scalar constant.
+// CHECK-LABEL: func @test_eq_logical_not_with_non_finite_scalar
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x12x512x512xf32>) -> tensor<4x12x512x512xi1>
+// CHECK: ^bb0(%[[ARG1:.*]]: tensor<4x12x512x512xf32>):
+// CHECK: %[[CST:.*]] = mfuse.constant dense<0xFFF0000000000000> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[EQ:.*]] = mfuse.eq %[[ARG1]], %[[CST]]
+// CHECK: %[[NOT:.*]] = mfuse.logical_not %[[EQ]]
+// CHECK: mfuse.yield %[[NOT]]
+// CHECK: return %[[FUSED]]
+func.func @test_eq_logical_not_with_non_finite_scalar(
+    %arg0: tensor<4x12x512x512xf32>) -> tensor<4x12x512x512xi1> {
+  %0 = mfuse.constant dense<0xFFF0000000000000> : tensor<f64, {is_scalar = ""}>
+  %1 = mfuse.eq %arg0, %0 : (tensor<4x12x512x512xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x12x512x512xi1>
+  %2 = mfuse.logical_not %1 : (tensor<4x12x512x512xi1>) -> tensor<4x12x512x512xi1>
+  return %2 : tensor<4x12x512x512xi1>
+}
+
 // Non-bool logical ops should still be rejected by DVM cluster.
 // CHECK-LABEL: func @test_logical_and_non_bool_not_clustered
 // CHECK-NOT: mfuse.fused
