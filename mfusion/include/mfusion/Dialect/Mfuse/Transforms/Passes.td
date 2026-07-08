@@ -107,25 +107,6 @@ def DVMCluster : Pass<"mfuse-dvm-cluster", "::mlir::func::FuncOp"> {
   ];
 }
 
-def DecomposeMatmulWithBiasForDvmCluster
-    : Pass<"mfuse-decompose-matmul-with-bias-for-dvm-cluster", "::mlir::func::FuncOp"> {
-  let summary = "Decompose mfuse.matmul_with_bias before DVM clustering";
-
-  let description = [{
-    This pass decomposes residual mfuse.matmul_with_bias operations into
-    mfuse.matmul and mfuse.add before DVM clustering. It keeps matmul transpose
-    attributes on the new mfuse.matmul and lets the existing DVM cluster
-    legality checks decide whether each primitive operation is clusterable.
-  }];
-
-  let constructor = "mlir::createDecomposeMatmulWithBiasForDvmClusterPass()";
-
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
 def BishengCluster : Pass<"mfuse-bisheng-cluster", "::mlir::func::FuncOp"> {
   let summary = "Cluster Mfuse operations checked by Bisheng backend into mfuse.fused";
 

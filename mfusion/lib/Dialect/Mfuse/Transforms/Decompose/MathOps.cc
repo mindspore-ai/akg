@@ -335,6 +335,26 @@ class ReduceMeanDecomposePattern : public OpRewritePattern<mfuse::ReduceMeanOp> 
   }
 };
 
+/// OpRewritePattern for decomposing MatmulWithBias into matmul + add
+class MatMulWithBiasDecomposePattern : public OpRewritePattern<mfuse::MatmulWithBiasOp> {
+ public:
+  using OpRewritePattern<mfuse::MatmulWithBiasOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mfuse::MatmulWithBiasOp op, PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value self = op.getSelf();
+    Value other = op.getOther();
+    Value bias = op.getBias();
+    Type resultType = op.getResult().getType();
+
+    auto matmulResult = rewriter.create<mfuse::MatmulOp>(loc, resultType, self, other,
+                                                         op.getTransX1Attr(), op.getTransX2Attr());
+    auto addResult = rewriter.create<mfuse::AddOp>(loc, resultType, matmulResult.getResult(), bias);
+    rewriter.replaceOp(op, addResult.getResult());
+    return success();
+  }
+};
+
 /// Populate the given pattern set with decompose patterns.
 /// This function registers decompose patterns based on the provided op list.
 void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList) {
@@ -347,7 +367,8 @@ void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vec
     {"gelubackward", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluBackwardDecomposePattern>(c); }},
     {"reducemean", [](RewritePatternSet &p, MLIRContext *c) { p.add<ReduceMeanDecomposePattern>(c); }},
     {"tanh", [](RewritePatternSet &p, MLIRContext *c) { p.add<TanhDecomposePattern>(c); }},
-    {"sigmoid", [](RewritePatternSet &p, MLIRContext *c) { p.add<SigmoidDecomposePattern>(c); }}};
+    {"sigmoid", [](RewritePatternSet &p, MLIRContext *c) { p.add<SigmoidDecomposePattern>(c); }},
+    {"matmulwithbias", [](RewritePatternSet &p, MLIRContext *c) { p.add<MatMulWithBiasDecomposePattern>(c); }}};
 
   // Register patterns using the common function
   registerPatternsByOpList(patterns, ctx, patternMap, opList);
