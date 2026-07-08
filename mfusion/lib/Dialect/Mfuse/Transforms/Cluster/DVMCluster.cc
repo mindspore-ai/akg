@@ -39,7 +39,7 @@ namespace mfuse {
 
 namespace {
 constexpr int64_t kMaxDimSize = UINT16_MAX - UINT8_MAX;
-constexpr int64_t kMinDimSize = 512;
+constexpr int64_t kSmallOutputMax = 256;
 constexpr int64_t kReduceSumNonReduceAxisSizeLimit = 100000;
 
 bool isProductOfTwoPrimes(int64_t value) {
@@ -291,7 +291,6 @@ class DvmSupportChecker {
     // Should add StridedSlice check. There is no corresponding op in aten.
     //  matmul op
     checkFunc_["mfuse.matmul"] = {matmulOpCheck, inputCheckAll};
-    checkFunc_["mfuse.batch_matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.grouped_matmul"] = {groupedMatmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.reshape"] = {floatIntOutputCheckFunc, inputCheckFirst};
   }
@@ -514,27 +513,56 @@ class DvmSupportChecker {
     return checkDimensionConstraints(op);
   }
 
+  static bool isSupportedMatmulRank(RankedTensorType lhsType, RankedTensorType rhsType, RankedTensorType outType) {
+    const int64_t lhsRank = lhsType.getRank();
+    if (lhsRank != rhsType.getRank() || lhsRank != outType.getRank() || (lhsRank != 2 && lhsRank != 3)) {
+      return false;
+    }
+    if (lhsRank == 3 && lhsType.getDimSize(0) != rhsType.getDimSize(0)) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool hasSmallStaticOutput(RankedTensorType type) {
+    const int64_t rank = type.getRank();
+    const int64_t dim0 = type.getDimSize(rank - 2);
+    const int64_t dim1 = type.getDimSize(rank - 1);
+    return dim0 <= kSmallOutputMax && dim1 <= kSmallOutputMax;
+  }
+
   /// MatMul shape check helper
   static bool matMulShapeCheck(Operation *op) {
-    auto outputTypeTensor = dyn_cast<TensorType>(op->getResult(0).getType());
-    auto input1TypeTensor = dyn_cast<TensorType>(op->getOperand(0).getType());
-    auto input2TypeTensor = dyn_cast<TensorType>(op->getOperand(1).getType());
+    auto matmulOp = dyn_cast<mfuse::MatmulOp>(op);
+    if (!matmulOp) {
+      return false;
+    }
+
+    auto outputTypeTensor = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    auto input1TypeTensor = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    auto input2TypeTensor = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
 
     // Check tensor types
     if (!outputTypeTensor || !input1TypeTensor || !input2TypeTensor) {
       return false;
     }
-    auto aShape = input1TypeTensor.getShape();
-    auto bShape = input2TypeTensor.getShape();
-    auto cShape = outputTypeTensor.getShape();
-    if (aShape.back() > kMaxDimSize || bShape.back() > kMaxDimSize) {
+    // aten.mm ==> mfuse.matmul(NxK, KxM) = NxM
+    // aten.bmm ==> mfuse.matmul(BxNxK, BxKxM) = BxNxM
+    if (!isSupportedMatmulRank(input1TypeTensor, input2TypeTensor, outputTypeTensor)) {
       return false;
     }
-    if (op->getName().getStringRef() == "mfuse.matmul" && cShape.back() <= kMinDimSize && cShape.size() >= 2 &&
-        cShape[cShape.size() - 2] <= kMinDimSize) {
+
+    const bool transX1 = matmulOp.getTransX1();
+    const bool transX2 = matmulOp.getTransX2();
+    const auto getInnerAxis = [](RankedTensorType type, bool transposed) {
+      return type.getDimSize(type.getRank() - (transposed ? 2 : 1));
+    };
+    const int64_t lhsInnerAxis = getInnerAxis(input1TypeTensor, transX1);
+    const int64_t rhsInnerAxis = getInnerAxis(input2TypeTensor, transX2);
+    if (lhsInnerAxis > kMaxDimSize || rhsInnerAxis > kMaxDimSize) {
       return false;
     }
-    if (op->getName().getStringRef() == "mfuse.batch_matmul" && cShape.size() > 4) {
+    if (hasSmallStaticOutput(outputTypeTensor)) {
       return false;
     }
     return true;
@@ -695,7 +723,7 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.logical_not", "mfuse.select",       "mfuse.assign",
     "mfuse.reduce_sum",  "mfuse.is_finite",    "mfuse.reshape",
     "mfuse.floor",       "mfuse.ceil",         "mfuse.trunc",
-    "mfuse.matmul",      "mfuse.batch_matmul", "mfuse.grouped_matmul",
+    "mfuse.matmul",      "mfuse.grouped_matmul",
   });
 }
 
