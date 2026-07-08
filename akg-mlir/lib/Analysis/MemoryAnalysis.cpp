@@ -1319,6 +1319,9 @@ static void inferDimLoopIndices(Operation *MemrefOp, int64_t memrefRank,
 
 static int64_t DimLoopIndexToBound(int64_t loopIndex, ArrayRef<scf::ForOp> orderedForOps,
                                    const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop) {
+  if (loopIndex < 0) {
+    return -loopIndex;
+  }
   if (loopIndex <= 0 || loopIndex > static_cast<int64_t>(orderedForOps.size())) {
     return 1;
   }
@@ -1346,6 +1349,16 @@ static int64_t lastAxis32ByteAlignElems(Type elementType) {
     return 1;
   }
   return 256 / static_cast<int64_t>(bitWidth);
+}
+
+static bool forLoopTileSizeIsZero(int64_t loopIndex, ArrayRef<scf::ForOp> orderedForOps,
+                                  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop) {
+  if (loopIndex <= 0 || loopIndex > static_cast<int64_t>(orderedForOps.size())) {
+    return false;
+  }
+  scf::ForOp forOp = orderedForOps[static_cast<size_t>(loopIndex - 1)];
+  auto it = tileUpperBoundPerLoop.find(forOp);
+  return it == tileUpperBoundPerLoop.end() || it->second <= 1;
 }
 
 static int64_t TotalBitsFromDimLoopIndicesInBroadcast(ArrayRef<int64_t> dimLoopIndices, Type elementType,
@@ -1939,6 +1952,13 @@ void MemoryPeakEstimator::InferOutputBufferShape_(BufferInfo &outputBufferInfo, 
     SmallVector<int64_t, 8> dimLoopIndices;
     inferDimLoopIndices(op, memTy.getRank(), forOpToIndex_, dimLoopIndices);
     outputBufferInfo.dimLoopIndices.assign(dimLoopIndices.begin(), dimLoopIndices.end());
+    if (isa<memref::LoadOp>(op) && !dimLoopIndices.empty()) {
+      const int64_t lastLoop = dimLoopIndices.back();
+      if (forLoopTileSizeIsZero(lastLoop, orderedForOps_, input_.tileUpperBoundPerLoop)) {
+        const Type elemTy = outputBufferInfo.elementType ? outputBufferInfo.elementType : memTy.getElementType();
+        outputBufferInfo.dimLoopIndices.push_back(-lastAxis32ByteAlignElems(elemTy));
+      }
+    }
     if (dimLoopIndices.empty()) {
       outputBufferInfo.isScalar = true;
     }

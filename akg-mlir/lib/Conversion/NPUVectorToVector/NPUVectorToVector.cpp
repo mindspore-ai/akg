@@ -703,6 +703,24 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     int64_t rank = vt.getRank();
     unsigned numDyn = vt.getNumDynamicDims();
 
+    // An extract_slice narrows the iteration to its sub-tile: the per-dim bound
+    // of the result is the slice size of the corresponding kept source dim.
+    if (auto es = anchorVal.getDefiningOp<npuv::ExtractSliceOp>()) {
+      ArrayRef<int64_t> keep = es.getKeepDims();
+      ValueRange sizes = es.getSizes();
+      if (static_cast<int64_t>(keep.size()) != rank) {
+        return failure();
+      }
+      for (int64_t r = 0; r < rank; ++r) {
+        int64_t sd = keep[r];
+        if (sd < 0 || sd >= static_cast<int64_t>(sizes.size())) {
+          return failure();
+        }
+        bounds.push_back(sizes[sd]);
+      }
+      return success();
+    }
+
     SmallVector<Value> dynSizes;
     Value source;
     if (auto rd = anchorVal.getDefiningOp<npuv::TransferReadOp>()) {
@@ -768,10 +786,27 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
         }
       }
     };
+    // A slice constrains the iteration to its sub-tile. Fill the sliced dims
+    // from the extract_slice sizes first so a full-tile transfer_read (which
+    // spans the padded, unsliced extent) cannot claim them with the wrong bound.
+    auto feedsExtractSlice = [](Value v) {
+      return llvm::any_of(v.getUsers(), [](Operation *u) { return isa<npuv::ExtractSliceOp>(u); });
+    };
+    for (Operation &op : entry) {
+      if (auto es = dyn_cast<npuv::ExtractSliceOp>(&op)) {
+        tryFill(es.getResult());
+      }
+    }
     for (Operation &op : entry) {
       if (auto rd = dyn_cast<npuv::TransferReadOp>(&op)) {
+        if (feedsExtractSlice(rd.getResult())) {
+          continue;
+        }
         tryFill(rd.getResult());
       } else if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
+        if (wr.getVector().getDefiningOp<npuv::InsertSliceOp>()) {
+          continue;
+        }
         tryFill(wr.getVector());
       }
     }
@@ -803,6 +838,12 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     }
     if (auto red = dyn_cast<npuv::ReductionOp>(op)) {
       return relaxReduction(red, dimMap, known, setMap) || changed;
+    }
+    if (auto es = dyn_cast<npuv::ExtractSliceOp>(op)) {
+      return relaxExtractSlice(es, dimMap, known, setMap) || changed;
+    }
+    if (auto is = dyn_cast<npuv::InsertSliceOp>(op)) {
+      return relaxInsertSlice(is, dimMap, known, setMap) || changed;
     }
     // Transfer writes are seeded separately and transfer-read result maps are
     // learned from consumers; neither has anything to relax here.
@@ -912,6 +953,23 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     } else {
       reduced.assign(srcRank, true);
     }
+    // Derive the (rank-reduced) result map from a known source: the result
+    // keeps every non-reduced source dim in order. This is the direction used
+    // by partial reductions that reduce the register axis and keep an outer
+    // axis (the kept axis is not the trailing loop dim).
+    if (isNpuVectorType(red.getDest().getType()) && known(red.getVector()) && !known(red.getDest())) {
+      SmallVector<int64_t> srcMap = dimMap.find(red.getVector())->second;
+      if (static_cast<int64_t>(srcMap.size()) == srcRank) {
+        SmallVector<int64_t> destMap;
+        for (int64_t d = 0; d < srcRank; ++d) {
+          if (!reduced[d]) {
+            destMap.push_back(srcMap[d]);
+          }
+        }
+        setMap(red.getDest(), destMap);
+      }
+    }
+
     SmallVector<int64_t> resMap;
     if (isNpuVectorType(red.getDest().getType()) && known(red.getDest())) {
       resMap = dimMap.find(red.getDest())->second;
@@ -933,6 +991,96 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     }
     setMap(red.getVector(), srcMap);
     return true;
+  }
+
+  // Relaxation helper for `npuv::ExtractSliceOp`. Result dim `r` is projected
+  // from source dim `keep_dims[r]`; dropped (rank-reduced) source dims are
+  // size-1 and never carry the register axis, so they get the sentinel -1.
+  static bool relaxExtractSlice(npuv::ExtractSliceOp es, DimMap &dimMap, const std::function<bool(Value)> &known,
+                                const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    ArrayRef<int64_t> keep = es.getKeepDims();
+    int64_t srcRank = npuVectorRank(es.getSource().getType());
+    if (known(es.getSource()) && !known(es.getResult())) {
+      SmallVector<int64_t> srcMap = dimMap.find(es.getSource())->second;
+      SmallVector<int64_t> resMap;
+      for (int64_t r = 0; r < static_cast<int64_t>(keep.size()); ++r) {
+        int64_t sd = keep[r];
+        resMap.push_back((sd >= 0 && sd < static_cast<int64_t>(srcMap.size())) ? srcMap[sd] : -1);
+      }
+      setMap(es.getResult(), resMap);
+    }
+    if (known(es.getResult()) && !known(es.getSource())) {
+      SmallVector<int64_t> resMap = dimMap.find(es.getResult())->second;
+      SmallVector<int64_t> srcMap(srcRank, -1);
+      for (int64_t r = 0; r < static_cast<int64_t>(keep.size()) && r < static_cast<int64_t>(resMap.size()); ++r) {
+        int64_t sd = keep[r];
+        if (sd >= 0 && sd < srcRank) {
+          srcMap[sd] = resMap[r];
+        }
+      }
+      setMap(es.getSource(), srcMap);
+    }
+    return true;
+  }
+
+  // Relaxation helper for `npuv::InsertSliceOp`. The result type equals the
+  // destination type, so they share a map; the inserted source (same rank as
+  // the slice) maps onto the same loop dims.
+  static bool relaxInsertSlice(npuv::InsertSliceOp is, DimMap &dimMap, const std::function<bool(Value)> &known,
+                               const std::function<void(Value, ArrayRef<int64_t>)> &setMap) {
+    if (known(is.getDest()) && !known(is.getResult())) {
+      SmallVector<int64_t> destMap = dimMap.find(is.getDest())->second;
+      setMap(is.getResult(), destMap);
+    }
+    if (known(is.getResult()) && !known(is.getDest())) {
+      SmallVector<int64_t> resMap = dimMap.find(is.getResult())->second;
+      setMap(is.getDest(), resMap);
+    }
+    Value ref;
+    if (known(is.getResult())) {
+      ref = is.getResult();
+    } else if (known(is.getDest())) {
+      ref = is.getDest();
+    }
+    if (ref && !known(is.getSource())) {
+      SmallVector<int64_t> refMap = dimMap.find(ref)->second;
+      if (npuVectorRank(is.getSource().getType()) == static_cast<int64_t>(refMap.size())) {
+        setMap(is.getSource(), refMap);
+      }
+    }
+    return true;
+  }
+
+  // True when `v` is a reduction result, or is computed from one only through
+  // rank-preserving ops (elementwise arith/math, npuvector casts, cmp/select).
+  // The walk stops at broadcast / transpose / transfer_read, which (re)build a
+  // full-grid or register-row shape and therefore break the "per-row scalar"
+  // chain (a broadcast of a reduced scalar back across the row stays reg-tiled).
+  static bool isReductionDerived(Value v) {
+    SmallVector<Value> work{v};
+    llvm::DenseSet<Value> seen;
+    while (!work.empty()) {
+      Value cur = work.pop_back_val();
+      if (!seen.insert(cur).second) {
+        continue;
+      }
+      Operation *def = cur.getDefiningOp();
+      if (!def) {
+        continue;
+      }
+      if (isa<npuv::ReductionOp>(def)) {
+        return true;
+      }
+      if (isa<npuv::BroadcastOp, npuv::TransposeOp, npuv::TransferReadOp>(def)) {
+        continue;
+      }
+      for (Value o : def->getOperands()) {
+        if (isNpuVectorType(o.getType())) {
+          work.push_back(o);
+        }
+      }
+    }
+    return false;
   }
 
   // Compute dimMap for every non-unit npuvector value in the kernel.
@@ -965,6 +1113,16 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     for (Operation &op : entry) {
       if (auto wr = dyn_cast<npuv::TransferWriteOp>(&op)) {
         Value v = wr.getVector();
+        // A reduction result (possibly followed by rank-preserving casts /
+        // elementwise ops) is not identity-aligned to the trailing loop dims:
+        // it keeps only the non-reduced axes. Leave it unseeded so relaxation
+        // derives the correct (kept-dim) map from the reduction source instead.
+        // A broadcast re-expands a reduced scalar back to the register row, so
+        // isReductionDerived deliberately stops at broadcasts (that write stays
+        // reg-tiled and is seeded normally).
+        if (isReductionDerived(v)) {
+          continue;
+        }
         if (isNpuVectorType(v.getType()) && !unitVals.count(v) && !dimMap.count(v)) {
           dimMap[v] = identityFor(npuVectorRank(v.getType()));
         }
@@ -1114,6 +1272,12 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       map.map(sel.getResult(), res);
       return success();
     }
+    if (auto es = dyn_cast<npuv::ExtractSliceOp>(op)) {
+      return emitTiledExtractSlice(b, es, map, ctx);
+    }
+    if (auto is = dyn_cast<npuv::InsertSliceOp>(op)) {
+      return emitTiledInsertSlice(b, is, map, ctx);
+    }
     if (succeeded(emitTiledUnaryCast(b, op, map, ctx))) {
       return success();
     }
@@ -1232,6 +1396,46 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     Value res = b.create<vector::BroadcastOp>(loc, vecTy, srcVal);
     map.map(bc.getResult(), res);
     return success();
+  }
+
+  // `emitTiledOp` helper: lower a `npuv::ExtractSliceOp`.
+  //
+  // Inside the register-tiled loop the slice degenerates to a passthrough of
+  // the (already register-sized) source tile: the loop bounds were derived from
+  // the slice sizes, so the induction variables already walk exactly the slice
+  // region. This is only valid when every offset is zero (unit strides); a
+  // non-zero offset would shift the loaded region and is rejected so we never
+  // silently miscompile.
+  LogicalResult emitTiledExtractSlice(OpBuilder &b, npuv::ExtractSliceOp es, IRMapping &map, const TileCtx &ctx) const {
+    if (!allZeroOffsets(es.getOffsets()) || !allUnitStrides(es.getStrides())) {
+      return es.emitError("npuvector-to-vector: only zero-offset unit-stride extract_slice is supported in a "
+                          "tileable kernel");
+    }
+    map.map(es.getResult(), map.lookupOrDefault(es.getSource()));
+    return success();
+  }
+
+  // `emitTiledOp` helper: lower a `npuv::InsertSliceOp`. Same reasoning as
+  // extract_slice: the surrounding transfer_write walks exactly the slice
+  // region, so the register tile of the inserted source passes straight through.
+  LogicalResult emitTiledInsertSlice(OpBuilder &b, npuv::InsertSliceOp is, IRMapping &map, const TileCtx &ctx) const {
+    if (!allZeroOffsets(is.getOffsets()) || !allUnitStrides(is.getStrides())) {
+      return is.emitError("npuvector-to-vector: only zero-offset unit-stride insert_slice is supported in a "
+                          "tileable kernel");
+    }
+    map.map(is.getResult(), map.lookupOrDefault(is.getSource()));
+    return success();
+  }
+
+  static bool allZeroOffsets(ValueRange offsets) {
+    return llvm::all_of(offsets, [](Value v) { return isConstantZeroIndex(v); });
+  }
+
+  static bool allUnitStrides(ValueRange strides) {
+    return llvm::all_of(strides, [](Value v) {
+      auto c = getConstantIndex(v);
+      return c && *c == 1;
+    });
   }
 
   LogicalResult emitTiledUnaryCast(OpBuilder &b, Operation *op, IRMapping &map, const TileCtx &ctx) const {
@@ -1355,6 +1559,88 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
   }
 
   // =========================================================================
+  // Shared register-tiled loop-nest emitter.
+  //
+  // Builds the outer loop nest (one step-1 loop per non-register dim) and splits
+  // the innermost (register) dim into an aligned main loop and a masked tail
+  // loop via `planRegSplit`. The tail loop masks its lanes to the (dynamic or
+  // static) remainder so out-of-range lanes are never read, computed on, or
+  // written back -- this is what keeps a kernel whose live extent is a dynamic
+  // (e.g. `affine.min`) or otherwise unaligned length from pulling in padding
+  // garbage. For a statically lane-aligned extent the tail is elided and the
+  // main loop lowers byte-identically to the historical unmasked form.
+  //
+  // Each inner loop gets a fresh op map seeded with the loop-invariant unit
+  // values so the two halves never share (register-specific) mappings.
+  // =========================================================================
+  LogicalResult emitSplitTiledLoopNest(OpBuilder &builder, Location loc, ArrayRef<Value> bounds,
+                                       ArrayRef<Operation *> computeOps, ArrayRef<Operation *> unitEmitted,
+                                       IRMapping &unitMap, const TileCtx &unitCtx) const {
+    int64_t R = unitCtx.loopRank;
+    int64_t lanes = unitCtx.laneCount;
+    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
+
+    // Outer loop nest over the non-register dims (step 1).
+    SmallVector<Value> outerIvs;
+    OpBuilder body = builder;
+    for (int64_t d = 0; d < R - 1; ++d) {
+      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
+      outerIvs.push_back(forOp.getInductionVar());
+      body = OpBuilder::atBlockBegin(forOp.getBody());
+    }
+
+    Value bound = bounds[R - 1];
+    auto emitInner = [&](OpBuilder &ib, Value lbv, Value ubv, bool masked) -> LogicalResult {
+      auto innerFor = ib.create<scf::ForOp>(loc, lbv, ubv, cLane);
+      Value regIv = innerFor.getInductionVar();
+      OpBuilder lb = OpBuilder::atBlockBegin(innerFor.getBody());
+
+      SmallVector<Value> ivs(outerIvs.begin(), outerIvs.end());
+      ivs.push_back(regIv);
+
+      // Fresh op map per inner loop, seeded with the loop-invariant unit values.
+      IRMapping innerMap;
+      for (Operation *u : unitEmitted) {
+        for (Value r : u->getResults()) {
+          if (Value mapped = unitMap.lookupOrDefault(r); mapped != r) {
+            innerMap.map(r, mapped);
+          }
+        }
+      }
+      TileCtx ctx = unitCtx;
+      ctx.ivs = ivs;
+      if (masked) {
+        ctx.mask = tailRegMask(lb, loc, bound, regIv, lanes);
+      }
+      for (Operation *op : computeOps) {
+        if (llvm::is_contained(unitEmitted, op)) {
+          continue;
+        }
+        if (failed(emitTiledOp(lb, op, innerMap, ctx))) {
+          return failure();
+        }
+      }
+      return success();
+    };
+
+    RegSplit split = planRegSplit(body, loc, bound, lanes);
+    if (split.emitMain) {
+      if (failed(emitInner(body, c0, split.alignedBound, /*masked=*/false))) {
+        return failure();
+      }
+    }
+    if (split.emitTail) {
+      Value tailLb = split.emitMain ? split.alignedBound : c0;
+      if (failed(emitInner(body, tailLb, bound, /*masked=*/true))) {
+        return failure();
+      }
+    }
+    return success();
+  }
+
+  // =========================================================================
   // Elementwise / broadcast kernel tiler
   // =========================================================================
   LogicalResult tileElementwiseKernel(func::FuncOp vfFunc, const KernelPlan &plan) {
@@ -1376,14 +1662,18 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     computeDimMap(entry, anchor, R, dimMap, unitVals);
 
     OpBuilder builder(entry.getTerminator());
+    // Prefer the aggregated loop bounds, which honor extract_slice sizes: when a
+    // slice narrows the live range to a dynamic (e.g. `affine.min`) length, that
+    // dynamic extent -- not the full padded transfer_read extent -- is what the
+    // loop (and its masked tail) must walk. Fall back to the anchor's per-dim
+    // extents when the dim map does not fully resolve.
     SmallVector<Value> bounds;
-    if (failed(getPerDimBounds(builder, loc, anchor, bounds)) || static_cast<int64_t>(bounds.size()) != R) {
-      return failure();
+    if (failed(getLoopBounds(builder, loc, entry, dimMap, R, bounds))) {
+      bounds.clear();
+      if (failed(getPerDimBounds(builder, loc, anchor, bounds)) || static_cast<int64_t>(bounds.size()) != R) {
+        return failure();
+      }
     }
-
-    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
-    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
 
     // Collect compute ops, emit unit ops once before the loop.
     SmallVector<Operation *> computeOps;
@@ -1407,28 +1697,11 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       return failure();
     }
 
-    // Build the loop nest (outer dims step 1, innermost step lanes).
-    SmallVector<Value> ivs;
-    OpBuilder body = builder;
-    for (int64_t d = 0; d < R - 1; ++d) {
-      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
-      ivs.push_back(forOp.getInductionVar());
-      body = OpBuilder::atBlockBegin(forOp.getBody());
-    }
-    auto innerFor = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
-    ivs.push_back(innerFor.getInductionVar());
-    body = OpBuilder::atBlockBegin(innerFor.getBody());
-
-    TileCtx ctx = unitCtx;
-    ctx.ivs = ivs;
-
-    for (Operation *op : computeOps) {
-      if (llvm::is_contained(unitEmitted, op)) {
-        continue;
-      }
-      if (failed(emitTiledOp(body, op, map, ctx))) {
-        return failure();
-      }
+    // Build the loop nest with an aligned main loop and a masked tail so an
+    // unaligned / dynamic register extent never reads or writes past its live
+    // range (which would corrupt e.g. a reduction accumulated across the tile).
+    if (failed(emitSplitTiledLoopNest(builder, loc, bounds, computeOps, unitEmitted, map, unitCtx))) {
+      return failure();
     }
 
     eraseComputeOps(entry, computeOps);
@@ -1476,10 +1749,6 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       return failure();
     }
 
-    Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
-    Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
-
     SmallVector<Operation *> computeOps;
     for (Operation &op : entry.without_terminator()) {
       if (touchesNpuVector(&op)) {
@@ -1501,29 +1770,12 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
       return failure();
     }
 
-    // Build the loop nest over the output index space (outer dims step 1,
-    // innermost step lanes).
-    SmallVector<Value> ivs;
-    OpBuilder body = builder;
-    for (int64_t d = 0; d < R - 1; ++d) {
-      auto forOp = body.create<scf::ForOp>(loc, c0, bounds[d], c1);
-      ivs.push_back(forOp.getInductionVar());
-      body = OpBuilder::atBlockBegin(forOp.getBody());
-    }
-    auto innerFor = body.create<scf::ForOp>(loc, c0, bounds[R - 1], cLane);
-    ivs.push_back(innerFor.getInductionVar());
-    body = OpBuilder::atBlockBegin(innerFor.getBody());
-
-    TileCtx ctx = unitCtx;
-    ctx.ivs = ivs;
-
-    for (Operation *op : computeOps) {
-      if (llvm::is_contained(unitEmitted, op)) {
-        continue;
-      }
-      if (failed(emitTiledOp(body, op, map, ctx))) {
-        return failure();
-      }
+    // Build the outer loop nest over the output index space (step 1). The
+    // innermost (register) dim is split into an aligned main loop and a masked
+    // tail loop so unaligned extents (e.g. a reduction K-tile whose length is
+    // not a multiple of the lane count) never read/write past their live range.
+    if (failed(emitSplitTiledLoopNest(builder, loc, bounds, computeOps, unitEmitted, map, unitCtx))) {
+      return failure();
     }
 
     eraseComputeOps(entry, computeOps);
@@ -2378,8 +2630,20 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
 
     // ---- Pass 2: recompute reg-tiled inputs and emit reduction-dependent
     //      outputs (broadcasting the per-row scalars back across the row) ----
-    if (failed(runPartialPass2(pr, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, R, unitEmitted,
-                               dependsOnReduction))) {
+    // Only needed when there is a reduction-dependent, register-tiled output
+    // (an output that spreads a per-row scalar back across the row). A pure
+    // "reduce and write per-row scalars" kernel has none, so pass 2 would emit
+    // nothing but dead register re-reads -- skip it entirely in that case.
+    bool needPass2 = false;
+    for (Operation &op : entry.without_terminator()) {
+      auto wr = dyn_cast<npuv::TransferWriteOp>(&op);
+      if (wr && dependsOnReduction.count(&op) && isRegTiled(wr.getVector(), dimMap, unitVals, R)) {
+        needPass2 = true;
+        break;
+      }
+    }
+    if (needPass2 && failed(runPartialPass2(pr, loc, entry, shared, baseCtx, bounds, outerIvs, c0, cLane, R,
+                                            unitEmitted, dependsOnReduction))) {
       return failure();
     }
 
@@ -2609,11 +2873,15 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
     for (size_t i = 0; i < reductions.size(); ++i) {
       auto red = reductions[i];
       Value acc = pass1.getResult(i);
-      Value identScalar = pr.create<arith::ConstantOp>(loc, getCombiningIdentityAttr(pr, redKinds[i], redElems[i]));
       // Horizontal reduce the register accumulator (vector<lanes>) to a scalar,
-      // using the same shape as the full-reduction path.
+      // using the exact same shape as the full-reduction path: the seed must be
+      // an `extractelement` of a rank-0 vector (not a bare scalar constant), so
+      // the downstream lowering recognizes the scalar-reduction pattern.
+      auto rank0Ty = VectorType::get({}, redElems[i]);
+      Value rank0Ident = buildIdentityAccumulator(pr, loc, redKinds[i], rank0Ty);
+      Value seed = pr.create<vector::ExtractElementOp>(loc, rank0Ident);
       SmallVector<bool> rmask(1, true);
-      Value scalar = pr.create<vector::MultiDimReductionOp>(loc, acc, identScalar, rmask, redKinds[i]);
+      Value scalar = pr.create<vector::MultiDimReductionOp>(loc, acc, seed, rmask, redKinds[i]);
       // Per-row values are represented as scalars; record into shared map.
       shared.map(red.getResult(), scalar);
     }
@@ -2635,6 +2903,61 @@ class NPUVectorToVectorPass : public impl::NPUVectorToVectorBase<NPUVectorToVect
         }
       }
     }
+
+    // Emit the per-row (non-reg-tiled) reduction-result writes: a partial
+    // reduction that folds the register axis yields one scalar per outer row,
+    // which is stored back with a shape-1 `vector.transfer_write` at the row
+    // index (the downstream lowering does not accept `memref.store`).
+    for (Operation &op : entry.without_terminator()) {
+      if (llvm::is_contained(unitEmitted, &op) || !touchesNpuVector(&op)) {
+        continue;
+      }
+      auto wr = dyn_cast<npuv::TransferWriteOp>(&op);
+      if (!wr || regTiled(wr.getVector())) {
+        continue;
+      }
+      if (failed(emitPerRowScalarWrite(pr, wr, shared, outerIvs, dimMap))) {
+        return failure();
+      }
+    }
+    return success();
+  }
+
+  // `finalizePartialReductions` helper: store one per-row scalar back to its
+  // memref with a shape-1 `vector.transfer_write` at the row index.
+  LogicalResult emitPerRowScalarWrite(OpBuilder &b, npuv::TransferWriteOp wr, IRMapping &map, ValueRange outerIvs,
+                                      const DimMap &dimMap) const {
+    Location loc = wr.getLoc();
+    Value scalar = map.lookupOrDefault(wr.getVector());
+    if (llvm::isa<ShapedType>(scalar.getType())) {
+      return wr.emitError("npuvector-to-vector: per-row reduction result is not a scalar");
+    }
+    Type elem = scalar.getType();
+    ArrayRef<int64_t> m =
+      dimMap.count(wr.getVector()) ? ArrayRef<int64_t>(dimMap.find(wr.getVector())->second) : ArrayRef<int64_t>();
+    SmallVector<Value> indices;
+    for (size_t k = 0; k < wr.getIndices().size(); ++k) {
+      Value base = map.lookupOrDefault(wr.getIndices()[k]);
+      Value iv;
+      if (k < m.size() && m[k] >= 0 && m[k] < static_cast<int64_t>(outerIvs.size())) {
+        iv = outerIvs[m[k]];
+      }
+      indices.push_back(addIndex(b, loc, base, iv));
+    }
+    int64_t srcRank = getShapedSourceRank(wr.getSource());
+    if (srcRank >= 0 && static_cast<int64_t>(indices.size()) > srcRank) {
+      indices.erase(indices.begin(), indices.begin() + (indices.size() - srcRank));
+    }
+    if (srcRank == 0) {
+      emitRank0TransferWrite(b, loc, b.create<vector::BroadcastOp>(loc, VectorType::get({1}, elem), scalar),
+                             map.lookupOrDefault(wr.getSource()));
+      return success();
+    }
+    auto vec1Ty = VectorType::get({1}, elem);
+    Value vec1 = b.create<vector::BroadcastOp>(loc, vec1Ty, scalar);
+    auto permMap = AffineMap::getMinorIdentityMap(static_cast<unsigned>(indices.size()), 1, b.getContext());
+    b.create<vector::TransferWriteOp>(loc, Type(), vec1, map.lookupOrDefault(wr.getSource()), indices, permMap,
+                                      Value(), b.getBoolArrayAttr({true}));
     return success();
   }
 
