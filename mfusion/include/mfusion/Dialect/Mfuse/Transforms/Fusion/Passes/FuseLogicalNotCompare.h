@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_TRANSPOSEWEIGHT_H
-#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_TRANSPOSEWEIGHT_H
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_FUSE_LOGICAL_NOT_COMPARE_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_FUSE_LOGICAL_NOT_COMPARE_H
 
 #include <memory>
 
@@ -26,10 +26,10 @@
 namespace mlir {
 namespace mfuse {
 
-/// Insert permute for MatMul/Mm inputs when inner axis is not 512-byte aligned; set trans_x1/trans_x2.
-std::unique_ptr<Pass> createFuseMatmulTransposeWeightPass();
+/// Create a pass to fold logical_not(compare(x, y)) into the opposite comparison.
+std::unique_ptr<Pass> createFuseLogicalNotComparePass();
 
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_TRANSPOSEWEIGHT_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_FUSE_LOGICAL_NOT_COMPARE_H
