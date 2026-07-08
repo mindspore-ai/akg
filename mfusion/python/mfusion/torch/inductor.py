@@ -150,9 +150,6 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
 
     if kernel_generator == "dvm":
         cluster_passes = [
-            "mfuse-decompose-matmul-with-bias-for-dvm-cluster",
-            "canonicalize",
-            # Run after matmul_with_bias decomposition to expose more DVM fusion opportunities.
             "mfuse-fold-bnsd-flatten-sum{guard=true}",
             "canonicalize",
             "mfuse-dvm-cluster",
