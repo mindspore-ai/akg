@@ -446,11 +446,11 @@ static LogicalResult matchRmsNorm(TorchD::AtenMulTensorOp outMul, MatchState &st
 
 // Check if (xDtype, gammaDtype) is one of the supported type combinations
 static bool isSupportedTypeCombination(Type xDtype, Type gammaDtype) {
-  return (xDtype.isa<mlir::Float16Type>() && gammaDtype.isa<mlir::Float32Type>()) ||
-         (xDtype.isa<mlir::BFloat16Type>() && gammaDtype.isa<mlir::Float32Type>()) ||
-         (xDtype.isa<mlir::Float16Type>() && gammaDtype.isa<mlir::Float16Type>()) ||
-         (xDtype.isa<mlir::BFloat16Type>() && gammaDtype.isa<mlir::BFloat16Type>()) ||
-         (xDtype.isa<mlir::Float32Type>() && gammaDtype.isa<mlir::Float32Type>());
+  return (mlir::isa<mlir::Float16Type>(xDtype) && mlir::isa<mlir::Float32Type>(gammaDtype)) ||
+         (mlir::isa<mlir::BFloat16Type>(xDtype) && mlir::isa<mlir::Float32Type>(gammaDtype)) ||
+         (mlir::isa<mlir::Float16Type>(xDtype) && mlir::isa<mlir::Float16Type>(gammaDtype)) ||
+         (mlir::isa<mlir::BFloat16Type>(xDtype) && mlir::isa<mlir::BFloat16Type>(gammaDtype)) ||
+         (mlir::isa<mlir::Float32Type>(xDtype) && mlir::isa<mlir::Float32Type>(gammaDtype));
 }
 
 // Check if fusedX, gamma, yOut and rstdOut types are compatible for npu_rms_norm
@@ -466,10 +466,10 @@ static LogicalResult checkTypeCompatibility(Value &fusedX, Value &gamma,
                                              const MatchState &st,
                                              PatternRewriter &rewriter,
                                              TorchD::AtenMulTensorOp op) {
-  auto fusedXType = fusedX.getType().dyn_cast<TorchD::ValueTensorType>();
-  auto gammaType = gamma.getType().dyn_cast<TorchD::ValueTensorType>();
-  auto yOutVTType = yOutType.dyn_cast<TorchD::ValueTensorType>();
-  auto rstdOutVTType = rstdOutType.dyn_cast<TorchD::ValueTensorType>();
+  auto fusedXType = mlir::dyn_cast<TorchD::ValueTensorType>(fusedX.getType());
+  auto gammaType = mlir::dyn_cast<TorchD::ValueTensorType>(gamma.getType());
+  auto yOutVTType = mlir::dyn_cast<TorchD::ValueTensorType>(yOutType);
+  auto rstdOutVTType = mlir::dyn_cast<TorchD::ValueTensorType>(rstdOutType);
   if (!fusedXType || !gammaType || !yOutVTType || !rstdOutVTType) {
     return success();
   }
@@ -484,7 +484,7 @@ static LogicalResult checkTypeCompatibility(Value &fusedX, Value &gamma,
   }
 
   // Check rstdOut must be FLOAT32
-  if (!rstdOutDtype.isa<mlir::Float32Type>()) {
+  if (!mlir::isa<mlir::Float32Type>(rstdOutDtype)) {
     return rewriter.notifyMatchFailure(op, "rstdOut type must be FLOAT32 for npu_rms_norm");
   }
 
@@ -496,7 +496,7 @@ static LogicalResult checkTypeCompatibility(Value &fusedX, Value &gamma,
         candidateGamma = gammaCastOp.getOperand(0);
       }
     }
-    if (auto candidateGammaType = candidateGamma.getType().dyn_cast<TorchD::ValueTensorType>()) {
+    if (auto candidateGammaType = mlir::dyn_cast<TorchD::ValueTensorType>(candidateGamma.getType())) {
       gamma = candidateGamma;
       gammaDtype = candidateGammaType.getDtype();
     }
