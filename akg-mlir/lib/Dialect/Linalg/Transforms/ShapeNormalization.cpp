@@ -102,6 +102,7 @@ struct ShapeNormalState {
   bool isSupported = true;
   llvm::StringMap<int64_t> axisSizes;
   llvm::StringMap<std::pair<Value, int64_t>> dynSymtoArgDim;
+  llvm::StringMap<Value> dynSymToDimValue;
   DenseMap<Value, DenseMap<int64_t, Value>> shapeStoreMap;
   DenseSet<Value> ValuesinFunc;
   DenseMap<Operation *, DenseMap<Value, DenseMap<int64_t, std::string>>> preservedOneValueIndices;
@@ -173,6 +174,32 @@ struct ShapeNormalState {
     std::transform(axes.begin(), axes.end(), std::back_inserter(sizes),
                    [this](const std::string &axis) { return axisSizes[axis]; });
     return sizes;
+  }
+
+  Value getOrCreateDynDimValue(const std::string &sym, PatternRewriter &rewriter, Location loc) {
+    if (auto it = dynSymToDimValue.find(sym); it != dynSymToDimValue.end()) {
+      return it->second;
+    }
+    auto dynIt = dynSymtoArgDim.find(sym);
+    if (dynIt == dynSymtoArgDim.end()) {
+      return nullptr;
+    }
+    auto [arg, idx] = dynIt->second;
+    if (Value mapped = ssaMap.lookup(arg)) {
+      arg = mapped;
+    }
+    Value dimVal;
+    if (idx == -1) {
+      if (arg.getType() != rewriter.getIndexType()) {
+        dimVal = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), arg);
+      } else {
+        dimVal = arg;
+      }
+    } else {
+      dimVal = rewriter.create<memref::DimOp>(loc, arg, idx);
+    }
+    dynSymToDimValue[sym] = dimVal;
+    return dimVal;
   }
 
   SmallVector<std::string> expandGroupedAxes(const SmallVector<std::string> &groupedAxes) {
@@ -1223,8 +1250,14 @@ struct AllocAdapter final : OpAdapter {
     newResultType = cast<MemRefType>(state.manager.updateSymbolicShape(newResultType, targetSymShape));
     rewriter.setInsertionPoint(op);
     SmallVector<Value> dynamicSizes;
-    llvm::transform(alloc.getDynamicSizes(), std::back_inserter(dynamicSizes),
-                    [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
+    for (size_t i = 0; i < targetSymShape.size(); ++i) {
+      if (targetShape[i] != ShapedType::kDynamic) {
+        continue;
+      }
+      Value dimVal = state.getOrCreateDynDimValue(targetSymShape[i], rewriter, loc);
+      assert(dimVal && "dynamic axis must have a dim value");
+      dynamicSizes.push_back(dimVal);
+    }
     Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, dynamicSizes, alloc.getSymbolOperands(),
                                                       alloc.getAlignmentAttr());
     state.ssaMap[oldResult] = newAlloc;
@@ -1392,22 +1425,11 @@ struct DimOpAdapter final : OpAdapter {
       return;
     }
     std::string symdim = state.affineMapSymDims[op][0];
-    auto dynIt = state.dynSymtoArgDim.find(symdim);
-    if (dynIt == state.dynSymtoArgDim.end()) {
-      return;
-    }
-    auto [arg, idx] = dynIt->second;
     Location loc = op->getLoc();
     rewriter.setInsertionPoint(op);
-    Value newResult;
-    if (idx == -1) {
-      if (arg.getType() != rewriter.getIndexType()) {
-        newResult = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), arg);
-      } else {
-        newResult = arg;
-      }
-    } else {
-      newResult = rewriter.create<memref::DimOp>(loc, arg, idx);
+    Value newResult = state.getOrCreateDynDimValue(symdim, rewriter, loc);
+    if (!newResult) {
+      return;
     }
     state.ssaMap[op->getResult(0)] = newResult;
     op->getResult(0).replaceAllUsesWith(newResult);
