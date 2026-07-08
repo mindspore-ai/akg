@@ -70,6 +70,26 @@ func.func @test_element_wise_chain(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32
   return %3 : tensor<8x8xf32>
 }
 
+// Test scenario: Div follows DVM FloatMixTypeCheck and accepts mixed float tensor types
+// CHECK-LABEL: func @test_div_mixed_float_cluster
+// CHECK-SAME: %arg0: tensor<4x4xf16>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf16>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG2:.*]]: tensor<4x4xf16>, %[[ARG3:.*]]: tensor<4x4xf32>):
+// CHECK: %[[DIV:.*]] = mfuse.div %[[ARG2]], %[[ARG3]]
+// CHECK-SAME: : (tensor<4x4xf16>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[DIV]], %[[ARG3]]
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: mfuse.yield %[[MUL]]
+// CHECK: return %[[FUSED]]
+func.func @test_div_mixed_float_cluster(%arg0: tensor<4x4xf16>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
+  %0 = mfuse.div %arg0, %arg1 : (tensor<4x4xf16>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %1 = mfuse.mul %0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  return %1 : tensor<4x4xf32>
+}
+
 // Test scenario: Fuse operations after processing all inputs
 // Non-clusterable operation (aclnn.sub) separates the computation into two phases
 // The cluster pass can still fuse operations that depend on the non-clusterable op's output

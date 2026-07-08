@@ -1,4 +1,4 @@
-// reduce_mean decompose: f32 -> sum+div; f16/bf16 -> cast f32, sum+div, cast back.
+// reduce_mean decompose: f32 -> sum+div; dtype-changing inputs cast first; f16/bf16 -> cast f32, sum+div, cast back.
 // RUN: mfusion-opt %s -decompose="pattern-type=AFTER_MANUAL_FUSION op-list=reduce_mean" | FileCheck %s
 
 // CHECK-LABEL: func.func @test_reduce_mean_decompose
@@ -15,12 +15,26 @@ func.func @test_reduce_mean_decompose(%arg0: tensor<2x4xf32>) -> tensor<2x1xf32>
 // CHECK-LABEL: func.func @test_reduce_mean_decompose_int_input_float_result
 // CHECK-NOT: mfuse.reduce_mean
 // CHECK-DAG: %[[CST:.*]] = mfuse.constant dense<4> : tensor<i64, {is_scalar = ""}>
-// CHECK-DAG: %[[REDUCE:.*]] = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = true} : (tensor<2x4xi32>) -> tensor<2x1xf32>
+// CHECK-DAG: %[[IN_F32:.*]] = mfuse.cast %arg0 : (tensor<2x4xi32>) -> tensor<2x4xf32>
+// CHECK-DAG: %[[REDUCE:.*]] = mfuse.reduce_sum %[[IN_F32]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
 // CHECK: %[[DIV:.*]] = mfuse.div %[[REDUCE]], %[[CST]]
 // CHECK: return %[[DIV]]
 func.func @test_reduce_mean_decompose_int_input_float_result(%arg0: tensor<2x4xi32>) -> tensor<2x1xf32> {
   %0 = mfuse.reduce_mean %arg0 {dimensions = [1], keepdim = true} : (tensor<2x4xi32>) -> tensor<2x1xf32>
   return %0 : tensor<2x1xf32>
+}
+
+// CHECK-LABEL: func.func @test_reduce_mean_decompose_int_input_f16_result
+// CHECK-NOT: mfuse.cast %arg0 : (tensor<2x4xi32>) -> tensor<2x4xf16>
+// CHECK-DAG: %[[CST:.*]] = mfuse.constant dense<4> : tensor<i64, {is_scalar = ""}>
+// CHECK-DAG: %[[IN_F32:.*]] = mfuse.cast %arg0 : (tensor<2x4xi32>) -> tensor<2x4xf32>
+// CHECK-DAG: %[[REDUCE:.*]] = mfuse.reduce_sum %[[IN_F32]] {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
+// CHECK: %[[DIV:.*]] = mfuse.div %[[REDUCE]], %[[CST]]
+// CHECK: %[[OUT:.*]] = mfuse.cast %[[DIV]] : (tensor<2x1xf32>) -> tensor<2x1xf16>
+// CHECK: return %[[OUT]]
+func.func @test_reduce_mean_decompose_int_input_f16_result(%arg0: tensor<2x4xi32>) -> tensor<2x1xf16> {
+  %0 = mfuse.reduce_mean %arg0 {dimensions = [1], keepdim = true} : (tensor<2x4xi32>) -> tensor<2x1xf16>
+  return %0 : tensor<2x1xf16>
 }
 
 // CHECK-LABEL: func.func @test_reduce_mean_decompose_scalar
