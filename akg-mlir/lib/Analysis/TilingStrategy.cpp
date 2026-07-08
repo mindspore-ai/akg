@@ -886,7 +886,6 @@ constexpr int64_t kUbGuardReserveKb = 0;
 constexpr unsigned kNpuTargetBlocks = 48;
 constexpr int64_t kNpuFallbackUbSizeInBytes = kNpuFallbackUbSizeKb * kBytesPerKb;
 constexpr unsigned kNpuMinInnerTileSize = 512;
-constexpr int64_t kDynamicUnknownExtentForAlignment = 2;
 constexpr int64_t kDefaultTypeBits = 32;
 constexpr int64_t kBitsPerByte = 8;
 constexpr int64_t kUbAlignBytes = 32;
@@ -1945,7 +1944,7 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
 
   for (const auto &axis : bandAxes) {
     bool hasDynamicExtent = !axis || isDynamicAxis(axis) || !axis->hasConstantBounds();
-    ctx.extents.push_back(hasDynamicExtent ? kDynamicUnknownExtentForAlignment
+    ctx.extents.push_back(hasDynamicExtent ? ctx.vectorUbCapacityElems
                                            : std::max<int64_t>(axis->range.second, 1));
     ctx.hasDynamicAxis |= isDynamicAxis(axis);
     ctx.hasReduction |= isReductionAxis(axis);
