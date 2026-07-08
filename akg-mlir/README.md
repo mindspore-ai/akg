@@ -7,12 +7,8 @@
 - ***LLVM/MLIR***:
   地址：https://github.com/llvm/llvm-project
   当前使用的 commit id：cd708029e0b2869e80abe31ddb175f7c35361f90
-
-- ***Polytops***:
-  地址：https://gitee.com/ms-incubator/polytops
-  推荐版本 commit SHA：ca3df32829ff81869ba0f209c7fca24d9710a89e
   编译时会自动构建
-  镜像仓库：https://codehub-y.huawei.com/DPSL-Paris/MLScheduler
+  镜像仓库：https://gitee.com/mirrors/LLVM
 
 - ***Symengine***:
   地址：https://github.com/symengine/symengine
@@ -21,8 +17,20 @@
 
 - ***AscendNPU IR***:
   地址：https://gitcode.com/Ascend/AscendNPU-IR
-  当前使用的 commit id：e4633e70f812b7c483768fdcc850c6077a3727e1
+  当前使用的 AscendNPU IR commit id：e4633e70f812b7c483768fdcc850c6077a3727e1
   编译时会自动构建
+
+- ***gmp***：安装依赖。对于基于 Debian 的系统（Ubuntu 等）：
+
+```shell
+apt-get install cmake libgmp-dev
+```
+
+对于基于 RPM 的系统（Fedora 等）：
+
+```shell
+yum install cmake gmp-devel
+```
 
 ## 编译和安装
 
@@ -33,7 +41,7 @@ cd PATH_TO_AKG_MLIR_ROOT_PATH
 
 print usage by -h (bash build.sh -h):
 Usage:
-bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t] [-b] [-u] [-s path] [-c] [-h]
+bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t] [-b] [-u] [-s path] [-c] [-m] [-h]
 
 Options:
     -b enable binds python (Default: disable)
@@ -41,22 +49,11 @@ Options:
     -d Debug mode
     -e Hardware environment: cpu, gpu, ascend or all
     -h Print usage
-    -j[n] Set the threads when building (Default: the number of cpu)
+    -j[n] Set the threads when building (Default: auto)
+    -m Enable auto build mlir (Default: disable)
     -s Specifies the source path of third-party, default: none
     -t Enable unit test (Default: disable)
     -u Enable auto tune (Default: disable)
-
-Options:
-    -h Print usage
-    -c Clean built files, default: off
-    -d Enable debug mode, default: off
-    -t Unit test: on or off, default: off
-    -m Compile mode: akg-mlir-only or all, default: all
-    -e Hardware environment: cpu, gpu, ascend or all
-    -s Specifies the source path of third-party, default: none \n\tllvm-project
-    -u Enable auto tune
-    -j[n] Set the threads when building, Default: -j8
-
 Command Example:
     # First time build, full compile
     bash build.sh -e ascend -j32 -s /path/to/llvm
@@ -91,12 +88,6 @@ cmake --build . --config Release -j32
 ## 运行示例
 
 ```shell
-cd compile/lib/test/
+cd tests/ut/Dialect/Affine
 PATH_TO_BUILD/bin/akg-opt akg_loop_tiling.mlir -allow-unregistered-dialect -split-input-file -akg-affine-loop-tile="tile-size=2" | FileCheck akg_loop_tiling.mlir
-```
-
-## 代码格式化
-
-```shell
-git diff -U0 HEAD^ | ./third-party/llvm-project/clang/tools/clang-format/clang-format-diff.py -i -p1
 ```

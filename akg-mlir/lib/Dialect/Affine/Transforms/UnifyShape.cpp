@@ -672,100 +672,75 @@ class UnifyShape : public mlir::impl::UnifyShapeBase<UnifyShape> {
   /// and keep the resulting shape.
   /// So the access functions to modify are the one that are before the collapseShapeOp
   // void eraseCollapseShapeOps(mlir::func::FuncOp &fop) {
+  WalkResult processCollapseShapeOp(mlir::memref::CollapseShapeOp csop) {
+    Value initValue = csop.getOperand();
+    if (isa<BlockArgument>(initValue)) {
+      return WalkResult::advance();
+    }
+    MemRefType resultType = cast<MemRefType>(csop.getType());
+    SmallVector<AffineMap, kVectorSizeFour> csopMap = csop.getReassociationMaps();
+    auto unifyShapeInfos = getNewAffineMapResults(csopMap, initValue);
+    if (unifyShapeInfos.skip) {
+      LLVM_DEBUG({
+        llvm::dbgs() << DEBUG_TYPE << " - Cannot remove the following Operation:\n";
+        csop.dump();
+      });
+      return WalkResult::skip();
+    }
+    if (unifyShapeInfos.dynamicReshape) {
+      for (Operation *uop : initValue.getUsers()) {
+        if (isa<mlir::memref::DimOp>(uop)) {
+          LLVM_DEBUG({
+            llvm::dbgs() << DEBUG_TYPE
+                         << " - Cannot remove the following Operation because of dynamic shape "
+                            "that was fused and "
+                            "new dim used:\n";
+            csop.dump();
+            uop->dump();
+          });
+          return WalkResult::skip();
+        }
+      }
+    }
+    Operation *initAlloc = initValue.getDefiningOp();
+    if (!initAlloc) {
+      return WalkResult::skip();
+    }
+    mlir::memref::AllocOp allocOp = dyn_cast_or_null<mlir::memref::AllocOp>(initAlloc);
+    if (!allocOp) {
+      llvm::errs() << DEBUG_TYPE << " - WARNING -- collapseShapeOp will be kept - Untreat DefiningOp:\n";
+      initAlloc->dump();
+      return WalkResult::skip();
+    }
+    mlir::memref::AllocOp newAlloc = createNewAllocOp(allocOp, resultType, unifyShapeInfos);
+    for (Operation *uop : initValue.getUsers()) {
+      if (!updateCopyOps(uop, csop, resultType, unifyShapeInfos)) {
+        if (!updateCopyOps(uop, allocOp, resultType, unifyShapeInfos)) {
+          llvm::dbgs() << DEBUG_TYPE
+                       << " WARNING -- failed to update corresponding copy Op, a collapseShapeOp will be kept\n";
+          return WalkResult::skip();
+        }
+      }
+      updateAffineOps(uop, unifyShapeInfos);
+      if (mlir::memref::DimOp dimOp = dyn_cast<mlir::memref::DimOp>(uop)) {
+        updateDimOp(dimOp, unifyShapeInfos.deletedDim);
+      }
+    }
+    initValue.replaceAllUsesWith(newAlloc);
+    allocOp->erase();
+    Value resultValue = csop.getResult();
+    resultValue.replaceAllUsesWith(newAlloc);
+    csop.erase();
+    return WalkResult::advance();
+  }
+
   void eraseCollapseShapeOps(mlir::ModuleOp &m) {
-    // a = alloc() : memref<a00 x a01 x type>
-    // for i, 0 a00
-    //     for j, 0 a01
-    //         a[i, j] = c[i, j]
-    // b = collapse_shape a [[0, 1]]: memref<a0 x type>
-    // for i, 0 a0
-    //     d[i] = b[i]
-    // -->
-    // a = alloc() : memref<a0 x type>
-    // for i, 0 a00
-    //     for j, 0 a01
-    //         a[i*a01 + j] = c[i, j]
-    // for i, 0 a0
-    //     d[i] = a[i]
     (void)m.walk([this](mlir::memref::CollapseShapeOp csop) {
       LLVM_DEBUG({
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         csop.dump();
       });
-      Value initValue = csop.getOperand();
-      // Cases where a BlockArgument is the operand should not be
-      // handled in this function
-      if (!isa<BlockArgument>(initValue)) {
-        MemRefType resultType = cast<MemRefType>(csop.getType());
-        // 1. Get the shape of the operand, which is the one we want to keep
-        // Also get the collapse shape reassociation information:
-        // we need it to update concerned access functions
-        SmallVector<AffineMap, kVectorSizeFour> csopMap = csop.getReassociationMaps();
-        auto unifyShapeInfos = getNewAffineMapResults(csopMap, initValue);
-        if (unifyShapeInfos.skip) {
-          LLVM_DEBUG({
-            llvm::dbgs() << DEBUG_TYPE << " - Cannot remove the following Operation:\n";
-            csop.dump();
-          });
-          return WalkResult::skip();
-        }
-        if (unifyShapeInfos.dynamicReshape) {
-          for (Operation *uop : initValue.getUsers()) {
-            if (isa<mlir::memref::DimOp>(uop)) {
-              LLVM_DEBUG({
-                llvm::dbgs() << DEBUG_TYPE
-                             << " - Cannot remove the following Operation because of dynamic shape "
-                                "that was fused and "
-                                "new dim used:\n";
-                csop.dump();
-                uop->dump();
-              });
-              return WalkResult::skip();
-            }
-          }
-        }
-
-        // 2. If operand is a memref alloc, replace it with a new alloc using result type
-        Operation *initAlloc = initValue.getDefiningOp();
-        if (mlir::memref::AllocOp allocOp = dyn_cast_or_null<mlir::memref::AllocOp>(initAlloc)) {
-          mlir::memref::AllocOp newAlloc = createNewAllocOp(allocOp, resultType, unifyShapeInfos);
-          // 3. Find users of initValue to update their access function
-          // NB: if there is many users with many copy, and that it is the last was that fail,
-          //       we may result in an inconsistent code... :(
-          for (Operation *uop : initValue.getUsers()) {
-            // If updateCopyOps returns false, there is a problem with
-            // the attempt to erase this CollapseShapeOp. Skip.
-            if (!updateCopyOps(uop, csop, resultType, unifyShapeInfos)) {
-              if (!updateCopyOps(uop, allocOp, resultType, unifyShapeInfos)) {
-                llvm::dbgs() << DEBUG_TYPE
-                             << " WARNING -- failed to update corresponding copy Op, a collapseShapeOp will be kept\n";
-                return WalkResult::skip();
-              }
-            }
-            updateAffineOps(uop, unifyShapeInfos);
-            if (mlir::memref::DimOp dimOp = dyn_cast<mlir::memref::DimOp>(uop)) {
-              updateDimOp(dimOp, unifyShapeInfos.deletedDim);
-            }
-          }
-
-          // 4. Replace all the usage of the allocOp (initValue) by the newAlloc Value
-          // and remove the allocOp Operator that is no more used
-          initValue.replaceAllUsesWith(newAlloc);
-          allocOp->erase();
-
-          // 5. Replace all the usage of the resultValue of csop by the newAlloc Value
-          Value resultValue = csop.getResult();
-          resultValue.replaceAllUsesWith(newAlloc);
-
-          // 6. Remove the CollapseShapeOp csop
-          csop.erase();
-        } else {
-          llvm::errs() << DEBUG_TYPE << " - WARNING -- collapseShapeOp will be kept - Untreat DefiningOp:\n";
-          initAlloc->dump();
-          return WalkResult::skip();
-        }
-      }
-      return WalkResult::advance();
+      return processCollapseShapeOp(csop);
     });
     LLVM_DEBUG({
       llvm::dbgs() << DEBUG_TYPE << " - After eraseCollapseShapeOps:\n";

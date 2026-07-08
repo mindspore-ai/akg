@@ -124,7 +124,7 @@ static LogicalResult applyTilingToLoop(const ApplyTilingParams &params);
 
 struct LeafBranchBandPlan {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> representativeBand;
-  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerLeafLoops;
+  SmallVector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>, kSmallVectorSizeFour> branchBands;
   unsigned representativeLeafDim = 0;
   bool hasLeafBranching = false;
 };
@@ -334,8 +334,6 @@ struct LeafBranchTileSlicesOutput {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &prefixBand;
   SmallVector<Value, kSmallVectorSizeSix> &prefixTileValues;
   SmallVector<unsigned, kSmallVectorSizeSix> &prefixTileSizesInt;
-  SmallVector<Value, kSmallVectorSizeSix> &leafTileValues;
-  SmallVector<unsigned, kSmallVectorSizeSix> &leafTileSizesInt;
 };
 
 static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const LeafBranchTileSlicesOutput &out);
@@ -349,16 +347,20 @@ struct CollectTagLeafBranchParams {
 };
 
 static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchParams &params, int64_t &nextNodeId,
-                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds);
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchRootNodeIds);
 // Bundled params for applyLeafBandsByNodeId to stay under readability-function-size_parameters limit.
 struct ApplyLeafBandsParams {
   mutable func::FuncOp originalKernel;
   OpBuilder &builder;
   size_t bandIdx;
-  ArrayRef<int64_t> branchLeafNodeIds;
-  ArrayRef<Value> leafTileValues;
-  ArrayRef<unsigned> leafTileSizesInt;
+  const LeafBranchBandPlan &plan;
+  ArrayRef<int64_t> branchRootNodeIds;
+  ArrayRef<Value> tileSizeValues;
+  ArrayRef<unsigned> tileSizesInt;
+  unsigned bandSize;
+  unsigned tileLevels;
   bool useRuntimeTileCounts;
+  int64_t &nextNodeId;
 };
 
 static LogicalResult applyLeafBandsByNodeId(const ApplyLeafBandsParams &params);
@@ -627,6 +629,13 @@ static void preprocessLoopAttrsForTileCalculation(func::FuncOp funcOp, const Lea
   }
   if (plan.hasLeafBranching || plan.representativeBand.size() <= 1) {
     clearAllBroadcastLoopAttrs(funcOp);
+    const bool hasNonLeafBranch =
+      plan.hasLeafBranching &&
+      llvm::any_of(plan.branchBands, [](const auto &branchBand) { return branchBand.size() != 1; });
+    if (hasNonLeafBranch) {
+      funcOp.walk([](mlir::scf::ForOp loop) { loop->removeAttr(kTransposeLoopAttr); });
+      return;
+    }
     markBandTransposeLoops(funcOp, plan);
     return;
   }
@@ -1054,6 +1063,24 @@ static bool isLeafForLoop(mlir::scf::ForOp loop) {
   return children.empty();
 }
 
+static LogicalResult collectSingleChain(mlir::scf::ForOp root, SmallVectorImpl<mlir::scf::ForOp> &chain) {
+  chain.clear();
+  for (mlir::scf::ForOp current = root; current;) {
+    chain.push_back(current);
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> children;
+    collectDirectChildLoopsInOrder(current, children);
+    if (children.empty()) {
+      return success();
+    }
+    if (children.size() != 1) {
+      chain.clear();
+      return failure();
+    }
+    current = children.front();
+  }
+  return failure();
+}
+
 static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, LeafBranchBandPlan &plan) {
   if (!rootLoop) {
     return failure();
@@ -1080,20 +1107,24 @@ static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, L
       continue;
     }
 
-    if (!llvm::all_of(children, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); })) {
+    plan.branchBands.clear();
+    for (mlir::scf::ForOp child : children) {
+      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchBand;
+      if (failed(collectSingleChain(child, branchBand))) {
+        return failure();
+      }
+      plan.branchBands.push_back(std::move(branchBand));
+    }
+    auto representativeIt =
+      llvm::max_element(plan.branchBands, [](const auto &lhs, const auto &rhs) { return lhs.size() < rhs.size(); });
+    if (representativeIt == plan.branchBands.end()) {
       return failure();
     }
 
-    mlir::scf::ForOp representativeLeaf = children.front();
     plan.representativeBand = linearPrefix;
     plan.representativeLeafDim = static_cast<unsigned>(linearPrefix.size());
-    plan.representativeBand.push_back(representativeLeaf);
+    plan.representativeBand.append(representativeIt->begin(), representativeIt->end());
     plan.hasLeafBranching = true;
-    for (mlir::scf::ForOp loop : children) {
-      if (loop != representativeLeaf) {
-        plan.peerLeafLoops.push_back(loop);
-      }
-    }
     return success();
   }
 }
@@ -2023,7 +2054,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
         newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
       }
       if (i == tileNum) {
-        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+        newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
       }
       return;
     }
@@ -2035,7 +2066,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
 
     // For inner point loop: preserve reduction attribute from original loop.
     if (i == tileNum && j == (bandSize - 1)) {
-      newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+      newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
     }
     return;
   }
@@ -2824,12 +2855,15 @@ static void reconcileTransposeAttrsAfterBranchScan(
 static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan &plan) {
   SmallVector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>, kSmallVectorSizeFour> leafBands;
   if (!plan.representativeBand.empty()) {
-    leafBands.push_back(plan.representativeBand);
-    for (mlir::scf::ForOp peerLeaf : plan.peerLeafLoops) {
-      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerBand(plan.representativeBand.begin(),
-                                                                  plan.representativeBand.end());
-      peerBand.back() = peerLeaf;
-      leafBands.push_back(std::move(peerBand));
+    if (!plan.hasLeafBranching) {
+      leafBands.push_back(plan.representativeBand);
+    } else {
+      ArrayRef<mlir::scf::ForOp> prefix(plan.representativeBand.data(), plan.representativeLeafDim);
+      for (const auto &branchBand : plan.branchBands) {
+        SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> leafBand(prefix.begin(), prefix.end());
+        leafBand.append(branchBand.begin(), branchBand.end());
+        leafBands.push_back(std::move(leafBand));
+      }
     }
   }
   for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
@@ -4071,31 +4105,25 @@ static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const
   auto &prefixBand = out.prefixBand;
   auto &prefixTileValues = out.prefixTileValues;
   auto &prefixTileSizesInt = out.prefixTileSizesInt;
-  auto &leafTileValues = out.leafTileValues;
-  auto &leafTileSizesInt = out.leafTileSizesInt;
   // Shared prefix axes are tiled first (e.g. i1,i2,i3), then each leaf axis is tiled independently.
   for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
     prefixBand.push_back(band[dim]);
+    band[dim]->removeAttr(kMultiVecLoopAttr);
   }
 
   prefixTileValues.reserve(tileLevels * plan.representativeLeafDim);
   prefixTileSizesInt.reserve(tileLevels * plan.representativeLeafDim);
-  leafTileValues.reserve(tileLevels);
-  leafTileSizesInt.reserve(tileLevels);
   for (unsigned level = 0; level < tileLevels; ++level) {
     for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
       size_t idx = static_cast<size_t>(level) * bandSize + dim;
       prefixTileValues.push_back(tileSizeValues[idx]);
       prefixTileSizesInt.push_back(tileSizesInt[idx]);
     }
-    size_t leafIdx = static_cast<size_t>(level) * bandSize + plan.representativeLeafDim;
-    leafTileValues.push_back(tileSizeValues[leafIdx]);
-    leafTileSizesInt.push_back(tileSizesInt[leafIdx]);
   }
 }
 
 static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchParams &params, int64_t &nextNodeId,
-                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds) {
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchRootNodeIds) {
   const auto &originalKernel = params.originalKernel;
   auto &builder = params.builder;
   const auto &bandIdx = params.bandIdx;
@@ -4107,56 +4135,84 @@ static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchPara
     return emitTilingFailure(originalKernel, "failed to locate leaf-branch parent loop for band " + Twine(bandIdx));
   }
 
-  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchLeaves;
-  collectDirectChildLoopsInOrder(branchPoint, branchLeaves);
-  if (branchLeaves.size() < kSmallVectorSizeTwo ||
-      !llvm::all_of(branchLeaves, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); }) ||
-      llvm::find(branchLeaves, representativeLeaf) == branchLeaves.end() ||
-      branchLeaves.size() != plan.peerLeafLoops.size() + 1) {
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchRoots;
+  collectDirectChildLoopsInOrder(branchPoint, branchRoots);
+  if (branchRoots.size() < kSmallVectorSizeTwo || branchRoots.size() != plan.branchBands.size() ||
+      llvm::find(branchRoots, representativeLeaf) == branchRoots.end()) {
     return emitTilingFailure(originalKernel, "invalid leaf-branch structure for band " + Twine(bandIdx));
   }
 
-  branchLeafNodeIds.clear();
-  branchLeafNodeIds.reserve(branchLeaves.size());
-  bool leafUsesMultiVec = representativeLeaf->hasAttr(kMultiVecLoopAttr);
-  for (mlir::scf::ForOp leafLoop : branchLeaves) {
-    if (leafUsesMultiVec) {
-      leafLoop->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
-    } else {
-      leafLoop->removeAttr(kMultiVecLoopAttr);
+  branchRootNodeIds.clear();
+  branchRootNodeIds.reserve(branchRoots.size());
+  for (auto [branchIdx, branchRoot] : llvm::enumerate(branchRoots)) {
+    const auto &branchBand = plan.branchBands[branchIdx];
+    for (auto [dim, branchLoop] : llvm::enumerate(branchBand)) {
+      size_t representativeDim = plan.representativeLeafDim + dim;
+      bool usesMultiVec = representativeDim < band.size() && band[representativeDim]->hasAttr(kMultiVecLoopAttr);
+      if (usesMultiVec) {
+        branchLoop->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+      } else {
+        branchLoop->removeAttr(kMultiVecLoopAttr);
+      }
     }
     int64_t nodeId = nextNodeId++;
-    leafLoop->setAttr(kTreeNodeIdAttr, builder.getI64IntegerAttr(nodeId));
-    leafLoop->setAttr(kTreeLeafAttr, builder.getUnitAttr());
-    branchLeafNodeIds.push_back(nodeId);
+    branchRoot->setAttr(kTreeNodeIdAttr, builder.getI64IntegerAttr(nodeId));
+    branchBand.back()->setAttr(kTreeLeafAttr, builder.getUnitAttr());
+    branchRootNodeIds.push_back(nodeId);
   }
   return success();
+}
+
+static void buildBranchTileValues(const ApplyLeafBandsParams &params, unsigned branchSize,
+                                  SmallVectorImpl<Value> &branchTileValues,
+                                  SmallVectorImpl<unsigned> &branchTileSizesInt) {
+  branchTileValues.clear();
+  branchTileSizesInt.clear();
+  branchTileValues.reserve(params.tileLevels * branchSize);
+  branchTileSizesInt.reserve(params.tileLevels * branchSize);
+  for (unsigned level = 0; level < params.tileLevels; ++level) {
+    for (unsigned dim = 0; dim < branchSize; ++dim) {
+      size_t idx =
+        static_cast<size_t>(level) * params.bandSize + params.plan.representativeLeafDim + static_cast<size_t>(dim);
+      branchTileValues.push_back(params.tileSizeValues[idx]);
+      branchTileSizesInt.push_back(params.tileSizesInt[idx]);
+    }
+  }
 }
 
 static LogicalResult applyLeafBandsByNodeId(const ApplyLeafBandsParams &params) {
   auto &originalKernel = params.originalKernel;
   auto &builder = params.builder;
   const auto &bandIdx = params.bandIdx;
-  const auto &branchLeafNodeIds = params.branchLeafNodeIds;
-  const auto &leafTileValues = params.leafTileValues;
-  const auto &leafTileSizesInt = params.leafTileSizesInt;
-  const auto &useRuntimeTileCounts = params.useRuntimeTileCounts;
-  for (int64_t nodeId : branchLeafNodeIds) {
-    mlir::scf::ForOp activeLeafLoop;
-    if (failed(findUniqueLoopByTreeNodeId(originalKernel, nodeId, activeLeafLoop))) {
-      return emitTilingFailure(originalKernel, "failed to locate unique leaf loop by temporary node id");
+  for (auto [branchIdx, nodeId] : llvm::enumerate(params.branchRootNodeIds)) {
+    mlir::scf::ForOp activeRoot;
+    if (failed(findUniqueLoopByTreeNodeId(originalKernel, nodeId, activeRoot))) {
+      return emitTilingFailure(originalKernel, "failed to locate unique branch loop by temporary node id");
+    }
+    if (branchIdx >= params.plan.branchBands.size()) {
+      return emitTilingFailure(originalKernel, "invalid branch metadata for band " + Twine(bandIdx));
+    }
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> activeBand;
+    if (failed(collectSingleChain(activeRoot, activeBand)) ||
+        activeBand.size() != params.plan.branchBands[branchIdx].size()) {
+      return emitTilingFailure(originalKernel, "failed to rebuild branch chain for band " + Twine(bandIdx));
     }
 
-    std::map<int64_t, Value> leafConstantCache;
-    if (!leafTileValues.empty()) {
-      if (Operation *defOp = leafTileValues.back().getDefiningOp()) {
-        builder.setInsertionPointAfter(defOp);
-      }
-    }
-
-    if (failed(applyTilingToLoop({activeLeafLoop, leafTileValues, leafTileSizesInt, builder, leafConstantCache,
-                                  mlir::scf::ForOp(), mlir::scf::ForOp(), Value(), useRuntimeTileCounts}))) {
-      return emitTilingFailure(originalKernel, "Failed to apply leaf tiling for band " + Twine(bandIdx));
+    SmallVector<Value, kSmallVectorSizeSix> branchTileValues;
+    SmallVector<unsigned, kSmallVectorSizeSix> branchTileSizesInt;
+    buildBranchTileValues(params, activeBand.size(), branchTileValues, branchTileSizesInt);
+    if (failed(applyDecoupledAxisTiling({originalKernel,
+                                         builder,
+                                         "branch",
+                                         activeBand,
+                                         branchTileValues,
+                                         branchTileSizesInt,
+                                         mlir::scf::ForOp(),
+                                         mlir::scf::ForOp(),
+                                         {},
+                                         params.useRuntimeTileCounts},
+                                        params.nextNodeId))) {
+      return emitTilingFailure(originalKernel, "Failed to apply branch tiling for band " + Twine(bandIdx));
     }
   }
   return success();
@@ -4185,10 +4241,8 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> prefixBand;
   SmallVector<Value, kSmallVectorSizeSix> prefixTileValues;
   SmallVector<unsigned, kSmallVectorSizeSix> prefixTileSizesInt;
-  SmallVector<Value, kSmallVectorSizeSix> leafTileValues;
-  SmallVector<unsigned, kSmallVectorSizeSix> leafTileSizesInt;
   buildLeafBranchTileSlices({plan, band, tileSizeValues, tileSizesInt, bandSize, tileLevels},
-                            {prefixBand, prefixTileValues, prefixTileSizesInt, leafTileValues, leafTileSizesInt});
+                            {prefixBand, prefixTileValues, prefixTileSizesInt});
 
   int64_t prefixParallelUseCore = 0;
   SmallVector<unsigned, kSmallVectorSizeSix> prefixParallelDims;
@@ -4201,9 +4255,9 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
      builder},
     {prefixParallelMapLoop, prefixParallelTileLoop, prefixParallelTileCoordByDim, prefixParallelUseCore});
 
-  SmallVector<int64_t, kSmallVectorSizeSix> branchLeafNodeIds;
+  SmallVector<int64_t, kSmallVectorSizeSix> branchRootNodeIds;
   if (failed(
-        collectAndTagLeafBranchLoops({originalKernel, builder, bandIdx, plan, band}, nextNodeId, branchLeafNodeIds))) {
+        collectAndTagLeafBranchLoops({originalKernel, builder, bandIdx, plan, band}, nextNodeId, branchRootNodeIds))) {
     return failure();
   }
 
@@ -4214,8 +4268,8 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
     return failure();
   }
 
-  return applyLeafBandsByNodeId(
-    {originalKernel, builder, bandIdx, branchLeafNodeIds, leafTileValues, leafTileSizesInt, useRuntimeTileCounts});
+  return applyLeafBandsByNodeId({originalKernel, builder, bandIdx, plan, branchRootNodeIds, tileSizeValues,
+                                 tileSizesInt, bandSize, tileLevels, useRuntimeTileCounts, nextNodeId});
 }
 
 static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuilder &builder,

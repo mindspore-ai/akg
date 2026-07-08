@@ -27,15 +27,18 @@
 // CHECK-NOT: arith.addf
 // CHECK: %[[RD0:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg0
 // CHECK-SAME: memref<3072xf32>, !npuvector<?xf32>
-// CHECK: npuvector.transfer_write %[[RD0]], %[[ALLOC_IN0]]
-// CHECK-SAME: !npuvector<?xf32>, memref<64xf32>
+// CHECK: %[[SUB0:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_IN0]]
+// CHECK: npuvector.transfer_write %[[RD0]], %[[SUB0]]
+// CHECK-SAME: !npuvector<?xf32>, memref<?xf32, strided<[1], offset: ?>>
 // CHECK: %[[RD1:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg1
 // CHECK-SAME: memref<3072xf32>, !npuvector<?xf32>
-// CHECK: npuvector.transfer_write %[[RD1]], %[[ALLOC_IN1]]
-// CHECK-SAME: !npuvector<?xf32>, memref<64xf32>
+// CHECK: %[[SUB1:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_IN1]]
+// CHECK: npuvector.transfer_write %[[RD1]], %[[SUB1]]
+// CHECK-SAME: !npuvector<?xf32>, memref<?xf32, strided<[1], offset: ?>>
 // CHECK: func.call @Fused_Add_fusion_8550873487731602555_outlined_vf_0(%[[ALLOC_IN0]], %{{.*}}, %[[ALLOC_IN1]], %[[ALLOC_OUT]]) {hivm.vector_function, no_inline} : (memref<64xf32>, index, memref<64xf32>, memref<64xf32>) -> ()
-// CHECK: %[[RD2:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[ALLOC_OUT]]
-// CHECK-SAME: memref<64xf32>, !npuvector<?xf32>
+// CHECK: %[[SUB2:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_OUT]]
+// CHECK: %[[RD2:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[SUB2]]
+// CHECK-SAME: memref<?xf32, strided<[1], offset: ?>>, !npuvector<?xf32>
 // CHECK: npuvector.transfer_write %[[RD2]], %arg2
 // CHECK-SAME: !npuvector<?xf32>, memref<3072xf32>
 
@@ -45,15 +48,12 @@
 // CHECK-SAME: memref<64xf32>
 // CHECK-SAME: memref<64xf32>
 // CHECK-SAME: attributes {hivm.vector_function, no_inline}
-// The original (cloned) maxSize constant is left in place (now dead) and a
-// fresh aligned maxSize constant is materialized immediately before each
-// transfer_read.  For f32 the aligned UB innermost-dim is 64.
 // CHECK: arith.constant 64 : index
-// CHECK: %[[VW0A:[a-zA-Z0-9_]+]] = arith.constant 64 : index
-// CHECK: npuvector.transfer_read %arg0[%{{.*}}] [%arg1] [%[[VW0A]]]
+// CHECK: arith.constant 64 : index
+// CHECK: npuvector.transfer_read %arg0[%c0] [%arg1] [%{{.*}}]
 // CHECK-SAME: memref<64xf32>, !npuvector<?xf32>
-// CHECK: %[[VW0B:[a-zA-Z0-9_]+]] = arith.constant 64 : index
-// CHECK: npuvector.transfer_read %arg2[%{{.*}}] [%arg1] [%[[VW0B]]]
+// CHECK: arith.constant 64 : index
+// CHECK: npuvector.transfer_read %arg2[%c0] [%arg1] [%{{.*}}]
 // CHECK-SAME: memref<64xf32>, !npuvector<?xf32>
 // CHECK: arith.addf
 // CHECK-SAME: !npuvector<?xf32>
@@ -99,15 +99,18 @@ module {
 // CHECK-NOT: arith.addf
 // CHECK: %[[RD0:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg0
 // CHECK-SAME: memref<4000xf32>, !npuvector<?xf32>
-// CHECK: npuvector.transfer_write %[[RD0]], %[[ALLOC_IN0]]
-// CHECK-SAME: !npuvector<?xf32>, memref<128xf32>
+// CHECK: %[[SUB0:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_IN0]]
+// CHECK: npuvector.transfer_write %[[RD0]], %[[SUB0]]
+// CHECK-SAME: !npuvector<?xf32>, memref<?xf32, strided<[1], offset: ?>>
 // CHECK: %[[RD1:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg1
 // CHECK-SAME: memref<4000xf32>, !npuvector<?xf32>
-// CHECK: npuvector.transfer_write %[[RD1]], %[[ALLOC_IN1]]
-// CHECK-SAME: !npuvector<?xf32>, memref<128xf32>
+// CHECK: %[[SUB1:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_IN1]]
+// CHECK: npuvector.transfer_write %[[RD1]], %[[SUB1]]
+// CHECK-SAME: !npuvector<?xf32>, memref<?xf32, strided<[1], offset: ?>>
 // CHECK: func.call @Fused_Add_fusion_8550873487731000000_outlined_vf_0(%[[ALLOC_IN0]], %{{.*}}, %[[ALLOC_IN1]], %[[ALLOC_OUT]]) {hivm.vector_function, no_inline} : (memref<128xf32>, index, memref<128xf32>, memref<128xf32>) -> ()
-// CHECK: %[[RD2:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[ALLOC_OUT]]
-// CHECK-SAME: memref<128xf32>, !npuvector<?xf32>
+// CHECK: %[[SUB2:[a-zA-Z0-9_]+]] = memref.subview %[[ALLOC_OUT]]
+// CHECK: %[[RD2:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[SUB2]]
+// CHECK-SAME: memref<?xf32, strided<[1], offset: ?>>, !npuvector<?xf32>
 // CHECK: npuvector.transfer_write %[[RD2]], %arg2
 // CHECK-SAME: !npuvector<?xf32>, memref<4000xf32>
 
@@ -117,11 +120,9 @@ module {
 // CHECK-SAME: memref<128xf32>
 // CHECK-SAME: memref<128xf32>
 // CHECK-SAME: attributes {hivm.vector_function, no_inline}
-// CHECK: %[[VW1A:[a-zA-Z0-9_]+]] = arith.constant 128 : index
-// CHECK: npuvector.transfer_read %arg0[%{{.*}}] [%arg1] [%[[VW1A]]]
+// CHECK: npuvector.transfer_read %arg0[%c0] [%arg1] [%{{.*}}]
 // CHECK-SAME: memref<128xf32>, !npuvector<?xf32>
-// CHECK: %[[VW1B:[a-zA-Z0-9_]+]] = arith.constant 128 : index
-// CHECK: npuvector.transfer_read %arg2[%{{.*}}] [%arg1] [%[[VW1B]]]
+// CHECK: npuvector.transfer_read %arg2[%c0] [%arg1] [%{{.*}}]
 // CHECK-SAME: memref<128xf32>, !npuvector<?xf32>
 // CHECK: arith.addf
 // CHECK-SAME: !npuvector<?xf32>
@@ -187,8 +188,9 @@ module {
 // npuvector result -- the result type list is empty (`-> ()`).
 // CHECK: %[[VF1_SCALAR_RD:[a-zA-Z0-9_]+]] = npuvector.transfer_read %collapse_shape
 // CHECK-SAME: memref<bf16>, !npuvector<1xbf16>
-// CHECK: npuvector.transfer_write %[[VF1_SCALAR_RD]], %[[VF1_INPUT_UB]]
-// CHECK-SAME: !npuvector<1xbf16>, memref<128xbf16>
+// CHECK: %[[SUB_VF1_IN:[a-zA-Z0-9_]+]] = memref.subview %[[VF1_INPUT_UB]]
+// CHECK: npuvector.transfer_write %[[VF1_SCALAR_RD]], %[[SUB_VF1_IN]]
+// CHECK-SAME: !npuvector<1xbf16>, memref<1xbf16, strided<[1], offset: ?>>
 // CHECK: call @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_1(%[[VF1_INPUT_UB]], %[[VF1_RET_UB]]) {hivm.vector_function, no_inline} : (memref<128xbf16>, memref<64xf32>) -> ()
 // Read the vf_1 result back from the UB out-param.
 // CHECK: %[[VF1_READBACK:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[VF1_RET_UB]]
