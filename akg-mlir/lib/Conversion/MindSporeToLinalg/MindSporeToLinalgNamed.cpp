@@ -368,18 +368,23 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t
   return success();
 }
 
-static void advanceDimsUntilEqual(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape, unsigned &currLhsDim,
-                                  unsigned &currRhsDim, int64_t &lhsSize, int64_t &rhsSize) {
-  while (lhsSize != rhsSize && currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
-    if (lhsSize < rhsSize) {
-      currLhsDim++;
-      if (currLhsDim < lhsShape.size()) {
-        lhsSize *= lhsShape[currLhsDim];
+struct DimCursor {
+  unsigned dim = 0;
+  int64_t size = 0;
+};
+
+static void advanceDimsUntilEqual(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> rhsShape, DimCursor &lhs,
+                                  DimCursor &rhs) {
+  while (lhs.size != rhs.size && lhs.dim < lhsShape.size() && rhs.dim < rhsShape.size()) {
+    if (lhs.size < rhs.size) {
+      lhs.dim++;
+      if (lhs.dim < lhsShape.size()) {
+        lhs.size *= lhsShape[lhs.dim];
       }
     } else {
-      currRhsDim++;
-      if (currRhsDim < rhsShape.size()) {
-        rhsSize *= rhsShape[currRhsDim];
+      rhs.dim++;
+      if (rhs.dim < rhsShape.size()) {
+        rhs.size *= rhsShape[rhs.dim];
       }
     }
   }
@@ -397,29 +402,33 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
     return true;
   }
 
-  unsigned currLhsDim = 0;
-  unsigned currRhsDim = 0;
-  while (currLhsDim < lhsShape.size() && currRhsDim < rhsShape.size()) {
-    int64_t rhsSize = rhsShape[currRhsDim];
-    int64_t lhsSize = lhsShape[currLhsDim];
-    advanceDimsUntilEqual(lhsShape, rhsShape, currLhsDim, currRhsDim, lhsSize, rhsSize);
-    if (lhsSize == rhsSize) {
-      intermediateShape.push_back(lhsSize);
+  DimCursor lhs{0, lhsShape[0]};
+  DimCursor rhs{0, rhsShape[0]};
+  while (lhs.dim < lhsShape.size() && rhs.dim < rhsShape.size()) {
+    if (lhs.dim > 0) {
+      lhs.size = lhsShape[lhs.dim];
     }
-    currRhsDim++;
-    currLhsDim++;
+    if (rhs.dim > 0) {
+      rhs.size = rhsShape[rhs.dim];
+    }
+    advanceDimsUntilEqual(lhsShape, rhsShape, lhs, rhs);
+    if (lhs.size == rhs.size) {
+      intermediateShape.push_back(lhs.size);
+    }
+    rhs.dim++;
+    lhs.dim++;
   }
 
   // If the iterators didn't reach the end and their leftover dimensions are not
   // equal to 1 an intermediate shape was not found.
-  while (currLhsDim < lhsShape.size()) {
-    if (lhsShape[currLhsDim++] != 1) {
+  while (lhs.dim < lhsShape.size()) {
+    if (lhsShape[lhs.dim++] != 1) {
       return false;
     }
   }
 
-  while (currRhsDim < rhsShape.size()) {
-    if (rhsShape[currRhsDim++] != 1) {
+  while (rhs.dim < rhsShape.size()) {
+    if (rhsShape[rhs.dim++] != 1) {
       return false;
     }
   }
@@ -427,12 +436,17 @@ static bool findIntermediateShape(ArrayRef<int64_t> lhsShape, ArrayRef<int64_t> 
   return true;
 }
 
-static void collapseTrailingOneDims(PatternRewriter &rewriter, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape,
-                                    SmallVector<ReassociationExprs, kSmallVectorSizeFour> &reassociationMap,
-                                    unsigned &currSrcDim, unsigned currDstDim) {
-  if (currDstDim == dstShape.size() - 1 || dstShape[currDstDim + 1] != 1) {
-    while (currSrcDim < srcShape.size() && srcShape[currSrcDim] == 1) {
-      reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
+struct CollapseContext {
+  PatternRewriter &rewriter;
+  ArrayRef<int64_t> srcShape;
+  ArrayRef<int64_t> dstShape;
+  SmallVector<ReassociationExprs, kSmallVectorSizeFour> &reassociationMap;
+};
+
+static void collapseTrailingOneDims(const CollapseContext &ctx, unsigned &currSrcDim, unsigned currDstDim) {
+  if (currDstDim == ctx.dstShape.size() - 1 || ctx.dstShape[currDstDim + 1] != 1) {
+    while (currSrcDim < ctx.srcShape.size() && ctx.srcShape[currSrcDim] == 1) {
+      ctx.reassociationMap[currDstDim].push_back(ctx.rewriter.getAffineDimExpr(currSrcDim++));
     }
   }
 }
@@ -467,7 +481,7 @@ static bool createReassociationMapsForCollapse(PatternRewriter &rewriter, ArrayR
     }
     if (srcSize == dstSize) {
       reassociationMap[currDstDim].push_back(rewriter.getAffineDimExpr(currSrcDim++));
-      collapseTrailingOneDims(rewriter, srcShape, dstShape, reassociationMap, currSrcDim, currDstDim);
+      collapseTrailingOneDims({rewriter, srcShape, dstShape, reassociationMap}, currSrcDim, currDstDim);
     }
     currDstDim++;
   }
