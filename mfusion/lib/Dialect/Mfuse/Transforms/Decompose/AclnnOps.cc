@@ -103,36 +103,6 @@ static Value getMatmulResult(Op op) {
   return op.getOut();
 }
 
-/// Try to find aclnn matmul-like op (mm/matmul/batch_matmul) from add operands.
-/// Returns the matmul op and sets bias to the other operand.
-template <typename AclnnMatmulOp>
-static Operation *findAclnnMatmulFromAddOperands(Value x, Value y, Value &bias) {
-  if (auto mm = x.getDefiningOp<AclnnMatmulOp>()) {
-    bias = y;
-    return mm.getOperation();
-  }
-  if (auto mm = y.getDefiningOp<AclnnMatmulOp>()) {
-    bias = x;
-    return mm.getOperation();
-  }
-  return nullptr;
-}
-
-/// Read trans_x1/trans_x2 from an aclnn matmul-like op (mm, matmul, batch_matmul).
-/// Returns (false, false) if \p op is not one of these (caller should only pass matched ops).
-static std::pair<bool, bool> getAclnnMatmulTransposeFlags(Operation *op) {
-  if (auto mm = dyn_cast<AclnnMmOp>(op)) {
-    return {mm.getTransX1(), mm.getTransX2()};
-  }
-  if (auto m = dyn_cast<AclnnMatmulOp>(op)) {
-    return {m.getTransX1(), m.getTransX2()};
-  }
-  if (auto bm = dyn_cast<AclnnBatchMatmulOp>(op)) {
-    return {bm.getTransX1(), bm.getTransX2()};
-  }
-  return {false, false};
-}
-
 //===----------------------------------------------------------------------===//
 // ConvertAclnnMatmulToMatmul: aclnn.mm / aclnn.matmul / aclnn.batch_matmul =>
 // mfuse.matmul (trans_x1/trans_x2 forwarded from aclnn)
@@ -161,44 +131,6 @@ class ConvertAclnnMatmulLikeToMatMulPattern : public OpRewritePattern<AclnnMatmu
 using ConvertAclnnMmToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<AclnnMmOp>;
 using ConvertAclnnMatmulToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<AclnnMatmulOp>;
 using ConvertAclnnBatchMatmulToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<AclnnBatchMatmulOp>;
-
-/// Pattern to fuse aclnn.matmul + add into mfuse.matmul_with_bias.
-/// Converts aclnn.mm/matmul/batch_matmul + add to mfuse.matmul_with_bias.
-/// Higher benefit pattern, so it runs before converting standalone matmul operations.
-/// Processed after AclnnAddDecomposePattern.
-class ConvertAclnnMatmulAddToMatMulWithBiasPattern : public OpRewritePattern<AddOp> {
- public:
-  using OpRewritePattern<AddOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AddOp addOp, PatternRewriter &rewriter) const override {
-    Value x = addOp.getX();
-    Value y = addOp.getY();
-    Value bias;
-    Operation *matmulOp = nullptr;
-
-    matmulOp = findAclnnMatmulFromAddOperands<AclnnMmOp>(x, y, bias);
-    if (!matmulOp) {
-      matmulOp = findAclnnMatmulFromAddOperands<AclnnMatmulOp>(x, y, bias);
-    }
-    if (!matmulOp) {
-      matmulOp = findAclnnMatmulFromAddOperands<AclnnBatchMatmulOp>(x, y, bias);
-    }
-    if (!matmulOp) {
-      return failure();
-    }
-
-    Value self = matmulOp->getOperand(0);
-    Value other = matmulOp->getOperand(1);
-    Type resultType = addOp.getResult().getType();
-    Location loc = addOp.getLoc();
-    const auto transFlags = getAclnnMatmulTransposeFlags(matmulOp);
-    auto newOp =
-      rewriter.create<MatmulWithBiasOp>(loc, resultType, self, other, bias, rewriter.getBoolAttr(transFlags.first),
-                                        rewriter.getBoolAttr(transFlags.second));
-    rewriter.replaceOp(addOp, newOp.getResult());
-    return success();
-  }
-};
 
 /// OpRewritePattern for decomposing AclnnSub operations (x - y * alpha) into mul and sub
 class AclnnSubDecomposePattern : public OpRewritePattern<mfuse::AclnnSubOp> {
@@ -259,8 +191,6 @@ void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vect
   std::map<std::string, PatternFunc> patternMap = {
     {"aclnnadd", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnAddDecomposePattern>(c); }},
     {"aclnnsub", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnSubDecomposePattern>(c); }},
-    {"aclnnmatmuladd",
-     [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMatmulAddToMatMulWithBiasPattern>(c); }},
     {"aclnnmm", [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMmToMatMulPattern>(c); }},
     {"aclnnmatmul", [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMatmulToMatMulPattern>(c); }},
     {"aclnnbatchmatmul",
