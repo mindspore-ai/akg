@@ -18,11 +18,14 @@
 
 #include <vector>
 
+#include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Value.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/DvmLegalityUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Support/Logging.h"
 
@@ -311,6 +314,64 @@ llvm::SmallVector<llvm::SmallVector<Operation *>> partitionClusterOps(llvm::Arra
   }
   std::reverse(partitions.begin(), partitions.end());
   return partitions;
+}
+
+bool materializeFusedOpFromBuildInfo(RewriterBase &rewriter, const ClusterBuildInfo &buildInfo,
+                                     llvm::StringRef fusionType, FusedOp &outFusedOp) {
+  if (!buildInfo.insertPoint || buildInfo.externalOutputs.empty()) {
+    return false;
+  }
+
+  rewriter.setInsertionPointAfter(buildInfo.insertPoint);
+
+  llvm::SmallVector<Type> resultTypes(buildInfo.externalOutputs.size());
+  std::transform(buildInfo.externalOutputs.begin(), buildInfo.externalOutputs.end(), resultTypes.begin(),
+                 [](Value output) { return output.getType(); });
+
+  outFusedOp = rewriter.create<FusedOp>(buildInfo.clusterOps.front()->getLoc(), resultTypes,
+                                        buildInfo.externalInputs.getArrayRef(), rewriter.getStringAttr(fusionType),
+                                        /*kernel_name=*/nullptr);
+
+  Block *body = new Block();
+  outFusedOp.getBody().push_back(body);
+
+  llvm::SmallVector<Location> argLocs;
+  argLocs.reserve(buildInfo.externalInputs.size());
+  std::transform(buildInfo.externalInputs.begin(), buildInfo.externalInputs.end(), std::back_inserter(argLocs),
+                 [](Value input) { return input.getLoc(); });
+  body->addArguments(TypeRange(buildInfo.externalInputs.getArrayRef()), argLocs);
+
+  IRMapping mapping;
+  for (auto [input, arg] : llvm::zip(buildInfo.externalInputs, body->getArguments())) {
+    mapping.map(input, arg);
+  }
+
+  rewriter.setInsertionPointToStart(body);
+  for (Operation *op : buildInfo.clusterOps) {
+    rewriter.clone(*op, mapping);
+  }
+
+  llvm::SmallVector<Value> yieldValues(buildInfo.externalOutputs.size());
+  std::transform(buildInfo.externalOutputs.begin(), buildInfo.externalOutputs.end(), yieldValues.begin(),
+                 [&mapping](Value output) { return mapping.lookup(output); });
+  rewriter.create<YieldOp>(outFusedOp.getLoc(), yieldValues);
+
+  for (auto [oldOutput, newResult] : llvm::zip(buildInfo.externalOutputs, outFusedOp.getResults())) {
+    Value output = oldOutput;
+    rewriter.replaceAllUsesWith(output, newResult);
+  }
+
+  for (auto it = buildInfo.clusterOps.rbegin(); it != buildInfo.clusterOps.rend(); ++it) {
+    if ((*it)->use_empty()) {
+      rewriter.eraseOp(*it);
+    }
+  }
+
+  return true;
+}
+
+bool allMemberOpsDvmSupported(llvm::ArrayRef<Operation *> memberOps) {
+  return llvm::all_of(memberOps, [](Operation *op) { return canFusedMemberOpLowerToDvm(op); });
 }
 }  // namespace mfuse
 }  // namespace mlir

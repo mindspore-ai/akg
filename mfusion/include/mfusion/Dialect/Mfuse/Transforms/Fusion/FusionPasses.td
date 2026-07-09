@@ -91,6 +91,27 @@ def FuseLayerNormDvm : Pass<"fuse-layer-norm-dvm", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Softmax fusion passes
+//===----------------------------------------------------------------------===//
+
+def FuseSafeSoftmaxDvm : Pass<"fuse-safe-softmax-dvm", "::mlir::ModuleOp"> {
+  let summary = "Fuse safe-softmax regions into mfuse.fused for DVM";
+  let description = [{
+    No-op unless the module contains safe-softmax candidate regions (broadcast
+    mfuse.select with a zero-filled branch and mfuse.softmax / torch.aten._softmax
+    or an already decomposed softmax chain). When active, sets
+    mfusion.safe_softmax_pipeline_active and fuses each matched region into a
+    single mfuse.fused DVM island (decomposing mfuse.softmax inside the pattern).
+    Non-safe softmax (e.g. BERT standalone or pre-softmax mask) is left unchanged.
+  }];
+  let constructor = "mlir::mfuse::createFuseSafeSoftmaxDvmPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseGelu pass
 //===----------------------------------------------------------------------===//
 

@@ -28,6 +28,7 @@
 #include "mfusion/Conversion/Passes.h"
 #include "mfusion/Dialect/Dvm/IR/Dvm.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 
 namespace mlir {
@@ -124,14 +125,20 @@ static FailureOr<TypedAttr> normalizeScalarConstantForDvmImpl(mfuse::ConstantOp 
   }
 
   if (elementType.isF64()) {
-    double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
-    constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
-    if (std::isfinite(value) && (value < -kMaxFloat || value > kMaxFloat)) {
-      return op->emitError() << "cannot convert f64 scalar constant to f32 for " << errorContext
-                             << ": finite value is out of range";
+    APFloat apf = *denseAttr.getValues<APFloat>().begin();
+    if (apf.isFinite()) {
+      double value = apf.convertToDouble();
+      constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
+      if (value < -kMaxFloat || value > kMaxFloat) {
+        return op->emitError() << "cannot convert f64 scalar constant to f32 for " << errorContext
+                               << ": finite value is out of range";
+      }
     }
+    APFloat f32Val = apf;
+    bool ignored;
+    f32Val.convert(llvm::APFloat::IEEEsingle(), llvm::APFloat::rmNearestTiesToEven, &ignored);
     auto f32Type = Float32Type::get(op.getContext());
-    return cast<TypedAttr>(FloatAttr::get(f32Type, static_cast<float>(value)));
+    return cast<TypedAttr>(FloatAttr::get(f32Type, f32Val));
   }
 
   if (elementType.isInteger(64)) {

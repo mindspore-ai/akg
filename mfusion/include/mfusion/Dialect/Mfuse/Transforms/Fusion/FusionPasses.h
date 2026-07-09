@@ -37,5 +37,6 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseBatchNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNormDvm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Softmax/FuseSafeSoftmaxDvm.h"
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_FUSION_PASSES_H

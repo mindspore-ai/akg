@@ -16,7 +16,7 @@
 
 #include "mfusion/Analysis/Split/FuseTagBarrier.h"
 
-#include "mfusion/Analysis/Split/FusionRegionTag.h"
+#include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 
 namespace mlir {
