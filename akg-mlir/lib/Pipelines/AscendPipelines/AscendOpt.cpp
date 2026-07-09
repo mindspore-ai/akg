@@ -247,7 +247,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(createAffineIteratorConversionPass());
     nestedFusionPM.addPass(createStoreLoadElimPass());
-    nestedFusionPM.addPass(createLegalizeTypeForAscendPass());
+    nestedFusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= 2));
     nestedFusionPM.addPass(createNormalizePass());
     nestedFusionPM.addPass(createConvertAffineToSCFPass());
 
