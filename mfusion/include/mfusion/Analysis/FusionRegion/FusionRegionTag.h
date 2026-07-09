@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_ANALYSIS_SPLIT_FUSIONREGIONTAG_H
-#define MFUSION_ANALYSIS_SPLIT_FUSIONREGIONTAG_H
+#ifndef MFUSION_ANALYSIS_FUSIONREGION_FUSIONREGIONTAG_H
+#define MFUSION_ANALYSIS_FUSIONREGION_FUSIONREGIONTAG_H
 
 #include <optional>
 #include <string>
@@ -24,11 +24,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/Rewrite/PatternApplicator.h"
+#include "mlir/IR/Value.h"
 
 namespace mlir {
-class RewritePatternSet;
-
 namespace mfuse {
 namespace fusion_region {
 
@@ -37,19 +35,21 @@ enum class FuseRole { Member, Affinity };
 /// Fuse kind string for LayerNorm; legacy unit attrs are written only for this kind.
 inline constexpr llvm::StringLiteral kLayerNormFuseKind = "layer_norm";
 
-/// Pluggable matcher that tags decomposed subgraphs for DVM split (FuseTagBarrierByGroupId).
-class FusionRegionMatcher {
- public:
-  virtual ~FusionRegionMatcher() = default;
+/// Fuse kind for bool-mask select / where with broadcast condition.
+inline constexpr llvm::StringLiteral kBroadcastCondSelectFuseKind = "broadcast_cond_select";
 
-  virtual llvm::StringRef kind() const = 0;
-  virtual void populatePatterns(RewritePatternSet &patterns) = 0;
-};
+/// Fuse kind for decomposed softmax + broadcast masked select (_safe_softmax semantics).
+inline constexpr llvm::StringLiteral kSafeSoftmaxFuseKind = "safe_softmax";
 
 FuseRole getFuseRole(Operation *op);
 bool hasRegionMember(Operation *op);
 bool hasRegionAffinity(Operation *op);
 bool isTagged(Operation *op);
+
+/// True when a matcher-materialized mfuse.fused island (e.g. safe-softmax) carries
+/// dvm_fuse_kind on its wrapper and must not be fragmented by the split cost model.
+/// LayerNorm uses top-level multi-op tags + FuseTagBarrierByGroupId instead.
+bool shouldSkipSplitForMatcherFusedIsland(Operation *op);
 
 /// Returns group id if this op participates in split merge (member or legacy LN unit tag).
 std::optional<llvm::StringRef> getMergeGroupId(Operation *op);
@@ -64,11 +64,21 @@ void resetGroupIdAllocator();
 void tagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind = {});
 void tagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind = {});
 void tagMembers(ArrayRef<Operation *> ops, llvm::StringRef groupId, llvm::StringRef kind = {});
+/// Overwrite existing fusion-region tags (e.g. upgrade broadcast_cond_select → safe_softmax).
+void retagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind = {});
+void retagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind = {});
 
-void registerAllFusionRegionMatchers(RewritePatternSet &patterns);
+inline bool isSingleUse(Value value) { return value.hasOneUse(); }
+
+inline Operation *getSingleUserOp(Value value) {
+  if (!value.hasOneUse()) {
+    return nullptr;
+  }
+  return *value.getUsers().begin();
+}
 
 }  // namespace fusion_region
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_ANALYSIS_SPLIT_FUSIONREGIONTAG_H
+#endif  // MFUSION_ANALYSIS_FUSIONREGION_FUSIONREGIONTAG_H

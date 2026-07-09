@@ -34,58 +34,7 @@
 namespace mlir {
 namespace mfuse {
 namespace {
-bool materializeFusedOpFromBuildInfo(func::FuncOp funcOp, const ClusterBuildInfo &buildInfo,
-                                     llvm::StringRef fusionType) {
-  // Materialize one already-validated cluster slice. Partition selection and
-  // legality analysis happen before we get here.
-  OpBuilder builder(funcOp.getContext());
-  builder.setInsertionPointAfter(buildInfo.insertPoint);
 
-  llvm::SmallVector<Type> resultTypes(buildInfo.externalOutputs.size());
-  std::transform(buildInfo.externalOutputs.begin(), buildInfo.externalOutputs.end(), resultTypes.begin(),
-                 [](Value output) { return output.getType(); });
-
-  auto fusedOp =
-    builder.create<FusedOp>(buildInfo.clusterOps.front()->getLoc(), resultTypes, buildInfo.externalInputs.getArrayRef(),
-                            builder.getStringAttr(fusionType), /*kernel_name=*/nullptr);
-
-  Block *body = new Block();
-  fusedOp.getBody().push_back(body);
-
-  llvm::SmallVector<Location> argLocs;
-  argLocs.reserve(buildInfo.externalInputs.size());
-  std::transform(buildInfo.externalInputs.begin(), buildInfo.externalInputs.end(), std::back_inserter(argLocs),
-                 [](Value input) { return input.getLoc(); });
-  body->addArguments(TypeRange(buildInfo.externalInputs.getArrayRef()), argLocs);
-
-  IRMapping mapping;
-  for (auto [input, arg] : llvm::zip(buildInfo.externalInputs, body->getArguments())) {
-    mapping.map(input, arg);
-  }
-
-  builder.setInsertionPointToStart(body);
-  for (Operation *op : buildInfo.clusterOps) {
-    builder.clone(*op, mapping);
-  }
-
-  llvm::SmallVector<Value> yieldValues(buildInfo.externalOutputs.size());
-  std::transform(buildInfo.externalOutputs.begin(), buildInfo.externalOutputs.end(), yieldValues.begin(),
-                 [&mapping](Value output) { return mapping.lookup(output); });
-  builder.create<YieldOp>(fusedOp.getLoc(), yieldValues);
-
-  for (auto [oldOutput, newResult] : llvm::zip(buildInfo.externalOutputs, fusedOp.getResults())) {
-    Value output = oldOutput;
-    output.replaceAllUsesWith(newResult);
-  }
-
-  for (auto it = buildInfo.clusterOps.rbegin(); it != buildInfo.clusterOps.rend(); ++it) {
-    if ((*it)->use_empty()) {
-      (*it)->erase();
-    }
-  }
-
-  return true;
-}
 }  // namespace
 
 //===----------------------------------------------------------------------===//
@@ -190,9 +139,11 @@ bool BaseCluster::createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &
   std::sort(baseClusterOps.begin(), baseClusterOps.end(),
             [](Operation *lhs, Operation *rhs) { return lhs->isBeforeInBlock(rhs); });
 
+  IRRewriter rewriter(funcOp.getContext());
   ClusterBuildInfo buildInfo;
   if (buildCluster(baseClusterOps, buildInfo)) {
-    return materializeFusedOpFromBuildInfo(funcOp, buildInfo, getFusionType());
+    FusedOp fusedOp;
+    return materializeFusedOpFromBuildInfo(rewriter, buildInfo, getFusionType(), fusedOp);
   }
 
   auto partitions = partitionClusterOps(baseClusterOps);
@@ -207,7 +158,8 @@ bool BaseCluster::createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &
     }
     // Fuse partitions in program order so later slices can naturally consume
     // results rewritten by earlier slices.
-    created |= materializeFusedOpFromBuildInfo(funcOp, partitionBuildInfo, getFusionType());
+    FusedOp fusedOp;
+    created |= materializeFusedOpFromBuildInfo(rewriter, partitionBuildInfo, getFusionType(), fusedOp);
   }
 
   return created;

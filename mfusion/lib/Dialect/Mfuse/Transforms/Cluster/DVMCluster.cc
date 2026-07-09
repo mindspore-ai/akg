@@ -27,6 +27,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/DvmLegalityUtils.h"
 #include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/BaseCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
@@ -165,9 +167,13 @@ bool isDvmSupportedScalarConstant(ConstantOp op) {
     return true;
   }
   if (elementType.isF64()) {
-    double value = (*denseAttr.getValues<APFloat>().begin()).convertToDouble();
+    APFloat apf = *denseAttr.getValues<APFloat>().begin();
+    if (!apf.isFinite()) {
+      return true;
+    }
+    double value = apf.convertToDouble();
     constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
-    return !std::isfinite(value) || (value >= -kMaxFloat && value <= kMaxFloat);
+    return value >= -kMaxFloat && value <= kMaxFloat;
   }
   if (elementType.isInteger(64)) {
     int64_t value = (*denseAttr.getValues<APInt>().begin()).getSExtValue();
@@ -707,6 +713,33 @@ class DvmSupportChecker {
 };
 }  // namespace
 
+bool checkDvmOpConstraints(Operation *op) {
+  if (op == nullptr) {
+    return false;
+  }
+  if (isComplexDataType(op)) {
+    return false;
+  }
+  if (auto constOp = dyn_cast<ConstantOp>(op)) {
+    return isDvmSupportedScalarConstant(constOp);
+  }
+  // Albert-style mask: any.dim lowered to bool reduce_max on i1.
+  if (auto reduceMax = dyn_cast<ReduceMaxOp>(op)) {
+    if (auto outputType = getElementType(reduceMax.getResult().getType())) {
+      if (outputType.isInteger(1)) {
+        return !hasZeroShape(op);
+      }
+    }
+  }
+  if (!DvmSupportChecker::instance().check(op)) {
+    return false;
+  }
+  if (hasZeroShape(op)) {
+    return false;
+  }
+  return true;
+}
+
 llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
   // Clusterable operations for DVM backend.
   // Currently, we only support dvm supported operations.
@@ -721,7 +754,7 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.gt",          "mfuse.ge",           "mfuse.lt",
     "mfuse.le",          "mfuse.logical_and",  "mfuse.logical_or",
     "mfuse.logical_not", "mfuse.select",       "mfuse.assign",
-    "mfuse.reduce_sum",  "mfuse.is_finite",    "mfuse.reshape",
+    "mfuse.reduce_sum",  "mfuse.reduce_max",   "mfuse.is_finite",    "mfuse.reshape",
     "mfuse.floor",       "mfuse.ceil",         "mfuse.trunc",
     "mfuse.matmul",      "mfuse.grouped_matmul",
   });
@@ -732,36 +765,32 @@ bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList,
   if (op == nullptr) {
     return false;
   }
-  // Check if operation is in clusterable list
   StringRef opName = op->getName().getStringRef();
   if (opList.find(opName) == opList.end()) {
     MLOG(DEBUG) << "Op not in cluster list: " << opName;
     return false;
   }
-
-  // Check if output type is complex type
-  if (isComplexDataType(op)) {
-    MLOG(DEBUG) << "Op has complex output type: " << opName;
+  if (!checkDvmOpConstraints(op)) {
+    MLOG(DEBUG) << "Op failed DVM constraints: " << opName;
     return false;
   }
-
-  // Check DVM-specific constraints
-  if (!DvmSupportChecker::instance().check(op)) {
-    MLOG(DEBUG) << "Op is not DVM supported: " << opName;
-    return false;
-  }
-
-  if (hasZeroShape(op)) {
-    MLOG(DEBUG) << "Op has zero shape: " << opName;
-    return false;
-  }
-
   return true;
 }
 
 llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOpList() { return getClusterableOps(); }
 
 bool DVMCluster::isClusterableOp(Operation *op) { return canClusterableOp(opList_, op); }
+
+bool canFusedMemberOpLowerToDvm(Operation *op) {
+  if (op == nullptr) {
+    return false;
+  }
+  // Scalar constants are fused into matcher-driven regions but are not clusterable ops.
+  if (isa<ConstantOp>(op)) {
+    return checkDvmOpConstraints(op);
+  }
+  return DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), op);
+}
 
 std::string DVMCluster::getFusionType() { return "dvm"; }
 

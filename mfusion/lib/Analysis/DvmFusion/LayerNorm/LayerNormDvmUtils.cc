@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "mfusion/Analysis/Split/LayerNormDvmUtils.h"
+#include "mfusion/Analysis/DvmFusion/LayerNorm/LayerNormDvmUtils.h"
 
 #include <algorithm>
 #include <cmath>
 
-#include "mfusion/Analysis/Split/FusionRegionTag.h"
+#include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
 #include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Support/VarianceUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
