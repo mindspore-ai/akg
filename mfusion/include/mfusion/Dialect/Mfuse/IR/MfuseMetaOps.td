@@ -142,33 +142,6 @@ def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_BatchMatmulOp : Mfuse_Op<"batch_matmul", [Pure]> {
-  let summary = "Batch matrix multiplication of two tensors with transpose options.";
-  let description = [{
-    Batch matrix multiplication with optional transpose on last two dimensions.
-    Supports tensors with rank >= 2 and same rank.
-
-    Default: (*B, N, C) @ (*B, C, M) -> (*B, N, M)
-    transpose_a=True: (*B, C, N) @ (*B, C, M) -> (*B, N, M)
-    transpose_b=True: (*B, N, C) @ (*B, M, C) -> (*B, N, M)
-
-    Where *B represents multidimensional batch dimensions.
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$self,
-    AnyRankedTensor:$mat2,
-    DefaultValuedAttr<BoolAttr, "false">:$transpose_a,
-    DefaultValuedAttr<BoolAttr, "false">:$transpose_b
-  );
-
-  let results = (outs AnyRankedTensor:$result);
-
-  let assemblyFormat = [{
-    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
-  }];
-}
-
 def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [
     Pure,
     SameOperandsAndResultElementType,
