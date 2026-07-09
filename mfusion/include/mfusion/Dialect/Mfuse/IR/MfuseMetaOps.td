@@ -135,6 +135,8 @@ def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative]> {
 
   let results = (outs AnyRankedTensor:$result);
 
+  let hasFolder = 1;
+
   let assemblyFormat = [{
     $x `,` $y attr-dict `:` functional-type(operands, results)
   }];
@@ -345,6 +347,8 @@ def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure]> {
   let results = (outs
     AnyRankedTensor:$out
   );
+
+  let hasFolder = 1;
 
   let assemblyFormat = [{
     $self `,` $other
@@ -744,6 +748,8 @@ def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative]> {
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let hasFolder = 1;
 
   let assemblyFormat = [{
     $lhs `,` $rhs attr-dict `:` functional-type(operands, results)
@@ -1168,6 +1174,8 @@ def Mfuse_SubOp : Mfuse_BroadcastableBinaryOp<"sub", [Pure]> {
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let hasFolder = 1;
 
   let assemblyFormat = [{
     $x `,` $y attr-dict `:` functional-type(operands, results)

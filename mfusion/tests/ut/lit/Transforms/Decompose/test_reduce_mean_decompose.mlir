@@ -39,10 +39,8 @@ func.func @test_reduce_mean_decompose_int_input_f16_result(%arg0: tensor<2x4xi32
 
 // CHECK-LABEL: func.func @test_reduce_mean_decompose_scalar
 // CHECK-NOT: mfuse.reduce_mean
-// CHECK-DAG: %[[CST:.*]] = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
 // CHECK-DAG: %[[REDUCE:.*]] = mfuse.reduce_sum %arg0 {dimensions = [], keepdim = false} : (tensor<f32>) -> tensor<f32>
-// CHECK: %[[DIV:.*]] = mfuse.div %[[REDUCE]], %[[CST]]
-// CHECK: return %[[DIV]]
+// CHECK: return %[[REDUCE]]
 func.func @test_reduce_mean_decompose_scalar(%arg0: tensor<f32>) -> tensor<f32> {
   %0 = mfuse.reduce_mean %arg0 {dimensions = [], keepdim = false} : (tensor<f32>) -> tensor<f32>
   return %0 : tensor<f32>
