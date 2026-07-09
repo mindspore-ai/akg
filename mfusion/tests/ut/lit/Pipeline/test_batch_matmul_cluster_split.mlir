@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s --fuse-batch-matmul --mfuse-dvm-cluster --split --canonicalize | FileCheck %s
+// RUN: mfusion-opt %s --fuse-matmul-permute --mfuse-dvm-cluster --split --canonicalize | FileCheck %s
 
 module {
   // CHECK-LABEL: func @test_add_permute_broadcast_matmul_cluster_split

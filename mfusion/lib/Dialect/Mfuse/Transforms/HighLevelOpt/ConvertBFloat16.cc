@@ -86,7 +86,7 @@ bool canKeepBF16Op(Operation *op) { return llvm::isa<ReshapeOp, BroadcastToOp>(o
 // Get the input indices that need to keep bf16 for this operation
 SmallVector<size_t> getKeepBF16InputIndices(Operation *op) {
   return llvm::TypeSwitch<Operation *, SmallVector<size_t>>(op)
-    .Case<MatmulOp, BatchMatmulOp, GroupedMatmulOp>([](auto) { return SmallVector<size_t>{0, 1}; })
+    .Case<MatmulOp, GroupedMatmulOp>([](auto) { return SmallVector<size_t>{0, 1}; })
     .Case<SliceOp, CastOp>([](auto) { return SmallVector<size_t>{0}; })
     .Default([](auto) { return SmallVector<size_t>{}; });
 }

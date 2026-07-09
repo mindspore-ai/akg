@@ -47,17 +47,17 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-conv-batchnorm", []() { return createFuseConvBatchNormPass(); }},
       // MatMul-related fusion passes (order by dependency):
       // FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
-      // FuseMatMulBiasAdd: matmul/batch_matmul+add(bias) -> matmul_with_bias;
+      // FuseMatMulBiasAdd: matmul+add(bias) -> matmul_with_bias;
       // before reshape so direct matmul+add is fused.
       // FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
-      // FuseBatchMatMul: transpose elimination (permute into trans); BatchMatMul 2D -> MatMul.
-      // FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
+      // fuse-matmul-permute: permute elimination (swap last two dims into trans flags on mfuse.matmul).
+      // fuse-matmul-k1-to-mul: mfuse.matmul (k=1) -> mul; after shape normalization.
       // FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
       {"fuse-matmul-cast", []() { return createFuseMatMulCastPass(); }},
       {"fuse-matmul-bias-add", []() { return createFuseMatMulBiasAddPass(); }},
       {"fuse-matmul-unsqueeze-squeeze", []() { return createFuseMatmulUnsqueezeSqueezePass(); }},
-      {"fuse-batch-matmul", []() { return createFuseBatchMatMulPass(); }},
-      {"fuse-batchmatmul-to-mul", []() { return createFuseBatchMatMulToMulPass(); }},
+      {"fuse-matmul-permute", []() { return createFuseMatmulPermutePass(); }},
+      {"fuse-matmul-k1-to-mul", []() { return createFuseMatmulK1ToMulPass(); }},
       {"fuse-matmul-reshape-bias-add", []() { return createFuseMatmulReshapeBiasAddPass(); }},
       {"fuse-gelu", []() { return createFuseGeluPass(); }},
       {"fuse-logical-not-compare", []() { return createFuseLogicalNotComparePass(); }},

@@ -1,18 +1,17 @@
-// RUN: mfusion-opt %s --fuse-batch-matmul --canonicalize | FileCheck %s
+// RUN: mfusion-opt %s --fuse-matmul-permute --canonicalize | FileCheck %s
 
 module {
-  // Mode 1: permute (swap last two dims) + matmul -> matmul with trans flag; permute eliminated.
+  // permute (swap last two dims) + matmul -> matmul with trans flag; permute eliminated.
   // CHECK-LABEL: func @transpose_elimination_matmul_one_permute
   func.func @transpose_elimination_matmul_one_permute(%arg0: tensor<4x2xf32>, %arg1: tensor<2x8xf32>) -> tensor<4x8xf32> {
     %0 = mfuse.permute %arg0, [1, 0] : (tensor<4x2xf32>) -> tensor<2x4xf32>
     %1 = mfuse.matmul %0, %arg1 : (tensor<2x4xf32>, tensor<2x8xf32>) -> tensor<4x8xf32>
     return %1 : tensor<4x8xf32>
-    // After pass: use permute input and set trans_x1=true (trans_x2=false omitted when default).
     // CHECK-NOT: mfuse.permute
     // CHECK: mfuse.matmul {{.*}} {trans_x1 = true}
   }
 
-  // Mode 1: both inputs from permute (swap last two) -> matmul with both trans set.
+  // both inputs from permute (swap last two) -> matmul with both trans set.
   // CHECK-LABEL: func @transpose_elimination_matmul_both_permute
   func.func @transpose_elimination_matmul_both_permute(%arg0: tensor<4x2xf32>, %arg1: tensor<8x2xf32>) -> tensor<4x8xf32> {
     %0 = mfuse.permute %arg0, [1, 0] : (tensor<4x2xf32>) -> tensor<2x4xf32>
@@ -183,5 +182,4 @@ module {
     // CHECK: %[[ADD:.*]] = mfuse.add %[[BCAST]], %[[BCAST]] : (tensor<1x640x640xf32>, tensor<1x640x640xf32>) -> tensor<1x640x640xf32>
     // CHECK: return %[[MM]], %[[ADD]]
   }
-
 }
