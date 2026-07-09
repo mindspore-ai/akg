@@ -400,7 +400,8 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
                             llvm::SmallPtrSetImpl<mlir::Operation *> &visited);
 static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
-                                             func::FuncOp tilingFunc, OpBuilder &builder);
+                                             func::FuncOp tilingFunc, OpBuilder &builder,
+                                             std::string *failureReason = nullptr);
 
 // Attribute marking helpers
 static Value stripIndexLikeCasts(Value value);
@@ -483,7 +484,10 @@ static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Ope
 
 // Helper: clone the upper bound definition chain into tiling function
 static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
-                                             func::FuncOp tilingFunc, OpBuilder &builder) {
+                                             func::FuncOp tilingFunc, OpBuilder &builder, std::string *failureReason) {
+  if (failureReason != nullptr) {
+    failureReason->clear();
+  }
   if (!upperBound) {
     return {};
   }
@@ -522,13 +526,17 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
     return isa<arith::ConstantOp, arith::ConstantIndexOp, arith::ConstantIntOp, arith::IndexCastOp,
                arith::IndexCastUIOp, arith::CmpIOp, arith::SelectOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
                arith::DivSIOp, arith::DivUIOp, arith::CeilDivSIOp, arith::RemSIOp, arith::RemUIOp, arith::MinSIOp,
-               arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, affine::AffineApplyOp,
-               affine::AffineMinOp>(op);
+               arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, memref::CollapseShapeOp,
+               memref::ExpandShapeOp, affine::AffineApplyOp, affine::AffineMinOp>(op);
   };
 
   for (auto *op : ops) {
     if (!isSupportedOp(op)) {
-      llvm::dbgs() << "cloneUpperBoundDefinition: unsupported op " << op->getName() << "\n";
+      if (failureReason != nullptr) {
+        llvm::raw_string_ostream os(*failureReason);
+        os << "unsupported clone op " << op->getName();
+      }
+      llvm::dbgs() << "cloneUpperBoundDefinition: unsupported clone op " << op->getName() << "\n";
       return {};
     }
 
@@ -829,12 +837,27 @@ static LogicalResult emitLoopTripCountInTilingFunc(const TripCountEmitParams &pa
     return success();
   }
 
-  Value lb = cloneUpperBoundDefinition(loop.getLowerBound(), originalKernel, tilingFunc, builder);
-  Value ub = cloneUpperBoundDefinition(loop.getUpperBound(), originalKernel, tilingFunc, builder);
-  Value step = cloneUpperBoundDefinition(loop.getStep(), originalKernel, tilingFunc, builder);
-  if (!lb || !ub || !step) {
-    tilingFunc.emitError("failed to clone loop bounds when computing runtime parallel tile size");
+  auto emitCloneBoundFailure = [&](StringRef boundName, const std::string &failureReason) {
+    auto diag = tilingFunc.emitError("failed to clone loop ");
+    diag << boundName << " when computing runtime parallel tile size";
+    if (!failureReason.empty()) {
+      diag << ": " << failureReason;
+    }
     return failure();
+  };
+
+  std::string failureReason;
+  Value lb = cloneUpperBoundDefinition(loop.getLowerBound(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!lb) {
+    return emitCloneBoundFailure("lower bound", failureReason);
+  }
+  Value ub = cloneUpperBoundDefinition(loop.getUpperBound(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!ub) {
+    return emitCloneBoundFailure("upper bound", failureReason);
+  }
+  Value step = cloneUpperBoundDefinition(loop.getStep(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!step) {
+    return emitCloneBoundFailure("step", failureReason);
   }
 
   Location loc = tilingFunc.getLoc();
@@ -3398,9 +3421,14 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
             return failure();
           }
 
-          Value dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b);
+          std::string failureReason;
+          Value dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b, &failureReason);
           if (!dim) {
-            tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " + std::to_string(tileIdx));
+            auto diag = tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " +
+                                             std::to_string(tileIdx));
+            if (!failureReason.empty()) {
+              diag << ": " << failureReason;
+            }
             return failure();
           }
           step = emitDynamicTilePerDim({loc, b, dim, constraintMax, dynamicTileCoreNum});
