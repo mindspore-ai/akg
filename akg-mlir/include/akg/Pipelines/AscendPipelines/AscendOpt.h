@@ -62,6 +62,8 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
 
   Option<bool> enableMemoryDisplay{*this, "enable-memory-display",
                                    llvm::cl::desc("Enable ascend memory display tools."), llvm::cl::init(false)};
+
+  Option<unsigned> optLevel{*this, "opt-level", llvm::cl::desc("Optimization level (default: 2)"), llvm::cl::init(2)};
 };
 
 void createAscendOptPipeline(OpPassManager &pm, const AscendOptPipelineOptions &options);
