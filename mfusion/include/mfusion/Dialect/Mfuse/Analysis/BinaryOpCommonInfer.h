@@ -127,6 +127,9 @@ inline mlir::Type inferScalarType(mlir::Type scalarType, mlir::Type lhsType) {
     return lhsType;
   } else if (auto lhsInt = mlir::dyn_cast<mlir::IntegerType>(lhsType)) {
     if (auto scalarInt = mlir::dyn_cast<mlir::IntegerType>(scalarType)) {
+      if (lhsInt.getWidth() == 1 && scalarInt.getWidth() != 1) {
+        return scalarType;
+      }
       return lhsType;
     }
     return mlir::FloatType::getF32(lhsType.getContext());
@@ -162,18 +165,26 @@ inline mlir::Type inferBinaryOpResultType(mlir::Type lhs, mlir::Type rhs) {
   return lhs;
 }
 
+inline mlir::Type inferResultElementType(mlir::RankedTensorType lhsType, mlir::RankedTensorType rhsType) {
+  auto lhsElemType = lhsType.getElementType();
+  auto rhsElemType = rhsType.getElementType();
+
+  bool lhsIsScalar = isScalarType(lhsType);
+  bool rhsIsScalar = isScalarType(rhsType);
+  if (lhsIsScalar && !rhsIsScalar) {
+    lhsElemType = inferScalarType(lhsElemType, rhsElemType);
+  }
+  if (rhsIsScalar) {
+    rhsElemType = inferScalarType(rhsElemType, lhsElemType);
+  }
+  return inferBinaryOpResultType(lhsElemType, rhsElemType);
+}
+
 inline mlir::Type inferResultElementType(mlir::Value lhs, mlir::Value rhs) {
   auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
   auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
   if (!lhsType || !rhsType) return lhs.getType();
-
-  auto lhsElemType = lhsType.getElementType();
-  auto rhsElemType = rhsType.getElementType();
-
-  if (isScalarType(rhsType)) {
-    rhsElemType = inferScalarType(rhsElemType, lhsElemType);
-  }
-  return inferBinaryOpResultType(lhsElemType, rhsElemType);
+  return inferResultElementType(lhsType, rhsType);
 }
 
 /// Common type/shape inference for broadcastable binary ops (NumPy-style broadcasting).
@@ -249,18 +260,12 @@ class BinaryOpCommonInfer {
   }
 
   /// Infers result type for broadcastable binary ops using NumPy-style broadcasting.
-  static mlir::Type inferResultType(mlir::Value lhs, mlir::Value rhs, bool isCompareOp) {
-    auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
-    auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
-    if (!lhsType || !rhsType) {
-      return {};
-    }
-
+  static mlir::Type inferResultType(mlir::RankedTensorType lhsType, mlir::RankedTensorType rhsType, bool isCompareOp) {
     mlir::Type elementType;
     if (isCompareOp) {
-      elementType = mlir::IntegerType::get(lhs.getContext(), 1);
+      elementType = mlir::IntegerType::get(lhsType.getContext(), 1);
     } else {
-      elementType = inferResultElementType(lhs, rhs);
+      elementType = inferResultElementType(lhsType, rhsType);
     }
 
     std::vector<int64_t> lhsShapeVec(lhsType.getShape().begin(), lhsType.getShape().end());
@@ -272,6 +277,15 @@ class BinaryOpCommonInfer {
 
     llvm::ArrayRef<int64_t> resultShape(resultShapeVec);
     return mlir::RankedTensorType::get(resultShape, elementType);
+  }
+
+  static mlir::Type inferResultType(mlir::Value lhs, mlir::Value rhs, bool isCompareOp) {
+    auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
+    auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
+    if (!lhsType || !rhsType) {
+      return {};
+    }
+    return inferResultType(lhsType, rhsType, isCompareOp);
   }
 };
 
