@@ -17,13 +17,15 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/CanonicalizeBinaryScalarOperands.h"
 
 #include <optional>
+#include <string>
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/STLExtras.h"
 #include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Transforms/BinaryScalarUtils.h"
 #include "mfusion/Support/Logging.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
@@ -41,40 +43,15 @@ bool isCommutativeSupportedBinary(Operation *op) {
   return llvm::isa<AddOp, MulOp>(op);
 }
 
-bool isScalarConstant(Value value) {
-  auto constantOp = value.getDefiningOp<ConstantOp>();
-  if (!constantOp) {
-    return false;
+FailureOr<Type> inferCanonicalizedResultType(Operation *op, Value lhs, Value rhs) {
+  auto oldRankedType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  auto inferredType = dyn_cast_or_null<RankedTensorType>(BinaryOpCommonInfer::inferResultType(lhs, rhs, false));
+  if (!oldRankedType || !inferredType) {
+    return failure();
   }
-  return isScalarType(value.getType());
-}
-
-struct ScalarOperandInfo {
-  Value scalar;
-  Operation *numToTensor = nullptr;
-};
-
-std::optional<ScalarOperandInfo> getRecoverableScalar(Value value) {
-  if (isScalarConstant(value)) {
-    return ScalarOperandInfo{value};
-  }
-
-  auto numToTensorOp = value.getDefiningOp<NumToTensorOp>();
-  if (!numToTensorOp) {
-    return std::nullopt;
-  }
-
-  Value input = numToTensorOp.getValue();
-  if (!isScalarConstant(input)) {
-    return std::nullopt;
-  }
-  return ScalarOperandInfo{input, numToTensorOp.getOperation()};
-}
-
-void eraseDeadNumToTensor(PatternRewriter &rewriter, const std::optional<ScalarOperandInfo> &info) {
-  if (info && info->numToTensor && info->numToTensor->use_empty()) {
-    rewriter.eraseOp(info->numToTensor);
-  }
+  Type resultType =
+    RankedTensorType::get(oldRankedType.getShape(), inferredType.getElementType(), oldRankedType.getEncoding());
+  return resultType;
 }
 
 // This pass must run before FuseNumToTensor.
@@ -143,14 +120,16 @@ class CanonicalizeBinaryScalarOperandsPattern : public RewritePattern {
       return failure();
     }
 
-    OperationState newState(op->getLoc(), op->getName());
-    newState.addOperands(newOperands);
-    llvm::for_each(op->getAttrs(),
-                   [&](NamedAttribute attr) { newState.addAttribute(attr.getName(), attr.getValue()); });
-    llvm::for_each(op->getResultTypes(), [&](Type type) { newState.addTypes(type); });
+    FailureOr<Type> newResultType = inferCanonicalizedResultType(op, newOperands[0], newOperands[1]);
+    if (failed(newResultType)) {
+      return rewriter.notifyMatchFailure(op, "failed to infer canonicalized binary result type");
+    }
+    if (*newResultType != op->getResult(0).getType()) {
+      return rewriter.notifyMatchFailure(op, "canonicalization would change the binary result type");
+    }
+
     std::string opName = op->getName().getStringRef().str();
-    Operation *newOp = rewriter.create(newState);
-    rewriter.replaceOp(op, newOp->getResults());
+    rewriter.modifyOpInPlace(op, [&] { op->setOperands(newOperands); });
     eraseDeadNumToTensor(rewriter, lhsScalar);
     eraseDeadNumToTensor(rewriter, rhsScalar);
     MLOG(DEBUG) << "Canonicalized binary scalar operands for " << opName;
