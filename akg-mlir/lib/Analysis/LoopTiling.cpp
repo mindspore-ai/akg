@@ -3078,6 +3078,11 @@ static bool isInlineableParallelNonVectorPointLoop(mlir::scf::ForOp loop) {
   if (!innerAttr || innerAttr.getInt() != 1) {
     return false;
   }
+  // A clamped point loop may be empty on a tail tile, so its upper-bound guard
+  // must be preserved instead of unconditionally executing the body once.
+  if (loop.getUpperBound().getDefiningOp<affine::AffineMinOp>()) {
+    return false;
+  }
   return !loop->hasAttr(kVectorAttr) && !loop->hasAttr(kMultiVecLoopAttr) && !loop->hasAttr(kTransposeLoopAttr) &&
          !loop->hasAttr(kBroadcastLoopAttr) && !loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr) &&
          !hasReductionVectorAttr(loop);
