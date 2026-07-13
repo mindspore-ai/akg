@@ -4145,7 +4145,6 @@ static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const
   // Shared prefix axes are tiled first (e.g. i1,i2,i3), then each leaf axis is tiled independently.
   for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
     prefixBand.push_back(band[dim]);
-    band[dim]->removeAttr(kMultiVecLoopAttr);
   }
 
   prefixTileValues.reserve(tileLevels * plan.representativeLeafDim);
