@@ -157,7 +157,12 @@ def FuseBiasaddConv : Pass<"fuse-biasadd-conv", "::mlir::ModuleOp"> {
   let summary = "Fuse aclnn.conv2d (no bias) and Add (bias) into aclnn.conv2d_with_bias";
   let description = [{
     Fuses aclnn.conv2d without bias followed by BiasAdd/Add into a single
-    aclnn.conv2d_with_bias. Does not fuse when conv already has bias or shapes are dynamic.
+    aclnn.conv2d_with_bias. Accepts 1D bias [C] or single-use reshape(1D [C]) to
+    canonical NCHW broadcast shapes [1,C,1,1] / [C,1,1]. Does not fuse when conv
+    already has bias, shapes are dynamic, dtype mismatches, bare [C] is ambiguous
+    with trailing broadcast (N/H/W equals C), or the bias reshape has multiple users.
+    If fusion misses and a bare-[C] Add is illegal under trailing broadcast, rewrite
+    it to reshape([C]->[1,C,1,1])+add so downstream never sees a non-trailing Add.
   }];
   let constructor = "mlir::mfuse::createFuseBiasaddConvPass()";
   let dependentDialects = [
