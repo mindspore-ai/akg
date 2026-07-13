@@ -314,7 +314,16 @@ void AKGLoopFusion::replaceDimWithPrimes(func::FuncOp funcOp) {
 // Restore the original dim values after fusion is complete.
 // All dim values in the same axis group are replaced with a single representative dim value.
 void AKGLoopFusion::restoreDimFromPrimes() {
-  // Replace each prime with its corresponding representative dim
+  // Build a lookup from prime integer value to representative dim, so that
+  // static constants folded into affine maps can be matched back.
+  llvm::DenseMap<int64_t, Value> primeValueToDim;
+  for (auto &[primeConst, representativeDim] : primeToDimMap) {
+    if (auto constOp = primeConst.getDefiningOp<arith::ConstantIndexOp>()) {
+      primeValueToDim[constOp.value()] = representativeDim;
+    }
+  }
+
+  // Step 1: Replace SSA uses of prime constants with representative dims.
   for (auto &[primeConst, representativeDim] : primeToDimMap) {
     primeConst.replaceAllUsesWith(representativeDim);
 
@@ -324,6 +333,49 @@ void AKGLoopFusion::restoreDimFromPrimes() {
         constOp.erase();
       }
     }
+  }
+
+  // Step 2: Restore prime constants that were constant-folded into affine.for
+  // bounds during fusion. When the codegen creates a new loop whose bound
+  // operand is a prime constant, MLIR may fold it into a fully static affine
+  // map (e.g. "0 to 1000003" instead of "0 to %c1000003"). These are not SSA
+  // uses and are missed by replaceAllUsesWith above.
+  if (!primeValueToDim.empty()) {
+    func::FuncOp funcOp = getOperation();
+    Builder builder(funcOp.getContext());
+
+    funcOp.walk([&primeValueToDim, &builder](affine::AffineForOp forOp) {
+      auto restoreStaticBound = [&primeValueToDim, &builder](affine::AffineForOp targetForOp, bool isUpper) {
+        AffineMap boundMap = isUpper ? targetForOp.getUpperBoundMap() : targetForOp.getLowerBoundMap();
+        auto operands = isUpper ? targetForOp.getUpperBoundOperands() : targetForOp.getLowerBoundOperands();
+
+        // Only fully-static single-result bounds (no operands) can be folded primes.
+        if (!operands.empty() || boundMap.getNumResults() != 1) {
+          return;
+        }
+
+        auto constExpr = dyn_cast<AffineConstantExpr>(boundMap.getResult(0));
+        if (!constExpr) {
+          return;
+        }
+
+        auto it = primeValueToDim.find(constExpr.getValue());
+        if (it == primeValueToDim.end()) {
+          return;
+        }
+
+        // Convert to an operand-based bound: (s0) -> (s0).
+        auto newMap = AffineMap::get(0, 1, builder.getAffineSymbolExpr(0));
+        if (isUpper) {
+          targetForOp.setUpperBound(ValueRange(it->second), newMap);
+        } else {
+          targetForOp.setLowerBound(ValueRange(it->second), newMap);
+        }
+      };
+
+      restoreStaticBound(forOp, true);
+      restoreStaticBound(forOp, false);
+    });
   }
 
   // Clear state for next run
