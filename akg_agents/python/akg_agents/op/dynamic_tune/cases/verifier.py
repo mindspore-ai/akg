@@ -24,6 +24,7 @@ from typing import Any, Mapping
 
 from akg_agents.op.dynamic_tune.cases.case import _CaseSpec
 from akg_agents.op.dynamic_tune.cases.device import _push_default_device
+from akg_agents.op.verifier import aggregate
 
 
 class _KernelVerifierRunner:
@@ -310,12 +311,13 @@ class _KernelVerifierRunner:
 
         impl_per_shape = [float(v) for v in impl_matrix.latencies_us.flatten().tolist()]
         base_per_shape = [float(v) for v in base_matrix.latencies_us.flatten().tolist()]
-        import math as _math
 
-        per_shape_speedup = [b / i if i > 0 else 0.0 for i, b in zip(impl_per_shape, base_per_shape)]
-        speedup = float(_math.exp(sum(_math.log(s) for s in per_shape_speedup if s > 0) / len(per_shape_speedup))) if any(s > 0 for s in per_shape_speedup) else 0.0
-        impl_us = float(sum(impl_per_shape) / len(impl_per_shape))
-        base_us = float(sum(base_per_shape) / len(base_per_shape))
+        # speedup = geomean(base/impl) per shape; latencies = arith mean
+        # (single owner: op.verifier.aggregate).
+        per_shape_speedup = aggregate.per_shape_ratio(base_per_shape, impl_per_shape)
+        speedup = aggregate.geomean_ratio(base_per_shape, impl_per_shape) or 0.0
+        impl_us = aggregate.mean_us(impl_per_shape) or 0.0
+        base_us = aggregate.mean_us(base_per_shape) or 0.0
 
         return {
             "gen_time_us": impl_us,

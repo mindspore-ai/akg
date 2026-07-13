@@ -37,12 +37,13 @@ _DEFAULT_SKILLS = os.path.abspath(os.path.join(
 
 
 def skills_dir() -> str:
-    """Per-DSL skill documentation tree. Reads AKG_AGENTS_AR_SKILLS_ROOT if
-    set; falls back to the relative path under akg_agents."""
-    return os.environ.get("AKG_AGENTS_AR_SKILLS_ROOT", _DEFAULT_SKILLS)
-
-
-def latency_refs_dir() -> str:
-    """Back-compat alias for the skills tree root. guidance.py expands the
-    per-phase prompt Globs against this path."""
-    return skills_dir()
+    """Per-DSL skill tree. A relative AKG_AGENTS_AR_SKILLS_ROOT is resolved
+    against _WS_ROOT (the dir it's written relative to), not the process
+    cwd — hooks/pipeline/quick_check run from assorted cwds, and a
+    cwd-relative `..` would Glob a dead tree."""
+    env = os.environ.get("AKG_AGENTS_AR_SKILLS_ROOT")
+    if not env:
+        return _DEFAULT_SKILLS
+    if os.path.isabs(env):
+        return env
+    return os.path.abspath(os.path.join(_WS_ROOT, env))

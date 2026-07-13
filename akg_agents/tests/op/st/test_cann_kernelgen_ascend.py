@@ -23,7 +23,7 @@ import pytest
 from akg_agents.core.worker.manager import register_local_worker, register_remote_worker
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
-from akg_agents.op.utils.cann_utils import get_cann_task_desc_for_prompt
+from akg_agents.op.cann_correctness import get_cann_task_desc_for_prompt
 from akg_agents.utils.environment_check import check_env_for_task
 from ..utils import get_device_id
 

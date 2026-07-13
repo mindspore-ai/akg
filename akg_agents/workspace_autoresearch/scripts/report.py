@@ -71,6 +71,7 @@ def _generate_svg(history: list[dict], primary: str, lower_is_better: bool,
     rounds_discard, vals_discard = [], []
     rounds_fail, vals_fail = [], []
     best_rounds, best_vals = [], []
+    speedup_by_round: dict[int, float] = {}
     current_best: Optional[float] = None
 
     for rec in history:
@@ -78,7 +79,11 @@ def _generate_svg(history: list[dict], primary: str, lower_is_better: bool,
         if r is None:
             continue
         decision = rec.get("decision", "")
-        val = rec.get("metrics", {}).get(primary)
+        metrics = rec.get("metrics", {})
+        val = metrics.get(primary)
+        sp = metrics.get("speedup_vs_ref")
+        if isinstance(sp, (int, float)) and sp > 0:
+            speedup_by_round[int(r)] = float(sp)
 
         if decision == "FAIL":
             # correctness-FAIL: kernel ran 50 shapes but verify caught a
@@ -242,7 +247,9 @@ def _generate_svg(history: list[dict], primary: str, lower_is_better: bool,
                     filtered.append((kr, kv))
             filtered.reverse()
             for kr, kv in filtered:
-                speedup = ref_val / kv
+                speedup = speedup_by_round.get(int(kr))
+                if speedup is None:
+                    continue
                 p.append(
                     f'<text x="{sx(kr):.1f}" y="{sy(kv)-9:.1f}" text-anchor="middle" '
                     f'font-size="9" fill="darkgreen">{speedup:.1f}x</text>'
@@ -360,9 +367,9 @@ def render_report(task_dir: str) -> str:
             improvement_str = f"{pct:.1f}% increase"
 
     speedup_str = None
-    if (ref_val is not None and isinstance(best_val, (int, float))
-            and best_val > 0):
-        speedup_str = f"{ref_val / best_val:.2f}x"
+    best_speedup = progress.get("best_speedup")
+    if isinstance(best_speedup, (int, float)) and best_speedup > 0:
+        speedup_str = f"{best_speedup:.2f}x"
 
     task_name = progress.get("task") or os.path.basename(os.path.normpath(task_dir))
     svg = _generate_svg(history, primary, lower_is_better, ref_val, ref_label, task_name)

@@ -28,6 +28,30 @@ from akg_agents.utils.common_utils import create_log_dir
 from ..utils import get_device_id
 
 
+def _cann_env_ready() -> bool:
+    """These ST tests run the real CANN-Bench verify/profile scaffolds on an
+    Ascend NPU. They need (1) torch_npu in the interpreter and (2) a cann-bench
+    checkout exposing the kernel_eval.benches API (point AKG_CANN_BENCH_SRC at
+    one — upstream HEAD moved those loaders to kernel_eval.data). Skip cleanly
+    otherwise instead of failing with ModuleNotFoundError."""
+    try:
+        import importlib.util
+        if importlib.util.find_spec("torch_npu") is None:
+            return False
+        from akg_agents.op.verifier.cann_verifier import CANN_BENCH_SRC_DIR
+        return os.path.isdir(
+            os.path.join(CANN_BENCH_SRC_DIR, "kernel_eval", "benches"))
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _cann_env_ready(),
+    reason="needs torch_npu + a cann-bench checkout exposing kernel_eval.benches "
+           "(set AKG_CANN_BENCH_SRC)",
+)
+
+
 PROTO_YAML = yaml.dump({
     "operator": {
         "name": "Relu",

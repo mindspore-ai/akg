@@ -40,7 +40,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.utils.arch_normalize import ascend_direct_invoke_npu_arch
 from .base import DSLAdapter
 
@@ -175,6 +175,7 @@ class DSLAdapterAscendC(DSLAdapter):
     impl_func_name_template = "ModelNew"
     profile_via_python_script = True
     benchmark_requires_l2_clear = False
+    uses_cannbench_precision = True
 
     kernel_arg_is_directory = True
     kernel_project_dir_name = "ascendc_op"
@@ -213,7 +214,19 @@ class DSLAdapterAscendC(DSLAdapter):
         data_dir: Optional[str] = None,
         framework_output: Optional[str] = None,
     ) -> str:
-        return f"impl_output = impl_model(*{inputs})\n"
+        # Runtime anti-cheat: run the candidate under compute_gate (block by
+        # default; AKG_GUARD_MODE overrides), which DISABLES the core-compute
+        # leaves + bulk D2H at the dispatch layer for this forward. Delegation via
+        # Python torch.matmul, C++ torch::matmul, or nesting inside the candidate's
+        # own custom op all raise — no watcher blind spot. Static CodeChecker stays
+        # the pre-flight for raw aclnn* / torch_npu.npu_* (which never reach
+        # dispatch). Emitted as a local import + single expression so it is
+        # indentation neutral in the verify script.
+        return (
+            "from akg_agents.op.utils.code_checker.runtime_guard import "
+            "guarded_call as _akg_guarded_call\n"
+            f"impl_output = _akg_guarded_call(lambda: impl_model(*{inputs}))\n"
+        )
 
     def benchmark_impl(
         self,
@@ -247,7 +260,7 @@ class DSLAdapterAscendC(DSLAdapter):
                         ascendc_benchmark_fn,
                         warmup={warmup},
                         active={runs},
-                        prof_dir_name="prof_generation_output",
+                        prof_dir_name=f"prof_generation_output_case_{{case_idx}}",
                         keep_res=False,
                         suppress_warnings=True,
                         clear_l2_cache=False,
@@ -316,7 +329,7 @@ class DSLAdapterAscendC(DSLAdapter):
         self._setup_timeout = int(
             config.get("verify_timeout")
             or config.get("timeout")
-            or DEFAULT_EVAL_TIMEOUT_S
+            or resolve_eval_timeout()
         )
         self._setup_project_dir_name = project_dir_name
 
@@ -334,7 +347,7 @@ class DSLAdapterAscendC(DSLAdapter):
         project_dir_name = getattr(
             self, "_setup_project_dir_name", self.kernel_project_dir_name
         )
-        timeout = int(getattr(self, "_setup_timeout", DEFAULT_EVAL_TIMEOUT_S))
+        timeout = int(getattr(self, "_setup_timeout", resolve_eval_timeout()))
         return textwrap.dedent(
             f"""
             # --- ascendc direct-invoke rebuild ---
@@ -418,6 +431,9 @@ class DSLAdapterAscendC(DSLAdapter):
             )
 
             _build_dir = os.path.join(_project_dir, "build")
+            if os.path.isdir(_build_dir):
+                import shutil as _shutil
+                _shutil.rmtree(_build_dir, ignore_errors=True)
             os.makedirs(_build_dir, exist_ok=True)
 
             def _find_shared_objects(_root):
@@ -433,68 +449,64 @@ class DSLAdapterAscendC(DSLAdapter):
                             _matches.append(os.path.relpath(_path, _root))
                 return sorted(_matches)
 
-            _existing_so = _find_shared_objects(_build_dir)
-            if _existing_so:
-                print(f"[INFO]: ascendc using existing build: {{', '.join(_existing_so)}}")
-            else:
-                _cmake_cmd = [
-                    "cmake",
-                    "..",
-                    f"-DCMAKE_PREFIX_PATH={{_t.utils.cmake_prefix_path}}",
-                    f"-DPython_EXECUTABLE={{sys.executable}}",
-                    f"-DPython3_EXECUTABLE={{sys.executable}}",
-                    "-DNPU_ARCH={npu_arch}",
-                    "-DASCENDC_NPU_ARCH={npu_arch}",
-                ]
-                _cfg = subprocess.run(
-                    _cmake_cmd,
-                    cwd=_build_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout={timeout},
+            _cmake_cmd = [
+                "cmake",
+                "..",
+                f"-DCMAKE_PREFIX_PATH={{_t.utils.cmake_prefix_path}}",
+                f"-DPython_EXECUTABLE={{sys.executable}}",
+                f"-DPython3_EXECUTABLE={{sys.executable}}",
+                "-DNPU_ARCH={npu_arch}",
+                "-DASCENDC_NPU_ARCH={npu_arch}",
+            ]
+            _cfg = subprocess.run(
+                _cmake_cmd,
+                cwd=_build_dir,
+                capture_output=True,
+                text=True,
+                timeout={timeout},
+            )
+            if _cfg.returncode != 0:
+                _details = "\\n".join(
+                    _part for _part in (_cfg.stdout, _cfg.stderr) if _part
                 )
-                if _cfg.returncode != 0:
-                    _details = "\\n".join(
-                        _part for _part in (_cfg.stdout, _cfg.stderr) if _part
-                    )
-                    raise RuntimeError("ascendc cmake configure failed\\n" + _details)
-                if not _count:
-                    _cfg_log = "\\n".join(
-                        _part for _part in (_cfg.stdout, _cfg.stderr) if _part
-                    )
-                    _unused_arch_vars = {{
-                        _var for _var in ("NPU_ARCH", "ASCENDC_NPU_ARCH")
-                        if re.search(rf"(?m)^\\s*{{_var}}\\s*$", _cfg_log)
-                    }}
-                    if (
-                        "Manually-specified variables were not used by the project"
-                        in _cfg_log
-                        and _unused_arch_vars == {{"NPU_ARCH", "ASCENDC_NPU_ARCH"}}
-                    ):
-                        raise RuntimeError(
-                            "ascendc cmake ignored -DNPU_ARCH/-DASCENDC_NPU_ARCH; "
-                            "the build may be using a stale hard-coded --npu-arch. "
-                            "Add a literal --npu-arch=<dav-token> flag or consume "
-                            "${{NPU_ARCH}} / ${{ASCENDC_NPU_ARCH}}.\\n" + _cfg_log
-                        )
-                _build = subprocess.run(
-                    ["cmake", "--build", ".", "--parallel", "1"],
-                    cwd=_build_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout={timeout},
+                raise RuntimeError("ascendc cmake configure failed\\n" + _details)
+            if not _count:
+                _cfg_log = "\\n".join(
+                    _part for _part in (_cfg.stdout, _cfg.stderr) if _part
                 )
-                if _build.returncode != 0:
-                    _details = "\\n".join(
-                        _part for _part in (_build.stdout, _build.stderr) if _part
-                    )
-                    raise RuntimeError("ascendc cmake build failed\\n" + _details)
-                _built_so = _find_shared_objects(_build_dir)
-                if not _built_so:
+                _unused_arch_vars = {{
+                    _var for _var in ("NPU_ARCH", "ASCENDC_NPU_ARCH")
+                    if re.search(rf"(?m)^\\s*{{_var}}\\s*$", _cfg_log)
+                }}
+                if (
+                    "Manually-specified variables were not used by the project"
+                    in _cfg_log
+                    and _unused_arch_vars == {{"NPU_ARCH", "ASCENDC_NPU_ARCH"}}
+                ):
                     raise RuntimeError(
-                        f"ascendc build finished without a shared library in {{_build_dir}}"
+                        "ascendc cmake ignored -DNPU_ARCH/-DASCENDC_NPU_ARCH; "
+                        "the build may be using a stale hard-coded --npu-arch. "
+                        "Add a literal --npu-arch=<dav-token> flag or consume "
+                        "${{NPU_ARCH}} / ${{ASCENDC_NPU_ARCH}}.\\n" + _cfg_log
                     )
-                print(f"[INFO]: ascendc build successful: {{', '.join(_built_so)}}")
+            _build = subprocess.run(
+                ["cmake", "--build", ".", "--parallel", "1"],
+                cwd=_build_dir,
+                capture_output=True,
+                text=True,
+                timeout={timeout},
+            )
+            if _build.returncode != 0:
+                _details = "\\n".join(
+                    _part for _part in (_build.stdout, _build.stderr) if _part
+                )
+                raise RuntimeError("ascendc cmake build failed\\n" + _details)
+            _built_so = _find_shared_objects(_build_dir)
+            if not _built_so:
+                raise RuntimeError(
+                    f"ascendc build finished without a shared library in {{_build_dir}}"
+                )
+            print(f"[INFO]: ascendc build successful: {{', '.join(_built_so)}}")
             """
         )
 
@@ -522,6 +534,11 @@ class DSLAdapterAscendC(DSLAdapter):
                 or task_info.get("ascendc_project_src")
                 or task_info.get("kernel_project_src")
             )
+        project_dir_name = cfg.get("ascendc_op_dir") or self.kernel_project_dir_name
+        if (not project_src or not os.path.isdir(project_src)) and cfg.get("task_dir"):
+            candidate = os.path.join(os.path.abspath(cfg["task_dir"]), project_dir_name)
+            if os.path.isdir(candidate):
+                project_src = candidate
         if not project_src or not os.path.isdir(project_src):
             raise ValueError(
                 f"[{op_name}] ascendc_op_src not found or not a directory. "
@@ -530,7 +547,6 @@ class DSLAdapterAscendC(DSLAdapter):
                 f"Got: {project_src!r}"
             )
 
-        project_dir_name = cfg.get("ascendc_op_dir") or self.kernel_project_dir_name
         project_dst = os.path.join(verify_dir, project_dir_name)
         _copy_project_tree(project_src, project_dst)
         _assert_cmake_has_npu_arch_channel(project_dst, op_name)
@@ -563,6 +579,8 @@ class DSLAdapterAscendC(DSLAdapter):
         ]
 
     def post_iteration_cleanup(self, verify_dir: str) -> None:
+        if os.environ.get("AR_KEEP_BATCH_VERIFY_TEMP") == "1":
+            return
         project_dir = os.path.join(
             verify_dir,
             getattr(self, "_setup_project_dir_name", self.kernel_project_dir_name),

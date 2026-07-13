@@ -38,7 +38,8 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import Any, List, Optional
+import tempfile
+from typing import Any, List
 
 
 def _read_whole_file(path: str) -> str:
@@ -92,16 +93,28 @@ def sanitize_floats(obj: Any) -> Any:
     return obj
 
 
-def parse_last_json_line(text: str) -> Optional[dict]:
-    """Last `{...}` line in `text`, parsed. None if no line is valid
-    JSON. Non-JSON lines after the result don't cause false negatives."""
-    if not text:
-        return None
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    return None
+def atomic_write_text(path: str, text: str) -> None:
+    """Replace ``path`` with ``text`` using a writer-unique temp file."""
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        dir=parent, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def atomic_write_json(path: str, value: Any, *, indent: int = 2) -> None:
+    """Strict-JSON atomic write shared by state and intent records."""
+    atomic_write_text(
+        path,
+        json.dumps(sanitize_floats(value), ensure_ascii=False, indent=indent),
+    )

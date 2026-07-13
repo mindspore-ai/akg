@@ -22,7 +22,7 @@ Steps inside `with open_task(td, role="agent")`:
     1. quick_check → fail? rollback, report
     2. eval → get metrics
     3. t.record_round → KEEP/DISCARD/FAIL (journals + history + state)
-    4. t.settle_round → update plan.md, advance phase, clear pending_settle
+    4. t.settle_round → plan.md + atomic phase/pending_settle commit
     5. print status + next guidance
 
 Output: human-readable status to stdout. Claude Code sees it and acts accordingly.
@@ -41,82 +41,31 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPTS_ROOT)
 sys.path.insert(0, SCRIPT_DIR)
-from quick_check import check_editable_files, _run_smoke_test as _run_smoke
+
+# Logging is owned by akg_agents/__init__.py (root -> stdout) so the eval
+# INFO chain stays chronological and the AR Phase guidance lands last; the
+# imports below trigger it. No basicConfig here — single owner.
+
+from quick_check import (
+    check_editable_files, effective_edit_issue,
+    _run_smoke_test as _run_smoke,
+)
 from task_config import run_eval
-from utils.failure_extractor import extract_failure_signals, format_for_stdout
-from phase_machine import get_guidance, FINISH
+from utils.eval_summary import (
+    eval_result_to_dict, print_eval_metrics, print_failure_signals,
+)
+from utils.settings import recorded_speedup
+from phase_machine import EDIT, get_guidance
 from task_handle import (
     open_task, Role, TaskCorrupted, TaskConsistencyError,
-    TaskOwnershipError,
+    TaskOwnershipError, TaskPhaseError,
 )
 
 
-# pipeline._run_settle is still defined here (not on Task) because
-# Task.settle_round imports it via a local-scope `from engine.pipeline
-# import _run_settle` to avoid the package import cycle (workflow ←
-# task_handle ← engine.pipeline ← workflow). The function stays
-# self-contained: it's the only piece of "what does settle MEAN"
-# logic that has to know about plan.md row encoding + idempotency.
-def _run_settle(task_dir: str, kd_json: dict) -> tuple:
-    """Settle the active plan item in-process. Returns
-    ``(ok: bool, error_tail: str, settle_json: dict | None)``.
-
-    Idempotent w.r.t. plan_item: when kd_json's `plan_item` already
-    appears in plan.md's Settled History table, settle is considered
-    already-done (replay-safe). Otherwise it actually runs.
-    """
-    from workflow import PlanStore
-    from phase_machine import get_active_item
-    try:
-        decision = kd_json.get("decision", "FAIL")
-        # THIS round's measured metric, regardless of decision. None
-        # only when eval never produced a number (kernel crash before
-        # any case ran) — plan.md renders that as "N/A". KEEP /
-        # DISCARD / correctness-FAIL all surface the real latency.
-        metric_val = kd_json.get("round_metric")
-
-        store = PlanStore(task_dir)
-        if not store.exists():
-            return False, "plan.md not found", None
-
-        expected_item = kd_json.get("plan_item")
-        if expected_item:
-            current_active = get_active_item(task_dir)
-            current_id = (current_active or {}).get("id")
-            if current_id != expected_item:
-                settled_rows = store.parse_settled_history() or ""
-                if f"| {expected_item} |" in settled_rows:
-                    return True, "", {
-                        "settled_item": expected_item,
-                        "decision": decision,
-                        "metric": metric_val,
-                        "already_settled": True,
-                    }
-                return False, (
-                    f"plan.md ACTIVE is {current_id!r}, kd_json "
-                    f"expected {expected_item!r}, and {expected_item} "
-                    f"does NOT appear in Settled History. Plan is "
-                    f"either malformed or was rewritten by an "
-                    f"unrelated create_plan — pretending settle "
-                    f"succeeded would lose this round's kd_json. "
-                    f"Refusing; state.pending_settle retained for "
-                    f"manual inspection."
-                ), None
-
-        settled_id, _ = store.settle_active(decision, metric_val)
-        return True, "", {
-            "settled_item": settled_id,
-            "decision": decision,
-            "metric": metric_val,
-        }
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}", None
-
-
 def _emit_settle_failure(task_dir: str, error_tail: str) -> None:
-    print(f"[PIPELINE] SETTLE FAILED. plan.md was NOT updated. "
-          f"history.jsonl + state.json already moved during this "
-          f"round; re-running this script will RETRY SETTLE ONLY "
+    print(f"[PIPELINE] SETTLE INCOMPLETE. plan.md may already contain "
+          f"the idempotent settlement, but state.pending_settle is still "
+          f"authoritative; re-running this script will RETRY SETTLE ONLY "
           f"(kd_json was persisted to state.pending_settle) — it "
           f"will NOT re-run quick_check/eval/record_round.\n"
           f"\n"
@@ -138,30 +87,43 @@ def _emit_settle_failure(task_dir: str, error_tail: str) -> None:
 
 def _print_round_summary(t, decision: str, settled_id: str,
                          next_phase: str) -> None:
-    """Status line + guidance after a settled round."""
+    """Status line + guidance after a settled round.
+
+    Commit hash is included on KEEP rounds — that's the only decision
+    where best_commit changed this round, so reporting it here surfaces
+    "what kernel just got committed" without a duplicate stderr print
+    from record_round.
+    """
     # Progress is guaranteed initialised here (we're in EDIT, which
     # implies baseline committed). Read via Task's typed accessor.
     progress = t.progress
     rounds = progress.eval_rounds
     max_rounds = progress.max_rounds
     best = progress.best_metric
-    baseline = progress.baseline_metric
     failures = progress.consecutive_failures
 
+    # Stored geomean speedup (best_speedup); pct derived from it so both numbers
+    # are tied. Empty when unset — never re-derive from baseline/best latencies.
+    speedup = recorded_speedup(progress)
     improv = ""
-    if (best is not None and baseline is not None
-            and isinstance(best, (int, float))
-            and isinstance(baseline, (int, float))
-            and baseline != 0 and best != 0):
-        pct = (baseline - best) / abs(baseline) * 100
-        speedup = baseline / best
+    if speedup is not None:
+        pct = (1.0 - 1.0 / speedup) * 100
         improv = f" ({speedup:.2f}x vs ref, {pct:+.1f}%)"
+
+    best_str = f"{best:.2f}" if isinstance(best, (int, float)) else str(best)
+    commit_str = ""
+    if decision == "KEEP" and progress.best_commit:
+        commit_str = f" | commit: {progress.best_commit}"
 
     print(f"\n{'=' * 50}")
     print(f"[{decision}] {settled_id} | Round {rounds}/{max_rounds} | "
-          f"Best: {best}{improv} | Failures: {failures}")
+          f"Best: {best_str}{improv} | Failures: {failures}{commit_str}")
     print(f"Phase -> {next_phase}")
     print(f"{'=' * 50}")
+    # Drain any pending stderr (e.g. tracebacks from settle path) so
+    # the AR Phase guidance lands as the very last line in the capture.
+    sys.stderr.flush()
+    sys.stdout.flush()
     print(get_guidance(t.task_dir))
 
 
@@ -175,21 +137,20 @@ def _run_with_task(t) -> int:
     settle failure, etc.) return rc instead of raising so the session
     keeps its ownership claim — the agent will re-edit / retry and the
     next post_bash hook needs to find the active task."""
+    t.require_phase(EDIT, action="pipeline")
+
     # === Replay-only settle ===
     # open_task already ran replay_intent; if state.pending_settle is
     # non-null after that, a prior round committed history but the
     # settle didn't finish. Re-run settle only — do NOT re-eval.
     kd_json = t.pending_settle
     if kd_json:
-        print(f"[PIPELINE] Retrying settle from state.pending_settle "
-              f"(skipping quick_check/eval/record_round).", flush=True)
+        print("[PIPELINE] Retrying settle from state.pending_settle "
+              "(skipping quick_check/eval/record_round).", flush=True)
         try:
-            result = t.settle_round(kd_json)
-        except TaskCorrupted:
-            # _emit_settle_failure already wrote the stderr banner
-            # inside Task.settle_round. The agent can re-run
-            # pipeline.py to re-enter this branch idempotently —
-            # keep claim.
+            result = t.settle_round()
+        except TaskCorrupted as exc:
+            _emit_settle_failure(t.task_dir, str(exc))
             return 1
         _print_round_summary(t, kd_json.get("decision", "?"),
                              result["settled_item"] or "?",
@@ -209,7 +170,10 @@ def _run_with_task(t) -> int:
     # === Step 1: Quick check ===
     print("[PIPELINE] Running quick_check...", flush=True)
     try:
-        file_issues = check_editable_files(t.task_dir, config)
+        edit_issue = effective_edit_issue(t.task_dir, config)
+        file_issues = [edit_issue] if edit_issue else []
+        if not file_issues:
+            file_issues = check_editable_files(t.task_dir, config)
         smoke_errors = _run_smoke(t.task_dir, config)
     except Exception as exc:
         file_issues = [{"file": "(internal)",
@@ -227,7 +191,7 @@ def _run_with_task(t) -> int:
             blob["smoke_errors"] = smoke_errors
         print(f"[PIPELINE] QUICK CHECK FAIL: "
               f"{json.dumps(blob, ensure_ascii=False)[:200]}")
-        print(f"[PIPELINE] Auto-rolled back. Fix and re-edit.")
+        print("[PIPELINE] Auto-rolled back. Fix and re-edit.")
         print(get_guidance(t.task_dir))
         return 0  # rollback is normal pipeline flow — agent will re-edit
 
@@ -236,29 +200,24 @@ def _run_with_task(t) -> int:
     # === Step 2: Eval ===
     print("[PIPELINE] Running eval...", flush=True)
     try:
-        result = run_eval(t.task_dir, config)
+        # Verify-dir step = the round about to be recorded. Same SSOT rule
+        # (progress.next_round) record_round derives from, so the StepNN
+        # artifacts and the history row agree — no number passed across.
+        result = run_eval(t.task_dir, config,
+                          current_step=t.progress.next_round)
     except Exception as e:
         t.rollback_edit()
         print(f"[PIPELINE] EVAL ERROR: run_eval raised "
               f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    eval_json = {
-        "outcome": result.outcome.value,
-        "correctness": result.correctness,
-        "metrics": result.metrics or {},
-        "error": result.error,
-        "error_source": result.error_source,
-    }
-    if not result.correctness or result.error:
-        eval_json["failure_signals"] = extract_failure_signals(
-            result.raw_output).to_dict()
-        eval_json["raw_output_tail"] = (result.raw_output or "")[-4000:]
+    eval_json = eval_result_to_dict(result)
 
-    correctness = eval_json.get("correctness", False)
-    metrics = eval_json.get("metrics", {})
-    print(f"[PIPELINE] Eval: correctness={correctness}, "
-          f"metrics={metrics}", flush=True)
+    # Compact summary + per-shape table replaces the old dict dump
+    # (per_shape_descs alone was ~4KB of unstructured noise). Full
+    # per-shape arrays still live in .ar_state/akg_verify/<task>/...
+    # for offline inspection.
+    print_eval_metrics(eval_json, "PIPELINE")
 
     # infra_fail: eval pipeline broke before kernel was meaningfully
     # exercised. Roll back and skip the round — recording a FAIL here
@@ -270,16 +229,7 @@ def _run_with_task(t) -> int:
               f"Rolled back, not recording round.", flush=True)
         return 0
 
-    if not correctness or eval_json.get("error"):
-        if eval_json.get("error"):
-            print(f"[PIPELINE] Error: {eval_json['error']}", flush=True)
-        pretty = format_for_stdout(eval_json.get("failure_signals") or {})
-        if pretty:
-            print(pretty, flush=True)
-        elif eval_json.get("raw_output_tail"):
-            print("[PIPELINE] Eval log tail (no structured signals "
-                  "matched):", flush=True)
-            print(eval_json["raw_output_tail"], flush=True)
+    print_failure_signals(eval_json, "PIPELINE")
 
     # === Step 3: Record round ===
     kd_json = t.record_round(eval_json, description=desc,
@@ -291,11 +241,9 @@ def _run_with_task(t) -> int:
 
     # === Step 4 + 5: Settle (advances phase + clears pending) ===
     try:
-        result = t.settle_round(kd_json)
-    except TaskCorrupted:
-        # banner already printed by Task.settle_round; keep claim so
-        # the agent's next pipeline.py invocation enters the replay
-        # branch.
+        result = t.settle_round()
+    except TaskCorrupted as exc:
+        _emit_settle_failure(t.task_dir, str(exc))
         return 1
     _print_round_summary(t, decision, result["settled_item"] or "?",
                          result["next_phase"])
@@ -303,11 +251,16 @@ def _run_with_task(t) -> int:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python pipeline.py <task_dir>")
+    argv = sys.argv[1:]
+    # --trace: keep the msprof trace dirs (timeline + CSVs) for analysis.
+    if "--trace" in argv:
+        os.environ["AKG_PROF_KEEP_RES"] = "1"
+        argv = [a for a in argv if a != "--trace"]
+    if not argv:
+        print("Usage: python pipeline.py <task_dir> [--trace]")
         sys.exit(1)
 
-    task_dir = os.path.abspath(sys.argv[1])
+    task_dir = os.path.abspath(argv[0])
 
     # The body returns rc; sys.exit happens AFTER the with-block so
     # SystemExit from a non-zero normal completion doesn't trip
@@ -321,6 +274,9 @@ def main():
         print(f"[PIPELINE] REFUSING TO RUN — {e}", file=sys.stderr)
     except TaskOwnershipError as e:
         print(f"[PIPELINE] cannot run: {e}", file=sys.stderr)
+        rc = 2
+    except TaskPhaseError as e:
+        print(f"[PIPELINE] refused: {e}", file=sys.stderr)
         rc = 2
 
     sys.exit(rc)

@@ -28,11 +28,12 @@
 
 import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-from akg_agents.core.worker.interface import (
-    DEFAULT_WARMUP_TIMES, DEFAULT_RUN_TIMES,
+from akg_agents.core.worker.eval_config import (
+    resolve_run_times,
+    resolve_warmup_times,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,8 @@ async def generate_reference_with_profile(
     framework: str = "torch",
     log_dir: str = None,
     task_id: str = "0",
-    warmup_times: int = DEFAULT_WARMUP_TIMES,
-    run_times: int = DEFAULT_RUN_TIMES,
+    warmup_times: Optional[int] = None,
+    run_times: Optional[int] = None,
     timeout: int = 180
 ) -> CrossPlatformReferenceResult:
     """
@@ -86,6 +87,8 @@ async def generate_reference_with_profile(
     import torch
     
     result = CrossPlatformReferenceResult()
+    warmup_times = resolve_warmup_times(warmup_times)
+    run_times = resolve_run_times(run_times)
 
     # 创建 KernelVerifier 实例
     if log_dir is None:
@@ -159,8 +162,8 @@ def create_cross_platform_config(
     base_config: Dict[str, Any],
     reference_bytes: bytes,
     gpu_kernel_time_us: float,
-    warmup_times: int = DEFAULT_WARMUP_TIMES,
-    run_times: int = DEFAULT_RUN_TIMES,
+    warmup_times: Optional[int] = None,
+    run_times: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     创建跨平台 Evolve 的配置
@@ -172,14 +175,16 @@ def create_cross_platform_config(
     config['use_reference_data'] = True
     config['reference_data'] = reference_bytes
     config['gpu_kernel_time_us'] = gpu_kernel_time_us
+    warmup_times = resolve_warmup_times(warmup_times)
+    run_times = resolve_run_times(run_times)
     
-    # 设置 profile_settings，包含 override_base_time_us
-    # 这样 NPU 端的 profile 会使用 GPU kernel 时间作为 base_time
-    # speedup = gpu_time / npu_gen_time 才有意义
+    # NPU profile 用 GPU kernel 时间当 base，speedup = gpu / npu_gen
+    from akg_agents.op.verifier.profiler_utils import make_profile_section
     config['profile_settings'] = {
         'run_times': run_times,
         'warmup_times': warmup_times,
-        'override_base_time_us': gpu_kernel_time_us,  # 跨平台关键：用 GPU 时间替换 base_time
+        'override_base_section': make_profile_section(
+            gpu_kernel_time_us, method="override"),
     }
     
     return config

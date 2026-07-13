@@ -39,7 +39,7 @@ from .validators import (
     DIAGNOSE_READY, DIAGNOSE_MANUAL_FALLBACK,
 )
 # state_store (imported above) puts scripts/ on sys.path, so utils resolves.
-from utils.external_paths import latency_refs_dir  # noqa: E402
+from utils.external_paths import skills_dir  # noqa: E402
 
 
 def _format_fail_record(rec: dict,
@@ -56,7 +56,7 @@ def _format_fail_record(rec: dict,
 
     `progress` is passed through to `_failed_shapes_block` so per-shape
     correctness failures (eval_client's `correctness_failed_cases` etc.)
-    get rendered with their describe_case() strings inline.
+    get rendered with their stored per-shape descriptions inline.
     """
     rnd = rec.get("round", "?")
     desc = (rec.get("description") or "")[:80]
@@ -64,7 +64,6 @@ def _format_fail_record(rec: dict,
 
     sig = rec.get("failure_signals") or {}
     signals = sig.get("signals") or []
-    primary = sig.get("primary")
     python_error = sig.get("python_error")
 
     for s in signals[:2]:  # at most two distinct kinds, the rest is noise
@@ -89,12 +88,13 @@ def _format_fail_record(rec: dict,
         err = (rec.get("error") or "").strip()
         if err and "verify failed (kernel broken)" not in err:
             out.append(f"      error: {err[:160]}")
-        tail = (rec.get("raw_output_tail") or "").strip()
+        tail = (sig.get("tail_excerpt") or rec.get("raw_output_tail") or "").strip()
         if tail:
-            # Strip noisy whitespace-only lines from the tail head, keep
-            # the last couple of lines - that's where Python tracebacks
-            # and ACL runtime errors land.
-            keep = [l for l in tail.splitlines()[-4:] if l.strip()]
+            # Prefer failure_extractor's filtered tail when present; fall
+            # back to the raw tail for old history rows. In either case,
+            # keep the final lines because Python tracebacks and ACL/CANN
+            # runtime errors usually land there after noisy warnings.
+            keep = [l for l in tail.splitlines()[-8:] if l.strip()]
             if keep:
                 out.append("      tail:")
                 for line in keep:
@@ -139,10 +139,11 @@ _PLAN_XML_RULES = (
     "Plan item schema (each rule below maps to a create_plan.py check):\n"
     "  - Root <items> has NO attributes.\n"
     "  - At least 3 <item> children. NO attributes on <item> (pid is auto-assigned).\n"
-    "  - Each <item> has EXACTLY two children: <desc> and <rationale>.\n"
+    "  - Each <item> has EXACTLY three children: <desc>, <rationale>, <skill>.\n"
     "    NO <id>, <pid>, <keywords>, <priority>, or any other tag.\n"
     "  - <desc>: short prose sentence, >=12 chars, MUST contain spaces.\n"
     "  - <rationale>: 30-400 chars, explains WHY the change should help.\n"
+    "  - <skill>: concrete skill filename, e.g. `ascendc-direct-invoke/SKILL.md`.\n"
     "  - At most ONE item may be pure parameter tuning (block size / num_warps /\n"
     "    num_stages / autotune sweep). The rest must be structural changes:\n"
     "    algorithmic / fusion / memory layout / data movement.\n"
@@ -166,6 +167,7 @@ _PLAN_XML_EXAMPLE = (
     '    <rationale>The separate activation kernel re-reads the matmul output '
     'from DRAM; folding it into the epilogue removes one round-trip and one '
     'launch overhead.</rationale>\n'
+    '    <skill>ascendc-direct-invoke/SKILL.md</skill>\n'
     '  </item>\n'
     '  <item>\n'
     '    <desc>Transpose the input layout so the reduction axis is contiguous '
@@ -173,12 +175,44 @@ _PLAN_XML_EXAMPLE = (
     '    <rationale>Current reduction stride is 16380 bytes, which traps the '
     'vector core because it needs 256-byte-aligned access. Making the reduce '
     'axis contiguous gives aligned vectorised loads.</rationale>\n'
+    '    <skill>ascendc-profiling-optimization/SKILL.md</skill>\n'
     '  </item>\n'
     '  <item>\n'
     '    <desc>Pad the inner dimension to a multiple of 64 elements</desc>\n'
     '    <rationale>The current inner dim is 4095, one short of the 4096 '
     'alignment the vector unit needs; padding to the next multiple lets the '
     'main loop drop its tail-handling branch entirely.</rationale>\n'
+    '    <skill>ascendc-direct-invoke/SKILL.md</skill>\n'
+    '  </item>\n'
+    '</items>'
+)
+# One-line schema reminder for re-plans (REPLAN / DIAGNOSE / repeat PLAN).
+# The agent already authored plan.md once and has it on disk as a live
+# example, so the full _PLAN_XML_RULES + _PLAN_XML_EXAMPLE blocks are pure
+# repetition — create_plan.py re-validates everything anyway. The freed
+# prompt budget goes to _skills_hint(), which is where re-plans actually
+# need help.
+_PLAN_SCHEMA_ONELINE = (
+    "Schema (same as your existing plan.md, create_plan.py re-checks it): "
+    ">= 3 <item>, each with EXACTLY <desc> (prose, has spaces) / <rationale> "
+    "(30-400 chars) / <skill> (a SKILL.md filename); no attributes on any "
+    "tag; at most ONE pure parameter-tuning item, the rest structural."
+)
+# Single-item shape shown on re-plans — enough to anchor the tag nesting
+# without the full 3-item block. The rationale deliberately cites a
+# reference doc, modelling the skills-hint rule "name the deeper doc in
+# <rationale>". No XML comments inside the structure (design note 2: the
+# agent treats them as part of the shape and leaks them) — the "repeat"
+# instruction lives in the prose around this block.
+_PLAN_XML_EXAMPLE_ONE = (
+    '<items>\n'
+    '  <item>\n'
+    '    <desc>Reuse the second calc buffer for the sigmoid output instead '
+    'of a third allocation</desc>\n'
+    '    <rationale>ascendc-ub-budget reduce-buffer note: freeing one '
+    'TILE*4 fp32 slot lets BUFFER_NUM go 2->3 within the 192KB UB, '
+    'enabling MTE2/V overlap.</rationale>\n'
+    '    <skill>ascendc-ub-budget/SKILL.md</skill>\n'
     '  </item>\n'
     '</items>'
 )
@@ -189,35 +223,52 @@ _PLAN_XML_EXAMPLE = (
 _PLAN_FIELD_RULES = _PLAN_XML_RULES
 
 
-def _create_plan_instruction(task_dir: str) -> str:
-    """Common 'how to invoke create_plan.py' block used by PLAN, DIAGNOSE,
-    and REPLAN guidance. Emits the canonical two-step flow:
+def _create_plan_instruction(task_dir: str, *, first_plan: bool = True) -> str:
+    """'How to invoke create_plan.py' block for PLAN / DIAGNOSE / REPLAN.
 
-      1. Write XML to the FIXED path .ar_state/plan_items.xml.
-      2. Run create_plan.py with just <task_dir> - it reads from that path.
+    Emits the canonical two-step flow (write XML to the FIXED path, then
+    run create_plan.py with just <task_dir>). The fixed path eliminates
+    the LLM-drift class where the model wrote to one path then passed a
+    different `@<path>` to create_plan.
 
-    The fixed path eliminates the LLM-drift class where the model wrote
-    to one path and then passed a different `@<path>` to create_plan
-    (most often a hallucinated /tmp/... or a typoed task subdir).
+    first_plan controls the schema teaching:
+      - first_plan=True (the very first PLAN, plan_version 0): print the
+        full _PLAN_XML_RULES + the worked 3-item _PLAN_XML_EXAMPLE so the
+        agent learns the format once.
+      - first_plan=False (every re-plan: REPLAN, DIAGNOSE, or a PLAN
+        revisited with plan_version >= 1): the agent already wrote plan.md
+        and has it on disk as a live example. Re-printing the rules +
+        example is pure repetition (create_plan.py re-validates anyway),
+        so collapse to a one-line schema reminder and spend the budget on
+        the skills/reference guidance instead.
     """
     xml_path = state_path(task_dir, PLAN_ITEMS_FILE)
-    return (
+    invoke = (
         f"To create the plan, do EXACTLY these two steps:\n"
         f"  1. Use the Write tool to write your <items>...</items> XML to:\n"
         f"       {xml_path}\n"
         f"     (Path is fixed - do NOT invent a different path, do NOT use "
-        f"/tmp/, do NOT pass it as a CLI arg later. The Write tool is the "
-        f"only thing that touches this path.)\n"
-        f"  2. Run:\n"
-        f"       python scripts/engine/create_plan.py \"{task_dir}\"\n"
-        f"     (No second argument. The script reads .ar_state/{PLAN_ITEMS_FILE} "
-        f"automatically. Adding `@/some/path` reintroduces the drift this "
-        f"two-step form exists to prevent.)\n"
+        f"/tmp/, do NOT pass it as a CLI arg later.)\n"
+        f"  2. Run: python scripts/engine/create_plan.py \"{task_dir}\"\n"
+        f"     (No second argument. The script reads .ar_state/"
+        f"{PLAN_ITEMS_FILE} automatically.)\n"
+    )
+    if not first_plan:
+        return (
+            f"{invoke}\n"
+            f"{_PLAN_SCHEMA_ONELINE}\n"
+            f"\n"
+            f"Shape of a single <item> (repeat per change; count + "
+            f"constraints are in the schema line above):\n"
+            f"{_PLAN_XML_EXAMPLE_ONE}\n"
+        )
+    return (
+        f"{invoke}"
         f"\n"
         f"{_PLAN_XML_RULES}\n"
         f"\n"
-        f"Canonical example (copy the SHAPE - three items, two children each;\n"
-        f"replace the contents with items that fit YOUR task):\n"
+        f"Canonical example (copy the SHAPE - three items, three children "
+        f"each;\nreplace the contents with items that fit YOUR task):\n"
         f"{_PLAN_XML_EXAMPLE}\n"
     )
 
@@ -251,9 +302,40 @@ def _load_config_safe(task_dir: str):
 
 
 def _skills_subtree(dsl: str) -> str:
-    root = os.path.abspath(latency_refs_dir())
-    path = os.path.join(root, dsl)
-    return path.replace(os.sep, "/")
+    root = os.path.abspath(skills_dir())
+    # Skill dirs are kebab-case (e.g. `triton-ascend`), but skill_dsl may arrive
+    # with underscores (operators copy the DSL adapter id `triton_ascend`).
+    # Prefer whichever variant actually exists so the Glob hint points at a real
+    # directory instead of returning zero matches.
+    for cand in (dsl, dsl.replace("_", "-")):
+        p = os.path.join(root, cand)
+        if os.path.isdir(p):
+            return p.replace(os.sep, "/")
+    return os.path.join(root, dsl.replace("_", "-")).replace(os.sep, "/")
+
+
+def _skills_catalog(subtree: str, *, limit: int = 20) -> str:
+    """Comma-joined list of the actual skill names under the subtree (the
+    leaf dir of each SKILL.md, e.g. `ascendc-ub-budget`).
+
+    Used for the 'match your bottleneck' hint. Built from the tree on disk
+    so it stays DSL-correct — the old hardcoded list (UB budget, reduce,
+    aliasing...) was AscendC vocabulary that would mislead a triton / cpp
+    plan. Names are kept verbatim (no prefix stripping) so each one is
+    usable as-is in a `<skill>` tag (`<name>/SKILL.md`). '' when none."""
+    names: set[str] = set()
+    try:
+        for dirpath, _dirnames, filenames in os.walk(subtree):
+            if "SKILL.md" in filenames:
+                names.add(os.path.basename(dirpath))
+    except OSError:
+        return ""
+    ordered = sorted(names)
+    if not ordered:
+        return ""
+    shown = ordered[:limit]
+    tail = ", ..." if len(ordered) > limit else ""
+    return ", ".join(shown) + tail
 
 
 def _skills_hint() -> str:
@@ -272,19 +354,48 @@ def _skills_hint() -> str:
     skills tree and not a "<dsl>" placeholder that the Glob tool would
     treat as a literal dir name and return zero matches for.
     """
-    if not os.path.isdir(latency_refs_dir()):
+    if not os.path.isdir(skills_dir()):
         return ""
     from utils.settings import skill_dsl as _skill_dsl
     dsl = _skill_dsl()
     subtree = _skills_subtree(dsl)
+    catalog = _skills_catalog(subtree)
+    # Bare leaf names; each sits under some category subdir, so locate via
+    # the `**/` glob above, not a flat `{subtree}/<name>` guess.
+    catalog_clause = (
+        f" Names for `{dsl}` (each lives under some category subdir — reach it "
+        f"via the `**/` glob above, don't guess the parent): {catalog}."
+    ) if catalog else ""
     return (
-        f"\nSkills: Glob {subtree}/**/SKILL.md "
-        f"(skill subdirs are `fundamentals/` `guides/` `cases/` "
-        f"`examples/` `evolved-improvement/` `evolved-fix/`), "
-        f"Read 1-3 most relevant "
-        f"to a candidate plan-item direction. Citing the filename in "
-        f"the rationale is recommended for traceability but not "
-        f"enforced."
+        f"\nSkills & references (DO THIS BEFORE writing items - most weak "
+        f"rounds skipped it):\n"
+        f"  1. Glob {subtree}/**/SKILL.md and Read the 1-3 whose description "
+        f"matches your bottleneck.{catalog_clause}\n"
+        f"  2. SKILL.md files are INDEXES. Follow their `references/` / "
+        f"`reference/` links and Read the specific doc for your case - the "
+        f"concrete technique (the byte budget, the API signature, the "
+        f"bound-type strategy) lives in the linked doc, not the index.\n"
+        f"  3. Each <skill> tag = the SKILL.md you actually read; name the "
+        f"deeper reference doc inside that item's <rationale> so EDIT knows "
+        f"where the technique came from. An item whose rationale cites no "
+        f"doc is usually a guess."
+    )
+
+
+def _active_skill_hint(skill: str) -> str:
+    """EDIT hint to read THIS item's bound skill doc. `<skill>` is a bare
+    `<dir>/SKILL.md` (no category parent), so anchor with `**/` to match
+    whatever subdir it lives under. '' when no skill / no skills tree."""
+    skill = (skill or "").strip()
+    if not skill or not os.path.isdir(skills_dir()):
+        return ""
+    from utils.settings import skill_dsl as _skill_dsl
+    subtree = _skills_subtree(_skill_dsl())
+    return (
+        f"\nBound skill: Glob `{subtree}/**/{skill}` and Read the match "
+        f"before editing — it's the technique source for this item's "
+        f"approach. SKILL.md is an index; follow its `references/` links to "
+        f"the doc with the concrete signature / byte budget / write-up."
     )
 
 
@@ -416,7 +527,7 @@ def _failed_shapes_block(metrics: Optional[dict],
       - correctness_worst_case:   index with the largest max_abs_diff
       - correctness_worst_max_abs: that diff
 
-    Resolves indices to describe_case() strings via progress.per_shape_descs
+    Resolves indices via progress.per_shape_descs
     so the agent sees both the index and the actual shape it fouled up.
     Returns "" when none of those fields are present (e.g. compile-error
     failure with no per-case detail, or single-shape op where the failure
@@ -472,10 +583,30 @@ def _diagnose_plan_next_step(task_dir: str, *,
         f"Create a NEW plan with >= 3 diverse items using {source}.\n"
         f"Max 1 parameter-tuning item; the rest must be structural changes "
         f"(algorithmic / fusion / memory layout / data movement).\n\n"
-        f"{_create_plan_instruction(task_dir)}"
+        f"{_create_plan_instruction(task_dir, first_plan=False)}"
         f"\nAfter create_plan.py validates, the hook advances phase to EDIT "
-        f"and emits the TodoWrite payload."
+        f"and emits the plan-mirror payload."
     )
+
+
+def _trace_analysis_block(task_dir: str, backend: str) -> str:
+    """Tell the agent about existing --trace captures + how to read them;
+    empty when none / non-Ascend. Used by PLAN/REPLAN/DIAGNOSE."""
+    if backend != "ascend":
+        return ""
+    import glob
+    dirs = glob.glob(os.path.join(
+        task_dir, ".ar_state", "akg_verify", "**",
+        "prof_generation_output_case_*"), recursive=True)
+    if not dirs:
+        return ""
+    return (
+        f"\n[trace] {len(dirs)} prior --trace capture(s) under akg_verify/<op>/"
+        "Iteration*_Step<round>_verify/prof_generation_output_case_<N>/ "
+        "(case_<N> = per-shape #N). Read kernel_details.csv / op_statistic.csv "
+        "(per-op time) to find the hotspot op / cube-vs-vector bound before "
+        "planning; trace_view.json (same dir) is the full timeline — open in "
+        "perfetto / chrome://tracing.\n")
 
 
 def get_guidance(task_dir: str) -> str:
@@ -563,24 +694,38 @@ def get_guidance(task_dir: str) -> str:
                 f"{failed_shapes_block}"
             )
 
+        # Full schema + worked example only on the very first plan
+        # (plan_version 0). A PLAN re-entered after a plan already exists
+        # gets the one-line schema reminder — same logic as REPLAN.
+        first_plan = (progress or {}).get("plan_version", 0) == 0
         return (f"[AR Phase: PLAN] "
                 f"Target DSL: {target_dsl} (skills: {skill_name}, backend: {backend}). "
                 f"Read task.yaml, reference.py, and editable files "
                 f"({_editable_scope_text(editable)}). Directory-backed DSLs "
                 f"may expose multiple editable project files; plan only "
                 f"changes inside that editable surface.{_skills_hint()}"
-                f"{metric_hint}{plan_note_section}{seed_failed_section}\n"
+                f"{metric_hint}{plan_note_section}{seed_failed_section}"
+                f"{_trace_analysis_block(task_dir, backend)}\n"
                 f"\n"
-                f"{_create_plan_instruction(task_dir)}"
+                f"{_create_plan_instruction(task_dir, first_plan=first_plan)}"
                 f"\n"
                 f"The script writes plan.md in the correct format. Hook validates and advances to EDIT.\n"
-                f"(After validation the hook emits a TodoWrite payload - call "
-                f"it verbatim; do not pre-emptively craft one here.)")
+                f"(After validation the hook emits the plan-mirror payload; "
+                f"mirror it verbatim, do not pre-emptively craft one here.)")
 
     if phase == EDIT:
         desc = active["description"] if active else "(no active item)"
         item_id = active["id"] if active else "?"
+        skill_hint = _active_skill_hint(active.get("skill", "")) if active else ""
         files_hint = f" (files: {', '.join(editable)})" if editable else ""
+        # --trace hint only on Ascend (msprof); irrelevant noise on CUDA.
+        trace_hint = (
+            f"PROFILE (only when evidence is needed): run `python "
+            f"scripts/engine/pipeline.py \"{task_dir}\" --trace` to keep "
+            f"trace_view.json plus kernel_details / op_statistic CSVs. Later "
+            f"planning or diagnosis guidance automatically surfaces them; "
+            f"read the CSVs first for hotspot / bound analysis.\n"
+            if backend == "ascend" else "")
         # No multi-shape note here. EDIT prompts already carry the active
         # plan item's description and the agent has the file list; piling
         # the full shape spec on top every EDIT phase (10-20+ times per
@@ -589,16 +734,17 @@ def get_guidance(task_dir: str) -> str:
         # next DIAGNOSE / PLAN retry will surface the offending shapes via
         # _failed_shapes_block.
         return (f"[AR Phase: EDIT] ACTIVE item: **{item_id}** - {desc}\n"
-                f"{files_hint}\n"
+                f"{files_hint}{skill_hint}\n"
                 f"CRITICAL: Implement ONLY {item_id}'s idea. Do NOT implement other plan items.\n"
                 f"Target DSL: {target_dsl}; edit only task.yaml editable_files. "
                 f"For directory-backed DSLs, this may include wrapper and "
                 f"project source/build files, not just kernel.py.\n"
                 f"The pipeline will settle {item_id} with this round's metric.\n"
                 f"Make your edit(s), then: python scripts/engine/pipeline.py \"{task_dir}\"\n"
-                f"(TodoWrite payloads are delivered by the hook after each "
-                f"settle / create_plan - call them verbatim when emitted; "
-                f"do not synthesize TodoWrite calls from this hint.)")
+                f"{trace_hint}"
+                f"(The hook delivers the plan-mirror payload after each "
+                f"settle / create_plan; mirror it verbatim, do not "
+                f"synthesize one from this hint.)")
 
     if phase == DIAGNOSE:
         # Pre-bake the recent-rounds summary INTO the subagent prompt so the
@@ -670,7 +816,7 @@ def get_guidance(task_dir: str) -> str:
         # Without the dir-existence check we'd hand the agent a Glob
         # pattern that returns zero matches, and they'd silently skip
         # the skill-reading step.
-        skills_present = os.path.isdir(latency_refs_dir())
+        skills_present = os.path.isdir(skills_dir())
         # Resolve to the literal kebab-case DSL dir name so the Glob
         # patterns below target an actual subtree (`triton-ascend/`
         # etc.) rather than the literal `<dsl>` token, which the Glob
@@ -678,15 +824,14 @@ def get_guidance(task_dir: str) -> str:
         dsl = skill_name
         if skills_present:
             subtree = _skills_subtree(dsl)
+            catalog = _skills_catalog(subtree)
+            catalog_clause = f" Available: {catalog}." if catalog else ""
             skills_block = (
                 f"Read curated DSL-specific skill references for "
                 f"`{dsl}` (use them to ground fix directions in "
                 f"known-good patterns for this hardware):\n"
-                f"  - Glob {subtree}/**/SKILL.md "
-                f"(subdirs: `fundamentals/` `guides/` `cases/` "
-                f"`examples/` `evolved-improvement/` `evolved-fix/`) "
-                f"and Read what "
-                f"matches the fix direction.\n"
+                f"  - Glob {subtree}/**/SKILL.md and Read what "
+                f"matches the fix direction.{catalog_clause}\n"
                 f"  - Cite filename in the rationale of items you "
                 f"propose.\n\n"
             )
@@ -739,6 +884,7 @@ def get_guidance(task_dir: str) -> str:
             f"  - {task_dir}/.ar_state/plan.md\n"
             f"  - {task_dir}/.ar_state/history.jsonl (focus on the last "
             f"~10 rounds; older entries are usually stale)\n\n"
+            f"{_trace_analysis_block(task_dir, backend)}"
             f"{skills_block}"
             f"Hard constraints:\n"
             f"  - Do NOT search git history (`git log` / `git show` / "
@@ -811,9 +957,10 @@ def get_guidance(task_dir: str) -> str:
                 "(reference the prior pid in <desc> for audit context)."
             )
         return (f"[AR Phase: REPLAN] All items settled. Budget: {remaining} rounds left. "
-                f"Read .ar_state/history.jsonl. Analyze what worked/failed.{_skills_hint()}\n"
+                f"Read .ar_state/history.jsonl. Analyze what worked/failed.{_skills_hint()}"
+                f"{_trace_analysis_block(task_dir, backend)}\n"
                 f"\n"
-                f"{_create_plan_instruction(task_dir)}"
+                f"{_create_plan_instruction(task_dir, first_plan=False)}"
                 f"{retry_hint}")
 
     if phase == FINISH:

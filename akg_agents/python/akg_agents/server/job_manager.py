@@ -19,6 +19,7 @@ from typing import Dict, Any, Optional
 from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.op.evolve import evolve
 from akg_agents.core.async_pool.task_pool import TaskPool
+from akg_agents.core.worker.eval_config import resolve_reference_timeout
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
@@ -260,7 +261,8 @@ class ServerJobManager:
                 )
 
                 # 生成参考数据
-                success, log, ref_bytes = await verifier.generate_reference_data(task_desc, timeout=120)
+                success, log, ref_bytes = await verifier.generate_reference_data(
+                    task_desc, timeout=resolve_reference_timeout())
 
                 if not success:
                     raise RuntimeError(f"Reference data generation failed on source worker:\n{log}")

@@ -166,6 +166,14 @@ class DSLAdapter(ABC):
         """
         return ""
 
+    # The ONE interface between akg core and the cannbench eval-standard. True
+    # makes kernel_verifier route reference + compare + comparator-staging through
+    # the cann_correctness package (MERE/MARE, fp64 dual reference); False/default
+    # uses the framework's generic allclose. That flag is the whole surface — no
+    # cannbench hooks or logic live on the adapter; akg reads it and pulls
+    # everything from the package.
+    uses_cannbench_precision: bool = False
+
     # ------------------------------------------------------------------
     # Extension hooks — KernelVerifier / akg_eval / LocalWorker delegate
     # per-DSL behavior here so new DSLs need only override these instead
@@ -231,6 +239,9 @@ class DSLAdapter(ABC):
     benchmark_requires_l2_clear: bool = True
     profile_via_python_script: bool = False
     impl_func_name_template: str = "{op_name}_{dsl}_{framework}"
+    profiler_dsl: str = "other"
+    supports_autotune_configs: bool = False
+    emits_autotune_artifacts: bool = False
 
     def post_iteration_cleanup(self, verify_dir: str) -> None:
         """Drop per-round artifacts that should not survive into the

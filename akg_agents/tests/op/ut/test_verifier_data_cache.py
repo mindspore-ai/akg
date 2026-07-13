@@ -20,12 +20,14 @@ import asyncio
 import io
 import json
 import tarfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 import torch
 
 from akg_agents.core.worker.remote_worker import RemoteWorker
+from akg_agents.core.worker.interface import empty_profile_result
 from akg_agents.op.verifier.data_cache import (
     VerifierDataCacheConfig,
     build_baseline_cache_key,
@@ -43,7 +45,11 @@ from akg_agents.op.verifier.data_cache import (
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
 )
-from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
+from akg_agents.op.verifier.baseline_profiler import (
+    _run_cached_baseline_profile,
+    profile_baseline_once,
+)
+from akg_agents.core.worker.manager import WorkerManager
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 
 
@@ -107,11 +113,18 @@ class DummyProfileWorker:
     def __init__(self):
         self.profile_settings = None
 
+    async def acquire_device(self, task_id="unknown", timeout=None):
+        return 0, 1  # (device_id, lease_id)
+
+    async def release_device(self, device_id, lease_id, task_id="unknown"):
+        pass
+
     async def profile(self, package_data, task_id, op_name, profile_settings):
         self.profile_settings = dict(profile_settings)
+        section = profile_settings.get("override_base_section") or {}
         return {
             "gen_time": 5.0,
-            "base_time": profile_settings.get("override_base_time_us"),
+            "base_time": section.get("avg_us"),
             "speedup": 2.0,
             "roofline_time": None,
             "roofline_speedup": 0.0,
@@ -120,7 +133,31 @@ class DummyProfileWorker:
         }
 
 
+class FailedProfileWorker(DummyProfileWorker):
+    async def profile(self, package_data, task_id, op_name, profile_settings):
+        return empty_profile_result(error="network down")
+
+
+class LeaseTrackingWorker:
+    def __init__(self):
+        self.events = []
+
+    @asynccontextmanager
+    async def device_lease(self, task_id="unknown", timeout=None):
+        self.events.append(("acquire", task_id))
+        try:
+            yield 7
+        finally:
+            self.events.append(("release", task_id))
+
+
 class DummyReferenceWorker:
+    async def acquire_device(self, task_id="unknown", timeout=None):
+        return 0, 1  # (device_id, lease_id)
+
+    async def release_device(self, device_id, lease_id, task_id="unknown"):
+        pass
+
     async def generate_reference(self, package_data, task_id, op_name, timeout):
         raise AssertionError("generate_reference should be stubbed by the test")
 
@@ -137,11 +174,11 @@ class SimulatedRemoteWorker(RemoteWorker):
         self.acquired_devices = []
         self.released_devices = []
 
-    async def acquire_device(self, task_id: str = "unknown", timeout: float = None) -> int:
+    async def acquire_device(self, task_id: str = "unknown", timeout: float = None):
         self.acquired_devices.append(task_id)
-        return 3
+        return 3, 1  # (device_id, lease_id)
 
-    async def release_device(self, device_id: int, task_id: str = "unknown"):
+    async def release_device(self, device_id: int, lease_id: int, task_id: str = "unknown"):
         self.released_devices.append((device_id, task_id))
 
     async def generate_reference(self, package_data, task_id, op_name, timeout):
@@ -552,9 +589,33 @@ async def test_run_profile_uses_cached_baseline(monkeypatch, tmp_path):
 
     assert captured["skip_base"] is True
     assert worker.profile_settings is not None
-    assert worker.profile_settings["override_base_time_us"] == 17.5
+    assert worker.profile_settings["override_base_section"]["avg_us"] == 17.5
     assert worker.profile_settings["skip_base_profile"] is True
     assert result["base_time"] == 17.5
+
+
+@pytest.mark.asyncio
+async def test_run_profile_preserves_worker_failure(monkeypatch, tmp_path):
+    verifier = _make_verifier(tmp_path, worker=FailedProfileWorker())
+    verify_dir = (
+        Path(verifier.log_dir).expanduser()
+        / verifier.op_name
+        / f"Iteration{verifier.task_id}_Step0_verify"
+    )
+    verify_dir.mkdir(parents=True, exist_ok=True)
+    (verify_dir / f"{verifier.op_name}_{verifier.framework}.py").write_text(
+        FRAMEWORK_CODE, encoding="utf-8")
+    (verify_dir / f"{verifier.op_name}_{verifier.dsl}_impl.py").write_text(
+        IMPL_CODE, encoding="utf-8")
+    monkeypatch.setattr(verifier, "gen_profile_project", lambda *args, **kwargs: None)
+    monkeypatch.setattr(verifier, "_pack_directory", lambda verify_dir: b"pkg")
+
+    result = await verifier.run_profile(
+        {"coder_code": IMPL_CODE}, current_step=0, device_id=0)
+
+    assert result["error"] == "network down"
+    assert result["gen_time"] is None
+    assert result["base_time"] is None
 
 
 @pytest.mark.asyncio
@@ -600,7 +661,7 @@ async def test_run_profile_uses_cached_sol_baseline(monkeypatch, tmp_path):
 
     assert captured["skip_base"] is True
     assert worker.profile_settings is not None
-    assert worker.profile_settings["override_base_time_us"] == 19.5
+    assert worker.profile_settings["override_base_section"]["avg_us"] == 19.5
     assert worker.profile_settings["skip_base_profile"] is True
     assert result["base_time"] == 19.5
 
@@ -650,6 +711,40 @@ async def test_baseline_preprofile_rereads_cache_after_lock(tmp_path):
         )
 
     assert await task == 23.0
+
+
+@pytest.mark.asyncio
+async def test_cached_baseline_releases_device_and_manager(monkeypatch, tmp_path):
+    import akg_agents.core.worker.manager as manager_module
+
+    manager = WorkerManager()
+    worker = LeaseTrackingWorker()
+    await manager.register(worker, "ascend", "ascend910b4")
+    monkeypatch.setattr(manager_module, "_GLOBAL_MANAGER", manager)
+    captured = {}
+
+    async def prepare(worker_arg, verifier, profile_dir, device_id,
+                      warmup_times, run_times, timeout):
+        captured["worker"] = worker_arg
+        captured["device_id"] = device_id
+        return {"success": True, "time_us": 12.5, "log": ""}
+
+    result = await _run_cached_baseline_profile(
+        "relu", "triton_ascend", "torch", "ascend", "ascend910b4",
+        {"log_dir": str(tmp_path / "logs"),
+         "data_cache": {"enabled": False}},
+        1, 2, 30,
+        bench_type="sol", bench_label="SOL", cache_framework_code="",
+        prepare_fn=prepare, cache_method="test", times_label="case",
+    )
+
+    assert result == 12.5
+    assert captured == {"worker": worker, "device_id": 7}
+    assert worker.events == [
+        ("acquire", "baseline_profile"),
+        ("release", "baseline_profile"),
+    ]
+    assert (await manager.get_status())[0]["load"] == 0
 
 
 @pytest.mark.asyncio

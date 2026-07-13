@@ -22,7 +22,7 @@ import shutil
 import textwrap
 from typing import Any, Dict, Optional
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.utils.catlass_runtime import arch_to_catlass_arch
 from .base import DSLAdapter
 
@@ -38,6 +38,7 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
     """CATLASS pybind + ModelNew wrapper on Ascend NPU."""
 
     impl_func_name_template = "ModelNew"
+    uses_cannbench_precision = True
 
     def get_import_statements(self, framework: str) -> str:
         return "import torch\nimport torch_npu\n"
@@ -68,7 +69,16 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
         data_dir: Optional[str] = None,
         framework_output: Optional[str] = None,
     ) -> str:
-        return f"impl_output = impl_model(*{inputs})\n"
+        # Runtime anti-cheat, same as ascendc: run the candidate under
+        # compute_gate so core-compute delegation (Python / C++ torch::* / at::*
+        # nested in the candidate's own catlass op) is disabled at the dispatch
+        # layer for this forward. Static CodeChecker is the pre-flight for raw
+        # aclnn* / torch_npu.npu_* (which never reach dispatch).
+        return (
+            "from akg_agents.op.utils.code_checker.runtime_guard import "
+            "guarded_call as _akg_guarded_call\n"
+            f"impl_output = _akg_guarded_call(lambda: impl_model(*{inputs}))\n"
+        )
 
     # catlass kernel handoff is a directory: the catlass_op/ project
     # subtree sitting next to a Python wrapper (kernel.py).
@@ -115,7 +125,7 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
                         catlass_benchmark_fn,
                         warmup={warmup},
                         active={runs},
-                        prof_dir_name="prof_generation_output",
+                        prof_dir_name=f"prof_generation_output_case_{{case_idx}}",
                         keep_res=False,
                         suppress_warnings=True,
                         clear_l2_cache={clear_l2_cache},
@@ -163,6 +173,7 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
         catlass_root = getattr(self, "_setup_catlass_root", None)
         catlass_arch = arch_to_catlass_arch(arch)
         catlass_root_repr = repr(catlass_root) if catlass_root else "None"
+        timeout = resolve_eval_timeout()
         return textwrap.dedent(
             f"""
         # --- ascendc_catlass rebuild ---
@@ -230,7 +241,7 @@ class DSLAdapterAscendC_Catlass(DSLAdapter):
                 ["bash", "-c", _cmake_shell],
                 capture_output=True,
                 text=True,
-                timeout={DEFAULT_EVAL_TIMEOUT_S},
+                timeout={timeout},
             )
             if result.returncode != 0:
                 print("[ERROR]: catlass build failed!")

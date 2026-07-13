@@ -28,8 +28,8 @@ propagate to every entry without per-script patches.
       if not t.progress_initialized:
           rc = t.record_baseline(eval_data)
       else:
-          kd = t.record_round(eval_data, description=desc, plan_item=pid)
-          t.settle_round(kd)
+          t.record_round(eval_data, description=desc, plan_item=pid)
+          t.settle_round()
 
 Roles
 =====
@@ -57,13 +57,10 @@ intent files.
 
 What stays free-functional
 ==========================
-Hook scripts (guard_bash / post_bash / guard_edit / post_edit /
-guard_task / post_task / stop_save) are short read-only checks that
-don't run transactions; they call ``get_task_dir`` + ``read_phase`` +
-``load_state`` directly and don't open a Task. The two exceptions —
-post_bash._handle_activation (transactional: claim + advance phase)
-and post_bash main's create_plan branch (transactional: validate +
-advance) — DO open a Task.
+Hook paths are read-only gates/reporters over committed state. Activation is
+the sole hook path that opens a Task because it claims ownership and selects
+the executable resume phase. Baseline, plan, and round transitions are
+committed by their engine transactions before post-tool reporting runs.
 
 Caller pattern: do NOT sys.exit inside the with-block
 =====================================================
@@ -112,31 +109,29 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from phase_machine import (  # noqa: E402
-    BASELINE, EDIT, FINISH, PLAN, REPLAN, DIAGNOSE, INIT,
+    BASELINE, DIAGNOSE, EDIT, FINISH, INIT, PLAN, REPLAN,
     # Reads
     load_state, load_progress, read_phase, task_summary,
     task_owner_info,
     get_active_item, diagnose_state,
     # Writes / lifecycle
-    save_state, write_phase, update_progress,
+    save_state, state_transaction,
     set_task_dir, clear_active_task, touch_heartbeat,
     # Journal
-    write_intent, clear_intent, replay_intent,
+    write_intent, clear_intent,
     # Consistency
-    require_state_consistency, check_state_consistency,
-    format_state_inconsistency,
+    require_state_consistency, format_state_inconsistency,
     # Paths
-    plan_path, history_path, edit_marker_path, state_record_path,
-    # Auto rollback
-    auto_rollback,
+    edit_marker_path, state_record_path,
 )
+from utils.git_utils import auto_rollback  # noqa: E402
 from task_config import load_task_config  # noqa: E402
 from workflow.baseline import (  # noqa: E402
     precheck_baseline, BaselinePrecheckOutcome,
-    run_baseline_init, baseline_exit_code,
+    run_baseline_init,
 )
 from workflow.round import record_round as _record_round  # noqa: E402
-from workflow.transition import PhaseController  # noqa: E402
+from workflow.transition import phase_after_round, phase_on_resume  # noqa: E402
 from workflow.planning import PlanStore  # noqa: E402
 
 
@@ -164,6 +159,10 @@ class TaskNotInitialized(TaskError):
 class TaskCorrupted(TaskError):
     """A transaction precondition failed in a way the journal can't
     auto-heal — typically an orphan body artifact with no intent."""
+
+
+class TaskPhaseError(TaskError):
+    """An event was invoked from a phase that cannot own it."""
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +351,14 @@ class Task:
         to skip, fail, or proceed without paying the eval cost.
         """
         self._require_entered()
-        return precheck_baseline(self.task_dir)
+        precheck = precheck_baseline(self.task_dir)
+        # A crash may have committed the baseline event (including phase=PLAN)
+        # before the CLI returned.  Permit that one idempotent retry shape;
+        # every event that could still evaluate must start in BASELINE.
+        if not (precheck.outcome == BaselinePrecheckOutcome.ALREADY_DONE
+                and self.phase == PLAN):
+            self.require_phase(BASELINE, action="baseline")
+        return precheck
 
     def record_baseline(self, eval_data: dict) -> int:
         """Commit the baseline transaction (journal → SEED row →
@@ -369,10 +375,11 @@ class Task:
         engine/baseline.py would pass `{}` as a fast-path signal,
         which silently routed through reduce_baseline_init and wrote
         null metrics into state. The contract here is: eval_data MUST
-        be the dict shape engine.baseline._eval_result_to_dict
+        be the dict shape utils.eval_summary.eval_result_to_dict
         produces (outcome + correctness + metrics keys at minimum).
         """
         self._require_entered()
+        self.require_phase(BASELINE, action="record baseline")
         # Defensive: refuse misuse. ALREADY_DONE etc. are caller
         # responsibility — see baseline_preflight().
         pre = precheck_baseline(self.task_dir)
@@ -383,7 +390,7 @@ class Task:
                 f"branch on baseline_preflight() and only call "
                 f"record_baseline on PROCEED.")
         # Defensive: real eval_data required. The minimal shape is
-        # what _eval_result_to_dict produces; absence of `outcome` is
+        # what eval_result_to_dict produces; absence of `outcome` is
         # the cheap discriminator for "empty / placeholder dict".
         if not isinstance(eval_data, dict) or "outcome" not in eval_data:
             raise TaskCorrupted(
@@ -402,35 +409,43 @@ class Task:
         pending_settle → clear journal). Returns kd_json which the
         caller hands to settle_round."""
         self._require_entered()
+        self.require_phase(EDIT, action="record round")
+        if self.pending_settle is not None:
+            raise TaskPhaseError(
+                "cannot record a new round while pending_settle must be replayed")
         return _record_round(self.task_dir, eval_data,
                              description=description, plan_item=plan_item)
 
-    def settle_round(self, kd_json: dict) -> dict:
-        """Settle the active plan item against this round's decision.
-        Inlines pipeline._run_settle + _post_settle + _clear_pending_
-        settle so the order is owned in one place.
+    def settle_round(self) -> dict:
+        with state_transaction(self.task_dir):
+            return self._settle_round()
 
-        Returns: {settled_item, decision, next_phase, finish, ...}.
-        Raises TaskCorrupted on settle failure (caller's old behaviour
-        was sys.exit with a printed banner; the exception now carries
-        the same recovery message)."""
-        self._require_entered()
-        from engine.pipeline import (  # local import to avoid cycle
-            _run_settle, _emit_settle_failure,
-        )
-        ok, error_tail, settle_json = _run_settle(self.task_dir, kd_json)
-        if not ok:
-            # The previous shape called _emit_settle_failure (which
-            # writes the recovery message to stderr) and then
-            # sys.exit(1). Keep the stderr message for operator
-            # context, but raise so Task callers can decide their
-            # own exit semantics.
-            _emit_settle_failure(self.task_dir, error_tail)
-            raise TaskCorrupted(f"settle failed: {error_tail}")
+    def _settle_round(self) -> dict:
+        """Settle plan.md, phase, and pending_settle as one event."""
+        self.require_phase(EDIT, action="settle round")
+        pending = self.pending_settle
+        if pending is None:
+            raise TaskPhaseError("cannot settle without pending_settle")
+        try:
+            settle_json = PlanStore(self.task_dir).settle_result(pending)
+            next_phase = phase_after_round(self.task_dir)
+        except RuntimeError as exc:
+            raise TaskCorrupted(f"settle failed: {exc}") from exc
 
-        # Advance phase (PhaseController.on_round_settled) and clear
-        # the edit marker.
-        next_phase = self._phase_controller().on_round_settled()
+        # plan.md is the body.  Commit the target phase and sentinel clear
+        # together: before this save replay remains legal; after it there is
+        # no in-flight settlement left for a hook or CLI to repair.
+        state = load_state(self.task_dir)
+        if state is None:
+            raise TaskCorrupted("state.json disappeared during settlement")
+        state["phase"] = next_phase
+        state["pending_settle"] = None
+        try:
+            save_state(self.task_dir, state)
+        except OSError as exc:
+            raise TaskCorrupted(
+                f"state commit failed after plan settlement: {exc}") from exc
+
         marker = edit_marker_path(self.task_dir)
         if os.path.exists(marker):
             os.remove(marker)
@@ -445,26 +460,20 @@ class Task:
                     print(f"[task] FINISH report: "
                           f"{os.path.relpath(rp, self.task_dir)}")
             except Exception as e:
-                print(f"[task] report generation failed: {e}",
-                      file=sys.stderr)
-
-        # Clear pending_settle LAST. A crash before this leaves
-        # state.pending_settle non-null; the next pipeline.py replay
-        # branch (or the next open_task) recognises the in-flight
-        # settle and skips quick_check/eval.
-        state = load_state(self.task_dir) or {}
-        if state.get("pending_settle") is not None:
-            state["pending_settle"] = None
-            save_state(self.task_dir, state)
+                print(f"[task] report generation failed: {e}")
 
         return {
-            "settled_item": (settle_json or {}).get("settled_item"),
-            "decision":     kd_json.get("decision"),
+            "settled_item": settle_json.get("settled_item"),
+            "decision":     pending.get("decision"),
             "next_phase":   next_phase,
             "finish":       finish,
         }
 
-    def commit_plan(self, items: list, items_meta: dict | None = None) -> dict:
+    def commit_plan(self, items: list) -> dict:
+        with state_transaction(self.task_dir):
+            return self._commit_plan(items)
+
+    def _commit_plan(self, items: list) -> dict:
         """Plan transaction (journal → plan.md → state with new
         plan_version + next_pid → clear journal).
 
@@ -477,9 +486,11 @@ class Task:
         """
         self._require_entered()
         prog = load_progress(self.task_dir)
-        version = (prog.plan_version if prog else 0) + 1
+        if prog is None or not os.path.exists(state_record_path(self.task_dir)):
+            raise TaskCorrupted("cannot commit a plan before baseline progress")
+        version = prog.plan_version + 1
         ps = PlanStore(self.task_dir)
-        next_pid = ps.compute_next_pid(prog.next_pid if prog else None)
+        next_pid = ps.compute_next_pid(prog.next_pid)
         settled_rows = ps.parse_settled_history()
         dropped_pids = [it["id"] for it in ps.parse_pending()]
         item_ids, new_next_pid = PlanStore.allocate_ids(len(items), next_pid)
@@ -489,12 +500,24 @@ class Task:
             "next_pid":     new_next_pid,
         }
 
-        # DIAGNOSE plan commit clears cf in the same save_state that
-        # bumps pv. Redundant with post_bash._reset_failures_for_diagnose;
-        # closes the hook-miss hole.
         state_before = load_state(self.task_dir) or {}
-        if state_before.get("phase") == DIAGNOSE:
+        source_phase = state_before.get("phase", INIT)
+        pending_recovery = source_phase == EDIT and bool(
+            state_before.get("pending_settle"))
+        if source_phase not in (PLAN, REPLAN, DIAGNOSE) \
+                and not pending_recovery:
+            raise TaskPhaseError(
+                "commit plan requires PLAN/REPLAN/DIAGNOSE or "
+                f"EDIT+pending_settle; current phase={source_phase}")
+        if source_phase == DIAGNOSE:
             progress_fields["consecutive_failures"] = 0
+
+        state_patch: dict[str, Any] = {
+            **progress_fields,
+            "phase": EDIT,
+            "pending_settle": None,
+            "expected_plan_version": version,
+        }
 
         # ---- Journal ----
         # Plan intent payload mirrors round/baseline: enough to
@@ -502,24 +525,24 @@ class Task:
         write_intent(self.task_dir, {
             "kind":            "plan",
             "version":         version,
-            "progress_fields": progress_fields,
+            "state_patch":     state_patch,
         })
 
         # ---- Body: plan.md ----
         ps.write(version, item_ids, items, settled_rows)
 
         # ---- Commit: state.json ----
-        # If progress doesn't exist yet (shouldn't happen — plan
-        # requires post-baseline state — but stay defensive), skip
-        # the state write; the consistency check next time will
-        # flag it.
-        if prog is not None and os.path.exists(state_record_path(self.task_dir)):
-            new_prog = prog.apply(**progress_fields)
-            state = load_state(self.task_dir) or {}
-            for k, v in new_prog.to_dict().items():
-                state[k] = v
-            state["expected_plan_version"] = version
+        new_prog = prog.apply(**progress_fields)
+        state = load_state(self.task_dir)
+        if state is None:
+            raise TaskCorrupted("state.json disappeared during plan commit")
+        state.update(new_prog.to_dict())
+        state.update(state_patch)
+        try:
             save_state(self.task_dir, state)
+        except OSError as exc:
+            raise TaskCorrupted(
+                f"state commit failed after writing plan.md: {exc}") from exc
 
         # ---- Journal clear ----
         clear_intent(self.task_dir)
@@ -532,44 +555,34 @@ class Task:
             "path":       ps.path,
         }
 
-    def note_diagnose_attempt(self, *, attempts: int,
-                              failure_reason: str) -> None:
-        """Update diagnose_attempts + last_diagnose_failure_reason.
-        Single atomic save_state; no journal needed (no bodies)."""
-        self._require_entered()
-        update_progress(
-            self.task_dir,
-            diagnose_attempts=attempts,
-            diagnose_attempts_for_version=self.diagnose_state().plan_version,
-            last_diagnose_failure_reason=failure_reason,
-        )
+    # ---- Activation -----------------------------------------------------
 
-    def note_diagnose_success(self) -> None:
-        """Reset diagnose_attempts for the current plan_version."""
-        self._require_entered()
-        update_progress(
-            self.task_dir,
-            diagnose_attempts=0,
-            diagnose_attempts_for_version=self.diagnose_state().plan_version,
-        )
+    def activate(self, *, fresh: bool) -> str:
+        with state_transaction(self.task_dir):
+            return self._activate(fresh=fresh)
 
-    # ---- Phase transitions (idempotent thin wrappers) -------------------
-    # These exist so callers don't import PhaseController directly.
+    def _activate(self, *, fresh: bool) -> str:
+        """Commit the executable phase for a fresh or resumed task.
 
-    def advance_on_activation_fresh(self) -> str:
-        """Initial activation of a freshly scaffolded task → BASELINE."""
+        ``pending_settle`` takes precedence to heal tasks interrupted by
+        older versions between their phase write and sentinel clear.
+        """
         self._require_entered()
-        return self._phase_controller().on_activation_ready()
-
-    def advance_on_activation_resume(self) -> str:
-        """Resume activation — compute_resume_phase decides target."""
-        self._require_entered()
-        return self._phase_controller().on_activation_resume()
-
-    def advance_on_plan_validated(self) -> str:
-        """create_plan completed → EDIT."""
-        self._require_entered()
-        return self._phase_controller().on_plan_validated()
+        current = self.phase
+        if fresh:
+            target = BASELINE
+        elif self.pending_settle is not None:
+            target = EDIT
+        elif current in (INIT, PLAN, REPLAN) \
+                or (current == BASELINE and self.progress_initialized):
+            target = phase_on_resume(self.task_dir)
+        else:
+            target = current
+        if target != current:
+            state = load_state(self.task_dir) or {}
+            state["phase"] = target
+            save_state(self.task_dir, state)
+        return target
 
     # ---- Rollback / sentinel maintenance --------------------------------
 
@@ -585,16 +598,6 @@ class Task:
                 os.remove(marker)
             except OSError:
                 pass
-
-    def clear_pending_settle(self) -> None:
-        """Drop state.pending_settle (used by post_bash's create_plan
-        EDIT-recovery branch — the new plan retires the broken
-        plan_version, the orphan kd_json is no longer actionable)."""
-        self._require_entered()
-        state = load_state(self.task_dir) or {}
-        if state.get("pending_settle") is not None:
-            state["pending_settle"] = None
-            save_state(self.task_dir, state)
 
     # ---- Explicit ownership ops (rare; prefer role-based __enter__) -----
 
@@ -612,8 +615,15 @@ class Task:
         if not self._entered:
             raise RuntimeError("Task method called before __enter__")
 
-    def _phase_controller(self) -> PhaseController:
-        return PhaseController(self.task_dir)
+    def require_phase(self, *allowed: str, action: str) -> str:
+        """Fail closed when a domain event is invoked from the wrong phase."""
+        self._require_entered()
+        phase = self.phase
+        if phase not in allowed:
+            expected = "/".join(allowed)
+            raise TaskPhaseError(
+                f"{action} requires phase {expected}; current phase={phase}")
+        return phase
 
 
 # ---------------------------------------------------------------------------

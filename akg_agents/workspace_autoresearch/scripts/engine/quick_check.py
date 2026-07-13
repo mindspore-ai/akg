@@ -44,10 +44,118 @@ from task_config import load_task_config
 from utils.settings import target_backend, target_dsl
 
 
-def _run_codechecker(code: str) -> tuple:
+def _run_codechecker(code: str, file_name: str = "") -> tuple:
     """One-shot AKG code check. Returns (passed, error_msg, errors)."""
     from akg_agents.op.utils.code_checker import CodeChecker
-    return CodeChecker(backend=target_backend(), dsl=target_dsl()).check(code)
+    return CodeChecker(backend=target_backend(), dsl=target_dsl()).check(
+        code, task_info={"file": file_name}
+    )
+
+
+def _diff_changed_lines(diff_text: str) -> list[tuple[str, str]]:
+    """Return (file_path, line_text) for added/removed content lines."""
+    out: list[tuple[str, str]] = []
+    current_file = ""
+    for raw in diff_text.splitlines():
+        if raw.startswith("+++ "):
+            path = raw[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            current_file = path
+            continue
+        if raw.startswith(("diff --git ", "index ", "--- ", "@@")):
+            continue
+        if not raw or raw[0] not in "+-":
+            continue
+        if raw.startswith(("+++", "---")):
+            continue
+        out.append((current_file, raw[1:]))
+    return out
+
+
+def _is_comment_line(path: str, line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+
+    name = os.path.basename(path).lower()
+    ext = os.path.splitext(name)[1]
+
+    if ext == ".py" or name == "cmakelists.txt" or ext == ".cmake":
+        return stripped.startswith("#")
+
+    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".asc"}:
+        return (
+            stripped.startswith("//")
+            or stripped.startswith("/*")
+            or stripped.startswith("*")
+            or stripped.startswith("*/")
+        )
+
+    return False
+
+
+def effective_edit_issue(task_dir: str, config) -> dict | None:
+    """Reject no-op, whitespace-only, and comment-only edit rounds.
+
+    CodeChecker validates file legality, but it cannot tell whether this
+    round made a meaningful exploratory edit. That is a task/git question,
+    so keep it here in quick_check where pipeline.py already has task_dir.
+    """
+    if not config.editable_files:
+        return None
+
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--no-ext-diff", "--unified=0", "--",
+             *config.editable_files],
+            cwd=task_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except Exception as exc:
+        return {
+            "file": "(edit-diff)",
+            "report": f"cannot inspect edit diff: {type(exc).__name__}: {exc}",
+            "errors": [],
+        }
+
+    if diff.returncode != 0:
+        msg = (diff.stderr or diff.stdout or "git diff failed").strip()
+        return {
+            "file": "(edit-diff)",
+            "report": msg[:800],
+            "errors": [],
+        }
+
+    diff_text = diff.stdout or ""
+    if not diff_text.strip():
+        return {
+            "file": "(edit-diff)",
+            "report": (
+                "Zero-edit: no git-visible changes in editable files. "
+                "The code may have rolled back to HEAD. Read broader "
+                "SKILL.md references, then make a substantive code edit."
+            ),
+            "errors": [],
+        }
+
+    changed = _diff_changed_lines(diff_text)
+    if changed and all(_is_comment_line(path, line) for path, line in changed):
+        return {
+            "file": "(edit-diff)",
+            "report": (
+                "Comment-only edit: the diff changes only comments or "
+                "whitespace. Keep SKILL citations in the plan, then edit "
+                "executable/source logic."
+            ),
+            "errors": [],
+        }
+
+    return None
 
 
 def check_editable_files(task_dir: str, config) -> list:
@@ -55,10 +163,7 @@ def check_editable_files(task_dir: str, config) -> list:
 
     Honors `config.code_checker_enabled` — when off, only the
     file-existence check fires; the AST check is skipped. This is the
-    single gate consulted by both the runtime quick check and
-    `phase_machine.validate_kernel`. Public lib API (no leading
-    underscore): both the CLI `main()` below and
-    `validators.validate_kernel` call this directly; do not duplicate.
+    single gate consulted by the runtime quick-check CLI.
 
     Returns `[{file, report, errors}]` per failing editable. `report` is
     CodeChecker's formatted multi-line error_msg; `errors` is the
@@ -67,8 +172,9 @@ def check_editable_files(task_dir: str, config) -> list:
     """
     issues = []
     use_checker = config.code_checker_enabled
+    dsl = target_dsl()
     for fname in config.editable_files:
-        if not fname.endswith(".py"):
+        if not fname.endswith(".py") and dsl != "ascendc":
             continue
         fpath = os.path.join(task_dir, fname)
         if not os.path.exists(fpath):
@@ -76,9 +182,9 @@ def check_editable_files(task_dir: str, config) -> list:
             continue
         if not use_checker:
             continue
-        with open(fpath, "r", encoding="utf-8") as f:
+        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
             code = f.read()
-        passed, error_msg, errors = _run_codechecker(code)
+        passed, error_msg, errors = _run_codechecker(code, fname)
         if not passed:
             issues.append({
                 "file": fname,
@@ -124,9 +230,11 @@ def main():
 
     if not config.code_checker_enabled:
         print("[quick_check] Triton regression check disabled in task.yaml — "
-              "only file-existence and smoke test will run.", file=sys.stderr)
+              "only file-existence and smoke test will run.")
 
-    file_issues = check_editable_files(task_dir, config)
+    edit_issue = effective_edit_issue(task_dir, config)
+    file_issues = [edit_issue] if edit_issue else check_editable_files(
+        task_dir, config)
     smoke_errors = _run_smoke_test(task_dir, config)
 
     if not file_issues and not smoke_errors:

@@ -15,7 +15,9 @@
 """
 CodeChecker 单元测试
 
-覆盖：语法检查、import 检测、中文混入、空代码、错误格式、DSL 合规、Autotune 规范。
+覆盖：语法检查、import 检测、中文混入、空代码、错误格式、DSL 合规
+(triton/tilelang/pypto/catlass/ascendc)、Autotune 规范、A5 亲和、以及运行时反作弊
+gate (runtime_guard.compute_gate)。
 """
 
 import pytest
@@ -40,6 +42,11 @@ def checker_a5():
 @pytest.fixture
 def checker_catlass():
     return CodeChecker(backend="ascend", dsl="ascendc_catlass")
+
+
+@pytest.fixture
+def checker_ascendc():
+    return CodeChecker(backend="ascend", dsl="ascendc")
 
 # ============================================================
 # 语法错误
@@ -130,6 +137,41 @@ def foo():
 '''
     passed, _, errors = checker_no_dsl.check(code)
     assert all(e["error_type"] != "import_error" for e in errors)
+
+
+@pytest.mark.level0
+def test_triton_import_availability_is_owned_by_ascend_worker(monkeypatch):
+    """A no-Triton orchestrator must still statically check remote Ascend code.
+
+    The exception is DSL-scoped: the same missing package remains an import
+    error for Triton CUDA, whose runtime is expected on the local evaluator.
+    """
+    monkeypatch.setattr(
+        CodeChecker, "_is_module_available", staticmethod(lambda _name: False)
+    )
+    code = "import triton\nimport triton.language as tl\n"
+
+    ascend = CodeChecker(backend="ascend", dsl="triton_ascend")
+    cuda = CodeChecker(backend="cuda", dsl="triton_cuda")
+
+    assert ascend._check_imports(code) == []
+    cuda_errors = cuda._check_imports(code)
+    assert any(
+        error["error_type"] == "import_error" and "triton" in error["detail"]
+        for error in cuda_errors
+    )
+
+
+@pytest.mark.level0
+def test_triton_ascend_import_typo_is_still_detected(monkeypatch):
+    monkeypatch.setattr(
+        CodeChecker, "_is_module_available", staticmethod(lambda _name: False)
+    )
+    checker = CodeChecker(backend="ascend", dsl="triton_ascend")
+
+    errors = checker._check_imports("from triton_ascned import autotune\n")
+
+    assert any("triton_ascned" in error["detail"] for error in errors)
 
 
 # ============================================================
@@ -1232,6 +1274,277 @@ class ModelNew(torch.nn.Module):
     _, _, errs = checker_catlass.check(soft_code)
     assert not any(e["error_type"] in ("no_catlass_call", "torch_api_instead_of_kernel",
                                        "torch_api_without_kernel") for e in errs)
+
+
+# ============================================================
+# AscendC-family source scan now also covers catlass (closes the earlier
+# asymmetry where catlass raw-aclnn was neither statically scanned nor gated)
+# ============================================================
+
+@pytest.mark.level0
+def test_catlass_cpp_raw_aclnn_blocked(checker_catlass):
+    """catlass's C++ is now scanned by the shared AscendC-family source scan, so a
+    raw aclnn* stock-kernel call in catlass_op/*.cpp is blocked."""
+    code = "#include <acl/acl.h>\nvoid launch() { aclnnMatmul(a, b, c); }\n"
+    passed, _, errors = checker_catlass.check(
+        code, task_info={"file": "catlass_op/foo.cpp"})
+    assert passed is False, code
+    assert any(e["error_type"] == "ascendc_anti_cheat_aclnn_builtin_compute"
+               for e in errors), errors
+
+
+@pytest.mark.level0
+def test_catlass_wrapper_torch_npu_blocked(checker_catlass):
+    """The same family scan catches a torch_npu.npu_* builtin in the catlass .py
+    wrapper (delegating to a stock NPU op)."""
+    code = ("import torch\nimport torch_npu\n"
+            "class ModelNew(torch.nn.Module):\n"
+            "    def forward(self, x, w):\n"
+            "        return torch_npu.npu_rms_norm(x, w)[0]\n")
+    passed, _, errors = checker_catlass.check(code, task_info={"file": "kernel.py"})
+    assert passed is False, code
+    assert any(e["error_type"] == "ascendc_anti_cheat_torch_npu_builtin_compute"
+               for e in errors), errors
+
+
+@pytest.mark.level0
+def test_catlass_clean_cpp_passes(checker_catlass):
+    """A clean catlass .cpp (no raw aclnn / torch_npu) is not over-blocked."""
+    code = "#include <catlass/gemm.h>\nvoid launch() { catlass::gemm(a, b, c); }\n"
+    passed, _, errors = checker_catlass.check(
+        code, task_info={"file": "catlass_op/foo.cpp"})
+    assert not any(e["error_type"].startswith("ascendc_anti_cheat_")
+                   for e in errors), errors
+
+
+# ============================================================
+# AscendC direct-invoke 反作弊检测
+# ============================================================
+
+ASCENDC_CUSTOM_OP_WRAPPER = '''\
+import os
+import torch
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        torch.ops.load_library(os.path.join("ascendc_op", "build", "libop.so"))
+
+    def forward(self, x):
+        return torch.ops.npu.my_custom_op(x.contiguous())
+'''
+
+ASCENDC_TORCH_NPU_FALLBACK = '''\
+import torch
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def forward(self, x, weight):
+        return torch_npu.npu_rms_norm(x, weight)[0]
+'''
+
+
+@pytest.mark.level0
+def test_ascendc_custom_op_wrapper_allowed(checker_ascendc):
+    passed, _, errors = checker_ascendc.check(
+        ASCENDC_CUSTOM_OP_WRAPPER, task_info={"file": "kernel.py"}
+    )
+    assert passed is True
+    assert not any(e["error_type"].startswith("ascendc_anti_cheat") for e in errors)
+
+
+@pytest.mark.level0
+def test_ascendc_torch_npu_builtin_rejected(checker_ascendc):
+    passed, _, errors = checker_ascendc.check(
+        ASCENDC_TORCH_NPU_FALLBACK, task_info={"file": "kernel.py"}
+    )
+    assert passed is False
+    assert any(
+        e["error_type"] == "ascendc_anti_cheat_torch_npu_builtin_compute"
+        for e in errors
+    )
+
+
+@pytest.mark.level0
+def test_ascendc_cpp_kernel_text_allowed_without_python_parse(checker_ascendc):
+    code = """\
+#include "kernel_operator.h"
+extern "C" __global__ __aicore__ void custom_kernel() {
+    // real AscendC body omitted in unit test
+}
+"""
+    passed, _, errors = checker_ascendc.check(
+        code, task_info={"file": "ascendc_op/op_kernel/foo_kernel.asc"}
+    )
+    assert passed is True
+    assert errors == []
+
+
+@pytest.mark.level0
+def test_ascendc_stock_kernel_patterns_still_block(checker_ascendc):
+    """CANN-Bench parity: stock-kernel calls (aclnn* / torch_npu.npu_*) are what
+    CANN-Bench disables OFFLINE (kernel-disable) and its runtime guards cannot
+    see, so AKG keeps blocking them statically as the kernel-disable equivalent."""
+    for code, fname, etype in (
+        ("class ModelNew(torch.nn.Module):\n"
+         "    def forward(self, x, w):\n"
+         "        return torch_npu.npu_rms_norm(x, w)[0]\n",
+         "kernel.py", "ascendc_anti_cheat_torch_npu_builtin_compute"),
+        ("#include <acl/acl.h>\n"
+         "void launch() { aclnnMatmul(a, b, c); }\n",
+         "ascendc_op/op_extension/foo.cpp",
+         "ascendc_anti_cheat_aclnn_builtin_compute"),
+    ):
+        passed, _, errors = checker_ascendc.check(code, task_info={"file": fname})
+        assert passed is False, code
+        assert any(e["error_type"] == etype for e in errors), (code, errors)
+
+
+@pytest.mark.level0
+def test_ascendc_runtime_covered_patterns_non_blocking(checker_ascendc):
+    """Compute delegation (Python torch.matmul / F.* / .matmul() / C++ at::matmul)
+    and D2H egress (.cpu() / at::kCPU) are NOT scanned by the static check at all —
+    they reach the ATen dispatch layer, where the runtime compute_gate disables
+    them (nesting-proof, incl. calls nested in the candidate's own custom op). The
+    static scan only blocks calls that bypass dispatch (aclnn* / torch_npu.npu_*).
+    So none of these spellings produce an ascendc_anti_cheat error."""
+    samples = (
+        ("class ModelNew(torch.nn.Module):\n"
+         "    def forward(self, a, b):\n"
+         "        return torch.matmul(a, b)\n", "kernel.py"),
+        ("class ModelNew(torch.nn.Module):\n"
+         "    def forward(self, a, b):\n"
+         "        return a.matmul(b)\n", "kernel.py"),
+        ("#include <ATen/ATen.h>\n"
+         "at::Tensor launch(const at::Tensor& a, const at::Tensor& b) {\n"
+         "    return at::matmul(a, b);\n}\n",
+         "ascendc_op/op_extension/foo.cpp"),
+        ("#include <ATen/ATen.h>\n"
+         "at::Tensor launch(const at::Tensor& a) {\n"
+         "    return a.to(at::kCPU).to(at::kDouble);\n}\n",
+         "ascendc_op/op_extension/foo.cpp"),
+    )
+    for code, fname in samples:
+        passed, _, errors = checker_ascendc.check(code, task_info={"file": fname})
+        assert passed is True, (code, errors)
+        assert not any(
+            e["error_type"].startswith("ascendc_anti_cheat_") for e in errors
+        ), (code, errors)
+
+
+@pytest.mark.level0
+def test_ascendc_forbidden_in_comment_or_string_not_flagged(checker_ascendc):
+    """CANN-Bench parity: its enforcement is purely runtime (guards +
+    offline kernel-disable) and never inspects source text, so a forbidden API
+    named only in a comment or a string literal is NOT a real call and must not
+    block. Real call sites on other lines still block."""
+    allowed = (
+        # torch_npu.npu_* only in a trailing comment
+        ("class ModelNew(torch.nn.Module):\n"
+         "    def forward(self, x, w):\n"
+         "        # never call torch_npu.npu_rms_norm(x, w) — stock kernel\n"
+         "        return custom_rms(x, w)\n", "kernel.py"),
+        # aclnn* only in a C++ line comment
+        ("#include <acl/acl.h>\n"
+         "void launch() {  // do not use aclnnMatmul(a, b, c) here\n"
+         "    custom_matmul(a, b, c);\n}\n",
+         "ascendc_op/op_extension/foo.cpp"),
+        # aclnn* only inside a C++ string literal
+        ("#include <acl/acl.h>\n"
+         "void launch() {\n"
+         "    TORCH_CHECK(false, \"do not call aclnnMatmul(\");\n}\n",
+         "ascendc_op/op_extension/foo.cpp"),
+        # aclnn* only inside a single-line block comment
+        ("#include <acl/acl.h>\n"
+         "void launch() { /* aclnnConv2d(x) is disabled */ custom(x); }\n",
+         "ascendc_op/op_extension/foo.cpp"),
+    )
+    for code, fname in allowed:
+        passed, _, errors = checker_ascendc.check(code, task_info={"file": fname})
+        assert passed is True, (code, errors)
+        assert not any(
+            e["error_type"].startswith("ascendc_anti_cheat_") for e in errors
+        ), (code, errors)
+
+    # A real call on a later line still blocks even when an earlier line only
+    # mentions the API in a comment.
+    mixed = (
+        "#include <acl/acl.h>\n"
+        "void launch() {  // aclnnMatmul(a, b, c) is the stock kernel\n"
+        "    aclnnMatmul(a, b, c);\n}\n"
+    )
+    passed, _, errors = checker_ascendc.check(
+        mixed, task_info={"file": "ascendc_op/op_extension/foo.cpp"})
+    assert passed is False, mixed
+    assert any(
+        e["error_type"] == "ascendc_anti_cheat_aclnn_builtin_compute"
+        for e in errors), (mixed, errors)
+
+
+# ============================================================
+# 运行时反作弊 gate (runtime_guard.compute_gate)
+#
+# 静态扫描只拦绕过 ATen dispatch 的 aclnn*/torch_npu.npu_*；一切走到 dispatch
+# 的计算委托由运行时 gate 在候选 forward 执行期间禁用核心计算 leaf。gate 用
+# torch.library kernel-override 实现，穿透候选自定义 op 内部的嵌套调用（mode 型
+# watcher 的盲区），每个 case 用完 Library._destroy 还原。
+# ============================================================
+
+import torch  # noqa: E402
+from akg_agents.op.utils.code_checker.runtime_guard import (  # noqa: E402
+    guarded_call, compute_gate, BuiltinComputeError,
+)
+
+# Custom op whose body delegates to torch.matmul — the refcall bypass the
+# dispatch-layer gate must catch despite the aten call being nested in the op.
+_CHEAT_DEF = torch.library.Library("cc_gate_ut", "DEF")
+_CHEAT_DEF.define("ch(Tensor a, Tensor b) -> Tensor")
+_CHEAT_IMPL = torch.library.Library("cc_gate_ut", "IMPL")
+_CHEAT_IMPL.impl("ch", lambda x, y: torch.matmul(x, y), "CompositeExplicitAutograd")
+
+
+@pytest.mark.level0
+def test_compute_gate_blocks_direct_matmul():
+    """Python-side torch.matmul in the candidate forward is disabled -> raises."""
+    a, b = torch.randn(8, 8), torch.randn(8, 8)
+    with pytest.raises(BuiltinComputeError):
+        guarded_call(lambda: torch.matmul(a, b), mode="block")
+
+
+@pytest.mark.level0
+def test_compute_gate_blocks_nested_delegation():
+    """The deliberate hole, closed: a custom op that internally calls aten matmul
+    is caught even though the call is nested (a TorchDispatchMode watcher, which
+    the gate replaced, is suspended during the op's own execution and blind here)."""
+    a, b = torch.randn(8, 8), torch.randn(8, 8)
+    with pytest.raises(BuiltinComputeError):
+        guarded_call(lambda: torch.ops.cc_gate_ut.ch(a, b), mode="block")
+
+
+@pytest.mark.level0
+def test_compute_gate_allows_legit_ops():
+    """Non-core ops (add / mul / reshape / dtype cast) are not gated."""
+    a, b = torch.randn(8, 8), torch.randn(8, 8)
+    out = guarded_call(lambda: (a * 2 + b).reshape(4, 16).float().sum(), mode="block")
+    assert out.numel() == 1
+
+
+@pytest.mark.level0
+def test_compute_gate_off_is_noop():
+    a, b = torch.randn(8, 8), torch.randn(8, 8)
+    assert tuple(guarded_call(lambda: torch.matmul(a, b), mode="off").shape) == (8, 8)
+
+
+@pytest.mark.level0
+def test_compute_gate_restores_after_exit():
+    """Per-case Library._destroy restores aten::mm on gate exit (incl. on the
+    raising path) so the next golden / case that legitimately uses matmul works."""
+    a, b = torch.randn(8, 8), torch.randn(8, 8)
+    with pytest.raises(BuiltinComputeError):
+        with compute_gate("block"):
+            torch.matmul(a, b)
+    assert tuple(torch.matmul(a, b).shape) == (8, 8)
 
 
 # ============================================================

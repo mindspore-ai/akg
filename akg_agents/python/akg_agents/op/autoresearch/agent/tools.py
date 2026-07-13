@@ -1002,7 +1002,8 @@ def _qc_dsl_compliance(fpath: str, fname: str,
         from akg_agents.op.utils.code_checker import CodeChecker
     except ImportError:
         return []  # standalone mode — no CodeChecker available
-    checker = CodeChecker(backend=config.backend or "", dsl=config.dsl)
+    checker = CodeChecker(backend=config.backend or "", dsl=config.dsl,
+                          arch=config.arch or "")
     with open(fpath, "r", encoding="utf-8") as fh:
         code = fh.read()
     return [

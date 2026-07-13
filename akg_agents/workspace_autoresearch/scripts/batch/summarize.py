@@ -34,6 +34,7 @@ import manifest as mf
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.settings import (  # noqa: E402
     classify_speedup, speedup_improved_above, speedup_regress_below,
+    recorded_speedup,
 )
 
 
@@ -76,9 +77,9 @@ def main() -> int:
     for k, v in by_status.get("done", []):
         r = v.get("result") or {}
         bm, best = r.get("baseline_metric"), r.get("best_metric")
-        if (isinstance(bm, (int, float)) and isinstance(best, (int, float))
-                and best > 0):
-            speedups.append((k, bm / best, bm, best))
+        sp = recorded_speedup(r)
+        if sp is not None:
+            speedups.append((k, sp, bm, best))
         else:
             no_metric.append(k)
 
@@ -89,7 +90,7 @@ def main() -> int:
         improved = labels.count("improved")
         onpar = labels.count("on-par")
         regr = labels.count("regress")
-        print("speedup (baseline / best, higher better):")
+        print("speedup (best_speedup geomean; higher better):")
         print(f"  ops with metric: {len(speedups)}")
         print(f"  median:          {statistics.median(vals):.2f}x")
         print(f"  best:            {max(vals):.2f}x")

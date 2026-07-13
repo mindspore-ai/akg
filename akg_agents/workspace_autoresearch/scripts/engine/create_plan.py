@@ -80,7 +80,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from phase_machine import PLAN_ITEMS_FILE
 from task_handle import (
     open_task, Role,
-    TaskOwnershipError, TaskConsistencyError,
+    TaskOwnershipError, TaskConsistencyError, TaskCorrupted, TaskPhaseError,
 )
 
 
@@ -98,6 +98,7 @@ _PARAM_PHRASES = {
 }
 _STOPWORDS = {"the", "a", "to", "of", "in", "for", "and", "with", "from", "by",
               "on", "is", "it", "as", "at", "or", "an", "be", "was", "that"}
+_SKILL_NAME_RE = re.compile(r"[\w.-]+[/\\]SKILL\.md\b", re.IGNORECASE)
 
 # Tracks where the XML payload came from so error messages can steer the
 # caller toward a robust input channel when argv looks suspicious. Set in
@@ -124,17 +125,25 @@ def _fail(msg: str):
     sys.exit(1)
 
 
-_ALLOWED_ITEM_TAGS = {"desc", "rationale"}
+def _skill_required() -> bool:
+    try:
+        from utils.external_paths import skills_dir
+        from utils.settings import skill_dsl
+        subtree = os.path.join(os.path.abspath(skills_dir()), skill_dsl())
+        return os.path.isdir(subtree)
+    except Exception:
+        return False
+
+
+_ALLOWED_ITEM_TAGS = {"desc", "rationale", "skill"}
 
 
 def _parse_items_xml(xml_str: str) -> list:
     """Parse <items><item>...</item>...</items> into a list of dicts.
 
-    Recognized child elements under <item>: desc, rationale. Unknown tags
-    are rejected so typos surface loudly rather than silently dropping
-    fields. (An earlier schema had a `<keywords>` field that the model
-    routinely omitted; it was removed because every keyword token already
-    appears in <desc>, and `_check_diversity` now reads desc directly.)
+    Recognized child elements under <item>: desc, rationale, skill.
+    Unknown tags are rejected so typos surface loudly rather than silently
+    dropping fields.
     """
     try:
         root = ET.fromstring(xml_str)
@@ -168,7 +177,7 @@ def _parse_items_xml(xml_str: str) -> list:
     return items
 
 
-def _validate_items(items):
+def _validate_items(items, *, require_skill: bool = False):
     if not isinstance(items, list) or len(items) < 3:
         _fail(f"Need >= 3 items, got {len(items) if isinstance(items, list) else 'non-list'}")
     for i, item in enumerate(items):
@@ -177,6 +186,8 @@ def _validate_items(items):
                 _fail(f"Item {i}: missing <{field}>")
             if not isinstance(item[field], str) or not item[field].strip():
                 _fail(f"Item {i}: '{field}' must be a non-empty string")
+        if require_skill and "skill" not in item:
+            _fail(f"Item {i}: missing <skill>")
 
         # desc must be a short prose sentence, not a snake_case identifier —
         # the history table and plan table in the dashboard surface this
@@ -197,6 +208,15 @@ def _validate_items(items):
             _fail(f"Item {i}: rationale too short ({len(rat)} chars, need >= 30)")
         if len(rat) > 400:
             item["rationale"] = rat[:397] + "..."
+            rat = item["rationale"]
+        skill = (item.get("skill") or "").strip()
+        if skill:
+            if not _SKILL_NAME_RE.search(skill):
+                _fail(
+                    f"Item {i}: <skill> must be a concrete "
+                    f"`<skill-dir>/SKILL.md` filename."
+                )
+            item["skill"] = skill
 
 
 def _check_diversity(items):
@@ -285,7 +305,7 @@ def main():
         xml_str = arg
 
     items = _parse_items_xml(xml_str)
-    _validate_items(items)
+    _validate_items(items, require_skill=_skill_required())
     _check_diversity(items)
 
     # Plan transaction is now journaled + committed atomically inside
@@ -303,6 +323,9 @@ def main():
         return
     except TaskOwnershipError as e:
         _fail(f"cannot run: {e}")
+        return
+    except (TaskCorrupted, TaskPhaseError) as e:
+        _fail(f"cannot commit plan: {e}")
         return
 
     print(json.dumps({

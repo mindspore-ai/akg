@@ -70,10 +70,17 @@ import manifest as mf
 # Reach up one level (scripts/) for the shared config accessors so batch
 # defaults match single-task /autoresearch instead of drifting.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import phase_machine  # noqa: E402
+import task_handle  # noqa: E402
+from akg_agents.utils.process_utils import (  # noqa: E402
+    popen_process_group_kwargs, terminate_process_tree,
+)
 from utils.settings import (  # noqa: E402
     default_max_rounds, default_eval_timeout,
-    batch_run_timeout_min, batch_cooldown_sec,
+    batch_run_timeout_min, batch_cooldown_sec, batch_transient_retries,
+    recorded_speedup,
 )
+
 
 # Force line-buffered stdout so logs flush in real time when run via nohup.
 try:
@@ -83,45 +90,43 @@ except Exception:
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
 
-PROMPT_TEMPLATE = """\
-/autoresearch --ref {ref} --kernel {kernel} --op-name {op} {hw} --max-rounds {rounds} --eval-timeout {timeout}
+def _console_write(text: str, *, flush: bool = True) -> None:
+    """Write to the interactive console without making it part of the
+    batch transaction.
 
-CRITICAL rules — read carefully, this session is non-interactive:
+    A foreground batch is commonly launched through ``ssh ... | tee``.  If
+    that controlling SSH connection disappears, the remote agent and its eval
+    children can keep running, but the inherited stdout pipe eventually raises
+    ``BrokenPipeError``.  Console output is only an observer; losing it must not
+    prevent the driver from harvesting a completed task into
+    ``batch_progress.json``.  After the first sink failure, replace stdout with
+    ``os.devnull`` so ordinary ``print`` calls later in the batch are harmless.
+    """
+    try:
+        sys.stdout.write(text)
+        if flush:
+            sys.stdout.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        try:
+            sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        except OSError:
+            pass
 
-1. After scaffold prints "Task directory created: <path>", your VERY FIRST
-   subsequent action MUST be exactly:
-       export AR_TASK_DIR="<that path>"
-   The double quotes are required so paths with spaces or backslashes
-   (e.g. C:\\Users\\Foo Bar\\...) survive shell parsing. The post-Bash
-   hook reads AR_TASK_DIR and claims the task into state.json (owner +
-   session_id). Every later hook keys off get_task_dir() / state.owner.
-   THIS IS THE SINGLE MOST IMPORTANT STEP.
 
-2. The kernel.py we passed via --kernel is a verified seed. Scaffold's
-   --run-baseline runs it; on PASS the phase advances to PLAN in
-   state.json immediately. Your job is PERFORMANCE OPTIMIZATION via
-   PLAN -> EDIT -> VERIFY for the configured max-rounds: propose
-   targeted incremental edits to ModelNew (block sizes, memory layout,
-   vectorization, fewer DRAM round-trips) and let pipeline.py measure
-   the speedup. If baseline fails on the seed, the hook routes to PLAN
-   and the first plan items must fix/rewrite the seed kernel.
+def _emit(log_fp, text: str) -> None:
+    """Persist output first, then mirror it to the best-effort console."""
+    log_fp.write(text)
+    log_fp.flush()
+    _console_write(text)
 
-3. In EDIT phase use the Edit tool (or Write for full rewrites).
-   PostToolUse validates kernel.py and auto-advances on pass.
 
-4. Treat hook output as authoritative. Each hook prints the legal next
-   action on stderr (or as additionalContext). Hooks gate every script
-   to the right phase (e.g. baseline.py runs only in BASELINE); when a
-   hook blocks something, the rejection reason is the next step.
-
-5. Keep working through whatever phase the hooks indicate, until the
-   framework itself writes phase=FINISH (which only happens when
-   eval_rounds reaches max-rounds — settling all current plan items
-   triggers REPLAN, not FINISH). The session is fully unattended; the
-   orchestrator detects completion by reading state.json's phase. When
-   the hooks have nothing more to ask of you, the session ends
-   naturally on your last tool call.
-"""
+# Keep the prompt to the slash command itself. Claude passes all text after
+# `/autoresearch` as `$ARGUMENTS`; appending extra prose here corrupts the
+# argument vector consumed by scripts/engine/parse_args.py.
+PROMPT_TEMPLATE = (
+    "/autoresearch --ref {ref} --kernel {kernel} --op-name {op} {hw} "
+    "--max-rounds {rounds} --eval-timeout {timeout}"
+)
 
 LOCK_FILENAME = ".batch.lock"
 
@@ -214,7 +219,7 @@ def release_lock(lock: Path) -> None:
         pass
 
 
-def recover_stale_running(progress: dict) -> int:
+def recover_stale_running(progress: dict) -> tuple[int, int]:
     """Demote 'running' cases that are demonstrably orphaned. We hold the
     batch dir lock when this fires, so anything still 'running' was left
     by a previous run.py. "Previous run.py" can mean any of:
@@ -232,7 +237,11 @@ def recover_stale_running(progress: dict) -> int:
         it's not orphaned — skip.
       - if the task_dir is_task_active (owner + fresh heartbeat in
         state.json), /autoresearch is still writing — skip.
-      - otherwise the case is a real orphan; demote with a note.
+      - once both owners are dead, harvest an already-FINISH task from its
+        authoritative state instead of launching the whole optimization again.
+      - otherwise the case is a real incomplete orphan; demote with a note.
+
+    Returns ``(demoted, harvested)``.
     """
     # Route through the phase_machine facade so the "is this task
     # still live" judgement has one owner (reads state.last_touched).
@@ -243,7 +252,7 @@ def recover_stale_running(progress: dict) -> int:
     from phase_machine import is_task_active  # noqa: E402
 
     cases = progress.get("cases", {})
-    n = 0
+    demoted = harvested = 0
     now = mf.now_iso()
     for c in cases.values():
         if c.get("status") != "running":
@@ -258,14 +267,30 @@ def recover_stale_running(progress: dict) -> int:
         td = c.get("task_dir")
         if td and is_task_active(td):
             continue
+        if td:
+            task_dir = Path(td)
+            if mf.read_phase(task_dir) == "FINISH":
+                c.update({
+                    "status": "done",
+                    "finished_at": now,
+                    "final_phase": "FINISH",
+                    "rc": 0,
+                    "result": mf.read_task_state(task_dir),
+                })
+                existing = (c.get("note") or "").strip()
+                tag = ("harvested completed task on batch restart "
+                       "after runner exit")
+                c["note"] = f"{existing}; {tag}" if existing else tag
+                harvested += 1
+                continue
         c["status"] = "error"
         c["finished_at"] = now
         existing = (c.get("note") or "").strip()
         tag = ("stale running, demoted on batch restart "
                "(no live runner_pid, task not active in state.json)")
         c["note"] = f"{existing}; {tag}" if existing else tag
-        n += 1
-    return n
+        demoted += 1
+    return demoted, harvested
 
 
 def build_prompt(case: dict, hw_arg: str,
@@ -297,206 +322,146 @@ def build_claude_cmd(args: argparse.Namespace, prompt: str) -> list[str]:
     return cmd
 
 
-def env_with_no_proxy() -> dict[str, str]:
+def env_with_no_proxy(extra: Optional[dict[str, str]] = None) -> dict[str, str]:
     env = os.environ.copy()
     extras = "127.0.0.1,localhost"
     existing = env.get("NO_PROXY", "")
     env["NO_PROXY"] = f"{existing},{extras}".strip(",") if existing else extras
     env["no_proxy"] = env["NO_PROXY"]
     env["PYTHONIOENCODING"] = "utf-8"  # propagates UTF-8 to claude --print + its Bash-tool subprocs
+    if extra:
+        env.update(extra)
     return env
+
+
+def _begin_case(batch_dir: Path, case: dict,
+                prev_task_dir: Optional[str]):
+    """Shared manifest/ownership setup for every agent driver."""
+    op = case["op_name"]
+    mf.update_case(
+        batch_dir, op, status="running", started_at=mf.now_iso(),
+        finished_at=None, task_dir=None, final_phase=None, rc=None,
+        runner_pid=os.getpid(), note="",
+    )
+    pre_task_dirs = mf.snapshot_task_dirs()
+    if phase_machine.clear_active_task(expected_task_dir=prev_task_dir):
+        return op, mf.repo_root(), time.time(), pre_task_dirs
+    sys.stdout.write(
+        f"[run] op={op}: refusing to start — another session is active on "
+        "this checkout. Stop it before retrying.\n")
+    sys.stdout.flush()
+    mf.update_case(batch_dir, op, status="error", finished_at=mf.now_iso(),
+                   note="aborted: prior owner still active")
+    return None
+
+
+def _find_task_dir(batch_dir: Path, op: str, pre_task_dirs: set,
+                   candidate: Optional[str] = None) -> Optional[Path]:
+    """Resolve the task produced by either agent, newest evidence first."""
+    recorded = (mf.load_progress(batch_dir).get("cases", {}).get(op, {})
+                .get("task_dir"))
+    for raw in (candidate, recorded):
+        if not isinstance(raw, str):
+            continue
+        task_dir = Path(raw)
+        if (task_dir.is_dir()
+                and mf.task_dir_belongs_to_op(task_dir.name, op)):
+            return task_dir.resolve()
+    found = mf.pick_new_task_dir(pre_task_dirs, op)
+    return found.resolve() if found is not None else None
+
+
+def _read_case_result(task_dir: Path, interrupted: bool):
+    """Replay an interrupted journal, then read one canonical outcome."""
+    consistency_note = ""
+    try:
+        with task_handle.open_task(
+                str(task_dir), role=task_handle.Role.SUPERVISOR):
+            pass
+    except task_handle.TaskConsistencyError as exc:
+        consistency_note = f"; post-run heal refused: {exc}"
+    phase = mf.read_phase(task_dir)
+    result = mf.read_task_state(task_dir)
+    status = ("done" if phase == "FINISH" and not interrupted
+              and not consistency_note else "error")
+    return phase, result, status, consistency_note
+
+
+def _finish_case(batch_dir: Path, op: str, task_dir: Path, phase: str,
+                 result: dict, status: str, rc: int, interrupted: bool,
+                 consistency_note: str = "", retries: int = 0) -> int:
+    note = ""
+    if status == "error":
+        note = f"phase={phase} rc={rc}"
+        if interrupted:
+            note += "; interrupted"
+        note += consistency_note
+    if retries:
+        retry_note = f"transient_retries={retries}"
+        note = f"{retry_note}; {note}" if note else retry_note
+    mf.update_case(
+        batch_dir, op, status=status, task_dir=str(task_dir.resolve()),
+        finished_at=mf.now_iso(), final_phase=phase, rc=rc,
+        result=result, note=note,
+    )
+    sys.stdout.write(
+        f"[run] result: op={op} task_dir={task_dir} phase={phase} "
+        f"status={status}\n")
+    return 130 if interrupted else (0 if status == "done" else 1)
+
+
+def _run_driver(cmd: list[str], repo_root: Path, batch_dir: Path, op: str,
+                hw_arg: str, rounds: int, timeout_min: int, started: float,
+                log_fp, launch_name: str, *, agent: str = "",
+                line_cb=None):
+    agent_tag = f" (agent={agent})" if agent else ""
+    header = (
+        f"\n{'=' * 72}\n"
+        f"[run {datetime.now().isoformat(timespec='seconds')}] op={op} "
+        f"{hw_arg} rounds={rounds}{agent_tag}\n"
+        f"[run] launching: {launch_name} (cwd={repo_root}, "
+        f"timeout={timeout_min}min)\n{'─' * 72}\n")
+    _emit(log_fp, header)
+    rc, interrupted = _stream_subprocess(
+        cmd, str(repo_root), started, timeout_min * 60, log_fp, line_cb,
+        extra_env={
+            "AR_BATCH_DIR": str(batch_dir.resolve()),
+            "AR_BATCH_OP": op,
+        },
+    )
+    footer = (f"{'─' * 72}\n[run] {launch_name} exited rc={rc} after "
+              f"{time.time() - started:.0f}s\n")
+    _emit(log_fp, footer)
+    return rc, interrupted
 
 
 def run_one(batch_dir: Path, case: dict,
             args: argparse.Namespace, hw_arg: str, log_fp,
             prev_task_dir: Optional[str] = None) -> int:
-    op = case["op_name"]
-    repo_root = mf.repo_root()
+    context = _begin_case(batch_dir, case, prev_task_dir)
+    if context is None:
+        return 2
+    op, repo_root, started, pre_task_dirs = context
     prompt = build_prompt(case, hw_arg,
                           args.max_rounds, args.eval_timeout)
     cmd = build_claude_cmd(args, prompt)
 
-    started = time.time()
-    started_iso = mf.now_iso()
-    mf.update_case(batch_dir, op,
-                   status="running",
-                   started_at=started_iso,
-                   finished_at=None,
-                   task_dir=None,
-                   final_phase=None,
-                   rc=None,
-                   # Record the runner pid so a future recover_stale_
-                   # running call can tell "this case is being driven by
-                   # a live process" from "this case is an orphan".
-                   runner_pid=os.getpid(),
-                   note="")
-
-    # Identity-bound task_dir from same-Popen scaffold markers; snapshot
-    # is the post-process safety net only.
-    pre_task_dirs = mf.snapshot_task_dirs()
-    bound_task_dir: Path | None = None
-
-    # Release the previous op's owner record before launching the
-    # next claude --print. Ownership lives in <task_dir>/.ar_state/
-    # state.json's owner field and the per-session index. Pass our
-    # just-finished task_dir as expected_task_dir so the ownership
-    # branch fires instead of the heartbeat-fresh defence (the
-    # previous op's last hook touched state.last_touched seconds ago
-    # and a heartbeat-only check would refuse every legitimate
-    # transition). First op of the run (prev_task_dir is None) falls
-    # through to the heartbeat defence, which protects against a
-    # manual Claude session
-    # already running against this checkout.
-    from phase_machine import clear_active_task
-    if not clear_active_task(expected_task_dir=prev_task_dir):
-        sys.stdout.write(f"[run] op={op}: refusing to start — another "
-                         f"session is active on this checkout. Stop it "
-                         f"before retrying.\n")
-        sys.stdout.flush()
-        mf.update_case(batch_dir, op, status="error",
-                       finished_at=mf.now_iso(),
-                       note="aborted: prior owner still active")
-        return 2
-
-    header = (f"\n{'=' * 72}\n"
-              f"[run {datetime.now().isoformat(timespec='seconds')}] op={op} "
-              f"{hw_arg} rounds={args.max_rounds}\n"
-              f"[run] launching: {args.claude_bin} --print "
-              f"(cwd={repo_root}, timeout={args.timeout_min}min)\n"
-              f"{'─' * 72}\n")
-    sys.stdout.write(header)
-    sys.stdout.flush()
-    log_fp.write(header)
-    log_fp.flush()
-
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(repo_root),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        # Force UTF-8 decode for subprocess stdout: claude (and our hooks)
-        # write UTF-8; Python's `text=True` default is
-        # `locale.getpreferredencoding(False)`, which on a Chinese-locale
-        # Windows is GBK and crashes the _reader thread on the first
-        # non-ASCII byte. errors='replace' keeps the stream readable even
-        # if some downstream tool ever emits malformed bytes.
-        encoding='utf-8',
-        errors='replace',
-        bufsize=1,
-        env=env_with_no_proxy(),
-    )
-
-    # Background reader thread + bounded queue.get poll. The earlier
-    # `for line in proc.stdout` form blocks on readline indefinitely when
-    # claude is alive but silent (API retry, deep IO wait), so the
-    # wall-clock check inside the loop never fires and `--timeout-min`
-    # becomes a no-op. Selectors aren't an option because Windows can't
-    # select() on pipe handles, so we use a thread + queue (cross-platform).
-    line_q: "queue.Queue[str]" = queue.Queue()
-    reader_done = threading.Event()
-
-    def _reader():
-        try:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line_q.put(line)
-        finally:
-            reader_done.set()
-
-    threading.Thread(target=_reader, daemon=True).start()
-
     timeout_s = args.timeout_min * 60
-    interrupted = False
-    try:
-        while True:
-            try:
-                # Short poll so a silent claude still hits the wall-clock
-                # check below within 5s of crossing the deadline.
-                line = line_q.get(timeout=5)
-            except queue.Empty:
-                if time.time() - started > timeout_s:
-                    msg = (f"[run] WALL-CLOCK TIMEOUT after "
-                           f"{args.timeout_min}min, killing claude\n")
-                    sys.stdout.write(msg)
-                    sys.stdout.flush()
-                    log_fp.write(msg)
-                    log_fp.flush()
-                    proc.kill()
-                    break
-                if reader_done.is_set() and line_q.empty():
-                    break
-                continue
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            log_fp.write(line)
-            log_fp.flush()
-            if bound_task_dir is None:
-                td = (mf.parse_scaffold_created_line(line)
-                      or mf.parse_scaffold_result_line(line))
-                # Reject paths claude might echo from prior context: must
-                # be fresh AND a scaffold-formatted dir for THIS op (exact
-                # match, not prefix — `op=avg` must not claim avg_pool2d_*).
-                if (td is not None
-                        and td not in pre_task_dirs
-                        and mf.task_dir_belongs_to_op(td.name, op)):
-                    bound_task_dir = td
-                    mf.update_case(batch_dir, op, task_dir=str(td.resolve()))
-        proc.wait(timeout=30)
-    except KeyboardInterrupt:
-        interrupted = True
-        msg = "\n[run] Ctrl-C received, killing claude\n"
-        sys.stdout.write(msg)
-        log_fp.write(msg)
-        try:
-            proc.kill()
-        except Exception:
-            pass
+    last_rc, interrupted = _run_driver(
+        cmd, repo_root, batch_dir, op, hw_arg, args.max_rounds,
+        args.timeout_min, started, log_fp, f"{args.claude_bin} --print")
 
-    elapsed = time.time() - started
-    footer = (f"{'─' * 72}\n"
-              f"[run] claude exited rc={proc.returncode} after {elapsed:.0f}s\n")
-    sys.stdout.write(footer)
-    log_fp.write(footer)
-    log_fp.flush()
-
-    # Final pick: stdout-bound dir wins; snapshot diff is the safety net.
-    td = bound_task_dir or mf.pick_new_task_dir(pre_task_dirs, op)
-    if td is None:
+    task_dir = _find_task_dir(batch_dir, op, pre_task_dirs)
+    if task_dir is None:
         mf.update_case(batch_dir, op,
                        status="error",
                        finished_at=mf.now_iso(),
-                       rc=proc.returncode,
-                       note=f"no task_dir found; rc={proc.returncode}"
+                       rc=last_rc,
+                       note=f"no task_dir found; rc={last_rc}"
                             + ("; interrupted" if interrupted else ""))
         return 130 if interrupted else 2
-    task_dir = td
-
-    # Post-op heal + read. The supervisor never owned this task —
-    # the claude --print process did, via post_bash activation. But a
-    # crash inside claude can leave an in-flight journal that this
-    # supervisor's `read_phase` / `read_task_state` would observe as
-    # stale fields. Open a Task as SUPERVISOR (heal + check, no
-    # claim) so the reads below see the post-replay state.
-    import sys as _sys
-    _scripts = str(Path(__file__).resolve().parent.parent)
-    if _scripts not in _sys.path:
-        _sys.path.insert(0, _scripts)
-    from task_handle import (open_task as _open_task,
-                              Role as _Role,
-                              TaskConsistencyError as _Consistency)
-    consistency_note = ""
-    try:
-        with _open_task(str(task_dir), role=_Role.SUPERVISOR):
-            pass  # __enter__ ran replay + check
-    except _Consistency as e:
-        consistency_note = f"; post-run heal refused: {e}"
-
-    phase = mf.read_phase(td)
-    result = mf.read_task_state(task_dir)
-    final_status = ("done" if phase == "FINISH" and not interrupted
-                    and not consistency_note else "error")
+    phase, result, final_status, consistency_note = _read_case_result(
+        task_dir, interrupted)
 
     # (D) Transient claude-exe retry. claude.exe exits rc != 0 on
     # ECONNRESET / Stream idle timeout / other transient API failures
@@ -509,12 +474,11 @@ def run_one(batch_dir: Path, case: dict,
     # rc != 0 + no progress = baseline never committed (real fail, no
     # retry).
     transient_attempts = 0
-    if (final_status == "error" and proc.returncode != 0
+    if (final_status == "error" and last_rc != 0
             and not interrupted and not consistency_note
             and phase != "FINISH"
             and (result or {}).get("progress_initialized") is True):
-        from utils.settings import batch_transient_retries as _max_retries
-        max_retries = _max_retries()
+        max_retries = batch_transient_retries()
         resume_prompt = (
             f"/autoresearch --resume {task_dir} --force"
         )
@@ -524,100 +488,168 @@ def run_one(batch_dir: Path, case: dict,
                and phase != "FINISH"):
             transient_attempts += 1
             r_started = time.time()
-            r_msg = (f"[run] transient claude crash (rc={proc.returncode}, "
+            r_msg = (f"[run] transient claude crash (rc={last_rc}, "
                      f"phase={phase}); resuming attempt "
                      f"{transient_attempts}/{max_retries} via "
                      f"--resume --force\n")
-            sys.stdout.write(r_msg); log_fp.write(r_msg)
-            sys.stdout.flush(); log_fp.flush()
-            r_proc = subprocess.Popen(
-                resume_cmd,
-                cwd=str(repo_root),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True, encoding='utf-8', errors='replace',
-                bufsize=1, env=env_with_no_proxy(),
+            _emit(log_fp, r_msg)
+            r_rc, r_interrupted = _stream_subprocess(
+                resume_cmd, str(repo_root), r_started, timeout_s, log_fp,
+                extra_env={
+                    "AR_BATCH_DIR": str(batch_dir.resolve()),
+                    "AR_BATCH_OP": op,
+                },
             )
-            r_q: "queue.Queue[str]" = queue.Queue()
-            r_done = threading.Event()
-            def _r_reader(p=r_proc, q=r_q, done=r_done):
-                try:
-                    assert p.stdout is not None
-                    for line in p.stdout:
-                        q.put(line)
-                finally:
-                    done.set()
-            threading.Thread(target=_r_reader, daemon=True).start()
-            r_interrupted = False
-            try:
-                while True:
-                    try:
-                        line = r_q.get(timeout=5)
-                    except queue.Empty:
-                        if time.time() - r_started > timeout_s:
-                            sys.stdout.write(f"[run] WALL-CLOCK TIMEOUT after "
-                                             f"{args.timeout_min}min on "
-                                             f"resume attempt "
-                                             f"{transient_attempts}, killing\n")
-                            r_proc.kill()
-                            break
-                        if r_done.is_set() and r_q.empty():
-                            break
-                        continue
-                    sys.stdout.write(line); log_fp.write(line)
-                    sys.stdout.flush(); log_fp.flush()
-                r_proc.wait(timeout=30)
-            except KeyboardInterrupt:
-                r_interrupted = True
-                r_proc.kill()
             r_elapsed = time.time() - r_started
-            sys.stdout.write(f"[run] resume attempt {transient_attempts} "
-                             f"exited rc={r_proc.returncode} after "
-                             f"{r_elapsed:.0f}s\n")
-            # Reread phase + state; rebind proc so the final
-            # update_case() below sees the latest rc.
+            _console_write(f"[run] resume attempt {transient_attempts} "
+                           f"exited rc={r_rc} after "
+                           f"{r_elapsed:.0f}s\n")
+            # Reread phase + state; retain the latest process return code for
+            # the final update_case() below.
             try:
-                with _open_task(str(task_dir), role=_Role.SUPERVISOR):
+                with task_handle.open_task(
+                        str(task_dir), role=task_handle.Role.SUPERVISOR):
                     pass
-            except _Consistency:
+            except task_handle.TaskConsistencyError:
                 pass
             phase = mf.read_phase(task_dir)
             result = mf.read_task_state(task_dir)
-            proc = r_proc
+            last_rc = r_rc
             interrupted = interrupted or r_interrupted
             final_status = ("done" if phase == "FINISH" and not interrupted
                             else "error")
             if r_interrupted:
                 break
 
-    note = ""
-    if final_status == "error":
-        note = f"phase={phase} rc={proc.returncode}"
-        if interrupted:
-            note += "; interrupted"
-        if consistency_note:
-            note += consistency_note
-    if transient_attempts > 0:
-        rt_tag = f"transient_retries={transient_attempts}"
-        note = f"{rt_tag}; {note}" if note else rt_tag
+    return _finish_case(
+        batch_dir, op, task_dir, phase, result, final_status, last_rc,
+        interrupted, consistency_note, transient_attempts)
 
-    mf.update_case(batch_dir, op,
-                   status=final_status,
-                   task_dir=str(task_dir.resolve()),
-                   finished_at=mf.now_iso(),
-                   final_phase=phase,
-                   rc=proc.returncode,
-                   result=result,
-                   note=note)
 
-    sys.stdout.write(
-        f"[run] result: op={op} task_dir={task_dir} phase={phase} "
-        f"status={final_status}\n"
+def _stream_subprocess(cmd, cwd, started, timeout_s, log_fp, line_cb=None,
+                       extra_env: Optional[dict[str, str]] = None):
+    """Run `cmd`, tee its combined stdout to console + log, enforce a
+    wall-clock cap, and invoke line_cb(line) per line. Reader-thread + queue
+    poll so a silent child still hits the deadline (Windows can't select on
+    pipes). Returns (returncode, interrupted). This is the agent-neutral
+    streaming primitive used by both Claude and OpenCode drivers.
+
+    The child is spawned in its own process group/session so a wall-clock or
+    Ctrl-C kill takes down the entire `run_loop.py -> opencode run -> shell ->
+    pipeline/build` tree, not just the driver."""
+    child_env = env_with_no_proxy(extra_env)
+    if os.name == "posix":
+        # Bun/OpenCode uses PWD for project-level config discovery.
+        child_env["PWD"] = os.path.abspath(cwd)
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        bufsize=1, env=child_env, **popen_process_group_kwargs(),
     )
-    if interrupted:
-        return 130
-    return 0 if final_status == "done" else 1
+    q: "queue.Queue[str]" = queue.Queue()
+    done = threading.Event()
+
+    def _reader():
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                q.put(line)
+        finally:
+            done.set()
+
+    threading.Thread(target=_reader, daemon=True).start()
+    interrupted = False
+    try:
+        while True:
+            try:
+                line = q.get(timeout=5)
+            except queue.Empty:
+                if time.time() - started > timeout_s:
+                    msg = ("[run] WALL-CLOCK TIMEOUT, killing agent driver "
+                           "+ its process tree\n")
+                    _emit(log_fp, msg)
+                    terminate_process_tree(proc)
+                    break
+                if done.is_set() and q.empty():
+                    break
+                continue
+            _emit(log_fp, line)
+            if line_cb:
+                line_cb(line)
+        proc.wait(timeout=30)
+    except KeyboardInterrupt:
+        interrupted = True
+        terminate_process_tree(proc)
+    return proc.returncode, interrupted
+
+
+def run_one_opencode(batch_dir: Path, case: dict, args: argparse.Namespace,
+                     hw_arg: str, log_fp, prev_task_dir: Optional[str] = None):
+    """Drive one op to FINISH with opencode. opencode 1.17.7 has no Stop
+    hook, so a single `opencode run` can't self-loop to FINISH like
+    `claude --print`. We delegate to the proven headless driver
+    `.opencode/run_loop.py`, which scaffolds the task and re-invokes
+    `opencode run --session <id>` until the phase machine reaches FINISH. This
+    wrapper supplies the same batch bookkeeping run_one does (ownership
+    handoff, task_dir binding, post-run heal, status/result recording) so
+    both agents share the manifest / queue / summary orchestration verbatim."""
+    context = _begin_case(batch_dir, case, prev_task_dir)
+    if context is None:
+        return 2
+    op, repo_root, started, pre_task_dirs = context
+
+    run_loop = repo_root / ".opencode" / "run_loop.py"
+    if not run_loop.is_file():
+        mf.update_case(batch_dir, op, status="error", finished_at=mf.now_iso(),
+                       note=f"opencode driver missing: {run_loop}")
+        return 2
+    # No iteration cap (symmetric with the claude path): run_loop stops on
+    # decide(stop), and this op is bounded by the outer wall-clock timeout
+    # below (args.timeout_min), the same one the claude path uses.
+    cmd = [sys.executable, str(run_loop),
+           "--ref", case["ref"], "--kernel", case["kernel"],
+           "--op-name", op,
+           "--max-rounds", str(args.max_rounds),
+           "--eval-timeout", str(args.eval_timeout)]
+    cmd += shlex.split(hw_arg)
+    if args.model:
+        os.environ["AR_OPENCODE_MODEL"] = args.model
+
+    bound = {"td": None}
+
+    def _cb(line: str):
+        # run_loop prints `[run_loop] task_dir=<abs path>` once it resolves
+        # the scaffolded task. scaffold.py also writes this into
+        # batch_progress when it creates the task.
+        if bound["td"] is None:
+            s = line.strip()
+            marker = "[run_loop] task_dir="
+            if s.startswith(marker):
+                td = s[len(marker):].strip()
+                if td:
+                    bound["td"] = td
+                    mf.update_case(batch_dir, op,
+                                   task_dir=str(Path(td).resolve()))
+
+    rc, interrupted = _run_driver(
+        cmd, repo_root, batch_dir, op, hw_arg, args.max_rounds,
+        args.timeout_min, started, log_fp, "run_loop.py",
+        agent="opencode", line_cb=_cb)
+
+    task_dir = _find_task_dir(
+        batch_dir, op, pre_task_dirs, bound["td"])
+    if task_dir is None:
+        mf.update_case(batch_dir, op, status="error", finished_at=mf.now_iso(),
+                       rc=rc,
+                       note=f"no task_dir from run_loop; rc={rc}"
+                            + ("; interrupted" if interrupted else ""))
+        return 130 if interrupted else 2
+    phase, result, status, consistency_note = _read_case_result(
+        task_dir, interrupted)
+    return _finish_case(
+        batch_dir, op, task_dir, phase, result, status, rc, interrupted,
+        consistency_note)
 
 
 def filter_queue(progress: dict, args: argparse.Namespace) -> list[dict]:
@@ -658,9 +690,9 @@ def print_summary(batch_dir: Path, total_elapsed: float,
         if s != "done":
             continue
         r = v.get("result") or {}
-        bm, best = r.get("baseline_metric"), r.get("best_metric")
-        if isinstance(bm, (int, float)) and isinstance(best, (int, float)) and best > 0:
-            speedups.append(bm / best)
+        sp = recorded_speedup(r)
+        if sp is not None:
+            speedups.append(sp)
 
     print()
     print("=" * 72)
@@ -737,16 +769,27 @@ def main() -> int:
                     help="also queue ops with status=error")
     ap.add_argument("--cooldown-sec", type=int, default=batch_cooldown_sec(),
                     help="seconds to sleep between ops")
+    ap.add_argument("--agent", choices=["claude", "opencode"], default="claude",
+                    help="which agent harness drives each op. claude: one "
+                         "`claude --print` per op (Stop hook self-loops to "
+                         "FINISH). opencode: `.opencode/run_loop.py` re-invokes "
+                         "`opencode run --session <id>` to FINISH (opencode has "
+                         "no Stop hook). Both share this batch's manifest/queue/"
+                         "summary. For opencode set its model + creds in the "
+                         "env (AR_OPENCODE_MODEL / DEEPSEEK_API_KEY / …).")
     ap.add_argument("--claude-bin", default="claude")
-    ap.add_argument("--model", default="")
+    ap.add_argument("--model", default="",
+                    help="model id. claude: --model. opencode: exported as "
+                         "AR_OPENCODE_MODEL for run_loop.py.")
     ap.add_argument("--extra-claude-arg", action="append", default=[],
                     help="extra arg to pass to claude (repeatable)")
     args = ap.parse_args()
     # Resolve `claude` -> real executable (Windows needs `claude.cmd`,
     # POSIX returns the absolute path). subprocess.Popen(list, ...) does
     # NOT walk PATHEXT, so a bare 'claude' crashes on Windows even when
-    # it's on PATH as a .cmd.
-    args.claude_bin = _resolve_claude_bin(args.claude_bin)
+    # it's on PATH as a .cmd. (opencode resolves its own bin inside run_loop.)
+    if args.agent == "claude":
+        args.claude_bin = _resolve_claude_bin(args.claude_bin)
 
     batch_dir = Path(args.batch_dir).resolve()
     if not batch_dir.is_dir():
@@ -786,12 +829,15 @@ def main() -> int:
     lock_path = acquire_lock(batch_dir)
     try:
         progress = mf.load_progress(batch_dir)
-        demoted = recover_stale_running(progress)
+        demoted, harvested = recover_stale_running(progress)
         progress, dropped = mf.merge_cases(progress, cases, mode)
         mf.save_progress(batch_dir, progress)
         if demoted:
             print(f"[batch] demoted {demoted} stale 'running' op(s) "
                   f"from a previous run -> error")
+        if harvested:
+            print(f"[batch] harvested {harvested} completed op(s) from "
+                  "authoritative task state")
         if dropped:
             preview = ", ".join(dropped[:5]) + (
                 f", ... (+{len(dropped) - 5} more)" if len(dropped) > 5 else "")
@@ -834,11 +880,13 @@ def main() -> int:
                       f"elapsed_total={(time.time()-total_started)/60:.1f}min")
 
                 try:
-                    rc = run_one(batch_dir, case, args, hw_arg, log_fp,
-                                 prev_task_dir=prev_task_dir)
+                    driver = (run_one_opencode if args.agent == "opencode"
+                              else run_one)
+                    rc = driver(batch_dir, case, args, hw_arg, log_fp,
+                                prev_task_dir=prev_task_dir)
                     # Refresh prev_task_dir from whatever update_case
-                    # eventually wrote (run_one resolves the task_dir
-                    # mid-run via scaffold markers). On run_one abort
+                    # eventually wrote (scaffold's batch-progress write or
+                    # an agent marker). On abort
                     # without ever binding a task_dir, the field stays
                     # None and the next clear() will fall through to
                     # the heartbeat defence — which is what we want.

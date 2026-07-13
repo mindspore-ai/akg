@@ -47,8 +47,10 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from phase_machine import (  # noqa: E402
-    _PLAN_ITEM_RE, get_plan_items, is_settled_table_header, plan_path,
+    _PLAN_ITEM_RE, get_active_item, get_plan_items,
+    is_settled_table_header, plan_path,
 )
+from utils.json_io import atomic_write_text  # noqa: E402
 
 
 class PlanStore:
@@ -128,6 +130,8 @@ class PlanStore:
             marker = " (ACTIVE)" if i == 0 else ""
             lines.append(f"- [ ] **{pid}**{marker}: {item['desc'].strip()}")
             lines.append(f"  - rationale: {item['rationale'].strip()}")
+            if item.get("skill"):
+                lines.append(f"  - skill: {item['skill'].strip()}")
         lines.append("")
         lines.append("## Settled History")
         lines.append("| Item | Outcome | Metric | Reason |")
@@ -144,30 +148,46 @@ class PlanStore:
         Cross-file consistency with state.json is the caller's
         responsibility — call save_state with the matching
         `expected_plan_version` after this returns."""
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(self.render(version, item_ids, items, settled_rows))
-        os.replace(tmp, self.path)
-
-    def parse_version_on_disk(self) -> Optional[int]:
-        """Return the integer N from a `# Plan vN` header, or None when
-        the file is missing or doesn't start with that header. Used by
-        post_bash to cross-check plan_version consistency after
-        create_plan.py wrote plan.md but crashed before save_progress
-        bumped progress.plan_version (or vice-versa)."""
-        if not self.exists():
-            return None
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                first = f.readline().strip()
-        except OSError:
-            return None
-        import re as _re
-        m = _re.match(r"^#\s*Plan\s+v(\d+)\b", first)
-        return int(m.group(1)) if m else None
+        atomic_write_text(
+            self.path, self.render(version, item_ids, items, settled_rows))
 
     # ---- settlement -----------------------------------------------------
+    def settle_result(self, result: dict) -> dict:
+        """Apply a recorded round to plan.md, idempotently.
+
+        ``result.plan_item`` binds settlement to the item that was active
+        during evaluation.  If that item is already present in Settled
+        History, replay succeeds without advancing the next item.
+        """
+        if not self.exists():
+            raise RuntimeError("plan.md not found")
+
+        decision = result.get("decision", "FAIL")
+        metric = result.get("round_metric")
+        expected = result.get("plan_item")
+        if expected:
+            active = get_active_item(self.task_dir)
+            active_id = (active or {}).get("id")
+            if active_id != expected:
+                if f"| {expected} |" in self.parse_settled_history():
+                    return {
+                        "settled_item": expected,
+                        "decision": decision,
+                        "metric": metric,
+                        "already_settled": True,
+                    }
+                raise RuntimeError(
+                    f"plan.md ACTIVE is {active_id!r}, recorded round "
+                    f"expected {expected!r}, and that item is absent from "
+                    f"Settled History")
+
+        settled_id, _ = self.settle_active(decision, metric)
+        return {
+            "settled_item": settled_id,
+            "decision": decision,
+            "metric": metric,
+        }
+
     def settle_active(self, decision: str,
                       metric: Optional[float]) -> tuple:
         """Mark the (ACTIVE) item as settled, advance ACTIVE to next
@@ -242,9 +262,6 @@ class PlanStore:
         # truncated. Header line is preserved as-is — plan_version
         # doesn't change on settle, so the artifact's marker stays
         # consistent with state.expected_plan_version.
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        os.replace(tmp, self.path)
+        atomic_write_text(self.path, "\n".join(lines))
 
         return settled_id, settled_desc

@@ -71,11 +71,12 @@ def _resolve_device_arg(device_id: Optional[int], config: TaskConfig,
 
 def run_eval(task_dir: str, config: TaskConfig,
              device_id: Optional[int] = None,
-             worker_urls: Optional[list] = None) -> EvalResult:
-    """Route the eval through ``utils.akg_eval.eval_kernel`` and convert
-    its dict response into ``EvalResult``. ``worker_urls`` empty → local
-    worker on ``device_id``; otherwise the first URL is registered as a
-    RemoteWorker."""
+             worker_urls: Optional[list] = None,
+             current_step: int = 0) -> EvalResult:
+    """Route the eval through ``utils.akg_eval.eval_kernel`` → ``EvalResult``.
+    ``worker_urls`` empty → local worker on ``device_id``; else first URL is a
+    RemoteWorker. ``current_step`` (caller-owned: pipeline=round_num, seed=0)
+    numbers the verify dir so each round's artifacts are kept, not overwritten."""
     _scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_dir not in sys.path:
         sys.path.insert(0, _scripts_dir)
@@ -87,7 +88,8 @@ def run_eval(task_dir: str, config: TaskConfig,
     try:
         raw = eval_kernel(task_dir, config,
                           device_id=dev_id,
-                          worker_url=worker_url)
+                          worker_url=worker_url,
+                          current_step=current_step)
     except Exception as e:  # pylint: disable=broad-exception-caught
         return EvalResult(
             outcome=EvalOutcome.INFRA_FAIL,
@@ -104,4 +106,6 @@ def run_eval(task_dir: str, config: TaskConfig,
         error=raw.get("error"),
         raw_output=str(raw.get("raw_output_tail") or ""),
         error_source=raw.get("error_source"),
+        fail_report=raw.get("fail_report"),
+        failure_signals=raw.get("failure_signals") or {},
     )

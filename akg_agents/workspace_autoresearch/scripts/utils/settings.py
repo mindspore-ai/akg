@@ -74,6 +74,11 @@ def default_eval_timeout() -> int:
     return _get("defaults", "eval_timeout")
 
 
+def default_reference_data_timeout() -> int:
+    """Reference-data generation budget (seconds) when omitted."""
+    return _get("defaults", "reference_data_timeout")
+
+
 def default_smoke_test_timeout() -> int:
     """quick_check smoke-test budget (seconds) when a task omits it."""
     return _get("defaults", "smoke_test_timeout")
@@ -202,3 +207,15 @@ def classify_speedup(v: float) -> str:
     if v < speedup_regress_below():
         return "regress"
     return "on-par"
+
+
+def recorded_speedup(src) -> float | None:
+    """THE single reader for the recorded speedup — ``best_speedup``, the
+    per-shape-ratio geomean produced once by ``aggregate.geomean_ratio`` and
+    stored in task state. Accepts a state/result dict or a progress object.
+    Returns None when unset / non-positive. Consumers read speedup from here;
+    they must NOT re-derive it from baseline/best latencies (a different, wrong
+    definition — that ratio is mean(base)/mean(gen), not the geomean of ratios)."""
+    v = src.get("best_speedup") if hasattr(src, "get") \
+        else getattr(src, "best_speedup", None)
+    return float(v) if isinstance(v, (int, float)) and v > 0 else None

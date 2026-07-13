@@ -22,7 +22,7 @@ from typing import Dict, Any
 
 from langgraph.graph import StateGraph, END
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
 from akg_agents.op.utils.dsl_project_config import project_dir_from_dsl_config
 from akg_agents.op.workflows.base_workflow import OpBaseWorkflow, _DSL_DOCS_DIR_MAP
@@ -64,7 +64,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
         super().__init__(**kwargs)
         # Scale workflow_timeout before task.py reads it for asyncio.wait_for.
         max_rounds = self.config.get("max_step", 20)
-        eval_timeout = self.config.get("eval_timeout", DEFAULT_EVAL_TIMEOUT_S)
+        eval_timeout = resolve_eval_timeout(self.config.get("eval_timeout"))
         self.config["workflow_timeout"] = max(
             self.config.get("workflow_timeout", 1800),
             max_rounds * (eval_timeout + 60) + 300,
@@ -287,7 +287,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
                 verifier.worker = _pf_worker
                 ref_ok, ref_err = await verifier.check_task_desc_runtime(
-                    task_desc, timeout=DEFAULT_EVAL_TIMEOUT_S)
+                    task_desc, timeout=resolve_eval_timeout())
                 verifier.worker = None
                 if not ref_ok:
                     return {
@@ -488,9 +488,12 @@ class AutoresearchWorkflow(OpBaseWorkflow):
                     # Profile: skip base if already cached
                     cur_profile_settings = _profile_settings
                     if _base_time_cache["value"] is not None:
+                        from akg_agents.op.verifier.profiler_utils import (
+                            make_profile_section)
                         cur_profile_settings = {
                             **_profile_settings,
-                            "override_base_time_us": _base_time_cache["value"],
+                            "override_base_section": make_profile_section(
+                                _base_time_cache["value"], method="override"),
                         }
                         verifier.config["use_reference_data"] = True
                     else:
@@ -554,7 +557,7 @@ class AutoresearchWorkflow(OpBaseWorkflow):
 
             # ---- 5. Scaffold task_dir ----
             log_dir = workflow_config.get("log_dir", "/tmp/autoresearch")
-            eval_timeout = workflow_config.get("eval_timeout", DEFAULT_EVAL_TIMEOUT_S)
+            eval_timeout = resolve_eval_timeout(workflow_config.get("eval_timeout"))
             task_dir = scaffold_task_dir(
                 base_dir=log_dir,
                 op_name=op_name,

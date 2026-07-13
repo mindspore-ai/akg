@@ -36,7 +36,7 @@ from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.utils.sol_utils import load_sol_task, load_sol_task_source, resolve_path_from_base
-from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
+from akg_agents.op.cann_correctness import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
 from akg_agents.op.utils.npukb_utils import (
     is_npukb_task_file, load_npukb_task, load_npukb_metadata_if_any,
 )
