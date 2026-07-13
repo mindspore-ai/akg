@@ -239,14 +239,12 @@ def register_misc_commands(
         host_show = (os.environ.get("WORKER_HOST") or "0.0.0.0").strip()
         # Propagate WorkerConfig.timing 到 worker_service.start —— 跟远端
         # SSH 路径对齐（remote_dispatch 也是 export 同名 env），让本机
-        # 直跑也能从 config.yaml worker.* 拿到 timing，而不是被 60s/5s
-        # 硬编码兜底。
-        os.environ.setdefault("AKG_WORKER_READY_TIMEOUT",
-                              str(cfg.timing.ready_timeout))
-        os.environ.setdefault("AKG_WORKER_READY_POLL_INTERVAL",
-                              str(cfg.timing.ready_poll_interval))
-        os.environ.setdefault("AKG_WORKER_READY_PROBE_TIMEOUT",
-                              str(cfg.timing.ready_probe_timeout))
+        # 直跑也能从 config.yaml worker.* 拿到 timing，而不是走代码默认。
+        for key, value in cfg.timing.as_env().items():
+            os.environ.setdefault(key, value)
+        from akg_agents.core.worker.eval_config import eval_defaults
+        for key, value in eval_defaults().as_env().items():
+            os.environ.setdefault(key, value)
         services.worker_service.start(
             akg_console,
             backend=backend_show,

@@ -24,9 +24,9 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from phase_machine import (  # noqa: E402
-    Progress, append_history, auto_rollback, load_progress,
+    Progress, append_history, load_progress,
     load_state, save_state,
-    write_intent, clear_intent,
+    write_intent, clear_intent, state_transaction,
 )
 # save_progress not imported — record_round writes progress fields
 # directly into state.json as part of one atomic save_state, so it
@@ -35,7 +35,9 @@ from task_config import (  # noqa: E402
     EvalOutcome, EvalResult, check_constraints, is_improvement,
     load_task_config,
 )
-from utils.git_utils import commit_in_task, current_head_short  # noqa: E402
+from utils.git_utils import (  # noqa: E402
+    auto_rollback, commit_in_task, current_head_short,
+)
 
 from .progress_reducer import eval_result_from_data, reduce_round_progress
 
@@ -43,16 +45,19 @@ from .progress_reducer import eval_result_from_data, reduce_round_progress
 def record_round(task_dir: str, eval_data: dict,
                  description: str = "optimization round",
                  plan_item: Optional[str] = None) -> dict:
+    with state_transaction(task_dir):
+        return _record_round(
+            task_dir, eval_data, description=description, plan_item=plan_item)
+
+
+def _record_round(task_dir: str, eval_data: dict,
+                  description: str = "optimization round",
+                  plan_item: Optional[str] = None) -> dict:
     """Single library entry point for one round of EDIT settlement.
 
-    Atomically commits three things via a single save_state at the
-    end: progress fields (eval_rounds, best_metric, ...), the
-    pending-settle sentinel (state.pending_settle = kd_json), and
-    the expected_history_round marker (so cross-file consistency
-    check matches the history.jsonl row this function appends).
-
-    Decision flow: correctness gate → constraint gate → primary-metric
-    presence → improvement check."""
+    Atomically commits progress fields + pending_settle + the
+    expected_history_round marker in one save_state. Decision flow:
+    correctness → constraints → primary-metric presence → improvement."""
     config = load_task_config(task_dir)
     if config is None:
         return {"decision": "ERROR", "error": "task.yaml not found"}
@@ -60,18 +65,21 @@ def record_round(task_dir: str, eval_data: dict,
     progress = load_progress(task_dir) or Progress()
     eval_result = eval_result_from_data(eval_data)
 
-    round_num = progress.eval_rounds + 1
+    # SSOT round number — derived here, not accepted from the caller (eval
+    # reads the same progress.next_round for its verify-dir step). This row's
+    # artifacts live at akg_verify/<op>/Iteration<op>_Step<round>_verify.
+    round_num = progress.next_round
     decision = "DISCARD"
     commit_hash: Optional[str] = None
     new_failures = progress.consecutive_failures
     new_best_metric = progress.best_metric
     new_best_commit = progress.best_commit
+    new_best_speedup = progress.best_speedup
 
     if not eval_result.correctness:
         decision = "FAIL"
         new_failures = progress.consecutive_failures + 1
-        print("[record_round] FAIL: correctness check failed",
-              file=sys.stderr)
+        print("[record_round] FAIL: correctness check failed")
     else:
         violations = (check_constraints(eval_result, config.constraints)
                       if config.constraints else [])
@@ -79,7 +87,7 @@ def record_round(task_dir: str, eval_data: dict,
             decision = "FAIL"
             new_failures = progress.consecutive_failures + 1
             print(f"[record_round] FAIL: constraint violations: "
-                  f"{violations}", file=sys.stderr)
+                  f"{violations}")
         else:
             cur = eval_result.metrics.get(config.primary_metric)
             best = progress.best_metric
@@ -89,7 +97,7 @@ def record_round(task_dir: str, eval_data: dict,
                 new_failures = progress.consecutive_failures + 1
                 print(f"[record_round] FAIL: correctness=PASS but primary "
                       f"metric '{config.primary_metric}' missing from "
-                      f"{sorted(eval_result.metrics)}", file=sys.stderr)
+                      f"{sorted(eval_result.metrics)}")
             elif best is None:
                 decision = "KEEP"
             else:
@@ -120,8 +128,7 @@ def record_round(task_dir: str, eval_data: dict,
             # unreliable. Demote to FAIL: roll the working tree back,
             # bump consecutive_failures, leave best_* untouched.
             print(f"[record_round] git commit failed: {info}; demoting "
-                  f"KEEP -> FAIL (kernel state not preserved)",
-                  file=sys.stderr)
+                  f"KEEP -> FAIL (kernel state not preserved)")
             decision = "FAIL"
             new_failures = progress.consecutive_failures + 1
             auto_rollback(task_dir)
@@ -139,13 +146,22 @@ def record_round(task_dir: str, eval_data: dict,
                 commit_hash = info
             new_best_metric = metric_val
             new_best_commit = commit_hash
+            # Capture this round's geomean speedup_vs_ref alongside the new
+            # best — display reads it back instead of recomputing a
+            # mean-ratio from baseline_metric / best_metric.
+            _round_speedup = eval_result.metrics.get("speedup_vs_ref")
+            new_best_speedup = (float(_round_speedup)
+                                if isinstance(_round_speedup, (int, float))
+                                and _round_speedup > 0 else new_best_speedup)
             new_failures = 0
-            print(f"[record_round] KEEP: {metric_str} "
-                  f"(commit: {commit_hash})", file=sys.stderr)
+            # KEEP outcome is reported by pipeline._print_round_summary
+            # (with Round n/m + improvement % + commit hash). Suppress
+            # the duplicate stderr print here — record_round still emits
+            # for FAIL / DISCARD / git-commit-failed / anchor-message
+            # paths where the summary doesn't carry the extra detail.
     else:
         auto_rollback(task_dir)
-        print(f"[record_round] {decision}: rolled back editable files",
-              file=sys.stderr)
+        print(f"[record_round] {decision}: rolled back editable files")
 
     # Keep baseline ownership centralized with baseline_init. This covers
     # missing anchors and fingerprint re-anchors.
@@ -154,10 +170,10 @@ def record_round(task_dir: str, eval_data: dict,
         consecutive_failures=new_failures,
         best_metric=new_best_metric,
         best_commit=new_best_commit,
+        best_speedup=new_best_speedup,
     )
     if reduction.anchor.changed and reduction.anchor.message:
-        print(f"[record_round] {reduction.anchor.message} from R{round_num}",
-              file=sys.stderr)
+        print(f"[record_round] {reduction.anchor.message} from R{round_num}")
 
     progress = reduction.progress
 
@@ -210,12 +226,16 @@ def record_round(task_dir: str, eval_data: dict,
     # post-action state.json on crash recovery: progress fields,
     # kd_json (becomes pending_settle), and round number (the
     # discriminator the replay path keys off).
-    progress_fields = progress.to_dict()
+    state_patch = {
+        **progress.to_dict(),
+        "pending_settle": kd_json,
+        "expected_history_round": round_num,
+    }
     write_intent(task_dir, {
         "kind": "round",
         "round": round_num,
         "kd_json": kd_json,
-        "progress_fields": progress_fields,
+        "state_patch": state_patch,
     })
 
     # ---- Body: history.jsonl ----
@@ -228,10 +248,7 @@ def record_round(task_dir: str, eval_data: dict,
     # replay_intent() at entry reconstructs pending_settle from the
     # journal so the existing replay branch can finish.
     state = load_state(task_dir) or {}
-    for k, v in progress_fields.items():
-        state[k] = v
-    state["pending_settle"] = kd_json
-    state["expected_history_round"] = round_num
+    state.update(state_patch)
     save_state(task_dir, state)
 
     # ---- Journal clear ----

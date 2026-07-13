@@ -25,10 +25,12 @@
 import logging
 import tempfile
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from akg_agents.core.worker.interface import (
-    DEFAULT_EVAL_TIMEOUT_S, DEFAULT_WARMUP_TIMES, DEFAULT_RUN_TIMES,
+from akg_agents.core.worker.eval_config import (
+    resolve_eval_timeout,
+    resolve_run_times,
+    resolve_warmup_times,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ async def verify_kernel(
     op_name: str,
     task_id: str = "default_task",
     device_id: int = 0,
-    timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+    timeout: Optional[int] = None,
     cur_path: str = "",
     framework: str = "torch",
     backend: str = "cuda",
@@ -48,6 +50,7 @@ async def verify_kernel(
     dsl: str = "triton"
 ) -> Dict[str, Any]:
     """验证生成的 Kernel 代码的正确性"""
+    timeout = resolve_eval_timeout(timeout)
     logger.info(f"[verify_kernel] 验证算子: {op_name}, backend={backend}, arch={arch}, dsl={dsl}")
 
     try:
@@ -128,8 +131,8 @@ async def profile_kernel(
     op_name: str,
     task_id: str = "default_task",
     device_id: int = 0,
-    run_times: int = DEFAULT_RUN_TIMES,
-    warmup_times: int = DEFAULT_WARMUP_TIMES,
+    run_times: Optional[int] = None,
+    warmup_times: Optional[int] = None,
     cur_path: str = "",
     framework: str = "torch",
     backend: str = "cuda",
@@ -137,6 +140,8 @@ async def profile_kernel(
     dsl: str = "triton"
 ) -> Dict[str, Any]:
     """对 Kernel 代码进行性能分析（仅性能测试，不做验证）"""
+    run_times = resolve_run_times(run_times)
+    warmup_times = resolve_warmup_times(warmup_times)
     logger.info(f"[profile_kernel] 性能分析: {op_name}, backend={backend}, arch={arch}")
 
     try:

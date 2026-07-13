@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Set
 import asyncio
 import logging
-import os
 from .interface import WorkerInterface
 from akg_agents.core_v2.config.settings import get_akg_env_var
+from akg_agents.cli.service.worker_config import worker_timing
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,15 @@ class WorkerManager:
             logger.debug(f"Selected worker {id(best_info.worker)} (load={best_info.load}/{best_info.capacity})")
             return best_info.worker
 
+    async def reserve(self, worker: WorkerInterface) -> bool:
+        """Increment load for one already-registered worker instance."""
+        async with self._lock:
+            for info in self._workers:
+                if info.worker is worker:
+                    info.load += 1
+                    return True
+            return False
+
     async def has_worker(self, backend: str, arch: Optional[str] = None, tags: Set[str] = None) -> bool:
         """
         判断是否存在匹配条件的 Worker，仅用于前置校验，不会修改负载。
@@ -141,7 +150,8 @@ _GLOBAL_MANAGER = WorkerManager()
 def get_worker_manager() -> WorkerManager:
     return _GLOBAL_MANAGER
 
-async def register_local_worker(device_ids: List[int], backend: str, arch: str, tags: Set[str] = None) -> None:
+async def register_local_worker(device_ids: List[int], backend: str, arch: str,
+                                tags: Set[str] = None) -> WorkerInterface:
     """
     便捷函数：创建并注册 LocalWorker 到全局 WorkerManager。
     
@@ -172,9 +182,11 @@ async def register_local_worker(device_ids: List[int], backend: str, arch: str, 
     )
     logger.info(f"✅ Registered LocalWorker: backend={backend}, arch={arch}, devices={device_ids}")
 
+    return local_worker
+
 async def register_remote_worker(backend: str, arch: str, worker_url: Optional[str] = None, capacity: Optional[int] = None, tags: Set[str] = None,
                                  expected_device_ids: Optional[List[int]] = None,
-                                 on_transient_failure: Optional[Callable[[], None]] = None) -> None:
+                                 on_transient_failure: Optional[Callable[[], None]] = None) -> WorkerInterface:
     """
     便捷函数：创建并注册 RemoteWorker 到全局 WorkerManager。
     如果未提供 worker_url，将从环境变量 AKG_AGENTS_WORKER_URL 读取。
@@ -222,7 +234,9 @@ async def register_remote_worker(backend: str, arch: str, worker_url: Optional[s
     if capacity is None or expected_device_ids:
         try:
             status_url = f"{worker_url.rstrip('/')}/api/v1/status"
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=worker_timing().status_timeout
+            ) as client:
                 response = await client.get(status_url)
                 response.raise_for_status()
                 status = response.json()
@@ -265,6 +279,7 @@ async def register_remote_worker(backend: str, arch: str, worker_url: Optional[s
     )
     logger.info(f"✅ Registered RemoteWorker: backend={backend}, arch={arch}, url={worker_url}, capacity={capacity}")
 
+    return remote_worker
 
 async def register_worker(
     backend: str,
@@ -274,7 +289,7 @@ async def register_worker(
     worker_url: Optional[str] = None,
     tags: Optional[Set[str]] = None,
     on_transient_failure: Optional[Callable[[], None]] = None,
-) -> None:
+) -> WorkerInterface:
     """
     统一的 Worker 注册入口。
 
@@ -290,7 +305,7 @@ async def register_worker(
     """
     resolved_worker_url = worker_url or get_akg_env_var("WORKER_URL")
     if resolved_worker_url:
-        await register_remote_worker(
+        return await register_remote_worker(
             backend=backend,
             arch=arch,
             worker_url=resolved_worker_url,
@@ -298,11 +313,10 @@ async def register_worker(
             expected_device_ids=device_ids,
             on_transient_failure=on_transient_failure,
         )
-        return
 
     if device_ids:
-        await register_local_worker(device_ids, backend=backend, arch=arch, tags=tags)
-        return
+        return await register_local_worker(
+            device_ids, backend=backend, arch=arch, tags=tags)
 
     raise RuntimeError(
         "未找到可用的 Worker。请先注册 Worker 再运行 evolve：\n"

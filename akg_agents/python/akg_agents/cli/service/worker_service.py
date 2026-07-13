@@ -30,6 +30,8 @@ from akg_agents.cli.constants import DisplayStyle, UISymbol
 
 logger = logging.getLogger(__name__)
 from akg_agents.cli.console import AKGConsole
+from akg_agents.cli.service.worker_config import worker_timing
+from akg_agents.core.worker.eval_config import eval_defaults
 from akg_agents.cli.utils.paths import (
     get_akg_agents_pkg_dir,
     get_process_log_dir,
@@ -43,15 +45,6 @@ from akg_agents.cli.utils.worker_state import (
     set_worker_entry,
     terminate_pid,
 )
-
-
-def _env_float(key: str, default: float) -> float:
-    """Parse env var as float, fall back to default on missing/invalid."""
-    try:
-        v = float(os.environ.get(key, ""))
-        return v if v > 0 else default
-    except (ValueError, TypeError):
-        return default
 
 
 # Silence httpx/httpcore DEBUG loggers — their connect_tcp.started /
@@ -155,12 +148,11 @@ class WorkerService:
         - ``ready_only=False``：仅查 HTTP 是否 200，状态 ``initializing``
           也算 alive；用于纯探活场景。
 
-        ``timeout`` 不传时回落 ``AKG_WORKER_READY_PROBE_TIMEOUT`` env，
-        再回落 1s。"""
+        ``timeout`` 不传时使用 ``worker_timing().ready_probe_timeout``。"""
         try:
             import httpx
             if timeout is None:
-                timeout = _env_float("AKG_WORKER_READY_PROBE_TIMEOUT", 1.0)
+                timeout = worker_timing().ready_probe_timeout
             status_url = f"{url.rstrip('/')}/api/v1/status"
             with httpx.Client(timeout=timeout, trust_env=False) as client:
                 resp = client.get(status_url)
@@ -286,6 +278,18 @@ class WorkerService:
         # daemon 通过 /api/v1/status 暴露这个路径，让 akg_cli probe 不再靠
         # 猜（process_log_dir/worker_server_*.log vs /tmp/akg_worker_*.log）。
         env["AKG_WORKER_LOG_FILE"] = log_file
+        if os.name == "posix":
+            # Eval subprocesses are separate sessions so timeout can kill their
+            # whole tree.  Persist their PGIDs per worker port as well, allowing
+            # a successor daemon to reap them after this daemon is SIGKILLed.
+            env["AKG_WORKER_PROCESS_REGISTRY"] = (
+                f"/tmp/akg_worker_{port}_process_groups.json"
+            )
+        timing = worker_timing()
+        for key, value in timing.as_env().items():
+            env.setdefault(key, value)
+        for key, value in eval_defaults().as_env().items():
+            env.setdefault(key, value)
 
         # stdin=DEVNULL is what lets this Popen detach cleanly when the
         # akg_cli that's calling us was itself spawned over SSH — without
@@ -304,12 +308,12 @@ class WorkerService:
 
         access_host = self._format_url_host(host)
         url = f"http://{access_host}:{port}"
-        # Timing：递归 SSH 路径下，remote_dispatch 把 worker.ready_timeout /
-        # ready_poll_interval 通过 env 传过来；本机直跑则用 60s/5s 默认。
+        # Timing：递归 SSH 路径下，remote_dispatch 把 worker.* timing
+        # 通过 env 传过来；本机直跑则用 config.yaml / WorkerTiming 默认。
         # 这是 worker.* config 的单一事实源能传到远端 daemon 的关键，
         # 否则远端 worker_service 永远卡 60s 不能调。
-        ready_timeout = _env_float("AKG_WORKER_READY_TIMEOUT", 60.0)
-        ready_tick = _env_float("AKG_WORKER_READY_POLL_INTERVAL", 5.0)
+        ready_timeout = timing.ready_timeout
+        ready_tick = timing.ready_poll_interval
         if not quiet:
             console.print(
                 f"[{DisplayStyle.DIM}]   等待 worker /status ready（最长 {ready_timeout}s）...[/{DisplayStyle.DIM}]"

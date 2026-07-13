@@ -24,6 +24,9 @@ class DSLAdapterTritonAscend(DSLAdapter):
 
     profile_via_python_script = True
     impl_func_name_template = "ModelNew"
+    profiler_dsl = "triton_ascend"
+    supports_autotune_configs = True
+    emits_autotune_artifacts = True
 
     def get_import_statements(self, framework: str) -> str:
         """Return Triton Ascend import statements."""
@@ -165,7 +168,7 @@ except ImportError:
                 triton_benchmark_fn,
                 warmup={warmup},
                 active={runs},
-                prof_dir_name="prof_generation_output",
+                prof_dir_name=f"prof_generation_output_case_{{case_idx}}",
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
@@ -205,5 +208,4 @@ except ImportError:
     pass
 """
         return code
-
 

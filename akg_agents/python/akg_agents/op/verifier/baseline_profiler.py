@@ -28,10 +28,10 @@ import logging
 from contextlib import AsyncExitStack
 from typing import Optional, Dict, Any
 
-from akg_agents.core.worker.interface import (
-    DEFAULT_EVAL_TIMEOUT_S,
-    DEFAULT_WARMUP_TIMES,
-    DEFAULT_RUN_TIMES,
+from akg_agents.core.worker.eval_config import (
+    resolve_eval_timeout,
+    resolve_run_times,
+    resolve_warmup_times,
 )
 from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
@@ -58,9 +58,9 @@ async def profile_baseline_once(
     backend: str,
     arch: str,
     config: Dict[str, Any],
-    warmup_times: int = DEFAULT_WARMUP_TIMES,
-    run_times: int = DEFAULT_RUN_TIMES,
-    timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+    warmup_times: Optional[int] = None,
+    run_times: Optional[int] = None,
+    timeout: Optional[int] = None,
 ) -> Optional[float]:
     """
     预先 profile baseline 一次（只测量框架实现的性能）
@@ -85,6 +85,9 @@ async def profile_baseline_once(
     Returns:
         float: baseline 时间（微秒），失败返回 None
     """
+    warmup_times = resolve_warmup_times(warmup_times)
+    run_times = resolve_run_times(run_times)
+    timeout = resolve_eval_timeout(timeout)
     bench_type = config.get("bench_type", "kernelbench")
 
     if bench_type == "sol":
@@ -117,7 +120,6 @@ async def _profile_kernelbench_baseline(
     timeout: int
 ) -> Optional[float]:
     """KernelBench 模式的 baseline profiling（原有逻辑）"""
-    acquired_device = None
     worker = None
     cache_cfg = load_verifier_data_cache_config(config)
     cache_key = None
@@ -125,8 +127,6 @@ async def _profile_kernelbench_baseline(
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.core.worker.manager import get_worker_manager
-        from akg_agents.core.worker.local_worker import LocalWorker
-        from akg_agents.core.worker.remote_worker import RemoteWorker
 
         if cache_cfg.enabled and cache_cfg.cache_baseline_result:
             cache_key_id = get_verifier_data_cache_key_id(config, "baseline_profile")
@@ -205,21 +205,16 @@ async def _profile_kernelbench_baseline(
                         cache_key=cache_key,
                     )
 
-            worker = await get_worker_manager().select(backend=backend, arch=arch)
+            worker_manager = get_worker_manager()
+            worker = await worker_manager.select(backend=backend, arch=arch)
             if not worker:
                 logger.warning(f"[{op_name}] 无法获取 worker，跳过预先 profile baseline")
                 return None
+            stack.push_async_callback(worker_manager.release, worker)
 
-            # 从 device_pool acquire 设备（与 run_profile/run 流程一致）
-            device_id = 0
-            if isinstance(worker, LocalWorker) and worker.device_pool:
-                acquired_device = await worker.device_pool.acquire_device()
-                device_id = acquired_device
-                logger.info(f"[{op_name}] Acquired device {device_id} from pool for baseline profile")
-            elif isinstance(worker, RemoteWorker):
-                acquired_device = await worker.acquire_device(task_id="baseline_profile")
-                device_id = acquired_device
-                logger.info(f"[{op_name}] Acquired remote device {device_id} for baseline profile")
+            device_id = await stack.enter_async_context(
+                worker.device_lease("baseline_profile"))
+            logger.info(f"[{op_name}] Acquired device {device_id} for baseline profile")
 
             verifier = KernelVerifier(
                 op_name=op_name,
@@ -286,19 +281,6 @@ async def _profile_kernelbench_baseline(
     except Exception as e:
         logger.warning(f"[{op_name}] 预先 profile baseline 失败: {e}")
         return None
-    finally:
-        if acquired_device is not None and worker is not None:
-            try:
-                from akg_agents.core.worker.local_worker import LocalWorker
-                from akg_agents.core.worker.remote_worker import RemoteWorker
-                if isinstance(worker, LocalWorker) and worker.device_pool:
-                    await worker.device_pool.release_device(acquired_device)
-                    logger.info(f"[{op_name}] Released device {acquired_device} after baseline profile")
-                elif isinstance(worker, RemoteWorker):
-                    await worker.release_device(acquired_device, task_id="baseline_profile")
-                    logger.info(f"[{op_name}] Released remote device {acquired_device} after baseline profile")
-            except Exception as e:
-                logger.warning(f"[{op_name}] Failed to release device {acquired_device}: {e}")
 
 async def _try_read_baseline_cache(
     cache_cfg, op_name: str, cache_key: str, cache_file: str, bench_label: str,
@@ -471,10 +453,14 @@ async def _run_cached_baseline_profile(
                 if cached is not None:
                     return cached
 
-            worker = await get_worker_manager().select(backend=backend, arch=arch)
+            worker_manager = get_worker_manager()
+            worker = await worker_manager.select(backend=backend, arch=arch)
             if not worker:
                 logger.warning(f"[{op_name}] 无法获取 worker，跳过预先 {bench_label} baseline profile")
                 return None
+            stack.push_async_callback(worker_manager.release, worker)
+            device_id = await stack.enter_async_context(
+                worker.device_lease("baseline_profile"))
 
             verifier = KernelVerifier(
                 op_name=op_name,
@@ -495,7 +481,9 @@ async def _run_cached_baseline_profile(
             )
             os.makedirs(profile_dir, exist_ok=True)
 
-            result = await prepare_fn(worker, verifier, profile_dir, warmup_times, run_times, timeout)
+            result = await prepare_fn(
+                worker, verifier, profile_dir, device_id,
+                warmup_times, run_times, timeout)
 
             times_us = _parse_profile_log_times(result.get('log', ''), op_name)
 
@@ -505,8 +493,6 @@ async def _run_cached_baseline_profile(
                 cache_cfg, cache_key, cache_key_id, arch,
                 bench_type, bench_label, cache_method, times_label,
             )
-
-            return None
 
     except TimeoutError as e:
         logger.warning(f"[{op_name}] 等待 {bench_label} baseline cache lock 超时，跳过预先 profile baseline: {e}")
@@ -518,7 +504,8 @@ async def _run_cached_baseline_profile(
         return None
 
 
-async def _prepare_sol_profile(worker, verifier, profile_dir, warmup_times, run_times, timeout):
+async def _prepare_sol_profile(worker, verifier, profile_dir, device_id,
+                               warmup_times, run_times, timeout):
     """Prepare and execute SOL baseline profile project."""
     from akg_agents.op.verifier.sol_verifier import PROF_SOL_BASE_TEMPLATE_PATH
     from akg_agents.op.verifier.adapters.factory import get_framework_adapter, get_backend_adapter
@@ -546,9 +533,10 @@ async def _prepare_sol_profile(worker, verifier, profile_dir, warmup_times, run_
 
     framework_adapter = get_framework_adapter(verifier.framework)
     backend_adapter = get_backend_adapter(verifier.backend)
-    backend_adapter.setup_environment(0, verifier.arch)
+    backend_adapter.setup_environment(device_id, verifier.arch)
     device_setup_code = verifier._prepare_code_lines(
-        framework_adapter.get_device_setup_code(verifier.backend, verifier.arch, 0),
+        framework_adapter.get_device_setup_code(
+            verifier.backend, verifier.arch, device_id),
     )
     sol_execbench_src_dir = os.path.abspath(
         os.path.join(get_project_root(), "..", "..", "thirdparty", "sol-execbench", "src"),
@@ -561,7 +549,7 @@ async def _prepare_sol_profile(worker, verifier, profile_dir, warmup_times, run_
         op_name=verifier.op_name,
         backend=verifier.backend,
         arch=verifier.arch,
-        device_id=0,
+        device_id=device_id,
         warmup_times=warmup_times,
         run_times=run_times,
         device_setup_code=device_setup_code,
@@ -589,11 +577,12 @@ if os.path.exists("base_profile_result.json"):
     )
 
 
-async def _prepare_cann_profile(worker, verifier, profile_dir, warmup_times, run_times, timeout):
+async def _prepare_cann_profile(worker, verifier, profile_dir, device_id,
+                                warmup_times, run_times, timeout):
     """Prepare and execute CANN baseline profile project."""
-    from akg_agents.op.verifier.cann_verifier import PROF_CANN_BASE_TEMPLATE_PATH
+    from akg_agents.op.cann_correctness import CANN_BENCH_SRC_DIR, stage_core_into
+    from akg_agents.op.cann_correctness.verifier import PROF_CANN_BASE_TEMPLATE_PATH
     from akg_agents.op.verifier.adapters.factory import get_framework_adapter, get_backend_adapter
-    from akg_agents import get_project_root
     from jinja2 import Template
     import yaml
 
@@ -615,16 +604,14 @@ async def _prepare_cann_profile(worker, verifier, profile_dir, warmup_times, run
     if os.path.exists(desc_src):
         shutil.copy2(desc_src, os.path.join(profile_dir, "desc.md"))
 
-    cann_correctness_src = os.path.join(
-        get_project_root(), "op", "resources", "utils", "cann_correctness.py",
-    )
-    shutil.copy2(cann_correctness_src, os.path.join(profile_dir, "cann_correctness.py"))
+    stage_core_into(profile_dir)
 
     framework_adapter = get_framework_adapter(verifier.framework)
     backend_adapter = get_backend_adapter(verifier.backend)
-    backend_adapter.setup_environment(0, verifier.arch)
+    backend_adapter.setup_environment(device_id, verifier.arch)
     device_setup_code = verifier._prepare_code_lines(
-        framework_adapter.get_device_setup_code(verifier.backend, verifier.arch, 0),
+        framework_adapter.get_device_setup_code(
+            verifier.backend, verifier.arch, device_id),
     )
 
     proto_path = os.path.join(profile_dir, "proto.yaml")
@@ -632,9 +619,7 @@ async def _prepare_cann_profile(worker, verifier, profile_dir, warmup_times, run
         proto = yaml.safe_load(f)
     schema = proto.get("operator", {}).get("schema", "")
 
-    cann_bench_src_dir = os.path.abspath(
-        os.path.join(get_project_root(), "..", "..", "thirdparty", "cann-bench", "src"),
-    )
+    cann_bench_src_dir = CANN_BENCH_SRC_DIR
 
     with open(PROF_CANN_BASE_TEMPLATE_PATH, "r", encoding="utf-8") as f:
         base_template = Template(f.read())
@@ -644,7 +629,7 @@ async def _prepare_cann_profile(worker, verifier, profile_dir, warmup_times, run
         backend=verifier.backend,
         arch=verifier.arch,
         dsl=verifier.dsl,
-        device_id=0,
+        device_id=device_id,
         warmup_times=warmup_times,
         run_times=run_times,
         device_setup_code=device_setup_code,
@@ -816,5 +801,7 @@ def set_baseline_in_config(config: Dict[str, Any], baseline_time_us: float) -> N
     if 'profile_settings' not in config:
         config['profile_settings'] = {}
 
-    config['profile_settings']['override_base_time_us'] = baseline_time_us
+    from akg_agents.op.verifier.profiler_utils import make_profile_section
+    config['profile_settings']['override_base_section'] = make_profile_section(
+        baseline_time_us, method="override")
     config['profile_settings']['skip_base_profile'] = True

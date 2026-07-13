@@ -217,6 +217,7 @@ triton_module_name: triton
 dsl_compliance_prefixes:
   - triton
   - tilelang
+  - ascendc
 
 # DSLs whose generated code is Python and can be checked by this
 # checker. DSLs not listed here (e.g. cpp, cuda_c) produce
@@ -259,6 +260,104 @@ pypto_compliance:
   # Root namespace of the kernel decorator (`<module>....<attr>`).
   decorator_module: pypto
   decorator_attr: jit
+
+# ---------------------------------------------------------------------------
+# AscendC direct-invoke anti-cheat. CANN-Bench blocks framework compute
+# fallbacks and large device-to-host egress at runtime; these regexes catch
+# the obvious static forms before eval. Legitimate custom kernels should call
+# `torch.ops.npu.<custom_op>(...)` from the wrapper and implement compute in
+# `ascendc_op`, not delegate to torch/ATen/torch_npu/aclnn high-level ops.
+# ---------------------------------------------------------------------------
+ascendc_anti_cheat:
+  dsl: ascendc
+  # Two-layer anti-cheat. STATIC (forbidden_patterns): source scan for calls that
+  # never reach ATen dispatch — raw aclnn* ACL APIs and torch_npu.npu_* builtins —
+  # which no torch runtime can observe; BLOCKING. RUNTIME (runtime_guard/): during
+  # the candidate's correctness run, the core-compute leaves and bulk D2H egress
+  # are DISABLED at the dispatch layer via torch.library override, so delegation
+  # by Python, C++ torch::*, or nesting inside the candidate's own custom op all
+  # raise — no blind spot (unlike a TorchFunctionMode/TorchDispatchMode watcher,
+  # which is suspended while the candidate's own registered op runs).
+  text_suffixes:
+    - ".asc"
+    - ".c"
+    - ".cc"
+    - ".cmake"
+    - ".cpp"
+    - ".cxx"
+    - ".h"
+    - ".hpp"
+    - ".py"
+    - ".txt"
+  text_filenames:
+    - CMakeLists.txt
+    - CMakePresets.json
+  # Patterns are data; their detail/suggestion messages live in code_checker.py
+  # (_ASCENDC_PATTERN_MESSAGES). Only calls that bypass ATen dispatch entirely
+  # (raw ACL / torch_npu builtins) are scanned + BLOCKED here; everything that
+  # reaches dispatch is disabled at runtime by the gate, not by source spelling.
+  forbidden_patterns:
+    - name: torch_npu_builtin_compute
+      pattern: "\\btorch_npu\\s*\\.\\s*npu_[A-Za-z0-9_]+\\s*\\("
+    - name: aclnn_builtin_compute
+      pattern: "\\baclnn(?:Matmul|Mm|BatchMatMul|GroupedMatmul|WeightQuantBatchMatmul|Convolution|Conv1d|Conv2d|Conv3d|Softmax|LogSoftmax|Topk|TopK|Sort|LayerNorm|RmsNorm|GroupNorm)[A-Za-z0-9_]*\\s*\\("
+  # Runtime gate config, read by runtime_guard/ (same file the static scan reads,
+  # so the two never drift).
+  runtime_guard:
+    # block / enforce (fail case) | off. AKG_GUARD_MODE overrides.
+    default_mode: block
+    # ATen core-compute leaves DISABLED (torch.library override) during the
+    # candidate forward. Every dispatch path (matmul / @ / Tensor method / F.*)
+    # decomposes onto these leaves, so disabling the leaf blocks every spelling —
+    # including C++ torch::* and calls nested in the candidate's own custom op.
+    # Generic primitives (gather/where/max/min/abs/pow/mean/sqrt/arange) are
+    # absent: legit host glue and golden refs use them.
+    compute_leaves:
+      - mm
+      - bmm
+      - addmm
+      - baddbmm
+      - addbmm
+      - matmul
+      - mv
+      - addmv
+      - dot
+      - einsum
+      - tensordot
+      - linear
+      - convolution
+      - _convolution
+      - conv1d
+      - conv2d
+      - conv3d
+      - conv_transpose1d
+      - conv_transpose2d
+      - conv_transpose3d
+      - _conv_depthwise2d
+      - slow_conv_transpose2d
+      - slow_conv_transpose3d
+      - softmax
+      - _softmax
+      - log_softmax
+      - _log_softmax
+      - scaled_dot_product_attention
+      - _scaled_dot_product_flash_attention
+      - _scaled_dot_product_efficient_attention
+      - _scaled_dot_product_attention_math
+      - layer_norm
+      - native_layer_norm
+      - group_norm
+      - native_group_norm
+      - batch_norm
+      - native_batch_norm
+      - rms_norm
+      - _fused_rms_norm
+      - silu
+      - gelu
+      - glu
+      - relu
+      - topk
+      - sort
 
 # ---------------------------------------------------------------------------
 # Stray-text detector (Step 4). Flags runs of >= `min_run` consecutive

@@ -46,7 +46,7 @@ def test_resolve_arch_spec_generates_local_yaml(tmp_path):
     assert arch_spec == str(arch_path)
 
 
-def test_compute_roofline_profile_sol_uses_geomean(tmp_path, monkeypatch):
+def test_compute_roofline_profile_sol_latency_is_arith_mean(tmp_path, monkeypatch):
     verify_dir = tmp_path
     (verify_dir / "definition.json").write_text("{}", encoding="utf-8")
     (verify_dir / "reference.py").write_text("def run(*args):\n    return args[0]\n", encoding="utf-8")
@@ -66,8 +66,10 @@ def test_compute_roofline_profile_sol_uses_geomean(tmp_path, monkeypatch):
             encoding="utf-8",
         ),
     )
+    seen_timeouts = []
 
     def _fake_single_case(**kwargs):
+        seen_timeouts.append(kwargs["timeout"])
         case_label = kwargs["case_label"]
         idx = int(case_label[1:])
         if idx == 0:
@@ -103,13 +105,19 @@ def test_compute_roofline_profile_sol_uses_geomean(tmp_path, monkeypatch):
             "arch": "ascend910b4",
             "framework": "torch",
             "bench_type": "sol",
+            "timeout": 4321,
         },
     )
 
     assert result["success"] is True
+    assert seen_timeouts == [4321, 4321]
     assert result["workload_count"] == 2
     assert result["case_labels"] == ["w000", "w001"]
-    assert math.isclose(result["time_us"], 20.0)
-    assert math.isclose(result["compute_time_us"], 12.0)
-    assert math.isclose(result["memory_time_us"], 20.0)
+    # Latency aggregates are the arithmetic mean of the per-shape cases
+    # (NOT geomean): mean(10,40)=25, mean(6,24)=15, mean(10,40)=25.
+    # The per-shape case_times_us stay for geomean speedup ratios.
+    assert math.isclose(result["time_us"], 25.0)
+    assert math.isclose(result["compute_time_us"], 15.0)
+    assert math.isclose(result["memory_time_us"], 25.0)
+    assert result["case_times_us"] == [10.0, 40.0]
     assert result["bottleneck"] == "memory"

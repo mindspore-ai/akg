@@ -42,7 +42,7 @@ from akg_agents.core.worker.manager import register_worker
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.utils.sol_utils import load_sol_task
-from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner
+from akg_agents.op.cann_correctness import is_cann_task_dir, load_cann_task_for_runner
 from akg_agents.op.utils.npukb_utils import is_npukb_task_file, load_npukb_task
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.core.async_pool.task_pool import TaskPool

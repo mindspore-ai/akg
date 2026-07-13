@@ -23,7 +23,7 @@ import uuid
 
 import yaml
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.utils.dsl_project_config import (
     project_dir_from_dsl_config,
     task_yaml_dsl_blocks,
@@ -40,7 +40,7 @@ def scaffold_task_dir(
     context_files: dict[str, str] | None = None,
     extra_files: dict[str, str] | None = None,
     max_rounds: int = 20,
-    eval_timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+    eval_timeout: int | None = None,
     dsl: str = "",
     framework: str = "",
     backend: str = "",
@@ -75,6 +75,7 @@ def scaffold_task_dir(
     Returns:
         Absolute path to the created task_dir.
     """
+    eval_timeout = resolve_eval_timeout(eval_timeout)
     dir_name = f"{op_name}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
     task_dir = os.path.join(base_dir, dir_name)
     os.makedirs(task_dir)

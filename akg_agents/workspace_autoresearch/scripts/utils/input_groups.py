@@ -65,58 +65,21 @@ def num_cases(ref_module: Any) -> int:
     return len(resolve(ref_module))
 
 
-def _value_repr(x: Any) -> str:
-    """Render a single argument value (no name)."""
+def num_cases_from_ref(ref_path: Any) -> int:
+    """SSOT for "how many input groups does this reference define": load the
+    reference .py and count its groups; 1 on any failure. Both akg_eval (the
+    dispatch budget) and batch verify.py (the parent Tier-2 wall cap) call this
+    so the per-shape -> whole-eval timeout expansion shares one num_cases."""
+    import os
+    import importlib.util
     try:
-        shape = tuple(getattr(x, "shape", ()))
-        dtype = str(getattr(x, "dtype", ""))
-        if shape and dtype:
-            return f"tensor{list(shape)}({dtype})"
+        if not os.path.isfile(str(ref_path)):
+            return 1
+        spec = importlib.util.spec_from_file_location("reference", str(ref_path))
+        if not (spec and spec.loader):
+            return 1
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return max(1, int(num_cases(mod)))
     except Exception:
-        pass
-    if isinstance(x, (list, tuple)):
-        return f"{type(x).__name__}{list(x)[:4]}{'...' if len(x) > 4 else ''}"
-    return repr(x)[:24]
-
-
-def _forward_param_names(model: Any) -> List[str]:
-    """Pull positional parameter names off `model.forward` via inspect.
-
-    `self` is auto-excluded for bound methods. *args / **kwargs entries
-    are dropped so we don't generate spurious names for variadic slots.
-    Returns an empty list on any failure (no model, weird signature,
-    inspect raises) so callers fall back cleanly to nameless rendering.
-    """
-    if model is None:
-        return []
-    try:
-        import inspect
-        sig = inspect.signature(model.forward)
-    except (TypeError, ValueError):
-        return []
-    out: List[str] = []
-    for p in sig.parameters.values():
-        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
-            continue
-        out.append(p.name)
-    return out
-
-
-def describe_case(case: list, model: Any = None) -> str:
-    """Cheap one-liner describing a case (for logs/reports).
-
-    With `model`: each argument is prefixed by its `forward()` parameter
-    name pulled from `inspect.signature(model.forward)`. Without `model`:
-    falls back to a nameless positional rendering (kept for tests).
-
-    Example with model (LayerNorm): 'x=tensor[1, 128, 4096](torch.float16)
-        + normalized_shape=list[4096] + weight=tensor[4096](...) + ...'
-    Example without model: 'tensor[1, 128, 4096](torch.float16) + list + ...'
-    """
-    names = _forward_param_names(model)
-    parts: list[str] = []
-    for i, x in enumerate(case):
-        value = _value_repr(x)
-        name = names[i] if i < len(names) else None
-        parts.append(f"{name}={value}" if name else value)
-    return " + ".join(parts) if parts else "(empty)"
+        return 1

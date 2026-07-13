@@ -21,6 +21,9 @@ short arch token used by AKG while keeping future cards data-driven.
 
 from __future__ import annotations
 
+import functools
+import glob
+import os
 import platform
 import re
 from typing import Optional
@@ -88,50 +91,51 @@ def normalize_cpu_arch_name(name: Optional[str] = None) -> Optional[str]:
     return arch if CPU_ARCH_PATTERN.match(arch) else None
 
 
-def normalize_arch_name(backend: str, name: Optional[str] = None) -> Optional[str]:
-    """Dispatch to the backend-specific arch normalizer."""
-    b = (backend or "").strip().lower()
-    if b in ("ascend", "npu"):
-        return normalize_ascend_arch_name(name or "")
-    if b == "cuda":
-        return normalize_cuda_arch_name(name or "")
-    if b == "cpu":
-        return normalize_cpu_arch_name(name)
-    return None
+@functools.lru_cache(maxsize=1)
+def load_ascend_soc_catalog() -> frozenset:
+    """Valid SOC_VERSION strings (exact case) read from CANN's
+    ``platform_config`` — the source of truth for both spelling and case.
 
-
-def ascend_soc_version(arch: str) -> Optional[str]:
-    """Derive the CANN/AscendC ``SOC_VERSION`` token from an AKG arch.
-
-    Keep support policy outside this function: config validation decides
-    which concrete SKUs are accepted. This function only encodes naming
-    rules needed by AscendC's ``run.sh -v``.
+    Scans ``<ASCEND_HOME>/**/platform_config/**/*.ini`` once (cached) and
+    returns the file stems. Empty when CANN / the env var is absent (dev
+    hosts, CI), so callers degrade gracefully and tests inject their own.
     """
-    normalized = normalize_ascend_arch_name(arch or "")
-    if not normalized:
+    home = os.environ.get("ASCEND_HOME_PATH") or os.environ.get("ASCEND_HOME")
+    if not home or not os.path.isdir(home):
+        return frozenset()
+    try:
+        pattern = os.path.join(home, "**", "platform_config", "**", "*.ini")
+        return frozenset(
+            os.path.splitext(os.path.basename(p))[0]
+            for p in glob.iglob(pattern, recursive=True)
+        )
+    except OSError:
+        return frozenset()
+
+
+def ascend_soc_version(arch: str,
+                       catalog: Optional[frozenset] = None) -> Optional[str]:
+    """CANN/AscendC ``SOC_VERSION`` for an AKG ascend arch token.
+
+    SOC_VERSION is the chip name verbatim, so ``arch_token == soc.lower()``.
+    Instead of hand-reconstructing the (case-sensitive, per-family-inconsistent)
+    spelling, look the token up in CANN's own ``platform_config`` catalog
+    case-insensitively and return its exact entry — correct for every current
+    SoC and any future one CANN ships, with no per-family casing rules.
+
+    ``catalog`` defaults to :func:`load_ascend_soc_catalog`; pass an explicit
+    set offline / in tests. Returns ``None`` when the token isn't a real SOC —
+    also how :mod:`hw_detect` learns that a bare family name (``ascend950pr``)
+    needs its board variant appended before it resolves.
+    """
+    token = normalize_ascend_arch_name(arch or "")
+    if not token:
         return None
-    suffix = normalized[len("ascend"):]
-
-    match = re.fullmatch(r"(910b[0-9][a-z]?)", suffix)
-    if match:
-        return "Ascend" + match.group(1).upper()
-
-    match = re.fullmatch(r"(310p[0-9][a-z]?)", suffix)
-    if match:
-        return "Ascend" + match.group(1).upper()
-
-    match = re.fullmatch(r"910_([0-9a-z]+)", suffix)
-    if match:
-        return f"Ascend910_{match.group(1)}"
-
-    match = re.fullmatch(r"950dt_([0-9a-z]+)", suffix)
-    if match:
-        return f"Ascend950DT_{match.group(1).upper()}"
-
-    match = re.fullmatch(r"950pr_([0-9a-z]+)", suffix)
-    if match:
-        return f"Ascend910_{match.group(1)}"
-
+    if catalog is None:
+        catalog = load_ascend_soc_catalog()
+    for soc in catalog:
+        if soc.lower() == token:
+            return soc
     return None
 
 

@@ -21,7 +21,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from .catlass_paths import patch_catlass_op_cmake, resolve_catlass_root
 
 _ARCH_TO_CATLASS_ARCH = {
@@ -60,9 +60,10 @@ def ensure_catlass_library(
     *,
     arch: str,
     catlass_root: Optional[str] = None,
-    timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+    timeout: Optional[int] = None,
 ) -> str:
     """Build ``catlass_op/build/libcatlass.so`` when missing and return its path."""
+    timeout = resolve_eval_timeout(timeout)
     import torch as _t
     import torch_npu as _tnp
 

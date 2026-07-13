@@ -6,7 +6,11 @@ ar_tasks/
 .ar_state/.edit_started
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+# opencode per-machine config (model / provider / key) — the .opencode analog of settings.local.json
+.opencode/opencode.json
+.opencode/opencode.jsonc
 # runtime control-plane state (per-session pointers / per-task locks)
 .session_tasks/
+# Legacy runtime artifacts from releases that used per-op task pointers.
 .task_dir_pointers/
 workspace/

@@ -29,6 +29,7 @@ from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )
+from akg_agents.op.verifier.profiler_utils import make_profile_section
 from akg_agents.op.verifier.data_cache import (
     build_baseline_cache_key,
     build_baseline_cache_payload,
@@ -47,12 +48,12 @@ from akg_agents.op.verifier.data_cache import (
     write_baseline_result_to_cache,
     write_reference_data_to_cache,
 )
-from akg_agents.core.worker.interface import (
-    WorkerInterface,
-    DEFAULT_EVAL_TIMEOUT_S,
-    DEFAULT_GEN_REF_TIMEOUT_S,
-    DEFAULT_WARMUP_TIMES,
-    DEFAULT_RUN_TIMES,
+from akg_agents.core.worker.interface import WorkerInterface, empty_profile_result
+from akg_agents.core.worker.eval_config import (
+    resolve_eval_timeout,
+    resolve_reference_timeout,
+    resolve_run_times,
+    resolve_warmup_times,
 )
 import tarfile
 import io
@@ -80,6 +81,19 @@ ArchType = str
 logger = logging.getLogger(__name__)
 
 
+def _get_framework_sync_code(framework: FrameworkType,
+                             backend: BackendType) -> str:
+    """Return the synchronization call emitted into verifier scripts."""
+    if framework == "torch":
+        if backend == "cuda":
+            return "torch.cuda.synchronize()"
+        if backend == "ascend":
+            return "torch.npu.synchronize()"
+    if framework == "mindspore" and backend == "ascend":
+        return "ms.runtime.synchronize()"
+    return ""
+
+
 def sync_artifacts_to_directory(artifacts: Dict[str, str], target_dir: str, task_id: str = "0") -> None:
     """
     将 artifacts 同步到目标目录。
@@ -95,9 +109,22 @@ def sync_artifacts_to_directory(artifacts: Dict[str, str], target_dir: str, task
 
     logger.info(f"[{task_id}] Syncing {len(artifacts)} artifact files to {target_dir}")
 
+    target_root = os.path.realpath(target_dir)
     for rel_path, content in artifacts.items():
-        # 构建完整路径
-        full_path = os.path.join(target_dir, rel_path)
+        if not isinstance(rel_path, str) or not rel_path:
+            logger.warning(f"[{task_id}] Ignoring invalid artifact path: {rel_path!r}")
+            continue
+        full_path = os.path.realpath(os.path.join(target_root, rel_path))
+        try:
+            contained = os.path.commonpath(
+                (target_root, full_path)) == target_root
+        except ValueError:
+            contained = False
+        if not contained:
+            logger.warning(
+                f"[{task_id}] Ignoring artifact path outside verify dir: "
+                f"{rel_path!r}")
+            continue
 
         # 确保目录存在
         dir_path = os.path.dirname(full_path)
@@ -516,7 +543,7 @@ if __name__ == "__main__":
     async def generate_reference_data(
         self,
         task_desc: str,
-        timeout: int = DEFAULT_GEN_REF_TIMEOUT_S,
+        timeout: Optional[int] = None,
         save_inputs: bool = False,
         device_id: Optional[int] = None,
     ) -> Tuple[bool, str, bytes]:
@@ -538,6 +565,7 @@ if __name__ == "__main__":
             - 成功时 bytes 为 .pt 文件内容
             - 失败时 bytes 为空 b''
         """
+        timeout = resolve_reference_timeout(timeout)
         # 1. 创建临时目录
         ref_dir = os.path.join(os.path.expanduser(self.log_dir), f"{self.op_name}_gen_ref_{self.task_id}")
         os.makedirs(ref_dir, exist_ok=True)
@@ -746,9 +774,9 @@ if __name__ == "__main__":
             shutil.rmtree(ref_dir, ignore_errors=True)
 
     async def profile_single_task(self, task_desc: str,
-                                  warmup_times: int = DEFAULT_WARMUP_TIMES,
-                                  run_times: int = DEFAULT_RUN_TIMES,
-                                  timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+                                  warmup_times: Optional[int] = None,
+                                  run_times: Optional[int] = None,
+                                  timeout: Optional[int] = None,
                                   device_id: int = 0) -> Dict[str, Any]:
         """
         执行单个任务的性能测试（只测量 task_desc 的性能，不进行 base vs generation 对比）
@@ -765,6 +793,9 @@ if __name__ == "__main__":
         Returns:
             Dict[str, Any]: 包含 time_us, success, log 等字段
         """
+        warmup_times = resolve_warmup_times(warmup_times)
+        run_times = resolve_run_times(run_times)
+        timeout = resolve_eval_timeout(timeout)
         # 1. 创建临时目录
         profile_dir = os.path.join(os.path.expanduser(self.log_dir),
                                    f"{self.op_name}_profile_single_{self.task_id}")
@@ -923,7 +954,7 @@ if __name__ == "__main__":
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
-        unique_dir = f"Iteration{self.task_id}_Step{step_counter:02d}_verify"
+        unique_dir = f"Iteration{self.task_id}_Step{step_counter}_verify"
 
         target_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir)
         os.makedirs(target_dir, exist_ok=True)
@@ -1181,9 +1212,9 @@ if __name__ == "__main__":
                     return None
 
                 logger.info(f"[{self.op_name}] 开始生成 reference data")
-                reference_timeout = int(
+                reference_timeout = resolve_reference_timeout(
                     self.config.get("reference_data_timeout",
-                                    self.config.get("verify_timeout", DEFAULT_EVAL_TIMEOUT_S))
+                                    self.config.get("verify_timeout"))
                 )
                 try:
                     success, log, reference_bytes = await self.generate_reference_data(
@@ -1343,7 +1374,7 @@ if __name__ == "__main__":
             from akg_agents.op.verifier.sol_verifier import generate_sol_verify_project
             return generate_sol_verify_project(self, impl_code, verify_dir, device_id)
         if self.bench_type == "cann":
-            from akg_agents.op.verifier.cann_verifier import generate_cann_verify_project
+            from akg_agents.op.cann_correctness import generate_cann_verify_project
             return generate_cann_verify_project(self, impl_code, verify_dir, device_id)
 
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
@@ -1397,6 +1428,12 @@ if __name__ == "__main__":
             task_info=None,
             config=self.config,
         )
+
+        # cannbench precision path: stage the package's MERE/MARE comparator into
+        # verify_dir as cann_correctness.py (the name the generated script imports).
+        if getattr(self.dsl_adapter, "uses_cannbench_precision", False):
+            from akg_agents.op.cann_correctness import CORE_PY_PATH
+            shutil.copy2(CORE_PY_PATH, os.path.join(verify_dir, "cann_correctness.py"))
 
         # 生成验证脚本
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
@@ -1499,9 +1536,21 @@ if __name__ == "__main__":
             compare_code = framework_adapter.get_compare_code()
             logger.debug(f"[{self.op_name}] Compare code生成成功 (长度: {len(compare_code)})")
 
-            # 生成 compare outputs 代码（用于调用 compare 函数）
-            compare_outputs_code = framework_adapter.get_compare_outputs_code()
+            # cannbench precision path (uses_cannbench_precision boolean): pull the
+            # reference-call + compare snippets from the cann_correctness package.
+            # Otherwise run the base model and the framework's generic compare.
+            if getattr(self.dsl_adapter, "uses_cannbench_precision", False) \
+                    and self.framework == "torch":
+                from akg_agents.op import cann_correctness as _cann
+                reference_call_code = _cann.reference_call_snippet()
+                compare_outputs_code = _cann.compare_snippet()
+            else:
+                reference_call_code = "framework_output = framework_model(*inputs_for_framework)"
+                compare_outputs_code = framework_adapter.get_compare_outputs_code()
             logger.debug(f"[{self.op_name}] Compare outputs code生成成功 (长度: {len(compare_outputs_code)})")
+
+            reference_sync_code = _get_framework_sync_code(
+                self.framework, self.backend)
         except Exception as e:
             logger.error(f"[{self.op_name}] 代码片段生成失败: {e}", exc_info=True)
             raise
@@ -1518,7 +1567,7 @@ if __name__ == "__main__":
                 backend=self.backend,
                 arch=self.arch,
                 is_dynamic_shape=is_dynamic_shape,
-                timeout=self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S),
+                timeout=resolve_eval_timeout(self.config.get('verify_timeout')),
                 # 参考数据模式（用于跨后端转换场景）
                 use_reference_data=use_reference_data,
                 use_reference_inputs=use_reference_inputs,
@@ -1534,11 +1583,13 @@ if __name__ == "__main__":
                 create_impl_code=self._prepare_code_lines(create_impl_code),
                 call_impl_code=self._prepare_code_lines(call_impl_code),
                 set_seed_code=self._prepare_code_lines(set_seed_code),
+                reference_sync_code=self._prepare_code_lines(reference_sync_code),
                 binary_io_functions=self._prepare_code_lines(binary_io_functions),
                 needs_binary_io=needs_binary_io,
                 tensor_type_name=tensor_type_name,
                 compare_code=self._prepare_code_lines(compare_code),
                 compare_outputs_code=self._prepare_code_lines(compare_outputs_code),
+                reference_call_code=self._prepare_code_lines(reference_call_code),
             )
             logger.info(f"[{self.op_name}] 模板渲染成功，渲染后代码长度: {len(rendered_code)} 字符")
         except Exception as e:
@@ -1566,7 +1617,7 @@ if __name__ == "__main__":
         return tar_buffer.getvalue()
 
     async def run_verify(self, verify_dir: str,
-                         timeout: int = DEFAULT_EVAL_TIMEOUT_S,
+                         timeout: Optional[int] = None,
                          device_id: int = 0):
         """
         运行验证脚本
@@ -1579,6 +1630,7 @@ if __name__ == "__main__":
             timeout: 超时时间（秒），默认5分钟（传递给模板用于每次计算）
             device_id: 设备ID（仅用于日志和兼容性，实际设备已在脚本中设置）
         """
+        timeout = resolve_eval_timeout(timeout)
         verify_script = os.path.join(verify_dir, f"verify_{self.op_name}.py")
         logger.info(f"[{self.op_name}] 准备运行验证脚本: {verify_script}, timeout={timeout}秒")
 
@@ -1622,6 +1674,7 @@ if __name__ == "__main__":
                     )
                 package_data = verify_dir
             else:
+                logger.info(f"[{self.op_name}] Packing verify project")
                 package_data = self._pack_directory(verify_dir)
 
             # worker.verify() 只是执行脚本，不需要管理 device
@@ -1629,7 +1682,9 @@ if __name__ == "__main__":
             # 我们给 worker 传的 timeout 需要稍微大一点，因为脚本内部已经有精确的 timeout 控制
             # 这里的 timeout 是为了防止脚本死锁导致整个进程挂起
             worker_timeout = timeout + 30
+            logger.info(f"[{self.op_name}] Dispatching verify project to worker")
             success, log, artifacts = await self.worker.verify(package_data, self.task_id, self.op_name, worker_timeout)
+            logger.info(f"[{self.op_name}] Worker verify returned")
 
             # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
             if artifacts:
@@ -1638,7 +1693,9 @@ if __name__ == "__main__":
             if success:
                 logger.info(f"[{self.op_name}] 验证执行成功")
             else:
-                logger.error(f"[{self.op_name}] 验证执行失败，日志如下：\n{log}")
+                # Full log is returned and written to the fail report; don't dump
+                # it here (CANN toolchain warnings alone can be 100+ noise lines).
+                logger.error(f"[{self.op_name}] 验证执行失败（完整日志见 fail report）")
             return success, log
 
         except Exception as e:
@@ -1646,8 +1703,8 @@ if __name__ == "__main__":
             return False, str(e)
 
     def gen_profile_project(self, verify_dir: str, device_id: int = 0,
-                            warmup_times: int = DEFAULT_WARMUP_TIMES,
-                            run_times: int = DEFAULT_RUN_TIMES,
+                            warmup_times: Optional[int] = None,
+                            run_times: Optional[int] = None,
                             skip_base: bool = False):
         """生成profile项目文件到指定目录
 
@@ -1658,13 +1715,15 @@ if __name__ == "__main__":
             run_times: 运行次数
             skip_base: 是否跳过 base profile（跨后端场景下设为 True）
         """
+        warmup_times = resolve_warmup_times(warmup_times)
+        run_times = resolve_run_times(run_times)
         if self.bench_type == "sol":
             from akg_agents.op.verifier.sol_verifier import generate_sol_profile_project
             return generate_sol_profile_project(
                 self, verify_dir, device_id, warmup_times, run_times, skip_base
             )
         if self.bench_type == "cann":
-            from akg_agents.op.verifier.cann_verifier import generate_cann_profile_project
+            from akg_agents.op.cann_correctness import generate_cann_profile_project
             return generate_cann_profile_project(
                 self, verify_dir, device_id, warmup_times, run_times, skip_base
             )
@@ -1857,40 +1916,17 @@ if __name__ == "__main__":
             runs: 有效运行次数
             clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
         """
-        if self.dsl == "torch":
-            # Kernel → PyTorch 转换场景（支持 Triton/CUDA C 等）：使用传统计时方法
-            sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
-                "torch.npu.synchronize()" if self.backend == "ascend" else ""
+        profiler_dsl = getattr(dsl_adapter, "profiler_dsl", "other")
+        sync_code = _get_framework_sync_code(self.framework, self.backend)
+
+        if self.backend == "ascend":
+            framework_arg = (
+                f', framework="{self.framework}"'
+                if self.framework == "mindspore" else ""
             )
-            code = f"""        # PyTorch 原生实现，使用传统循环计时
-        import time
-        def base_benchmark_fn():
-            result = framework_model(*inputs)
-            return result
-        
-        # 预热
-        for _ in range({warmup}):
-            _ = base_benchmark_fn()
-            {sync_code}
-        
-        # 计时
-        start_time = time.time()
-        for _ in range({runs}):
-            _ = base_benchmark_fn()
-            {sync_code}
-        end_time = time.time()
-        
-        execution_time_ms = (end_time - start_time) * 1000 / {runs}
-        method = "pytorch_loop_timer"
-"""
-            return code
-        elif "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            if self.backend == "ascend":
-                dsl_type = "triton_ascend" if "triton_ascend" in self.dsl else "other"
-                framework_arg = f', framework="{self.framework}"' if self.framework == "mindspore" else ""
-                set_framework_code = ""
-                if self.framework == "mindspore":
-                    set_framework_code = """        import os
+            set_framework_code = ""
+            if self.framework == "mindspore":
+                set_framework_code = """        import os
         os.environ["TRITON_BACKEND"] = "mindspore"
         try:
             from akg_agents.op.utils.triton_autotune_patch import set_framework
@@ -1898,21 +1934,16 @@ if __name__ == "__main__":
         except ImportError:
             pass
 """
-                code = f"""{set_framework_code}        # 导入profiler以支持性能测试
+            return f"""{set_framework_code}        import time
         try:
             from akg_agents.op.verifier.profiler import profiler_npu
-            patch_imported = True
         except ImportError:
-            # 如果导入失败，使用标准方法
-            patch_imported = False
-        # 基准测试函数
+            profiler_npu = None
+
         def base_benchmark_fn():
-            result = framework_model(*inputs)
-            return result
-        
-        if backend == "ascend" and patch_imported:
-            # 使用 L2 cache 清除确保测量精度
-            # DSL 类型: {dsl_type}
+            return framework_model(*inputs)
+
+        if profiler_npu is not None:
             execution_time_us = profiler_npu(
                 base_benchmark_fn,
                 warmup={warmup},
@@ -1921,112 +1952,36 @@ if __name__ == "__main__":
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
-                dsl="{dsl_type}"{framework_arg}
+                dsl="{profiler_dsl}"{framework_arg}
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"
         else:
-            import triton.testing
-            execution_time_ms = triton.testing.do_bench(
-                base_benchmark_fn,
-                warmup={warmup},
-                rep={runs},
-                return_mode="min"
-            )
-            method = "triton_do_bench"
-"""
-            else:
-                code = f"""        import triton.testing
-        def base_benchmark_fn():
-            result = framework_model(*inputs)
-            return result
-        
-        execution_time_ms = triton.testing.do_bench(
-            base_benchmark_fn,
-            warmup={warmup},
-            rep={runs},
-            return_mode="median"
-        )
-        method = "triton_do_bench"
-"""
-        elif self.dsl == "cpp":
-            code = f"""        # CPU
-        import time
-        def base_benchmark_fn():
-            return framework_model(*inputs)
-        # 执行 warmup
-        for _ in range({warmup}):
-            _ = base_benchmark_fn()
-        # 计时 rep 次
-        start_t = time.perf_counter()
-        for _ in range({runs}):
-            _ = base_benchmark_fn()
-        end_t = time.perf_counter()
-        execution_time_ms = (end_t - start_t) * 1000.0 / max({runs}, 1)
-        method = "cpu_loop_timer"
-"""
-        else:
-            sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
-                "torch.npu.synchronize()" if self.backend == "ascend" else ""
-            )
-            # 对于其他 DSL（非 triton），如果是 ascend 后端也支持 L2 cache 清除
-            if self.backend == "ascend":
-                framework_arg = f', framework="{self.framework}"' if self.framework == "mindspore" else ""
-                set_framework_code = ""
-                if self.framework == "mindspore":
-                    set_framework_code = """        import os
-        os.environ["TRITON_BACKEND"] = "mindspore"
-        try:
-            from akg_agents.op.utils.triton_autotune_patch import set_framework
-            set_framework("mindspore")
-        except ImportError:
-            pass
-"""
-                code = f"""{set_framework_code}        # 非triton实现，使用 profiler_npu 计时
-        try:
-            from akg_agents.op.verifier.profiler import profiler_npu
-            patch_imported = True
-        except ImportError:
-            patch_imported = False
-        
-        def base_benchmark_fn():
-            return framework_model(*inputs)
-        
-        if patch_imported:
-            execution_time_us = profiler_npu(
-                base_benchmark_fn,
-                warmup={warmup},
-                active={runs},
-                prof_dir_name="prof_base_output",
-                keep_res=False,
-                suppress_warnings=True,
-                clear_l2_cache={clear_l2_cache},
-                dsl="other"{framework_arg}
-            )
-            execution_time_ms = execution_time_us / 1000
-            method = "profiler_npu"
-        else:
-            import time
-            start_time = time.time()
-            for _ in range({warmup + runs}):
-                framework_output = framework_model(*inputs)
+            for _ in range({warmup}):
+                base_benchmark_fn()
                 {sync_code}
-            end_time = time.time()
-            execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}
-            method = "traditional_timing"
+            start_time = time.perf_counter()
+            for _ in range({runs}):
+                base_benchmark_fn()
+                {sync_code}
+            execution_time_ms = (time.perf_counter() - start_time) * 1000 / max({runs}, 1)
+            method = "device_loop_timer"
 """
-            else:
-                code = f"""        # 非triton实现，使用传统循环计时
-        import time
-        start_time = time.time()
-        for _ in range({warmup + runs}):
-            framework_output = framework_model(*inputs)
+
+        return f"""        import time
+        def base_benchmark_fn():
+            return framework_model(*inputs)
+
+        for _ in range({warmup}):
+            base_benchmark_fn()
             {sync_code}
-        end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}  # 转换为毫秒
-        method = "traditional_timing"
+        start_time = time.perf_counter()
+        for _ in range({runs}):
+            base_benchmark_fn()
+            {sync_code}
+        execution_time_ms = (time.perf_counter() - start_time) * 1000 / max({runs}, 1)
+        method = "{self.backend}_loop_timer"
 """
-        return code
 
     def save_speedup_result(
         self,
@@ -2060,7 +2015,9 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 保存加速比结果失败: {str(e)}")
 
-    async def run_profile(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = -1, profile_settings: dict = {}) -> dict:
+    async def run_profile(self, task_info: Dict[str, Any], current_step: int = 0,
+                          device_id: int = -1,
+                          profile_settings: Optional[dict] = None) -> dict:
         """运行profile分析
 
         注意：与 run() 方法类似，device 的管理在此方法中统一完成
@@ -2077,50 +2034,45 @@ if __name__ == "__main__":
                 - roofline_speedup: roofline_time / gen_time（可选）
                 - autotune_summary: autotune配置详情（仅triton DSL）
         """
-        # 【关键】对于 LocalWorker 和 RemoteWorker，在方法开始时就 acquire device
-        # 整个 profile 流程（生成脚本 + 执行）都使用这个 device_id
-        # 最后在 finally 中统一释放
-        actual_device_id = device_id
         acquired_device = None
-        from akg_agents.core.worker.local_worker import LocalWorker
-        from akg_agents.core.worker.remote_worker import RemoteWorker
-
-        if self.worker and isinstance(self.worker, LocalWorker):
-            # LocalWorker: 从本地 device_pool 获取设备
-            acquired_device = await self.worker.device_pool.acquire_device()
-            actual_device_id = acquired_device
-            logger.info(f"[{self.op_name}] Acquired local device {actual_device_id} for entire profile process")
-        elif self.worker and isinstance(self.worker, RemoteWorker):
-            # RemoteWorker: 从远程服务器获取设备
-            acquired_device = await self.worker.acquire_device(task_id=self.task_id)
-            actual_device_id = acquired_device
-            logger.info(f"[{self.op_name}] Acquired remote device {actual_device_id} for entire profile process")
-        else:
-            # 没有 worker（旧流程兼容）
-            actual_device_id = device_id if device_id != -1 else 0
-            logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
-
+        acquired_lease = None
+        profile_settings = dict(profile_settings or {})
+        unique_dir_name = f"Iteration{self.task_id}_Step{current_step}_verify"
         try:
+            logger.info(f"[{self.op_name}] Preparing profile config before device acquire")
             self.dsl_adapter.prepare_config(self.config, task_info=task_info)
 
-            run_times = profile_settings.get("run_times", DEFAULT_RUN_TIMES)
-            warmup_times = profile_settings.get("warmup_times", DEFAULT_WARMUP_TIMES)
+            run_times = resolve_run_times(profile_settings.get("run_times"))
+            warmup_times = resolve_warmup_times(
+                profile_settings.get("warmup_times"))
             effective_profile_settings = dict(profile_settings)
             base_only_after_failed_verify = (
                 getattr(self, "last_verify_ok", None) is False
             )
 
             cached_baseline_time_us = None
-            has_user_override = effective_profile_settings.get("override_base_time_us") is not None
+            has_user_override = effective_profile_settings.get("override_base_section") is not None
             if not has_user_override:
                 cached_baseline_time_us = self._get_cached_baseline_time_us(warmup_times, run_times)
                 if cached_baseline_time_us is not None:
-                    effective_profile_settings["override_base_time_us"] = cached_baseline_time_us
+                    # Data cache only stores scalar; per_shape array comes
+                    # from workspace sticky path (state.baseline_per_shape_us).
+                    effective_profile_settings["override_base_section"] = make_profile_section(
+                        cached_baseline_time_us, method="override")
                     effective_profile_settings["skip_base_profile"] = True
+
+            if self.worker is not None:
+                logger.info(f"[{self.op_name}] Acquiring device for profile project generation")
+                acquired_device, acquired_lease = await self.worker.acquire_device(self.task_id)
+                actual_device_id = acquired_device
+                logger.info(f"[{self.op_name}] Acquired device {actual_device_id} for profile")
+            else:
+                # 没有 worker（旧流程兼容）
+                actual_device_id = device_id if device_id != -1 else 0
+                logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
 
             # 获取验证目录
             expanded_log_dir = os.path.expanduser(self.log_dir)
-            unique_dir_name = f"Iteration{self.task_id}_Step{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
 
             # 确保目录存在
@@ -2153,33 +2105,36 @@ if __name__ == "__main__":
                 if not impl_code:
                     raise ValueError(f"[{self.op_name}] task_info 中缺少 coder_code，无法生成性能测试代码文件")
 
-                logger.info(f"[{self.op_name}] 代码文件不存在，先生成代码文件...")
+                logger.info(f"[{self.op_name}] Generating verify project for profile")
                 self.gen_verify_project(impl_code, verify_dir, actual_device_id)
-                logger.info(f"[{self.op_name}] 代码文件生成完成")
+                logger.info(f"[{self.op_name}] Verify project for profile generated")
 
             # 生成profile脚本
             # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
             # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
             # 仅在显式跳过或已提供有效 baseline 结果时跳过 base profile。
             skip_base_profile = effective_profile_settings.get('skip_base_profile', False)
-            override_base_time_us = effective_profile_settings.get('override_base_time_us')
+            override_base_section = effective_profile_settings.get('override_base_section')
             has_valid_override = (
-                override_base_time_us is not None
-                and override_base_time_us > 0
-                and override_base_time_us < float('inf')
+                isinstance(override_base_section, dict)
+                and isinstance(override_base_section.get("avg_us"), (int, float))
+                and 0 < override_base_section["avg_us"] < float('inf')
             )
             skip_base = skip_base_profile or has_valid_override
             old_generation_enabled = getattr(
                 self, "_profile_generation_enabled", True)
             self._profile_generation_enabled = not base_only_after_failed_verify
             try:
+                logger.info(f"[{self.op_name}] Generating profile project")
                 self.gen_profile_project(verify_dir, actual_device_id,
                                          warmup_times, run_times,
                                          skip_base=skip_base)
+                logger.info(f"[{self.op_name}] Profile project generated")
             finally:
                 self._profile_generation_enabled = old_generation_enabled
 
             # 打包并发送给Worker执行
+            logger.info(f"[{self.op_name}] Packing profile project")
             package_data = self._pack_directory(verify_dir)
 
             if not self.worker:
@@ -2237,7 +2192,9 @@ if __name__ == "__main__":
                 ),
             }
 
+            logger.info(f"[{self.op_name}] Dispatching profile project to worker")
             result = await self.worker.profile(package_data, self.task_id, self.op_name, full_settings)
+            logger.info(f"[{self.op_name}] Worker profile returned")
 
             # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
             artifacts = result.get('artifacts', {})
@@ -2304,9 +2261,10 @@ if __name__ == "__main__":
 
             # 构建返回结果. per_shape_* / case_descs 在 caller 侧 (akg_eval) 直接
             # 拼进 metrics dict, 不需要再去 sidecar 取一次.
-            result = {
-                'gen_time': gen_time if gen_time is not None else None,
-                'base_time': base_time_display,
+            profile_result = empty_profile_result(result.get('error'))
+            profile_result.update({
+                'gen_time': gen_time,
+                'base_time': base_time,
                 'speedup': speedup,
                 'per_shape_gen_us': per_shape_gen_us,
                 'per_shape_base_us': per_shape_base_us,
@@ -2316,45 +2274,27 @@ if __name__ == "__main__":
                 'roofline_time': roofline_time,
                 'roofline_speedup': roofline_speedup,
                 'roofline': roofline_result,
+                'artifacts': artifacts,
                 'unique_dir': unique_dir_name,
-            }
+            })
 
-            # 只在 triton_ascend 情况下添加 autotune_summary
-            if "triton_ascend" in self.dsl and self.backend == "ascend":
+            if self.dsl_adapter.emits_autotune_artifacts:
                 autotune_summary = self.read_autotune_results_from_directory(verify_dir)
                 if autotune_summary:
-                    result['autotune_summary'] = autotune_summary
+                    profile_result['autotune_summary'] = autotune_summary
                     logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
 
-            return result
+            return profile_result
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
-            return {
-                'gen_time': None,
-                'base_time': None,
-                'speedup': 0.0,
-                'per_shape_gen_us': [],
-                'per_shape_base_us': [],
-                'case_descs': [],
-                'gen_method': None,
-                'base_method': None,
-                'roofline_time': None,
-                'roofline_speedup': 0.0,
-                'roofline': None,
-            }
+            result = empty_profile_result(error=str(e))
+            result.update(case_descs=[], unique_dir=unique_dir_name)
+            return result
         finally:
-            # 【关键】在方法结束时统一释放设备
-            # 设备的整个生命周期由 run_profile() 方法管理
+            # Always release the device for the whole profile lifecycle.
             if acquired_device is not None:
-                from akg_agents.core.worker.local_worker import LocalWorker
-                from akg_agents.core.worker.remote_worker import RemoteWorker
-
-                if isinstance(self.worker, LocalWorker):
-                    await self.worker.device_pool.release_device(acquired_device)
-                    logger.info(f"[{self.op_name}] Released local device {acquired_device}")
-                elif isinstance(self.worker, RemoteWorker):
-                    await self.worker.release_device(acquired_device, task_id=self.task_id)
-                    logger.info(f"[{self.op_name}] Released remote device {acquired_device}")
+                await self.worker.release_device(acquired_device, acquired_lease, self.task_id)
+                logger.info(f"[{self.op_name}] Released device {acquired_device}")
 
     def read_autotune_results_from_directory(self, verify_dir: str) -> str:
         """从验证目录读取所有autotune结果并格式化输出
@@ -2704,26 +2644,21 @@ if __name__ == "__main__":
         # 动态创建验证目录
         verify_dir = self._create_verify_dir(current_step)
 
+        logger.info(f"[{self.op_name}] Preparing verify config before device acquire")
         self.dsl_adapter.prepare_config(self.config, task_info=task_info)
+        logger.info(f"[{self.op_name}] Verify config prepared")
 
-        # 【关键】对于 LocalWorker 和 RemoteWorker，在 run() 方法开始时就 acquire device
-        # 整个 verify 流程（生成脚本 + 执行）都使用这个 device_id
-        # 最后在 finally 中统一释放
-        actual_device_id = device_id
+        # One device for the whole verify (generate scripts + execute),
+        # released in the finally below. LocalWorker and RemoteWorker share
+        # the same acquire/release contract; on the remote path the daemon's
+        # lease reaper backstops a client that dies before release.
         acquired_device = None
-        from akg_agents.core.worker.local_worker import LocalWorker
-        from akg_agents.core.worker.remote_worker import RemoteWorker
-
-        if self.worker and isinstance(self.worker, LocalWorker):
-            # LocalWorker: 从本地 device_pool 获取设备
-            acquired_device = await self.worker.device_pool.acquire_device()
+        acquired_lease = None
+        if self.worker is not None:
+            logger.info(f"[{self.op_name}] Acquiring device for verify project generation")
+            acquired_device, acquired_lease = await self.worker.acquire_device(self.task_id)
             actual_device_id = acquired_device
-            logger.info(f"[{self.op_name}] Acquired local device {actual_device_id} for entire verify process")
-        elif self.worker and isinstance(self.worker, RemoteWorker):
-            # RemoteWorker: 从远程服务器获取设备
-            acquired_device = await self.worker.acquire_device(task_id=self.task_id)
-            actual_device_id = acquired_device
-            logger.info(f"[{self.op_name}] Acquired remote device {actual_device_id} for entire verify process")
+            logger.info(f"[{self.op_name}] Acquired device {actual_device_id} for verify")
         else:
             # 没有 worker（旧流程兼容）
             actual_device_id = device_id if device_id != -1 else 0
@@ -2734,12 +2669,16 @@ if __name__ == "__main__":
                 os.environ.get("AKG_VERIFY_PER_CONFIG", "0") == "1"
                 or self.config.get("verify_per_config", False)
             )
-            is_triton_autotune = (self.dsl in ["triton_cuda", "triton_ascend"] and
-                                  self._detect_triton_autotune(target_code))
+            is_triton_autotune = (
+                self.dsl_adapter.supports_autotune_configs
+                and self._detect_triton_autotune(target_code)
+            )
 
             if verify_per_config and is_triton_autotune:
                 config_verify_result, config_verify_log, final_code = await self._verify_configs_separately(
-                    target_code, verify_dir, actual_device_id, self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S), current_step
+                    target_code, verify_dir, actual_device_id,
+                    resolve_eval_timeout(self.config.get('verify_timeout')),
+                    current_step
                 )
                 if config_verify_result is not None:
                     if config_verify_result:
@@ -2747,30 +2686,50 @@ if __name__ == "__main__":
                     self.last_verify_ok = bool(config_verify_result)
                     return config_verify_result, config_verify_log
 
-            cached_reference_data = await self._prepare_cached_reference_data(actual_device_id)
-            if cached_reference_data:
-                self._apply_cached_reference_data(cached_reference_data)
+            # uses_cannbench_precision DSLs need the reference run LIVE so we can
+            # produce the FP64-CPU golden + target-precision native pair
+            # (dual_reference); the cached-inputs path stores only one precomputed
+            # golden and sets framework_model=None, which would defeat the parity.
+            _cannbench_precision = getattr(
+                self.dsl_adapter, "uses_cannbench_precision", False)
+            if _cannbench_precision:
+                logger.info(
+                    f"[{self.op_name}] cannbench precision: skipping reference "
+                    f"cache to run FP64 golden + native reference live")
+            else:
+                logger.info(f"[{self.op_name}] Preparing cached reference data")
+                cached_reference_data = await self._prepare_cached_reference_data(actual_device_id)
+                if cached_reference_data:
+                    self._apply_cached_reference_data(cached_reference_data)
+                    logger.info(f"[{self.op_name}] Cached reference data applied")
+                else:
+                    logger.info(f"[{self.op_name}] No cached reference data applied")
 
             # 默认模式：直接验证完整代码
             project_gen_log = ""
             try:
                 # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
                 # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
+                logger.info(f"[{self.op_name}] Generating verify project")
                 self.gen_verify_project(target_code, verify_dir, actual_device_id)
+                logger.info(f"[{self.op_name}] Verify project generated")
             except Exception as e:
                 # 捕获gen_verify_project中的异常，记录到project_gen_log中
                 error_msg = str(e)
                 logger.error(f"验证项目生成失败: {error_msg}")
                 project_gen_log = f"项目生成失败: {error_msg}\n"
 
-            # 从config获取timeout配置，默认5分钟
-            verify_timeout = self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S)
+            # 从 config 获取 timeout 配置
+            verify_timeout = resolve_eval_timeout(
+                self.config.get('verify_timeout'))
 
             # 运行验证
             # worker.verify() 只是执行脚本，不需要管理 device（device 已经在脚本中设置好了）
+            logger.info(f"[{self.op_name}] Running verify project")
             verify_res, verify_log = await self.run_verify(
                 verify_dir, timeout=verify_timeout, device_id=actual_device_id
             )
+            logger.info(f"[{self.op_name}] Verify project finished: result={verify_res}")
 
             # 拼接项目生成日志和验证日志
             verify_log = project_gen_log + verify_log
@@ -2802,15 +2761,7 @@ if __name__ == "__main__":
             self.last_verify_ok = bool(verify_res)
             return verify_res, verify_log
         finally:
-            # 【关键】在 run() 方法结束时统一释放设备
-            # 设备的整个生命周期由 run() 方法管理
+            # Always release the device for the whole verify lifecycle.
             if acquired_device is not None:
-                from akg_agents.core.worker.local_worker import LocalWorker
-                from akg_agents.core.worker.remote_worker import RemoteWorker
-
-                if isinstance(self.worker, LocalWorker):
-                    await self.worker.device_pool.release_device(acquired_device)
-                    logger.info(f"[{self.op_name}] Released local device {acquired_device}")
-                elif isinstance(self.worker, RemoteWorker):
-                    await self.worker.release_device(acquired_device, task_id=self.task_id)
-                    logger.info(f"[{self.op_name}] Released remote device {acquired_device}")
+                await self.worker.release_device(acquired_device, acquired_lease, self.task_id)
+                logger.info(f"[{self.op_name}] Released device {acquired_device}")
