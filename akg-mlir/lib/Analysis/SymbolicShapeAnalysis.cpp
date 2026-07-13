@@ -130,10 +130,10 @@ Type SymbolicShapeAnalysis::createNewSymbolicShape(Type type) {
   if (dict && dict.contains(getSymbolShapeAttrName())) {
     return type;
   }
-  uint64_t rank = cast<ShapedType>(type).getRank();
+  int64_t rank = cast<ShapedType>(type).getRank();
   ArrayRef<int64_t> shape = cast<ShapedType>(type).getShape();
   llvm::SmallVector<Attribute> symShapeAttr;
-  for (uint i = 0; i < rank; i++) {
+  for (int64_t i = 0; i < rank; i++) {
     if (shape[i] == ShapedType::kDynamic) {
       (void)symShapeAttr.emplace_back(StringAttr::get(type.getContext(), newSymbolicDim()));
     } else {
@@ -223,13 +223,13 @@ bool SymbolicShapeAnalysis::isSameSymbolicShape(Type lhs, Type rhs) {
   if (!l || !r) {
     return false;
   }
-  uint64_t lRank = cast<ShapedType>(l).getRank();
-  uint64_t rRank = cast<ShapedType>(r).getRank();
+  int64_t lRank = cast<ShapedType>(l).getRank();
+  int64_t rRank = cast<ShapedType>(r).getRank();
   if (lRank != rRank) {
     return false;
   }
-  for (uint i = 0; i < lRank; i++) {
-    if (!isSameSymbolicDim(lhs, i, rhs, i)) {
+  for (int64_t i = 0; i < lRank; ++i) {
+    if (!isSameSymbolicDim(lhs, static_cast<uint64_t>(i), rhs, static_cast<uint64_t>(i))) {
       return false;
     }
   }

@@ -33,6 +33,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/DenseMap.h"
@@ -367,6 +368,25 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return out;
   }
 
+  // Drop the entries at `reductionDims` from a per-rank (sizes, maxSizes)
+  // pair, yielding the shape of a reduction result.  Either side may be empty
+  // (kept empty); when non-empty its arity is assumed to be one entry per
+  // source dimension (same convention as permuteVecSizes).
+  static VecSizesPair reduceVecSizes(const VecSizesPair &p, ArrayRef<int64_t> reductionDims) {
+    llvm::SmallDenseSet<int64_t> reduced(reductionDims.begin(), reductionDims.end());
+    auto dropDims = [&](const SmallVector<Value> &in, SmallVector<Value> &out) {
+      for (int64_t i = 0; i < static_cast<int64_t>(in.size()); ++i) {
+        if (reduced.count(i) == 0u) {
+          out.push_back(in[i]);
+        }
+      }
+    };
+    VecSizesPair out;
+    dropDims(p.first, out.first);
+    dropDims(p.second, out.second);
+    return out;
+  }
+
   static std::optional<VecSizesPair> tryExtractVecSizes(Value v, int depth = 0) {
     if (depth > kMaxExtractDepth) {
       return std::nullopt;
@@ -399,6 +419,23 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     if (auto tp = llvm::dyn_cast<mlir::npuvector::TransposeOp>(defOp)) {
       if (auto inner = tryExtractVecSizes(tp.getVector(), depth + 1))
         return permuteVecSizes(*inner, tp.getPermutation());
+      return std::nullopt;
+    }
+    // A partial reduction drops its reduced axes, so the result rank is lower
+    // than the source.  Like transpose, its sizes must be rewritten from the
+    // source (dropping the reduced dims) instead of propagated verbatim; the
+    // generic/operand walk below would otherwise box the reduction result in
+    // a UB buffer with the *input* (rank-higher) tile shape.  A full reduction
+    // (no/empty reduction_dims) yields a scalar / rank-0 result handled by the
+    // rank-0 early return above.
+    if (auto red = llvm::dyn_cast<mlir::npuvector::ReductionOp>(defOp)) {
+      auto dims = red.getReductionDims();
+      if (!dims || dims->empty()) {
+        return std::nullopt;
+      }
+      if (auto inner = tryExtractVecSizes(red.getVector(), depth + 1)) {
+        return reduceVecSizes(*inner, *dims);
+      }
       return std::nullopt;
     }
     if (defOp->getDialect() && defOp->getDialect()->getNamespace() == "npuvector") {
@@ -895,10 +932,23 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return shape;
   }
 
+  // True when `written` (the vector stored by a transfer_write) is produced by
+  // a reduction.  Such a write stores a rank-reduced tile into a GM output at
+  // an offset; its UB staging buffer must mirror the *destination* extent (the
+  // full logical output, e.g. memref<3072xf32>) rather than the small reduced
+  // tile, so the reduced result keeps its offset-based placement into the
+  // output and the whole buffer can be DMA'd out.
+  static bool isReductionProducedValue(Value written) {
+    Operation *def = written.getDefiningOp();
+    return (def != nullptr) && llvm::isa<mlir::npuvector::ReductionOp>(def);
+  }
+
   // Per-dim UB shape for a kernel arg.  The shape is taken directly from
   // the maxSizes operand of the npuvector.transfer_read (or, for write-only
   // args, from the producing transfer_read in the def chain of the value
   // being written).  This preserves the original npuvector rank/shape.
+  // Exception: a reduction-produced write is sized from the destination memref
+  // shape (see isReductionProducedValue).
   static SmallVector<int64_t> computeArgShape(unsigned argIdx, MemRefType origType, ArgReadMap &argToRead,
                                               ArgWriteMap &argToWrite) {
     SmallVector<int64_t> shape;
@@ -912,7 +962,7 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     }
 
     auto wIt = argToWrite.find(argIdx);
-    if (wIt != argToWrite.end()) {
+    if (wIt != argToWrite.end() && !isReductionProducedValue(wIt->second.getVector())) {
       auto vs = tryExtractVecSizes(wIt->second.getVector());
       if (vs) {
         shape = shapeFromMaxSizes(vs->second);
@@ -935,20 +985,58 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return shape;
   }
 
-  static Value remapKernelValueToCaller(Value v, func::CallOp callOp, func::FuncOp kernelFunc) {
+  // A pure, single-result index/arith computation (e.g. affine.apply/min/max
+  // or a side-effect-free arith op) that was sunk into the kernel. Such ops can
+  // be safely re-materialized on the caller side as long as every operand is
+  // itself remappable to a caller value.
+  static bool isRemappableComputeOp(Operation *op) {
+    if ((op == nullptr) || op->getNumResults() != 1 || op->getNumRegions() != 0) {
+      return false;
+    }
+    if (isa<affine::AffineApplyOp, affine::AffineMinOp, affine::AffineMaxOp>(op)) {
+      return true;
+    }
+    Dialect *dialect = op->getDialect();
+    return (dialect != nullptr) && isa<arith::ArithDialect>(dialect) && isMemoryEffectFree(op);
+  }
+
+  static Value remapKernelValueToCaller(Value v, func::CallOp callOp, func::FuncOp kernelFunc, int depth = 0) {
+    // Bound the recursion so a pathological def chain cannot loop unbounded.
+    constexpr int kMaxRemapDepth = 16;
     if (auto bArg = llvm::dyn_cast<BlockArgument>(v)) {
       if (bArg.getOwner() == &kernelFunc.getBody().front()) {
         return callOp.getOperand(bArg.getArgNumber());
       }
       return {};
     }
-    if (Operation *defOp = v.getDefiningOp()) {
-      if (isCloneableConstant(defOp)) {
-        OpBuilder b(callOp);
-        b.setInsertionPoint(callOp);
-        Operation *cloned = b.clone(*defOp);
-        return cloned->getResult(0);
+    Operation *defOp = v.getDefiningOp();
+    if (defOp == nullptr) {
+      return {};
+    }
+    if (isCloneableConstant(defOp)) {
+      OpBuilder b(callOp);
+      b.setInsertionPoint(callOp);
+      Operation *cloned = b.clone(*defOp);
+      return cloned->getResult(0);
+    }
+    // Re-materialize sunk index computations (affine.min/apply, pure arith,
+    // ...) on the caller side by remapping their operands recursively.  Without
+    // this, dynamic tile sizes derived from such ops fail to remap and GM<->UB
+    // copies fall back to the padded static tile shape, reading past the valid
+    // region for partial/tail tiles.
+    if (depth < kMaxRemapDepth && isRemappableComputeOp(defOp)) {
+      IRMapping mapping;
+      for (Value operand : defOp->getOperands()) {
+        Value mappedOperand = remapKernelValueToCaller(operand, callOp, kernelFunc, depth + 1);
+        if (!mappedOperand) {
+          return {};
+        }
+        mapping.map(operand, mappedOperand);
       }
+      OpBuilder b(callOp);
+      b.setInsertionPoint(callOp);
+      Operation *cloned = b.clone(*defOp, mapping);
+      return cloned->getResult(0);
     }
     return {};
   }
@@ -982,6 +1070,99 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     return result;
   }
 
+  // Return true when the logical tile (described by `logicalSizes`) occupies
+  // only part of the padded UB buffer and a subview is required.
+  static bool ubTileNeedsSubview(MemRefType ubType, ValueRange logicalSizes) {
+    if (!ubType || logicalSizes.empty()) {
+      return false;
+    }
+    if (!ubType.hasStaticShape()) {
+      return true;
+    }
+    ArrayRef<int64_t> ubShape = ubType.getShape();
+    if (ubShape.size() != logicalSizes.size()) {
+      return true;
+    }
+    for (size_t i = 0; i < ubShape.size(); ++i) {
+      auto cst = logicalSizes[i].getDefiningOp<arith::ConstantIndexOp>();
+      if (!cst || ubShape[i] != cst.value()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Transfer ops may carry sizes either per dynamic dim (`numDyn` entries) or per
+  // rank (`rank` entries).  memref.subview always needs one size per memref dim.
+  static SmallVector<Value> expandLogicalSizesToRank(mlir::npuvector::NPUVectorType vt, ValueRange logicalSizes,
+                                                     OpBuilder &builder, Location loc) {
+    ArrayRef<int64_t> shape = vt.getShape();
+    unsigned rank = static_cast<unsigned>(shape.size());
+    if (logicalSizes.size() == rank) {
+      return llvm::to_vector(logicalSizes);
+    }
+    unsigned numDyn = 0;
+    for (int64_t d : shape) {
+      if (ShapedType::isDynamic(d)) {
+        ++numDyn;
+      }
+    }
+    if (logicalSizes.size() != numDyn) {
+      return llvm::to_vector(logicalSizes);
+    }
+    SmallVector<Value> rankSizes;
+    rankSizes.reserve(rank);
+    unsigned dynIdx = 0;
+    for (int64_t d : shape) {
+      if (ShapedType::isDynamic(d)) {
+        rankSizes.push_back(logicalSizes[dynIdx++]);
+      } else {
+        rankSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, d));
+      }
+    }
+    return rankSizes;
+  }
+
+  static SmallVector<Value> rankLogicalSizesForSubview(OpBuilder &builder, Location loc, Type vecType,
+                                                       ValueRange transferSizes) {
+    auto vt = llvm::dyn_cast<mlir::npuvector::NPUVectorType>(vecType);
+    if (!vt) {
+      return llvm::to_vector(transferSizes);
+    }
+    return expandLogicalSizesToRank(vt, transferSizes, builder, loc);
+  }
+
+  // Build mixed static/dynamic size operands for subview: constant logical sizes
+  // become IndexAttr so the inferred memref type keeps static dims; only truly
+  // dynamic sizes become `?` in the result shape.
+  static SmallVector<OpFoldResult> ubLogicalSizeOperands(OpBuilder &builder, ValueRange logicalSizes) {
+    SmallVector<OpFoldResult> sizes;
+    sizes.reserve(logicalSizes.size());
+    for (Value sz : logicalSizes) {
+      if (auto cst = sz.getDefiningOp<arith::ConstantIndexOp>()) {
+        sizes.push_back(builder.getIndexAttr(cst.value()));
+      } else {
+        sizes.push_back(sz);
+      }
+    }
+    return sizes;
+  }
+
+  // View the logical tile region inside a padded UB buffer.
+  static Value createUbLogicalSubview(OpBuilder &builder, Location loc, Value ubBuf, ValueRange logicalSizes,
+                                      Value c0) {
+    auto ubType = llvm::cast<MemRefType>(ubBuf.getType());
+    unsigned rank = ubType.getRank();
+    if (logicalSizes.size() != rank) {
+      return ubBuf;
+    }
+    SmallVector<OpFoldResult> offsets(rank, c0);
+    SmallVector<OpFoldResult> sizes = ubLogicalSizeOperands(builder, logicalSizes);
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+    auto resultType = llvm::cast<MemRefType>(memref::SubViewOp::inferResultType(ubType, offsets, sizes, strides));
+    return builder.create<memref::SubViewOp>(loc, resultType, ubBuf, offsets, sizes, strides);
+  }
+
   // Emit GM -> UB transfer before the call.  `vecType`/`dynSizes`/`maxSizes`
   // describe the actual tile being moved; using the original transfer's
   // dynamic extents (rather than the padded UB size) ensures only the valid
@@ -993,7 +1174,13 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     SmallVector<Value> ubIndices((ubRank != 0u) ? ubRank : 1u, c0);
     Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, origArg, gmIndices, padding,
                                                                 Value(), dynSizes, maxSizes);
-    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, ubBuf, ubIndices, Value());
+    auto ubType = llvm::dyn_cast<MemRefType>(ubBuf.getType());
+    SmallVector<Value> subviewSizes = rankLogicalSizesForSubview(builder, loc, vecType, dynSizes);
+    Value writeTarget = ubBuf;
+    if (ubTileNeedsSubview(ubType, subviewSizes)) {
+      writeTarget = createUbLogicalSubview(builder, loc, ubBuf, subviewSizes, c0);
+    }
+    builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, writeTarget, ubIndices, Value());
   }
 
   // Emit UB -> GM transfer after the call.  Mirrors `emitGmToUbCopy`: only the
@@ -1006,7 +1193,13 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
     Value c0p = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value padding = builder.create<arith::ConstantOp>(loc, elemType, builder.getZeroAttr(elemType));
     SmallVector<Value> ubIndices((ubRank != 0u) ? ubRank : 1u, c0p);
-    Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, ubBuf, ubIndices, padding,
+    auto ubType = llvm::dyn_cast<MemRefType>(ubBuf.getType());
+    SmallVector<Value> subviewSizes = rankLogicalSizesForSubview(builder, loc, vecType, dynSizes);
+    Value readSource = ubBuf;
+    if (ubTileNeedsSubview(ubType, subviewSizes)) {
+      readSource = createUbLogicalSubview(builder, loc, ubBuf, subviewSizes, c0p);
+    }
+    Value vec = builder.create<mlir::npuvector::TransferReadOp>(loc, vecType, readSource, ubIndices, padding,
                                                                 Value(), dynSizes, maxSizes);
     builder.create<mlir::npuvector::TransferWriteOp>(loc, TypeRange{}, vec, origArg, gmIndices, Value());
     builder.setInsertionPoint(callOp);
@@ -1051,7 +1244,11 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
       // logical and aligned shapes differ.
       bool sizesMatchDyn = numDyn > 0 && rd.size() == numDyn && rm.size() == numDyn;
       bool sizesMatchRank = rank > 0 && rd.size() == rank && rm.size() == rank;
-      if (numDyn > 0 && (sizesMatchDyn || sizesMatchRank)) {
+      // Static-shape vectors still carry per-dim sizes/maxSizes on the
+      // transfer op (e.g. logical 10 vs aligned 16 on a middle dim).  Accept
+      // rank-sized operands even when numDyn == 0 so we do not fall back to
+      // the padded UB alloc shape for GM<->UB copies.
+      if (sizesMatchDyn || sizesMatchRank) {
         copyVecType = vt;
         dynSizes = std::move(rd);
         maxSizes = std::move(rm);
@@ -1465,6 +1662,131 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
   }
 
   // =========================================================================
+  // Step 2.5: Align local UB scratch allocs passed to vf functions
+  //
+  // Buffers created by earlier passes (e.g. ElimScfIterArgs, which backs scf
+  // iter-args by a memref.alloc whose shape is derived from the vector
+  // maxSizes) are plain `memref.alloc`s in the parent function whose
+  // inner-most dim may not be a multiple of the UB vector-width alignment
+  // (e.g. memref<40x528xf32> where the f32 UB alignment is 64).  The GM->UB
+  // promotion above only aligns args whose root is a parent GM argument, so
+  // such a local scratch buffer would reach the backend unaligned.  Pad its
+  // inner-most dim to the UB alignment, propagate the new type into every vf
+  // signature that receives the buffer, and re-align the maxSizes of
+  // transfer_reads on the retyped kernel args (mirroring the GM->UB path).
+  // =========================================================================
+
+  // Collect (vfFunc, argIdx) uses of `allocResult` as call operands.  Returns
+  // false unless *every* use is an operand of a vf `func.call` (i.e. the alloc
+  // is a pure UB scratch buffer flowing only into vector kernels); in that
+  // case the buffer is left untouched.
+  static bool collectVfArgUses(Value allocResult, ModuleOp module,
+                               SmallVector<std::pair<func::FuncOp, unsigned>> &argUses) {
+    bool anyUse = false;
+    for (OpOperand &use : allocResult.getUses()) {
+      auto call = llvm::dyn_cast<func::CallOp>(use.getOwner());
+      if (!call) {
+        return false;
+      }
+      auto callee = module.lookupSymbol<func::FuncOp>(call.getCallee());
+      if (!callee || !callee->hasAttr(kVectorFunctionAttr)) {
+        return false;
+      }
+      argUses.emplace_back(callee, use.getOperandNumber());
+      anyUse = true;
+    }
+    return anyUse;
+  }
+
+  // Retype vf arg `argIdx` to the aligned UB memref type and align the
+  // maxSizes of every transfer_read that loads from it.  Idempotent: a shared
+  // buffer reaching several vf functions (or the same arg from multiple call
+  // sites) is safe to re-align because the aligned type is derived
+  // deterministically from the (identical) original arg type.
+  LogicalResult alignVfArgReceiver(func::FuncOp vfFunc, unsigned argIdx, MemRefType alignedType,
+                                   func::FuncOp parentFunc) {
+    if (vfFunc.getBody().empty()) {
+      return success();
+    }
+    Block &entry = vfFunc.getBody().front();
+    if (argIdx >= entry.getNumArguments()) {
+      return success();
+    }
+    BlockArgument arg = entry.getArgument(argIdx);
+    if (arg.getType() == alignedType) {
+      return success();
+    }
+    arg.setType(alignedType);
+    SmallVector<Type> inTypes(entry.getArgumentTypes().begin(), entry.getArgumentTypes().end());
+    vfFunc.setType(FunctionType::get(vfFunc.getContext(), inTypes, vfFunc.getResultTypes()));
+
+    auto kUbAlignmentOr = getUbAlignment(parentFunc, alignedType.getElementType());
+    if (failed(kUbAlignmentOr)) {
+      return failure();
+    }
+    int64_t kUbAlignment = *kUbAlignmentOr;
+    for (Operation *user : arg.getUsers()) {
+      auto rd = llvm::dyn_cast<mlir::npuvector::TransferReadOp>(user);
+      if (!rd || rd.getSource() != arg) {
+        continue;
+      }
+      OpBuilder rb(rd);
+      SmallVector<Value> newMax = alignedMaxSizeValues(rb, rd.getLoc(), rd.getMaxSizes(), kUbAlignment);
+      rd.getMaxSizesMutable().assign(newMax);
+    }
+    return success();
+  }
+
+  LogicalResult alignLocalUbAllocs(ModuleOp module) {
+    SmallVector<memref::AllocOp> allocs;
+    module.walk([&](func::FuncOp f) {
+      if (f->hasAttr(kVectorFunctionAttr)) {
+        return;
+      }
+      f.walk([&](memref::AllocOp a) { allocs.push_back(a); });
+    });
+
+    for (memref::AllocOp alloc : allocs) {
+      MemRefType memrefType = alloc.getType();
+      if (!memrefType.hasStaticShape() || memrefType.getRank() == 0) {
+        continue;
+      }
+      auto parentFunc = alloc->getParentOfType<func::FuncOp>();
+      if (!parentFunc) {
+        continue;
+      }
+      Type elemType = memrefType.getElementType();
+      auto kUbAlignmentOr = getUbAlignment(parentFunc, elemType);
+      if (failed(kUbAlignmentOr)) {
+        return failure();
+      }
+      SmallVector<int64_t> alignedShape = alignUbShape(memrefType.getShape(), *kUbAlignmentOr);
+      if (ArrayRef<int64_t>(alignedShape) == memrefType.getShape()) {
+        continue;  // already aligned.
+      }
+
+      SmallVector<std::pair<func::FuncOp, unsigned>> argUses;
+      if (!collectVfArgUses(alloc.getResult(), module, argUses)) {
+        continue;  // not a pure UB scratch buffer -> leave untouched.
+      }
+
+      auto alignedType = MemRefType::get(alignedShape, elemType);
+      bool anyReceiverAlignFailed = llvm::any_of(argUses, [&](const std::pair<func::FuncOp, unsigned> &use) {
+        return failed(alignVfArgReceiver(use.first, use.second, alignedType, parentFunc));
+      });
+      if (anyReceiverAlignFailed) {
+        return failure();
+      }
+
+      OpBuilder b(alloc);
+      auto newAlloc = b.create<memref::AllocOp>(alloc.getLoc(), alignedType);
+      alloc.getResult().replaceAllUsesWith(newAlloc.getResult());
+      alloc.erase();
+    }
+    return success();
+  }
+
+  // =========================================================================
   // Step 2.4: Drop unused kernel args
   // =========================================================================
 
@@ -1569,6 +1891,13 @@ class OutlineVectorFunction : public mlir::npuvector::impl::OutlineVectorFunctio
 
     if (std::any_of(kernelFuncs.begin(), kernelFuncs.end(),
                     [this](func::FuncOp f) { return failed(promoteVectorArgsToUB(f)); })) {
+      signalPassFailure();
+      return;
+    }
+
+    // Step 2.5: pad local UB scratch allocs (inner-most dim) to the UB
+    // alignment and propagate the aligned type into the vf signatures.
+    if (failed(alignLocalUbAllocs(module))) {
       signalPassFailure();
       return;
     }

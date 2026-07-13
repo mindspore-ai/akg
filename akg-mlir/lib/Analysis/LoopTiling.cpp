@@ -124,7 +124,7 @@ static LogicalResult applyTilingToLoop(const ApplyTilingParams &params);
 
 struct LeafBranchBandPlan {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> representativeBand;
-  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerLeafLoops;
+  SmallVector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>, kSmallVectorSizeFour> branchBands;
   unsigned representativeLeafDim = 0;
   bool hasLeafBranching = false;
 };
@@ -245,6 +245,8 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<m
                                                                       func::FuncOp originalKernel);
 static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
                                          TilingMetadata &metadata);
+static void captureMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                 TilingMetadata &metadata);
 static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
                                              ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse,
                                              const TilingMetadata &baseMetadata, TilingMetadata &metadata);
@@ -282,7 +284,7 @@ static LogicalResult prepareTileSizesFromMemref(
   std::vector<SmallVector<Value, kSmallVectorSizeSix>> &allTileSizeValues);
 static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel, OpBuilder &builder,
                                                     std::vector<LeafBranchBandPlan> &leafBranchPlans,
-                                                    bool &shouldReturnEarly);
+                                                    bool isStaticShape, bool &shouldReturnEarly);
 // Bundled params for prepareTileMetadataForApply to stay under readability-function-size_parameters limit.
 struct PrepareTileMetadataParams {
   mutable func::FuncOp originalKernel;
@@ -332,8 +334,6 @@ struct LeafBranchTileSlicesOutput {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &prefixBand;
   SmallVector<Value, kSmallVectorSizeSix> &prefixTileValues;
   SmallVector<unsigned, kSmallVectorSizeSix> &prefixTileSizesInt;
-  SmallVector<Value, kSmallVectorSizeSix> &leafTileValues;
-  SmallVector<unsigned, kSmallVectorSizeSix> &leafTileSizesInt;
 };
 
 static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const LeafBranchTileSlicesOutput &out);
@@ -347,16 +347,20 @@ struct CollectTagLeafBranchParams {
 };
 
 static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchParams &params, int64_t &nextNodeId,
-                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds);
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchRootNodeIds);
 // Bundled params for applyLeafBandsByNodeId to stay under readability-function-size_parameters limit.
 struct ApplyLeafBandsParams {
   mutable func::FuncOp originalKernel;
   OpBuilder &builder;
   size_t bandIdx;
-  ArrayRef<int64_t> branchLeafNodeIds;
-  ArrayRef<Value> leafTileValues;
-  ArrayRef<unsigned> leafTileSizesInt;
+  const LeafBranchBandPlan &plan;
+  ArrayRef<int64_t> branchRootNodeIds;
+  ArrayRef<Value> tileSizeValues;
+  ArrayRef<unsigned> tileSizesInt;
+  unsigned bandSize;
+  unsigned tileLevels;
   bool useRuntimeTileCounts;
+  int64_t &nextNodeId;
 };
 
 static LogicalResult applyLeafBandsByNodeId(const ApplyLeafBandsParams &params);
@@ -396,7 +400,8 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
                             llvm::SmallPtrSetImpl<mlir::Operation *> &visited);
 static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
-                                             func::FuncOp tilingFunc, OpBuilder &builder);
+                                             func::FuncOp tilingFunc, OpBuilder &builder,
+                                             std::string *failureReason = nullptr);
 
 // Attribute marking helpers
 static Value stripIndexLikeCasts(Value value);
@@ -442,9 +447,7 @@ static void updatePointLoopYieldsFromOriginalLoops(llvm::ArrayRef<mlir::scf::For
                                                    llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                    unsigned tileSizesNum, mlir::IRMapping &mapping,
                                                    mlir::OpBuilder &builder);
-static bool isTransposePointLoop(mlir::scf::ForOp loop);
 static bool isMultiVecPointLoop(mlir::scf::ForOp loop);
-static void sinkTransposePointLoops(func::FuncOp funcOp);
 static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
@@ -481,7 +484,10 @@ static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Ope
 
 // Helper: clone the upper bound definition chain into tiling function
 static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
-                                             func::FuncOp tilingFunc, OpBuilder &builder) {
+                                             func::FuncOp tilingFunc, OpBuilder &builder, std::string *failureReason) {
+  if (failureReason != nullptr) {
+    failureReason->clear();
+  }
   if (!upperBound) {
     return {};
   }
@@ -520,13 +526,17 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
     return isa<arith::ConstantOp, arith::ConstantIndexOp, arith::ConstantIntOp, arith::IndexCastOp,
                arith::IndexCastUIOp, arith::CmpIOp, arith::SelectOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
                arith::DivSIOp, arith::DivUIOp, arith::CeilDivSIOp, arith::RemSIOp, arith::RemUIOp, arith::MinSIOp,
-               arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, affine::AffineApplyOp,
-               affine::AffineMinOp>(op);
+               arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, memref::DimOp, memref::CollapseShapeOp,
+               memref::ExpandShapeOp, affine::AffineApplyOp, affine::AffineMinOp>(op);
   };
 
   for (auto *op : ops) {
     if (!isSupportedOp(op)) {
-      llvm::dbgs() << "cloneUpperBoundDefinition: unsupported op " << op->getName() << "\n";
+      if (failureReason != nullptr) {
+        llvm::raw_string_ostream os(*failureReason);
+        os << "unsupported clone op " << op->getName();
+      }
+      llvm::dbgs() << "cloneUpperBoundDefinition: unsupported clone op " << op->getName() << "\n";
       return {};
     }
 
@@ -627,6 +637,13 @@ static void preprocessLoopAttrsForTileCalculation(func::FuncOp funcOp, const Lea
   }
   if (plan.hasLeafBranching || plan.representativeBand.size() <= 1) {
     clearAllBroadcastLoopAttrs(funcOp);
+    const bool hasNonLeafBranch =
+      plan.hasLeafBranching &&
+      llvm::any_of(plan.branchBands, [](const auto &branchBand) { return branchBand.size() != 1; });
+    if (hasNonLeafBranch) {
+      funcOp.walk([](mlir::scf::ForOp loop) { loop->removeAttr(kTransposeLoopAttr); });
+      return;
+    }
     markBandTransposeLoops(funcOp, plan);
     return;
   }
@@ -820,12 +837,27 @@ static LogicalResult emitLoopTripCountInTilingFunc(const TripCountEmitParams &pa
     return success();
   }
 
-  Value lb = cloneUpperBoundDefinition(loop.getLowerBound(), originalKernel, tilingFunc, builder);
-  Value ub = cloneUpperBoundDefinition(loop.getUpperBound(), originalKernel, tilingFunc, builder);
-  Value step = cloneUpperBoundDefinition(loop.getStep(), originalKernel, tilingFunc, builder);
-  if (!lb || !ub || !step) {
-    tilingFunc.emitError("failed to clone loop bounds when computing runtime parallel tile size");
+  auto emitCloneBoundFailure = [&](StringRef boundName, const std::string &failureReason) {
+    auto diag = tilingFunc.emitError("failed to clone loop ");
+    diag << boundName << " when computing runtime parallel tile size";
+    if (!failureReason.empty()) {
+      diag << ": " << failureReason;
+    }
     return failure();
+  };
+
+  std::string failureReason;
+  Value lb = cloneUpperBoundDefinition(loop.getLowerBound(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!lb) {
+    return emitCloneBoundFailure("lower bound", failureReason);
+  }
+  Value ub = cloneUpperBoundDefinition(loop.getUpperBound(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!ub) {
+    return emitCloneBoundFailure("upper bound", failureReason);
+  }
+  Value step = cloneUpperBoundDefinition(loop.getStep(), originalKernel, tilingFunc, builder, &failureReason);
+  if (!step) {
+    return emitCloneBoundFailure("step", failureReason);
   }
 
   Location loc = tilingFunc.getLoc();
@@ -1054,6 +1086,24 @@ static bool isLeafForLoop(mlir::scf::ForOp loop) {
   return children.empty();
 }
 
+static LogicalResult collectSingleChain(mlir::scf::ForOp root, SmallVectorImpl<mlir::scf::ForOp> &chain) {
+  chain.clear();
+  for (mlir::scf::ForOp current = root; current;) {
+    chain.push_back(current);
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> children;
+    collectDirectChildLoopsInOrder(current, children);
+    if (children.empty()) {
+      return success();
+    }
+    if (children.size() != 1) {
+      chain.clear();
+      return failure();
+    }
+    current = children.front();
+  }
+  return failure();
+}
+
 static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, LeafBranchBandPlan &plan) {
   if (!rootLoop) {
     return failure();
@@ -1080,20 +1130,24 @@ static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, L
       continue;
     }
 
-    if (!llvm::all_of(children, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); })) {
+    plan.branchBands.clear();
+    for (mlir::scf::ForOp child : children) {
+      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchBand;
+      if (failed(collectSingleChain(child, branchBand))) {
+        return failure();
+      }
+      plan.branchBands.push_back(std::move(branchBand));
+    }
+    auto representativeIt =
+      llvm::max_element(plan.branchBands, [](const auto &lhs, const auto &rhs) { return lhs.size() < rhs.size(); });
+    if (representativeIt == plan.branchBands.end()) {
       return failure();
     }
 
-    mlir::scf::ForOp representativeLeaf = children.front();
     plan.representativeBand = linearPrefix;
     plan.representativeLeafDim = static_cast<unsigned>(linearPrefix.size());
-    plan.representativeBand.push_back(representativeLeaf);
+    plan.representativeBand.append(representativeIt->begin(), representativeIt->end());
     plan.hasLeafBranching = true;
-    for (mlir::scf::ForOp loop : children) {
-      if (loop != representativeLeaf) {
-        plan.peerLeafLoops.push_back(loop);
-      }
-    }
     return success();
   }
 }
@@ -1131,6 +1185,15 @@ static void collectRepresentativeBands(ArrayRef<LeafBranchBandPlan> plans,
       bands.push_back(plan.representativeBand);
     }
   }
+}
+
+static LogicalResult rejectDynamicMultiTopLevelBands(func::FuncOp funcOp, bool isStaticShape,
+                                                     ArrayRef<LeafBranchBandPlan> plans) {
+  if (isStaticShape || plans.size() <= 1) {
+    return success();
+  }
+  funcOp.emitError("dynamic shape with multiple top-level bands is not supported by NPU auto tiling");
+  return failure();
 }
 
 static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
@@ -1382,28 +1445,32 @@ struct ParallelTileCoordMapParams {
   mutable mlir::scf::ForOp parallelTileLoop;
   mutable mlir::scf::ForOp insertBeforeLoop;
   OpBuilder &builder;
+  Value linearTaskId;
 };
 
 static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
                                       SmallVectorImpl<Value> &parallelTileCoordByDim) {
   const auto &parallelDims = params.parallelDims;
   const auto &tileCountsByDim = params.tileCountsByDim;
-  const auto &insertBeforeLoop = params.insertBeforeLoop;
+  mlir::scf::ForOp insertBeforeLoop = params.insertBeforeLoop;
   auto &parallelMapLoop = params.parallelMapLoop;
   auto &parallelTileLoop = params.parallelTileLoop;
   auto &builder = params.builder;
-  if (!parallelMapLoop || !parallelTileLoop || !insertBeforeLoop || parallelDims.empty()) {
+  Value remaining = params.linearTaskId;
+  if ((!remaining && (!parallelMapLoop || !parallelTileLoop)) || !insertBeforeLoop || parallelDims.empty()) {
     return;
   }
 
   OpBuilder::InsertionGuard guard(builder);
-  mlir::Location loc = parallelTileLoop.getLoc();
+  mlir::Location loc = insertBeforeLoop.getLoc();
   builder.setInsertionPoint(insertBeforeLoop);
-  AffineExpr taskLoopExpr = builder.getAffineDimExpr(0);
-  AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
-  auto taskIdMap = AffineMap::get(2, 0, taskLoopExpr + mapLoopExpr, builder.getContext());
-  Value remaining = builder.create<affine::AffineApplyOp>(
-    loc, taskIdMap, ValueRange{parallelTileLoop.getInductionVar(), parallelMapLoop.getInductionVar()});
+  if (!remaining) {
+    AffineExpr taskLoopExpr = builder.getAffineDimExpr(0);
+    AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
+    auto taskIdMap = AffineMap::get(2, 0, taskLoopExpr + mapLoopExpr, builder.getContext());
+    remaining = builder.create<affine::AffineApplyOp>(
+      loc, taskIdMap, ValueRange{parallelTileLoop.getInductionVar(), parallelMapLoop.getInductionVar()});
+  }
   AffineExpr remainingExpr = builder.getAffineDimExpr(0);
   AffineExpr tileCountExpr = builder.getAffineSymbolExpr(0);
   auto remMap = AffineMap::get(1, 1, remainingExpr % tileCountExpr, builder.getContext());
@@ -1455,8 +1522,8 @@ static mlir::scf::ForOp createParallelTileLoop(const ParallelTileLoopParams &par
   AffineExpr taskNumExpr = builder.getAffineDimExpr(0);
   AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
   auto taskUbMap = AffineMap::get(2, 0, taskNumExpr - mapLoopExpr, builder.getContext());
-  Value taskUb = builder.create<affine::AffineApplyOp>(
-    loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
+  Value taskUb =
+    builder.create<affine::AffineApplyOp>(loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
   auto tileLoop =
     builder.create<mlir::scf::ForOp>(loc, c0, taskUb, step, ValueRange{},
                                      [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value,
@@ -1484,11 +1551,41 @@ struct ParallelMapTileOutput {
   int64_t &parallelUseCore;
 };
 
-static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, ParallelMapTileOutput out) {
-  const auto &funcOp = in.funcOp;
+static void collectParallelTileCounts(const ParallelMapTileInput &in, int64_t coreNum, mlir::Location loc,
+                                      SmallVectorImpl<Value> &tileCountsByDim, Value &totalTilesValue,
+                                      int64_t &totalTiles) {
   const auto &band = in.band;
   const auto &tileSizeValues = in.tileSizeValues;
   const auto &tileSizesInt = in.tileSizesInt;
+  const auto &parallelDims = in.parallelDims;
+  const auto &useRuntimeTileCounts = in.useRuntimeTileCounts;
+  auto &builder = in.builder;
+  for (unsigned dim : parallelDims) {
+    if (dim >= band.size() || dim >= tileSizesInt.size() || tileSizesInt[dim] == 0) {
+      continue;
+    }
+    if (useRuntimeTileCounts) {
+      if (dim >= tileSizeValues.size() || !tileSizeValues[dim]) {
+        continue;
+      }
+      tileCountsByDim[dim] = emitTileCountFromTileSize(loc, builder, band[dim], tileSizeValues[dim]);
+      totalTilesValue = builder.create<arith::MulIOp>(loc, totalTilesValue, tileCountsByDim[dim]);
+    } else {
+      int64_t tileCount = 0;
+      if (tileSizesInt[dim] == static_cast<unsigned>(-1) ||
+          !getStaticParallelTileWork(band[dim], tileSizesInt[dim], tileCount)) {
+        tileCount = coreNum;
+      }
+      tileCountsByDim[dim] = builder.create<arith::ConstantIndexOp>(loc, std::max<int64_t>(tileCount, 1));
+      totalTiles = multiplyAndCapPositive(totalTiles, std::max<int64_t>(tileCount, 1));
+    }
+    band[dim]->setAttr(kParallelAxisAttr, builder.getUnitAttr());
+  }
+}
+
+static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, ParallelMapTileOutput out) {
+  const auto &funcOp = in.funcOp;
+  const auto &band = in.band;
   const auto &parallelDims = in.parallelDims;
   const auto &useRuntimeTileCounts = in.useRuntimeTileCounts;
   auto &builder = in.builder;
@@ -1521,30 +1618,7 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
     totalTilesValue = builder.create<arith::ConstantIndexOp>(loc, 1);
   }
 
-  for (unsigned dim : parallelDims) {
-    if (dim >= band.size() || dim >= tileSizesInt.size()) {
-      continue;
-    }
-    if (tileSizesInt[dim] == 0) {
-      continue;
-    }
-    if (useRuntimeTileCounts) {
-      if (dim >= tileSizeValues.size() || !tileSizeValues[dim]) {
-        continue;
-      }
-      tileCountsByDim[dim] = emitTileCountFromTileSize(loc, builder, band[dim], tileSizeValues[dim]);
-      totalTilesValue = builder.create<arith::MulIOp>(loc, totalTilesValue, tileCountsByDim[dim]);
-    } else {
-      int64_t tileCount = 0;
-      if (tileSizesInt[dim] == static_cast<unsigned>(-1) ||
-          !getStaticParallelTileWork(band[dim], tileSizesInt[dim], tileCount)) {
-        tileCount = coreNum;
-      }
-      tileCountsByDim[dim] = builder.create<arith::ConstantIndexOp>(loc, std::max<int64_t>(tileCount, 1));
-      totalTiles = multiplyAndCapPositive(totalTiles, std::max<int64_t>(tileCount, 1));
-    }
-    band[dim]->setAttr(kParallelAxisAttr, builder.getUnitAttr());
-  }
+  collectParallelTileCounts(in, coreNum, loc, tileCountsByDim, totalTilesValue, totalTiles);
 
   if (!useRuntimeTileCounts) {
     totalTilesValue = builder.create<arith::ConstantIndexOp>(loc, totalTiles);
@@ -1556,8 +1630,14 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
     return;
   }
 
+  if (!useRuntimeTileCounts && totalTiles <= parallelUseCore) {
+    buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder,
+                               parallelMapLoop.getInductionVar()},
+                              parallelTileCoordByDim);
+    return;
+  }
   parallelTileLoop = createParallelTileLoop({parallelMapLoop, root, totalTilesValue, parallelUseCore, builder});
-  buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder},
+  buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder, Value()},
                             parallelTileCoordByDim);
 }
 
@@ -2023,7 +2103,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
         newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
       }
       if (i == tileNum) {
-        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+        newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
       }
       return;
     }
@@ -2035,7 +2115,7 @@ static void updateLoopAttrsForTileLoop(const UpdateLoopAttrsParams &params) {
 
     // For inner point loop: preserve reduction attribute from original loop.
     if (i == tileNum && j == (bandSize - 1)) {
-      newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(getLoopExtent(newLoop)));
+      newLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
     }
     return;
   }
@@ -2654,7 +2734,6 @@ static Value stripIndexLikeCasts(Value value) {
 struct TransposeOrderPairInfo {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
-  size_t commonPrefix = 0;
 };
 
 static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder, ArrayRef<mlir::scf::ForOp> rhsOrder,
@@ -2691,21 +2770,13 @@ static bool intersectLoopOrdersForTranspose(ArrayRef<mlir::scf::ForOp> lhsOrder,
   return lhsCommonOrder.size() >= kSmallVectorSizeTwo && lhsCommonOrder.size() == rhsCommonOrder.size();
 }
 
-static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(ArrayRef<mlir::scf::ForOp> band,
-                                                                             ArrayRef<mlir::scf::ForOp> lhsOrder,
-                                                                             ArrayRef<mlir::scf::ForOp> rhsOrder,
-                                                                             bool linearBand) {
+static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(ArrayRef<mlir::scf::ForOp> lhsOrder,
+                                                                             ArrayRef<mlir::scf::ForOp> rhsOrder) {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> lhsCommonOrder;
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsCommonOrder;
   if (!intersectLoopOrdersForTranspose(lhsOrder, rhsOrder, lhsCommonOrder, rhsCommonOrder)) {
     return std::nullopt;
   }
-  // Tree bands keep the strict rule: the innermost index must actually participate in the permutation,
-  // otherwise downstream tree-aware tiling cannot use the transpose path safely.
-  if (!linearBand && lhsCommonOrder.back() == rhsCommonOrder.back()) {
-    return std::nullopt;
-  }
-
   size_t commonPrefix = 0;
   while (commonPrefix < lhsCommonOrder.size() && lhsCommonOrder[commonPrefix] == rhsCommonOrder[commonPrefix]) {
     ++commonPrefix;
@@ -2718,12 +2789,7 @@ static std::optional<TransposeOrderPairInfo> buildTransposeOrderPairAnalysis(Arr
     return std::nullopt;
   }
 
-  if (!linearBand &&
-      std::find(lhsCommonOrder.begin() + commonPrefix, lhsCommonOrder.end(), band.back()) == lhsCommonOrder.end()) {
-    return std::nullopt;
-  }
-
-  return TransposeOrderPairInfo{std::move(lhsCommonOrder), std::move(rhsCommonOrder), commonPrefix};
+  return TransposeOrderPairInfo{std::move(lhsCommonOrder), std::move(rhsCommonOrder)};
 }
 
 static void clearBandBroadcastAttrsForTranspose(ArrayRef<mlir::scf::ForOp> band) {
@@ -2733,82 +2799,26 @@ static void clearBandBroadcastAttrsForTranspose(ArrayRef<mlir::scf::ForOp> band)
   }
 }
 
-// Non-tree (single-chain) band: mark every loop from the outermost permuted loop down to band.back(),
-// keeping a contiguous transpose suffix that applyBandTiling's transpose path requires.
-static void markTransposeAttrsLinearBandSuffix(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
-                                               UnitAttr transposeAttr) {
-  const size_t commonPrefix = info.commonPrefix;
+static void markActualTransposeLoops(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
+                                     UnitAttr transposeAttr) {
   const auto &lhsCommonOrder = info.lhsCommonOrder;
   const auto &rhsCommonOrder = info.rhsCommonOrder;
 
   llvm::DenseSet<Operation *> permutedLoops;
-  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    permutedLoops.insert(loopOp.getOperation());
+  for (size_t i = 0; i < lhsCommonOrder.size(); ++i) {
+    if (lhsCommonOrder[i] == rhsCommonOrder[i]) {
+      continue;
+    }
+    mlir::scf::ForOp lhsLoop = lhsCommonOrder[i];
+    mlir::scf::ForOp rhsLoop = rhsCommonOrder[i];
+    permutedLoops.insert(lhsLoop.getOperation());
+    permutedLoops.insert(rhsLoop.getOperation());
   }
-  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    permutedLoops.insert(loopOp.getOperation());
-  }
-  size_t startIdx = band.size();
-  for (size_t i = 0; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
+  for (mlir::scf::ForOp loop : band) {
     if (permutedLoops.contains(loop.getOperation())) {
-      startIdx = i;
-      break;
+      loop->setAttr(kTransposeLoopAttr, transposeAttr);
     }
   }
-  for (size_t i = startIdx; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
-    if (loop->hasAttr(kReductionLoopAttr) && !isLeafForLoop(loop)) {
-      for (mlir::scf::ForOp bandLoop : band) {
-        bandLoop->removeAttr(kTransposeLoopAttr);
-      }
-      return;
-    }
-  }
-  for (size_t i = startIdx; i < band.size(); ++i) {
-    mlir::scf::ForOp loop = band[i];
-    loop->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-}
-
-static void markTransposeAttrsTreeCommonSuffix(const TransposeOrderPairInfo &info, UnitAttr transposeAttr) {
-  const size_t commonPrefix = info.commonPrefix;
-  const auto &lhsCommonOrder = info.lhsCommonOrder;
-  const auto &rhsCommonOrder = info.rhsCommonOrder;
-
-  auto hasBlockingReduction = [&commonPrefix](ArrayRef<mlir::scf::ForOp> order) {
-    for (auto it = order.begin() + commonPrefix; it != order.end(); ++it) {
-      mlir::scf::ForOp loopOp = *it;
-      if (loopOp->hasAttr(kReductionLoopAttr) && !isLeafForLoop(loopOp)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  if (hasBlockingReduction(lhsCommonOrder) || hasBlockingReduction(rhsCommonOrder)) {
-    return;
-  }
-
-  for (auto it = lhsCommonOrder.begin() + commonPrefix; it != lhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-  for (auto it = rhsCommonOrder.begin() + commonPrefix; it != rhsCommonOrder.end(); ++it) {
-    mlir::scf::ForOp loopOp = *it;
-    loopOp->setAttr(kTransposeLoopAttr, transposeAttr);
-  }
-}
-
-static void applyTransposeLoopAttrsForOrderPair(ArrayRef<mlir::scf::ForOp> band, const TransposeOrderPairInfo &info,
-                                                UnitAttr transposeAttr, bool linearBand) {
-  clearBandBroadcastAttrsForTranspose(band);
-  if (linearBand) {
-    markTransposeAttrsLinearBandSuffix(band, info, transposeAttr);
-    return;
-  }
-  markTransposeAttrsTreeCommonSuffix(info, transposeAttr);
 }
 
 // Bundled params for markTransposeOrderPair to stay under readability-function-size_parameters limit.
@@ -2817,7 +2827,6 @@ struct TransposeOrderPairParams {
   ArrayRef<mlir::scf::ForOp> lhsOrder;
   ArrayRef<mlir::scf::ForOp> rhsOrder;
   UnitAttr transposeAttr;
-  bool linearBand;
 };
 
 static void markTransposeOrderPair(const TransposeOrderPairParams &params) {
@@ -2825,12 +2834,12 @@ static void markTransposeOrderPair(const TransposeOrderPairParams &params) {
   const auto &lhsOrder = params.lhsOrder;
   const auto &rhsOrder = params.rhsOrder;
   const auto &transposeAttr = params.transposeAttr;
-  const auto &linearBand = params.linearBand;
-  std::optional<TransposeOrderPairInfo> info = buildTransposeOrderPairAnalysis(band, lhsOrder, rhsOrder, linearBand);
+  std::optional<TransposeOrderPairInfo> info = buildTransposeOrderPairAnalysis(lhsOrder, rhsOrder);
   if (!info) {
     return;
   }
-  applyTransposeLoopAttrsForOrderPair(band, *info, transposeAttr, linearBand);
+  clearBandBroadcastAttrsForTranspose(band);
+  markActualTransposeLoops(band, *info, transposeAttr);
 }
 
 static bool memOpsMayFormTransposePair(Operation *lhs, Operation *rhs) {
@@ -2881,29 +2890,34 @@ static void reconcileTransposeAttrsAfterBranchScan(
     llvm::any_of(leafBands, [](const SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> &band) {
       return !band.empty() && band.back()->hasAttr(kTransposeLoopAttr);
     });
+  if (!hasTransposeLeaf) {
+    return;
+  }
   for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
     if (band.empty()) {
       continue;
     }
-    if (hasTransposeLeaf) {
-      band.back()->setAttr(kTransposeLoopAttr, transposeAttr);
-      continue;
-    }
-    for (mlir::scf::ForOp loop : band) {
-      loop->removeAttr(kTransposeLoopAttr);
-    }
+    band.back()->setAttr(kTransposeLoopAttr, transposeAttr);
   }
 }
 
 static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan &plan) {
   SmallVector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>, kSmallVectorSizeFour> leafBands;
   if (!plan.representativeBand.empty()) {
-    leafBands.push_back(plan.representativeBand);
-    for (mlir::scf::ForOp peerLeaf : plan.peerLeafLoops) {
-      SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> peerBand(plan.representativeBand.begin(),
-                                                                  plan.representativeBand.end());
-      peerBand.back() = peerLeaf;
-      leafBands.push_back(std::move(peerBand));
+    if (!plan.hasLeafBranching) {
+      leafBands.push_back(plan.representativeBand);
+    } else {
+      ArrayRef<mlir::scf::ForOp> prefix(plan.representativeBand.data(), plan.representativeLeafDim);
+      for (const auto &branchBand : plan.branchBands) {
+        SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> leafBand(prefix.begin(), prefix.end());
+        leafBand.append(branchBand.begin(), branchBand.end());
+        leafBands.push_back(std::move(leafBand));
+      }
+    }
+  }
+  for (ArrayRef<mlir::scf::ForOp> band : leafBands) {
+    for (mlir::scf::ForOp loop : band) {
+      loop->removeAttr(kTransposeLoopAttr);
     }
   }
 
@@ -2933,7 +2947,7 @@ static void markBandTransposeLoops(func::FuncOp funcOp, const LeafBranchBandPlan
           continue;
         }
         SmallVector<mlir::scf::ForOp, kSmallVectorSizeFour> rhsOrder = extractMemrefLoopOrder(memOps[j], band);
-        markTransposeOrderPair({band, lhsOrder, rhsOrder, transposeAttr, linearBand});
+        markTransposeOrderPair({band, lhsOrder, rhsOrder, transposeAttr});
       }
     }
   }
@@ -3048,22 +3062,44 @@ static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop,
   }
 }
 
-// Multi-dim vec analogue of `markTransposeLoopChainWithVectorAttr`. Walks the
-// ancestor chain from `innermostLoop` upward, converting every loop tagged
-// with `kMultiVecLoopAttr` into the appropriate vec / reduction marker. The
-// reduce-y multi-vec intentionally lowers through the reduction-x marker until
-// the vectorize pass grows a dedicated multi-dim reduce-y path.
+static mlir::scf::ForOp findOutermostTransposeAncestor(mlir::scf::ForOp loop) {
+  mlir::scf::ForOp outermost;
+  for (mlir::scf::ForOp cur = loop->getParentOfType<mlir::scf::ForOp>(); cur;
+       cur = cur->getParentOfType<mlir::scf::ForOp>()) {
+    if (cur->hasAttr(kTransposeLoopAttr)) {
+      outermost = cur;
+    }
+  }
+  return outermost;
+}
+
+static bool hasMultiVecLoopInAncestorChain(mlir::scf::ForOp loop) {
+  for (mlir::scf::ForOp cur = loop; cur; cur = cur->getParentOfType<mlir::scf::ForOp>()) {
+    if (cur->hasAttr(kMultiVecLoopAttr)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Consume sparse multi-vec markers without requiring every intervening point
+// loop to participate. Markers are cleared after all leaf chains are visited so
+// a shared leaf-branch prefix remains visible to every peer leaf.
 static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    curLoop->removeAttr(kTransposeLoopAttr);
     if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
       continue;
     }
     if (!curLoop->hasAttr(kMultiVecLoopAttr)) {
-      break;
+      continue;
     }
-    curLoop->removeAttr(kMultiVecLoopAttr);
     curLoop->removeAttr(kBroadcastLoopAttr);
     curLoop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+    if (curLoop->hasAttr(kVectorAttr) || curLoop->hasAttr(kReductionXLoopAttr) ||
+        curLoop->hasAttr(kReductionYLoopAttr) || curLoop->hasAttr(kReductionAllLoopAttr)) {
+      continue;
+    }
     if (curLoop->hasAttr(kReductionLoopAttr)) {
       curLoop->removeAttr(kReductionLoopAttr);
       ReduceDirection reduceType = getReduceType(curLoop);
@@ -3089,6 +3125,11 @@ static bool isInlineableParallelNonVectorPointLoop(mlir::scf::ForOp loop) {
   }
   auto innerAttr = loop->getAttrOfType<IntegerAttr>(kInnerLoopAttr);
   if (!innerAttr || innerAttr.getInt() != 1) {
+    return false;
+  }
+  // A clamped point loop may be empty on a tail tile, so its upper-bound guard
+  // must be preserved instead of unconditionally executing the body once.
+  if (loop.getUpperBound().getDefiningOp<affine::AffineMinOp>()) {
     return false;
   }
   return !loop->hasAttr(kVectorAttr) && !loop->hasAttr(kMultiVecLoopAttr) && !loop->hasAttr(kTransposeLoopAttr) &&
@@ -3134,77 +3175,75 @@ static void markBroadcastLoopChainWithVectorAttr(mlir::scf::ForOp vectorTarget, 
   });
 }
 
+static void markReduceYParentWithVectorAttr(mlir::scf::ForOp loop, OpBuilder &builder) {
+  bool restrictToPointLoops = hasPointLoopInAncestorChain(loop);
+  for (mlir::scf::ForOp curLoop = loop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (curLoop->hasAttr(kReductionLoopAttr)) {
+      curLoop->removeAttr(kReductionLoopAttr);
+      continue;
+    }
+    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
+      continue;
+    }
+    curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
+    break;
+  }
+}
+
 // Mark all innermost scf.for loops with vector attribute.
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder) {
   funcOp->walk([&builder](mlir::scf::ForOp forOp) {
-    if (isInnermostScfLoop(forOp)) {
-      auto reduceType = ReduceDirection::UNKNOWN;
-      const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
-      // Multi-dim vec is consumed first: when an innermost point loop is part
-      // of a `kMultiVecLoopAttr` chain, the whole chain owns the vec marking.
-      // The strategy guarantees this branch is mutually exclusive with the
-      // transpose / broadcast paths below, so the early-return is safe.
-      if (forOp->hasAttr(kMultiVecLoopAttr)) {
-        markMultiVecLoopChainWithVectorAttr(forOp, builder);
-        return;
-      }
-      if (forOp->hasAttr(kTransposeLoopAttr)) {
-        markTransposeLoopChainWithVectorAttr(forOp, builder);
-        return;
-      }
-      // set vector attribute to innermost loops
-      if (!hasReductionAttr) {
-        for (auto curLoop = forOp->getParentOfType<mlir::scf::ForOp>(); curLoop;
-             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
-          if (curLoop->hasAttr(kTransposeLoopAttr)) {
-            markTransposeLoopChainWithVectorAttr(forOp, builder, curLoop);
-            return;
-          }
-        }
-        if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
-          if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
-            markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
-            vectorTarget->removeAttr(kBroadcastLoopAttr);
-          }
-          vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(vectorTarget)));
-        }
-      } else {
-        forOp->removeAttr(kReductionLoopAttr);
-        reduceType = getReduceType(forOp);
-        if (reduceType == ReduceDirection::X) {
-          forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
-        } else if (reduceType == ReduceDirection::Y) {
-          forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
-        } else if (reduceType == ReduceDirection::ALL) {
-          forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
-        }
-
-        forOp = forOp->getParentOfType<mlir::scf::ForOp>();
-      }
-
-      // For reduce-y: clear reduction tags outward and set vector tag on the first non-reduction parent loop.
-      if (reduceType == ReduceDirection::Y) {
-        mlir::scf::ForOp curLoop = forOp;
-        bool restrictToPointLoops = hasPointLoopInAncestorChain(curLoop);
-        while (curLoop) {
-          if (curLoop->hasAttr(kReductionLoopAttr)) {
-            curLoop->removeAttr(kReductionLoopAttr);
-            curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
-            continue;
-          }
-          if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
-            curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
-            continue;
-          }
-          curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
-          break;
-        }
-      }
-    } else {
+    if (!isInnermostScfLoop(forOp)) {
       if (forOp->hasAttr(kReductionLoopAttr)) {
         forOp->removeAttr(kReductionLoopAttr);
       }
+      return;
     }
+
+    auto reduceType = ReduceDirection::UNKNOWN;
+    const bool hasReductionAttr = forOp->hasAttr(kReductionLoopAttr);
+    // Multi-dim vec is consumed first, including sparse marked ancestors.
+    if (hasMultiVecLoopInAncestorChain(forOp)) {
+      markMultiVecLoopChainWithVectorAttr(forOp, builder);
+      return;
+    }
+    if (forOp->hasAttr(kTransposeLoopAttr)) {
+      markTransposeLoopChainWithVectorAttr(forOp, builder);
+      return;
+    }
+    // set vector attribute to innermost loops
+    if (!hasReductionAttr) {
+      if (mlir::scf::ForOp transposeAncestor = findOutermostTransposeAncestor(forOp)) {
+        markTransposeLoopChainWithVectorAttr(forOp, builder, transposeAncestor);
+        return;
+      }
+      if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
+        if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
+          markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
+          vectorTarget->removeAttr(kBroadcastLoopAttr);
+        }
+        vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(vectorTarget)));
+      }
+      return;
+    }
+
+    forOp->removeAttr(kReductionLoopAttr);
+    reduceType = getReduceType(forOp);
+    if (reduceType == ReduceDirection::X) {
+      forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
+    } else if (reduceType == ReduceDirection::Y) {
+      forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
+    } else if (reduceType == ReduceDirection::ALL) {
+      forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(getLoopExtent(forOp)));
+    }
+
+    if (reduceType == ReduceDirection::Y) {
+      markReduceYParentWithVectorAttr(forOp->getParentOfType<mlir::scf::ForOp>(), builder);
+    }
+  });
+  funcOp.walk([](mlir::scf::ForOp loop) {
+    loop->removeAttr(kMultiVecLoopAttr);
+    loop->removeAttr(kTransposeLoopAttr);
   });
 }
 
@@ -3413,9 +3452,14 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
             return failure();
           }
 
-          Value dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b);
+          std::string failureReason;
+          Value dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b, &failureReason);
           if (!dim) {
-            tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " + std::to_string(tileIdx));
+            auto diag = tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " +
+                                             std::to_string(tileIdx));
+            if (!failureReason.empty()) {
+              diag << ": " << failureReason;
+            }
             return failure();
           }
           step = emitDynamicTilePerDim({loc, b, dim, constraintMax, dynamicTileCoreNum});
@@ -3474,6 +3518,9 @@ static LogicalResult createTilingFuncDefault(const CreateTilingFuncParams &param
   if (failed(buildLeafBranchBandPlans(originalKernel, leafBranchPlans, hasUnsupportedTreeShape))) {
     return failure();
   }
+  if (failed(rejectDynamicMultiTopLevelBands(originalKernel, isStaticShape, leafBranchPlans))) {
+    return failure();
+  }
   std::vector<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
   bool skipTiling = hasUnsupportedTreeShape || leafBranchPlans.size() > 1;
@@ -3504,7 +3551,7 @@ static LogicalResult createTilingFuncDefault(const CreateTilingFuncParams &param
         metadata->tilingKey = tilingKey;
         metadata->bandTileSizes = allBandTileSizes;
         metadata->bandConstraintMaxs = allBandConstraintMaxs;
-        initializeEmptyMultiVecMasks(bandsToUse, *metadata);
+        captureMultiVecMasks(bandsToUse, *metadata);
       }
 
       tilingStructMemrefSize =
@@ -3656,6 +3703,17 @@ static void initializeEmptyMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, 
   }
 }
 
+static void captureMultiVecMasks(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands,
+                                 TilingMetadata &metadata) {
+  initializeEmptyMultiVecMasks(bands, metadata);
+  for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
+    for (size_t axisIdx = 0; axisIdx < bands[bandIdx].size(); ++axisIdx) {
+      metadata.bandMultiVecAxisMasks[bandIdx][axisIdx] =
+        static_cast<char>(bands[bandIdx][axisIdx]->hasAttr(kMultiVecLoopAttr));
+    }
+  }
+}
+
 static bool isZeroBasedUnitStepLoop(mlir::scf::ForOp loop) {
   std::optional<int64_t> lb = getConstantIndexValue(loop.getLowerBound());
   std::optional<int64_t> step = getConstantIndexValue(loop.getStep());
@@ -3688,8 +3746,7 @@ static bool buildTwoDimDynamicVectorMetadata(func::FuncOp originalKernel,
   const auto &baseTileSizes = baseMetadata.bandTileSizes.front();
   size_t bandSize = band.size();
   if (bandSize < kSmallVectorSizeTwo || baseTileSizes.size() != bandSize * kSmallVectorSizeTwo ||
-      !isZeroBasedUnitStepLoop(band[bandSize - kSmallVectorSizeTwo]) ||
-      !isZeroBasedUnitStepLoop(band.back())) {
+      !isZeroBasedUnitStepLoop(band[bandSize - kSmallVectorSizeTwo]) || !isZeroBasedUnitStepLoop(band.back())) {
     return false;
   }
   if (std::any_of(band.begin(), band.end(), [](mlir::scf::ForOp loop) { return loop->hasAttr(kTransposeLoopAttr); })) {
@@ -3964,14 +4021,17 @@ static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &build
 
 static LogicalResult prepareLeafBranchPlansForApply(func::FuncOp originalKernel, OpBuilder &builder,
                                                     std::vector<LeafBranchBandPlan> &leafBranchPlans,
-                                                    bool &shouldReturnEarly) {
+                                                    bool isStaticShape, bool &shouldReturnEarly) {
   shouldReturnEarly = false;
   bool hasUnsupportedTreeShape = false;
   if (failed(buildLeafBranchBandPlans(originalKernel, leafBranchPlans, hasUnsupportedTreeShape))) {
     return failure();
   }
+  if (failed(rejectDynamicMultiTopLevelBands(originalKernel, isStaticShape, leafBranchPlans))) {
+    return failure();
+  }
 
-  // Unsupported shapes and multiple top-level bands keep stage-1 skip behavior.
+  // Remaining unsupported shapes and static multiple top-level bands keep stage-1 skip behavior.
   if (hasUnsupportedTreeShape || leafBranchPlans.size() > 1) {
     applySkipTilingFallback(originalKernel, builder);
     shouldReturnEarly = true;
@@ -4110,8 +4170,6 @@ static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const
   auto &prefixBand = out.prefixBand;
   auto &prefixTileValues = out.prefixTileValues;
   auto &prefixTileSizesInt = out.prefixTileSizesInt;
-  auto &leafTileValues = out.leafTileValues;
-  auto &leafTileSizesInt = out.leafTileSizesInt;
   // Shared prefix axes are tiled first (e.g. i1,i2,i3), then each leaf axis is tiled independently.
   for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
     prefixBand.push_back(band[dim]);
@@ -4119,22 +4177,17 @@ static void buildLeafBranchTileSlices(const LeafBranchTileSlicesInput &in, const
 
   prefixTileValues.reserve(tileLevels * plan.representativeLeafDim);
   prefixTileSizesInt.reserve(tileLevels * plan.representativeLeafDim);
-  leafTileValues.reserve(tileLevels);
-  leafTileSizesInt.reserve(tileLevels);
   for (unsigned level = 0; level < tileLevels; ++level) {
     for (unsigned dim = 0; dim < plan.representativeLeafDim; ++dim) {
       size_t idx = static_cast<size_t>(level) * bandSize + dim;
       prefixTileValues.push_back(tileSizeValues[idx]);
       prefixTileSizesInt.push_back(tileSizesInt[idx]);
     }
-    size_t leafIdx = static_cast<size_t>(level) * bandSize + plan.representativeLeafDim;
-    leafTileValues.push_back(tileSizeValues[leafIdx]);
-    leafTileSizesInt.push_back(tileSizesInt[leafIdx]);
   }
 }
 
 static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchParams &params, int64_t &nextNodeId,
-                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchLeafNodeIds) {
+                                                  SmallVector<int64_t, kSmallVectorSizeSix> &branchRootNodeIds) {
   const auto &originalKernel = params.originalKernel;
   auto &builder = params.builder;
   const auto &bandIdx = params.bandIdx;
@@ -4146,50 +4199,84 @@ static LogicalResult collectAndTagLeafBranchLoops(const CollectTagLeafBranchPara
     return emitTilingFailure(originalKernel, "failed to locate leaf-branch parent loop for band " + Twine(bandIdx));
   }
 
-  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchLeaves;
-  collectDirectChildLoopsInOrder(branchPoint, branchLeaves);
-  if (branchLeaves.size() < kSmallVectorSizeTwo ||
-      !llvm::all_of(branchLeaves, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); }) ||
-      llvm::find(branchLeaves, representativeLeaf) == branchLeaves.end() ||
-      branchLeaves.size() != plan.peerLeafLoops.size() + 1) {
+  SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> branchRoots;
+  collectDirectChildLoopsInOrder(branchPoint, branchRoots);
+  if (branchRoots.size() < kSmallVectorSizeTwo || branchRoots.size() != plan.branchBands.size() ||
+      llvm::find(branchRoots, representativeLeaf) == branchRoots.end()) {
     return emitTilingFailure(originalKernel, "invalid leaf-branch structure for band " + Twine(bandIdx));
   }
 
-  branchLeafNodeIds.clear();
-  branchLeafNodeIds.reserve(branchLeaves.size());
-  for (mlir::scf::ForOp leafLoop : branchLeaves) {
+  branchRootNodeIds.clear();
+  branchRootNodeIds.reserve(branchRoots.size());
+  for (auto [branchIdx, branchRoot] : llvm::enumerate(branchRoots)) {
+    const auto &branchBand = plan.branchBands[branchIdx];
+    for (auto [dim, branchLoop] : llvm::enumerate(branchBand)) {
+      size_t representativeDim = plan.representativeLeafDim + dim;
+      bool usesMultiVec = representativeDim < band.size() && band[representativeDim]->hasAttr(kMultiVecLoopAttr);
+      if (usesMultiVec) {
+        branchLoop->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+      } else {
+        branchLoop->removeAttr(kMultiVecLoopAttr);
+      }
+    }
     int64_t nodeId = nextNodeId++;
-    leafLoop->setAttr(kTreeNodeIdAttr, builder.getI64IntegerAttr(nodeId));
-    leafLoop->setAttr(kTreeLeafAttr, builder.getUnitAttr());
-    branchLeafNodeIds.push_back(nodeId);
+    branchRoot->setAttr(kTreeNodeIdAttr, builder.getI64IntegerAttr(nodeId));
+    branchBand.back()->setAttr(kTreeLeafAttr, builder.getUnitAttr());
+    branchRootNodeIds.push_back(nodeId);
   }
   return success();
+}
+
+static void buildBranchTileValues(const ApplyLeafBandsParams &params, unsigned branchSize,
+                                  SmallVectorImpl<Value> &branchTileValues,
+                                  SmallVectorImpl<unsigned> &branchTileSizesInt) {
+  branchTileValues.clear();
+  branchTileSizesInt.clear();
+  branchTileValues.reserve(params.tileLevels * branchSize);
+  branchTileSizesInt.reserve(params.tileLevels * branchSize);
+  for (unsigned level = 0; level < params.tileLevels; ++level) {
+    for (unsigned dim = 0; dim < branchSize; ++dim) {
+      size_t idx =
+        static_cast<size_t>(level) * params.bandSize + params.plan.representativeLeafDim + static_cast<size_t>(dim);
+      branchTileValues.push_back(params.tileSizeValues[idx]);
+      branchTileSizesInt.push_back(params.tileSizesInt[idx]);
+    }
+  }
 }
 
 static LogicalResult applyLeafBandsByNodeId(const ApplyLeafBandsParams &params) {
   auto &originalKernel = params.originalKernel;
   auto &builder = params.builder;
   const auto &bandIdx = params.bandIdx;
-  const auto &branchLeafNodeIds = params.branchLeafNodeIds;
-  const auto &leafTileValues = params.leafTileValues;
-  const auto &leafTileSizesInt = params.leafTileSizesInt;
-  const auto &useRuntimeTileCounts = params.useRuntimeTileCounts;
-  for (int64_t nodeId : branchLeafNodeIds) {
-    mlir::scf::ForOp activeLeafLoop;
-    if (failed(findUniqueLoopByTreeNodeId(originalKernel, nodeId, activeLeafLoop))) {
-      return emitTilingFailure(originalKernel, "failed to locate unique leaf loop by temporary node id");
+  for (auto [branchIdx, nodeId] : llvm::enumerate(params.branchRootNodeIds)) {
+    mlir::scf::ForOp activeRoot;
+    if (failed(findUniqueLoopByTreeNodeId(originalKernel, nodeId, activeRoot))) {
+      return emitTilingFailure(originalKernel, "failed to locate unique branch loop by temporary node id");
+    }
+    if (branchIdx >= params.plan.branchBands.size()) {
+      return emitTilingFailure(originalKernel, "invalid branch metadata for band " + Twine(bandIdx));
+    }
+    SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> activeBand;
+    if (failed(collectSingleChain(activeRoot, activeBand)) ||
+        activeBand.size() != params.plan.branchBands[branchIdx].size()) {
+      return emitTilingFailure(originalKernel, "failed to rebuild branch chain for band " + Twine(bandIdx));
     }
 
-    std::map<int64_t, Value> leafConstantCache;
-    if (!leafTileValues.empty()) {
-      if (Operation *defOp = leafTileValues.back().getDefiningOp()) {
-        builder.setInsertionPointAfter(defOp);
-      }
-    }
-
-    if (failed(applyTilingToLoop({activeLeafLoop, leafTileValues, leafTileSizesInt, builder, leafConstantCache,
-                                  mlir::scf::ForOp(), mlir::scf::ForOp(), Value(), useRuntimeTileCounts}))) {
-      return emitTilingFailure(originalKernel, "Failed to apply leaf tiling for band " + Twine(bandIdx));
+    SmallVector<Value, kSmallVectorSizeSix> branchTileValues;
+    SmallVector<unsigned, kSmallVectorSizeSix> branchTileSizesInt;
+    buildBranchTileValues(params, activeBand.size(), branchTileValues, branchTileSizesInt);
+    if (failed(applyDecoupledAxisTiling({originalKernel,
+                                         builder,
+                                         "branch",
+                                         activeBand,
+                                         branchTileValues,
+                                         branchTileSizesInt,
+                                         mlir::scf::ForOp(),
+                                         mlir::scf::ForOp(),
+                                         {},
+                                         params.useRuntimeTileCounts},
+                                        params.nextNodeId))) {
+      return emitTilingFailure(originalKernel, "Failed to apply branch tiling for band " + Twine(bandIdx));
     }
   }
   return success();
@@ -4218,10 +4305,8 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> prefixBand;
   SmallVector<Value, kSmallVectorSizeSix> prefixTileValues;
   SmallVector<unsigned, kSmallVectorSizeSix> prefixTileSizesInt;
-  SmallVector<Value, kSmallVectorSizeSix> leafTileValues;
-  SmallVector<unsigned, kSmallVectorSizeSix> leafTileSizesInt;
   buildLeafBranchTileSlices({plan, band, tileSizeValues, tileSizesInt, bandSize, tileLevels},
-                            {prefixBand, prefixTileValues, prefixTileSizesInt, leafTileValues, leafTileSizesInt});
+                            {prefixBand, prefixTileValues, prefixTileSizesInt});
 
   int64_t prefixParallelUseCore = 0;
   SmallVector<unsigned, kSmallVectorSizeSix> prefixParallelDims;
@@ -4234,9 +4319,9 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
      builder},
     {prefixParallelMapLoop, prefixParallelTileLoop, prefixParallelTileCoordByDim, prefixParallelUseCore});
 
-  SmallVector<int64_t, kSmallVectorSizeSix> branchLeafNodeIds;
+  SmallVector<int64_t, kSmallVectorSizeSix> branchRootNodeIds;
   if (failed(
-        collectAndTagLeafBranchLoops({originalKernel, builder, bandIdx, plan, band}, nextNodeId, branchLeafNodeIds))) {
+        collectAndTagLeafBranchLoops({originalKernel, builder, bandIdx, plan, band}, nextNodeId, branchRootNodeIds))) {
     return failure();
   }
 
@@ -4247,8 +4332,8 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
     return failure();
   }
 
-  return applyLeafBandsByNodeId(
-    {originalKernel, builder, bandIdx, branchLeafNodeIds, leafTileValues, leafTileSizesInt, useRuntimeTileCounts});
+  return applyLeafBandsByNodeId({originalKernel, builder, bandIdx, plan, branchRootNodeIds, tileSizeValues,
+                                 tileSizesInt, bandSize, tileLevels, useRuntimeTileCounts, nextNodeId});
 }
 
 static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuilder &builder,
@@ -4290,7 +4375,6 @@ static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &build
   // Step 5: Post-processing - mark attributes.
   clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
   inlineDeleteMarkedLoops(originalKernel, builder);
-  sinkTransposePointLoops(originalKernel);
   sinkMultiVecPointLoops(originalKernel);
   markInnermostLoopsWithVectorAttr(originalKernel, builder);
   inlineParallelNonVectorPointLoops(originalKernel, builder);
@@ -4310,7 +4394,8 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
 
   std::vector<LeafBranchBandPlan> leafBranchPlans;
   bool shouldReturnEarly = false;
-  if (failed(prepareLeafBranchPlansForApply(originalKernel, builder, leafBranchPlans, shouldReturnEarly))) {
+  if (failed(
+        prepareLeafBranchPlansForApply(originalKernel, builder, leafBranchPlans, isStaticShape, shouldReturnEarly))) {
     return failure();
   }
   if (shouldReturnEarly) {
@@ -4566,10 +4651,6 @@ static mlir::scf::ForOp getUniqueChildLoop(mlir::scf::ForOp loop) {
   return childLoop;
 }
 
-static bool isTransposePointLoop(mlir::scf::ForOp loop) {
-  return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kTransposeLoopAttr);
-}
-
 static bool isMultiVecPointLoop(mlir::scf::ForOp loop) {
   return loop && loop->hasAttr(kInnerLoopAttr) && loop->hasAttr(kMultiVecLoopAttr);
 }
@@ -4594,6 +4675,21 @@ static void clearPointLoopChain(mlir::scf::ForOp loop, llvm::StringRef chainAttr
   }
 }
 
+static mlir::scf::ForOp findNextContiguousPointLoop(mlir::scf::ForOp pointLoop,
+                                                    llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop,
+                                                    mlir::scf::ForOp &nextPointParent) {
+  for (mlir::scf::ForOp loop = getUniqueChildLoop(pointLoop); loop; loop = getUniqueChildLoop(loop)) {
+    if (isPointLoop(loop)) {
+      return loop;
+    }
+    if (loop->hasAttr(kInnerLoopAttr)) {
+      return {};
+    }
+    nextPointParent = loop;
+  }
+  return {};
+}
+
 // Walk down `pointLoop`'s unique-child chain to locate the nearest matching
 // inner point loop. If their bodies allow it (no iter_args / no side-effecting
 // non-load ops in between), hoist the independent ops up past `pointLoop` and
@@ -4601,15 +4697,8 @@ static void clearPointLoopChain(mlir::scf::ForOp loop, llvm::StringRef chainAttr
 // `true` when one sink step actually happened, `false` otherwise.
 static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainAttr,
                               llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
-  mlir::scf::ForOp nextPointLoop;
   mlir::scf::ForOp nextPointParent;
-  for (mlir::scf::ForOp loop = getUniqueChildLoop(pointLoop); loop; loop = getUniqueChildLoop(loop)) {
-    if (isPointLoop(loop)) {
-      nextPointLoop = loop;
-      break;
-    }
-    nextPointParent = loop;
-  }
+  mlir::scf::ForOp nextPointLoop = findNextContiguousPointLoop(pointLoop, isPointLoop, nextPointParent);
   if (!nextPointLoop || !nextPointParent) {
     return false;
   }
@@ -4654,9 +4743,8 @@ static bool sinkPointLoopOnce(mlir::scf::ForOp pointLoop, llvm::StringRef chainA
   return true;
 }
 
-// Generic point-loop sink driver. `chainAttr` is the marker that identifies a
-// chain (`kTransposeLoopAttr` for transpose, `kMultiVecLoopAttr` for
-// multi-dim vectorization). `isPointLoop` recognises members of the chain.
+// Sink only contiguous multi-vec point loops. A non-marked point loop is a
+// semantic gap and must keep the original nesting order.
 static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chainAttr,
                                       llvm::function_ref<bool(mlir::scf::ForOp)> isPointLoop) {
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeEight> pointLoops;
@@ -4670,10 +4758,6 @@ static void sinkPointLoopsByPredicate(func::FuncOp funcOp, llvm::StringRef chain
     while (isPointLoop(pointLoop) && sinkPointLoopOnce(pointLoop, chainAttr, isPointLoop)) {
     }
   }
-}
-
-static void sinkTransposePointLoops(func::FuncOp funcOp) {
-  sinkPointLoopsByPredicate(funcOp, kTransposeLoopAttr, isTransposePointLoop);
 }
 
 static void sinkMultiVecPointLoops(func::FuncOp funcOp) {

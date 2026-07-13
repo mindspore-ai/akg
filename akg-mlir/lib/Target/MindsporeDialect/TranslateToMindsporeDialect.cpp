@@ -866,6 +866,10 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
       NamedAttribute(StringAttr::get(context, kPtrAddress), StringAttr::get(context, opNode.ptrAddress)));
   }
   std::string opName = opNode.opName;
+  if (opNode.outputDesc.empty()) {
+    llvm::report_fatal_error(
+      llvm::StringRef("Error occurs when converting json to mlir: op name: " + opName + " has empty outputDesc\n"));
+  }
   ConvertOpParams params{builder, opNode, inputTys, outputTys, operands, allAttrs};
   if (this->mindOpFactory.count(opName) == 0) {
     MindBuilder::convertUnknownOp(params);
@@ -1267,7 +1271,7 @@ void MindBuilder::convertReduceOp(ConvertOpParams params) {
     if (opNode.inputDesc[1][0].at(kValue).is_number()) {
       auto axis = opNode.inputDesc[1][0].at(kValue).get<int64_t>();
       if (axis < 0) {
-        axis = opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size() + axis;
+        axis = static_cast<int64_t>(opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size()) + axis;
       }
       (void)axes.emplace_back(axis);
     } else {
@@ -1275,7 +1279,7 @@ void MindBuilder::convertReduceOp(ConvertOpParams params) {
     }
   } else if (opNode.opName == "ElemAny") {
     // for ElemAny Op, all axis are "reduction" types.
-    int64_t rank = opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size();
+    int64_t rank = static_cast<int64_t>(opNode.inputDesc[0][0].at(kShape).get<SmallVector<int64_t>>().size());
     for (int64_t i = 0; i < rank; i++) {
       (void)axes.emplace_back(i);
     }

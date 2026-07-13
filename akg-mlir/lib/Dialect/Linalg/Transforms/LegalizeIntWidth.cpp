@@ -164,7 +164,6 @@ struct NarrowCmpPattern : public OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp, PatternRewriter &rewriter) const override {
     arith::CmpIPredicate pred = cmpOp.getPredicate();
-
     // Peek signedness from any extension operand WITHOUT touching IR,
     // and reject mismatched predicates early so narrowOperands is never
     // invoked for a guaranteed-to-fail rewrite.
@@ -179,8 +178,12 @@ struct NarrowCmpPattern : public OpRewritePattern<arith::CmpIOp> {
           break;
         }
       }
-      if (!found) return failure();
-      if (isSignedPredicate(pred) != peekedSigned) return failure();
+      if (!found) {
+        return failure();
+      }
+      if (isSignedPredicate(pred) != peekedSigned) {
+        return failure();
+      }
     }
 
     FailureOr<NarrowedOperands> narrowed = narrowOperands({cmpOp.getLhs(), cmpOp.getRhs()}, rewriter, cmpOp.getLoc());
