@@ -91,6 +91,8 @@
 
 评审反馈中提到的 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 是一个面向 AI coding agents 的通用代码知识图谱 MCP 服务。调研其 README 和 `server.json` 后，可以看到它的定位是：通过 tree-sitter、Hybrid LSP、SQLite 图存储和 MCP tools，为 Agent 提供自动索引、结构化搜索、调用链追踪、影响分析、架构概览、语义搜索等能力。
 
+需要说明的是，本实验没有在 AKG 源代码中集成 `codebase-memory-mcp`，也没有提交该 MCP 服务的配置或运行时依赖。本实验只是参考这类代码图谱/代码记忆工具的思路，在 AKG 仓库内提供一套更轻量、可版本化、可 review 的上下文图示例。
+
 它和本实验中的 `CODEGRAPH.md` / `context_graph.json` 不是同一层问题，二者更适合组合使用。
 
 | 维度 | codebase-memory-mcp | 本实验的 CODEGRAPH/context_graph |
@@ -107,7 +109,7 @@
 - `codebase-memory-mcp` 负责“从大仓库里快速找代码”：例如定位某个函数、追踪调用链、查询相关文件、分析 git diff 影响面。
 - `CODEGRAPH.md` / `context_graph.json` 负责“告诉 Agent 找到以后怎么判断”：例如 Triton Ascend DSL 行为应该放在 adapter hook，不能在 `KernelVerifier` 中硬编码 DSL 分支；改动后至少要跑哪些验证；哪些 Skill/docs 资源会被影响。
 
-因此，最终方案不是替代 `codebase-memory-mcp`，而是在使用 `codebase-memory-mcp` 的基础上，为 AKG Agents 关键目录补充可版本化、可 review、可被 Code Agent 直接读取的领域上下文层。这样 Agent 可以先通过 MCP 做自动检索，再读取仓库内的 `CODEGRAPH.md` / `context_graph.json` 获取项目规则和改造边界。
+因此，最终方案不是否定或替换 `codebase-memory-mcp`，而是先在 AKG 仓库内沉淀轻量级领域上下文图：用 `CODEGRAPH.md` / `context_graph.json` 明确项目规则、改造边界和验证路径。后续如果需要接入 `codebase-memory-mcp`，可以把它作为底层自动索引和图查询能力，再结合仓库内的 `CODEGRAPH.md` / `context_graph.json` 作为 AKG 专用语义层。
 
 ## 六、最终推荐修改方案
 
