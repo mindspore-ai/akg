@@ -223,6 +223,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createConvertLinalgToAffineLoopsPass());
 
     // pre-process
+    nestedFusionPM.addPass(createStoreLoadElimPass());
     nestedFusionPM.addPass(createCSEPass());
     bool promoteSingleIter = true;
     nestedFusionPM.addPass(affine::createAffineLoopNormalizePass(promoteSingleIter));

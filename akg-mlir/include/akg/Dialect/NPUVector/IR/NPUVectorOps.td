@@ -46,7 +46,8 @@ def NPUVector_TransferReadOp :
                    AnyType:$padding,
                    Optional<VectorOf<[I1]>>:$mask,
                    Variadic<Index>:$dynamicSizes,
-                   Variadic<Index>:$maxSizes)>,
+                   Variadic<Index>:$maxSizes,
+                   OptionalAttr<AffineMapAttr>:$permutation_map)>,
     Results<(outs AnyVectorOrNPUVectorOfAnyRank:$vector)> {
 
   let summary = "NPU super-vector load from memref/tensor with explicit dynamic tile sizes.";
@@ -84,6 +85,20 @@ def NPUVector_TransferReadOp :
     attr-dict
     `:` type($source) `,` type($vector)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Type":$vectorType, "Value":$source, "ValueRange":$indices, "Value":$padding,
+                   "Value":$mask, "ValueRange":$dynamicSizes, "ValueRange":$maxSizes,
+                   "AffineMap":$permutationMap), [{
+      build($_builder, $_state, vectorType, source, indices, padding, mask, dynamicSizes, maxSizes,
+            ::mlir::AffineMapAttr::get(permutationMap));
+    }]>,
+    OpBuilder<(ins "Type":$vectorType, "Value":$source, "ValueRange":$indices, "Value":$padding,
+                   "Value":$mask, "ValueRange":$dynamicSizes, "ValueRange":$maxSizes), [{
+      build($_builder, $_state, vectorType, source, indices, padding, mask, dynamicSizes, maxSizes,
+            ::mlir::AffineMapAttr());
+    }]>
+  ];
 
   let extraClassDeclaration = [{
     // MaskableOpInterface methods.

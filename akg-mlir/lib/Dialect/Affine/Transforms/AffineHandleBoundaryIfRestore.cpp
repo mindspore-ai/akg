@@ -112,6 +112,9 @@ Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(
   }
 
   Operation *res = nullptr;
+  if (funcOp == nullptr) {
+    return res;
+  }
   funcOp->walk([&applyOps, &res](affine::AffineApplyOp apply) {
     if (std::any_of(applyOps.begin(), applyOps.end(), [&apply](Operation *op) { return apply.getOperation() == op; })) {
       res = apply.getOperation();

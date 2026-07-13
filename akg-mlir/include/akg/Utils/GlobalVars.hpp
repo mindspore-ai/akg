@@ -43,17 +43,20 @@ static const int kGpuSeqMapDim = 3;
 
 // Constexpr prime number generation helpers (C++17 compatible)
 namespace prime_helpers {
+constexpr size_t kSmallestPrime = 2;
+constexpr size_t kPrimeStep = 2;
+constexpr size_t kPrimeStart = 3;
 constexpr bool isPrime(size_t n) {
-  if (n < 2) {
+  if (n < kSmallestPrime) {
     return false;
   }
-  if (n == 2) {
+  if (n == kSmallestPrime) {
     return true;
   }
-  if (n % 2 == 0) {
+  if (n % kSmallestPrime == 0) {
     return false;
   }
-  for (size_t i = 3; i * i <= n; i += 2) {
+  for (size_t i = kPrimeStart; i * i <= n; i += kPrimeStep) {
     if (n % i == 0) {
       return false;
     }

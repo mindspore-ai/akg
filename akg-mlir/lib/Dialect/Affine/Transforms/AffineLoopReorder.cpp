@@ -146,7 +146,7 @@ void AffineLoopReorder::runOnOperation() {
 
   // Get the order and check the validations
   auto order = GpuScheduleTool::getInstance().getUpdatedOrder();
-  auto start = 0;
+  size_t start = 0;
   if (order.empty()) {
     if (newOrder.empty()) {
       return;
