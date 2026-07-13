@@ -98,6 +98,11 @@ static bool isAliasOfOriginalInput(Value v, func::FuncOp func, unsigned origNumI
       continue;
     }
 
+    if (auto cast = mlir::dyn_cast<memref::CastOp>(def)) {
+      v = cast.getSource();
+      continue;
+    }
+
     return false;
   }
 }
@@ -147,7 +152,7 @@ struct ShapeOpInChain {
 };
 
 static bool isShapeOp(Operation *op) {
-  return isa<memref::ExpandShapeOp, memref::CollapseShapeOp, memref::ReshapeOp>(op);
+  return isa<memref::ExpandShapeOp, memref::CollapseShapeOp, memref::ReshapeOp, memref::CastOp>(op);
 }
 
 static LogicalResult collectShapeChainToAlloc(Value v, SmallVectorImpl<ShapeOpInChain> &chain,
@@ -239,6 +244,13 @@ static LogicalResult buildInverseShapeChainOnOut(Value outArg, ArrayRef<ShapeOpI
 
       SmallVector<int64_t, kSmallVectorSizeFour> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
       cur = buildReshapeFromOut(b, r.getLoc(), srcTy, cur, staticDims);
+    } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {
+      auto srcTy = dyn_cast<MemRefType>(castOp.getSource().getType());
+      if (!srcTy) {
+        return failure();
+      }
+      auto newCast = b.create<memref::CastOp>(castOp.getLoc(), srcTy, cur);
+      cur = newCast.getResult();
     } else {
       return failure();
     }
