@@ -20,7 +20,11 @@
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import (
+    resolve_eval_timeout,
+    resolve_run_times,
+    resolve_warmup_times,
+)
 from akg_agents.core_v2.langgraph_base.base_workflow import BaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.utils.common_utils import get_prompt_path
@@ -179,12 +183,12 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
 
         # 5. profile_settings（硬编码，不允许用户或 LLM 修改）
         config["profile_settings"] = {
-            "run_times": 50,
-            "warmup_times": 5,
+            "run_times": resolve_run_times(),
+            "warmup_times": resolve_warmup_times(),
         }
 
-        # 6. verify_timeout —— worker 协议层默认（DEFAULT_EVAL_TIMEOUT_S）
-        config["verify_timeout"] = DEFAULT_EVAL_TIMEOUT_S
+        # 6. verify_timeout —— 统一从 eval/profile 默认配置解析
+        config["verify_timeout"] = resolve_eval_timeout()
 
         # 7. default_workflow（仅在未设置时使用默认值，不覆盖已有配置）
         config.setdefault("default_workflow", "default_workflow")

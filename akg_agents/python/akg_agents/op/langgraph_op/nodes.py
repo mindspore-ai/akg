@@ -1051,7 +1051,7 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
 
             expanded_log_dir = os.path.expanduser(log_dir)
-            iter_dir = os.path.join(expanded_log_dir, op_name, f"Iteration{task_id}_Step{step_count:02d}")
+            iter_dir = os.path.join(expanded_log_dir, op_name, f"Iteration{task_id}_Step{step_count}")
             os.makedirs(iter_dir, exist_ok=True)
 
             # 保存 space_config.py
@@ -1170,7 +1170,7 @@ class NodeFactory:
             # 使用 verifier_instance.task_id 确保与验证目录命名一致
             log_task_id = verifier_instance.task_id if verifier_instance else task_id
             iter_dir = os.path.join(expanded_log_dir, op_name,
-                                    f"Iteration{log_task_id}_multicase_Step{step:02d}_verify")
+                                    f"Iteration{log_task_id}_multicase_Step{step}_verify")
             os.makedirs(iter_dir, exist_ok=True)
 
             # 3. 保存space_config.py
@@ -1433,7 +1433,7 @@ class NodeFactory:
 
             # 构建源目录路径
             expanded_log_dir = os.path.expanduser(log_dir)
-            unique_dir_name = f"Iteration{verifier_instance.task_id}_Step{current_step:02d}_verify"
+            unique_dir_name = f"Iteration{verifier_instance.task_id}_Step{current_step}_verify"
             src_dir = os.path.join(expanded_log_dir, op_name, unique_dir_name)
 
             # 构建目标目录路径

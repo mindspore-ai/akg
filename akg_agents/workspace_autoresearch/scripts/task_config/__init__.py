@@ -19,8 +19,8 @@ Layout:
     loader            — TaskConfig dataclass + load_task_config (YAML
                         parsing). No internal deps; everyone else
                         consumes TaskConfig from here.
-    metric_policy     — EvalResult, is_improvement, check_constraints,
-                        format_result_summary. Pure data + arithmetic;
+    metric_policy     — EvalResult, is_improvement, check_constraints.
+                        Pure data + arithmetic;
                         no I/O. Imported by keep_or_discard, dashboard.
     eval_client       — Local subprocess + remote HTTP transport,
                         result assembly. Depends on loader +
@@ -39,10 +39,10 @@ reach into the submodule explicitly when you need them.
 # fmt: off
 from .loader import (
     TaskConfig, load_task_config,
-    REF_FILE_DEFAULT, py_stem,
+    REF_FILE_DEFAULT,
 )
 from .metric_policy import (
-    EvalOutcome, EvalResult, check_constraints, is_improvement, format_result_summary,
+    EvalOutcome, EvalResult, check_constraints, is_improvement,
 )
 from .eval_client import run_eval
 # fmt: on

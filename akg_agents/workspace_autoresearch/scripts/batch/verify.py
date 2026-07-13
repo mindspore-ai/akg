@@ -22,9 +22,9 @@ DSL-aware static check via ``akg_agents.op.utils.code_checker.CodeChecker``
 contributes its own ``_<dsl>ComplianceCheck`` subclass - so the same
 tier-1 path covers triton (@triton.jit + forward must launch it), pypto
 (@pypto.jit), catlass (forward must call torch.ops.<ns>.*), etc.
-``static_check_via_python_ast=False`` DSLs (cpp / cuda_c) skip
-the AST layer; tier-1 only catches syntax/import errors for
-them, real failures surface in the verify/profile subprocess later.
+For directory-backed AscendC, tier-1 also scans editable project files
+(``.cpp/.h/.asc/CMakeLists.txt``) for CANN-Bench-style fallback/D2H
+anti-cheat before Tier-2 touches any worker.
 
 Tier 2 (--full): FORMAL verify-only pass. It materializes a temporary
 task directory and calls ``utils.akg_eval.eval_kernel(...,
@@ -43,6 +43,7 @@ Usage:
     python scripts/batch/verify.py <batch_dir> --full      # Tier 1 + Tier 2
     python scripts/batch/verify.py <batch_dir> --full --worker-url 127.0.0.1:9111
     python scripts/batch/verify.py <batch_dir> --only op1,op2
+    python scripts/batch/verify.py <batch_dir> --full --only op --case-ids 3,7
 """
 from __future__ import annotations
 
@@ -59,7 +60,7 @@ import manifest as mf
 # Reach up one level for the shared precision module - single source of
 # truth so verify.py and autoresearch's per-round eval can't drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils.input_groups import resolve as _resolve_groups  # noqa: E402
+from utils.input_groups import num_cases_from_ref  # noqa: E402
 from utils.hw_detect import derive_arch, probe_hint  # noqa: E402
 from utils.settings import (  # noqa: E402
     batch_tier1_timeout, batch_tier2_timeout, target_backend, target_dsl,
@@ -143,7 +144,7 @@ def _tier1_inspect(path: Path, required: tuple[str, ...]) -> dict:
         try:
             passed, error_msg, errors = CodeChecker(
                 backend=target_backend(), dsl=target_dsl()
-            ).check(src)
+            ).check(src, task_info={"file": str(path)})
         except Exception as e:
             out["validate"] = "FAIL"
             out["msg"] = f"checker raised: {type(e).__name__}: {e}"[:160]
@@ -166,6 +167,50 @@ def _tier1_inspect(path: Path, required: tuple[str, ...]) -> dict:
     return out
 
 
+def _tier1_static_check(path: Path) -> dict:
+    """Run CodeChecker on a source file that is not necessarily Python.
+
+    Directory-backed DSLs such as AscendC expose C++/AscendC/CMake files
+    in addition to kernel.py. These files must be scanned for fallback
+    compute and D2H egress before Tier-2 touches a worker.
+    """
+    out: dict = {"path": str(path), "compile": "skip", "import": "skip",
+                 "exports": "PASS", "validate": "skip", "missing": [], "msg": ""}
+    try:
+        src = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as e:
+        out["validate"] = "FAIL"
+        out["msg"] = f"read error: {e}"
+        return out
+
+    from akg_agents.op.utils.code_checker import CodeChecker
+    try:
+        passed, error_msg, errors = CodeChecker(
+            backend=target_backend(), dsl=target_dsl()
+        ).check(src, task_info={"file": str(path)})
+    except Exception as e:
+        out["validate"] = "FAIL"
+        out["msg"] = f"checker raised: {type(e).__name__}: {e}"[:160]
+        return out
+
+    if passed:
+        out["validate"] = "PASS"
+        return out
+
+    out["validate"] = "FAIL"
+    if errors:
+        first = errors[0]
+        out["msg"] = (
+            f"L{first.get('line', 0)} "
+            f"{first.get('error_type', '?')}: "
+            f"{first.get('detail', '')}"
+        )[:160]
+    else:
+        out["msg"] = (error_msg.splitlines()[0] if error_msg
+                      else "regression detected")[:160]
+    return out
+
+
 def _parse_device_ids(devices: str | int | list[int] | None) -> list[int]:
     if devices is None:
         return []
@@ -177,19 +222,43 @@ def _parse_device_ids(devices: str | int | list[int] | None) -> list[int]:
     return [int(x.strip()) for x in text.split(",") if x.strip()]
 
 
+def _parse_case_ids(case_ids: str | int | list[int] | None) -> list[int]:
+    if case_ids is None:
+        return []
+    if isinstance(case_ids, list):
+        return [int(x) for x in case_ids]
+    text = str(case_ids).strip()
+    if not text:
+        return []
+    return [int(x.strip()) for x in text.split(",") if x.strip()]
+
+
+def _tier2_subprocess_timeout(ref_path: Path,
+                              case_ids: list[int] | None = None) -> int:
+    """Parent wall-clock cap for the Tier-2 runner. ``_tier2_run`` hands the
+    PER-SHAPE ``TIER2_TIMEOUT`` to akg_eval, which expands it by num_cases
+    before dispatch; the parent must mirror that expansion (same num_cases
+    SSOT, ``input_groups.num_cases_from_ref``) or it kills a multi-shape
+    verify mid-run and loses the per-case sidecar/logs. ``+ TIER1_TIMEOUT``
+    covers the runner's own import/compile preamble."""
+    num_cases = len(case_ids or []) or num_cases_from_ref(ref_path)
+    return TIER2_TIMEOUT * num_cases + TIER1_TIMEOUT
+
+
 def _tier2_run(ref_path: Path, kernel_path: Path, *,
-               worker_url: str = "", device_ids: list[int] | None = None) -> dict:
+               worker_url: str = "", device_ids: list[int] | None = None,
+               case_ids: list[int] | None = None) -> dict:
     """Run the formal KernelVerifier-backed verify path on a temp task dir."""
     out: dict = {"status": "skip", "msg": "", "max_abs_diff": None}
 
     try:
         import shutil
         import tempfile
-        import yaml
-        from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT
         from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+        from scaffold import scaffold_task_dir
         from task_config.loader import load_task_config
         from utils.akg_eval import eval_kernel as formal_eval
+        from utils.failure_extractor import summarize_one_line
     except Exception as e:
         out["status"] = "ERROR"
         out["msg"] = f"formal verify import failed: {type(e).__name__}: {e}"
@@ -199,23 +268,41 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
         stem = path.stem
         return stem[:-4] if stem.endswith("_ref") else stem
 
-    def _copy_ref_sidecars(src_ref: Path, task_dir: Path) -> list[str]:
-        copied: list[str] = []
-        ref_stem = src_ref.stem
-        dst_ref_stem = Path(REF_FILE_DEFAULT).stem
-        for sibling in sorted(src_ref.parent.iterdir()):
-            if sibling.name.startswith(".") or not sibling.is_file():
-                continue
-            ext = sibling.suffix.lower()
-            if ext not in (".json", ".pt", ".npz"):
-                continue
-            stem = sibling.stem
-            if stem != ref_stem and not stem.startswith(ref_stem + "_"):
-                continue
-            dest_name = f"{dst_ref_stem}{ext}" if stem == ref_stem else sibling.name
-            shutil.copy2(sibling, task_dir / dest_name)
-            copied.append(dest_name)
-        return copied
+    def _ref_code(src_ref: Path, selected_ids: list[int]) -> str:
+        src = src_ref.read_text(encoding="utf-8-sig")
+        if not selected_ids:
+            return src
+        selected_literal = ", ".join(str(x) for x in selected_ids)
+        patch = f"""
+
+# --- verify.py case-id filter ---
+# Applied only to the temporary reference.py used by Tier-2.  Generated
+# CANN-Bench references build their multi-shape inputs from the global CASES
+# table, so filtering that table is independent of any environment-variable
+# convention inside the original reference file.  Prefer explicit case_id;
+# fall back to the 1-based CASES ordinal for generic multi-shape refs.
+_VERIFY_SELECTED_CASE_IDS = {{{selected_literal}}}
+if _VERIFY_SELECTED_CASE_IDS:
+    try:
+        _VERIFY_FILTERED_CASES = []
+        for _case_ordinal, _case in enumerate(CASES, 1):
+            try:
+                _case_id = int(_case.get("case_id") or _case_ordinal)
+            except AttributeError:
+                _case_id = _case_ordinal
+            if _case_id in _VERIFY_SELECTED_CASE_IDS:
+                _VERIFY_FILTERED_CASES.append(_case)
+        CASES = _VERIFY_FILTERED_CASES
+    except NameError:
+        raise RuntimeError("verify.py --case-ids requires reference.py CASES")
+    if not CASES:
+        raise RuntimeError(
+            f"verify.py --case-ids selected no cases: "
+            f"{{sorted(_VERIFY_SELECTED_CASE_IDS)}}"
+        )
+# --- end verify.py case-id filter ---
+"""
+        return src.rstrip() + patch + "\n"
 
     op_name = _op_name_from_ref(ref_path)
     arch = None
@@ -236,14 +323,10 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
 
     adapter = get_dsl_adapter(target_dsl())
     temp_root = Path(tempfile.mkdtemp(prefix=f"_batch_verify_{op_name}_"))
-    task_dir = temp_root / "task"
     try:
-        task_dir.mkdir(parents=True, exist_ok=True)
         entry_name = adapter.entry_filename_template.format(op_name=op_name)
-        shutil.copy2(ref_path, task_dir / REF_FILE_DEFAULT)
-        shutil.copy2(kernel_path, task_dir / entry_name)
-
         editable_files = [entry_name]
+        project_src = None
         if adapter.kernel_arg_is_directory:
             project_name = adapter.kernel_project_dir_name
             if not project_name:
@@ -252,37 +335,26 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
                     "kernel_project_dir_name"
                 )
             project_src = kernel_path.parent / project_name
-            adapter.materialize_project_tree(str(task_dir), str(project_src))
             for rel in adapter.list_kernel_project_files(
                     str(project_src), op_name=op_name):
                 if rel not in editable_files:
                     editable_files.append(rel)
 
-        data_files = _copy_ref_sidecars(ref_path, task_dir)
-        task_yaml = {
-            "name": op_name,
-            "editable_files": editable_files,
-            "eval": {"timeout": TIER2_TIMEOUT},
-            "agent": {
-                "ref_file": REF_FILE_DEFAULT,
-                "max_rounds": 1,
-            },
-        }
-        if device_ids:
-            task_yaml["devices"] = device_ids
-        if arch:
-            task_yaml["arch"] = arch
-        if data_files:
-            task_yaml["data_files"] = data_files
-        if target_dsl() == "ascendc_catlass":
-            task_yaml["catlass"] = {
-                "op_dir": adapter.kernel_project_dir_name or "catlass_op",
-            }
-
-        (task_dir / "task.yaml").write_text(
-            yaml.dump(task_yaml, default_flow_style=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        task_dir = Path(scaffold_task_dir(
+            ref_code=_ref_code(ref_path, case_ids or []),
+            kernel_code=kernel_path.read_text(encoding="utf-8-sig"),
+            op_name=op_name,
+            arch=arch or "",
+            devices=device_ids,
+            max_rounds=1,
+            eval_timeout=TIER2_TIMEOUT,
+            output_dir=str(temp_root),
+            editable_filename=entry_name,
+            editable_files=editable_files,
+            kernel_project_src=(str(project_src) if project_src else None),
+            ref_source_path=str(ref_path),
+            worker_url=worker_url,
+        ))
 
         config = load_task_config(str(task_dir))
         if config is None:
@@ -300,7 +372,10 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
         out["msg"] = f"formal verify setup failed: {type(e).__name__}: {e}"
         return out
     finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
+        if os.environ.get("AR_KEEP_BATCH_VERIFY_TEMP") == "1":
+            out["temp_dir"] = str(temp_root)
+        else:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
     metrics = raw.get("metrics") or {}
     out["max_abs_diff"] = metrics.get("max_abs_diff")
@@ -314,37 +389,35 @@ def _tier2_run(ref_path: Path, kernel_path: Path, *,
         out["msg"] = f"OK (n={out['num_cases']})"
         return out
 
+    sig = raw.get("failure_signals") or {}
     failure_kinds = {
         str(item.get("failure_kind") or "")
         for item in per_case
         if isinstance(item, dict)
     }
-    out["status"] = "FAIL" if "kernel_miss" in failure_kinds else "ERROR"
-
-    for item in per_case:
-        if isinstance(item, dict) and item.get("error"):
-            err_text = str(item["error"])
-            out["msg"] = err_text[-2000:]
-            out["raw_output_tail"] = str(
-                item.get("raw_output_tail") or item.get("log") or ""
-            )[-4000:]
-            break
-    else:
-        err_text = str(raw.get("error") or raw.get("outcome") or "formal verify failed")
-        out["msg"] = err_text[-2000:]
-        out["raw_output_tail"] = str(raw.get("raw_output_tail") or "")[-4000:]
+    # FAIL = a numerical miss the agent can fix; ERROR = crash/infra. Trust
+    # the per-case kernel_miss, else fall back to the distilled primary signal
+    # (covers the per_case-less path where only failure_signals survived).
+    is_fail = "kernel_miss" in failure_kinds or sig.get("primary") == "precision_fail"
+    out["status"] = "FAIL" if is_fail else "ERROR"
+    # Note reuses the shared failure_extractor distillation akg_eval already
+    # produced (raw["failure_signals"]), not a hand-rolled error slice.
+    out["msg"] = (summarize_one_line(sig)
+                  or str(raw.get("error") or "formal verify failed"))[:160]
+    out["raw_output_tail"] = str(raw.get("raw_output_tail") or "")[-4000:]
     return out
 
 
 def _run_tier_subprocess() -> int:
     """Subprocess entry point. Writes JSON to a sidecar path on stdout's last line."""
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tier", choices=("1ref", "1kernel", "2"), required=True)
+    ap.add_argument("--tier", choices=("1ref", "1kernel", "1source", "2"), required=True)
     ap.add_argument("--ref", required=True)
     ap.add_argument("--kernel", default="")
     ap.add_argument("--sidecar", required=True)
     ap.add_argument("--worker-url", default="")
     ap.add_argument("--device-ids", default="")
+    ap.add_argument("--case-ids", default="")
     args = ap.parse_args(sys.argv[2:])  # skip the --tier-runner sentinel
 
     ref_path = Path(args.ref)
@@ -354,12 +427,15 @@ def _run_tier_subprocess() -> int:
         result = _tier1_inspect(ref_path, REF_REQUIRED)
     elif args.tier == "1kernel":
         result = _tier1_inspect(kernel_path, KERNEL_REQUIRED)
+    elif args.tier == "1source":
+        result = _tier1_static_check(kernel_path)
     else:  # tier == "2"
         result = _tier2_run(
             ref_path,
             kernel_path,
             worker_url=args.worker_url,
             device_ids=_parse_device_ids(args.device_ids),
+            case_ids=_parse_case_ids(args.case_ids),
         )
 
     Path(args.sidecar).write_text(json.dumps(result), encoding="utf-8")
@@ -371,7 +447,8 @@ def _run_tier_subprocess() -> int:
 # ---------------------------------------------------------------------------
 def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
                     timeout: int, worker_url: str = "",
-                    device_ids: list[int] | None = None) -> dict:
+                    device_ids: list[int] | None = None,
+                    case_ids: list[int] | None = None) -> dict:
     sidecar = Path(os.environ.get("TMP", "/tmp")) / f"_verify_{os.getpid()}_{tier}_{ref.stem}.json"
     if sidecar.exists():
         sidecar.unlink()
@@ -388,6 +465,9 @@ def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
         ids = ",".join(str(x) for x in (device_ids or []))
         if ids:
             cmd += ["--device-ids", ids]
+        selected = ",".join(str(x) for x in (case_ids or []))
+        if selected:
+            cmd += ["--case-ids", selected]
 
     env = os.environ.copy()
     # Default the Windows libomp/libiomp5md double-init workaround so users
@@ -425,7 +505,8 @@ def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
 
 
 def _verify_one(case: dict, full: bool, *, worker_url: str = "",
-                device_ids: list[int] | None = None) -> dict:
+                device_ids: list[int] | None = None,
+                case_ids: list[int] | None = None) -> dict:
     op = case["op_name"]
     ref = Path(case["ref"])
     # Tier-1 + tier-2 always import the Python wrapper. For single-file
@@ -434,7 +515,7 @@ def _verify_one(case: dict, full: bool, *, worker_url: str = "",
     kernel = Path(case.get("kernel_module") or case["kernel"])
 
     out: dict = {"op_name": op, "tier1_ref": None, "tier1_kernel": None,
-                 "tier2": None}
+                 "tier1_sources": [], "tier2": None}
 
     out["tier1_ref"] = _run_subprocess(tier="1ref", ref=ref, kernel=None,
                                        timeout=TIER1_TIMEOUT)
@@ -442,20 +523,47 @@ def _verify_one(case: dict, full: bool, *, worker_url: str = "",
                                           kernel=kernel,
                                           timeout=TIER1_TIMEOUT)
 
+    try:
+        from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+        adapter = get_dsl_adapter(target_dsl())
+    except Exception:
+        adapter = None
+
+    project_path = Path(case["kernel"])
+    if adapter is not None and getattr(adapter, "kernel_arg_is_directory", False):
+        if project_path.is_dir():
+            project_root = project_path
+            wrapper_root = project_root.parent
+            for rel in adapter.list_kernel_project_files(str(project_root), op_name=op):
+                source_path = wrapper_root / rel
+                if source_path == kernel:
+                    continue
+                out["tier1_sources"].append(
+                    _run_subprocess(tier="1source", ref=ref,
+                                    kernel=source_path,
+                                    timeout=TIER1_TIMEOUT)
+                )
+
     def _t1_pass(rec: dict | None) -> bool:
         if not rec:
             return False
         # validate is "skip" for ref-side records (only kernel runs it).
         return (rec.get("exports") == "PASS"
                 and rec.get("validate") != "FAIL")
-    tier1_ok = _t1_pass(out["tier1_ref"]) and _t1_pass(out["tier1_kernel"])
+    tier1_ok = (
+        _t1_pass(out["tier1_ref"])
+        and _t1_pass(out["tier1_kernel"])
+        and all(src.get("validate") != "FAIL" for src in out["tier1_sources"])
+    )
 
     if full:
         if tier1_ok:
             out["tier2"] = _run_subprocess(tier="2", ref=ref, kernel=kernel,
-                                           timeout=TIER2_TIMEOUT,
+                                           timeout=_tier2_subprocess_timeout(
+                                               ref, case_ids),
                                            worker_url=worker_url,
-                                           device_ids=device_ids)
+                                           device_ids=device_ids,
+                                           case_ids=case_ids)
         else:
             out["tier2"] = {"status": "skip",
                             "msg": "tier1 failed; skipping tier2",
@@ -472,6 +580,7 @@ def _summary_status(record: dict, full: bool) -> str:
     all map to F (matches the per-tier table column); runtime ERROR is E."""
     t1r = record["tier1_ref"]
     t1k = record["tier1_kernel"]
+    t1s = record.get("tier1_sources") or []
     t2 = record["tier2"]
 
     def _bad(t):
@@ -486,6 +595,9 @@ def _summary_status(record: dict, full: bool) -> str:
         return "F" if _content_fail(t1r) else "E"
     if _bad(t1k):
         return "F" if _content_fail(t1k) else "E"
+    for src in t1s:
+        if _bad(src):
+            return "F" if _content_fail(src) else "E"
     if full and t2:
         if t2.get("status") == "PASS":
             return "P"
@@ -502,6 +614,7 @@ def _print_table(results: dict, full: bool) -> None:
     for op, rec in results.items():
         t1r = rec["tier1_ref"]
         t1k = rec["tier1_kernel"]
+        t1s = rec.get("tier1_sources") or []
         t2 = rec["tier2"]
 
         col_t1r = "PASS" if t1r and t1r.get("exports") == "PASS" else (
@@ -523,6 +636,12 @@ def _print_table(results: dict, full: bool) -> None:
         else:
             col_t1k = "-"
 
+        if t1s:
+            failed_sources = [src for src in t1s if src.get("validate") == "FAIL"]
+            col_t1s = "FAIL" if failed_sources else "PASS"
+        else:
+            col_t1s = "-"
+
         if full and t2 is not None:
             col_t2 = t2.get("status", "?")
         else:
@@ -530,27 +649,29 @@ def _print_table(results: dict, full: bool) -> None:
 
         # Pick the most informative message
         msg = ""
-        for src in (t2, t1k, t1r):
+        for src in (t2, *(t1s or []), t1k, t1r):
             if src and src.get("msg") and src.get("msg") != "OK":
                 msg = src["msg"]
                 if "FAIL" in (src.get("compile"), src.get("import"),
                               src.get("exports")) or src.get("status") in ("FAIL", "ERROR"):
                     break
-        rows.append((op, col_t1r, col_t1k, col_t2,
+        rows.append((op, col_t1r, col_t1k, col_t1s, col_t2,
                      _summary_status(rec, full), msg[:70]))
 
     op_w = max(8, max(len(r[0]) for r in rows))
-    headers = ("op", "t1_ref", "t1_kern", "t2", "ok", "note")
+    headers = ("op", "t1_ref", "t1_kern", "t1_src", "t2", "ok", "note")
     print(f"  {headers[0]:<{op_w}}  {headers[1]:<6}  {headers[2]:<7}  "
-          f"{headers[3]:<6}  {headers[4]:<3}  {headers[5]}")
-    print(f"  {'-' * op_w}  {'-' * 6}  {'-' * 7}  {'-' * 6}  {'-' * 3}  {'-' * 60}")
-    for op, t1r, t1k, t2, ok, msg in rows:
-        print(f"  {op:<{op_w}}  {t1r:<6}  {t1k:<7}  {t2:<6}  {ok:<3}  {msg}")
+          f"{headers[3]:<6}  {headers[4]:<6}  {headers[5]:<3}  {headers[6]}")
+    print(f"  {'-' * op_w}  {'-' * 6}  {'-' * 7}  {'-' * 6}  "
+          f"{'-' * 6}  {'-' * 3}  {'-' * 60}")
+    for op, t1r, t1k, t1s, t2, ok, msg in rows:
+        print(f"  {op:<{op_w}}  {t1r:<6}  {t1k:<7}  {t1s:<6}  {t2:<6}  {ok:<3}  {msg}")
 
 
 def run_verification(batch_dir: Path, *, full: bool = False,
                      only: str = "", worker_url: str = "",
-                     devices: str | int = "") -> int:
+                     devices: str | int = "",
+                     case_ids: str | int | list[int] | None = None) -> int:
     """Run the verification loop programmatically (so prepare.py and other
     scripts can call us without subprocessing). Returns the same exit code
     main() would: 0 if everything passed, 1 if any FAIL/ERROR. All output
@@ -578,11 +699,14 @@ def run_verification(batch_dir: Path, *, full: bool = False,
 
     print(f"verify  batch_dir={batch_dir}  "
           f"tier={'1+2' if full else '1'}  ops={len(cases)}  "
-          f"precision: allclose-style (per-dtype rtol+atol)")
+          f"precision: KernelVerifier/CANN-Bench MERE/MARE for AscendC")
     device_ids = _parse_device_ids(devices)
+    selected_case_ids = _parse_case_ids(case_ids)
     if full and worker_url:
         dev_desc = ",".join(str(x) for x in device_ids) if device_ids else "worker-declared"
         print(f"  worker_url={worker_url}  devices={dev_desc}")
+    if selected_case_ids:
+        print(f"  case_ids={','.join(str(x) for x in selected_case_ids)}")
     print()
 
     results: dict = {}
@@ -596,18 +720,19 @@ def run_verification(batch_dir: Path, *, full: bool = False,
             full=full,
             worker_url=worker_url,
             device_ids=device_ids,
+            case_ids=selected_case_ids,
         )
         results[op] = rec
         ok = _summary_status(rec, full=full)
         sys.stdout.write(f"{ok}\n")
         sys.stdout.flush()
 
-    out_path = batch_dir / VERIFY_RESULTS
-    out_path.write_text(json.dumps({
+    from utils.eval_summary import write_artifact
+    out_path = write_artifact(batch_dir / VERIFY_RESULTS, {
         "full": full,
-        "precision": "npu-benchmark-mere-mare",
+        "precision": "cannbench-mere-mare",
         "results": results,
-    }, indent=2), encoding="utf-8")
+    })
 
     print()
     _print_table(results, full=full)
@@ -641,6 +766,8 @@ def main() -> int:
     ap.add_argument("--devices", default="",
                     help="optional device id/list filter for --full Tier 2; "
                          "omitted with --worker-url lets the worker declare/allocate")
+    ap.add_argument("--case-ids", default="",
+                    help="optional comma-separated CANN-Bench case ids for Tier 2")
     args = ap.parse_args()
 
     return run_verification(
@@ -648,6 +775,7 @@ def main() -> int:
         full=args.full, only=args.only,
         worker_url=args.worker_url,
         devices=args.devices,
+        case_ids=args.case_ids,
     )
 
 

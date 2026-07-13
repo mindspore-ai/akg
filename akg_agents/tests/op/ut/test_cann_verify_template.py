@@ -5,17 +5,11 @@
 
 from pathlib import Path
 
+from akg_agents.op.cann_correctness import TEMPLATES_DIR
+
 
 def _read_cann_verify_template() -> str:
-    template_path = (
-        Path(__file__).resolve().parents[3]
-        / "python"
-        / "akg_agents"
-        / "op"
-        / "resources"
-        / "templates"
-        / "verify_cann_template.j2"
-    )
+    template_path = Path(TEMPLATES_DIR) / "verify_cann.j2"
     return template_path.read_text(encoding="utf-8")
 
 

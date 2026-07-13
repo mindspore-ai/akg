@@ -39,7 +39,8 @@ from .diagnostics import classify, has_fatal, render_findings
 from .remote_env import source_env_script_bash
 from .remote_probe import probe_remote
 from .tunnel import kill_pid_hint, tunnel_start, tunnel_stop_silent, who_holds_port
-from .worker_config import WorkerConfig, WorkerTiming
+from .worker_config import WorkerConfig, WorkerTiming, worker_timing
+from akg_agents.core.worker.eval_config import eval_defaults
 
 
 # Back-compat thin wrappers — misc.py / akg_eval.py still import these
@@ -66,7 +67,7 @@ def _curl_status(host: str, port: int,
     ``ready_probe_timeout`` instead since the two have different roles."""
     import urllib.request
     if timeout is None:
-        timeout = WorkerConfig.load(None).timing.status_timeout
+        timeout = worker_timing().status_timeout
     try:
         with urllib.request.urlopen(
             f"http://{host}:{port}/api/v1/status", timeout=timeout
@@ -87,13 +88,18 @@ def _is_ready(st: Optional[dict]) -> bool:
 
 def _curl_health(host: str, port: int,
                  timeout: Optional[float] = None) -> Optional[dict]:
-    """``/health``: non-blocking device queue probe. ``timeout`` defaults
-    to ``status_timeout`` doubled (server-side health handler has a 5s
-    internal bound). Returns None on transport failure / missing endpoint
-    (old daemons)."""
+    """``/health``：非阻塞 device queue 探活。
+
+    ``timeout`` 默认比 daemon 侧 health_timeout 多留一段 client 余量。
+    传输失败或老 daemon 缺少 endpoint 时返回 None。
+    """
     import urllib.request
     if timeout is None:
-        timeout = WorkerConfig.load(None).timing.status_timeout * 2
+        timing = worker_timing()
+        timeout = (
+            max(timing.status_timeout, timing.health_timeout)
+            + timing.http_read_margin
+        )
     try:
         with urllib.request.urlopen(
             f"http://{host}:{port}/api/v1/health", timeout=timeout
@@ -124,8 +130,8 @@ def _build_remote_start_cmd(host_cfg: dict, backend: str, arch: str,
     conda shell hook before sourcing it so non-interactive SSH behaves like
     the user's login shell.
 
-    Timing values propagate via env so remote ``worker_service.start`` 不
-    再硬编码 60s/5s —— config.yaml worker.* 一处改、本机和递归远端都
+    worker.* timing 通过 env 透传，所以远端 ``worker_service.start`` 不
+    再硬编码固定启动等待值 —— config.yaml worker.* 一处改、本机和递归远端都
     生效。"""
     repo_path = host_cfg["repo_path"]
     env_script = host_cfg.get("env_script")
@@ -135,14 +141,14 @@ def _build_remote_start_cmd(host_cfg: dict, backend: str, arch: str,
         f"export PYTHONPATH={shlex.quote(repo_path)}/akg_agents/python:"
         f"${{PYTHONPATH:-}}"
     )
-    # Pin daemon to loopback (tunnel forwards :<port> → remote 127.0.0.1).
+    # daemon 只绑 loopback（tunnel 转发 :<port> 到远端 127.0.0.1）。
     parts.append("export WORKER_HOST=127.0.0.1")
-    # AKG_CLI_QUIET=1 tells the recursive remote akg_cli to skip startup
-    # tables and heartbeat noise. The local command owns user-facing output.
+    # 递归远端 akg_cli 跳过启动表格和心跳噪声；本机命令负责用户可见输出。
     parts.append("export AKG_CLI_QUIET=1")
-    parts.append(f"export AKG_WORKER_READY_TIMEOUT={timing.ready_timeout}")
-    parts.append(f"export AKG_WORKER_READY_POLL_INTERVAL={timing.ready_poll_interval}")
-    parts.append(f"export AKG_WORKER_READY_PROBE_TIMEOUT={timing.ready_probe_timeout}")
+    for key, value in timing.as_env().items():
+        parts.append(f"export {key}={shlex.quote(value)}")
+    for key, value in eval_defaults().as_env().items():
+        parts.append(f"export {key}={shlex.quote(value)}")
     parts.append(
         " ".join([
             "python", "-m", "akg_agents.cli.cli", "worker",
@@ -153,6 +159,63 @@ def _build_remote_start_cmd(host_cfg: dict, backend: str, arch: str,
             "--port", str(port),
         ])
     )
+    return "\n".join(parts)
+
+
+def _build_remote_stop_cmd(host_cfg: dict, port: int) -> str:
+    """Compose exact daemon termination plus predecessor-tree cleanup.
+
+    A single SIGTERM is not a completed stop: Uvicorn waits for an in-flight
+    eval, while that eval may run for many minutes.  Escalate the one listener
+    PID after the configured NPU teardown grace, then invoke the shared,
+    PID-fingerprinted eval-group reaper from the same checkout/environment.
+    """
+    repo_path = host_cfg["repo_path"]
+    env_script = host_cfg.get("env_script")
+    defaults = eval_defaults()
+    polls = max(1, int(defaults.kill_grace_s * 10) + 1)
+    registry = f"/tmp/akg_worker_{port}_process_groups.json"
+    state_lookup = (
+        "from akg_agents.cli.utils.worker_state import live_worker_pid; "
+        f"print(live_worker_pid({port}) or '')"
+    )
+    cleanup = (
+        "import json; "
+        "from akg_agents.utils.process_utils import "
+        "reap_orphaned_process_groups; "
+        "from akg_agents.cli.utils.worker_state import "
+        "load_worker_state, remove_worker_entry, save_worker_state; "
+        "reaped = reap_orphaned_process_groups(); "
+        "state = load_worker_state(); "
+        f"remove_worker_entry(state, {port}); "
+        "save_worker_state(state); "
+        "print(json.dumps({'reaped_process_groups': reaped}))"
+    )
+    parts: list[str] = [source_env_script_bash(env_script)]
+    parts.append(
+        f"export PYTHONPATH={shlex.quote(repo_path)}/akg_agents/python:"
+        f"${{PYTHONPATH:-}}"
+    )
+    for key, value in defaults.as_env().items():
+        parts.append(f"export {key}={shlex.quote(value)}")
+    parts.append(
+        f"export AKG_WORKER_PROCESS_REGISTRY={shlex.quote(registry)}"
+    )
+    parts.extend([
+        f'listener_pid="$(lsof -tiTCP:{port} -sTCP:LISTEN | head -n 1)"',
+        f"state_pid=\"$(python -c {shlex.quote(state_lookup)})\"",
+        'pid="${listener_pid:-$state_pid}"',
+        (
+            'if [ -n "$pid" ]; then '
+            'kill -TERM "$pid" 2>/dev/null || true; '
+            f'for _ in $(seq 1 {polls}); do '
+            'kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done; '
+            'if kill -0 "$pid" 2>/dev/null; then '
+            'kill -KILL "$pid" 2>/dev/null || true; fi; '
+            'fi'
+        ),
+        f"python -c {shlex.quote(cleanup)}",
+    ])
     return "\n".join(parts)
 
 
@@ -215,7 +278,7 @@ def dispatch_start(alias: str, host_cfg: dict, backend: Optional[str],
     cfg = WorkerConfig.load(None)
     effective_backend = (backend or cfg.backend)   # CLI > config.yaml
     effective_dsl = dsl or cfg.dsl
-    timing = cfg.timing
+    timing = worker_timing()
     probe_device_ids = _device_ids_from_arg(devices)
 
     _step(f"[1/4] 探活 127.0.0.1:{port}/api/v1/status ...")
@@ -350,18 +413,20 @@ def dispatch_start(alias: str, host_cfg: dict, backend: Optional[str],
 
 
 def dispatch_stop(alias: str, host_cfg: dict, port: int) -> int:
-    """Tear down local tunnel + kill remote daemon on ``port``.
-
-    Uses ``lsof -ti :<port>`` to target only the listening PID — safer
-    than pkill which could match unrelated python processes."""
+    """Tear down the tunnel, stop the exact listener, reap its eval trees."""
     ssh_alias = host_cfg.get("ssh_alias") or alias
     tunnel_stop_silent(port, ssh_alias)
     print(f"[akg_cli] tore down local tunnel for :{port}")
-    rc = _ssh_dispatch(ssh_alias, f"lsof -ti :{port} | xargs -r kill")
+    if "repo_path" not in host_cfg:
+        print(f"[akg_cli] remote_worker.hosts.{alias} 缺 repo_path",
+              file=sys.stderr)
+        return 2
+    rc = _ssh_dispatch(ssh_alias, _build_remote_stop_cmd(host_cfg, port))
     if rc != 0:
         print(f"[akg_cli] remote daemon stop rc={rc}", file=sys.stderr)
         return rc
-    print(f"[akg_cli] killed remote daemon on {ssh_alias}:{port}")
+    print(f"[akg_cli] stopped remote daemon and reaped owned eval trees on "
+          f"{ssh_alias}:{port}")
     return 0
 
 

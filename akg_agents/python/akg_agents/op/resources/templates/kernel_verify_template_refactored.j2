@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import numpy as np
 import signal
 import functools
@@ -15,6 +16,7 @@ from typing import Union, Literal, List, Tuple, Any
 {% endfor %}
 {% endif %}
 TensorType = {{ tensor_type_name }}
+_akg_op_name = "{{ op_name }}"  # op identity, available to compare hooks
 
 {% if framework == "mindspore" %}
 MS_TO_NP_DTYPE_MAP = {
@@ -179,12 +181,29 @@ def verify_implementations():
             {{ line }}
             {% endfor %}
 
+            _ref_t0 = time.perf_counter()
+            # Optional secondary reference a DSL's reference_call_code may set for
+            # its compare hook (default None → the compare ignores it).
+            _akg_secondary_ref = None
             if reference_output is not None:
                 # Cross-backend conversion path — skip base model.
                 framework_output = reference_output
                 print("[INFO] 使用参考数据作为 ground truth（跳过 base model 执行）")
             else:
-                framework_output = framework_model(*inputs_for_framework)
+                # reference_call_code: default computes framework_output from the
+                # base model; a DSL may inject an alternate that also sets
+                # _akg_secondary_ref (see DSLAdapter.get_reference_call_code).
+                {% for line in reference_call_code %}
+                {{ line }}
+                {% endfor %}
+
+            {% for line in reference_sync_code %}
+            {{ line }}
+            {% endfor %}
+            # Free per-shape wall of one synchronized ref call. The host
+            # (akg_eval) uses it to size the profile to its per-shape budget.
+            # Cold call -> overestimates steady state, the safe direction.
+            case_result["ref_wall_us"] = (time.perf_counter() - _ref_t0) * 1e6
 
             if not isinstance(framework_output, (list, tuple)):
                 framework_output = [framework_output]
@@ -201,9 +220,18 @@ def verify_implementations():
         # We wrap it in its own try so a kernel crash gets blamed on the
         # kernel side rather than masquerading as a "ref" issue.
         try:
+            _impl_t0 = time.perf_counter()
             {% for line in call_impl_code %}
             {{ line }}
             {% endfor %}
+
+            {% for line in reference_sync_code %}
+            {{ line }}
+            {% endfor %}
+            # Same free per-shape wall for the kernel side (reuses the device
+            # sync hook above). Lets the host tell "kernel too slow" from
+            # "ref too slow" when sizing / skipping the profile.
+            case_result["impl_wall_us"] = (time.perf_counter() - _impl_t0) * 1e6
 
             if not isinstance(impl_output, (list, tuple)):
                 impl_output = [impl_output]
@@ -215,9 +243,9 @@ def verify_implementations():
             return case_result
 
         # ---- Stage 3: compare ----
-        # compare_outputs_code (FrameworkAdapter hook) raises on mismatch.
-        # An AssertionError = numerical miss = kernel_miss. Any other
-        # exception bubbling out of the comparator = compare_crash.
+        # compare_outputs_code (DSLAdapter override, else FrameworkAdapter
+        # hook) raises on mismatch. An AssertionError = numerical miss =
+        # kernel_miss. Any other exception out of the comparator = compare_crash.
         try:
             if len(framework_output) != len(impl_output):
                 raise AssertionError(
@@ -229,6 +257,13 @@ def verify_implementations():
                     raise AssertionError(
                         "输出" + str(i) + "为None: framework=" + str(fw_out is None)
                         + ", impl=" + str(impl_out is None))
+
+                # element i of the optional secondary reference (None unless a
+                # DSL's reference_call_code populated _akg_secondary_ref)
+                _akg_secondary_ref_i = (
+                    _akg_secondary_ref[i]
+                    if _akg_secondary_ref is not None and i < len(_akg_secondary_ref)
+                    else None)
 
                 {% for line in compare_outputs_code %}
                 {{ line }}
@@ -450,6 +485,10 @@ def verify_implementations():
             "error": c.get("error"),
             "error_source": c.get("error_source"),
             "failure_kind": c.get("failure_kind"),
+            # Free per-shape walls (us) from verify; the host sizes the
+            # profile to its per-shape budget from these (None if unmeasured).
+            "ref_wall_us": c.get("ref_wall_us"),
+            "impl_wall_us": c.get("impl_wall_us"),
         } for c in per_case_results],
         "diagnostics": diagnostics,
         # max_abs_diff is not exposed by the FrameworkAdapter compare hook
@@ -480,7 +519,6 @@ def verify_implementations():
             + str(first_fail.get("error") or "verify failed"))
     
     # 构建验证成功信息
-    import time
     import uuid
     
     # 生成唯一标识符，避免并发时的日志混乱

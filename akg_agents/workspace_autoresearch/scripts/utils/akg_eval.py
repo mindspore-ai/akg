@@ -32,11 +32,14 @@ import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter
+from akg_agents.op.verifier import aggregate
 
 from .settings import (
     eval_warmup, eval_repeats,
+    default_reference_data_timeout,
     target_backend, target_framework, target_dsl,
 )
+from .profile_plan import ProfilePlan, plan_profile
 
 logger = logging.getLogger(__name__)
 
@@ -170,21 +173,20 @@ async def _acquire_worker(backend: str, arch: str, device_ids: list[int],
             # call site stays terse.
             url = worker_url if worker_url.startswith(("http://", "https://")) \
                 else f"http://{worker_url}"
-            await register_remote_worker(
+            worker = await register_remote_worker(
                 backend=backend, arch=arch, worker_url=url,
                 expected_device_ids=device_ids or None,
                 on_transient_failure=_make_reconnect_callback(url),
             )
         else:
-            await register_local_worker(device_ids=device_ids or [0],
-                                        backend=backend, arch=arch)
+            worker = await register_local_worker(
+                device_ids=device_ids or [0], backend=backend, arch=arch)
     except Exception as e:
         return None, _infra_fail(f"worker registration failed: {e}")
     wm = get_worker_manager()
-    worker = await wm.select(backend=backend, arch=arch)
-    if worker is None:
+    if not await wm.reserve(worker):
         return None, _infra_fail(
-            f"no worker available for backend={backend} arch={arch}")
+            f"registered worker disappeared for backend={backend} arch={arch}")
     return (worker, wm), None
 
 
@@ -205,22 +207,63 @@ def _resolve_eval_timeout_s(task_dir: str, config) -> int:
     (single-shape fallback)."""
     num_cases = int(getattr(config, "num_cases", 0) or 0)
     if num_cases <= 0:
-        try:
-            from .input_groups import num_cases as probe_num_cases
-            ref_path = os.path.join(task_dir, config.ref_file)
-            if os.path.isfile(ref_path):
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    "reference", ref_path)
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    num_cases = int(probe_num_cases(mod))
-        except Exception:
-            num_cases = 0
-    if num_cases <= 0:
-        num_cases = 1
+        from .input_groups import num_cases_from_ref
+        num_cases = num_cases_from_ref(os.path.join(task_dir, config.ref_file))
     return int(config.eval_timeout) * num_cases
+
+
+def _sticky_baseline_override(task_dir: str,
+                              sidecar: Optional[dict]):
+    """Committed AR baseline as ``StickyOverride`` (metric + per_shape_us),
+    or ``None`` when no fingerprint-matched anchor exists. Caller wraps
+    into a Section so multi-shape per_case data survives the worker hop.
+
+    Anchor key is ``(num_cases, shape_signature)`` — run_times-independent
+    (see :mod:`utils.baseline_anchor`), so baseline reuse survives
+    :func:`plan_profile` varying ``run_times`` per round."""
+    sidecar = sidecar if isinstance(sidecar, dict) else {}
+    per_case = sidecar.get("per_case") or []
+    descs = [c.get("case_desc") for c in per_case
+             if isinstance(c, dict) and c.get("case_desc")]
+    num_cases = int(sidecar.get("num_cases") or len(descs) or 1)
+    try:
+        from phase_machine.state_store import load_progress
+        from utils.baseline_anchor import (current_fingerprint,
+                                            sticky_override_from_progress)
+        decision = sticky_override_from_progress(
+            load_progress(task_dir), current_fingerprint(num_cases, descs))
+    except Exception:
+        return None
+    return decision.override
+
+
+def _profile_plan(sidecar: Optional[dict], config, *,
+                  base_only: bool = False, override=None) -> ProfilePlan:
+    """Turn the verify sidecar + committed baseline ``override`` (resolved
+    once by the caller) into a :class:`ProfilePlan`. Per-shape walls come
+    from verify; sizing / precedence stays in :func:`plan_profile`."""
+    per_case = (sidecar or {}).get("per_case") or []
+
+    def _walls(key: str) -> list:
+        return [float(c[key]) for c in per_case
+                if isinstance(c, dict)
+                and isinstance(c.get(key), (int, float)) and c[key] > 0]
+
+    sticky_section = None
+    if not base_only and override is not None:
+        from akg_agents.op.verifier.profiler_utils import make_profile_section
+        sticky_section = make_profile_section(
+            override.metric, per_case_us=override.per_shape_us,
+            method="override")
+    return plan_profile(
+        ref_walls=_walls("ref_wall_us"),
+        impl_walls=_walls("impl_wall_us"),
+        eval_timeout=float(getattr(config, "eval_timeout", 0) or 0),
+        warmup=eval_warmup(),
+        repeats=eval_repeats(),
+        sticky_section=sticky_section,
+        base_only=base_only,
+    )
 
 
 def _build_verifier(task_dir: str, config, ref_code: str, backend: str,
@@ -235,6 +278,7 @@ def _build_verifier(task_dir: str, config, ref_code: str, backend: str,
     config_dict: Dict[str, Any] = {
         "log_dir": log_dir,
         "verify_timeout": _resolve_eval_timeout_s(task_dir, config),
+        "reference_data_timeout": default_reference_data_timeout(),
         "warmup_times": eval_warmup(),
         "run_times": eval_repeats(),
         "task_dir": task_dir,
@@ -295,27 +339,40 @@ def _base_metrics_from_profile(profile_result: dict,
                 f"per_shape_base_us len {num_cases}; regenerating labels")
         descs = [f"case{i}" for i in range(num_cases)]
 
-    base_method = profile_result.get("base_method") or "akg_kernel_verifier"
     return {
         "ref_latency_us": base_us,
         "num_cases": num_cases,
         "per_shape_base_us": per_shape_base,
-        "per_shape_base_method": [base_method] * num_cases,
-        "timing_method_base": base_method,
         "per_shape_descs": descs,
     }
 
 
+def _add_failure_signals(payload: Dict[str, Any], log: str) -> None:
+    """Best-effort: tag the payload with extracted failure signals. Import is
+    local + swallowed so a missing/broken failure_extractor never breaks the
+    eval result. Mutates ``payload`` in place."""
+    try:
+        from .failure_extractor import extract_failure_signals
+        diag = extract_failure_signals(log)
+        if not diag.is_empty:
+            payload["failure_signals"] = diag.to_dict()
+    except Exception:
+        pass
+
+
 def _verify_fail_payload(verify_log: Optional[str],
                          sidecar: Optional[dict] = None,
-                         metrics: Optional[Dict[str, Any]] = None
+                         metrics: Optional[Dict[str, Any]] = None,
+                         report_path: Optional[str] = None
                          ) -> Dict[str, Any]:
-    """Build the dict downstream eval_client consumes. When the verify
-    script wrote a per-case sidecar (kernel_verify_template_refactored.j2
-    -> verify_result.json -> KernelVerifier.last_verify_sidecar), use its
-    `error_source` so a ref-side crash flips to "ref" instead of being
-    blamed on the kernel. The per-case list is forwarded under `per_case`
-    for failure_extractor / DIAGNOSE consumption."""
+    """Build the dict downstream eval_client consumes. When the verify script
+    wrote a per-case sidecar (kernel_verify_template_refactored.j2 ->
+    verify_result.json -> KernelVerifier.last_verify_sidecar), use its
+    `error_source` so a ref-side crash flips to "ref". The per-case results are
+    folded into the SAME ``per_shape_*`` metric arrays a passing round uses, so
+    the FAIL prints through the one per_shape_table path. When ``report_path``
+    is given the FULL per-case + complete log is written there (verify.py-style
+    artifact) and surfaced as ``fail_report`` for the agent to open by file."""
     payload: Dict[str, Any] = {
         "outcome": "kernel_fail",
         "correctness": False,
@@ -324,21 +381,36 @@ def _verify_fail_payload(verify_log: Optional[str],
         "error_source": "kernel",
         "raw_output_tail": (verify_log or "")[-4000:],
     }
+    per_case: list = []
     if isinstance(sidecar, dict):
         es = sidecar.get("error_source")
         if es in ("ref", "kernel"):
             payload["error_source"] = es
-        if sidecar.get("per_case"):
-            payload["per_case"] = sidecar["per_case"]
+        per_case = sidecar.get("per_case") or []
         if sidecar.get("failed_indices") is not None:
             payload["failed_indices"] = sidecar["failed_indices"]
-    try:
-        from .failure_extractor import extract_failure_signals
-        diag = extract_failure_signals(verify_log or "")
-        if not diag.is_empty:
-            payload["failure_signals"] = diag.to_dict()
-    except Exception:
-        pass
+    if per_case:
+        # gen/base = the free per-shape verify walls (None where unmeasured);
+        # status = PASS / failure_kind. Same arrays the success table reads.
+        payload["metrics"].update({
+            "num_cases": len(per_case),
+            "per_shape_descs": [c.get("case_desc", "") for c in per_case],
+            "per_shape_status": ["PASS" if c.get("correctness")
+                                 else (c.get("failure_kind") or "FAIL")
+                                 for c in per_case],
+            "per_shape_gen_us": [c.get("impl_wall_us") for c in per_case],
+            "per_shape_base_us": [c.get("ref_wall_us") for c in per_case],
+        })
+    _add_failure_signals(payload, verify_log or "")
+    if report_path:
+        from .eval_summary import write_artifact
+        payload["fail_report"] = write_artifact(report_path, {
+            "outcome": payload["outcome"],
+            "error_source": payload["error_source"],
+            "per_case": per_case,
+            "failure_signals": payload.get("failure_signals", {}),
+            "verify_log": verify_log or "",
+        })
     return payload
 
 
@@ -352,14 +424,28 @@ def _profile_fail_payload(exc: Exception) -> Dict[str, Any]:
         "error_source": "kernel",
         "raw_output_tail": tb_str[-4000:],
     }
-    try:
-        from .failure_extractor import extract_failure_signals
-        diag = extract_failure_signals(tb_str)
-        if not diag.is_empty:
-            payload["failure_signals"] = diag.to_dict()
-    except Exception:
-        pass
+    _add_failure_signals(payload, tb_str)
     return payload
+
+
+def _too_slow_payload(reason: str, sidecar: Optional[dict]) -> Dict[str, Any]:
+    """Kernel is correct but a single call exceeds the per-shape budget.
+    ``kernel_fail`` (agent can fix by optimising), deliberately NOT ``inf``,
+    which ``_make_ok_payload`` collapses to ``infra_fail`` (operator-only).
+    Mirrors :func:`_profile_fail_payload` (correctness stays True)."""
+    payload: Dict[str, Any] = {
+        "outcome": "kernel_fail",
+        "correctness": True,
+        "metrics": {},
+        "error": reason,
+        "error_source": "kernel",
+    }
+    if isinstance(sidecar, dict) and sidecar.get("per_case"):
+        payload["per_case"] = sidecar["per_case"]
+    return payload
+
+
+EVAL_FAIL_REPORT = "eval_fail_report.json"
 
 
 def _iteration_verify_dir(task_dir: str, op_name: str, current_step: int) -> str:
@@ -368,7 +454,7 @@ def _iteration_verify_dir(task_dir: str, op_name: str, current_step: int) -> str
     post_iteration_cleanup hook to run after each round."""
     return os.path.join(
         task_dir, ".ar_state", "akg_verify", op_name,
-        f"Iteration{op_name}_Step{current_step:02d}_verify",
+        f"Iteration{op_name}_Step{current_step}_verify",
     )
 
 
@@ -406,8 +492,6 @@ def _make_ok_payload(profile_result: dict, op_name: str) -> Dict[str, Any]:
           "per_shape_gen_us": list[float],      # always populated; len == num_cases
           "per_shape_base_us": list[float],     # [] when base skipped
           "case_descs": list[str],              # from verify sidecar
-          "gen_method": str | None,
-          "base_method": str | None,
           ...roofline fields...
         }
 
@@ -447,9 +531,13 @@ def _make_ok_payload(profile_result: dict, op_name: str) -> Dict[str, Any]:
         per_shape_base = []
         base_us = None
 
-    speedup = _float(profile_result.get("speedup"))
-    if speedup is None and base_us and base_us > 0:
-        speedup = base_us / gen_us
+    # speedup_vs_ref = geomean of per-shape base/gen ratios — the ONLY speedup
+    # definition (single owner: aggregate.geomean_ratio), recomputed from the
+    # per-shape arrays we hold. No scalar mean-ratio fallback: the number has
+    # one owner and sticky rounds agree with round 0. None when there is no
+    # per-shape baseline (can't form the geomean without one).
+    speedup = (aggregate.geomean_ratio(per_shape_base, per_shape_gen)
+               if per_shape_base else None)
 
     descs = list(profile_result.get("case_descs") or [])
     if len(descs) != num_cases:
@@ -460,15 +548,6 @@ def _make_ok_payload(profile_result: dict, op_name: str) -> Dict[str, Any]:
             )
         descs = [f"case{i}" for i in range(num_cases)]
 
-    per_shape_speedup: list = []
-    if per_shape_base:
-        for g, b in zip(per_shape_gen, per_shape_base):
-            per_shape_speedup.append(b / g if g and g > 0 else 0.0)
-
-    gen_method = profile_result.get("gen_method") or "akg_kernel_verifier"
-    base_method = profile_result.get("base_method") or (
-        "akg_kernel_verifier" if per_shape_base else None)
-
     return {
         "outcome": "ok",
         "correctness": True,
@@ -478,14 +557,7 @@ def _make_ok_payload(profile_result: dict, op_name: str) -> Dict[str, Any]:
             "speedup_vs_ref": speedup,
             "num_cases": num_cases,
             "per_shape_gen_us": per_shape_gen,
-            "per_shape_gen_method": [gen_method] * num_cases,
-            "timing_method_gen": gen_method,
             "per_shape_base_us": per_shape_base,
-            "per_shape_base_method":
-                [base_method] * num_cases if per_shape_base else [],
-            "timing_method_base": base_method,
-            "per_shape_speedup": per_shape_speedup,
-            "speedup_aggregation": "geomean",
             "per_shape_descs": descs,
         },
         "error": None,
@@ -548,15 +620,38 @@ async def _eval_async(task_dir: str, config, device_id: Any,
     try:
         verify_ok, verify_log = await verifier.run(
             task_info, current_step=current_step)
+        sidecar = getattr(verifier, "last_verify_sidecar", None)
+        # Profile/verify subprocess wall cap = ``eval_timeout × num_cases``
+        # (single owner: :func:`_resolve_eval_timeout_s`). The per-shape
+        # ``run_times`` sizing (:func:`_profile_plan` -> ``plan_profile``)
+        # the same per-shape budget so a slow ref/kernel can't blow it —
+        # symmetric across agents, no bash timeout in the loop.
+        timeout_s = _resolve_eval_timeout_s(task_dir, config)
+        # --trace: Ascend-only (profiler_npu); carried in profile_settings to
+        # reach a remote worker. CUDA uses nsys → warn + ignore.
+        keep_res = os.environ.get("AKG_PROF_KEEP_RES") == "1"
+        if keep_res and backend != "ascend":
+            logger.warning("[%s] --trace ignored: msprof trace is Ascend-only "
+                           "(backend=%s)", config.name, backend)
+            keep_res = False
+        # Committed ref baseline (fingerprint-matched), resolved ONCE.
+        # Non-None = "ref already measured" — the single source of truth
+        # threaded into both paths so the ref is never re-measured.
+        override = _sticky_baseline_override(task_dir, sidecar)
         if not verify_ok:
+            # A failed round's metrics are dropped at record_round's
+            # correctness gate, so the only round that needs the ref is the
+            # first BASELINE (seed fails before ref ever ran -> override None).
+            # EDIT-round failures do zero ref work: no device, no worker.
             ref_metrics: Dict[str, Any] = {}
-            if not verify_only:
+            if not verify_only and override is None:
                 try:
+                    plan = _profile_plan(sidecar, config, base_only=True)
                     base_profile = await verifier.run_profile(
                         task_info, current_step=current_step,
-                        profile_settings={
-                            "timeout": _resolve_eval_timeout_s(task_dir, config),
-                        },
+                        profile_settings={"timeout": timeout_s,
+                                          "keep_res": keep_res,
+                                          **plan.settings},
                     )
                     ref_metrics = _base_metrics_from_profile(
                         base_profile, config.name)
@@ -564,22 +659,22 @@ async def _eval_async(task_dir: str, config, device_id: Any,
                     logger.warning(
                         f"[{config.name}] failed to profile reference after "
                         f"verify failure: {e}", exc_info=True)
+            # verify_only (batch/quick_check) task dir is a temp, rmtree'd after.
             return _verify_fail_payload(
-                verify_log, getattr(verifier, "last_verify_sidecar", None),
-                ref_metrics)
+                verify_log, sidecar, ref_metrics,
+                report_path=(None if verify_only else os.path.join(
+                    _iteration_verify_dir(task_dir, config.name, current_step),
+                    EVAL_FAIL_REPORT)))
         if verify_only:
-            return _make_verify_ok_payload(
-                getattr(verifier, "last_verify_sidecar", None))
+            return _make_verify_ok_payload(sidecar)
+        plan = _profile_plan(sidecar, config, override=override)
+        if plan.too_slow:
+            return _too_slow_payload(plan.too_slow, sidecar)
         try:
-            # Profile HTTP read timeout = ``eval_timeout × num_cases``
-            # (single owner: :func:`_resolve_eval_timeout_s`). Mirrors
-            # verify_timeout — both layers share the same per-shape budget
-            # so multi-shape ops don't trip the worker's protocol default.
             profile_result = await verifier.run_profile(
                 task_info, current_step=current_step,
-                profile_settings={
-                    "timeout": _resolve_eval_timeout_s(task_dir, config),
-                },
+                profile_settings={"timeout": timeout_s,
+                                  "keep_res": keep_res, **plan.settings},
             )
         except Exception as e:
             return _profile_fail_payload(e)

@@ -25,6 +25,14 @@ class MockWorker(WorkerInterface):
     async def get_doc(self, doc_name: str) -> str:
         return f"{self.name}:{doc_name}"
 
+    async def acquire_device(self, task_id: str = "unknown",
+                             timeout=None) -> Tuple[int, int]:
+        return 0, 0
+
+    async def release_device(self, device_id: int, lease_id: int,
+                             task_id: str = "unknown") -> None:
+        return None
+
 @pytest.mark.asyncio
 async def test_worker_manager_basic_flow():
     """测试基本的注册、选择、释放流程"""
@@ -110,6 +118,19 @@ async def test_worker_manager_filtering():
     await manager.release(w_cuda)
     await manager.release(w_cuda) # 此时 load=0
     await manager.release(w_ascend)
+
+@pytest.mark.asyncio
+async def test_reserve_targets_the_registered_instance():
+    manager = WorkerManager()
+    old = MockWorker("old")
+    current = MockWorker("current")
+    await manager.register(old, "cuda", "a100")
+    await manager.register(current, "cuda", "a100")
+
+    assert await manager.reserve(current)
+    status = await manager.get_status()
+    assert [item["load"] for item in status] == [0, 1]
+
 
 @pytest.mark.asyncio
 async def test_worker_manager_tags():

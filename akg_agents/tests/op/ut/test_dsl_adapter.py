@@ -18,6 +18,7 @@ import pytest
 from akg_agents.op.utils.arch_normalize import (
     ascend_direct_invoke_npu_arch,
     ascend_soc_version,
+    load_ascend_soc_catalog,
 )
 from akg_agents.op.verifier.adapters.factory import get_dsl_adapter, get_framework_adapter
 
@@ -236,16 +237,53 @@ class TestDSLAdapterAscendC:
         adapter = get_dsl_adapter("ascendc")
         framework_adapter = get_framework_adapter("torch")
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert code == "impl_output = impl_model(*inputs)\n"
+        assert "guarded_call as _akg_guarded_call" in code
+        assert "lambda: impl_model(*inputs)" in code
 
-    def test_ascend_soc_version_derives_from_arch(self):
-        assert ascend_soc_version("ascend910b4") == "Ascend910B4"
-        assert ascend_soc_version("ascend910b2c") == "Ascend910B2C"
-        assert ascend_soc_version("ascend310p3") == "Ascend310P3"
-        assert ascend_soc_version("ascend910_9392") == "Ascend910_9392"
-        assert ascend_soc_version("ascend950dt_95a") == "Ascend950DT_95A"
-        assert ascend_soc_version("ascend950pr_9589") == "Ascend910_9589"
-        assert ascend_soc_version("unknown") is None
+    def test_ascend_soc_version_resolves_via_catalog(self):
+        # CANN's platform_config .ini stems are the source of truth for both
+        # spelling and case; the lookup is case-insensitive and returns the
+        # exact entry — no per-family casing rules.
+        catalog = frozenset({
+            "Ascend910B4", "Ascend910B2C", "Ascend310P3", "Ascend910_9392",
+            "Ascend950PR_957b", "Ascend950PR_9589",
+            "Ascend950DT_950x", "Ascend950DT_95A1",
+        })
+        assert ascend_soc_version("ascend910b4", catalog) == "Ascend910B4"
+        assert ascend_soc_version("ascend910b2c", catalog) == "Ascend910B2C"
+        assert ascend_soc_version("ascend310p3", catalog) == "Ascend310P3"
+        assert ascend_soc_version("ascend910_9392", catalog) == "Ascend910_9392"
+        # 950 mixed-case variants come back exactly as CANN spells them.
+        assert ascend_soc_version("ascend950pr_957b", catalog) == "Ascend950PR_957b"
+        assert ascend_soc_version("ascend950dt_950x", catalog) == "Ascend950DT_950x"
+        assert ascend_soc_version("ascend950dt_95a1", catalog) == "Ascend950DT_95A1"
+        # input case is irrelevant; only catalog membership matters
+        assert ascend_soc_version("ASCEND950PR_957B", catalog) == "Ascend950PR_957b"
+        # bare family / unknown / empty catalog -> None
+        assert ascend_soc_version("ascend950pr", catalog) is None
+        assert ascend_soc_version("unknown", catalog) is None
+        assert ascend_soc_version("ascend910b4", frozenset()) is None
+
+    def test_load_ascend_soc_catalog_reads_platform_config(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            pc = os.path.join(home, "compiler", "data", "platform_config", "x")
+            os.makedirs(pc)
+            for name in ("Ascend950PR_957b.ini", "Ascend910B3.ini"):
+                open(os.path.join(pc, name), "w").close()
+            prev = os.environ.get("ASCEND_HOME_PATH")
+            os.environ["ASCEND_HOME_PATH"] = home
+            try:
+                load_ascend_soc_catalog.cache_clear()
+                assert load_ascend_soc_catalog() == frozenset(
+                    {"Ascend950PR_957b", "Ascend910B3"})
+            finally:
+                load_ascend_soc_catalog.cache_clear()
+                if prev is None:
+                    os.environ.pop("ASCEND_HOME_PATH", None)
+                else:
+                    os.environ["ASCEND_HOME_PATH"] = prev
 
     def test_ascend_direct_invoke_npu_arch_derives_from_arch(self):
         assert ascend_direct_invoke_npu_arch("ascend910b4") == "dav-2201"

@@ -36,7 +36,7 @@ from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.evolve import evolve
 from akg_agents.op.utils.sol_utils import load_sol_task, load_sol_task_source, resolve_path_from_base
-from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
+from akg_agents.op.cann_correctness import is_cann_task_dir, load_cann_task_for_runner, load_cann_task_source
 from akg_agents.op.utils.npukb_utils import load_npukb_metadata_if_any
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.environment_check import check_env_for_task

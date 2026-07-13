@@ -24,6 +24,7 @@ class DSLAdapterTritonCuda(DSLAdapter):
 
     profile_via_python_script = True
     impl_func_name_template = "ModelNew"
+    supports_autotune_configs = True
 
     def get_import_statements(self, framework: str) -> str:
         """Return Triton import statements."""
@@ -99,5 +100,4 @@ class DSLAdapterTritonCuda(DSLAdapter):
         method = "triton_do_bench"
 """
         return code
-
 

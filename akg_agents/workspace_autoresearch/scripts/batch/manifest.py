@@ -39,11 +39,16 @@ YAML support is optional (requires pyyaml). JSON works with stdlib only.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Tuple
+
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import phase_machine  # noqa: E402
+from utils.json_io import atomic_write_json  # noqa: E402
 
 PROGRESS_FILENAME = "batch_progress.json"
 LOG_FILENAME = "batch.log"
@@ -100,7 +105,6 @@ def resolve_kernel_paths_for_op(kernel_dir: Path, op_name: str
     """Thin wrapper around ``task_layout.resolve_kernel_paths_for_op``
     that hooks WA settings (``target_dsl()``) + maps the layout-layer
     exceptions into ``ManifestError`` for uniform batch error format."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from utils.settings import target_dsl  # noqa: E402
     from akg_agents.op.utils.task_layout import (  # noqa: E402
         resolve_kernel_paths_for_op as _resolve,
@@ -184,16 +188,13 @@ def load_progress(batch_dir: Path) -> dict:
     if not path.exists():
         return {"batch_dir": str(batch_dir.resolve()), "cases": {}}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
         raise ManifestError(f"corrupt progress file at {path}: {e}")
 
 
 def save_progress(batch_dir: Path, progress: dict) -> None:
-    path = batch_dir / PROGRESS_FILENAME
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(progress, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_json(str(batch_dir / PROGRESS_FILENAME), progress)
 
 
 def merge_cases(progress: dict, resolved_cases: list[dict],
@@ -247,8 +248,17 @@ def merge_cases(progress: dict, resolved_cases: list[dict],
 
 
 def update_case(batch_dir: Path, op_name: str, **fields: Any) -> None:
-    """Atomic update of one case's fields. Reloads progress file on each call
-    so concurrent edits (e.g. by hand) aren't clobbered."""
+    """Atomic update of one case's fields. Reloads the progress file on each
+    call so a concurrent hand-edit isn't clobbered, and the whole-file write is
+    atomic (save_progress uses the workspace's shared atomic writer).
+
+    NO cross-process lock by design. batch_progress.json is per-batch-dir and a
+    batch runs its ops sequentially, so the only writer at any instant is this
+    supervisor — there is nothing to serialise against. (A scaffold subprocess
+    writes task_dir during a run, but the supervisor is streaming, not writing,
+    then.) If single-batch in-process parallelism is ever added, serialise the
+    op runners with a threading.Lock here — a cross-process file lock would
+    still be overkill since it's all one process."""
     progress = load_progress(batch_dir)
     case = progress.get("cases", {}).get(op_name)
     if case is None:
@@ -263,13 +273,6 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _ensure_phase_machine_on_path() -> None:
-    import sys as _sys
-    _scripts = str(Path(__file__).resolve().parent.parent)
-    if _scripts not in _sys.path:
-        _sys.path.insert(0, _scripts)
-
-
 def read_task_state(task_dir: Path) -> dict:
     """Pull the result block from this task's state.json via the
     task_summary facade. Returns a dict with whichever fields could be
@@ -278,14 +281,14 @@ def read_task_state(task_dir: Path) -> dict:
     has committed anything), and the facade is the only place callers
     should reach in."""
     out: dict = {
+        "progress_initialized": False,
         "baseline_metric": None,
         "best_metric": None,
+        "best_speedup": None,
         "rounds": None,
         "consecutive_failures": None,
     }
-    _ensure_phase_machine_on_path()
-    from phase_machine import task_summary  # noqa: E402
-    summary = task_summary(str(task_dir))
+    summary = phase_machine.task_summary(str(task_dir))
     if summary is None:
         return out
     # progress_initialized=False means baseline never landed: leave the
@@ -293,8 +296,10 @@ def read_task_state(task_dir: Path) -> dict:
     # misleading 0s.
     if not summary.get("progress_initialized"):
         return out
+    out["progress_initialized"] = True
     out["baseline_metric"] = summary.get("baseline_metric")
     out["best_metric"] = summary.get("best_metric")
+    out["best_speedup"] = summary.get("best_speedup")
     out["rounds"] = summary.get("eval_rounds")
     out["consecutive_failures"] = summary.get("consecutive_failures")
     return out
@@ -305,20 +310,18 @@ def read_phase(task_dir: Path) -> str:
     is missing / corrupt (matches this module's historical contract;
     run.py and monitor treat UNKNOWN as "not done yet"). Goes through
     phase_machine.read_phase so the state.json schema has a single owner."""
-    _ensure_phase_machine_on_path()
-    from phase_machine import read_phase as _pm_read_phase, load_state, INIT
     # Distinguish "no state.json at all" (truly unknown) from "state
     # exists, phase=INIT" (legitimate fresh task). _pm_read_phase
     # collapses both to INIT; we need the original signal because
     # run.py polls a worker that may finish in <1s and we don't want
     # to mistake "state.json hasn't been created yet" for INIT.
-    state = load_state(str(task_dir))
+    state = phase_machine.load_state(str(task_dir))
     if state is None:
         return "UNKNOWN"
-    phase = _pm_read_phase(str(task_dir))
+    phase = phase_machine.read_phase(str(task_dir))
     # INIT after state.json exists means a task that was claimed but
     # hasn't advanced — treat as UNKNOWN for run.py's done-check.
-    return "UNKNOWN" if phase == INIT else phase
+    return "UNKNOWN" if phase == phase_machine.INIT else phase
 
 
 def repo_root() -> Path:
@@ -331,8 +334,6 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-_SCAFFOLD_RESULT_STATUSES = frozenset({"ok", "error"})
-_SCAFFOLD_CREATED_MARKER = "[scaffold] Task directory created: "
 _HEX6 = frozenset("0123456789abcdef")
 
 
@@ -350,45 +351,6 @@ def task_dir_belongs_to_op(name: str, op: str) -> bool:
             and len(rand) == 6 and all(c in _HEX6 for c in rand))
 
 
-def parse_scaffold_created_line(line: str) -> Path | None:
-    """Early identity bind: scaffold prints
-    `[scaffold] Task directory created: <abs>` on stderr right after
-    mkdir, BEFORE baseline runs (which can stay silent >5s and would
-    otherwise let the mid-run mtime fallback race a sibling batch)."""
-    idx = line.find(_SCAFFOLD_CREATED_MARKER)
-    if idx < 0:
-        return None
-    path = line[idx + len(_SCAFFOLD_CREATED_MARKER):].strip()
-    if not path:
-        return None
-    p = Path(path)
-    return p if p.is_dir() else None
-
-
-def parse_scaffold_result_line(line: str) -> Path | None:
-    """Identity-bound task_dir: a scaffold result JSON in THIS claude
-    subprocess's stdout names the dir scaffold created for THIS run.
-    Accepts both ok and error shapes — ok is OK / KERNEL_FAIL (both
-    activatable, rc=0); error is INFRA_FAIL (rc=4) which still carries
-    task_dir for inspection. Done/error verdict is decided downstream
-    from .phase + rc."""
-    s = line.strip()
-    if not (s.startswith("{") and s.endswith("}")):
-        return None
-    try:
-        d = json.loads(s)
-    except json.JSONDecodeError:
-        return None
-    if (not isinstance(d, dict)
-            or d.get("status") not in _SCAFFOLD_RESULT_STATUSES):
-        return None
-    td = d.get("task_dir")
-    if not isinstance(td, str):
-        return None
-    p = Path(td)
-    return p if p.is_dir() else None
-
-
 def snapshot_task_dirs() -> set[Path]:
     """Current `ar_tasks/<dir>` set. Diff against a later snapshot to
     find dirs created since."""
@@ -400,10 +362,8 @@ def snapshot_task_dirs() -> set[Path]:
 
 def pick_new_task_dir(pre_snapshot: set[Path], op_name: str) -> Path | None:
     """Post-process fallback when no in-loop identity bind landed.
-    Among `current - pre_snapshot` whose name passes
-    `task_dir_belongs_to_op` (exact `<op>_<ts>_<hex6>` match), prefer
-    the per-op pointer scaffold writes when it lands inside the new
-    set, else most-recent mtime."""
+    Among `current - pre_snapshot` whose name passes the exact
+    `<op>_<ts>_<hex6>` match, return the most recently created fallback."""
     tasks_root = repo_root() / "ar_tasks"
     if not tasks_root.is_dir():
         return None
@@ -415,18 +375,6 @@ def pick_new_task_dir(pre_snapshot: set[Path], op_name: str) -> Path | None:
     matches = [d for d in new if task_dir_belongs_to_op(d.name, op_name)]
     if not matches:
         return None
-    # Per-op pointer hint: trust only when it points inside `new`.
-    import sys as _sys
-    _scripts_dir = str(Path(__file__).resolve().parent.parent)
-    if _scripts_dir not in _sys.path:
-        _sys.path.insert(0, _scripts_dir)
-    try:
-        from phase_machine import read_task_dir_pointer  # noqa: E402
-        pointed = read_task_dir_pointer(op_name)
-    except Exception:
-        pointed = None
-    if pointed is not None and Path(pointed) in new:
-        return Path(pointed)
     matches.sort(key=lambda d: d.stat().st_mtime, reverse=True)
     return matches[0]
 
@@ -464,12 +412,7 @@ def find_running_case_task_dir(batch_dir: Path) -> Path | None:
     # phase_machine.find_active_task_dir scans ar_tasks/ for state.json
     # owned by the current session (or, failing that, the most-recently
     # touched).
-    import sys as _sys, os as _os
-    _scripts = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    if _scripts not in _sys.path:
-        _sys.path.insert(0, _scripts)
-    from phase_machine import find_active_task_dir as _pm_find_active
-    pointed = _pm_find_active()
+    pointed = phase_machine.find_active_task_dir()
     if pointed:
         td = Path(pointed)
         if td.is_dir() and task_dir_belongs_to_op(td.name, op):

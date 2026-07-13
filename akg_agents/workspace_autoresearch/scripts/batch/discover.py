@@ -170,19 +170,41 @@ def write_manifest(batch_dir: Path, ref_dir: str,
     return target
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Auto-discover ops by <op>_ref.py / <op>_kernel.py convention."
-    )
+def make_parser(description: str) -> argparse.ArgumentParser:
+    """Shared discovery CLI surface used by discover and prepare."""
+    ap = argparse.ArgumentParser(description=description)
     ap.add_argument("batch_dir")
     ap.add_argument("--ref-dir", default="",
-                    help="ref subdirectory (default: from manifest, else 'refs')")
+                    help="ref subdirectory (default: manifest or 'refs')")
     ap.add_argument("--kernel-dir", default="",
-                    help="kernel subdirectory (default: from manifest, else 'kernels')")
-    ap.add_argument("--filter", default="",
-                    help="glob to KEEP only matching op names (e.g. '*norm')")
+                    help="kernel subdirectory (default: manifest or 'kernels')")
+    ap.add_argument("--filter", default="", help="glob of op names to keep")
     ap.add_argument("--exclude", action="append", default=[],
-                    help="glob(s) to drop matching op names; repeatable")
+                    help="glob(s) to drop; repeatable")
+    return ap
+
+
+def resolve_request(args) -> tuple[Path, str, str, list[str]]:
+    """Resolve directories and discover ops once for both entry points."""
+    batch_dir = Path(args.batch_dir).resolve()
+    if not batch_dir.is_dir():
+        sys.exit(f"batch dir not found: {batch_dir}")
+    try:
+        existing = mf.load_manifest(mf.find_manifest(batch_dir))
+    except mf.ManifestError:
+        existing = {}
+    ref_dir = args.ref_dir or existing.get("ref_dir") or "refs"
+    kernel_dir = args.kernel_dir or existing.get("kernel_dir") or "kernels"
+    ops = discover(batch_dir, ref_dir, kernel_dir, args.filter or None,
+                   list(args.exclude))
+    if not ops:
+        sys.exit("no ops discovered; expected paired <op>_ref.py and "
+                 "<op>_kernel.py/DSL project in ref_dir and kernel_dir")
+    return batch_dir, ref_dir, kernel_dir, ops
+
+
+def main() -> int:
+    ap = make_parser("Auto-discover ops by ref/kernel naming and DSL layout.")
     ap.add_argument("--write-manifest", action="store_true",
                     help="write/update the manifest's ops list (and other "
                          "fields if given via flags); without this, just "
@@ -190,30 +212,7 @@ def main() -> int:
     ap.add_argument("--json", action="store_true",
                     help="when not writing manifest: print as JSON array")
     args = ap.parse_args()
-
-    batch_dir = Path(args.batch_dir).resolve()
-    if not batch_dir.is_dir():
-        sys.exit(f"batch dir not found: {batch_dir}")
-
-    existing: dict = {}
-    try:
-        manifest_path = mf.find_manifest(batch_dir)
-        existing = mf.load_manifest(manifest_path)
-    except mf.ManifestError:
-        pass
-
-    ref_dir = args.ref_dir or existing.get("ref_dir") or "refs"
-    kernel_dir = args.kernel_dir or existing.get("kernel_dir") or "kernels"
-
-    ops = discover(
-        batch_dir, ref_dir, kernel_dir,
-        include_glob=args.filter or None,
-        exclude_globs=list(args.exclude),
-    )
-    if not ops:
-        sys.exit("no ops discovered. expected files matching "
-                 "<op_name>_ref.py / <op_name>_kernel.py in the configured "
-                 "ref_dir / kernel_dir.")
+    batch_dir, ref_dir, kernel_dir, ops = resolve_request(args)
 
     if args.write_manifest:
         target = write_manifest(batch_dir, ref_dir, kernel_dir, ops)

@@ -36,6 +36,7 @@ Modes:
 Output (single JSON line on stdout):
   {"mode": "scaffold|resume|ask",
    "command": "python ... (verbatim, ready to exec)" | null,
+   "argv": ["python", ...] | null,  # shell-free driver form
    "values":  {parsed flag dict — ground truth for the LLM},
    "missing": [human-readable required fields, ask-mode only]}
 
@@ -60,8 +61,8 @@ def _emit(payload: dict) -> None:
     sys.exit(0)
 
 
-def _build_scaffold_command(args) -> str:
-    """Reconstruct an exec-ready scaffold invocation from parsed args.
+def _build_scaffold_argv(args) -> list[str]:
+    """Reconstruct a shell-free scaffold argv from parsed args.
 
     Every value comes from the argparse Namespace, never from the raw
     input — that's the whole point: once argparse has accepted the args,
@@ -69,18 +70,15 @@ def _build_scaffold_command(args) -> str:
     or whitespace quirks in the user's typed string.
     """
     parts = ["python", "scripts/scaffold.py"]
-    parts += ["--ref", shlex.quote(args.ref)]
-    parts += ["--kernel", shlex.quote(args.kernel)]
+    parts += ["--ref", args.ref]
+    parts += ["--kernel", args.kernel]
     if args.op_name:
-        parts += ["--op-name", shlex.quote(args.op_name)]
+        parts += ["--op-name", args.op_name]
     if args.devices:
         parts += ["--devices", str(args.devices)]
     parts += ["--max-rounds", str(args.max_rounds)]
     parts += ["--eval-timeout", str(args.eval_timeout)]
-    # shlex.quote here too: --output-dir "C:\tmp\my tasks" would
-    # otherwise be re-split into "C:\tmp\my" + "tasks" when the
-    # generated command line is re-parsed by bash.
-    parts += ["--output-dir", shlex.quote(args.output_dir or "ar_tasks")]
+    parts += ["--output-dir", args.output_dir or "ar_tasks"]
     parts.append("--run-baseline")
     # scaffold's CLI uses dest='code_checker' with store_const:
     # None (no flag) -> omit, let scaffold resolve from config;
@@ -88,8 +86,30 @@ def _build_scaffold_command(args) -> str:
     if args.code_checker is False:
         parts.append("--no-code-checker")
     if getattr(args, "worker_url", ""):
-        parts += ["--worker-url", shlex.quote(args.worker_url)]
-    return " ".join(parts)
+        parts += ["--worker-url", args.worker_url]
+    return parts
+
+
+def _dispatch_record(mode: str, argv: list[str] | None, values: dict,
+                     missing: list[str]) -> dict:
+    """One record shape for agents (command) and drivers (argv)."""
+    return {
+        "mode": mode,
+        "command": shlex.join(argv) if argv else None,
+        "argv": argv,
+        "values": values,
+        "missing": missing,
+    }
+
+
+def _ask(values: dict, *missing: str) -> None:
+    _emit(_dispatch_record("ask", None, values, list(missing)))
+
+
+def _resume(task_dir: str = "") -> None:
+    argv = ["python", "scripts/resume.py"] + ([task_dir] if task_dir else [])
+    _emit(_dispatch_record(
+        "resume", argv, {"task_dir": task_dir or None}, []))
 
 
 def main():
@@ -97,52 +117,25 @@ def main():
 
     # --- empty: ask mode ---
     if not tokens:
-        _emit({
-            "mode": "ask",
-            "command": None,
-            "values": {},
-            "missing": [
-                "--ref <file>",
-                "--kernel <file|dsl_project_dir>",
-                "--op-name <name>",
-                "--devices <N>",
-                f"--max-rounds (optional, default {default_max_rounds()})",
-            ],
-            "note": ("no arguments — ask the user for the missing fields, "
-                     "then re-invoke /autoresearch with the full flag set."),
-        })
+        _ask(
+            {}, "--ref <file>", "--kernel <file|dsl_project_dir>",
+            "--op-name <name>", "--devices <N>",
+            f"--max-rounds (optional, default {default_max_rounds()})")
 
     # --- resume forms ---
     if tokens[0] == "--resume":
-        task_dir = tokens[1] if len(tokens) > 1 else ""
-        cmd_parts = ["python", "scripts/resume.py"]
-        if task_dir:
-            cmd_parts.append(shlex.quote(task_dir))
-        _emit({
-            "mode": "resume",
-            "command": " ".join(cmd_parts),
-            "values": {"task_dir": task_dir or None},
-            "missing": [],
-        })
+        _resume(tokens[1] if len(tokens) > 1 else "")
 
     # bare path → resume that task
     if not tokens[0].startswith("--"):
         path = tokens[0]
         if not os.path.isdir(path):
-            _emit({
-                "mode": "ask",
-                "command": None,
-                "values": {"first_token": path},
-                "missing": [f"first token {path!r} is neither a flag nor an "
-                            f"existing directory — clarify with the user "
-                            f"before re-invoking /autoresearch."],
-            })
-        _emit({
-            "mode": "resume",
-            "command": f"python scripts/resume.py {shlex.quote(path)}",
-            "values": {"task_dir": path},
-            "missing": [],
-        })
+            _ask(
+                {"first_token": path},
+                f"first token {path!r} is neither a flag nor an existing "
+                "directory — clarify with the user before re-invoking "
+                "/autoresearch.")
+        _resume(path)
 
     # --- scaffold form ---
     # Reuse scaffold's parser so flag spec stays in lockstep.
@@ -164,12 +157,7 @@ def main():
     try:
         args = parser.parse_args(tokens)
     except _CapturedExit as e:
-        _emit({
-            "mode": "ask",
-            "command": None,
-            "values": {"raw_tokens": tokens},
-            "missing": [f"argparse rejected the args: {e.msg}"],
-        })
+        _ask({"raw_tokens": tokens}, f"argparse rejected the args: {e.msg}")
 
     # Workflow-level required fields. argparse already enforces --ref and
     # --kernel as required positionals; the rest we check here so the LLM
@@ -199,19 +187,10 @@ def main():
     }
 
     if missing:
-        _emit({
-            "mode": "ask",
-            "command": None,
-            "values": values,
-            "missing": missing,
-        })
+        _emit(_dispatch_record("ask", None, values, missing))
 
-    _emit({
-        "mode": "scaffold",
-        "command": _build_scaffold_command(args),
-        "values": values,
-        "missing": [],
-    })
+    _emit(_dispatch_record(
+        "scaffold", _build_scaffold_argv(args), values, []))
 
 
 if __name__ == "__main__":

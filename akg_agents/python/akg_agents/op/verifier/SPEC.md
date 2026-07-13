@@ -111,6 +111,10 @@ verifier/
 `__init__` 里 cache 到 `self.dsl_adapter`，因为 `prepare_config` 会在 adapter 实例
 上 stash state），然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
 
+验证包和回传 artifact 都是跨进程/HTTP 边界的数据：LocalWorker 解包时必须拒绝
+绝对路径、`..` 越界、链接和设备节点；`sync_artifacts_to_directory` 必须在写入前
+确认 realpath 仍位于当前 verify_dir，不能信任远端返回的相对路径。
+
 ### Verifier Data Cache
 
 - 仅作用于 `KernelBench` 风格验证链路

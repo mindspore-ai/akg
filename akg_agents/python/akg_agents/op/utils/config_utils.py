@@ -150,6 +150,12 @@ def check_backend_arch(backend: str, arch: str):
         )
 
 
+def is_supported_arch(backend: str, arch: str) -> bool:
+    """Whether ``arch`` belongs to the canonical backend family table."""
+    return backend in ("ascend", "cuda", "cpu") \
+        and _family_of(backend, arch) is not None
+
+
 def normalize_dsl(dsl: str, backend: str = None) -> str:
     """
     规范化DSL类型，将通用的triton根据backend转换为triton_cuda或triton_ascend

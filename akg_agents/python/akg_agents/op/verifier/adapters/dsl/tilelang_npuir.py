@@ -90,7 +90,7 @@ except ImportError:
                 tilelang_benchmark_fn,
                 warmup={warmup},
                 active={runs},
-                prof_dir_name="prof_generation_output",
+                prof_dir_name=f"prof_generation_output_case_{{case_idx}}",
                 keep_res=False,
                 suppress_warnings=True,
                 clear_l2_cache={clear_l2_cache},
