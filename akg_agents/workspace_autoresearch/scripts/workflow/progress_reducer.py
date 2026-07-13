@@ -96,6 +96,11 @@ def reduce_baseline_init(existing: Progress, config: Any, eval_data: dict,
         dropped_seed_metric = seed_metric
         seed_metric = None
 
+    raw_speedup = metrics.get("speedup_vs_ref")
+    seed_speedup = (float(raw_speedup)
+                    if seed_metric is not None and valid_metric(raw_speedup)
+                    else None)
+
     anchor = resolve_baseline_init_anchor(existing, metrics)
 
     progress = Progress(
@@ -105,6 +110,7 @@ def reduce_baseline_init(existing: Progress, config: Any, eval_data: dict,
         best_metric=seed_metric,
         best_commit=(best_commit if seed_metric is not None
                      else "seed_profile_failed"),
+        best_speedup=seed_speedup,
         baseline_metric=anchor.metric,
         baseline_source=anchor.source,
         baseline_outcome=outcome.value,
@@ -137,13 +143,15 @@ def reduce_round_progress(progress: Progress, eval_result: EvalResult,
                           round_num: int,
                           consecutive_failures: int,
                           best_metric: Optional[float],
-                          best_commit: Optional[str]) -> RoundReduction:
+                          best_commit: Optional[str],
+                          best_speedup: Optional[float] = None) -> RoundReduction:
     anchor = refresh_round_anchor(progress, eval_result.metrics)
     new_progress = progress.apply(
         eval_rounds=round_num,
         consecutive_failures=consecutive_failures,
         best_metric=best_metric,
         best_commit=best_commit,
+        best_speedup=best_speedup,
         baseline_metric=anchor.metric,
         baseline_source=anchor.source,
         baseline_per_shape_us=anchor.per_shape_us,

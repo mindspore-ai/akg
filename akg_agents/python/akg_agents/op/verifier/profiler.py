@@ -318,6 +318,8 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
     Returns:
         float: 平均执行时间（微秒）
     """
+    # --trace / AKG_PROF_KEEP_RES: keep the msprof trace dir (timeline + CSVs).
+    keep_res = keep_res or os.environ.get("AKG_PROF_KEEP_RES") == "1"
     clear_l2_cache_warnings()
     
     core_fn = profiler_npu_mindspore_core if framework == "mindspore" else profiler_npu_core

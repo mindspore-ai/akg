@@ -926,10 +926,12 @@ async def test_profile_generation_only_cpp(op_name):
     cached_baseline_time = 20.0  # 假设的 baseline 时间（微秒）
     
     # 测试 profile（优化模式，跳过 baseline profile）
+    from akg_agents.op.verifier.profiler_utils import make_profile_section
     profile_settings = {
         "warmup_times": 2,
         "run_times": 5,
-        "override_base_time_us": cached_baseline_time,  # 传递缓存的 baseline
+        "override_base_section": make_profile_section(
+            cached_baseline_time, method="override"),
         "skip_base_profile": True,  # 显式跳过 baseline profile
     }
     

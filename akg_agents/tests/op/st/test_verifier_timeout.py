@@ -35,7 +35,11 @@ def mock_kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
 
     config = {
         "verify_timeout": 1,  # 1 second timeout
-        "log_dir": "./test_logs"
+        "log_dir": "./test_logs",
+        # Fail-fast lives on the per-config verification path, which is opt-in
+        # (env AKG_VERIFY_PER_CONFIG=1 or this flag). Enable it so the test
+        # actually exercises the consecutive-timeout fail-fast it asserts.
+        "verify_per_config": True,
     }
 
     verifier = KernelVerifier(
@@ -64,8 +68,9 @@ def mock_kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
     # Check that it failed
     assert not success
 
-    # Check that fail-fast was triggered in the log
-    assert "连续 2 个 config 验证超时" in log or "Fail-Fast" in log
+    # Check that fail-fast was triggered in the log (message from
+    # kernel_verifier._verify_configs_separately).
+    assert "触发 Fail-Fast" in log
 
     # Clean up
     import shutil

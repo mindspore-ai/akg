@@ -41,11 +41,14 @@ if _running_under_pytest:
     # pytest 环境下，只设置日志级别，让 pytest 的 log_cli 处理输出
     root_logger.setLevel(log_level)
 else:
-    # 非 pytest 环境且没有 handler，配置 basicConfig
+    # stream=sys.stdout：根 logger 默认走 stderr，捕获框架会把 stdout 排在
+    # stderr 前，使 print 的结果先于 INFO 日志。统一到 stdout 保证时序。
+    # 全项目日志流向的单一 owner，入口脚本不应再各自重配。
     logging.basicConfig(
         level=log_level,
         format=log_format,
-        datefmt=log_datefmt
+        datefmt=log_datefmt,
+        stream=sys.stdout,
     )
 
 logger = logging.getLogger(__name__)

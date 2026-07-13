@@ -74,6 +74,33 @@ def get_worker_entry(state: Dict[str, Any], port: int) -> Optional[Dict[str, Any
     return entry if isinstance(entry, dict) else None
 
 
+def live_worker_pid(port: int) -> Optional[int]:
+    """Return the recorded daemon PID only when it still identifies this port.
+
+    During graceful Uvicorn shutdown the listener disappears before the
+    process exits, so ``lsof`` alone cannot finish a repeated ``--stop``.  The
+    state entry supplies the fallback PID; Linux ``/proc`` environment and
+    command line validation prevent a stale/reused PID from targeting an
+    unrelated process.
+    """
+    entry = get_worker_entry(load_worker_state(), port)
+    pid = entry.get("pid") if entry else None
+    if not isinstance(pid, int) or pid <= 0 or not pid_alive(pid):
+        return None
+    if os.name == "posix":
+        try:
+            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            env = dict(item.split(b"=", 1) for item in environ if b"=" in item)
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
+        except OSError:
+            return None
+        if env.get(b"WORKER_PORT") != str(port).encode():
+            return None
+        if b"akg_agents/worker/server.py" not in cmdline:
+            return None
+    return pid
+
+
 def set_worker_entry(state: Dict[str, Any], port: int, entry: Dict[str, Any]) -> None:
     workers = state.get("workers")
     if not isinstance(workers, dict):

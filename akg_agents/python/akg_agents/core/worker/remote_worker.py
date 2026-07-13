@@ -1,14 +1,13 @@
 import httpx
 import logging
 import json
+from contextvars import ContextVar
 from typing import Tuple, Dict, Any, Callable, Optional
 
 from akg_agents.core_v2.config.settings import get_akg_env_var
-from .interface import (
-    WorkerInterface,
-    DEFAULT_EVAL_TIMEOUT_S,
-    DEFAULT_GEN_REF_TIMEOUT_S,
-)
+from .interface import WorkerInterface, empty_profile_result
+from .eval_config import resolve_eval_timeout, resolve_reference_timeout
+from akg_agents.cli.service.worker_config import worker_timing
 
 logger = logging.getLogger(__name__)
 
@@ -72,49 +71,79 @@ class RemoteWorker(WorkerInterface):
                  on_transient_failure: Optional[Callable[[], None]] = None):
         self.worker_url = worker_url.rstrip('/')
         self.on_transient_failure = on_transient_failure
+
+        # Lease state is coroutine-local. Concurrent jobs can share the same
+        # op/task name without attaching or clearing each other's lease token.
+        self._active_lease = ContextVar(
+            f"remote_worker_lease_{id(self)}", default=None)
+
+    def _attach_active_lease(self, data: Dict[str, Any], task_id: str
+                             ) -> Dict[str, Any]:
+        active = self._active_lease.get()
+        if not active or active[0] != task_id:
+            return data
+        payload = dict(data)
+        payload["device_id"] = str(active[1])
+        payload["lease_id"] = str(active[2])
+        return payload
     
     async def acquire_device(self, task_id: str = "unknown",
-                             timeout: Optional[float] = None) -> int:
+                             timeout: Optional[float] = None) -> Tuple[int, int]:
         """从远端 worker 获取一个可用设备。
 
-        ``timeout`` 是 **read** budget（含远端 queue 等待）。connect 仍由
-        ``_connect_timeout_s`` bounded（默认 5s），所以隧道断开会快速
-        ConnectError → ``on_transient_failure`` 重建 tunnel + 重试，而
-        不是裸 httpx 在 acquire 阶段无限挂。默认 read=300s 对绝大多数
-        evolve 场景够用；真要长等可在调用方传更大的 timeout。"""
-        read_timeout = float(timeout) if timeout is not None else float(DEFAULT_EVAL_TIMEOUT_S)
+        ``timeout`` 是设备 **等待预算**：传给服务端做 queue 等待上限，自己
+        的 HTTP read 按 worker.http_read_margin 多留余量，所以*服务端先放弃*并返回 503，而不是
+        client 先 read-timeout、留下一个仍在排队的服务端 waiter 抢走刚释放
+        的设备给一个已经超时的 client。connect 仍由 ``_connect_timeout_s``
+        bounded（默认 5s），隧道断开快速 ConnectError → reconnect 重试。"""
+        timing = worker_timing()
+        wait_budget = float(timeout) if timeout is not None else timing.acquire_timeout
+        read_timeout = wait_budget + timing.http_read_margin
         url = f"{self.worker_url}/api/v1/acquire_device"
         try:
             result = await self._post_with_reconnect(
-                url, files=None, data={"task_id": task_id},
+                url, files=None,
+                data={"task_id": task_id, "timeout": str(wait_budget)},
                 read_timeout=read_timeout, task_id=task_id,
             )
             device_id = result.get("device_id")
-            logger.info(f"[{task_id}] Acquired remote device {device_id}")
-            return device_id
+            lease_id = result.get("lease_id")
+            if not isinstance(device_id, int) or not isinstance(lease_id, int):
+                raise RuntimeError(
+                    f"worker returned invalid lease token: "
+                    f"device_id={device_id!r}, lease_id={lease_id!r}")
+            self._active_lease.set((task_id, device_id, lease_id))
+            logger.info(f"[{task_id}] Acquired remote device {device_id} (lease {lease_id})")
+            return device_id, lease_id
         except Exception as e:
             logger.error(f"[{task_id}] Failed to acquire remote device: {e}")
             raise RuntimeError(f"Failed to acquire remote device: {e}")
 
-    async def release_device(self, device_id: int, task_id: str = "unknown"):
-        """归还设备给远端 worker。"""
+    async def release_device(self, device_id: int, lease_id: int,
+                             task_id: str = "unknown"):
+        """归还设备给远端 worker（带 lease_id，挡住对已被取代租约的晚到释放）。"""
         url = f"{self.worker_url}/api/v1/release_device"
         try:
             await self._post_with_reconnect(
                 url, files=None,
-                data={"task_id": task_id, "device_id": device_id},
-                read_timeout=10.0, task_id=task_id,
+                data={"task_id": task_id, "device_id": device_id, "lease_id": lease_id},
+                read_timeout=worker_timing().release_timeout, task_id=task_id,
             )
             logger.info(f"[{task_id}] Released remote device {device_id}")
         except Exception as e:
             logger.error(f"[{task_id}] Failed to release remote device: {e}")
+        finally:
+            active = self._active_lease.get()
+            if active == (task_id, device_id, lease_id):
+                self._active_lease.set(None)
 
     async def get_doc(self, doc_name: str) -> str:
         """从远端 worker 拉取文档内容（GET，复用 reconnect 包装）。"""
         url = f"{self.worker_url}/api/v1/docs/{doc_name}"
         try:
             result = await self._get_with_reconnect(
-                url, read_timeout=20.0, task_id=f"doc:{doc_name}",
+                url, read_timeout=worker_timing().doc_timeout,
+                task_id=f"doc:{doc_name}",
             )
             return result.get("content", "") if isinstance(result, dict) else ""
         except httpx.HTTPStatusError as e:
@@ -195,27 +224,31 @@ class RemoteWorker(WorkerInterface):
                 raise
         raise last_exc
 
-    async def verify(self, package_data: bytes, task_id: str, op_name: str, timeout: int = DEFAULT_EVAL_TIMEOUT_S) -> Tuple[bool, str, Dict[str, Any]]:
+    async def verify(self, package_data: bytes, task_id: str, op_name: str,
+                     timeout: Optional[int] = None
+                     ) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Send verification task to remote worker.
 
         Returns:
             Tuple[bool, str, Dict[str, Any]]: (success, log, artifacts)
         """
+        timeout = resolve_eval_timeout(timeout)
         verify_url = f"{self.worker_url}/api/v1/verify"
 
         try:
             files = {'package': ('package.tar', package_data, 'application/x-tar')}
-            data = {
+            data = self._attach_active_lease({
                 'task_id': task_id,
                 'op_name': op_name,
                 'timeout': str(timeout)
-            }
+            }, task_id)
             logger.info(f"[{task_id}] Sending verification request to {verify_url}")
 
             result = await self._post_with_reconnect(
                 verify_url, files=files, data=data,
-                read_timeout=timeout + 10, task_id=task_id,
+                read_timeout=timeout + worker_timing().http_read_margin,
+                task_id=task_id,
             )
             success = result.get('success', False)
             log = result.get('log', '')
@@ -247,19 +280,24 @@ class RemoteWorker(WorkerInterface):
             Dict[str, Any]: 包含 gen_time, base_time, speedup, artifacts 等字段
         """
         profile_url = f"{self.worker_url}/api/v1/profile"
-        timeout = profile_settings.get('timeout', DEFAULT_EVAL_TIMEOUT_S)
+        timeout = resolve_eval_timeout(profile_settings.get('timeout'))
         try:
             files = {'package': ('package.tar', package_data, 'application/x-tar')}
-            data = {
+            data = self._attach_active_lease({
                 'task_id': task_id,
                 'op_name': op_name,
                 'profile_settings': json.dumps(profile_settings)
-            }
+            }, task_id)
             logger.info(f"[{task_id}] Sending profiling request to {profile_url}")
 
             result = await self._post_with_reconnect(
                 profile_url, files=files, data=data,
-                read_timeout=timeout + 10, task_id=task_id,
+                # LocalWorker profiles base then generation serially, and
+                # ``timeout`` is the per-script wall cap.  The HTTP request
+                # must cover both caps; otherwise the client can abandon a
+                # live server-side generation profile after a slow base run.
+                read_timeout=2 * timeout + worker_timing().http_read_margin,
+                task_id=task_id,
             )
             artifacts = result.get('artifacts', {})
             if artifacts:
@@ -269,7 +307,7 @@ class RemoteWorker(WorkerInterface):
 
         except Exception as e:
             logger.error(f"[{task_id}] Remote profiling failed: {e}")
-            return {'artifacts': {}}
+            return empty_profile_result(error=str(e))
 
     async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str,
                                    profile_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -282,36 +320,39 @@ class RemoteWorker(WorkerInterface):
             Dict[str, Any]: 包含 time_us, success, log 等字段
         """
         profile_url = f"{self.worker_url}/api/v1/profile_single_task"
-        timeout = profile_settings.get('timeout', DEFAULT_EVAL_TIMEOUT_S)
+        timeout = resolve_eval_timeout(profile_settings.get('timeout'))
         try:
             files = {'package': ('package.tar', package_data, 'application/x-tar')}
-            data = {
+            data = self._attach_active_lease({
                 'task_id': task_id,
                 'op_name': op_name,
                 'profile_settings': json.dumps(profile_settings)
-            }
+            }, task_id)
             logger.info(f"[{task_id}] Sending profile_single_task request to {profile_url}")
 
             result = await self._post_with_reconnect(
                 profile_url, files=files, data=data,
-                read_timeout=timeout + 10, task_id=task_id,
+                read_timeout=timeout + worker_timing().http_read_margin,
+                task_id=task_id,
             )
             return result
                 
         except httpx.RequestError as e:
             error_msg = f"Network error communicating with worker at {self.worker_url}: {e}"
             logger.error(f"[{task_id}] {error_msg}")
-            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+            return {'time_us': None, 'success': False, 'log': error_msg}
         except httpx.HTTPStatusError as e:
             error_msg = f"Worker returned error status: {e.response.status_code} - {e.response.text}"
             logger.error(f"[{task_id}] {error_msg}")
-            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+            return {'time_us': None, 'success': False, 'log': error_msg}
         except Exception as e:
             error_msg = f"Remote profile_single_task failed: {e}"
             logger.error(f"[{task_id}] {error_msg}")
-            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+            return {'time_us': None, 'success': False, 'log': error_msg}
 
-    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = DEFAULT_GEN_REF_TIMEOUT_S) -> Tuple[bool, str, bytes]:
+    async def generate_reference(self, package_data: bytes, task_id: str,
+                                 op_name: str, timeout: Optional[int] = None
+                                 ) -> Tuple[bool, str, bytes]:
         """
         Send reference generation task to remote worker.
         
@@ -327,24 +368,26 @@ class RemoteWorker(WorkerInterface):
         Returns:
             Tuple[bool, str, bytes]: (success, log, reference_data_bytes)
         """
+        timeout = resolve_reference_timeout(timeout)
         import base64
         
         generate_ref_url = f"{self.worker_url}/api/v1/generate_reference"
 
         try:
             files = {'package': ('package.tar', package_data, 'application/x-tar')}
-            data = {
+            data = self._attach_active_lease({
                 'task_id': task_id,
                 'op_name': op_name,
                 'timeout': str(timeout),
-            }
+            }, task_id)
             logger.info(f"[{task_id}] Sending generate_reference request to {generate_ref_url}")
             # 走统一的 reconnect 包装 —— 之前裸 httpx.AsyncClient 让 tunnel
             # 断时 generate_reference 不会触发 on_transient_failure，跨
             # backend 参考数据生成会无响应。
             result = await self._post_with_reconnect(
                 generate_ref_url, files=files, data=data,
-                read_timeout=timeout + 10, task_id=task_id,
+                read_timeout=timeout + worker_timing().http_read_margin,
+                task_id=task_id,
             )
             success = result.get('success', False)
             log = result.get('log', '')

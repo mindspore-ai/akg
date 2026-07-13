@@ -109,6 +109,14 @@ class TestFrameworkAdapterTorch:
         assert "test_op" in code
 
 
+class TestFrameworkAdapterMindSpore:
+    def test_get_device_setup_ascend_selects_device(self):
+        pytest.importorskip("mindspore")
+        adapter = get_framework_adapter("mindspore")
+        code = adapter.get_device_setup_code("ascend", "ascend910b4", 3)
+        assert 'ms.set_device("Ascend", 3)' in code
+
+
 class TestFrameworkAdapterFactory:
     """Test Framework Adapter Factory."""
     

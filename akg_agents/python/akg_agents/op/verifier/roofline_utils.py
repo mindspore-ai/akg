@@ -34,7 +34,9 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.utils.json_safe import sanitize_floats
+from akg_agents.op.verifier.aggregate import mean_us, geomean_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,7 @@ def compute_roofline_profile(
     arch = str(profile_settings.get("arch", "")).lower()
     framework = str(profile_settings.get("framework", "torch")).lower()
     precision_override = profile_settings.get("roofline_precision")
+    roofline_timeout = resolve_eval_timeout(profile_settings.get("timeout"))
 
     if not profile_settings.get("enable_roofline", True):
         return _skipped_result("roofline 已显式关闭", bench_type=bench_type, arch=arch)
@@ -219,6 +222,7 @@ def compute_roofline_profile(
                 solar_api=solar_api,
                 arch_spec=arch_spec,
                 precision_override=precision_override,
+                timeout=roofline_timeout,
             )
         elif bench_type == "cann":
             # CANN-Bench: roofline not applicable, return skip result
@@ -236,6 +240,7 @@ def compute_roofline_profile(
                 solar_api=solar_api,
                 arch_spec=arch_spec,
                 precision_override=precision_override,
+                timeout=roofline_timeout,
             )
         result.setdefault("bench_type", bench_type)
         result.setdefault("arch", arch)
@@ -259,27 +264,48 @@ def compute_roofline_profile(
 
 def augment_roofline_metrics(
     roofline_result: Dict[str, Any],
-    gen_time_us: Optional[float],
+    gen_time_us: Optional[float] = None,
     base_time_us: Optional[float] = None,
+    gen_per_shape_us: Optional[list] = None,
+    base_per_shape_us: Optional[list] = None,
 ) -> Dict[str, Any]:
-    """补充与 profile 实测时间相关的 roofline 指标。"""
+    """补充与 profile 实测时间相关的 roofline 指标。
+
+    ``speedup_vs_generated`` / ``speedup_vs_baseline`` are the geomean of the
+    per-shape ratios ``roofline_case[i] / gen[i]`` when the per-shape arrays
+    are present AND length-aligned with the roofline cases — same rule as
+    ``speedup_vs_ref``. Otherwise fall back to the scalar
+    ``roofline_time / gen_time`` (both arithmetic-mean aggregates), so a
+    backend that doesn't surface per-shape arrays still gets a number."""
     augmented = dict(roofline_result or {})
     roofline_time = augmented.get("time_us")
+    case_times = list(augmented.get("case_times_us") or [])
+    gen_ps = list(gen_per_shape_us or [])
+    base_ps = list(base_per_shape_us or [])
+    roofline_valid = _is_valid_positive_number(roofline_time)
     gen_valid = _is_valid_positive_number(gen_time_us)
     base_valid = _is_valid_positive_number(base_time_us)
-    roofline_valid = _is_valid_positive_number(roofline_time)
 
-    if roofline_valid and gen_valid:
-        augmented["speedup_vs_generated"] = float(roofline_time) / float(gen_time_us)
-        augmented["gap_vs_generated"] = float(gen_time_us) / float(roofline_time)
-    else:
-        augmented["speedup_vs_generated"] = 0.0
-        augmented["gap_vs_generated"] = None
+    def _ratio(numer_ps, numer_scalar, denom_ps, denom_scalar):
+        """geomean(numer_ps[i]/denom_ps[i]) when arrays align with the
+        roofline cases; else scalar numer/denom; else None."""
+        if (case_times and len(numer_ps) == len(case_times)
+                and len(denom_ps) == len(case_times)):
+            geo = geomean_ratio(numer_ps, denom_ps)
+            if geo is not None:
+                return geo
+        if (_is_valid_positive_number(numer_scalar)
+                and _is_valid_positive_number(denom_scalar)):
+            return float(numer_scalar) / float(denom_scalar)
+        return None
 
-    if roofline_valid and base_valid:
-        augmented["speedup_vs_baseline"] = float(roofline_time) / float(base_time_us)
-    else:
-        augmented["speedup_vs_baseline"] = 0.0
+    svg = _ratio(case_times, roofline_time, gen_ps, gen_time_us)
+    augmented["speedup_vs_generated"] = svg if svg is not None else 0.0
+    gap = _ratio(gen_ps, gen_time_us, case_times, roofline_time)
+    augmented["gap_vs_generated"] = gap  # None when unmeasurable
+
+    svb = _ratio(case_times, roofline_time, base_ps, base_time_us)
+    augmented["speedup_vs_baseline"] = svb if svb is not None else 0.0
 
     return augmented
 
@@ -324,7 +350,9 @@ def _compute_kernelbench_roofline(
     solar_api: Dict[str, Any],
     arch_spec: str,
     precision_override: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
+    timeout = resolve_eval_timeout(timeout)
     source_file = _find_framework_source_file(verify_dir, op_name, framework)
     case_output_dir = verify_dir / "_roofline_kernelbench"
     case_result = _compute_single_case_roofline(
@@ -335,6 +363,7 @@ def _compute_kernelbench_roofline(
         task_id=task_id,
         case_label=source_file.stem,
         precision_override=precision_override,
+        timeout=timeout,
     )
     return _aggregate_case_results([case_result], bench_type="kernelbench")
 
@@ -346,7 +375,9 @@ def _compute_sol_roofline(
     solar_api: Dict[str, Any],
     arch_spec: str,
     precision_override: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
+    timeout = resolve_eval_timeout(timeout)
     workload_path = verify_dir / "workload.jsonl"
     if not workload_path.is_file():
         raise FileNotFoundError(f"SOL workload 文件不存在: {workload_path}")
@@ -373,6 +404,7 @@ def _compute_sol_roofline(
                 task_id=task_id,
                 case_label=f"w{workload_idx:03d}",
                 precision_override=precision_override,
+                timeout=timeout,
             )
         )
 
@@ -389,7 +421,9 @@ def _compute_single_case_roofline(
     task_id: str,
     case_label: str,
     precision_override: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
+    timeout = resolve_eval_timeout(timeout)
     graph_dir = case_output_dir / "graph"
     einsum_dir = case_output_dir / "einsum"
     analysis_dir = case_output_dir / "analysis"
@@ -402,7 +436,7 @@ def _compute_single_case_roofline(
     processing_config = solar_api["ProcessingConfig"](
         save_graph=False,
         force_rerun=True,
-        timeout=600,
+        timeout=timeout,
         output_dir=str(graph_dir),
         debug=False,
         safe_mode=True,
@@ -515,9 +549,12 @@ def _aggregate_case_results(case_results: list[Dict[str, Any]], bench_type: str)
         "case_count": len(case_results),
         "case_labels": case_labels,
         "case_times_us": case_times_us,
-        "time_us": _geomean(case_times_us),
-        "compute_time_us": _geomean(compute_times_us),
-        "memory_time_us": _geomean(memory_times_us),
+        # Latencies aggregate as arithmetic mean (per-call cost); the
+        # per-shape ``case_times_us`` stays for the geomean speedup ratios
+        # computed in ``augment_roofline_metrics``.
+        "time_us": mean_us(case_times_us),
+        "compute_time_us": mean_us(compute_times_us),
+        "memory_time_us": mean_us(memory_times_us),
         "bottleneck": _merge_strings_keep_mixed(bottlenecks),
         "precision": _merge_strings_keep_mixed(precisions),
         "arch_name": _merge_strings_keep_mixed(arch_names),
@@ -787,13 +824,6 @@ def _map_graph_dtype(raw: Any) -> Optional[str]:
         return _normalize_precision_name(text)
     except ValueError:
         return None
-
-
-def _geomean(values: list[float]) -> float:
-    if not values:
-        raise ValueError("几何平均输入为空")
-    safe_values = [max(float(v), 1e-12) for v in values]
-    return math.exp(sum(math.log(v) for v in safe_values) / len(safe_values))
 
 
 def _merge_strings_keep_mixed(values: list[str]) -> Optional[str]:

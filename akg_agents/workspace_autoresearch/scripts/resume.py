@@ -67,7 +67,7 @@ def _validate_resumable(t) -> tuple[bool, str]:
     if missing:
         return False, f"state.json progress fields missing: {missing}"
     # plan.md present + has pending items → must be structurally valid.
-    # A fully-consumed plan (0 pending) is legal (compute_resume_phase
+    # A fully-consumed plan (0 pending) is legal (phase_on_resume
     # routes it to REPLAN). validate_plan rejects 0-pending plans for
     # lack of an ACTIVE item, so only validate when items exist.
     if os.path.exists(plan_path(t.task_dir)) and has_pending_items(t.task_dir):
@@ -143,11 +143,11 @@ def main():
         sys.exit(1)
     except TaskOwnershipError as e:
         print(f"[resume] ERROR: {e}", file=sys.stderr)
-        print(f"[resume] Another Claude Code session may be running it.",
+        print("[resume] Another Claude Code session may be running it.",
               file=sys.stderr)
-        print(f"[resume] If you're sure no other session is running, "
-              f"add --force:", file=sys.stderr)
-        print(f"[resume]   /autoresearch --resume --force",
+        print("[resume] If you're sure no other session is running, "
+              "add --force:", file=sys.stderr)
+        print("[resume]   /autoresearch --resume --force",
               file=sys.stderr)
         sys.exit(1)
 

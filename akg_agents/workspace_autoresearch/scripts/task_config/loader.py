@@ -30,13 +30,8 @@ import os
 import yaml
 
 
-# File-name conventions (REF_FILE_DEFAULT / py_stem / editable-files
-# helpers / resolve_kernel_paths_for_op) live in akg_agents.op.utils.
-# task_layout — workflow-neutral SoT. Re-exported here for back-compat
-# (legacy callers still import from task_config.loader).
-
 from akg_agents.op.utils.dsl_project_config import flatten_task_yaml_dsl_blocks  # noqa: E402
-from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT, py_stem  # noqa: E402, F401
+from akg_agents.op.utils.task_layout import REF_FILE_DEFAULT  # noqa: E402
 
 
 def _is_contained(path: str) -> bool:
@@ -148,7 +143,7 @@ class TaskConfig:
     # Default on; disable per-task via `code_checker.enabled: false` in
     # task.yaml or scaffold's --no-code-checker flag. The yaml key name
     # is kept as `code_checker.enabled` for back-compat with existing
-    # task.yaml files. When off, quick_check and validate_kernel skip
+    # task.yaml files. When off, quick_check skips
     # the regression check but still reject the scaffold TODO placeholder.
     code_checker_enabled: bool = True
 

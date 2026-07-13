@@ -20,6 +20,7 @@ import mindspore as ms
 from mindspore.common import np_dtype
 import numpy as np
 
+from akg_agents.op.utils.config_utils import check_backend_arch
 from .base import FrameworkAdapter
 
 
@@ -47,24 +48,11 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
         """Setup MindSpore device."""
         os.environ['DEVICE_ID'] = str(device_id)
         if backend == "ascend":
-            device = "Ascend"
-            supported_ascend_archs = [
-                "ascend910b1", "ascend910b2", "ascend910b2c",
-                "ascend910b3", "ascend910b4", "ascend310p3",
-                "ascend910_9362", "ascend910_9372", "ascend910_9381",
-                "ascend910_9382", "ascend910_9391", "ascend910_9392",
-                "ascend950dt_95a",
-                "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
-                "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
-                "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
-                "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
-                "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
-                "ascend950pr_9599",
-            ]
-            if arch not in supported_ascend_archs:
-                raise ValueError(f"不支持的ascend架构: {arch}，支持的架构: {supported_ascend_archs}")
-            return device
+            check_backend_arch(backend, arch)
+            ms.set_device("Ascend", device_id)
+            return "Ascend"
         elif backend == "cpu":
+            ms.set_device("CPU")
             return "CPU"
         else:
             raise ValueError(f"MindSpore不支持的后端: {backend}")
@@ -244,25 +232,13 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
         code = f"""    os.environ['DEVICE_ID'] = str({device_id})
 """
         if backend == "ascend":
-            supported_ascend_archs = [
-                "ascend910b1", "ascend910b2", "ascend910b2c",
-                "ascend910b3", "ascend910b4", "ascend310p3",
-                "ascend910_9362", "ascend910_9372", "ascend910_9381",
-                "ascend910_9382", "ascend910_9391", "ascend910_9392",
-                "ascend950dt_95a",
-                "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
-                "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
-                "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
-                "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
-                "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
-                "ascend950pr_9599",
-            ]
-            if arch not in supported_ascend_archs:
-                raise ValueError(f"不支持的ascend架构: {arch}，支持的架构: {supported_ascend_archs}")
-            code += """    device = "Ascend"
+            check_backend_arch(backend, arch)
+            code += f"""    ms.set_device("Ascend", {device_id})
+    device = "Ascend"
 """
         elif backend == "cpu":
-            code += """    device = "CPU"
+            code += """    ms.set_device("CPU")
+    device = "CPU"
 """
         return code
     

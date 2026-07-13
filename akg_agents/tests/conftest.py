@@ -45,6 +45,30 @@ def pytest_configure(config):
     print(f"pytest配置: 根据环境变量AKG_AGENTS_LOG_LEVEL={glog_level}设置日志级别为{level_name}")
 
 
+def _cuda_available() -> bool:
+    """True only on a host with a working NVIDIA CUDA device. Degrades to
+    False if torch is absent / CUDA init fails, so ``cuda``-marked tests skip
+    rather than error on non-NVIDIA hosts (e.g. the Ascend boxes)."""
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip ``cuda`` / ``a100`` tests when no NVIDIA device is present —
+    these run real triton-CUDA kernels and otherwise fail with "no NVIDIA
+    driver" on Ascend hardware. Single place that gives those markers their
+    skip semantics."""
+    if _cuda_available():
+        return
+    skip_cuda = pytest.mark.skip(reason="no NVIDIA CUDA device available")
+    for item in items:
+        if "cuda" in item.keywords or "a100" in item.keywords:
+            item.add_marker(skip_cuda)
+
+
 @pytest.fixture(autouse=True)
 def manage_test_dir():
     """

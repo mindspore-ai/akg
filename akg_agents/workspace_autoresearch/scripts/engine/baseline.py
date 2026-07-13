@@ -33,31 +33,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPTS_ROOT)
 sys.path.insert(0, SCRIPT_DIR)
+
+# Logging is owned by akg_agents/__init__.py (root -> stdout); the eval
+# imports below trigger it. No basicConfig here — single owner.
+
 from task_config import load_task_config, run_eval
 from task_config.metric_policy import EvalOutcome, EvalResult
-from utils.failure_extractor import extract_failure_signals, format_for_stdout
+from utils.eval_summary import (
+    eval_result_to_dict, print_eval_metrics, print_failure_signals,
+)
 from task_handle import (
     open_task, Role,
-    TaskCorrupted, TaskConsistencyError, TaskOwnershipError,
+    TaskCorrupted, TaskConsistencyError, TaskOwnershipError, TaskPhaseError,
 )
 from workflow.baseline import BaselinePrecheckOutcome, baseline_exit_code
-from workflow.transition import PhaseController
-
-
-def _eval_result_to_dict(result) -> dict:
-    """Match the dict shape `Task.record_baseline` consumes."""
-    eval_data = {
-        "outcome": result.outcome.value,
-        "correctness": result.correctness,
-        "metrics": result.metrics or {},
-        "error": result.error,
-        "error_source": result.error_source,
-    }
-    if not result.correctness or result.error:
-        eval_data["failure_signals"] = extract_failure_signals(
-            result.raw_output).to_dict()
-        eval_data["raw_output_tail"] = (result.raw_output or "")[-4000:]
-    return eval_data
 
 
 def main():
@@ -101,6 +90,9 @@ def main():
     except TaskOwnershipError as e:
         print(f"[baseline] cannot run: {e}", file=sys.stderr)
         rc = 2
+    except TaskPhaseError as e:
+        print(f"[baseline] refused: {e}", file=sys.stderr)
+        rc = 2
     except TaskCorrupted as e:
         # ORPHAN_SEED / MISSING_SEED raise here (caller-flagged
         # corruption); __exit__ released claim. Defensive: also
@@ -120,7 +112,7 @@ def _run_baseline(task_dir: str, t, args, worker_urls) -> int:
     Classify pre-run state BEFORE run_eval so non-PROCEED outcomes
     don't burn device time. Four outcomes:
       PROCEED      → normal first run; run eval + record.
-      ALREADY_DONE → state + body agree; advance phase, return
+      ALREADY_DONE → state + body agree; derive executable phase, return
                      committed outcome's rc.
       ORPHAN_SEED  → body ahead of state; raise TaskCorrupted (eval
                      would silently overwrite the state metric while
@@ -132,12 +124,12 @@ def _run_baseline(task_dir: str, t, args, worker_urls) -> int:
     pre = t.baseline_preflight()
 
     if pre.outcome == BaselinePrecheckOutcome.ALREADY_DONE:
-        # Idempotent: ensure phase advanced past BASELINE, return rc
-        # mapped from the committed outcome.
-        PhaseController(task_dir).on_baseline_settled()
+        # Idempotent: activation derives the executable phase from the
+        # already-committed event (also heals pre-transactional tasks).
+        t.activate(fresh=False)
         rc = baseline_exit_code(task_dir)
         print(f"[baseline] {pre.detail} (committed outcome → "
-              f"exit={rc})", file=sys.stderr)
+              f"exit={rc})")
         return rc
 
     if pre.outcome in (BaselinePrecheckOutcome.ORPHAN_SEED,
@@ -151,15 +143,15 @@ def _run_baseline(task_dir: str, t, args, worker_urls) -> int:
     try:
         result = run_eval(task_dir, t.config,
                           device_id=args.device_id,
-                          worker_urls=worker_urls)
+                          worker_urls=worker_urls,
+                          current_step=0)  # seed → Step00
     except Exception as e:
         # run_eval normally converts internal failures to
         # EvalResult(INFRA_FAIL, ...); reaching here means it raised.
         # Funnel the exception through the same path as a normal
         # INFRA_FAIL so the ref-baseline gate inside run_baseline_init
         # owns parking the task at BASELINE with no committed progress.
-        # Single owner of the baseline-pending invariant — no duplicate
-        # write_phase / clear_intent here.
+        # The baseline transaction is the single owner of parking/retry state.
         print(f"[baseline] run_eval raised "
               f"{type(e).__name__}: {e}", file=sys.stderr)
         result = EvalResult(
@@ -168,24 +160,13 @@ def _run_baseline(task_dir: str, t, args, worker_urls) -> int:
             error_source="infra",
         )
 
-    eval_data = _eval_result_to_dict(result)
+    eval_data = eval_result_to_dict(result)
 
-    # Pretty-print structured failure signals (UB overflow, aivec
-    # trap, OOM, correctness mismatch, ...) — mirrors pipeline.py so
-    # the seed-failure → PLAN flow surfaces the same actionable
-    # summary the EDIT loop does.
-    if not eval_data.get("correctness", False) or eval_data.get("error"):
-        if eval_data.get("error"):
-            print(f"[baseline] Error: {eval_data['error']}",
-                  flush=True)
-        pretty = format_for_stdout(
-            eval_data.get("failure_signals") or {})
-        if pretty:
-            print(pretty, flush=True)
-        elif eval_data.get("raw_output_tail"):
-            print("[baseline] Eval log tail (no structured "
-                  "signals matched):", flush=True)
-            print(eval_data["raw_output_tail"], flush=True)
+    # Same per-shape table + failure summary the EDIT loop shows, so the
+    # seed → PLAN flow surfaces the ref baseline's per-shape latencies and
+    # any structured failure signals.
+    print_eval_metrics(eval_data, "baseline")
+    print_failure_signals(eval_data, "baseline")
 
     return t.record_baseline(eval_data)
 

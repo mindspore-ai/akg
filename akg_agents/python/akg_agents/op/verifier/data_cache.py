@@ -79,7 +79,12 @@ def _get_env_override(key: str) -> str:
 
 def _normalize_cache_dir(cache_dir: Any) -> str:
     raw = str(cache_dir or DEFAULT_VERIFIER_CACHE_DIR).strip() or DEFAULT_VERIFIER_CACHE_DIR
-    expanded = os.path.expandvars(os.path.expanduser(raw))
+    raw = os.path.expandvars(raw)
+    home = os.getenv("HOME")
+    if home and (raw == "~" or raw.startswith("~/") or raw.startswith("~\\")):
+        expanded = os.path.join(home, raw[2:]) if len(raw) > 1 else home
+    else:
+        expanded = os.path.expanduser(raw)
     return str(Path(expanded))
 
 

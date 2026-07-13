@@ -1,28 +1,26 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, Any, Dict, Union
+from contextlib import asynccontextmanager
+from typing import Tuple, Any, Dict, Optional, Union
 
 
-# Worker-protocol-level default for eval subprocess timeouts (verify /
-# profile / profile_single_task). Concrete tasks usually pass an explicit
-# value derived from TaskConfig.eval_timeout; this default is the
-# backstop applied only when no explicit value is provided. Single owner
-# — every layer downstream (LocalWorker / RemoteWorker, KernelVerifier,
-# DSL adapters that bypass the verifier helper) references THIS constant
-# instead of redeclaring 300 as a literal at each callsite.
-DEFAULT_EVAL_TIMEOUT_S: int = 300
-
-# Worker-protocol-level default for the ``generate_reference`` step.
-# Smaller than the eval timeout because reference generation is
-# typically a one-shot torch forward pass, not a multi-shape benchmark.
-DEFAULT_GEN_REF_TIMEOUT_S: int = 120
-
-# Worker-protocol-level defaults for benchmark iteration counts. Mirror
-# the same SSOT pattern as the timeouts — every layer pulls from here
-# instead of redeclaring ``warmup_times: int = 5`` / ``run_times: int = 50``
-# at every callsite. Workspace-side overrides come via the
-# ``warmup_times`` / ``run_times`` keys in ``profile_settings``.
-DEFAULT_WARMUP_TIMES: int = 5
-DEFAULT_RUN_TIMES: int = 50
+def empty_profile_result(error: Optional[str] = None) -> Dict[str, Any]:
+    """Canonical profile failure shape shared by local and remote workers."""
+    result: Dict[str, Any] = {
+        "gen_time": None,
+        "base_time": None,
+        "speedup": 0.0,
+        "per_shape_gen_us": [],
+        "per_shape_base_us": [],
+        "gen_method": None,
+        "base_method": None,
+        "roofline_time": None,
+        "roofline_speedup": 0.0,
+        "roofline": None,
+        "artifacts": {},
+    }
+    if error is not None:
+        result["error"] = error
+    return result
 
 
 class WorkerInterface(ABC):
@@ -31,7 +29,9 @@ class WorkerInterface(ABC):
     """
 
     @abstractmethod
-    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = DEFAULT_EVAL_TIMEOUT_S) -> Tuple[bool, str, Dict[str, Any]]:
+    async def verify(self, package_data: Union[bytes, str], task_id: str,
+                     op_name: str, timeout: Optional[int] = None
+                     ) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Execute verification task.
         
@@ -78,7 +78,10 @@ class WorkerInterface(ABC):
         pass
 
     @abstractmethod
-    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = DEFAULT_GEN_REF_TIMEOUT_S) -> Tuple[bool, str, bytes]:
+    async def generate_reference(self, package_data: bytes, task_id: str,
+                                 op_name: str,
+                                 timeout: Optional[int] = None
+                                 ) -> Tuple[bool, str, bytes]:
         """
         Execute task_desc and generate reference data.
         
@@ -134,3 +137,33 @@ class WorkerInterface(ABC):
             str: 文档内容
         """
         pass
+
+    @abstractmethod
+    async def acquire_device(self, task_id: str = "unknown",
+                             timeout: Optional[float] = None) -> Tuple[int, int]:
+        """Reserve a device. Returns ``(device_id, lease_id)``; the lease_id
+        must be presented on release. LocalWorker delegates to its DevicePool;
+        RemoteWorker calls the daemon's /acquire_device."""
+        ...
+
+    @abstractmethod
+    async def release_device(self, device_id: int, lease_id: int,
+                             task_id: str = "unknown") -> None:
+        """Return a device acquired under ``lease_id``. Idempotent; a stale
+        lease_id is rejected (won't free a successor's device)."""
+        ...
+
+    @asynccontextmanager
+    async def device_lease(self, task_id: str = "unknown", *,
+                           timeout: Optional[float] = None):
+        """Hold a device for the block, releasing on normal exit, exception,
+        AND cancellation. The single structural way to obtain a device — the
+        lease_id is tracked internally so callers only see the device id. If
+        the client process is killed before /release_device runs, the daemon's
+        reaper reclaims the device, so it can never be permanently leaked.
+        """
+        device_id, lease_id = await self.acquire_device(task_id, timeout=timeout)
+        try:
+            yield device_id
+        finally:
+            await self.release_device(device_id, lease_id, task_id)

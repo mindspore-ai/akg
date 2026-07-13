@@ -22,12 +22,12 @@ import re
 import json
 import logging
 import math
-import subprocess
 from typing import Tuple, Optional, Dict, Any, List
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
-from akg_agents.utils.process_utils import run_command
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
+from akg_agents.utils.process_utils import run_command_capture
 
 logger = logging.getLogger(__name__)
 
@@ -116,63 +116,49 @@ def read_profile_result_from_json(verify_dir: str,
     }
 
 
-def run_profile_scripts_and_collect_results(
-    verify_dir: str, op_name: str, task_id: str = "0",
-    override_base_time_us: Optional[float] = None,
+async def run_profile_scripts_and_collect_results(
+    verify_dir: str, op_name: str, run_script, *, task_id: str = "0",
+    override_base_section: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Run base + generation profile scripts and collect their canonical
-    per-shape sections.
+    per-shape sections. Single owner of the base/gen orchestration; the
+    caller injects ``run_script(script_name, label) -> Awaitable[bool]`` so
+    the subprocess + timeout/kill policy lives with the caller (the worker
+    runs each as a killable async subprocess; tests pass a fake).
 
-    Returns ``{"base": Section | None, "gen": Section | None}``. ``base``
-    is ``None`` when the base script is absent (cross-backend / cached) and
-    no override was provided, or when its measurement otherwise failed.
-    ``gen`` is ``None`` when generation measurement failed (subprocess
-    non-zero or JSON missing); callers treat that as an infra error.
+    Returns ``{"base": Section | None, "gen": Section | None}``. ``base`` is
+    ``None`` when the base script is absent (cross-backend / cached) and no
+    override was provided, or when its measurement failed. ``gen`` is
+    ``None`` when generation measurement failed (subprocess non-zero or JSON
+    missing); callers treat that as an infra error.
 
-    Thread-safe: uses ``cwd=`` instead of ``os.chdir()``.
-    """
+    ``override_base_section``: canonical Section dict (built via
+    :func:`make_profile_section`) used as ``base`` verbatim."""
     base_section: Optional[Dict[str, Any]] = None
-
-    # Cached / cross-backend path: caller already has the baseline. Wrap as
-    # single-case section so downstream array consumers see the same shape.
-    if (override_base_time_us is not None and override_base_time_us > 0
-            and override_base_time_us < float("inf")):
-        base_section = make_profile_section(
-            override_base_time_us, method="override")
+    if (override_base_section is not None
+            and isinstance(override_base_section.get("avg_us"), (int, float))
+            and 0 < override_base_section["avg_us"] < float("inf")):
+        base_section = override_base_section
         logger.info(f"[{op_name}: {task_id}] 使用缓存的 baseline: "
-                    f"{base_section['avg_us']:.2f} us")
-    else:
-        base_script = f"profile_{op_name}_base.py"
-        base_script_path = os.path.join(verify_dir, base_script)
-        if os.path.exists(base_script_path):
-            base_result = run_command(
-                ["python", base_script], cmd_msg="base_profile",
-                timeout=600, cwd=verify_dir,
-            )
-            if not base_result[0]:
-                logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: "
-                             f"{base_result[1]}")
-            else:
-                base_section = read_profile_result_from_json(
-                    verify_dir, "base_profile_result.json")
+                    f"{base_section['avg_us']:.2f} us "
+                    f"(per_shape len={len(base_section.get('per_case_us') or [])})")
+    elif os.path.exists(os.path.join(verify_dir, f"profile_{op_name}_base.py")):
+        if await run_script(f"profile_{op_name}_base.py", "base_profile"):
+            base_section = read_profile_result_from_json(
+                verify_dir, "base_profile_result.json")
         else:
-            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在"
-                        f"（使用缓存 baseline 或跨后端场景），跳过 base profile")
+            logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败")
+    else:
+        logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在"
+                    f"（使用缓存 baseline 或跨后端场景），跳过 base profile")
 
     gen_section: Optional[Dict[str, Any]] = None
-    gen_script = f"profile_{op_name}_generation.py"
-    gen_script_path = os.path.join(verify_dir, gen_script)
-    if os.path.exists(gen_script_path):
-        gen_result = run_command(
-            ["python", gen_script], cmd_msg="generation_profile",
-            timeout=600, cwd=verify_dir,
-        )
-        if not gen_result[0]:
-            logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: "
-                         f"{gen_result[1]}")
-        else:
+    if os.path.exists(os.path.join(verify_dir, f"profile_{op_name}_generation.py")):
+        if await run_script(f"profile_{op_name}_generation.py", "generation_profile"):
             gen_section = read_profile_result_from_json(
                 verify_dir, "generation_profile_result.json")
+        else:
+            logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败")
     else:
         logger.info(f"[{op_name}: {task_id}] 生成代码性能脚本不存在，"
                     "跳过 generation profile")
@@ -186,7 +172,9 @@ def run_profile_scripts_and_collect_results(
     return {"base": base_section, "gen": gen_section}
 
 
-def run_msprof(script_path: str, op_name: str = "", task_id: str = "0", timeout: int = 600) -> Tuple[bool, str, Optional[str]]:
+def run_msprof(script_path: str, op_name: str = "", task_id: str = "0",
+               timeout: Optional[int] = None,
+               cancel_event=None) -> Tuple[bool, str, Optional[str]]:
     """运行msprof性能分析
     
     Args:
@@ -198,13 +186,19 @@ def run_msprof(script_path: str, op_name: str = "", task_id: str = "0", timeout:
     Returns:
         (success, error_msg, prof_path): 是否成功，错误信息，prof数据路径
     """
+    timeout = resolve_eval_timeout(timeout)
     try:
-        process = subprocess.run(
-            ["msprof", "--application", f"python {script_path}"],
-            capture_output=True, text=True, timeout=timeout
+        returncode, stdout, stderr, timed_out = run_command_capture(
+            ["msprof", f"--application=python {script_path}"],
+            timeout=timeout,
+            cancel_event=cancel_event,
         )
+        if timed_out:
+            return False, f"msprof timed out after {timeout} seconds", None
+        if returncode != 0:
+            return False, stderr or stdout or f"msprof exited with {returncode}", None
 
-        for line in process.stdout.split('\n'):
+        for line in stdout.split('\n'):
             if "[INFO] Process profiling data complete. Data is saved in" in line:
                 match = re.search(r"Data is saved in (.+)$", line)
                 if match:
@@ -270,7 +264,9 @@ def analyze_prof_data(prof_path: str, warmup_times: int, run_times: int, op_name
         return False, f"分析数据时出错: {str(e)}", float('inf')
 
 
-def run_nsys(script_path: str, op_name: str = "", task_id: str = "0", timeout: int = 600) -> Tuple[bool, str, Optional[str]]:
+def run_nsys(script_path: str, op_name: str = "", task_id: str = "0",
+             timeout: Optional[int] = None,
+             cancel_event=None) -> Tuple[bool, str, Optional[str]]:
     """运行nsys性能分析
     
     Args:
@@ -282,11 +278,21 @@ def run_nsys(script_path: str, op_name: str = "", task_id: str = "0", timeout: i
     Returns:
         (success, error_msg, rep_path): 是否成功，错误信息，nsys报告文件路径
     """
+    timeout = resolve_eval_timeout(timeout)
     try:
         output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
         cmd = ["nsys", "profile", f"--output={output_name}", "python", script_path]
         logger.debug(f"[{task_id}:{op_name}] Running nsys profile: {cmd}")
-        process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        returncode, stdout, stderr, timed_out = run_command_capture(
+            cmd,
+            timeout=timeout,
+            cwd=os.path.dirname(script_path),
+            cancel_event=cancel_event,
+        )
+        if timed_out:
+            return False, f"nsys timed out after {timeout} seconds", None
+        if returncode != 0:
+            return False, stderr or stdout or f"nsys exited with {returncode}", None
         report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
 
         if os.path.exists(report_path):
@@ -297,7 +303,10 @@ def run_nsys(script_path: str, op_name: str = "", task_id: str = "0", timeout: i
         return False, f"执行错误: {str(e)}", None
 
 
-def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int, profile_type: str = "", op_name: str = "", task_id: str = "0") -> Tuple[bool, str, float]:
+def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int,
+                      profile_type: str = "", op_name: str = "",
+                      task_id: str = "0", cancel_event=None
+                      ) -> Tuple[bool, str, float]:
     """分析nsys生成的rep文件，返回平均耗时(us)
     
     Args:
@@ -331,10 +340,18 @@ def analyze_nsys_data(rep_path: str, warmup_times: int, run_times: int, profile_
             "csv",
             "--output",
             str(csv_path),
-            rep_path,
+            str(rep_path),
         ]
         logger.debug(f"[{task_id}:{op_name}] Running nsys stats: {cmd}")
-        subprocess.run(cmd, check=True)
+        returncode, stdout, stderr, timed_out = run_command_capture(
+            cmd,
+            timeout=resolve_eval_timeout(),
+            cancel_event=cancel_event,
+        )
+        if timed_out:
+            return False, "nsys stats timed out", float('inf')
+        if returncode != 0:
+            return False, stderr or stdout or f"nsys stats exited with {returncode}", float('inf')
         csv_path = dir_plib / f"{csv_base}_gputrace.csv"
 
         if not os.path.exists(csv_path):

@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Round-0 SEED eval recorder. `run_baseline_init(task_dir, eval_data)`
-is called in-process by engine/baseline.py and returns that script's
-exit code (see `_EXIT_FOR`). Owns the post-baseline phase transition
-via PhaseController.on_baseline_settled — the post-Bash hook only
-emits guidance off the phase already on disk."""
+"""Round-0 SEED transaction.
+
+The baseline body, progress fields, and target phase are committed as one
+event.  The post-tool hook observes that result; it never advances state.
+"""
 from __future__ import annotations
 
 import os
@@ -27,16 +27,15 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from phase_machine import (  # noqa: E402
-    BASELINE, Progress, append_history, load_progress, load_state,
+    BASELINE, PLAN, Progress, append_history, load_progress, load_state,
     save_state, history_path, write_intent, clear_intent, replay_intent,
-    write_phase,
+    state_transaction,
 )
 from task_config import EvalOutcome, load_task_config  # noqa: E402
 from utils.baseline_anchor import valid_metric  # noqa: E402
 from utils.git_utils import current_head_short  # noqa: E402
 
 from .progress_reducer import reduce_baseline_init
-from .transition import PhaseController
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +103,7 @@ def precheck_baseline(task_dir: str) -> BaselinePrecheck:
     replay = replay_intent(task_dir)
     if replay is not None:
         print(f"[baseline] replay_intent {replay['action']}: "
-              f"{replay['detail']}", file=sys.stderr)
+              f"{replay['detail']}")
 
     state = load_state(task_dir) or {}
     seed_on_disk = _existing_seed_row(task_dir)
@@ -214,6 +213,11 @@ def baseline_exit_code(task_dir: str) -> int:
 
 
 def run_baseline_init(task_dir: str, eval_data: dict) -> int:
+    with state_transaction(task_dir):
+        return _run_baseline_init(task_dir, eval_data)
+
+
+def _run_baseline_init(task_dir: str, eval_data: dict) -> int:
     """Library entry point. engine/baseline.py calls this after
     run_eval finishes; the return value becomes that script's exit
     code. Side effects (progress, history, phase) are durable on disk
@@ -223,18 +227,24 @@ def run_baseline_init(task_dir: str, eval_data: dict) -> int:
         print("[baseline] ERROR: task.yaml not found", file=sys.stderr)
         return 1
 
-    # Single hard gate: a baseline EXISTS iff the PyTorch reference was
-    # measured. Without a valid ref latency there is nothing to optimise
-    # against (speedup / KEEP-DISCARD are meaningless), so commit nothing
-    # — no Progress, no SEED row, progress_initialized stays False — and
-    # park the task at BASELINE so a retry after the env/ref/worker is
-    # fixed re-evaluates cleanly. Seed timing is NOT a substitute.
+    # A baseline exists only for an actionable evaluation: valid reference
+    # plus OK/KERNEL_FAIL.  INFRA_FAIL never becomes progress even if a
+    # partial ref timing happened to be present.
     metrics = eval_data.get("metrics") or {}
-    if not valid_metric(metrics.get("ref_latency_us")):
-        write_phase(task_dir, BASELINE)
+    try:
+        outcome = EvalOutcome(eval_data.get("outcome"))
+    except (TypeError, ValueError):
+        outcome = EvalOutcome.INFRA_FAIL
+    if (outcome == EvalOutcome.INFRA_FAIL
+            or not valid_metric(metrics.get("ref_latency_us"))):
+        state = load_state(task_dir) or {}
+        state["phase"] = BASELINE
+        save_state(task_dir, state)
         clear_intent(task_dir)
-        print(f"[baseline] no valid ref baseline "
-              f"({eval_data.get('error') or 'ref_latency_us missing'}) — "
+        reason = (eval_data.get("error") or
+                  ("infrastructure failure" if outcome == EvalOutcome.INFRA_FAIL
+                   else "ref_latency_us missing"))
+        print(f"[baseline] baseline unavailable ({reason}) — "
               f"baseline pending; fix env/ref/worker and re-run.",
               file=sys.stderr)
         return _EXIT_FOR[EvalOutcome.INFRA_FAIL]
@@ -244,16 +254,33 @@ def run_baseline_init(task_dir: str, eval_data: dict) -> int:
     reduction = reduce_baseline_init(
         existing, config, eval_data, best_commit=head_commit)
 
+    # An OK result without its primary metric is structurally incomplete.
+    # Do not write a SEED row/progress that preflight would later classify as
+    # ALREADY_DONE; leaving the event uncommitted makes the retry real.
+    if reduction.outcome == EvalOutcome.OK and reduction.seed_metric is None:
+        state = load_state(task_dir) or {}
+        state["phase"] = BASELINE
+        save_state(task_dir, state)
+        clear_intent(task_dir)
+        print(f"[baseline] ERROR: outcome=OK but no valid "
+              f"{config.primary_metric}; baseline not committed, retrying "
+              f"will re-evaluate.", file=sys.stderr)
+        return 2
+
     if reduction.dropped_seed_metric is not None:
         print(f"[baseline] dropping wrong-output seed timing "
               f"(latency_us={reduction.dropped_seed_metric:.1f}) — "
               f"kernel failed correctness "
-              f"so its measurement cannot anchor best_metric.",
-              file=sys.stderr)
+              f"so its measurement cannot anchor best_metric.")
     if reduction.anchor.message:
-        print(f"[baseline] {reduction.anchor.message}", file=sys.stderr)
+        print(f"[baseline] {reduction.anchor.message}")
 
-    progress_fields = reduction.progress.to_dict()
+    state_patch = {
+        **reduction.progress.to_dict(),
+        "phase": PLAN,
+        "expected_history_round": 0,
+        "progress_initialized": True,
+    }
 
     # ---- Journal ----
     # Write intent FIRST so a crash between body append and state
@@ -263,7 +290,7 @@ def run_baseline_init(task_dir: str, eval_data: dict) -> int:
     write_intent(task_dir, {
         "kind": "baseline",
         "round": 0,
-        "progress_fields": progress_fields,
+        "state_patch": state_patch,
     })
 
     # ---- Body: history.jsonl ----
@@ -290,37 +317,20 @@ def run_baseline_init(task_dir: str, eval_data: dict) -> int:
     # dashboard rely on it to avoid offering a Round 0/0 view on a task
     # that hasn't run baseline yet.
     state = load_state(task_dir) or {}
-    for k, v in progress_fields.items():
-        state[k] = v
-    state["expected_history_round"] = 0
-    state["progress_initialized"] = True
+    state.update(state_patch)
     save_state(task_dir, state)
 
     # ---- Journal clear ----
     clear_intent(task_dir)
 
-    # Phase transition is owned by on_baseline_settled. Only KERNEL_FAIL
-    # reaches here now (OK falls through below; INFRA_FAIL was gated out
-    # above before any commit): kernel_fail commits the ref baseline and
-    # routes to PLAN so the main loop rewrites the broken seed.
+    # Both actionable outcomes now have phase=PLAN in the same state commit.
     if reduction.outcome != EvalOutcome.OK:
-        PhaseController(task_dir).on_baseline_settled()
         print(f"[baseline] {reduction.outcome.value}: "
-              f"{eval_data.get('error') or '(no detail)'}",
-              file=sys.stderr)
+              f"{eval_data.get('error') or '(no detail)'}")
         return _EXIT_FOR[reduction.outcome]
 
-    if reduction.seed_metric is None:
-        # Degenerate: outcome=OK but no primary metric. Leave phase at
-        # BASELINE so the agent retries.
-        print(f"[baseline] ERROR: outcome=OK but no valid "
-              f"{config.primary_metric}; treating as kernel-no-timing.",
-              file=sys.stderr)
-        return 2
-
-    PhaseController(task_dir).on_baseline_settled()
     print(f"[baseline] Initialized: task={config.name}, "
           f"seed_{config.primary_metric}={reduction.seed_metric}, "
           f"baseline({reduction.anchor.source})={reduction.anchor.metric}, "
-          f"commit={head_commit}", file=sys.stderr)
+          f"commit={head_commit}")
     return 0

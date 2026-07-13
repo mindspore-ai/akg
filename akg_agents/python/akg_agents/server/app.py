@@ -1,4 +1,5 @@
 import os
+import sys
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
@@ -11,8 +12,8 @@ from akg_agents.core.worker.manager import (
 )
 from akg_agents.core.worker.remote_worker import RemoteWorker
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
+# 配置日志。stream=sys.stdout 保证捕获时日志按时间顺序（见 akg_agents/__init__.py）。
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIKG Server")

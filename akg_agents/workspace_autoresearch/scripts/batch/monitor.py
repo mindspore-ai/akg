@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as mf
 # Reach up one level (scripts/) for the shared settings accessors.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils.settings import classify_speedup  # noqa: E402
+from utils.settings import classify_speedup, recorded_speedup  # noqa: E402
 
 DASHBOARD_PY = mf.repo_root() / "scripts" / "dashboard.py"
 
@@ -90,6 +90,7 @@ def task_state(task_dir: Path) -> dict:
     if summary.get("progress_initialized"):
         out["baseline_metric"] = summary.get("baseline_metric")
         out["best_metric"]     = summary.get("best_metric")
+        out["best_speedup"]    = summary.get("best_speedup")
 
     # Heartbeat age — last_touched is the new single source of truth.
     last_touched = summary.get("last_touched")
@@ -203,9 +204,10 @@ def render(batch_dir: Path, progress: dict, active: dict | None,
                    f"status={active.get('status', '?')}")
         bm = active.get("baseline_metric")
         best = active.get("best_metric")
-        if isinstance(bm, (int, float)) and isinstance(best, (int, float)) and best > 0:
+        sp = recorded_speedup(active)
+        if sp is not None:
             out.append(f"        baseline={fmt_metric(bm)}  best={fmt_metric(best)}  "
-                       f"speedup={bm/best:.2f}x")
+                       f"speedup={sp:.2f}x")
         elif bm is not None or best is not None:
             out.append(f"        baseline={bm}  best={best}")
         hb = active.get("heartbeat_age_s")
@@ -251,9 +253,9 @@ def render(batch_dir: Path, progress: dict, active: dict | None,
         if v.get("status") != "done":
             continue
         r = v.get("result") or {}
-        bm, best = r.get("baseline_metric"), r.get("best_metric")
-        if isinstance(bm, (int, float)) and isinstance(best, (int, float)) and best > 0:
-            speedups.append((k, bm / best))
+        sp = recorded_speedup(r)
+        if sp is not None:
+            speedups.append((k, sp))
     if speedups:
         vals = [s for _, s in speedups]
         labels = [classify_speedup(v) for v in vals]

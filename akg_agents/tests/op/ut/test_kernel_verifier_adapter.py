@@ -18,7 +18,39 @@ import os
 import tempfile
 import shutil
 import pytest
-from akg_agents.op.verifier.kernel_verifier import KernelVerifier
+from akg_agents.op.verifier.kernel_verifier import (
+    KernelVerifier,
+    _get_framework_sync_code,
+    sync_artifacts_to_directory,
+)
+
+
+@pytest.mark.parametrize(
+    ("framework", "backend", "expected"),
+    [
+        ("torch", "cuda", "torch.cuda.synchronize()"),
+        ("torch", "ascend", "torch.npu.synchronize()"),
+        ("mindspore", "ascend", "ms.runtime.synchronize()"),
+        ("numpy", "cpu", ""),
+    ],
+)
+def test_framework_sync_code(framework, backend, expected):
+    assert _get_framework_sync_code(framework, backend) == expected
+
+
+def test_sync_artifacts_rejects_path_escape(tmp_path):
+    verify_dir = tmp_path / "verify"
+    verify_dir.mkdir()
+    outside = tmp_path / "escaped.json"
+
+    sync_artifacts_to_directory(
+        {"ok/result.json": "{}", "../escaped.json": "owned"},
+        str(verify_dir),
+        "unit",
+    )
+
+    assert (verify_dir / "ok" / "result.json").read_text() == "{}"
+    assert not outside.exists()
 
 
 class TestKernelVerifierWithAdapters:
@@ -150,4 +182,3 @@ def test_op_triton_cuda_torch(x):
             with open(verify_script, "r", encoding="utf-8") as f:
                 content = f.read()
                 assert "get_inputs_dyn_list" in content
-

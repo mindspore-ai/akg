@@ -47,7 +47,7 @@ akg_cli worker --remote-host my-npu --start \
 ```
 
 `akg_cli worker --remote-host my-npu --stop` tears down both the remote
-daemon and the local tunnel. See [AUTORESEARCH.md §B](AUTORESEARCH.md)
+daemon and the local tunnel. See [AUTORESEARCH.md §3](AUTORESEARCH.md)
 for the full two-machine setup walkthrough.
 
 ## Skills Library
@@ -67,32 +67,31 @@ Read 1-3 most relevant SKILL.md files and cite filenames in plan rationales.
 
 1. **`.ar_state/plan.md` is the source of truth.** Only `create_plan.py`
    and `pipeline.py`'s inlined settle step write it (both via
-   `workflow.PlanStore`). Never hand-edit. TodoWrite is a UI mirror,
-   not a substitute.
+   `workflow.PlanStore`). Never hand-edit. The plan mirror is a UI
+   reflection, not a substitute.
 2. **Plan IDs are globally monotonic.** `p1, p2, ...` from
    `state.next_pid`. Never reuse, never skip.
 3. **Every `pN` either settles (KEEP / DISCARD / FAIL in `history.jsonl`)
    or is silently dropped at a REPLAN/DIAGNOSE boundary** — pid counter
    still advances, no synthetic DISCARD row written.
-4. **Phase transitions are owned by `workflow.PhaseController`.** Never
-   write `state.json` manually. The hook (`hooks/post_bash.py`)
-   triggers the controller after activation and after `create_plan.py`
-   validates; the engine scripts (`workflow.run_baseline_init` inside
-   `engine/baseline.py`, `_post_settle` inside `engine/pipeline.py`)
-   trigger it after baseline / round settlement. Either way every
-   write goes through `PhaseController.on_*`. Listen to the
+4. **The event transaction owns its phase transition.** Baseline, plan
+   commit, and round settlement write their result fields, target `phase`,
+   and replay sentinels in the same atomic `state.json` save. The two pure
+   selectors in `workflow.transition` only answer where resume/settlement
+   should go; they never write state. Post-tool hooks observe committed
+   state and emit guidance — they do not advance it. Listen to the
    `[AR Phase: ...]` messages on stderr; don't poke `phase_machine`
-   directly (it's a library, not a CLI — `hooks/guard_bash.py` rejects
+   directly (it's a library, not a CLI — the pre-tool Bash gate rejects
    direct invocation).
 5. **Editable files are scoped by `task.yaml.editable_files`.** Editing
-   anything else is rejected by `hooks/guard_edit.py`.
+   anything else is rejected by the pre-tool Edit gate.
 6. **After a session break, resume with `/autoresearch --resume`.** Do
    not patch state files to recover.
 7. **`create_plan.py` rejects mean the plan has a real problem**
    (diversity, repeated failure keywords, short rationale). Read stderr
    and rewrite — don't retry the same XML payload.
-8. **TodoWrite sync is mandatory.** When a hook emits `additionalContext`
-   with a TodoWrite payload, call TodoWrite with it verbatim next turn.
+8. **Plan-mirror sync.** When a hook emits a plan-mirror payload in
+   `additionalContext`, mirror it verbatim next turn; never hand-craft it.
 9. **AR scripts run as direct top-level Bash invocations only.**
    To *invoke* a blessed CLI the command must be a single foreground
    call: `python scripts/engine/<name>.py <task_dir>
@@ -103,7 +102,7 @@ Read 1-3 most relevant SKILL.md files and cite filenames in plan rationales.
    (`> log 2>&1`) are fine. Wrappers (`nohup`, `bash -lc`, `sh -c`,
    subshells, `$(...)`), chains (`&&`, `||`, `;`, `|`), and
    backgrounding (`&`) are unsupported and rejected by
-   `hooks/guard_bash.py`. Run multiple AR scripts as separate Bash
+   the pre-tool Bash gate. Run multiple AR scripts as separate Bash
    tool calls.
 
    *Reading* AR scripts (e.g. `cat scripts/engine/pipeline.py`,
@@ -135,7 +134,7 @@ Read 1-3 most relevant SKILL.md files and cite filenames in plan rationales.
    read-only-by-default tool isolation produce a more reliable diagnosis,
    not because the host can prove the subagent wrote the file.
 
-11. **Stop is only legal at phase FINISH.** `hooks/stop_save.py` blocks
+11. **Stop is only legal at phase FINISH.** The Stop hook blocks
     early Stop in every other phase; the block message embeds
     `get_guidance(task_dir)` so the agent sees the next action.
     `max_rounds` + auto-DIAGNOSE-on-3-fails are the budget. If stuck,

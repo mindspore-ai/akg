@@ -34,7 +34,9 @@ Files this module reads (artifacts written elsewhere):
 import json
 import os
 import sys
+import threading
 import time
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from typing import Optional, Union
 
@@ -44,7 +46,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS_DIR = os.path.dirname(_HERE)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
-from utils.json_io import sanitize_floats  # noqa: E402
+from utils.json_io import (  # noqa: E402
+    atomic_write_json,
+    atomic_write_text,
+    sanitize_floats,
+)
 
 from .models import Progress
 
@@ -79,7 +85,7 @@ EDIT_MARKER_FILE = ".edit_started"
 # transaction from this file. See `write_intent` / `replay_intent`.
 INTENT_FILE = "intent.json"
 
-# DIAGNOSE artifact — see CLAUDE.md invariant #10.
+# DIAGNOSE artifact — see AGENTS.md invariant #10.
 DIAGNOSE_ARTIFACT_TEMPLATE = "diagnose_v{}.md"
 DIAGNOSE_MARKER_TEMPLATE = "[AR DIAGNOSE COMPLETE marker_v{}]"
 # Pulled from config.yaml `defaults.diagnose_max_attempts` at import time
@@ -90,19 +96,11 @@ DIAGNOSE_ATTEMPTS_CAP = _diagnose_max_attempts()
 
 
 # ---------------------------------------------------------------------------
-# Project root + per-op pointer (scaffold -> batch/run.py handoff)
+# Project root + session ownership index
 # ---------------------------------------------------------------------------
 
-def _find_project_root() -> str:
-    """The autoresearch project root. Derived from this file's fixed
-    location: <autoresearch_root>/scripts/phase_machine/state_store.py.
-    """
-    return os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-
-
-_PROJECT_ROOT = _find_project_root()
-_TASK_DIR_POINTERS = os.path.join(_PROJECT_ROOT, ".task_dir_pointers")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 
 # Repo-level session→task_dir index. Each session has its own file at
 # <repo>/.session_tasks/<sha(session_id)>; its content is the absolute
@@ -112,35 +110,91 @@ _TASK_DIR_POINTERS = os.path.join(_PROJECT_ROOT, ".task_dir_pointers")
 _SESSION_TASKS_DIR = os.path.join(_PROJECT_ROOT, ".session_tasks")
 
 
-def task_dir_pointer_path(op_name: str) -> str:
-    """Per-op pointer file path. scaffold writes the task_dir here
-    immediately after creating <repo>/ar_tasks/<op>_<ts>_<rand>;
-    batch/run.py reads it instead of mtime-scanning."""
-    safe = op_name.replace("/", "_").replace("\\", "_")
-    return os.path.join(_TASK_DIR_POINTERS, safe)
+# One task-scoped lock serializes every state read-modify-write and the
+# corresponding WAL/body/commit sequence.  The in-process RLock covers hook
+# threads; the OS advisory lock covers separate hook/agent processes and is
+# released automatically if a process dies.
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+_LOCK_LOCAL = threading.local()
 
 
-def write_task_dir_pointer(op_name: str, task_dir: str) -> None:
-    """Atomic write."""
-    path = task_dir_pointer_path(op_name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(os.path.abspath(task_dir))
-    os.replace(tmp, path)
+def _thread_lock(path: str) -> threading.RLock:
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(path, threading.RLock())
 
 
-def read_task_dir_pointer(op_name: str) -> Optional[str]:
-    """Returns absolute task_dir, or None when missing / dangling."""
-    path = task_dir_pointer_path(op_name)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            td = f.read().strip()
-    except OSError:
-        return None
-    return td if td and os.path.isdir(td) else None
+@contextmanager
+def _file_lock(lock_path: str):
+    lock_path = os.path.abspath(lock_path)
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with _thread_lock(lock_path):
+        held = getattr(_LOCK_LOCAL, "held", set())
+        if lock_path in held:
+            yield
+            return
+
+        lock_file = open(lock_path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                while True:
+                    try:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.01)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+            held = set(held)
+            held.add(lock_path)
+            _LOCK_LOCAL.held = held
+            try:
+                yield
+            finally:
+                held.remove(lock_path)
+                _LOCK_LOCAL.held = held
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+@contextmanager
+def _state_lock(task_dir: str):
+    with _file_lock(state_path(task_dir, ".state.lock")):
+        yield
+
+
+@contextmanager
+def _session_lock(session_id: str):
+    if not session_id:
+        yield
+        return
+    with _file_lock(_session_index_path(session_id) + ".lock"):
+        yield
+
+
+@contextmanager
+def state_transaction(*task_dirs: str):
+    """Serialize a complete state/WAL/body transaction for one or more tasks."""
+    paths = sorted({os.path.abspath(td) for td in task_dirs if td})
+    with ExitStack() as stack:
+        for task_dir in paths:
+            stack.enter_context(_state_lock(task_dir))
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -238,30 +292,11 @@ def load_state(task_dir: str) -> Optional[dict]:
 
 
 def save_state(task_dir: str, state: dict) -> None:
-    """Atomic write of the full state record. Bumps last_touched.
-    Callers pass the COMPLETE new state dict — partial updates go
-    through update_state below."""
-    state = dict(state)
-    state["last_touched"] = _now_iso()
-    path = state_record_path(task_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(sanitize_floats(state), f, indent=2)
-    os.replace(tmp, path)
-
-
-def update_state(task_dir: str, **fields) -> dict:
-    """Load → merge fields → atomic save. Returns the post-merge state.
-    Convenience for single-field updates (touch_heartbeat, owner
-    changes); transactional callers that mutate many fields should
-    build the dict explicitly and call save_state."""
-    state = load_state(task_dir) or _fresh_state()
-    state.update(fields)
-    save_state(task_dir, state)
-    return state
-
-
+    """Atomic write of the complete state record. Bumps last_touched."""
+    with _state_lock(task_dir):
+        state = dict(state)
+        state["last_touched"] = _now_iso()
+        atomic_write_json(state_record_path(task_dir), state)
 def _fresh_state() -> dict:
     """Default state record for a task that has none yet on disk.
     Two orthogonal semantics live in state.json:
@@ -300,9 +335,16 @@ def _now_iso() -> str:
 # clear_active_task to release a task they themselves spawned.
 
 def _our_session_id() -> str:
-    """Caller's Claude Code session id (empty when not inside an agent
-    process — supervisors like batch/run.py)."""
-    return os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    """Caller's agent session id (empty when not inside an agent process —
+    supervisors like batch/run.py).
+
+    Agent-neutral seam: any adapter can supply the session id via
+    ``AR_SESSION_ID``. Claude Code sets ``CLAUDE_CODE_SESSION_ID`` natively,
+    so it is honoured as a fallback and existing behaviour is unchanged;
+    other harnesses (opencode, …) export ``AR_SESSION_ID`` from their own
+    session handle. This is the ONLY place the session-id source is read."""
+    return (os.environ.get("AR_SESSION_ID")
+            or os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
 
 
 # ---- Session→task index ---------------------------------------------------
@@ -324,12 +366,8 @@ def _session_index_path(session_id: str) -> str:
 def _write_session_index(session_id: str, task_dir: str) -> None:
     if not session_id:
         return
-    path = _session_index_path(session_id)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(os.path.abspath(task_dir))
-    os.replace(tmp, path)
+    atomic_write_text(
+        _session_index_path(session_id), os.path.abspath(task_dir))
 
 
 def _read_session_index(session_id: str) -> Optional[str]:
@@ -356,17 +394,10 @@ def _clear_session_index(session_id: str) -> None:
 
 
 def _heartbeat_fresh(state: dict) -> bool:
-    """True iff state.last_touched is within heartbeat_fresh_seconds.
-    Loud-fallback to 180s if settings is unreachable."""
-    try:
-        from utils.settings import heartbeat_fresh_seconds as _hb
-        window = _hb()
-    except Exception as e:
-        print(f"[state_store] WARNING: heartbeat_fresh_seconds() "
-              f"unavailable ({e}); falling back to 180s.", file=sys.stderr)
-        window = 180
+    """True iff state.last_touched is within heartbeat_fresh_seconds."""
+    from utils.settings import heartbeat_fresh_seconds
     age = _age_seconds(state.get("last_touched"))
-    return age < window
+    return age < heartbeat_fresh_seconds()
 
 
 def _age_seconds(iso_str: Optional[str]) -> float:
@@ -471,6 +502,11 @@ def get_task_dir() -> str:
 
 
 def set_task_dir(task_dir: str, *, force: bool = False) -> bool:
+    with _session_lock(_our_session_id()):
+        return _set_task_dir(task_dir, force=force)
+
+
+def _set_task_dir(task_dir: str, *, force: bool = False) -> bool:
     """Claim `task_dir` for the current session. Returns True on
     success, False when refused.
 
@@ -493,45 +529,51 @@ def set_task_dir(task_dir: str, *, force: bool = False) -> bool:
     """
     if not os.path.isdir(task_dir):
         return False
-    state = load_state(task_dir) or _fresh_state()
     our_session = _our_session_id()
     new_abs = os.path.abspath(task_dir)
-    if not force:
-        existing = state.get("owner") or {}
-        existing_sid = existing.get("session_id") or ""
-        same_session = our_session and existing_sid == our_session
-        if existing_sid and not same_session and _heartbeat_fresh(state):
-            print(f"[state_store] WARNING: refusing to claim {task_dir} "
-                  f"— owned by session_id={existing_sid} "
-                  f"(heartbeat fresh). Our session_id="
-                  f"{our_session or '<none>'}. Stop the other session "
-                  f"or rm state.json's owner to take over.",
-                  file=sys.stderr)
-            return False
-    # Release the prior task this session was driving (if any), so
-    # the session is never simultaneously listed as owner of two
-    # tasks. Skip when the prior task IS this one (idempotent re-set).
-    if our_session:
-        prior = _read_session_index(our_session)
+    prior = _read_session_index(our_session) if our_session else None
+    with state_transaction(new_abs, prior or ""):
+        state = load_state(task_dir) or _fresh_state()
+        if not force:
+            existing = state.get("owner") or {}
+            existing_sid = existing.get("session_id") or ""
+            same_session = our_session and existing_sid == our_session
+            if existing_sid and not same_session and _heartbeat_fresh(state):
+                print(f"[state_store] WARNING: refusing to claim {task_dir} "
+                      f"— owned by session_id={existing_sid} "
+                      f"(heartbeat fresh). Our session_id="
+                      f"{our_session or '<none>'}. Stop the other session "
+                      f"or rm state.json's owner to take over.",
+                      file=sys.stderr)
+                return False
+
+        # Release the prior task this session was driving (if any), so the
+        # session is never simultaneously listed as owner of two tasks.
         if prior and os.path.abspath(prior) != new_abs:
             prior_state = load_state(prior)
             if prior_state and (prior_state.get("owner") or {}).get(
                     "session_id") == our_session:
                 prior_state["owner"] = None
                 save_state(prior, prior_state)
-    state["owner"] = {
-        "session_id": our_session,
-        "pid":        os.getpid(),
-        "claimed_at": _now_iso(),
-    }
-    save_state(task_dir, state)
-    if our_session:
-        _write_session_index(our_session, new_abs)
+        state["owner"] = {
+            "session_id": our_session,
+            "pid":        os.getpid(),
+            "claimed_at": _now_iso(),
+        }
+        save_state(task_dir, state)
+        if our_session:
+            _write_session_index(our_session, new_abs)
     return True
 
 
 def clear_active_task(expected_task_dir: Optional[str] = None,
                       *, force: bool = False) -> bool:
+    with _session_lock(_our_session_id()):
+        return _clear_active_task(expected_task_dir, force=force)
+
+
+def _clear_active_task(expected_task_dir: Optional[str] = None,
+                       *, force: bool = False) -> bool:
     """Release ownership.
 
     Two caller patterns:
@@ -566,32 +608,32 @@ def clear_active_task(expected_task_dir: Optional[str] = None,
         return True
 
     for td in targets:
-        state = load_state(td)
-        if not state or not state.get("owner"):
-            # Already cleared on disk; just drop the index.
-            if our_session:
-                _clear_session_index(our_session)
-            continue
+        with state_transaction(td):
+            state = load_state(td)
+            if not state or not state.get("owner"):
+                if our_session:
+                    _clear_session_index(our_session)
+                continue
 
-        owner = state["owner"] or {}
-        owner_sid = owner.get("session_id") or ""
-        same_session = our_session and owner_sid == our_session
-        supervisor_claim = (expected_task_dir
-                            and os.path.abspath(expected_task_dir) == td)
+            owner = state["owner"] or {}
+            owner_sid = owner.get("session_id") or ""
+            same_session = our_session and owner_sid == our_session
+            supervisor_claim = (expected_task_dir
+                                and os.path.abspath(expected_task_dir) == td)
 
-        if force or same_session or supervisor_claim or not _heartbeat_fresh(state):
-            state["owner"] = None
-            save_state(td, state)
-            if our_session and (same_session or force):
-                _clear_session_index(our_session)
-            continue
+            if force or same_session or supervisor_claim or not _heartbeat_fresh(state):
+                state["owner"] = None
+                save_state(td, state)
+                if our_session and (same_session or force):
+                    _clear_session_index(our_session)
+                continue
 
-        print(f"[state_store] WARNING: refusing to clear ownership of "
-              f"{td} — owned by session_id={owner_sid} (heartbeat "
-              f"fresh, neither session-match nor supervisor claim). "
-              f"Pass force=True only if you've verified that session "
-              f"is truly done.", file=sys.stderr)
-        return False
+            print(f"[state_store] WARNING: refusing to clear ownership of "
+                  f"{td} — owned by session_id={owner_sid} (heartbeat "
+                  f"fresh, neither session-match nor supervisor claim). "
+                  f"Pass force=True only if you've verified that session "
+                  f"is truly done.", file=sys.stderr)
+            return False
 
     return True
 
@@ -639,8 +681,9 @@ def touch_heartbeat(task_dir: str):
     swallowing would make the session look dead in a hard-to-debug
     way."""
     try:
-        state = load_state(task_dir) or _fresh_state()
-        save_state(task_dir, state)
+        with state_transaction(task_dir):
+            state = load_state(task_dir) or _fresh_state()
+            save_state(task_dir, state)
     except Exception as e:
         print(f"[AR] WARNING: heartbeat write failed ({e}); resume.py "
               f"may misreport this task as inactive.", file=sys.stderr)
@@ -721,6 +764,7 @@ def task_summary(task_dir: str) -> Optional[dict]:
         "eval_rounds":   state.get("eval_rounds") or 0,
         "max_rounds":    state.get("max_rounds") or 0,
         "best_metric":   state.get("best_metric"),
+        "best_speedup":  state.get("best_speedup"),
         "baseline_metric":       state.get("baseline_metric"),
         "baseline_outcome":      state.get("baseline_outcome"),
         "baseline_error_source": state.get("baseline_error_source"),
@@ -756,15 +800,6 @@ def read_phase(task_dir: str) -> str:
     return INIT
 
 
-def write_phase(task_dir: str, phase: str):
-    """Write phase into state.json. Atomic single-file commit; no
-    cross-file coordination needed here."""
-    assert phase in ALL_PHASES, f"Invalid phase: {phase}"
-    state = load_state(task_dir) or _fresh_state()
-    state["phase"] = phase
-    save_state(task_dir, state)
-
-
 # ---------------------------------------------------------------------------
 # Progress R/W (Progress fields embedded in state)
 # ---------------------------------------------------------------------------
@@ -790,12 +825,13 @@ def save_progress(task_dir: str, progress: Union[Progress, dict]):
     """Merge progress fields into state.json and atomically save.
     state.last_touched is bumped inside save_state — callers don't need
     a separate progress-side timestamp."""
-    state = load_state(task_dir) or _fresh_state()
-    payload = progress.to_dict() if isinstance(progress, Progress) else dict(progress)
-    for k, v in payload.items():
-        if k in _PROGRESS_FIELD_NAMES:
-            state[k] = v
-    save_state(task_dir, state)
+    with state_transaction(task_dir):
+        state = load_state(task_dir) or _fresh_state()
+        payload = progress.to_dict() if isinstance(progress, Progress) else dict(progress)
+        for k, v in payload.items():
+            if k in _PROGRESS_FIELD_NAMES:
+                state[k] = v
+        save_state(task_dir, state)
 
 
 def append_history(task_dir: str, record: dict):
@@ -804,10 +840,13 @@ def append_history(task_dir: str, record: dict):
     with state.json's `expected_history_round` is the caller's
     responsibility (typically: bump expected_history_round in the
     same save_state that wraps this round's body writes)."""
-    path = history_path(task_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(sanitize_floats(record), ensure_ascii=False) + "\n")
+    with _state_lock(task_dir):
+        path = history_path(task_dir)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(sanitize_floats(record), ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def update_progress(task_dir: str, **fields) -> Optional[Progress]:
@@ -821,21 +860,22 @@ def update_progress(task_dir: str, **fields) -> Optional[Progress]:
     warning — earlier callers silently lost DIAGNOSE attempt counts
     and consecutive_failures resets when the write failed, producing
     infinite-retry loops the operator couldn't trace back."""
-    progress = load_progress(task_dir)
-    if progress is None:
-        return None
-    new_progress = progress.apply(**fields)
-    try:
-        save_progress(task_dir, new_progress)
-    except Exception as e:
-        print(f"[state_store] CRITICAL: failed to save state.json for "
-              f"{task_dir}: {type(e).__name__}: {e}. fields="
-              f"{list(fields)}. The in-memory update is lost; the next "
-              f"round may see stale state. Free disk space / fix "
-              f"permissions and re-run the failed action.",
-              file=sys.stderr)
-        raise
-    return new_progress
+    with state_transaction(task_dir):
+        progress = load_progress(task_dir)
+        if progress is None:
+            return None
+        new_progress = progress.apply(**fields)
+        try:
+            save_progress(task_dir, new_progress)
+        except Exception as e:
+            print(f"[state_store] CRITICAL: failed to save state.json for "
+                  f"{task_dir}: {type(e).__name__}: {e}. fields="
+                  f"{list(fields)}. The in-memory update is lost; the next "
+                  f"round may see stale state. Free disk space / fix "
+                  f"permissions and re-run the failed action.",
+                  file=sys.stderr)
+            raise
+        return new_progress
 
 
 # ---------------------------------------------------------------------------
@@ -849,9 +889,7 @@ def update_progress(task_dir: str, **fields) -> Optional[Progress]:
 
 def _read_plan_version_from_disk(task_dir: str) -> Optional[int]:
     """Parse plan.md's `# Plan vN` header; None when plan.md missing
-    or unparseable. (PlanStore.parse_version_on_disk exists too but
-    we keep this local to avoid the workflow→phase_machine import
-    cycle.)"""
+    or unparseable."""
     path = plan_path(task_dir)
     if not os.path.exists(path):
         return None
@@ -990,12 +1028,8 @@ def write_intent(task_dir: str, intent: dict) -> None:
     touched is intentionally NOT done here — touch_heartbeat owns
     that and the intent layer should be invisible to "is this task
     fresh" callers."""
-    path = intent_path(task_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(sanitize_floats(intent), f, indent=2)
-    os.replace(tmp, path)
+    with _state_lock(task_dir):
+        atomic_write_json(intent_path(task_dir), intent)
 
 
 def read_intent(task_dir: str) -> Optional[dict]:
@@ -1020,11 +1054,43 @@ def read_intent(task_dir: str) -> Optional[dict]:
 
 
 def clear_intent(task_dir: str) -> None:
-    path = intent_path(task_dir)
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    with _state_lock(task_dir):
+        try:
+            os.remove(intent_path(task_dir))
+        except FileNotFoundError:
+            pass
+
+
+def _intent_result(task_dir: str, kind: str, action: str,
+                   detail: str) -> dict:
+    clear_intent(task_dir)
+    return {"kind": kind, "action": action, "detail": detail}
+
+
+_INTENT_CONTROL_FIELDS = frozenset({
+    "phase", "progress_initialized", "pending_settle",
+    "expected_history_round", "expected_plan_version",
+})
+
+
+def _apply_intent_patch(state: dict, intent: dict) -> bool:
+    """Apply the event's complete state patch.
+
+    New journals carry ``state_patch`` so replay restores progress and
+    control state (phase/sentinels) exactly as the original transaction
+    would have committed it.  ``progress_fields`` remains readable for
+    interrupted tasks created by older versions.
+    """
+    patch = intent.get("state_patch")
+    if isinstance(patch, dict):
+        for key, value in patch.items():
+            if key in _PROGRESS_FIELD_NAMES or key in _INTENT_CONTROL_FIELDS:
+                state[key] = value
+        return True
+    for key, value in (intent.get("progress_fields") or {}).items():
+        if key in _PROGRESS_FIELD_NAMES:
+            state[key] = value
+    return False
 
 
 def replay_intent(task_dir: str) -> Optional[dict]:
@@ -1044,28 +1110,29 @@ def replay_intent(task_dir: str) -> Optional[dict]:
                        warning to stderr — caller should inspect.
     }
     """
-    intent = read_intent(task_dir)
-    if intent is None:
-        return None
-    kind = intent.get("kind")
-    if kind == _INTENT_KIND_ROUND:
-        return _replay_round_intent(task_dir, intent)
-    if kind == _INTENT_KIND_BASELINE:
-        return _replay_baseline_intent(task_dir, intent)
-    if kind == _INTENT_KIND_PLAN:
-        return _replay_plan_intent(task_dir, intent)
-    print(f"[state_store] WARNING: intent.json has unknown kind "
-          f"{kind!r}; leaving in place. Inspect "
-          f"{intent_path(task_dir)} and rm if safe to discard.",
-          file=sys.stderr)
-    return {"kind": str(kind), "action": "skipped",
-            "detail": f"unknown kind {kind!r}"}
+    with state_transaction(task_dir):
+        intent = read_intent(task_dir)
+        if intent is None:
+            return None
+        kind = intent.get("kind")
+        if kind == _INTENT_KIND_ROUND:
+            return _replay_round_intent(task_dir, intent)
+        if kind == _INTENT_KIND_BASELINE:
+            return _replay_baseline_intent(task_dir, intent)
+        if kind == _INTENT_KIND_PLAN:
+            return _replay_plan_intent(task_dir, intent)
+        print(f"[state_store] WARNING: intent.json has unknown kind "
+              f"{kind!r}; leaving in place. Inspect "
+              f"{intent_path(task_dir)} and rm if safe to discard.",
+              file=sys.stderr)
+        return {"kind": str(kind), "action": "skipped",
+                "detail": f"unknown kind {kind!r}"}
 
 
 def _replay_round_intent(task_dir: str, intent: dict) -> dict:
     """Round intent payload:
         {"kind":"round", "kd_json":{...}, "round":N,
-         "progress_fields":{<Progress.to_dict subset>}}
+         "state_patch":{<progress + pending/expected fields>}}
 
     On crash recovery the three possible disk states are:
       (a) state already at round N (expected_history_round==N AND
@@ -1084,38 +1151,35 @@ def _replay_round_intent(task_dir: str, intent: dict) -> dict:
         # State caught up. pending_settle may or may not still be
         # there depending on where we crashed; either way, the
         # journal has nothing to add. Drop it.
-        clear_intent(task_dir)
-        return {"kind": "round", "action": "cleared",
-                "detail": f"state.expected_history_round already {target_round}"}
+        return _intent_result(
+            task_dir, "round", "cleared",
+            f"state.expected_history_round already {target_round}")
 
     last_round = _read_last_history_round(task_dir)
     if last_round == target_round:
         # Body landed; rebuild state so consistency gate passes and
         # the replay branch reconstructs the settle.
         kd_json = intent.get("kd_json") or {}
-        progress_fields = intent.get("progress_fields") or {}
-        for k, v in progress_fields.items():
-            if k in _PROGRESS_FIELD_NAMES:
-                state[k] = v
-        state["pending_settle"] = kd_json
-        state["expected_history_round"] = target_round
+        patched = _apply_intent_patch(state, intent)
+        if not patched:  # backward compatibility with old journals
+            state["pending_settle"] = kd_json
+            state["expected_history_round"] = target_round
         save_state(task_dir, state)
-        clear_intent(task_dir)
-        return {"kind": "round", "action": "rebuilt",
-                "detail": f"reconstructed pending_settle for round "
-                          f"{target_round} from journal"}
+        return _intent_result(
+            task_dir, "round", "rebuilt",
+            f"reconstructed pending_settle for round {target_round} "
+            "from journal")
 
     # Body didn't land — discard.
-    clear_intent(task_dir)
-    return {"kind": "round", "action": "discarded",
-            "detail": f"history.jsonl last_round={last_round} != "
-                      f"intent.round={target_round} (body never landed)"}
+    return _intent_result(
+        task_dir, "round", "discarded",
+        f"history.jsonl last_round={last_round} != intent.round="
+        f"{target_round} (body never landed)")
 
 
 def _replay_baseline_intent(task_dir: str, intent: dict) -> dict:
     """Baseline intent payload:
-        {"kind":"baseline", "progress_fields":{...},
-         "expected_history_round": 0}
+        {"kind":"baseline", "state_patch":{<progress + phase/control>}}
 
     Three disk shapes:
       (a) state already progress_initialized=True AND
@@ -1129,31 +1193,31 @@ def _replay_baseline_intent(task_dir: str, intent: dict) -> dict:
     state = load_state(task_dir) or {}
     if state.get("progress_initialized") and \
             state.get("expected_history_round") == 0:
-        clear_intent(task_dir)
-        return {"kind": "baseline", "action": "cleared",
-                "detail": "state already shows baseline committed"}
+        return _intent_result(
+            task_dir, "baseline", "cleared",
+            "state already shows baseline committed")
 
     last_round = _read_last_history_round(task_dir)
     if last_round == 0:
-        for k, v in (intent.get("progress_fields") or {}).items():
-            if k in _PROGRESS_FIELD_NAMES:
-                state[k] = v
-        state["progress_initialized"] = True
-        state["expected_history_round"] = 0
+        patched = _apply_intent_patch(state, intent)
+        if not patched:  # backward compatibility with old journals
+            state["progress_initialized"] = True
+            state["expected_history_round"] = 0
         save_state(task_dir, state)
-        clear_intent(task_dir)
-        return {"kind": "baseline", "action": "rebuilt",
-                "detail": "reconstructed progress fields from journal "
-                          "(SEED row already in history.jsonl)"}
+        return _intent_result(
+            task_dir, "baseline", "rebuilt",
+            "reconstructed progress fields from journal "
+            "(SEED row already in history.jsonl)")
 
-    clear_intent(task_dir)
-    return {"kind": "baseline", "action": "discarded",
-            "detail": "no SEED row on disk; intent dropped"}
+    return _intent_result(
+        task_dir, "baseline", "discarded",
+        "no SEED row on disk; intent dropped")
 
 
 def _replay_plan_intent(task_dir: str, intent: dict) -> dict:
     """Plan intent payload:
-        {"kind":"plan", "version":N, "progress_fields":{...}}
+        {"kind":"plan", "version":N,
+         "state_patch":{<plan progress + phase/control>}}
 
     create_plan writes plan.md (the body) first, then save_state with
     expected_plan_version=N. The window: SIGKILL after ps.write,
@@ -1171,27 +1235,25 @@ def _replay_plan_intent(task_dir: str, intent: dict) -> dict:
     state = load_state(task_dir) or {}
 
     if int(state.get("expected_plan_version") or 0) == target_version:
-        clear_intent(task_dir)
-        return {"kind": "plan", "action": "cleared",
-                "detail": f"state.expected_plan_version already {target_version}"}
+        return _intent_result(
+            task_dir, "plan", "cleared",
+            f"state.expected_plan_version already {target_version}")
 
     plan_on_disk = _read_plan_version_from_disk(task_dir)
     if plan_on_disk == target_version:
-        for k, v in (intent.get("progress_fields") or {}).items():
-            if k in _PROGRESS_FIELD_NAMES:
-                state[k] = v
-        state["expected_plan_version"] = target_version
+        patched = _apply_intent_patch(state, intent)
+        if not patched:  # backward compatibility with old journals
+            state["expected_plan_version"] = target_version
         save_state(task_dir, state)
-        clear_intent(task_dir)
-        return {"kind": "plan", "action": "rebuilt",
-                "detail": f"reconstructed plan_version + next_pid for "
-                          f"v{target_version} from journal"}
+        return _intent_result(
+            task_dir, "plan", "rebuilt",
+            f"reconstructed plan_version + next_pid for v{target_version} "
+            "from journal")
 
-    clear_intent(task_dir)
-    return {"kind": "plan", "action": "discarded",
-            "detail": f"plan.md on disk is at v{plan_on_disk} != "
-                      f"intent.version={target_version} "
-                      f"(body never landed)"}
+    return _intent_result(
+        task_dir, "plan", "discarded",
+        f"plan.md on disk is at v{plan_on_disk} != intent.version="
+        f"{target_version} (body never landed)")
 
 
 def require_state_consistency(task_dir: str,

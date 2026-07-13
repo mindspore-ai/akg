@@ -35,7 +35,7 @@
 from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.utils.common_utils import load_yaml
 from akg_agents.core.worker.manager import register_worker
-from akg_agents.op.utils.cann_utils import is_cann_task_dir, load_cann_proto
+from akg_agents.op.cann_correctness import is_cann_task_dir, load_cann_proto
 from akg_agents import get_project_root
 import sys
 import os

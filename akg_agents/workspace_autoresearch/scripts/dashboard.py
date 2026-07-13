@@ -16,7 +16,6 @@
 """Live dashboard for autoresearch progress."""
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -26,6 +25,7 @@ import phase_machine as _pm
 from utils.json_io import load_jsonl as _shared_load_jsonl
 from utils.json_io import _read_whole_file as _shared_read_whole_file
 from utils.settings import default_max_rounds as _default_max_rounds
+from utils.settings import recorded_speedup
 
 # ---------------------------------------------------------------------------
 # Non-blocking keyboard input (cross-platform)
@@ -113,12 +113,6 @@ def fmt_metric(value):
 _read_raw = _shared_read_whole_file  # canonical loader lives in utils.json_io
 
 
-def load_json(path):
-    if not os.path.exists(path):
-        return None
-    return json.loads(_read_raw(path))
-
-
 load_jsonl = _shared_load_jsonl
 
 
@@ -191,7 +185,7 @@ def render(task_dir, history_offset=0, history_window=None):
     if progress is None:
         lines.append(f"\n  {RED}No state.json found at "
                      f"{_pm.state_record_path(task_dir)}{RESET}")
-        lines.append(f"  Run /autoresearch --ref ... --op-name ... first.")
+        lines.append("  Run /autoresearch --ref ... --op-name ... first.")
         return "\n".join(lines)
 
     # progress_initialized=False means a session has claimed this task
@@ -237,15 +231,15 @@ def render(task_dir, history_offset=0, history_window=None):
     except Exception:
         updated = updated_raw
 
-    # Improvement (baseline is PyTorch reference latency; best is kernel latency)
-    if best is not None and baseline is not None and baseline != 0 and best != 0:
-        improv_pct = (baseline - best) / abs(baseline) * 100
-        speedup = baseline / best
-        color = GREEN if improv_pct > 0 else RED
-        # Anchor is always "ref" for committed tasks (the baseline gate
-        # refuses to commit without a valid PyTorch reference).
-        src = progress.get("baseline_source")
-        anchor_label = "vs ref" if src == "ref" else "vs baseline"
+    # Speedup is the stored geomean (best_speedup); pct is derived from it so
+    # the two numbers stay tied. N/A when unset — never re-derive from
+    # baseline/best latencies (that would be a different definition).
+    speedup = recorded_speedup(progress)
+    src = progress.get("baseline_source")
+    anchor_label = "vs ref" if src == "ref" else "vs baseline"
+    if speedup is not None:
+        improv_pct = (1.0 - 1.0 / speedup) * 100
+        color = GREEN if speedup > 1 else RED
         improv_str = f"{color}{speedup:.2f}x {anchor_label} ({improv_pct:+.1f}%){RESET}"
     else:
         improv_str = f"{DIM}N/A{RESET}"

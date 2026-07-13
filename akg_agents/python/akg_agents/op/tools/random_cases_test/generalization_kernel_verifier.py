@@ -14,7 +14,7 @@ from typing import Dict, Any, Tuple
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "python"))
 
-from akg_agents.core.worker.interface import DEFAULT_EVAL_TIMEOUT_S
+from akg_agents.core.worker.eval_config import resolve_eval_timeout
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ class GeneralizationKernelVerifier(KernelVerifier):
                 backend=self.backend,
                 arch=self.arch,
                 is_dynamic_shape=is_dynamic_shape,
-                timeout=self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S),
+                timeout=resolve_eval_timeout(self.config.get('verify_timeout')),
                 # Adapter生成的代码
                 framework_imports=self._prepare_code_lines(framework_imports),
                 framework_model_import=self._prepare_code_lines(framework_model_import),
@@ -266,7 +266,7 @@ class GeneralizationKernelVerifier(KernelVerifier):
         self.gen_verify_project(target_code, verify_dir, device_id)
         
         # 运行验证
-        verify_timeout = self.config.get('verify_timeout', DEFAULT_EVAL_TIMEOUT_S)
+        verify_timeout = resolve_eval_timeout(self.config.get('verify_timeout'))
         verify_res, verify_log = self.run_verify(verify_dir, timeout=verify_timeout)
         
         # 读取详细结果JSON
@@ -288,4 +288,3 @@ class GeneralizationKernelVerifier(KernelVerifier):
             'pass_rate': 0.0,
             'detailed_results': []
         }, verify_log
-

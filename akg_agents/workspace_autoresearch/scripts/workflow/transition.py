@@ -12,58 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PhaseController — single owner of phase transitions. Callers invoke
-``on_*`` events; the controller decides the target phase and writes
-``state.json``'s phase field via state_store.write_phase (atomic).
+"""Pure phase selection for resume and settled-round events.
 
-The phase write is its own atomic file write; it doesn't participate
-in a multi-file transaction because the new single-file state.json
-design eliminated the need for begin_txn/commit_txn coordination.
+This module never writes state.  The transaction that owns an event also
+commits its target phase in the same ``save_state`` call as the event's other
+control fields.  Keeping selection pure makes the transition table testable;
+keeping writes with the transaction removes hook/process crash windows.
 """
 from __future__ import annotations
 
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from phase_machine import (  # noqa: E402
-    BASELINE, EDIT, FINISH, PLAN,
-    compute_next_phase, compute_resume_phase, load_progress,
-    write_phase,
+    BASELINE, DIAGNOSE, EDIT, FINISH, PLAN, REPLAN,
+    get_active_item, has_pending_items, load_progress, plan_path,
 )
 
 
-class PhaseController:
-    def __init__(self, task_dir: str):
-        self.task_dir = task_dir
+def phase_after_round(task_dir: str) -> str:
+    """Select the phase after a round body and plan settlement complete."""
+    progress = load_progress(task_dir)
+    if progress is None:
+        raise RuntimeError(
+            "cannot settle a round without committed baseline progress")
 
-    # ---- Activation -----------------------------------------------------
-    def on_activation_resume(self) -> str:
-        return self._write(compute_resume_phase(self.task_dir))
+    if progress.eval_rounds >= progress.max_rounds:
+        return FINISH
 
-    def on_activation_ready(self) -> str:
-        return self._write(BASELINE)
+    from utils.settings import consecutive_fail_threshold
+    if progress.consecutive_failures >= consecutive_fail_threshold():
+        return DIAGNOSE
+    if has_pending_items(task_dir):
+        return EDIT
+    return REPLAN
 
-    def on_baseline_settled(self) -> str:
-        """Committed baseline (progress present) → PLAN. No progress means
-        the baseline gate refused to commit (no valid ref baseline), so
-        park the task at BASELINE for a retry after env/ref/worker is
-        fixed."""
-        progress = load_progress(self.task_dir)
-        if progress is None:
-            return self._write(BASELINE)
-        return self._write(PLAN)
 
-    def on_plan_validated(self) -> str:
-        return self._write(EDIT)
-
-    def on_round_settled(self) -> str:
-        return self._write(compute_next_phase(self.task_dir))
-
-    def _write(self, phase: str) -> str:
-        write_phase(self.task_dir, phase)
-        return phase
-
-    # Re-export so callers don't need a separate `from phase_machine import FINISH`.
-    FINISH = FINISH
+def phase_on_resume(task_dir: str) -> str:
+    """Derive the executable phase for an interrupted task."""
+    progress = load_progress(task_dir)
+    if progress is None:
+        return BASELINE
+    if progress.eval_rounds >= progress.max_rounds:
+        return FINISH
+    if progress.seed_metric is None or progress.baseline_outcome != "ok":
+        return PLAN
+    if not os.path.exists(plan_path(task_dir)):
+        return PLAN
+    if get_active_item(task_dir) is not None or has_pending_items(task_dir):
+        return EDIT
+    return REPLAN

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Phase rules + bash/edit gates + transition logic.
+"""Phase-aware Bash and Edit/Write gates.
 
 Bash gate is three layers, each with one job:
 
@@ -33,10 +33,10 @@ Bash gate is three layers, each with one job:
 
   3. `check_bash` — global string bans, classify(), table lookup.
 
-The Edit/Write gate (`check_edit`) and phase-transition logic
-(`compute_next_phase` / `compute_resume_phase`) live below.
+The Edit/Write gate (`check_edit`) lives below.  Business transitions are
+selected by ``workflow.transition`` and committed by the transaction that
+owns each event.
 """
-import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -46,9 +46,7 @@ from .state_store import (
     INIT, BASELINE, PLAN, EDIT,
     DIAGNOSE, REPLAN, FINISH,
     PLAN_FILE, PLAN_ITEMS_FILE,
-    load_progress, plan_path,
 )
-from .validators import get_active_item, has_pending_items
 
 
 # === LAYER 1: CLASSIFIER ===============================================
@@ -116,8 +114,9 @@ _CANONICAL_AR_RE = re.compile(
 # would 404 and post_bash would still announce "Pipeline complete").
 # The classifier rejects the wrong location before that can happen.
 #
-# Invariant: this set MUST equal hooks/guard_bash._BLESSED_SCRIPTS.
-# guard_bash rejects un-blessed names before this map is consulted, so
+# Invariant: this set MUST equal decide._BLESSED_SCRIPTS (the agent-neutral
+# decision layer; formerly hooks/guard_bash._BLESSED_SCRIPTS). The pre_tool
+# Bash gate rejects un-blessed names before this map is consulted, so
 # any name here that isn't blessed is unreachable. Internal subprocesses
 # (e.g. pipeline.py → eval_kernel.py) don't go through the Bash tool
 # and therefore don't appear in this map.
@@ -146,6 +145,7 @@ _CANONICAL_LOCATION = {
 #
 # Allowed shapes:
 #   ls/cat/head/tail/wc/grep/echo/pwd ARGS
+#   find ARGS (except actions that execute commands, delete, or write files)
 #   git log/diff/status/show/rev-parse/blame ARGS
 #   git branch [--list | --show-current | -a | -r | -v | -vv]*
 #   export AR_TASK_DIR=...
@@ -154,14 +154,19 @@ _CANONICAL_LOCATION = {
 # `git diff --output=patch.diff` can't smuggle a write). `--output-format`
 # and other hyphen-extended flags are NOT blocked.
 #
-# `find` is intentionally absent (`-delete` / `-exec rm` are too easy a
-# smuggle). Agent has Glob / Read tools.
+# Headless Claude versions do not always expose Glob, so skill discovery
+# needs a read-only ``find`` form.  The action denylist below keeps the shell
+# boundary closed instead of rejecting the command wholesale.
 
 _READONLY_HEAD_SINGLE = frozenset({
     "ls", "cat", "head", "tail", "wc", "grep", "echo", "pwd",
 })
 _READONLY_GIT_OPS = frozenset({
     "log", "diff", "status", "show", "rev-parse", "blame",
+})
+_FIND_EFFECT_ACTIONS = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fprint", "-fprint0", "-fprintf", "-fls",
 })
 _GIT_BRANCH_LISTING_FLAGS = frozenset({
     "--list", "--show-current", "-a", "-r", "-v", "-vv",
@@ -173,6 +178,13 @@ def _is_safe_readonly_arg(arg: str) -> bool:
     Accepts `--output-format`, `--output-something`, etc. — those are
     different flags."""
     return arg != "--output" and not arg.startswith("--output=")
+
+
+def _is_safe_find_arg(arg: str) -> bool:
+    return not any(
+        arg == action or arg.startswith(action + "=")
+        for action in _FIND_EFFECT_ACTIONS
+    )
 
 
 def _has_unquoted_redirect(s: str) -> bool:
@@ -233,6 +245,9 @@ def _is_readonly_segment(seg_text: str) -> bool:
         # `export AR_TASK_DIR=<value>` — shlex unquotes the value into
         # the same token, so `AR_TASK_DIR="..."` arrives as one piece.
         return args[0].startswith("AR_TASK_DIR=") and len(args) == 1
+
+    if head == "find":
+        return all(_is_safe_find_arg(a) for a in args)
 
     if head in _READONLY_HEAD_SINGLE:
         return all(_is_safe_readonly_arg(a) for a in args)
@@ -602,63 +617,3 @@ def check_edit(phase: str, rel_path: str, editable_files,
         return True, ""
 
     return False, f"phase {phase} does not allow writing {rel_path!r}"
-
-
-# === Phase transitions =================================================
-
-def compute_next_phase(task_dir: str) -> str:
-    """After a pipeline round finishes, mechanically determine the next phase.
-
-    `eval_rounds >= max_rounds` is the only legitimate FINISH trigger; the
-    `not progress` branch is an error fallback for unrecoverable state.
-    """
-    progress = load_progress(task_dir)
-    if not progress:
-        return FINISH  # error fallback: corrupt/missing state.json
-
-    consecutive_failures = progress.get("consecutive_failures", 0)
-    eval_rounds = progress.get("eval_rounds", 0)
-    max_rounds = progress.get("max_rounds", 999)
-
-    if eval_rounds >= max_rounds:
-        return FINISH
-    from utils.settings import consecutive_fail_threshold
-    if consecutive_failures >= consecutive_fail_threshold():
-        return DIAGNOSE
-    if has_pending_items(task_dir):
-        return EDIT
-    return REPLAN
-
-
-def compute_resume_phase(task_dir: str) -> str:
-    """Determine phase for resuming after interruption.
-
-    No committed progress → BASELINE: either never baselined, or the
-    baseline gate refused to commit (no valid ref baseline). Either way
-    the agent re-runs baseline.py; if the env/ref is still broken it
-    parks at BASELINE again and stop_save lets the agent exit with a
-    clear 'fix env/ref' message."""
-    progress = load_progress(task_dir)
-    if not progress:
-        return BASELINE
-
-    eval_rounds = progress.get("eval_rounds", 0)
-    max_rounds = progress.get("max_rounds", 999)
-
-    if eval_rounds >= max_rounds:
-        return FINISH
-
-    # Kernel-side baseline failure: route to PLAN. seed_metric=None (no
-    # timing) and baseline_outcome != "ok" (kernel_fail) both mean the
-    # seed needs rewriting; PLAN guidance surfaces a SEED FAILED block
-    # pushing the agent to rewrite kernel.py as plan items.
-    if (progress.get("seed_metric") is None
-            or progress.get("baseline_outcome") != "ok"):
-        return PLAN
-
-    if not os.path.exists(plan_path(task_dir)):
-        return PLAN
-
-    if get_active_item(task_dir) is not None or has_pending_items(task_dir):
-        return EDIT
-    return REPLAN

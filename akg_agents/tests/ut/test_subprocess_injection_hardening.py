@@ -73,14 +73,16 @@ def test_run_msprof_passes_shell_metachar_path_as_single_application_arg(monkeyp
     script_path = "/tmp/profile;touch injected.py"
     calls = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_capture(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return _Completed(
-            returncode=0,
-            stdout="[INFO] Process profiling data complete. Data is saved in /tmp/prof\n",
+        return (
+            0,
+            "[INFO] Process profiling data complete. Data is saved in /tmp/prof\n",
+            "",
+            False,
         )
 
-    monkeypatch.setattr(profiler_utils.subprocess, "run", fake_run)
+    monkeypatch.setattr(profiler_utils, "run_command_capture", fake_capture)
 
     success, error, prof_path = profiler_utils.run_msprof(script_path, timeout=7)
 
@@ -89,8 +91,8 @@ def test_run_msprof_passes_shell_metachar_path_as_single_application_arg(monkeyp
     assert prof_path == "/tmp/prof"
     assert calls == [
         (
-            ["msprof", "--application", f"python {script_path}"],
-            {"capture_output": True, "text": True, "timeout": 7},
+            ["msprof", f"--application=python {script_path}"],
+            {"timeout": 7, "cancel_event": None},
         )
     ]
 
@@ -100,19 +102,23 @@ def test_run_nsys_and_stats_use_argv_without_shell(monkeypatch, tmp_path):
     rep_path = str(tmp_path / "report;touch injected.nsys-rep")
     calls = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_capture(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return _Completed(returncode=0)
+        return 0, "", "", False
 
-    monkeypatch.setattr(profiler_utils.subprocess, "run", fake_run)
+    monkeypatch.setattr(profiler_utils, "run_command_capture", fake_capture)
 
     profiler_utils.run_nsys(script_path, timeout=9)
     profiler_utils.analyze_nsys_data(rep_path, warmup_times=1, run_times=1)
 
     assert calls[0] == (
         ["nsys", "profile", "--output=nsys_report_profile&&touch injected", "python", script_path],
-        {"capture_output": True, "text": True, "timeout": 9},
+        {
+            "timeout": 9,
+            "cwd": str(tmp_path),
+            "cancel_event": None,
+        },
     )
     assert calls[1][0][-1] == rep_path
-    assert calls[1][1] == {"check": True}
+    assert calls[1][1]["cancel_event"] is None
     assert all(call_kwargs.get("shell") is not True for _, call_kwargs in calls)
