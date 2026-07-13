@@ -87,7 +87,29 @@
 
 因此，这个实验不证明模型已经具备稳定生成高质量 Triton Ascend matmul kernel 的能力，也不证明运行性能提升；它证明的是：在复杂代码仓中，结构化上下文图能增强 Code Agent 的仓库理解、任务定位和改造规划能力。
 
-## 五、最终推荐修改方案
+## 五、与 codebase-memory-mcp 的关系
+
+评审反馈中提到的 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 是一个面向 AI coding agents 的通用代码知识图谱 MCP 服务。调研其 README 和 `server.json` 后，可以看到它的定位是：通过 tree-sitter、Hybrid LSP、SQLite 图存储和 MCP tools，为 Agent 提供自动索引、结构化搜索、调用链追踪、影响分析、架构概览、语义搜索等能力。
+
+它和本实验中的 `CODEGRAPH.md` / `context_graph.json` 不是同一层问题，二者更适合组合使用。
+
+| 维度 | codebase-memory-mcp | 本实验的 CODEGRAPH/context_graph |
+|------|---------------------|----------------------------------|
+| 定位 | 通用代码智能后端 / MCP 服务 | AKG 仓库内的 Agent 上下文规范和任务知识索引 |
+| 生成方式 | 自动索引代码仓，生成函数、类、调用边、搜索索引等图数据 | 人工维护关键目录的职责、阅读路径、影响矩阵、验证命令和反模式 |
+| 适用范围 | 多语言、多仓库、通用代码结构检索 | AKG Agents 中特定模块、特定开发规则、特定工作流 |
+| 优势 | 快速发现符号、调用链、架构热点，降低文件级搜索成本 | 明确告诉 Agent “该怎么改、不要怎么改、改完怎么验证” |
+| 局限 | 自动图谱不一定知道项目约定、评审要求和领域边界 | 需要随代码演进维护，不能替代全仓自动索引 |
+| 推荐关系 | 作为底层检索和图查询能力 | 作为 AKG 专用的高层任务语义和约束层 |
+
+结合 AKG Agents 当前任务，可以把二者分工理解为：
+
+- `codebase-memory-mcp` 负责“从大仓库里快速找代码”：例如定位某个函数、追踪调用链、查询相关文件、分析 git diff 影响面。
+- `CODEGRAPH.md` / `context_graph.json` 负责“告诉 Agent 找到以后怎么判断”：例如 Triton Ascend DSL 行为应该放在 adapter hook，不能在 `KernelVerifier` 中硬编码 DSL 分支；改动后至少要跑哪些验证；哪些 Skill/docs 资源会被影响。
+
+因此，最终方案不是替代 `codebase-memory-mcp`，而是在使用 `codebase-memory-mcp` 的基础上，为 AKG Agents 关键目录补充可版本化、可 review、可被 Code Agent 直接读取的领域上下文层。这样 Agent 可以先通过 MCP 做自动检索，再读取仓库内的 `CODEGRAPH.md` / `context_graph.json` 获取项目规则和改造边界。
+
+## 六、最终推荐修改方案
 
 建议 AKG Agents 在继续保留 `AGENTS.md`、`SPEC.md`、`README` 的基础上，引入“人类可读 + 机器可读”的 Agent 上下文图机制。
 
