@@ -4443,9 +4443,10 @@ static void processLoop(LoopVectorizationCtx &ctx) {
   }
 }
 
-static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, Location loc) {
-  Value maxStepConst = builder.create<arith::ConstantIndexOp>(loc, 1);
-  LoopVectorizationCtx ctx(builder, /* actualStep */ 1, /* vfVal */ nullptr, maxStepConst,
+static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder) {
+  // Phase 2 rank-0 sweep: empty allVectorSizes so getVectorType/getRank yield !npuvector.T (0-D),
+  // not !npuvector<1xT> from actualStep=1.
+  LoopVectorizationCtx ctx(builder, SmallVector<int64_t>{}, SmallVector<Value>{}, SmallVector<Value>{},
                            VectorizationMode::Elementwise, scf::ForOp(), nullptr);
   ctx.localDim = 0;
   ctx.vf1FuncLevelNoAnchor = true;
@@ -4653,7 +4654,7 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
   }
 
   OpBuilder builder(rootLoad);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, rootLoad.getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
 
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
@@ -4752,7 +4753,7 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
       return Vf1ChainPromotionResult::Skipped;
     }
     OpBuilder builder(storeOp);
-    LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+    LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
     vectorizeStore(storeOp, ctx);
     storeOp.erase();
     return Vf1ChainPromotionResult::Promoted;
@@ -4771,7 +4772,7 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
   }
 
   OpBuilder builder(storeOp);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(op);
@@ -4847,7 +4848,7 @@ static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
   }
 
   OpBuilder builder(op);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, op->getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
   if (failed(handleArithOrMathOp(*op, ctx))) {
     return Vf1ChainPromotionResult::FatalError;
   }

@@ -361,6 +361,15 @@ static bool isScalarBroadcast(Value value) {
   return broadcast && isScalarType(broadcast.getSource().getType());
 }
 
+static bool isDynamicVectorBroadcast(Value value) {
+  auto broadcast = value.getDefiningOp<npuvector::BroadcastOp>();
+  if (broadcast == nullptr || isScalarType(broadcast.getSource().getType())) {
+    return false;
+  }
+  auto resultTy = dyn_cast<npuvector::NPUVectorType>(broadcast.getResult().getType());
+  return resultTy != nullptr && resultTy.hasDynamicShape();
+}
+
 static bool isSupportedBinaryComputeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
   if (user->getNumOperands() != kBinaryOpOperandCount || !hasVectorOrNPUVectorLikeResult(user)) {
     return false;
@@ -3534,6 +3543,45 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
   return success();
 }
 
+static LogicalResult buildNPUVectorTransferWriteLogicalSizesStrides(
+  npuvector::TransferWriteOp op, Value dataToWrite, MemRefType dataMemRefType,
+  npuvector::NPUVectorType npuVecType, int64_t memRefRank, int64_t dataRank, ConversionPatternRewriter &rewriter,
+  SmallVectorImpl<OpFoldResult> &sizes, SmallVectorImpl<OpFoldResult> &strides) {
+  if (!npuVecType) {
+    return buildNPUVectorTransferWriteSizesStrides(op, dataToWrite, dataMemRefType, memRefRank, dataRank, rewriter,
+                                                   sizes, strides);
+  }
+
+  SmallVector<int64_t> mappedDims;
+  if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
+    return failure();
+  }
+
+  sizes.clear();
+  strides.clear();
+  for (int64_t i = 0; i < memRefRank; ++i) {
+    sizes.push_back(rewriter.getIndexAttr(1));
+    strides.push_back(rewriter.getIndexAttr(1));
+  }
+  for (int64_t i = 0; i < dataRank; ++i) {
+    OpFoldResult dimSize;
+    if (npuVecType.isDynamicDim(i)) {
+      FailureOr<Value> dimVal = getNPUVectorDimValue(op.getVector(), i, 8, &rewriter);
+      if (failed(dimVal) && i < dataMemRefType.getRank()) {
+        dimVal = getMemRefDimValue(dataToWrite, i, rewriter);
+      }
+      if (failed(dimVal)) {
+        return failure();
+      }
+      dimSize = *dimVal;
+    } else {
+      dimSize = rewriter.getIndexAttr(npuVecType.getDimSize(i));
+    }
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = dimSize;
+  }
+  return success();
+}
+
 static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::TransferWriteOp op,
                                                              npuvector::NPUVectorType npuVecType,
                                                              ValueRange dynamicSizes, int64_t memRefRank,
@@ -3711,6 +3759,52 @@ static void eraseBufferMarks(Value buffer, ConversionPatternRewriter &rewriter) 
   }
 }
 
+static bool sameIndexFoldResult(OpFoldResult lhs, OpFoldResult rhs) {
+  if (lhs == rhs) {
+    return true;
+  }
+  std::optional<int64_t> lhsConst = getConstantIntValue(lhs);
+  std::optional<int64_t> rhsConst = getConstantIntValue(rhs);
+  return lhsConst && rhsConst && *lhsConst == *rhsConst;
+}
+
+static bool isConstantZero(OpFoldResult ofr) {
+  return isConstantIntValue(ofr, 0);
+}
+
+static bool isAfterInCommonBlock(Operation *before, Operation *after) {
+  for (Operation *beforeAncestor = before; beforeAncestor != nullptr; beforeAncestor = beforeAncestor->getParentOp()) {
+    for (Operation *afterAncestor = after; afterAncestor != nullptr; afterAncestor = afterAncestor->getParentOp()) {
+      if (beforeAncestor->getBlock() == afterAncestor->getBlock()) {
+        return beforeAncestor->isBeforeInBlock(afterAncestor);
+      }
+    }
+  }
+  return false;
+}
+
+static Value createExpandShape(PatternRewriter &rewriter, Location loc, Value src, ArrayRef<int64_t> resultShape,
+                               ArrayRef<ReassociationIndices> reassoc);
+
+static bool canReshapeMemRefToType(MemRefType srcTy, MemRefType dstTy) {
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return false;
+  }
+  if (srcTy.getMemorySpace() != dstTy.getMemorySpace()) {
+    return false;
+  }
+  if (srcTy == dstTy) {
+    return true;
+  }
+  if (srcTy.getShape() == dstTy.getShape()) {
+    return true;
+  }
+  if (!srcTy.hasStaticShape() || !dstTy.hasStaticShape() || srcTy.getNumElements() != dstTy.getNumElements()) {
+    return false;
+  }
+  return getReassociationIndicesForReshape(srcTy, dstTy).has_value();
+}
+
 static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, ConversionPatternRewriter &rewriter) {
   auto srcTy = cast<MemRefType>(src.getType());
   if (srcTy == dstTy) {
@@ -3724,7 +3818,7 @@ static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, Conv
     return {};
   }
   if (dstTy.getRank() > srcTy.getRank()) {
-    return rewriter.create<memref::ExpandShapeOp>(loc, dstTy, src, *reassoc);
+    return createExpandShape(rewriter, loc, src, dstTy.getShape(), *reassoc);
   }
   if (dstTy.getRank() < srcTy.getRank()) {
     return rewriter.create<memref::CollapseShapeOp>(loc, dstTy, src, *reassoc);
@@ -3732,16 +3826,19 @@ static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, Conv
   return {};
 }
 
-// True when `t` describes a packed, row-major, zero-offset slab: its elements are exactly
-// the leading getNumElements(t) elements of the underlying buffer, in linear order. Such a
-// view can be aliased as a contiguous prefix regardless of rank or extent (multi-dim and
-// dynamic-extent contiguous reads included); strided gathers and non-zero offsets cannot.
-// Unit-size dims are ignored (their stride is immaterial). Once a dynamic extent is seen the
-// outer strides become unverifiable, so any further non-unit dim is rejected conservatively.
-static bool isContiguousZeroOffsetSlab(MemRefType t) {
+static Value adaptSubviewToProducerType(Value subview, MemRefType producerTy, Location loc,
+                                        ConversionPatternRewriter &rewriter) {
+  auto subviewTy = cast<MemRefType>(subview.getType());
+  if (subviewTy.getShape() == producerTy.getShape()) {
+    return subview;
+  }
+  return reshapeMemRefToType(subview, producerTy, loc, rewriter);
+}
+
+static bool isContiguousSlab(MemRefType t) {
   int64_t offset = 0;
   SmallVector<int64_t> strides;
-  if (failed(getStridesAndOffset(t, strides, offset)) || offset != 0) {
+  if (failed(getStridesAndOffset(t, strides, offset))) {
     return false;
   }
   ArrayRef<int64_t> shape = t.getShape();
@@ -3765,8 +3862,174 @@ static bool isContiguousZeroOffsetSlab(MemRefType t) {
   return true;
 }
 
-// Returns true if `dest` (or any of its view aliases) is written by an op other than
-// `anchor`. View-like ops are followed so writes through a subview/cast are detected.
+static Value buildForwardedSourceView(Value dataRoot, MemRefType destTy, Location loc,
+                                      ConversionPatternRewriter &rewriter) {
+  auto rootTy = cast<MemRefType>(dataRoot.getType());
+  if (rootTy == destTy) {
+    return dataRoot;
+  }
+  if (rootTy.getElementType() != destTy.getElementType() || !rootTy.hasStaticShape() || !destTy.hasStaticShape()) {
+    return {};
+  }
+  int64_t need = destTy.getNumElements();
+  int64_t have = rootTy.getNumElements();
+  if (have < need) {
+    return {};
+  }
+
+  Value src = dataRoot;
+  if (have > need) {
+    Value flat = src;
+    if (rootTy.getRank() != 1) {
+      ReassociationIndices group(static_cast<size_t>(rootTy.getRank()));
+      std::iota(group.begin(), group.end(), 0);
+      flat = rewriter.create<memref::CollapseShapeOp>(loc, src, ArrayRef<ReassociationIndices>{group});
+    }
+    auto prefixTy = MemRefType::get({need}, destTy.getElementType());
+    src = rewriter.create<memref::SubViewOp>(loc, prefixTy, flat, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(0)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(need)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+  }
+  return reshapeMemRefToType(src, destTy, loc, rewriter);
+}
+
+// Gate for the alloc-read -> alloc-write forwarding path: the written value must be a view
+// (subview) of an alloc distinct from the destination alloc, i.e. a store that the hardware
+// cannot express as a UB->UB copy and must be eliminated by forwarding.
+static bool isAllocReadIntoAllocWrite(Value dataToWrite, Value destRoot) {
+  if (!dataToWrite.getDefiningOp<memref::SubViewOp>()) {
+    return false;
+  }
+  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  return isRootFromAlloc(dataRoot) && dataRoot != destRoot;
+}
+
+constexpr int kIndexExprMaxDepth = 16;
+
+using AllocForwardSubstMap = llvm::DenseMap<Value, Value>;
+
+// Returns the scf.for whose induction variable is `v`, or null.
+static scf::ForOp getDefiningForOfInductionVar(Value v) {
+  auto barg = dyn_cast<BlockArgument>(v);
+  if (!barg) {
+    return nullptr;
+  }
+  auto forOp = dyn_cast_or_null<scf::ForOp>(barg.getOwner()->getParentOp());
+  if (forOp && barg == forOp.getInductionVar()) {
+    return forOp;
+  }
+  return nullptr;
+}
+
+static bool sameIndexOrEquivalentExpr(OpFoldResult a, OpFoldResult b, AllocForwardSubstMap &subst, int depth = 0);
+
+static bool tryMatchForInductionVars(Value av, Value bv, AllocForwardSubstMap &subst, int depth) {
+  scf::ForOp forA = getDefiningForOfInductionVar(av);
+  scf::ForOp forB = getDefiningForOfInductionVar(bv);
+  if (forA == nullptr || forB == nullptr) {
+    return false;
+  }
+  OpFoldResult lbA = getAsOpFoldResult(forA.getLowerBound());
+  OpFoldResult lbB = getAsOpFoldResult(forB.getLowerBound());
+  OpFoldResult ubA = getAsOpFoldResult(forA.getUpperBound());
+  OpFoldResult ubB = getAsOpFoldResult(forB.getUpperBound());
+  OpFoldResult stepA = getAsOpFoldResult(forA.getStep());
+  OpFoldResult stepB = getAsOpFoldResult(forB.getStep());
+  if (!sameIndexOrEquivalentExpr(lbA, lbB, subst, depth + 1) ||
+      !sameIndexOrEquivalentExpr(ubA, ubB, subst, depth + 1) ||
+      !sameIndexOrEquivalentExpr(stepA, stepB, subst, depth + 1)) {
+    return false;
+  }
+  subst[av] = bv;
+  return true;
+}
+
+static bool tryMatchPureIndexOps(Value av, Value bv, AllocForwardSubstMap &subst, int depth) {
+  Operation *defA = av.getDefiningOp();
+  Operation *defB = bv.getDefiningOp();
+  if (defA == nullptr || defB == nullptr || defA->getName() != defB->getName() || !isMemoryEffectFree(defA) ||
+      defA->getNumResults() != 1 || defA->getNumOperands() != defB->getNumOperands() ||
+      defA->getAttrDictionary() != defB->getAttrDictionary()) {
+    return false;
+  }
+  for (auto [operandA, operandB] : llvm::zip(defA->getOperands(), defB->getOperands())) {
+    if (!sameIndexOrEquivalentExpr(getAsOpFoldResult(operandA), getAsOpFoldResult(operandB), subst, depth + 1)) {
+      return false;
+    }
+  }
+  subst[av] = bv;
+  return true;
+}
+
+static bool sameIndexOrEquivalentExpr(OpFoldResult a, OpFoldResult b, AllocForwardSubstMap &subst, int depth) {
+  if (sameIndexFoldResult(a, b)) {
+    return true;
+  }
+  if (depth > kIndexExprMaxDepth) {
+    return false;
+  }
+  auto av = a.dyn_cast<Value>();
+  auto bv = b.dyn_cast<Value>();
+  if (!av || !bv) {
+    return false;
+  }
+  auto known = subst.find(av);
+  if (known != subst.end()) {
+    return known->second == bv;
+  }
+  if (tryMatchForInductionVars(av, bv, subst, depth)) {
+    return true;
+  }
+  return tryMatchPureIndexOps(av, bv, subst, depth);
+}
+
+// Rebuilds the write-side index `v` at `readSite` using `subst` (write->read). Mapped values
+// are substituted, values already dominating `readSite` are reused, and pure index ops are
+// cloned with rebuilt operands. Returns null when a leaf is neither mapped, visible, nor pure.
+static Value materializeRemappedIndex(Value v, AllocForwardSubstMap &subst, DominanceInfo &dom, Operation *readSite,
+                                      ConversionPatternRewriter &rewriter, int depth = 0) {
+  auto mapped = subst.find(v);
+  if (mapped != subst.end()) {
+    return mapped->second;
+  }
+  if (dom.properlyDominates(v, readSite)) {
+    return v;
+  }
+  Operation *def = v.getDefiningOp();
+  if (depth > kIndexExprMaxDepth || def == nullptr || !isMemoryEffectFree(def) || def->getNumResults() != 1) {
+    return {};
+  }
+  SmallVector<Value> rebuilt;
+  rebuilt.reserve(def->getNumOperands());
+  for (Value operand : def->getOperands()) {
+    Value remapped = materializeRemappedIndex(operand, subst, dom, readSite, rewriter, depth + 1);
+    if (!remapped) {
+      return {};
+    }
+    rebuilt.push_back(remapped);
+  }
+  rewriter.setInsertionPoint(readSite);
+  Operation *cloned = rewriter.clone(*def);
+  for (unsigned i = 0; i < rebuilt.size(); ++i) {
+    cloned->setOperand(i, rebuilt[i]);
+  }
+  return cloned->getResult(0);
+}
+
+static FailureOr<OpFoldResult> materializeRemappedFold(OpFoldResult ofr, AllocForwardSubstMap &subst,
+                                                       DominanceInfo &dom, Operation *readSite,
+                                                       ConversionPatternRewriter &rewriter) {
+  auto v = ofr.dyn_cast<Value>();
+  if (!v) {
+    return ofr;
+  }
+  Value remapped = materializeRemappedIndex(v, subst, dom, readSite, rewriter);
+  if (!remapped) {
+    return failure();
+  }
+  return OpFoldResult(remapped);
+}
+
 // DPS-init operands, sibling transfer_writes and memref.copy targets count as writers;
 // func.call and plain reads are treated as readers (matching the full-coverage path).
 static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
@@ -3807,98 +4070,291 @@ static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
   return false;
 }
 
-// Build a value of type `destTy` aliasing the leading getNumElements(destTy) elements of
-// `dataRoot` (an alloc). The source's first elements are exactly what the copy stored into
-// `dest`, so reads of `dest` observe identical data through this alias; trailing elements
-// (only present when the source is larger) map to dest positions the copy never defined, so
-// reading them was undefined either way. Returns null only when the source is too small to
-// cover `dest` (no contiguous alias possible) or shapes cannot be reconciled.
-static Value buildForwardedSourceView(Value dataRoot, MemRefType destTy, Location loc,
-                                      ConversionPatternRewriter &rewriter) {
-  auto rootTy = cast<MemRefType>(dataRoot.getType());
-  if (!rootTy.hasStaticShape() || !destTy.hasStaticShape() || rootTy.getElementType() != destTy.getElementType()) {
-    return {};
-  }
-  int64_t need = destTy.getNumElements();
-  int64_t have = rootTy.getNumElements();
-  if (have < need) {
-    return {};
-  }
-
-  Value src = dataRoot;
-  // Source larger than dest: collapse to 1D and slice the contiguous prefix of `need` elems.
-  // The explicit canonical (offset 0, unit stride) result type keeps a default-layout memref
-  // so the following reshape stays valid.
-  if (have > need) {
-    Value flat = src;
-    if (rootTy.getRank() != 1) {
-      ReassociationIndices group(static_cast<size_t>(rootTy.getRank()));
-      std::iota(group.begin(), group.end(), 0);
-      flat = rewriter.create<memref::CollapseShapeOp>(loc, src, ArrayRef<ReassociationIndices>{group});
+static FailureOr<SmallVector<npuvector::TransferReadOp>> collectDestTransferReads(Value dest, Operation *anchor,
+                                                                                  npuvector::TransferWriteOp op,
+                                                                                  ConversionPatternRewriter &rewriter) {
+  SmallVector<npuvector::TransferReadOp> reads;
+  for (OpOperand &use : dest.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == anchor || isa<annotation::MarkOp, memref::DeallocOp>(user)) {
+      continue;
     }
-    auto prefixTy = MemRefType::get({need}, destTy.getElementType());
-    src = rewriter.create<memref::SubViewOp>(loc, prefixTy, flat, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(0)},
-                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(need)},
-                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+    auto readOp = dyn_cast<npuvector::TransferReadOp>(user);
+    if (readOp == nullptr || use.get() != readOp.getSource()) {
+      return rewriter.notifyMatchFailure(op, "dest has a non transfer_read consumer");
+    }
+    reads.push_back(readOp);
   }
-
-  // src and dest now share element count; only shape/rank may differ -> reshape (linear order
-  // preserved). reshapeMemRefToType returns src unchanged when the types already match.
-  return reshapeMemRefToType(src, destTy, loc, rewriter);
+  if (reads.empty()) {
+    return rewriter.notifyMatchFailure(op, "no dest read to forward");
+  }
+  return reads;
 }
 
-// "Take the read value, drop the write": when a copy moves data between two allocs (which
-// would otherwise lower to an unsupported UB->UB store), redirect every later read of `dest`
-// to a dest-typed alias of the source alloc, then delete the copy and the now-dead dest.
-// This always handles the read-alloc -> write-alloc pattern; no full-coverage requirement.
-// The only guards are mechanical (both roots are allocs, base-aligned offsets, dest not read
-// before the write / not deallocated) plus a single-writer check: a `dest` assembled by
-// several writers cannot be aliased to one source, so that (genuinely unsupported) case is
-// left to the caller to diagnose rather than silently miscompiled.
-static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteOp op, Location loc, Value dataToWrite,
-                                                       Value dest, ArrayRef<OpFoldResult> offsets,
-                                                       ConversionPatternRewriter &rewriter) {
-  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
-  if (!dataSubview) {
+// Exact match, or contiguous subregion (same stride; relOff = roff - woff). Dynamic containment
+// is not proved statically — tiling is assumed to keep the read inside the written slab.
+// On success, relOffs[d] is the read's offset within the write along dest dim d (0 if exact).
+static bool matchWriteReadRegions(ArrayRef<OpFoldResult> woff, ArrayRef<OpFoldResult> wsize,
+                                  ArrayRef<OpFoldResult> wstride, ArrayRef<OpFoldResult> roff,
+                                  ArrayRef<OpFoldResult> rsize, ArrayRef<OpFoldResult> rstride, int64_t destRank,
+                                  AllocForwardSubstMap &subst, SmallVectorImpl<OpFoldResult> &relOffs, bool &isPartial,
+                                  Location loc, ConversionPatternRewriter &rewriter) {
+  relOffs.clear();
+  relOffs.reserve(static_cast<size_t>(destRank));
+  isPartial = false;
+  for (int64_t d = 0; d < destRank; ++d) {
+    auto idx = static_cast<size_t>(d);
+    if (!sameIndexOrEquivalentExpr(wstride[idx], rstride[idx], subst)) {
+      return false;
+    }
+    if (sameIndexOrEquivalentExpr(woff[idx], roff[idx], subst) &&
+        sameIndexOrEquivalentExpr(wsize[idx], rsize[idx], subst)) {
+      relOffs.push_back(rewriter.getIndexAttr(0));
+      continue;
+    }
+    // Subregion: relative offset along this dim. Prefer folded forms when woff is 0 / both const.
+    OpFoldResult rel = roff[idx];
+    if (!isConstantZero(woff[idx])) {
+      if (sameIndexFoldResult(roff[idx], woff[idx])) {
+        rel = rewriter.getIndexAttr(0);
+      } else {
+        auto constR = getConstantIntValue(roff[idx]);
+        auto constW = getConstantIntValue(woff[idx]);
+        if (constR && constW) {
+          rel = rewriter.getIndexAttr(*constR - *constW);
+        } else {
+          Value vr = getValueOrCreateConstantIndexOp(rewriter, loc, roff[idx]);
+          Value vw = getValueOrCreateConstantIndexOp(rewriter, loc, woff[idx]);
+          rel = rewriter.create<arith::SubIOp>(loc, vr, vw).getResult();
+        }
+      }
+    }
+    relOffs.push_back(rel);
+    isPartial = true;
+  }
+  return true;
+}
+
+static FailureOr<Value> rebuildSrcViewAtRead(Location loc, memref::SubViewOp dataSubview, Value source,
+                                             MemRefType sourceTy, ArrayRef<int64_t> reducedShape,
+                                             AllocForwardSubstMap &subst, DominanceInfo &dom,
+                                             npuvector::TransferReadOp readOp, ConversionPatternRewriter &rewriter) {
+  SmallVector<OpFoldResult> srcOff = dataSubview.getMixedOffsets();
+  SmallVector<OpFoldResult> srcSize = dataSubview.getMixedSizes();
+  SmallVector<OpFoldResult> srcStride = dataSubview.getMixedStrides();
+  auto remapRange = [&](SmallVectorImpl<OpFoldResult> &range) {
+    for (OpFoldResult &ofr : range) {
+      FailureOr<OpFoldResult> remapped = materializeRemappedFold(ofr, subst, dom, readOp, rewriter);
+      if (failed(remapped)) {
+        return false;
+      }
+      ofr = *remapped;
+    }
+    return true;
+  };
+  if (!remapRange(srcOff) || !remapRange(srcSize) || !remapRange(srcStride)) {
+    return failure();
+  }
+  rewriter.setInsertionPoint(readOp);
+  auto viewTy =
+    cast<MemRefType>(memref::SubViewOp::inferRankReducedResultType(reducedShape, sourceTy, srcOff, srcSize, srcStride));
+  return rewriter.create<memref::SubViewOp>(loc, viewTy, source, srcOff, srcSize, srcStride).getResult();
+}
+
+static LogicalResult forwardOneAllocRead(npuvector::TransferWriteOp op, Location loc, Value dataToWrite,
+                                         memref::SubViewOp dataSubview, Value source, MemRefType sourceTy,
+                                         MemRefType destTy, ArrayRef<int64_t> reducedShape, Operation *anchor,
+                                         ArrayRef<OpFoldResult> woff, ArrayRef<OpFoldResult> wsize,
+                                         ArrayRef<OpFoldResult> wstride, npuvector::TransferReadOp readOp,
+                                         DominanceInfo &dom, bool &reusedDataSubview,
+                                         ConversionPatternRewriter &rewriter) {
+  int64_t destRank = destTy.getRank();
+  auto readVecType = dyn_cast<npuvector::NPUVectorType>(readOp.getResult().getType());
+  if (readVecType == nullptr || readOp.getIndices().size() != static_cast<size_t>(destRank) ||
+      !isAfterInCommonBlock(anchor, readOp)) {
+    return rewriter.notifyMatchFailure(op, "read is not forwardable");
+  }
+  SmallVector<OpFoldResult> roff = getAsOpFoldResult(readOp.getIndices());
+  SmallVector<OpFoldResult> rsize;
+  SmallVector<OpFoldResult> rstride;
+  SmallVector<int64_t> mappedDims;
+  if (failed(buildTransferReadSizesAndStrides(readOp, destRank, readVecType.getRank(), readVecType,
+                                              readOp.getDynamicSizes(), rewriter, rsize, rstride, mappedDims))) {
     return failure();
   }
 
-  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  AllocForwardSubstMap subst;
+  SmallVector<OpFoldResult> relOffs;
+  bool isPartial = false;
+  rewriter.setInsertionPoint(readOp);
+  if (!matchWriteReadRegions(woff, wsize, wstride, roff, rsize, rstride, destRank, subst, relOffs, isPartial, loc,
+                             rewriter)) {
+    return rewriter.notifyMatchFailure(op, "read region differs from the written region");
+  }
+
+  Value srcView = dataToWrite;
+  if (!dom.properlyDominates(dataToWrite, readOp)) {
+    FailureOr<Value> rebuilt =
+      rebuildSrcViewAtRead(loc, dataSubview, source, sourceTy, reducedShape, subst, dom, readOp, rewriter);
+    if (failed(rebuilt)) {
+      return rewriter.notifyMatchFailure(op, "source index not visible at read site");
+    }
+    srcView = *rebuilt;
+  }
+
+  Value forwarded = srcView;
+  if (isPartial) {
+    auto srcTy = dyn_cast<MemRefType>(srcView.getType());
+    ArrayRef<int64_t> readShape = readVecType.getShape();
+    if (srcTy == nullptr || mappedDims.size() != static_cast<size_t>(srcTy.getRank()) ||
+        readShape.size() != static_cast<size_t>(srcTy.getRank())) {
+      return rewriter.notifyMatchFailure(op, "cannot slice source view to read subregion");
+    }
+    SmallVector<OpFoldResult> tileOff;
+    SmallVector<OpFoldResult> tileSize;
+    SmallVector<OpFoldResult> tileStride;
+    for (size_t i = 0; i < mappedDims.size(); ++i) {
+      auto destDim = static_cast<size_t>(mappedDims[i]);
+      tileOff.push_back(relOffs[destDim]);
+      tileSize.push_back(rsize[destDim]);
+      tileStride.push_back(rstride[destDim]);
+    }
+    Type inferred = memref::SubViewOp::inferRankReducedResultType(readShape, srcTy, tileOff, tileSize, tileStride);
+    if (!inferred) {
+      return rewriter.notifyMatchFailure(op, "cannot slice source view to read subregion");
+    }
+    forwarded =
+      rewriter.create<memref::SubViewOp>(loc, cast<MemRefType>(inferred), srcView, tileOff, tileSize, tileStride);
+  } else if (reducedShape != readVecType.getShape()) {
+    forwarded = reshapeMemRefToType(srcView, MemRefType::get(readVecType.getShape(), destTy.getElementType()), loc,
+                                    rewriter);
+    if (!forwarded) {
+      return rewriter.notifyMatchFailure(op, "cannot reshape source view to read type");
+    }
+  }
+  reusedDataSubview |= (forwarded == dataToWrite);
+  rewriter.replaceOp(readOp, forwarded);
+  return success();
+}
+
+static void cleanupForwardedAllocWrite(npuvector::TransferWriteOp op, Value dest, memref::SubViewOp dataSubview,
+                                       bool reusedDataSubview, ConversionPatternRewriter &rewriter) {
+  eraseBufferMarks(dest, rewriter);
+  rewriter.eraseOp(op);
+  if (!reusedDataSubview && dataSubview->use_empty()) {
+    rewriter.eraseOp(dataSubview);
+  }
+  Operation *destDef = dest.getDefiningOp();
+  if (destDef != nullptr && isa<memref::AllocOp, memref::AllocaOp>(destDef)) {
+    for (Operation *user : llvm::make_early_inc_range(dest.getUsers())) {
+      if (isa<memref::DeallocOp>(user)) {
+        rewriter.eraseOp(user);
+      }
+    }
+    if (dest.use_empty()) {
+      rewriter.eraseOp(destDef);
+    }
+  }
+}
+
+// Store-to-load forwarding for an alloc-read -> alloc-write copy: each later read of `dest`
+// whose region equals or is a contiguous subregion of the written region is replaced by an
+// equivalent view of the source (sliced when the read is partial). `dataToWrite` is the
+// subview produced by lowering the source transfer_read; (woff, wsize, wstride) is the write
+// region in destination coordinates.
+static LogicalResult forwardAllocReadWriteByReadForwarding(npuvector::TransferWriteOp op, Location loc,
+                                                           Value dataToWrite, Value dest,
+                                                           ArrayRef<OpFoldResult> woff, ArrayRef<OpFoldResult> wsize,
+                                                           ArrayRef<OpFoldResult> wstride,
+                                                           ConversionPatternRewriter &rewriter) {
+  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
+  if (dataSubview == nullptr) {
+    return rewriter.notifyMatchFailure(op, "data-to-write is not a subview of alloc");
+  }
+  Value source = dataSubview.getSource();
+  auto sourceTy = dyn_cast<MemRefType>(source.getType());
   auto destTy = cast<MemRefType>(dest.getType());
   Operation *anchor = op.getOperation();
-  auto isZero = [](OpFoldResult ofr) { return isConstantIntValue(ofr, 0); };
-  // The forwarded alias maps dest[i] -> dataRoot[i] (linear). That is correct for reads of
-  // any extent/rank as long as the read is a contiguous prefix of the root (a zero-offset
-  // packed slab); a strided gather or offset read would alias the wrong elements. The write
-  // into dest is contiguous from base by construction (offsets 0, unit strides).
-  if (dataRoot == dest || !isRootFromAlloc(dataRoot) || !isRootFromAlloc(dest) || !llvm::all_of(offsets, isZero) ||
-      !isContiguousZeroOffsetSlab(cast<MemRefType>(dataToWrite.getType())) || allocDestHasForeignWriter(dest, anchor)) {
+  if (sourceTy == nullptr || sourceTy.getElementType() != destTy.getElementType()) {
+    return rewriter.notifyMatchFailure(op, "source/dest element type mismatch");
+  }
+
+  FailureOr<SmallVector<npuvector::TransferReadOp>> readsOr = collectDestTransferReads(dest, anchor, op, rewriter);
+  if (failed(readsOr)) {
     return failure();
   }
 
-  DominanceInfo domInfo;
-  if (llvm::any_of(dest.getUses(), [anchor, &domInfo](OpOperand &use) {
-        Operation *user = use.getOwner();
-        return user != anchor && !isa<annotation::MarkOp>(user) &&
-               (isa<memref::DeallocOp>(user) || !domInfo.properlyDominates(anchor, user));
-      })) {
+  ArrayRef<int64_t> reducedShape = cast<MemRefType>(dataSubview.getType()).getShape();
+  DominanceInfo dom;
+  // Set when a read is forwarded to `dataToWrite` itself: `dataSubview` is then still live and
+  // must not be erased below (its physical use appears only after the deferred replaceOp lands).
+  bool reusedDataSubview = false;
+  const bool forwardFailed = llvm::any_of(*readsOr, [&](npuvector::TransferReadOp readOp) {
+    return failed(forwardOneAllocRead(op, loc, dataToWrite, dataSubview, source, sourceTy, destTy, reducedShape, anchor,
+                                      woff, wsize, wstride, readOp, dom, reusedDataSubview, rewriter));
+  });
+  if (forwardFailed) {
     return failure();
+  }
+
+  cleanupForwardedAllocWrite(op, dest, dataSubview, reusedDataSubview, rewriter);
+  return success();
+}
+
+static bool destUsesDominatedByWrite(Value dest, Operation *anchor, DominanceInfo &dom) {
+  for (OpOperand &use : dest.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == anchor || isa<annotation::MarkOp>(user)) {
+      continue;
+    }
+    if (isa<memref::DeallocOp>(user) || !dom.properlyDominates(anchor, user)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whole-buffer aliasing for a contiguous alloc-to-alloc copy: replace every non-write use of
+// `dest` with an equivalent view of the source. Used when `dest` has non transfer_read
+// consumers (e.g. func.call) or when the ranks differ but cover one contiguous slab.
+static LogicalResult narrowAliasForward(npuvector::TransferWriteOp op, Location loc, Value dataToWrite, Value dest,
+                                        ConversionPatternRewriter &rewriter) {
+  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
+  if (dataSubview == nullptr || !isContiguousSlab(cast<MemRefType>(dataToWrite.getType()))) {
+    return rewriter.notifyMatchFailure(op, "data-to-write is not a contiguous alloc slab");
+  }
+  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  auto destTy = cast<MemRefType>(dest.getType());
+  auto dataRootTy = cast<MemRefType>(dataRoot.getType());
+  if (dataRootTy.hasStaticShape() && destTy.hasStaticShape() &&
+      dataRootTy.getNumElements() > destTy.getNumElements() &&
+      !llvm::all_of(dataSubview.getMixedOffsets(), isConstantZero)) {
+    return rewriter.notifyMatchFailure(op, "cannot alias a non-prefix partial copy");
+  }
+
+  Operation *anchor = op.getOperation();
+  if (allocDestHasForeignWriter(dest, anchor)) {
+    return rewriter.notifyMatchFailure(op, "dest has a foreign writer");
+  }
+  DominanceInfo dom;
+  if (!destUsesDominatedByWrite(dest, anchor, dom)) {
+    return rewriter.notifyMatchFailure(op, "dest use is not dominated by the write");
   }
 
   rewriter.setInsertionPoint(anchor);
   Value forwarded = buildForwardedSourceView(dataRoot, destTy, loc, rewriter);
   if (!forwarded) {
-    return failure();
+    return rewriter.notifyMatchFailure(op, "cannot build forwarded source view");
   }
-
   eraseBufferMarks(dest, rewriter);
   dest.replaceUsesWithIf(forwarded, [anchor](OpOperand &use) { return use.getOwner() != anchor; });
   rewriter.eraseOp(op);
   if (dataSubview->use_empty()) {
     rewriter.eraseOp(dataSubview);
   }
-  if (dest.use_empty()) {
-    rewriter.eraseOp(dest.getDefiningOp());
+  Operation *destDef = dest.getDefiningOp();
+  if (destDef != nullptr && dest.use_empty()) {
+    rewriter.eraseOp(destDef);
   }
   return success();
 }
@@ -3926,6 +4382,11 @@ static LogicalResult fuseTransferWriteOnProducerSide(npuvector::TransferWriteOp 
                                                      MemRefType resultMemType, ArrayRef<OpFoldResult> offsets,
                                                      ArrayRef<OpFoldResult> sizes, ArrayRef<OpFoldResult> strides,
                                                      ConversionPatternRewriter &rewriter) {
+  auto actualBufType = cast<MemRefType>(actualBuf.getType());
+  if (!canReshapeMemRefToType(resultMemType, actualBufType)) {
+    return failure();
+  }
+
   eraseBufferMarks(actualBuf, rewriter);
 
   SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
@@ -3938,9 +4399,13 @@ static LogicalResult fuseTransferWriteOnProducerSide(npuvector::TransferWriteOp 
   rewriter.setInsertionPoint(insertPt);
   Value slicedDest =
     rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, subviewOffsets, subviewSizes, subviewStrides);
+  Value producerDest = adaptSubviewToProducerType(slicedDest, actualBufType, loc, rewriter);
+  if (!producerDest) {
+    return failure();
+  }
 
-  rewriter.replaceAllUsesWith(actualBuf, slicedDest);
-  rewriter.replaceOp(allocDef, slicedDest);
+  rewriter.replaceAllUsesWith(actualBuf, producerDest);
+  rewriter.replaceOp(allocDef, producerDest);
   rewriter.eraseOp(op);
   return success();
 }
@@ -3951,6 +4416,11 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
                                                         ArrayRef<OpFoldResult> offsets, ArrayRef<OpFoldResult> sizes,
                                                         ArrayRef<OpFoldResult> strides, DominanceInfo &domInfo,
                                                         ConversionPatternRewriter &rewriter) {
+  auto actualBufType = cast<MemRefType>(actualBuf.getType());
+  if (!canReshapeMemRefToType(resultMemType, actualBufType)) {
+    return failure();
+  }
+
   Operation *anchor = op.getOperation();
   Block *allocBlock = allocDef->getBlock();
 
@@ -3991,9 +4461,13 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
 
   rewriter.setInsertionPoint(anchor);
   Value slicedDest = rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, offsets, sizes, strides);
+  Value producerDest = adaptSubviewToProducerType(slicedDest, actualBufType, loc, rewriter);
+  if (!producerDest) {
+    return failure();
+  }
 
   IRMapping mapping;
-  mapping.map(actualBuf, slicedDest);
+  mapping.map(actualBuf, producerDest);
   for (Operation *writer : writers) {
     rewriter.clone(*writer, mapping);
   }
@@ -4003,6 +4477,100 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
     rewriter.eraseOp(writer);
   }
   rewriter.eraseOp(allocDef);
+  return success();
+}
+
+static Operation *getSingleReductionWriter(Value buffer, Operation *collapseOp) {
+  Operation *writer = nullptr;
+  for (Operation *user : buffer.getUsers()) {
+    if (user == collapseOp || isa<annotation::MarkOp>(user)) {
+      continue;
+    }
+
+    bool writesBuffer = false;
+    auto dpsUser = dyn_cast<DestinationStyleOpInterface>(user);
+    for (OpOperand &use : user->getOpOperands()) {
+      if (use.get() != buffer) {
+        continue;
+      }
+      if (dpsUser && dpsUser.isDpsInit(&use)) {
+        writesBuffer = true;
+        continue;
+      }
+      return nullptr;
+    }
+    if (!writesBuffer || !isa<hivm::VReduceOp>(user)) {
+      return nullptr;
+    }
+    if (writer != nullptr && writer != user) {
+      return nullptr;
+    }
+    writer = user;
+  }
+  return writer;
+}
+
+static LogicalResult lowerCollapsedReductionWriteToAllocRoot(npuvector::TransferWriteOp op, Location loc, Value dest,
+                                                             Value dataToWrite, MemRefType destMemRefType,
+                                                             ArrayRef<OpFoldResult> offsets,
+                                                             ArrayRef<OpFoldResult> sizes,
+                                                             ArrayRef<OpFoldResult> strides,
+                                                             ConversionPatternRewriter &rewriter) {
+  auto collapseOp = dataToWrite.getDefiningOp<memref::CollapseShapeOp>();
+  if (!collapseOp) {
+    return failure();
+  }
+
+  auto writeValueType = dyn_cast<MemRefType>(dataToWrite.getType());
+  Value reductionBuf = collapseOp.getSrc();
+  auto reductionBufType = dyn_cast<MemRefType>(reductionBuf.getType());
+  Operation *writer = getSingleReductionWriter(reductionBuf, collapseOp.getOperation());
+  if (!writeValueType || !reductionBufType || !isRootFromAlloc(reductionBuf) || writer == nullptr) {
+    return failure();
+  }
+  if (writeValueType.getRank() > destMemRefType.getRank()) {
+    return failure();
+  }
+
+  DominanceInfo domInfo;
+  if (!dominatesInsertPoint(domInfo, dest, writer)) {
+    return failure();
+  }
+
+  SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
+  SmallVector<OpFoldResult> subviewSizes(sizes.begin(), sizes.end());
+  SmallVector<OpFoldResult> subviewStrides(strides.begin(), strides.end());
+  if (failed(materializeSubviewIndicesBefore(subviewOffsets, subviewSizes, subviewStrides, writer, rewriter))) {
+    return rewriter.notifyMatchFailure(op, "failed to materialize subview indices before reduction");
+  }
+
+  auto subviewType = cast<MemRefType>(memref::SubViewOp::inferRankReducedResultType(
+    writeValueType.getShape(), destMemRefType, subviewOffsets, subviewSizes, subviewStrides));
+  if (!canReshapeMemRefToType(subviewType, reductionBufType)) {
+    return failure();
+  }
+
+  rewriter.setInsertionPoint(writer);
+  Value writeDest =
+    rewriter.create<memref::SubViewOp>(loc, subviewType, dest, subviewOffsets, subviewSizes, subviewStrides);
+  Value reductionDest = adaptSubviewToProducerType(writeDest, reductionBufType, loc, rewriter);
+  if (!reductionDest) {
+    return failure();
+  }
+
+  auto dpsWriter = cast<DestinationStyleOpInterface>(writer);
+  for (OpOperand &use : writer->getOpOperands()) {
+    if (use.get() == reductionBuf && dpsWriter.isDpsInit(&use)) {
+      use.set(reductionDest);
+    }
+  }
+  collapseOp->setOperand(0, reductionDest);
+
+  rewriter.eraseOp(op);
+  eraseBufferMarks(reductionBuf, rewriter);
+  if (reductionBuf.use_empty()) {
+    rewriter.eraseOp(reductionBuf.getDefiningOp());
+  }
   return success();
 }
 
@@ -4088,14 +4656,66 @@ static void markFullyDynamicAllocRootDefaultSize(PatternRewriter &rewriter, Loca
   setBufferSizeMarkAtLeast(rewriter, loc, destRoot, kDefaultDynamicAllocSize);
 }
 
+static Value resolveTransferWriteDataMemRef(npuvector::TransferWriteOp op, Value dataToWrite,
+                                            ConversionPatternRewriter &rewriter) {
+  if (isa<MemRefType>(dataToWrite.getType())) {
+    return dataToWrite;
+  }
+  if (Value remapped = rewriter.getRemappedValue(op.getVector())) {
+    if (isa<MemRefType>(remapped.getType())) {
+      return remapped;
+    }
+  }
+  return dataToWrite;
+}
+
+static bool tryEraseSameAllocRootWrite(npuvector::TransferWriteOp op, Value dataToWrite, Value dest, Value destRoot,
+                                       bool destIsAllocRoot, ConversionPatternRewriter &rewriter) {
+  // No-op when data and dest share the same alloc root (for results: map through init args).
+  // destRoot/destIsAllocRoot remain valid: default-size marking only inserts/adjusts an
+  // annotation.mark on the root and never replaces or erases dest's defining op.
+  if (!isa<MemRefType>(dataToWrite.getType()) || !isa<MemRefType>(dest.getType())) {
+    return false;
+  }
+  Value dataRoot = traceDataToWriteRoot(dataToWrite);
+  if (dataRoot != destRoot || !destIsAllocRoot) {
+    return false;
+  }
+  rewriter.eraseOp(op);
+  return true;
+}
+
+enum class AllocReadWriteForwardOutcome { NotApplicable, Applied, Failed };
+
+static AllocReadWriteForwardOutcome tryForwardOrAliasAllocReadWrite(
+  npuvector::TransferWriteOp op, Location loc, Value dataToWrite, Value dest, Value destRoot, bool destIsAllocRoot,
+  int64_t memRefRank, int64_t dataRank, ArrayRef<OpFoldResult> offsets, ArrayRef<OpFoldResult> sizes,
+  ArrayRef<OpFoldResult> strides, ConversionPatternRewriter &rewriter) {
+  // alloc-read -> alloc-write: the written value is a view of another alloc, so lowering to a
+  // store would be an illegal UB->UB copy. Eliminate it by store-to-load forwarding, or by
+  // whole-buffer aliasing for non transfer_read consumers. This class is handled exclusively
+  // here; if neither applies we report an error instead of emitting a store.
+  if (!destIsAllocRoot || hasNonSuffixTransferWritePermutationMap(op, memRefRank, dataRank) ||
+      !isAllocReadIntoAllocWrite(dataToWrite, destRoot)) {
+    return AllocReadWriteForwardOutcome::NotApplicable;
+  }
+  if (succeeded(forwardAllocReadWriteByReadForwarding(op, loc, dataToWrite, dest, offsets, sizes, strides, rewriter))) {
+    return AllocReadWriteForwardOutcome::Applied;
+  }
+  if (succeeded(narrowAliasForward(op, loc, dataToWrite, dest, rewriter))) {
+    return AllocReadWriteForwardOutcome::Applied;
+  }
+  (void)op.emitError("unsupported alloc-read to alloc-write copy: cannot forward or alias");
+  return AllocReadWriteForwardOutcome::Failed;
+}
+
 struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
   using OpConversionPattern<npuvector::TransferWriteOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(npuvector::TransferWriteOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-
-    Value dataToWrite = adaptor.getVector();
+    Value dataToWrite = resolveTransferWriteDataMemRef(op, adaptor.getVector(), rewriter);
     Value dest = adaptor.getSource();
     Value destRoot = traceMemRefToRoot(dest);
     const bool destIsAllocRoot = isRootFromAlloc(destRoot);
@@ -4106,31 +4726,23 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     if (succeeded(tryLowerBroadcastNPUVectorTransferWrite(op, dest, rewriter))) {
       return success();
     }
-
-    // No-op when data and dest share the same alloc root (for results: map through init args).
-    // destRoot/destIsAllocRoot are computed once above and remain valid here: the default-size
-    // marking above only inserts/adjusts an annotation.mark on the root and never replaces or
-    // erases dest's defining op, so SSA identity and op type are unchanged.
-    if (isa<MemRefType>(dataToWrite.getType()) && isa<MemRefType>(dest.getType())) {
-      Value dataRoot = traceDataToWriteRoot(dataToWrite);
-      if (dataRoot == destRoot && destIsAllocRoot) {
-        rewriter.eraseOp(op);
-        return success();
-      }
+    if (tryEraseSameAllocRootWrite(op, dataToWrite, dest, destRoot, destIsAllocRoot, rewriter)) {
+      return success();
     }
 
     if (!isa<MemRefType>(dest.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref destination");
     }
+    auto destMemRefType = cast<MemRefType>(dest.getType());
+    auto npuVecType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
     if (!isa<MemRefType>(dataToWrite.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref data source");
     }
 
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
-    auto destMemRefType = cast<MemRefType>(dest.getType());
-
     int64_t memRefRank = destMemRefType.getRank();
-    int64_t dataRank = dataMemRefType.getRank();
+    int64_t dataRank = npuVecType != nullptr ? npuVecType.getRank() : dataMemRefType.getRank();
+    ArrayRef<int64_t> dataShape = npuVecType != nullptr ? npuVecType.getShape() : dataMemRefType.getShape();
 
     // Preserve the historical rank-1 vector-to-scalar write. Equal-rank
     // transfers, including rank-0, use the common subview/fusion path below.
@@ -4142,21 +4754,31 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     // Rank-0 accesses have no memref coordinates. Ignore any tile/VF metadata
     // carried in indices and let the common path operate on empty ranges.
     SmallVector<OpFoldResult> offsets;
-    if (memRefRank != 0) offsets = getAsOpFoldResult(adaptor.getIndices());
+    if (memRefRank != 0) {
+      offsets = getAsOpFoldResult(adaptor.getIndices());
+    }
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
-
-    if (failed(buildNPUVectorTransferWriteSizesStrides(op, dataToWrite, dataMemRefType, memRefRank, dataRank, rewriter,
-                                                       sizes, strides))) {
+    if (failed(buildNPUVectorTransferWriteLogicalSizesStrides(op, dataToWrite, dataMemRefType, npuVecType, memRefRank,
+                                                              dataRank, rewriter, sizes, strides))) {
       return failure();
     }
 
-    auto resultType =
-      memref::SubViewOp::inferRankReducedResultType(dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
-
-    if (destIsAllocRoot && !hasNonSuffixTransferWritePermutationMap(op, memRefRank, dataRank) &&
-        succeeded(forwardAllocViewCopyTransferWrite(op, loc, dataToWrite, dest, offsets, rewriter))) {
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(dataShape, destMemRefType, offsets, sizes, strides);
+    if (destIsAllocRoot &&
+        succeeded(lowerCollapsedReductionWriteToAllocRoot(op, loc, dest, dataToWrite, destMemRefType, offsets, sizes,
+                                                          strides, rewriter))) {
       return success();
+    }
+
+    AllocReadWriteForwardOutcome forwardOutcome =
+      tryForwardOrAliasAllocReadWrite(op, loc, dataToWrite, dest, destRoot, destIsAllocRoot, memRefRank, dataRank,
+                                      offsets, sizes, strides, rewriter);
+    if (forwardOutcome == AllocReadWriteForwardOutcome::Applied) {
+      return success();
+    }
+    if (forwardOutcome == AllocReadWriteForwardOutcome::Failed) {
+      return failure();
     }
 
     if (destIsAllocRoot) {
@@ -4527,7 +5149,7 @@ static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemR
         continue;
       }
       Value other = user->getOperand(0) == broadcastVal ? user->getOperand(1) : user->getOperand(0);
-      if (isScalarType(other.getType()) || isScalarBroadcast(other)) {
+      if (isScalarType(other.getType()) || isScalarBroadcast(other) || isDynamicVectorBroadcast(other)) {
         return false;
       }
     }
