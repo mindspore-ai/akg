@@ -28,6 +28,7 @@
 #include "mlir/Pass/PassManager.h"
 
 namespace mlir {
+#define GEN_PASS_DECL_MFUSEFUSION
 #define GEN_PASS_DEF_MFUSEFUSION
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 
@@ -35,6 +36,8 @@ namespace mfuse {
 
 struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
+    // mfuse-fusion: manual fusion patterns ending with matcher-driven DVM materializers.
+    // fuse-layernorm runs early (before fuse-layer-norm-dvm's embedded aclnnvar decompose).
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
     std::vector<std::pair<const char *, PassCreator>> preMatmulPasses = {
       // Must run before fuse-num-to-tensor so scalar binary operands are not materialized as mfuse.full.
@@ -55,10 +58,15 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-layernorm", []() { return createFuseLayerNormPass(); }},
       {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
       {"fuse-num-to-tensor", []() { return createFuseNumToTensorPass(); }},
-      // Safe-softmax fusion must run last: it relies on all preceding fusion
-      // passes having completed so softmax producers are in their final form,
+    };
+    std::vector<std::pair<const char *, PassCreator>> dvmPasses = {
+      // Safe-softmax fusion must run before LayerNorm DVM: it relies on all preceding
+      // fusion passes having completed so softmax producers are in their final form,
       // and it creates its own mfuse.fused regions.
       {"fuse-safe-softmax-dvm", []() { return createFuseSafeSoftmaxDvmPass(); }},
+      // LayerNorm DVM: self-contained pass (embedded aclnnvar + reducemean decompose,
+      // then match → partition → materialize). Must run after fuse-layernorm above.
+      {"fuse-layer-norm-dvm", []() { return createFuseLayerNormDvmPass(); }},
     };
 
     PassManager pm(&getContext());
@@ -73,6 +81,12 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
     for (const auto &[name, creator] : postMatmulPasses) {
       (void)name;
       pm.addPass(creator());
+    }
+    if (kernelGenerator == "dvm") {
+      for (const auto &[name, creator] : dvmPasses) {
+        (void)name;
+        pm.addPass(creator());
+      }
     }
     if (failed(pm.run(getOperation()))) {
       signalPassFailure();

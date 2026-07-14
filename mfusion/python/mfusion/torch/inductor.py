@@ -52,6 +52,11 @@ _MFUSE_FUSION_INTERNAL_PASSES = _load_internal_passes_from_cpp(
     "lib/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.cc",
 )
 
+_DVM_ONLY_MFUSE_PASSES = {
+    "fuse-safe-softmax-dvm",
+    "fuse-layer-norm-dvm",
+}
+
 
 def _run_composite_fusion_stage(
     runner: PipelineRunner,
@@ -124,20 +129,18 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
         stage="Decompose aclnn ops to meta ops",
     )
 
+    mfuse_internal_passes = _MFUSE_FUSION_INTERNAL_PASSES
+    if kernel_generator != "dvm":
+        mfuse_internal_passes = tuple(
+            name for name in mfuse_internal_passes if name not in _DVM_ONLY_MFUSE_PASSES
+        )
+
     _run_composite_fusion_stage(
         runner,
         "Mfuse Fusion",
-        "builtin.module(mfuse-fusion,canonicalize)",
-        _MFUSE_FUSION_INTERNAL_PASSES,
+        f"builtin.module(mfuse-fusion{{kernel-generator={kernel_generator}}},canonicalize)",
+        mfuse_internal_passes,
     )
-
-    runner.run(
-        pipeline=(
-            'builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION op-list=aclnnvar}, canonicalize)'
-        ),
-        stage="Decompose aclnn.var for DVM (before reduce_mean)",
-    )
-
     after_decompose = "decompose{pattern-type=AFTER_MANUAL_FUSION}"
     # DVM: also split matmul_with_bias so bias add can fuse with epilogue.
     # Non-DVM keeps fused op for aten.addmm on torch exit.
@@ -149,11 +152,6 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     runner.run(
         pipeline=f"builtin.module({after_decompose}, canonicalize)",
         stage="Decompose complex ops to meta ops",
-    )
-
-    runner.run(
-        pipeline="builtin.module(fuse-layer-norm-dvm,canonicalize)",
-        stage="Tag LayerNorm subgraphs for DVM",
     )
 
     if kernel_generator == "dvm":

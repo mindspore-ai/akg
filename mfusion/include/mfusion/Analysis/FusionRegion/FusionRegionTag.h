@@ -32,7 +32,7 @@ namespace fusion_region {
 
 enum class FuseRole { Member, Affinity };
 
-/// Fuse kind string for LayerNorm; legacy unit attrs are written only for this kind.
+/// Fuse kind string for LayerNorm matcher-materialized islands.
 inline constexpr llvm::StringLiteral kLayerNormFuseKind = "layer_norm";
 
 /// Fuse kind for bool-mask select / where with broadcast condition.
@@ -48,16 +48,18 @@ bool isTagged(Operation *op);
 
 /// True when a matcher-materialized mfuse.fused island (e.g. safe-softmax) carries
 /// dvm_fuse_kind on its wrapper and must not be fragmented by the split cost model.
-/// LayerNorm uses top-level multi-op tags + FuseTagBarrierByGroupId instead.
+/// LayerNorm uses matcher-materialized mfuse.fused + shouldSkipSplitForMatcherFusedIsland.
 bool shouldSkipSplitForMatcherFusedIsland(Operation *op);
 
-/// Returns group id if this op participates in split merge (member or legacy LN unit tag).
+/// Returns group id when this op is a fusion-region member participating in split merge.
 std::optional<llvm::StringRef> getMergeGroupId(Operation *op);
 
 void collectMergeGroupIds(Operation *op, llvm::StringSet<> &groups);
 void collectAreaMergeGroupIds(ArrayRef<Operation *> ops, llvm::StringSet<> &groups);
 
 std::string allocateGroupId(llvm::StringRef kind);
+/// Undo the last allocateGroupId() when materialization fails after pre-allocation.
+void rollbackLastGroupId();
 /// Reset the per-process group counter so each tagging pass assigns ids from `{kind}#0`.
 void resetGroupIdAllocator();
 

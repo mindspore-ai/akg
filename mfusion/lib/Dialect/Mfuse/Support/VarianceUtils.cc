@@ -128,30 +128,41 @@ bool reductionDimsEqual(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
 }
 
 ReduceMeanOp findMatchingReduceMean(Value x, ArrayRef<int64_t> dims, bool keepdim) {
-  for (Operation *user : x.getUsers()) {
-    auto reduceMean = dyn_cast<ReduceMeanOp>(user);
-    if (!reduceMean || reduceMean.getKeepdim() != keepdim || reduceMean.getInput() != x) {
-      continue;
+  Value keyX = getCanonicalFusionTensor(x);
+  auto matchesReduceMean = [&](Value root) -> ReduceMeanOp {
+    for (Operation *user : root.getUsers()) {
+      auto reduceMean = dyn_cast<ReduceMeanOp>(user);
+      if (!reduceMean || reduceMean.getKeepdim() != keepdim ||
+          getCanonicalFusionTensor(reduceMean.getInput()) != keyX) {
+        continue;
+      }
+      auto reduceDims = reduceMean.getDimensions();
+      if (!reduceDims) {
+        continue;
+      }
+      llvm::SmallVector<int64_t, 4> reduceDimValues;
+      reduceDimValues.reserve(reduceDims.size());
+      std::transform(reduceDims.begin(), reduceDims.end(), std::back_inserter(reduceDimValues),
+                     [](Attribute dimAttr) { return cast<IntegerAttr>(dimAttr).getValue().getSExtValue(); });
+      std::sort(reduceDimValues.begin(), reduceDimValues.end());
+      if (reductionDimsEqual(reduceDimValues, dims)) {
+        return reduceMean;
+      }
     }
-    auto reduceDims = reduceMean.getDimensions();
-    if (!reduceDims) {
-      continue;
-    }
-    llvm::SmallVector<int64_t, 4> reduceDimValues;
-    reduceDimValues.reserve(reduceDims.size());
-    std::transform(reduceDims.begin(), reduceDims.end(), std::back_inserter(reduceDimValues),
-                   [](Attribute dimAttr) { return cast<IntegerAttr>(dimAttr).getValue().getSExtValue(); });
-    std::sort(reduceDimValues.begin(), reduceDimValues.end());
-    if (reductionDimsEqual(reduceDimValues, dims)) {
-      return reduceMean;
-    }
+    return nullptr;
+  };
+  if (auto reduceMean = matchesReduceMean(x)) {
+    return reduceMean;
+  }
+  if (keyX != x) {
+    return matchesReduceMean(keyX);
   }
   return nullptr;
 }
 
 Value createVarianceFromExistingMean(PatternRewriter &rewriter, Location loc, Value x, Value mean,
                                      ArrayRef<int64_t> dims, int64_t correction, RankedTensorType varType,
-                                     bool keepdim) {
+                                     bool keepdim, Operation *dominanceAnchor) {
   auto inType = cast<RankedTensorType>(x.getType());
   auto dimsAttr = rewriter.getI64ArrayAttr(dims);
   auto keepdimAttr = rewriter.getBoolAttr(keepdim);
@@ -162,7 +173,36 @@ Value createVarianceFromExistingMean(PatternRewriter &rewriter, Location loc, Va
     meanBc = rewriter.create<BroadcastToOp>(loc, meanBcType, mean).getResult();
   }
 
-  Value centered = rewriter.create<SubOp>(loc, inType, x, meanBc).getResult();
+  Value centered;
+  Value keyX = getCanonicalFusionTensor(x);
+  auto tryReuseCenterSub = [&](Value root) -> bool {
+    for (Operation *user : root.getUsers()) {
+      auto subOp = dyn_cast<SubOp>(user);
+      if (!subOp || getCanonicalFusionTensor(subOp.getX()) != keyX) {
+        continue;
+      }
+      if (dominanceAnchor && !subOp->isBeforeInBlock(dominanceAnchor)) {
+        continue;
+      }
+      Value subMean = peelBroadcast(subOp.getY());
+      Value peeledMean = peelBroadcast(meanBc);
+      if (subMean == peeledMean || subMean == meanBc || subOp.getY() == meanBc) {
+        centered = subOp.getResult();
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!tryReuseCenterSub(x) && keyX != x) {
+    (void)tryReuseCenterSub(keyX);
+  }
+  if (!centered) {
+    centered = rewriter.create<SubOp>(loc, inType, x, meanBc).getResult();
+  } else if (Operation *centerDef = centered.getDefiningOp()) {
+    // Reused center_sub may be defined earlier in the block; emit the var chain after it.
+    rewriter.setInsertionPointAfter(centerDef);
+  }
+
   Value squared = rewriter.create<MulOp>(loc, inType, centered, centered).getResult();
   Value sumSq = rewriter.create<ReduceSumOp>(loc, varType, squared, dimsAttr, keepdimAttr).getResult();
 
@@ -216,7 +256,7 @@ FailureOr<Value> decomposeAclnnVar(AclnnVarOp op, PatternRewriter &rewriter) {
   }
 
   return createVarianceFromExistingMean(rewriter, op.getLoc(), x, existingMean.getResult(), dims, correction,
-                                       varType, keepdim);
+                                       varType, keepdim, op.getOperation());
 }
 
 FailureOr<std::pair<Value, Value>> decomposeAclnnVarMean(AclnnVarMeanOp op, PatternRewriter &rewriter) {
@@ -256,12 +296,12 @@ FailureOr<std::pair<Value, Value>> decomposeAclnnVarMean(AclnnVarMeanOp op, Patt
   auto keepdimAttr = rewriter.getBoolAttr(keepdim);
   auto meanOp = rewriter.create<ReduceMeanOp>(op.getLoc(), meanType, x, dimsAttr, keepdimAttr);
   Value var = createVarianceFromExistingMean(rewriter, op.getLoc(), x, meanOp.getResult(), dims, correction,
-                                             varType, keepdim);
+                                             varType, keepdim, op.getOperation());
   return std::pair<Value, Value>{var, Value(meanOp.getResult())};
 }
 
 bool matchDecomposedVarianceChain(Value sqrtInput, Value x, DecomposedVarianceChain &chain) {
-  Value varVal = peelBroadcast(sqrtInput);
+  Value varVal = getCanonicalFusionTensor(peelBroadcast(sqrtInput));
   auto varDivOp = varVal.getDefiningOp<DivOp>();
   if (!varDivOp || !isPositiveDimDivisor(varDivOp.getOther())) {
     return false;
@@ -288,7 +328,7 @@ bool matchDecomposedVarianceChain(Value sqrtInput, Value x, DecomposedVarianceCh
   }
   Value centered = lhs.getDefiningOp<SubOp>() ? lhs : (rhs.getDefiningOp<SubOp>() ? rhs : Value{});
   auto centerSub = centered.getDefiningOp<SubOp>();
-  if (!centerSub || centerSub.getX() != x) {
+  if (!centerSub || getCanonicalFusionTensor(centerSub.getX()) != getCanonicalFusionTensor(x)) {
     return false;
   }
 

@@ -768,7 +768,7 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.gt",          "mfuse.ge",           "mfuse.lt",
     "mfuse.le",          "mfuse.logical_and",  "mfuse.logical_or",
     "mfuse.logical_not", "mfuse.select",       "mfuse.assign",
-    "mfuse.reduce_sum",  "mfuse.reduce_max",   "mfuse.is_finite",    "mfuse.reshape",
+    "mfuse.reduce_sum",  "mfuse.reduce_max",   "mfuse.reduce_mean",  "mfuse.is_finite",    "mfuse.reshape",
     "mfuse.floor",       "mfuse.ceil",         "mfuse.trunc",
     "mfuse.matmul",      "mfuse.grouped_matmul",
   });

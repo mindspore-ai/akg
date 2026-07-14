@@ -37,31 +37,18 @@ void setRoleAttr(Operation *op, FuseRole role) {
 
 void setGroupAndKind(Operation *op, llvm::StringRef groupId, llvm::StringRef kind, FuseRole role) {
   OpBuilder b(op);
-  op->setAttr(mfusion_attrs::kDvmFuseGroup, b.getStringAttr(groupId));
-  setRoleAttr(op, role);
   if (!kind.empty()) {
     op->setAttr(mfusion_attrs::kDvmFuseKind, b.getStringAttr(kind));
   }
+  setRoleAttr(op, role);
+  op->setAttr(mfusion_attrs::kDvmFuseGroup, b.getStringAttr(groupId));
 }
-
-bool hasLegacyMember(Operation *op) {
-  return op && op->hasAttr(mfusion_attrs::kLayerNormDvm);
-}
-
-bool hasLegacyAffinity(Operation *op) {
-  return op && op->hasAttr(mfusion_attrs::kLayerNormDvmAffinity);
-}
-
-bool useLayerNormLegacyAttrs(llvm::StringRef kind) { return kind == kLayerNormFuseKind; }
 
 }  // namespace
 
 FuseRole getFuseRole(Operation *op) {
   if (!op) {
     return FuseRole::Member;
-  }
-  if (hasLegacyAffinity(op)) {
-    return FuseRole::Affinity;
   }
   if (auto role = op->getAttrOfType<StringAttr>(mfusion_attrs::kDvmFuseRole)) {
     if (role.getValue() == mfusion_attrs::kDvmFuseRoleAffinity) {
@@ -72,23 +59,11 @@ FuseRole getFuseRole(Operation *op) {
 }
 
 bool hasRegionMember(Operation *op) {
-  if (!op) {
-    return false;
-  }
-  if (hasLegacyMember(op)) {
-    return true;
-  }
-  return op->hasAttr(mfusion_attrs::kDvmFuseGroup) && getFuseRole(op) == FuseRole::Member;
+  return op && op->hasAttr(mfusion_attrs::kDvmFuseGroup) && getFuseRole(op) == FuseRole::Member;
 }
 
 bool hasRegionAffinity(Operation *op) {
-  if (!op) {
-    return false;
-  }
-  if (hasLegacyAffinity(op)) {
-    return true;
-  }
-  return op->hasAttr(mfusion_attrs::kDvmFuseGroup) && getFuseRole(op) == FuseRole::Affinity;
+  return op && op->hasAttr(mfusion_attrs::kDvmFuseGroup) && getFuseRole(op) == FuseRole::Affinity;
 }
 
 bool isTagged(Operation *op) { return hasRegionMember(op) || hasRegionAffinity(op); }
@@ -98,7 +73,7 @@ bool shouldSkipSplitForMatcherFusedIsland(Operation *op) {
     return false;
   }
   if (auto kind = op->getAttrOfType<StringAttr>(mfusion_attrs::kDvmFuseKind)) {
-    return kind.getValue() == kSafeSoftmaxFuseKind;
+    return kind.getValue() == kSafeSoftmaxFuseKind || kind.getValue() == kLayerNormFuseKind;
   }
   return false;
 }
@@ -109,9 +84,6 @@ std::optional<llvm::StringRef> getMergeGroupId(Operation *op) {
   }
   if (auto group = op->getAttrOfType<StringAttr>(mfusion_attrs::kDvmFuseGroup)) {
     return group.getValue();
-  }
-  if (hasLegacyMember(op)) {
-    return mfusion_attrs::kLegacyLayerNormDvmGroup;
   }
   return std::nullopt;
 }
@@ -135,6 +107,12 @@ std::string allocateGroupId(llvm::StringRef kind) {
   return id;
 }
 
+void rollbackLastGroupId() {
+  if (gNextGroupId > 0) {
+    --gNextGroupId;
+  }
+}
+
 void resetGroupIdAllocator() { gNextGroupId = 0; }
 
 void tagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
@@ -142,9 +120,6 @@ void tagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
     return;
   }
   setGroupAndKind(op, groupId, kind, FuseRole::Member);
-  if (useLayerNormLegacyAttrs(kind)) {
-    op->setAttr(mfusion_attrs::kLayerNormDvm, UnitAttr::get(op->getContext()));
-  }
 }
 
 void tagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
@@ -152,9 +127,6 @@ void tagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
     return;
   }
   setGroupAndKind(op, groupId, kind, FuseRole::Affinity);
-  if (useLayerNormLegacyAttrs(kind)) {
-    op->setAttr(mfusion_attrs::kLayerNormDvmAffinity, UnitAttr::get(op->getContext()));
-  }
 }
 
 void tagMembers(ArrayRef<Operation *> ops, llvm::StringRef groupId, llvm::StringRef kind) {
@@ -168,9 +140,6 @@ void retagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
     return;
   }
   setGroupAndKind(op, groupId, kind, FuseRole::Member);
-  if (useLayerNormLegacyAttrs(kind)) {
-    op->setAttr(mfusion_attrs::kLayerNormDvm, UnitAttr::get(op->getContext()));
-  }
 }
 
 void retagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
@@ -178,9 +147,6 @@ void retagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind)
     return;
   }
   setGroupAndKind(op, groupId, kind, FuseRole::Affinity);
-  if (useLayerNormLegacyAttrs(kind)) {
-    op->setAttr(mfusion_attrs::kLayerNormDvmAffinity, UnitAttr::get(op->getContext()));
-  }
 }
 
 }  // namespace fusion_region

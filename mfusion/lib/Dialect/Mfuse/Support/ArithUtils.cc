@@ -20,6 +20,7 @@
 #include <cmath>
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir {
@@ -101,6 +102,16 @@ bool hasDynamicShape(Type type) {
     return true;
   }
   return !ranked.hasStaticShape();
+}
+
+Value getCanonicalFusionTensor(Value v) {
+  while (auto castOp = v.getDefiningOp<UnrealizedConversionCastOp>()) {
+    if (castOp.getNumOperands() != 1 || castOp.getNumResults() != 1) {
+      break;
+    }
+    v = castOp.getOperand(0);
+  }
+  return v;
 }
 
 bool isSingleElementFloat(Value v, double x, double tolerance) {
