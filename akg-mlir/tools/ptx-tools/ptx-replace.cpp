@@ -57,8 +57,8 @@ bool validateFilePath(const std::string &path, bool check_exist = true) {
   if (!check_exist) {
     return true;
   }
-  std::ifstream f(path);
-  return f.good();
+  struct stat st;
+  return stat(path.c_str(), &st) == 0;
 }
 
 std::vector<std::string> splitString(const std::string &str, char delimiter) {
@@ -116,28 +116,24 @@ struct VectorizeEmitter {
     if (LdStGlobalCache.size() != vectorizeSize) {
       return "";
     }
-    std::string instruction;
-    std::string dest;
-    std::map<int, std::string> srcIndex;
     auto isLoad = LdStGlobalCache.front().find("ld.global") != std::string::npos;
-    auto destPos = isLoad ? 2 : 1;
-    auto srcPos = isLoad ? 1 : -1;
-    size_t instPos = 0;
+    ParseConfig config{0, static_cast<size_t>(isLoad ? 2 : 1), isLoad ? 1 : -1};
+    ParseState state;
     for (auto it = LdStGlobalCache.cbegin(); it != LdStGlobalCache.cend(); ++it) {
-      if (!parseLoadStoreEntry(*it, instruction, dest, srcIndex, instPos, destPos, srcPos)) {
+      if (!parseLoadStoreEntry(*it, config, state)) {
         return "";
       }
     }
 
     // Now we can emit the final result:
-    instruction = emitInstruction(instruction, isLoad);
-    auto [packDataStr, firstOffset] = emitPackDataStr(srcIndex);
+    state.instruction = emitInstruction(state.instruction, isLoad);
+    auto [packDataStr, firstOffset] = emitPackDataStr(state.srcIndex);
     if (packDataStr.empty()) {
       return "";
     }
-    auto destStr = emitDestStr(dest, firstOffset);
+    auto destStr = emitDestStr(state.dest, firstOffset);
     std::string vectorLoad;
-    vectorLoad += "\t" + instruction + "\t";
+    vectorLoad += "\t" + state.instruction + "\t";
     if (isLoad) {
       vectorLoad += (packDataStr + ", " + destStr);
     } else {
@@ -148,48 +144,80 @@ struct VectorizeEmitter {
   }
 
  private:
-  /// Parse a single load/store entry, updating instruction/dest/srcIndex.
-  /// Returns false if the entry is invalid or mismatches.
-  bool parseLoadStoreEntry(const std::string &entry, std::string &instruction, std::string &dest,
-                           std::map<int, std::string> &srcIndex, size_t instPos, size_t destPos,
-                           int srcPos) const {
-    std::vector<std::string> result = splitEachLoadStore(entry);
-    if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
-      return false;
-    }
-    if (instruction.empty()) {
-      if (instPos < result.size()) {
-        instruction = result[instPos];
-      } else {
-        return false;
-      }
-    }
-    if (instruction != result[instPos]) {
-      return false;
-    }
-    if (dest.empty()) {
-      dest = result[destPos];
-    }
-    if (dest != result[destPos]) {
-      return false;
-    }
+  struct ParseConfig {
+    size_t instPos;
+    size_t destPos;
+    int srcPos;
+  };
 
-    int offset = -1;
+  struct ParseState {
+    std::string instruction;
+    std::string dest;
+    std::map<int, std::string> srcIndex;
+  };
+
+  /// Validate that the split result has the expected number of tokens.
+  static bool validateSplitCount(size_t count) {
+    return count == kSplitResultSizeWithoutOffset || count == kSplitResultSizeWithOffset;
+  }
+
+  /// Lazy-init a field from the parsed result on first call,
+  /// then validate consistency on subsequent calls.
+  static bool initAndValidateField(std::string &field, const std::vector<std::string> &result, size_t pos) {
+    if (pos >= result.size()) {
+      return false;
+    }
+    if (field.empty()) {
+      field = result[pos];
+    }
+    return field == result[pos];
+  }
+
+  /// Parse the memory offset from the parsed result tokens.
+  /// Returns false if the offset cannot be determined or converted.
+  static bool parseOffset(const std::vector<std::string> &result, size_t destPos, int &offset) {
     if (result.size() == kSplitResultSizeWithoutOffset) {
       offset = 0;
-    } else if (result.size() == kSplitResultSizeWithOffset) {
+      return true;
+    }
+    if (result.size() == kSplitResultSizeWithOffset) {
       try {
         offset = std::stoi(result[destPos + 1]);
+        return true;
       } catch (const std::exception &e) {
         std::cerr << "convert to int error, numStr is " << result[destPos + 1] << std::endl;
         return false;
       }
     }
+    return false;
+  }
+
+  /// Extract the source operand from the parsed result.
+  static std::string extractSrc(const std::vector<std::string> &result, int srcPos) {
     if (srcPos == -1) {
-      srcIndex[offset] = result.back();
-    } else {
-      srcIndex[offset] = result[srcPos];
+      return result.back();
     }
+    return result[srcPos];
+  }
+
+  /// Parse a single load/store entry, updating parse state.
+  /// Returns false if the entry is invalid or mismatches.
+  bool parseLoadStoreEntry(const std::string &entry, const ParseConfig &config, ParseState &state) const {
+    std::vector<std::string> result = splitEachLoadStore(entry);
+    if (!validateSplitCount(result.size())) {
+      return false;
+    }
+    if (!initAndValidateField(state.instruction, result, config.instPos)) {
+      return false;
+    }
+    if (!initAndValidateField(state.dest, result, config.destPos)) {
+      return false;
+    }
+    int offset = 0;
+    if (!parseOffset(result, config.destPos, offset)) {
+      return false;
+    }
+    state.srcIndex[offset] = extractSrc(result, config.srcPos);
     return true;
   }
 
@@ -413,6 +441,9 @@ void concatPtx(std::string &result, const std::vector<std::string> &vec, const s
 
 void copyFile(const std::string &inputFilename, const std::string &outputFilename) {
   if (!validateFilePath(inputFilename)) {
+    return;
+  }
+  if (!validateFilePath(outputFilename, false)) {
     return;
   }
   std::ifstream inFile(inputFilename, std::ios::binary);
