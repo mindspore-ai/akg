@@ -1,0 +1,131 @@
+{
+    "composite": true,
+    "composite_graph": "2seg_trans__anonymous__11858",
+    "id": 0,
+    "input_desc": [
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    3072
+                ],
+                "tensor_name": "input_0"
+            }
+        ]
+    ],
+    "node_name": "Square_ReduceSum_Cast_fusion_0",
+    "op": "Fused_Mul_ReduceSum_split_1421551648179530053",
+    "op_desc": [
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            3072
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            3072
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        3072
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ],
+            "ptr_address": "Default/Mul-op1047_1516112"
+        },
+        {
+            "attr": [
+                {
+                    "data_type": "bool",
+                    "name": "keep_dims",
+                    "value": false
+                },
+                {
+                    "data_type": "bool",
+                    "name": "skip_mode",
+                    "value": false
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            3072
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "int64",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_2",
+                        "value": 0
+                    }
+                ]
+            ],
+            "name": "ReduceSum",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        1
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ],
+            "ptr_address": "Default/ReduceSum-op1021_1516113"
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                1
+            ],
+            "tensor_name": "output_0_1"
+        }
+    ],
+    "platform": "AKG_V2",
+    "process": "aicore",
+    "target_info": {
+        "arch": "Ascend910B2"
+    },
+    "version": 2
+}
