@@ -3079,6 +3079,24 @@ static bool storeTargetHasBroadcastDimLoopIndices(ArrayRef<int64_t> storeDimLoop
   return false;
 }
 
+static bool storeAxisOrderMatchesForNesting(ArrayRef<int64_t> storeDimLoopIndices,
+                                            ArrayRef<int64_t> forNestingOrder) {
+  size_t nestingPos = 0;
+  for (int64_t loopIdx : storeDimLoopIndices) {
+    if (loopIdx <= 0) {
+      continue;
+    }
+    while (nestingPos < forNestingOrder.size() && forNestingOrder[nestingPos] != loopIdx) {
+      ++nestingPos;
+    }
+    if (nestingPos >= forNestingOrder.size()) {
+      return false;
+    }
+    ++nestingPos;
+  }
+  return true;
+}
+
 int64_t MemoryPeakEstimator::scaledBufferBitsForStoreBroadcastChain_(const BufferInfo &info) const {
   return totalBitsfromBuffer(info);
 }
@@ -3147,6 +3165,18 @@ void MemoryPeakEstimator::modelStoreExtraBuffer() {
       continue;
     }
     const BufferInfo &inputInfo = bufferInfoList_[static_cast<size_t>(valueIt->second)];
+
+    SmallVector<int64_t, 4> forNestingOrder;
+    SmallVector<scf::ForOp, 8> enclosingLoops;
+    getEnclosingScfForOps(storeOp, enclosingLoops);
+    inferDimLoopIndicesFromForOps_(enclosingLoops, forNestingOrder);
+    if (inputInfo.multiNum > 1 &&
+        (!storeAxisOrderMatchesForNesting(storeDimLoopIndices, forNestingOrder) ||
+         !storeAxisOrderMatchesForNesting(inputInfo.dimLoopIndices, forNestingOrder))) {
+      opRecord.extraBufferSizes.push_back(inputInfo.totalBufferSize);
+      opRecord.extraBufferSizes.push_back(inputInfo.totalBufferSize);
+    }
+
     if (!storeTargetHasBroadcastDimLoopIndices(storeDimLoopIndices, inputInfo.dimLoopIndices)) {
       continue;
     }
@@ -3484,10 +3514,10 @@ void MemoryPeakEstimator::run(PeakAnalysisResult &out) {
   modelSelectExtraBuffer();
   modelNegExtraBuffer();
   modelLoadExtraBuffer();
-  modelStoreExtraBuffer();
   if (input_.enableMultibuffer) {
     markMultiBuffer();
   }
+  modelStoreExtraBuffer();
   invalidateFullyInlinedBrcCstBuffers_();
   analyzeIntraOpInplace();
   analyzeInterOpInplace();
