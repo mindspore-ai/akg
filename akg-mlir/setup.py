@@ -45,7 +45,7 @@ def get_version() -> str:
         return version_file.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         logging.info("version.txt not found.")
-    return "2.5.0.beta"
+    return "2.5.0"
 
 
 def get_commit_id() -> str:
