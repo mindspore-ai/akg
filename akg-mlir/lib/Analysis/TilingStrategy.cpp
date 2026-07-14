@@ -3418,6 +3418,10 @@ std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
   return std::nullopt;
 }
 
+size_t getTransposeTargetAxis(ArrayRef<size_t> axisOrder, size_t innermostAxis) {
+  return llvm::is_contained(axisOrder, innermostAxis) ? axisOrder.back() : innermostAxis;
+}
+
 struct TransposeAxisMasks {
   SmallVector<bool, kSmallVectorSizeSix> transpose;
   SmallVector<bool, kSmallVectorSizeSix> target;
@@ -3441,11 +3445,13 @@ TransposeAxisMasks collectTransposeAxisMasks(const NpuBandContext &ctx) {
         }
       }
     }
-    if (!info.sourceAxisOrder.empty() && info.sourceAxisOrder.back() < masks.target.size()) {
-      masks.target[info.sourceAxisOrder.back()] = true;
+    size_t sourceTarget = getTransposeTargetAxis(info.sourceAxisOrder, masks.target.size() - 1);
+    size_t targetTarget = getTransposeTargetAxis(info.targetAxisOrder, masks.target.size() - 1);
+    if (!info.sourceAxisOrder.empty() && sourceTarget < masks.target.size()) {
+      masks.target[sourceTarget] = true;
     }
-    if (!info.targetAxisOrder.empty() && info.targetAxisOrder.back() < masks.target.size()) {
-      masks.target[info.targetAxisOrder.back()] = true;
+    if (!info.targetAxisOrder.empty() && targetTarget < masks.target.size()) {
+      masks.target[targetTarget] = true;
     }
   }
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
