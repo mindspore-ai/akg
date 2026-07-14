@@ -255,43 +255,38 @@ class DvmSupportChecker {
     auto compareInputSupported = [](Operation *op) { return compareInputCheck(op); };
     auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
     auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
-    auto castCheck = [](Operation *op) { return castCheckFunc(op); };
-    auto floatOutputCheck = [](Operation *op) { return floatOutputCheckFunc(op); };
-    auto floatIntBoolOutputCheck = [](Operation *op) { return floatIntBoolOutputCheckFunc(op); };
-    auto boolOpCheck = [](Operation *op) { return boolOpCheckFunc(op); };
-    auto boolTensorInputCheck = [](Operation *op) { return boolTensorInputCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
-    checkFunc_["mfuse.cast"] = {castCheck};
+    checkFunc_["mfuse.cast"] = {castCheckFunc};
     // reduce sum op
     checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    checkFunc_["mfuse.eq"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.ne"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.gt"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.ge"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.lt"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.le"] = {boolOpCheck, compareInputSupported};
-    checkFunc_["mfuse.is_finite"] = {boolOpCheck, isFiniteOpCheckFunc};
+    checkFunc_["mfuse.eq"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.ne"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.gt"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.ge"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.lt"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.le"] = {boolOpCheckFunc, compareInputSupported};
+    checkFunc_["mfuse.is_finite"] = {boolOpCheckFunc, isFiniteOpCheckFunc};
     // select op
-    checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
+    checkFunc_["mfuse.select"] = {selectOpCheck};
     // float/int output ops
-    checkFunc_["mfuse.add"] = {floatIntOutputCheckFunc, inputCheckAll};
-    checkFunc_["mfuse.sub"] = {floatIntOutputCheckFunc, inputCheckAll};
-    checkFunc_["mfuse.relu"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.add"] = {floatIntBinaryOpCheck};
+    checkFunc_["mfuse.sub"] = {floatIntBinaryOpCheck};
+    checkFunc_["mfuse.relu"] = {floatOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.mul"] = {mulOpCheck};
     checkFunc_["mfuse.div"] = {divOpCheck};
-    checkFunc_["mfuse.maximum"] = {floatOutputCheck, inputCheckAll};
-    checkFunc_["mfuse.minimum"] = {floatOutputCheck, inputCheckAll};
+    checkFunc_["mfuse.maximum"] = {floatOutputCheckFunc, inputCheckAll};
+    checkFunc_["mfuse.minimum"] = {floatOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.neg"] = {floatIntOutputCheckFunc, inputCheckAll};
     checkFunc_["mfuse.abs"] = {floatIntOutputCheckFunc, inputCheckAll};
-    checkFunc_["mfuse.logical_and"] = {boolOpCheck, boolTensorInputCheck};
-    checkFunc_["mfuse.logical_or"] = {boolOpCheck, boolTensorInputCheck};
-    checkFunc_["mfuse.logical_not"] = {boolOpCheck, boolTensorInputCheck};
+    checkFunc_["mfuse.logical_and"] = {boolOpCheckFunc, boolTensorInputCheckFunc};
+    checkFunc_["mfuse.logical_or"] = {boolOpCheckFunc, boolTensorInputCheckFunc};
+    checkFunc_["mfuse.logical_not"] = {boolOpCheckFunc, boolTensorInputCheckFunc};
     // Should add Assign check. There is no corresponding op in aten.
-    checkFunc_["mfuse.broadcast_to"] = {floatIntBoolOutputCheck, inputCheckFirst};
-    checkFunc_["mfuse.full"] = {floatIntBoolOutputCheck};
+    checkFunc_["mfuse.broadcast_to"] = {floatIntBoolOutputCheckFunc, inputCheckFirst};
+    checkFunc_["mfuse.full"] = {floatIntBoolOutputCheckFunc};
     // slice op
     checkFunc_["mfuse.slice"] = {sliceSupported, inputCheckFirst};
     // Should add StridedSlice check. There is no corresponding op in aten.
@@ -301,9 +296,7 @@ class DvmSupportChecker {
     checkFunc_["mfuse.reshape"] = {floatIntOutputCheckFunc, inputCheckFirst};
   }
 
-  static bool isCastTypeSupported(Type type) {
-    return type.isF16() || type.isF32() || type.isInteger(1) || type.isInteger(32) || type.isBF16();
-  }
+  static bool isCastTypeSupported(Type type) { return isBoolType(type) || isFloatIntTypeWithInt64(type); }
 
   static bool castCheckFunc(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
@@ -341,6 +334,18 @@ class DvmSupportChecker {
     return inputType && isFloatType(inputType);
   }
 
+  static bool isDvmSupportedFloatIntOperand(Value operand) {
+    Type operandType = operand.getType();
+    if (hasScalarMarker(operandType)) {
+      return isDvmSupportedScalarOperand(operand);
+    }
+    if (!isa<TensorType>(operandType)) {
+      return true;
+    }
+    Type inputType = getElementType(operandType);
+    return inputType && isFloatIntTypeWithInt64(inputType);
+  }
+
   static bool selectOpCheck(Operation *op) {
     // Check first operand is bool type
     Type condType = getElementType(op->getOperand(0).getType());
@@ -349,8 +354,11 @@ class DvmSupportChecker {
       return false;
     }
     Type outputType = getElementType(op->getResult(0).getType());
-    // Only support float type
-    return outputType && isFloatType(outputType);
+    if (!outputType || !isFloatIntTypeWithInt64(outputType)) {
+      return false;
+    }
+    return isDvmSupportedFloatIntOperand(op->getOperand(kIndex1)) &&
+           isDvmSupportedFloatIntOperand(op->getOperand(kIndex2));
   }
 
   static bool floatIntOutputCheckFunc(Operation *op) {
@@ -389,6 +397,10 @@ class DvmSupportChecker {
 
   static bool mulOpCheck(Operation *op) {
     return mixTypeCheck(op, [](Type type) { return isFloatIntType(type); }, {});
+  }
+
+  static bool floatIntBinaryOpCheck(Operation *op) {
+    return mixTypeCheck(op, [](Type type) { return isFloatIntTypeWithInt64(type); }, {});
   }
 
   static bool divOpCheck(Operation *op) {
@@ -708,6 +720,8 @@ class DvmSupportChecker {
 
   /// Check if output type is float/int type
   static bool isFloatIntType(Type type) { return isFloatType(type) || type.isInteger(32); }
+
+  static bool isFloatIntTypeWithInt64(Type type) { return isFloatIntType(type) || type.isInteger(64); }
 
   std::unordered_map<std::string, std::vector<std::function<bool(Operation *)>>> checkFunc_;
 };
