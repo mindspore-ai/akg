@@ -284,11 +284,11 @@ module {
     return %1 : tensor<2x3xf32>
   }
 
-  // Test batch_matmul operation with complex dependencies
+  // Test batch matmul operation with complex dependencies
   // CHECK-LABEL: func @test_batch_matmul_operation
   // CHECK-SAME: %arg0: tensor<2x3x4xf32>
   // CHECK-SAME: %arg1: tensor<2x4x5xf32>
-  // CHECK: %[[BATCH_MATMUL:.*]] = mfuse.batch_matmul %arg0, %arg1
+  // CHECK: %[[BATCH_MATMUL:.*]] = mfuse.matmul %arg0, %arg1
   // CHECK: %[[FUSED:.*]] = mfuse.fused %[[BATCH_MATMUL]]
   // CHECK: mfuse.add
   // CHECK: mfuse.mul
@@ -298,7 +298,7 @@ module {
   // CHECK: mfuse.yield
   // CHECK: return %[[FUSED]]
   func.func @test_batch_matmul_operation(%arg0: tensor<2x3x4xf32>, %arg1: tensor<2x4x5xf32>) -> tensor<2x3x5xf32> {
-    %0 = mfuse.batch_matmul %arg0, %arg1 : (tensor<2x3x4xf32>, tensor<2x4x5xf32>) -> tensor<2x3x5xf32>
+    %0 = mfuse.matmul %arg0, %arg1 : (tensor<2x3x4xf32>, tensor<2x4x5xf32>) -> tensor<2x3x5xf32>
     %1 = mfuse.fused %0 {fusion_type = "dvm"} : (tensor<2x3x5xf32>) -> tensor<2x3x5xf32> {
     ^bb0(%arg2: tensor<2x3x5xf32>):
       %2 = mfuse.add %arg2, %arg2 : (tensor<2x3x5xf32>, tensor<2x3x5xf32>) -> tensor<2x3x5xf32>

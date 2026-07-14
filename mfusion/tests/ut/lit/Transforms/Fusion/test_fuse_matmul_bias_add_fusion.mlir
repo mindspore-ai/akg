@@ -25,12 +25,11 @@ module {
     return %1 : tensor<2x8xf32>
   }
 
-  // BatchMatmul + Add(bias 1D) -> MatmulWithBias. [2,4,8] @ [2,8,16] -> [2,4,16], bias [16].
+  // Batch matmul + Add(bias 1D) -> MatmulWithBias. [2,4,8] @ [2,8,16] -> [2,4,16], bias [16].
   // CHECK-LABEL: func @fuse_batch_matmul_bias_add
   func.func @fuse_batch_matmul_bias_add(%arg0: tensor<2x4x8xf32>, %arg1: tensor<2x8x16xf32>, %bias: tensor<16xf32>) -> tensor<2x4x16xf32> {
-    %0 = mfuse.batch_matmul %arg0, %arg1 : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
+    %0 = mfuse.matmul %arg0, %arg1 : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
     %1 = mfuse.add %0, %bias : (tensor<2x4x16xf32>, tensor<16xf32>) -> tensor<2x4x16xf32>
-    // CHECK-NOT: mfuse.batch_matmul
     // CHECK-NOT: mfuse.add
     // CHECK: mfuse.matmul_with_bias
     return %1 : tensor<2x4x16xf32>

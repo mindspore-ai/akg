@@ -34,19 +34,11 @@ namespace mfuse {
 namespace {
 
 /// Shared fusion: Add(matmul_out, bias) -> MatmulWithBias. \p addOp is the Add op.
-///
-/// Constraints (all enforced below):
-/// 1. One of add's two inputs must have rank 1 (the bias).
-/// 2. Bias size must equal the last dimension of MatMul/BatchMatMul output.
-/// 3. MatMul (2D) output must have rank 2.
-/// 4. No broadcast: only rank-1 bias with size = last dim is allowed.
-/// 5. Precision: if pre-fusion Add was fp16, fused op may use fp32 (see pass description).
 static LogicalResult tryFuseMatMulBiasAdd(Operation *addOp, Value lhs, Value rhs,
                                           PatternRewriter &rewriter) {
   Value matmulOut;
   Value bias;
   MatmulOp matmulOp;
-  BatchMatmulOp batchMatmulOp;
 
   if (auto m = lhs.getDefiningOp<MatmulOp>()) {
     matmulOut = lhs;
@@ -56,16 +48,8 @@ static LogicalResult tryFuseMatMulBiasAdd(Operation *addOp, Value lhs, Value rhs
     matmulOut = rhs;
     bias = lhs;
     matmulOp = m;
-  } else if (auto b = lhs.getDefiningOp<BatchMatmulOp>()) {
-    matmulOut = lhs;
-    bias = rhs;
-    batchMatmulOp = b;
-  } else if (auto b = rhs.getDefiningOp<BatchMatmulOp>()) {
-    matmulOut = rhs;
-    bias = lhs;
-    batchMatmulOp = b;
   } else {
-    return rewriter.notifyMatchFailure(addOp, "add operands are not (matmul/batch_matmul, bias)");
+    return rewriter.notifyMatchFailure(addOp, "add operands are not (matmul, bias)");
   }
 
   auto matmulOutType = dyn_cast<RankedTensorType>(matmulOut.getType());
@@ -79,40 +63,28 @@ static LogicalResult tryFuseMatMulBiasAdd(Operation *addOp, Value lhs, Value rhs
 
   const int64_t matmulRank = matmulOutType.getRank();
   const int64_t biasRank = biasType.getRank();
-  // Constraint 1 & 4: one add input must be rank 1 (bias); no broadcast (only 1D bias allowed).
+  if (matmulRank < static_cast<int64_t>(kDim2)) {
+    return rewriter.notifyMatchFailure(addOp, "matmul output rank must be at least 2");
+  }
   if (biasRank != static_cast<int64_t>(kDim1)) {
     return rewriter.notifyMatchFailure(addOp, "bias must be rank 1");
   }
-  // Constraint 2: bias size equals matmul output last dimension.
   const int64_t lastDimSize = matmulOutType.getShape()[matmulRank - 1];
   const int64_t biasSize = biasType.getShape()[kIndex0];
   if (biasSize != lastDimSize) {
     return rewriter.notifyMatchFailure(addOp, "bias size does not match matmul last dimension");
   }
-  // Constraint 3: MatMul output must have rank 2.
-  if (matmulOp && matmulRank != static_cast<int64_t>(kDim2)) {
-    return rewriter.notifyMatchFailure(addOp, "2D MatMul output rank must be 2");
-  }
-  // Avoid increasing matmul count: fuse only when matmul/batch_matmul has exactly one user (this Add).
   if (!matmulOut.hasOneUse()) {
-    return rewriter.notifyMatchFailure(addOp, "matmul/batch_matmul must have exactly one user (the Add) to fuse");
+    return rewriter.notifyMatchFailure(addOp, "matmul must have exactly one user (the Add) to fuse");
   }
 
-  MLOG(DEBUG) << "FuseMatMulBiasAdd matched @" << addOp->getLoc() << " (MatMul/BatchMatmul + bias)";
+  MLOG(DEBUG) << "FuseMatMulBiasAdd matched @" << addOp->getLoc() << " (MatMul + bias)";
 
   Location loc = addOp->getLoc();
   Type resultType = addOp->getResult(0).getType();
-  Value newMatmulWithBias;
-  if (matmulOp) {
-    newMatmulWithBias = rewriter.create<MatmulWithBiasOp>(
-        loc, resultType, matmulOp.getSelf(), matmulOp.getOther(), bias,
-        matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
-  } else {
-    newMatmulWithBias = rewriter.create<MatmulWithBiasOp>(
-        loc, resultType, batchMatmulOp.getSelf(), batchMatmulOp.getMat2(), bias,
-        rewriter.getBoolAttr(batchMatmulOp.getTransposeA()),
-        rewriter.getBoolAttr(batchMatmulOp.getTransposeB()));
-  }
+  Value newMatmulWithBias = rewriter.create<MatmulWithBiasOp>(
+      loc, resultType, matmulOp.getSelf(), matmulOp.getOther(), bias,
+      matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
   rewriter.replaceOp(addOp, newMatmulWithBias);
   return success();
 }

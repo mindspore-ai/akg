@@ -109,7 +109,6 @@ OP_REGISTER("mfuse.floor", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.ceil", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.trunc", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.matmul", NodePattern::OPAQUE);
-OP_REGISTER("mfuse.batch_matmul", NodePattern::OPAQUE);
 OP_REGISTER("mfuse.grouped_matmul", NodePattern::OPAQUE);
 
 }  // namespace split

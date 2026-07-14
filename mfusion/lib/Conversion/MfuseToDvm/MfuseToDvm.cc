@@ -500,21 +500,6 @@ struct ConvertMatmulOp : public OpConversionPattern<mfuse::MatmulOp> {
   }
 };
 
-struct ConvertBatchMatmulOp : public OpConversionPattern<mfuse::BatchMatmulOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(mfuse::BatchMatmulOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (!isDvmOutlinedOp(op.getOperation())) {
-      return failure();
-    }
-    // BatchMatmul maps directly to dvm::MatMul which supports batch dimensions
-    rewriter.replaceOpWithNewOp<dvm::MatMulOp>(op, op.getResult().getType(), adaptor.getSelf(), adaptor.getMat2(),
-                                               op.getTransposeAAttr(), op.getTransposeBAttr(), mlir::Value());
-    return success();
-  }
-};
-
 struct ConvertMatmulWithBiasOp : public OpConversionPattern<mfuse::MatmulWithBiasOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -723,8 +708,6 @@ static void addDynamicallyLegalMfuseOps(ConversionTarget &target) {
   // defined and the operands can be unpacked safely.
   target.addDynamicallyLegalOp<mlir::mfuse::GroupedMatmulOp>(
     [](mlir::mfuse::GroupedMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
-  target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
-    [](mlir::mfuse::BatchMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
 }
 
 static void addDvmConversionPatterns(RewritePatternSet &patterns, MLIRContext *ctx) {
@@ -735,7 +718,7 @@ static void addDvmConversionPatterns(RewritePatternSet &patterns, MLIRContext *c
                ConvertReciprocalOp, ConvertSqrtOp, ConvertIsFiniteOp, ConvertLogicalNotOp>(ctx);
   patterns.add<ConvertNegOp, ConvertRsqrtOp, ConvertSelectOp, ConvertCastOp, ConvertBroadcastToOp, ConvertFullOp,
                ConvertReshapeOp, ConvertReduceSumOp, ConvertReluOp, ConvertRealDivOp, ConvertMatmulOp,
-               ConvertBatchMatmulOp, ConvertMatmulWithBiasOp>(ctx);
+               ConvertMatmulWithBiasOp>(ctx);
 }
 
 }  // namespace

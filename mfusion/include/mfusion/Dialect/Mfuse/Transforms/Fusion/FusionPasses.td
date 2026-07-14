@@ -182,12 +182,13 @@ def FuseConv2DCast : Pass<"fuse-conv2d-cast", "::mlir::ModuleOp"> {
 }
 
 def FuseMatMulBiasAdd : Pass<"fuse-matmul-bias-add", "::mlir::ModuleOp"> {
-  let summary = "Fuse MatMul/BatchMatmul and Add(bias) into MatmulWithBias";
+  let summary = "Fuse MatMul and Add(bias) into MatmulWithBias";
   let description = [{
-    Fuses MatMul or BatchMatmul (no bias) followed by Add(bias) into a single
+    Fuses MatMul (no bias) followed by Add(bias) into a single
     MatmulWithBias. Constraints: one of add's inputs has rank 1 (bias); bias
-    size equals matmul output last dimension; for 2D MatMul output rank is 2;
-    no broadcast. Note: if BiasAdd/Add was fp16, fused bias is added in fp32
+    size equals matmul output last dimension; matmul output rank must be at
+    least 2 (supports batch N-D matmul); no broadcast. Note: if BiasAdd/Add
+    was fp16, fused bias is added in fp32
     inside matmul (precision may improve); disable pass to avoid this change.
   }];
   let constructor = "mlir::mfuse::createFuseMatMulBiasAddPass()";
@@ -239,18 +240,18 @@ def FuseMatmulReshapeBiasAdd : Pass<"fuse-matmul-reshape-bias-add", "::mlir::Mod
 }
 
 //===----------------------------------------------------------------------===
-// FuseBatchMatMul pass (transpose elimination + BatchMatMul 2D -> MatMul)
+// FuseMatmulPermute pass (permute elimination on mfuse.matmul)
 //===----------------------------------------------------------------------===
 
-def FuseBatchMatMul : Pass<"fuse-batch-matmul", "::mlir::ModuleOp"> {
-  let summary = "Fuse BatchMatMul: eliminate Permute into trans flag; BatchMatMul 2D -> MatMul";
+def FuseMatmulPermute : Pass<"fuse-matmul-permute", "::mlir::ModuleOp"> {
+  let summary = "Eliminate permute into trans flags on mfuse.matmul";
   let description = [{
-    Mode 1: When MatMul/BatchMatMul has one or both inputs from Permute that only
-    swaps the last two dimensions, use permute input and flip trans flag to eliminate
-    the permute. Matmul input dtypes: float16, float32, bfloat16 only.
-    Mode 2: When BatchMatMul both inputs are 2D, convert BatchMatMul to MatMul.
+    When mfuse.matmul or mfuse.matmul_with_bias has one or both inputs from Permute that
+    only swaps the last two dimensions, use permute input and flip trans_x1/trans_x2 to
+    eliminate the permute. Also folds broadcast_to(permute(x)) operands when all broadcast
+    users are matmul-like. Matmul input dtypes: float16, float32, bfloat16 only.
   }];
-  let constructor = "mlir::mfuse::createFuseBatchMatMulPass()";
+  let constructor = "mlir::mfuse::createFuseMatmulPermutePass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
@@ -258,18 +259,18 @@ def FuseBatchMatMul : Pass<"fuse-batch-matmul", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===
-// FuseBatchMatMulToMul pass
+// FuseMatmulK1ToMul pass
 //===----------------------------------------------------------------------===
 
-def FuseBatchMatMulToMul : Pass<"fuse-batchmatmul-to-mul", "::mlir::ModuleOp"> {
-  let summary = "Fuse BatchMatMul/MatMul with k=1 to Mul";
+def FuseMatmulK1ToMul : Pass<"fuse-matmul-k1-to-mul", "::mlir::ModuleOp"> {
+  let summary = "Fuse mfuse.matmul with k=1 to Mul";
   let description = [{
-    Fuses BatchMatMul/MatMul/MatMulv2 operators with k=1 dimension to Mul operators
-    to improve performance. Inserts reshape operators when adj/transpose is true.
+    Fuses mfuse.matmul operators with k=1 contracting dimension to mfuse.mul to
+    improve performance. Inserts reshape operators when trans_x1/trans_x2 is true.
     Only applies to static shapes without bias.
     Supports Float32, Float16, and BFloat16 data types.
   }];
-  let constructor = "mlir::mfuse::createFuseBatchMatMulToMulPass()";
+  let constructor = "mlir::mfuse::createFuseMatmulK1ToMulPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
