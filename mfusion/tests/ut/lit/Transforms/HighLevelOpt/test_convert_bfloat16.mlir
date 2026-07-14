@@ -199,19 +199,19 @@ module {
   // CHECK-NOT: mfuse.cast
   // CHECK: mfuse.broadcast_to
 
-  // Test 9: BatchMatmul - NeedKeepBF16, skipped completely
+  // Test 9: Matmul (batch ND) - NeedKeepBF16, skipped completely
   // CHECK-LABEL: func @batch_matmul_keep_bf16
   func.func @batch_matmul_keep_bf16(%arg0: tensor<2x4x4xbf16>, %arg1: tensor<2x4x4xbf16>) -> tensor<2x4x4xbf16> {
     %0 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<2x4x4xbf16>, tensor<2x4x4xbf16>) -> tensor<2x4x4xbf16> {
       ^bb0(%x0: tensor<2x4x4xbf16>, %x1: tensor<2x4x4xbf16>):
-        %1 = mfuse.batch_matmul %x0, %x1 : (tensor<2x4x4xbf16>, tensor<2x4x4xbf16>) -> tensor<2x4x4xbf16>
+        %1 = mfuse.matmul %x0, %x1 : (tensor<2x4x4xbf16>, tensor<2x4x4xbf16>) -> tensor<2x4x4xbf16>
         mfuse.yield %1 : tensor<2x4x4xbf16>
     }
     return %0 : tensor<2x4x4xbf16>
   }
-  // BatchMatmul is NeedKeepBF16, skipped completely
+  // Matmul is NeedKeepBF16, skipped completely
   // CHECK-NOT: mfuse.cast
-  // CHECK: mfuse.batch_matmul
+  // CHECK: mfuse.matmul
   // CHECK-NOT: mfuse.cast
 
   // Test 10: Slice - NeedKeepBF16 input, skipped

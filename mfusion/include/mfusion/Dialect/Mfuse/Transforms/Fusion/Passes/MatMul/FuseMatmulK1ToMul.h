@@ -14,24 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_BIASADD_H
-#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_BIASADD_H
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_K1_TO_MUL_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_K1_TO_MUL_H
 
-#include <memory>
-
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
 namespace mfuse {
 
-/// Fuse MatMul (no bias) and Add(bias) into MatmulWithBias.
-/// Constraints: one add input has rank 1 (bias); bias size equals matmul output
-/// last dimension; matmul output rank must be at least 2; no broadcast.
-std::unique_ptr<Pass> createFuseMatMulBiasAddPass();
+#define GEN_PASS_DECL_FUSEMATMULK1TOMUL
+
+/// Create a pass to fuse mfuse.matmul with k=1 contracting dim to mfuse.mul.
+std::unique_ptr<Pass> createFuseMatmulK1ToMulPass();
 
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_BIASADD_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_K1_TO_MUL_H

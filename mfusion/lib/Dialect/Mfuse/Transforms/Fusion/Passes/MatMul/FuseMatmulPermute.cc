@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMul.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulPermute.h"
 
 #include <optional>
 
@@ -30,7 +30,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_FUSEBATCHMATMUL
+#define GEN_PASS_DEF_FUSEMATMULPERMUTE
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 
 namespace mfuse {
@@ -219,7 +219,7 @@ struct MatmulLikeTransposeEliminationTraits<MatmulOp> {
   static Value getRhs(MatmulOp op) { return op.getOther(); }
   static bool getTransLhs(MatmulOp op) { return op.getTransX1(); }
   static bool getTransRhs(MatmulOp op) { return op.getTransX2(); }
-  static constexpr llvm::StringLiteral kPatternName = "FuseBatchMatMulTransposeMatmulPattern";
+  static constexpr llvm::StringLiteral kPatternName = "FuseMatmulPermuteMatmulPattern";
 
   static Operation *create(PatternRewriter &rewriter, MatmulOp op, Value lhs, Value rhs, bool transLhs, bool transRhs) {
     return rewriter
@@ -235,7 +235,7 @@ struct MatmulLikeTransposeEliminationTraits<MatmulWithBiasOp> {
   static Value getRhs(MatmulWithBiasOp op) { return op.getOther(); }
   static bool getTransLhs(MatmulWithBiasOp op) { return op.getTransX1(); }
   static bool getTransRhs(MatmulWithBiasOp op) { return op.getTransX2(); }
-  static constexpr llvm::StringLiteral kPatternName = "FuseBatchMatMulTransposeMatmulWithBiasPattern";
+  static constexpr llvm::StringLiteral kPatternName = "FuseMatmulPermuteMatmulWithBiasPattern";
 
   static Operation *create(PatternRewriter &rewriter, MatmulWithBiasOp op, Value lhs, Value rhs, bool transLhs,
                            bool transRhs) {
@@ -331,10 +331,10 @@ static LogicalResult rewriteMatmulLikeOpWithSharedBroadcast(UserOpTy userOp, Pat
   rewriter.setInsertionPoint(userOp);
   Operation *newOp = Traits::create(rewriter, userOp, rewriteState->lhs, rewriteState->rhs, rewriteState->transLhs,
                                     rewriteState->transRhs);
-  MLOG(DEBUG) << "FuseBatchMatMul: created " << newOp->getName().getStringRef() << "@" << newOp->getLoc()
+  MLOG(DEBUG) << "FuseMatmulPermute: created " << newOp->getName().getStringRef() << "@" << newOp->getLoc()
               << " lhs_trans=" << rewriteState->transLhs << " rhs_trans=" << rewriteState->transRhs;
   rewriter.replaceOp(userOp, newOp->getResults());
-  MLOG(DEBUG) << "FuseBatchMatMul: replaced " << oldOpName << " with transpose-eliminated op";
+  MLOG(DEBUG) << "FuseMatmulPermute: replaced " << oldOpName << " with transpose-eliminated op";
   return success();
 }
 
@@ -454,16 +454,15 @@ static LogicalResult rewriteMatmulLikeTransposeElimination(OpTy op, PatternRewri
   auto oldOpName = op->getName().getStringRef();
   Operation *newOp =
     Traits::create(rewriter, op, rewriteState->lhs, rewriteState->rhs, rewriteState->transLhs, rewriteState->transRhs);
-  MLOG(DEBUG) << "FuseBatchMatMul: created " << newOp->getName().getStringRef() << "@" << newOp->getLoc()
+  MLOG(DEBUG) << "FuseMatmulPermute: created " << newOp->getName().getStringRef() << "@" << newOp->getLoc()
               << " lhs_trans=" << rewriteState->transLhs << " rhs_trans=" << rewriteState->transRhs;
   rewriter.replaceOp(op, newOp->getResults());
-  MLOG(DEBUG) << "FuseBatchMatMul: replaced " << oldOpName << " with transpose-eliminated op";
+  MLOG(DEBUG) << "FuseMatmulPermute: replaced " << oldOpName << " with transpose-eliminated op";
   return success();
 }
 
-/// Mode 1: Eliminate Permute (swap last two dims) into MatmulOp by using permute
-/// input and flipping trans_x1/trans_x2.
-class FuseBatchMatMulTransposeMatmulPattern : public OpRewritePattern<MatmulOp> {
+/// Eliminate Permute (swap last two dims) into MatmulOp by using permute input and flipping trans_x1/trans_x2.
+class FuseMatmulPermuteMatmulPattern : public OpRewritePattern<MatmulOp> {
  public:
   using OpRewritePattern<MatmulOp>::OpRewritePattern;
 
@@ -472,9 +471,8 @@ class FuseBatchMatMulTransposeMatmulPattern : public OpRewritePattern<MatmulOp> 
   }
 };
 
-/// Mode 1: Eliminate Permute (swap last two dims) into MatmulWithBiasOp by
-/// using permute input and flipping trans_x1/trans_x2.
-class FuseBatchMatMulTransposeMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBiasOp> {
+/// Eliminate Permute (swap last two dims) into MatmulWithBiasOp by using permute input and flipping trans flags.
+class FuseMatmulPermuteMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBiasOp> {
  public:
   using OpRewritePattern<MatmulWithBiasOp>::OpRewritePattern;
 
@@ -485,8 +483,7 @@ class FuseBatchMatMulTransposeMatmulWithBiasPattern : public OpRewritePattern<Ma
 
 }  // namespace
 
-DEFINE_MFUSE_FUSION_PASS(FuseBatchMatMul, FuseBatchMatMulTransposeMatmulPattern,
-                         FuseBatchMatMulTransposeMatmulWithBiasPattern)
+DEFINE_MFUSE_FUSION_PASS(FuseMatmulPermute, FuseMatmulPermuteMatmulPattern, FuseMatmulPermuteMatmulWithBiasPattern)
 
 }  // namespace mfuse
 }  // namespace mlir

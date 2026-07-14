@@ -495,7 +495,7 @@ module {
   // CHECK: return %[[STORE]] : tensor<2x4x16xf32>
   // CHECK-NOT: mfuse.batch_matmul
   func.func @main_batch_matmul_fused(%a: tensor<2x4x8xf32>, %b: tensor<2x8x16xf32>) -> tensor<2x4x16xf32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
-    %0 = mfuse.batch_matmul %a, %b : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
+    %0 = mfuse.matmul %a, %b : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
     return %0 : tensor<2x4x16xf32>
   }
 
