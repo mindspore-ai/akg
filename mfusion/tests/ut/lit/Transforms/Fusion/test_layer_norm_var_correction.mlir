@@ -1,6 +1,7 @@
 // RUN: mfusion-opt %s --convert-torch-to-mfuse --convert-torch-symbol-to-mfuse --canonicalize | FileCheck %s --check-prefix=CONVERT
 // RUN: mfusion-opt %s --decompose="pattern-type=AFTER_MANUAL_FUSION op-list=aclnnvar" | FileCheck %s --check-prefix=DECOMPOSE
-// RUN: mfusion-opt %s --convert-torch-to-mfuse --convert-torch-symbol-to-mfuse --decompose="pattern-type=AFTER_MANUAL_FUSION op-list=aclnnvar" --decompose="pattern-type=AFTER_MANUAL_FUSION" --fuse-layer-norm-dvm --canonicalize | FileCheck %s --check-prefix=PIPE
+// RUN: mfusion-opt %s --decompose="pattern-type=AFTER_MANUAL_FUSION_CLUSTER op-list=clamp extra-op-list=aclnnvar" | FileCheck %s --check-prefix=CLUSTER-EXTRA
+// RUN: mfusion-opt %s --convert-torch-to-mfuse --convert-torch-symbol-to-mfuse --mfuse-fusion --decompose="pattern-type=AFTER_MANUAL_FUSION_CLUSTER" --canonicalize | FileCheck %s --check-prefix=PIPE
 
 module {
   // CONVERT-LABEL: func @test_convert_var_correction
@@ -22,6 +23,10 @@ module {
   // DECOMPOSE-NOT: mfuse.aclnn.var
   // DECOMPOSE: mfuse.reduce_mean
   // DECOMPOSE: mfuse.reduce_sum
+  // CLUSTER-EXTRA-LABEL: func @test_decompose_var
+  // CLUSTER-EXTRA-NOT: mfuse.aclnn.var
+  // CLUSTER-EXTRA: mfuse.reduce_mean
+  // CLUSTER-EXTRA: mfuse.reduce_sum
   func.func @test_decompose_var(%x: tensor<2x4xf32>) -> tensor<2x1xf32> {
     %mean = mfuse.reduce_mean %x {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>
     %var = mfuse.aclnn.var %x {dim = [1], correction = 1 : i64, keepdim = true}
@@ -33,9 +38,9 @@ module {
   // PIPE-NOT: mfuse.aclnn.var
   // PIPE-NOT: torch.aten.var.correction
   // PIPE-NOT: mfuse.reduce_mean
-  // PIPE-COUNT-2: mfuse.reduce_sum
-  // PIPE: mfusion.dvm_fuse_group = "layer_norm#0"
-  // PIPE: mfusion.layer_norm_dvm
+  // PIPE: mfuse.fused
+  // PIPE-DAG: mfusion.dvm_fuse_kind = "layer_norm"
+  // PIPE-DAG: mfuse.reduce_sum
   func.func @test_var_pipeline_and_tag(%x: tensor<2x4xf32>, %gamma: tensor<4xf32>, %beta: tensor<4xf32>) -> tensor<2x4xf32> {
     %c_eps = mfuse.constant dense<9.99999974E-6> : tensor<f32, {is_scalar = ""}>
     %mean = mfuse.reduce_mean %x {dimensions = [1], keepdim = true} : (tensor<2x4xf32>) -> tensor<2x1xf32>

@@ -17,64 +17,18 @@
 #ifndef MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
 #define MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
 
-#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StringRef.h"
+#include "mlir/IR/Operation.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/Rewrite/FrozenRewritePatternSet.h"
 
 namespace mlir {
-class RewritePatternSet;
-
 namespace mfuse {
 namespace layernorm_dvm {
 
-bool hasLayerNormDvmAttr(Operation *op);
-bool hasLayerNormDvmAffinityAttr(Operation *op);
-void tagLayerNormDvmOp(Operation *op, llvm::StringRef groupId = {});
-void tagLayerNormDvmAffinityOp(Operation *op, llvm::StringRef groupId = {});
-void tagLayerNormDvmForwardOps(ArrayRef<Operation *> ops);
-unsigned tagLayerNormDvmBackwardOpsExclusive(ArrayRef<Operation *> ops, llvm::StringRef groupId = {});
+/// Collect backward operations whose transitive users stay inside the matched closure.
+void collectExclusiveBackwardOps(llvm::ArrayRef<Operation *> ops, llvm::SmallVectorImpl<Operation *> &members);
 
-void registerLayerNormDvmRegionPatterns(RewritePatternSet &patterns);
-
-struct LayerNormDvmMatch {
-  bool matched = false;
-  Value x;
-  Value gamma;
-  Value beta;
-  AddOp betaAdd;
-  DivOp normDiv;
-  MulOp gammaMul;
-  SubOp centerSub;
-  ReduceSumOp reduceSum;
-  ReduceMeanOp reduceMean;
-  DivOp meanDiv;
-  SqrtOp sqrtOp;
-  AddOp rstdAdd;
-  MulOp varSquareMul;
-  ReduceSumOp varReduceSum;
-  DivOp varDiv;
-  llvm::SmallVector<Operation *, 16> ops;
-};
-
-LayerNormDvmMatch matchLayerNormDvmFromBetaAdd(AddOp addOp);
-
-struct LayerNormDvmBwdMatch {
-  bool matched = false;
-  Value x;
-  Value rstd;
-  DivOp gradDiv;
-  SubOp centerSub;
-  ReduceSumOp reduceSum;
-  ReduceMeanOp reduceMean;
-  DivOp meanDiv;
-  llvm::SmallVector<Operation *, 32> ops;
-};
-
-LayerNormDvmBwdMatch matchLayerNormDvmBackwardFromGradDiv(DivOp gradDiv);
-LayerNormDvmBwdMatch matchLayerNormDvmBackwardFromCqxnSum(ReduceSumOp sumOp);
-LayerNormDvmBwdMatch matchLayerNormDvmBackwardFromCuahirSum(ReduceSumOp sumOp);
+bool isOpInFusedIsland(Operation *op);
 
 }  // namespace layernorm_dvm
 }  // namespace mfuse

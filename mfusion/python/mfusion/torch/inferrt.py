@@ -47,7 +47,10 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     )
 
     runner.run(
-        pipeline="builtin.module(mfuse-fusion,canonicalize)",
+        pipeline=(
+            "builtin.module("
+            f"mfuse-fusion{{kernel-generator={kernel_generator}}},canonicalize)"
+        ),
         stage="Mfuse Fusion",
     )
 

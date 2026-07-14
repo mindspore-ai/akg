@@ -64,6 +64,8 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
       patternType = DecomposePatternType::BEFORE_MANUAL_FUSION;
     } else if (this->patternType == "AFTER_MANUAL_FUSION") {
       patternType = DecomposePatternType::AFTER_MANUAL_FUSION;
+    } else if (this->patternType == "AFTER_MANUAL_FUSION_CLUSTER") {
+      patternType = DecomposePatternType::AFTER_MANUAL_FUSION_CLUSTER;
     }
 
     // Register decompose patterns with the specified op list / extra-op-list

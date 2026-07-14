@@ -104,6 +104,12 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
 
       // If constant is not a tensor type (e.g., scalar), include it in cluster
       if (!isa<TensorType>(resultType)) {
+        bool allUsersInCluster = llvm::all_of(defOp->getUsers(), [&](Operation *user) {
+          return clusterOpSet.contains(user);
+        });
+        if (!allUsersInCluster) {
+          continue;
+        }
         MLOG(DEBUG) << "Constant at index " << idx << " for " << opName << " is not a tensor type, keeping in cluster";
         constantsToCluster.insert(defOp);
         continue;
@@ -358,7 +364,9 @@ bool materializeFusedOpFromBuildInfo(RewriterBase &rewriter, const ClusterBuildI
 
   for (auto [oldOutput, newResult] : llvm::zip(buildInfo.externalOutputs, outFusedOp.getResults())) {
     Value output = oldOutput;
-    rewriter.replaceAllUsesWith(output, newResult);
+    output.replaceUsesWithIf(newResult, [&](OpOperand &use) {
+      return !buildInfo.clusterOpSet.contains(use.getOwner());
+    });
   }
 
   for (auto it = buildInfo.clusterOps.rbegin(); it != buildInfo.clusterOps.rend(); ++it) {
