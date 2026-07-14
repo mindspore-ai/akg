@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" | FileCheck %s
+// RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" --verify-each | FileCheck %s
 
 // CHECK-LABEL: @aclnn_add_test
 // CHECK-NOT: mfuse.aclnn.add
@@ -52,6 +52,118 @@ func.func @aclnn_sub_alpha_one_test(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf3
   %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
   %0 = mfuse.aclnn.sub %arg0, %arg1, %alpha : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
+}
+
+// CHECK-LABEL: @aclnn_sub_scalar_lhs_bf16_tensor_alpha_one_test
+// CHECK-NOT: mfuse.aclnn.sub
+// CHECK: mfuse.sub {{.*}} : (tensor<f32, {is_scalar = ""}>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+// CHECK-NOT: mfuse.mul
+func.func @aclnn_sub_scalar_lhs_bf16_tensor_alpha_one_test(%arg0: tensor<f32, {is_scalar = ""}>, %arg1: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %arg0, %arg1, %alpha : (tensor<f32, {is_scalar = ""}>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %0 : tensor<4x4xbf16>
+}
+
+// CHECK-LABEL: @aclnn_add_i64_scalar_lhs_bool_tensor
+// CHECK-NOT: mfuse.aclnn.add
+// CHECK: mfuse.add %arg0, {{.*}} : (tensor<4x4xi1>, tensor<i64, {is_scalar = ""}>) -> tensor<4x4xi64>
+func.func @aclnn_add_i64_scalar_lhs_bool_tensor(%arg0: tensor<4x4xi1>) -> tensor<4x4xi64> {
+  %scalar = mfuse.constant dense<2> : tensor<i64, {is_scalar = ""}>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.add %scalar, %arg0, %alpha : (tensor<i64, {is_scalar = ""}>, tensor<4x4xi1>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xi64>
+  return %0 : tensor<4x4xi64>
+}
+
+// CHECK-LABEL: @aclnn_add_i64_scalar_rhs_bool_tensor
+// CHECK-NOT: mfuse.aclnn.add
+// CHECK: mfuse.add %arg0, {{.*}} : (tensor<4x4xi1>, tensor<i64, {is_scalar = ""}>) -> tensor<4x4xi64>
+func.func @aclnn_add_i64_scalar_rhs_bool_tensor(%arg0: tensor<4x4xi1>) -> tensor<4x4xi64> {
+  %scalar = mfuse.constant dense<2> : tensor<i64, {is_scalar = ""}>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.add %arg0, %scalar, %alpha : (tensor<4x4xi1>, tensor<i64, {is_scalar = ""}>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xi64>
+  return %0 : tensor<4x4xi64>
+}
+
+// CHECK-LABEL: @aclnn_sub_num_to_tensor_scalar_lhs_user_chain
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK-NOT: mfuse.num_to_tensor
+// CHECK: %[[SUB:.*]] = mfuse.sub %[[SCALAR]], %arg0 : (tensor<f64, {is_scalar = ""}>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+// CHECK: %[[ADD:.*]] = mfuse.add %[[SUB]], %arg1 : (tensor<4x4xbf16>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+// CHECK: return %[[ADD]] : tensor<4x4xbf16>
+func.func @aclnn_sub_num_to_tensor_scalar_lhs_user_chain(%arg0: tensor<4x4xbf16>, %arg1: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+  %c = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %n, %arg0, %alpha : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  %1 = mfuse.aclnn.add %0, %arg1, %alpha : (tensor<4x4xbf16>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %1 : tensor<4x4xbf16>
+}
+
+// CHECK-LABEL: @keep_aclnn_sub_when_scalar_inference_changes_result_type
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[NUM:.*]] = mfuse.num_to_tensor %[[SCALAR]] : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+// CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %[[NUM]], %arg0, {{.*}} : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
+// CHECK: return %[[SUB]] : tensor<4x4xf32>
+func.func @keep_aclnn_sub_when_scalar_inference_changes_result_type(%arg0: tensor<4x4xbf16>) -> tensor<4x4xf32> {
+  %c = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %n, %arg0, %alpha : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xf32>
+  return %0 : tensor<4x4xf32>
+}
+
+// CHECK-LABEL: @aclnn_add_num_to_tensor_scalar_lhs
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK-NOT: mfuse.num_to_tensor
+// CHECK: %[[ADD:.*]] = mfuse.add %arg0, %[[SCALAR]] : (tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+// CHECK: return %[[ADD]] : tensor<4x4xbf16>
+func.func @aclnn_add_num_to_tensor_scalar_lhs(%arg0: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+  %c = mfuse.constant dense<2.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.add %n, %arg0, %alpha : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %0 : tensor<4x4xbf16>
+}
+
+// CHECK-LABEL: @aclnn_sub_num_to_tensor_scalar_lhs_non_unit_alpha
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK-NOT: mfuse.num_to_tensor
+// CHECK: %[[MUL:.*]] = mfuse.mul %arg0, {{.*}} : (tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+// CHECK: %[[SUB:.*]] = mfuse.sub %[[SCALAR]], %[[MUL]] : (tensor<f64, {is_scalar = ""}>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+// CHECK: return %[[SUB]] : tensor<4x4xbf16>
+func.func @aclnn_sub_num_to_tensor_scalar_lhs_non_unit_alpha(%arg0: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+  %c = mfuse.constant dense<2.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<0.5> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %n, %arg0, %alpha : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %0 : tensor<4x4xbf16>
+}
+
+// CHECK-LABEL: @keep_aclnn_sub_num_to_tensor_scalar_rhs_non_unit_alpha
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[NUM:.*]] = mfuse.num_to_tensor %[[SCALAR]] : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+// CHECK-NOT: mfuse.mul
+// CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %arg0, %[[NUM]], {{.*}} : (tensor<4x4xbf16>, tensor<f32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+// CHECK: return %[[SUB]] : tensor<4x4xbf16>
+func.func @keep_aclnn_sub_num_to_tensor_scalar_rhs_non_unit_alpha(%arg0: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+  %c = mfuse.constant dense<2.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<0.5> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %arg0, %n, %alpha : (tensor<4x4xbf16>, tensor<f32>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %0 : tensor<4x4xbf16>
+}
+
+// CHECK-LABEL: @keep_shared_num_to_tensor
+// CHECK: %[[SCALAR:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[NUM:.*]] = mfuse.num_to_tensor %[[SCALAR]] : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+// CHECK: %[[SUB:.*]] = mfuse.sub %[[SCALAR]], %arg0 : (tensor<f64, {is_scalar = ""}>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+// CHECK: return %[[SUB]], %[[NUM]] : tensor<4x4xbf16>, tensor<f32>
+func.func @keep_shared_num_to_tensor(%arg0: tensor<4x4xbf16>) -> (tensor<4x4xbf16>, tensor<f32>) {
+  %c = mfuse.constant dense<2.0> : tensor<f64, {is_scalar = ""}>
+  %n = mfuse.num_to_tensor %c : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  %alpha = mfuse.constant dense<1.0> : tensor<f64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %n, %arg0, %alpha : (tensor<f32>, tensor<4x4xbf16>, tensor<f64, {is_scalar = ""}>) -> tensor<4x4xbf16>
+  return %0, %n : tensor<4x4xbf16>, tensor<f32>
 }
 
 // CHECK-LABEL: @aclnn_sub_alpha_with_cast

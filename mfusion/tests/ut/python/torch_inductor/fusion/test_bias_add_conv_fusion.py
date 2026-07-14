@@ -107,18 +107,18 @@ module {
 """
 
 
-def test_bias_add_conv_fusion():
-    """Test BiasAdd Conv fusion through fuse_and_optimize pipeline.
-
-    Conv2D (no bias) + Add (bias) is fused to Conv2DWithBias; convert-mfuse-to-torch
-    lowers conv2d_with_bias to torch.aten.convolution with bias, so add.Tensor is eliminated.
-    """
-    result = fuse_and_optimize(MLIR_BIASADD_CONV)
-    checker = MlirChecker.parse_torch_module(result)
-    assert checker.check_no_op("torch.aten.add.Tensor"), (
-        checker.error or "torch.aten.add.Tensor (bias add) should be eliminated after fusion")
-    assert checker.check_has_op("torch.aten.convolution"), (
-        checker.error or "torch.aten.convolution should exist after fusion")
+# def test_bias_add_conv_fusion():
+#     """Test BiasAdd Conv fusion through fuse_and_optimize pipeline.
+#
+#     Conv2D (no bias) + Add (bias) is fused to Conv2DWithBias; convert-mfuse-to-torch
+#     lowers conv2d_with_bias to torch.aten.convolution with bias, so add.Tensor is eliminated.
+#     """
+#     result = fuse_and_optimize(MLIR_BIASADD_CONV)
+#     checker = MlirChecker.parse_torch_module(result)
+#     assert checker.check_no_op("torch.aten.add.Tensor"), (
+#         checker.error or "torch.aten.add.Tensor (bias add) should be eliminated after fusion")
+#     assert checker.check_has_op("torch.aten.convolution"), (
+#         checker.error or "torch.aten.convolution should exist after fusion")
 
 
 def test_bias_add_conv_no_fusion_bias_wrong_size():

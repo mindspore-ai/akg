@@ -17,8 +17,10 @@
 #include <utility>
 
 #include "llvm/Support/FormatVariadic.h"
+#include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/VarianceUtils.h"
+#include "mfusion/Dialect/Mfuse/Transforms/BinaryScalarUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/DecomposePatterns.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
@@ -36,42 +38,95 @@ static bool isSupportFloatType(Type type) { return type.isF32() || type.isF16() 
 /// Check if output type is float/int type
 static bool isSupportType(Type type) { return isSupportFloatType(type) || type.isInteger(32); }
 
+static FailureOr<RankedTensorType> inferBinaryResultType(Type lhsType, Type rhsType) {
+  auto lhsRankedType = dyn_cast<RankedTensorType>(lhsType);
+  auto rhsRankedType = dyn_cast<RankedTensorType>(rhsType);
+  if (!lhsRankedType || !rhsRankedType) {
+    return failure();
+  }
+  auto inferredType = dyn_cast_or_null<RankedTensorType>(
+    BinaryOpCommonInfer::inferResultType(lhsRankedType, rhsRankedType, false));
+  if (!inferredType) {
+    return failure();
+  }
+  return inferredType;
+}
+
+static bool hasSameShapeAndElementType(RankedTensorType lhsType, RankedTensorType rhsType) {
+  return lhsType.getShape() == rhsType.getShape() && lhsType.getElementType() == rhsType.getElementType();
+}
+
+static bool canDecomposeAclnnWithAlpha(Value x, Value y, bool hasUnitAlpha, Type resultElementType) {
+  if (isScalarType(x.getType()) && isScalarType(y.getType())) {
+    return false;
+  }
+  if (hasUnitAlpha) {
+    return true;
+  }
+  return !isScalarType(y.getType()) && isSupportType(resultElementType);
+}
+
+static FailureOr<RankedTensorType> inferAclnnWithAlphaResultType(Value x, Value y, Value alpha,
+                                                                bool hasUnitAlpha) {
+  if (hasUnitAlpha) {
+    return inferBinaryResultType(x.getType(), y.getType());
+  }
+  auto inferredMulType = inferBinaryResultType(y.getType(), alpha.getType());
+  if (failed(inferredMulType)) {
+    return failure();
+  }
+  return inferBinaryResultType(x.getType(), *inferredMulType);
+}
+
+static Value buildAclnnWithAlphaResult(ComputeOpBuilder &builder, Value x, Value y, Value alpha, bool hasUnitAlpha,
+                                       bool isAdd) {
+  Value rhs = y;
+  if (!hasUnitAlpha) {
+    rhs = builder.mul(y, alpha);
+  }
+  if (!isAdd) {
+    return builder.sub(x, rhs);
+  }
+  if (isScalarType(x.getType())) {
+    return builder.add(rhs, x);
+  }
+  return builder.add(x, rhs);
+}
+
 /// Helper function to decompose Aclnn operations with alpha parameter
 /// This handles the common logic for both AclnnAdd and AclnnSub
 /// op The Aclnn operation (AclnnAddOp or AclnnSubOp)
-/// builder ComputeOpBuilder instance
 /// rewriter PatternRewriter instance
-/// return The decomposed operation result
+/// return Whether the operation was decomposed
 template <typename OpType>
-static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &builder, PatternRewriter &rewriter) {
-  // Get the inputs from the op
-  Value x = op.getX();
-  Value y = op.getY();
+static LogicalResult decomposeAclnnWithAlpha(OpType op, PatternRewriter &rewriter) {
+  auto xScalar = getRecoverableScalar(op.getX());
+  auto yScalar = getRecoverableScalar(op.getY());
+  Value x = xScalar ? xScalar->scalar : op.getX();
+  Value y = yScalar ? yScalar->scalar : op.getY();
   Value alpha = op.getAlpha();
   Type resultType = op.getResult().getType();
   auto resultElementType = mlir::cast<RankedTensorType>(resultType).getElementType();
-  // Determine if the operation is an add or sub
   bool isAdd = isa<mfuse::AclnnAddOp>(op);
-  if (isConstOne(alpha)) {
-    return isAdd ? builder.add(x, y) : builder.sub(x, y);
+  bool hasUnitAlpha = isConstOne(alpha);
+
+  if (!canDecomposeAclnnWithAlpha(x, y, hasUnitAlpha, resultElementType)) {
+    return failure();
   }
 
-  // Do not decompose add/sub.Scalar to mul + add/sub
-  if (auto rhsEnc = mlir::dyn_cast<mlir::RankedTensorType>(y.getType()).getEncoding()) {
-    if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(rhsEnc)) {
-      if (dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
-        return nullptr;
-      }
-    }
+  auto inferredResultType = inferAclnnWithAlphaResultType(x, y, alpha, hasUnitAlpha);
+  auto expectedResultType = dyn_cast<RankedTensorType>(resultType);
+  if (failed(inferredResultType) || !expectedResultType ||
+      !hasSameShapeAndElementType(*inferredResultType, expectedResultType)) {
+    return rewriter.notifyMatchFailure(op, "decomposed result type differs from the original result type");
   }
 
-  if (!isSupportType(resultElementType)) {
-    return nullptr;
-  }
-
-  Value mulResult = builder.mul(y, alpha);
-  // Perform the final add or sub operation
-  return isAdd ? builder.add(x, mulResult) : builder.sub(x, mulResult);
+  mlir::mfuse::ComputeOpBuilder builder(rewriter, op.getLoc());
+  Value result = buildAclnnWithAlphaResult(builder, x, y, alpha, hasUnitAlpha, isAdd);
+  rewriter.replaceOp(op, result);
+  eraseDeadNumToTensor(rewriter, xScalar);
+  eraseDeadNumToTensor(rewriter, yScalar);
+  return success();
 }
 
 }  // namespace
@@ -82,18 +137,7 @@ class AclnnAddDecomposePattern : public OpRewritePattern<mfuse::AclnnAddOp> {
   using OpRewritePattern<mfuse::AclnnAddOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnAddOp addOp, PatternRewriter &rewriter) const override {
-    // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, addOp.getLoc());
-
-    // Decompose using the helper function
-    Value addResult = decomposeAclnnWithAlpha(addOp, builder, rewriter);
-    if (!addResult) {
-      return failure();
-    }
-
-    // Replace the original AclnnAdd operation with the decomposed computation
-    rewriter.replaceOp(addOp, addResult);
-    return success();
+    return decomposeAclnnWithAlpha(addOp, rewriter);
   }
 };
 
@@ -138,18 +182,7 @@ class AclnnSubDecomposePattern : public OpRewritePattern<mfuse::AclnnSubOp> {
   using OpRewritePattern<mfuse::AclnnSubOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnSubOp subOp, PatternRewriter &rewriter) const override {
-    // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, subOp.getLoc());
-
-    // Decompose using the helper function
-    Value subResult = decomposeAclnnWithAlpha(subOp, builder, rewriter);
-    if (!subResult) {
-      return failure();
-    }
-
-    // Replace the original AclnnSub operation with the decomposed computation
-    rewriter.replaceOp(subOp, subResult);
-    return success();
+    return decomposeAclnnWithAlpha(subOp, rewriter);
   }
 };
 
