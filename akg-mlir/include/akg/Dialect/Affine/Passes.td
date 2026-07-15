@@ -273,6 +273,10 @@ def LegalizeTypeForAscend : Pass<"legalize-type-for-ascend", "func::FuncOp"> {
     related affine.for / arith casts for Ascend pipelines.
   }];
   let constructor = "mlir::createLegalizeTypeForAscendPass()";
+  let options = [
+    Option<"enableI64ToI32", "enable-i64-to-i32", "bool", /*default=*/"false",
+           "Enable i64 to i32 integer narrowing (default: false)">,
+  ];
   let dependentDialects = [
     "arith::ArithDialect",
     "affine::AffineDialect"
