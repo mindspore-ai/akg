@@ -15,10 +15,7 @@
 
 // CHECK-LABEL: func.func @Fused_Add_fusion_8550873487731602555
 // All UB allocs appear at the very start of the parent func body, before
-// any constants / scf.for. allocAtFuncStart inserts at entry.begin(), so
-// later allocations end up at the top: the output buffer (last to be
-// promoted) is the first alloc in the IR, then the second input, then the
-// first input.
+// any constants / scf.for.
 // CHECK: %[[ALLOC_OUT:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
 // CHECK-NEXT: %[[ALLOC_IN1:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
 // CHECK-NEXT: %[[ALLOC_IN0:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
@@ -158,73 +155,72 @@ module {
 // Verify vf-returning-npuvector handling: the scalar broadcast prep before
 // the scf.for is extracted into `_outlined_vf_1`, which originally returned
 // an `!npuvector<1xf32>` value. The pass drops that return and routes the
-// value through an extra UB `memref<64xf32>` out-param: the kernel writes
-// the npuvector to the out-param via npuvector.transfer_write, and the
-// caller reads it back via npuvector.transfer_read after the call.
+// value through an extra UB `memref<64xf32>` out-param. That same buffer is
+// later reused as the scalar broadcast input for `_outlined_vf_0` inside the
+// loop, eliminating an extra read/write round-trip.
 //
-// All six UB allocations (one per promoted memref + the new return-value
-// out-param) are hoisted to the start of the parent function body.
+// Five UB allocations (one promoted buffer per GM memref + the shared return-
+// value/broadcast out-param) are hoisted to the start of the parent function.
 
 // CHECK-LABEL: func.func @Fused_Mul_IsFinite_split_15301331195131479419
-// The six UB allocs appear back-to-back at the very start of the body
-// (before constants / collapse_shape / scf.for). Sizes/element-types here
-// uniquely identify each buffer:
-//   vf_0 broadcast-scalar UB (f32, aligned to 64),
-//   vf_1 input UB (bf16, aligned to 128),
-//   vf_0 i8 output UB (aligned to 256),
-//   vf_0 bf16 output UB (aligned to 128),
-//   vf_0 bf16 input UB (aligned to 128),
-//   vf_1 return-value out-param UB (f32, aligned to 64).
-// CHECK: %[[VF0_SCALAR_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
-// CHECK-NEXT: %[[VF1_INPUT_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<128xbf16>
+// CHECK: %[[VF1_INPUT_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<128xbf16>
 // CHECK-NEXT: %[[VF0_I8_OUT_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<256xi8>
 // CHECK-NEXT: %[[VF0_BF16_OUT_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<128xbf16>
 // CHECK-NEXT: %[[VF0_BF16_IN_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<128xbf16>
-// CHECK-NEXT: %[[VF1_RET_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
+// CHECK-NEXT: %[[SCALAR_RET_UB:[a-zA-Z0-9_]+]] = memref.alloc() : memref<64xf32>
 // CHECK-NOT: memref.alloc
 
-// Stage the scalar input into the UB, then call vf_1 with the UB input and
-// the UB return-value out-param. vf_1's call site no longer produces an
-// npuvector result -- the result type list is empty (`-> ()`).
+// Stage scalar into UB and call vf_1 with the UB input and the UB return-value
+// out-param. No npuvector result is produced.
 // CHECK: %[[VF1_SCALAR_RD:[a-zA-Z0-9_]+]] = npuvector.transfer_read %collapse_shape
 // CHECK-SAME: memref<bf16>, !npuvector<1xbf16>
 // CHECK: %[[SUB_VF1_IN:[a-zA-Z0-9_]+]] = memref.subview %[[VF1_INPUT_UB]]
 // CHECK: npuvector.transfer_write %[[VF1_SCALAR_RD]], %[[SUB_VF1_IN]]
 // CHECK-SAME: !npuvector<1xbf16>, memref<1xbf16, strided<[1], offset: ?>>
-// CHECK: call @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_1(%[[VF1_INPUT_UB]], %[[VF1_RET_UB]]) {hivm.vector_function, no_inline} : (memref<128xbf16>, memref<64xf32>) -> ()
-// Read the vf_1 result back from the UB out-param.
-// CHECK: %[[VF1_READBACK:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[VF1_RET_UB]]
-// CHECK-SAME: memref<64xf32>, !npuvector<1xf32>
+// CHECK: call @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_1(%[[VF1_INPUT_UB]], %[[SCALAR_RET_UB]]) {hivm.vector_function, no_inline} : (memref<128xbf16>, memref<64xf32>) -> ()
 
-// Inside the scf.for, the main compute calls vf_0 with all UB buffers; the
-// broadcast scalar (an npuvector arg in the un-promoted form) is staged
-// into VF0_SCALAR_UB before the call by promoteVectorArgsToUB.
+// Inside the scf.for, vf_0 reads the scalar directly from %[[SCALAR_RET_UB]],
+// which already holds the result from vf_1.
 // CHECK: scf.for
-// CHECK: npuvector.transfer_write %[[VF1_READBACK]], %[[VF0_SCALAR_UB]]
-// CHECK-SAME: !npuvector<1xf32>, memref<64xf32>
-// CHECK: func.call @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_0(%[[VF0_BF16_IN_UB]], %{{.*}}, %[[VF0_SCALAR_UB]], %[[VF0_BF16_OUT_UB]], %[[VF0_I8_OUT_UB]]) {hivm.vector_function, no_inline} : (memref<128xbf16>, index, memref<64xf32>, memref<128xbf16>, memref<256xi8>) -> ()
+// CHECK: %[[RD_ARG0:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg0
+// CHECK-SAME: memref<3072xbf16>, !npuvector<?xbf16>
+// CHECK: %[[SUB_VF0_IN:[a-zA-Z0-9_]+]] = memref.subview %[[VF0_BF16_IN_UB]]
+// CHECK: npuvector.transfer_write %[[RD_ARG0]], %[[SUB_VF0_IN]]
+// CHECK-SAME: !npuvector<?xbf16>, memref<?xbf16, strided<[1], offset: ?>>
+// CHECK: func.call @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_0(%[[VF0_BF16_IN_UB]], %{{.*}}, %[[SCALAR_RET_UB]], %[[VF0_BF16_OUT_UB]], %[[VF0_I8_OUT_UB]]) {hivm.vector_function, no_inline} : (memref<128xbf16>, index, memref<64xf32>, memref<128xbf16>, memref<256xi8>) -> ()
+// CHECK: %[[SUB_I8_OUT:[a-zA-Z0-9_]+]] = memref.subview %[[VF0_I8_OUT_UB]]
+// CHECK: %[[RD_I8:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[SUB_I8_OUT]]
+// CHECK-SAME: memref<?xi8, strided<[1], offset: ?>>, !npuvector<?xi8>
+// CHECK: npuvector.transfer_write %[[RD_I8]], %arg3
+// CHECK-SAME: !npuvector<?xi8>, memref<3072xi8>
+// CHECK: %[[SUB_BF16_OUT:[a-zA-Z0-9_]+]] = memref.subview %[[VF0_BF16_OUT_UB]]
+// CHECK: %[[RD_BF16:[a-zA-Z0-9_]+]] = npuvector.transfer_read %[[SUB_BF16_OUT]]
+// CHECK-SAME: memref<?xbf16, strided<[1], offset: ?>>, !npuvector<?xbf16>
+// CHECK: npuvector.transfer_write %[[RD_BF16]], %arg2
+// CHECK-SAME: !npuvector<?xbf16>, memref<3072xbf16>
 
-// vf_0 takes UB memrefs for all of its memref/vector-typed args; no
-// npuvector arg remains in the signature.
+// vf_0 takes UB memrefs for all inputs/outputs.
 // CHECK-LABEL: func.func private @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_0
-// CHECK-SAME: memref<128xbf16>
-// CHECK-SAME: index
-// CHECK-SAME: memref<64xf32>
-// CHECK-SAME: memref<128xbf16>
-// CHECK-SAME: memref<256xi8>
+// CHECK-SAME: (%arg0: memref<128xbf16>, %arg1: index, %arg2: memref<64xf32>, %arg3: memref<128xbf16>, %arg4: memref<256xi8>)
 // CHECK-SAME: attributes {hivm.vector_function, no_inline}
-// CHECK-NOT: -> !npuvector
+// CHECK: %[[SCALAR_RD:.*]] = npuvector.transfer_read %arg2[%c0] [%c1] [%c64]
+// CHECK-SAME: memref<64xf32>, !npuvector<1xf32>
+// CHECK: %[[VEC_RD:.*]] = npuvector.transfer_read %arg0[%c0_0] [%arg1] [%c128]
+// CHECK-SAME: memref<128xbf16>, !npuvector<?xbf16>
+// CHECK: npuvector.extf %[[VEC_RD]]
+// CHECK: npuvector.broadcast %[[SCALAR_RD]]
+// CHECK: arith.mulf
+// CHECK: npuvector.transfer_write %{{.*}}, %arg3[%c0_0] : !npuvector<?xbf16>, memref<128xbf16>
+// CHECK: npuvector.transfer_write %{{.*}}, %arg4[%c0_0] : !npuvector<?xi8>, memref<256xi8>
+// CHECK: return
 
-// vf_1's signature has been rewritten: the original `-> !npuvector<1xf32>`
-// return is gone, replaced by an extra `memref<64xf32>` out-param. The body
-// writes the produced npuvector into that out-param and returns nothing.
+// vf_1: return dropped, replaced by write to out-param memref<64xf32>.
 // CHECK-LABEL: func.func private @Fused_Mul_IsFinite_split_15301331195131479419_outlined_vf_1
 // CHECK-SAME: (%arg0: memref<128xbf16>, %arg1: memref<64xf32>)
 // CHECK-SAME: attributes {hivm.vector_function, no_inline}
-// CHECK-NOT: -> !npuvector
-// CHECK: %[[VF1_RD:[a-zA-Z0-9_]+]] = npuvector.transfer_read %arg0
+// CHECK: %[[VF1_RD:.*]] = npuvector.transfer_read %arg0
 // CHECK-SAME: memref<128xbf16>, !npuvector<1xbf16>
-// CHECK: %[[VF1_EXTF:[a-zA-Z0-9_]+]] = npuvector.extf %[[VF1_RD]]
+// CHECK: %[[VF1_EXTF:.*]] = npuvector.extf %[[VF1_RD]]
 // CHECK-SAME: !npuvector<1xbf16> to !npuvector<1xf32>
 // CHECK: npuvector.transfer_write %[[VF1_EXTF]], %arg1
 // CHECK-SAME: !npuvector<1xf32>, memref<64xf32>
