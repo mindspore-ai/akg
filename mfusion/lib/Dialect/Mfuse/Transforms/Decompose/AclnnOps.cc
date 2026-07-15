@@ -18,6 +18,7 @@
 
 #include "llvm/Support/FormatVariadic.h"
 #include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
+#include "mfusion/Dialect/Mfuse/Analysis/ConvBiasAddInfer.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/VarianceUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/BinaryScalarUtils.h"
@@ -38,7 +39,7 @@ static bool isSupportFloatType(Type type) { return type.isF32() || type.isF16() 
 /// Check if output type is float/int type
 static bool isSupportType(Type type) { return isSupportFloatType(type) || type.isInteger(32); }
 
-static FailureOr<RankedTensorType> inferBinaryResultType(Type lhsType, Type rhsType) {
+static FailureOr<RankedTensorType> inferBinaryResultTypeFromTypes(Type lhsType, Type rhsType) {
   auto lhsRankedType = dyn_cast<RankedTensorType>(lhsType);
   auto rhsRankedType = dyn_cast<RankedTensorType>(rhsType);
   if (!lhsRankedType || !rhsRankedType) {
@@ -50,6 +51,14 @@ static FailureOr<RankedTensorType> inferBinaryResultType(Type lhsType, Type rhsT
     return failure();
   }
   return inferredType;
+}
+
+/// Add-only: try ConvBiasAddInfer then trailing broadcast. Must not be used for Sub.
+static FailureOr<RankedTensorType> inferAddResultTypeWithConvBiasFallback(Value lhs, Value rhs) {
+  if (auto convBias = dyn_cast_or_null<RankedTensorType>(ConvBiasAddInfer::inferAddResultType(lhs, rhs))) {
+    return convBias;
+  }
+  return inferBinaryResultTypeFromTypes(lhs.getType(), rhs.getType());
 }
 
 static bool hasSameShapeAndElementType(RankedTensorType lhsType, RankedTensorType rhsType) {
@@ -66,31 +75,51 @@ static bool canDecomposeAclnnWithAlpha(Value x, Value y, bool hasUnitAlpha, Type
   return !isScalarType(y.getType()) && isSupportType(resultElementType);
 }
 
-static FailureOr<RankedTensorType> inferAclnnWithAlphaResultType(Value x, Value y, Value alpha,
-                                                                bool hasUnitAlpha) {
+static FailureOr<RankedTensorType> inferAclnnWithAlphaResultType(Value x, Value y, Value alpha, bool hasUnitAlpha,
+                                                                bool isAdd) {
   if (hasUnitAlpha) {
-    return inferBinaryResultType(x.getType(), y.getType());
+    // ConvBiasAddInfer is Add-only; Sub uses trailing broadcast only.
+    if (isAdd) {
+      return inferAddResultTypeWithConvBiasFallback(x, y);
+    }
+    return inferBinaryResultTypeFromTypes(x.getType(), y.getType());
   }
-  auto inferredMulType = inferBinaryResultType(y.getType(), alpha.getType());
+
+  auto inferredMulType = inferBinaryResultTypeFromTypes(y.getType(), alpha.getType());
   if (failed(inferredMulType)) {
     return failure();
   }
-  return inferBinaryResultType(x.getType(), *inferredMulType);
+
+  // Non-unit alpha: x + y*alpha. Channel-bias only when x=conv and y=bias[C]
+  // (alpha scales bias). Do not swap — add(bias, conv, alpha) means bias + alpha*conv.
+  if (isAdd) {
+    auto yTy = dyn_cast<RankedTensorType>(y.getType());
+    if (yTy && yTy.getShape() == inferredMulType->getShape()) {
+      if (auto channelTy =
+            dyn_cast_or_null<RankedTensorType>(ConvBiasAddInfer::inferAddResultTypeOrdered(x, y))) {
+        // Keep dtype aligned with fuse / conv2d_with_bias contract.
+        if (inferredMulType->getElementType() == channelTy.getElementType()) {
+          return channelTy;
+        }
+      }
+    }
+  }
+  return inferBinaryResultTypeFromTypes(x.getType(), *inferredMulType);
 }
 
 static Value buildAclnnWithAlphaResult(ComputeOpBuilder &builder, Value x, Value y, Value alpha, bool hasUnitAlpha,
-                                       bool isAdd) {
+                                       bool isAdd, Type resultType) {
   Value rhs = y;
   if (!hasUnitAlpha) {
     rhs = builder.mul(y, alpha);
   }
   if (!isAdd) {
-    return builder.sub(x, rhs);
+    return builder.sub(x, rhs, resultType);
   }
   if (isScalarType(x.getType())) {
-    return builder.add(rhs, x);
+    return builder.add(rhs, x, resultType);
   }
-  return builder.add(x, rhs);
+  return builder.add(x, rhs, resultType);
 }
 
 /// Helper function to decompose Aclnn operations with alpha parameter
@@ -114,7 +143,7 @@ static LogicalResult decomposeAclnnWithAlpha(OpType op, PatternRewriter &rewrite
     return failure();
   }
 
-  auto inferredResultType = inferAclnnWithAlphaResultType(x, y, alpha, hasUnitAlpha);
+  auto inferredResultType = inferAclnnWithAlphaResultType(x, y, alpha, hasUnitAlpha, isAdd);
   auto expectedResultType = dyn_cast<RankedTensorType>(resultType);
   if (failed(inferredResultType) || !expectedResultType ||
       !hasSameShapeAndElementType(*inferredResultType, expectedResultType)) {
@@ -122,7 +151,7 @@ static LogicalResult decomposeAclnnWithAlpha(OpType op, PatternRewriter &rewrite
   }
 
   mlir::mfuse::ComputeOpBuilder builder(rewriter, op.getLoc());
-  Value result = buildAclnnWithAlphaResult(builder, x, y, alpha, hasUnitAlpha, isAdd);
+  Value result = buildAclnnWithAlphaResult(builder, x, y, alpha, hasUnitAlpha, isAdd, resultType);
   rewriter.replaceOp(op, result);
   eraseDeadNumToTensor(rewriter, xScalar);
   eraseDeadNumToTensor(rewriter, yScalar);

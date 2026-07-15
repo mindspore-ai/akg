@@ -45,7 +45,9 @@ class ComputeOpBuilder {
 
   // ComputeOpBuilder methods
   Value add(Value a, Value b) { return rewriter.create<AddOp>(loc, a, b); }
+  Value add(Value a, Value b, Type resultType) { return rewriter.create<AddOp>(loc, resultType, a, b); }
   Value sub(Value a, Value b) { return rewriter.create<SubOp>(loc, a, b); }
+  Value sub(Value a, Value b, Type resultType) { return rewriter.create<SubOp>(loc, resultType, a, b); }
   Value mul(Value a, Value b) { return rewriter.create<MulOp>(loc, a, b); }
   Value div(Value a, Value b) { return rewriter.create<DivOp>(loc, a, b); }
 
