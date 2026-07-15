@@ -86,6 +86,7 @@ using akg::kNpuUbAlignBytes;
 using akg::multiplyAndCap;
 
 constexpr int64_t kDefaultDynamicAllocSize = 32 * 1024;
+constexpr int kMaxInlineBroadcastTraceSteps = 32;
 
 static bool setBufferSizeMark(PatternRewriter &rewriter, Location loc, Value buffer, int64_t bytes) {
   if (bytes <= 0 || bytes == LLONG_MAX || !isa<MemRefType>(buffer.getType())) {
@@ -3187,7 +3188,7 @@ static FailureOr<SmallVector<int64_t>> inferInlineBroadcastRootMaxShape(Value op
                                                                         Value &root) {
   Value current = operand;
   SmallVector<int64_t> currentMaxShape(operandMaxShape.begin(), operandMaxShape.end());
-  for (int depth = 0; depth < 32; ++depth) {
+  for (int depth = 0; depth < kMaxInlineBroadcastTraceSteps; ++depth) {
     Operation *def = current.getDefiningOp();
     if (def == nullptr) {
       break;
