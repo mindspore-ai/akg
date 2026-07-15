@@ -36,7 +36,7 @@ namespace mfuse {
 struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
-    std::vector<std::pair<const char *, PassCreator>> passes = {
+    std::vector<std::pair<const char *, PassCreator>> preMatmulPasses = {
       // Must run before fuse-num-to-tensor so scalar binary operands are not materialized as mfuse.full.
       {"mfuse-canonicalize-binary-scalar-operands",
        []() { return createCanonicalizeBinaryScalarOperandsPass(); }},
@@ -45,20 +45,8 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
       {"fuse-conv2d-cast", []() { return createFuseConv2DCastPass(); }},
       {"fuse-batch-norm", []() { return createFuseBatchNormPass(); }},
       {"fuse-conv-batchnorm", []() { return createFuseConvBatchNormPass(); }},
-      // MatMul-related fusion passes (order by dependency):
-      // FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
-      // FuseMatMulBiasAdd: matmul+add(bias) -> matmul_with_bias;
-      // before reshape so direct matmul+add is fused.
-      // FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
-      // fuse-matmul-permute: permute elimination (swap last two dims into trans flags on mfuse.matmul).
-      // fuse-matmul-k1-to-mul: mfuse.matmul (k=1) -> mul; after shape normalization.
-      // FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
-      {"fuse-matmul-cast", []() { return createFuseMatMulCastPass(); }},
-      {"fuse-matmul-bias-add", []() { return createFuseMatMulBiasAddPass(); }},
-      {"fuse-matmul-unsqueeze-squeeze", []() { return createFuseMatmulUnsqueezeSqueezePass(); }},
-      {"fuse-matmul-permute", []() { return createFuseMatmulPermutePass(); }},
-      {"fuse-matmul-k1-to-mul", []() { return createFuseMatmulK1ToMulPass(); }},
-      {"fuse-matmul-reshape-bias-add", []() { return createFuseMatmulReshapeBiasAddPass(); }},
+    };
+    std::vector<std::pair<const char *, PassCreator>> postMatmulPasses = {
       {"fuse-gelu", []() { return createFuseGeluPass(); }},
       {"fuse-logical-not-compare", []() { return createFuseLogicalNotComparePass(); }},
       // RmsNorm is fused on Torch dialect (torch-fusion) before convert-torch-to-mfuse.
@@ -74,7 +62,15 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
     };
 
     PassManager pm(&getContext());
-    for (const auto &[name, creator] : passes) {
+    for (const auto &[name, creator] : preMatmulPasses) {
+      (void)name;
+      pm.addPass(creator());
+    }
+    // MatMul-related fusion passes via MatMulOptimizationManager (recommended order):
+    // 1. FuseMatMulCast  2. FuseMatmulUnsqueezeSqueeze  3. FuseMatmulPermute
+    // 4. FuseMatmulK1ToMul  5. FuseMatMulBiasAdd  6. FuseMatmulReshapeBiasAdd
+    MatMulOptimizationManager::registerPasses(pm);
+    for (const auto &[name, creator] : postMatmulPasses) {
       (void)name;
       pm.addPass(creator());
     }
