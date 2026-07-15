@@ -19,10 +19,8 @@
 """Tuning record and serialization format"""
 
 import argparse
-import base64
 import logging
 import multiprocessing
-import pickle
 import json
 import time
 import os
@@ -78,7 +76,7 @@ def encode(inp, result, protocol='json'):
     result: autotvm.tuner.MeasureResult
         pair of input/result
     protocol: str
-        log protocol, json or pickle
+        log protocol, json
 
     Returns
     -------
@@ -101,15 +99,6 @@ def encode(inp, result, protocol='json'):
             "v": AUTOTVM_LOG_VERSION
         }
         return json.dumps(json_dict)
-    if protocol == 'pickle':
-        row = (str(inp.target),
-               str(base64.b64encode(pickle.dumps([inp.task.name,
-                                                  inp.task.args,
-                                                  inp.task.kwargs,
-                                                  inp.task.workload])).decode()),
-               str(base64.b64encode(pickle.dumps(inp.config)).decode()),
-               str(base64.b64encode(pickle.dumps(tuple(result))).decode()))
-        return '\t'.join(row)
 
     raise RuntimeError("Invalid log protocol: " + protocol)
 
@@ -122,7 +111,7 @@ def decode(row, protocol='json'):
     row: str
         a row in the logger file
     protocol: str
-        log protocol, json or pickle
+        log protocol, json
 
     Returns
     -------
@@ -154,16 +143,6 @@ def decode(row, protocol='json'):
         result = MeasureResult(*[tuple(x) if isinstance(x, list) else x for x in row["r"]])
 
         return inp, result
-    if protocol == 'pickle':
-        items = row.split("\t")
-        tgt = _target.create(items[0])
-        task_tuple = pickle.loads(base64.b64decode(items[1].encode()))
-        config = pickle.loads(base64.b64decode(items[2].encode()))
-        result = pickle.loads(base64.b64decode(items[3].encode()))
-
-        tsk = task.Task(task_tuple[0], task_tuple[1])
-        tsk.workload = task_tuple[3]
-        return MeasureInput(tgt, tsk, config), MeasureResult(*result)
 
     raise RuntimeError("Invalid log protocol: " + protocol)
 

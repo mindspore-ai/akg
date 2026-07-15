@@ -25,6 +25,7 @@ from pathlib import Path
 from akg import composite
 from akg.utils import kernel_exec as kernel_exec
 from akg.utils.dsl_create import TensorUtils
+from akg.utils.signature_verify import verify_file_signature_or_raise
 from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
 from akg.ms.utils import get_op
@@ -42,6 +43,7 @@ def _compilewithjson_to_module_op(kernel_info, attrs, processor):
             impl_path = os.path.realpath(kernel_info['impl_path'])
             safe_path = os.path.realpath(os.environ.get("AKG_WHITE_LIST_PATH", "./"))
             if os.path.isfile(impl_path) and impl_path.startswith(safe_path):
+                verify_file_signature_or_raise(impl_path)
                 custom_mod_name = Path(impl_path).resolve().stem
                 mod_spec = importlib.util.spec_from_file_location(
                     custom_mod_name, impl_path)
