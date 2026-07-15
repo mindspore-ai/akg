@@ -52,6 +52,9 @@ cscope.*
 *__pycache__*
 .pytest_cache
 
+# Signature key files
+*.pem
+
 # Mac files
 *.DS_Store
 

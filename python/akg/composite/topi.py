@@ -15,6 +15,7 @@
 # limitations under the License.
 
 """composite topi"""
+import base64
 import functools
 import itertools
 import operator
@@ -32,6 +33,7 @@ from akg.global_configs import get_kernel_meta_path
 from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
+from akg.utils.signature_verify import verify_file_signature_or_raise, get_sign_path
 
 import akg.topi as akg_topi
 import akg.utils as utils
@@ -718,7 +720,7 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
     return output
 
 
-def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name):
+def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name, func_source_sign=""):
     kernel_meta_path = get_kernel_meta_path()
     cuda_path = os.path.realpath(kernel_meta_path)
     if not os.path.isdir(cuda_path):
@@ -731,6 +733,9 @@ def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name
     op_imply_path = os.path.realpath(kernel_meta_path + func_name + ".py")
     if os.path.exists(op_imply_path):
         os.remove(op_imply_path)
+    sign_path = get_sign_path(op_imply_path)
+    if os.path.exists(sign_path):
+        os.remove(sign_path)
     try:
         with open(op_imply_path, 'at') as file:
             fcntl.flock(file.fileno(), fcntl.LOCK_EX)
@@ -738,9 +743,18 @@ def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name
             if file.tell() == 0:
                 file.write(func_source)
         os.chmod(op_imply_path, 0o400)
+        if func_source_sign:
+            try:
+                sign_bytes = base64.b64decode(func_source_sign)
+            except (ValueError, base64.binascii.Error):
+                raise ValueError("Invalid func_source_sign for function: {}".format(str(func_name)))
+            with open(sign_path, 'wb') as sign_file:
+                sign_file.write(sign_bytes)
     except Exception:
         logging.error(traceback.format_exc())
         return None
+
+    verify_file_signature_or_raise(op_imply_path)
 
     custom_mod_name = Path(op_imply_path).resolve().stem
     mod_spec = importlib.util.spec_from_file_location(
@@ -787,6 +801,7 @@ def custom(inputs, attrs):
         raise ValueError("Can't find the source str for the function: {}".format(func_name))
 
     source_str = attrs["func_source_str"].value
+    source_sign = attrs["func_source_sign"].value if "func_source_sign" in attrs else ""
 
     if func_type == "hybrid":
         return _launch_kernel_from_source(inputs, op_attrs, source_str,
@@ -796,7 +811,8 @@ def custom(inputs, attrs):
     else:
         return _launch_kernel_from_path(inputs, op_attrs, func_type,
                                         source_str,
-                                        func_name)
+                                        func_name,
+                                        source_sign)
 
 
 @tvm.register_func("GatherNd")
