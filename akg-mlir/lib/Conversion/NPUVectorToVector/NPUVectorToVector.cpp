@@ -1228,7 +1228,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     ArrayRef<Value> outerIvs;
     Value c0;
     Value cLane;
-    int64_t R = 0;
+    int64_t rank = 0;
   };
 
   // Full-reduction specification shared by buildReductionRegLoop / buildFullReductionLoopNest.
@@ -2357,7 +2357,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     auto rank0Ty = VectorType::get({}, scalarElem);
     FullReductionInfo info{redOp, kind, scalarElem, producers, regIdent, regVecTy, laneCount};
     SeedResult seed;
-    buildFullReductionSeed({builder, loc}, info, {idAttr, target, delivery, c0}, seed);
+    BuilderEnv benv{builder, loc};
+    DeliveryCtx dctx{idAttr, target, delivery, c0};
+    buildFullReductionSeed(benv, info, dctx, seed);
     bool reuseTargetAsAccBuf = seed.reuseTargetAsAccBuf;
     Value accBuf = seed.accBuf;
     Value idScalar = seed.idScalar;
@@ -2418,9 +2420,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     const DeliveryTarget &target = dctx.target;
     const ReductionDelivery &delivery = dctx.delivery;
     out.reuseTargetAsAccBuf = false;
-    if (target.isStore && target.rank == 1) {
+    if (target.isStore && target.rank == 1 && target.memref) {
       auto mt = llvm::cast<MemRefType>(target.memref.getType());
-      if (mt.getShape()[0] == 1 && mt.getElementType() == scalarElem && delivery.castChain.empty()) {
+      if (!mt.getShape().empty() && mt.getShape()[0] == 1 && mt.getElementType() == scalarElem &&
+          delivery.castChain.empty()) {
         out.reuseTargetAsAccBuf = true;
       }
     }
@@ -2438,13 +2441,19 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   }
 
   // `buildFullReductionLoopNest` helper: emit one register-tiled reduction loop
-  // over [lbv, ubv) step lanes, accumulating `init`. When `masked`, the tail
-  // lanes are masked (transfer reads padded + a select against the identity) so
-  // out-of-range lanes never reach the reduction. Returns the loop result.
+  // over [lbv, ubv) step lanes, accumulating `lp.initAccs.front()`. When
+  // `lp.masked`, the tail lanes are masked (transfer reads padded + a select
+  // against the identity) so out-of-range lanes never reach the reduction.
+  // Returns the loop result.
   LogicalResult buildReductionRegLoop(BuilderEnv env, PassLoopParams lp, FullReductionInfo info,
-                                      Value init, bool masked, Value &result) const {
+                                      Value &result) const {
+    if (lp.initAccs.empty()) {
+      return info.redOp.emitError("npuvector-to-vector: reduction register loop needs an accumulator");
+    }
     OpBuilder &b = env.builder;
     Location loc = env.loc;
+    Value init = lp.initAccs.front();
+    bool masked = lp.masked;
     auto forOp = b.create<scf::ForOp>(loc, lp.lbv, lp.ubv, lp.cLane, ValueRange{init});
     Value iv = forOp.getInductionVar();
     Value acc = forOp.getRegionIterArgs().front();
@@ -2500,14 +2509,14 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Value acc = curInit;
     if (split.emitMain) {
       if (failed(buildReductionRegLoop({lb, loc}, {lc.c0, split.alignedBound, bound, lc.cLane,
-                                     outerIvs, {}, false}, info, acc, false, acc))) {
+                                     outerIvs, {acc}, false}, info, acc))) {
         return failure();
       }
     }
     if (split.emitTail) {
       Value tailLb = split.emitMain ? split.alignedBound : lc.c0;
       if (failed(buildReductionRegLoop({lb, loc}, {tailLb, bound, bound, lc.cLane,
-                                     outerIvs, {}, true}, info, acc, true, acc))) {
+                                     outerIvs, {acc}, true}, info, acc))) {
         return failure();
       }
     }
@@ -2624,15 +2633,11 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
 
   // =========================================================================
   // Partial (last-axis) reduction kernel tiler.
-  // Structure per outer (row) iteration:
-  //   * pass 1 over the register/reduction axis with one accumulator iter_arg
-  //     per reduction: emit the reduction producers, accumulate, and write any
-  //     pure-elementwise outputs that do not depend on a reduction result.
-  //   * finalize each reduction to a per-row scalar, then run the per-row
-  //     compute.
-  //   * pass 2 over the register axis: recompute the register-wide inputs and
-  //     emit the outputs that broadcast the per-row results back across the row.
   // =========================================================================
+
+  // Returns true when the vector function contains only last-axis reductions
+  // (no transpose) and `loopRank >= 1`, so the partial-reduction tiler can
+  // handle it.
   static bool isPartialLastAxisReductionTileable(func::FuncOp vfFunc, int64_t loopRank) {
     if (vfFunc.getBody().empty()) {
       return false;
@@ -2669,6 +2674,15 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (R < 1) {
       return failure();
     }
+
+    // Structure per outer (row) iteration:
+    //   * pass 1 over the register/reduction axis with one accumulator iter_arg
+    //     per reduction: emit the reduction producers, accumulate, and write any
+    //     pure-elementwise outputs that do not depend on a reduction result.
+    //   * finalize each reduction to a per-row scalar, then run the per-row
+    //     compute.
+    //   * pass 2 over the register axis: recompute the register-wide inputs and
+    //     emit the outputs that broadcast the per-row results back across the row.
 
     Value anchor = findAnchorValue(entry);
     if (!anchor) {
@@ -2809,7 +2823,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // `pass1`.
   LogicalResult runPartialPass1(PartialPassEnv env, Location loc, LoopIterCtx iter,
                                 ReductionCtx red, scf::ForOp &pass1) const {
-    Value bound = iter.bounds[iter.R - 1];
+    if (iter.rank < 1 || iter.rank > static_cast<int64_t>(iter.bounds.size())) {
+      return failure();
+    }
+    Value bound = iter.bounds[iter.rank - 1];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     SmallVector<Value> curInit(red.redIdents.begin(), red.redIdents.end());
     bool any = false;
@@ -2864,7 +2881,10 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // main loop + masked tail loop), seed each op map with the per-row scalars /
   // unit values, then emit the pass-2 body in each.
   LogicalResult runPartialPass2(PartialPassEnv env, Location loc, LoopIterCtx iter, ReductionCtx red) const {
-    Value bound = iter.bounds[iter.R - 1];
+    if (iter.rank < 1 || iter.rank > static_cast<int64_t>(iter.bounds.size())) {
+      return failure();
+    }
+    Value bound = iter.bounds[iter.rank - 1];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     if (split.emitMain) {
       if (failed(emitPartialPass2Loop(env, loc, red, {iter.c0, split.alignedBound, bound, iter.cLane,
