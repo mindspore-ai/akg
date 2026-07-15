@@ -837,7 +837,7 @@ static LogicalResult emitLoopTripCountInTilingFunc(const TripCountEmitParams &pa
     return success();
   }
 
-  auto emitCloneBoundFailure = [&](StringRef boundName, const std::string &failureReason) {
+  auto emitCloneBoundFailure = [&tilingFunc](StringRef boundName, const std::string &failureReason) {
     auto diag = tilingFunc.emitError("failed to clone loop ");
     diag << boundName << " when computing runtime parallel tile size";
     if (!failureReason.empty()) {
@@ -1685,7 +1685,7 @@ static LoopBounds createFirstLevelTileLoopBounds(const BuildContext &bc, const F
   if (isNoSplitLoop(origLoop)) {
     const auto &dropFirstLevelReductionIterArgs = params.dropFirstLevelReductionIterArgs;
     return buildNoSplitBounds(bc,
-                              {origLoop, /*prevLoop=*/{}, NoSplitKind::FirstLevel, dropFirstLevelReductionIterArgs});
+                              {origLoop, {} /* prevLoop */, NoSplitKind::FirstLevel, dropFirstLevelReductionIterArgs});
   }
 
   LoopBounds bounds;
@@ -1819,7 +1819,7 @@ static Value createFullTilePointBound(const FullTilePointBoundParams &params) {
     operands.push_back(entry.first);
     expr = expr + builder.getAffineDimExpr(static_cast<unsigned>(idx)) * tileSizes[idx];
   }
-  auto map = AffineMap::get(static_cast<unsigned>(levelInfo.size()), /* symbolCount= */ 0, expr, context);
+  auto map = AffineMap::get(static_cast<unsigned>(levelInfo.size()), 0 /* symbolCount */, expr, context);
   return builder.create<mlir::affine::AffineApplyOp>(loc, map, operands);
 }
 
@@ -1830,13 +1830,13 @@ static LoopBounds createPointLoopBounds(const BuildContext &bc, mlir::scf::ForOp
   auto &builder = bc.builder;
   auto &constantCache = bc.constantCache;
   if (isNoSplitLoop(origLoop)) {
-    return buildNoSplitBounds(bc, {origLoop, prevLoop, NoSplitKind::Point, /*dropReductionInits=*/false});
+    return buildNoSplitBounds(bc, {origLoop, prevLoop, NoSplitKind::Point, false /* dropReductionInits */});
   }
 
   LoopBounds bounds;
   SmallVector<int64_t, kSmallVectorSizeFour> fullTileSizes;
   if (collectStaticFullPointTileSizes(origLoop, levelInfo, fullTileSizes)) {
-    bounds.lb = createFullTilePointBound({loc, levelInfo, fullTileSizes, /*offset=*/0, builder});
+    bounds.lb = createFullTilePointBound({loc, levelInfo, fullTileSizes, 0 /* offset */, builder});
     bounds.ub = createFullTilePointBound({loc, levelInfo, fullTileSizes, fullTileSizes.back(), builder});
     bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.inits = prevLoop.getResults();
@@ -2571,7 +2571,7 @@ static LogicalResult applyTilingToLoop(const ApplyTilingParams &params) {
                          parallelTileCoord,
                          getNpuCoreNum(funcOp),
                          useRuntimeTileCounts,
-                         /* dropMappedOutermostFirstLevelIterArgs= */ !parentFor || parentFor == parallelMapLoop};
+                         (!parentFor || parentFor == parallelMapLoop) /* dropMappedOutermostFirstLevelIterArgs */};
   constructTiledLoopStatic({loop, width, tiledLoops, builder, constantCache});
 
   // Replace all dummy loops first, before cloning operations, so IV mapping points to final loops.
@@ -2581,8 +2581,8 @@ static LogicalResult applyTilingToLoop(const ApplyTilingParams &params) {
     return failure();
   }
 
-  return finalizeRootLoopAfterTiling({loop, tiledLoops, tileSizesNum, /*forNum=*/1, escapeReduceLoops, parallelMapLoop,
-                                      ctx.dropMappedOutermostFirstLevelIterArgs, builder});
+  return finalizeRootLoopAfterTiling({loop, tiledLoops, tileSizesNum, 1 /* forNum */, escapeReduceLoops,
+                                      parallelMapLoop, ctx.dropMappedOutermostFirstLevelIterArgs, builder});
 }
 
 static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clearPointLoopAttr = true) {
@@ -2605,7 +2605,7 @@ static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clea
 // Emit an error on `funcOp` and clean temporary identification attrs in one go.
 // Always returns `failure()` so call sites can `return emitTilingFailure(...)`.
 static LogicalResult emitTilingFailure(func::FuncOp funcOp, const Twine &msg) {
-  clearTemporaryLoopIdentificationAttrs(funcOp, /* clearPointLoopAttr= */ false);
+  clearTemporaryLoopIdentificationAttrs(funcOp, false /* clearPointLoopAttr */);
   funcOp.emitError() << msg;
   return failure();
 }
@@ -3030,7 +3030,7 @@ static mlir::scf::ForOp findVectorAttrTargetLoop(mlir::scf::ForOp startLoop, boo
 static void markTransposeLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder,
                                                  mlir::scf::ForOp stopLoop = mlir::scf::ForOp()) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
-    if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
+    if (shouldSkipVectorAttrCandidate(curLoop, false /* restrictToPointLoops */, true /* skipDeleteLoops */)) {
       if (curLoop == stopLoop) {
         break;
       }
@@ -3088,7 +3088,7 @@ static bool hasMultiVecLoopInAncestorChain(mlir::scf::ForOp loop) {
 static void markMultiVecLoopChainWithVectorAttr(mlir::scf::ForOp innermostLoop, OpBuilder &builder) {
   for (mlir::scf::ForOp curLoop = innermostLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
     curLoop->removeAttr(kTransposeLoopAttr);
-    if (shouldSkipVectorAttrCandidate(curLoop, /* restrictToPointLoops= */ false, /* skipDeleteLoops= */ true)) {
+    if (shouldSkipVectorAttrCandidate(curLoop, false /* restrictToPointLoops */, true /* skipDeleteLoops */)) {
       continue;
     }
     if (!curLoop->hasAttr(kMultiVecLoopAttr)) {
@@ -3182,7 +3182,7 @@ static void markReduceYParentWithVectorAttr(mlir::scf::ForOp loop, OpBuilder &bu
       curLoop->removeAttr(kReductionLoopAttr);
       continue;
     }
-    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /* skipDeleteLoops= */ true)) {
+    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, true /* skipDeleteLoops */)) {
       continue;
     }
     curLoop->setAttr(kVectorAttr, builder.getI64IntegerAttr(getLoopExtent(curLoop)));
@@ -3217,7 +3217,7 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
         markTransposeLoopChainWithVectorAttr(forOp, builder, transposeAncestor);
         return;
       }
-      if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /* skipDeleteLoops= */ false)) {
+      if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, false /* skipDeleteLoops */)) {
         if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
           markBroadcastLoopChainWithVectorAttr(vectorTarget, builder);
           vectorTarget->removeAttr(kBroadcastLoopAttr);
@@ -4365,7 +4365,7 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
       return failure();
     }
 
-    clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, false /* clearPointLoopAttr */);
   }
 
   return success();
@@ -4373,7 +4373,7 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
 
 static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &builder) {
   // Step 5: Post-processing - mark attributes.
-  clearTemporaryLoopIdentificationAttrs(originalKernel, /* clearPointLoopAttr= */ false);
+  clearTemporaryLoopIdentificationAttrs(originalKernel, false /* clearPointLoopAttr */);
   inlineDeleteMarkedLoops(originalKernel, builder);
   sinkMultiVecPointLoops(originalKernel);
   markInnermostLoopsWithVectorAttr(originalKernel, builder);
@@ -5084,12 +5084,12 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
 
     // pre: put into the beginning of the body (before the child loop op)
     if (!pre.empty()) {
-      cloneOpsToPointLoop(parentTile0, pre, /* insertAtStart= */ true, builder, mapping);
+      cloneOpsToPointLoop(parentTile0, pre, true /* insertAtStart */, builder, mapping);
     }
 
     // post: put into the end of the body (before the yield)
     if (!post.empty()) {
-      cloneOpsToPointLoop(parentTile0, post, /* insertAtStart= */ false, builder, mapping);
+      cloneOpsToPointLoop(parentTile0, post, false /* insertAtStart */, builder, mapping);
     }
   }
 
