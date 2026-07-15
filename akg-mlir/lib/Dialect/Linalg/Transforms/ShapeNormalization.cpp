@@ -862,28 +862,24 @@ struct ShapeNormalState {
     return true;
   }
 
-  void memrefFillStridesCollapseShape(ArrayRef<int64_t> inputStrides,
+  void memrefFillStridesCollapseShape(ArrayRef<int64_t> inputShape, ArrayRef<int64_t> inputStrides,
                                       const SmallVector<ReassociationIndices> &reassociation,
-                                      const SmallVector<std::string> &inputSymShape,
                                       SmallVector<int64_t> &targetStrides) const {
-    auto symAxisIsUnit = [this, inputSymShape](int64_t dimIndex) {
-      const std::string &axis = inputSymShape[static_cast<size_t>(dimIndex)];
-      // if axis is a dynamic axis but length is known
-      return axis == "1" || axisSizes.lookup(axis) == 1;
-    };
+    targetStrides.clear();
+    targetStrides.reserve(reassociation.size());
     for (const ReassociationIndices &group : reassociation) {
       if (group.empty()) {
         continue;
       }
-      int64_t s = inputStrides[group.back()];
-      for (auto it = group.rbegin(); it != group.rend(); ++it) {
-        if (symAxisIsUnit(*it)) {
-          continue;
-        }
-        s = inputStrides[*it];
-        break;
+      ArrayRef<int64_t> ref = llvm::ArrayRef(group);
+      while (ref.size() > 1 && !ShapedType::isDynamic(inputShape[ref.back()]) && inputShape[ref.back()] == 1) {
+        ref = ref.drop_back();
       }
-      targetStrides.push_back(s);
+      if (!ShapedType::isDynamic(inputShape[ref.back()]) || ref.size() == 1) {
+        targetStrides.push_back(inputStrides[ref.back()]);
+      } else {
+        targetStrides.push_back(ShapedType::kDynamic);
+      }
     }
   }
 
@@ -905,12 +901,10 @@ struct ShapeNormalState {
         }
         break;
       case MemRefStrideInheritKind::CollapseShape:
-        memrefFillStridesCollapseShape(inputStrides, inheritInfo.reassociation, inputSymShape, targetStrides);
+        memrefFillStridesCollapseShape(inputType.getShape(), inputStrides, inheritInfo.reassociation, targetStrides);
         break;
     }
-    if (targetStrides.size() != targetShape.size() ||
-        llvm::any_of(targetStrides, [](int64_t s) { return s == ShapedType::kDynamic; }) ||
-        inputOffset == ShapedType::kDynamic) {
+    if (targetStrides.size() != targetShape.size()) {
       return MemRefType::get(targetShape, elementType);
     }
     auto newLayout = StridedLayoutAttr::get(inputType.getContext(), inputOffset, targetStrides);
@@ -1214,6 +1208,34 @@ struct ShapeNormalState {
 static Value reshapeValuePreservingRecordedUnitAxes(ShapeNormalState &state, PatternRewriter &rewriter, Operation *op,
                                                     Value newValue);
 
+static void collectDefiningOpsPostOrder(Value value, SmallVectorImpl<Operation *> &ops,
+                                        llvm::SmallPtrSetImpl<Operation *> &visited) {
+  Operation *def = value.getDefiningOp();
+  if (!def || !visited.insert(def).second) {
+    return;
+  }
+  for (Value operand : def->getOperands()) {
+    if (operand.getDefiningOp()) {
+      collectDefiningOpsPostOrder(operand, ops, visited);
+    }
+  }
+  ops.push_back(def);
+}
+
+static void hoistValueDefBeforeOp(Value value, Operation *beforeOp) {
+  Operation *def = value.getDefiningOp();
+  if (!def || !beforeOp || def->getBlock() != beforeOp->getBlock() || def->isBeforeInBlock(beforeOp)) {
+    return;
+  }
+  SmallVector<Operation *, 8> opsToMove;
+  llvm::SmallPtrSet<Operation *, 8> visited;
+  collectDefiningOpsPostOrder(value, opsToMove, visited);
+  for (Operation *opToMove : opsToMove) {
+    assert(opToMove != beforeOp && "dim value defining op chain must not include target alloc");
+    opToMove->moveBefore(beforeOp);
+  }
+}
+
 struct AllocAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::AllocOp>(op); }
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
@@ -1264,6 +1286,7 @@ struct AllocAdapter final : OpAdapter {
       }
       Value dimVal = state.getOrCreateDynDimValue(targetSymShape[i], rewriter, loc);
       assert(dimVal && "dynamic axis must have a dim value");
+      hoistValueDefBeforeOp(dimVal, op);
       dynamicSizes.push_back(dimVal);
     }
     Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, dynamicSizes, alloc.getSymbolOperands(),
