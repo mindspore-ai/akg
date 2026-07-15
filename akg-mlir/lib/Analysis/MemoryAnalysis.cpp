@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "akg/Analysis/MemoryAnalysis.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -46,7 +48,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "akg/Utils/AnalysisCommon.hpp"
-#include "akg/Analysis/MemoryAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
 namespace mlir {
@@ -956,7 +957,7 @@ static bool isArithOp(int64_t opType) {
 
 static bool isScalarArithSelectOp(arith::SelectOp selectOp, const llvm::DenseMap<Value, int64_t> &bufMap,
                                   llvm::ArrayRef<BufferInfo> bufferList) {
-  auto isScalarOperand = [&](Value v) {
+  auto isScalarOperand = [&bufMap, &bufferList](Value v) {
     auto it = bufMap.find(v);
     if (it == bufMap.end()) {
       return false;
@@ -988,7 +989,7 @@ static bool isReusableArithSelectInplace(arith::SelectOp selectOp, const BufferI
   if (genBits != killBits || gen.dimLoopIndices != kill.dimLoopIndices) {
     return false;
   }
-  auto isKillSrcBuffer = [&](Value v) {
+  auto isKillSrcBuffer = [&bufMap, &kill](Value v) {
     auto it = bufMap.find(v);
     return it != bufMap.end() && it->second == kill.Index;
   };
@@ -1071,60 +1072,87 @@ static bool isReusableExtrabuffer(const MemoryPeakEstimator &est, Operation *op,
   return opRecord.extraBufferSizes.size() == 1 && !est.hasInlineBroadcastLoopDims(op) && opType != kOpTypeArithNegF;
 }
 
-static bool isOpSupportingIntraOpInplace(const MemoryPeakEstimator &est, Operation *op, int64_t opType,
-                                         const OpRecord &opRecord, const BufferInfo &gen, const BufferInfo &kill,
-                                         const llvm::DenseMap<Value, int64_t> &bufMap,
-                                         llvm::MutableArrayRef<BufferInfo> bufferList, const BufferInfoUnionFind &uf) {
-  const int64_t killTotalBits = refreshBufferTotalSizeIfChanged(est, bufferList[static_cast<size_t>(kill.Index)]);
-  const int64_t genTotalBits = refreshBufferTotalSizeIfChanged(est, bufferList[static_cast<size_t>(gen.Index)]);
+struct IntraOpInplaceReuseParams {
+  const MemoryPeakEstimator &est;
+  Operation *op;
+  int64_t opType;
+  const OpRecord &opRecord;
+  const BufferInfo &gen;
+  const BufferInfo &kill;
+  const llvm::DenseMap<Value, int64_t> &bufMap;
+  llvm::MutableArrayRef<BufferInfo> bufferList;
+  const BufferInfoUnionFind &uf;
+};
+
+static bool checkIntraOpInplaceBroadcastReuse(const IntraOpInplaceReuseParams &params) {
+  if (isKillBrcCst(params.est, params.op, params.opRecord, params.kill.Index, params.bufferList) &&
+      !params.bufferList[static_cast<size_t>(params.kill.Index)].isValid) {
+    return false;
+  }
+  return params.gen.dimLoopIndices == params.kill.dimLoopIndices;
+}
+
+static bool checkIntraOpInplaceElementTypeReuse(const IntraOpInplaceReuseParams &params) {
+  if (params.gen.elementType == params.kill.elementType) {
+    return true;
+  }
+  if (auto selectOp = dyn_cast<arith::SelectOp>(params.op)) {
+    return isReusableArithSelectInplace(selectOp, params.gen, params.kill, params.bufMap, params.bufferList);
+  }
+  const unsigned genBits = getElementTypeOrSelf(params.gen.elementType).getIntOrFloatBitWidth();
+  const unsigned killBits = getElementTypeOrSelf(params.kill.elementType).getIntOrFloatBitWidth();
+  return (killBits % genBits == 0);
+}
+
+static bool isOpSupportingIntraOpInplace(const IntraOpInplaceReuseParams &params) {
+  const int64_t killTotalBits =
+    refreshBufferTotalSizeIfChanged(params.est, params.bufferList[static_cast<size_t>(params.kill.Index)]);
+  const int64_t genTotalBits =
+    refreshBufferTotalSizeIfChanged(params.est, params.bufferList[static_cast<size_t>(params.gen.Index)]);
   if (killTotalBits < genTotalBits) {
     return false;
   }
-  if (inplaceChainMaxMultiNum(uf, bufferList, kill.Index) == MULTI_BUFFER_NUM &&
-      gen.multiNum == MULTI_BUFFER_NUM) {
+  if (inplaceChainMaxMultiNum(params.uf, params.bufferList, params.kill.Index) == MULTI_BUFFER_NUM &&
+      params.gen.multiNum == MULTI_BUFFER_NUM) {
     return false;
   }
 
-  if (!op || op->hasAttr(kReductionAxesStr)) {
+  if (!params.op || params.op->hasAttr(kReductionAxesStr)) {
     return false;
   }
 
-  if (isIsaInplaceElemwiseOp(op) && !est.hasInlineBroadcastLoopDims(op) && !est.hasInlineTransposeLoopDims(op)) {
+  if (isIsaInplaceElemwiseOp(params.op) && !params.est.hasInlineBroadcastLoopDims(params.op) &&
+      !params.est.hasInlineTransposeLoopDims(params.op)) {
     return true;
   }
 
-  if (isReusableExtrabuffer(est, op, opRecord, opType)) {
+  if (isReusableExtrabuffer(params.est, params.op, params.opRecord, params.opType)) {
     return false;
   }
 
-  if (!isArithOp(opType)) {
+  if (!isArithOp(params.opType)) {
     return false;
   }
 
-  if (est.hasInlineTransposeLoopDims(op)) {
+  if (params.est.hasInlineTransposeLoopDims(params.op)) {
     return false;
   }
 
-  if (est.hasInlineBroadcastLoopDims(op)) {
-    if (isKillBrcCst(est, op, opRecord, kill.Index, bufferList) &&
-        !bufferList[static_cast<size_t>(kill.Index)].isValid) {
-      return false;
-    }
-    return gen.dimLoopIndices == kill.dimLoopIndices;
+  if (params.est.hasInlineBroadcastLoopDims(params.op)) {
+    return checkIntraOpInplaceBroadcastReuse(params);
   }
 
-  if (gen.elementType == kill.elementType) {
-    return true;
-  }
+  return checkIntraOpInplaceElementTypeReuse(params);
+}
 
-  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
-    return isReusableArithSelectInplace(selectOp, gen, kill, bufMap, bufferList);
+static bool canIntraOpInplaceReuse(const IntraOpInplaceReuseParams &params) {
+  if (params.gen.ignoreInplace || params.kill.ignoreInplace) {
+    return false;
   }
-
-  const unsigned genBits = getElementTypeOrSelf(gen.elementType).getIntOrFloatBitWidth();
-  const unsigned killBits = getElementTypeOrSelf(kill.elementType).getIntOrFloatBitWidth();
-  return (killBits % genBits == 0);
-  // For dynamic axes, check if it will be collapsed later. If so, check if shape.size is greater than 1.
+  if (!isBufferEligibleForIntraOpInplace(params.gen) || !isBufferEligibleForIntraOpInplace(params.kill)) {
+    return false;
+  }
+  return isOpSupportingIntraOpInplace(params);
 }
 
 static bool areConditionallyAliased(int64_t a, int64_t b, llvm::ArrayRef<ConditionalAliasEdge> edges) {
@@ -1137,19 +1165,6 @@ static bool areConditionallyAliased(int64_t a, int64_t b, llvm::ArrayRef<Conditi
     }
   }
   return false;
-}
-
-static bool canIntraOpInplaceReuse(const MemoryPeakEstimator &est, Operation *op, int64_t opType,
-                                   const OpRecord &opRecord, const BufferInfo &gen, const BufferInfo &kill,
-                                   const llvm::DenseMap<Value, int64_t> &bufMap,
-                                   llvm::MutableArrayRef<BufferInfo> bufferList, const BufferInfoUnionFind &uf) {
-  if (gen.ignoreInplace || kill.ignoreInplace) {
-    return false;
-  }
-  if (!isBufferEligibleForIntraOpInplace(gen) || !isBufferEligibleForIntraOpInplace(kill)) {
-    return false;
-  }
-  return isOpSupportingIntraOpInplace(est, op, opType, opRecord, gen, kill, bufMap, bufferList, uf);
 }
 
 //  buffers defined in `region` but not as results of ops in `siblingRegion`.
@@ -1601,6 +1616,19 @@ static bool allDimLoopIndicesSame(ArrayRef<ArrayRef<int64_t>> nonScalarDimLoopIn
   return true;
 }
 
+struct InlineBrcExtraBufferContext {
+  ArrayRef<int64_t> outputDimLoopIndices;
+  Type outputElementType;
+  ArrayRef<BufferInfo> bufferList;
+  Operation *op;
+  const MemoryPeakEstimator &est;
+  ArrayRef<scf::ForOp> orderedForOps;
+  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop;
+  int64_t outputUpperLimitElems;
+  bool needScalarTmpForUnsupportedVS;
+  bool alignBufferSizeTo256Bits;
+};
+
 static int64_t computeLastAxisAlignBrcElems(ArrayRef<int64_t> outputDimLoopIndices,
                                              ArrayRef<int64_t> inputDimLoopIndices, int64_t numPerBlock,
                                              int64_t outputUpperLimitElems, ArrayRef<scf::ForOp> orderedForOps,
@@ -1625,17 +1653,21 @@ static int64_t computeLastAxisAlignBrcElems(ArrayRef<int64_t> outputDimLoopIndic
   return numPerBlock * numGroups;
 }
 
-static void appendNormalInlineBrcExtraBufferForInput(
-    int64_t index, ArrayRef<int64_t> outputDimLoopIndices, Type outputElementType, ArrayRef<BufferInfo> bufferList,
-    OpRecord &rec, Operation *op, const MemoryPeakEstimator &est, ArrayRef<scf::ForOp> orderedForOps,
-    const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop, int64_t outputUpperLimitElems,
-    bool needScalarTmpForUnsupportedVS) {
-  if (index < 0 || index >= static_cast<int64_t>(bufferList.size())) {
+static void appendBroadcastMismatchExtraBuffer(const InlineBrcExtraBufferContext &ctx, OpRecord &rec,
+                                               Type inputElementType) {
+  const Type elemTy = inputElementType ? inputElementType : ctx.outputElementType;
+  rec.extraBufferSizes.push_back(TotalBitsFromDimLoopIndicesInBroadcast(
+    ctx.outputDimLoopIndices, elemTy, ctx.orderedForOps, ctx.tileUpperBoundPerLoop, ctx.alignBufferSizeTo256Bits));
+}
+
+static void appendNormalInlineBrcExtraBufferForInput(int64_t index, const InlineBrcExtraBufferContext &ctx,
+                                                     OpRecord &rec) {
+  if (index < 0 || index >= static_cast<int64_t>(ctx.bufferList.size())) {
     return;
   }
-  const BufferInfo &inputInfo = bufferList[static_cast<size_t>(index)];
+  const BufferInfo &inputInfo = ctx.bufferList[static_cast<size_t>(index)];
 
-  const Type srcElemTy = inputInfo.elementType ? inputInfo.elementType : outputElementType;
+  const Type srcElemTy = inputInfo.elementType ? inputInfo.elementType : ctx.outputElementType;
   const unsigned srcBitWidth = getElementTypeOrSelf(srcElemTy).getIntOrFloatBitWidth();
   if (srcBitWidth == 0) {
     return;
@@ -1643,91 +1675,71 @@ static void appendNormalInlineBrcExtraBufferForInput(
   const int64_t numPerBlock = getNumPerBlockTy(srcElemTy);
 
   const bool isBrcCstInput =
-    isKillBrcCst(est, op, rec, index, bufferList) && !bufferList[static_cast<size_t>(index)].isValid;
-  if (isBrcCstInput && needScalarTmpForUnsupportedVS) {
+    isKillBrcCst(ctx.est, ctx.op, rec, index, ctx.bufferList) &&
+    !ctx.bufferList[static_cast<size_t>(index)].isValid;
+  if (isBrcCstInput && ctx.needScalarTmpForUnsupportedVS) {
     rec.extraBufferSizes.push_back(numPerBlock * static_cast<int64_t>(srcBitWidth));
     return;
   }
 
-  if (outputDimLoopIndices.empty() || llvm::is_contained(inputInfo.dimLoopIndices, outputDimLoopIndices.back())) {
+  if (ctx.outputDimLoopIndices.empty() ||
+      llvm::is_contained(inputInfo.dimLoopIndices, ctx.outputDimLoopIndices.back())) {
     return;
   }
 
-  const int64_t lastAxisInlineBrcElems =
-    computeLastAxisAlignBrcElems(outputDimLoopIndices, inputInfo.dimLoopIndices, numPerBlock, outputUpperLimitElems,
-                                  orderedForOps, tileUpperBoundPerLoop);
+  const int64_t lastAxisInlineBrcElems = computeLastAxisAlignBrcElems(
+    ctx.outputDimLoopIndices, inputInfo.dimLoopIndices, numPerBlock, ctx.outputUpperLimitElems, ctx.orderedForOps,
+    ctx.tileUpperBoundPerLoop);
   if (lastAxisInlineBrcElems > 0) {
     rec.extraBufferSizes.push_back(lastAxisInlineBrcElems * static_cast<int64_t>(srcBitWidth));
   }
 }
 
-static int64_t findInputBufferIndexForValue(Value operand, ArrayRef<int64_t> inputBufferIndexes,
-                                            ArrayRef<BufferInfo> bufferList) {
-  for (int64_t idx : inputBufferIndexes) {
-    if (idx >= 0 && idx < static_cast<int64_t>(bufferList.size()) &&
-        bufferList[static_cast<size_t>(idx)].originalValue == operand) {
-      return idx;
-    }
-  }
-  return -1;
-}
-
-static void appendBroadcastMismatchExtraBuffer(ArrayRef<int64_t> outputDimLoopIndices, Type outputElementType,
-                                               ArrayRef<scf::ForOp> orderedForOps,
-                                               const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
-                                               bool alignBufferSizeTo256Bits, OpRecord &rec, Type inputElementType) {
-  const Type elemTy = inputElementType ? inputElementType : outputElementType;
-  rec.extraBufferSizes.push_back(TotalBitsFromDimLoopIndicesInBroadcast(
-    outputDimLoopIndices, elemTy, orderedForOps, tileUpperBoundPerLoop, alignBufferSizeTo256Bits));
-}
-
-static void appendSelectInlineBroadcastExtraBuffers(
-    arith::SelectOp selectOp, ArrayRef<int64_t> inputBufferIndexes, ArrayRef<int64_t> outputDimLoopIndices,
-    Type outputElementType, ArrayRef<BufferInfo> bufferList, OpRecord &rec, Operation *op,
-    const MemoryPeakEstimator &est, ArrayRef<scf::ForOp> orderedForOps,
-    const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop, bool alignBufferSizeTo256Bits,
-    int64_t outputUpperLimitElems, bool needScalarTmpForUnsupportedVS) {
+static void appendSelectInlineBroadcastExtraBuffers(arith::SelectOp selectOp,
+                                                    ArrayRef<int64_t> inputBufferIndexes,
+                                                    const InlineBrcExtraBufferContext &ctx, OpRecord &rec) {
   for (Value operand : {selectOp.getTrueValue(), selectOp.getFalseValue()}) {
-    const int64_t index = findInputBufferIndexForValue(operand, inputBufferIndexes, bufferList);
+    int64_t index = -1;
+    for (int64_t idx : inputBufferIndexes) {
+      if (idx >= 0 && idx < static_cast<int64_t>(ctx.bufferList.size()) &&
+          ctx.bufferList[static_cast<size_t>(idx)].originalValue == operand) {
+        index = idx;
+        break;
+      }
+    }
     if (index < 0) {
       continue;
     }
-    const BufferInfo &inputInfo = bufferList[static_cast<size_t>(index)];
+    const BufferInfo &inputInfo = ctx.bufferList[static_cast<size_t>(index)];
     const bool isBrcCstInput =
-      est.isMaterializedCstBufferIndex(index) || isConstantSsaValue(inputInfo.originalValue);
+      ctx.est.isMaterializedCstBufferIndex(index) || isConstantSsaValue(inputInfo.originalValue);
     if (!isBrcCstInput && !inputInfo.dimLoopIndices.empty()) {
-      appendNormalInlineBrcExtraBufferForInput(index, outputDimLoopIndices, outputElementType, bufferList, rec, op,
-                                               est, orderedForOps, tileUpperBoundPerLoop, outputUpperLimitElems,
-                                               needScalarTmpForUnsupportedVS);
+      appendNormalInlineBrcExtraBufferForInput(index, ctx, rec);
       continue;
     }
-    if (isKillBrcCst(est, op, rec, index, bufferList)) {
+    if (isKillBrcCst(ctx.est, ctx.op, rec, index, ctx.bufferList)) {
       continue;
     }
-    if (ArrayRef(inputInfo.dimLoopIndices) != outputDimLoopIndices) {
-      appendBroadcastMismatchExtraBuffer(outputDimLoopIndices, outputElementType, orderedForOps, tileUpperBoundPerLoop,
-                                         alignBufferSizeTo256Bits, rec, inputInfo.elementType);
+    if (ArrayRef(inputInfo.dimLoopIndices) != ctx.outputDimLoopIndices) {
+      appendBroadcastMismatchExtraBuffer(ctx, rec, inputInfo.elementType);
     }
   }
 }
 
-static void appendCmpInlineBroadcastExtraBuffers(
-    ArrayRef<int64_t> inputBufferIndexes, ArrayRef<int64_t> outputDimLoopIndices, Type outputElementType,
-    ArrayRef<BufferInfo> bufferList, OpRecord &rec, const MemoryPeakEstimator &est, ArrayRef<scf::ForOp> orderedForOps,
-    const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop, bool alignBufferSizeTo256Bits) {
+static void appendCmpInlineBroadcastExtraBuffers(ArrayRef<int64_t> inputBufferIndexes,
+                                                 const InlineBrcExtraBufferContext &ctx, OpRecord &rec) {
   for (int64_t index : inputBufferIndexes) {
-    if (index < 0 || index >= static_cast<int64_t>(bufferList.size())) {
+    if (index < 0 || index >= static_cast<int64_t>(ctx.bufferList.size())) {
       continue;
     }
-    const BufferInfo &inputInfo = bufferList[static_cast<size_t>(index)];
+    const BufferInfo &inputInfo = ctx.bufferList[static_cast<size_t>(index)];
     const bool isBrcCstInput =
-      est.isMaterializedCstBufferIndex(index) || isConstantSsaValue(inputInfo.originalValue);
+      ctx.est.isMaterializedCstBufferIndex(index) || isConstantSsaValue(inputInfo.originalValue);
     if (isBrcCstInput) {
       continue;
     }
-    if (ArrayRef(inputInfo.dimLoopIndices) != outputDimLoopIndices) {
-      appendBroadcastMismatchExtraBuffer(outputDimLoopIndices, outputElementType, orderedForOps, tileUpperBoundPerLoop,
-                                         alignBufferSizeTo256Bits, rec, inputInfo.elementType);
+    if (ArrayRef(inputInfo.dimLoopIndices) != ctx.outputDimLoopIndices) {
+      appendBroadcastMismatchExtraBuffer(ctx, rec, inputInfo.elementType);
     }
   }
 }
@@ -1752,24 +1764,22 @@ static void setInlineBroadcastExtraBufferSize(ArrayRef<int64_t> inputBufferIndex
   const bool needScalarTmpForUnsupportedVS = isa<arith::SubFOp, arith::SubIOp, arith::DivFOp, arith::DivSIOp,
                                                  arith::DivUIOp>(op);
 
+  InlineBrcExtraBufferContext ctx{outputDimLoopIndices, outputElementType, bufferList, op, est, orderedForOps,
+                                  tileUpperBoundPerLoop, outputUpperLimitElems, needScalarTmpForUnsupportedVS,
+                                  alignBufferSizeTo256Bits};
+
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
-    appendSelectInlineBroadcastExtraBuffers(selectOp, inputBufferIndexes, outputDimLoopIndices, outputElementType,
-                                            bufferList, rec, op, est, orderedForOps, tileUpperBoundPerLoop,
-                                            alignBufferSizeTo256Bits, outputUpperLimitElems,
-                                            needScalarTmpForUnsupportedVS);
+    appendSelectInlineBroadcastExtraBuffers(selectOp, inputBufferIndexes, ctx, rec);
     return;
   }
 
   if (isa<arith::CmpIOp, arith::CmpFOp>(op)) {
-    appendCmpInlineBroadcastExtraBuffers(inputBufferIndexes, outputDimLoopIndices, outputElementType, bufferList, rec,
-                                         est, orderedForOps, tileUpperBoundPerLoop, alignBufferSizeTo256Bits);
+    appendCmpInlineBroadcastExtraBuffers(inputBufferIndexes, ctx, rec);
     return;
   }
 
   for (int64_t index : inputBufferIndexes) {
-    appendNormalInlineBrcExtraBufferForInput(index, outputDimLoopIndices, outputElementType, bufferList, rec, op, est,
-                                             orderedForOps, tileUpperBoundPerLoop, outputUpperLimitElems,
-                                             needScalarTmpForUnsupportedVS);
+    appendNormalInlineBrcExtraBufferForInput(index, ctx, rec);
   }
 }
 
@@ -3420,9 +3430,9 @@ void MemoryPeakEstimator::analyzeIntraOpInplace() {
         if (areConditionallyAliased(genIdx, killIdx, conditionalAliasEdges_)) {
           continue;
         }
-        if (!canIntraOpInplaceReuse(*this, op, opRecord.opType, opRecord, bufferInfoList_[genIdx],
-                                    bufferInfoList_[killIdx], bufferInfoIndexMap_, bufferInfoList_,
-                                    bufferInfoUnionFind_)) {
+        if (!canIntraOpInplaceReuse({*this, op, opRecord.opType, opRecord, bufferInfoList_[genIdx],
+                                     bufferInfoList_[killIdx], bufferInfoIndexMap_, bufferInfoList_,
+                                     bufferInfoUnionFind_})) {
           continue;
         }
         uniteBuffersByTimeline(bufferInfoUnionFind_, bufferInfoList_, killIdx, genIdx);
