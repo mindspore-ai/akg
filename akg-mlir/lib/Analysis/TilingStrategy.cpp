@@ -432,7 +432,7 @@ bool BroadcastStrategy::searchForLargeShape(const GpuModelGraphPtr gpuGraph, con
       continue;
     }
     auto outerSize = a->range.second / middleSize;
-    if (!gpuGraph->gpuGrid.canApply(outerSize)) {
+    if (!gpuGraph->gpuBlock.canApply(innerSize) || !gpuGraph->gpuGrid.canApply(outerSize)) {
       continue;
     }
     auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize);
@@ -2253,7 +2253,7 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
-  return result.PeakBits / 8;
+  return result.PeakBits / kBitsPerByte;
 }
 int64_t computeAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes, int64_t elemBytes) {
   int64_t elems = 1;
@@ -2555,7 +2555,7 @@ bool satisfiesTransposeAlignConstraints(const NpuBandContext &ctx, ArrayRef<int6
   if (activeTransposeInfos.empty()) {
     return true;
   }
-  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles, /*includeTransposeCoLive=*/true)) {
+  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles, true /* includeTransposeCoLive */)) {
     return false;
   }
   return llvm::all_of(activeTransposeInfos, [&axisTiles](const TransposeVectorInfo &info) {
@@ -2977,15 +2977,15 @@ TransposeTileSearchState selectTransposeMinState(const TransposeTileSearchParams
       break;
     }
     size_t wholeFromAxis = state.wholeFromAxis;
-    auto outerTargetIt =
-      std::find_if(params.searchAxisOrder.begin(), params.searchAxisOrder.end(), [&](size_t axisIdx) {
+    auto outerTargetIt = std::find_if(
+      params.searchAxisOrder.begin(), params.searchAxisOrder.end(), [&params, &state, &wholeFromAxis](size_t axisIdx) {
         return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
       });
     if (outerTargetIt != params.searchAxisOrder.end()) {
       state.activeAxisMask[*outerTargetIt] = false;
     }
     state = buildTransposeMinTileState(params, state.activeAxisMask);
-    bool hasOuterTarget = llvm::any_of(params.searchAxisOrder, [&](size_t axisIdx) {
+    bool hasOuterTarget = llvm::any_of(params.searchAxisOrder, [&params, &state, &wholeFromAxis](size_t axisIdx) {
       return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
     });
     if (!hasOuterTarget) {
@@ -3316,7 +3316,7 @@ bool tryBuildTargetFirstMultiVecPlan(const NpuBandContext &ctx, BandTilePlan &pl
     return false;
   }
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx), targetAxis);
   if (!hasActiveVectorSuffix(plan, targetAxis)) {
     initWholeBandPlan(ctx, plan);
@@ -3652,7 +3652,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
 
   if (!isInnermostAxisReduceY(ctx)) {
     initWholeBandPlan(ctx, plan);
-    assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+    assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
@@ -3666,7 +3666,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */);
 
   size_t innermost = ctx.extents.size() - 1;
   SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
@@ -3693,7 +3693,7 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   size_t outermostTransposeIdx = static_cast<size_t>(outermostTransposeIt - axisMasks.transpose.begin());
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */);
   for (size_t i = 0; i < outermostTransposeIdx; ++i) {
     plan.innerTiles[i] = plan.outerTiles[i];
   }
@@ -3725,7 +3725,7 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */);
   SmallVector<unsigned, kSmallVectorSizeFour> prefixPlaceholder(plan.outerTiles.begin(),
                                                                 plan.outerTiles.begin() + suffixStart);
   fillPrefixSuffixTiles(ctx, prefixPlaceholder, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
@@ -3753,7 +3753,7 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
   plan.usesMultiVecScheme = true;
   return true;
