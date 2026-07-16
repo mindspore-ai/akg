@@ -98,6 +98,9 @@ namespace scf {
 }  // namespace mlir
 
 namespace {
+
+constexpr int kMaxMemrefAccessNormalizeGuards = 64;
+constexpr size_t kMinMergedReductionLoopCount = 2;
 using namespace mlir;  // NOLINT(build/namespaces)
 
 enum class VectorizationMode {
@@ -400,7 +403,8 @@ static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue, OpBui
   SmallVector<Value, kSmallVectorSizeThree> operands{upperBound, lowerBound, maxStepValue};
   SmallVector<AffineExpr, kSmallVectorSizeTwo> minExprs{getAffineDimExpr(0, context) - getAffineDimExpr(1, context),
                                                         getAffineDimExpr(2, context)};
-  AffineMap minMap = AffineMap::get(/* dimCount= */ 3, /* symbolCount= */ 0, minExprs, context);
+  AffineMap minMap =
+      AffineMap::get(kSmallVectorSizeThree, kSmallVectorSizeZero, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -832,7 +836,7 @@ static std::optional<MergedReductionGroup> tryBuildMergedReductionGroup(scf::For
     current = child;
   }
 
-  if (loops.size() < 2) {
+  if (loops.size() < kMinMergedReductionLoopCount) {
     return std::nullopt;
   }
   for (unsigned idx = 0; idx + 1 < loops.size(); ++idx) {
@@ -936,7 +940,7 @@ static std::optional<int64_t> tryConstantIndex(Value indexValue) {
 static Value createAffineBinaryApply(OpBuilder &builder, Location loc, Value lhs, Value rhs, AffineExpr expr) {
   MLIRContext *context = builder.getContext();
   SmallVector<Value, kSmallVectorSizeTwo> operands{lhs, rhs};
-  AffineMap map = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, expr, context);
+  AffineMap map = AffineMap::get(kSmallVectorSizeTwo, kSmallVectorSizeZero, expr, context);
   return builder.create<affine::AffineApplyOp>(loc, map, operands).getResult();
 }
 
@@ -957,7 +961,8 @@ static Value createAffineMinWithConstant(OpBuilder &builder, Location loc, Value
   SmallVector<Value, kSmallVectorSizeOne> operands{value};
   SmallVector<AffineExpr, kSmallVectorSizeTwo> minExprs{getAffineDimExpr(0, context),
                                                         getAffineConstantExpr(constant, context)};
-  AffineMap minMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, minExprs, context);
+  AffineMap minMap =
+      AffineMap::get(kSmallVectorSizeOne, kSmallVectorSizeZero, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -965,7 +970,8 @@ static Value createAffineMin(OpBuilder &builder, Location loc, Value lhs, Value 
   MLIRContext *context = builder.getContext();
   SmallVector<Value, kSmallVectorSizeTwo> operands{lhs, rhs};
   SmallVector<AffineExpr, kSmallVectorSizeTwo> minExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
-  AffineMap minMap = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, minExprs, context);
+  AffineMap minMap =
+      AffineMap::get(kSmallVectorSizeTwo, kSmallVectorSizeZero, minExprs, context);
   return builder.create<affine::AffineMinOp>(loc, minMap, operands).getResult();
 }
 
@@ -973,7 +979,8 @@ static Value createAffineMax(OpBuilder &builder, Location loc, Value lhs, Value 
   MLIRContext *context = builder.getContext();
   SmallVector<Value, kSmallVectorSizeTwo> operands{lhs, rhs};
   SmallVector<AffineExpr, kSmallVectorSizeTwo> maxExprs{getAffineDimExpr(0, context), getAffineDimExpr(1, context)};
-  AffineMap maxMap = AffineMap::get(/* dimCount= */ 2, /* symbolCount= */ 0, maxExprs, context);
+  AffineMap maxMap =
+      AffineMap::get(kSmallVectorSizeTwo, kSmallVectorSizeZero, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -982,7 +989,8 @@ static Value createAffineMaxWithConstant(OpBuilder &builder, Location loc, Value
   SmallVector<Value, kSmallVectorSizeOne> operands{value};
   SmallVector<AffineExpr, kSmallVectorSizeTwo> maxExprs{getAffineDimExpr(0, context),
                                                         getAffineConstantExpr(constant, context)};
-  AffineMap maxMap = AffineMap::get(/* dimCount= */ 1, /* symbolCount= */ 0, maxExprs, context);
+  AffineMap maxMap =
+      AffineMap::get(kSmallVectorSizeOne, kSmallVectorSizeZero, maxExprs, context);
   return builder.create<affine::AffineMaxOp>(loc, maxMap, operands).getResult();
 }
 
@@ -1376,7 +1384,7 @@ static FailureOr<AffineMap> buildPermutationMapFromAxisOrder(Operation *op, Arra
     }
     results.push_back(getAffineDimExpr(static_cast<unsigned>(axisToMemDim[static_cast<size_t>(axis)]), context));
   }
-  return AffineMap::get(memRefRank, /*symbolCount=*/0, results, context);
+  return AffineMap::get(memRefRank, kSmallVectorSizeZero, results, context);
 }
 
 static FailureOr<AffineMap> buildTransferReadPermutationMap(memref::LoadOp loadOp, LoopVectorizationCtx &ctx,
@@ -1420,7 +1428,6 @@ static Value vectorizeLoadSubRankZero(memref::LoadOp loadOp, LoopVectorizationCt
   indices.reserve(loadOp.getIndices().size());
   std::transform(loadOp.getIndices().begin(), loadOp.getIndices().end(), std::back_inserter(indices),
                  [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
-
   if (!ctx.vf1FuncLevelNoAnchor) {
     // Scalar SSA; arith/store broadcast to tile when mixed with !npuvector.
     return ctx.builder.create<memref::LoadOp>(loc, mappedMemRef, indices);
@@ -1442,7 +1449,6 @@ static Value vectorizeLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
 
   Value memRef = loadOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
-
   if (loadIndicesAreLoopInvariant(loadOp, ctx)) {
     SmallVector<Value> indices;
     for (Value idx : loadOp.getIndices()) {
@@ -1743,7 +1749,7 @@ static FailureOr<AffineMap> buildTransferWritePermutationMap(memref::StoreOp sto
   const int64_t vecRank = npuVecType.getRank();
   int64_t memRefRank = static_cast<int64_t>(storeOp.getIndices().size());
   if (vecRank == 0) {
-    return AffineMap::get(static_cast<unsigned>(memRefRank), /*symbolCount=*/0, ctx.builder.getContext());
+    return AffineMap::get(static_cast<unsigned>(memRefRank), kSmallVectorSizeZero, ctx.builder.getContext());
   }
 
   SmallVector<int64_t> axisToMemDim;
@@ -1802,7 +1808,6 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
   indices.reserve(storeOp.getIndices().size());
   std::transform(storeOp.getIndices().begin(), storeOp.getIndices().end(), std::back_inserter(indices),
                  [&ctx](Value idx) { return ctx.valueMapping.lookupOrDefault(idx); });
-
   if (!mlir::isa<npuvector::NPUVectorType>(vectorValue.getType())) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
   }
@@ -1813,7 +1818,6 @@ static void vectorizeStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
 
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
-
   if (!createTransferWriteWithPermutationMap(storeOp, ctx, loc, vectorValue, mappedMemRef, ValueRange(indices),
                                              storeDimOrder)) {
     return;
@@ -2223,7 +2227,6 @@ static Value vectorizeBroadcastScalar(Value scalarVal, LoopVectorizationCtx &ctx
   DenseI64ArrayAttr dimAttr = ctx.builder.getDenseI64ArrayAttr(dimAxes);
   auto broadcast = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, scalarVal, ValueRange(dynamicSizes),
                                                               ValueRange(maxSizes), dimAttr);
-
   if (!resultDimToCtxAxis.empty() && resultDimToCtxAxis.size() == outRank) {
     ctx.valueDimOrder[broadcast.getResult()] = SmallVector<int>(resultDimToCtxAxis.begin(), resultDimToCtxAxis.end());
   }
@@ -2684,7 +2687,6 @@ static bool emitIfSlice(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Location loc,
     createAffineMax(opBuilder, loc, sliceHalfOpenUpperBound, sliceLowerBoundOnVectorAxis);
   Value vectorLengthForThenRegionAlongAxis =
     createAffineSub(opBuilder, loc, sliceHalfOpenUpperClampedNotBelowSliceLower, sliceLowerBoundOnVectorAxis);
-
   if (sliceBounds.predicateEmptyOnIntegers) {
     vectorLengthForThenRegionAlongAxis = opBuilder.create<arith::ConstantIndexOp>(loc, 0);
     sliceLowerBoundOnVectorAxis = tileLowerBoundOnVectorAxis;
@@ -2745,7 +2747,6 @@ static bool emitIfSliceWithElse(scf::IfOp ifOp, LoopVectorizationCtx &ctx, Locat
   }
   thenSliceUb = createAffineMax(b, loc, thenSliceUb, thenSliceLb);
   Value thenLen = createAffineSub(b, loc, thenSliceUb, thenSliceLb);
-
   if (sliceBounds.predicateEmptyOnIntegers) {
     thenLen = b.create<arith::ConstantIndexOp>(loc, 0);
     thenSliceLb = tileLb;
@@ -2980,7 +2981,6 @@ static Value vectorizeIf(scf::IfOp ifOp, LoopVectorizationCtx &ctx) {
   {
     OpBuilder::InsertionGuard guard(ctx.builder);
     ctx.builder.setInsertionPointToStart(vecIfOp.thenBlock());
-
     if (failed(vectorizeRegion(ifOp.getThenRegion(), ctx))) {
       vecIfOp.erase();
       return nullptr;
@@ -3060,7 +3060,6 @@ static void updateNestedLoopOperands(scf::ForOp nestedForOp, LoopVectorizationCt
   Value mappedLB = ctx.valueMapping.lookupOrDefault(nestedForOp.getLowerBound());
   Value mappedUB = ctx.valueMapping.lookupOrDefault(nestedForOp.getUpperBound());
   Value mappedStep = ctx.valueMapping.lookupOrDefault(nestedForOp.getStep());
-
   if (mappedLB != nestedForOp.getLowerBound()) {
     nestedForOp.getLowerBoundMutable().assign(mappedLB);
   }
@@ -3109,7 +3108,9 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
     for (const auto &kv : child.allocBypass) {
       parentCtx.allocBypass[kv.first] = kv.second;
     }
-    for (const auto &kv : child.scratchMeta) parentCtx.scratchMeta[kv.first] = kv.second;
+    for (const auto &kv : child.scratchMeta) {
+      parentCtx.scratchMeta[kv.first] = kv.second;
+    }
     return;
   }
 
@@ -3259,9 +3260,15 @@ struct NormalizedScratchAccess {
 static std::optional<OpFoldResult> addScratchIndexOFR(OpFoldResult lhs, OpFoldResult rhs, MLIRContext *context) {
   std::optional<int64_t> cl = getConstantIntValue(lhs);
   std::optional<int64_t> cr = getConstantIntValue(rhs);
-  if (cl && *cl == 0) return rhs;
-  if (cr && *cr == 0) return lhs;
-  if (cl && cr) return OpFoldResult(IntegerAttr::get(IndexType::get(context), *cl + *cr));
+  if (cl && *cl == 0) {
+    return rhs;
+  }
+  if (cr && *cr == 0) {
+    return lhs;
+  }
+  if (cl && cr) {
+    return OpFoldResult(IntegerAttr::get(IndexType::get(context), *cl + *cr));
+  }
   return std::nullopt;
 }
 
@@ -3407,7 +3414,7 @@ static FailureOr<NormalizedScratchAccess> normalizeMemrefAccess(Value memref, Va
   SmallVector<OpFoldResult> curIdx = getAsOpFoldResult(indices);
   Value cur = memref;
 
-  for (int guard = 0; guard < 64; ++guard) {
+  for (int guard = 0; guard < kMaxMemrefAccessNormalizeGuards; ++guard) {
     Operation *def = cur.getDefiningOp();
     if (!def) {
       break;
@@ -3457,15 +3464,21 @@ static FailureOr<NormalizedScratchAccess> normalizeMemrefAccess(Value memref, Va
 
 static bool isLocalNonEscapingScratch(Value root) {
   Operation *def = root.getDefiningOp();
-  if (!def || !isa<memref::AllocOp, memref::AllocaOp>(def)) return false;
+  if (!def || !isa<memref::AllocOp, memref::AllocaOp>(def)) {
+    return false;
+  }
 
   SmallVector<Value> worklist{root};
   DenseSet<Value> seen;
   while (!worklist.empty()) {
     Value v = worklist.pop_back_val();
-    if (!seen.insert(v).second) continue;
+    if (!seen.insert(v).second) {
+      continue;
+    }
     for (Operation *user : v.getUsers()) {
-      if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp>(user)) continue;
+      if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp>(user)) {
+        continue;
+      }
       if (isa<memref::SubViewOp, memref::CollapseShapeOp, memref::ExpandShapeOp, memref::CastOp,
               memref::MemorySpaceCastOp>(user)) {
         worklist.append(user->getResults().begin(), user->getResults().end());
@@ -3479,11 +3492,17 @@ static bool isLocalNonEscapingScratch(Value root) {
 
 static FailureOr<int64_t> getConstantVectorIndexLowerBound(Value idxVal) {
   auto blockArg = dyn_cast<BlockArgument>(idxVal);
-  if (!blockArg) return failure();
+  if (!blockArg) {
+    return failure();
+  }
   auto forOp = dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
-  if (!forOp) return failure();
+  if (!forOp) {
+    return failure();
+  }
   auto c = forOp.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-  if (!c) return failure();
+  if (!c) {
+    return failure();
+  }
   return c.value();
 }
 
@@ -3673,9 +3692,9 @@ static void appendKeptScratchSliceDim(unsigned tileDim, const ScratchSlicePlan &
 static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuvector::NPUVectorType tileType,
                                          const ScratchSlicePlan &plan, LoopVectorizationCtx &ctx) {
   if (plan.cacheable) {
-    for (auto &entry : ctx.scratchSliceCache) {
-      if (std::get<0>(entry) == tile && std::get<1>(entry) == plan.cacheKey) {
-        return std::get<2>(entry);
+    for (auto &[cachedTile, cachedKey, cachedSlice] : ctx.scratchSliceCache) {
+      if (cachedTile == tile && cachedKey == plan.cacheKey) {
+        return cachedSlice;
       }
     }
   }
@@ -4040,7 +4059,6 @@ static void recordReductionXCurrentTileSize(LoopVectorizationCtx &ctx) {
 
   Value remaining = createAffineSub(ctx.builder, loc, ctx.vecLoop.getUpperBound(), ctx.vecLoop.getInductionVar());
   Value tileSize = createAffineMin(ctx.builder, loc, remaining, ctx.vecLoop.getStep());
-
   if (axisIdx >= ctx.currentVectorSizeValues.size()) {
     ctx.currentVectorSizeValues.resize(axisIdx + 1);
   }
@@ -4199,7 +4217,6 @@ static bool parentHasTaggedVectorLoop(scf::ForOp loop) {
 
 static void finalizeReductionY(LoopVectorizationCtx &ctx) {
   Location loc = ctx.vecLoop.getLoc();
-
   if (ctx.scalarLoop.getInitArgs().empty()) {
     Block *body = ctx.vecLoop.getBody();
     if (body->empty() || !isa<scf::YieldOp>(body->back())) {
@@ -4208,7 +4225,6 @@ static void finalizeReductionY(LoopVectorizationCtx &ctx) {
     }
 
     ctx.builder.setInsertionPointAfter(ctx.vecLoop);
-
     if (!parentHasTaggedVectorLoop(ctx.scalarLoop)) {
       ctx.scalarLoop.erase();
     }
@@ -4315,7 +4331,6 @@ static LogicalResult inlineVectorize(LoopVectorizationCtx &ctx) {
 
   // Probe: nestedLoop.erase disabled (see vectorizeLoopBody); re-enable after bisect.
   (void)nestedLoopsToErase;
-
   if (ctx.parent == nullptr) {
     ctx.scalarLoop.erase();
   }
@@ -4495,7 +4510,6 @@ static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
 
   SmallVector<Value> finalResults;
   finalResults.reserve(numResults);
-
   if (isMergedReductionLoop(ctx) && !isMergedReductionRoot(ctx)) {
     std::copy(ctx.vecLoop.getResults().begin(), ctx.vecLoop.getResults().end(), std::back_inserter(finalResults));
     finalizeReductionXOutputs(ctx, finalResults);
@@ -4804,7 +4818,6 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(op);
-
     if (auto ld = dyn_cast<memref::LoadOp>(op)) {
       Value vecLoaded = vectorizeLoad(ld, ctx);
       if (!vecLoaded) {
@@ -5096,7 +5109,6 @@ static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder 
                              bool isDynamic) {
   OpBuilder attrBuilder(builder.getContext());
   attrBuilder.setInsertionPoint(loop);
-
   if (mode == VectorizationMode::ReductionX) {
     if (std::optional<MergedReductionGroup> group = tryBuildMergedReductionGroup(loop, attrBuilder)) {
       LoopVectorizationCtx ctx(builder, group->vectorSizes, group->vectorSizeValues, group->maxStepValues, mode, loop,
@@ -5194,7 +5206,9 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
       runVectorization(loop, mode, builder, maxStepFromAttr, isDynamic);
     }
 
-    if (failed(runPhase2RankZeroSweep(funcOp))) signalPassFailure();
+    if (failed(runPhase2RankZeroSweep(funcOp))) {
+      signalPassFailure();
+    }
   }
 };
 
