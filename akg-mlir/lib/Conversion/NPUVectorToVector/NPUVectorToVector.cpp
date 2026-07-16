@@ -2347,6 +2347,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (failed(collectTileBounds({builder, loc}, nvt, refRead.getDynamicSizes(), refRead.getSource(), bounds))) {
       return failure();
     }
+    if (static_cast<int64_t>(bounds.size()) != rank) {
+      return failure();
+    }
 
     Value regIdent = buildIdentityAccumulator(builder, loc, kind, regVecTy);
     TypedAttr idAttr = getCombiningIdentityAttr(builder, kind, scalarElem);
@@ -2417,12 +2420,13 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     npuv::ReductionOp redOp = info.redOp;
     vector::CombiningKind kind = info.kind;
     Type scalarElem = info.scalarElem;
-    const DeliveryTarget &target = dctx.target;
+    const DeliveryTarget target = dctx.target;
     const ReductionDelivery &delivery = dctx.delivery;
     out.reuseTargetAsAccBuf = false;
     if (target.isStore && target.rank == 1 && target.memref) {
       auto mt = llvm::cast<MemRefType>(target.memref.getType());
-      if (!mt.getShape().empty() && mt.getShape()[0] == 1 && mt.getElementType() == scalarElem &&
+      llvm::ArrayRef<int64_t> memShape = mt.getShape();
+      if (memShape.size() >= 1 && memShape[0] == 1 && mt.getElementType() == scalarElem &&
           delivery.castChain.empty()) {
         out.reuseTargetAsAccBuf = true;
       }
@@ -2491,6 +2495,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Location loc = env.loc;
     int64_t rank = dims.rank;
     ArrayRef<Value> bounds = dims.bounds;
+    if (rank < 1 || static_cast<size_t>(rank) > bounds.size()) {
+      return failure();
+    }
     SmallVector<Value> outerIvs;
     SmallVector<scf::ForOp> outerLoops;
     OpBuilder lb = builder;
@@ -2823,10 +2830,14 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // `pass1`.
   LogicalResult runPartialPass1(PartialPassEnv env, Location loc, LoopIterCtx iter,
                                 ReductionCtx red, scf::ForOp &pass1) const {
-    if (iter.rank < 1 || iter.rank > static_cast<int64_t>(iter.bounds.size())) {
+    if (iter.rank < 1) {
       return failure();
     }
-    Value bound = iter.bounds[iter.rank - 1];
+    const size_t innerIdx = static_cast<size_t>(iter.rank - 1);
+    if (innerIdx >= iter.bounds.size()) {
+      return failure();
+    }
+    Value bound = iter.bounds[innerIdx];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     SmallVector<Value> curInit(red.redIdents.begin(), red.redIdents.end());
     bool any = false;
