@@ -72,7 +72,7 @@ Type NPUVectorType::parse(AsmParser &parser) {
   // Parse shape dimensions - similar to tensor/memref dimension parsing
   // Format: dim1 x dim2 x ... x elementType
   // Use parseDimensionList for proper dimension parsing with dynamic support
-  if (parser.parseDimensionList(shape, /* allowDynamic= */ true, /* withTrailingX= */ true)) {
+  if (parser.parseDimensionList(shape, true, true)) {
     return {};
   }
 
