@@ -23,7 +23,7 @@
 
 namespace mlir {
 
-std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass(bool enableI64ToI32 = false);
 
 }  // namespace mlir
 

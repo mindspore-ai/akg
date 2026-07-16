@@ -111,8 +111,15 @@ enum class VectorizationMode {
 };
 
 struct ScratchTileMeta {
+  /// Store-time valueDimOrder (tile layout). Prefer tileDimToLoop for cross-nest rebind.
   SmallVector<int> tileAxisOrder;
-  /// Each entry is (allocDim, tileGlobalAxis, loopLowerBound).
+  /// Parallel to tileAxisOrder: alloc memref dim for this tile dim, or -1 if SSA-only (shadow).
+  SmallVector<int> allocDimOfTileDim;
+  /// Parallel: scf.for Operation* that owned the axis at store time (for shadow rebind).
+  SmallVector<Operation *> tileDimToLoop;
+  /// Parallel: store IV lower bound for alloc-backed dims (0 for shadow).
+  SmallVector<int64_t> storeLowerBoundOfTileDim;
+  /// Each entry is (allocDim, tileGlobalAxis, loopLowerBound). Kept for empty-channel full-tile path.
   SmallVector<std::tuple<int, int, int64_t>> channelDims;
   SmallVector<OpFoldResult> storeRootIndices;
   int allocRank = 0;
@@ -304,6 +311,13 @@ struct LoopVectorizationCtx {
       child.valueDimOrder[kv.first] = kv.second;
     }
 
+    for (const auto &kv : parentCtx.allocBypass) {
+      child.allocBypass[kv.first] = kv.second;
+    }
+    for (const auto &kv : parentCtx.scratchMeta) {
+      child.scratchMeta[kv.first] = kv.second;
+    }
+
     child.mergedReductionLoops = parentCtx.mergedReductionLoops;
     return child;
   }
@@ -322,6 +336,12 @@ struct LoopVectorizationCtx {
     }
     for (const auto &kv : parentCtx.valueDimOrder) {
       child.valueDimOrder[kv.first] = kv.second;
+    }
+    for (const auto &kv : parentCtx.allocBypass) {
+      child.allocBypass[kv.first] = kv.second;
+    }
+    for (const auto &kv : parentCtx.scratchMeta) {
+      child.scratchMeta[kv.first] = kv.second;
     }
     return child;
   }
@@ -3095,6 +3115,12 @@ static void registerChildResults(LoopVectorizationCtx &child, LoopVectorizationC
 
   if (child.mode == VectorizationMode::ReductionX) {
     mergeChildValueDimOrderIntoParent(child, parentCtx);
+    for (const auto &kv : child.allocBypass) {
+      parentCtx.allocBypass[kv.first] = kv.second;
+    }
+    for (const auto &kv : child.scratchMeta) {
+      parentCtx.scratchMeta[kv.first] = kv.second;
+    }
     return;
   }
 
@@ -3466,6 +3492,18 @@ static FailureOr<ScratchTileMeta> buildScratchTileMeta(const NormalizedScratchAc
   ScratchTileMeta meta;
   meta.tileAxisOrder.assign(vdo.begin(), vdo.end());
   meta.allocRank = rootType.getRank();
+  meta.allocDimOfTileDim.assign(vdo.size(), -1);
+  meta.tileDimToLoop.assign(vdo.size(), nullptr);
+  meta.storeLowerBoundOfTileDim.assign(vdo.size(), 0);
+
+  for (const auto &[loop, dim] : ctx.allLoopToVectorDim) {
+    for (unsigned tileDim = 0; tileDim < vdo.size(); ++tileDim) {
+      if (static_cast<int>(dim) == vdo[tileDim]) {
+        meta.tileDimToLoop[tileDim] = loop;
+      }
+    }
+  }
+
   for (unsigned d = 0; d < norm.rootIndices.size(); ++d) {
     Value idxVal = llvm::dyn_cast_if_present<Value>(norm.rootIndices[d]);
     if (!idxVal) {
@@ -3480,11 +3518,283 @@ static FailureOr<ScratchTileMeta> buildScratchTileMeta(const NormalizedScratchAc
       return failure();
     }
     meta.channelDims.push_back({static_cast<int>(d), axis, *lb});
+    for (unsigned tileDim = 0; tileDim < vdo.size(); ++tileDim) {
+      if (vdo[tileDim] != axis) {
+        continue;
+      }
+      meta.allocDimOfTileDim[tileDim] = static_cast<int>(d);
+      meta.storeLowerBoundOfTileDim[tileDim] = *lb;
+    }
   }
   if (meta.channelDims.empty()) {
     meta.storeRootIndices = norm.rootIndices;
   }
   return meta;
+}
+
+/// Plan for extract_slice / keep from a recorded scratch tile.
+struct ScratchSlicePlan {
+  SmallVector<bool> dropDim;
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+  /// Per tile dim: current-ctx axis id for kept dims, -1 if dropped.
+  SmallVector<int> resultAxisForTileDim;
+  SmallVector<int64_t> cacheKey;
+  bool cacheable = true;
+};
+
+static Value getTileDimExtent(Value tile, npuvector::NPUVectorType tileType, unsigned tileDim,
+                              LoopVectorizationCtx &ctx, Location loc, int curAxisHint) {
+  SmallVector<Value> tileExtents;
+  if (gatherVectorDynExtents(tile, tileExtents) && tileDim < tileExtents.size() && tileExtents[tileDim]) {
+    return tileExtents[tileDim];
+  }
+  int64_t staticSize = tileType.getShape()[tileDim];
+  if (staticSize != ShapedType::kDynamic) {
+    return ctx.builder.create<arith::ConstantIndexOp>(loc, staticSize);
+  }
+  if (curAxisHint >= 0 && static_cast<unsigned>(curAxisHint) < ctx.allVectorSizes.size()) {
+    return getRuntimeVectorSizeValue(ctx, static_cast<unsigned>(curAxisHint), loc);
+  }
+  return Value();
+}
+
+static bool computeScratchSliceProjection(const ScratchTileMeta &meta, const NormalizedScratchAccess &norm,
+                                          unsigned tileRank, Value tile, npuvector::NPUVectorType tileType,
+                                          LoopVectorizationCtx &ctx, Location loc, ScratchSlicePlan &plan) {
+  plan.dropDim.assign(tileRank, false);
+  plan.offsets.assign(tileRank, Value());
+  plan.sizes.assign(tileRank, Value());
+  plan.resultAxisForTileDim.assign(tileRank, -1);
+  plan.cacheKey.clear();
+  plan.cacheable = true;
+
+  if (meta.allocDimOfTileDim.size() != tileRank || meta.tileDimToLoop.size() != tileRank ||
+      meta.storeLowerBoundOfTileDim.size() != tileRank) {
+    return false;
+  }
+
+  Value c0 = ctx.builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value c1 = ctx.builder.create<arith::ConstantIndexOp>(loc, 1);
+
+  for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
+    const int allocDim = meta.allocDimOfTileDim[tileDim];
+    if (allocDim < 0) {
+      Operation *loop = meta.tileDimToLoop[tileDim];
+      if (loop == nullptr) {
+        return false;
+      }
+      auto axisIt = ctx.allLoopToVectorDim.find(loop);
+      if (axisIt == ctx.allLoopToVectorDim.end()) {
+        return false;
+      }
+      const int curAxis = static_cast<int>(axisIt->second);
+      Value extent = getTileDimExtent(tile, tileType, tileDim, ctx, loc, curAxis);
+      if (!extent) {
+        return false;
+      }
+      plan.dropDim[tileDim] = false;
+      plan.offsets[tileDim] = c0;
+      plan.sizes[tileDim] = extent;
+      plan.resultAxisForTileDim[tileDim] = curAxis;
+      plan.cacheKey.push_back(-2);
+      plan.cacheKey.push_back(curAxis);
+      continue;
+    }
+
+    if (allocDim >= static_cast<int>(norm.rootIndices.size())) {
+      return false;
+    }
+    OpFoldResult rootIndex = norm.rootIndices[allocDim];
+    const int64_t storeLb = meta.storeLowerBoundOfTileDim[tileDim];
+
+    if (std::optional<int64_t> c = getConstantIntValue(rootIndex)) {
+      plan.dropDim[tileDim] = true;
+      plan.offsets[tileDim] = ctx.builder.create<arith::ConstantIndexOp>(loc, *c - storeLb);
+      plan.sizes[tileDim] = c1;
+      plan.resultAxisForTileDim[tileDim] = -1;
+      plan.cacheKey.push_back(*c - storeLb);
+      continue;
+    }
+
+    Value idxVal = llvm::dyn_cast_if_present<Value>(rootIndex);
+    if (!idxVal) {
+      return false;
+    }
+    const int loadAxis = getVectorDimForIndex(idxVal, ctx);
+    if (loadAxis < 0) {
+      return false;
+    }
+    Value mappedIdx = ctx.valueMapping.lookupOrDefault(idxVal);
+    Value offset = mappedIdx;
+    if (storeLb != 0) {
+      Value lbVal = ctx.builder.create<arith::ConstantIndexOp>(loc, storeLb);
+      offset = createAffineSub(ctx.builder, loc, mappedIdx, lbVal);
+    }
+    Value tileSize = getRuntimeVectorSizeValue(ctx, static_cast<unsigned>(loadAxis), loc);
+    plan.dropDim[tileDim] = false;
+    plan.offsets[tileDim] = offset;
+    plan.sizes[tileDim] = tileSize;
+    plan.resultAxisForTileDim[tileDim] = loadAxis;
+    plan.cacheKey.push_back(-1);
+    plan.cacheKey.push_back(loadAxis);
+    if (!tryConstantIndex(offset).has_value() || !tryConstantIndex(tileSize).has_value()) {
+      plan.cacheable = false;
+    }
+  }
+  return true;
+}
+
+/// Append one kept tile dim into slice plan outputs; set needsSlice when extent/offset is partial.
+static void appendKeptScratchSliceDim(unsigned tileDim, const ScratchSlicePlan &plan, npuvector::NPUVectorType tileType,
+                                      SmallVectorImpl<int64_t> &keepDims, SmallVectorImpl<int> &resultDimOrder,
+                                      SmallVectorImpl<int64_t> &sliceShape, bool &needsSlice) {
+  keepDims.push_back(static_cast<int64_t>(tileDim));
+  resultDimOrder.push_back(plan.resultAxisForTileDim[tileDim]);
+  if (std::optional<int64_t> sizeConst = tryConstantIndex(plan.sizes[tileDim])) {
+    sliceShape.push_back(*sizeConst);
+    int64_t fullStatic = tileType.getShape()[tileDim];
+    if (fullStatic != ShapedType::kDynamic && *sizeConst != fullStatic) {
+      needsSlice = true;
+    }
+  } else {
+    sliceShape.push_back(ShapedType::kDynamic);
+    needsSlice = true;
+  }
+  if (std::optional<int64_t> offConst = tryConstantIndex(plan.offsets[tileDim])) {
+    if (*offConst != 0) {
+      needsSlice = true;
+    }
+  } else {
+    needsSlice = true;
+  }
+}
+
+static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuvector::NPUVectorType tileType,
+                                         const ScratchSlicePlan &plan, LoopVectorizationCtx &ctx) {
+  if (plan.cacheable) {
+    for (auto &entry : ctx.scratchSliceCache) {
+      if (std::get<0>(entry) == tile && std::get<1>(entry) == plan.cacheKey) {
+        return std::get<2>(entry);
+      }
+    }
+  }
+
+  Location loc = loadOp.getLoc();
+  const unsigned tileRank = static_cast<unsigned>(tileType.getRank());
+  if (plan.dropDim.size() != tileRank || plan.offsets.size() != tileRank || plan.sizes.size() != tileRank ||
+      plan.resultAxisForTileDim.size() != tileRank) {
+    return Value();
+  }
+
+  Value c1 = ctx.builder.create<arith::ConstantIndexOp>(loc, 1);
+  SmallVector<Value> strides(tileRank, c1);
+  SmallVector<int64_t> keepDims;
+  SmallVector<int> resultDimOrder;
+  SmallVector<int64_t> sliceShape;
+  bool anyDrop = false;
+  bool needsSlice = false;
+  for (unsigned t = 0; t < tileRank; ++t) {
+    if (plan.dropDim[t]) {
+      anyDrop = true;
+      needsSlice = true;
+      continue;
+    }
+    appendKeptScratchSliceDim(t, plan, tileType, keepDims, resultDimOrder, sliceShape, needsSlice);
+  }
+  if (keepDims.empty()) {
+    return Value();
+  }
+
+  if (!needsSlice && !anyDrop && keepDims.size() == tileRank) {
+    ctx.valueDimOrder[tile] = resultDimOrder;
+    return tile;
+  }
+
+  auto sliceType = npuvector::NPUVectorType::get(sliceShape, tileType.getElementType());
+  Value slice = ctx.builder.create<npuvector::ExtractSliceOp>(loc, sliceType, tile, ValueRange(plan.offsets),
+                                                              ValueRange(plan.sizes), ValueRange(strides),
+                                                              ctx.builder.getDenseI64ArrayAttr(keepDims));
+  ctx.valueDimOrder[slice] = resultDimOrder;
+  if (plan.cacheable) {
+    ctx.scratchSliceCache.push_back({tile, plan.cacheKey, slice});
+  }
+  return slice;
+}
+
+static bool scratchIndicesMatch(ArrayRef<OpFoldResult> storeIndices, ArrayRef<OpFoldResult> loadIndices) {
+  if (storeIndices.size() != loadIndices.size()) {
+    return false;
+  }
+  for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
+    std::optional<int64_t> storeConst = getConstantIntValue(storeIdx);
+    std::optional<int64_t> loadConst = getConstantIntValue(loadIdx);
+    if (storeConst || loadConst) {
+      if (!storeConst || !loadConst || *storeConst != *loadConst) {
+        return false;
+      }
+      continue;
+    }
+    Value storeValue = llvm::dyn_cast_if_present<Value>(storeIdx);
+    Value loadValue = llvm::dyn_cast_if_present<Value>(loadIdx);
+    if (!storeValue || storeValue != loadValue) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
+  if (ctx.scratchMeta.empty()) {
+    return false;
+  }
+
+  FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(loadOp.getMemRef(), loadOp.getIndices(), ctx);
+  if (failed(norm)) {
+    return false;
+  }
+  Value root = norm->root;
+  auto metaIt = ctx.scratchMeta.find(root);
+  if (metaIt == ctx.scratchMeta.end()) {
+    return false;
+  }
+  auto bypassIt = ctx.allocBypass.find(root);
+  if (bypassIt == ctx.allocBypass.end() || !bypassIt->second) {
+    return false;
+  }
+
+  Value tile = bypassIt->second;
+  auto tileType = dyn_cast<npuvector::NPUVectorType>(tile.getType());
+  if (!tileType) {
+    return false;
+  }
+  const ScratchTileMeta &meta = metaIt->second;
+  if (static_cast<int64_t>(norm->rootIndices.size()) != meta.allocRank) {
+    return false;
+  }
+  if (static_cast<int64_t>(meta.tileAxisOrder.size()) != tileType.getRank()) {
+    return false;
+  }
+
+  if (meta.channelDims.empty()) {
+    if (!scratchIndicesMatch(meta.storeRootIndices, norm->rootIndices)) {
+      return false;
+    }
+    ctx.valueMapping.map(loadOp.getResult(), tile);
+    return true;
+  }
+
+  const unsigned tileRank = static_cast<unsigned>(tileType.getRank());
+  ScratchSlicePlan plan;
+  if (!computeScratchSliceProjection(meta, *norm, tileRank, tile, tileType, ctx, loadOp.getLoc(), plan)) {
+    return false;
+  }
+  Value slice = createForwardedScratchSlice(loadOp, tile, tileType, plan, ctx);
+  if (!slice) {
+    return false;
+  }
+  ctx.valueMapping.map(loadOp.getResult(), slice);
+  return true;
 }
 
 static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
@@ -3544,171 +3854,6 @@ static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, Loo
   }
   ctx.allocBypass[root] = vectorValue;
   ctx.scratchMeta[root] = std::move(*meta);
-  return true;
-}
-
-static bool scratchIndicesMatch(ArrayRef<OpFoldResult> storeIndices, ArrayRef<OpFoldResult> loadIndices) {
-  if (storeIndices.size() != loadIndices.size()) {
-    return false;
-  }
-  for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
-    std::optional<int64_t> storeConst = getConstantIntValue(storeIdx);
-    std::optional<int64_t> loadConst = getConstantIntValue(loadIdx);
-    if (storeConst || loadConst) {
-      if (!storeConst || !loadConst || *storeConst != *loadConst) {
-        return false;
-      }
-      continue;
-    }
-    Value storeValue = llvm::dyn_cast_if_present<Value>(storeIdx);
-    Value loadValue = llvm::dyn_cast_if_present<Value>(loadIdx);
-    if (!storeValue || storeValue != loadValue) {
-      return false;
-    }
-  }
-  return true;
-}
-
-static bool computeScratchSliceProjection(const ScratchTileMeta &meta, const NormalizedScratchAccess &norm,
-                                          unsigned tileRank, const LoopVectorizationCtx &ctx,
-                                          SmallVector<bool> &dropDim, SmallVector<int64_t> &dropOffset,
-                                          SmallVector<int64_t> &cacheKey) {
-  for (auto &cd : meta.channelDims) {
-    int allocDim = std::get<0>(cd);
-    int axis = std::get<1>(cd);
-    int64_t lb = std::get<2>(cd);
-    auto axisIt = llvm::find(meta.tileAxisOrder, axis);
-    if (axisIt == meta.tileAxisOrder.end() || allocDim < 0 || allocDim >= static_cast<int>(norm.rootIndices.size())) {
-      return false;
-    }
-    unsigned tileDim = static_cast<unsigned>(std::distance(meta.tileAxisOrder.begin(), axisIt));
-    if (tileDim >= tileRank) {
-      return false;
-    }
-    OpFoldResult rootIndex = norm.rootIndices[allocDim];
-    if (std::optional<int64_t> c = getConstantIntValue(rootIndex)) {
-      dropDim[tileDim] = true;
-      dropOffset[tileDim] = *c - lb;
-      cacheKey.push_back(dropOffset[tileDim]);
-      continue;
-    }
-    Value idxVal = llvm::dyn_cast_if_present<Value>(rootIndex);
-    if (!idxVal || getVectorDimForIndex(idxVal, ctx) != axis) {
-      return false;
-    }
-    cacheKey.push_back(-1);
-  }
-  return true;
-}
-
-static Value createForwardedScratchSlice(memref::LoadOp loadOp, Value tile, npuvector::NPUVectorType tileType,
-                                         const ScratchTileMeta &meta, const SmallVector<bool> &dropDim,
-                                         const SmallVector<int64_t> &dropOffset, const SmallVector<int64_t> &cacheKey,
-                                         LoopVectorizationCtx &ctx) {
-  for (auto &entry : ctx.scratchSliceCache) {
-    if (std::get<0>(entry) == tile && std::get<1>(entry) == cacheKey) {
-      return std::get<2>(entry);
-    }
-  }
-
-  Location loc = loadOp.getLoc();
-  SmallVector<Value> tileExtents;
-  const bool haveExtents = gatherVectorDynExtents(tile, tileExtents);
-  const unsigned tileRank = static_cast<unsigned>(tileType.getRank());
-  Value c1 = ctx.builder.create<arith::ConstantIndexOp>(loc, 1);
-  SmallVector<Value> offsets(tileRank), sizes(tileRank), strides(tileRank, c1);
-  SmallVector<int64_t> keepDims;
-  for (unsigned t = 0; t < tileRank; ++t) {
-    if (dropDim[t]) {
-      offsets[t] = ctx.builder.create<arith::ConstantIndexOp>(loc, dropOffset[t]);
-      sizes[t] = c1;
-      continue;
-    }
-    offsets[t] = ctx.builder.create<arith::ConstantIndexOp>(loc, 0);
-    if (haveExtents && t < tileExtents.size() && tileExtents[t]) {
-      sizes[t] = tileExtents[t];
-    } else {
-      int64_t st = tileType.getShape()[t];
-      if (st == ShapedType::kDynamic) {
-        return nullptr;
-      }
-      sizes[t] = ctx.builder.create<arith::ConstantIndexOp>(loc, st);
-    }
-    keepDims.push_back(static_cast<int64_t>(t));
-  }
-  if (keepDims.empty()) {
-    return nullptr;
-  }
-
-  SmallVector<int64_t> sliceShape;
-  sliceShape.reserve(keepDims.size());
-  std::transform(keepDims.begin(), keepDims.end(), std::back_inserter(sliceShape),
-                 [&](int64_t t) { return tileType.getShape()[static_cast<unsigned>(t)]; });
-  auto sliceType = npuvector::NPUVectorType::get(sliceShape, tileType.getElementType());
-  Value slice =
-    ctx.builder.create<npuvector::ExtractSliceOp>(loc, sliceType, tile, ValueRange(offsets), ValueRange(sizes),
-                                                  ValueRange(strides), ctx.builder.getDenseI64ArrayAttr(keepDims));
-  SmallVector<int> resultDimOrder;
-  resultDimOrder.reserve(keepDims.size());
-  std::transform(keepDims.begin(), keepDims.end(), std::back_inserter(resultDimOrder),
-                 [&](int64_t t) { return meta.tileAxisOrder[static_cast<unsigned>(t)]; });
-  ctx.valueDimOrder[slice] = resultDimOrder;
-  ctx.scratchSliceCache.push_back({tile, cacheKey, slice});
-  return slice;
-}
-
-static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
-  if (ctx.scratchMeta.empty()) {
-    return false;
-  }
-
-  FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(loadOp.getMemRef(), loadOp.getIndices(), ctx);
-  if (failed(norm)) {
-    return false;
-  }
-  Value root = norm->root;
-  auto metaIt = ctx.scratchMeta.find(root);
-  if (metaIt == ctx.scratchMeta.end()) {
-    return false;
-  }
-  auto bypassIt = ctx.allocBypass.find(root);
-  if (bypassIt == ctx.allocBypass.end() || !bypassIt->second) {
-    return false;
-  }
-
-  Value tile = bypassIt->second;
-  auto tileType = dyn_cast<npuvector::NPUVectorType>(tile.getType());
-  if (!tileType) {
-    return false;
-  }
-  const ScratchTileMeta &meta = metaIt->second;
-  if (static_cast<int64_t>(norm->rootIndices.size()) != meta.allocRank) {
-    return false;
-  }
-  if (static_cast<int64_t>(meta.tileAxisOrder.size()) != tileType.getRank()) {
-    return false;
-  }
-
-  if (meta.channelDims.empty()) {
-    if (!scratchIndicesMatch(meta.storeRootIndices, norm->rootIndices)) {
-      return false;
-    }
-    ctx.valueMapping.map(loadOp.getResult(), tile);
-    return true;
-  }
-
-  const unsigned tileRank = static_cast<unsigned>(tileType.getRank());
-  SmallVector<bool> dropDim(tileRank, false);
-  SmallVector<int64_t> dropOffset(tileRank, 0);
-  SmallVector<int64_t> cacheKey;
-  if (!computeScratchSliceProjection(meta, *norm, tileRank, ctx, dropDim, dropOffset, cacheKey)) {
-    return false;
-  }
-  Value slice = createForwardedScratchSlice(loadOp, tile, tileType, meta, dropDim, dropOffset, cacheKey, ctx);
-  if (!slice) {
-    return false;
-  }
-  ctx.valueMapping.map(loadOp.getResult(), slice);
   return true;
 }
 
@@ -4443,9 +4588,10 @@ static void processLoop(LoopVectorizationCtx &ctx) {
   }
 }
 
-static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder, Location loc) {
-  Value maxStepConst = builder.create<arith::ConstantIndexOp>(loc, 1);
-  LoopVectorizationCtx ctx(builder, /* actualStep */ 1, /* vfVal */ nullptr, maxStepConst,
+static LoopVectorizationCtx createVF1SweepCtx(OpBuilder &builder) {
+  // Phase 2 rank-0 sweep: empty allVectorSizes so getVectorType/getRank yield !npuvector.T (0-D),
+  // not !npuvector<1xT> from actualStep=1.
+  LoopVectorizationCtx ctx(builder, SmallVector<int64_t>{}, SmallVector<Value>{}, SmallVector<Value>{},
                            VectorizationMode::Elementwise, scf::ForOp(), nullptr);
   ctx.localDim = 0;
   ctx.vf1FuncLevelNoAnchor = true;
@@ -4653,7 +4799,7 @@ static Vf1ChainPromotionResult tryPromoteVF1Chain(memref::LoadOp rootLoad) {
   }
 
   OpBuilder builder(rootLoad);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, rootLoad.getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
 
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
@@ -4752,7 +4898,7 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
       return Vf1ChainPromotionResult::Skipped;
     }
     OpBuilder builder(storeOp);
-    LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+    LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
     vectorizeStore(storeOp, ctx);
     storeOp.erase();
     return Vf1ChainPromotionResult::Promoted;
@@ -4771,7 +4917,7 @@ static Vf1ChainPromotionResult tryPromoteVF1StoreChain(memref::StoreOp storeOp) 
   }
 
   OpBuilder builder(storeOp);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, storeOp.getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
   for (Operation *op : topo) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(op);
@@ -4847,7 +4993,7 @@ static Vf1ChainPromotionResult tryPromoteVF1ArithOp(Operation *op) {
   }
 
   OpBuilder builder(op);
-  LoopVectorizationCtx ctx = createVF1SweepCtx(builder, op->getLoc());
+  LoopVectorizationCtx ctx = createVF1SweepCtx(builder);
   if (failed(handleArithOrMathOp(*op, ctx))) {
     return Vf1ChainPromotionResult::FatalError;
   }

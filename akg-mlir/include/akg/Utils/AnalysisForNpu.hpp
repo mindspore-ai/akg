@@ -41,6 +41,10 @@ namespace akg {
 constexpr int64_t kNpuBitsPerByte = 8;
 constexpr int64_t kNpuUbAlignBytes = 32;
 constexpr int64_t kNpuUbAlignBits = kNpuUbAlignBytes * kNpuBitsPerByte;
+constexpr int64_t kIndexBitWidth = 64;
+constexpr int64_t kLastDimTransposeAxisCount = 2;
+constexpr int64_t kTransposeDoubleAlignFactor = 2;
+constexpr int64_t kB32ElementBytes = 4;
 
 constexpr auto kSoc910B1 = "Ascend910B1";
 constexpr auto kSoc910B2 = "Ascend910B2";
@@ -69,70 +73,70 @@ class HardwareConfig {
 
 inline const std::vector<std::pair<std::string, HardwareConfig>> &getHardwareConfigs() {
   static const std::vector<std::pair<std::string, HardwareConfig>> kHardwareConfigs = {
-    {kSoc910B1, HardwareConfig{/* coreNumAic = */ 24,
-                               /* coreNumAiv = */ 48,
-                               /* l2 = */ 201326592,
-                               /* l1 = */ 524288,
-                               /* l0a = */ 65536,
-                               /* l0b = */ 65536,
-                               /* l0c = */ 131072,
-                               /* ub = */ 196608,
-                               /* isRegBasedArch = */ false}},
-    {kSoc910B2, HardwareConfig{/* coreNumAic = */ 24,
-                               /* coreNumAiv = */ 48,
-                               /* l2 = */ 201326592,
-                               /* l1 = */ 524288,
-                               /* l0a = */ 65536,
-                               /* l0b = */ 65536,
-                               /* l0c = */ 131072,
-                               /* ub = */ 196608,
-                               /* isRegBasedArch = */ false}},
-    {kSoc910B2C, HardwareConfig{/* coreNumAic = */ 24,
-                                /* coreNumAiv = */ 48,
-                                /* l2 = */ 201326592,
-                                /* l1 = */ 524288,
-                                /* l0a = */ 65536,
-                                /* l0b = */ 65536,
-                                /* l0c = */ 131072,
-                                /* ub = */ 196608,
-                                /* isRegBasedArch = */ false}},
-    {kSoc910B3, HardwareConfig{/* coreNumAic = */ 20,
-                               /* coreNumAiv = */ 40,
-                               /* l2 = */ 201326592,
-                               /* l1 = */ 524288,
-                               /* l0a = */ 65536,
-                               /* l0b = */ 65536,
-                               /* l0c = */ 131072,
-                               /* ub = */ 196608,
-                               /* isRegBasedArch = */ false}},
-    {kSoc910B4, HardwareConfig{/* coreNumAic = */ 20,
-                               /* coreNumAiv = */ 40,
-                               /* l2 = */ 100663296,
-                               /* l1 = */ 524288,
-                               /* l0a = */ 65536,
-                               /* l0b = */ 65536,
-                               /* l0c = */ 131072,
-                               /* ub = */ 196608,
-                               /* isRegBasedArch = */ false}},
-    {kSoc910B4_1, HardwareConfig{/* coreNumAic = */ 20,
-                                 /* coreNumAiv = */ 40,
-                                 /* l2 = */ 176160768,
-                                 /* l1 = */ 524288,
-                                 /* l0a = */ 65536,
-                                 /* l0b = */ 65536,
-                                 /* l0c = */ 131072,
-                                 /* ub = */ 196608,
-                                 /* isRegBasedArch = */ false}},
-    {kSoc950PR_9599, HardwareConfig{/* coreNumAic = */ 36,
-                                    /* coreNumAiv = */ 72,
-                                    /* l2 = */ 134217728,
-                                    /* l1 = */ 524288,
-                                    /* l0a = */ 65536,
-                                    /* l0b = */ 65536,
-                                    /* l0c = */ 262144,
-                                    /* ub = */ 253952,
-                                    /* isRegBasedArch = */ true,
-                                    /* RegVectorLength = */ 256}},
+    {kSoc910B1, HardwareConfig{24,              // coreNumAic
+                               48,              // coreNumAiv
+                               201326592,       // l2
+                               524288,          // l1
+                               65536,           // l0a
+                               65536,           // l0b
+                               131072,          // l0c
+                               196608,          // ub
+                               false}},         // isRegBasedArch
+    {kSoc910B2, HardwareConfig{24,              // coreNumAic
+                               48,              // coreNumAiv
+                               201326592,       // l2
+                               524288,          // l1
+                               65536,           // l0a
+                               65536,           // l0b
+                               131072,          // l0c
+                               196608,          // ub
+                               false}},         // isRegBasedArch
+    {kSoc910B2C, HardwareConfig{24,             // coreNumAic
+                                48,             // coreNumAiv
+                                201326592,      // l2
+                                524288,         // l1
+                                65536,          // l0a
+                                65536,          // l0b
+                                131072,         // l0c
+                                196608,         // ub
+                                false}},        // isRegBasedArch
+    {kSoc910B3, HardwareConfig{20,              // coreNumAic
+                               40,              // coreNumAiv
+                               201326592,       // l2
+                               524288,          // l1
+                               65536,           // l0a
+                               65536,           // l0b
+                               131072,          // l0c
+                               196608,          // ub
+                               false}},         // isRegBasedArch
+    {kSoc910B4, HardwareConfig{20,              // coreNumAic
+                               40,              // coreNumAiv
+                               100663296,       // l2
+                               524288,          // l1
+                               65536,           // l0a
+                               65536,           // l0b
+                               131072,          // l0c
+                               196608,          // ub
+                               false}},         // isRegBasedArch
+    {kSoc910B4_1, HardwareConfig{20,            // coreNumAic
+                                 40,            // coreNumAiv
+                                 176160768,     // l2
+                                 524288,        // l1
+                                 65536,         // l0a
+                                 65536,         // l0b
+                                 131072,        // l0c
+                                 196608,        // ub
+                                 false}},       // isRegBasedArch
+    {kSoc950PR_9599, HardwareConfig{36,         // coreNumAic
+                                    72,         // coreNumAiv
+                                    134217728,  // l2
+                                    524288,     // l1
+                                    65536,      // l0a
+                                    65536,      // l0b
+                                    262144,     // l0c
+                                    253952,     // ub
+                                    true,       // isRegBasedArch
+                                    256}},      // RegVectorLength
   };
   return kHardwareConfigs;
 }
@@ -201,7 +205,7 @@ inline int64_t getElementBitWidth(Type type) {
     elemType = shapedType.getElementType();
   }
   if (elemType.isIndex()) {
-    return 64;
+    return kIndexBitWidth;
   }
   if (!llvm::isa<IntegerType, FloatType>(elemType)) {
     return 0;
@@ -350,7 +354,7 @@ inline int64_t computeBishengLastDimTransposeBufferBytes(ArrayRef<int64_t> sourc
       transposeDims.push_back(i);
     }
   }
-  if (transposeDims.size() != 2 ||
+  if (transposeDims.size() != kLastDimTransposeAxisCount ||
       (transposeDims[0] != sourceTypeShape.size() - 1 && transposeDims[1] != sourceTypeShape.size() - 1)) {
     return 0;
   }
@@ -378,15 +382,15 @@ inline int64_t computeBishengLastDimTransposeBufferBytes(ArrayRef<int64_t> sourc
 
   int64_t alignedDim0Bytes = alignUpInt64(multiplyAndCap(sourceShape[transposeDims[0]], elemBytes), kNpuUbAlignBytes);
   int64_t alignedDim1Bytes = alignUpInt64(multiplyAndCap(sourceShape[transposeDims[1]], elemBytes), kNpuUbAlignBytes);
-  bool hasDoubleAlignedDim =
-    alignedDim0Bytes % (kNpuUbAlignBytes * 2) == 0 || alignedDim1Bytes % (kNpuUbAlignBytes * 2) == 0;
+  bool hasDoubleAlignedDim = alignedDim0Bytes % (kNpuUbAlignBytes * kTransposeDoubleAlignFactor) == 0 ||
+                             alignedDim1Bytes % (kNpuUbAlignBytes * kTransposeDoubleAlignFactor) == 0;
   // B32 (4-byte) types need double alignment on transpose, matching bishengir's
   // getUnAlignSizeInfo(VTransposeOp) which keys on elemTypeBytes == 4 (covers
   // both f32 and i32, not just f32).
-  if (elemBytes == 4 && !hasDoubleAlignedDim) {
+  if (elemBytes == kB32ElementBytes && !hasDoubleAlignedDim) {
     sourceAlign[transposeDims[0]] = kNpuUbAlignBytes;
-    sourceAlign[transposeDims[1]] = kNpuUbAlignBytes * 2;
-    resultAlign[transposeDims[0]] = kNpuUbAlignBytes * 2;
+    sourceAlign[transposeDims[1]] = kNpuUbAlignBytes * kTransposeDoubleAlignFactor;
+    resultAlign[transposeDims[0]] = kNpuUbAlignBytes * kTransposeDoubleAlignFactor;
     resultAlign[transposeDims[1]] = kNpuUbAlignBytes;
   }
 
