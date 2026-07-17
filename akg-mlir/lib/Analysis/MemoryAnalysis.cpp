@@ -87,7 +87,7 @@ struct BufferInfo {
   bool isScalar = false;
   int64_t totalBufferSize = 0;
   Type elementType;
-  llvm::SmallVector<int64_t, 4> dimLoopIndices;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> dimLoopIndices;
   bool isVirtual = false;
   int64_t OriginOpRecordIndex;
   Value originalValue;
@@ -108,8 +108,8 @@ struct ConditionalAliasEdge {
 // Branch-exclusive  buffers for slice-lowered `scf.if` (no results).
 struct ScfIfBranchInfo {
   int64_t ifOpRecordIndex = -1;
-  llvm::SmallVector<int64_t, 4> thenExclusive;
-  llvm::SmallVector<int64_t, 4> elseExclusive;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> thenExclusive;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> elseExclusive;
 };
 
 struct OpRecord {
@@ -122,7 +122,7 @@ struct OpRecord {
   int64_t opType = -1;
   llvm::SmallVector<int64_t> inputBufferIndexes;
   int64_t outputBufferIndex;
-  llvm::SmallVector<int64_t, 2> extraBufferSizes;
+  llvm::SmallVector<int64_t, kSmallVectorSizeTwo> extraBufferSizes;
   Operation *forOPRegion = nullptr;
   llvm::SmallVector<int64_t> generatedBufferIndexes;
   llvm::SmallVector<int64_t> killedBufferIndexes;
@@ -360,7 +360,7 @@ struct EquivalentOpKey {
   Operation *enclosingFor = nullptr;
   int64_t opType = kOpTypeUnknown;
   StringRef opName;
-  llvm::SmallVector<OperandEquivalenceEntry, 4> inputOperands;
+  llvm::SmallVector<OperandEquivalenceEntry, kSmallVectorSizeFour> inputOperands;
   DictionaryAttr normalizedAttrs;
 
   bool operator==(const EquivalentOpKey &other) const {
@@ -377,7 +377,7 @@ struct EquivalentOpKey {
 
 struct BrcCstKey {
   Value cst;
-  llvm::SmallVector<int64_t, 4> dimLoopIndices;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> dimLoopIndices;
 
   bool operator==(const BrcCstKey &other) const {
     return cst == other.cst && dimLoopIndices == other.dimLoopIndices;
@@ -405,17 +405,19 @@ static bool isConstantSsaValue(Value val) {
 static Attribute normalizeAttrForEquivalence(
   Attribute attr, Operation *op, llvm::function_ref<std::optional<int64_t>(Value)> resolveValueBuffer) {
   if (auto arr = dyn_cast<ArrayAttr>(attr)) {
-    llvm::SmallVector<Attribute, 4> elems;
+    llvm::SmallVector<Attribute, kSmallVectorSizeFour> elems;
     elems.reserve(arr.size());
     std::transform(arr.begin(), arr.end(), std::back_inserter(elems),
-                   [&](Attribute elem) { return normalizeAttrForEquivalence(elem, op, resolveValueBuffer); });
+                   [op, resolveValueBuffer](Attribute elem) {
+                     return normalizeAttrForEquivalence(elem, op, resolveValueBuffer);
+                   });
     return ArrayAttr::get(arr.getContext(), elems);
   }
   if (auto dict = dyn_cast<DictionaryAttr>(attr)) {
-    llvm::SmallVector<NamedAttribute, 4> entries;
+    llvm::SmallVector<NamedAttribute, kSmallVectorSizeFour> entries;
     entries.reserve(dict.size());
     std::transform(dict.begin(), dict.end(), std::back_inserter(entries),
-                   [&](NamedAttribute na) {
+                   [op, resolveValueBuffer](NamedAttribute na) {
                      return NamedAttribute(
                        na.getName(), normalizeAttrForEquivalence(na.getValue(), op, resolveValueBuffer));
                    });
@@ -435,10 +437,10 @@ static Attribute normalizeAttrForEquivalence(
 
 static DictionaryAttr normalizeOpAttrDictionary(
   DictionaryAttr attrs, Operation *op, llvm::function_ref<std::optional<int64_t>(Value)> resolveValueBuffer) {
-  llvm::SmallVector<NamedAttribute, 4> entries;
+  llvm::SmallVector<NamedAttribute, kSmallVectorSizeFour> entries;
   entries.reserve(attrs.size());
   std::transform(attrs.begin(), attrs.end(), std::back_inserter(entries),
-                 [&](NamedAttribute na) {
+                 [op, resolveValueBuffer](NamedAttribute na) {
                    return NamedAttribute(
                      na.getName(), normalizeAttrForEquivalence(na.getValue(), op, resolveValueBuffer));
                  });
@@ -606,7 +608,7 @@ static void dumpOpRecordLine(llvm::raw_ostream &os, const OpRecord &rec, ArrayRe
 
 static void dumpOpRecordsSection(llvm::raw_ostream &os, ArrayRef<OpRecord> perOpList, ArrayRef<BufferInfo> bufferList,
                                  OpPrintingFlags printFlags) {
-  llvm::SmallVector<const OpRecord *, 0> records;
+  llvm::SmallVector<const OpRecord *, kSmallVectorSizeZero> records;
   records.reserve(perOpList.size());
   for (const OpRecord &rec : perOpList) {
     if (rec.opType == kOpTypeScfFor) {
@@ -653,7 +655,7 @@ class MemoryPeakEstimator {
   void dumpOpRecords(llvm::raw_ostream &os) const;
 
   const llvm::DenseMap<Operation *, int64_t> &getPerOpIndexMap() const { return perOpIndexMap_; }
-  const llvm::SmallVector<OpRecord, 0> &getPerOpList() const { return perOpList_; }
+  const llvm::SmallVector<OpRecord, kSmallVectorSizeZero> &getPerOpList() const { return perOpList_; }
 
   bool hasInlineBroadcastLoopDims(Operation *op) const;
   bool hasInlineTransposeLoopDims(Operation *op) const;
@@ -664,10 +666,10 @@ class MemoryPeakEstimator {
  private:
   PeakAnalysisInput input_;
 
-  llvm::SmallVector<scf::ForOp, 8> orderedForOps_;
+  llvm::SmallVector<scf::ForOp, kSmallVectorSizeEight> orderedForOps_;
   llvm::DenseMap<scf::ForOp, int64_t> forOpToIndex_;
 
-  llvm::SmallVector<OpRecord, 0> perOpList_;
+  llvm::SmallVector<OpRecord, kSmallVectorSizeZero> perOpList_;
   llvm::SmallVector<BufferInfo> bufferInfoList_;
 
   llvm::DenseMap<Operation *, int64_t> perOpIndexMap_;
@@ -675,15 +677,15 @@ class MemoryPeakEstimator {
   llvm::SmallVector<std::pair<EquivalentOpKey, int64_t>, 16> equivalentOpBufferMap_;
   llvm::SmallVector<std::pair<BrcCstKey, int64_t>, 16> brcCstBufferMap_;
 
-  SmallVector<int64_t, 4> TimelineOpIndexList;
+  SmallVector<int64_t, kSmallVectorSizeFour> TimelineOpIndexList;
 
   BufferInfoUnionFind bufferInfoUnionFind_;
 
   // Per inplace-chain stats keyed by union-find root buffer index.
   llvm::DenseMap<int64_t, InplaceChainSummary> inplaceChainSummary_;
 
-  llvm::SmallVector<ConditionalAliasEdge, 8> conditionalAliasEdges_;
-  llvm::SmallVector<ScfIfBranchInfo, 4> scfIfBranchInfos_;
+  llvm::SmallVector<ConditionalAliasEdge, kSmallVectorSizeEight> conditionalAliasEdges_;
+  llvm::SmallVector<ScfIfBranchInfo, kSmallVectorSizeFour> scfIfBranchInfos_;
 
   void initPerOp_();
   OpRecord &createBaseOpRecord_(Operation *op);
@@ -693,6 +695,8 @@ class MemoryPeakEstimator {
   void initReduceOps_(OpRecord &rec, BufferInfo &outputBufferInfo, Operation *op);
   void InferOutputBufferShape_(BufferInfo &outputBufferInfo, Operation *op, OpRecord &rec,
                               bool recordInlineBroadcastExtraBuffer = true);
+  std::pair<bool, int64_t> resolveLoadAppendAlignAxis_(memref::LoadOp loadOp, ArrayRef<int64_t> rawDimLoopIndices,
+                                                       Type elemTy) const;
   void inferShapeFromInput_(ArrayRef<int64_t> inputBufferIndexes, BufferInfo &outputBufferInfo, OpRecord &rec,
                             Operation *op, bool recordInlineBroadcastExtraBuffer = true);
   void buildForOpWalkOrder_();
@@ -1194,7 +1198,7 @@ static void collectRegionExclusiveBuffers(Region &region, Region *siblingRegion,
                                             llvm::SmallVectorImpl<int64_t> &out) {
   llvm::SmallDenseSet<int64_t> siblingIndices;
   if (siblingRegion) {
-    siblingRegion->walk([&](Operation *inner) {
+    siblingRegion->walk([&bufMap, &siblingIndices](Operation *inner) {
       for (Value res : inner->getResults()) {
         auto it = bufMap.find(res);
         if (it != bufMap.end()) {
@@ -1205,7 +1209,7 @@ static void collectRegionExclusiveBuffers(Region &region, Region *siblingRegion,
   }
 
   llvm::SmallDenseSet<int64_t> seen;
-  region.walk([&](Operation *inner) {
+  region.walk([&bufMap, &bufferList, &siblingIndices, &seen, &out](Operation *inner) {
     if (isa<scf::YieldOp>(inner)) {
       return;
     }
@@ -1232,7 +1236,7 @@ static void recordConditionalAlias(llvm::SmallVectorImpl<ConditionalAliasEdge> &
   if (a < 0 || b < 0 || a == b) {
     return;
   }
-  edges.push_back({a, b, /*hasCond=*/true});
+  edges.push_back({a, b, /* hasCond= */ true});
 }
 
 static int64_t inplaceChainEarliestAllocTime(const BufferInfoUnionFind &uf, ArrayRef<BufferInfo> buffers,
@@ -1267,7 +1271,7 @@ static void uniteBuffersByTimeline(BufferInfoUnionFind &uf, ArrayRef<BufferInfo>
 }
 
 static void getEnclosingScfForOps(Operation *op, SmallVectorImpl<scf::ForOp> &loops) {
-  SmallVector<scf::ForOp, 8> innermostFirst;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> innermostFirst;
   Region *region = op->getParentRegion();
   while (region) {
     Operation *parent = region->getParentOp();
@@ -1356,7 +1360,7 @@ static void inferDimLoopIndices(Operation *MemrefOp, int64_t memrefRank,
     return;
   }
 
-  SmallVector<scf::ForOp, 8> loops;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> loops;
   getEnclosingScfForOps(MemrefOp, loops);
   for (scf::ForOp forOp : loops) {
     auto it = forOpToIndex.find(forOp);
@@ -1433,9 +1437,10 @@ static void filterActiveTileDimLoopIndices(ArrayRef<int64_t> in, SmallVectorImpl
                                            ArrayRef<scf::ForOp> orderedForOps,
                                            const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop) {
   out.clear();
-  std::copy_if(in.begin(), in.end(), std::back_inserter(out), [&](int64_t loopIdx) {
-    return isActiveTileLoopIndex(loopIdx, orderedForOps, tileUpperBoundPerLoop);
-  });
+  std::copy_if(in.begin(), in.end(), std::back_inserter(out),
+               [orderedForOps, &tileUpperBoundPerLoop](int64_t loopIdx) {
+                 return isActiveTileLoopIndex(loopIdx, orderedForOps, tileUpperBoundPerLoop);
+               });
 }
 
 static bool storeLastAxisTileZeroWithOtherTiledAxes(memref::StoreOp storeOp,
@@ -1446,7 +1451,7 @@ static bool storeLastAxisTileZeroWithOtherTiledAxes(memref::StoreOp storeOp,
   if (!memTy || memTy.getRank() == 0) {
     return false;
   }
-  SmallVector<int64_t, 8> rawStoreDimLoopIndices;
+  SmallVector<int64_t, kSmallVectorSizeEight> rawStoreDimLoopIndices;
   inferDimLoopIndices(storeOp, memTy.getRank(), forOpToIndex, rawStoreDimLoopIndices);
   if (rawStoreDimLoopIndices.empty()) {
     return false;
@@ -1462,8 +1467,21 @@ static bool storeLastAxisTileZeroWithOtherTiledAxes(memref::StoreOp storeOp,
   return false;
 }
 
+static void appendIfYieldUseChainSuccessors(Value v, scf::YieldOp yieldOp, scf::IfOp ifOp,
+                                            SmallVectorImpl<Value> &worklist,
+                                            llvm::SmallPtrSet<Value, kSmallVectorSizeSixteen> &visited) {
+  for (unsigned i = 0; i < yieldOp.getNumOperands(); ++i) {
+    if (yieldOp.getOperand(i) != v || i >= ifOp.getNumResults()) {
+      continue;
+    }
+    if (visited.insert(ifOp.getResult(i)).second) {
+      worklist.push_back(ifOp.getResult(i));
+    }
+  }
+}
+
 static void appendUseChainSuccessorValues(Value v, Operation *user, SmallVectorImpl<Value> &worklist,
-                                            llvm::SmallPtrSet<Value, 16> &visited) {
+                                            llvm::SmallPtrSet<Value, kSmallVectorSizeSixteen> &visited) {
   if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
     Operation *parent = yieldOp->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
@@ -1473,14 +1491,7 @@ static void appendUseChainSuccessorValues(Value v, Operation *user, SmallVectorI
         }
       }
     } else if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
-      for (unsigned i = 0; i < yieldOp.getNumOperands(); ++i) {
-        if (yieldOp.getOperand(i) != v || i >= ifOp.getNumResults()) {
-          continue;
-        }
-        if (visited.insert(ifOp.getResult(i)).second) {
-          worklist.push_back(ifOp.getResult(i));
-        }
-      }
+      appendIfYieldUseChainSuccessors(v, yieldOp, ifOp, worklist, visited);
     }
     return;
   }
@@ -1494,8 +1505,8 @@ static void appendUseChainSuccessorValues(Value v, Operation *user, SmallVectorI
 static bool loadUseChainHasStoreNeedingAppendAlignAxis(
     Value loadResult, const llvm::DenseMap<scf::ForOp, int64_t> &forOpToIndex, ArrayRef<scf::ForOp> orderedForOps,
     const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop) {
-  llvm::SmallPtrSet<Value, 16> visited;
-  SmallVector<Value, 8> worklist;
+  llvm::SmallPtrSet<Value, kSmallVectorSizeSixteen> visited;
+  SmallVector<Value, kSmallVectorSizeEight> worklist;
   visited.insert(loadResult);
   worklist.push_back(loadResult);
   for (size_t i = 0; i < worklist.size(); ++i) {
@@ -1582,11 +1593,12 @@ static int64_t TotalBitsFromDimLoopIndicesInBroadcast(ArrayRef<int64_t> dimLoopI
   if (dimLoopIndices.empty()) {
     return static_cast<int64_t>(getElementTypeOrSelf(elementType).getIntOrFloatBitWidth());
   }
-  SmallVector<int64_t, 4> bounds;
+  SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   bounds.reserve(dimLoopIndices.size());
-  std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(bounds), [&](int64_t loopIndex) {
-    return DimLoopIndexToBound(loopIndex, orderedForOps, tileUpperBoundPerLoop);
-  });
+  std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(bounds),
+                 [orderedForOps, &tileUpperBoundPerLoop](int64_t loopIndex) {
+                   return DimLoopIndexToBound(loopIndex, orderedForOps, tileUpperBoundPerLoop);
+                 });
   if (!bounds.empty()) {
     bounds.back() = ceilFactor(bounds.back(), lastAxis32ByteAlignElems(elementType));
   }
@@ -1819,7 +1831,7 @@ static std::string loadIndexValueSig(Value v) {
 }
 
 static std::string scfForLoopSig(scf::ForOp forOp) {
-  SmallVector<scf::ForOp, 8> chain;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> chain;
   scf::ForOp cur = forOp;
   while (cur) {
     chain.push_back(cur);
@@ -1842,13 +1854,13 @@ static void propagateTileUpperBoundsInMap(PeakAnalysisInput &input) {
     return;
   }
 
-  llvm::StringMap<llvm::SmallVector<scf::ForOp, 8>> boundGroups;
-  func.walk([&](scf::ForOp forOp) {
+  llvm::StringMap<llvm::SmallVector<scf::ForOp, kSmallVectorSizeEight>> boundGroups;
+  func.walk([&boundGroups](scf::ForOp forOp) {
     boundGroups[scfForLoopSig(forOp)].push_back(forOp);
   });
 
   for (auto &entry : boundGroups) {
-    const llvm::SmallVector<scf::ForOp, 8> &forOps = entry.getValue();
+    const llvm::SmallVector<scf::ForOp, kSmallVectorSizeEight> &forOps = entry.getValue();
     int64_t validBound = 0;
     for (scf::ForOp forOp : forOps) {
       auto it = input.tileUpperBoundPerLoop.find(forOp);
@@ -1873,7 +1885,7 @@ static void propagateTileUpperBoundsInMap(PeakAnalysisInput &input) {
 
 // Tile size 1 is equivalent to no tiling; erase so downstream shape inference skips the axis.
 static void normalizeUnitTileUpperBoundsToZero(PeakAnalysisInput &input) {
-  SmallVector<scf::ForOp, 16> eraseList;
+  SmallVector<scf::ForOp, kSmallVectorSizeSixteen> eraseList;
   for (const auto &entry : input.tileUpperBoundPerLoop) {
     if (entry.second == 1) {
       eraseList.push_back(entry.first);
@@ -1897,7 +1909,7 @@ void MemoryPeakEstimator::buildForOpWalkOrder_() {
     return;
   }
   llvm::StringMap<int64_t> sigToIndex;
-  input_.func.walk([&](scf::ForOp forOp) {
+  input_.func.walk([this, &sigToIndex](scf::ForOp forOp) {
     const std::string sig = scfForLoopSig(forOp);
     int64_t idx;
     if (auto it = sigToIndex.find(sig); it != sigToIndex.end()) {
@@ -1915,9 +1927,10 @@ void MemoryPeakEstimator::DimLoopIndicesToShape(ArrayRef<int64_t> dimLoopIndices
                                                 SmallVectorImpl<int64_t> &outBounds) const {
   outBounds.clear();
   outBounds.reserve(dimLoopIndices.size());
-  std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(outBounds), [&](int64_t loopIndex) {
-    return DimLoopIndexToBound(loopIndex, orderedForOps_, input_.tileUpperBoundPerLoop);
-  });
+  std::transform(dimLoopIndices.begin(), dimLoopIndices.end(), std::back_inserter(outBounds),
+                 [this](int64_t loopIndex) {
+                   return DimLoopIndexToBound(loopIndex, orderedForOps_, input_.tileUpperBoundPerLoop);
+                 });
 }
 
 int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
@@ -1931,7 +1944,7 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
     }
     return bits;
   }
-  SmallVector<int64_t, 4> bounds;
+  SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   DimLoopIndicesToShape(info.dimLoopIndices, bounds);
   return totalBitsFromShape(bounds, info.elementType, input_.alignBufferSizeTo256Bits);
 }
@@ -1986,7 +1999,7 @@ static bool isInsideScfForBody(Operation *op) {
 }
 
 void MemoryPeakEstimator::inferEnclosingDimLoopIndices_(Operation *op, SmallVectorImpl<int64_t> &outIndices) const {
-  SmallVector<scf::ForOp, 8> loops;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> loops;
   getEnclosingScfForOps(op, loops);
   llvm::DenseSet<int64_t> seen;
   outIndices.clear();
@@ -2034,7 +2047,7 @@ void MemoryPeakEstimator::inferDimLoopIndicesFromForOps_(ArrayRef<scf::ForOp> lo
 
 void MemoryPeakEstimator::inferIterArgDimLoopIndices_(scf::ForOp owningFor,
                                                        SmallVectorImpl<int64_t> &outIndices) const {
-  SmallVector<scf::ForOp, 8> loops;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> loops;
   getEnclosingScfForOps(owningFor, loops);
   loops.push_back(owningFor);
   inferDimLoopIndicesFromForOps_(loops, outIndices);
@@ -2042,7 +2055,7 @@ void MemoryPeakEstimator::inferIterArgDimLoopIndices_(scf::ForOp owningFor,
 
 void MemoryPeakEstimator::inferBroadcastOutputDimLoopIndices_(Operation *op,
                                                                SmallVectorImpl<int64_t> &outIndices) const {
-  SmallVector<scf::ForOp, 8> loops;
+  SmallVector<scf::ForOp, kSmallVectorSizeEight> loops;
   getEnclosingScfForOps(op, loops);
   inferDimLoopIndicesFromForOps_(loops, outIndices);
 }
@@ -2109,7 +2122,7 @@ int64_t MemoryPeakEstimator::getOrCreateBlockInputBufferIndex_(Value input, cons
 
 int64_t MemoryPeakEstimator::getOrCreateBrcCstBuffer_(Value cst, ArrayRef<int64_t> dimLoopIndices, OpRecord &rec,
                                                       Operation *op) {
-  SmallVector<int64_t, 8> filteredDimLoopIndices;
+  SmallVector<int64_t, kSmallVectorSizeEight> filteredDimLoopIndices;
   filterActiveTileDimLoopIndices(dimLoopIndices, filteredDimLoopIndices, orderedForOps_, input_.tileUpperBoundPerLoop);
 
   BrcCstKey key;
@@ -2147,7 +2160,7 @@ bool MemoryPeakEstimator::isMaterializedCstBufferIndex(int64_t bufIdx) const {
 }
 
 int64_t MemoryPeakEstimator::findMaterializedCstBufferIndex(Value cst, ArrayRef<int64_t> dimLoopIndices) const {
-  SmallVector<int64_t, 8> filteredDimLoopIndices;
+  SmallVector<int64_t, kSmallVectorSizeEight> filteredDimLoopIndices;
   filterActiveTileDimLoopIndices(dimLoopIndices, filteredDimLoopIndices, orderedForOps_, input_.tileUpperBoundPerLoop);
 
   BrcCstKey key;
@@ -2162,7 +2175,6 @@ int64_t MemoryPeakEstimator::findMaterializedCstBufferIndex(Value cst, ArrayRef<
 EquivalentOpKey MemoryPeakEstimator::buildEquivalentOpKeyFromRecord_(Operation *op, Operation *enclosingFor,
                                                                      ArrayRef<int64_t> orderedInputBufferIndexes) {
   EquivalentOpKey key;
-  // key.enclosingFor = enclosingFor;
   key.opType = OpTypeCode(op);
   key.opName = op->getName().getStringRef();
 
@@ -2194,7 +2206,7 @@ EquivalentOpKey MemoryPeakEstimator::buildEquivalentOpKeyFromRecord_(Operation *
     }
   }
 
-  auto resolveValueBuffer = [&](Value val) -> std::optional<int64_t> {
+  auto resolveValueBuffer = [this, op](Value val) -> std::optional<int64_t> {
     const int64_t idx = resolveOperandBufferIndex_(val, op);
     if (idx < 0) {
       return std::nullopt;
@@ -2267,7 +2279,7 @@ static void mapYieldedResultsToBufferIndexes(ArrayRef<Value> results, ArrayRef<V
 }
 
 OpRecord &MemoryPeakEstimator::createBaseOpRecord_(Operation *op) {
-  int64_t opIndex = perOpList_.size();
+  int64_t opIndex = static_cast<int64_t>(perOpList_.size());
   perOpList_.push_back(OpRecord{});
   OpRecord &rec = perOpList_[opIndex];
   perOpIndexMap_[op] = opIndex;
@@ -2285,8 +2297,8 @@ void MemoryPeakEstimator::initPerOpForForOp_(scf::ForOp forOp) {
     return;
   }
   auto yieldOp = cast<scf::YieldOp>(forOp.getRegion().front().getTerminator());
-  SmallVector<Value, 4> forResults(forOp.getResults().begin(), forOp.getResults().end());
-  SmallVector<Value, 4> yieldValues(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
+  SmallVector<Value, kSmallVectorSizeFour> forResults(forOp.getResults().begin(), forOp.getResults().end());
+  SmallVector<Value, kSmallVectorSizeFour> yieldValues(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
   mapYieldedResultsToBufferIndexes(forResults, yieldValues, bufferInfoIndexMap_, perOpIndexMap_, perOpList_);
   if (auto outIt = bufferInfoIndexMap_.find(forOp.getResult(0)); outIt != bufferInfoIndexMap_.end()) {
     rec.outputBufferIndex = outIt->second;
@@ -2304,8 +2316,8 @@ void MemoryPeakEstimator::initPerOpForIfOp_(scf::IfOp ifOp) {
   } else {
     yieldOp = cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
   }
-  SmallVector<Value, 4> ifResults(ifOp.getResults().begin(), ifOp.getResults().end());
-  SmallVector<Value, 4> yieldValues(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
+  SmallVector<Value, kSmallVectorSizeFour> ifResults(ifOp.getResults().begin(), ifOp.getResults().end());
+  SmallVector<Value, kSmallVectorSizeFour> yieldValues(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
   mapYieldedResultsToBufferIndexes(ifResults, yieldValues, bufferInfoIndexMap_, perOpIndexMap_, perOpList_);
   if (auto outIt = bufferInfoIndexMap_.find(ifOp.getResult(0)); outIt != bufferInfoIndexMap_.end()) {
     rec.outputBufferIndex = outIt->second;
@@ -2326,28 +2338,15 @@ void MemoryPeakEstimator::InferOutputBufferShape_(BufferInfo &outputBufferInfo, 
       outputBufferInfo.dimLoopIndices.clear();
       return;
     }
-    SmallVector<int64_t, 8> rawDimLoopIndices;
+    SmallVector<int64_t, kSmallVectorSizeEight> rawDimLoopIndices;
     inferDimLoopIndices(op, memTy.getRank(), forOpToIndex_, rawDimLoopIndices);
 
     bool appendAlignAxis = false;
     int64_t alignAxisElems = 1;
-    if (isa<memref::LoadOp>(op)) {
-      auto loadOp = cast<memref::LoadOp>(op);
-      if (!rawDimLoopIndices.empty()) {
-        const int64_t lastLoop = rawDimLoopIndices.back();
-        if (forLoopTileSizeIsZero(lastLoop, orderedForOps_, input_.tileUpperBoundPerLoop)) {
-          appendAlignAxis = true;
-        }
-      }
-      if (!appendAlignAxis &&
-          loadUseChainHasStoreNeedingAppendAlignAxis(loadOp.getResult(), forOpToIndex_, orderedForOps_,
-                                                     input_.tileUpperBoundPerLoop)) {
-        appendAlignAxis = true;
-      }
-      if (appendAlignAxis) {
-        const Type elemTy = outputBufferInfo.elementType ? outputBufferInfo.elementType : memTy.getElementType();
-        alignAxisElems = lastAxis32ByteAlignElems(elemTy);
-      }
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      const Type elemTy = outputBufferInfo.elementType ? outputBufferInfo.elementType : memTy.getElementType();
+      std::tie(appendAlignAxis, alignAxisElems) =
+        resolveLoadAppendAlignAxis_(loadOp, rawDimLoopIndices, elemTy);
     }
 
     filterActiveTileDimLoopIndices(rawDimLoopIndices, outputBufferInfo.dimLoopIndices, orderedForOps_,
@@ -2361,14 +2360,33 @@ void MemoryPeakEstimator::InferOutputBufferShape_(BufferInfo &outputBufferInfo, 
   inferShapeFromInput_(rec.inputBufferIndexes, outputBufferInfo, rec, op, recordInlineBroadcastExtraBuffer);
 }
 
+std::pair<bool, int64_t> MemoryPeakEstimator::resolveLoadAppendAlignAxis_(memref::LoadOp loadOp,
+                                                                          ArrayRef<int64_t> rawDimLoopIndices,
+                                                                          Type elemTy) const {
+  bool appendAlignAxis = false;
+  int64_t alignAxisElems = 1;
+  if (!rawDimLoopIndices.empty() &&
+      forLoopTileSizeIsZero(rawDimLoopIndices.back(), orderedForOps_, input_.tileUpperBoundPerLoop)) {
+    appendAlignAxis = true;
+  }
+  if (!appendAlignAxis &&
+      loadUseChainHasStoreNeedingAppendAlignAxis(loadOp.getResult(), forOpToIndex_, orderedForOps_,
+                                                 input_.tileUpperBoundPerLoop)) {
+    appendAlignAxis = true;
+  }
+  if (appendAlignAxis) {
+    alignAxisElems = lastAxis32ByteAlignElems(elemTy);
+  }
+  return {appendAlignAxis, alignAxisElems};
+}
+
 void MemoryPeakEstimator::inferShapeFromInput_(ArrayRef<int64_t> inputBufferIndexes, BufferInfo &outputBufferInfo,
                                                OpRecord &rec, Operation *op, bool recordInlineBroadcastExtraBuffer) {
-  // outputBufferInfo.isScalar = true;
   outputBufferInfo.dimLoopIndices.clear();
 
   bool hasScalarInput = false;
   bool hasVectorInput = false;
-  SmallVector<ArrayRef<int64_t>, 4> nonScalarDimLoopIndices;
+  SmallVector<ArrayRef<int64_t>, kSmallVectorSizeFour> nonScalarDimLoopIndices;
   collectInputShapeInfo(inputBufferIndexes, bufferInfoList_, hasScalarInput, hasVectorInput, nonScalarDimLoopIndices);
   if (nonScalarDimLoopIndices.empty()) {
     return;
@@ -2399,7 +2417,7 @@ void MemoryPeakEstimator::inferShapeFromInput_(ArrayRef<int64_t> inputBufferInde
 void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBufferInfo, Operation *op) {
   outputBufferInfo.isVirtual = true;
 
-  SmallVector<int64_t, 4> loopAxes;
+  SmallVector<int64_t, kSmallVectorSizeFour> loopAxes;
   auto arr = op->getAttrOfType<ArrayAttr>(kReductionAxesStr);
   for (Attribute a : arr) {
     if (auto ia = dyn_cast<IntegerAttr>(a)) {
@@ -2407,7 +2425,7 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
     }
   }
 
-  int64_t virtualOpIndex = perOpList_.size();
+  int64_t virtualOpIndex = static_cast<int64_t>(perOpList_.size());
   perOpList_.push_back(OpRecord{});
   OpRecord &virtualOpRec = perOpList_[virtualOpIndex];
   rec.VirtualopIndexes.push_back(virtualOpIndex);
@@ -2420,7 +2438,7 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
   virtualOpRec.inputBufferIndexes = rec.inputBufferIndexes;
   virtualOpRec.outputBufferIndex = rec.outputBufferIndex;
 
-  int64_t virtualReduceOpIndex = perOpList_.size();
+  int64_t virtualReduceOpIndex = static_cast<int64_t>(perOpList_.size());
   perOpList_.push_back(OpRecord{});
   OpRecord &virtualReduceOpRec = perOpList_[virtualReduceOpIndex];
   rec.VirtualopIndexes.push_back(virtualReduceOpIndex);
@@ -2432,14 +2450,14 @@ void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBuffer
   virtualReduceOpRec.opType = kOpTypeArithReduce;
   virtualReduceOpRec.inputBufferIndexes = {rec.outputBufferIndex};
 
-  int64_t reductionBufferInfoIndex = bufferInfoList_.size();
+  int64_t reductionBufferInfoIndex = static_cast<int64_t>(bufferInfoList_.size());
   bufferInfoList_.push_back(BufferInfo{});
   BufferInfo &reductionBufferInfo = bufferInfoList_[reductionBufferInfoIndex];
   reductionBufferInfo.Index = reductionBufferInfoIndex;
   reductionBufferInfo.elementType = op->getResults()[0].getType();
   reductionBufferInfo.isValid = outputBufferInfo.isValid;
 
-  SmallVector<int64_t, 4> reductionShapeIndices;
+  SmallVector<int64_t, kSmallVectorSizeFour> reductionShapeIndices;
   for (size_t i = 0; i < outputBufferInfo.dimLoopIndices.size(); i++) {
     if (llvm::find(loopAxes, static_cast<int64_t>(i)) == loopAxes.end()) {
       reductionShapeIndices.push_back(outputBufferInfo.dimLoopIndices[i]);
@@ -2459,7 +2477,7 @@ void MemoryPeakEstimator::initPerOpForGenericOp_(Operation *op) {
 
   OpRecord &rec = createBaseOpRecord_(op);
 
-  llvm::SmallVector<int64_t, 4> orderedInputBuffers;
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> orderedInputBuffers;
   orderedInputBuffers.reserve(op->getNumOperands());
   rec.inputBufferIndexes.clear();
   for (Value input : op->getOperands()) {
@@ -2482,7 +2500,8 @@ void MemoryPeakEstimator::initPerOpForGenericOp_(Operation *op) {
   Value output = op->getResults()[0];
   BufferInfo shapeProbe;
   shapeProbe.elementType = output.getType();
-  InferOutputBufferShape_(shapeProbe, op, rec, /*recordInlineBroadcastExtraBuffer=*/false);
+  const bool recordInlineBroadcastExtraBuffer = false;
+  InferOutputBufferShape_(shapeProbe, op, rec, recordInlineBroadcastExtraBuffer);
 
   rec.inputBufferIndexes.clear();
   for (size_t i = 0; i < op->getNumOperands(); ++i) {
@@ -2507,7 +2526,7 @@ void MemoryPeakEstimator::initPerOpForGenericOp_(Operation *op) {
   }
 
   if (valIndex < 0) {
-    valIndex = bufferInfoList_.size();
+    valIndex = static_cast<int64_t>(bufferInfoList_.size());
     bufferInfoList_.push_back(BufferInfo{});
     BufferInfo &outputBufferInfo = bufferInfoList_[valIndex];
 
@@ -2555,7 +2574,7 @@ void MemoryPeakEstimator::initPerOp_() {
   equivalentOpBufferMap_.clear();
   brcCstBufferMap_.clear();
   buildForOpWalkOrder_();
-  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [&](Operation *op) {
+  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [this](Operation *op) {
     if (isa<scf::YieldOp>(op) || isa<func::ReturnOp>(op)) {
       return;
     }
@@ -2575,7 +2594,7 @@ void MemoryPeakEstimator::analyzeConditionalControlFlow_() {
   conditionalAliasEdges_.clear();
   scfIfBranchInfos_.clear();
 
-  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [&](Operation *op) {
+  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [this](Operation *op) {
     if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
       if (!isScalarArithSelectOp(selectOp, bufferInfoIndexMap_, bufferInfoList_)) {
         return;
@@ -2586,7 +2605,7 @@ void MemoryPeakEstimator::analyzeConditionalControlFlow_() {
       }
       const int64_t resultIdx = resultIt->second;
 
-      auto markSelectOperand = [&](Value operand) {
+  auto markSelectOperand = [this, resultIdx](Value operand) {
         auto operandIt = bufferInfoIndexMap_.find(operand);
         if (operandIt == bufferInfoIndexMap_.end()) {
           return;
@@ -2622,7 +2641,7 @@ void MemoryPeakEstimator::analyzeConditionalControlFlow_() {
           continue;
         }
         const int64_t resultIdx = resultIt->second;
-        auto recordIfYieldAlias = [&](Value yieldVal) {
+        auto recordIfYieldAlias = [this, resultIdx](Value yieldVal) {
           auto yieldIt = bufferInfoIndexMap_.find(yieldVal);
           if (yieldIt != bufferInfoIndexMap_.end()) {
             recordConditionalAlias(conditionalAliasEdges_, resultIdx, yieldIt->second);
@@ -2658,7 +2677,7 @@ static void dumpForLoopIndexMap(
     return;
   }
   unsigned walkIdx = 0;
-  func.walk([&](scf::ForOp forOp) {
+  func.walk([&forOpToIndex, &tileUpperBoundPerLoop, &os, &walkIdx](scf::ForOp forOp) {
     auto it = forOpToIndex.find(forOp);
     const int64_t loopIndex = it != forOpToIndex.end() ? it->second : -1;
     auto tileIt = tileUpperBoundPerLoop.find(forOp);
@@ -2683,7 +2702,7 @@ static void dumpBufferDimLoopIndices(llvm::raw_ostream &os, ArrayRef<BufferInfo>
 }
 
 void MemoryPeakEstimator::dumpInplaceChains(llvm::raw_ostream &os) const {
-  llvm::DenseMap<int64_t, llvm::SmallVector<int64_t, 4>> chainBuffers;
+  llvm::DenseMap<int64_t, llvm::SmallVector<int64_t, kSmallVectorSizeFour>> chainBuffers;
   for (int64_t i = 0, n = static_cast<int64_t>(bufferInfoList_.size()); i < n; ++i) {
     const BufferInfo &info = bufferInfoList_[static_cast<size_t>(i)];
     if (!info.isValid) {
@@ -2698,7 +2717,7 @@ void MemoryPeakEstimator::dumpInplaceChains(llvm::raw_ostream &os) const {
     }
   }
 
-  llvm::SmallVector<int64_t, 8> sortedRoots;
+  llvm::SmallVector<int64_t, kSmallVectorSizeEight> sortedRoots;
   sortedRoots.reserve(chainBuffers.size());
   std::transform(chainBuffers.begin(), chainBuffers.end(), std::back_inserter(sortedRoots),
                  [](const auto &entry) { return entry.first; });
@@ -2725,7 +2744,7 @@ void MemoryPeakEstimator::dumpInplaceChains(llvm::raw_ostream &os) const {
       dumpTempBufferChainLine(os, chainRoot, perOpList_, printFlags);
     }
 
-    llvm::SmallVector<int64_t, 4> sortedBufs(buffers.begin(), buffers.end());
+    llvm::SmallVector<int64_t, kSmallVectorSizeFour> sortedBufs(buffers.begin(), buffers.end());
     llvm::sort(sortedBufs);
     for (int64_t bufIdx : sortedBufs) {
       dumpChainBufferLine(os, bufIdx, bufferInfoList_[static_cast<size_t>(bufIdx)], perOpList_, printFlags);
@@ -2896,12 +2915,12 @@ void MemoryPeakEstimator::computeBufferLifetimes() {
   // record TimelineOpIndexList, only record op whose output bufferinfo
   // update generatedBufferIndexes、killedBufferIndexes、allocTime、freeTime、opTimeIndex
   int64_t opTimeIndex = 0;
-  walkFuncBodyUntilReturn(input_.func, WalkOrder::PreOrder, [&](Operation *op) {
+  walkFuncBodyUntilReturn(input_.func, WalkOrder::PreOrder, [this, &opTimeIndex](Operation *op) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       assignForEntryTimeline_(forOp, opTimeIndex);
     }
   });
-  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [&](Operation *op) {
+  walkFuncBodyUntilReturn(input_.func, WalkOrder::PostOrder, [this, &opTimeIndex](Operation *op) {
     if (isa<scf::ForOp>(op)) {
       assignForExitTimeline_(op, opTimeIndex);
       return;
@@ -3006,7 +3025,7 @@ static bool memRefLastAxisStrideNotOne(MemRefType memTy) {
   if (!memTy || memTy.getRank() == 0) {
     return false;
   }
-  SmallVector<int64_t, 4> strides;
+  SmallVector<int64_t, kSmallVectorSizeFour> strides;
   int64_t offset = 0;
   if (failed(getStridesAndOffset(memTy, strides, offset)) || strides.empty()) {
     return false;
@@ -3039,8 +3058,8 @@ void MemoryPeakEstimator::modelLoadExtraBuffer() {
   }
 }
 
-static llvm::SmallDenseSet<int64_t, 4> inputDimLoopIndexSet(ArrayRef<int64_t> inputDimLoopIndices) {
-  llvm::SmallDenseSet<int64_t, 4> inputLoops;
+static llvm::SmallDenseSet<int64_t, kSmallVectorSizeFour> inputDimLoopIndexSet(ArrayRef<int64_t> inputDimLoopIndices) {
+  llvm::SmallDenseSet<int64_t, kSmallVectorSizeFour> inputLoops;
   for (int64_t loopIdx : inputDimLoopIndices) {
     if (loopIdx > 0) {
       inputLoops.insert(loopIdx);
@@ -3054,7 +3073,7 @@ static bool storeBroadcastsOnLastAxis(ArrayRef<int64_t> storeDimLoopIndices,
   if (storeDimLoopIndices.empty()) {
     return false;
   }
-  const llvm::SmallDenseSet<int64_t, 4> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
+  const llvm::SmallDenseSet<int64_t, kSmallVectorSizeFour> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
   const int64_t lastLoop = storeDimLoopIndices.back();
   return lastLoop > 0 && !inputLoops.contains(lastLoop);
 }
@@ -3064,10 +3083,10 @@ static int64_t computeStoreBroadcastExtraBits(ArrayRef<int64_t> storeDimLoopIndi
                                               ArrayRef<scf::ForOp> orderedForOps,
                                               const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
                                               bool alignBufferSizeTo256Bits) {
-  SmallVector<int64_t, 4> bounds;
+  SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   bounds.reserve(storeDimLoopIndices.size());
   std::transform(storeDimLoopIndices.begin(), storeDimLoopIndices.end(), std::back_inserter(bounds),
-                 [&](int64_t loopIdx) {
+                 [orderedForOps, &tileUpperBoundPerLoop](int64_t loopIdx) {
                    return DimLoopIndexToBound(loopIdx, orderedForOps, tileUpperBoundPerLoop);
                  });
   if (storeBroadcastsOnLastAxis(storeDimLoopIndices, inputDimLoopIndices) && !bounds.empty()) {
@@ -3080,7 +3099,7 @@ static int64_t computeStoreBroadcastExtraBits(ArrayRef<int64_t> storeDimLoopIndi
 
 static bool storeTargetHasBroadcastDimLoopIndices(ArrayRef<int64_t> storeDimLoopIndices,
                                                   ArrayRef<int64_t> inputDimLoopIndices) {
-  const llvm::SmallDenseSet<int64_t, 4> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
+  const llvm::SmallDenseSet<int64_t, kSmallVectorSizeFour> inputLoops = inputDimLoopIndexSet(inputDimLoopIndices);
   for (int64_t loopIdx : storeDimLoopIndices) {
     if (loopIdx > 0 && !inputLoops.contains(loopIdx)) {
       return true;
@@ -3123,7 +3142,7 @@ void MemoryPeakEstimator::replaceExtraBufferSizesMatching_(int64_t oldSize, int6
 
 void MemoryPeakEstimator::propagateStoreBroadcastInputChainResize_(int64_t startBufIdx) {
   llvm::SmallDenseSet<int64_t> visited;
-  SmallVector<int64_t, 8> worklist;
+  SmallVector<int64_t, kSmallVectorSizeEight> worklist;
   worklist.push_back(startBufIdx);
   while (!worklist.empty()) {
     const int64_t bufIdx = worklist.pop_back_val();
@@ -3164,9 +3183,9 @@ void MemoryPeakEstimator::modelStoreExtraBuffer() {
     if (memTy.getRank() == 0) {
       continue;
     }
-    SmallVector<int64_t, 8> rawStoreDimLoopIndices;
+    SmallVector<int64_t, kSmallVectorSizeEight> rawStoreDimLoopIndices;
     inferDimLoopIndices(storeOp, memTy.getRank(), forOpToIndex_, rawStoreDimLoopIndices);
-    SmallVector<int64_t, 4> storeDimLoopIndices;
+    SmallVector<int64_t, kSmallVectorSizeFour> storeDimLoopIndices;
     filterActiveTileDimLoopIndices(rawStoreDimLoopIndices, storeDimLoopIndices, orderedForOps_,
                                    input_.tileUpperBoundPerLoop);
 
@@ -3176,8 +3195,8 @@ void MemoryPeakEstimator::modelStoreExtraBuffer() {
     }
     const BufferInfo &inputInfo = bufferInfoList_[static_cast<size_t>(valueIt->second)];
 
-    SmallVector<int64_t, 4> forNestingOrder;
-    SmallVector<scf::ForOp, 8> enclosingLoops;
+    SmallVector<int64_t, kSmallVectorSizeFour> forNestingOrder;
+    SmallVector<scf::ForOp, kSmallVectorSizeEight> enclosingLoops;
     getEnclosingScfForOps(storeOp, enclosingLoops);
     inferDimLoopIndicesFromForOps_(enclosingLoops, forNestingOrder);
     if (inputInfo.multiNum > 1 &&
@@ -3227,7 +3246,7 @@ void MemoryPeakEstimator::modelReduceExtraBuffer() {
     if (opRecord.opType == kOpTypeArithReduce) {
       Operation *originOp = opRecord.sourceOp;
 
-      SmallVector<int64_t, 4> loopAxes;
+      SmallVector<int64_t, kSmallVectorSizeFour> loopAxes;
       auto arr = originOp->getAttrOfType<ArrayAttr>(kReductionAxesStr);
       for (Attribute a : arr) {
         if (auto ia = dyn_cast<IntegerAttr>(a)) {
@@ -3235,7 +3254,7 @@ void MemoryPeakEstimator::modelReduceExtraBuffer() {
         }
       }
       const auto &inputDimLoopIndices = bufferInfoList_[opRecord.inputBufferIndexes[0]].dimLoopIndices;
-      SmallVector<int64_t, 4> inputShape;
+      SmallVector<int64_t, kSmallVectorSizeFour> inputShape;
       DimLoopIndicesToShape(inputDimLoopIndices, inputShape);
       int64_t srcAllocElems =
         std::accumulate(inputShape.begin(), inputShape.end(), int64_t(1), std::multiplies<int64_t>());
@@ -3282,7 +3301,7 @@ bool MemoryPeakEstimator::hasInlineBroadcastLoopDims(Operation *op) const {
     return false;
   }
 
-  auto resolveBufferIndex = [&](Value val) -> int64_t {
+  auto resolveBufferIndex = [&inputBufferIndexes, this](Value val) -> int64_t {
     for (int64_t idx : inputBufferIndexes) {
       if (idx < 0 || idx >= static_cast<int64_t>(bufferInfoList_.size())) {
         continue;
@@ -3294,7 +3313,7 @@ bool MemoryPeakEstimator::hasInlineBroadcastLoopDims(Operation *op) const {
     return -1;
   };
 
-  auto dimLoopIndicesSizesDiffer = [&](int64_t lhsIdx, int64_t rhsIdx) -> bool {
+  auto dimLoopIndicesSizesDiffer = [this](int64_t lhsIdx, int64_t rhsIdx) -> bool {
     if (lhsIdx < 0 || rhsIdx < 0 || lhsIdx >= static_cast<int64_t>(bufferInfoList_.size()) ||
         rhsIdx >= static_cast<int64_t>(bufferInfoList_.size())) {
       return false;
@@ -3392,8 +3411,8 @@ void MemoryPeakEstimator::analyzeIntraOpInplace() {
       continue;
     }
 
-    llvm::SmallVector<int64_t, 4> sortedGenIndexes(genIndexes.begin(), genIndexes.end());
-    llvm::sort(sortedGenIndexes, [&](int64_t lhs, int64_t rhs) {
+    llvm::SmallVector<int64_t, kSmallVectorSizeFour> sortedGenIndexes(genIndexes.begin(), genIndexes.end());
+    llvm::sort(sortedGenIndexes, [this](int64_t lhs, int64_t rhs) {
       const int64_t lhsMulti = inplaceChainMaxMultiNum(bufferInfoUnionFind_, bufferInfoList_, lhs);
       const int64_t rhsMulti = inplaceChainMaxMultiNum(bufferInfoUnionFind_, bufferInfoList_, rhs);
       const bool lhsSingleMulti = lhsMulti == 1;
@@ -3473,7 +3492,7 @@ void MemoryPeakEstimator::analyzeInterOpInplace() {
     }
   }
 
-  llvm::SmallVector<ChainPlanningEntry, 8> planningEntries;
+  llvm::SmallVector<ChainPlanningEntry, kSmallVectorSizeEight> planningEntries;
   planningEntries.reserve(inplaceChainSummary_.size());
   for (const auto &entry : inplaceChainSummary_) {
     for (int64_t slot = 0; slot < entry.second.maxMultiNum; ++slot) {
@@ -3481,7 +3500,7 @@ void MemoryPeakEstimator::analyzeInterOpInplace() {
     }
   }
 
-  llvm::sort(planningEntries, [&](const ChainPlanningEntry &a, const ChainPlanningEntry &b) {
+  llvm::sort(planningEntries, [this](const ChainPlanningEntry &a, const ChainPlanningEntry &b) {
     return compareChainPlanningEntries(a, b, inplaceChainSummary_);
   });
 
@@ -3491,7 +3510,7 @@ void MemoryPeakEstimator::analyzeInterOpInplace() {
     entry.second.allocatedEndBits = 0;
   }
 
-  llvm::SmallVector<PlacedChainInstance, 16> placedInstances;
+  llvm::SmallVector<PlacedChainInstance, kSmallVectorSizeSixteen> placedInstances;
   placedInstances.reserve(planningEntries.size());
   for (const ChainPlanningEntry &planEntry : planningEntries) {
     placeChainPlanningEntry(planEntry, inplaceChainSummary_, placedInstances);
@@ -3553,7 +3572,7 @@ void fillTileUpperBoundsByWalkOrder(PeakAnalysisInput &input, llvm::ArrayRef<int
     return;
   }
   unsigned i = 0;
-  input.func.walk([&](scf::ForOp forOp) {
+  input.func.walk([&input, &bounds, &i](scf::ForOp forOp) {
     if (i < bounds.size() && bounds[i] > 0) {
       input.tileUpperBoundPerLoop[forOp] = bounds[i];
     }
@@ -3567,7 +3586,7 @@ int64_t estimateAndPrintPeakWithUnitTileSize(func::FuncOp func) {
   input.enableMultibuffer = true;
   input.alignBufferSizeTo256Bits = false;
   if (func) {
-    func.walk([&](scf::ForOp forOp) {
+    func.walk([&input](scf::ForOp forOp) {
       input.tileUpperBoundPerLoop[forOp] = 1;
       input.isReduceXorAllVectorizeLoop[forOp] = false;
     });
@@ -3601,7 +3620,7 @@ void estimatePeakForTiling(const PeakAnalysisInput &analysisInput, PeakAnalysisR
                << " PeakBits=" << out.PeakBits << " tileBounds=[";
   if (func) {
     bool first = true;
-    func.walk([&](scf::ForOp forOp) {
+    func.walk([&first, &analysisInput](scf::ForOp forOp) {
       if (!first) {
         llvm::dbgs() << ", ";
       }
