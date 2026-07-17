@@ -474,7 +474,8 @@ void BufferAnalysis::UpdateIfOpBufferAliasImpl(IfOpType ifOp, YieldOpType yieldO
     Value result = ifOp->getResult(i);
     if (isMemRefValue(result) && isMemRefValue(arg)) {
       // Multiple buffers involved, requiring one-to-one correspondence
-      UpdateBufferAlias(result, arg, /* hasCond= */ true);
+      constexpr bool hasCond = true;
+      UpdateBufferAlias(result, arg, hasCond);
     }
   }
 }
