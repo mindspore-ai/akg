@@ -254,7 +254,7 @@ inline SmallVector<int64_t, kSmallVectorSizeSix> collectBishengStrideAlignUnits(
         continue;
       }
       size_t idx = static_cast<size_t>(dim);
-      alignTargets[idx] = std::lcm(alignTargets[idx], unit);
+      alignTargets[idx] = unit;
     }
   }
 
@@ -262,8 +262,11 @@ inline SmallVector<int64_t, kSmallVectorSizeSix> collectBishengStrideAlignUnits(
   int64_t shapeAccumulation = 1;
   for (int64_t dim = static_cast<int64_t>(shape.size()) - 1; dim >= 0; --dim) {
     size_t idx = static_cast<size_t>(dim);
-    int64_t newAlignedUnits = std::lcm(innerAlignedUnits, alignTargets[idx]);
-    alignUnits[idx + 1] = (shapeAccumulation % newAlignedUnits == 0) ? 1 : newAlignedUnits / innerAlignedUnits;
+    int64_t newAlignedUnits = std::max(innerAlignedUnits, alignTargets[idx]);
+    int64_t nonzeroNewAlignedUnits = std::max<int64_t>(newAlignedUnits, 1);
+    int64_t nonzeroInnerAlignedUnits = std::max<int64_t>(innerAlignedUnits, 1);
+    alignUnits[idx + 1] =
+      (shapeAccumulation % nonzeroNewAlignedUnits == 0) ? 1 : nonzeroNewAlignedUnits / nonzeroInnerAlignedUnits;
     innerAlignedUnits = newAlignedUnits;
     if (staticDims[idx]) {
       shapeAccumulation = multiplyAndCap(
