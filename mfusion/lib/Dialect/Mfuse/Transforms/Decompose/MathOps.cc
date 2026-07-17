@@ -356,8 +356,11 @@ class MatMulWithBiasDecomposePattern : public OpRewritePattern<mfuse::MatmulWith
 };
 
 /// Populate the given pattern set with decompose patterns.
-/// This function registers decompose patterns based on the provided op list.
-void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList) {
+/// When \p opList is empty, matmul_with_bias is registered only if
+/// \p includeMatMulWithBiasByDefault is true (AFTER_MANUAL_FUSION passes false;
+/// DVM adds it back via extra-op-list=matmul_with_bias).
+void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList,
+                                     bool includeMatMulWithBiasByDefault) {
   MLIRContext *ctx = patterns.getContext();
 
   // Map of operation names to their pattern registration functions
@@ -369,6 +372,10 @@ void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vec
     {"tanh", [](RewritePatternSet &p, MLIRContext *c) { p.add<TanhDecomposePattern>(c); }},
     {"sigmoid", [](RewritePatternSet &p, MLIRContext *c) { p.add<SigmoidDecomposePattern>(c); }},
     {"matmulwithbias", [](RewritePatternSet &p, MLIRContext *c) { p.add<MatMulWithBiasDecomposePattern>(c); }}};
+
+  if (opList.empty() && !includeMatMulWithBiasByDefault) {
+    patternMap.erase("matmulwithbias");
+  }
 
   // Register patterns using the common function
   registerPatternsByOpList(patterns, ctx, patternMap, opList);

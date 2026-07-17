@@ -138,8 +138,16 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
         stage="Decompose aclnn.var for DVM (before reduce_mean)",
     )
 
+    after_decompose = "decompose{pattern-type=AFTER_MANUAL_FUSION}"
+    # DVM: also split matmul_with_bias so bias add can fuse with epilogue.
+    # Non-DVM keeps fused op for aten.addmm on torch exit.
+    if kernel_generator == "dvm":
+        after_decompose = (
+            "decompose{pattern-type=AFTER_MANUAL_FUSION "
+            "extra-op-list=matmul_with_bias}"
+        )
     runner.run(
-        pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
+        pipeline=f"builtin.module({after_decompose}, canonicalize)",
         stage="Decompose complex ops to meta ops",
     )
 
