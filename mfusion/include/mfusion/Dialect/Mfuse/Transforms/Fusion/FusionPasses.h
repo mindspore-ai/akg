@@ -33,6 +33,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulPermute.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulK1ToMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulReshape.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/MatMulOptimizationManager.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseAddRmsNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseBatchNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNorm.h"
