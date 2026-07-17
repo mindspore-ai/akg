@@ -61,6 +61,9 @@
 namespace mlir {
 namespace {
 
+// Minimum opt-level required to enable type legalization for Ascend.
+static constexpr unsigned kLegalizeTypeOptLevel = 2;
+
 void canonicalizationPipeline(OpPassManager &pm) {
   pm.addPass(createArithToAffineConversionPass());
   pm.nest<func::FuncOp>().addPass(scf::createCanonicalizeIterArgPass());
@@ -247,7 +250,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(createAffineIteratorConversionPass());
     nestedFusionPM.addPass(createStoreLoadElimPass());
-    nestedFusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= 2));
+    nestedFusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel));
     nestedFusionPM.addPass(createNormalizePass());
     nestedFusionPM.addPass(createConvertAffineToSCFPass());
 
