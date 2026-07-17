@@ -396,3 +396,29 @@ def MfuseFusion : Pass<"mfuse-fusion", "::mlir::ModuleOp"> {
     "::mlir::func::FuncDialect"
   ];
 }
+
+//===----------------------------------------------------------------------===//
+// MatMulOptimization pass - unified MatMul optimization manager
+//===----------------------------------------------------------------------===//
+
+def MatMulOptimization : Pass<"matmul-optimization", "::mlir::ModuleOp"> {
+  let summary = "Unified MatMul optimization pass with optimal ordering";
+  let description = [{
+    Unified MatMul optimization manager that runs all MatMul-related passes
+    in the optimal order with explicit dependency management:
+    1. fuse-matmul-cast - absorb f16->f32 cast (must precede unsqueeze:
+       Unsqueeze first inserts reshape and breaks Matmul->Cast matching on 1D)
+    2. fuse-matmul-unsqueeze-squeeze - normalize 1D inputs
+    3. fuse-matmul-permute - eliminate permute into trans flags
+    4. fuse-matmul-k1-to-mul - K=1 case reduction (must precede bias-add:
+       K1 only matches MatmulOp; BiasAdd first would hide K=1 behind
+       MatmulWithBiasOp until AFTER_MANUAL_FUSION splits it back without mul)
+    5. fuse-matmul-bias-add - bias fusion
+    6. fuse-matmul-reshape-bias-add - reshape path bias fusion
+  }];
+  let constructor = "mlir::mfuse::createMatMulOptimizationPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
