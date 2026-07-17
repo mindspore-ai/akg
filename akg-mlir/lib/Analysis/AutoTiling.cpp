@@ -223,10 +223,11 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
     if (solver->solved.find(a) == solver->solved.end()) {
       solver->solve(a);
     }
+    const auto resultAxisIdx = static_cast<unsigned>(axisIdx);
     if (level < a->configs[kTileCfg].size()) {
-      resMap[axisIdx] = a->configs[kTileCfg][level]->value;
+      resMap[resultAxisIdx] = static_cast<unsigned>(a->configs[kTileCfg][level]->value);
     } else {
-      resMap[axisIdx] = 1;
+      resMap[resultAxisIdx] = 1;
     }
   };
   auto sortedAxes = solver->sortAxis(bandIdx);
