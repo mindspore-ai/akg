@@ -2413,14 +2413,14 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // whether the output memref can be reused as the scalar accumulator buffer
   // (legacy `memref<1xT>` path) and, depending on that, sets up either the
   // legacy scalar identity / scratch store or the new rank-0 vector seed.
-  void buildFullReductionSeed(BuilderEnv env, FullReductionInfo info, DeliveryCtx dctx,
-                              SeedResult &out) const {
+  void buildFullReductionSeed(const BuilderEnv &env, const FullReductionInfo &info,
+                              const DeliveryCtx &dctx, SeedResult &out) const {
     OpBuilder &builder = env.builder;
     Location loc = env.loc;
     npuv::ReductionOp redOp = info.redOp;
     vector::CombiningKind kind = info.kind;
     Type scalarElem = info.scalarElem;
-    const DeliveryTarget target = dctx.target;
+    const DeliveryTarget &target = dctx.target;
     const ReductionDelivery &delivery = dctx.delivery;
     out.reuseTargetAsAccBuf = false;
     if (target.isStore && target.rank == 1 && target.memref) {
@@ -2828,16 +2828,17 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // aligned main loop and a masked tail loop; the accumulators thread from main
   // into tail. Returns the final loop (whose results are the accumulators) in
   // `pass1`.
-  LogicalResult runPartialPass1(PartialPassEnv env, Location loc, LoopIterCtx iter,
-                                ReductionCtx red, scf::ForOp &pass1) const {
+  LogicalResult runPartialPass1(const PartialPassEnv &env, Location loc, const LoopIterCtx &iter,
+                                const ReductionCtx &red, scf::ForOp &pass1) const {
     if (iter.rank < 1) {
       return failure();
     }
+    const ArrayRef<Value> bounds = iter.bounds;
     const size_t innerIdx = static_cast<size_t>(iter.rank - 1);
-    if (innerIdx >= iter.bounds.size()) {
+    if (innerIdx >= bounds.size()) {
       return failure();
     }
-    Value bound = iter.bounds[innerIdx];
+    Value bound = bounds[innerIdx];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     SmallVector<Value> curInit(red.redIdents.begin(), red.redIdents.end());
     bool any = false;
