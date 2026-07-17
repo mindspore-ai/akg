@@ -363,7 +363,7 @@ void GlobalConfigSolver::UpdateGlobalInfo(func::FuncOp funcOp) {
       for (size_t i = 0; i < mapLevelCnt[axisInfo.mapLevel].size(); ++i) {
         auto used = mapLevelCnt[axisInfo.mapLevel][i];
         if (!used) {
-          axisInfo.mapDim = i;
+          axisInfo.mapDim = static_cast<int>(i);
           mapLevelCnt[axisInfo.mapLevel][i] = true;
           break;
         }
