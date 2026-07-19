@@ -113,6 +113,9 @@ class TransposeStrategy : public TilingStrategy {
   int maxExpectSeq = 4;
   int maxExpectSeqPerAxis = 2;
   size_t minRankForTranspose = 2;
+
+ private:
+  void allocTransposeResource(const AxisPtr axis, int64_t warpSize, GpuModelGraphPtr gpuGraph);
 };
 
 class BroadcastStrategy : public TilingStrategy {
