@@ -352,50 +352,59 @@ void TransposeStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
   auto warpSize = GpuInfo::getInstance(gpuGraph->hardware).getWarpSizes();
   auto innerMostReadAxis = transposeRead->loopNest_.back();
   auto innerMostWriteAxis = transposeWrite->loopNest_.back();
-  auto allocResource = [this, &warpSize, &gpuGraph](const AxisPtr axis) {
-    auto blockSize = std::min<int64_t>(warpSize, axis->range.second);
-    if (!gpuGraph->gpuBlock.canApply(blockSize)) {
-      return;
-    }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(axis, blockSize);
+  allocTransposeResource(innerMostWriteAxis, warpSize, gpuGraph);
+  allocTransposeResource(innerMostReadAxis, warpSize, gpuGraph);
+  gpuGraph->sortedAxes = sortByLoadAxes;
+  gpuGraph->updateMaxRankTensor(transposeWrite);
+}
+
+void TransposeStrategy::allocTransposeResource(const AxisPtr axis, int64_t warpSize, GpuModelGraphPtr gpuGraph) {
+  auto blockSize = std::min<int64_t>(warpSize, axis->range.second);
+  if (!gpuGraph->gpuBlock.canApply(blockSize)) {
+    return;
+  }
+  if (auto blockcfg = gpuGraph->gpuBlock.alloc(axis, blockSize)) {
     blockcfg->index = ConfigPos::kInner;
     blockcfg->mapDim = static_cast<int>(gpuGraph->gpuBlock.currAllocDim()) - 1;
-    auto outerSize = (axis->range.second - 1) / blockSize + 1;
-    if (outerSize > maxExpectSeqPerAxis && outerSize % maxExpectSeqPerAxis == 0 &&
-        gpuGraph->gpuGrid.canApply(outerSize / maxExpectSeqPerAxis)) {
-      // we can do multi-tile for this divisible & large-shape case and alloc grids to the outer-most axis
-      auto innerTile = axis->tryGetConfig(1);
-      if (!innerTile) {
-        axis->doExtraTile();
-        innerTile = axis->tryGetConfig(1);
-      }
-      innerTile->value = static_cast<int>(blockSize);
-      auto outerTile = axis->tryGetConfig(0);
-      outerTile->value = innerTile->value * maxExpectSeqPerAxis;
-      outerSize = outerSize / maxExpectSeqPerAxis;
-      auto seqCfg = std::make_shared<GpuSeq>(maxExpectSeqPerAxis);
-      seqCfg->index = ConfigPos::kMiddle;
-      axis->configs[seqCfg->type].push_back(seqCfg);
-      auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize);
+  }
+  auto outerSize = (axis->range.second - 1) / blockSize + 1;
+  if (outerSize > maxExpectSeqPerAxis && outerSize % maxExpectSeqPerAxis == 0 &&
+      gpuGraph->gpuGrid.canApply(outerSize / maxExpectSeqPerAxis)) {
+    // we can do multi-tile for this divisible & large-shape case and alloc grids to the outer-most axis
+    auto innerTile = axis->tryGetConfig(1);
+    if (!innerTile) {
+      axis->doExtraTile();
+      innerTile = axis->tryGetConfig(1);
+    }
+    const int innerTileValue = static_cast<int>(blockSize);
+    if (innerTile) {
+      innerTile->value = innerTileValue;
+    }
+    if (auto outerTile = axis->tryGetConfig(0)) {
+      outerTile->value = innerTileValue * maxExpectSeqPerAxis;
+    }
+    outerSize = outerSize / maxExpectSeqPerAxis;
+    auto seqCfg = std::make_shared<GpuSeq>(maxExpectSeqPerAxis);
+    seqCfg->index = ConfigPos::kMiddle;
+    axis->configs[seqCfg->type].push_back(seqCfg);
+    if (auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize)) {
       gridcfg->index = ConfigPos::kOuter;
-    } else {
-      // otherwise, we can only do single tile, and we alloc the outer-most axis to grids or seqs by condition
-      auto tile = axis->tryGetConfig(0);
+    }
+  } else {
+    // otherwise, we can only do single tile, and we alloc the outer-most axis to grids or seqs by condition
+    if (auto tile = axis->tryGetConfig(0)) {
       tile->value = static_cast<int>(blockSize);
-      if (outerSize <= maxExpectSeq) {
-        auto seqCfg = std::make_shared<GpuSeq>(outerSize);
-        seqCfg->index = ConfigPos::kOuter;
-        axis->configs[seqCfg->type].push_back(seqCfg);
-      } else {
-        auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize);
+    }
+    if (outerSize <= maxExpectSeq) {
+      auto seqCfg = std::make_shared<GpuSeq>(outerSize);
+      seqCfg->index = ConfigPos::kOuter;
+      axis->configs[seqCfg->type].push_back(seqCfg);
+    } else {
+      if (auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize)) {
         gridcfg->index = ConfigPos::kOuter;
       }
     }
-  };
-  allocResource(innerMostWriteAxis);
-  allocResource(innerMostReadAxis);
-  gpuGraph->sortedAxes = sortByLoadAxes;
-  gpuGraph->updateMaxRankTensor(transposeWrite);
+  }
 }
 
 bool BroadcastStrategy::searchForSmallShape(const GpuModelGraphPtr gpuGraph, const AxisPtr a) {
@@ -409,10 +418,12 @@ bool BroadcastStrategy::searchForSmallShape(const GpuModelGraphPtr gpuGraph, con
     if (!gpuGraph->gpuBlock.canApply(innerSize)) {
       continue;
     }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize);
-    blockcfg->index = ConfigPos::kInner;
-    auto tile = a->tryGetConfig(0);
-    tile->value = static_cast<int>(innerSize);
+    if (auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize)) {
+      blockcfg->index = ConfigPos::kInner;
+    }
+    if (auto tile = a->tryGetConfig(0)) {
+      tile->value = static_cast<int>(innerSize);
+    }
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
     seqCfg->index = ConfigPos::kOuter;
     a->configs[seqCfg->type].push_back(seqCfg);
@@ -435,20 +446,24 @@ bool BroadcastStrategy::searchForLargeShape(const GpuModelGraphPtr gpuGraph, con
     if (!gpuGraph->gpuBlock.canApply(innerSize) || !gpuGraph->gpuGrid.canApply(outerSize)) {
       continue;
     }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize);
-    blockcfg->index = ConfigPos::kInner;
+    if (auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize)) {
+      blockcfg->index = ConfigPos::kInner;
+    }
     a->doExtraTile();
-    auto tile1 = a->tryGetConfig(1);
-    tile1->value = innerSize;
+    if (auto tile1 = a->tryGetConfig(1)) {
+      tile1->value = innerSize;
+    }
 
-    auto tile = a->tryGetConfig(0);
-    tile->value = middleSize;
+    if (auto tile = a->tryGetConfig(0)) {
+      tile->value = middleSize;
+    }
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
     seqCfg->index = ConfigPos::kMiddle;
     a->configs[seqCfg->type].push_back(seqCfg);
 
-    auto gridcfg = gpuGraph->gpuGrid.alloc(a, outerSize);
-    gridcfg->index = ConfigPos::kOuter;
+    if (auto gridcfg = gpuGraph->gpuGrid.alloc(a, outerSize)) {
+      gridcfg->index = ConfigPos::kOuter;
+    }
     succ = true;
     break;
   }
@@ -549,8 +564,9 @@ bool ParallelStrategy::tryMapBlock(const GpuModelGraphPtr gpuGraph, const AxisPt
   if (!gpuGraph->gpuBlock.seen(axis) && gpuGraph->gpuBlock.canApply(largestForBlock)) {
     (void)gpuGraph->gpuBlock.alloc(axis, largestForBlock);
     if (currHasMinMax) {
-      auto tile = axis->tryGetConfig(0);
-      tile->value = static_cast<int>(largestForBlock);
+      if (auto tile = axis->tryGetConfig(0)) {
+        tile->value = static_cast<int>(largestForBlock);
+      }
     } else {
       auto consTile = Constraint(1, static_cast<int>(largestForBlock), 1);
       axis->tryAddConstraint(0, consTile);
@@ -824,10 +840,14 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
       // Vectorization and unroll are on the same axis.
       bool isUnroll = axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kVectorization) != 0u;
       if (isUnroll) {
-        auto unrollConfig = axis->tryGetConfig(1, kTileCfg);
-        unrollConfig->mergeConstraints();
-        unrollTileValue = unrollConfig->getValidCandidates()[0];
-        axisSize = unrollTileValue;
+        if (auto unrollConfig = axis->tryGetConfig(1, kTileCfg)) {
+          unrollConfig->mergeConstraints();
+          auto candidates = unrollConfig->getValidCandidates();
+          if (!candidates.empty()) {
+            unrollTileValue = candidates[0];
+            axisSize = unrollTileValue;
+          }
+        }
       }
 
       int evaluateNum = static_cast<int>(dataSize) / MIN_EXEC_NUM_PER_THREAD;

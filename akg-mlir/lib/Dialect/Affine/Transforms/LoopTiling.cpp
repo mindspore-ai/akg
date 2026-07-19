@@ -1409,7 +1409,7 @@ affine::AffineForOp LoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &build
     Block *parentBlock = fullLoop->getBlock();
     moveTailBlockAfterFullLoop(fullLoop, ctx.tailBlock);
     builder.setInsertionPoint(parentBlock, fullLoop->getIterator());
-    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, /* hasElse= */ false);
+    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, false);
   }
   fullLoop.setLowerBound(ValueRange{kernelId}, startMap);
   fullLoop.setUpperBound(ValueRange{kernelId}, endMap);
@@ -1445,8 +1445,8 @@ void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams
   auto lastIterSet = IntegerSet::get(kAffineSingleDimCount, kAffineZeroSymbolCount, exprs, eqFlags);
 
   builder.setInsertionPoint(params.tailLoop);
-  auto tailIfOp = builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId},
-                                                     /* hasElse= */ false);
+  auto tailIfOp =
+    builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId}, false);
 
   params.tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
 }
