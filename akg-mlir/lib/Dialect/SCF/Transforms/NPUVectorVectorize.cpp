@@ -101,6 +101,8 @@ namespace {
 
 constexpr int kMaxMemrefAccessNormalizeGuards = 64;
 constexpr size_t kMinMergedReductionLoopCount = 2;
+constexpr int64_t kCacheKeyLoopDrivenDimTag = -2;
+constexpr int64_t kCacheKeyRuntimeIndexDimTag = -1;
 using namespace mlir;  // NOLINT(build/namespaces)
 
 enum class VectorizationMode {
@@ -3785,7 +3787,7 @@ static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionPar
       params.plan.offsets[tileDim] = c0;
       params.plan.sizes[tileDim] = extent;
       params.plan.resultAxisForTileDim[tileDim] = curAxis;
-      params.plan.cacheKey.push_back(-2);
+      params.plan.cacheKey.push_back(kCacheKeyLoopDrivenDimTag);
       params.plan.cacheKey.push_back(curAxis);
       continue;
     }
@@ -3824,7 +3826,7 @@ static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionPar
     params.plan.offsets[tileDim] = offset;
     params.plan.sizes[tileDim] = tileSize;
     params.plan.resultAxisForTileDim[tileDim] = loadAxis;
-    params.plan.cacheKey.push_back(-1);
+    params.plan.cacheKey.push_back(kCacheKeyRuntimeIndexDimTag);
     params.plan.cacheKey.push_back(loadAxis);
     if (!tryConstantIndex(offset).has_value() || !tryConstantIndex(tileSize).has_value()) {
       params.plan.cacheable = false;
@@ -4247,6 +4249,20 @@ static void recordReductionXCurrentTileSize(LoopVectorizationCtx &ctx) {
 /// Map ReductionX/Y region iter_args to vecLoop args (with optional current-tile slice).
 static void mapReductionRegionIterArgs(LoopVectorizationCtx &ctx) {
   std::optional<unsigned> currentTileAxis = getCurrentReductionTileAxis(ctx);
+
+  auto updateMappedArgAndRecordSlice = [&ctx, &currentTileAxis](unsigned idx, Value vecArg,
+                                                                const SmallVector<int> &dimOrder, Value &mappedArg) {
+    ctx.valueDimOrder[vecArg] = dimOrder;
+    if (!currentTileAxis) {
+      return;
+    }
+    CurrentTileSliceInfo sliceInfo;
+    mappedArg = createCurrentTileSlice(vecArg, ctx, dimOrder, *currentTileAxis, &sliceInfo);
+    if (mappedArg != vecArg) {
+      ctx.iterArgTileSlices[idx] = std::move(sliceInfo);
+    }
+  };
+
   for (unsigned idx = 0, e = ctx.scalarLoop.getNumRegionIterArgs(); idx < e; ++idx) {
     Value scalarArg = ctx.scalarLoop.getRegionIterArgs()[idx];
     Value vecArg = ctx.vecLoop.getRegionIterArgs()[idx];
@@ -4255,14 +4271,7 @@ static void mapReductionRegionIterArgs(LoopVectorizationCtx &ctx) {
     Value vecInit = ctx.vecLoop.getInitArgs()[idx];
     auto dimOrderIter = ctx.valueDimOrder.find(vecInit);
     if (dimOrderIter != ctx.valueDimOrder.end()) {
-      ctx.valueDimOrder[vecArg] = dimOrderIter->second;
-      if (currentTileAxis) {
-        CurrentTileSliceInfo sliceInfo;
-        mappedArg = createCurrentTileSlice(vecArg, ctx, dimOrderIter->second, *currentTileAxis, &sliceInfo);
-        if (mappedArg != vecArg) {
-          ctx.iterArgTileSlices[idx] = std::move(sliceInfo);
-        }
-      }
+      updateMappedArgAndRecordSlice(idx, vecArg, dimOrderIter->second, mappedArg);
     }
     ctx.valueMapping.map(scalarArg, mappedArg);
   }
