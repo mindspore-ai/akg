@@ -3420,8 +3420,48 @@ struct BandTileStoreContext {
   MutableArrayRef<Value> firstLevelStepI64Cache;
 };
 
-static LogicalResult storeOneTileSize(const TileSizeStoreContext &ctx, const BandTileStoreContext &bandCtx,
-                                      size_t tileIdx, size_t memrefOffset) {
+static Value castToI64(const TileSizeStoreContext &ctx, Value value) {
+  return ctx.builder.create<arith::IndexCastOp>(ctx.loc, ctx.i64Type, value);
+}
+
+static LogicalResult computeDynamicLevelNTile(const TileSizeStoreContext &ctx, const BandTileStoreContext &bandCtx,
+                                              size_t tileIdx, int constraintMax, Value &out) {
+  const auto &mapping = bandCtx.dynamicMappings[tileIdx];
+  if (!mapping.upperBound) {
+    ctx.tilingFunc.emitError("dynamic axis upper bound missing for tile index " + std::to_string(tileIdx));
+    return failure();
+  }
+  std::string failureReason;
+  Value dim =
+    cloneUpperBoundDefinition(mapping.upperBound, ctx.originalKernel, ctx.tilingFunc, ctx.builder, &failureReason);
+  if (!dim) {
+    auto diag =
+      ctx.tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " + std::to_string(tileIdx));
+    if (!failureReason.empty()) {
+      diag << ": " << failureReason;
+    }
+    return failure();
+  }
+  out = emitDynamicTilePerDim({ctx.loc, ctx.builder, dim, constraintMax, ctx.dynamicTileCoreNum});
+  return success();
+}
+
+static Value computeStaticTileSizeI64(const TileSizeStoreContext &ctx, unsigned tileSize) {
+  return ctx.builder.create<arith::ConstantIntOp>(ctx.loc, static_cast<int64_t>(tileSize), 64);
+}
+
+static Value computeSecondLevelTileSizeI64(const TileSizeStoreContext &ctx, const BandTileStoreContext &bandCtx,
+                                           size_t dimIdx, unsigned tileSize) {
+  Value staticTileSizeI64 = computeStaticTileSizeI64(ctx, tileSize);
+  Value staticTileSize = ctx.builder.create<arith::IndexCastOp>(ctx.loc, ctx.indexType, staticTileSizeI64);
+  Value firstLevelStep =
+    ctx.builder.create<arith::IndexCastOp>(ctx.loc, ctx.indexType, bandCtx.firstLevelStepI64Cache[dimIdx]);
+  Value minVal = ctx.builder.create<arith::MinSIOp>(ctx.loc, staticTileSize, firstLevelStep);
+  return castToI64(ctx, minVal);
+}
+
+static LogicalResult storeOneTileSize(const TileSizeStoreContext &ctx, BandTileStoreContext &bandCtx, size_t tileIdx,
+                                      size_t memrefOffset) {
   auto &builder = ctx.builder;
   Value idx = builder.create<arith::ConstantIndexOp>(ctx.loc, memrefOffset);
   unsigned tileSize = bandCtx.tileSizes[tileIdx];
@@ -3429,62 +3469,37 @@ static LogicalResult storeOneTileSize(const TileSizeStoreContext &ctx, const Ban
   size_t level = tileIdx / bandSize;
   size_t dimIdx = tileIdx % bandSize;
 
-  if (level == 0 && dimIdx < bandCtx.parallelOuterTiles.size() && bandCtx.parallelOuterTiles[dimIdx]) {
-    Value stepI64 = builder.create<arith::IndexCastOp>(ctx.loc, ctx.i64Type, bandCtx.parallelOuterTiles[dimIdx]);
-    builder.create<memref::StoreOp>(ctx.loc, stepI64, ctx.dataMem, ValueRange{idx});
-    bandCtx.firstLevelStepI64Cache[dimIdx] = stepI64;
-    return success();
-  }
+  Value stepI64;
+  bool cacheAsFirstLevel = false;
 
-  if (tileSize == static_cast<unsigned>(-1)) {
+  if (level == 0 && dimIdx < bandCtx.parallelOuterTiles.size() && bandCtx.parallelOuterTiles[dimIdx]) {
+    stepI64 = castToI64(ctx, bandCtx.parallelOuterTiles[dimIdx]);
+    cacheAsFirstLevel = true;
+  } else if (tileSize == static_cast<unsigned>(-1)) {
     int constraintMax = (tileIdx < bandCtx.constraintMaxs.size()) ? bandCtx.constraintMaxs[tileIdx] : 0;
     Value step;
     if (level == 0) {
-      if (failed(
-            emitLoopTripCountInTilingFunc({ctx.tilingFunc, ctx.originalKernel, bandCtx.band[dimIdx], builder}, step))) {
+      if (failed(emitLoopTripCountInTilingFunc({ctx.tilingFunc, ctx.originalKernel, bandCtx.band[dimIdx], ctx.builder},
+                                               step))) {
         return failure();
       }
+      cacheAsFirstLevel = true;
     } else {
-      const auto &mapping = bandCtx.dynamicMappings[tileIdx];
-      if (!mapping.upperBound) {
-        ctx.tilingFunc.emitError("dynamic axis upper bound missing for tile index " + std::to_string(tileIdx));
+      if (failed(computeDynamicLevelNTile(ctx, bandCtx, tileIdx, constraintMax, step))) {
         return failure();
       }
-      std::string failureReason;
-      Value dim =
-        cloneUpperBoundDefinition(mapping.upperBound, ctx.originalKernel, ctx.tilingFunc, builder, &failureReason);
-      if (!dim) {
-        auto diag = ctx.tilingFunc.emitError("failed to clone dynamic axis upper bound for tile index " +
-                                             std::to_string(tileIdx));
-        if (!failureReason.empty()) {
-          diag << ": " << failureReason;
-        }
-        return failure();
-      }
-      step = emitDynamicTilePerDim({ctx.loc, builder, dim, constraintMax, ctx.dynamicTileCoreNum});
     }
-
-    Value stepI64 = builder.create<arith::IndexCastOp>(ctx.loc, ctx.i64Type, step);
-    builder.create<memref::StoreOp>(ctx.loc, stepI64, ctx.dataMem, ValueRange{idx});
-    if (level == 0) {
-      bandCtx.firstLevelStepI64Cache[dimIdx] = stepI64;
-    }
-    return success();
+    stepI64 = castToI64(ctx, step);
+  } else if (level < 1 || !bandCtx.firstLevelStepI64Cache[dimIdx]) {
+    stepI64 = computeStaticTileSizeI64(ctx, tileSize);
+  } else {
+    stepI64 = computeSecondLevelTileSizeI64(ctx, bandCtx, dimIdx, tileSize);
   }
 
-  if (level < 1 || !bandCtx.firstLevelStepI64Cache[dimIdx]) {
-    Value val = builder.create<arith::ConstantIntOp>(ctx.loc, static_cast<int64_t>(tileSize), 64);
-    builder.create<memref::StoreOp>(ctx.loc, val, ctx.dataMem, ValueRange{idx});
-    return success();
-  }
-
-  Value firstLevelStepI64 = bandCtx.firstLevelStepI64Cache[dimIdx];
-  Value staticTileSizeI64 = builder.create<arith::ConstantIntOp>(ctx.loc, static_cast<int64_t>(tileSize), 64);
-  Value staticTileSize = builder.create<arith::IndexCastOp>(ctx.loc, ctx.indexType, staticTileSizeI64);
-  Value firstLevelStep = builder.create<arith::IndexCastOp>(ctx.loc, ctx.indexType, firstLevelStepI64);
-  Value minVal = builder.create<arith::MinSIOp>(ctx.loc, staticTileSize, firstLevelStep);
-  Value stepI64 = builder.create<arith::IndexCastOp>(ctx.loc, ctx.i64Type, minVal);
   builder.create<memref::StoreOp>(ctx.loc, stepI64, ctx.dataMem, ValueRange{idx});
+  if (cacheAsFirstLevel) {
+    bandCtx.firstLevelStepI64Cache[dimIdx] = stepI64;
+  }
   return success();
 }
 
@@ -3562,8 +3577,10 @@ static LogicalResult prepareDynamicTilingFunctionData(const DynamicTilingFunctio
     llvm::make_scope_exit([&kernelRef = params.originalKernel] { clearNotInnerDimensionBroadcastLoopAttr(kernelRef); });
   (void)clearNotInnerBroadcastGuard;
   if (params.hasPresetMetadata) {
-    allBandTileSizes = params.metadata->bandTileSizes;
-    allBandConstraintMaxs = params.metadata->bandConstraintMaxs;
+    if (params.metadata != nullptr) {
+      allBandTileSizes = params.metadata->bandTileSizes;
+      allBandConstraintMaxs = params.metadata->bandConstraintMaxs;
+    }
   } else {
     size_t levelToTile = 0;
     if (failed(calculateTileSizesForBands(params.originalKernel, true, params.output, levelToTile))) {
