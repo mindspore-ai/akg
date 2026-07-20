@@ -72,6 +72,48 @@ mlir::LogicalResult verifyReduceDimensions(mlir::Operation *op, mlir::ArrayAttr 
   return mlir::success();
 }
 
+static mlir::DenseElementsAttr getSplatDenseAttr(mlir::Value value) {
+  auto cst = value.getDefiningOp<mlir::mfuse::ConstantOp>();
+  if (!cst) {
+    return {};
+  }
+  auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
+  if (!dense || !dense.isSplat()) {
+    return {};
+  }
+  return dense;
+}
+
+static bool isIntegerOrIndexSplatZero(mlir::Value value) {
+  auto dense = getSplatDenseAttr(value);
+  if (!dense) {
+    return false;
+  }
+  auto elementType = dense.getElementType();
+  // Keep zero-folding restricted to integer/index splats. For floating-point,
+  // APFloat::isZero() treats +0.0 and -0.0 the same, which is not strictly
+  // semantics-preserving for add/sub without no-signed-zero style guarantees.
+  if (elementType.isIntOrIndex()) {
+    return dense.getSplatValue<llvm::APInt>().isZero();
+  }
+  return false;
+}
+
+static bool isSplatOne(mlir::Value value) {
+  auto dense = getSplatDenseAttr(value);
+  if (!dense) {
+    return false;
+  }
+  auto elementType = dense.getElementType();
+  if (mlir::isa<mlir::FloatType>(elementType)) {
+    return dense.getSplatValue<llvm::APFloat>().isExactlyValue(1.0);
+  }
+  if (elementType.isIntOrIndex()) {
+    return dense.getSplatValue<llvm::APInt>() == 1;
+  }
+  return false;
+}
+
 }  // namespace
 
 namespace mlir::mfuse {
@@ -664,6 +706,40 @@ mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+mlir::OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
+  if (getY().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getX())) {
+    return getY();
+  }
+  if (getX().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getY())) {
+    return getX();
+  }
+  return {};
+}
+
+mlir::OpFoldResult DivOp::fold(FoldAdaptor adaptor) {
+  if (getSelf().getType() == getResult().getType() && isSplatOne(getOther())) {
+    return getSelf();
+  }
+  return {};
+}
+
+mlir::OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
+  if (getRhs().getType() == getResult().getType() && isSplatOne(getLhs())) {
+    return getRhs();
+  }
+  if (getLhs().getType() == getResult().getType() && isSplatOne(getRhs())) {
+    return getLhs();
+  }
+  return {};
+}
+
+mlir::OpFoldResult SubOp::fold(FoldAdaptor adaptor) {
+  if (getX().getType() == getResult().getType() && isIntegerOrIndexSplatZero(getY())) {
+    return getX();
+  }
+  return {};
+}
+
 mlir::LogicalResult CastOp::verify() {
   auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
   auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getResult().getType());
@@ -892,7 +968,7 @@ IMPL_BINARY_OP_FUNCTION(LtOp, true)
 IMPL_BINARY_OP_FUNCTION(MaximumOp, false)
 IMPL_BINARY_OP_FUNCTION(MinimumOp, false)
 IMPL_BINARY_OP_FUNCTION(MulOp, false)
-IMPL_BINARY_OP_FUNCTION(NeOp, false)
+IMPL_BINARY_OP_FUNCTION(NeOp, true)
 IMPL_BINARY_OP_FUNCTION(PowOp, false)
 IMPL_BINARY_OP_FUNCTION(RealDivOp, false)
 IMPL_BINARY_OP_FUNCTION(SubOp, false)
@@ -935,6 +1011,27 @@ mlir::FailureOr<mlir::Type> ReduceSumOp::inferSymbolicShapes(mlir::OpBuilder &bu
 }
 
 mlir::LogicalResult ReduceSumOp::verify() {
+  auto dimensions = getDimensions();
+  for (auto dimAttr : dimensions.getValue()) {
+    auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();
+    if (dim < 0) {
+      return emitOpError("dimensions must be non-negative, got ") << dim;
+    }
+  }
+  return mlir::success();
+}
+
+mlir::Type ReduceMaxOp::inferResultType(mlir::Value input, mlir::ArrayAttr dimensions, mlir::BoolAttr keepdim,
+                                        mlir::Type elementType) {
+  return ReduceOpCommonInfer::inferResultType(input, dimensions, keepdim, elementType);
+}
+
+mlir::FailureOr<mlir::Type> ReduceMaxOp::inferSymbolicShapes(mlir::OpBuilder &builder,
+                                                             const mlir::OperationState &state, mlir::Type resultType) {
+  return ReduceOpCommonInfer::inferSymbolicShapes(builder, state, resultType);
+}
+
+mlir::LogicalResult ReduceMaxOp::verify() {
   auto dimensions = getDimensions();
   for (auto dimAttr : dimensions.getValue()) {
     auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();

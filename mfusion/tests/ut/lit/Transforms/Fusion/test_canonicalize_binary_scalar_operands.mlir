@@ -13,6 +13,36 @@ module {
     return %0 : tensor<4x4xf32>
   }
 
+  // CHECK-LABEL: func.func @canonicalize_lhs_num_to_tensor_sub_bf16
+  // CHECK: %[[C:.*]] = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+  // CHECK-NOT: mfuse.num_to_tensor
+  // CHECK: %[[R:.*]] = mfuse.sub %[[C]], %arg0 : (tensor<f64, {is_scalar = ""}>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+  // CHECK: mfuse.cast %[[R]] : (tensor<4x4xbf16>) -> tensor<4x4xi1>
+  // CHECK: mfuse.select {{.*}}, %arg0, %[[R]] : (tensor<4x4xi1>, tensor<4x4xbf16>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+  func.func @canonicalize_lhs_num_to_tensor_sub_bf16(%arg0: tensor<4x4xbf16>) -> tensor<4x4xbf16> {
+    %c1 = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %n = mfuse.num_to_tensor %c1 : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+    %0 = mfuse.sub %n, %arg0 : (tensor<f32>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+    %1 = mfuse.cast %0 : (tensor<4x4xbf16>) -> tensor<4x4xi1>
+    %2 = mfuse.select %1, %arg0, %0 : (tensor<4x4xi1>, tensor<4x4xbf16>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+    return %2 : tensor<4x4xbf16>
+  }
+
+  // CHECK-LABEL: func.func @keep_lhs_num_to_tensor_sub_bf16_result_mismatch
+  // CHECK: %[[C:.*]] = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+  // CHECK: %[[N:.*]] = mfuse.num_to_tensor %[[C]] : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+  // CHECK: %[[SUB:.*]] = mfuse.sub %[[N]], %arg0 : (tensor<f32>, tensor<4x4xbf16>) -> tensor<4x4xf32>
+  // CHECK: %[[ADD:.*]] = mfuse.add %[[SUB]], %arg1 : (tensor<4x4xf32>, tensor<4x4xbf16>) -> tensor<4x4xf32>
+  // CHECK: return %[[ADD]] : tensor<4x4xf32>
+  func.func @keep_lhs_num_to_tensor_sub_bf16_result_mismatch(
+      %arg0: tensor<4x4xbf16>, %arg1: tensor<4x4xbf16>) -> tensor<4x4xf32> {
+    %c1 = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+    %n = mfuse.num_to_tensor %c1 : (tensor<f64, {is_scalar = ""}>) -> tensor<f32>
+    %0 = mfuse.sub %n, %arg0 : (tensor<f32>, tensor<4x4xbf16>) -> tensor<4x4xf32>
+    %1 = mfuse.add %0, %arg1 : (tensor<4x4xf32>, tensor<4x4xbf16>) -> tensor<4x4xf32>
+    return %1 : tensor<4x4xf32>
+  }
+
   // CHECK-LABEL: func.func @canonicalize_rhs_num_to_tensor_div
   // CHECK: %[[C:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
   // CHECK-NOT: mfuse.num_to_tensor

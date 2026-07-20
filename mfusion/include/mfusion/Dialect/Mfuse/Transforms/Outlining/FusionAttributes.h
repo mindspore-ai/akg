@@ -60,6 +60,10 @@ static constexpr llvm::StringRef kLayerNormDvmAffinity = "mfusion.layer_norm_dvm
 /// Synthetic group id used when merging areas that only carry kLayerNormDvm.
 static constexpr llvm::StringRef kLegacyLayerNormDvmGroup = "legacy.layer_norm_dvm";
 
+/// Set on the module when safe-softmax candidate regions are present; gates tag passes
+/// and DVMCluster broadcast-select rejection.
+static constexpr llvm::StringRef kSafeSoftmaxPipelineActive = "mfusion.safe_softmax_pipeline_active";
+
 }  // namespace mfusion_attrs
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_OUTLINING_FUSIONATTRIBUTES_H
