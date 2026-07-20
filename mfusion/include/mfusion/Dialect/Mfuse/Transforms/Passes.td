@@ -42,8 +42,10 @@ def Decompose : Pass<"decompose", "::mlir::ModuleOp"> {
   let options = [
     Option<"patternType", "pattern-type", "std::string", "\"ALL\"",
            "Type of decompose patterns to use (NONE, ALL, BEFORE_MANUAL_FUSION, AFTER_MANUAL_FUSION)" >,
-    ListOption<"opList", "op-list", "std::string", 
-               "List of specific operations to decompose (empty means all)" >
+    ListOption<"opList", "op-list", "std::string",
+               "List of specific operations to decompose (empty means the pattern-type default set)" >,
+    ListOption<"extraOpList", "extra-op-list", "std::string",
+               "Additional ops to decompose on top of op-list / defaults (e.g. matmul_with_bias for DVM AFTER)" >
   ];
 
   let constructor = "mlir::createDecomposePass()";
@@ -100,25 +102,6 @@ def DVMCluster : Pass<"mfuse-dvm-cluster", "::mlir::func::FuncOp"> {
   }];
 
   let constructor = "mlir::createDVMClusterPass()";
-
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
-def DecomposeMatmulWithBiasForDvmCluster
-    : Pass<"mfuse-decompose-matmul-with-bias-for-dvm-cluster", "::mlir::func::FuncOp"> {
-  let summary = "Decompose mfuse.matmul_with_bias before DVM clustering";
-
-  let description = [{
-    This pass decomposes residual mfuse.matmul_with_bias operations into
-    mfuse.matmul and mfuse.add before DVM clustering. It keeps matmul transpose
-    attributes on the new mfuse.matmul and lets the existing DVM cluster
-    legality checks decide whether each primitive operation is clusterable.
-  }];
-
-  let constructor = "mlir::createDecomposeMatmulWithBiasForDvmClusterPass()";
 
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",

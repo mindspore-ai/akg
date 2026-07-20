@@ -66,8 +66,8 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
       patternType = DecomposePatternType::AFTER_MANUAL_FUSION;
     }
 
-    // Register decompose patterns with the specified op list
-    registerDecomposePatterns(patterns, patternType, this->opList);
+    // Register decompose patterns with the specified op list / extra-op-list
+    registerDecomposePatterns(patterns, patternType, this->opList, this->extraOpList);
 
     // Apply the patterns using the greedy pattern rewrite driver
     // OpRewritePattern will automatically match operations and decompose them

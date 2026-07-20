@@ -58,27 +58,55 @@ void registerPatternsByOpList(RewritePatternSet &patterns, MLIRContext *ctx,
   }
 }
 
+/// Register \p extraOpList patterns selectively on top of an already-populated set.
+static void registerExtraDecomposePatterns(RewritePatternSet &patterns, DecomposePatternType patternType,
+                                           const std::vector<std::string> &extraOpList) {
+  if (extraOpList.empty()) {
+    return;
+  }
+  switch (patternType) {
+    case DecomposePatternType::ALL:
+      registerAclnnDecomposePatterns(patterns, extraOpList);
+      registerDecomposeMathOpPatterns(patterns, extraOpList, /*includeMatMulWithBiasByDefault=*/true);
+      break;
+    case DecomposePatternType::BEFORE_MANUAL_FUSION:
+      registerAclnnDecomposePatterns(patterns, extraOpList);
+      break;
+    case DecomposePatternType::AFTER_MANUAL_FUSION:
+      registerAclnnPostFusionDecomposePatterns(patterns, extraOpList);
+      registerDecomposeMathOpPatterns(patterns, extraOpList, /*includeMatMulWithBiasByDefault=*/true);
+      break;
+    case DecomposePatternType::NONE:
+      break;
+  }
+}
+
 /// Populate the given pattern set with decompose patterns.
-/// This function registers decompose patterns based on the specified pattern type and op list.
+/// \p opList empty → pattern-type defaults; non-empty → only those ops.
+/// \p extraOpList is always applied selectively on top (e.g. DVM AFTER defaults + matmul_with_bias).
 void registerDecomposePatterns(RewritePatternSet &patterns, DecomposePatternType patternType,
-                               const std::vector<std::string> &opList) {
+                               const std::vector<std::string> &opList,
+                               const std::vector<std::string> &extraOpList) {
   switch (patternType) {
     case DecomposePatternType::ALL:
       registerAclnnDecomposePatterns(patterns, opList);
-      registerDecomposeMathOpPatterns(patterns, opList);
+      registerDecomposeMathOpPatterns(patterns, opList, /*includeMatMulWithBiasByDefault=*/true);
       break;
     case DecomposePatternType::BEFORE_MANUAL_FUSION:
       registerAclnnDecomposePatterns(patterns, opList);
       break;
     case DecomposePatternType::AFTER_MANUAL_FUSION:
       // Expand aclnn.var / var_mean while reduce_mean is still a meta op, then decompose reduce_mean.
+      // Empty op-list omits matmul_with_bias (non-DVM → aten.addmm); DVM adds it via
+      // extra-op-list=matmul_with_bias in the same AFTER stage.
       registerAclnnPostFusionDecomposePatterns(patterns, opList);
-      registerDecomposeMathOpPatterns(patterns, opList);
+      registerDecomposeMathOpPatterns(patterns, opList, /*includeMatMulWithBiasByDefault=*/false);
       break;
     case DecomposePatternType::NONE:
       // No patterns to register
       break;
   }
+  registerExtraDecomposePatterns(patterns, patternType, extraOpList);
 }
 
 }  // namespace mlir::mfuse

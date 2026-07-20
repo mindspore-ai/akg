@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Analysis/Split/FusionRegionTag.h"
+#include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
 
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 #include "llvm/ADT/StringSet.h"
@@ -93,6 +93,16 @@ bool hasRegionAffinity(Operation *op) {
 
 bool isTagged(Operation *op) { return hasRegionMember(op) || hasRegionAffinity(op); }
 
+bool shouldSkipSplitForMatcherFusedIsland(Operation *op) {
+  if (!op) {
+    return false;
+  }
+  if (auto kind = op->getAttrOfType<StringAttr>(mfusion_attrs::kDvmFuseKind)) {
+    return kind.getValue() == kSafeSoftmaxFuseKind;
+  }
+  return false;
+}
+
 std::optional<llvm::StringRef> getMergeGroupId(Operation *op) {
   if (!op || getFuseRole(op) != FuseRole::Member) {
     return std::nullopt;
@@ -150,6 +160,26 @@ void tagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
 void tagMembers(ArrayRef<Operation *> ops, llvm::StringRef groupId, llvm::StringRef kind) {
   for (Operation *op : ops) {
     tagMember(op, groupId, kind);
+  }
+}
+
+void retagMember(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
+  if (!op) {
+    return;
+  }
+  setGroupAndKind(op, groupId, kind, FuseRole::Member);
+  if (useLayerNormLegacyAttrs(kind)) {
+    op->setAttr(mfusion_attrs::kLayerNormDvm, UnitAttr::get(op->getContext()));
+  }
+}
+
+void retagAffinity(Operation *op, llvm::StringRef groupId, llvm::StringRef kind) {
+  if (!op) {
+    return;
+  }
+  setGroupAndKind(op, groupId, kind, FuseRole::Affinity);
+  if (useLayerNormLegacyAttrs(kind)) {
+    op->setAttr(mfusion_attrs::kLayerNormDvmAffinity, UnitAttr::get(op->getContext()));
   }
 }
 

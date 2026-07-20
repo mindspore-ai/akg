@@ -135,35 +135,10 @@ def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative]> {
 
   let results = (outs AnyRankedTensor:$result);
 
+  let hasFolder = 1;
+
   let assemblyFormat = [{
     $x `,` $y attr-dict `:` functional-type(operands, results)
-  }];
-}
-
-def Mfuse_BatchMatmulOp : Mfuse_Op<"batch_matmul", [Pure]> {
-  let summary = "Batch matrix multiplication of two tensors with transpose options.";
-  let description = [{
-    Batch matrix multiplication with optional transpose on last two dimensions.
-    Supports tensors with rank >= 2 and same rank.
-
-    Default: (*B, N, C) @ (*B, C, M) -> (*B, N, M)
-    transpose_a=True: (*B, C, N) @ (*B, C, M) -> (*B, N, M)
-    transpose_b=True: (*B, N, C) @ (*B, M, C) -> (*B, N, M)
-
-    Where *B represents multidimensional batch dimensions.
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$self,
-    AnyRankedTensor:$mat2,
-    DefaultValuedAttr<BoolAttr, "false">:$transpose_a,
-    DefaultValuedAttr<BoolAttr, "false">:$transpose_b
-  );
-
-  let results = (outs AnyRankedTensor:$result);
-
-  let assemblyFormat = [{
-    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -345,6 +320,8 @@ def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure]> {
   let results = (outs
     AnyRankedTensor:$out
   );
+
+  let hasFolder = 1;
 
   let assemblyFormat = [{
     $self `,` $other
@@ -745,6 +722,8 @@ def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative]> {
 
   let results = (outs AnyRankedTensor:$result);
 
+  let hasFolder = 1;
+
   let assemblyFormat = [{
     $lhs `,` $rhs attr-dict `:` functional-type(operands, results)
   }];
@@ -955,6 +934,51 @@ def Mfuse_ReduceSumOp : Mfuse_ReduceOp<"reduce_sum", [Pure]> {
   }];
 }
 
+def Mfuse_SoftmaxOp : Mfuse_Op<"softmax", [
+    Pure,
+    SameOperandsAndResultShape
+  ]> {
+  let summary = "Softmax along a single dimension (maps to torch.aten._softmax).";
+  let description = [{
+    Computes softmax on the input tensor along `dim`. The `half_to_float` flag
+    matches torch.aten._softmax and is preserved for round-trip lowering.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64Attr:$dim,
+    BoolAttr:$half_to_float
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_ReduceMaxOp : Mfuse_ReduceOp<"reduce_max", [Pure]> {
+  let summary = "Max reduction operation";
+  let description = [{
+    Computes the maximum of tensor elements along specified dimensions.
+    The boolean parameter controls whether to keep dimensions.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64ArrayAttr:$dimensions,
+    BoolAttr:$keepdim
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_ReluOp : Mfuse_Op<"relu", [
     Pure,
     SameOperandsAndResultType,
@@ -1123,6 +1147,8 @@ def Mfuse_SubOp : Mfuse_BroadcastableBinaryOp<"sub", [Pure]> {
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let hasFolder = 1;
 
   let assemblyFormat = [{
     $x `,` $y attr-dict `:` functional-type(operands, results)

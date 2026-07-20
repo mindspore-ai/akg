@@ -48,23 +48,28 @@ def _assert_no_aten_permute_in_torch_output(ir: str) -> None:
 MLIR_MM_UNALIGNED_K = textwrap.dedent(
     r"""
     module {
-      func.func @main(%arg0: !torch.vtensor<[2,100],f32>, %arg1: !torch.vtensor<[100,8],f32>) -> !torch.vtensor<[2,8],f32> attributes {torch.assume_strict_symbolic_shapes} {
-        %0 = torch.aten.mm %arg0, %arg1 : !torch.vtensor<[2,100],f32>, !torch.vtensor<[100,8],f32> -> !torch.vtensor<[2,8],f32>
+      func.func @main(%arg0: !torch.vtensor<[2,100],f32>, %arg1: !torch.vtensor<[100,8],f32>)
+          -> !torch.vtensor<[2,8],f32> attributes {torch.assume_strict_symbolic_shapes} {
+        %0 = torch.aten.mm %arg0, %arg1
+            : !torch.vtensor<[2,100],f32>, !torch.vtensor<[100,8],f32> -> !torch.vtensor<[2,8],f32>
         return %0 : !torch.vtensor<[2,8],f32>
       }
     }
     """
 )
 
-# Same shape as transpose+mm in test_batch_matmul_fusion.py: layout via transpose.int, not `torch.aten.permute`.
+# Same shape as transpose+mm in test_fuse_matmul_permute.mlir: layout via transpose.int, not `torch.aten.permute`.
 MLIR_TRANSPOSE_INT_THEN_MM = textwrap.dedent(
     r"""
     module {
-      func.func @main(%arg0: !torch.vtensor<[2,4],f32>, %arg1: !torch.vtensor<[2,8],f32>) -> !torch.vtensor<[4,8],f32> attributes {torch.assume_strict_symbolic_shapes} {
+      func.func @main(%arg0: !torch.vtensor<[2,4],f32>, %arg1: !torch.vtensor<[2,8],f32>)
+          -> !torch.vtensor<[4,8],f32> attributes {torch.assume_strict_symbolic_shapes} {
         %int0 = torch.constant.int 0
         %int1 = torch.constant.int 1
-        %0 = torch.aten.transpose.int %arg0, %int0, %int1 : !torch.vtensor<[2,4],f32>, !torch.int, !torch.int -> !torch.vtensor<[4,2],f32>
-        %1 = torch.aten.mm %0, %arg1 : !torch.vtensor<[4,2],f32>, !torch.vtensor<[2,8],f32> -> !torch.vtensor<[4,8],f32>
+        %0 = torch.aten.transpose.int %arg0, %int0, %int1
+            : !torch.vtensor<[2,4],f32>, !torch.int, !torch.int -> !torch.vtensor<[4,2],f32>
+        %1 = torch.aten.mm %0, %arg1
+            : !torch.vtensor<[4,2],f32>, !torch.vtensor<[2,8],f32> -> !torch.vtensor<[4,8],f32>
         return %1 : !torch.vtensor<[4,8],f32>
       }
     }
