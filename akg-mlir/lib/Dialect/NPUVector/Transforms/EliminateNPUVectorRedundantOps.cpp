@@ -36,6 +36,8 @@ namespace npuvector {
 
 namespace {
 
+constexpr int kMaxMemrefRootTraceSteps = 32;
+
 // This pass performs local redundant memory-access elimination for NPUVector IR.
 //
 // Supported cases:
@@ -71,7 +73,7 @@ struct AvailableWrite {
 
 static Value traceMemrefRoot(Value value) {
   Value current = value;
-  for (int step = 0; step < 32; ++step) {
+  for (int step = 0; step < kMaxMemrefRootTraceSteps; ++step) {
     Operation *defOp = current.getDefiningOp();
     if (defOp == nullptr) {
       break;

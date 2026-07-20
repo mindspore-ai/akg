@@ -65,7 +65,7 @@ static npuvector::NPUVectorType buildRefinedTypeFromSizes(npuvector::NPUVectorTy
   SmallVector<int64_t> newShape(oldType.getShape().begin(), oldType.getShape().end());
   bool changed = false;
 
-  auto refineDim = [&](unsigned dim, Value sizeValue) {
+  auto refineDim = [&newShape, &changed](unsigned dim, Value sizeValue) {
     if (!ShapedType::isDynamic(newShape[dim])) {
       return;
     }

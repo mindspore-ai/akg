@@ -165,9 +165,10 @@ void KernelLaunch(const std::string &func_name, uint64_t kernel_func, uint64_t b
 
   if (is_dynamic) {
     begin_time = MsprofSysCycleTime();
-    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);  // NOLINT
+    auto kernel_func_ptr = reinterpret_cast<CallFunc>(kernel_func);
     if (kernel_func_ptr == nullptr) {
       LOG(FATAL) << "kernel_func is null, func_name: " << func_name;
+      return;
     }
     kernel_func_ptr(block_num, nullptr, (rtStream_t)stream, args.data());
   } else {
