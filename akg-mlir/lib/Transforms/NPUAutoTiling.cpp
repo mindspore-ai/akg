@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "akg/Analysis/LoopTiling.h"
+#include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/BitVector.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -455,29 +456,35 @@ class TilingBase {
     return host;
   }
 
-  Value selectKeyByDimension(OpBuilder &b, Location loc, ArrayRef<Value> args) {
-    for (int64_t key : tilingInfo_.getAllKeys()) {
+  FailureOr<Value> selectKeyFromOuterTiles(OpBuilder &b, Location loc, ArrayRef<Value> outerTiles,
+                                           ArrayRef<int64_t> caseKeys) {
+    Value selectedKey = b.create<arith::ConstantIntOp>(loc, 0, 64);
+    for (int64_t key : caseKeys) {
       const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
-      if (!metadata || !metadata->hasRuntimeSelector()) {
+      if (!metadata || metadata->selectorOuterTileIndices.empty() || metadata->maxVectorTile <= 0 ||
+          metadata->selectorMinTile <= 0) {
         continue;
       }
-      if (metadata->selectorInputIndex >= args.size()) {
-        continue;
+      Value budget = b.create<arith::ConstantIntOp>(loc, metadata->maxVectorTile, 64);
+      for (auto [i, tileIdx] : llvm::enumerate(metadata->selectorOuterTileIndices)) {
+        if (tileIdx >= outerTiles.size() || !outerTiles[tileIdx]) {
+          originalKernel_.emitError() << "missing selector outer tile for axis " << tileIdx;
+          return failure();
+        }
+        Value tile = b.create<arith::IndexCastOp>(loc, b.getI64Type(), outerTiles[tileIdx]);
+        int64_t alignUnit =
+          i < metadata->selectorAlignUnits.size() ? std::max<int64_t>(metadata->selectorAlignUnits[i], 1) : 1;
+        Value align = b.create<arith::ConstantIntOp>(loc, alignUnit, 64);
+        Value aligned = b.create<arith::CeilDivSIOp>(loc, tile, align);
+        aligned = b.create<arith::MulIOp>(loc, aligned, align);
+        budget = b.create<arith::DivSIOp>(loc, budget, aligned);
       }
-      auto memrefTy = dyn_cast<MemRefType>(args[metadata->selectorInputIndex].getType());
-      if (!memrefTy || metadata->selectorDimIndex >= static_cast<unsigned>(memrefTy.getRank())) {
-        continue;
-      }
-      Value dimIdx = b.create<arith::ConstantIndexOp>(loc, metadata->selectorDimIndex);
-      Value dim = b.create<memref::DimOp>(loc, args[metadata->selectorInputIndex], dimIdx);
-      Value limit = b.create<arith::ConstantIndexOp>(loc, metadata->selectorLimit);
-      Value useTrueKey = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, dim, limit);
-      Value trueKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorTrueKey, 64);
-      Value falseKey = b.create<arith::ConstantIntOp>(loc, metadata->selectorFalseKey, 64);
-      return b.create<arith::SelectOp>(loc, useTrueKey, trueKey, falseKey);
+      Value minTile = b.create<arith::ConstantIntOp>(loc, metadata->selectorMinTile, 64);
+      Value canUse = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, budget, minTile);
+      Value caseKey = b.create<arith::ConstantIntOp>(loc, key, 64);
+      selectedKey = b.create<arith::SelectOp>(loc, canUse, caseKey, selectedKey);
     }
-    auto k0 = b.create<arith::ConstantIntOp>(loc, 0, 64);  // i64
-    return k0;
+    return selectedKey;
   }
 
   LogicalResult createHostTilingFunction(OpBuilder &builder) {
@@ -510,18 +517,44 @@ class TilingBase {
     Value keyPtr = args[keyIdx];
     Value dataMem = args[tilingDataIdx];
 
-    Value logicalKeyI64 = selectKeyByDimension(bodyBuilder, loc, computeArgs);
-    Value keyIndex = bodyBuilder.create<arith::IndexCastUIOp>(loc, bodyBuilder.getIndexType(), logicalKeyI64);
-
+    SmallVector<Value> callArgs;
+    callArgs.append(computeArgs.begin(), computeArgs.end());
+    callArgs.push_back(keyPtr);
+    callArgs.push_back(dataMem);
+    func::FuncOp baseTilingFunc = tilingInfo_.getPerCaseTilingFunc(0);
+    if (!baseTilingFunc) {
+      host.emitError("missing base tiling function for key=0");
+      return failure();
+    }
     SmallVector<int64_t> caseKeys = tilingInfo_.getAllKeys();
     if (caseKeys.empty()) {
       host.emitError("no tiling cases recorded in TilingInfo for host tiling function");
       return failure();
     }
+    SmallVector<Value, kSmallVectorSizeSix> outerTiles;
+    bool needsOuterTiles = llvm::any_of(caseKeys, [this](int64_t key) {
+      const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
+      return metadata && !metadata->selectorOuterTileIndices.empty() && metadata->maxVectorTile > 0 &&
+             metadata->selectorMinTile > 0;
+    });
+    if (needsOuterTiles) {
+      const auto *baseMetadata = tilingInfo_.getPerCaseTilingMetadata(0);
+      if (!baseMetadata || failed(mlir::autotiling::materializeDynamicSelectorOuterTiles(
+                             originalKernel_, host, *baseMetadata, bodyBuilder, outerTiles))) {
+        return failure();
+      }
+    }
+    bodyBuilder.create<func::CallOp>(loc, baseTilingFunc.getSymName(), baseTilingFunc.getFunctionType().getResults(),
+                                     callArgs);
+    FailureOr<Value> logicalKeyI64 = selectKeyFromOuterTiles(bodyBuilder, loc, outerTiles, caseKeys);
+    if (failed(logicalKeyI64)) {
+      return failure();
+    }
+    Value keyIndex = bodyBuilder.create<arith::IndexCastUIOp>(loc, bodyBuilder.getIndexType(), *logicalKeyI64);
 
     // numCases: one switch region per tiling key.
-    auto switchOp = bodyBuilder.create<scf::IndexSwitchOp>(
-        loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys), caseKeys.size());
+    auto switchOp =
+      bodyBuilder.create<scf::IndexSwitchOp>(loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys), caseKeys.size());
 
     for (unsigned i = 0; i < caseKeys.size(); ++i) {
       int64_t key = caseKeys[i];
@@ -536,12 +569,9 @@ class TilingBase {
         return failure();
       }
 
-      SmallVector<Value> callArgs;
-      callArgs.append(computeArgs.begin(), computeArgs.end());
-      callArgs.push_back(keyPtr);
-      callArgs.push_back(dataMem);
-
-      cb.create<func::CallOp>(loc, perCaseF.getSymName(), perCaseF.getFunctionType().getResults(), callArgs);
+      if (key != 0) {
+        cb.create<func::CallOp>(loc, perCaseF.getSymName(), perCaseF.getFunctionType().getResults(), callArgs);
+      }
       cb.create<scf::YieldOp>(loc);
     }
 
@@ -840,6 +870,9 @@ class TilingBase {
       int64_t key = it.getFirst();
       mlir::func::FuncOp f = it.getSecond();
       const auto *metadata = tilingInfo_.getPerCaseTilingMetadata(key);
+      if (!tilingInfo_.isStaticShape && metadata && metadata->maxVectorTile > 0) {
+        f->setAttr(kDynamicMaxTileAttr, builder.getI64IntegerAttr(metadata->maxVectorTile));
+      }
       if (failed(mlir::autotiling::applyTilingFromTilingFunc(f, builder, tilingInfo_.isStaticShape, metadata))) {
         return failure();
       }

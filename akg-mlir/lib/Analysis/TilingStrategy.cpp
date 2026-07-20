@@ -42,6 +42,7 @@
 namespace mlir {
 namespace autotiling {
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
+static constexpr const char *kDynamicVectorAlignUnitAttr = "dynamic_vector_align_unit";
 using akg::alignUpInt64;
 using akg::ceilDivInt64;
 using akg::computeBishengStrideAlignedStorageBytes;
@@ -3612,11 +3613,9 @@ void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     const AxisPtr &axis = ctx.axes[i];
     bool hasRuntime = hasRuntimeExtent(axis);
-    if (isReductionAxis(axis) && !hasRuntime) {
-      continue;
-    }
-    plan.outerTiles[i] =
+    unsigned tile =
       hasRuntime ? static_cast<unsigned>(UINT_MAX) : saturateToTileValue(std::max<int64_t>(ctx.extents[i], 1));
+    plan.outerTiles[i] = plan.innerTiles[i] = tile;
   }
 }
 
@@ -3657,6 +3656,7 @@ bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTileP
   }
 
   initDynamicSingleAxisPlan(ctx, plan);
+  plan.innerTiles.assign(ctx.axes.size(), 1);
 
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
   for (size_t i = *outermostTransposeIdx; i < ctx.axes.size(); ++i) {
@@ -3686,9 +3686,13 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
 
   initDynamicSingleAxisPlan(ctx, plan);
   SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
-  int64_t tile =
-    std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, *targetAxis, getAxisSearchUpper(ctx, *targetAxis)), 1);
+  int64_t alignUnit =
+    *targetAxis < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[*targetAxis], 1) : 1;
+  int64_t upper = std::max<int64_t>(ctx.vectorUbCapacityElems, alignUnit);
+  int64_t tile = std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, *targetAxis, upper), 1);
   plan.innerTiles[*targetAxis] = saturateToTileValue(tile);
+  plan.multiVecAxisMask[*targetAxis] = true;
+  plan.usesMultiVecScheme = true;
   return true;
 }
 
@@ -3699,26 +3703,31 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
 // The dynamic-shape pipeline re-enters the strategy for the same band twice
 // (memref-size pre-pass + actual apply); clearing stale markers first keeps
 // the second pass authoritative when the chosen plan changes.
-void tagMultiVecLoops(const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes, const BandTilePlan &plan) {
+void tagMultiVecLoops(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes,
+                      const BandTilePlan &plan) {
   for (const AxisPtr &axis : bandAxes) {
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
-    if ((loopOp != nullptr) && loopOp->hasAttr(kMultiVecLoopAttr)) {
+    if (loopOp != nullptr) {
       loopOp->removeAttr(kMultiVecLoopAttr);
+      loopOp->removeAttr(kDynamicVectorAlignUnitAttr);
     }
   }
   if (!plan.usesMultiVecScheme) {
     return;
   }
-  for (size_t i = 0; i < bandAxes.size() && i < plan.multiVecAxisMask.size(); ++i) {
-    if (!plan.multiVecAxisMask[i]) {
-      continue;
-    }
+  for (size_t i = 0; i < bandAxes.size(); ++i) {
     Operation *loopOp = bandAxes[i] ? bandAxes[i]->getLoopOperation() : nullptr;
     if (loopOp == nullptr) {
       continue;
     }
     OpBuilder builder(loopOp);
-    loopOp->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+    int64_t alignUnit = hasUnsupportedVectorAccess(ctx.axes[i])
+                          ? 0
+                          : std::max<int64_t>(i < ctx.axesAlignUnits.size() ? ctx.axesAlignUnits[i] : 1, 1);
+    loopOp->setAttr(kDynamicVectorAlignUnitAttr, builder.getI64IntegerAttr(alignUnit));
+    if (i < plan.multiVecAxisMask.size() && plan.multiVecAxisMask[i]) {
+      loopOp->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+    }
   }
 }
 
@@ -4148,8 +4157,10 @@ void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSm
       }
       tileConfig->constraints.clear();
       unsigned tileValue = (level == 0) ? plan.outerTiles[i] : plan.innerTiles[i];
-      int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-      tileValue = saturateReductionTileValue(alignUnit, axis, tileValue);
+      if (level == 0 || tileValue <= plan.outerTiles[i]) {
+        int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+        tileValue = saturateReductionTileValue(alignUnit, axis, tileValue);
+      }
       tileConfig->value = static_cast<int>(tileValue);
       axis->tryAddConstraint(static_cast<int>(level), Constraint({static_cast<int>(tileValue)}));
     }
@@ -4274,7 +4285,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
-      tagMultiVecLoops(bandAxes, bandPlan);
+      tagMultiVecLoops(bandCtx, bandAxes, bandPlan);
       continue;
     }
 
