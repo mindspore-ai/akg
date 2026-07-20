@@ -1637,21 +1637,20 @@ struct InlineBrcExtraBufferContext {
   bool alignBufferSizeTo256Bits;
 };
 
-static InlineBrcExtraBufferContext makeInlineBrcExtraBufferContext(ArrayRef<int64_t> outputDimLoopIndices,
-                                                                   Type outputElementType,
+static InlineBrcExtraBufferContext makeInlineBrcExtraBufferContext(const BufferInfo &outputBufferInfo,
                                                                    ArrayRef<BufferInfo> bufferList, Operation *op,
                                                                    const MemoryPeakEstimator &est,
                                                                    const LoopTileContext &loopTileCtx) {
-  const int64_t outputTotalBits =
-    TotalBitsFromDimLoopIndicesInBroadcast(outputDimLoopIndices, outputElementType, loopTileCtx.orderedForOps,
-                                           loopTileCtx.tileUpperBoundPerLoop, loopTileCtx.alignBufferSizeTo256Bits);
-  const unsigned outputBitWidth = getElementTypeOrSelf(outputElementType).getIntOrFloatBitWidth();
+  const int64_t outputTotalBits = TotalBitsFromDimLoopIndicesInBroadcast(
+    outputBufferInfo.dimLoopIndices, outputBufferInfo.elementType, loopTileCtx.orderedForOps,
+    loopTileCtx.tileUpperBoundPerLoop, loopTileCtx.alignBufferSizeTo256Bits);
+  const unsigned outputBitWidth = getElementTypeOrSelf(outputBufferInfo.elementType).getIntOrFloatBitWidth();
   const int64_t outputUpperLimitElems =
     outputBitWidth == 0 ? 0 : outputTotalBits / static_cast<int64_t>(outputBitWidth);
   const bool needScalarTmpForUnsupportedVS =
     isa<arith::SubFOp, arith::SubIOp, arith::DivFOp, arith::DivSIOp, arith::DivUIOp>(op);
-  return InlineBrcExtraBufferContext{outputDimLoopIndices,
-                                     outputElementType,
+  return InlineBrcExtraBufferContext{outputBufferInfo.dimLoopIndices,
+                                     outputBufferInfo.elementType,
                                      bufferList,
                                      op,
                                      est,
@@ -2392,8 +2391,8 @@ void MemoryPeakEstimator::inferShapeFromInput_(ArrayRef<int64_t> inputBufferInde
     (hasScalarInput && hasVectorInput) || (nonScalarDimLoopIndices.size() >= kMinDimsForLastAxis && !allSame);
   if (recordInlineBroadcastExtraBuffer && needExtraBuffer) {
     const LoopTileContext loopTileCtx{orderedForOps_, input_.tileUpperBoundPerLoop, input_.alignBufferSizeTo256Bits};
-    const InlineBrcExtraBufferContext ctx = makeInlineBrcExtraBufferContext(
-      outputBufferInfo.dimLoopIndices, outputBufferInfo.elementType, bufferInfoList_, op, *this, loopTileCtx);
+    const InlineBrcExtraBufferContext ctx =
+      makeInlineBrcExtraBufferContext(outputBufferInfo, bufferInfoList_, op, *this, loopTileCtx);
     setInlineBroadcastExtraBufferSize(inputBufferIndexes, rec, ctx);
   }
 }

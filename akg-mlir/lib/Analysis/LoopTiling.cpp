@@ -3383,7 +3383,7 @@ static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRe
   // Write tiling key.
   OpBuilder b(&f.getBody().front(), f.getBody().front().end());
   Value tilingKeyPtr = f.getArgument(keyIdx);
-  Value strategyValue = b.create<arith::ConstantIntOp>(loc, tilingKey, 64);
+  Value strategyValue = b.create<arith::ConstantIntOp>(loc, tilingKey, kI64BitWidth);
   b.create<LLVM::StoreOp>(loc, strategyValue, tilingKeyPtr);
 
   return f;
@@ -3447,7 +3447,7 @@ static LogicalResult computeDynamicLevelNTile(const TileSizeStoreContext &ctx, c
 }
 
 static Value computeStaticTileSizeI64(const TileSizeStoreContext &ctx, unsigned tileSize) {
-  return ctx.builder.create<arith::ConstantIntOp>(ctx.loc, static_cast<int64_t>(tileSize), 64);
+  return ctx.builder.create<arith::ConstantIntOp>(ctx.loc, static_cast<int64_t>(tileSize), kI64BitWidth);
 }
 
 static Value computeSecondLevelTileSizeI64(const TileSizeStoreContext &ctx, const BandTileStoreContext &bandCtx,
