@@ -3,6 +3,25 @@
 // Redundant mfuse.cast chains: CastOp::fold (identity), CastOp::canonicalize
 // (round-trip, same-target, precision-preserving cast(cast(x,T1),T2)->cast(x,T2)).
 
+// CHECK-LABEL: func.func @same_input_same_type_cse
+// CHECK: %[[CAST:.*]] = mfuse.cast %arg0 : (tensor<1x4xf32>) -> tensor<1x4xf16>
+// CHECK-NOT: mfuse.cast
+// CHECK: return %[[CAST]], %[[CAST]] : tensor<1x4xf16>, tensor<1x4xf16>
+func.func @same_input_same_type_cse(%arg0: tensor<1x4xf32>) -> (tensor<1x4xf16>, tensor<1x4xf16>) {
+  %a = mfuse.cast %arg0 : (tensor<1x4xf32>) -> tensor<1x4xf16>
+  %b = mfuse.cast %arg0 : (tensor<1x4xf32>) -> tensor<1x4xf16>
+  return %a, %b : tensor<1x4xf16>, tensor<1x4xf16>
+}
+
+// CHECK-LABEL: func.func @same_input_different_type_no_cse
+// CHECK-COUNT-2: mfuse.cast
+func.func @same_input_different_type_no_cse(%arg0: tensor<1x4xf32>)
+    -> (tensor<1x4xf16>, tensor<1x4xbf16>) {
+  %a = mfuse.cast %arg0 : (tensor<1x4xf32>) -> tensor<1x4xf16>
+  %b = mfuse.cast %arg0 : (tensor<1x4xf32>) -> tensor<1x4xbf16>
+  return %a, %b : tensor<1x4xf16>, tensor<1x4xbf16>
+}
+
 // CHECK-LABEL: func.func @round_trip
 // CHECK-NOT: mfuse.cast
 // CHECK: {{\s*return %arg0 : tensor<1x4xf32>}}
