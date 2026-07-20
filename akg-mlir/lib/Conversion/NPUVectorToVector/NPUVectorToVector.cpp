@@ -2092,6 +2092,16 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Value seedVec;
   };
 
+  // Input bundle for buildFullReductionSeed: the reduction spec plus the
+  // delivery target/chain and the constants needed to materialize the seed.
+  struct FullReductionSeedInput {
+    const FullReductionInfo &info;
+    TypedAttr idAttr;
+    const DeliveryTarget &target;
+    const ReductionDelivery &delivery;
+    Value c0;
+  };
+
   static DeliveryTarget resolveDeliveryTarget(const ReductionDelivery &delivery) {
     DeliveryTarget out;
     if (auto store = dyn_cast<memref::StoreOp>(delivery.finalWrite)) {
@@ -2364,7 +2374,8 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     FullReductionInfo info{redOp, kind, scalarElem, producers, regIdent, regVecTy, laneCount};
     SeedResult seed;
     BuilderEnv benv{builder, loc};
-    buildFullReductionSeed(benv, info, idAttr, target, delivery, c0, seed);
+    FullReductionSeedInput seedInput{info, idAttr, target, delivery, c0};
+    buildFullReductionSeed(benv, seedInput, seed);
     bool reuseTargetAsAccBuf = seed.reuseTargetAsAccBuf;
     Value accBuf = seed.accBuf;
     Value idScalar = seed.idScalar;
@@ -2418,53 +2429,53 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // whether the output memref can be reused as the scalar accumulator buffer
   // (legacy `memref<1xT>` path) and, depending on that, sets up either the
   // legacy scalar identity / scratch store or the new rank-0 vector seed.
-  void buildFullReductionSeed(const BuilderEnv &env, const FullReductionInfo &info,
-                              TypedAttr idAttr, const DeliveryTarget &target,
-                              const ReductionDelivery &delivery, Value c0, SeedResult &out) const {
+  void buildFullReductionSeed(const BuilderEnv &env, const FullReductionSeedInput &in, SeedResult &out) const {
     OpBuilder &builder = env.builder;
     Location loc = env.loc;
-    npuv::ReductionOp redOp = info.redOp;
-    vector::CombiningKind kind = info.kind;
-    Type scalarElem = info.scalarElem;
-    out.reuseTargetAsAccBuf = false;
-    if (target.isStore && target.rank == 1 && target.memref) {
-      auto mt = llvm::cast<MemRefType>(target.memref.getType());
-      llvm::ArrayRef<int64_t> memShape = mt.getShape();
-      if (!memShape.empty() && memShape.front() == 1 && mt.getElementType() == scalarElem &&
-          delivery.castChain.empty()) {
-        out.reuseTargetAsAccBuf = true;
-      }
-    }
+    npuv::ReductionOp redOp = in.info.redOp;
+    Type scalarElem = in.info.scalarElem;
+    out.reuseTargetAsAccBuf = canReuseTargetAsAccBuf(in.target, in.delivery, scalarElem);
     auto rank0Ty = VectorType::get({}, scalarElem);
     if (out.reuseTargetAsAccBuf) {
-      out.idScalar = builder.create<arith::ConstantOp>(loc, idAttr);
-      out.accBuf = target.memref;
+      out.idScalar = builder.create<arith::ConstantOp>(loc, in.idAttr);
+      out.accBuf = in.target.memref;
       Value seedInit = redOp.getAcc() ? redOp.getAcc() : out.idScalar;
-      builder.create<memref::StoreOp>(loc, seedInit, out.accBuf, ValueRange{c0});
+      builder.create<memref::StoreOp>(loc, seedInit, out.accBuf, ValueRange{in.c0});
     } else if (Value acc = redOp.getAcc()) {
       out.seedVec = builder.create<vector::BroadcastOp>(loc, rank0Ty, acc);
     } else {
-      out.seedVec = buildIdentityAccumulator(builder, loc, kind, rank0Ty);
+      out.seedVec = buildIdentityAccumulator(builder, loc, in.info.kind, rank0Ty);
     }
   }
 
+  // `buildFullReductionSeed` helper: the output memref can double as the scalar
+  // accumulator buffer only when it is a `memref<1xT>` store whose element type
+  // matches the accumulator and there is no intervening cast chain.
+  static bool canReuseTargetAsAccBuf(const DeliveryTarget &target, const ReductionDelivery &delivery,
+                                     Type scalarElem) {
+    if (!(target.isStore && target.rank == 1 && target.memref)) {
+      return false;
+    }
+    auto mt = llvm::cast<MemRefType>(target.memref.getType());
+    llvm::ArrayRef<int64_t> memShape = mt.getShape();
+    return !memShape.empty() && memShape.front() == 1 && mt.getElementType() == scalarElem &&
+           delivery.castChain.empty();
+  }
+
   // `buildFullReductionLoopNest` helper: emit one register-tiled reduction loop
-  // over [lbv, ubv) step lanes, accumulating `lp.initAccs.front()`. When
+  // over [lbv, ubv) step lanes, threading the single scalar accumulator `acc`
+  // (used as both the loop init and, on success, the loop result). When
   // `lp.masked`, the tail lanes are masked (transfer reads padded + a select
   // against the identity) so out-of-range lanes never reach the reduction.
-  // Returns the loop result.
-  LogicalResult buildReductionRegLoop(BuilderEnv env, PassLoopParams lp, FullReductionInfo info,
-                                      Value &result) const {
-    if (lp.initAccs.empty()) {
-      return info.redOp.emitError("npuvector-to-vector: reduction register loop needs an accumulator");
-    }
+  LogicalResult buildReductionRegLoop(BuilderEnv env, PassLoopParams lp, Value &acc,
+                                      FullReductionInfo info) const {
     OpBuilder &b = env.builder;
     Location loc = env.loc;
-    Value init = lp.initAccs.front();
+    Value init = acc;
     bool masked = lp.masked;
     auto forOp = b.create<scf::ForOp>(loc, lp.lbv, lp.ubv, lp.cLane, ValueRange{init});
     Value iv = forOp.getInductionVar();
-    Value acc = forOp.getRegionIterArgs().front();
+    Value iterAcc = forOp.getRegionIterArgs().front();
     OpBuilder lb = OpBuilder::atBlockBegin(forOp.getBody());
 
     SmallVector<Value> ivs(lp.outerIvs.begin(), lp.outerIvs.end());
@@ -2482,9 +2493,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
       return info.redOp.emitError("npuvector-to-vector: reduction input register type mismatch");
     }
     Value contrib = masked ? lb.create<arith::SelectOp>(loc, mask, redInput, info.regIdent) : redInput;
-    Value combined = vector::makeArithReduction(lb, loc, info.kind, acc, contrib);
+    Value combined = vector::makeArithReduction(lb, loc, info.kind, iterAcc, contrib);
     lb.create<scf::YieldOp>(loc, combined);
-    result = forOp.getResult(0);
+    acc = forOp.getResult(0);
     return success();
   }
 
@@ -2519,15 +2530,15 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     RegSplit split = planRegSplit(lb, loc, bound, info.laneCount);
     Value acc = curInit;
     if (split.emitMain) {
-      if (failed(buildReductionRegLoop({lb, loc}, {lc.c0, split.alignedBound, bound, lc.cLane,
-                                     outerIvs, {acc}, false}, info, acc))) {
+      if (failed(buildReductionRegLoop({lb, loc}, {lc.c0, split.alignedBound, bound, lc.cLane, outerIvs},
+                                       acc, info))) {
         return failure();
       }
     }
     if (split.emitTail) {
       Value tailLb = split.emitMain ? split.alignedBound : lc.c0;
-      if (failed(buildReductionRegLoop({lb, loc}, {tailLb, bound, bound, lc.cLane,
-                                     outerIvs, {acc}, true}, info, acc))) {
+      if (failed(buildReductionRegLoop({lb, loc}, {tailLb, bound, bound, lc.cLane, outerIvs, {}, true},
+                                       acc, info))) {
         return failure();
       }
     }
