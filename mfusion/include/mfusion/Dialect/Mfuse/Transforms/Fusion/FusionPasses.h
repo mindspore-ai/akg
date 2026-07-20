@@ -30,12 +30,14 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulCast.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulReshapeBiasAdd.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulUnsqueezeSqueeze.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMul.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMulToMul.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulPermute.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulK1ToMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulReshape.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/MatMulOptimizationManager.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseAddRmsNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseBatchNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNormDvm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Softmax/FuseSafeSoftmaxDvm.h"
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_FUSION_PASSES_H

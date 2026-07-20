@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "llvm/ADT/ArrayRef.h"
@@ -127,6 +128,9 @@ inline mlir::Type inferScalarType(mlir::Type scalarType, mlir::Type lhsType) {
     return lhsType;
   } else if (auto lhsInt = mlir::dyn_cast<mlir::IntegerType>(lhsType)) {
     if (auto scalarInt = mlir::dyn_cast<mlir::IntegerType>(scalarType)) {
+      if (lhsInt.getWidth() == 1 && scalarInt.getWidth() != 1) {
+        return scalarType;
+      }
       return lhsType;
     }
     return mlir::FloatType::getF32(lhsType.getContext());
@@ -162,24 +166,85 @@ inline mlir::Type inferBinaryOpResultType(mlir::Type lhs, mlir::Type rhs) {
   return lhs;
 }
 
-inline mlir::Type inferResultElementType(mlir::Value lhs, mlir::Value rhs) {
-  auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
-  auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
-  if (!lhsType || !rhsType) return lhs.getType();
-
+inline mlir::Type inferResultElementType(mlir::RankedTensorType lhsType, mlir::RankedTensorType rhsType) {
   auto lhsElemType = lhsType.getElementType();
   auto rhsElemType = rhsType.getElementType();
 
-  if (isScalarType(rhsType)) {
+  bool lhsIsScalar = isScalarType(lhsType);
+  bool rhsIsScalar = isScalarType(rhsType);
+  if (lhsIsScalar && !rhsIsScalar) {
+    lhsElemType = inferScalarType(lhsElemType, rhsElemType);
+  }
+  if (rhsIsScalar) {
     rhsElemType = inferScalarType(rhsElemType, lhsElemType);
   }
   return inferBinaryOpResultType(lhsElemType, rhsElemType);
 }
 
-/// Common type/shape inference for broadcastable binary ops (NumPy-style broadcasting).
+inline mlir::Type inferResultElementType(mlir::Value lhs, mlir::Value rhs) {
+  auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
+  auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
+  if (!lhsType || !rhsType) return lhs.getType();
+  return inferResultElementType(lhsType, rhsType);
+}
+
+/// Common type/shape inference for broadcastable binary ops (PyTorch-style broadcasting).
 class BinaryOpCommonInfer {
  public:
-  /// Infers broadcast shape for binary ops using NumPy-style broadcasting.
+  static std::optional<int64_t> mergeTrailingBroadcastDim(int64_t lhsDim, int64_t rhsDim) {
+    if (lhsDim == rhsDim) {
+      return lhsDim;
+    }
+    if (lhsDim == 1) {
+      return rhsDim;
+    }
+    if (rhsDim == 1) {
+      return lhsDim;
+    }
+    constexpr int64_t kDynamic = mlir::ShapedType::kDynamic;
+    if (lhsDim == kDynamic) {
+      return rhsDim;
+    }
+    if (rhsDim == kDynamic) {
+      return lhsDim;
+    }
+    return std::nullopt;
+  }
+
+  /// Infers broadcast shape using trailing alignment (equal / one is 1 / missing dim keeps the other).
+  static std::optional<std::vector<int64_t>> inferTrailingBroadcastShape(llvm::ArrayRef<int64_t> lhsShape,
+                                                                         llvm::ArrayRef<int64_t> rhsShape) {
+    size_t lhsRank = lhsShape.size();
+    size_t rhsRank = rhsShape.size();
+    size_t maxRank = std::max(lhsRank, rhsRank);
+
+    std::vector<int64_t> rev;
+    rev.reserve(maxRank);
+    for (size_t i = 0; i < maxRank; ++i) {
+      int64_t lhsIdx = static_cast<int64_t>(lhsRank) - 1 - static_cast<int64_t>(i);
+      int64_t rhsIdx = static_cast<int64_t>(rhsRank) - 1 - static_cast<int64_t>(i);
+
+      if (lhsIdx >= 0 && rhsIdx < 0) {
+        rev.push_back(lhsShape[lhsIdx]);
+        continue;
+      }
+      if (lhsIdx < 0 && rhsIdx >= 0) {
+        rev.push_back(rhsShape[rhsIdx]);
+        continue;
+      }
+
+      auto mergedDim = mergeTrailingBroadcastDim(lhsShape[lhsIdx], rhsShape[rhsIdx]);
+      if (!mergedDim) {
+        return std::nullopt;
+      }
+      rev.push_back(*mergedDim);
+    }
+
+    std::reverse(rev.begin(), rev.end());
+    return rev;
+  }
+
+  /// Infers broadcast shape for binary ops using trailing alignment with custom merge (symbolic shapes).
   template <typename T, typename CompareFunc, typename MergeFunc>
   static std::vector<T> inferShape(const std::vector<T> &lhsShape, const std::vector<T> &rhsShape, CompareFunc isOne,
                                    MergeFunc mergeDims) {
@@ -239,6 +304,17 @@ class BinaryOpCommonInfer {
     auto resultExprs = inferShape(
       lhsShapeVec, rhsShapeVec, [](SymbolAttrUtils::SymExpr dim) { return dim->__str__() == "1"; },
       [&symBuilder](SymbolAttrUtils::SymExpr lhsDim, SymbolAttrUtils::SymExpr rhsDim) {
+        auto lhsStr = lhsDim->__str__();
+        auto rhsStr = rhsDim->__str__();
+        if (lhsStr == rhsStr) {
+          return lhsDim;
+        }
+        if (lhsStr == "1") {
+          return rhsDim;
+        }
+        if (rhsStr == "1") {
+          return lhsDim;
+        }
         return symBuilder.makeMax(lhsDim, rhsDim);
       });
 
@@ -248,30 +324,31 @@ class BinaryOpCommonInfer {
     return SymbolAttrUtils::withSymbolicAttr(rankedResult, combinedAttr);
   }
 
-  /// Infers result type for broadcastable binary ops using NumPy-style broadcasting.
+  /// Infers result type for broadcastable binary ops using PyTorch-style broadcasting.
+  static mlir::Type inferResultType(mlir::RankedTensorType lhsType, mlir::RankedTensorType rhsType, bool isCompareOp) {
+    mlir::Type elementType;
+    if (isCompareOp) {
+      elementType = mlir::IntegerType::get(lhsType.getContext(), 1);
+    } else {
+      elementType = inferResultElementType(lhsType, rhsType);
+    }
+
+    auto resultShapeVec = inferTrailingBroadcastShape(lhsType.getShape(), rhsType.getShape());
+    if (!resultShapeVec) {
+      return {};
+    }
+
+    llvm::ArrayRef<int64_t> resultShape(*resultShapeVec);
+    return mlir::RankedTensorType::get(resultShape, elementType);
+  }
+
   static mlir::Type inferResultType(mlir::Value lhs, mlir::Value rhs, bool isCompareOp) {
     auto lhsType = llvm::dyn_cast<mlir::RankedTensorType>(lhs.getType());
     auto rhsType = llvm::dyn_cast<mlir::RankedTensorType>(rhs.getType());
     if (!lhsType || !rhsType) {
       return {};
     }
-
-    mlir::Type elementType;
-    if (isCompareOp) {
-      elementType = mlir::IntegerType::get(lhs.getContext(), 1);
-    } else {
-      elementType = inferResultElementType(lhs, rhs);
-    }
-
-    std::vector<int64_t> lhsShapeVec(lhsType.getShape().begin(), lhsType.getShape().end());
-    std::vector<int64_t> rhsShapeVec(rhsType.getShape().begin(), rhsType.getShape().end());
-
-    auto resultShapeVec = inferShape(
-      lhsShapeVec, rhsShapeVec, [](int64_t dim) { return dim == 1; },
-      [](int64_t lhsDim, int64_t rhsDim) -> int64_t { return std::max(lhsDim, rhsDim); });
-
-    llvm::ArrayRef<int64_t> resultShape(resultShapeVec);
-    return mlir::RankedTensorType::get(resultShape, elementType);
+    return inferResultType(lhsType, rhsType, isCompareOp);
   }
 };
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_ANALYSIS_SPLIT_LAYERNORMDVMUTILS_H
-#define MFUSION_ANALYSIS_SPLIT_LAYERNORMDVMUTILS_H
+#ifndef MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
+#define MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
 
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "llvm/ADT/DenseSet.h"
@@ -80,4 +80,4 @@ LayerNormDvmBwdMatch matchLayerNormDvmBackwardFromCuahirSum(ReduceSumOp sumOp);
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_ANALYSIS_SPLIT_LAYERNORMDVMUTILS_H
+#endif  // MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H

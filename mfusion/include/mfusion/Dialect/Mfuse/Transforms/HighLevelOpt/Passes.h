@@ -31,6 +31,9 @@ std::unique_ptr<Pass> createConvertBFloat16Pass();
 /// Create a pass to raise reduction precision from float16 to float32.
 std::unique_ptr<Pass> createRaiseReductionPrecisionPass();
 
+/// Create a pass to fold flattened BNSD-style sum reductions.
+std::unique_ptr<Pass> createFoldBnsdFlattenSumPass();
+
 /// Create a pass to promote binary operations to ensure consistent input types.
 std::unique_ptr<Pass> createPromoteBinaryOpsPass();
 

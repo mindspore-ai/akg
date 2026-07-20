@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_BATCH_MATMUL_H
-#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_BATCH_MATMUL_H
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_PERMUTE_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_PERMUTE_H
 
 #include <memory>
 
@@ -26,12 +26,10 @@
 namespace mlir {
 namespace mfuse {
 
-/// Mode 1: Fuse Transpose (permute that swaps last two dims) into MatMul/BatchMatMul
-/// by using permute input and flipping trans flag. Mode 2: When BatchMatMul inputs
-/// are both 2D, convert BatchMatMul to MatMul.
-std::unique_ptr<Pass> createFuseBatchMatMulPass();
+/// Eliminate permute (swap last two dims) into mfuse.matmul trans_x1/trans_x2 flags.
+std::unique_ptr<Pass> createFuseMatmulPermutePass();
 
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_BATCH_MATMUL_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_PERMUTE_H

@@ -27,6 +27,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir {
@@ -77,6 +78,15 @@ bool buildCluster(llvm::ArrayRef<Operation *> baseClusterOps, ClusterBuildInfo &
 /// as many original cluster operations as possible.
 llvm::SmallVector<llvm::SmallVector<Operation *>> partitionClusterOps(llvm::ArrayRef<Operation *> baseClusterOps,
                                                                       size_t minClusterSize = kMinClusterSize);
+
+/// Materialize an mfuse.fused op from a validated ClusterBuildInfo slice.
+bool materializeFusedOpFromBuildInfo(RewriterBase &rewriter, const ClusterBuildInfo &buildInfo,
+                                     llvm::StringRef fusionType, FusedOp &outFusedOp);
+
+/// Return true only if every operation in `memberOps` can be lowered to DVM via the
+/// cluster whitelist + checkDvmOpConstraints (with scalar-constant bypass). Use as a
+/// pre-flight gate before materializing a matcher-driven fused region (e.g. safe-softmax).
+bool allMemberOpsDvmSupported(llvm::ArrayRef<Operation *> memberOps);
 }  // namespace mfuse
 }  // namespace mlir
 

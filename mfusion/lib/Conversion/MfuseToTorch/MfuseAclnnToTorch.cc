@@ -39,8 +39,11 @@ namespace TorchD = mlir::torch::Torch;
 namespace {
 
 using mfuse::buildSwapLastTwoDimsPermute;
+using mfuse::isAclnnMmAddFoldLegal;
 using mfuse::isDvmKernelGenerator;
 using mfuse::isInsideDvmCopiedSubgraph;
+using mfuse::matchAclnnMmAddFoldFromMm;
+using mfuse::rewriteAclnnMmAddToAtenAddmm;
 
 static bool areRank3ValueTensors(mlir::Value lhs, mlir::Value rhs) {
   auto lhsType = mlir::dyn_cast<TorchD::ValueTensorType>(lhs.getType());
@@ -381,6 +384,31 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
   }
 };
 
+/// Fold mfuse.aclnn.mm + mfuse.add → torch.aten.addmm (post-recompose residual / bias path).
+class ConvertMfuseAclnnMmAddToAddmm : public mlir::OpConversionPattern<mlir::mfuse::AclnnMmOp> {
+ public:
+  ConvertMfuseAclnnMmAddToAddmm(mlir::TypeConverter &converter, mlir::MLIRContext *context,
+                                llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, context, /*benefit=*/10), kernelGenerator_(kernelGenerator.str()) {}
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnMmOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    if (isDvmKernelGenerator(kernelGenerator_) && isInsideDvmCopiedSubgraph(op)) {
+      return rewriter.notifyMatchFailure(op, "skip addmm fold inside DVM copied subgraph");
+    }
+    mfuse::AclnnMmAddFoldMatch fold;
+    if (!matchAclnnMmAddFoldFromMm(op, fold) || !isAclnnMmAddFoldLegal(fold)) {
+      return rewriter.notifyMatchFailure(op, "aclnn.mm is not a legal addmm fold producer");
+    }
+    mlir::Value remappedInput = rewriter.getRemappedValue(fold.input);
+    return rewriteAclnnMmAddToAtenAddmm(fold, *getTypeConverter(), adaptor.getSelf(), adaptor.getMat2(), remappedInput,
+                                        rewriter);
+  }
+
+ private:
+  std::string kernelGenerator_;
+};
+
 /// Converts mfuse.aclnn.mm -> torch.aten.mm. DVM copied subgraph functions preserve trans_x1/trans_x2
 /// as dvm_trans_a/dvm_trans_b attrs; other contexts use explicit torch.aten.permute.
 class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnMmOp> {
@@ -523,6 +551,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
   patterns.add<ConvertMfuseAclnnLayerNorm>(converter, context);
+  patterns.add<ConvertMfuseAclnnMmAddToAddmm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnMm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);

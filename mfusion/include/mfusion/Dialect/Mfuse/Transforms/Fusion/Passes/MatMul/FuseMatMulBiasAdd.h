@@ -26,9 +26,9 @@
 namespace mlir {
 namespace mfuse {
 
-/// Fuse MatMul/BatchMatmul (no bias) and Add(bias) into MatmulWithBias.
+/// Fuse MatMul (no bias) and Add(bias) into MatmulWithBias.
 /// Constraints: one add input has rank 1 (bias); bias size equals matmul output
-/// last dimension; for 2D MatMul output rank is 2; no broadcast.
+/// last dimension; matmul output rank must be at least 2; no broadcast.
 std::unique_ptr<Pass> createFuseMatMulBiasAddPass();
 
 }  // namespace mfuse
