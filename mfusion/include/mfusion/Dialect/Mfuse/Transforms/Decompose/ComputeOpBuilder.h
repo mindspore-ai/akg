@@ -45,27 +45,32 @@ class ComputeOpBuilder {
 
   // ComputeOpBuilder methods
   Value add(Value a, Value b) { return rewriter.create<AddOp>(loc, a, b); }
+  Value add(Value a, Value b, Type resultType) { return rewriter.create<AddOp>(loc, resultType, a, b); }
   Value sub(Value a, Value b) { return rewriter.create<SubOp>(loc, a, b); }
+  Value sub(Value a, Value b, Type resultType) { return rewriter.create<SubOp>(loc, resultType, a, b); }
   Value mul(Value a, Value b) { return rewriter.create<MulOp>(loc, a, b); }
   Value div(Value a, Value b) { return rewriter.create<DivOp>(loc, a, b); }
 
-  // Scalar overloads using CRTP-like pattern to avoid code duplication
-  template <typename T>
+  // Scalar overloads using CRTP-like pattern to avoid code duplication.
+  // The enable_if restricts T to arithmetic scalars so that a call with two
+  // Values (e.g. sub(Value, Value)) resolves to the non-template Value-Value
+  // overload above instead of instantiating this template with T=Value.
+  template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
   Value add(Value a, T scalar) {
     return binOpWithScalar(a, scalar, [&](Value a, Value b) { return add(a, b); });
   }
 
-  template <typename T>
+  template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
   Value sub(Value a, T scalar) {
     return binOpWithScalar(a, scalar, [&](Value a, Value b) { return sub(a, b); });
   }
 
-  template <typename T>
+  template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
   Value mul(Value a, T scalar) {
     return binOpWithScalar(a, scalar, [&](Value a, Value b) { return mul(a, b); });
   }
 
-  template <typename T>
+  template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
   Value div(Value a, T scalar) {
     return binOpWithScalar(a, scalar, [&](Value a, Value b) { return div(a, b); });
   }
@@ -81,7 +86,7 @@ class ComputeOpBuilder {
 
   /// Scalar-bounds clamp via mfuse.maximum/minimum (maps to clamp_min/clamp_max on roundtrip).
   /// Avoid mfuse.aclnn.clamp, whose Mfuse→Torch lowering expands to isnan/where.
-  template <typename T>
+  template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
   Value clampMinMax(Value input, T minVal, T maxVal) {
     auto resultType = input.getType();
     auto elemType = mlir::cast<RankedTensorType>(resultType).getElementType();

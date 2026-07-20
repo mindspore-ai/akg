@@ -17,8 +17,11 @@
 #include <utility>
 
 #include "llvm/Support/FormatVariadic.h"
+#include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
+#include "mfusion/Dialect/Mfuse/Analysis/ConvBiasAddInfer.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/VarianceUtils.h"
+#include "mfusion/Dialect/Mfuse/Transforms/BinaryScalarUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/DecomposePatterns.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
@@ -36,42 +39,123 @@ static bool isSupportFloatType(Type type) { return type.isF32() || type.isF16() 
 /// Check if output type is float/int type
 static bool isSupportType(Type type) { return isSupportFloatType(type) || type.isInteger(32); }
 
-/// Helper function to decompose Aclnn operations with alpha parameter
-/// This handles the common logic for both AclnnAdd and AclnnSub
-/// op The Aclnn operation (AclnnAddOp or AclnnSubOp)
-/// builder ComputeOpBuilder instance
-/// rewriter PatternRewriter instance
-/// return The decomposed operation result
-template <typename OpType>
-static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &builder, PatternRewriter &rewriter) {
-  // Get the inputs from the op
-  Value x = op.getX();
-  Value y = op.getY();
-  Value alpha = op.getAlpha();
-  Type resultType = op.getResult().getType();
-  auto resultElementType = mlir::cast<RankedTensorType>(resultType).getElementType();
-  // Determine if the operation is an add or sub
-  bool isAdd = isa<mfuse::AclnnAddOp>(op);
-  if (isConstOne(alpha)) {
-    return isAdd ? builder.add(x, y) : builder.sub(x, y);
+static FailureOr<RankedTensorType> inferBinaryResultTypeFromTypes(Type lhsType, Type rhsType) {
+  auto lhsRankedType = dyn_cast<RankedTensorType>(lhsType);
+  auto rhsRankedType = dyn_cast<RankedTensorType>(rhsType);
+  if (!lhsRankedType || !rhsRankedType) {
+    return failure();
+  }
+  auto inferredType = dyn_cast_or_null<RankedTensorType>(
+    BinaryOpCommonInfer::inferResultType(lhsRankedType, rhsRankedType, false));
+  if (!inferredType) {
+    return failure();
+  }
+  return inferredType;
+}
+
+/// Add-only: try ConvBiasAddInfer then trailing broadcast. Must not be used for Sub.
+static FailureOr<RankedTensorType> inferAddResultTypeWithConvBiasFallback(Value lhs, Value rhs) {
+  if (auto convBias = dyn_cast_or_null<RankedTensorType>(ConvBiasAddInfer::inferAddResultType(lhs, rhs))) {
+    return convBias;
+  }
+  return inferBinaryResultTypeFromTypes(lhs.getType(), rhs.getType());
+}
+
+static bool hasSameShapeAndElementType(RankedTensorType lhsType, RankedTensorType rhsType) {
+  return lhsType.getShape() == rhsType.getShape() && lhsType.getElementType() == rhsType.getElementType();
+}
+
+static bool canDecomposeAclnnWithAlpha(Value x, Value y, bool hasUnitAlpha, Type resultElementType) {
+  if (isScalarType(x.getType()) && isScalarType(y.getType())) {
+    return false;
+  }
+  if (hasUnitAlpha) {
+    return true;
+  }
+  return !isScalarType(y.getType()) && isSupportType(resultElementType);
+}
+
+static FailureOr<RankedTensorType> inferAclnnWithAlphaResultType(Value x, Value y, Value alpha, bool hasUnitAlpha,
+                                                                bool isAdd) {
+  if (hasUnitAlpha) {
+    // ConvBiasAddInfer is Add-only; Sub uses trailing broadcast only.
+    if (isAdd) {
+      return inferAddResultTypeWithConvBiasFallback(x, y);
+    }
+    return inferBinaryResultTypeFromTypes(x.getType(), y.getType());
   }
 
-  // Do not decompose add/sub.Scalar to mul + add/sub
-  if (auto rhsEnc = mlir::dyn_cast<mlir::RankedTensorType>(y.getType()).getEncoding()) {
-    if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(rhsEnc)) {
-      if (dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
-        return nullptr;
+  auto inferredMulType = inferBinaryResultTypeFromTypes(y.getType(), alpha.getType());
+  if (failed(inferredMulType)) {
+    return failure();
+  }
+
+  // Non-unit alpha: x + y*alpha. Channel-bias only when x=conv and y=bias[C]
+  // (alpha scales bias). Do not swap — add(bias, conv, alpha) means bias + alpha*conv.
+  if (isAdd) {
+    auto yTy = dyn_cast<RankedTensorType>(y.getType());
+    if (yTy && yTy.getShape() == inferredMulType->getShape()) {
+      if (auto channelTy =
+            dyn_cast_or_null<RankedTensorType>(ConvBiasAddInfer::inferAddResultTypeOrdered(x, y))) {
+        // Keep dtype aligned with fuse / conv2d_with_bias contract.
+        if (inferredMulType->getElementType() == channelTy.getElementType()) {
+          return channelTy;
+        }
       }
     }
   }
+  return inferBinaryResultTypeFromTypes(x.getType(), *inferredMulType);
+}
 
-  if (!isSupportType(resultElementType)) {
-    return nullptr;
+static Value buildAclnnWithAlphaResult(ComputeOpBuilder &builder, Value x, Value y, Value alpha, bool hasUnitAlpha,
+                                       bool isAdd, Type resultType) {
+  Value rhs = y;
+  if (!hasUnitAlpha) {
+    rhs = builder.mul(y, alpha);
+  }
+  if (!isAdd) {
+    return builder.sub(x, rhs, resultType);
+  }
+  if (isScalarType(x.getType())) {
+    return builder.add(rhs, x, resultType);
+  }
+  return builder.add(x, rhs, resultType);
+}
+
+/// Helper function to decompose Aclnn operations with alpha parameter
+/// This handles the common logic for both AclnnAdd and AclnnSub
+/// op The Aclnn operation (AclnnAddOp or AclnnSubOp)
+/// rewriter PatternRewriter instance
+/// return Whether the operation was decomposed
+template <typename OpType>
+static LogicalResult decomposeAclnnWithAlpha(OpType op, PatternRewriter &rewriter) {
+  auto xScalar = getRecoverableScalar(op.getX());
+  auto yScalar = getRecoverableScalar(op.getY());
+  Value x = xScalar ? xScalar->scalar : op.getX();
+  Value y = yScalar ? yScalar->scalar : op.getY();
+  Value alpha = op.getAlpha();
+  Type resultType = op.getResult().getType();
+  auto resultElementType = mlir::cast<RankedTensorType>(resultType).getElementType();
+  bool isAdd = isa<mfuse::AclnnAddOp>(op);
+  bool hasUnitAlpha = isConstOne(alpha);
+
+  if (!canDecomposeAclnnWithAlpha(x, y, hasUnitAlpha, resultElementType)) {
+    return failure();
   }
 
-  Value mulResult = builder.mul(y, alpha);
-  // Perform the final add or sub operation
-  return isAdd ? builder.add(x, mulResult) : builder.sub(x, mulResult);
+  auto inferredResultType = inferAclnnWithAlphaResultType(x, y, alpha, hasUnitAlpha, isAdd);
+  auto expectedResultType = dyn_cast<RankedTensorType>(resultType);
+  if (failed(inferredResultType) || !expectedResultType ||
+      !hasSameShapeAndElementType(*inferredResultType, expectedResultType)) {
+    return rewriter.notifyMatchFailure(op, "decomposed result type differs from the original result type");
+  }
+
+  mlir::mfuse::ComputeOpBuilder builder(rewriter, op.getLoc());
+  Value result = buildAclnnWithAlphaResult(builder, x, y, alpha, hasUnitAlpha, isAdd, resultType);
+  rewriter.replaceOp(op, result);
+  eraseDeadNumToTensor(rewriter, xScalar);
+  eraseDeadNumToTensor(rewriter, yScalar);
+  return success();
 }
 
 }  // namespace
@@ -82,18 +166,7 @@ class AclnnAddDecomposePattern : public OpRewritePattern<mfuse::AclnnAddOp> {
   using OpRewritePattern<mfuse::AclnnAddOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnAddOp addOp, PatternRewriter &rewriter) const override {
-    // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, addOp.getLoc());
-
-    // Decompose using the helper function
-    Value addResult = decomposeAclnnWithAlpha(addOp, builder, rewriter);
-    if (!addResult) {
-      return failure();
-    }
-
-    // Replace the original AclnnAdd operation with the decomposed computation
-    rewriter.replaceOp(addOp, addResult);
-    return success();
+    return decomposeAclnnWithAlpha(addOp, rewriter);
   }
 };
 
@@ -101,36 +174,6 @@ class AclnnAddDecomposePattern : public OpRewritePattern<mfuse::AclnnAddOp> {
 template <typename Op>
 static Value getMatmulResult(Op op) {
   return op.getOut();
-}
-
-/// Try to find aclnn matmul-like op (mm/matmul/batch_matmul) from add operands.
-/// Returns the matmul op and sets bias to the other operand.
-template <typename AclnnMatmulOp>
-static Operation *findAclnnMatmulFromAddOperands(Value x, Value y, Value &bias) {
-  if (auto mm = x.getDefiningOp<AclnnMatmulOp>()) {
-    bias = y;
-    return mm.getOperation();
-  }
-  if (auto mm = y.getDefiningOp<AclnnMatmulOp>()) {
-    bias = x;
-    return mm.getOperation();
-  }
-  return nullptr;
-}
-
-/// Read trans_x1/trans_x2 from an aclnn matmul-like op (mm, matmul, batch_matmul).
-/// Returns (false, false) if \p op is not one of these (caller should only pass matched ops).
-static std::pair<bool, bool> getAclnnMatmulTransposeFlags(Operation *op) {
-  if (auto mm = dyn_cast<AclnnMmOp>(op)) {
-    return {mm.getTransX1(), mm.getTransX2()};
-  }
-  if (auto m = dyn_cast<AclnnMatmulOp>(op)) {
-    return {m.getTransX1(), m.getTransX2()};
-  }
-  if (auto bm = dyn_cast<AclnnBatchMatmulOp>(op)) {
-    return {bm.getTransX1(), bm.getTransX2()};
-  }
-  return {false, false};
 }
 
 //===----------------------------------------------------------------------===//
@@ -162,62 +205,13 @@ using ConvertAclnnMmToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<Acln
 using ConvertAclnnMatmulToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<AclnnMatmulOp>;
 using ConvertAclnnBatchMatmulToMatMulPattern = ConvertAclnnMatmulLikeToMatMulPattern<AclnnBatchMatmulOp>;
 
-/// Pattern to fuse aclnn.matmul + add into mfuse.matmul_with_bias.
-/// Converts aclnn.mm/matmul/batch_matmul + add to mfuse.matmul_with_bias.
-/// Higher benefit pattern, so it runs before converting standalone matmul operations.
-/// Processed after AclnnAddDecomposePattern.
-class ConvertAclnnMatmulAddToMatMulWithBiasPattern : public OpRewritePattern<AddOp> {
- public:
-  using OpRewritePattern<AddOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AddOp addOp, PatternRewriter &rewriter) const override {
-    Value x = addOp.getX();
-    Value y = addOp.getY();
-    Value bias;
-    Operation *matmulOp = nullptr;
-
-    matmulOp = findAclnnMatmulFromAddOperands<AclnnMmOp>(x, y, bias);
-    if (!matmulOp) {
-      matmulOp = findAclnnMatmulFromAddOperands<AclnnMatmulOp>(x, y, bias);
-    }
-    if (!matmulOp) {
-      matmulOp = findAclnnMatmulFromAddOperands<AclnnBatchMatmulOp>(x, y, bias);
-    }
-    if (!matmulOp) {
-      return failure();
-    }
-
-    Value self = matmulOp->getOperand(0);
-    Value other = matmulOp->getOperand(1);
-    Type resultType = addOp.getResult().getType();
-    Location loc = addOp.getLoc();
-    const auto transFlags = getAclnnMatmulTransposeFlags(matmulOp);
-    auto newOp =
-      rewriter.create<MatmulWithBiasOp>(loc, resultType, self, other, bias, rewriter.getBoolAttr(transFlags.first),
-                                        rewriter.getBoolAttr(transFlags.second));
-    rewriter.replaceOp(addOp, newOp.getResult());
-    return success();
-  }
-};
-
 /// OpRewritePattern for decomposing AclnnSub operations (x - y * alpha) into mul and sub
 class AclnnSubDecomposePattern : public OpRewritePattern<mfuse::AclnnSubOp> {
  public:
   using OpRewritePattern<mfuse::AclnnSubOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnSubOp subOp, PatternRewriter &rewriter) const override {
-    // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, subOp.getLoc());
-
-    // Decompose using the helper function
-    Value subResult = decomposeAclnnWithAlpha(subOp, builder, rewriter);
-    if (!subResult) {
-      return failure();
-    }
-
-    // Replace the original AclnnSub operation with the decomposed computation
-    rewriter.replaceOp(subOp, subResult);
-    return success();
+    return decomposeAclnnWithAlpha(subOp, rewriter);
   }
 };
 
@@ -259,8 +253,6 @@ void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vect
   std::map<std::string, PatternFunc> patternMap = {
     {"aclnnadd", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnAddDecomposePattern>(c); }},
     {"aclnnsub", [](RewritePatternSet &p, MLIRContext *c) { p.add<AclnnSubDecomposePattern>(c); }},
-    {"aclnnmatmuladd",
-     [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMatmulAddToMatMulWithBiasPattern>(c); }},
     {"aclnnmm", [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMmToMatMulPattern>(c); }},
     {"aclnnmatmul", [](RewritePatternSet &p, MLIRContext *c) { p.add<ConvertAclnnMatmulToMatMulPattern>(c); }},
     {"aclnnbatchmatmul",

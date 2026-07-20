@@ -232,7 +232,7 @@ class FuseMatMul : public FusePattern {
       }
       auto op = area->dom()->op();
       auto opName = op->getName().getStringRef();
-      return opName == "mfuse.matmul" || opName == "mfuse.batch_matmul";
+      return opName == "mfuse.matmul";
     }
     // To Check if operation is GroupedMatmul.
     return false;
@@ -277,7 +277,7 @@ class FuseMatMul : public FusePattern {
       if (a->size() == 1 && a->dom()->op()->getName().getStringRef() == "mfuse.reshape") {
         continue;
       }
-      bool fuse_flag = (opName == "mfuse.matmul" || opName == "mfuse.batch_matmul" || opName == "mfuse.grouped_matmul");
+      bool fuse_flag = (opName == "mfuse.matmul" || opName == "mfuse.grouped_matmul");
       if (std::any_of(a->nodes().begin(), a->nodes().end(),
                       [](const Node *node) { return node->op()->getName().getStringRef() == "mfuse.reshape"; })) {
         fuse_flag = fuse_flag && (a->pattern() < NodePattern::BROADCAST);

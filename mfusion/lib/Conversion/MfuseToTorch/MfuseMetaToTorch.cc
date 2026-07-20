@@ -43,8 +43,14 @@ namespace TorchD = mlir::torch::Torch;
 namespace {
 
 using mfuse::buildSwapLastTwoDimsPermute;
+using mfuse::createAtenAddmm;
+using mfuse::infer2DMatmulOutType;
+using mfuse::isAclnnMmAddFoldLegal;
 using mfuse::isDvmKernelGenerator;
 using mfuse::isInsideDvmCopiedSubgraph;
+using mfuse::isLegalAddmmInputShape;
+using mfuse::matchAclnnMmAddFoldFromAdd;
+using mfuse::rewriteAclnnMmAddToAtenAddmm;
 
 static std::optional<int64_t> getTorchOrRankedTensorRank(mlir::Type ty) {
   if (auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(ty)) {
@@ -322,6 +328,43 @@ class ConvertMfuseFull : public mlir::OpConversionPattern<mlir::mfuse::FullOp> {
   }
 };
 
+/// Fold mfuse.add(aclnn.mm, bias) → torch.aten.addmm. Matches Add so folding wins even if
+/// the aclnn.mm conversion pattern has not run yet (vs plain add lowering).
+/// Only aclnn.mm is matched: inductor always recomposes mfuse.matmul → aclnn.mm before to-torch.
+/// When mm operands are not yet Torch types, returns failure; ConvertBinaryOpWithAlphaPattern
+/// skips the same fold candidates so plain add cannot race ahead.
+class ConvertMfuseAddMmToAddmm : public mlir::OpConversionPattern<mlir::mfuse::AddOp> {
+ public:
+  ConvertMfuseAddMmToAddmm(mlir::TypeConverter &converter, mlir::MLIRContext *ctx, llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, ctx, /*benefit=*/10), kernelGenerator_(kernelGenerator.str()) {}
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AddOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    if (isDvmKernelGenerator(kernelGenerator_) && isInsideDvmCopiedSubgraph(op)) {
+      return rewriter.notifyMatchFailure(op, "skip addmm fold inside DVM copied subgraph");
+    }
+
+    mfuse::AclnnMmAddFoldMatch fold;
+    if (!matchAclnnMmAddFoldFromAdd(op, fold) || !isAclnnMmAddFoldLegal(fold)) {
+      return rewriter.notifyMatchFailure(op, "add is not a legal aclnn.mm+input addmm fold");
+    }
+
+    mlir::Value mat1 = rewriter.getRemappedValue(fold.mmOp.getSelf());
+    mlir::Value mat2 = rewriter.getRemappedValue(fold.mmOp.getMat2());
+    mlir::Value remappedInput = (fold.input == op.getX()) ? adaptor.getX() : adaptor.getY();
+    // Defer until mm operands are converted; binary Add skips the same candidates.
+    if (!mlir::isa<TorchD::ValueTensorType>(mat1.getType()) ||
+        !mlir::isa<TorchD::ValueTensorType>(mat2.getType()) ||
+        !mlir::isa<TorchD::ValueTensorType>(remappedInput.getType())) {
+      return rewriter.notifyMatchFailure(op, "mm/add operands not yet converted to Torch types");
+    }
+    return rewriteAclnnMmAddToAtenAddmm(fold, *getTypeConverter(), mat1, mat2, remappedInput, rewriter);
+  }
+
+ private:
+  std::string kernelGenerator_;
+};
+
 /// Converts mfuse.matmul -> torch.aten.mm (2D) or torch.aten.matmul (ND).
 /// DVM copied subgraph functions keep trans_x1/trans_x2 as dvm_trans_a/dvm_trans_b on torch.aten.mm.
 /// Other contexts lower transpose flags to explicit torch.aten.permute.
@@ -384,9 +427,8 @@ class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulO
   std::string kernelGenerator_;
 };
 
-/// Converts mfuse.matmul_with_bias -> torch.aten.mm/matmul + torch.aten.add.Tensor.
-/// Since torch.aten.mm/matmul don't support bias directly, we decompose it into
-/// matmul followed by add. Transpose handling matches ConvertMfuseMatmul.
+/// Converts mfuse.matmul_with_bias.
+/// Non-DVM 2D with legal bias → torch.aten.addmm; DVM copied / ND → mm/matmul + add.
 class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse::MatmulWithBiasOp> {
  public:
   ConvertMfuseMatmulWithBias(mlir::TypeConverter &converter, mlir::MLIRContext *ctx, llvm::StringRef kernelGenerator)
@@ -407,12 +449,27 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
 
     mlir::Location loc = op.getLoc();
     const bool dvm = isDvmKernelGenerator(kernelGenerator_);
+    const bool inDvmCopied = dvm && isInsideDvmCopiedSubgraph(op);
+
+    // Prefer aten.addmm on the main graph (and non-DVM generators) for 2D + legal bias.
+    // Use inferred matmul product type (not fused result) as addmm's matmul-out shape.
+    auto mmOutTyOr = infer2DMatmulOutType(op.getSelf().getType(), op.getOther().getType(), trans1, trans2);
+    if (!inDvmCopied && mlir::succeeded(mmOutTyOr) &&
+        isLegalAddmmInputShape(*mmOutTyOr, op.getBias().getType()) &&
+        isTwoDMatmulOperandTypes(op.getSelf().getType(), op.getOther().getType())) {
+      auto addmmOr = createAtenAddmm(loc, resultType, self, other, bias, trans1, trans2, rewriter);
+      if (mlir::succeeded(addmmOr)) {
+        rewriter.replaceOp(op, *addmmOr);
+        return mlir::success();
+      }
+    }
+
     mlir::Value matmulResult;
     // In DVM copied subgraphs, keep matmul transpose semantics on the lowered
     // torch op instead of materializing explicit permutes. These clustered
     // kernels are lowered to aten.mm and preserve trans_x1/trans_x2 as
     // dvm_trans_a/dvm_trans_b before the bias add is rebuilt.
-    if (dvm && isInsideDvmCopiedSubgraph(op)) {
+    if (inDvmCopied) {
       auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other);
       newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(trans1));
       newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(trans2));
@@ -582,6 +639,41 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
   }
 };
 
+struct ConvertMfuseReduceMax : public mlir::OpConversionPattern<mlir::mfuse::ReduceMaxOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::ReduceMaxOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+
+    mlir::Value dimList = buildTorchIntListFromI64ArrayAttr(op.getDimensions(), op.getLoc(), rewriter);
+
+    bool keepdim = op.getKeepdim();
+    mlir::Value keepdimVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), keepdim);
+
+    rewriter.replaceOpWithNewOp<TorchD::AtenAmaxOp>(op, resultType, input, dimList, keepdimVal);
+    return mlir::success();
+  }
+};
+
+struct ConvertMfuseSoftmax : public mlir::OpConversionPattern<mlir::mfuse::SoftmaxOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::SoftmaxOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    mlir::Value dimVal = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), op.getDim());
+    mlir::Value halfVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), op.getHalfToFloat());
+    rewriter.replaceOpWithNewOp<TorchD::Aten_SoftmaxOp>(op, resultType, input, dimVal, halfVal);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.reshape -> torch.aten.reshape.
 /// Shape is derived from reshape result type. A dynamic dim is mapped to -1.
 class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::ReshapeOp> {
@@ -689,6 +781,19 @@ class ConvertBinaryOpWithAlphaPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
+    // Do not lower foldable aclnn.mm+add ahead of addmm patterns (including when
+    // AddMm is waiting for mm operands to become Torch types). Skip this defer
+    // inside DVM copied subgraphs: addmm fold patterns intentionally no-op there,
+    // so blocking Binary Add would leave mfuse.add illegal.
+    if constexpr (std::is_same_v<SourceOp, mfuse::AddOp>) {
+      if (!isInsideDvmCopiedSubgraph(op)) {
+        mfuse::AclnnMmAddFoldMatch fold;
+        if (matchAclnnMmAddFoldFromAdd(op, fold) && isAclnnMmAddFoldLegal(fold)) {
+          return rewriter.notifyMatchFailure(op, "defer legal aclnn.mm+add to addmm fold patterns");
+        }
+      }
+    }
+
     auto commonResult = convertBinaryOpCommon(op, adaptor, rewriter, this);
     if (failed(commonResult)) {
       return failure();
@@ -735,11 +840,14 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   patterns.add<ConvertMfuseAclnnConv2D>(converter, context);
   patterns.add<ConvertMfuseAclnnConv2DWithBias>(converter, context);
   patterns.add<ConvertMfuseFull>(converter, context);
+  patterns.add<ConvertMfuseAddMmToAddmm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseMatmul>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseMatmulWithBias>(converter, context, kernelGenerator);
   patterns.add<ConvertMfusePermute>(converter, context);
   patterns.add<ConvertMfuseReduceMean>(converter, context);
   patterns.add<ConvertMfuseReduceSum>(converter, context);
+  patterns.add<ConvertMfuseReduceMax>(converter, context);
+  patterns.add<ConvertMfuseSoftmax>(converter, context);
   patterns.add<ConvertMfuseReshape>(converter, context);
 }
 

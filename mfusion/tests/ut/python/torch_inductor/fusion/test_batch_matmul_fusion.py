@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""UT for FuseBatchMatMul: transpose elimination (permute into trans) and BatchMatMul 2D -> MatMul."""
+"""UT for fuse-matmul-permute: eliminate permute (swap last two dims) into trans flags on mfuse.matmul."""
 
 from mfusion.torch.inductor import fuse_and_optimize
 
 from ut_utils.mlir_checker import MlirChecker
 
 # Transpose (swap last two dims) + mm: x [2,4] -> transpose -> [4,2], mm([4,2], [2,8]) = [4,8].
-# At mfuse level FuseBatchMatMul eliminates permute by using permute input and trans_x1=true.
+# At mfuse level fuse-matmul-permute eliminates permute by using permute input and trans_x1=true.
 MLIR_TRANSPOSE_MM = r"""
 module {
   func.func @main(%arg0: !torch.vtensor<[2,4],f32>, %arg1: !torch.vtensor<[2,8],f32>) -> !torch.vtensor<[4,8],f32> attributes {torch.assume_strict_symbolic_shapes} {
@@ -44,7 +44,7 @@ module {
 
 
 def test_batch_matmul_fusion_transpose_mm():
-    """Test transpose + mm: FuseBatchMatMul eliminates permute at mfuse level.
+    """Test transpose + mm: fuse-matmul-permute eliminates permute at mfuse level.
 
     Pipeline runs; result has mm/matmul (transpose may be folded into trans flag).
     """
