@@ -1723,51 +1723,63 @@ struct StoreVectorAxisAdjustParams {
 };
 
 static bool transposeStoreVectorIfAxesDiffer(const StoreVectorAxisAdjustParams &params) {
-  if (params.valueDimOrd == params.intersectStoreDimOrder) {
+  memref::StoreOp storeOp = params.storeOp;
+  LoopVectorizationCtx &ctx = params.ctx;
+  Location loc = params.loc;
+  ArrayRef<int> valueDimOrd = params.valueDimOrd;
+  ArrayRef<int> intersectStoreDimOrder = params.intersectStoreDimOrder;
+  Value &vectorValue = params.vectorValue;
+
+  if (valueDimOrd == intersectStoreDimOrder) {
     return true;
   }
-  SmallVector<int64_t> perm(params.intersectStoreDimOrder.size());
-  for (unsigned rowIdx = 0; rowIdx < params.intersectStoreDimOrder.size(); ++rowIdx) {
+  SmallVector<int64_t> perm(intersectStoreDimOrder.size());
+  for (unsigned rowIdx = 0; rowIdx < intersectStoreDimOrder.size(); ++rowIdx) {
     bool matched = false;
-    for (unsigned j = 0; j < params.valueDimOrd.size(); ++j) {
-      if (params.valueDimOrd[j] == params.intersectStoreDimOrder[rowIdx]) {
+    for (unsigned j = 0; j < valueDimOrd.size(); ++j) {
+      if (valueDimOrd[j] == intersectStoreDimOrder[rowIdx]) {
         perm[rowIdx] = static_cast<int64_t>(j);
         matched = true;
         break;
       }
     }
     if (!matched) {
-      params.storeOp.emitError(
+      storeOp.emitError(
         "npuvector-vectorize: cannot map intersected store axis order to valueDimOrder for "
         "transpose");
       return false;
     }
   }
-  params.vectorValue = params.ctx.builder.create<npuvector::TransposeOp>(params.loc, params.vectorValue, perm);
-  params.ctx.valueDimOrder[params.vectorValue] =
-    SmallVector<int>(params.intersectStoreDimOrder.begin(), params.intersectStoreDimOrder.end());
+  vectorValue = ctx.builder.create<npuvector::TransposeOp>(loc, vectorValue, perm);
+  ctx.valueDimOrder[vectorValue] =
+    SmallVector<int>(intersectStoreDimOrder.begin(), intersectStoreDimOrder.end());
   return true;
 }
 
 static bool rankLiftStoreVectorIfExtraIndices(const StoreVectorAxisAdjustParams &params) {
-  if (params.storeDimOrder.size() <= params.intersectStoreDimOrder.size()) {
+  memref::StoreOp storeOp = params.storeOp;
+  LoopVectorizationCtx &ctx = params.ctx;
+  ArrayRef<int> storeDimOrder = params.storeDimOrder;
+  ArrayRef<int> intersectStoreDimOrder = params.intersectStoreDimOrder;
+  Value &vectorValue = params.vectorValue;
+
+  if (storeDimOrder.size() <= intersectStoreDimOrder.size()) {
     return true;
   }
   npuvector::NPUVectorType targetTy;
   SmallVector<int> resultDimToCtxAxis;
-  if (failed(buildStoreTargetTypeForDimOrder(params.storeOp, params.storeDimOrder, params.ctx, targetTy,
-                                             resultDimToCtxAxis))) {
-    params.storeOp.emitError("npuvector-vectorize: store index maps to invalid vector dim");
+  if (failed(buildStoreTargetTypeForDimOrder(storeOp, storeDimOrder, ctx, targetTy, resultDimToCtxAxis))) {
+    storeOp.emitError("npuvector-vectorize: store index maps to invalid vector dim");
     return false;
   }
-  Value lifted = vectorizeBroadcastScalar(params.vectorValue, params.ctx, targetTy, resultDimToCtxAxis);
+  Value lifted = vectorizeBroadcastScalar(vectorValue, ctx, targetTy, resultDimToCtxAxis);
   if (lifted == nullptr) {
-    params.storeOp.emitError(
+    storeOp.emitError(
       "npuvector-vectorize: store rank-lift broadcast failed (see diagnostic "
       "on npuvector.broadcast / valueDimOrder)");
     return false;
   }
-  params.vectorValue = lifted;
+  vectorValue = lifted;
   return true;
 }
 
