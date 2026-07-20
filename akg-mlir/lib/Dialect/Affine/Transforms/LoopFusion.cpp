@@ -348,7 +348,6 @@ void AKGLoopFusion::restoreDimFromPrimes() {
       auto restoreStaticBound = [&primeValueToDim, &builder](affine::AffineForOp targetForOp, bool isUpper) {
         AffineMap boundMap = isUpper ? targetForOp.getUpperBoundMap() : targetForOp.getLowerBoundMap();
         auto operands = isUpper ? targetForOp.getUpperBoundOperands() : targetForOp.getLowerBoundOperands();
-
         // Only fully-static single-result bounds (no operands) can be folded primes.
         if (!operands.empty() || boundMap.getNumResults() != 1) {
           return;

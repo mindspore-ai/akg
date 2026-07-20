@@ -117,7 +117,7 @@ class MindBuilder {
     SmallVector<Value> operands;
     SmallVector<NamedAttribute> attrs;
   };
-  using pFunc = void (MindBuilder::*)(ConvertOpParams);
+  using pFunc = void (MindBuilder::*)(ConvertOpParams &);
   std::map<std::string, pFunc> mindOpFactory;
   // attrInputOpList defines the category where ops can input their attr as the second input (with type 1D index)
   SmallVector<std::string> attrInputOpList = {"Reshape",   "BroadcastTo", "ReduceMax", "ReduceMin",
@@ -168,35 +168,35 @@ class MindBuilder {
   // functions for conversion
   void convertConstOperand(const std::string &, SmallVector<int64_t>, SmallVector<double>, const std::string &,
                            OpBuilder);
-  void convertStridedSliceOp(ConvertOpParams params);
-  void convertUnsortedSegmentSumOp(ConvertOpParams params);
-  void convertTransposeOp(ConvertOpParams params);
-  void convertInplaceAssignOp(ConvertOpParams params);
-  void convertConcatOp(ConvertOpParams params);
-  void convertTileOp(ConvertOpParams params);
-  void convertReshapeOp(ConvertOpParams params);
-  void convertBroadcastToOp(ConvertOpParams params);
-  void convertSliceOp(ConvertOpParams params);
-  void convertPadOp(ConvertOpParams params);
-  void convertGatherOp(ConvertOpParams params);
-  void convertSplitOp(ConvertOpParams params);
-  void convertMatMulOp(ConvertOpParams params);
-  void convertBatchMatMulOp(ConvertOpParams params);
-  void convertCastOp(ConvertOpParams params);
-  void convertAddNOp(ConvertOpParams params);
-  void convertUnknownOp(ConvertOpParams params);
+  void convertStridedSliceOp(ConvertOpParams &params);
+  void convertUnsortedSegmentSumOp(ConvertOpParams &params);
+  void convertTransposeOp(ConvertOpParams &params);
+  void convertInplaceAssignOp(ConvertOpParams &params);
+  void convertConcatOp(ConvertOpParams &params);
+  void convertTileOp(ConvertOpParams &params);
+  void convertReshapeOp(ConvertOpParams &params);
+  void convertBroadcastToOp(ConvertOpParams &params);
+  void convertSliceOp(ConvertOpParams &params);
+  void convertPadOp(ConvertOpParams &params);
+  void convertGatherOp(ConvertOpParams &params);
+  void convertSplitOp(ConvertOpParams &params);
+  void convertMatMulOp(ConvertOpParams &params);
+  void convertBatchMatMulOp(ConvertOpParams &params);
+  void convertCastOp(ConvertOpParams &params);
+  void convertAddNOp(ConvertOpParams &params);
+  void convertUnknownOp(ConvertOpParams &params);
   template <typename TernaryOp>
-  void convertTernaryOp(ConvertOpParams params);
+  void convertTernaryOp(ConvertOpParams &params);
   template <typename BinaryOp>
-  void convertBinaryOp(ConvertOpParams params);
+  void convertBinaryOp(ConvertOpParams &params);
   template <typename UnaryOp>
-  void convertUnaryOp(ConvertOpParams params);
+  void convertUnaryOp(ConvertOpParams &params);
 
   template <typename UnaryOp>
-  void convertMultiOutputOp(ConvertOpParams params);
+  void convertMultiOutputOp(ConvertOpParams &params);
 
   template <typename ReduceOp>
-  void convertReduceOp(ConvertOpParams params);
+  void convertReduceOp(ConvertOpParams &params);
 
   void handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                       SmallVector<std::string> &operandNames);
@@ -871,7 +871,7 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
       llvm::StringRef("Error occurs when converting json to mlir: op name: " + opName + " has empty outputDesc\n"));
   }
   ConvertOpParams params{builder, opNode, inputTys, outputTys, operands, allAttrs};
-  if (this->mindOpFactory.count(opName) == 0) {
+  if (this->mindOpFactory.count(opName) == 0u) {
     MindBuilder::convertUnknownOp(params);
   } else {
     (this->*mindOpFactory[opName])(params);
@@ -879,7 +879,8 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
 }
 
 template <typename UnaryOp>
-void MindBuilder::convertUnaryOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertUnaryOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -892,7 +893,8 @@ void MindBuilder::convertUnaryOp(ConvertOpParams params) {
 }
 
 template <typename UnaryOp>
-void MindBuilder::convertMultiOutputOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertMultiOutputOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -910,7 +912,8 @@ void MindBuilder::convertMultiOutputOp(ConvertOpParams params) {
 }
 
 template <typename BinaryOp>
-void MindBuilder::convertBinaryOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertBinaryOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -923,7 +926,8 @@ void MindBuilder::convertBinaryOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op.getResult();
 }
 
-void MindBuilder::convertAddNOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertAddNOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -931,7 +935,8 @@ void MindBuilder::convertAddNOp(ConvertOpParams params) {
     builder.create<mindspore::AddNOp>(UnknownLoc::get(context), outputTys, operands, attrs);
 }
 
-void MindBuilder::convertUnknownOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertUnknownOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -941,7 +946,8 @@ void MindBuilder::convertUnknownOp(ConvertOpParams params) {
 }
 
 template <typename TernaryOp>
-void MindBuilder::convertTernaryOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertTernaryOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -955,7 +961,8 @@ void MindBuilder::convertTernaryOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op.getResult();
 }
 
-void MindBuilder::convertTransposeOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertTransposeOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -970,7 +977,8 @@ void MindBuilder::convertTransposeOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op.getResult();
 }
 
-void MindBuilder::convertUnsortedSegmentSumOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertUnsortedSegmentSumOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   constexpr auto kNumSegments = "numSegments";
@@ -1022,7 +1030,8 @@ SmallVector<int64_t> MindBuilder::getValueFromJson(nlohmann::json operand) const
   return newValue;
 }
 
-void MindBuilder::convertStridedSliceOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertStridedSliceOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   constexpr auto kEnd = "end";
@@ -1077,7 +1086,7 @@ void MindBuilder::convertStridedSliceOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op.getResult();
 }
 
-void MindBuilder::convertSliceOp(ConvertOpParams params) {
+void MindBuilder::convertSliceOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   constexpr auto kBegin = "begin";
   constexpr auto kSize = "size";
@@ -1091,7 +1100,8 @@ void MindBuilder::convertSliceOp(ConvertOpParams params) {
   convertUnaryOp<mindspore::SliceOp>(params);
 }
 
-void MindBuilder::convertInplaceAssignOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertInplaceAssignOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)outputTys;
   (void)attrs;
@@ -1104,7 +1114,7 @@ void MindBuilder::convertInplaceAssignOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op.getResult();
 }
 
-void MindBuilder::convertConcatOp(ConvertOpParams params) {
+void MindBuilder::convertConcatOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   auto axis = getAttrFromJson<int64_t>(opNode.attrs, kAxis, 0);
@@ -1113,7 +1123,7 @@ void MindBuilder::convertConcatOp(ConvertOpParams params) {
   convertBinaryOp<mindspore::ConcatOp>(params);
 }
 
-void MindBuilder::convertTileOp(ConvertOpParams params) {
+void MindBuilder::convertTileOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   constexpr auto kMultiples = "multiples";
   MLIRContext *context = builder.getContext();
@@ -1124,7 +1134,8 @@ void MindBuilder::convertTileOp(ConvertOpParams params) {
   convertUnaryOp<mindspore::TileOp>(params);
 }
 
-void MindBuilder::convertBroadcastToOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertBroadcastToOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   MLIRContext *context = builder.getContext();
@@ -1154,7 +1165,7 @@ void MindBuilder::convertBroadcastToOp(ConvertOpParams params) {
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op_result;
 }
 
-void MindBuilder::convertPadOp(ConvertOpParams params) {
+void MindBuilder::convertPadOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   auto padding = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, "padding");
@@ -1168,7 +1179,7 @@ void MindBuilder::convertPadOp(ConvertOpParams params) {
   convertUnaryOp<mindspore::PadOp>(params);
 }
 
-void MindBuilder::convertGatherOp(ConvertOpParams params) {
+void MindBuilder::convertGatherOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   auto axis = 0;
@@ -1192,7 +1203,7 @@ void MindBuilder::convertGatherOp(ConvertOpParams params) {
   }
 }
 
-void MindBuilder::convertSplitOp(ConvertOpParams params) {
+void MindBuilder::convertSplitOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   SmallVector<int64_t> split_size_or_sections;
@@ -1220,7 +1231,7 @@ void MindBuilder::convertSplitOp(ConvertOpParams params) {
   convertMultiOutputOp<mindspore::SplitOp>(params);
 }
 
-void MindBuilder::convertReshapeOp(ConvertOpParams params) {
+void MindBuilder::convertReshapeOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   constexpr auto kReshapeInputNum2 = 2;
@@ -1260,7 +1271,8 @@ void MindBuilder::convertReshapeOp(ConvertOpParams params) {
 }
 
 template <typename ReduceOp>
-void MindBuilder::convertReduceOp(ConvertOpParams params) {
+// cppcheck-suppress constParameter
+void MindBuilder::convertReduceOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   (void)inputTys;
   constexpr auto kEnableAtomicAdd = "enable_atomic_add";
@@ -1316,7 +1328,7 @@ void MindBuilder::convertConstOperand(const std::string &operand_name, SmallVect
   this->operandList[operand_name] = op.getResult();
 }
 
-void MindBuilder::convertMatMulOp(ConvertOpParams params) {
+void MindBuilder::convertMatMulOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   bool transposeA = getAttrFromJson<bool>(opNode.attrs, kTransposeA, false);
@@ -1326,7 +1338,7 @@ void MindBuilder::convertMatMulOp(ConvertOpParams params) {
   convertBinaryOp<mindspore::MatMulOp>(params);
 }
 
-void MindBuilder::convertBatchMatMulOp(ConvertOpParams params) {
+void MindBuilder::convertBatchMatMulOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   bool transposeA = getAttrFromJson<bool>(opNode.attrs, kTransposeA, false);
@@ -1336,7 +1348,7 @@ void MindBuilder::convertBatchMatMulOp(ConvertOpParams params) {
   convertBinaryOp<mindspore::BatchMatMulOp>(params);
 }
 
-void MindBuilder::convertCastOp(ConvertOpParams params) {
+void MindBuilder::convertCastOp(ConvertOpParams &params) {
   auto &[builder, opNode, inputTys, outputTys, operands, attrs] = params;
   MLIRContext *context = builder.getContext();
   SmallVector<Value> newOperands;
