@@ -261,6 +261,18 @@ struct SetTransposeResultBufferSizeMarkParams {
   Value buffer;
 };
 
+static int64_t applyDynamicMaxTileBufferBytes(Operation *anchor, Type elemType, int64_t fallbackBytes) {
+  auto funcOp = anchor == nullptr ? func::FuncOp{} : anchor->getParentOfType<func::FuncOp>();
+  auto maxTile = funcOp ? funcOp->getAttrOfType<IntegerAttr>(kDynamicMaxTileAttr) : IntegerAttr{};
+  int64_t elementBits = getElementBitWidth(elemType);
+  if (!maxTile || maxTile.getInt() <= 0 || elementBits <= 0) {
+    return fallbackBytes;
+  }
+  int64_t maxTileBytes =
+    alignUpInt64(ceilDivInt64(multiplyAndCap(maxTile.getInt(), elementBits), kBitsPerByte), kNpuUbAlignBytes);
+  return std::min(fallbackBytes, maxTileBytes);
+}
+
 static bool setTransposeResultBufferSizeMark(const SetTransposeResultBufferSizeMarkParams &params) {
   if (params.resultMaxShape.empty()) {
     return false;
@@ -269,7 +281,9 @@ static bool setTransposeResultBufferSizeMark(const SetTransposeResultBufferSizeM
     computeBishengStructuredNpuVectorStorageBytes(params.resultMaxShape, params.resultType.getShape(), params.elemType);
   int64_t transposeBytes = computeBishengLastDimTransposeBufferBytes(params.sourceMaxShape, params.sourceTypeShape,
                                                                      params.perm, params.elemType, true);
-  return setBufferSizeMark(params.rewriter, params.loc, params.buffer, std::max(bytes, transposeBytes));
+  bytes =
+    applyDynamicMaxTileBufferBytes(params.buffer.getDefiningOp(), params.elemType, std::max(bytes, transposeBytes));
+  return setBufferSizeMark(params.rewriter, params.loc, params.buffer, bytes);
 }
 
 struct SetNPUVectorBufferSizeMarkParams {
@@ -281,10 +295,16 @@ struct SetNPUVectorBufferSizeMarkParams {
   Value buffer;
 };
 
+static int64_t computeNPUVectorBufferBytes(Operation *anchor, ArrayRef<int64_t> maxShape, ArrayRef<int64_t> typeShape,
+                                           Type elemType) {
+  return applyDynamicMaxTileBufferBytes(anchor, elemType,
+                                        computeBishengNpuVectorStorageBytes(maxShape, typeShape, elemType));
+}
+
 static bool setNPUVectorBufferSizeMark(const SetNPUVectorBufferSizeMarkParams &params) {
-  return setBufferSizeMark(
-    params.rewriter, params.loc, params.buffer,
-    computeBishengNpuVectorStorageBytes(params.maxShape, params.npuTy.getShape(), params.elemType));
+  return setBufferSizeMark(params.rewriter, params.loc, params.buffer,
+                           computeNPUVectorBufferBytes(params.buffer.getDefiningOp(), params.maxShape,
+                                                       params.npuTy.getShape(), params.elemType));
 }
 
 static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operation *op,
@@ -1545,7 +1565,7 @@ static std::optional<int64_t> computeNPUVectorF16TempBufferBytes(Operation *op, 
     return std::nullopt;
   }
 
-  int64_t bytes = computeBishengNpuVectorStorageBytes(*maxShape, npuVectorType.getShape(), rewriter.getF16Type());
+  int64_t bytes = computeNPUVectorBufferBytes(op, *maxShape, npuVectorType.getShape(), rewriter.getF16Type());
   if (bytes <= 0 || bytes == LLONG_MAX) {
     return std::nullopt;
   }
@@ -1625,7 +1645,8 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
     if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
       auto maxShape = inferNPUVectorMaxShapeFromOperands(op.getOperation(), npuVectorType);
       if (succeeded(maxShape)) {
-        resultBufferBytes = computeBishengNpuVectorStorageBytes(*maxShape, npuVectorType.getShape(), elemType);
+        resultBufferBytes =
+          computeNPUVectorBufferBytes(op.getOperation(), *maxShape, npuVectorType.getShape(), elemType);
       }
     }
 
@@ -1734,9 +1755,9 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
     int64_t resultBufferBytes = 0;
     std::optional<int64_t> i8ToF16BufferBytes;
     if (succeeded(maxShape)) {
-      resultBufferBytes = computeBishengNpuVectorStorageBytes(*maxShape, npuVectorType.getShape(), elemType);
+      resultBufferBytes = computeNPUVectorBufferBytes(op.getOperation(), *maxShape, npuVectorType.getShape(), elemType);
       int64_t f16Bytes =
-        computeBishengNpuVectorStorageBytes(*maxShape, npuVectorType.getShape(), rewriter.getF16Type());
+        computeNPUVectorBufferBytes(op.getOperation(), *maxShape, npuVectorType.getShape(), rewriter.getF16Type());
       if (f16Bytes > 0 && f16Bytes != LLONG_MAX) {
         i8ToF16BufferBytes = f16Bytes;
       }
@@ -3395,6 +3416,7 @@ static void markInlineBroadcastOperandBufferSizeAtLeast(
   }
   int64_t bytes =
     computeBishengInlineBroadcastSourceStorageBytes(*rootMaxShape, rootTy.getShape(), rootTy.getElementType());
+  bytes = applyDynamicMaxTileBufferBytes(params.anchor, rootTy.getElementType(), bytes);
   markInplaceProducerChainBufferSizeAtLeast(params.rewriter, params.loc, root, params.anchor, bytes);
 }
 
@@ -5546,7 +5568,8 @@ static int64_t computeRankExtendedVbrcSourceBytes(npuvector::BroadcastOp op, npu
     expandedMaxShape.push_back(expandedTy.isDynamicDim(i) ? dstMaxShape[static_cast<size_t>(i)]
                                                           : expandedTy.getDimSize(i));
   }
-  return computeBishengStrideAlignedStorageBytes(expandedMaxShape, expandedTy.getShape(), elemType);
+  int64_t bytes = computeBishengStrideAlignedStorageBytes(expandedMaxShape, expandedTy.getShape(), elemType);
+  return applyDynamicMaxTileBufferBytes(op.getOperation(), elemType, bytes);
 }
 
 struct PrepareMemrefVbrcParams {
@@ -5922,7 +5945,8 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
                                                                   sourceNpuType.getElementType());
     int64_t transposeBytes = computeBishengLastDimTransposeBufferBytes(
       sourceMaxShape, sourceNpuType.getShape(), op.getPermutation(), sourceNpuType.getElementType(), false);
-    bytes = std::max(bytes, transposeBytes);
+    bytes = applyDynamicMaxTileBufferBytes(op.getOperation(), sourceNpuType.getElementType(),
+                                           std::max(bytes, transposeBytes));
     setBufferSizeMarkAtLeast(rewriter, loc, src, bytes);
   }
 
@@ -6034,7 +6058,9 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
           computeBishengStructuredNpuVectorStorageBytes(currentMaxShape, currentType.getShape(), elemType);
         int64_t transposeSourceBytes =
           computeBishengLastDimTransposeBufferBytes(currentMaxShape, currentType.getShape(), swapPerm, elemType, false);
-        setBufferSizeMarkAtLeast(rewriter, loc, currentBuf, std::max(sourceBytes, transposeSourceBytes));
+        int64_t bytes =
+          applyDynamicMaxTileBufferBytes(newBuf.getDefiningOp(), elemType, std::max(sourceBytes, transposeSourceBytes));
+        setBufferSizeMarkAtLeast(rewriter, loc, currentBuf, bytes);
       }
       if (!hasMaxShape ||
           !setTransposeResultBufferSizeMark({rewriter, loc, newMemRefType, elemType, newMaxShape, currentMaxShape,
