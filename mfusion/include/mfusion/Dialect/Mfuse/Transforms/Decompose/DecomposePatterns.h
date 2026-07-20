@@ -54,12 +54,15 @@ void registerPatternsByOpList(RewritePatternSet &patterns, MLIRContext *ctx,
 /// that automatically match and rewrite operations based on the pattern type.
 /// \param patterns The pattern set to populate
 /// \param patternType The type of decompose patterns to register
-/// \param opList Optional list of specific operations to decompose (empty means all)
+/// \param opList Specific operations to decompose (empty means the pattern-type default set)
+/// \param extraOpList Additional ops registered on top of \p opList / defaults
 void registerDecomposePatterns(RewritePatternSet &patterns,
                                DecomposePatternType patternType = DecomposePatternType::ALL,
-                               const std::vector<std::string> &opList = {});
+                               const std::vector<std::string> &opList = {},
+                               const std::vector<std::string> &extraOpList = {});
 
-void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList = {});
+void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList = {},
+                                     bool includeMatMulWithBiasByDefault = true);
 
 void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList = {});
 

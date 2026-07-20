@@ -1,4 +1,5 @@
-// RUN: mfusion-opt %s --pass-pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION op-list=matmul_with_bias},func.func(mfuse-dvm-cluster),canonicalize)" | FileCheck %s
+// RUN: mfusion-opt %s --pass-pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION extra-op-list=matmul_with_bias},func.func(mfuse-dvm-cluster),canonicalize)" | FileCheck %s
+// DVM pipeline: AFTER defaults + extra-op-list=matmul_with_bias before mfuse-dvm-cluster.
 
 module {
   // CHECK-LABEL: func.func @f32_matmul_stays_outside_add_suffix_fuses

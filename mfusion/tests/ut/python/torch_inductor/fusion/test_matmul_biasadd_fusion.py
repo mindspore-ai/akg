@@ -70,25 +70,24 @@ module {
 def test_matmul_biasadd_fusion():
     """Test MatMul + Add(bias) fusion through fuse_and_optimize pipeline.
 
-    At mfuse level, mm + add(bias 1D) is fused to matmul_with_bias. When converting
-    back to torch, MfuseMetaToTorch lowers matmul_with_bias to mm + add.Tensor, so
-    the final IR has one mm and one add.Tensor (expected).
+    At mfuse level, mm + add(bias 1D) is fused to matmul_with_bias. Exit converts
+    the legal 2D form to torch.aten.addmm (not bare mm + add).
     """
     result = fuse_and_optimize(MLIR_MATMUL_BIASADD)
     checker = MlirChecker.parse_torch_module(result)
-    assert checker.check_has_op("torch.aten.mm") or checker.check_has_op("torch.aten.matmul"), (
-        checker.error or "matmul op should exist after pipeline"
+    assert checker.check_has_op("torch.aten.addmm"), (
+        checker.error or "expected exit torch.aten.addmm after bias fusion"
     )
-    assert checker.check_has_op("torch.aten.add.Tensor"), (
-        checker.error or "add.Tensor (bias) expected: matmul_with_bias is lowered to mm + add"
+    assert checker.check_no_op("torch.aten.add.Tensor"), (
+        checker.error or "bias should be folded into aten.addmm, not bare add.Tensor"
     )
 
 
 def test_batch_matmul_biasadd_fusion():
     """Test BatchMatmul + Add(bias) fusion through fuse_and_optimize pipeline.
 
-    At mfuse level, bmm + add(bias) is fused to matmul_with_bias. Convert-mfuse-to-torch
-    lowers it to bmm + add.Tensor, so the final IR has one bmm and one add.Tensor.
+    At mfuse level, bmm + add(bias) is fused to matmul_with_bias. aten.addmm is 2D-only,
+    so ND exit remains matmul/bmm + add.Tensor.
     """
     result = fuse_and_optimize(MLIR_BATCH_MATMUL_BIASADD)
     checker = MlirChecker.parse_torch_module(result)
@@ -96,7 +95,10 @@ def test_batch_matmul_biasadd_fusion():
         checker.error or "batch matmul / matmul op should exist after pipeline"
     )
     assert checker.check_has_op("torch.aten.add.Tensor"), (
-        checker.error or "add.Tensor (bias) expected: matmul_with_bias is lowered to bmm + add"
+        checker.error or "add.Tensor (bias) expected: ND matmul_with_bias lowers to bmm/matmul + add"
+    )
+    assert checker.check_no_op("torch.aten.addmm"), (
+        checker.error or "aten.addmm is 2D-only; batch path must not emit addmm"
     )
 
 
