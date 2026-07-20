@@ -86,6 +86,12 @@ using akg::kNpuUbAlignBytes;
 using akg::multiplyAndCap;
 
 constexpr int64_t kDefaultDynamicAllocSize = 32 * 1024;
+constexpr int kMaxInlineBroadcastTraceSteps = 32;
+constexpr unsigned kMaxMemRefDimTraceSteps = 32;
+constexpr unsigned kDefaultMemRefDimTraceDepth = 8;
+constexpr unsigned kSelectTrueValueOperandIndex = 1;
+constexpr unsigned kSelectFalseValueOperandIndex = 2;
+constexpr unsigned kTwoAxisTransposeCount = 2;
 
 static bool setBufferSizeMark(PatternRewriter &rewriter, Location loc, Value buffer, int64_t bytes) {
   if (bytes <= 0 || bytes == LLONG_MAX || !isa<MemRefType>(buffer.getType())) {
@@ -97,11 +103,28 @@ static bool setBufferSizeMark(PatternRewriter &rewriter, Location loc, Value buf
 }
 
 static bool setBufferSizeMarkAtLeast(PatternRewriter &rewriter, Location loc, Value buffer, int64_t bytes);
-static bool setRank1StrideAlignedBufferSizeMarkFromSource(PatternRewriter &rewriter, Location loc, Value source,
-                                                          Value buffer, npuvector::NPUVectorType npuTy, Type elemType,
-                                                          ArrayRef<int64_t> maxShape);
-static void markRank1StrideAlignedProducerChains(PatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
-                                                 Value resBuf, Operation *anchor);
+struct SetRank1StrideAlignedBufferSizeMarkFromSourceParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value source;
+  Value buffer;
+  npuvector::NPUVectorType npuTy;
+  Type elemType;
+  ArrayRef<int64_t> maxShape;
+};
+
+static bool setRank1StrideAlignedBufferSizeMarkFromSource(
+  const SetRank1StrideAlignedBufferSizeMarkFromSourceParams &params);
+struct MarkRank1StrideAlignedProducerChainsParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value lhs;
+  Value rhs;
+  Value resBuf;
+  Operation *anchor;
+};
+
+static void markRank1StrideAlignedProducerChains(const MarkRank1StrideAlignedProducerChainsParams &params);
 
 static bool propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest,
                                     bool preserveLargerMark = false) {
@@ -170,7 +193,8 @@ static FailureOr<SmallVector<int64_t>> foldMaxValsForNpuMark(npuvector::NPUVecto
   return raw;
 }
 
-static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int depth = 8) {
+static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value,
+                                                              unsigned depth = kDefaultMemRefDimTraceDepth) {
   auto npuTy = dyn_cast<npuvector::NPUVectorType>(value.getType());
   if (!npuTy) {
     return failure();
@@ -180,7 +204,7 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
   }
 
   Operation *defOp = value.getDefiningOp();
-  if ((defOp == nullptr) || depth <= 0) {
+  if ((defOp == nullptr) || depth == 0) {
     return failure();
   }
   if (auto readOp = dyn_cast<npuvector::TransferReadOp>(defOp)) {
@@ -225,23 +249,42 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShape(Value value, int d
   return failure();
 }
 
-static bool setTransposeResultBufferSizeMark(PatternRewriter &rewriter, Location loc, MemRefType resultType,
-                                             Type elemType, ArrayRef<int64_t> resultMaxShape,
-                                             ArrayRef<int64_t> sourceMaxShape, ArrayRef<int64_t> sourceTypeShape,
-                                             ArrayRef<int64_t> perm, Value buffer) {
-  if (resultMaxShape.empty()) {
+struct SetTransposeResultBufferSizeMarkParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  MemRefType resultType;
+  Type elemType;
+  ArrayRef<int64_t> resultMaxShape;
+  ArrayRef<int64_t> sourceMaxShape;
+  ArrayRef<int64_t> sourceTypeShape;
+  ArrayRef<int64_t> perm;
+  Value buffer;
+};
+
+static bool setTransposeResultBufferSizeMark(const SetTransposeResultBufferSizeMarkParams &params) {
+  if (params.resultMaxShape.empty()) {
     return false;
   }
-  int64_t bytes = computeBishengStructuredNpuVectorStorageBytes(resultMaxShape, resultType.getShape(), elemType);
-  int64_t transposeBytes =
-    computeBishengLastDimTransposeBufferBytes(sourceMaxShape, sourceTypeShape, perm, elemType, true);
-  return setBufferSizeMark(rewriter, loc, buffer, std::max(bytes, transposeBytes));
+  int64_t bytes =
+    computeBishengStructuredNpuVectorStorageBytes(params.resultMaxShape, params.resultType.getShape(), params.elemType);
+  int64_t transposeBytes = computeBishengLastDimTransposeBufferBytes(params.sourceMaxShape, params.sourceTypeShape,
+                                                                     params.perm, params.elemType, true);
+  return setBufferSizeMark(params.rewriter, params.loc, params.buffer, std::max(bytes, transposeBytes));
 }
 
-static bool setNPUVectorBufferSizeMark(PatternRewriter &rewriter, Location loc, npuvector::NPUVectorType npuTy,
-                                       Type elemType, ArrayRef<int64_t> maxShape, Value buffer) {
-  return setBufferSizeMark(rewriter, loc, buffer,
-                           computeBishengNpuVectorStorageBytes(maxShape, npuTy.getShape(), elemType));
+struct SetNPUVectorBufferSizeMarkParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  npuvector::NPUVectorType npuTy;
+  Type elemType;
+  ArrayRef<int64_t> maxShape;
+  Value buffer;
+};
+
+static bool setNPUVectorBufferSizeMark(const SetNPUVectorBufferSizeMarkParams &params) {
+  return setBufferSizeMark(
+    params.rewriter, params.loc, params.buffer,
+    computeBishengNpuVectorStorageBytes(params.maxShape, params.npuTy.getShape(), params.elemType));
 }
 
 static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operation *op,
@@ -277,8 +320,9 @@ static FailureOr<SmallVector<int64_t>> inferNPUVectorMaxShapeFromOperands(Operat
   return merged;
 }
 
-static bool setNPUVectorResultBufferSizeMark(PatternRewriter &rewriter, Location loc, Operation *op, Value buffer,
-                                             Type elemTypeOverride = Type()) {
+static bool setNPUVectorResultBufferSizeMark(
+  // cppcheck-suppress constParameter
+  PatternRewriter &rewriter, Location loc, Operation *op, Value buffer, Type elemTypeOverride = Type()) {
   if ((op == nullptr) || op->getNumResults() != kUnaryOpOperandCount) {
     return false;
   }
@@ -288,26 +332,36 @@ static bool setNPUVectorResultBufferSizeMark(PatternRewriter &rewriter, Location
   }
   auto maxShape = inferNPUVectorMaxShapeFromOperands(op, npuTy);
   return succeeded(maxShape) &&
-         setNPUVectorBufferSizeMark(rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(),
-                                    *maxShape, buffer);
+         setNPUVectorBufferSizeMark(
+           {rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(), *maxShape, buffer});
 }
 
-static bool setNPUVectorValueBufferSizeMark(PatternRewriter &rewriter, Location loc, Value value, Value buffer,
-                                            Type elemTypeOverride = Type()) {
+static bool setNPUVectorValueBufferSizeMark(
+  // cppcheck-suppress constParameter
+  PatternRewriter &rewriter, Location loc, Value value, Value buffer, Type elemTypeOverride = Type()) {
   auto npuTy = dyn_cast<npuvector::NPUVectorType>(value.getType());
   if (!npuTy || !npuTy.hasDynamicShape()) {
     return false;
   }
   auto maxShape = inferNPUVectorMaxShape(value);
   return succeeded(maxShape) &&
-         setNPUVectorBufferSizeMark(rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(),
-                                    *maxShape, buffer);
+         setNPUVectorBufferSizeMark(
+           {rewriter, loc, npuTy, elemTypeOverride ? elemTypeOverride : npuTy.getElementType(), *maxShape, buffer});
 }
 
-static bool setOrPropagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Operation *op,
-                                         Value fallbackSrc, Value buffer, Type elemTypeOverride = Type()) {
-  bool marked = setNPUVectorResultBufferSizeMark(rewriter, loc, op, buffer, elemTypeOverride);
-  return propagateBufferSizeMark(rewriter, loc, fallbackSrc, buffer, marked) || marked;
+struct SetOrPropagateBufferSizeMarkParams {
+  ConversionPatternRewriter &rewriter;
+  Location loc;
+  Operation *op;
+  Value fallbackSrc;
+  Value buffer;
+  Type elemTypeOverride = Type();
+};
+
+static bool setOrPropagateBufferSizeMark(const SetOrPropagateBufferSizeMarkParams &params) {
+  bool marked =
+    setNPUVectorResultBufferSizeMark(params.rewriter, params.loc, params.op, params.buffer, params.elemTypeOverride);
+  return propagateBufferSizeMark(params.rewriter, params.loc, params.fallbackSrc, params.buffer, marked) || marked;
 }
 
 static void propagateSelectBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value trueVal,
@@ -361,6 +415,15 @@ static bool isScalarBroadcast(Value value) {
   return broadcast && isScalarType(broadcast.getSource().getType());
 }
 
+static bool isDynamicVectorBroadcast(Value value) {
+  auto broadcast = value.getDefiningOp<npuvector::BroadcastOp>();
+  if (broadcast == nullptr || isScalarType(broadcast.getSource().getType())) {
+    return false;
+  }
+  auto resultTy = dyn_cast<npuvector::NPUVectorType>(broadcast.getResult().getType());
+  return resultTy != nullptr && resultTy.hasDynamicShape();
+}
+
 static bool isSupportedBinaryComputeScalarFoldUser(Operation *user, ArrayRef<unsigned> operandIndices) {
   if (user->getNumOperands() != kBinaryOpOperandCount || !hasVectorOrNPUVectorLikeResult(user)) {
     return false;
@@ -399,7 +462,9 @@ static bool isSupportedSelectLikeScalarFoldUser(Operation *user, ArrayRef<unsign
   }
 
   // Keep the condition vector-shaped. HIVM select value operands may be scalar.
-  return llvm::all_of(operandIndices, [](unsigned idx) { return idx == 1 || idx == 2; });
+  return llvm::all_of(operandIndices, [](unsigned idx) {
+    return idx == kSelectTrueValueOperandIndex || idx == kSelectFalseValueOperandIndex;
+  });
 }
 
 static bool isSupportedBroadcastScalarFoldUser(Operation *user, Value broadcastResult) {
@@ -650,7 +715,7 @@ static Value remapDimTraceValue(Value value, ConversionPatternRewriter *rewriter
   return remapped ? remapped : value;
 }
 
-static FailureOr<Value> getShapedDimValue(Value value, int64_t dim, unsigned depth = 8,
+static FailureOr<Value> getShapedDimValue(Value value, int64_t dim, unsigned depth = kDefaultMemRefDimTraceDepth,
                                           ConversionPatternRewriter *rewriter = nullptr);
 
 static FailureOr<Value> traceScfIfResultDim(scf::IfOp ifOp, Value ifResult, int64_t dim, unsigned depth,
@@ -678,7 +743,7 @@ static FailureOr<Value> traceScfIfResultDim(scf::IfOp ifOp, Value ifResult, int6
   return *thenDim;
 }
 
-static FailureOr<Value> getNPUVectorDimValue(Value vector, int64_t dim, unsigned depth = 8,
+static FailureOr<Value> getNPUVectorDimValue(Value vector, int64_t dim, unsigned depth = kDefaultMemRefDimTraceDepth,
                                              ConversionPatternRewriter *rewriter = nullptr) {
   auto npuVecType = dyn_cast<npuvector::NPUVectorType>(vector.getType());
   if (!npuVecType || depth == 0) {
@@ -705,22 +770,44 @@ static FailureOr<Value> getNPUVectorDimValue(Value vector, int64_t dim, unsigned
   return failure();
 }
 
-static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, unsigned depth = 8,
+static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, unsigned depth = kDefaultMemRefDimTraceDepth,
                                           ConversionPatternRewriter *rewriter = nullptr);
 static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, ConversionPatternRewriter &rewriter);
 
-static bool traceScfIfDim(scf::IfOp ifOp, Value curMemRef, int64_t dim, unsigned depth,
-                          std::optional<Value> &resolvedOut, ConversionPatternRewriter *rewriter) {
-  FailureOr<Value> tracedDim = traceScfIfResultDim(ifOp, curMemRef, dim, depth, rewriter);
+struct TraceScfIfDimParams {
+  mutable scf::IfOp ifOp;
+  Value curMemRef;
+  int64_t dim;
+  unsigned depth;
+  std::optional<Value> &resolvedOut;
+  ConversionPatternRewriter *rewriter;
+};
+
+static bool traceScfIfDim(const TraceScfIfDimParams &params) {
+  FailureOr<Value> tracedDim =
+    traceScfIfResultDim(params.ifOp, params.curMemRef, params.dim, params.depth, params.rewriter);
   if (succeeded(tracedDim)) {
-    resolvedOut = *tracedDim;
+    params.resolvedOut = *tracedDim;
   }
   return false;
 }
 
-static bool advanceMemRefDimTrace(Value &curMemRef, MemRefType &baseType, int64_t &dim,
-                                  std::optional<Value> &resolvedOut, unsigned depth,
-                                  ConversionPatternRewriter *rewriter) {
+struct AdvanceMemRefDimTraceParams {
+  Value &curMemRef;
+  MemRefType &baseType;
+  int64_t &dim;
+  std::optional<Value> &resolvedOut;
+  unsigned depth;
+  ConversionPatternRewriter *rewriter;
+};
+
+static bool advanceMemRefDimTrace(const AdvanceMemRefDimTraceParams &params) {
+  Value &curMemRef = params.curMemRef;
+  MemRefType &baseType = params.baseType;
+  int64_t &dim = params.dim;
+  std::optional<Value> &resolvedOut = params.resolvedOut;
+  unsigned depth = params.depth;
+  ConversionPatternRewriter *rewriter = params.rewriter;
   resolvedOut.reset();
   if (auto bitcastOp = curMemRef.getDefiningOp<hivm::BitcastOp>()) {
     curMemRef = bitcastOp.getSrc();
@@ -742,7 +829,7 @@ static bool advanceMemRefDimTrace(Value &curMemRef, MemRefType &baseType, int64_
     return traceAllocDim(allocaOp, dim, baseType, resolvedOut);
   }
   if (auto ifOp = curMemRef.getDefiningOp<scf::IfOp>()) {
-    return traceScfIfDim(ifOp, curMemRef, dim, depth, resolvedOut, rewriter);
+    return traceScfIfDim({ifOp, curMemRef, dim, depth, resolvedOut, rewriter});
   }
   if (auto next = traceToScfForInitArgFromIterArg(curMemRef)) {
     curMemRef = *next;
@@ -764,14 +851,14 @@ static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, unsigned de
   }
 
   Value curMemRef = memref;
-  for (unsigned step = 0; step < 32; ++step) {
+  for (unsigned step = 0; step < kMaxMemRefDimTraceSteps; ++step) {
     curMemRef = remapDimTraceValue(curMemRef, rewriter);
     baseType = dyn_cast<MemRefType>(curMemRef.getType());
     if (!baseType) {
       return failure();
     }
     std::optional<Value> resolved;
-    if (!advanceMemRefDimTrace(curMemRef, baseType, dim, resolved, depth, rewriter)) {
+    if (!advanceMemRefDimTrace({curMemRef, baseType, dim, resolved, depth, rewriter})) {
       if (resolved) {
         return *resolved;
       }
@@ -782,7 +869,7 @@ static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, unsigned de
 }
 
 static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim, ConversionPatternRewriter &rewriter) {
-  return getMemRefDimValue(memref, dim, 8, &rewriter);
+  return getMemRefDimValue(memref, dim, kDefaultMemRefDimTraceDepth, &rewriter);
 }
 
 static FailureOr<Value> getShapedDimValue(Value value, int64_t dim, unsigned depth,
@@ -876,77 +963,109 @@ static FailureOr<SmallVector<int64_t>> inferResultMaxShapeForBufferMark(Operatio
   return failure();
 }
 
-static void markInlineBroadcastOperandBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value operand,
-                                                        MemRefType resultTy, ArrayRef<int64_t> resultMaxShape,
-                                                        Operation *anchor);
+// limit.
+struct MarkInlineBroadcastOperandBufferSizeAtLeastParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value operand;
+  MemRefType resultTy;
+  ArrayRef<int64_t> resultMaxShape;
+  Operation *anchor;
+};
 
-static void markInlineBroadcastOperandsBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
-                                                         Value resBuf, Operation *anchor) {
-  auto resultTy = dyn_cast<MemRefType>(resBuf.getType());
+static void markInlineBroadcastOperandBufferSizeAtLeast(
+  const MarkInlineBroadcastOperandBufferSizeAtLeastParams &params);
+
+struct MarkInlineBroadcastOperandsBufferSizeAtLeastParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value lhs;
+  Value rhs;
+  Value resBuf;
+  Operation *anchor;
+};
+
+static void markInlineBroadcastOperandsBufferSizeAtLeast(
+  const MarkInlineBroadcastOperandsBufferSizeAtLeastParams &params) {
+  auto resultTy = dyn_cast<MemRefType>(params.resBuf.getType());
   if (!resultTy) {
     return;
   }
 
-  auto resultMaxShape = inferResultMaxShapeForBufferMark(anchor, resultTy);
+  auto resultMaxShape = inferResultMaxShapeForBufferMark(params.anchor, resultTy);
   if (failed(resultMaxShape)) {
     return;
   }
 
-  markInlineBroadcastOperandBufferSizeAtLeast(rewriter, loc, lhs, resultTy, *resultMaxShape, anchor);
-  markInlineBroadcastOperandBufferSizeAtLeast(rewriter, loc, rhs, resultTy, *resultMaxShape, anchor);
+  markInlineBroadcastOperandBufferSizeAtLeast(
+    {params.rewriter, params.loc, params.lhs, resultTy, *resultMaxShape, params.anchor});
+  markInlineBroadcastOperandBufferSizeAtLeast(
+    {params.rewriter, params.loc, params.rhs, resultTy, *resultMaxShape, params.anchor});
 }
 
+struct CreateHIVMBinaryOpParams {
+  ConversionPatternRewriter &rewriter;
+  Location loc;
+  Value lhs;
+  Value rhs;
+  Value resBuf;
+  Operation *anchor = nullptr;
+};
+
 template <typename HIVMOp>
-static void createHIVMBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
-                               Operation *anchor = nullptr) {
-  DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+static void createHIVMBinaryOp(const CreateHIVMBinaryOpParams &params) {
+  DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(params.lhs, params.rhs, params.resBuf, params.rewriter);
   if (broadcastAttr && !broadcastAttr.empty()) {
-    markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
-    rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
-                            rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
-    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
-    markRank1StrideAlignedProducerChains(rewriter, loc, lhs, rhs, resBuf, anchor);
+    markInlineBroadcastOperandsBufferSizeAtLeast(
+      {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
+    params.rewriter.create<HIVMOp>(params.loc, TypeRange{}, ValueRange{params.lhs, params.rhs},
+                                   ValueRange{params.resBuf}, params.rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+    propagateOperandBufferSizeMarks(params.rewriter, params.loc, {params.lhs, params.rhs}, {params.resBuf});
+    markRank1StrideAlignedProducerChains(
+      {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
     return;
   }
 
-  rewriter.create<HIVMOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf});
-  propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
-  markRank1StrideAlignedProducerChains(rewriter, loc, lhs, rhs, resBuf, anchor);
+  params.rewriter.create<HIVMOp>(params.loc, TypeRange{}, ValueRange{params.lhs, params.rhs},
+                                 ValueRange{params.resBuf});
+  propagateOperandBufferSizeMarks(params.rewriter, params.loc, {params.lhs, params.rhs}, {params.resBuf});
+  markRank1StrideAlignedProducerChains(
+    {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
 }
 
 template <typename HIVMOp>
 struct HIVMElementwiseBinaryCreator {
-  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
-                     Operation *anchor = nullptr) {
-    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf, anchor);
-  }
+  static void create(const CreateHIVMBinaryOpParams &params) { createHIVMBinaryOp<HIVMOp>(params); }
 };
 
 template <>
 struct HIVMElementwiseBinaryCreator<hivm::VShROp> {
-  static void create(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs, Value resBuf,
-                     Operation *anchor = nullptr) {
-    DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
+  static void create(const CreateHIVMBinaryOpParams &params) {
+    DenseI64ArrayAttr broadcastAttr =
+      getElementwiseBroadcastAttr(params.lhs, params.rhs, params.resBuf, params.rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
-      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, anchor);
-      rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
-                                    rewriter.getBoolAttr(true), rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
-      propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
-      markRank1StrideAlignedProducerChains(rewriter, loc, lhs, rhs, resBuf, anchor);
+      markInlineBroadcastOperandsBufferSizeAtLeast(
+        {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
+      params.rewriter.create<hivm::VShROp>(params.loc, TypeRange{}, ValueRange{params.lhs, params.rhs},
+                                           ValueRange{params.resBuf}, params.rewriter.getBoolAttr(true),
+                                           params.rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
+      propagateOperandBufferSizeMarks(params.rewriter, params.loc, {params.lhs, params.rhs}, {params.resBuf});
+      markRank1StrideAlignedProducerChains(
+        {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
       return;
     }
 
-    rewriter.create<hivm::VShROp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf},
-                                  rewriter.getBoolAttr(true));
-    propagateOperandBufferSizeMarks(rewriter, loc, {lhs, rhs}, {resBuf});
-    markRank1StrideAlignedProducerChains(rewriter, loc, lhs, rhs, resBuf, anchor);
+    params.rewriter.create<hivm::VShROp>(params.loc, TypeRange{}, ValueRange{params.lhs, params.rhs},
+                                         ValueRange{params.resBuf}, params.rewriter.getBoolAttr(true));
+    propagateOperandBufferSizeMarks(params.rewriter, params.loc, {params.lhs, params.rhs}, {params.resBuf});
+    markRank1StrideAlignedProducerChains(
+      {params.rewriter, params.loc, params.lhs, params.rhs, params.resBuf, params.anchor});
   }
 };
 
 template <typename HIVMOp>
-static void createHIVMElementwiseBinaryOp(ConversionPatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
-                                          Value resBuf, Operation *anchor = nullptr) {
-  HIVMElementwiseBinaryCreator<HIVMOp>::create(rewriter, loc, lhs, rhs, resBuf, anchor);
+static void createHIVMElementwiseBinaryOp(const CreateHIVMBinaryOpParams &params) {
+  HIVMElementwiseBinaryCreator<HIVMOp>::create(params);
 }
 
 // If this binary op's sole result is the i-th scf.yield operand inside an scf.for, reuse
@@ -991,7 +1110,6 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     Value rhsMemRef = adaptor.getRhs();
 
     bool rhsIsMemRef = isa<MemRefType>(rhsMemRef.getType());
-
     if (!isa<MemRefType>(lhsMemRef.getType())) {
       // Swap operands for commutative ops if the left-hand side is a scalar and the right-hand side is a memref.
       if constexpr (isCommutative()) {
@@ -1038,7 +1156,7 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
       }
     }
 
-    createHIVMBinaryOp<HIVMOp>(rewriter, loc, lhsMemRef, rhsMemRef, resBuf, op.getOperation());
+    createHIVMBinaryOp<HIVMOp>({rewriter, loc, lhsMemRef, rhsMemRef, resBuf, op.getOperation()});
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1150,7 +1268,9 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     SmallVector<Value> allocOperands;
     if (memRefType.getNumDynamicDims() > 0) {
       for (int i = 0; i < memRefType.getRank(); ++i) {
-        if (!memRefType.isDynamicDim(i)) continue;
+        if (!memRefType.isDynamicDim(i)) {
+          continue;
+        }
         auto dimVal = getMemRefDimValue(srcMemRef, i, rewriter);
         if (failed(dimVal)) {
           return failure();
@@ -1167,8 +1287,8 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     auto setCastBufferSizeMark = [&rewriter, loc, &op, &srcMemRef, npuVectorType, &maxShape](Value buffer,
                                                                                              Type markElemType) {
       if (npuVectorType && succeeded(maxShape) &&
-          setRank1StrideAlignedBufferSizeMarkFromSource(rewriter, loc, srcMemRef, buffer, npuVectorType, markElemType,
-                                                        *maxShape)) {
+          setRank1StrideAlignedBufferSizeMarkFromSource(
+            {rewriter, loc, srcMemRef, buffer, npuVectorType, markElemType, *maxShape})) {
         return true;
       }
       if (setNPUVectorResultBufferSizeMark(rewriter, loc, op.getOperation(), buffer, markElemType)) {
@@ -1213,7 +1333,6 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
   static hivm::RoundMode selectRoundMode(CastOp op) {
     auto inType = getElementTypeOrSelf(op.getOperand().getType());
     auto outType = getElementTypeOrSelf(op.getResult().getType());
-
     if (isa<npuvector::TruncFOp>(op)) {
       return selectRoundModeForTruncF(inType, outType);
     }
@@ -1289,9 +1408,9 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     auto setCastBufferSizeMark = [&maxShape, &rewriter, loc, npuVectorType, srcMemRef](Value buffer,
                                                                                        Type markElemType) {
       if (succeeded(maxShape) &&
-          (setRank1StrideAlignedBufferSizeMarkFromSource(rewriter, loc, srcMemRef, buffer, npuVectorType, markElemType,
-                                                         *maxShape) ||
-           setNPUVectorBufferSizeMark(rewriter, loc, npuVectorType, markElemType, *maxShape, buffer))) {
+          (setRank1StrideAlignedBufferSizeMarkFromSource(
+             {rewriter, loc, srcMemRef, buffer, npuVectorType, markElemType, *maxShape}) ||
+           setNPUVectorBufferSizeMark({rewriter, loc, npuVectorType, markElemType, *maxShape, buffer}))) {
         return true;
       }
       return propagateBufferSizeMark(rewriter, loc, srcMemRef, buffer);
@@ -1528,14 +1647,13 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
-
     if (failed(legalizeI8VCmpOperands(rewriter, loc, lhs, rhs))) {
       return failure();
     }
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
-      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
+      markInlineBroadcastOperandsBufferSizeAtLeast({rewriter, loc, lhs, rhs, resBuf, op.getOperation()});
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
                                     rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
     } else {
@@ -1642,14 +1760,13 @@ struct NPUVectorCmpToHIVM : OpConversionPattern<CompareOp> {
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
-
     if (failed(legalizeI8VCmpOperands(rewriter, loc, lhs, rhs, i8ToF16BufferBytes))) {
       return failure();
     }
 
     DenseI64ArrayAttr broadcastAttr = getElementwiseBroadcastAttr(lhs, rhs, resBuf, rewriter);
     if (broadcastAttr && !broadcastAttr.empty()) {
-      markInlineBroadcastOperandsBufferSizeAtLeast(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
+      markInlineBroadcastOperandsBufferSizeAtLeast({rewriter, loc, lhs, rhs, resBuf, op.getOperation()});
       rewriter.create<hivm::VCmpOp>(loc, TypeRange{}, ValueRange{lhs, rhs}, ValueRange{resBuf}, predicateAttr,
                                     rewriter.getDenseI64ArrayAttr({}), broadcastAttr);
     } else {
@@ -1770,7 +1887,6 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
     Value rhs = adaptor.getRhs();
 
     bool rhsIsMemRef = isa<MemRefType>(rhs.getType());
-
     if (!isa<MemRefType>(lhs.getType())) {
       if constexpr (isCommutative()) {
         bool lhsIsScalar = isScalarType(lhs.getType());
@@ -1808,7 +1924,7 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
       }
     }
 
-    createHIVMElementwiseBinaryOp<HIVMOp>(rewriter, loc, lhs, rhs, resBuf, op.getOperation());
+    createHIVMElementwiseBinaryOp<HIVMOp>({rewriter, loc, lhs, rhs, resBuf, op.getOperation()});
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1969,14 +2085,14 @@ struct ArithNegfToHIVM : public OpConversionPattern<arith::NegFOp> {
     if (failed(zeroBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *zeroBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *zeroBuf});
     rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, zeroScalar, *zeroBuf, rewriter.getDenseI64ArrayAttr({}));
 
     auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VSubOp>(loc, TypeRange{}, ValueRange{*zeroBuf, inputMemRef}, ValueRange{*resBuf});
 
     rewriter.replaceOp(op, *resBuf);
@@ -2009,7 +2125,7 @@ struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VExpOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -2042,7 +2158,7 @@ struct MathLogToHIVM : public OpConversionPattern<math::LogOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VLnOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -2075,7 +2191,7 @@ struct MathAbsFToHIVM : public OpConversionPattern<math::AbsFOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -2108,7 +2224,7 @@ struct MathSqrtToHIVM : public OpConversionPattern<math::SqrtOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VSqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -2141,7 +2257,7 @@ struct MathRsqrtToHIVM : public OpConversionPattern<math::RsqrtOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VRsqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
     rewriter.replaceOp(op, *resBuf);
@@ -2173,7 +2289,7 @@ struct MathTanhToHIVM : public OpConversionPattern<math::TanhOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VTanhOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2202,7 +2318,7 @@ struct MathSinToHIVM : public OpConversionPattern<math::SinOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VSinOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2231,7 +2347,7 @@ struct MathCosToHIVM : public OpConversionPattern<math::CosOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VCosOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2260,7 +2376,7 @@ struct MathErfToHIVM : public OpConversionPattern<math::ErfOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VErfOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2292,7 +2408,7 @@ struct MathUnaryRoundToHIVM : public OpConversionPattern<MathOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(RoundMode);
     rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr, hivm::TypeFnAttr{});
     rewriter.replaceOp(op, *resBuf);
@@ -2324,7 +2440,7 @@ struct MathAbsIToHIVM : public OpConversionPattern<math::AbsIOp> {
     if (failed(resBuf)) {
       return failure();
     }
-    setOrPropagateBufferSizeMark(rewriter, loc, op.getOperation(), inputMemRef, *resBuf);
+    setOrPropagateBufferSizeMark({rewriter, loc, op.getOperation(), inputMemRef, *resBuf});
     rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
     rewriter.replaceOp(op, *resBuf);
     return success();
@@ -2419,7 +2535,6 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
 
     auto vecType = op.getVector().getType();
     auto memRefType = MemRefType::get(vecType.getShape(), vecType.getElementType());
-
     if (auto srcMemRefType = dyn_cast<MemRefType>(source.getType())) {
       if (srcMemRefType == memRefType) {
         rewriter.replaceOp(op, source);
@@ -2678,10 +2793,27 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
   }
 };
 
-static LogicalResult rewritePartialMemRefReductionCollapse(npuvector::ReductionOp op,
-                                                           ConversionPatternRewriter &rewriter, Location loc,
-                                                           MemRefType srcMemRefType, Type elemType, Value resultBuf,
-                                                           const llvm::DenseSet<int64_t> &reduceDimSet, int64_t rank) {
+// limit.
+struct RewritePartialMemRefReductionCollapseParams {
+  mutable npuvector::ReductionOp op;
+  ConversionPatternRewriter &rewriter;
+  Location loc;
+  MemRefType srcMemRefType;
+  Type elemType;
+  Value resultBuf;
+  const llvm::DenseSet<int64_t> &reduceDimSet;
+  int64_t rank;
+};
+
+static LogicalResult rewritePartialMemRefReductionCollapse(const RewritePartialMemRefReductionCollapseParams &params) {
+  npuvector::ReductionOp op = params.op;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  Location loc = params.loc;
+  MemRefType srcMemRefType = params.srcMemRefType;
+  Type elemType = params.elemType;
+  Value resultBuf = params.resultBuf;
+  const llvm::DenseSet<int64_t> &reduceDimSet = params.reduceDimSet;
+  int64_t rank = params.rank;
   SmallVector<int64_t> collapsedShape;
   for (int64_t i = 0; i < rank; ++i) {
     if (!reduceDimSet.contains(i)) {
@@ -2808,8 +2940,8 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
     Type resultType = op.getResult().getType();
     bool isPartial = isa<npuvector::NPUVectorType>(resultType);
     if (isPartial) {
-      return rewritePartialMemRefReductionCollapse(op, rewriter, loc, srcMemRefType, elemType, resultBuf, reduceDimSet,
-                                                   rank);
+      return rewritePartialMemRefReductionCollapse(
+        {op, rewriter, loc, srcMemRefType, elemType, resultBuf, reduceDimSet, rank});
     }
 
     if (isa<MemRefType>(resultType)) {
@@ -2864,28 +2996,39 @@ static int64_t computeRank1StrideAlignedTransferReadBytes(ArrayRef<int64_t> maxS
   return computeBishengStrideAlignedStorageBytesWithTrailingUnit(maxShape, staticDims, alignDims, elementBits);
 }
 
-static LogicalResult setTransferReadBufferSizeMarkIfNeeded(npuvector::TransferReadOp op, Value source, Value buf,
-                                                           Type elemType, npuvector::NPUVectorType npuVecType,
-                                                           ConversionPatternRewriter &rewriter) {
-  if (!npuVecType.hasDynamicShape()) {
+// limit.
+struct SetTransferReadBufferSizeMarkIfNeededParams {
+  mutable npuvector::TransferReadOp op;
+  Value source;
+  Value buf;
+  Type elemType;
+  npuvector::NPUVectorType npuVecType;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult setTransferReadBufferSizeMarkIfNeeded(const SetTransferReadBufferSizeMarkIfNeededParams &params) {
+  if (!params.npuVecType.hasDynamicShape()) {
     return success();
   }
 
-  auto folded = foldMaxValsForNpuMark(npuVecType, op.getMaxSizes());
+  auto folded = foldMaxValsForNpuMark(params.npuVecType, params.op.getMaxSizes());
   if (failed(folded)) {
-    return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
+    return params.rewriter.notifyMatchFailure(params.op,
+                                              "maxSizes for npuvector mark must be one constant index per result rank");
   }
 
   // BiShengIR later materializes rank-1 non-contiguous loads as padded 2D UB storage.
-  if (needsRank1StrideAlignedTransferReadBuffer(source, npuVecType)) {
-    int64_t strideAlignedBytes = computeRank1StrideAlignedTransferReadBytes(*folded, npuVecType, elemType);
+  if (needsRank1StrideAlignedTransferReadBuffer(params.source, params.npuVecType)) {
+    int64_t strideAlignedBytes =
+      computeRank1StrideAlignedTransferReadBytes(*folded, params.npuVecType, params.elemType);
     if (strideAlignedBytes > 0) {
-      setBufferSizeMark(rewriter, op.getLoc(), buf, strideAlignedBytes);
+      setBufferSizeMark(params.rewriter, params.op.getLoc(), params.buf, strideAlignedBytes);
       return success();
     }
   }
 
-  setNPUVectorBufferSizeMark(rewriter, op.getLoc(), npuVecType, elemType, *folded, buf);
+  setNPUVectorBufferSizeMark(
+    {params.rewriter, params.op.getLoc(), params.npuVecType, params.elemType, *folded, params.buf});
   return success();
 }
 
@@ -2936,17 +3079,18 @@ static bool hasBufferSizeMarkAtLeast(Value buffer, int64_t bytes) {
   return false;
 }
 
-static bool setRank1StrideAlignedBufferSizeMarkFromSource(PatternRewriter &rewriter, Location loc, Value source,
-                                                          Value buffer, npuvector::NPUVectorType npuTy, Type elemType,
-                                                          ArrayRef<int64_t> maxShape) {
-  auto sourceTy = dyn_cast<MemRefType>(source.getType());
-  if (!sourceTy || sourceTy.getRank() != 1 || npuTy.getRank() != 1) {
+static bool setRank1StrideAlignedBufferSizeMarkFromSource(
+  const SetRank1StrideAlignedBufferSizeMarkFromSourceParams &params) {
+  auto sourceTy = dyn_cast<MemRefType>(params.source.getType());
+  if (!sourceTy || sourceTy.getRank() != 1 || params.npuTy.getRank() != 1) {
     return false;
   }
   int64_t sourceBytes =
-    computeBishengRank1StrideAlignedStorageBytes(maxShape, sourceTy.getShape(), sourceTy.getElementType());
-  int64_t resultBytes = computeBishengRank1StrideAlignedStorageBytes(maxShape, npuTy.getShape(), elemType);
-  return hasBufferSizeMarkAtLeast(source, sourceBytes) && setBufferSizeMark(rewriter, loc, buffer, resultBytes);
+    computeBishengRank1StrideAlignedStorageBytes(params.maxShape, sourceTy.getShape(), sourceTy.getElementType());
+  int64_t resultBytes =
+    computeBishengRank1StrideAlignedStorageBytes(params.maxShape, params.npuTy.getShape(), params.elemType);
+  return hasBufferSizeMarkAtLeast(params.source, sourceBytes) &&
+         setBufferSizeMark(params.rewriter, params.loc, params.buffer, resultBytes);
 }
 
 static Value traceDataToWriteRoot(Value dataToWrite) {
@@ -3010,20 +3154,29 @@ static bool isDpsInitRoot(DestinationStyleOpInterface op, Value root) {
   return llvm::any_of(op.getDpsInits(), [root](Value init) { return traceMemRefToRoot(init) == root; });
 }
 
-static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value buffer,
-                                                      Operation *anchor, int64_t bytes,
-                                                      llvm::SmallPtrSetImpl<Operation *> &visited) {
-  if (!setBufferSizeMarkAtLeast(rewriter, loc, buffer, bytes)) {
+struct MarkInplaceProducerChainBufferSizeAtLeastRecursiveParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value buffer;
+  Operation *anchor;
+  int64_t bytes;
+  llvm::SmallPtrSetImpl<Operation *> &visited;
+};
+
+static void markInplaceProducerChainBufferSizeAtLeast(
+  const MarkInplaceProducerChainBufferSizeAtLeastRecursiveParams &params) {
+  if (!setBufferSizeMarkAtLeast(params.rewriter, params.loc, params.buffer, params.bytes)) {
     return;
   }
 
-  Value root = traceMemRefToRoot(buffer);
+  Value root = traceMemRefToRoot(params.buffer);
   for (Operation *user : llvm::make_early_inc_range(root.getUsers())) {
-    if (user == anchor || !isBeforeAnchorInSameBlock(user, anchor) || !isa<hivm::HIVMStructuredOp>(user)) {
+    if (user == params.anchor || !isBeforeAnchorInSameBlock(user, params.anchor) ||
+        !isa<hivm::HIVMStructuredOp>(user)) {
       continue;
     }
     auto dpsOp = dyn_cast<DestinationStyleOpInterface>(user);
-    if (!dpsOp || !isDpsInitRoot(dpsOp, root) || !visited.insert(user).second) {
+    if (!dpsOp || !isDpsInitRoot(dpsOp, root) || !params.visited.insert(user).second) {
       continue;
     }
 
@@ -3032,37 +3185,40 @@ static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter,
         continue;
       }
       auto inputTy = dyn_cast<MemRefType>(input.getType());
-      auto bufferTy = dyn_cast<MemRefType>(buffer.getType());
+      auto bufferTy = dyn_cast<MemRefType>(params.buffer.getType());
       bool canPropagate =
-        hasSameMemRefShapeAndElementType(input, buffer) ||
+        hasSameMemRefShapeAndElementType(input, params.buffer) ||
         (isa<hivm::VCastOp>(user) && inputTy && bufferTy && inputTy.getShape() == bufferTy.getShape());
-      if (!canPropagate) continue;
-      markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, input, user, bytes, visited);
+      if (!canPropagate) {
+        continue;
+      }
+      markInplaceProducerChainBufferSizeAtLeast(
+        {params.rewriter, params.loc, input, user, params.bytes, params.visited});
     }
   }
 }
 
-static void markInplaceProducerChainBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value buffer,
-                                                      Operation *anchor, int64_t bytes) {
+static void markInplaceProducerChainBufferSizeAtLeast(
+  // cppcheck-suppress constParameter
+  PatternRewriter &rewriter, Location loc, Value buffer, Operation *anchor, int64_t bytes) {
   llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
-  markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, buffer, anchor, bytes, visited);
+  markInplaceProducerChainBufferSizeAtLeast({rewriter, loc, buffer, anchor, bytes, visited});
 }
 
-static void markRank1StrideAlignedProducerChains(PatternRewriter &rewriter, Location loc, Value lhs, Value rhs,
-                                                 Value resBuf, Operation *anchor) {
-  auto resultTy = dyn_cast<MemRefType>(resBuf.getType());
+static void markRank1StrideAlignedProducerChains(const MarkRank1StrideAlignedProducerChainsParams &params) {
+  auto resultTy = dyn_cast<MemRefType>(params.resBuf.getType());
   if (!resultTy || resultTy.getRank() != 1 || !resultTy.isDynamicDim(0)) {
     return;
   }
-  auto maxShape = inferResultMaxShapeForBufferMark(anchor, resultTy);
+  auto maxShape = inferResultMaxShapeForBufferMark(params.anchor, resultTy);
   if (failed(maxShape)) {
     return;
   }
   int64_t bytes =
     computeBishengRank1StrideAlignedStorageBytes(*maxShape, resultTy.getShape(), resultTy.getElementType());
-  for (Value value : {lhs, rhs, resBuf}) {
+  for (Value value : {params.lhs, params.rhs, params.resBuf}) {
     if (hasBufferSizeMarkAtLeast(value, bytes))
-      markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, value, anchor, bytes);
+      markInplaceProducerChainBufferSizeAtLeast(params.rewriter, params.loc, value, params.anchor, bytes);
   }
 }
 
@@ -3178,7 +3334,7 @@ static FailureOr<SmallVector<int64_t>> inferInlineBroadcastRootMaxShape(Value op
                                                                         Value &root) {
   Value current = operand;
   SmallVector<int64_t> currentMaxShape(operandMaxShape.begin(), operandMaxShape.end());
-  for (int depth = 0; depth < 32; ++depth) {
+  for (int depth = 0; depth < kMaxInlineBroadcastTraceSteps; ++depth) {
     Operation *def = current.getDefiningOp();
     if (def == nullptr) {
       break;
@@ -3220,16 +3376,15 @@ static FailureOr<SmallVector<int64_t>> inferInlineBroadcastRootMaxShape(Value op
   return currentMaxShape;
 }
 
-static void markInlineBroadcastOperandBufferSizeAtLeast(PatternRewriter &rewriter, Location loc, Value operand,
-                                                        MemRefType resultTy, ArrayRef<int64_t> resultMaxShape,
-                                                        Operation *anchor) {
-  auto operandMaxShape = inferInlineBroadcastOperandMaxShape(operand, resultTy, resultMaxShape);
+static void markInlineBroadcastOperandBufferSizeAtLeast(
+  const MarkInlineBroadcastOperandBufferSizeAtLeastParams &params) {
+  auto operandMaxShape = inferInlineBroadcastOperandMaxShape(params.operand, params.resultTy, params.resultMaxShape);
   if (failed(operandMaxShape)) {
     return;
   }
 
   Value root;
-  auto rootMaxShape = inferInlineBroadcastRootMaxShape(operand, *operandMaxShape, root);
+  auto rootMaxShape = inferInlineBroadcastRootMaxShape(params.operand, *operandMaxShape, root);
   if (failed(rootMaxShape)) {
     return;
   }
@@ -3240,14 +3395,45 @@ static void markInlineBroadcastOperandBufferSizeAtLeast(PatternRewriter &rewrite
   }
   int64_t bytes =
     computeBishengInlineBroadcastSourceStorageBytes(*rootMaxShape, rootTy.getShape(), rootTy.getElementType());
-  markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, root, anchor, bytes);
+  markInplaceProducerChainBufferSizeAtLeast(params.rewriter, params.loc, root, params.anchor, bytes);
 }
 
-static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferReadOp op,
-                                                            npuvector::TransferReadOp::Adaptor adaptor, Value source,
-                                                            npuvector::NPUVectorType npuVecType,
-                                                            ValueRange dynamicSizes,
-                                                            ConversionPatternRewriter &rewriter) {
+/// Collect alloc dynamic operands from size values aligned to npuVecType rank (or copy as-is).
+static void collectDynamicAllocOperandsFromSizes(MemRefType targetMemRefType, npuvector::NPUVectorType npuVecType,
+                                                 ValueRange dynamicSizes, SmallVectorImpl<Value> &allocOperands) {
+  allocOperands.clear();
+  if (targetMemRefType.getNumDynamicDims() <= 0) {
+    return;
+  }
+  if (static_cast<int64_t>(dynamicSizes.size()) != npuVecType.getRank()) {
+    allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+    return;
+  }
+  for (int64_t i = 0; i < npuVecType.getRank(); ++i) {
+    if (!targetMemRefType.isDynamicDim(static_cast<unsigned>(i))) {
+      continue;
+    }
+    allocOperands.push_back(dynamicSizes[static_cast<unsigned>(i)]);
+  }
+}
+
+// limit.
+struct RewriteRank0MemRefToVectorTransferReadParams {
+  mutable npuvector::TransferReadOp op;
+  npuvector::TransferReadOp::Adaptor adaptor;
+  Value source;
+  npuvector::NPUVectorType npuVecType;
+  ValueRange dynamicSizes;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult rewriteRank0MemRefToVectorTransferRead(
+  const RewriteRank0MemRefToVectorTransferReadParams &params) {
+  npuvector::TransferReadOp op = params.op;
+  Value source = params.source;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  ValueRange dynamicSizes = params.dynamicSizes;
+  ConversionPatternRewriter &rewriter = params.rewriter;
   Location loc = op.getLoc();
 
   Type elemType = npuVecType.getElementType();
@@ -3256,20 +3442,9 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
   Value scalar = rewriter.create<memref::LoadOp>(loc, source, ValueRange{});
 
   SmallVector<Value> allocOperands;
-  if (targetMemRefType.getNumDynamicDims() > 0) {
-    if (static_cast<int64_t>(dynamicSizes.size()) == npuVecType.getRank()) {
-      for (int64_t i = 0; i < npuVecType.getRank(); ++i) {
-        if (targetMemRefType.isDynamicDim(i)) {
-          allocOperands.push_back(dynamicSizes[static_cast<unsigned>(i)]);
-        }
-      }
-    } else {
-      allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
-    }
-  }
+  collectDynamicAllocOperandsFromSizes(targetMemRefType, npuVecType, dynamicSizes, allocOperands);
   Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
-
-  if (failed(setTransferReadBufferSizeMarkIfNeeded(op, source, tempBuf, elemType, npuVecType, rewriter))) {
+  if (failed(setTransferReadBufferSizeMarkIfNeeded({op, source, tempBuf, elemType, npuVecType, rewriter}))) {
     return failure();
   }
 
@@ -3278,15 +3453,27 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
   return success();
 }
 
-static LogicalResult collectTransferMappedDims(Operation *op, std::optional<AffineMap> permutationMap,
-                                               int64_t memRefRank, int64_t dataRank, PatternRewriter &rewriter,
-                                               SmallVectorImpl<int64_t> &mappedDims) {
+struct CollectTransferMappedDimsParams {
+  Operation *op;
+  std::optional<AffineMap> permutationMap;
+  int64_t memRefRank;
+  int64_t dataRank;
+  PatternRewriter &rewriter;
+  SmallVectorImpl<int64_t> &mappedDims;
+};
+
+static LogicalResult collectTransferMappedDims(const CollectTransferMappedDimsParams &params) {
+  Operation *op = params.op;
+  int64_t memRefRank = params.memRefRank;
+  int64_t dataRank = params.dataRank;
+  PatternRewriter &rewriter = params.rewriter;
+  SmallVectorImpl<int64_t> &mappedDims = params.mappedDims;
   mappedDims.clear();
   if (dataRank > memRefRank) {
     return rewriter.notifyMatchFailure(op, "permutation_map result rank exceeds source rank");
   }
 
-  AffineMap map = permutationMap.value_or(AffineMap::getMinorIdentityMap(
+  AffineMap map = params.permutationMap.value_or(AffineMap::getMinorIdentityMap(
     static_cast<unsigned>(memRefRank), static_cast<unsigned>(dataRank), rewriter.getContext()));
   if (map.getNumDims() != static_cast<unsigned>(memRefRank)) {
     return rewriter.notifyMatchFailure(op, "permutation_map input rank must match source rank");
@@ -3320,8 +3507,8 @@ static LogicalResult collectTransferMappedDims(Operation *op, std::optional<Affi
 
 static LogicalResult collectTransferReadMappedDims(npuvector::TransferReadOp op, int64_t memRefRank, int64_t dataRank,
                                                    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &mappedDims) {
-  if (failed(collectTransferMappedDims(op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter,
-                                       mappedDims))) {
+  if (failed(collectTransferMappedDims(
+        {op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter, mappedDims}))) {
     return failure();
   }
   if (!llvm::is_sorted(mappedDims)) {
@@ -3342,12 +3529,28 @@ static FailureOr<OpFoldResult> getNPUVectorDimSize(npuvector::NPUVectorType npuV
   return OpFoldResult(rewriter.getIndexAttr(npuVecType.getDimSize(dim)));
 }
 
-static LogicalResult buildTransferReadSizesAndStrides(npuvector::TransferReadOp op, int64_t memRefRank, int64_t vecRank,
-                                                      npuvector::NPUVectorType npuVecType, ValueRange dynamicSizes,
-                                                      ConversionPatternRewriter &rewriter,
-                                                      SmallVectorImpl<OpFoldResult> &sizes,
-                                                      SmallVectorImpl<OpFoldResult> &strides,
-                                                      SmallVectorImpl<int64_t> &mappedDims) {
+struct BuildTransferReadSizesAndStridesParams {
+  mutable npuvector::TransferReadOp op;
+  int64_t memRefRank;
+  int64_t vecRank;
+  npuvector::NPUVectorType npuVecType;
+  ValueRange dynamicSizes;
+  ConversionPatternRewriter &rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes;
+  SmallVectorImpl<OpFoldResult> &strides;
+  SmallVectorImpl<int64_t> &mappedDims;
+};
+
+static LogicalResult buildTransferReadSizesAndStrides(const BuildTransferReadSizesAndStridesParams &params) {
+  npuvector::TransferReadOp op = params.op;
+  int64_t memRefRank = params.memRefRank;
+  int64_t vecRank = params.vecRank;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  ValueRange dynamicSizes = params.dynamicSizes;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes = params.sizes;
+  SmallVectorImpl<OpFoldResult> &strides = params.strides;
+  SmallVectorImpl<int64_t> &mappedDims = params.mappedDims;
   if (failed(collectTransferReadMappedDims(op, memRefRank, vecRank, rewriter, mappedDims))) {
     return failure();
   }
@@ -3394,14 +3597,13 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     int64_t vecRank = npuVecType.getRank();
 
     auto dynamicSizes = adaptor.getDynamicSizes();
-
     if (memRefRank == 0 && vecRank > 0) {
-      return rewriteRank0MemRefToVectorTransferRead(op, adaptor, source, npuVecType, dynamicSizes, rewriter);
+      return rewriteRank0MemRefToVectorTransferRead({op, adaptor, source, npuVecType, dynamicSizes, rewriter});
     }
 
     SmallVector<int64_t> mappedDims;
-    if (failed(buildTransferReadSizesAndStrides(op, memRefRank, vecRank, npuVecType, dynamicSizes, rewriter, sizes,
-                                                strides, mappedDims))) {
+    if (failed(buildTransferReadSizesAndStrides(
+          {op, memRefRank, vecRank, npuVecType, dynamicSizes, rewriter, sizes, strides, mappedDims}))) {
       return failure();
     }
 
@@ -3439,20 +3641,9 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
     SmallVector<Value> allocOperands;
-    if (targetMemRefType.getNumDynamicDims() > 0) {
-      if (static_cast<int64_t>(dynamicSizes.size()) == npuVecType.getRank()) {
-        for (int64_t i = 0; i < npuVecType.getRank(); ++i) {
-          if (targetMemRefType.isDynamicDim(i)) {
-            allocOperands.push_back(dynamicSizes[static_cast<unsigned>(i)]);
-          }
-        }
-      } else {
-        allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
-      }
-    }
+    collectDynamicAllocOperandsFromSizes(targetMemRefType, npuVecType, dynamicSizes, allocOperands);
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
-
-    if (failed(setTransferReadBufferSizeMarkIfNeeded(op, finalSource, tempBuf, elemType, npuVecType, rewriter))) {
+    if (failed(setTransferReadBufferSizeMarkIfNeeded({op, finalSource, tempBuf, elemType, npuVecType, rewriter}))) {
       return failure();
     }
 
@@ -3463,10 +3654,26 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
   }
 };
 
-static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(npuvector::TransferWriteOp op, Location loc,
-                                                               Value dataToWrite, Value dest, MemRefType dataMemRefType,
-                                                               MemRefType destMemRefType,
-                                                               ConversionPatternRewriter &rewriter) {
+// limit.
+struct RewriteNPUVectorTransferWriteRankMismatchParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dataToWrite;
+  Value dest;
+  MemRefType dataMemRefType;
+  MemRefType destMemRefType;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(
+  const RewriteNPUVectorTransferWriteRankMismatchParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dataToWrite = params.dataToWrite;
+  Value dest = params.dest;
+  MemRefType dataMemRefType = params.dataMemRefType;
+  MemRefType destMemRefType = params.destMemRefType;
+  ConversionPatternRewriter &rewriter = params.rewriter;
   if (dataMemRefType.getRank() != 1 || destMemRefType.getRank() != 0) {
     return rewriter.notifyMatchFailure(op, "unsupported transfer_write rank mismatch");
   }
@@ -3485,10 +3692,14 @@ static LogicalResult rewriteNPUVectorTransferWriteRankMismatch(npuvector::Transf
   return success();
 }
 
-static LogicalResult collectTransferWriteMappedDims(npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank,
-                                                    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &mappedDims) {
-  return collectTransferMappedDims(op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter,
-                                   mappedDims);
+static LogicalResult collectTransferWriteMappedDims(
+  npuvector::TransferWriteOp op, int64_t memRefRank, int64_t dataRank,
+  // cppcheck-suppress constParameter
+  PatternRewriter &rewriter,
+  // cppcheck-suppress constParameter
+  SmallVectorImpl<int64_t> &mappedDims) {
+  return collectTransferMappedDims(
+    {op.getOperation(), op.getPermutationMap(), memRefRank, dataRank, rewriter, mappedDims});
 }
 
 static bool hasNonSuffixTransferWritePermutationMap(npuvector::TransferWriteOp op, int64_t memRefRank,
@@ -3502,11 +3713,27 @@ static bool hasNonSuffixTransferWritePermutationMap(npuvector::TransferWriteOp o
   return *permutationMap != suffixMap;
 }
 
-static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::TransferWriteOp op, Value dataToWrite,
-                                                             MemRefType dataMemRefType, int64_t memRefRank,
-                                                             int64_t dataRank, ConversionPatternRewriter &rewriter,
-                                                             SmallVectorImpl<OpFoldResult> &sizes,
-                                                             SmallVectorImpl<OpFoldResult> &strides) {
+struct BuildNPUVectorTransferWriteMemRefSizesStridesParams {
+  mutable npuvector::TransferWriteOp op;
+  Value dataToWrite;
+  MemRefType dataMemRefType;
+  int64_t memRefRank;
+  int64_t dataRank;
+  ConversionPatternRewriter &rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes;
+  SmallVectorImpl<OpFoldResult> &strides;
+};
+
+static LogicalResult buildNPUVectorTransferWriteSizesStrides(
+  const BuildNPUVectorTransferWriteMemRefSizesStridesParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Value dataToWrite = params.dataToWrite;
+  MemRefType dataMemRefType = params.dataMemRefType;
+  int64_t memRefRank = params.memRefRank;
+  int64_t dataRank = params.dataRank;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes = params.sizes;
+  SmallVectorImpl<OpFoldResult> &strides = params.strides;
   SmallVector<int64_t> mappedDims;
   if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
     return failure();
@@ -3534,12 +3761,85 @@ static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::Transfer
   return success();
 }
 
-static LogicalResult buildNPUVectorTransferWriteSizesStrides(npuvector::TransferWriteOp op,
-                                                             npuvector::NPUVectorType npuVecType,
-                                                             ValueRange dynamicSizes, int64_t memRefRank,
-                                                             int64_t dataRank, ConversionPatternRewriter &rewriter,
-                                                             SmallVectorImpl<OpFoldResult> &sizes,
-                                                             SmallVectorImpl<OpFoldResult> &strides) {
+struct BuildNPUVectorTransferWriteLogicalSizesStridesParams {
+  mutable npuvector::TransferWriteOp op;
+  Value dataToWrite;
+  MemRefType dataMemRefType;
+  npuvector::NPUVectorType npuVecType;
+  int64_t memRefRank;
+  int64_t dataRank;
+  ConversionPatternRewriter &rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes;
+  SmallVectorImpl<OpFoldResult> &strides;
+};
+
+static LogicalResult buildNPUVectorTransferWriteLogicalSizesStrides(
+  const BuildNPUVectorTransferWriteLogicalSizesStridesParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Value dataToWrite = params.dataToWrite;
+  MemRefType dataMemRefType = params.dataMemRefType;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  int64_t memRefRank = params.memRefRank;
+  int64_t dataRank = params.dataRank;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes = params.sizes;
+  SmallVectorImpl<OpFoldResult> &strides = params.strides;
+  if (!npuVecType) {
+    return buildNPUVectorTransferWriteSizesStrides(
+      {op, dataToWrite, dataMemRefType, memRefRank, dataRank, rewriter, sizes, strides});
+  }
+
+  SmallVector<int64_t> mappedDims;
+  if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
+    return failure();
+  }
+
+  sizes.clear();
+  strides.clear();
+  for (int64_t i = 0; i < memRefRank; ++i) {
+    sizes.push_back(rewriter.getIndexAttr(1));
+    strides.push_back(rewriter.getIndexAttr(1));
+  }
+  for (int64_t i = 0; i < dataRank; ++i) {
+    OpFoldResult dimSize;
+    if (npuVecType.isDynamicDim(i)) {
+      FailureOr<Value> dimVal = getNPUVectorDimValue(op.getVector(), i, kDefaultMemRefDimTraceDepth, &rewriter);
+      if (failed(dimVal) && i < dataMemRefType.getRank()) {
+        dimVal = getMemRefDimValue(dataToWrite, i, rewriter);
+      }
+      if (failed(dimVal)) {
+        return failure();
+      }
+      dimSize = *dimVal;
+    } else {
+      dimSize = rewriter.getIndexAttr(npuVecType.getDimSize(i));
+    }
+    sizes[static_cast<size_t>(mappedDims[static_cast<size_t>(i)])] = dimSize;
+  }
+  return success();
+}
+
+struct BuildNPUVectorTransferWriteNpuSizesStridesParams {
+  mutable npuvector::TransferWriteOp op;
+  npuvector::NPUVectorType npuVecType;
+  ValueRange dynamicSizes;
+  int64_t memRefRank;
+  int64_t dataRank;
+  ConversionPatternRewriter &rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes;
+  SmallVectorImpl<OpFoldResult> &strides;
+};
+
+static LogicalResult buildNPUVectorTransferWriteSizesStrides(
+  const BuildNPUVectorTransferWriteNpuSizesStridesParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  ValueRange dynamicSizes = params.dynamicSizes;
+  int64_t memRefRank = params.memRefRank;
+  int64_t dataRank = params.dataRank;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  SmallVectorImpl<OpFoldResult> &sizes = params.sizes;
+  SmallVectorImpl<OpFoldResult> &strides = params.strides;
   SmallVector<int64_t> mappedDims;
   if (failed(collectTransferWriteMappedDims(op, memRefRank, dataRank, rewriter, mappedDims))) {
     return failure();
@@ -3580,10 +3880,24 @@ static FailureOr<TypedAttr> getSplatScalarAttr(Value value) {
   return scalarAttr;
 }
 
-static LogicalResult lowerScalarNPUVectorTransferWriteToVbrc(npuvector::TransferWriteOp op, Value scalar,
-                                                             npuvector::NPUVectorType npuVecType, Value dest,
-                                                             ValueRange dynamicSizes,
-                                                             ConversionPatternRewriter &rewriter) {
+// limit.
+struct LowerScalarNPUVectorTransferWriteToVbrcParams {
+  mutable npuvector::TransferWriteOp op;
+  Value scalar;
+  npuvector::NPUVectorType npuVecType;
+  Value dest;
+  ValueRange dynamicSizes;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult lowerScalarNPUVectorTransferWriteToVbrc(
+  const LowerScalarNPUVectorTransferWriteToVbrcParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Value scalar = params.scalar;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  Value dest = params.dest;
+  ValueRange dynamicSizes = params.dynamicSizes;
+  ConversionPatternRewriter &rewriter = params.rewriter;
   auto destMemRefType = dyn_cast<MemRefType>(dest.getType());
   if (!destMemRefType) {
     return failure();
@@ -3602,8 +3916,8 @@ static LogicalResult lowerScalarNPUVectorTransferWriteToVbrc(npuvector::Transfer
   ArrayRef<int64_t> vectorShape = npuVecType.getShape();
   SmallVector<OpFoldResult> sizes;
   SmallVector<OpFoldResult> strides;
-  if (failed(buildNPUVectorTransferWriteSizesStrides(op, npuVecType, dynamicSizes, memRefRank, dataRank, rewriter,
-                                                     sizes, strides))) {
+  if (failed(buildNPUVectorTransferWriteSizesStrides(
+        {op, npuVecType, dynamicSizes, memRefRank, dataRank, rewriter, sizes, strides}))) {
     return failure();
   }
 
@@ -3634,11 +3948,13 @@ static LogicalResult tryLowerDenseConstantNPUVectorTransferWrite(npuvector::Tran
 
   rewriter.setInsertionPoint(op);
   Value scalarConstant = rewriter.create<arith::ConstantOp>(op.getLoc(), *scalarAttr);
-  return lowerScalarNPUVectorTransferWriteToVbrc(op, scalarConstant, npuVecType, dest, ValueRange{}, rewriter);
+  return lowerScalarNPUVectorTransferWriteToVbrc({op, scalarConstant, npuVecType, dest, ValueRange{}, rewriter});
 }
 
-static LogicalResult tryLowerBroadcastNPUVectorTransferWrite(npuvector::TransferWriteOp op, Value dest,
-                                                             ConversionPatternRewriter &rewriter) {
+static LogicalResult tryLowerBroadcastNPUVectorTransferWrite(
+  npuvector::TransferWriteOp op, Value dest,
+  // cppcheck-suppress constParameter
+  ConversionPatternRewriter &rewriter) {
   auto broadcast = op.getVector().getDefiningOp<npuvector::BroadcastOp>();
   auto npuVecType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
   if (!broadcast || !npuVecType || npuVecType.getElementType().isInteger(kBoolBitWidth) ||
@@ -3647,8 +3963,8 @@ static LogicalResult tryLowerBroadcastNPUVectorTransferWrite(npuvector::Transfer
     return failure();
   }
 
-  return lowerScalarNPUVectorTransferWriteToVbrc(op, broadcast.getSource(), npuVecType, dest,
-                                                 broadcast.getDynamicSizes(), rewriter);
+  return lowerScalarNPUVectorTransferWriteToVbrc(
+    {op, broadcast.getSource(), npuVecType, dest, broadcast.getDynamicSizes(), rewriter});
 }
 
 static LogicalResult materializeSubviewIndicesBefore(SmallVectorImpl<OpFoldResult> &offsets,
@@ -3711,6 +4027,50 @@ static void eraseBufferMarks(Value buffer, ConversionPatternRewriter &rewriter) 
   }
 }
 
+static bool sameIndexFoldResult(OpFoldResult lhs, OpFoldResult rhs) {
+  if (lhs == rhs) {
+    return true;
+  }
+  std::optional<int64_t> lhsConst = getConstantIntValue(lhs);
+  std::optional<int64_t> rhsConst = getConstantIntValue(rhs);
+  return lhsConst && rhsConst && *lhsConst == *rhsConst;
+}
+
+static bool isConstantZero(OpFoldResult ofr) { return isConstantIntValue(ofr, 0); }
+
+static bool isAfterInCommonBlock(Operation *before, Operation *after) {
+  for (Operation *beforeAncestor = before; beforeAncestor != nullptr; beforeAncestor = beforeAncestor->getParentOp()) {
+    for (Operation *afterAncestor = after; afterAncestor != nullptr; afterAncestor = afterAncestor->getParentOp()) {
+      if (beforeAncestor->getBlock() == afterAncestor->getBlock()) {
+        return beforeAncestor->isBeforeInBlock(afterAncestor);
+      }
+    }
+  }
+  return false;
+}
+
+static Value createExpandShape(PatternRewriter &rewriter, Location loc, Value src, ArrayRef<int64_t> resultShape,
+                               ArrayRef<ReassociationIndices> reassoc);
+
+static bool canReshapeMemRefToType(MemRefType srcTy, MemRefType dstTy) {
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return false;
+  }
+  if (srcTy.getMemorySpace() != dstTy.getMemorySpace()) {
+    return false;
+  }
+  if (srcTy == dstTy) {
+    return true;
+  }
+  if (srcTy.getShape() == dstTy.getShape()) {
+    return true;
+  }
+  if (!srcTy.hasStaticShape() || !dstTy.hasStaticShape() || srcTy.getNumElements() != dstTy.getNumElements()) {
+    return false;
+  }
+  return getReassociationIndicesForReshape(srcTy, dstTy).has_value();
+}
+
 static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, ConversionPatternRewriter &rewriter) {
   auto srcTy = cast<MemRefType>(src.getType());
   if (srcTy == dstTy) {
@@ -3724,7 +4084,7 @@ static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, Conv
     return {};
   }
   if (dstTy.getRank() > srcTy.getRank()) {
-    return rewriter.create<memref::ExpandShapeOp>(loc, dstTy, src, *reassoc);
+    return createExpandShape(rewriter, loc, src, dstTy.getShape(), *reassoc);
   }
   if (dstTy.getRank() < srcTy.getRank()) {
     return rewriter.create<memref::CollapseShapeOp>(loc, dstTy, src, *reassoc);
@@ -3732,16 +4092,19 @@ static Value reshapeMemRefToType(Value src, MemRefType dstTy, Location loc, Conv
   return {};
 }
 
-// True when `t` describes a packed, row-major, zero-offset slab: its elements are exactly
-// the leading getNumElements(t) elements of the underlying buffer, in linear order. Such a
-// view can be aliased as a contiguous prefix regardless of rank or extent (multi-dim and
-// dynamic-extent contiguous reads included); strided gathers and non-zero offsets cannot.
-// Unit-size dims are ignored (their stride is immaterial). Once a dynamic extent is seen the
-// outer strides become unverifiable, so any further non-unit dim is rejected conservatively.
-static bool isContiguousZeroOffsetSlab(MemRefType t) {
+static Value adaptSubviewToProducerType(Value subview, MemRefType producerTy, Location loc,
+                                        ConversionPatternRewriter &rewriter) {
+  auto subviewTy = cast<MemRefType>(subview.getType());
+  if (subviewTy.getShape() == producerTy.getShape()) {
+    return subview;
+  }
+  return reshapeMemRefToType(subview, producerTy, loc, rewriter);
+}
+
+static bool isContiguousSlab(MemRefType t) {
   int64_t offset = 0;
   SmallVector<int64_t> strides;
-  if (failed(getStridesAndOffset(t, strides, offset)) || offset != 0) {
+  if (failed(getStridesAndOffset(t, strides, offset))) {
     return false;
   }
   ArrayRef<int64_t> shape = t.getShape();
@@ -3765,8 +4128,184 @@ static bool isContiguousZeroOffsetSlab(MemRefType t) {
   return true;
 }
 
-// Returns true if `dest` (or any of its view aliases) is written by an op other than
-// `anchor`. View-like ops are followed so writes through a subview/cast are detected.
+static Value buildForwardedSourceView(Value dataRoot, MemRefType destTy, Location loc,
+                                      ConversionPatternRewriter &rewriter) {
+  auto rootTy = cast<MemRefType>(dataRoot.getType());
+  if (rootTy == destTy) {
+    return dataRoot;
+  }
+  if (rootTy.getElementType() != destTy.getElementType() || !rootTy.hasStaticShape() || !destTy.hasStaticShape()) {
+    return {};
+  }
+  int64_t need = destTy.getNumElements();
+  int64_t have = rootTy.getNumElements();
+  if (have < need) {
+    return {};
+  }
+
+  Value src = dataRoot;
+  if (have > need) {
+    Value flat = src;
+    if (rootTy.getRank() != 1) {
+      ReassociationIndices group(static_cast<size_t>(rootTy.getRank()));
+      std::iota(group.begin(), group.end(), 0);
+      flat = rewriter.create<memref::CollapseShapeOp>(loc, src, ArrayRef<ReassociationIndices>{group});
+    }
+    auto prefixTy = MemRefType::get({need}, destTy.getElementType());
+    src = rewriter.create<memref::SubViewOp>(loc, prefixTy, flat, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(0)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(need)},
+                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+  }
+  return reshapeMemRefToType(src, destTy, loc, rewriter);
+}
+
+// Gate for the alloc-read -> alloc-write forwarding path: the written value must be a view
+// (subview) of an alloc distinct from the destination alloc, i.e. a store that the hardware
+// cannot express as a UB->UB copy and must be eliminated by forwarding.
+static bool isAllocReadIntoAllocWrite(Value dataToWrite, Value destRoot) {
+  if (!dataToWrite.getDefiningOp<memref::SubViewOp>()) {
+    return false;
+  }
+  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  return isRootFromAlloc(dataRoot) && dataRoot != destRoot;
+}
+
+constexpr int kIndexExprMaxDepth = 16;
+
+using AllocForwardSubstMap = llvm::DenseMap<Value, Value>;
+
+// Returns the scf.for whose induction variable is `v`, or null.
+static scf::ForOp getDefiningForOfInductionVar(Value v) {
+  auto barg = dyn_cast<BlockArgument>(v);
+  if (!barg) {
+    return nullptr;
+  }
+  auto forOp = dyn_cast_or_null<scf::ForOp>(barg.getOwner()->getParentOp());
+  if (forOp && barg == forOp.getInductionVar()) {
+    return forOp;
+  }
+  return nullptr;
+}
+
+static bool sameIndexOrEquivalentExpr(OpFoldResult a, OpFoldResult b, AllocForwardSubstMap &subst, int depth = 0);
+
+static bool tryMatchForInductionVars(Value av, Value bv, AllocForwardSubstMap &subst, int depth) {
+  scf::ForOp forA = getDefiningForOfInductionVar(av);
+  scf::ForOp forB = getDefiningForOfInductionVar(bv);
+  if (forA == nullptr || forB == nullptr) {
+    return false;
+  }
+  OpFoldResult lbA = getAsOpFoldResult(forA.getLowerBound());
+  OpFoldResult lbB = getAsOpFoldResult(forB.getLowerBound());
+  OpFoldResult ubA = getAsOpFoldResult(forA.getUpperBound());
+  OpFoldResult ubB = getAsOpFoldResult(forB.getUpperBound());
+  OpFoldResult stepA = getAsOpFoldResult(forA.getStep());
+  OpFoldResult stepB = getAsOpFoldResult(forB.getStep());
+  if (!sameIndexOrEquivalentExpr(lbA, lbB, subst, depth + 1) ||
+      !sameIndexOrEquivalentExpr(ubA, ubB, subst, depth + 1) ||
+      !sameIndexOrEquivalentExpr(stepA, stepB, subst, depth + 1)) {
+    return false;
+  }
+  subst[av] = bv;
+  return true;
+}
+
+static bool tryMatchPureIndexOps(Value av, Value bv, AllocForwardSubstMap &subst, int depth) {
+  Operation *defA = av.getDefiningOp();
+  Operation *defB = bv.getDefiningOp();
+  if (defA == nullptr || defB == nullptr || defA->getName() != defB->getName() || !isMemoryEffectFree(defA) ||
+      defA->getNumResults() != 1 || defA->getNumOperands() != defB->getNumOperands() ||
+      defA->getAttrDictionary() != defB->getAttrDictionary()) {
+    return false;
+  }
+  for (auto [operandA, operandB] : llvm::zip(defA->getOperands(), defB->getOperands())) {
+    if (!sameIndexOrEquivalentExpr(getAsOpFoldResult(operandA), getAsOpFoldResult(operandB), subst, depth + 1)) {
+      return false;
+    }
+  }
+  subst[av] = bv;
+  return true;
+}
+
+static bool sameIndexOrEquivalentExpr(OpFoldResult a, OpFoldResult b, AllocForwardSubstMap &subst, int depth) {
+  if (sameIndexFoldResult(a, b)) {
+    return true;
+  }
+  if (depth > kIndexExprMaxDepth) {
+    return false;
+  }
+  auto av = a.dyn_cast<Value>();
+  auto bv = b.dyn_cast<Value>();
+  if (!av || !bv) {
+    return false;
+  }
+  auto known = subst.find(av);
+  if (known != subst.end()) {
+    return known->second == bv;
+  }
+  if (tryMatchForInductionVars(av, bv, subst, depth)) {
+    return true;
+  }
+  return tryMatchPureIndexOps(av, bv, subst, depth);
+}
+
+// Rebuilds the write-side index `v` at `readSite` using `subst` (write->read). Mapped values
+// are substituted, values already dominating `readSite` are reused, and pure index ops are
+// cloned with rebuilt operands. Returns null when a leaf is neither mapped, visible, nor pure.
+struct MaterializeRemappedIndexParams {
+  Value v;
+  const AllocForwardSubstMap &subst;
+  const DominanceInfo &dom;
+  Operation *readSite;
+  ConversionPatternRewriter &rewriter;
+  int depth = 0;
+};
+
+static Value materializeRemappedIndex(const MaterializeRemappedIndexParams &params) {
+  auto mapped = params.subst.find(params.v);
+  if (mapped != params.subst.end()) {
+    return mapped->second;
+  }
+  if (params.dom.properlyDominates(params.v, params.readSite)) {
+    return params.v;
+  }
+  Operation *def = params.v.getDefiningOp();
+  if (params.depth > kIndexExprMaxDepth || def == nullptr || !isMemoryEffectFree(def) || def->getNumResults() != 1) {
+    return {};
+  }
+  SmallVector<Value> rebuilt;
+  rebuilt.reserve(def->getNumOperands());
+  for (Value operand : def->getOperands()) {
+    Value remapped =
+      materializeRemappedIndex({operand, params.subst, params.dom, params.readSite, params.rewriter, params.depth + 1});
+    if (!remapped) {
+      return {};
+    }
+    rebuilt.push_back(remapped);
+  }
+  params.rewriter.setInsertionPoint(params.readSite);
+  Operation *cloned = params.rewriter.clone(*def);
+  for (unsigned i = 0; i < rebuilt.size(); ++i) {
+    cloned->setOperand(i, rebuilt[i]);
+  }
+  return cloned->getResult(0);
+}
+
+static FailureOr<OpFoldResult> materializeRemappedFold(OpFoldResult ofr, const AllocForwardSubstMap &subst,
+                                                       const DominanceInfo &dom, Operation *readSite,
+                                                       // cppcheck-suppress constParameter
+                                                       ConversionPatternRewriter &rewriter) {
+  auto v = ofr.dyn_cast<Value>();
+  if (!v) {
+    return ofr;
+  }
+  Value remapped = materializeRemappedIndex({v, subst, dom, readSite, rewriter});
+  if (!remapped) {
+    return failure();
+  }
+  return OpFoldResult(remapped);
+}
+
 // DPS-init operands, sibling transfer_writes and memref.copy targets count as writers;
 // func.call and plain reads are treated as readers (matching the full-coverage path).
 static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
@@ -3807,98 +4346,367 @@ static bool allocDestHasForeignWriter(Value dest, Operation *anchor) {
   return false;
 }
 
-// Build a value of type `destTy` aliasing the leading getNumElements(destTy) elements of
-// `dataRoot` (an alloc). The source's first elements are exactly what the copy stored into
-// `dest`, so reads of `dest` observe identical data through this alias; trailing elements
-// (only present when the source is larger) map to dest positions the copy never defined, so
-// reading them was undefined either way. Returns null only when the source is too small to
-// cover `dest` (no contiguous alias possible) or shapes cannot be reconciled.
-static Value buildForwardedSourceView(Value dataRoot, MemRefType destTy, Location loc,
-                                      ConversionPatternRewriter &rewriter) {
-  auto rootTy = cast<MemRefType>(dataRoot.getType());
-  if (!rootTy.hasStaticShape() || !destTy.hasStaticShape() || rootTy.getElementType() != destTy.getElementType()) {
-    return {};
-  }
-  int64_t need = destTy.getNumElements();
-  int64_t have = rootTy.getNumElements();
-  if (have < need) {
-    return {};
-  }
-
-  Value src = dataRoot;
-  // Source larger than dest: collapse to 1D and slice the contiguous prefix of `need` elems.
-  // The explicit canonical (offset 0, unit stride) result type keeps a default-layout memref
-  // so the following reshape stays valid.
-  if (have > need) {
-    Value flat = src;
-    if (rootTy.getRank() != 1) {
-      ReassociationIndices group(static_cast<size_t>(rootTy.getRank()));
-      std::iota(group.begin(), group.end(), 0);
-      flat = rewriter.create<memref::CollapseShapeOp>(loc, src, ArrayRef<ReassociationIndices>{group});
+static FailureOr<SmallVector<npuvector::TransferReadOp>> collectDestTransferReads(Value dest, Operation *anchor,
+                                                                                  npuvector::TransferWriteOp op,
+                                                                                  ConversionPatternRewriter &rewriter) {
+  SmallVector<npuvector::TransferReadOp> reads;
+  for (OpOperand &use : dest.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == anchor || isa<annotation::MarkOp, memref::DeallocOp>(user)) {
+      continue;
     }
-    auto prefixTy = MemRefType::get({need}, destTy.getElementType());
-    src = rewriter.create<memref::SubViewOp>(loc, prefixTy, flat, ArrayRef<OpFoldResult>{rewriter.getIndexAttr(0)},
-                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(need)},
-                                             ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+    auto readOp = dyn_cast<npuvector::TransferReadOp>(user);
+    if (readOp == nullptr || use.get() != readOp.getSource()) {
+      return rewriter.notifyMatchFailure(op, "dest has a non transfer_read consumer");
+    }
+    reads.push_back(readOp);
   }
-
-  // src and dest now share element count; only shape/rank may differ -> reshape (linear order
-  // preserved). reshapeMemRefToType returns src unchanged when the types already match.
-  return reshapeMemRefToType(src, destTy, loc, rewriter);
+  if (reads.empty()) {
+    return rewriter.notifyMatchFailure(op, "no dest read to forward");
+  }
+  return reads;
 }
 
-// "Take the read value, drop the write": when a copy moves data between two allocs (which
-// would otherwise lower to an unsupported UB->UB store), redirect every later read of `dest`
-// to a dest-typed alias of the source alloc, then delete the copy and the now-dead dest.
-// This always handles the read-alloc -> write-alloc pattern; no full-coverage requirement.
-// The only guards are mechanical (both roots are allocs, base-aligned offsets, dest not read
-// before the write / not deallocated) plus a single-writer check: a `dest` assembled by
-// several writers cannot be aliased to one source, so that (genuinely unsupported) case is
-// left to the caller to diagnose rather than silently miscompiled.
-static LogicalResult forwardAllocViewCopyTransferWrite(npuvector::TransferWriteOp op, Location loc, Value dataToWrite,
-                                                       Value dest, ArrayRef<OpFoldResult> offsets,
-                                                       ConversionPatternRewriter &rewriter) {
-  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
-  if (!dataSubview) {
+// Exact match, or contiguous subregion (same stride; relOff = roff - woff). Dynamic containment
+// is not proved statically — tiling is assumed to keep the read inside the written slab.
+// On success, relOffs[d] is the read's offset within the write along dest dim d (0 if exact).
+/// Compute read offset relative to write offset along one dim (folded when possible).
+static OpFoldResult computeWriteReadRelativeOffset(OpFoldResult writeOff, OpFoldResult readOff, Location loc,
+                                                   ConversionPatternRewriter &rewriter) {
+  if (isConstantZero(writeOff)) {
+    return readOff;
+  }
+  if (sameIndexFoldResult(readOff, writeOff)) {
+    return rewriter.getIndexAttr(0);
+  }
+  auto constR = getConstantIntValue(readOff);
+  auto constW = getConstantIntValue(writeOff);
+  if (constR && constW) {
+    return rewriter.getIndexAttr(*constR - *constW);
+  }
+  Value vr = getValueOrCreateConstantIndexOp(rewriter, loc, readOff);
+  Value vw = getValueOrCreateConstantIndexOp(rewriter, loc, writeOff);
+  return rewriter.create<arith::SubIOp>(loc, vr, vw).getResult();
+}
+
+struct MatchWriteReadRegionsParams {
+  ArrayRef<OpFoldResult> woff;
+  ArrayRef<OpFoldResult> wsize;
+  ArrayRef<OpFoldResult> wstride;
+  ArrayRef<OpFoldResult> roff;
+  ArrayRef<OpFoldResult> rsize;
+  ArrayRef<OpFoldResult> rstride;
+  int64_t destRank;
+  AllocForwardSubstMap &subst;
+  SmallVectorImpl<OpFoldResult> &relOffs;
+  bool &isPartial;
+  Location loc;
+  ConversionPatternRewriter &rewriter;
+};
+
+static bool matchWriteReadRegions(const MatchWriteReadRegionsParams &params) {
+  params.relOffs.clear();
+  params.relOffs.reserve(static_cast<size_t>(params.destRank));
+  params.isPartial = false;
+  for (int64_t d = 0; d < params.destRank; ++d) {
+    auto idx = static_cast<size_t>(d);
+    if (!sameIndexOrEquivalentExpr(params.wstride[idx], params.rstride[idx], params.subst)) {
+      return false;
+    }
+    if (sameIndexOrEquivalentExpr(params.woff[idx], params.roff[idx], params.subst) &&
+        sameIndexOrEquivalentExpr(params.wsize[idx], params.rsize[idx], params.subst)) {
+      params.relOffs.push_back(params.rewriter.getIndexAttr(0));
+      continue;
+    }
+    params.relOffs.push_back(
+      computeWriteReadRelativeOffset(params.woff[idx], params.roff[idx], params.loc, params.rewriter));
+    params.isPartial = true;
+  }
+  return true;
+}
+
+struct RebuildSrcViewAtReadParams {
+  Location loc;
+  mutable memref::SubViewOp dataSubview;
+  Value source;
+  MemRefType sourceTy;
+  ArrayRef<int64_t> reducedShape;
+  AllocForwardSubstMap &subst;
+  DominanceInfo &dom;
+  mutable npuvector::TransferReadOp readOp;
+  ConversionPatternRewriter &rewriter;
+};
+
+static FailureOr<Value> rebuildSrcViewAtRead(const RebuildSrcViewAtReadParams &params) {
+  Location loc = params.loc;
+  memref::SubViewOp dataSubview = params.dataSubview;
+  Value source = params.source;
+  MemRefType sourceTy = params.sourceTy;
+  ArrayRef<int64_t> reducedShape = params.reducedShape;
+  AllocForwardSubstMap &subst = params.subst;
+  DominanceInfo &dom = params.dom;
+  npuvector::TransferReadOp readOp = params.readOp;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  SmallVector<OpFoldResult> srcOff = dataSubview.getMixedOffsets();
+  SmallVector<OpFoldResult> srcSize = dataSubview.getMixedSizes();
+  SmallVector<OpFoldResult> srcStride = dataSubview.getMixedStrides();
+  auto remapRange = [&subst, &dom, &readOp, &rewriter](SmallVectorImpl<OpFoldResult> &range) {
+    for (OpFoldResult &ofr : range) {
+      FailureOr<OpFoldResult> remapped = materializeRemappedFold(ofr, subst, dom, readOp, rewriter);
+      if (failed(remapped)) {
+        return false;
+      }
+      ofr = *remapped;
+    }
+    return true;
+  };
+  if (!remapRange(srcOff) || !remapRange(srcSize) || !remapRange(srcStride)) {
+    return failure();
+  }
+  rewriter.setInsertionPoint(readOp);
+  auto viewTy =
+    cast<MemRefType>(memref::SubViewOp::inferRankReducedResultType(reducedShape, sourceTy, srcOff, srcSize, srcStride));
+  return rewriter.create<memref::SubViewOp>(loc, viewTy, source, srcOff, srcSize, srcStride).getResult();
+}
+
+struct ForwardOneAllocReadParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dataToWrite;
+  mutable memref::SubViewOp dataSubview;
+  Value source;
+  MemRefType sourceTy;
+  MemRefType destTy;
+  ArrayRef<int64_t> reducedShape;
+  Operation *anchor;
+  ArrayRef<OpFoldResult> woff;
+  ArrayRef<OpFoldResult> wsize;
+  ArrayRef<OpFoldResult> wstride;
+  mutable npuvector::TransferReadOp readOp;
+  DominanceInfo &dom;
+  bool &reusedDataSubview;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult forwardOneAllocRead(const ForwardOneAllocReadParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dataToWrite = params.dataToWrite;
+  memref::SubViewOp dataSubview = params.dataSubview;
+  Value source = params.source;
+  MemRefType sourceTy = params.sourceTy;
+  MemRefType destTy = params.destTy;
+  ArrayRef<int64_t> reducedShape = params.reducedShape;
+  Operation *anchor = params.anchor;
+  ArrayRef<OpFoldResult> woff = params.woff;
+  ArrayRef<OpFoldResult> wsize = params.wsize;
+  ArrayRef<OpFoldResult> wstride = params.wstride;
+  npuvector::TransferReadOp readOp = params.readOp;
+  DominanceInfo &dom = params.dom;
+  bool &reusedDataSubview = params.reusedDataSubview;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  int64_t destRank = destTy.getRank();
+  auto readVecType = dyn_cast<npuvector::NPUVectorType>(readOp.getResult().getType());
+  if (readVecType == nullptr || readOp.getIndices().size() != static_cast<size_t>(destRank) ||
+      !isAfterInCommonBlock(anchor, readOp)) {
+    return rewriter.notifyMatchFailure(op, "read is not forwardable");
+  }
+  SmallVector<OpFoldResult> roff = getAsOpFoldResult(readOp.getIndices());
+  SmallVector<OpFoldResult> rsize;
+  SmallVector<OpFoldResult> rstride;
+  SmallVector<int64_t> mappedDims;
+  if (failed(buildTransferReadSizesAndStrides({readOp, destRank, readVecType.getRank(), readVecType,
+                                               readOp.getDynamicSizes(), rewriter, rsize, rstride, mappedDims}))) {
     return failure();
   }
 
-  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  AllocForwardSubstMap subst;
+  SmallVector<OpFoldResult> relOffs;
+  bool isPartial = false;
+  rewriter.setInsertionPoint(readOp);
+  if (!matchWriteReadRegions(
+        {woff, wsize, wstride, roff, rsize, rstride, destRank, subst, relOffs, isPartial, loc, rewriter})) {
+    return rewriter.notifyMatchFailure(op, "read region differs from the written region");
+  }
+
+  Value srcView = dataToWrite;
+  if (!dom.properlyDominates(dataToWrite, readOp)) {
+    FailureOr<Value> rebuilt =
+      rebuildSrcViewAtRead({loc, dataSubview, source, sourceTy, reducedShape, subst, dom, readOp, rewriter});
+    if (failed(rebuilt)) {
+      return rewriter.notifyMatchFailure(op, "source index not visible at read site");
+    }
+    srcView = *rebuilt;
+  }
+
+  Value forwarded = srcView;
+  if (isPartial) {
+    auto srcTy = dyn_cast<MemRefType>(srcView.getType());
+    ArrayRef<int64_t> readShape = readVecType.getShape();
+    if (srcTy == nullptr || mappedDims.size() != static_cast<size_t>(srcTy.getRank()) ||
+        readShape.size() != static_cast<size_t>(srcTy.getRank())) {
+      return rewriter.notifyMatchFailure(op, "cannot slice source view to read subregion");
+    }
+    SmallVector<OpFoldResult> tileOff;
+    SmallVector<OpFoldResult> tileSize;
+    SmallVector<OpFoldResult> tileStride;
+    for (size_t i = 0; i < mappedDims.size(); ++i) {
+      auto destDim = static_cast<size_t>(mappedDims[i]);
+      tileOff.push_back(relOffs[destDim]);
+      tileSize.push_back(rsize[destDim]);
+      tileStride.push_back(rstride[destDim]);
+    }
+    Type inferred = memref::SubViewOp::inferRankReducedResultType(readShape, srcTy, tileOff, tileSize, tileStride);
+    if (!inferred) {
+      return rewriter.notifyMatchFailure(op, "cannot slice source view to read subregion");
+    }
+    forwarded =
+      rewriter.create<memref::SubViewOp>(loc, cast<MemRefType>(inferred), srcView, tileOff, tileSize, tileStride);
+  } else if (reducedShape != readVecType.getShape()) {
+    forwarded =
+      reshapeMemRefToType(srcView, MemRefType::get(readVecType.getShape(), destTy.getElementType()), loc, rewriter);
+    if (!forwarded) {
+      return rewriter.notifyMatchFailure(op, "cannot reshape source view to read type");
+    }
+  }
+  reusedDataSubview |= (forwarded == dataToWrite);
+  rewriter.replaceOp(readOp, forwarded);
+  return success();
+}
+
+static void cleanupForwardedAllocWrite(npuvector::TransferWriteOp op, Value dest, memref::SubViewOp dataSubview,
+                                       bool reusedDataSubview, ConversionPatternRewriter &rewriter) {
+  eraseBufferMarks(dest, rewriter);
+  rewriter.eraseOp(op);
+  if (!reusedDataSubview && dataSubview->use_empty()) {
+    rewriter.eraseOp(dataSubview);
+  }
+  Operation *destDef = dest.getDefiningOp();
+  if (destDef != nullptr && isa<memref::AllocOp, memref::AllocaOp>(destDef)) {
+    for (Operation *user : llvm::make_early_inc_range(dest.getUsers())) {
+      if (isa<memref::DeallocOp>(user)) {
+        rewriter.eraseOp(user);
+      }
+    }
+    if (dest.use_empty()) {
+      rewriter.eraseOp(destDef);
+    }
+  }
+}
+
+// Store-to-load forwarding for an alloc-read -> alloc-write copy: each later read of `dest`
+// whose region equals or is a contiguous subregion of the written region is replaced by an
+// equivalent view of the source (sliced when the read is partial). `dataToWrite` is the
+// subview produced by lowering the source transfer_read; (woff, wsize, wstride) is the write
+// region in destination coordinates.
+// limit.
+struct ForwardAllocReadWriteByReadForwardingParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dataToWrite;
+  Value dest;
+  ArrayRef<OpFoldResult> woff;
+  ArrayRef<OpFoldResult> wsize;
+  ArrayRef<OpFoldResult> wstride;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult forwardAllocReadWriteByReadForwarding(const ForwardAllocReadWriteByReadForwardingParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dataToWrite = params.dataToWrite;
+  Value dest = params.dest;
+  ArrayRef<OpFoldResult> woff = params.woff;
+  ArrayRef<OpFoldResult> wsize = params.wsize;
+  ArrayRef<OpFoldResult> wstride = params.wstride;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
+  if (dataSubview == nullptr) {
+    return rewriter.notifyMatchFailure(op, "data-to-write is not a subview of alloc");
+  }
+  Value source = dataSubview.getSource();
+  auto sourceTy = dyn_cast<MemRefType>(source.getType());
   auto destTy = cast<MemRefType>(dest.getType());
   Operation *anchor = op.getOperation();
-  auto isZero = [](OpFoldResult ofr) { return isConstantIntValue(ofr, 0); };
-  // The forwarded alias maps dest[i] -> dataRoot[i] (linear). That is correct for reads of
-  // any extent/rank as long as the read is a contiguous prefix of the root (a zero-offset
-  // packed slab); a strided gather or offset read would alias the wrong elements. The write
-  // into dest is contiguous from base by construction (offsets 0, unit strides).
-  if (dataRoot == dest || !isRootFromAlloc(dataRoot) || !isRootFromAlloc(dest) || !llvm::all_of(offsets, isZero) ||
-      !isContiguousZeroOffsetSlab(cast<MemRefType>(dataToWrite.getType())) || allocDestHasForeignWriter(dest, anchor)) {
+  if (sourceTy == nullptr || sourceTy.getElementType() != destTy.getElementType()) {
+    return rewriter.notifyMatchFailure(op, "source/dest element type mismatch");
+  }
+
+  FailureOr<SmallVector<npuvector::TransferReadOp>> readsOr = collectDestTransferReads(dest, anchor, op, rewriter);
+  if (failed(readsOr)) {
     return failure();
   }
 
-  DominanceInfo domInfo;
-  if (llvm::any_of(dest.getUses(), [anchor, &domInfo](OpOperand &use) {
-        Operation *user = use.getOwner();
-        return user != anchor && !isa<annotation::MarkOp>(user) &&
-               (isa<memref::DeallocOp>(user) || !domInfo.properlyDominates(anchor, user));
-      })) {
+  ArrayRef<int64_t> reducedShape = cast<MemRefType>(dataSubview.getType()).getShape();
+  DominanceInfo dom;
+  // Set when a read is forwarded to `dataToWrite` itself: `dataSubview` is then still live and
+  // must not be erased below (its physical use appears only after the deferred replaceOp lands).
+  bool reusedDataSubview = false;
+  const bool forwardFailed = llvm::any_of(*readsOr, [&](npuvector::TransferReadOp readOp) {
+    return failed(forwardOneAllocRead({op, loc, dataToWrite, dataSubview, source, sourceTy, destTy, reducedShape,
+                                       anchor, woff, wsize, wstride, readOp, dom, reusedDataSubview, rewriter}));
+  });
+  if (forwardFailed) {
     return failure();
+  }
+
+  cleanupForwardedAllocWrite(op, dest, dataSubview, reusedDataSubview, rewriter);
+  return success();
+}
+
+static bool destUsesDominatedByWrite(Value dest, Operation *anchor, DominanceInfo &dom) {
+  for (OpOperand &use : dest.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == anchor || isa<annotation::MarkOp>(user)) {
+      continue;
+    }
+    if (isa<memref::DeallocOp>(user) || !dom.properlyDominates(anchor, user)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whole-buffer aliasing for a contiguous alloc-to-alloc copy: replace every non-write use of
+// `dest` with an equivalent view of the source. Used when `dest` has non transfer_read
+// consumers (e.g. func.call) or when the ranks differ but cover one contiguous slab.
+static LogicalResult narrowAliasForward(npuvector::TransferWriteOp op, Location loc, Value dataToWrite, Value dest,
+                                        ConversionPatternRewriter &rewriter) {
+  auto dataSubview = dataToWrite.getDefiningOp<memref::SubViewOp>();
+  if (dataSubview == nullptr || !isContiguousSlab(cast<MemRefType>(dataToWrite.getType()))) {
+    return rewriter.notifyMatchFailure(op, "data-to-write is not a contiguous alloc slab");
+  }
+  Value dataRoot = traceMemRefToRoot(dataToWrite);
+  auto destTy = cast<MemRefType>(dest.getType());
+  auto dataRootTy = cast<MemRefType>(dataRoot.getType());
+  if (dataRootTy.hasStaticShape() && destTy.hasStaticShape() && dataRootTy.getNumElements() > destTy.getNumElements() &&
+      !llvm::all_of(dataSubview.getMixedOffsets(), isConstantZero)) {
+    return rewriter.notifyMatchFailure(op, "cannot alias a non-prefix partial copy");
+  }
+
+  Operation *anchor = op.getOperation();
+  if (allocDestHasForeignWriter(dest, anchor)) {
+    return rewriter.notifyMatchFailure(op, "dest has a foreign writer");
+  }
+  DominanceInfo dom;
+  if (!destUsesDominatedByWrite(dest, anchor, dom)) {
+    return rewriter.notifyMatchFailure(op, "dest use is not dominated by the write");
   }
 
   rewriter.setInsertionPoint(anchor);
   Value forwarded = buildForwardedSourceView(dataRoot, destTy, loc, rewriter);
   if (!forwarded) {
-    return failure();
+    return rewriter.notifyMatchFailure(op, "cannot build forwarded source view");
   }
-
   eraseBufferMarks(dest, rewriter);
   dest.replaceUsesWithIf(forwarded, [anchor](OpOperand &use) { return use.getOwner() != anchor; });
   rewriter.eraseOp(op);
   if (dataSubview->use_empty()) {
     rewriter.eraseOp(dataSubview);
   }
-  if (dest.use_empty()) {
-    rewriter.eraseOp(dest.getDefiningOp());
+  Operation *destDef = dest.getDefiningOp();
+  if (destDef != nullptr && dest.use_empty()) {
+    rewriter.eraseOp(destDef);
   }
   return success();
 }
@@ -3921,11 +4729,37 @@ static Value resolveActualBuffer(Value dataToWrite) {
   return dataToWrite;
 }
 
-static LogicalResult fuseTransferWriteOnProducerSide(npuvector::TransferWriteOp op, Location loc, Value dest,
-                                                     Value actualBuf, Operation *allocDef, Operation *insertPt,
-                                                     MemRefType resultMemType, ArrayRef<OpFoldResult> offsets,
-                                                     ArrayRef<OpFoldResult> sizes, ArrayRef<OpFoldResult> strides,
-                                                     ConversionPatternRewriter &rewriter) {
+struct FuseTransferWriteOnProducerSideParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dest;
+  Value actualBuf;
+  Operation *allocDef;
+  Operation *insertPt;
+  MemRefType resultMemType;
+  ArrayRef<OpFoldResult> offsets;
+  ArrayRef<OpFoldResult> sizes;
+  ArrayRef<OpFoldResult> strides;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult fuseTransferWriteOnProducerSide(const FuseTransferWriteOnProducerSideParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dest = params.dest;
+  Value actualBuf = params.actualBuf;
+  Operation *allocDef = params.allocDef;
+  Operation *insertPt = params.insertPt;
+  MemRefType resultMemType = params.resultMemType;
+  ArrayRef<OpFoldResult> offsets = params.offsets;
+  ArrayRef<OpFoldResult> sizes = params.sizes;
+  ArrayRef<OpFoldResult> strides = params.strides;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  auto actualBufType = cast<MemRefType>(actualBuf.getType());
+  if (!canReshapeMemRefToType(resultMemType, actualBufType)) {
+    return failure();
+  }
+
   eraseBufferMarks(actualBuf, rewriter);
 
   SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
@@ -3938,19 +4772,49 @@ static LogicalResult fuseTransferWriteOnProducerSide(npuvector::TransferWriteOp 
   rewriter.setInsertionPoint(insertPt);
   Value slicedDest =
     rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, subviewOffsets, subviewSizes, subviewStrides);
+  Value producerDest = adaptSubviewToProducerType(slicedDest, actualBufType, loc, rewriter);
+  if (!producerDest) {
+    return failure();
+  }
 
-  rewriter.replaceAllUsesWith(actualBuf, slicedDest);
-  rewriter.replaceOp(allocDef, slicedDest);
+  rewriter.replaceAllUsesWith(actualBuf, producerDest);
+  rewriter.replaceOp(allocDef, producerDest);
   rewriter.eraseOp(op);
   return success();
 }
 
 // Sink producer to transfer_write when dest does not dominate the producer side.
-static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWriteOp op, Location loc, Value dest,
-                                                        Value actualBuf, Operation *allocDef, MemRefType resultMemType,
-                                                        ArrayRef<OpFoldResult> offsets, ArrayRef<OpFoldResult> sizes,
-                                                        ArrayRef<OpFoldResult> strides, DominanceInfo &domInfo,
-                                                        ConversionPatternRewriter &rewriter) {
+struct FuseTransferWriteBySinkingProducerParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dest;
+  Value actualBuf;
+  Operation *allocDef;
+  MemRefType resultMemType;
+  ArrayRef<OpFoldResult> offsets;
+  ArrayRef<OpFoldResult> sizes;
+  ArrayRef<OpFoldResult> strides;
+  DominanceInfo &domInfo;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult fuseTransferWriteBySinkingProducer(const FuseTransferWriteBySinkingProducerParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dest = params.dest;
+  Value actualBuf = params.actualBuf;
+  Operation *allocDef = params.allocDef;
+  MemRefType resultMemType = params.resultMemType;
+  ArrayRef<OpFoldResult> offsets = params.offsets;
+  ArrayRef<OpFoldResult> sizes = params.sizes;
+  ArrayRef<OpFoldResult> strides = params.strides;
+  DominanceInfo &domInfo = params.domInfo;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  auto actualBufType = cast<MemRefType>(actualBuf.getType());
+  if (!canReshapeMemRefToType(resultMemType, actualBufType)) {
+    return failure();
+  }
+
   Operation *anchor = op.getOperation();
   Block *allocBlock = allocDef->getBlock();
 
@@ -3991,9 +4855,13 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
 
   rewriter.setInsertionPoint(anchor);
   Value slicedDest = rewriter.create<memref::SubViewOp>(loc, resultMemType, dest, offsets, sizes, strides);
+  Value producerDest = adaptSubviewToProducerType(slicedDest, actualBufType, loc, rewriter);
+  if (!producerDest) {
+    return failure();
+  }
 
   IRMapping mapping;
-  mapping.map(actualBuf, slicedDest);
+  mapping.map(actualBuf, producerDest);
   for (Operation *writer : writers) {
     rewriter.clone(*writer, mapping);
   }
@@ -4006,12 +4874,141 @@ static LogicalResult fuseTransferWriteBySinkingProducer(npuvector::TransferWrite
   return success();
 }
 
-static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::TransferWriteOp op, Location loc,
-                                                                   Value dest, Value dataToWrite, Type resultType,
-                                                                   ArrayRef<OpFoldResult> offsets,
-                                                                   ArrayRef<OpFoldResult> sizes,
-                                                                   ArrayRef<OpFoldResult> strides,
-                                                                   ConversionPatternRewriter &rewriter) {
+static Operation *getSingleReductionWriter(Value buffer, Operation *collapseOp) {
+  Operation *writer = nullptr;
+  for (Operation *user : buffer.getUsers()) {
+    if (user == collapseOp || isa<annotation::MarkOp>(user)) {
+      continue;
+    }
+
+    bool writesBuffer = false;
+    auto dpsUser = dyn_cast<DestinationStyleOpInterface>(user);
+    for (OpOperand &use : user->getOpOperands()) {
+      if (use.get() != buffer) {
+        continue;
+      }
+      if (dpsUser && dpsUser.isDpsInit(&use)) {
+        writesBuffer = true;
+        continue;
+      }
+      return nullptr;
+    }
+    if (!writesBuffer || !isa<hivm::VReduceOp>(user)) {
+      return nullptr;
+    }
+    if (writer != nullptr && writer != user) {
+      return nullptr;
+    }
+    writer = user;
+  }
+  return writer;
+}
+
+// limit.
+struct LowerCollapsedReductionWriteToAllocRootParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dest;
+  Value dataToWrite;
+  MemRefType destMemRefType;
+  ArrayRef<OpFoldResult> offsets;
+  ArrayRef<OpFoldResult> sizes;
+  ArrayRef<OpFoldResult> strides;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult lowerCollapsedReductionWriteToAllocRoot(
+  const LowerCollapsedReductionWriteToAllocRootParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dest = params.dest;
+  Value dataToWrite = params.dataToWrite;
+  MemRefType destMemRefType = params.destMemRefType;
+  ArrayRef<OpFoldResult> offsets = params.offsets;
+  ArrayRef<OpFoldResult> sizes = params.sizes;
+  ArrayRef<OpFoldResult> strides = params.strides;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  auto collapseOp = dataToWrite.getDefiningOp<memref::CollapseShapeOp>();
+  if (!collapseOp) {
+    return failure();
+  }
+
+  auto writeValueType = dyn_cast<MemRefType>(dataToWrite.getType());
+  Value reductionBuf = collapseOp.getSrc();
+  auto reductionBufType = dyn_cast<MemRefType>(reductionBuf.getType());
+  Operation *writer = getSingleReductionWriter(reductionBuf, collapseOp.getOperation());
+  if (!writeValueType || !reductionBufType || !isRootFromAlloc(reductionBuf) || writer == nullptr) {
+    return failure();
+  }
+  if (writeValueType.getRank() > destMemRefType.getRank()) {
+    return failure();
+  }
+
+  DominanceInfo domInfo;
+  if (!dominatesInsertPoint(domInfo, dest, writer)) {
+    return failure();
+  }
+
+  SmallVector<OpFoldResult> subviewOffsets(offsets.begin(), offsets.end());
+  SmallVector<OpFoldResult> subviewSizes(sizes.begin(), sizes.end());
+  SmallVector<OpFoldResult> subviewStrides(strides.begin(), strides.end());
+  if (failed(materializeSubviewIndicesBefore(subviewOffsets, subviewSizes, subviewStrides, writer, rewriter))) {
+    return rewriter.notifyMatchFailure(op, "failed to materialize subview indices before reduction");
+  }
+
+  auto subviewType = cast<MemRefType>(memref::SubViewOp::inferRankReducedResultType(
+    writeValueType.getShape(), destMemRefType, subviewOffsets, subviewSizes, subviewStrides));
+  if (!canReshapeMemRefToType(subviewType, reductionBufType)) {
+    return failure();
+  }
+
+  rewriter.setInsertionPoint(writer);
+  Value writeDest =
+    rewriter.create<memref::SubViewOp>(loc, subviewType, dest, subviewOffsets, subviewSizes, subviewStrides);
+  Value reductionDest = adaptSubviewToProducerType(writeDest, reductionBufType, loc, rewriter);
+  if (!reductionDest) {
+    return failure();
+  }
+
+  auto dpsWriter = cast<DestinationStyleOpInterface>(writer);
+  for (OpOperand &use : writer->getOpOperands()) {
+    if (use.get() == reductionBuf && dpsWriter.isDpsInit(&use)) {
+      use.set(reductionDest);
+    }
+  }
+  collapseOp->setOperand(0, reductionDest);
+
+  rewriter.eraseOp(op);
+  eraseBufferMarks(reductionBuf, rewriter);
+  if (reductionBuf.use_empty()) {
+    rewriter.eraseOp(reductionBuf.getDefiningOp());
+  }
+  return success();
+}
+
+struct LowerNPUVectorTransferWriteAllocRootOptimizedParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dest;
+  Value dataToWrite;
+  Type resultType;
+  ArrayRef<OpFoldResult> offsets;
+  ArrayRef<OpFoldResult> sizes;
+  ArrayRef<OpFoldResult> strides;
+  ConversionPatternRewriter &rewriter;
+};
+
+static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(
+  const LowerNPUVectorTransferWriteAllocRootOptimizedParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dest = params.dest;
+  Value dataToWrite = params.dataToWrite;
+  Type resultType = params.resultType;
+  ArrayRef<OpFoldResult> offsets = params.offsets;
+  ArrayRef<OpFoldResult> sizes = params.sizes;
+  ArrayRef<OpFoldResult> strides = params.strides;
+  ConversionPatternRewriter &rewriter = params.rewriter;
   auto resultMemType = cast<MemRefType>(resultType);
 
   Value actualBuf = resolveActualBuffer(dataToWrite);
@@ -4064,12 +5061,12 @@ static LogicalResult lowerNPUVectorTransferWriteAllocRootOptimized(npuvector::Tr
   const bool destDominates = dominatesInsertPoint(domInfo, dest, insertPt);
   const bool indicesAvailable = indexAvailable(offsets) && indexAvailable(sizes) && indexAvailable(strides);
   if (destDominates && indicesAvailable) {
-    return fuseTransferWriteOnProducerSide(op, loc, dest, actualBuf, allocDef, insertPt, resultMemType, offsets, sizes,
-                                           strides, rewriter);
+    return fuseTransferWriteOnProducerSide(
+      {op, loc, dest, actualBuf, allocDef, insertPt, resultMemType, offsets, sizes, strides, rewriter});
   }
 
-  return fuseTransferWriteBySinkingProducer(op, loc, dest, actualBuf, allocDef, resultMemType, offsets, sizes, strides,
-                                            domInfo, rewriter);
+  return fuseTransferWriteBySinkingProducer(
+    {op, loc, dest, actualBuf, allocDef, resultMemType, offsets, sizes, strides, domInfo, rewriter});
 }
 
 // Attach a conservative default buffer-size mark to a fully-dynamic alloc/allocation root
@@ -4088,14 +5085,106 @@ static void markFullyDynamicAllocRootDefaultSize(PatternRewriter &rewriter, Loca
   setBufferSizeMarkAtLeast(rewriter, loc, destRoot, kDefaultDynamicAllocSize);
 }
 
+static Value resolveTransferWriteDataMemRef(npuvector::TransferWriteOp op, Value dataToWrite,
+                                            ConversionPatternRewriter &rewriter) {
+  if (isa<MemRefType>(dataToWrite.getType())) {
+    return dataToWrite;
+  }
+  if (Value remapped = rewriter.getRemappedValue(op.getVector())) {
+    if (isa<MemRefType>(remapped.getType())) {
+      return remapped;
+    }
+  }
+  return dataToWrite;
+}
+
+struct TryEraseSameAllocRootWriteParams {
+  mutable npuvector::TransferWriteOp op;
+  Value dataToWrite;
+  Value dest;
+  Value destRoot;
+  bool destIsAllocRoot;
+  ConversionPatternRewriter &rewriter;
+};
+
+static bool tryEraseSameAllocRootWrite(const TryEraseSameAllocRootWriteParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Value dataToWrite = params.dataToWrite;
+  Value dest = params.dest;
+  Value destRoot = params.destRoot;
+  bool destIsAllocRoot = params.destIsAllocRoot;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  // No-op when data and dest share the same alloc root (for results: map through init args).
+  // destRoot/destIsAllocRoot remain valid: default-size marking only inserts/adjusts an
+  // annotation.mark on the root and never replaces or erases dest's defining op.
+  if (!isa<MemRefType>(dataToWrite.getType()) || !isa<MemRefType>(dest.getType())) {
+    return false;
+  }
+  Value dataRoot = traceDataToWriteRoot(dataToWrite);
+  if (dataRoot != destRoot || !destIsAllocRoot) {
+    return false;
+  }
+  rewriter.eraseOp(op);
+  return true;
+}
+
+enum class AllocReadWriteForwardOutcome { NotApplicable, Applied, Failed };
+
+struct TryForwardOrAliasAllocReadWriteParams {
+  mutable npuvector::TransferWriteOp op;
+  Location loc;
+  Value dataToWrite;
+  Value dest;
+  Value destRoot;
+  bool destIsAllocRoot;
+  int64_t memRefRank;
+  int64_t dataRank;
+  ArrayRef<OpFoldResult> offsets;
+  ArrayRef<OpFoldResult> sizes;
+  ArrayRef<OpFoldResult> strides;
+  ConversionPatternRewriter &rewriter;
+};
+
+static AllocReadWriteForwardOutcome tryForwardOrAliasAllocReadWrite(
+  const TryForwardOrAliasAllocReadWriteParams &params) {
+  npuvector::TransferWriteOp op = params.op;
+  Location loc = params.loc;
+  Value dataToWrite = params.dataToWrite;
+  Value dest = params.dest;
+  Value destRoot = params.destRoot;
+  bool destIsAllocRoot = params.destIsAllocRoot;
+  int64_t memRefRank = params.memRefRank;
+  int64_t dataRank = params.dataRank;
+  ArrayRef<OpFoldResult> offsets = params.offsets;
+  ArrayRef<OpFoldResult> sizes = params.sizes;
+  ArrayRef<OpFoldResult> strides = params.strides;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  // alloc-read -> alloc-write: the written value is a view of another alloc, so lowering to a
+  // store would be an illegal UB->UB copy. Eliminate it by store-to-load forwarding, or by
+  // whole-buffer aliasing for non transfer_read consumers. This class is handled exclusively
+  // here; if neither applies we report an error instead of emitting a store.
+  if (!destIsAllocRoot || hasNonSuffixTransferWritePermutationMap(op, memRefRank, dataRank) ||
+      !isAllocReadIntoAllocWrite(dataToWrite, destRoot)) {
+    return AllocReadWriteForwardOutcome::NotApplicable;
+  }
+  if (succeeded(
+        forwardAllocReadWriteByReadForwarding({op, loc, dataToWrite, dest, offsets, sizes, strides, rewriter}))) {
+    return AllocReadWriteForwardOutcome::Applied;
+  }
+  if (succeeded(narrowAliasForward(op, loc, dataToWrite, dest, rewriter))) {
+    return AllocReadWriteForwardOutcome::Applied;
+  }
+  (void)op.emitError("unsupported alloc-read to alloc-write copy: cannot forward or alias");
+  return AllocReadWriteForwardOutcome::Failed;
+}
+
 struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
   using OpConversionPattern<npuvector::TransferWriteOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(npuvector::TransferWriteOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-
-    Value dataToWrite = adaptor.getVector();
+    Value dataToWrite = resolveTransferWriteDataMemRef(op, adaptor.getVector(), rewriter);
     Value dest = adaptor.getSource();
     Value destRoot = traceMemRefToRoot(dest);
     const bool destIsAllocRoot = isRootFromAlloc(destRoot);
@@ -4106,62 +5195,62 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     if (succeeded(tryLowerBroadcastNPUVectorTransferWrite(op, dest, rewriter))) {
       return success();
     }
-
-    // No-op when data and dest share the same alloc root (for results: map through init args).
-    // destRoot/destIsAllocRoot are computed once above and remain valid here: the default-size
-    // marking above only inserts/adjusts an annotation.mark on the root and never replaces or
-    // erases dest's defining op, so SSA identity and op type are unchanged.
-    if (isa<MemRefType>(dataToWrite.getType()) && isa<MemRefType>(dest.getType())) {
-      Value dataRoot = traceDataToWriteRoot(dataToWrite);
-      if (dataRoot == destRoot && destIsAllocRoot) {
-        rewriter.eraseOp(op);
-        return success();
-      }
+    if (tryEraseSameAllocRootWrite({op, dataToWrite, dest, destRoot, destIsAllocRoot, rewriter})) {
+      return success();
     }
 
     if (!isa<MemRefType>(dest.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref destination");
     }
+    auto destMemRefType = cast<MemRefType>(dest.getType());
+    auto npuVecType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
     if (!isa<MemRefType>(dataToWrite.getType())) {
       return rewriter.notifyMatchFailure(op, "expected memref data source");
     }
 
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
-    auto destMemRefType = cast<MemRefType>(dest.getType());
-
     int64_t memRefRank = destMemRefType.getRank();
-    int64_t dataRank = dataMemRefType.getRank();
+    int64_t dataRank = npuVecType != nullptr ? npuVecType.getRank() : dataMemRefType.getRank();
+    ArrayRef<int64_t> dataShape = npuVecType != nullptr ? npuVecType.getShape() : dataMemRefType.getShape();
 
     // Preserve the historical rank-1 vector-to-scalar write. Equal-rank
     // transfers, including rank-0, use the common subview/fusion path below.
     if (dataRank > memRefRank) {
-      return rewriteNPUVectorTransferWriteRankMismatch(op, loc, dataToWrite, dest, dataMemRefType, destMemRefType,
-                                                       rewriter);
+      return rewriteNPUVectorTransferWriteRankMismatch(
+        {op, loc, dataToWrite, dest, dataMemRefType, destMemRefType, rewriter});
     }
 
     // Rank-0 accesses have no memref coordinates. Ignore any tile/VF metadata
     // carried in indices and let the common path operate on empty ranges.
     SmallVector<OpFoldResult> offsets;
-    if (memRefRank != 0) offsets = getAsOpFoldResult(adaptor.getIndices());
+    if (memRefRank != 0) {
+      offsets = getAsOpFoldResult(adaptor.getIndices());
+    }
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
-
-    if (failed(buildNPUVectorTransferWriteSizesStrides(op, dataToWrite, dataMemRefType, memRefRank, dataRank, rewriter,
-                                                       sizes, strides))) {
+    if (failed(buildNPUVectorTransferWriteLogicalSizesStrides(
+          {op, dataToWrite, dataMemRefType, npuVecType, memRefRank, dataRank, rewriter, sizes, strides}))) {
       return failure();
     }
 
-    auto resultType =
-      memref::SubViewOp::inferRankReducedResultType(dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
-
-    if (destIsAllocRoot && !hasNonSuffixTransferWritePermutationMap(op, memRefRank, dataRank) &&
-        succeeded(forwardAllocViewCopyTransferWrite(op, loc, dataToWrite, dest, offsets, rewriter))) {
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(dataShape, destMemRefType, offsets, sizes, strides);
+    if (destIsAllocRoot && succeeded(lowerCollapsedReductionWriteToAllocRoot(
+                             {op, loc, dest, dataToWrite, destMemRefType, offsets, sizes, strides, rewriter}))) {
       return success();
     }
 
+    AllocReadWriteForwardOutcome forwardOutcome = tryForwardOrAliasAllocReadWrite(
+      {op, loc, dataToWrite, dest, destRoot, destIsAllocRoot, memRefRank, dataRank, offsets, sizes, strides, rewriter});
+    if (forwardOutcome == AllocReadWriteForwardOutcome::Applied) {
+      return success();
+    }
+    if (forwardOutcome == AllocReadWriteForwardOutcome::Failed) {
+      return failure();
+    }
+
     if (destIsAllocRoot) {
-      return lowerNPUVectorTransferWriteAllocRootOptimized(op, loc, dest, dataToWrite, resultType, offsets, sizes,
-                                                           strides, rewriter);
+      return lowerNPUVectorTransferWriteAllocRootOptimized(
+        {op, loc, dest, dataToWrite, resultType, offsets, sizes, strides, rewriter});
     }
 
     rewriter.setInsertionPoint(op);
@@ -4227,7 +5316,11 @@ static FailureOr<Value> insertSingletonAtPosition(PatternRewriter &rewriter, Loc
   assert(insertSingletonDimIndex >= 0 && insertSingletonDimIndex <= srcRank);
 
   auto staticDimOrDynamic = [srcTy](int64_t dimIdx) -> int64_t {
-    return srcTy.isDynamicDim(dimIdx) ? ShapedType::kDynamic : srcTy.getDimSize(dimIdx);
+    if (dimIdx < 0) {
+      llvm_unreachable("staticDimOrDynamic: dimIdx must be non-negative");
+    }
+    const unsigned unsignedDimIdx = static_cast<unsigned>(dimIdx);
+    return srcTy.isDynamicDim(unsignedDimIdx) ? ShapedType::kDynamic : srcTy.getDimSize(unsignedDimIdx);
   };
 
   if (insertSingletonDimIndex < srcRank) {
@@ -4281,8 +5374,22 @@ static FailureOr<Value> expandZeroRankMemRefToOnes(PatternRewriter &rewriter, Lo
 
 /// `m[i]` maps source dim i to destination axis; |m| == srcRank, entries unique in [0, dstRank).
 /// Inserts missing destination axes as static 1 (no transpose; vectorization orders m ascending).
-static FailureOr<Value> expandMemRefRankWithBroadcastMapping(PatternRewriter &rewriter, Location loc, Value src,
-                                                             MemRefType srcTy, ArrayRef<int64_t> m, int64_t dstRank) {
+struct ExpandMemRefRankWithBroadcastMappingParams {
+  PatternRewriter &rewriter;
+  Location loc;
+  Value src;
+  MemRefType srcTy;
+  ArrayRef<int64_t> m;
+  int64_t dstRank;
+};
+
+static FailureOr<Value> expandMemRefRankWithBroadcastMapping(const ExpandMemRefRankWithBroadcastMappingParams &params) {
+  PatternRewriter &rewriter = params.rewriter;
+  Location loc = params.loc;
+  Value src = params.src;
+  MemRefType srcTy = params.srcTy;
+  ArrayRef<int64_t> m = params.m;
+  int64_t dstRank = params.dstRank;
   const int64_t srcRank = srcTy.getRank();
   if (static_cast<int64_t>(m.size()) != srcRank) {
     return failure();
@@ -4382,19 +5489,29 @@ static bool tryFoldScalarBroadcast(npuvector::BroadcastOp op, Value source, Conv
   return true;
 }
 
-static LogicalResult allocBroadcastBuffer(npuvector::BroadcastOp op, Location loc, MemRefType memRefType,
-                                          npuvector::NPUVectorType npuVecType, Type elemType, ValueRange dynSizes,
-                                          ConversionPatternRewriter &rewriter, Value &outBuf) {
+struct AllocBroadcastBufferParams {
+  mutable npuvector::BroadcastOp op;
+  Location loc;
+  MemRefType memRefType;
+  npuvector::NPUVectorType npuVecType;
+  Type elemType;
+  ValueRange dynSizes;
+  ConversionPatternRewriter &rewriter;
+  Value &outBuf;
+};
+
+static LogicalResult allocBroadcastBuffer(const AllocBroadcastBufferParams &params) {
+  npuvector::BroadcastOp op = params.op;
+  Location loc = params.loc;
+  MemRefType memRefType = params.memRefType;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  Type elemType = params.elemType;
+  ValueRange dynSizes = params.dynSizes;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  Value &outBuf = params.outBuf;
   SmallVector<Value> allocOperands;
-  if (memRefType.getNumDynamicDims() > 0 && !dynSizes.empty()) {
-    if (static_cast<int64_t>(dynSizes.size()) == npuVecType.getRank()) {
-      for (int64_t i = 0; i < npuVecType.getRank(); ++i) {
-        if (!memRefType.isDynamicDim(i)) continue;
-        allocOperands.push_back(dynSizes[static_cast<unsigned>(i)]);
-      }
-    } else {
-      allocOperands.assign(dynSizes.begin(), dynSizes.end());
-    }
+  if (!dynSizes.empty()) {
+    collectDynamicAllocOperandsFromSizes(memRefType, npuVecType, dynSizes, allocOperands);
   }
   outBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
   if (npuVecType.hasDynamicShape()) {
@@ -4402,7 +5519,7 @@ static LogicalResult allocBroadcastBuffer(npuvector::BroadcastOp op, Location lo
     if (failed(folded)) {
       return rewriter.notifyMatchFailure(op, "maxSizes for npuvector mark must be one constant index per result rank");
     }
-    setNPUVectorBufferSizeMark(rewriter, loc, npuVecType, elemType, *folded, outBuf);
+    setNPUVectorBufferSizeMark({rewriter, loc, npuVecType, elemType, *folded, outBuf});
   }
   return success();
 }
@@ -4432,11 +5549,30 @@ static int64_t computeRankExtendedVbrcSourceBytes(npuvector::BroadcastOp op, npu
   return computeBishengStrideAlignedStorageBytes(expandedMaxShape, expandedTy.getShape(), elemType);
 }
 
-static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, MemRefType dstMemTy,
-                                       npuvector::NPUVectorType npuVecType, Type elemType, Location loc,
-                                       ConversionPatternRewriter &rewriter, Value &outVbrcSrc,
-                                       DenseI64ArrayAttr &outBroadcastDims,
-                                       int64_t *outRankExtendedSourceBytes = nullptr) {
+struct PrepareMemrefVbrcParams {
+  mutable npuvector::BroadcastOp op;
+  Value source;
+  MemRefType dstMemTy;
+  npuvector::NPUVectorType npuVecType;
+  Type elemType;
+  Location loc;
+  ConversionPatternRewriter &rewriter;
+  Value &outVbrcSrc;
+  DenseI64ArrayAttr &outBroadcastDims;
+  int64_t *outRankExtendedSourceBytes = nullptr;
+};
+
+static LogicalResult prepareMemrefVbrc(const PrepareMemrefVbrcParams &params) {
+  npuvector::BroadcastOp op = params.op;
+  Value source = params.source;
+  MemRefType dstMemTy = params.dstMemTy;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  Type elemType = params.elemType;
+  Location loc = params.loc;
+  ConversionPatternRewriter &rewriter = params.rewriter;
+  Value &outVbrcSrc = params.outVbrcSrc;
+  DenseI64ArrayAttr &outBroadcastDims = params.outBroadcastDims;
+  int64_t *outRankExtendedSourceBytes = params.outRankExtendedSourceBytes;
   if (outRankExtendedSourceBytes != nullptr) {
     *outRankExtendedSourceBytes = 0;
   }
@@ -4470,7 +5606,7 @@ static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, 
     }
 
     FailureOr<Value> expanded =
-      expandMemRefRankWithBroadcastMapping(rewriter, loc, outVbrcSrc, srcMemTy, mVec, dstRank);
+      expandMemRefRankWithBroadcastMapping({rewriter, loc, outVbrcSrc, srcMemTy, mVec, dstRank});
     if (failed(expanded)) {
       return rewriter.notifyMatchFailure(op,
                                          "npuvector.broadcast: rank extension (expand_shape) failed, "
@@ -4506,9 +5642,24 @@ static LogicalResult prepareMemrefVbrc(npuvector::BroadcastOp op, Value source, 
   return success();
 }
 
-static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemRefType dstMemTy,
-                                   npuvector::NPUVectorType npuVecType, Type elemType, Location loc,
-                                   ConversionPatternRewriter &rewriter) {
+struct TryFoldVectorBroadcastParams {
+  mutable npuvector::BroadcastOp op;
+  Value source;
+  MemRefType dstMemTy;
+  npuvector::NPUVectorType npuVecType;
+  Type elemType;
+  Location loc;
+  ConversionPatternRewriter &rewriter;
+};
+
+static bool tryFoldVectorBroadcast(const TryFoldVectorBroadcastParams &params) {
+  npuvector::BroadcastOp op = params.op;
+  Value source = params.source;
+  MemRefType dstMemTy = params.dstMemTy;
+  npuvector::NPUVectorType npuVecType = params.npuVecType;
+  Type elemType = params.elemType;
+  Location loc = params.loc;
+  ConversionPatternRewriter &rewriter = params.rewriter;
   if (!isa<MemRefType>(source.getType())) {
     return false;
   }
@@ -4527,7 +5678,7 @@ static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemR
         continue;
       }
       Value other = user->getOperand(0) == broadcastVal ? user->getOperand(1) : user->getOperand(0);
-      if (isScalarType(other.getType()) || isScalarBroadcast(other)) {
+      if (isScalarType(other.getType()) || isScalarBroadcast(other) || isDynamicVectorBroadcast(other)) {
         return false;
       }
     }
@@ -4536,7 +5687,7 @@ static bool tryFoldVectorBroadcast(npuvector::BroadcastOp op, Value source, MemR
   Value vbrcSrc;
   DenseI64ArrayAttr broadcastDimsAttr;
   if (failed(
-        prepareMemrefVbrc(op, source, dstMemTy, npuVecType, elemType, loc, rewriter, vbrcSrc, broadcastDimsAttr))) {
+        prepareMemrefVbrc({op, source, dstMemTy, npuVecType, elemType, loc, rewriter, vbrcSrc, broadcastDimsAttr}))) {
     return false;
   }
   if (broadcastDimsAttr.empty()) {
@@ -4598,27 +5749,27 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
       if (tryFoldScalarBroadcast(op, source, rewriter)) {
         return success();
       }
-      if (tryFoldVectorBroadcast(op, source, memRefType, npuVecType, elemType, loc, rewriter)) {
+      if (tryFoldVectorBroadcast({op, source, memRefType, npuVecType, elemType, loc, rewriter})) {
         return success();
       }
     }
 
     Value resultBuf;
-    if (failed(allocBroadcastBuffer(op, loc, memRefType, npuVecType, elemType, adaptor.getDynamicSizes(), rewriter,
-                                    resultBuf))) {
+    if (failed(allocBroadcastBuffer(
+          {op, loc, memRefType, npuVecType, elemType, adaptor.getDynamicSizes(), rewriter, resultBuf}))) {
       return failure();
     }
     Value vbrcResultBuf = resultBuf;
-    if (isI1Broadcast && failed(allocBroadcastBuffer(op, loc, vbrcMemRefType, npuVecType, vbrcElemType,
-                                                     adaptor.getDynamicSizes(), rewriter, vbrcResultBuf))) {
+    if (isI1Broadcast && failed(allocBroadcastBuffer({op, loc, vbrcMemRefType, npuVecType, vbrcElemType,
+                                                      adaptor.getDynamicSizes(), rewriter, vbrcResultBuf}))) {
       return failure();
     }
 
     DenseI64ArrayAttr broadcastDimsAttr;
     Value vbrcSrc;
     int64_t rankExtendedSourceBytes = 0;
-    if (failed(prepareMemrefVbrc(op, source, vbrcMemRefType, npuVecType, vbrcElemType, loc, rewriter, vbrcSrc,
-                                 broadcastDimsAttr, &rankExtendedSourceBytes))) {
+    if (failed(prepareMemrefVbrc({op, source, vbrcMemRefType, npuVecType, vbrcElemType, loc, rewriter, vbrcSrc,
+                                  broadcastDimsAttr, &rankExtendedSourceBytes}))) {
       return failure();
     }
 
@@ -4775,9 +5926,26 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
     setBufferSizeMarkAtLeast(rewriter, loc, src, bytes);
   }
 
-  static FailureOr<Value> lowerTranspose2Axis(ConversionPatternRewriter &rewriter, Location loc, Value src,
-                                              MemRefType srcType, ArrayRef<int64_t> perm, Type elemType,
-                                              ArrayRef<int64_t> sourceMaxShape, ArrayRef<int64_t> resultMaxShape) {
+  struct LowerTranspose2AxisParams {
+    ConversionPatternRewriter &rewriter;
+    Location loc;
+    Value src;
+    MemRefType srcType;
+    ArrayRef<int64_t> perm;
+    Type elemType;
+    ArrayRef<int64_t> sourceMaxShape;
+    ArrayRef<int64_t> resultMaxShape;
+  };
+
+  static FailureOr<Value> lowerTranspose2Axis(const LowerTranspose2AxisParams &params) {
+    ConversionPatternRewriter &rewriter = params.rewriter;
+    Location loc = params.loc;
+    Value src = params.src;
+    MemRefType srcType = params.srcType;
+    ArrayRef<int64_t> perm = params.perm;
+    Type elemType = params.elemType;
+    ArrayRef<int64_t> sourceMaxShape = params.sourceMaxShape;
+    ArrayRef<int64_t> resultMaxShape = params.resultMaxShape;
     int64_t rank = srcType.getRank();
     SmallVector<int64_t> resultShape(rank);
     for (int64_t i = 0; i < rank; ++i) {
@@ -4795,17 +5963,32 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       }
     }
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType, allocOperands);
-    if (!setTransposeResultBufferSizeMark(rewriter, loc, resultMemRefType, elemType, resultMaxShape, sourceMaxShape,
-                                          srcType.getShape(), perm, resultBuf)) {
+    if (!setTransposeResultBufferSizeMark({rewriter, loc, resultMemRefType, elemType, resultMaxShape, sourceMaxShape,
+                                           srcType.getShape(), perm, resultBuf})) {
       propagateBufferSizeMark(rewriter, loc, src, resultBuf);
     }
     rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, src, resultBuf, rewriter.getDenseI64ArrayAttr(perm));
     return resultBuf;
   }
 
-  static FailureOr<Value> lowerTransposeMultiAxis(ConversionPatternRewriter &rewriter, Location loc, Value src,
-                                                  MemRefType srcType, ArrayRef<int64_t> swapSeq, Type elemType,
-                                                  ArrayRef<int64_t> sourceMaxShape) {
+  struct LowerTransposeMultiAxisParams {
+    ConversionPatternRewriter &rewriter;
+    Location loc;
+    Value src;
+    MemRefType srcType;
+    ArrayRef<int64_t> swapSeq;
+    Type elemType;
+    ArrayRef<int64_t> sourceMaxShape;
+  };
+
+  static FailureOr<Value> lowerTransposeMultiAxis(const LowerTransposeMultiAxisParams &params) {
+    ConversionPatternRewriter &rewriter = params.rewriter;
+    Location loc = params.loc;
+    Value src = params.src;
+    MemRefType srcType = params.srcType;
+    ArrayRef<int64_t> swapSeq = params.swapSeq;
+    Type elemType = params.elemType;
+    ArrayRef<int64_t> sourceMaxShape = params.sourceMaxShape;
     int64_t rank = srcType.getRank();
     Value currentBuf = src;
     MemRefType currentType = srcType;
@@ -4820,16 +6003,23 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       }
       for (int64_t i = 0; i < rank; ++i) {
         int64_t srcDim = (i == a) ? a + 1 : (i == a + 1) ? a : i;
-        newShape[i] = currentType.getDimSize(srcDim);
+        if (srcDim < 0) {
+          return failure();
+        }
+        const unsigned unsignedSrcDim = static_cast<unsigned>(srcDim);
+        newShape[static_cast<size_t>(i)] = currentType.getDimSize(unsignedSrcDim);
         if (hasMaxShape) {
-          newMaxShape[i] = currentMaxShape[static_cast<size_t>(srcDim)];
+          newMaxShape[static_cast<size_t>(i)] = currentMaxShape[static_cast<size_t>(srcDim)];
         }
       }
       auto newMemRefType = MemRefType::get(newShape, elemType);
       SmallVector<Value> allocOperands;
       for (int64_t i = 0; i < rank; ++i) {
-        if (newMemRefType.isDynamicDim(i)) {
+        if (newMemRefType.isDynamicDim(static_cast<unsigned>(i))) {
           int64_t srcDim = (i == a) ? a + 1 : (i == a + 1) ? a : i;
+          if (srcDim < 0) {
+            return failure();
+          }
           auto dimVal = getMemRefDimValue(currentBuf, srcDim, rewriter);
           if (failed(dimVal)) {
             return failure();
@@ -4847,8 +6037,8 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
         setBufferSizeMarkAtLeast(rewriter, loc, currentBuf, std::max(sourceBytes, transposeSourceBytes));
       }
       if (!hasMaxShape ||
-          !setTransposeResultBufferSizeMark(rewriter, loc, newMemRefType, elemType, newMaxShape, currentMaxShape,
-                                            currentType.getShape(), swapPerm, newBuf)) {
+          !setTransposeResultBufferSizeMark({rewriter, loc, newMemRefType, elemType, newMaxShape, currentMaxShape,
+                                             currentType.getShape(), swapPerm, newBuf})) {
         propagateBufferSizeMark(rewriter, loc, currentBuf, newBuf);
       }
       rewriter.create<hivm::VTransposeOp>(loc, TypeRange{}, currentBuf, newBuf,
@@ -4902,14 +6092,14 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
       return success();
     }
 
-    if (transposeAxisNum == 2) {
+    if (transposeAxisNum == kTwoAxisTransposeCount) {
       ArrayRef<int64_t> sourceMaxShapeRef;
       if (succeeded(sourceMaxShape)) {
         sourceMaxShapeRef = *sourceMaxShape;
         markTransposeSourceBufferSizeAtLeast(rewriter, loc, op, src, *sourceMaxShape);
       }
       auto resultBuf =
-        lowerTranspose2Axis(rewriter, loc, src, srcType, perm, elemType, sourceMaxShapeRef, resultMaxShape);
+        lowerTranspose2Axis({rewriter, loc, src, srcType, perm, elemType, sourceMaxShapeRef, resultMaxShape});
       if (failed(resultBuf)) {
         return failure();
       }
@@ -4926,7 +6116,7 @@ struct NPUVectorTransposeToHIVM : public OpConversionPattern<npuvector::Transpos
     if (succeeded(sourceMaxShape)) {
       sourceMaxShapeRef = *sourceMaxShape;
     }
-    auto resultBuf = lowerTransposeMultiAxis(rewriter, loc, src, srcType, swapSeq, elemType, sourceMaxShapeRef);
+    auto resultBuf = lowerTransposeMultiAxis({rewriter, loc, src, srcType, swapSeq, elemType, sourceMaxShapeRef});
     if (failed(resultBuf)) {
       return failure();
     }

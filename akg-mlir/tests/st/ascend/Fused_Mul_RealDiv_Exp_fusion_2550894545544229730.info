@@ -1,0 +1,108 @@
+{
+    "composite": true,
+    "composite_graph": "_anonymous__518",
+    "id": 0,
+    "input_desc": [
+        [
+            {
+                "data_type": "float16",
+                "format": "DefaultFormat",
+                "shape": [
+                    1536
+                ],
+                "tensor_name": "input_0"
+            }
+        ]
+    ],
+    "op": "Fused_Mul_RealDiv_Exp_fusion_2550894545544229730",
+    "op_desc": [
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float16",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            1536
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float16",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_1",
+                        "value": -0.005996315740048885
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float16",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        1536
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ],
+            "ptr_address": "Default/Mul-op1032_1207965"
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float16",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            1536
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ]
+            ],
+            "name": "Exp",
+            "output_desc": [
+                {
+                    "data_type": "float16",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        1536
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ],
+            "ptr_address": "Default/Exp-op0_1207967"
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float16",
+            "format": "DefaultFormat",
+            "shape": [
+                1536
+            ],
+            "tensor_name": "output_0_1"
+        }
+    ],
+    "platform": "AKG_V2",
+    "process": "aicore",
+    "target_info": {
+        "arch": "Ascend910B2"
+    },
+    "version": 2
+}

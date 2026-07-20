@@ -213,7 +213,6 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       // values or through memory; otherwise it is safe to hoist.
       bool mustStay = opDependsOnSeenAffineFors(op, stayOps, valueDepCache) ||
                       opHasMemoryDepWithStaySet(op, stayReadMemRefs, stayWrittenMemRefs);
-
       if (mustStay) {
         collectNestedOps(op, stayOps);
         collectMemRefEffects(op, stayReadMemRefs, stayWrittenMemRefs);

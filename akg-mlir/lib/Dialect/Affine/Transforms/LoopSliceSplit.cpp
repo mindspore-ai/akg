@@ -358,7 +358,7 @@ static bool substituteIVInAffineOp(Operation *user, Value iv, llvm::function_ref
   if (idx < static_cast<int>(numDims)) {
     dimRepls[idx] = substExpr;
   } else {
-    symRepls[idx - numDims] = substExpr;
+    symRepls[idx - static_cast<int>(numDims)] = substExpr;
   }
   AffineMap newMap = map.replaceDimsAndSymbols(dimRepls, symRepls, numDims, numSyms);
   affine::canonicalizeMapAndOperands(&newMap, &operands);

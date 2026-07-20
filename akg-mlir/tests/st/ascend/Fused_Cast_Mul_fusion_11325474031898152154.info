@@ -1,0 +1,143 @@
+{
+    "composite": true,
+    "composite_graph": "seg_trans__anonymous__513",
+    "id": 0,
+    "input_desc": [
+        [
+            {
+                "data_type": "int32",
+                "format": "DefaultFormat",
+                "shape": [
+                    1,
+                    1
+                ],
+                "tensor_name": "input_0"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    1,
+                    1536
+                ],
+                "tensor_name": "input_3"
+            }
+        ]
+    ],
+    "op": "Fused_Cast_Mul_fusion_11325474031898152154",
+    "op_desc": [
+        {
+            "attr": [
+                {
+                    "data_type": "bool",
+                    "name": "is_backend_cast",
+                    "value": false
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "int32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            1,
+                            1
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "int64",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_1",
+                        "value": 43
+                    }
+                ]
+            ],
+            "name": "Cast",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        1,
+                        1
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ],
+            "ptr_address": "Default/network-TrainStepForCogVideo/Cast-op8_1207913"
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            1,
+                            1
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            1,
+                            1536
+                        ],
+                        "tensor_name": "input_3"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        1,
+                        1536
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ],
+            "ptr_address": "Default/network-TrainStepForCogVideo/transformer-CogVideoXTransformer3DModel_SP/time_proj-Timesteps/Mul-op1_1207915"
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                1,
+                1536
+            ],
+            "tensor_name": "output_0_1"
+        }
+    ],
+    "platform": "AKG_V2",
+    "process": "aicore",
+    "target_info": {
+        "arch": "Ascend910B2"
+    },
+    "version": 2
+}

@@ -2214,3 +2214,51 @@ func.func @test_reduction_x_outer_iter_arg_vf1_lane_promotion(
   }
   return
 }
+
+// -----
+
+// Softmax-like: multi-dim reduction stores into a shrunk local scratch, then a
+// sibling nest reloads the same alloc with a different tiling IV. Scratch state
+// must propagate across createChild and forward via extract_slice (no physical
+// transfer_read from the never-written alloc).
+// CHECK-LABEL: func.func @test_scratch_reduction_store_sibling_load
+// CHECK: %[[ALLOC:.*]] = memref.alloc() {{.*}} : memref<1x16xf32>
+// CHECK: %[[RED:.*]] = npuvector.reduction
+// CHECK: npuvector.extract_slice %[[RED]]
+// CHECK-NOT: npuvector.transfer_read %[[ALLOC]]
+func.func @test_scratch_reduction_store_sibling_load(
+    %input: memref<2x2x16xf32>,
+    %output: memref<2x2x16xf32>) attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c8 = arith.constant 8 : index
+  %c16 = arith.constant 16 : index
+  %neg_inf = arith.constant 0xFF800000 : f32
+  %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x16xf32>
+
+  scf.for %i = %c0 to %c2 step %c1 {
+    scf.for %j = %c0 to %c16 step %c1 {
+      %mx = scf.for %r = %c0 to %c2 step %c1 iter_args(%acc = %neg_inf) -> (f32) {
+        %v = memref.load %input[%i, %r, %j] : memref<2x2x16xf32>
+        %n = arith.maximumf %v, %acc {reduction_axes = [1 : index], reduction_type = "y"} : f32
+        scf.yield %n : f32
+      } {reduction_x = 8 : i64}
+      memref.store %mx, %alloc[%c0, %j] : memref<1x16xf32>
+    } {vector = 16 : i64}
+
+    scf.for %t = %c0 to %c2 step %c1 {
+      %lo = affine.apply affine_map<(d0) -> (d0 * 8)>(%t)
+      %hi = affine.apply affine_map<(d0) -> (d0 * 8 + 8)>(%t)
+      scf.for %r = %c0 to %c2 step %c1 {
+        scf.for %k = %lo to %hi step %c1 {
+          %m = memref.load %alloc[%c0, %k] : memref<1x16xf32>
+          %x = memref.load %input[%i, %r, %k] : memref<2x2x16xf32>
+          %d = arith.subf %x, %m : f32
+          memref.store %d, %output[%i, %r, %k] : memref<2x2x16xf32>
+        } {vector = 8 : i64}
+      } {vector = 16 : i64}
+    }
+  } {vector = 2 : i64}
+  return
+}

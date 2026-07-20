@@ -352,50 +352,59 @@ void TransposeStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
   auto warpSize = GpuInfo::getInstance(gpuGraph->hardware).getWarpSizes();
   auto innerMostReadAxis = transposeRead->loopNest_.back();
   auto innerMostWriteAxis = transposeWrite->loopNest_.back();
-  auto allocResource = [this, &warpSize, &gpuGraph](const AxisPtr axis) {
-    auto blockSize = std::min<int64_t>(warpSize, axis->range.second);
-    if (!gpuGraph->gpuBlock.canApply(blockSize)) {
-      return;
-    }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(axis, blockSize);
+  allocTransposeResource(innerMostWriteAxis, warpSize, gpuGraph);
+  allocTransposeResource(innerMostReadAxis, warpSize, gpuGraph);
+  gpuGraph->sortedAxes = sortByLoadAxes;
+  gpuGraph->updateMaxRankTensor(transposeWrite);
+}
+
+void TransposeStrategy::allocTransposeResource(const AxisPtr axis, int64_t warpSize, GpuModelGraphPtr gpuGraph) {
+  auto blockSize = std::min<int64_t>(warpSize, axis->range.second);
+  if (!gpuGraph->gpuBlock.canApply(blockSize)) {
+    return;
+  }
+  if (auto blockcfg = gpuGraph->gpuBlock.alloc(axis, blockSize)) {
     blockcfg->index = ConfigPos::kInner;
     blockcfg->mapDim = static_cast<int>(gpuGraph->gpuBlock.currAllocDim()) - 1;
-    auto outerSize = (axis->range.second - 1) / blockSize + 1;
-    if (outerSize > maxExpectSeqPerAxis && outerSize % maxExpectSeqPerAxis == 0 &&
-        gpuGraph->gpuGrid.canApply(outerSize / maxExpectSeqPerAxis)) {
-      // we can do multi-tile for this divisible & large-shape case and alloc grids to the outer-most axis
-      auto innerTile = axis->tryGetConfig(1);
-      if (!innerTile) {
-        axis->doExtraTile();
-        innerTile = axis->tryGetConfig(1);
-      }
-      innerTile->value = static_cast<int>(blockSize);
-      auto outerTile = axis->tryGetConfig(0);
-      outerTile->value = innerTile->value * maxExpectSeqPerAxis;
-      outerSize = outerSize / maxExpectSeqPerAxis;
-      auto seqCfg = std::make_shared<GpuSeq>(maxExpectSeqPerAxis);
-      seqCfg->index = ConfigPos::kMiddle;
-      axis->configs[seqCfg->type].push_back(seqCfg);
-      auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize);
+  }
+  auto outerSize = (axis->range.second - 1) / blockSize + 1;
+  if (outerSize > maxExpectSeqPerAxis && outerSize % maxExpectSeqPerAxis == 0 &&
+      gpuGraph->gpuGrid.canApply(outerSize / maxExpectSeqPerAxis)) {
+    // we can do multi-tile for this divisible & large-shape case and alloc grids to the outer-most axis
+    auto innerTile = axis->tryGetConfig(1);
+    if (!innerTile) {
+      axis->doExtraTile();
+      innerTile = axis->tryGetConfig(1);
+    }
+    const int innerTileValue = static_cast<int>(blockSize);
+    if (innerTile) {
+      innerTile->value = innerTileValue;
+    }
+    if (auto outerTile = axis->tryGetConfig(0)) {
+      outerTile->value = innerTileValue * maxExpectSeqPerAxis;
+    }
+    outerSize = outerSize / maxExpectSeqPerAxis;
+    auto seqCfg = std::make_shared<GpuSeq>(maxExpectSeqPerAxis);
+    seqCfg->index = ConfigPos::kMiddle;
+    axis->configs[seqCfg->type].push_back(seqCfg);
+    if (auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize)) {
       gridcfg->index = ConfigPos::kOuter;
-    } else {
-      // otherwise, we can only do single tile, and we alloc the outer-most axis to grids or seqs by condition
-      auto tile = axis->tryGetConfig(0);
+    }
+  } else {
+    // otherwise, we can only do single tile, and we alloc the outer-most axis to grids or seqs by condition
+    if (auto tile = axis->tryGetConfig(0)) {
       tile->value = static_cast<int>(blockSize);
-      if (outerSize <= maxExpectSeq) {
-        auto seqCfg = std::make_shared<GpuSeq>(outerSize);
-        seqCfg->index = ConfigPos::kOuter;
-        axis->configs[seqCfg->type].push_back(seqCfg);
-      } else {
-        auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize);
+    }
+    if (outerSize <= maxExpectSeq) {
+      auto seqCfg = std::make_shared<GpuSeq>(outerSize);
+      seqCfg->index = ConfigPos::kOuter;
+      axis->configs[seqCfg->type].push_back(seqCfg);
+    } else {
+      if (auto gridcfg = gpuGraph->gpuGrid.alloc(axis, outerSize)) {
         gridcfg->index = ConfigPos::kOuter;
       }
     }
-  };
-  allocResource(innerMostWriteAxis);
-  allocResource(innerMostReadAxis);
-  gpuGraph->sortedAxes = sortByLoadAxes;
-  gpuGraph->updateMaxRankTensor(transposeWrite);
+  }
 }
 
 bool BroadcastStrategy::searchForSmallShape(const GpuModelGraphPtr gpuGraph, const AxisPtr a) {
@@ -409,10 +418,12 @@ bool BroadcastStrategy::searchForSmallShape(const GpuModelGraphPtr gpuGraph, con
     if (!gpuGraph->gpuBlock.canApply(innerSize)) {
       continue;
     }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize);
-    blockcfg->index = ConfigPos::kInner;
-    auto tile = a->tryGetConfig(0);
-    tile->value = static_cast<int>(innerSize);
+    if (auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize)) {
+      blockcfg->index = ConfigPos::kInner;
+    }
+    if (auto tile = a->tryGetConfig(0)) {
+      tile->value = static_cast<int>(innerSize);
+    }
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
     seqCfg->index = ConfigPos::kOuter;
     a->configs[seqCfg->type].push_back(seqCfg);
@@ -432,23 +443,27 @@ bool BroadcastStrategy::searchForLargeShape(const GpuModelGraphPtr gpuGraph, con
       continue;
     }
     auto outerSize = a->range.second / middleSize;
-    if (!gpuGraph->gpuGrid.canApply(outerSize)) {
+    if (!gpuGraph->gpuBlock.canApply(innerSize) || !gpuGraph->gpuGrid.canApply(outerSize)) {
       continue;
     }
-    auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize);
-    blockcfg->index = ConfigPos::kInner;
+    if (auto blockcfg = gpuGraph->gpuBlock.alloc(a, innerSize)) {
+      blockcfg->index = ConfigPos::kInner;
+    }
     a->doExtraTile();
-    auto tile1 = a->tryGetConfig(1);
-    tile1->value = innerSize;
+    if (auto tile1 = a->tryGetConfig(1)) {
+      tile1->value = innerSize;
+    }
 
-    auto tile = a->tryGetConfig(0);
-    tile->value = middleSize;
+    if (auto tile = a->tryGetConfig(0)) {
+      tile->value = middleSize;
+    }
     auto seqCfg = std::make_shared<GpuSeq>(expectSeq);
     seqCfg->index = ConfigPos::kMiddle;
     a->configs[seqCfg->type].push_back(seqCfg);
 
-    auto gridcfg = gpuGraph->gpuGrid.alloc(a, outerSize);
-    gridcfg->index = ConfigPos::kOuter;
+    if (auto gridcfg = gpuGraph->gpuGrid.alloc(a, outerSize)) {
+      gridcfg->index = ConfigPos::kOuter;
+    }
     succ = true;
     break;
   }
@@ -549,8 +564,9 @@ bool ParallelStrategy::tryMapBlock(const GpuModelGraphPtr gpuGraph, const AxisPt
   if (!gpuGraph->gpuBlock.seen(axis) && gpuGraph->gpuBlock.canApply(largestForBlock)) {
     (void)gpuGraph->gpuBlock.alloc(axis, largestForBlock);
     if (currHasMinMax) {
-      auto tile = axis->tryGetConfig(0);
-      tile->value = static_cast<int>(largestForBlock);
+      if (auto tile = axis->tryGetConfig(0)) {
+        tile->value = static_cast<int>(largestForBlock);
+      }
     } else {
       auto consTile = Constraint(1, static_cast<int>(largestForBlock), 1);
       axis->tryAddConstraint(0, consTile);
@@ -824,10 +840,14 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
       // Vectorization and unroll are on the same axis.
       bool isUnroll = axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kVectorization) != 0u;
       if (isUnroll) {
-        auto unrollConfig = axis->tryGetConfig(1, kTileCfg);
-        unrollConfig->mergeConstraints();
-        unrollTileValue = unrollConfig->getValidCandidates()[0];
-        axisSize = unrollTileValue;
+        if (auto unrollConfig = axis->tryGetConfig(1, kTileCfg)) {
+          unrollConfig->mergeConstraints();
+          auto candidates = unrollConfig->getValidCandidates();
+          if (!candidates.empty()) {
+            unrollTileValue = candidates[0];
+            axisSize = unrollTileValue;
+          }
+        }
       }
 
       int evaluateNum = static_cast<int>(dataSize) / MIN_EXEC_NUM_PER_THREAD;
@@ -895,9 +915,6 @@ constexpr int64_t kHivmAutoMultiBufferFactor = 2;
 constexpr int64_t kGenericHivmWorkspaceBuffers = 1;
 constexpr int64_t kCompareHivmWorkspaceBuffers = 3;
 constexpr int64_t kHeavyHivmWorkspaceBuffers = 3;
-constexpr int64_t kReductionBackendExtraReserveBuffers = 1;
-constexpr int64_t kReductionFixedReserveAlignUnits = 4;
-constexpr int64_t kReductionBackendExtraFixedReserveBytes = kUbAlignBytes * kReductionFixedReserveAlignUnits;
 constexpr int64_t kTransposeOrBroadcastFootprintBuffers = 4;
 constexpr int64_t kSuffixPreservePointRows = 2;
 
@@ -918,6 +935,10 @@ struct VectorPeakReserveSet {
   int64_t fixedBytes{0};
 };
 
+using VectorPeakReserveSets = SmallVector<VectorPeakReserveSet, kSmallVectorSizeZero>;
+using TransposeCoLiveReserveSets =
+  SmallVector<SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour>, kSmallVectorSizeZero>;
+
 struct TransposeVectorInfo {
   SmallVector<size_t, kSmallVectorSizeSix> sourceAxisOrder;
   SmallVector<size_t, kSmallVectorSizeSix> targetAxisOrder;
@@ -925,12 +946,14 @@ struct TransposeVectorInfo {
   bool isF32{true};
 };
 
+using TransposeVectorInfos = SmallVector<TransposeVectorInfo, kSmallVectorSizeZero>;
+
 struct NpuBandContext {
   func::FuncOp func;
   size_t bandIdx{0};
   SmallVector<AxisPtr, kSmallVectorSizeFour> axes;
   SmallVector<int64_t, kSmallVectorSizeFour> extents;
-  SmallVector<NodePtr, kSmallVectorSizeThirtyTwo> nodes;
+  SmallVector<NodePtr, kSmallVectorSizeZero> nodes;
   GraphTemplate graphTemplate{GraphTemplate::DEFAULT};
   int64_t rawUbElems{1};
   int64_t ubCapacityElems{1};
@@ -942,10 +965,9 @@ struct NpuBandContext {
   SmallVector<int64_t, kSmallVectorSizeSix> axesAlignUnits;
   SmallVector<size_t, kSmallVectorSizeSix> transposeSourceAxisOrder;
   SmallVector<size_t, kSmallVectorSizeSix> transposeTargetAxisOrder;
-  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> transposeInfos;
-  SmallVector<SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour>, kSmallVectorSizeFour>
-    transposeCoLiveReserveSets;
-  SmallVector<VectorPeakReserveSet, kSmallVectorSizeThirtyTwo> vectorPeakReserveSets;
+  TransposeVectorInfos transposeInfos;
+  TransposeCoLiveReserveSets transposeCoLiveReserveSets;
+  VectorPeakReserveSets vectorPeakReserveSets;
   int64_t fixedReserveBytes{0};
   int64_t targetBlocks{kNpuTargetBlocks};
   int64_t mathComplexityScore{0};
@@ -967,6 +989,7 @@ struct BandTilePlan {
   bool usesMultiVecScheme{false};
   bool preserveWholeBandTiles{false};
   bool preferCoreMultipleOuterTiles{false};
+  bool preferTransposeAlignMinTiles{false};
 };
 
 int64_t computeAxisAlignSize(size_t axisIdx, const NpuBandContext &ctx);
@@ -975,11 +998,18 @@ bool isParallelCandidateAxis(const NpuBandContext &ctx, size_t axisIdx);
 bool isStrictPerfectAxisEdge(const NpuBandContext &ctx, size_t parentIdx);
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
                                                                         bool alignParallelTiles,
-                                                                        bool preferCoreMultiples = false);
+                                                                        bool preferCoreMultiples = false,
+                                                                        bool preferTransposeAlignMinTiles = false);
 
-static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes,
-                                    unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
-                                    bool isFullTileAxis = false);
+struct FallbackAxisTilingParams {
+  AxisPtr axis;
+  const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes;
+  unsigned innerTileSize;
+  unsigned blockNumber;
+  bool isFullTileAxis;
+};
+
+static void applyFallbackAxisTiling(const FallbackAxisTilingParams &params, size_t &maxLevelToTile);
 
 static SmallVector<unsigned, kSmallVectorSizeFour> computeFallbackTileSizes(
   const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes, unsigned innerTileSize,
@@ -1148,9 +1178,8 @@ struct BandNodeFacts {
 struct VectorUbFootprint {
   int64_t peakBitsPerElem{kDefaultTypeBits}, vectorElementBits{kDefaultTypeBits};
   int64_t fixedReserveBytes{0};
-  SmallVector<SmallVector<TransposeCoLiveReserve, kSmallVectorSizeFour>, kSmallVectorSizeFour>
-    transposeCoLiveReserveSets;
-  SmallVector<VectorPeakReserveSet, kSmallVectorSizeThirtyTwo> vectorPeakReserveSets;
+  TransposeCoLiveReserveSets transposeCoLiveReserveSets;
+  VectorPeakReserveSets vectorPeakReserveSets;
 };
 struct VectorUbLiveState {
   llvm::DenseMap<Value, int64_t> remainingUses;
@@ -1163,8 +1192,8 @@ struct VectorUbLiveState {
 };
 struct BandNodeInfo {
   BandNodeFacts facts;
-  SmallVector<NodePtr, kSmallVectorSizeThirtyTwo> nodes;
-  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> transposeInfos;
+  SmallVector<NodePtr, kSmallVectorSizeZero> nodes;
+  TransposeVectorInfos transposeInfos;
 };
 enum class VectorOpKind { None, Generic, Heavy, Compare, Select };
 int64_t getValueElementBits(Value value);
@@ -1246,6 +1275,50 @@ SmallVector<size_t, kSmallVectorSizeSix> getMemrefAxisOrder(ValueRange indices, 
   }
   return order;
 }
+
+bool isSupportedVectorIndexChain(Value value, Value inductionVar, llvm::DenseSet<Value> &visited) {
+  if (value == inductionVar || !CommonUtils::valueDependsOnTarget(value, inductionVar)) {
+    return true;
+  }
+  if (!visited.insert(value).second) {
+    return true;
+  }
+  Operation *defOp = value.getDefiningOp();
+  if (!isa_and_nonnull<arith::IndexCastOp, arith::IndexCastUIOp, arith::AddIOp, arith::SubIOp, affine::AffineApplyOp>(
+        defOp)) {
+    return false;
+  }
+  return llvm::all_of(defOp->getOperands(), [&inductionVar, &visited](Value operand) {
+    return isSupportedVectorIndexChain(operand, inductionVar, visited);
+  });
+}
+
+// Reject axes whose lane-varying memref index would be cloned as a scalar index by NPUVectorVectorize.
+bool hasUnsupportedVectorAccess(const AxisPtr &axis) {
+  auto loop = dyn_cast_or_null<scf::ForOp>(axis ? axis->getLoopOperation() : nullptr);
+  if (!loop) {
+    return false;
+  }
+  return loop
+    .walk([&loop](Operation *op) {
+      ValueRange indices;
+      if (auto load = dyn_cast<memref::LoadOp>(op)) {
+        indices = load.getIndices();
+      } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+        indices = store.getIndices();
+      } else {
+        return WalkResult::advance();
+      }
+      for (Value index : indices) {
+        llvm::DenseSet<Value> visited;
+        if (!isSupportedVectorIndexChain(index, loop.getInductionVar(), visited)) {
+          return WalkResult::interrupt();
+        }
+      }
+      return WalkResult::advance();
+    })
+    .wasInterrupted();
+}
 // Walk the SSA use-def graph backwards from `value` and check whether `source`
 // is reachable. In addition to the plain `defOp->getOperands()` chain this
 // also descends into the region(s) of region-bearing ops (scf.for, scf.if,
@@ -1311,8 +1384,8 @@ Operation *findTransposeInfoScanRoot(const NpuBandContext &ctx) {
   return parentLoop ? parentLoop.getOperation() : scanRoot;
 }
 
-SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> findTransposeVectorInfos(const NpuBandContext &ctx) {
-  SmallVector<TransposeVectorInfo, kSmallVectorSizeSix> infos;
+TransposeVectorInfos findTransposeVectorInfos(const NpuBandContext &ctx) {
+  TransposeVectorInfos infos;
   const bool hasTaggedTransposeAxis = llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); });
   auto tryAddInfo = [&hasTaggedTransposeAxis, &ctx, &infos](Operation *loadOp, ArrayRef<size_t> loadOrder,
                                                             Operation *storeOp, ArrayRef<size_t> storeOrder) {
@@ -1786,6 +1859,7 @@ VectorUbFootprint computeVectorUbFootprint(ArrayRef<NodePtr> bandNodes, const Np
     return footprint;
   }
 
+  footprint.vectorPeakReserveSets.reserve(bandNodes.size());
   VectorUbLiveState state;
   for (const auto &node : bandNodes) {
     Operation *op = node->op();
@@ -1944,8 +2018,7 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
 
   for (const auto &axis : bandAxes) {
     bool hasDynamicExtent = !axis || isDynamicAxis(axis) || !axis->hasConstantBounds();
-    ctx.extents.push_back(hasDynamicExtent ? ctx.vectorUbCapacityElems
-                                           : std::max<int64_t>(axis->range.second, 1));
+    ctx.extents.push_back(hasDynamicExtent ? ctx.vectorUbCapacityElems : std::max<int64_t>(axis->range.second, 1));
     ctx.hasDynamicAxis |= isDynamicAxis(axis);
     ctx.hasReduction |= isReductionAxis(axis);
   }
@@ -2082,8 +2155,17 @@ static SmallVector<int64_t, kSmallVectorSizeSixteen> collectAlignAwareTileCandid
   return candidates;
 }
 
-static bool tryAssignExactPrefixTasks(ArrayRef<int64_t> extents, ArrayRef<int64_t> alignUnits, size_t axisIdx,
-                                      int64_t remainingTasks, SmallVectorImpl<unsigned> &tiles) {
+struct ExactPrefixTaskParams {
+  ArrayRef<int64_t> extents;
+  ArrayRef<int64_t> alignUnits;
+  ArrayRef<int64_t> minTiles;
+};
+
+static bool tryAssignExactPrefixTasks(const ExactPrefixTaskParams &params, size_t axisIdx, int64_t remainingTasks,
+                                      SmallVectorImpl<unsigned> &tiles) {
+  const auto &extents = params.extents;
+  const auto &alignUnits = params.alignUnits;
+  const auto &minTiles = params.minTiles;
   if (axisIdx == extents.size()) {
     return remainingTasks == 1;
   }
@@ -2094,14 +2176,30 @@ static bool tryAssignExactPrefixTasks(ArrayRef<int64_t> extents, ArrayRef<int64_
       continue;
     }
     int64_t tile = alignUpInt64(ceilDivInt64(extent, blocks), alignUnit);
-    if (ceilDivInt64(extent, tile) != blocks) {
+    int64_t minTile = axisIdx < minTiles.size() ? std::max<int64_t>(minTiles[axisIdx], 1) : 1;
+    if (tile < minTile || ceilDivInt64(extent, tile) != blocks) {
       continue;
     }
     tiles.push_back(saturateToTileValue(tile));
-    if (tryAssignExactPrefixTasks(extents, alignUnits, axisIdx + 1, remainingTasks / blocks, tiles)) {
+    if (tryAssignExactPrefixTasks(params, axisIdx + 1, remainingTasks / blocks, tiles)) {
       return true;
     }
     tiles.pop_back();
+  }
+  return false;
+}
+
+static bool tryAssignPreferredPrefixTasks(ArrayRef<int64_t> extents, ArrayRef<int64_t> alignUnits,
+                                          ArrayRef<int64_t> minTiles, int64_t targetBlocks,
+                                          SmallVectorImpl<unsigned> &tiles) {
+  ExactPrefixTaskParams params{extents, alignUnits, minTiles};
+  int64_t maxTasks = std::max<int64_t>(targetBlocks, 1);
+  int64_t minTasks = ceilDivInt64(multiplyAndCap(maxTasks, 2), 3);
+  for (int64_t tasks = maxTasks; tasks >= minTasks; --tasks) {
+    tiles.clear();
+    if (tryAssignExactPrefixTasks(params, 0, tasks, tiles)) {
+      return true;
+    }
   }
   return false;
 }
@@ -2158,7 +2256,7 @@ SmallVector<unsigned, kSmallVectorSizeFour> assignPrefixOuterTiles(ArrayRef<int6
     int64_t maxMultiple = ceilDivInt64(producedTiles, std::max<int64_t>(targetBlocks, 1));
     for (int64_t multiple = 1; multiple <= maxMultiple; ++multiple) {
       exactTiles.clear();
-      if (tryAssignExactPrefixTasks(prefixExtents, prefixAlignUnits, 0, multiplyAndCap(targetBlocks, multiple),
+      if (tryAssignExactPrefixTasks({prefixExtents, prefixAlignUnits, {}}, 0, multiplyAndCap(targetBlocks, multiple),
                                     exactTiles)) {
         return exactTiles;
       }
@@ -2213,27 +2311,6 @@ int64_t computeLogicalReserveBytes(const VectorLiveReserve &reserve, ArrayRef<in
   }
   return computeLogicalShapeBytes(shape, reserve.elementBits);
 }
-int64_t computeReductionBackendExtraReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
-  if (ctx.hasDynamicAxis || !ctx.hasReduction || !ctx.lastAxisIsReduction ||
-      ctx.graphTemplate == GraphTemplate::TRANSPOSE_OP) {
-    return 0;
-  }
-  SmallVector<size_t, kSmallVectorSizeSix> axisOrder;
-  axisOrder.reserve(axisTiles.size());
-  for (size_t i = 0; i < axisTiles.size() && i < ctx.axes.size(); ++i) {
-    axisOrder.push_back(i);
-  }
-  if (axisOrder.empty()) {
-    return 0;
-  }
-  VectorLiveReserve reserve{axisOrder, getDefaultBishengStrideAlignDims(static_cast<int64_t>(axisOrder.size())),
-                            ctx.vectorElementBits};
-  int64_t extraBytes =
-    multiplyAndCap(kReductionBackendExtraReserveBuffers, computeReserveBytes(ctx, reserve, axisTiles));
-  return (extraBytes > LLONG_MAX - kReductionBackendExtraFixedReserveBytes)
-           ? LLONG_MAX
-           : extraBytes + kReductionBackendExtraFixedReserveBytes;
-}
 bool satisfiesStrideAlignWithoutExpansion(const NpuBandContext &ctx, const VectorLiveReserve &reserve,
                                           ArrayRef<int64_t> axisTiles) {
   return computeReserveBytes(ctx, reserve, axisTiles) <= computeLogicalReserveBytes(reserve, axisTiles);
@@ -2253,7 +2330,7 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
-  return result.PeakBits / 8;
+  return result.PeakBits / kBitsPerByte;
 }
 int64_t computeAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes, int64_t elemBytes) {
   int64_t elems = 1;
@@ -2555,7 +2632,7 @@ bool satisfiesTransposeAlignConstraints(const NpuBandContext &ctx, ArrayRef<int6
   if (activeTransposeInfos.empty()) {
     return true;
   }
-  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles, /*includeTransposeCoLive=*/true)) {
+  if (!satisfiesVectorReserveAlignConstraints(ctx, axisTiles, true /* includeTransposeCoLive */)) {
     return false;
   }
   return llvm::all_of(activeTransposeInfos, [&axisTiles](const TransposeVectorInfo &info) {
@@ -2968,40 +3045,49 @@ TransposeTileSearchState buildSingleAxisTransposeFallback(const TransposeTileSea
   return buildTransposeMinTileState(params, activeAxisMask);
 }
 
+bool tryUseWholeActiveTransposeState(const TransposeTileSearchParams &params, TransposeTileSearchState &state,
+                                     int64_t &peak) {
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t axisIdx = params.searchAxisOrder[i];
+    if (state.activeAxisMask[axisIdx]) {
+      state.tiles[i] = alignUpInt64(params.ctx.extents[axisIdx], state.alignUnits[axisIdx]);
+    }
+  }
+  peak = getTransposeTileSearchPeak(params, state);
+  if (peak <= params.ubLimitBytes) {
+    return true;
+  }
+  state = buildTransposeMinTileState(params, state.activeAxisMask);
+  return false;
+}
+
+static bool refineTransposeMinState(const TransposeTileSearchParams &params, TransposeTileSearchState &state,
+                                    int64_t &peak) {
+  if (state.wholeFromAxis >= params.ctx.axes.size()) {
+    return false;
+  }
+  size_t wholeFromAxis = state.wholeFromAxis;
+  auto isActiveOuterTarget = [&params, &state, wholeFromAxis](size_t axisIdx) {
+    return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
+  };
+  auto outerTargetIt = std::find_if(params.searchAxisOrder.begin(), params.searchAxisOrder.end(), isActiveOuterTarget);
+  if (outerTargetIt != params.searchAxisOrder.end()) {
+    state.activeAxisMask[*outerTargetIt] = false;
+  }
+  state = buildTransposeMinTileState(params, state.activeAxisMask);
+  bool hasOuterTarget = llvm::any_of(params.searchAxisOrder, isActiveOuterTarget);
+  if (!hasOuterTarget && tryUseWholeActiveTransposeState(params, state, peak)) {
+    return false;
+  }
+  peak = getTransposeTileSearchPeak(params, state);
+  return true;
+}
+
 TransposeTileSearchState selectTransposeMinState(const TransposeTileSearchParams &params, ArrayRef<bool> targetMask,
                                                  int64_t &peak) {
   TransposeTileSearchState state = buildTransposeMinTileState(params, targetMask);
   peak = getTransposeTileSearchPeak(params, state);
-  while (peak > params.ubLimitBytes) {
-    if (state.wholeFromAxis >= params.ctx.axes.size()) {
-      break;
-    }
-    size_t wholeFromAxis = state.wholeFromAxis;
-    auto outerTargetIt =
-      std::find_if(params.searchAxisOrder.begin(), params.searchAxisOrder.end(), [&](size_t axisIdx) {
-        return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
-      });
-    if (outerTargetIt != params.searchAxisOrder.end()) {
-      state.activeAxisMask[*outerTargetIt] = false;
-    }
-    state = buildTransposeMinTileState(params, state.activeAxisMask);
-    bool hasOuterTarget = llvm::any_of(params.searchAxisOrder, [&](size_t axisIdx) {
-      return axisIdx < wholeFromAxis && axisIdx < state.activeAxisMask.size() && state.activeAxisMask[axisIdx];
-    });
-    if (!hasOuterTarget) {
-      for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
-        size_t axisIdx = params.searchAxisOrder[i];
-        if (state.activeAxisMask[axisIdx]) {
-          state.tiles[i] = alignUpInt64(params.ctx.extents[axisIdx], state.alignUnits[axisIdx]);
-        }
-      }
-      peak = getTransposeTileSearchPeak(params, state);
-      if (peak <= params.ubLimitBytes) {
-        return state;
-      }
-      state = buildTransposeMinTileState(params, state.activeAxisMask);
-    }
-    peak = getTransposeTileSearchPeak(params, state);
+  while (peak > params.ubLimitBytes && refineTransposeMinState(params, state, peak)) {
   }
   if (peak <= params.ubLimitBytes) {
     return state;
@@ -3097,24 +3183,21 @@ void tryMaximizeTransposeAxis(const TransposeTileSearchParams &params, size_t ax
   }
 }
 
-bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, ArrayRef<size_t> searchAxisOrder,
-                                 ArrayRef<bool> targetAxisMask, ArrayRef<bool> transposeAxisMask,
-                                 int64_t ubLimitBytes) {
-  if (searchAxisOrder.empty()) {
+bool chooseAlignedTransposeTiles(const TransposeTileSearchParams &params, BandTilePlan &plan) {
+  if (params.searchAxisOrder.empty()) {
     return true;
   }
-  TransposeTileSearchParams params{ctx, plan, searchAxisOrder, targetAxisMask, transposeAxisMask, ubLimitBytes};
-  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask(ctx.axes.size(), false);
-  for (size_t axisIdx : searchAxisOrder) {
-    activeAxisMask[axisIdx] = axisIdx < targetAxisMask.size() && targetAxisMask[axisIdx];
+  SmallVector<bool, kSmallVectorSizeSix> activeAxisMask(params.ctx.axes.size(), false);
+  for (size_t axisIdx : params.searchAxisOrder) {
+    activeAxisMask[axisIdx] = axisIdx < params.targetAxisMask.size() && params.targetAxisMask[axisIdx];
   }
   if (llvm::none_of(activeAxisMask, [](bool active) { return active; })) {
-    activeAxisMask[searchAxisOrder.back()] = true;
+    activeAxisMask[params.searchAxisOrder.back()] = true;
   }
 
   int64_t peak = 0;
   TransposeTileSearchState state = selectTransposeMinState(params, activeAxisMask, peak);
-  if (peak > ubLimitBytes) {
+  if (peak > params.ubLimitBytes) {
     emitTransposeMinTileExceedsUb(params, state, peak);
   }
 
@@ -3124,8 +3207,8 @@ bool chooseAlignedTransposeTiles(const NpuBandContext &ctx, BandTilePlan &plan, 
 
   plan.multiVecAxisMask.assign(state.activeAxisMask.begin(), state.activeAxisMask.end());
   plan.usesMultiVecScheme = true;
-  for (size_t i = 0; i < searchAxisOrder.size(); ++i) {
-    size_t axisIdx = searchAxisOrder[i];
+  for (size_t i = 0; i < params.searchAxisOrder.size(); ++i) {
+    size_t axisIdx = params.searchAxisOrder[i];
     plan.innerTiles[axisIdx] =
       state.activeAxisMask[axisIdx] ? saturateToTileValue(state.tiles[i]) : plan.outerTiles[axisIdx];
   }
@@ -3214,10 +3297,10 @@ SmallVector<bool, kSmallVectorSizeSix> collectReductionAxisMask(const NpuBandCon
   return mask;
 }
 
-void markUnitAxesInsideMultiVecChain(BandTilePlan &plan) {
+void markUnitAxesInsideMultiVecChain(const NpuBandContext &ctx, BandTilePlan &plan) {
   bool hasOuterVecAxis = false;
   for (size_t i = 0; i < plan.innerTiles.size(); ++i) {
-    if (hasOuterVecAxis && plan.innerTiles[i] == 1) {
+    if (hasOuterVecAxis && plan.innerTiles[i] == 1 && !hasUnsupportedVectorAccess(ctx.axes[i])) {
       plan.multiVecAxisMask[i] = true;
     }
     hasOuterVecAxis |= plan.multiVecAxisMask[i];
@@ -3253,6 +3336,9 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
   for (size_t idx : searchAxisOrder) {
     if (stopped) {
       break;
+    }
+    if (hasUnsupportedVectorAccess(ctx.axes[idx])) {
+      continue;
     }
     int64_t candidate = std::max<int64_t>(static_cast<int64_t>(plan.outerTiles[idx]), 1);
     bool isPrimaryAxis = idx == primaryAxis;
@@ -3299,12 +3385,12 @@ void computeInnerTilesVecGreedy(const NpuBandContext &ctx, BandTilePlan &plan, A
   // Keep the multi-vec axis chain contiguous: an inner axis with innerTile==1 sitting
   // between two vectorized axes must still carry the marker so the apply phase emits a
   // length-1 vector slot (shapes like [10, 1, 10]) instead of breaking the chain.
-  markUnitAxesInsideMultiVecChain(plan);
+  markUnitAxesInsideMultiVecChain(ctx, plan);
 }
 
-bool hasActiveVectorSuffix(const BandTilePlan &plan, size_t suffixStart) {
+bool hasActiveVectorSuffix(const NpuBandContext &ctx, const BandTilePlan &plan, size_t suffixStart) {
   for (size_t i = suffixStart; i < plan.innerTiles.size(); ++i) {
-    if (plan.innerTiles[i] <= 1) {
+    if (plan.innerTiles[i] <= 1 && !hasUnsupportedVectorAccess(ctx.axes[i])) {
       return false;
     }
   }
@@ -3316,9 +3402,9 @@ bool tryBuildTargetFirstMultiVecPlan(const NpuBandContext &ctx, BandTilePlan &pl
     return false;
   }
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx), targetAxis);
-  if (!hasActiveVectorSuffix(plan, targetAxis)) {
+  if (!hasActiveVectorSuffix(ctx, plan, targetAxis)) {
     initWholeBandPlan(ctx, plan);
     return false;
   }
@@ -3418,6 +3504,10 @@ std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
   return std::nullopt;
 }
 
+size_t getTransposeTargetAxis(ArrayRef<size_t> axisOrder, size_t innermostAxis) {
+  return llvm::is_contained(axisOrder, innermostAxis) ? axisOrder.back() : innermostAxis;
+}
+
 struct TransposeAxisMasks {
   SmallVector<bool, kSmallVectorSizeSix> transpose;
   SmallVector<bool, kSmallVectorSizeSix> target;
@@ -3441,11 +3531,13 @@ TransposeAxisMasks collectTransposeAxisMasks(const NpuBandContext &ctx) {
         }
       }
     }
-    if (!info.sourceAxisOrder.empty() && info.sourceAxisOrder.back() < masks.target.size()) {
-      masks.target[info.sourceAxisOrder.back()] = true;
+    size_t sourceTarget = getTransposeTargetAxis(info.sourceAxisOrder, masks.target.size() - 1);
+    size_t targetTarget = getTransposeTargetAxis(info.targetAxisOrder, masks.target.size() - 1);
+    if (!info.sourceAxisOrder.empty() && sourceTarget < masks.target.size()) {
+      masks.target[sourceTarget] = true;
     }
-    if (!info.targetAxisOrder.empty() && info.targetAxisOrder.back() < masks.target.size()) {
-      masks.target[info.targetAxisOrder.back()] = true;
+    if (!info.targetAxisOrder.empty() && targetTarget < masks.target.size()) {
+      masks.target[targetTarget] = true;
     }
   }
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
@@ -3464,7 +3556,7 @@ std::optional<size_t> findReduceYVectorTargetAxis(const NpuBandContext &ctx) {
   for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - static_cast<int64_t>(kMinTransposeAxisOrderSize); i >= 0;
        --i) {
     size_t axisIdx = static_cast<size_t>(i);
-    if (!isReductionAxis(ctx.axes[axisIdx])) {
+    if (!isReductionAxis(ctx.axes[axisIdx]) && !hasUnsupportedVectorAccess(ctx.axes[axisIdx])) {
       return axisIdx;
     }
   }
@@ -3476,7 +3568,7 @@ std::optional<size_t> findDefaultVectorTargetAxis(const NpuBandContext &ctx) {
     return std::nullopt;
   }
   size_t innermost = ctx.axes.size() - 1;
-  if (isReductionAxis(ctx.axes[innermost])) {
+  if (isReductionAxis(ctx.axes[innermost]) && !hasUnsupportedVectorAccess(ctx.axes[innermost])) {
     if (isInnermostAxisReduceY(ctx)) {
       return findReduceYVectorTargetAxis(ctx);
     }
@@ -3485,7 +3577,8 @@ std::optional<size_t> findDefaultVectorTargetAxis(const NpuBandContext &ctx) {
 
   for (int64_t i = static_cast<int64_t>(ctx.axes.size()) - 1; i >= 0; --i) {
     size_t axisIdx = static_cast<size_t>(i);
-    if (!hasAxisAttr(ctx.axes[axisIdx], kNotInnerDimensionBroadcastLoopAttr)) {
+    if (!hasAxisAttr(ctx.axes[axisIdx], kNotInnerDimensionBroadcastLoopAttr) &&
+        !hasUnsupportedVectorAccess(ctx.axes[axisIdx])) {
       return axisIdx;
     }
   }
@@ -3646,7 +3739,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
 
   if (!isInnermostAxisReduceY(ctx)) {
     initWholeBandPlan(ctx, plan);
-    assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+    assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
@@ -3660,7 +3753,7 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */);
 
   size_t innermost = ctx.extents.size() - 1;
   SmallVector<int64_t, kSmallVectorSizeFour> axisTiles(plan.innerTiles.begin(), plan.innerTiles.end());
@@ -3687,7 +3780,8 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   size_t outermostTransposeIdx = static_cast<size_t>(outermostTransposeIt - axisMasks.transpose.begin());
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */,
+                                 true /* preferTransposeAlignMinTiles */);
   for (size_t i = 0; i < outermostTransposeIdx; ++i) {
     plan.innerTiles[i] = plan.outerTiles[i];
   }
@@ -3696,7 +3790,7 @@ bool tryBuildTransposePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = outermostTransposeIdx; i < ctx.axes.size(); ++i) {
     searchAxisOrder.push_back(i);
   }
-  chooseAlignedTransposeTiles(ctx, plan, searchAxisOrder, axisMasks.target, axisMasks.transpose, ubLimitBytes);
+  chooseAlignedTransposeTiles({ctx, plan, searchAxisOrder, axisMasks.target, axisMasks.transpose, ubLimitBytes}, plan);
   return true;
 }
 
@@ -3719,7 +3813,7 @@ bool tryBuildBroadcastSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/false, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, false /* alignParallelTiles */, true /* preferCoreMultiples */);
   SmallVector<unsigned, kSmallVectorSizeFour> prefixPlaceholder(plan.outerTiles.begin(),
                                                                 plan.outerTiles.begin() + suffixStart);
   fillPrefixSuffixTiles(ctx, prefixPlaceholder, getBroadcastSuffixPointRows(ctx, suffixStart, broadcastTileBudget),
@@ -3747,7 +3841,7 @@ bool tryBuildElementwisePlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   }
 
   initWholeBandPlan(ctx, plan);
-  assignParallelPrefixOuterTiles(ctx, plan, /*alignParallelTiles=*/true, /*preferCoreMultiples=*/true);
+  assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
   computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
   plan.usesMultiVecScheme = true;
   return true;
@@ -3892,8 +3986,10 @@ int64_t getParallelTileAlignUnit(const NpuBandContext &ctx, const BandTilePlan &
 
 SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &plan,
                                                                         bool alignParallelTiles,
-                                                                        bool preferCoreMultiples) {
+                                                                        bool preferCoreMultiples,
+                                                                        bool preferTransposeAlignMinTiles) {
   plan.preferCoreMultipleOuterTiles |= preferCoreMultiples;
+  plan.preferTransposeAlignMinTiles |= preferTransposeAlignMinTiles;
   SmallVector<size_t, kSmallVectorSizeSix> parallelAxes = collectParallelPrefixAxes(ctx);
   if (parallelAxes.empty()) {
     return parallelAxes;
@@ -3901,14 +3997,31 @@ SmallVector<size_t, kSmallVectorSizeSix> assignParallelPrefixOuterTiles(const Np
 
   SmallVector<int64_t, kSmallVectorSizeSix> parallelExtents;
   SmallVector<int64_t, kSmallVectorSizeSix> parallelAlignUnits;
+  SmallVector<int64_t, kSmallVectorSizeSix> parallelMinTiles;
+  SmallVector<bool, kSmallVectorSizeSix> transposeAxisMask;
+  if (preferTransposeAlignMinTiles) {
+    transposeAxisMask = collectTransposeAxisMasks(ctx).transpose;
+  }
   parallelExtents.reserve(parallelAxes.size());
   parallelAlignUnits.reserve(parallelAxes.size());
+  parallelMinTiles.reserve(preferTransposeAlignMinTiles ? parallelAxes.size() : 0);
   for (size_t axisIdx : parallelAxes) {
     parallelExtents.push_back(std::max<int64_t>(ctx.extents[axisIdx], 1));
     parallelAlignUnits.push_back(getParallelTileAlignUnit(ctx, plan, axisIdx, alignParallelTiles));
+    if (preferTransposeAlignMinTiles) {
+      int64_t minTile = 1;
+      if (axisIdx < transposeAxisMask.size() && transposeAxisMask[axisIdx]) {
+        int64_t axisAlign = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+        minTile = std::lcm(axisAlign, getTransposeVectorAlignUnit(ctx, axisIdx));
+      }
+      parallelMinTiles.push_back(minTile);
+    }
   }
-  SmallVector<unsigned, kSmallVectorSizeFour> outerCaps =
-    assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks, preferCoreMultiples);
+  SmallVector<unsigned, kSmallVectorSizeFour> outerCaps;
+  if (!preferTransposeAlignMinTiles || !tryAssignPreferredPrefixTasks(parallelExtents, parallelAlignUnits,
+                                                                      parallelMinTiles, ctx.targetBlocks, outerCaps)) {
+    outerCaps = assignPrefixOuterTiles(parallelExtents, parallelAlignUnits, ctx.targetBlocks, preferCoreMultiples);
+  }
 
   for (auto [pos, axisIdx] : llvm::enumerate(parallelAxes)) {
     int64_t alignUnit = getParallelTileAlignUnit(ctx, plan, axisIdx, alignParallelTiles);
@@ -3987,8 +4100,8 @@ void adjustParallelPrefixOuterTiles(const NpuBandContext &ctx, BandTilePlan &pla
   alignPlanTiles(ctx, plan);
 
   bool scalarInnerVectorMode = usesScalarInnerVectorMode(ctx, plan);
-  SmallVector<size_t, kSmallVectorSizeSix> parallelAxes =
-    assignParallelPrefixOuterTiles(ctx, plan, !scalarInnerVectorMode, plan.preferCoreMultipleOuterTiles);
+  SmallVector<size_t, kSmallVectorSizeSix> parallelAxes = assignParallelPrefixOuterTiles(
+    ctx, plan, !scalarInnerVectorMode, plan.preferCoreMultipleOuterTiles, plan.preferTransposeAlignMinTiles);
   if (parallelAxes.empty()) {
     return;
   }
@@ -4076,19 +4189,18 @@ void applyDynamicFallbackAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
   }
 }
 
-static void applyFallbackAxisTiling(const AxisPtr axis, const SmallVector<unsigned, kSmallVectorSizeFour> &tileSizes,
-                                    unsigned innerTileSize, unsigned blockNumber, size_t &maxLevelToTile,
-                                    bool isFullTileAxis) {
+static void applyFallbackAxisTiling(const FallbackAxisTilingParams &params, size_t &maxLevelToTile) {
+  const auto &axis = params.axis;
   bool hasStaticBounds = axis->hasConstantBounds();
   bool hasDynamicUpperBound = !axis->hasConstantUpperBound();
   if (hasDynamicUpperBound || !hasStaticBounds) {
-    applyDynamicFallbackAxisTiling(axis, isFullTileAxis);
+    applyDynamicFallbackAxisTiling(axis, params.isFullTileAxis);
     maxLevelToTile = std::max(maxLevelToTile, kNpuTileLevels);
     return;
   }
 
   SmallVector<unsigned, kSmallVectorSizeFour> usedTileSizes =
-    computeFallbackTileSizes(axis, tileSizes, innerTileSize, blockNumber, isFullTileAxis);
+    computeFallbackTileSizes(axis, params.tileSizes, params.innerTileSize, params.blockNumber, params.isFullTileAxis);
   applyTileConfigsToAxis(axis, usedTileSizes, maxLevelToTile);
 }
 }  // namespace
@@ -4145,7 +4257,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
 
   if (!tileSizes.empty()) {
     for (const auto &axis : axes) {
-      applyFallbackAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReductionAxis(axis));
+      applyFallbackAxisTiling({axis, tileSizes, innerTileSize, blockNumber, isReductionAxis(axis)}, maxLevelToTile);
     }
     npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
     return;
@@ -4167,7 +4279,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     }
 
     for (const auto &axis : bandAxes) {
-      applyFallbackAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReductionAxis(axis));
+      applyFallbackAxisTiling({axis, tileSizes, innerTileSize, blockNumber, isReductionAxis(axis)}, maxLevelToTile);
     }
   }
 

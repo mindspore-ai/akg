@@ -239,6 +239,17 @@ struct ShapeNormalState {
     SmallVector<SmallVector<std::string>> groupedAxes2;
   };
 
+  struct AxisSideInfo {
+    const SmallVector<std::string> &axes;
+    const SmallVector<int64_t> &sizes;
+  };
+
+  struct AxisCursor {
+    std::string axis;
+    int64_t size;
+    int64_t idx;
+  };
+
   FinestSlices unifyAxesGroupsToSlices(const SmallVector<std::string> &axesgroup1,
                                        const SmallVector<std::string> &axesgroup2) {
     FinestSlices result;
@@ -334,27 +345,38 @@ struct ShapeNormalState {
     return std::nullopt;
   }
 
-  void skipLeadingSizeOne(const SmallVector<std::string> &axes, const SmallVector<int64_t> &sizes, std::string &axis,
-                          int64_t &size, int64_t &idx) {
-    while (size == 1 && idx < static_cast<int64_t>(axes.size())) {
-      idx++;
-      axis = axes[idx];
-      size = sizes[idx];
+  void skipLeadingSizeOne(const AxisSideInfo &side, AxisCursor &cur) {
+    while (cur.size == 1 && cur.idx < static_cast<int64_t>(side.axes.size())) {
+      cur.idx++;
+      cur.axis = side.axes[cur.idx];
+      cur.size = side.sizes[cur.idx];
     }
   }
 
-  bool mergeSmallerAxis(const SmallVector<std::string> &axes1, const SmallVector<int64_t> &sizes1,
-                        const SmallVector<std::string> &axes2, const SmallVector<int64_t> &sizes2, std::string &axis1,
-                        int64_t &size1, int64_t &idx1, std::string &axis2, int64_t &size2, int64_t &idx2,
+  void advanceCursorsPastMergedAxis(const AxisSideInfo &side1, const AxisSideInfo &side2, AxisCursor &cur1,
+                                    AxisCursor &cur2) {
+    cur1.idx++;
+    cur2.idx++;
+    if (cur1.idx < static_cast<int64_t>(side1.axes.size())) {
+      cur1.axis = side1.axes[cur1.idx];
+      cur1.size = side1.sizes[cur1.idx];
+    }
+    if (cur2.idx < static_cast<int64_t>(side2.axes.size())) {
+      cur2.axis = side2.axes[cur2.idx];
+      cur2.size = side2.sizes[cur2.idx];
+    }
+  }
+
+  bool mergeSmallerAxis(const AxisSideInfo &side1, const AxisSideInfo &side2, AxisCursor &cur1, AxisCursor &cur2,
                         FinestDecompositionResult &result) {
-    const bool smallFirst = size1 < size2;
-    int64_t smallSize = smallFirst ? size1 : size2;
-    int64_t largeSize = smallFirst ? size2 : size1;
-    const auto &smallAxes = smallFirst ? axes1 : axes2;
-    const auto &smallSizes = smallFirst ? sizes1 : sizes2;
-    int64_t &smallIdx = smallFirst ? idx1 : idx2;
-    std::string &smallAxis = smallFirst ? axis1 : axis2;
-    std::string &largeAxis = smallFirst ? axis2 : axis1;
+    const bool smallFirst = cur1.size < cur2.size;
+    int64_t smallSize = smallFirst ? cur1.size : cur2.size;
+    int64_t largeSize = smallFirst ? cur2.size : cur1.size;
+    const auto &smallAxes = smallFirst ? side1.axes : side2.axes;
+    const auto &smallSizes = smallFirst ? side1.sizes : side2.sizes;
+    int64_t &smallIdx = smallFirst ? cur1.idx : cur2.idx;
+    std::string &smallAxis = smallFirst ? cur1.axis : cur2.axis;
+    std::string &largeAxis = smallFirst ? cur2.axis : cur1.axis;
 
     int64_t tmpSize = smallSize;
     SmallVector<std::string> tmpAxis = {smallAxis};
@@ -371,21 +393,12 @@ struct ShapeNormalState {
     if (remainder != 0) {
       result.finestAxes.clear();
       result.success = false;
-      result.finestAxes.append(sizes1[0] < sizes2[0] ? axes1 : axes2);
+      result.finestAxes.append(side1.sizes[0] < side2.sizes[0] ? side1.axes : side2.axes);
       return false;
     }
     int64_t newdimSize = largeSize / tmpSize;
     if (newdimSize == 1) {
-      idx1++;
-      idx2++;
-      if (idx1 < static_cast<int64_t>(axes1.size())) {
-        axis1 = axes1[idx1];
-        size1 = sizes1[idx1];
-      }
-      if (idx2 < static_cast<int64_t>(axes2.size())) {
-        axis2 = axes2[idx2];
-        size2 = sizes2[idx2];
-      }
+      advanceCursorsPastMergedAxis(side1, side2, cur1, cur2);
       return true;
     }
     std::string newdim = createNewSymbolicDim(newdimSize);
@@ -394,24 +407,24 @@ struct ShapeNormalState {
     largeAxis = newdim;
     smallAxis = newdim;
     if (smallFirst) {
-      size2 = newdimSize;
-      if (smallIdx + 1 < static_cast<int64_t>(axes1.size())) {
-        axis1 = axes1[smallIdx + 1];
-        size1 = sizes1[smallIdx + 1];
-        idx1 = smallIdx + 1;
+      cur2.size = newdimSize;
+      if (smallIdx + 1 < static_cast<int64_t>(side1.axes.size())) {
+        cur1.axis = side1.axes[smallIdx + 1];
+        cur1.size = side1.sizes[smallIdx + 1];
+        cur1.idx = smallIdx + 1;
       } else {
-        axis1 = newdim;
-        size1 = newdimSize;
+        cur1.axis = newdim;
+        cur1.size = newdimSize;
       }
     } else {
-      size1 = newdimSize;
-      if (smallIdx + 1 < static_cast<int64_t>(axes2.size())) {
-        axis2 = axes2[smallIdx + 1];
-        size2 = sizes2[smallIdx + 1];
-        idx2 = smallIdx + 1;
+      cur1.size = newdimSize;
+      if (smallIdx + 1 < static_cast<int64_t>(side2.axes.size())) {
+        cur2.axis = side2.axes[smallIdx + 1];
+        cur2.size = side2.sizes[smallIdx + 1];
+        cur2.idx = smallIdx + 1;
       } else {
-        axis2 = newdim;
-        size2 = newdimSize;
+        cur2.axis = newdim;
+        cur2.size = newdimSize;
       }
     }
     return true;
@@ -428,35 +441,33 @@ struct ShapeNormalState {
       return *trivial;
     }
 
-    std::string axis1 = axes1[0];
-    std::string axis2 = axes2[0];
-    int64_t size1 = sizes1[0];
-    int64_t size2 = sizes2[0];
-    int64_t idx1 = 0;
-    int64_t idx2 = 0;
-    skipLeadingSizeOne(axes1, sizes1, axis1, size1, idx1);
-    skipLeadingSizeOne(axes2, sizes2, axis2, size2, idx2);
+    AxisSideInfo side1{axes1, sizes1};
+    AxisSideInfo side2{axes2, sizes2};
+    AxisCursor cur1{axes1[0], sizes1[0], 0};
+    AxisCursor cur2{axes2[0], sizes2[0], 0};
+    skipLeadingSizeOne(side1, cur1);
+    skipLeadingSizeOne(side2, cur2);
 
-    while (idx1 < static_cast<int64_t>(axes1.size()) && idx2 < static_cast<int64_t>(axes2.size())) {
-      if (!mergeSmallerAxis(axes1, sizes1, axes2, sizes2, axis1, size1, idx1, axis2, size2, idx2, result)) {
+    while (cur1.idx < static_cast<int64_t>(axes1.size()) && cur2.idx < static_cast<int64_t>(axes2.size())) {
+      if (!mergeSmallerAxis(side1, side2, cur1, cur2, result)) {
         return result;
       }
     }
 
     SmallVector<std::string> tail;
     std::string parentAxis;
-    if (size1 > size2) {
-      tail.push_back(axis2);
-      parentAxis = axis1;
+    if (cur1.size > cur2.size) {
+      tail.push_back(cur2.axis);
+      parentAxis = cur1.axis;
     } else {
-      tail.push_back(axis1);
-      parentAxis = axis2;
+      tail.push_back(cur1.axis);
+      parentAxis = cur2.axis;
     }
-    for (; idx1 < static_cast<int64_t>(axes1.size()); idx1++) {
-      tail.push_back(axes1[idx1]);
+    for (; cur1.idx < static_cast<int64_t>(axes1.size()); cur1.idx++) {
+      tail.push_back(axes1[cur1.idx]);
     }
-    for (; idx2 < static_cast<int64_t>(axes2.size()); idx2++) {
-      tail.push_back(axes2[idx2]);
+    for (; cur2.idx < static_cast<int64_t>(axes2.size()); cur2.idx++) {
+      tail.push_back(axes2[cur2.idx]);
     }
     updateDecomposition(parentAxis, tail);
     return result;
@@ -862,28 +873,24 @@ struct ShapeNormalState {
     return true;
   }
 
-  void memrefFillStridesCollapseShape(ArrayRef<int64_t> inputStrides,
+  void memrefFillStridesCollapseShape(ArrayRef<int64_t> inputShape, ArrayRef<int64_t> inputStrides,
                                       const SmallVector<ReassociationIndices> &reassociation,
-                                      const SmallVector<std::string> &inputSymShape,
                                       SmallVector<int64_t> &targetStrides) const {
-    auto symAxisIsUnit = [this, inputSymShape](int64_t dimIndex) {
-      const std::string &axis = inputSymShape[static_cast<size_t>(dimIndex)];
-      // if axis is a dynamic axis but length is known
-      return axis == "1" || axisSizes.lookup(axis) == 1;
-    };
+    targetStrides.clear();
+    targetStrides.reserve(reassociation.size());
     for (const ReassociationIndices &group : reassociation) {
       if (group.empty()) {
         continue;
       }
-      int64_t s = inputStrides[group.back()];
-      for (auto it = group.rbegin(); it != group.rend(); ++it) {
-        if (symAxisIsUnit(*it)) {
-          continue;
-        }
-        s = inputStrides[*it];
-        break;
+      ArrayRef<int64_t> ref = llvm::ArrayRef(group);
+      while (ref.size() > 1 && !ShapedType::isDynamic(inputShape[ref.back()]) && inputShape[ref.back()] == 1) {
+        ref = ref.drop_back();
       }
-      targetStrides.push_back(s);
+      if (!ShapedType::isDynamic(inputShape[ref.back()]) || ref.size() == 1) {
+        targetStrides.push_back(inputStrides[ref.back()]);
+      } else {
+        targetStrides.push_back(ShapedType::kDynamic);
+      }
     }
   }
 
@@ -905,16 +912,29 @@ struct ShapeNormalState {
         }
         break;
       case MemRefStrideInheritKind::CollapseShape:
-        memrefFillStridesCollapseShape(inputStrides, inheritInfo.reassociation, inputSymShape, targetStrides);
+        memrefFillStridesCollapseShape(inputType.getShape(), inputStrides, inheritInfo.reassociation, targetStrides);
         break;
     }
-    if (targetStrides.size() != targetShape.size() ||
-        llvm::any_of(targetStrides, [](int64_t s) { return s == ShapedType::kDynamic; }) ||
-        inputOffset == ShapedType::kDynamic) {
+    if (targetStrides.size() != targetShape.size()) {
       return MemRefType::get(targetShape, elementType);
     }
     auto newLayout = StridedLayoutAttr::get(inputType.getContext(), inputOffset, targetStrides);
     return MemRefType::get(targetShape, elementType, newLayout, inputType.getMemorySpace());
+  }
+
+  void buildDynamicReassociation(ReassociationIndices &group, size_t &fineInd, const std::string &coarseAxis,
+                                 const SmallVector<std::string> &fineShape) {
+    SmallVector<std::string> targetGroupFinestShape = expandAxisRecursively(coarseAxis);
+    SmallVector<std::string> tmpGroupFinestShape;
+    while (tmpGroupFinestShape != targetGroupFinestShape) {
+      if (axisSizes[fineShape[fineInd]] == 1) {
+        group.push_back(static_cast<int64_t>(fineInd++));
+        continue;
+      }
+      tmpGroupFinestShape.append(expandAxisRecursively(fineShape[fineInd]));
+      group.push_back(static_cast<int64_t>(fineInd));
+      fineInd++;
+    }
   }
 
   SmallVector<ReassociationIndices> buildReassociation(const SmallVector<std::string> &coarseShape,
@@ -926,17 +946,7 @@ struct ShapeNormalState {
       ReassociationIndices group;
       int64_t coarseSize = axisSizes[coarseShape[coarseInd]];
       if (coarseSize == ShapedType::kDynamic) {
-        SmallVector<std::string> targetGroupFinestShape = expandAxisRecursively(coarseShape[coarseInd]);
-        SmallVector<std::string> tmpGroupFinestShape;
-        while (tmpGroupFinestShape != targetGroupFinestShape) {
-          if (axisSizes[fineShape[fineInd]] == 1) {
-            group.push_back(static_cast<int64_t>(fineInd++));
-            continue;
-          }
-          tmpGroupFinestShape.append(expandAxisRecursively(fineShape[fineInd]));
-          group.push_back(static_cast<int64_t>(fineInd));
-          fineInd++;
-        }
+        buildDynamicReassociation(group, fineInd, coarseShape[coarseInd], fineShape);
       }
       while (tmpTargetSize < coarseSize) {
         group.push_back(static_cast<int64_t>(fineInd));
@@ -966,6 +976,27 @@ struct ShapeNormalState {
     }
   }
 
+  Value materializeReshapeDimValue(const std::string &symAxis, Type i64Ty, PatternRewriter &rewriter, Location loc) {
+    auto [src, idx] = dynSymtoArgDim[symAxis];
+    if (idx == -1) {
+      if (src.getType() != i64Ty) {
+        auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, src);
+        entryMaterializedOps.insert(castOp);
+        return castOp.getResult();
+      }
+      return src;
+    }
+    auto dimOp = rewriter.create<memref::DimOp>(loc, src, idx);
+    entryMaterializedOps.insert(dimOp);
+    Value dimVal = dimOp.getResult();
+    if (dimVal.getType() != i64Ty) {
+      auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, dimVal);
+      entryMaterializedOps.insert(castOp);
+      return castOp.getResult();
+    }
+    return dimVal;
+  }
+
   SmallVector<Operation *> reshapeWithMemref(Value newRet, const SmallVector<std::string> &targetSymShape,
                                              Type elementType, PatternRewriter &rewriter, Location loc) {
     SmallVector<Operation *> ops;
@@ -983,25 +1014,7 @@ struct ShapeNormalState {
         entryMaterializedOps.insert(cstOp);
         dimVal = cstOp.getResult();
       } else {
-        auto [src, idx] = dynSymtoArgDim[targetSymShape[i]];
-        if (idx == -1) {
-          if (src.getType() != i64Ty) {
-            auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, src);
-            entryMaterializedOps.insert(castOp);
-            dimVal = castOp.getResult();
-          } else {
-            dimVal = src;
-          }
-        } else {
-          auto dimOp = rewriter.create<memref::DimOp>(loc, src, idx);
-          entryMaterializedOps.insert(dimOp);
-          dimVal = dimOp.getResult();
-          if (dimVal.getType() != i64Ty) {
-            auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, dimVal);
-            entryMaterializedOps.insert(castOp);
-            dimVal = castOp.getResult();
-          }
-        }
+        dimVal = materializeReshapeDimValue(targetSymShape[i], i64Ty, rewriter, loc);
       }
       auto indexCst = rewriter.create<arith::ConstantIndexOp>(loc, i);
       entryMaterializedOps.insert(indexCst);
@@ -1206,6 +1219,34 @@ struct ShapeNormalState {
 static Value reshapeValuePreservingRecordedUnitAxes(ShapeNormalState &state, PatternRewriter &rewriter, Operation *op,
                                                     Value newValue);
 
+static void collectDefiningOpsPostOrder(Value value, SmallVectorImpl<Operation *> &ops,
+                                        llvm::SmallPtrSetImpl<Operation *> &visited) {
+  Operation *def = value.getDefiningOp();
+  if (!def || !visited.insert(def).second) {
+    return;
+  }
+  for (Value operand : def->getOperands()) {
+    if (operand.getDefiningOp()) {
+      collectDefiningOpsPostOrder(operand, ops, visited);
+    }
+  }
+  ops.push_back(def);
+}
+
+static void hoistValueDefBeforeOp(Value value, Operation *beforeOp) {
+  Operation *def = value.getDefiningOp();
+  if (!def || !beforeOp || def->getBlock() != beforeOp->getBlock() || def->isBeforeInBlock(beforeOp)) {
+    return;
+  }
+  SmallVector<Operation *, kSmallVectorSizeEight> opsToMove;
+  llvm::SmallPtrSet<Operation *, kSmallVectorSizeEight> visited;
+  collectDefiningOpsPostOrder(value, opsToMove, visited);
+  for (Operation *opToMove : opsToMove) {
+    assert(opToMove != beforeOp && "dim value defining op chain must not include target alloc");
+    opToMove->moveBefore(beforeOp);
+  }
+}
+
 struct AllocAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::AllocOp>(op); }
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
@@ -1256,6 +1297,7 @@ struct AllocAdapter final : OpAdapter {
       }
       Value dimVal = state.getOrCreateDynDimValue(targetSymShape[i], rewriter, loc);
       assert(dimVal && "dynamic axis must have a dim value");
+      hoistValueDefBeforeOp(dimVal, op);
       dynamicSizes.push_back(dimVal);
     }
     Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, dynamicSizes, alloc.getSymbolOperands(),
@@ -1514,6 +1556,27 @@ struct GlobalAdapter final : OpAdapter {
   }
 };
 
+static void computeExpandShapeAxes(memref::ExpandShapeOp expandOp, ShapeNormalState &state, ArrayRef<int64_t> indices,
+                                   const std::string &srcAxis, SmallVector<std::string> &resultAxes) {
+  SmallVector<std::string> childAxes;
+  for (int64_t outDim : indices) {
+    int64_t dimSize = expandOp.getResultType().getDimSize(outDim);
+    std::string newAxis = state.createNewSymbolicDim(dimSize);
+    resultAxes[outDim] = newAxis;
+    childAxes.push_back(newAxis);
+  }
+  SmallVector<std::string> childAxesWithoutOne;
+  std::copy_if(childAxes.begin(), childAxes.end(), std::back_inserter(childAxesWithoutOne),
+               [](const std::string &axis) { return axis != "1"; });
+  if (childAxesWithoutOne.size() == 1) {
+    auto it = std::find(childAxes.begin(), childAxes.end(), childAxesWithoutOne[0]);
+    if (it != childAxes.end()) {
+      resultAxes[indices[std::distance(childAxes.begin(), it)]] = srcAxis;
+    }
+  }
+  state.updateDecomposition(srcAxis, childAxes);
+}
+
 struct ExpandShapeAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::ExpandShapeOp>(op); }
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
@@ -1536,23 +1599,7 @@ struct ExpandShapeAdapter final : OpAdapter {
           resultAxes[outDim] = srcAxis;
         }
       } else {
-        SmallVector<std::string> childAxes;
-        for (int64_t outDim : indices) {
-          int64_t dimSize = expandOp.getResultType().getDimSize(outDim);
-          std::string newAxis = state.createNewSymbolicDim(dimSize);
-          resultAxes[outDim] = newAxis;
-          childAxes.push_back(newAxis);
-        }
-        SmallVector<std::string> childAxesWithoutOne;
-        std::copy_if(childAxes.begin(), childAxes.end(), std::back_inserter(childAxesWithoutOne),
-                     [](const std::string &axis) { return axis != "1"; });
-        if (childAxesWithoutOne.size() == 1) {
-          auto it = std::find(childAxes.begin(), childAxes.end(), childAxesWithoutOne[0]);
-          if (it != childAxes.end()) {
-            resultAxes[indices[std::distance(childAxes.begin(), it)]] = srcAxis;
-          }
-        }
-        state.updateDecomposition(srcAxis, childAxes);
+        computeExpandShapeAxes(expandOp, state, indices, srcAxis, resultAxes);
       }
     }
     for (std::string &ax : resultAxes) {
@@ -1879,7 +1926,7 @@ struct GenericAdapter final : OpAdapter {
         if (unifiedAxesNames[inputDimMap[i]].empty()) {
           unifiedAxesNames[inputDimMap[i]] = SymShape[i];
         } else {
-          SmallVector<std::string> SymShapeList = { SymShape[i] };
+          SmallVector<std::string> SymShapeList = {SymShape[i]};
           state.applyRecordedAxisRenames(SymShapeList);
           std::string updatedAxis = state.globalReplaceAxis(SymShapeList[0], unifiedAxesNames[inputDimMap[i]]);
           std::replace_if(
@@ -2472,6 +2519,7 @@ struct SubviewAdapter final : OpAdapter {
     SmallVector<std::string> &targetResultSymShape;
     SmallVector<int64_t> &newUpdatedIndex;
     DenseMap<int64_t, int64_t> &newUpdatedIndexToOldTargetIndex;
+    int64_t newIndex = 0;
   };
 
   struct SubviewInputData {
@@ -2546,29 +2594,33 @@ struct SubviewAdapter final : OpAdapter {
     return "";
   }
 
+  static void computeSubviewAxisLayout(Operation *op, const ShapeNormalState &state, size_t axisIndex,
+                                       const std::string &oldAxis, TargetLayoutResult &result) {
+    if (const auto *rec = findSubviewAxisExpandPlan(state, op, static_cast<int64_t>(axisIndex))) {
+      for (size_t j = 0; j < rec->outputFinalAxes.size(); ++j) {
+        result.newUpdatedIndex.push_back(result.newIndex);
+        result.newUpdatedIndexToOldTargetIndex[result.newIndex++] = static_cast<int64_t>(axisIndex);
+      }
+      result.targetForSubView.append(rec->outputFinalAxes);
+    } else {
+      result.newUpdatedIndex.push_back(result.newIndex);
+      result.newUpdatedIndexToOldTargetIndex[result.newIndex++] = static_cast<int64_t>(axisIndex);
+      result.targetForSubView.push_back(oldAxis);
+    }
+  }
+
   static void computeTargetLayout(Operation *op, ShapeNormalState &state,
                                   const SmallVector<std::string> &oldResultSymShape,
                                   const SmallVector<int64_t> &updatedAxesIndex, TargetLayoutResult &result) {
     SmallVector<std::string> targetTemp;
-    int64_t newIndex = 0;
     for (size_t i = 0; i < oldResultSymShape.size(); ++i) {
       bool isSubviewAxis = llvm::is_contained(updatedAxesIndex, static_cast<int64_t>(i));
       if (isSubviewAxis) {
         targetTemp = state.computeTargetSymShape(targetTemp);
-        newIndex += static_cast<int64_t>(targetTemp.size());
+        result.newIndex += static_cast<int64_t>(targetTemp.size());
         result.targetForSubView.append(state.computeTargetSymShape(targetTemp));
         targetTemp.clear();
-        if (const auto *rec = findSubviewAxisExpandPlan(state, op, static_cast<int64_t>(i))) {
-          for (size_t j = 0; j < rec->outputFinalAxes.size(); ++j) {
-            result.newUpdatedIndex.push_back(newIndex);
-            result.newUpdatedIndexToOldTargetIndex[newIndex++] = static_cast<int64_t>(i);
-          }
-          result.targetForSubView.append(rec->outputFinalAxes);
-        } else {
-          result.newUpdatedIndex.push_back(newIndex);
-          result.newUpdatedIndexToOldTargetIndex[newIndex++] = static_cast<int64_t>(i);
-          result.targetForSubView.push_back(oldResultSymShape[i]);
-        }
+        computeSubviewAxisLayout(op, state, i, oldResultSymShape[i], result);
       } else {
         targetTemp.push_back(oldResultSymShape[i]);
       }
@@ -2746,7 +2798,7 @@ struct SubviewAdapter final : OpAdapter {
     SmallVector<int64_t> newUpdatedIndex;
     DenseMap<int64_t, int64_t> newUpdatedIndexToOldTargetIndex;
     TargetLayoutResult layoutResult{targetForSubView, targetResultSymShape, newUpdatedIndex,
-                                    newUpdatedIndexToOldTargetIndex};
+                                    newUpdatedIndexToOldTargetIndex, 0};
     computeTargetLayout(op, state, oldResultSymShape, updatedAxesIndex, layoutResult);
 
     SmallVector<int64_t> targetForSubViewShapeInt = state.getAxesSizes(targetForSubView);

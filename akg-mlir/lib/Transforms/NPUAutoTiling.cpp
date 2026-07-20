@@ -64,6 +64,9 @@ namespace mockattr {
 static constexpr const char *kEnableAutoMarkBufferSize = "enable_auto_mark_buffer_size";
 }  // namespace mockattr
 
+// Trailing args appended after original kernel inputs: kTilingKey and kTilingStruct.
+static constexpr unsigned kNumTilingTailArgs = 2;
+
 namespace {
 
 using hacc::BlockDimAttr;
@@ -445,7 +448,7 @@ class TilingBase {
     host->setAttr(HostFuncTypeAttr::name, HostFuncTypeAttr::get(ctx, HostFuncType::kTilingFunction));
 
     unsigned numArgs = host.getNumArguments();
-    unsigned keyIdx = numArgs - 2;
+    unsigned keyIdx = numArgs - kNumTilingTailArgs;
     unsigned tilingDataIdx = numArgs - 1;
     setTilingKeyAndDataArgAttrs(host, keyIdx, tilingDataIdx);
 
@@ -496,11 +499,11 @@ class TilingBase {
     SmallVector<Value> args(host.getArguments().begin(), host.getArguments().end());
 
     unsigned numArgs = args.size();
-    if (numArgs < 2) {
-      host.emitError("host tiling function expects at least 2 tail args");
+    if (numArgs < kNumTilingTailArgs) {
+      host.emitError() << "host tiling function expects at least " << kNumTilingTailArgs << " tail args";
       return failure();
     }
-    unsigned keyIdx = numArgs - 2;
+    unsigned keyIdx = numArgs - kNumTilingTailArgs;
     unsigned tilingDataIdx = numArgs - 1;
 
     SmallVector<Value> computeArgs(args.begin(), args.begin() + keyIdx);
@@ -516,8 +519,9 @@ class TilingBase {
       return failure();
     }
 
-    auto switchOp = bodyBuilder.create<scf::IndexSwitchOp>(loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys),
-                                                           /* numCases= */ caseKeys.size());
+    // numCases: one switch region per tiling key.
+    auto switchOp = bodyBuilder.create<scf::IndexSwitchOp>(
+        loc, TypeRange{}, keyIndex, ArrayRef<int64_t>(caseKeys), caseKeys.size());
 
     for (unsigned i = 0; i < caseKeys.size(); ++i) {
       int64_t key = caseKeys[i];
@@ -565,7 +569,7 @@ class TilingBase {
     auto origTy = orig.getFunctionType();
 
     devInputs.clear();
-    devInputs.reserve(origTy.getNumInputs() + 2);
+    devInputs.reserve(origTy.getNumInputs() + kNumTilingTailArgs);
     std::copy(origTy.getInputs().begin(), origTy.getInputs().end(), std::back_inserter(devInputs));
 
     devResults.clear();
@@ -609,7 +613,7 @@ class TilingBase {
     }
 
     unsigned numInputs = desc.devTy.getNumInputs();
-    unsigned keyIdx = numInputs - 2;
+    unsigned keyIdx = numInputs - kNumTilingTailArgs;
     unsigned tilingDataIdx = numInputs - 1;
     setTilingKeyAndDataArgAttrs(deviceFunc, keyIdx, tilingDataIdx);
 
@@ -765,7 +769,7 @@ class TilingBase {
 
     // Snapshot attrs of non-tiling args in their original order.
     SmallVector<DictionaryAttr> leadingAttrs;
-    leadingAttrs.reserve(f.getNumArguments() - 2);
+    leadingAttrs.reserve(f.getNumArguments() - kNumTilingTailArgs);
     for (unsigned i = 0, e = f.getNumArguments(); i < e; ++i) {
       if (static_cast<int>(i) == keyIdx || static_cast<int>(i) == structIdx) {
         continue;
@@ -854,7 +858,8 @@ class TilingBase {
   LogicalResult applyStaticTilingWithoutAnyTilingFunc(OpBuilder &builder) {
     auto *ctx = builder.getContext();
 
-    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, /* isStaticShape= */ true))) {
+    bool isStaticShape = true;
+    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, isStaticShape))) {
       originalKernel_.emitError("static tiling: failed to apply tiling on kernel");
       return failure();
     }
