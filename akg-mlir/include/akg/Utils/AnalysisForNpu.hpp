@@ -52,6 +52,15 @@ constexpr auto kSoc910B2C = "Ascend910B2C";
 constexpr auto kSoc910B3 = "Ascend910B3";
 constexpr auto kSoc910B4 = "Ascend910B4";
 constexpr auto kSoc910B4_1 = "Ascend910B4-1";
+constexpr auto kSoc910_9362 = "Ascend910_9362";
+constexpr auto kSoc910_9372 = "Ascend910_9372";
+constexpr auto kSoc910_9381 = "Ascend910_9381";
+constexpr auto kSoc910_9382 = "Ascend910_9382";
+constexpr auto kSoc910_9391 = "Ascend910_9391";
+constexpr auto kSoc910_9392 = "Ascend910_9392";
+constexpr auto kSoc950PR_9579 = "Ascend950PR_9579";
+constexpr auto kSoc950PR_9581 = "Ascend950PR_9581";
+constexpr auto kSoc950PR_9589 = "Ascend950PR_9589";
 constexpr auto kSoc950PR_9599 = "Ascend950PR_9599";
 
 class HardwareConfig {
@@ -73,70 +82,23 @@ class HardwareConfig {
 
 inline const std::vector<std::pair<std::string, HardwareConfig>> &getHardwareConfigs() {
   static const std::vector<std::pair<std::string, HardwareConfig>> kHardwareConfigs = {
-    {kSoc910B1, HardwareConfig{24,              // coreNumAic
-                               48,              // coreNumAiv
-                               201326592,       // l2
-                               524288,          // l1
-                               65536,           // l0a
-                               65536,           // l0b
-                               131072,          // l0c
-                               196608,          // ub
-                               false}},         // isRegBasedArch
-    {kSoc910B2, HardwareConfig{24,              // coreNumAic
-                               48,              // coreNumAiv
-                               201326592,       // l2
-                               524288,          // l1
-                               65536,           // l0a
-                               65536,           // l0b
-                               131072,          // l0c
-                               196608,          // ub
-                               false}},         // isRegBasedArch
-    {kSoc910B2C, HardwareConfig{24,             // coreNumAic
-                                48,             // coreNumAiv
-                                201326592,      // l2
-                                524288,         // l1
-                                65536,          // l0a
-                                65536,          // l0b
-                                131072,         // l0c
-                                196608,         // ub
-                                false}},        // isRegBasedArch
-    {kSoc910B3, HardwareConfig{20,              // coreNumAic
-                               40,              // coreNumAiv
-                               201326592,       // l2
-                               524288,          // l1
-                               65536,           // l0a
-                               65536,           // l0b
-                               131072,          // l0c
-                               196608,          // ub
-                               false}},         // isRegBasedArch
-    {kSoc910B4, HardwareConfig{20,              // coreNumAic
-                               40,              // coreNumAiv
-                               100663296,       // l2
-                               524288,          // l1
-                               65536,           // l0a
-                               65536,           // l0b
-                               131072,          // l0c
-                               196608,          // ub
-                               false}},         // isRegBasedArch
-    {kSoc910B4_1, HardwareConfig{20,            // coreNumAic
-                                 40,            // coreNumAiv
-                                 176160768,     // l2
-                                 524288,        // l1
-                                 65536,         // l0a
-                                 65536,         // l0b
-                                 131072,        // l0c
-                                 196608,        // ub
-                                 false}},       // isRegBasedArch
-    {kSoc950PR_9599, HardwareConfig{36,         // coreNumAic
-                                    72,         // coreNumAiv
-                                    134217728,  // l2
-                                    524288,     // l1
-                                    65536,      // l0a
-                                    65536,      // l0b
-                                    262144,     // l0c
-                                    253952,     // ub
-                                    true,       // isRegBasedArch
-                                    256}},      // RegVectorLength
+    // Field order: coreNumAic, coreNumAiv, l2, l1, l0a, l0b, l0c, ub, isRegBasedArch[, RegVectorLength]
+    {kSoc910B1, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910B2, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910B2C, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910B3, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910B4, HardwareConfig{20, 40, 100663296, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910B4_1, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9362, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9372, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9381, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9382, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9391, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc910_9392, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
+    {kSoc950PR_9579, HardwareConfig{28, 56, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
+    {kSoc950PR_9581, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
+    {kSoc950PR_9589, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
+    {kSoc950PR_9599, HardwareConfig{36, 72, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
   };
   return kHardwareConfigs;
 }
@@ -292,7 +254,7 @@ inline SmallVector<int64_t, kSmallVectorSizeSix> collectBishengStrideAlignUnits(
         continue;
       }
       size_t idx = static_cast<size_t>(dim);
-      alignTargets[idx] = std::lcm(alignTargets[idx], unit);
+      alignTargets[idx] = unit;
     }
   }
 
@@ -300,8 +262,11 @@ inline SmallVector<int64_t, kSmallVectorSizeSix> collectBishengStrideAlignUnits(
   int64_t shapeAccumulation = 1;
   for (int64_t dim = static_cast<int64_t>(shape.size()) - 1; dim >= 0; --dim) {
     size_t idx = static_cast<size_t>(dim);
-    int64_t newAlignedUnits = std::lcm(innerAlignedUnits, alignTargets[idx]);
-    alignUnits[idx + 1] = (shapeAccumulation % newAlignedUnits == 0) ? 1 : newAlignedUnits / innerAlignedUnits;
+    int64_t newAlignedUnits = std::max(innerAlignedUnits, alignTargets[idx]);
+    int64_t nonzeroNewAlignedUnits = std::max<int64_t>(newAlignedUnits, 1);
+    int64_t nonzeroInnerAlignedUnits = std::max<int64_t>(innerAlignedUnits, 1);
+    alignUnits[idx + 1] =
+      (shapeAccumulation % nonzeroNewAlignedUnits == 0) ? 1 : nonzeroNewAlignedUnits / nonzeroInnerAlignedUnits;
     innerAlignedUnits = newAlignedUnits;
     if (staticDims[idx]) {
       shapeAccumulation = multiplyAndCap(

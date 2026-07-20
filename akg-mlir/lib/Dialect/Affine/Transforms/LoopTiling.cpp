@@ -346,12 +346,12 @@ void LoopTiling::constructTiledLoop(affine::AffineForOp rootAffineForOp, unsigne
 // }
 // ```
 void LoopTiling::constructTiledIndex(MutableArrayRef<affine::AffineForOp> newLoops) {
-  int bandSize = band.size();
+  int bandSize = static_cast<int>(band.size());
   if (bandSize == 0) {
     return;
   }
   OpBuilder b(band[0].getOperation());
-  int tileNum = bandTileSizes.size() / bandSize;
+  int tileNum = static_cast<int>(bandTileSizes.size() / static_cast<size_t>(bandSize));
   // the i-th tiling
   for (int i = 0; i <= tileNum; ++i) {
     // the j-th axis
@@ -394,7 +394,7 @@ void LoopTiling::setInsertInequality(int curTile, bool &insertInequality) {
     return;
   }
 
-  int bandSize = band.size();
+  int bandSize = static_cast<int>(band.size());
   int lastTile = curTile - bandSize;
   insertInequality = false;
   // Check whether it can be divided from the inside out.
@@ -405,8 +405,8 @@ void LoopTiling::setInsertInequality(int curTile, bool &insertInequality) {
       return;
     }
   }
-  int64_t largestDiv = getLargestDivisorOfTripCount(band[lastTile]);
-  insertInequality |= (largestDiv % bandTileSizes[lastTile] != 0);
+  int64_t largestDiv = static_cast<int64_t>(getLargestDivisorOfTripCount(band[lastTile]));
+  insertInequality |= (largestDiv % static_cast<int64_t>(bandTileSizes[lastTile]) != 0);
 }
 
 // Set the upper bound of newLoops[curTile]. If insertInequality is true, the upper bound of the loop should be inserted
@@ -436,10 +436,10 @@ void LoopTiling::setInsertInequality(int curTile, bool &insertInequality) {
 // }
 void LoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops, int curTile, bool insertInequality) {
   // Set the upper bound.
-  int bandSize = band.size();
+  int bandSize = static_cast<int>(band.size());
   int lastTile = curTile - bandSize;
   OpBuilder b(newLoops[0].getOperation());
-  int64_t largestDiv = getLargestDivisorOfTripCount(band[curTile % bandSize]);
+  int64_t largestDiv = static_cast<int64_t>(getLargestDivisorOfTripCount(band[curTile % bandSize]));
 
   setInsertInequality(curTile, insertInequality);
   if (insertInequality) {
@@ -1409,7 +1409,7 @@ affine::AffineForOp LoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &build
     Block *parentBlock = fullLoop->getBlock();
     moveTailBlockAfterFullLoop(fullLoop, ctx.tailBlock);
     builder.setInsertionPoint(parentBlock, fullLoop->getIterator());
-    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, /* hasElse= */ false);
+    (void)builder.create<affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, false);
   }
   fullLoop.setLowerBound(ValueRange{kernelId}, startMap);
   fullLoop.setUpperBound(ValueRange{kernelId}, endMap);
@@ -1445,8 +1445,8 @@ void LoopTiling::mapTailBlockToKernel(OpBuilder &builder, TailBlockMappingParams
   auto lastIterSet = IntegerSet::get(kAffineSingleDimCount, kAffineZeroSymbolCount, exprs, eqFlags);
 
   builder.setInsertionPoint(params.tailLoop);
-  auto tailIfOp = builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId},
-                                                     /*hasElse=*/false);
+  auto tailIfOp =
+    builder.create<affine::AffineIfOp>(params.tailLoop.getLoc(), lastIterSet, ValueRange{params.kernelId}, false);
 
   params.tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
 }

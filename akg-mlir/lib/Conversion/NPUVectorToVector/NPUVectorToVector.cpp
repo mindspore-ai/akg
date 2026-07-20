@@ -672,6 +672,11 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     bool emitTail = true;
     Value alignedBound;  // lower bound of the tail / upper bound of the main loop
   };
+
+  static bool hasValidLoopShape(int64_t rank, int64_t laneCount) {
+    return rank > 0 && laneCount > 0;
+  }
+
   RegSplit planRegSplit(OpBuilder &b, Location loc, Value bound, int64_t lanes) const {
     RegSplit s;
     if (auto bc = getConstantIndex(bound)) {
@@ -1666,6 +1671,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
                                        IRMapping &unitMap, const TileCtx &unitCtx) const {
     int64_t R = unitCtx.loopRank;
     int64_t lanes = unitCtx.laneCount;
+    if (R < 1 || lanes < 1 || static_cast<size_t>(R) > bounds.size()) {
+      return failure();
+    }
     Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
     Value cLane = builder.create<arith::ConstantIndexOp>(loc, lanes);
@@ -2076,14 +2084,6 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     bool isStore = false;  // true for memref::StoreOp, false for npuv::TransferWriteOp
   };
 
-  // Delivery context for buildFullReductionSeed.
-  struct DeliveryCtx {
-    TypedAttr idAttr;
-    const DeliveryTarget &target;
-    const ReductionDelivery &delivery;
-    Value c0;
-  };
-
   // Output bundle for buildFullReductionSeed.
   struct SeedResult {
     bool reuseTargetAsAccBuf = false;
@@ -2320,6 +2320,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     }
     auto nvt = llvm::cast<npuv::NPUVectorType>(refRead.getVector().getType());
     int64_t rank = nvt.getRank();
+    if (!hasValidLoopShape(rank, laneCount)) {
+      return redOp.emitError("npuvector-to-vector: reduction rank and lane count must be positive");
+    }
 
     // Trace the post-reduction delivery chain
     ReductionDelivery delivery;
@@ -2347,6 +2350,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     if (failed(collectTileBounds({builder, loc}, nvt, refRead.getDynamicSizes(), refRead.getSource(), bounds))) {
       return failure();
     }
+    if (static_cast<int64_t>(bounds.size()) != rank) {
+      return failure();
+    }
 
     Value regIdent = buildIdentityAccumulator(builder, loc, kind, regVecTy);
     TypedAttr idAttr = getCombiningIdentityAttr(builder, kind, scalarElem);
@@ -2358,16 +2364,18 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     FullReductionInfo info{redOp, kind, scalarElem, producers, regIdent, regVecTy, laneCount};
     SeedResult seed;
     BuilderEnv benv{builder, loc};
-    DeliveryCtx dctx{idAttr, target, delivery, c0};
-    buildFullReductionSeed(benv, info, dctx, seed);
+    buildFullReductionSeed(benv, info, idAttr, target, delivery, c0, seed);
     bool reuseTargetAsAccBuf = seed.reuseTargetAsAccBuf;
     Value accBuf = seed.accBuf;
     Value idScalar = seed.idScalar;
     Value seedVec = seed.seedVec;
 
+    LoopNestDims loopDims;
+    loopDims.rank = rank;
+    loopDims.bounds = bounds;
+    LoopConstants loopConstants{c0, c1, cLane};
     Value vecAcc;
-    if (failed(buildFullReductionLoopNest({builder, loc}, {rank, bounds}, {c0, c1, cLane},
-                                          info, vecAcc))) {
+    if (failed(buildFullReductionLoopNest(benv, loopDims, loopConstants, info, vecAcc))) {
       return failure();
     }
 
@@ -2410,29 +2418,29 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // whether the output memref can be reused as the scalar accumulator buffer
   // (legacy `memref<1xT>` path) and, depending on that, sets up either the
   // legacy scalar identity / scratch store or the new rank-0 vector seed.
-  void buildFullReductionSeed(BuilderEnv env, FullReductionInfo info, DeliveryCtx dctx,
-                              SeedResult &out) const {
+  void buildFullReductionSeed(const BuilderEnv &env, const FullReductionInfo &info,
+                              TypedAttr idAttr, const DeliveryTarget &target,
+                              const ReductionDelivery &delivery, Value c0, SeedResult &out) const {
     OpBuilder &builder = env.builder;
     Location loc = env.loc;
     npuv::ReductionOp redOp = info.redOp;
     vector::CombiningKind kind = info.kind;
     Type scalarElem = info.scalarElem;
-    const DeliveryTarget &target = dctx.target;
-    const ReductionDelivery &delivery = dctx.delivery;
     out.reuseTargetAsAccBuf = false;
     if (target.isStore && target.rank == 1 && target.memref) {
       auto mt = llvm::cast<MemRefType>(target.memref.getType());
-      if (!mt.getShape().empty() && mt.getShape()[0] == 1 && mt.getElementType() == scalarElem &&
+      llvm::ArrayRef<int64_t> memShape = mt.getShape();
+      if (!memShape.empty() && memShape.front() == 1 && mt.getElementType() == scalarElem &&
           delivery.castChain.empty()) {
         out.reuseTargetAsAccBuf = true;
       }
     }
     auto rank0Ty = VectorType::get({}, scalarElem);
     if (out.reuseTargetAsAccBuf) {
-      out.idScalar = builder.create<arith::ConstantOp>(loc, dctx.idAttr);
+      out.idScalar = builder.create<arith::ConstantOp>(loc, idAttr);
       out.accBuf = target.memref;
       Value seedInit = redOp.getAcc() ? redOp.getAcc() : out.idScalar;
-      builder.create<memref::StoreOp>(loc, seedInit, out.accBuf, ValueRange{dctx.c0});
+      builder.create<memref::StoreOp>(loc, seedInit, out.accBuf, ValueRange{c0});
     } else if (Value acc = redOp.getAcc()) {
       out.seedVec = builder.create<vector::BroadcastOp>(loc, rank0Ty, acc);
     } else {
@@ -2491,6 +2499,9 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Location loc = env.loc;
     int64_t rank = dims.rank;
     ArrayRef<Value> bounds = dims.bounds;
+    if (rank < 1 || info.laneCount < 1 || static_cast<size_t>(rank) > bounds.size()) {
+      return failure();
+    }
     SmallVector<Value> outerIvs;
     SmallVector<scf::ForOp> outerLoops;
     OpBuilder lb = builder;
@@ -2671,7 +2682,7 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
     Location loc = vfFunc.getLoc();
     int64_t lanes = plan.laneCount;
     int64_t R = plan.loopRank;
-    if (R < 1) {
+    if (!hasValidLoopShape(R, lanes)) {
       return failure();
     }
 
@@ -2821,12 +2832,17 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // aligned main loop and a masked tail loop; the accumulators thread from main
   // into tail. Returns the final loop (whose results are the accumulators) in
   // `pass1`.
-  LogicalResult runPartialPass1(PartialPassEnv env, Location loc, LoopIterCtx iter,
-                                ReductionCtx red, scf::ForOp &pass1) const {
-    if (iter.rank < 1 || iter.rank > static_cast<int64_t>(iter.bounds.size())) {
+  LogicalResult runPartialPass1(const PartialPassEnv &env, Location loc, const LoopIterCtx &iter,
+                                const ReductionCtx &red, scf::ForOp &pass1) const {
+    if (iter.rank < 1) {
       return failure();
     }
-    Value bound = iter.bounds[iter.rank - 1];
+    const ArrayRef<Value> bounds = iter.bounds;
+    const size_t innerIdx = static_cast<size_t>(iter.rank - 1);
+    if (innerIdx >= bounds.size()) {
+      return failure();
+    }
+    Value bound = bounds[innerIdx];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     SmallVector<Value> curInit(red.redIdents.begin(), red.redIdents.end());
     bool any = false;
@@ -2880,22 +2896,40 @@ class NPUVectorToVector : public impl::NPUVectorToVectorBase<NPUVectorToVector> 
   // `tilePartialReductionKernel` helper: build the pass-2 register loops (aligned
   // main loop + masked tail loop), seed each op map with the per-row scalars /
   // unit values, then emit the pass-2 body in each.
-  LogicalResult runPartialPass2(PartialPassEnv env, Location loc, LoopIterCtx iter, ReductionCtx red) const {
-    if (iter.rank < 1 || iter.rank > static_cast<int64_t>(iter.bounds.size())) {
+  LogicalResult runPartialPass2(const PartialPassEnv &env, Location loc, const LoopIterCtx &iter,
+                                const ReductionCtx &red) const {
+    if (iter.rank < 1) {
       return failure();
     }
-    Value bound = iter.bounds[iter.rank - 1];
+    const size_t innerIdx = static_cast<size_t>(iter.rank - 1);
+    if (innerIdx >= iter.bounds.size()) {
+      return failure();
+    }
+    if (env.baseCtx.laneCount < 1) {
+      return failure();
+    }
+    Value bound = iter.bounds[innerIdx];
     RegSplit split = planRegSplit(env.builder, loc, bound, env.baseCtx.laneCount);
     if (split.emitMain) {
-      if (failed(emitPartialPass2Loop(env, loc, red, {iter.c0, split.alignedBound, bound, iter.cLane,
-                                     iter.outerIvs, {}, false}))) {
+      PassLoopParams mainParams;
+      mainParams.lbv = iter.c0;
+      mainParams.ubv = split.alignedBound;
+      mainParams.bound = bound;
+      mainParams.cLane = iter.cLane;
+      mainParams.outerIvs = iter.outerIvs;
+      if (failed(emitPartialPass2Loop(env, loc, red, mainParams))) {
         return failure();
       }
     }
     if (split.emitTail) {
-      Value tailLb = split.emitMain ? split.alignedBound : iter.c0;
-      if (failed(emitPartialPass2Loop(env, loc, red, {tailLb, bound, bound, iter.cLane,
-                                     iter.outerIvs, {}, true}))) {
+      PassLoopParams tailParams;
+      tailParams.lbv = split.emitMain ? split.alignedBound : iter.c0;
+      tailParams.ubv = bound;
+      tailParams.bound = bound;
+      tailParams.cLane = iter.cLane;
+      tailParams.outerIvs = iter.outerIvs;
+      tailParams.masked = true;
+      if (failed(emitPartialPass2Loop(env, loc, red, tailParams))) {
         return failure();
       }
     }

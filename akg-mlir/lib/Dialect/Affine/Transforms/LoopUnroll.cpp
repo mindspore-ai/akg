@@ -56,6 +56,7 @@ using mlir::succeeded;
 using mlir::WalkResult;
 using mlir::func::FuncOp;
 
+static constexpr int32_t kMaxUBNum = 65;
 /// Loop unrolling pass. Unrolls all innermost loops unless full unrolling and a
 /// full unroll threshold was specified, in which case, fully unrolls all loops
 /// with trip count less than the specified threshold. The latter is for testing
@@ -83,7 +84,7 @@ static bool isInnermostAffineForOp(mlir::affine::AffineForOp op) {
               int64_t origLoopStep = nestedForOp.getStepAsInt();
               for (auto origUbExpr : origUbExprs) {
                 AffineExpr newUb = (origUbExpr - origLbExprs[0]).ceilDiv(origLoopStep);
-                if (newUb != 1 || newUb.floorDiv(65) == 0) {
+                if (newUb != 1 || newUb.floorDiv(kMaxUBNum) == 0) {
                   return WalkResult::interrupt();
                 }
               }

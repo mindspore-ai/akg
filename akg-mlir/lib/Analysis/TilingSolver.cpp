@@ -48,7 +48,9 @@ void TilingSolver::initMinSize() {
     while (this->modelGraph->levelToTile > a->configs[kTileCfg].size()) {
       a->doExtraTile();
       auto tile = a->tryGetConfig(static_cast<int>(a->configs[kTileCfg].size()) - 1);
-      tile->value = 1;
+      if (tile) {
+        tile->value = 1;
+      }
       // Move last block config forward
       if (auto mapBlock = a->tryGetConfig(0, kGpuBlockCfg)) {
         mapBlock->index = ConfigPos(static_cast<int>(mapBlock->index) - 1);
@@ -173,10 +175,9 @@ void GlobalConfigSolver::setEnableVectorize() {
       return;
     }
     auto innerTile = innerMostAxis->tryGetConfig(0, kTileCfg);
-    innerAlignSize =
-      innerMostAxis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) == innerMostAxis->axisType.end()
-        ? innerTile->value
-        : -1;
+    bool isDynamic = innerMostAxis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) !=
+                     innerMostAxis->axisType.end();
+    innerAlignSize = (!isDynamic && innerTile) ? innerTile->value : -1;
     innerDivisible = innerMostAxis->range.second % innerAlignSize == 0;
   });
   if (std::any_of(modelGraph->nodes().begin(), modelGraph->nodes().end(),
@@ -363,7 +364,7 @@ void GlobalConfigSolver::UpdateGlobalInfo(func::FuncOp funcOp) {
       for (size_t i = 0; i < mapLevelCnt[axisInfo.mapLevel].size(); ++i) {
         auto used = mapLevelCnt[axisInfo.mapLevel][i];
         if (!used) {
-          axisInfo.mapDim = i;
+          axisInfo.mapDim = static_cast<int>(i);
           mapLevelCnt[axisInfo.mapLevel][i] = true;
           break;
         }
