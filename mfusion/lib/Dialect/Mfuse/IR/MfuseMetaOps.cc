@@ -570,6 +570,24 @@ static bool isIdentityPermutation(llvm::ArrayRef<int64_t> perm) {
 
 namespace {
 
+/// Try to reuse an equivalent cast that already dominates this cast in the
+/// same block. This gives CastOp a local CSE canonicalization without moving
+/// casts across control-flow or region boundaries.
+static mlir::LogicalResult tryReusePreviousEquivalentCast(CastOp op, mlir::PatternRewriter &rewriter) {
+  mlir::Value input = op.getInput();
+  for (Operation *user : input.getUsers()) {
+    auto castOp = mlir::dyn_cast<CastOp>(user);
+    if (!castOp || castOp.getOperation() == op.getOperation() || castOp.getType() != op.getType()) {
+      continue;
+    }
+    if (castOp->getBlock() == op->getBlock() && castOp->isBeforeInBlock(op)) {
+      rewriter.replaceOp(op, castOp.getResult());
+      return mlir::success();
+    }
+  }
+  return mlir::failure();
+}
+
 /// Try to commute cast with permute: cast(permute(x)) -> permute(cast(x))
 static mlir::LogicalResult tryCommuteWithPermute(CastOp op, mlir::PatternRewriter &rewriter) {
   mlir::Value input = op.getInput();
@@ -660,6 +678,12 @@ static mlir::LogicalResult tryComposeWithInnerCast(CastOp op, mlir::PatternRewri
 
 mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewriter) {
   mlir::Value input = op.getInput();
+
+  // Reuse an earlier identical cast in the same block.
+  if (mlir::succeeded(tryReusePreviousEquivalentCast(op, rewriter))) {
+    return mlir::success();
+  }
+
   if (!input.getDefiningOp()) {
     return mlir::failure();
   }
