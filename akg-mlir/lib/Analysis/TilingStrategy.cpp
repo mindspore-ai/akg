@@ -2319,14 +2319,15 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   PeakAnalysisInput input;
   input.func = ctx.func;
   for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
+    int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
+    int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
     auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
     if (!forOp) continue;
-    int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
-    int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
     tile = std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1));
     setTileUpperBoundForLoop(input, forOp, tile);
     input.isReduceXorAllVectorizeLoop[forOp] = false;
+    input.isWholeTiledLoop[forOp] = (tile >= extent);
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
