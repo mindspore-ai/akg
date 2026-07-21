@@ -18,32 +18,13 @@
 #define MFUSION_ANALYSIS_SPLIT_FUSETAGBARRIER_H
 
 #include <string>
-#include <vector>
 
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "mfusion/Analysis/Split/FusePattern.h"
 
 namespace mlir {
 namespace mfuse {
 namespace split {
-
-/// Merge adjacent split areas when any node carries one of the given unit attrs (legacy).
-class FuseTagBarrier : public FusePattern {
- public:
-  FuseTagBarrier(std::string name, llvm::ArrayRef<llvm::StringRef> mergeAttrs, FuseDirection direction);
-
- protected:
-  bool check(const AreaPtr &area) override;
-  bool match(const AreaPtr &area) override;
-
- private:
-  bool areaHasMergeAttr(const AreaPtr &area) const;
-
-  std::vector<std::string> merge_attrs_storage_;
-  llvm::SmallVector<llvm::StringRef, 4> merge_attrs_;
-};
 
 /// Merge adjacent areas that share at least one mfusion.dvm_fuse_group (member role only).
 class FuseTagBarrierByGroupId : public FusePattern {
@@ -60,9 +41,6 @@ class FuseTagBarrierByGroupId : public FusePattern {
 };
 
 FusePatternPtr createDvmFuseGroupTagBarrier(FuseDirection direction);
-
-/// Deprecated: use createDvmFuseGroupTagBarrier.
-FusePatternPtr createLayerNormDvmTagBarrier(FuseDirection direction);
 
 }  // namespace split
 }  // namespace mfuse

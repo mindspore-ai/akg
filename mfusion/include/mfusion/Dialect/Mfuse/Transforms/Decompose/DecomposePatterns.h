@@ -19,14 +19,18 @@
 
 #include "mlir/IR/PatternMatch.h"
 
+
 namespace mlir::mfuse {
+
+class ReduceMeanOp;
 
 /// Decompose pattern types enum
 enum class DecomposePatternType {
-  NONE,                  // No patterns
-  ALL,                   // All patterns
-  BEFORE_MANUAL_FUSION,  // Patterns to apply before manual fusion
-  AFTER_MANUAL_FUSION    // Patterns to apply after manual fusion
+  NONE,                       // No patterns
+  ALL,                        // All patterns
+  BEFORE_MANUAL_FUSION,       // Patterns to apply before manual fusion
+  AFTER_MANUAL_FUSION,        // All post-fusion patterns (aclnnvar, reducemean, math, ...)
+  AFTER_MANUAL_FUSION_CLUSTER  // Cluster-prep; excludes only LN-specific aclnnvar
 };
 
 /// Pattern function type for registering decomposition patterns
@@ -68,7 +72,11 @@ void registerAclnnDecomposePatterns(RewritePatternSet &patterns, const std::vect
 
 /// Register aclnn decompose patterns that run after manual fusion (e.g. var_mean for DVM tagging).
 void registerAclnnPostFusionDecomposePatterns(RewritePatternSet &patterns,
-                                                const std::vector<std::string> &opList = {});
+                                              const std::vector<std::string> &opList = {});
+
+/// Decompose one reduce_mean op into reduce_sum/div while preserving low-precision compute semantics.
+LogicalResult decomposeReduceMean(ReduceMeanOp meanOp, PatternRewriter &rewriter);
+
 
 }  // namespace mlir::mfuse
 

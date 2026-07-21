@@ -17,62 +17,10 @@
 #include "mfusion/Analysis/Split/FuseTagBarrier.h"
 
 #include "mfusion/Analysis/FusionRegion/FusionRegionTag.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 
 namespace mlir {
 namespace mfuse {
 namespace split {
-
-FuseTagBarrier::FuseTagBarrier(std::string name, llvm::ArrayRef<llvm::StringRef> mergeAttrs, FuseDirection direction)
-    : FusePattern(name, direction), merge_attrs_storage_(mergeAttrs.begin(), mergeAttrs.end()) {
-  merge_attrs_.reserve(merge_attrs_storage_.size());
-  for (const auto &attr : merge_attrs_storage_) {
-    merge_attrs_.push_back(attr);
-  }
-}
-
-bool FuseTagBarrier::areaHasMergeAttr(const AreaPtr &area) const {
-  if (!area) {
-    return false;
-  }
-  for (auto *node : area->nodes()) {
-    if (!node || !node->op()) {
-      continue;
-    }
-    Operation *op = node->op();
-    for (llvm::StringRef attr : merge_attrs_) {
-      if (op->hasAttr(attr)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-bool FuseTagBarrier::check(const AreaPtr &area) { return areaHasMergeAttr(area); }
-
-bool FuseTagBarrier::match(const AreaPtr &area) {
-  if (direction() == FuseDirection::FORWARD) {
-    for (const auto &[inp, relation] : area->inputsWithRelation()) {
-      if (hasCircle(area, inp) || relation > EdgeRelation::BROADCAST) {
-        continue;
-      }
-      if (areaHasMergeAttr(inp)) {
-        fused_areas_.push_back(inp);
-      }
-    }
-  } else {
-    for (const auto &[user, relation] : area->usersWithRelation()) {
-      if (hasCircle(area, user) || relation > EdgeRelation::BROADCAST) {
-        continue;
-      }
-      if (areaHasMergeAttr(user)) {
-        fused_areas_.push_back(user);
-      }
-    }
-  }
-  return !fused_areas_.empty();
-}
 
 FuseTagBarrierByGroupId::FuseTagBarrierByGroupId(std::string name, FuseDirection direction)
     : FusePattern(std::move(name), direction) {}
@@ -140,10 +88,6 @@ bool FuseTagBarrierByGroupId::match(const AreaPtr &area) {
 FusePatternPtr createDvmFuseGroupTagBarrier(FuseDirection direction) {
   const char *suffix = direction == FuseDirection::FORWARD ? "fwd" : "bwd";
   return std::make_shared<FuseTagBarrierByGroupId>(std::string("tag_barrier_dvm_fuse_group_") + suffix, direction);
-}
-
-FusePatternPtr createLayerNormDvmTagBarrier(FuseDirection direction) {
-  return createDvmFuseGroupTagBarrier(direction);
 }
 
 }  // namespace split

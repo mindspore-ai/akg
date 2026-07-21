@@ -283,55 +283,59 @@ class SigmoidDecomposePattern : public OpRewritePattern<mfuse::AclnnSigmoidOp> {
   }
 };
 
+LogicalResult decomposeReduceMean(ReduceMeanOp meanOp, PatternRewriter &rewriter) {
+  auto inputType = dyn_cast<RankedTensorType>(meanOp.getInput().getType());
+  auto resultType = dyn_cast<RankedTensorType>(meanOp.getResult().getType());
+  if (!inputType || !resultType) {
+    return failure();
+  }
+
+  auto reductionSizeOr = getStaticReductionSize(inputType, meanOp.getDimensions());
+  if (failed(reductionSizeOr)) {
+    return rewriter.notifyMatchFailure(meanOp, "reduced dimensions must be statically known and positive");
+  }
+
+  Type resultElementType = resultType.getElementType();
+  auto floatElementType = dyn_cast<FloatType>(resultElementType);
+  if (!floatElementType) {
+    return rewriter.notifyMatchFailure(meanOp, "result element type must be floating point");
+  }
+
+  // Compute f16/bf16 means in f32 and cast back. Cast the input directly to
+  // the compute type to avoid overflowing large values through f16 first.
+  const bool computeInF32 = shouldComputeMeanInF32(resultElementType);
+  Type computeElementType = computeInF32 ? rewriter.getF32Type() : resultElementType;
+  Value reduceInput = meanOp.getInput();
+  RankedTensorType sumResultType =
+      computeInF32 ? getSameShapeWithElementType(resultType, computeElementType) : resultType;
+
+  if (inputType.getElementType() != computeElementType) {
+    RankedTensorType reduceInputType = getSameShapeWithElementType(inputType, computeElementType);
+    reduceInput = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), reduceInputType, reduceInput).getResult();
+  }
+
+  auto reduceSum = rewriter.create<mfuse::ReduceSumOp>(meanOp.getLoc(), sumResultType, reduceInput,
+                                                       meanOp.getDimensions(), meanOp.getKeepdimAttr());
+  auto divisorOr = materializePositiveIntScalarTensorConstant(rewriter, meanOp.getLoc(), *reductionSizeOr);
+  if (failed(divisorOr)) {
+    return rewriter.notifyMatchFailure(meanOp, "failed to materialize mean divisor constant");
+  }
+
+  auto mean = rewriter.create<mfuse::DivOp>(meanOp.getLoc(), sumResultType, reduceSum.getResult(), *divisorOr);
+  Value output = mean.getResult();
+  if (computeInF32) {
+    output = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), resultType, output).getResult();
+  }
+  rewriter.replaceOp(meanOp, output);
+  return success();
+}
+
 class ReduceMeanDecomposePattern : public OpRewritePattern<mfuse::ReduceMeanOp> {
  public:
   using OpRewritePattern<mfuse::ReduceMeanOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::ReduceMeanOp meanOp, PatternRewriter &rewriter) const override {
-    auto inputType = dyn_cast<RankedTensorType>(meanOp.getInput().getType());
-    auto resultType = dyn_cast<RankedTensorType>(meanOp.getResult().getType());
-    if (!inputType || !resultType) {
-      return failure();
-    }
-
-    auto reductionSizeOr = getStaticReductionSize(inputType, meanOp.getDimensions());
-    if (failed(reductionSizeOr)) {
-      return rewriter.notifyMatchFailure(meanOp, "reduced dimensions must be statically known and positive");
-    }
-
-    Type resultElementType = resultType.getElementType();
-    auto floatElementType = dyn_cast<FloatType>(resultElementType);
-    if (!floatElementType) {
-      return rewriter.notifyMatchFailure(meanOp, "result element type must be floating point");
-    }
-
-    // Compute f16/bf16 means in f32 and cast back. Cast the input directly to
-    // the compute type to avoid overflowing large values through f16 first.
-    const bool computeInF32 = shouldComputeMeanInF32(resultElementType);
-    Type computeElementType = computeInF32 ? rewriter.getF32Type() : resultElementType;
-    Value reduceInput = meanOp.getInput();
-    RankedTensorType sumResultType =
-      computeInF32 ? getSameShapeWithElementType(resultType, computeElementType) : resultType;
-
-    if (inputType.getElementType() != computeElementType) {
-      RankedTensorType reduceInputType = getSameShapeWithElementType(inputType, computeElementType);
-      reduceInput = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), reduceInputType, reduceInput).getResult();
-    }
-
-    auto reduceSum = rewriter.create<mfuse::ReduceSumOp>(meanOp.getLoc(), sumResultType, reduceInput,
-                                                         meanOp.getDimensions(), meanOp.getKeepdimAttr());
-    auto divisorOr = materializePositiveIntScalarTensorConstant(rewriter, meanOp.getLoc(), *reductionSizeOr);
-    if (failed(divisorOr)) {
-      return rewriter.notifyMatchFailure(meanOp, "failed to materialize mean divisor constant");
-    }
-
-    auto mean = rewriter.create<mfuse::DivOp>(meanOp.getLoc(), sumResultType, reduceSum.getResult(), *divisorOr);
-    Value output = mean.getResult();
-    if (computeInF32) {
-      output = rewriter.create<mfuse::CastOp>(meanOp.getLoc(), resultType, output).getResult();
-    }
-    rewriter.replaceOp(meanOp, output);
-    return success();
+    return decomposeReduceMean(meanOp, rewriter);
   }
 };
 

@@ -53,13 +53,6 @@ static constexpr llvm::StringRef kDvmFuseKind = "mfusion.dvm_fuse_kind";
 static constexpr llvm::StringRef kDvmFuseRoleMember = "member";
 static constexpr llvm::StringRef kDvmFuseRoleAffinity = "affinity";
 
-/// Legacy unit tags (still read by split for backward compatibility).
-static constexpr llvm::StringRef kLayerNormDvm = "mfusion.layer_norm_dvm";
-static constexpr llvm::StringRef kLayerNormDvmAffinity = "mfusion.layer_norm_dvm_affinity";
-
-/// Synthetic group id used when merging areas that only carry kLayerNormDvm.
-static constexpr llvm::StringRef kLegacyLayerNormDvmGroup = "legacy.layer_norm_dvm";
-
 /// Set on the module when safe-softmax candidate regions are present; gates tag passes
 /// and DVMCluster broadcast-select rejection.
 static constexpr llvm::StringRef kSafeSoftmaxPipelineActive = "mfusion.safe_softmax_pipeline_active";

@@ -49,6 +49,9 @@ bool isScalarOrSingleElement(RankedTensorType tensorType);
 // Return true if the type has dynamic dimensions (non-ranked or has dynamic dims).
 bool hasDynamicShape(Type type);
 
+// Peel unrealized_conversion_cast chains so fusion matching treats converted inputs as the same SSA value.
+Value getCanonicalFusionTensor(Value v);
+
 // Match both operands of a binary operation with specific Op types, considering commutativity.
 template <typename TargetLhsOpType, typename TargetRhsOpType>
 inline bool matchCommutativeOperands(Value x, Value y, TargetLhsOpType &matchedLhsOp, TargetRhsOpType &matchedRhsOp) {

@@ -14,24 +14,33 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
-#define MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
+#ifndef MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMPARTITIONER_H
+#define MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMPARTITIONER_H
 
-#include "mlir/IR/Operation.h"
-#include "llvm/ADT/ArrayRef.h"
+#include <string>
+
+#include "mfusion/Analysis/DvmFusion/LayerNorm/LayerNormDvmMatcher.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mfuse {
 namespace layernorm_dvm {
 
-/// Collect backward operations whose transitive users stay inside the matched closure.
-void collectExclusiveBackwardOps(llvm::ArrayRef<Operation *> ops, llvm::SmallVectorImpl<Operation *> &members);
+struct FusedIsland {
+  llvm::SmallVector<Operation *, 32> ops;
+};
 
-bool isOpInFusedIsland(Operation *op);
+struct LayerNormDvmPlan {
+  std::string groupId;
+  llvm::SmallVector<FusedIsland, 4> islands;
+};
+
+LayerNormDvmPlan partitionForward(LayerNormDvmMatch &match, llvm::StringRef groupId);
+LayerNormDvmPlan partitionBackwardGradDiv(const LayerNormDvmBwdMatch &match, llvm::StringRef groupId);
+LayerNormDvmPlan partitionBackwardVector(const LayerNormDvmBwdMatch &match, llvm::StringRef groupId);
 
 }  // namespace layernorm_dvm
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMUTILS_H
+#endif  // MFUSION_ANALYSIS_LAYERNORMDVM_LAYERNORMDVMPARTITIONER_H

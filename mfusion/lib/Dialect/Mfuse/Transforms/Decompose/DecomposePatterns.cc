@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -73,6 +74,7 @@ static void registerExtraDecomposePatterns(RewritePatternSet &patterns, Decompos
       registerAclnnDecomposePatterns(patterns, extraOpList);
       break;
     case DecomposePatternType::AFTER_MANUAL_FUSION:
+    case DecomposePatternType::AFTER_MANUAL_FUSION_CLUSTER:
       registerAclnnPostFusionDecomposePatterns(patterns, extraOpList);
       registerDecomposeMathOpPatterns(patterns, extraOpList, /*includeMatMulWithBiasByDefault=*/true);
       break;
@@ -102,6 +104,22 @@ void registerDecomposePatterns(RewritePatternSet &patterns, DecomposePatternType
       registerAclnnPostFusionDecomposePatterns(patterns, opList);
       registerDecomposeMathOpPatterns(patterns, opList, /*includeMatMulWithBiasByDefault=*/false);
       break;
+    case DecomposePatternType::AFTER_MANUAL_FUSION_CLUSTER: {
+      // Global cluster-prep decompose after mfuse-fusion. aclnn.var remains
+      // LayerNorm-local because it must see the sibling reduce_mean first.
+      // reduce_mean stays global: non-LayerNorm means (including failed
+      // RmsNorm fusion and low-precision mean.dim) still require sum+div.
+      static const std::vector<std::string> kDefaultAclnnOps = {"aclnnvarmean"};
+      static const std::vector<std::string> kDefaultMathOps = {"clamp",       "gelu",
+                                                               "gelubackward", "reducemean",
+                                                               "tanh",        "sigmoid",
+                                                               "matmulwithbias"};
+      const std::vector<std::string> &aclnnOps = opList.empty() ? kDefaultAclnnOps : opList;
+      const std::vector<std::string> &mathOps = opList.empty() ? kDefaultMathOps : opList;
+      registerAclnnPostFusionDecomposePatterns(patterns, aclnnOps);
+      registerDecomposeMathOpPatterns(patterns, mathOps);
+      break;
+    }
     case DecomposePatternType::NONE:
       // No patterns to register
       break;
