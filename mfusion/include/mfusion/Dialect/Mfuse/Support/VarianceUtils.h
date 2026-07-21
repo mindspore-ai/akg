@@ -39,9 +39,11 @@ bool reductionDimsEqual(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs);
 ReduceMeanOp findMatchingReduceMean(Value x, ArrayRef<int64_t> dims, bool keepdim);
 
 /// Build var = sum((x-mean)^2) / (N - correction) with keepdim, reusing an existing mean.
+/// When \p dominanceAnchor is set, an existing center sub is reused only if it is defined
+/// before \p dominanceAnchor in the same block (SSA dominance).
 Value createVarianceFromExistingMean(PatternRewriter &rewriter, Location loc, Value x, Value mean,
                                      ArrayRef<int64_t> dims, int64_t correction, RankedTensorType varType,
-                                     bool keepdim);
+                                     bool keepdim, Operation *dominanceAnchor = nullptr);
 
 llvm::SmallVector<int64_t, 4> getSortedReductionDims(ArrayAttr dimAttr);
 

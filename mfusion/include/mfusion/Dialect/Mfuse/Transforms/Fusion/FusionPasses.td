@@ -75,13 +75,13 @@ def FuseLayerNorm : Pass<"fuse-layernorm", "::mlir::ModuleOp"> {
 //===----------------------------------------------------------------------===//
 
 def FuseLayerNormDvm : Pass<"fuse-layer-norm-dvm", "::mlir::ModuleOp"> {
-  let summary = "Tag BERT LayerNorm subgraphs for DVM split/codegen";
+  let summary = "Fuse BERT LayerNorm subgraphs into mfuse.fused for DVM";
   let description = [{
-    Tag decomposed LayerNorm subgraphs via the generic fusion-region API
-    (mfusion.dvm_fuse_group / mfusion.dvm_fuse_role member|affinity). Legacy unit attrs
-    mfusion.layer_norm_dvm are also set for compatibility. Split uses
-    FuseTagBarrierByGroupId to merge adjacent areas sharing the same group id (member
-    only; affinity nodes are not merge hubs).
+    Phase 0: targeted decompose (aclnnvar, then reducemean) while sibling reduce_mean
+    is still available for var expansion.
+    Phase 1: match decomposed LayerNorm subgraphs and materialize matcher-driven mfuse.fused
+    DVM islands. Tags mfusion.dvm_fuse_kind=layer_norm on the fused wrapper only;
+    split skips these islands via shouldSkipSplitForMatcherFusedIsland.
   }];
   let constructor = "mlir::mfuse::createFuseLayerNormDvmPass()";
   let dependentDialects = [
@@ -388,9 +388,16 @@ def FuseConvBatchNorm : Pass<"fuse-conv-batchnorm", "::mlir::ModuleOp"> {
 def MfuseFusion : Pass<"mfuse-fusion", "::mlir::ModuleOp"> {
   let summary = "Unified fusion pass containing all fusion patterns";
   let description = [{
-    Unified fusion pass that runs all fusion patterns.
+    Runs common Mfuse fusion passes for every backend. When kernel-generator=dvm,
+    it additionally runs fuse-safe-softmax-dvm followed by fuse-layer-norm-dvm.
+    LayerNorm DVM embeds candidate-local variance and mean decomposition before matcher
+    materialization; fuse-layernorm must run earlier in this same pipeline.
   }];
   let constructor = "mlir::mfuse::createMfuseFusionPass()";
+  let options = [
+    Option<"kernelGenerator", "kernel-generator", "std::string", /*default=*/"\"dvm\"",
+           "Kernel generator used to select backend-specific fusion passes">
+  ];
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
@@ -417,6 +424,31 @@ def MatMulOptimization : Pass<"matmul-optimization", "::mlir::ModuleOp"> {
     6. fuse-matmul-reshape-bias-add - reshape path bias fusion
   }];
   let constructor = "mlir::mfuse::createMatMulOptimizationPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def MfuseFusionPre : Pass<"mfuse-fusion-pre", "::mlir::ModuleOp"> {
+  let summary = "Alias of mfuse-fusion";
+  let description = [{
+    Same pass pipeline as mfuse-fusion (including fuse-layer-norm-dvm at the end).
+  }];
+  let constructor = "mlir::mfuse::createMfuseFusionPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def MfuseFusionPost : Pass<"mfuse-fusion-post", "::mlir::ModuleOp"> {
+  let summary = "Deprecated alias of fuse-layer-norm-dvm (lit bisect only)";
+  let description = [{
+    Same as fuse-layer-norm-dvm. Production pipeline uses mfuse-fusion which includes
+    fuse-layer-norm-dvm at the end.
+  }];
+  let constructor = "mlir::mfuse::createFuseLayerNormDvmPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
