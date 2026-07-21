@@ -51,6 +51,11 @@ struct TilingMetadata {
   int64_t selectorTrueKey = 0;
   int64_t selectorFalseKey = 0;
   std::vector<SmallVector<char, kSmallVectorSizeSix>> bandMultiVecAxisMasks;
+  std::vector<SmallVector<int64_t, kSmallVectorSizeSix>> bandAxisAlignUnits;
+  SmallVector<unsigned, kSmallVectorSizeSix> selectorOuterTileIndices;
+  SmallVector<int64_t, kSmallVectorSizeSix> selectorAlignUnits;
+  int64_t maxVectorTile = 0;
+  int64_t selectorMinTile = 0;
 
   bool empty() const { return bandTileSizes.empty() && bandConstraintMaxs.empty() && bandMultiVecAxisMasks.empty(); }
   bool hasRuntimeSelector() const {
@@ -64,9 +69,14 @@ struct TilingMetadata {
     selectorLimit = 0;
     selectorTrueKey = 0;
     selectorFalseKey = 0;
+    maxVectorTile = 0;
+    selectorMinTile = 0;
     bandTileSizes.clear();
     bandConstraintMaxs.clear();
     bandMultiVecAxisMasks.clear();
+    bandAxisAlignUnits.clear();
+    selectorOuterTileIndices.clear();
+    selectorAlignUnits.clear();
   }
 };
 using TilingMetadataMap = DenseMap<int64_t, TilingMetadata>;
@@ -83,6 +93,9 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
                                     TilingMetadataMap *metadataByKey);
+LogicalResult materializeDynamicSelectorOuterTiles(func::FuncOp originalKernel, func::FuncOp hostTilingFunc,
+                                                   const TilingMetadata &metadata, OpBuilder &builder,
+                                                   llvm::SmallVectorImpl<Value> &outerTiles);
 
 // Apply tiling to a kernel using tile sizes from a memref
 // originalKernel: the input IR function to be tiled (tileSizesMemref is the last argument)
