@@ -20,6 +20,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -49,11 +50,12 @@ static Value convertToI32(OpBuilder &builder, Location loc, Value value) {
   if (auto intTy = dyn_cast<IntegerType>(valueType)) {
     if (intTy.getWidth() == kI64BitWidth) {
       auto i32Type = builder.getI32Type();
-      if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
-        IntegerAttr intAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
-        APInt i64Val = intAttr.getValue();
-        APInt i32Val = i64Val.trunc(kI32BitWidth);
-        return builder.create<arith::ConstantOp>(loc, i32Type, builder.getIntegerAttr(i32Type, i32Val));
+      if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+          APInt i64Val = intAttr.getValue();
+          APInt i32Val = i64Val.trunc(kI32BitWidth);
+          return builder.create<arith::ConstantOp>(loc, i32Type, builder.getIntegerAttr(i32Type, i32Val));
+        }
       }
       // TruncIOp only accepts signless integers; bitcast signed/unsigned to signless first
       Value truncInput = value;
@@ -72,15 +74,16 @@ static Value convertToF32(OpBuilder &builder, Location loc, Value value) {
   Type valueType = value.getType();
   if (isa<BFloat16Type>(valueType)) {
     auto f32Type = builder.getF32Type();
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
-      FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
-      APFloat bf16Value = floatAttr.getValue();
-      bool losesInfo = false;
-      APFloat f32Value(bf16Value);
-      f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
-      return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
+    if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto floatAttr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+        APFloat bf16Value = floatAttr.getValue();
+        bool losesInfo = false;
+        APFloat f32Value(bf16Value);
+        f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
+        return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
+      }
     }
-    if (auto truncFOp = dyn_cast<arith::TruncFOp>(value.getDefiningOp())) {
+    if (auto truncFOp = value.getDefiningOp<arith::TruncFOp>()) {
       if (isa<Float32Type>(truncFOp.getIn().getType())) {
         return truncFOp.getIn();
       }
@@ -89,14 +92,16 @@ static Value convertToF32(OpBuilder &builder, Location loc, Value value) {
   }
   if (isa<Float64Type>(valueType)) {
     auto f32Type = builder.getF32Type();
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
-      FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
-      APFloat f64Value = floatAttr.getValue();
-      bool losesInfo = false;
-      APFloat f32Value(f64Value);
-      f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
-      return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
-    } else if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
+    if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto floatAttr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+        APFloat f64Value = floatAttr.getValue();
+        bool losesInfo = false;
+        APFloat f32Value(f64Value);
+        f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
+        return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
+      }
+    }
+    if (auto extFOp = value.getDefiningOp<arith::ExtFOp>()) {
       if (isa<Float32Type>(extFOp.getIn().getType())) {
         return extFOp.getIn();
       }
@@ -110,16 +115,17 @@ static Value convertWideFPToBF16(OpBuilder &builder, Location loc, Value value) 
   Type valueType = value.getType();
   if (isa<Float32Type, Float64Type>(valueType)) {
     auto bf16Type = builder.getBF16Type();
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
-      FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
-      APFloat f32Value = floatAttr.getValue();
-      bool losesInfo = false;
-      APFloat bf16Value(f32Value);
-      bf16Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
-      FloatAttr bf16Attr = FloatAttr::get(bf16Type, bf16Value);
-      return builder.create<arith::ConstantOp>(loc, bf16Type, bf16Attr);
+    if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto floatAttr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+        APFloat f32Value = floatAttr.getValue();
+        bool losesInfo = false;
+        APFloat bf16Value(f32Value);
+        bf16Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
+        FloatAttr bf16Attr = FloatAttr::get(bf16Type, bf16Value);
+        return builder.create<arith::ConstantOp>(loc, bf16Type, bf16Attr);
+      }
     }
-    if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
+    if (auto extFOp = value.getDefiningOp<arith::ExtFOp>()) {
       if (extFOp.getIn().getType().isBF16()) {
         return extFOp.getIn();
       }
@@ -140,13 +146,14 @@ static Value convertI8ExtSiToI64(OpBuilder &builder, Location loc, Value v) {
   return builder.create<arith::ExtSIOp>(loc, i64Ty, i32Val);
 }
 
-// Pattern to convert affine.load from bf16 memref to f32
+// Pattern to convert (affine|memref).load from bf16 memref to f32
 // Benefit = 3: Higher priority to process loads first (before arithmetic ops)
-struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp> {
-  explicit AffineLoadBF16ToF32Pattern(MLIRContext *context, PatternBenefit benefit = 3)
-      : OpRewritePattern<affine::AffineLoadOp>(context, benefit) {}
+template <typename LoadOpTy, typename StoreOpTy>
+struct LoadBF16ToF32Pattern : public OpRewritePattern<LoadOpTy> {
+  explicit LoadBF16ToF32Pattern(MLIRContext *context, PatternBenefit benefit = 3)
+      : OpRewritePattern<LoadOpTy>(context, benefit) {}
 
-  LogicalResult matchAndRewrite(affine::AffineLoadOp loadOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(LoadOpTy loadOp, PatternRewriter &rewriter) const override {
     Value memref = loadOp.getMemRef();
     auto memrefType = dyn_cast<MemRefType>(memref.getType());
     if (!memrefType || !isa<BFloat16Type>(memrefType.getElementType())) {
@@ -154,40 +161,31 @@ struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp
     }
 
     Value loadedValue = loadOp.getResult();
-    // Check if all uses are only affine.store or arith::ExtFOp
-    // If so, we don't need to convert (store will handle it, or ExtFOp already exists)
     if (!llvm::any_of(loadedValue.getUses(), [](OpOperand &use) {
-          return !isa<affine::AffineStoreOp, arith::ExtFOp, arith::BitcastOp>(use.getOwner());
+          return !isa<StoreOpTy, arith::ExtFOp, arith::BitcastOp>(use.getOwner());
         })) {
-      return failure();  // All uses are store BitcastOp or ExtFOp, skip conversion
+      return failure();  // All uses are store / BitcastOp / ExtFOp, skip conversion
     }
-    // The memref has bf16 element type, so the load will return a bf16 value
-    // We need to convert the loaded bf16 value to f32
-    // Insert the conversion right after the load operation
+
     Location loc = loadOp.getLoc();
     rewriter.setInsertionPointAfter(loadOp);
-
-    // Create the conversion operation (f32Value uses loadedValue as input)
     Value f32Value = convertToF32(rewriter, loc, loadedValue);
     Operation *conversionOp = f32Value.getDefiningOp();
 
-    // Replace all uses of the original load result with the converted f32 value
-    // But exclude the conversion operation itself (f32Value's defining op uses loadedValue)
-    rewriter.replaceUsesWithIf(loadedValue, f32Value, [conversionOp](OpOperand &use) {
-      // Replace all uses except the one in the conversion operation itself
-      return use.getOwner() != conversionOp;
-    });
-
+    rewriter.replaceUsesWithIf(loadedValue, f32Value,
+                               [conversionOp](OpOperand &use) { return use.getOwner() != conversionOp; });
     return success();
   }
 };
 
-// Pattern to convert affine.load from i64 memref to i32
-struct AffineLoadI64ToI32Pattern : public OpRewritePattern<affine::AffineLoadOp> {
-  explicit AffineLoadI64ToI32Pattern(MLIRContext *context, PatternBenefit benefit = 3)
-      : OpRewritePattern<affine::AffineLoadOp>(context, benefit) {}
+// Pattern to convert (affine|memref).load from i64 memref to i32
+// Benefit = 3: Higher priority to process loads first (before arithmetic ops)
+template <typename LoadOpTy, typename StoreOpTy>
+struct LoadI64ToI32Pattern : public OpRewritePattern<LoadOpTy> {
+  explicit LoadI64ToI32Pattern(MLIRContext *context, PatternBenefit benefit = 3)
+      : OpRewritePattern<LoadOpTy>(context, benefit) {}
 
-  LogicalResult matchAndRewrite(affine::AffineLoadOp loadOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(LoadOpTy loadOp, PatternRewriter &rewriter) const override {
     Value memref = loadOp.getMemRef();
     auto memrefType = dyn_cast<MemRefType>(memref.getType());
     if (!memrefType) {
@@ -200,7 +198,7 @@ struct AffineLoadI64ToI32Pattern : public OpRewritePattern<affine::AffineLoadOp>
 
     Value loadedValue = loadOp.getResult();
     if (!llvm::any_of(loadedValue.getUses(),
-                      [](OpOperand &use) { return !isa<affine::AffineStoreOp, arith::TruncIOp>(use.getOwner()); })) {
+                      [](OpOperand &use) { return !isa<StoreOpTy, arith::TruncIOp>(use.getOwner()); })) {
       return failure();
     }
 
@@ -214,6 +212,86 @@ struct AffineLoadI64ToI32Pattern : public OpRewritePattern<affine::AffineLoadOp>
   }
 };
 
+// Trait for store op recreation: affine needs affineMapAttr, memref doesn't.
+template <typename StoreOpTy>
+struct StoreRecreator;
+
+template <>
+struct StoreRecreator<affine::AffineStoreOp> {
+  static void recreate(PatternRewriter &rewriter, affine::AffineStoreOp storeOp, Value value, Value memref) {
+    rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, value, memref, storeOp.getAffineMapAttr().getValue(),
+                                                       storeOp.getIndices());
+  }
+};
+
+template <>
+struct StoreRecreator<memref::StoreOp> {
+  static void recreate(PatternRewriter &rewriter, memref::StoreOp storeOp, Value value, Value memref) {
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(storeOp, value, memref, storeOp.getIndices());
+  }
+};
+
+// Pattern to convert (affine|memref).store wider float value to bf16 memref
+// Benefit = 2: Medium priority, process stores after loads but before arithmetic ops
+template <typename StoreOpTy>
+struct StoreWideFPToBF16Pattern : public OpRewritePattern<StoreOpTy> {
+  explicit StoreWideFPToBF16Pattern(MLIRContext *context, PatternBenefit benefit = 2)
+      : OpRewritePattern<StoreOpTy>(context, benefit) {}
+  LogicalResult matchAndRewrite(StoreOpTy storeOp, PatternRewriter &rewriter) const override {
+    Value valueToStore = storeOp.getValueToStore();
+    Value memref = storeOp.getMemRef();
+
+    auto memrefType = dyn_cast<MemRefType>(memref.getType());
+    if (!memrefType) {
+      return failure();
+    }
+
+    if (!isa<BFloat16Type>(memrefType.getElementType()) || !isa<Float32Type, Float64Type>(valueToStore.getType())) {
+      return failure();
+    }
+
+    Value bf16Value = convertWideFPToBF16(rewriter, storeOp.getLoc(), valueToStore);
+    StoreRecreator<StoreOpTy>::recreate(rewriter, storeOp, bf16Value, memref);
+    return success();
+  }
+};
+
+// Pattern to convert (affine|memref).store i32 value to i64 memref
+// Benefit = 2: Medium priority, process stores after loads but before arithmetic ops
+template <typename StoreOpTy>
+struct StoreI64ToI32Pattern : public OpRewritePattern<StoreOpTy> {
+  explicit StoreI64ToI32Pattern(MLIRContext *context, PatternBenefit benefit = 2)
+      : OpRewritePattern<StoreOpTy>(context, benefit) {}
+  LogicalResult matchAndRewrite(StoreOpTy storeOp, PatternRewriter &rewriter) const override {
+    Value valueToStore = storeOp.getValueToStore();
+    Value memref = storeOp.getMemRef();
+
+    auto memrefType = dyn_cast<MemRefType>(memref.getType());
+    if (!memrefType) {
+      return failure();
+    }
+
+    auto elemTy = dyn_cast<IntegerType>(memrefType.getElementType());
+    if (!elemTy || elemTy.getWidth() != kI64BitWidth) {
+      return failure();
+    }
+
+    auto valTy = dyn_cast<IntegerType>(valueToStore.getType());
+    if (!valTy || valTy.getWidth() != kI32BitWidth) {
+      return failure();
+    }
+
+    bool isUnsigned = (valTy.getSignedness() == IntegerType::Unsigned);
+    Value i64Value = isUnsigned ? rewriter.create<arith::ExtUIOp>(storeOp.getLoc(), elemTy, valueToStore).getResult()
+                                : rewriter.create<arith::ExtSIOp>(storeOp.getLoc(), elemTy, valueToStore);
+    StoreRecreator<StoreOpTy>::recreate(rewriter, storeOp, i64Value, memref);
+    return success();
+  }
+};
+
+// Pattern to convert affine.load from bf16 memref to f32
+// Benefit = 3: Higher priority to process loads first (before arithmetic ops)
+// Pattern to convert affine.load from i64 memref to i32
 struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
   explicit TruncFOpPattern(MLIRContext *context, PatternBenefit benefit = 2)
       : OpRewritePattern<arith::TruncFOp>(context, benefit) {}
@@ -247,7 +325,7 @@ struct TruncIOpPattern : public OpRewritePattern<arith::TruncIOp> {
       return success();
     }
     // Fold trunci of a constant
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
+    if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
       auto resIntTy = dyn_cast<IntegerType>(truncOp.getResult().getType());
       if (!resIntTy) {
         return failure();
@@ -313,68 +391,6 @@ struct BitcastOpPattern : public OpRewritePattern<arith::BitcastOp> {
       rewriter.replaceOpWithNewOp<arith::BitcastOp>(bitcastOp, resType, bf16Value);
     }
     return failure();
-  }
-};
-
-// Pattern to convert affine.store wider float value to bf16 memref
-// Benefit = 2: Medium priority, process stores after loads but before arithmetic ops
-struct AffineStoreWideFPToBF16Pattern : public OpRewritePattern<affine::AffineStoreOp> {
-  explicit AffineStoreWideFPToBF16Pattern(MLIRContext *context, PatternBenefit benefit = 2)
-      : OpRewritePattern<affine::AffineStoreOp>(context, benefit) {}
-  LogicalResult matchAndRewrite(affine::AffineStoreOp storeOp, PatternRewriter &rewriter) const override {
-    Value valueToStore = storeOp.getValueToStore();
-    Value memref = storeOp.getMemRef();
-
-    auto memrefType = dyn_cast<MemRefType>(memref.getType());
-    if (!memrefType) {
-      return failure();
-    }
-
-    // Check if memref is bf16 type and value is wider float
-    if (!isa<BFloat16Type>(memrefType.getElementType()) || !isa<Float32Type, Float64Type>(valueToStore.getType())) {
-      return failure();  // Not storing f32 to bf16 memref, skip
-    }
-
-    // Convert wider float value to bf16 before storing
-    Value bf16Value = convertWideFPToBF16(rewriter, storeOp.getLoc(), valueToStore);
-    rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, bf16Value, memref,
-                                                       storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
-    return success();
-  }
-};
-
-// Pattern to convert affine.store i32 value to i64 memref
-// Benefit = 2: Medium priority, process stores after loads but before arithmetic ops
-struct AffineStoreI64ToI32Pattern : public OpRewritePattern<affine::AffineStoreOp> {
-  explicit AffineStoreI64ToI32Pattern(MLIRContext *context, PatternBenefit benefit = 2)
-      : OpRewritePattern<affine::AffineStoreOp>(context, benefit) {}
-  LogicalResult matchAndRewrite(affine::AffineStoreOp storeOp, PatternRewriter &rewriter) const override {
-    Value valueToStore = storeOp.getValueToStore();
-    Value memref = storeOp.getMemRef();
-
-    auto memrefType = dyn_cast<MemRefType>(memref.getType());
-    if (!memrefType) {
-      return failure();
-    }
-
-    auto elemTy = dyn_cast<IntegerType>(memrefType.getElementType());
-    if (!elemTy || elemTy.getWidth() != kI64BitWidth) {
-      return failure();  // Not an i64 memref, skip
-    }
-
-    auto valTy = dyn_cast<IntegerType>(valueToStore.getType());
-    if (!valTy || valTy.getWidth() != kI32BitWidth) {
-      return failure();  // Value to store is not i32, skip
-    }
-
-    // Extend i32 value back to i64 before storing to i64 memref
-    // Use ExtUIOp for unsigned, ExtSIOp otherwise (signed/signless)
-    bool isUnsigned = (valTy.getSignedness() == IntegerType::Unsigned);
-    Value i64Value = isUnsigned ? rewriter.create<arith::ExtUIOp>(storeOp.getLoc(), elemTy, valueToStore).getResult()
-                                : rewriter.create<arith::ExtSIOp>(storeOp.getLoc(), elemTy, valueToStore);
-    rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, i64Value, memref, storeOp.getAffineMapAttr().getValue(),
-                                                       storeOp.getIndices());
-    return success();
   }
 };
 
@@ -602,9 +618,11 @@ class LegalizeTypeForAscend : public impl::LegalizeTypeForAscendBase<LegalizeTyp
     }
 
     // Add patterns for affine operations
-    patterns.add<AffineLoadBF16ToF32Pattern>(context);
-    patterns.add<AffineStoreWideFPToBF16Pattern>(context);
+    patterns.add<LoadBF16ToF32Pattern<affine::AffineLoadOp, affine::AffineStoreOp>>(context);
+    patterns.add<StoreWideFPToBF16Pattern<affine::AffineStoreOp>>(context);
     patterns.add<AffineForFPToBF16Pattern>(context);
+    patterns.add<LoadBF16ToF32Pattern<memref::LoadOp, memref::StoreOp>>(context);
+    patterns.add<StoreWideFPToBF16Pattern<memref::StoreOp>>(context);
     patterns.add<ExtFOpPattern>(context);
     patterns.add<ExtSIOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
@@ -612,9 +630,11 @@ class LegalizeTypeForAscend : public impl::LegalizeTypeForAscendBase<LegalizeTyp
     patterns.add<LegalizeBF16RewritePattern>(context, typeConverter, enableI64ToI32);
     patterns.add<AffineIfAlignResultTypesWithYieldPattern>(context);
     if (enableI64ToI32) {
-      patterns.add<AffineLoadI64ToI32Pattern>(context);
-      patterns.add<AffineStoreI64ToI32Pattern>(context);
+      patterns.add<LoadI64ToI32Pattern<affine::AffineLoadOp, affine::AffineStoreOp>>(context);
+      patterns.add<StoreI64ToI32Pattern<affine::AffineStoreOp>>(context);
       patterns.add<AffineForI64ToI32Pattern>(context);
+      patterns.add<LoadI64ToI32Pattern<memref::LoadOp, memref::StoreOp>>(context);
+      patterns.add<StoreI64ToI32Pattern<memref::StoreOp>>(context);
       patterns.add<TruncIOpPattern>(context);
     }
 
