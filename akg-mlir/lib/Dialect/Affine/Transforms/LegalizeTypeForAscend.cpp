@@ -549,7 +549,8 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
         enableI64ToI32(enableI64ToI32) {}
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
     if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::ExtFOp, arith::TruncFOp, arith::ConstantOp,
-            arith::BitcastOp, arith::ExtSIOp, arith::TruncIOp, arith::ExtUIOp>(op)) {
+        arith::BitcastOp, arith::ExtSIOp, arith::TruncIOp, arith::ExtUIOp, arith::IndexCastOp,
+        arith::IndexCastUIOp, memref::LoadOp, memref::StoreOp>(op)) {
       return failure();
     }
     if (op->getNumRegions() != 0) {
