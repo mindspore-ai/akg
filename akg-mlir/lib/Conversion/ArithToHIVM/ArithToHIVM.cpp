@@ -5192,7 +5192,7 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     if (succeeded(tryLowerDenseConstantNPUVectorTransferWrite(op, dest, rewriter))) {
       return success();
     }
-    if (succeeded(tryLowerBroadcastNPUVectorTransferWrite(op, dest, rewriter))) {
+    if (destIsAllocRoot && succeeded(tryLowerBroadcastNPUVectorTransferWrite(op, dest, rewriter))) {
       return success();
     }
     if (tryEraseSameAllocRootWrite({op, dataToWrite, dest, destRoot, destIsAllocRoot, rewriter})) {
