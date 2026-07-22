@@ -1277,7 +1277,7 @@ func.func @simple_broadcast_static(%arg0: f32, %out: memref<1024xf32>) attribute
   // CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<1024xf32>
   // CHECK: hivm.hir.vbrc ins(%arg0 : f32) outs(%[[ALLOC]] : memref<1024xf32>)
   // CHECK: %[[SUBVIEW:.*]] = memref.subview %arg1[0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
-  // CHECK: hivm.hir.vbrc ins(%arg0 : f32) outs(%[[SUBVIEW]] : memref<1024xf32, strided<[1]>>)
+  // CHECK: hivm.hir.store ins(%[[ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW]] : memref<1024xf32, strided<[1]>>)
   %c0 = arith.constant 0 : index
   %0 = npuvector.broadcast %arg0 : f32 to !npuvector<1024xf32>
   npuvector.transfer_write %0, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
