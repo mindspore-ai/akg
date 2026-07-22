@@ -3824,7 +3824,10 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
     key0Metadata = cases.front();
   }
   out[kDefaultTilingKey] = tilingFunc;
-  if (metadataByKey && !key0Metadata.empty()) {
+  if (!metadataByKey) {
+    return success();
+  }
+  if (!key0Metadata.empty()) {
     (*metadataByKey)[kDefaultTilingKey] = key0Metadata;
   }
 
@@ -3994,7 +3997,7 @@ static void appendOuterDynamicVectorCases(const DynamicVectorCaseContext &ctx, i
                                           SmallVectorImpl<TilingMetadata> &cases) {
   constexpr unsigned dynamicTile = static_cast<unsigned>(-1);
   TilingMetadata previous = cases.back();
-  for (int64_t key = 1; reachedDynamic && key <= 2 && nextAxis >= 0; ++key, --nextAxis) {
+  for (int64_t key = 1; reachedDynamic && key <= kSmallVectorSizeTwo && nextAxis >= 0; ++key, --nextAxis) {
     size_t axis = static_cast<size_t>(nextAxis);
     if (!canExtendDynamicVectorCase(ctx, axis)) {
       break;
