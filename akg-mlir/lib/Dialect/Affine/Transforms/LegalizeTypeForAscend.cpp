@@ -41,6 +41,25 @@ namespace mlir {
 namespace mlir {
 namespace {
 
+// Fold an i64 arith.constant into an equivalent signless i32 constant.
+// Returns a valid Value on success, or Value() if `value` is not a foldable
+// i64 constant.
+static Value tryFoldI64ConstantToI32(OpBuilder &builder, Location loc, Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp || !isa<arith::ConstantOp>(defOp)) {
+    return Value();
+  }
+  auto constantOp = cast<arith::ConstantOp>(defOp);
+  auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
+  if (!intAttr) {
+    return Value();
+  }
+  APInt i64Val = intAttr.getValue();
+  APInt i32Val = i64Val.trunc(kI32BitWidth);
+  auto i32Type = builder.getI32Type();
+  return builder.create<arith::ConstantOp>(loc, i32Type, builder.getIntegerAttr(i32Type, i32Val));
+}
+
 // Helper function to convert i64 value to i32
 // TruncIOp requires signless integer types, so we always produce signless i32.
 // For signed/unsigned i64, the value is first bitcast to signless before trunci.
@@ -49,13 +68,8 @@ static Value convertToI32(OpBuilder &builder, Location loc, Value value) {
   Type valueType = value.getType();
   if (auto intTy = dyn_cast<IntegerType>(valueType)) {
     if (intTy.getWidth() == kI64BitWidth) {
-      auto i32Type = builder.getI32Type();
-      if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
-        if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-          APInt i64Val = intAttr.getValue();
-          APInt i32Val = i64Val.trunc(kI32BitWidth);
-          return builder.create<arith::ConstantOp>(loc, i32Type, builder.getIntegerAttr(i32Type, i32Val));
-        }
+      if (Value folded = tryFoldI64ConstantToI32(builder, loc, value)) {
+        return folded;
       }
       // TruncIOp only accepts signless integers; bitcast signed/unsigned to signless first
       Value truncInput = value;
@@ -63,6 +77,7 @@ static Value convertToI32(OpBuilder &builder, Location loc, Value value) {
         auto signlessI64 = builder.getIntegerType(kI64BitWidth);
         truncInput = builder.create<arith::BitcastOp>(loc, signlessI64, value);
       }
+      auto i32Type = builder.getI32Type();
       return builder.create<arith::TruncIOp>(loc, i32Type, truncInput);
     }
   }
