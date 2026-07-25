@@ -3940,10 +3940,11 @@ static bool initializeDynamicVectorCaseContext(ArrayRef<SmallVector<mlir::scf::F
 }
 
 static bool canExtendDynamicVectorCase(const DynamicVectorCaseContext &ctx, size_t axis) {
+  // Representative bands may cross supported non-perfect or leaf-branch edges.
+  // Match static multi-vector expansion instead of requiring a strict perfect edge.
   return ctx.alignUnits[axis] > 0 && isZeroBasedUnitStepLoop(ctx.band[axis]) &&
          !ctx.band[axis]->hasAttr(kNotInnerDimensionBroadcastLoopAttr) &&
-         !ctx.band[axis]->hasAttr(kReductionLoopAttr) && axis + 1 < ctx.bandSize &&
-         isStrictPerfectLoopEdge(ctx.band[axis], ctx.band[axis + 1]);
+         !ctx.band[axis]->hasAttr(kReductionLoopAttr) && axis + 1 < ctx.bandSize;
 }
 
 static TilingMetadata buildDynamicVectorKey0(const DynamicVectorCaseContext &ctx, const TilingMetadata &baseMetadata,
