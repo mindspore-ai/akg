@@ -27,6 +27,7 @@
 #include "akg/Transforms/CopyRemoval.h"
 #include "akg/Transforms/NPUAutoTiling.h"
 #include "akg/Transforms/AddOutParameter.h"
+#include "akg/Transforms/HoistLoopIndependentOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
