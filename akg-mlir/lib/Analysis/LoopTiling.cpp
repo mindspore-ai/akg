@@ -84,6 +84,7 @@ static constexpr const char *kDeleteLoopAttr = "delete";
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
 static constexpr const char *kParallelAxisAttr = "parallel__axis";
 static constexpr const char *kDynamicVectorAlignUnitAttr = "dynamic_vector_align_unit";
+static constexpr const char *kDynamicVectorCaseMaxTilesAttr = "dynamic_vector_case_max_tiles";
 static constexpr int64_t kDefaultNpuCoreNum = 48;
 static constexpr int64_t kDefaultTilingKey = 0;
 static constexpr unsigned kTilingFuncReservedArgCount = 2;
@@ -870,7 +871,10 @@ static LogicalResult emitLoopTripCountInTilingFunc(const TripCountEmitParams &pa
 }
 
 static Value emitTileCountFromTileSize(Location loc, OpBuilder &builder, mlir::scf::ForOp loop, Value tileSize) {
-  return builder.create<arith::CeilDivSIOp>(loc, emitLoopTripCountInCurrentFunc(loc, builder, loop), tileSize);
+  Value tileCount =
+    builder.create<arith::CeilDivSIOp>(loc, emitLoopTripCountInCurrentFunc(loc, builder, loop), tileSize);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  return builder.create<arith::MaxSIOp>(loc, tileCount, one);
 }
 
 // Bundled params for computeParallelDimTileSize to stay under readability-function-size_parameters limit.
@@ -898,13 +902,13 @@ static LogicalResult computeParallelDimTileSize(const ParallelDimTileParams &par
   }
 
   Value hasEnoughTasks = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, producedTasks, coreNum);
-  Value remainingTarget = builder.create<arith::CeilDivSIOp>(loc, coreNum, producedTasks);
-  Value smallTrip = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, tripCount, remainingTarget);
-  Value splitTile = builder.create<arith::DivSIOp>(loc, tripCount, remainingTarget);
+  Value remainingTarget = builder.create<arith::DivSIOp>(loc, coreNum, producedTasks);
+  remainingTarget = builder.create<arith::MaxSIOp>(loc, remainingTarget, one);
+  Value splitTile = builder.create<arith::CeilDivSIOp>(loc, tripCount, remainingTarget);
   splitTile = builder.create<arith::MaxSIOp>(loc, splitTile, one);
-  Value activeTile = builder.create<arith::SelectOp>(loc, smallTrip, one, splitTile);
-  tileSize = builder.create<arith::SelectOp>(loc, hasEnoughTasks, tripCount, activeTile);
+  tileSize = builder.create<arith::SelectOp>(loc, hasEnoughTasks, tripCount, splitTile);
   Value tileCount = builder.create<arith::CeilDivSIOp>(loc, tripCount, tileSize);
+  tileCount = builder.create<arith::MaxSIOp>(loc, tileCount, one);
   producedTasks = builder.create<arith::MulIOp>(loc, producedTasks, tileCount);
   return success();
 }
@@ -1194,8 +1198,34 @@ static LogicalResult rejectDynamicMultiTopLevelBands(func::FuncOp funcOp, bool i
   return failure();
 }
 
+static SmallVector<int64_t, kSmallVectorSizeThree> getDynamicVectorCaseMaxTiles(mlir::scf::ForOp loop,
+                                                                                int64_t fallback = 0) {
+  SmallVector<int64_t, kSmallVectorSizeThree> maxTiles;
+  if (auto attr = loop->getAttrOfType<DenseI64ArrayAttr>(kDynamicVectorCaseMaxTilesAttr)) {
+    maxTiles.append(attr.asArrayRef().begin(), attr.asArrayRef().end());
+  }
+  if (maxTiles.empty() && fallback > 0) {
+    maxTiles.push_back(fallback);
+  }
+  return maxTiles;
+}
+
+static SmallVector<int64_t, kSmallVectorSizeThree> collectDynamicVectorCaseMaxTiles(
+  ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bands) {
+  for (const auto &band : bands) {
+    for (mlir::scf::ForOp loop : band) {
+      auto maxTiles = getDynamicVectorCaseMaxTiles(loop);
+      if (!maxTiles.empty()) {
+        return maxTiles;
+      }
+    }
+  }
+  return {};
+}
+
 static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
-                                const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs) {
+                                const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
+                                bool isDynamicShape, ArrayRef<int64_t> maxTiles) {
   llvm::dbgs() << "=== All Band Tile Sizes ===\n";
   for (size_t i = 0; i < allBandTileSizes.size(); ++i) {
     llvm::dbgs() << "Band " << i << " tile sizes: [";
@@ -1211,6 +1241,11 @@ static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVe
         llvm::dbgs() << allBandTileSizes[i][j];
       }
     }
+    llvm::dbgs() << "]\n";
+  }
+  if (isDynamicShape) {
+    llvm::dbgs() << "maxTiles: [";
+    llvm::interleaveComma(maxTiles, llvm::dbgs());
     llvm::dbgs() << "]\n";
   }
   llvm::dbgs() << "==========================\n";
@@ -1298,7 +1333,9 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
     allBandConstraintMaxs.push_back(bandConstraintMaxs);
   }
 
-  logAllBandTileSizes(allBandTileSizes, allBandConstraintMaxs);
+  SmallVector<int64_t, kSmallVectorSizeThree> maxTiles =
+    isDynamicShape ? collectDynamicVectorCaseMaxTiles(bandsToUse) : SmallVector<int64_t, kSmallVectorSizeThree>{};
+  logAllBandTileSizes(allBandTileSizes, allBandConstraintMaxs, isDynamicShape, maxTiles);
 
   return success();
 }
@@ -1436,7 +1473,19 @@ struct ParallelTileCoordMapParams {
   mutable mlir::scf::ForOp insertBeforeLoop;
   OpBuilder &builder;
   Value linearTaskId;
+  bool preserveOuterOverflow = false;
 };
+
+static Value decodeParallelTileCoord(Location loc, OpBuilder &builder, Value remaining, Value tileCount,
+                                     AffineMap remMap, bool preserveOverflow) {
+  if (preserveOverflow) {
+    return remaining;
+  }
+  if (auto tileCountConst = getConstantIndexValue(tileCount); tileCountConst && *tileCountConst == 1) {
+    return builder.create<arith::ConstantIndexOp>(loc, 0);
+  }
+  return builder.create<affine::AffineApplyOp>(loc, remMap, ValueRange{remaining, tileCount});
+}
 
 static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
                                       SmallVectorImpl<Value> &parallelTileCoordByDim) {
@@ -1474,11 +1523,8 @@ static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
     if (!tileCount) {
       continue;
     }
-    if (auto tileCountConst = getConstantIndexValue(tileCount); tileCountConst && *tileCountConst == 1) {
-      parallelTileCoordByDim[dim] = builder.create<arith::ConstantIndexOp>(loc, 0);
-      continue;
-    }
-    parallelTileCoordByDim[dim] = builder.create<affine::AffineApplyOp>(loc, remMap, ValueRange{remaining, tileCount});
+    parallelTileCoordByDim[dim] =
+      decodeParallelTileCoord(loc, builder, remaining, tileCount, remMap, pos == 0 && params.preserveOuterOverflow);
     if (pos > 0) {
       remaining = builder.create<affine::AffineApplyOp>(loc, divMap, ValueRange{remaining, tileCount});
     }
@@ -1628,9 +1674,9 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
     return;
   }
 
-  if (!useRuntimeTileCounts && totalTiles <= parallelUseCore) {
+  if (useRuntimeTileCounts || totalTiles <= parallelUseCore) {
     buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder,
-                               parallelMapLoop.getInductionVar()},
+                               parallelMapLoop.getInductionVar(), useRuntimeTileCounts},
                               parallelTileCoordByDim);
     return;
   }
@@ -1837,8 +1883,14 @@ static LoopBounds createPointLoopBounds(const BuildContext &bc, mlir::scf::ForOp
   LoopBounds bounds;
   SmallVector<int64_t, kSmallVectorSizeFour> fullTileSizes;
   if (collectStaticFullPointTileSizes(origLoop, levelInfo, fullTileSizes)) {
-    bounds.lb = createFullTilePointBound({loc, levelInfo, fullTileSizes, 0 /* offset */, builder});
-    bounds.ub = createFullTilePointBound({loc, levelInfo, fullTileSizes, fullTileSizes.back(), builder});
+    int64_t origUb = *getConstantIndexValue(origLoop.getUpperBound());
+    if (fullTileSizes.back() == origUb) {
+      bounds.lb = recreateConstantOrSelf(origLoop.getLowerBound(), builder);
+      bounds.ub = recreateConstantOrSelf(origLoop.getUpperBound(), builder);
+    } else {
+      bounds.lb = createFullTilePointBound({loc, levelInfo, fullTileSizes, 0 /* offset */, builder});
+      bounds.ub = createFullTilePointBound({loc, levelInfo, fullTileSizes, fullTileSizes.back(), builder});
+    }
     bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.inits = prevLoop.getResults();
     return bounds;
@@ -2610,6 +2662,7 @@ static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clea
       loop->removeAttr(kInnerLoopAttr);
     }
     loop->removeAttr(kDynamicVectorAlignUnitAttr);
+    loop->removeAttr(kDynamicVectorCaseMaxTilesAttr);
   });
 }
 
@@ -3908,6 +3961,7 @@ struct DynamicVectorCaseContext {
   size_t bandSize = 0;
   size_t target = 0;
   int64_t maxTile = 0;
+  SmallVector<int64_t, kSmallVectorSizeThree> maxTiles;
 };
 
 static bool initializeDynamicVectorCaseContext(ArrayRef<SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix>> bandsToUse,
@@ -3932,6 +3986,8 @@ static bool initializeDynamicVectorCaseContext(ArrayRef<SmallVector<mlir::scf::F
   }
   ctx.target = static_cast<size_t>(targetIt - baseMetadata.bandMultiVecAxisMasks.front().begin());
   ctx.maxTile = ctx.baseTileSizes[ctx.bandSize + ctx.target];
+  ctx.maxTiles = getDynamicVectorCaseMaxTiles(ctx.band[ctx.target], ctx.maxTile);
+  ctx.maxTile = ctx.maxTiles.front();
   llvm::transform(ctx.band, std::back_inserter(ctx.alignUnits), [](mlir::scf::ForOp loop) {
     auto attr = loop->getAttrOfType<IntegerAttr>(kDynamicVectorAlignUnitAttr);
     return attr ? attr.getInt() : 0;
@@ -3999,12 +4055,16 @@ static void appendOuterDynamicVectorCases(const DynamicVectorCaseContext &ctx, i
   constexpr unsigned dynamicTile = static_cast<unsigned>(-1);
   TilingMetadata previous = cases.back();
   for (int64_t key = 1; reachedDynamic && key <= kSmallVectorSizeTwo && nextAxis >= 0; ++key, --nextAxis) {
+    if (static_cast<size_t>(key) >= ctx.maxTiles.size()) {
+      break;
+    }
     size_t axis = static_cast<size_t>(nextAxis);
     if (!canExtendDynamicVectorCase(ctx, axis)) {
       break;
     }
     TilingMetadata metadata = previous;
     metadata.tilingKey = key;
+    metadata.maxVectorTile = ctx.maxTiles[static_cast<size_t>(key)];
     metadata.selectorOuterTileIndices.clear();
     metadata.selectorAlignUnits.clear();
     for (size_t inner = axis + 1; inner < ctx.bandSize; ++inner) {
@@ -4016,7 +4076,7 @@ static void appendOuterDynamicVectorCases(const DynamicVectorCaseContext &ctx, i
     metadata.selectorMinTile = kSmallVectorSizeTwo;
     metadata.bandMultiVecAxisMasks.front()[axis] = static_cast<char>(true);
     metadata.bandTileSizes.front()[ctx.bandSize + axis] =
-      ctx.baseTileSizes[axis] == dynamicTile ? static_cast<unsigned>(ctx.maxTile) : ctx.baseTileSizes[axis];
+      ctx.baseTileSizes[axis] == dynamicTile ? static_cast<unsigned>(metadata.maxVectorTile) : ctx.baseTileSizes[axis];
     cases.push_back(metadata);
     previous = std::move(metadata);
   }
@@ -4139,6 +4199,43 @@ static LogicalResult prepareTileSizesForStaticShape(
   return success();
 }
 
+struct DynamicApplyTileValueContext {
+  mlir::Location loc;
+  OpBuilder &builder;
+  Value tileSizesMemref;
+  ArrayRef<unsigned> tileSizes;
+  ArrayRef<unsigned> parallelDims;
+  ArrayRef<char> multiVecMask;
+  int64_t maxVectorTile;
+  size_t bandSize;
+  size_t memrefOffset;
+};
+
+static Value materializeDynamicApplyTileValue(const DynamicApplyTileValueContext &ctx, ArrayRef<Value> priorValues,
+                                              size_t tileIdx) {
+  size_t dimIdx = tileIdx % ctx.bandSize;
+  unsigned tileSize = ctx.tileSizes[tileIdx];
+  if (tileIdx < ctx.bandSize && tileSize != static_cast<unsigned>(-1) &&
+      llvm::find(ctx.parallelDims, static_cast<unsigned>(dimIdx)) == ctx.parallelDims.end()) {
+    return ctx.builder.create<arith::ConstantIndexOp>(ctx.loc, tileSize);
+  }
+
+  auto firstActive = llvm::find(ctx.multiVecMask, static_cast<char>(true));
+  bool hasMultiVec = ctx.maxVectorTile > 0 && firstActive != ctx.multiVecMask.end();
+  if (tileIdx >= ctx.bandSize && hasMultiVec && dimIdx != static_cast<size_t>(firstActive - ctx.multiVecMask.begin())) {
+    return priorValues[dimIdx];
+  }
+  if (tileIdx >= ctx.bandSize && !hasMultiVec && tileSize != static_cast<unsigned>(-1)) {
+    if (std::optional<int64_t> firstTile = getConstantIndexValue(priorValues[dimIdx])) {
+      return ctx.builder.create<arith::ConstantIndexOp>(ctx.loc, std::min<int64_t>(*firstTile, tileSize));
+    }
+  }
+
+  Value idx = ctx.builder.create<arith::ConstantIndexOp>(ctx.loc, ctx.memrefOffset + tileIdx);
+  Value loaded = ctx.builder.create<memref::LoadOp>(ctx.loc, ctx.tileSizesMemref, ValueRange{idx});
+  return ctx.builder.create<arith::IndexCastOp>(ctx.loc, ctx.builder.getIndexType(), loaded);
+}
+
 // Helper: Prepare tile sizes from memref (dynamic shape)
 static LogicalResult prepareTileSizesFromMemref(
   const PrepareTileSizesFromMemrefParams &params,
@@ -4146,7 +4243,6 @@ static LogicalResult prepareTileSizesFromMemref(
   auto &originalKernel = params.originalKernel;
   const auto &bands = params.bands;
   const auto &loc = params.loc;
-  auto &builder = params.builder;
   const auto &allBandTileSizesInt = params.allBandTileSizesInt;
   const auto &allBandMultiVecAxisMasks = params.allBandMultiVecAxisMasks;
   const auto &maxVectorTile = params.maxVectorTile;
@@ -4185,18 +4281,15 @@ static LogicalResult prepareTileSizesFromMemref(
 
     SmallVector<Value, kSmallVectorSizeSix> tileSizeValues;
     tileSizeValues.reserve(bandTileSizesCount);
+    SmallVector<unsigned, kSmallVectorSizeSix> parallelDims;
+    collectParallelPrefixDims(band, bandTileSizes, parallelDims);
+    ArrayRef<char> multiVecMask =
+      bandIdx < allBandMultiVecAxisMasks.size() ? ArrayRef<char>(allBandMultiVecAxisMasks[bandIdx]) : ArrayRef<char>();
+    DynamicApplyTileValueContext tileCtx{loc,          params.builder, tileSizesMemref, bandTileSizes, parallelDims,
+                                         multiVecMask, maxVectorTile,  bandSize,        memrefOffset};
 
     for (size_t i = 0; i < bandTileSizesCount; ++i) {
-      size_t dimIdx = i % bandSize;
-      if (i >= bandSize && maxVectorTile > 0 && bandIdx < allBandMultiVecAxisMasks.size() &&
-          !allBandMultiVecAxisMasks[bandIdx][dimIdx]) {
-        tileSizeValues.push_back(tileSizeValues[dimIdx]);
-        continue;
-      }
-      Value idx = builder.create<arith::ConstantIndexOp>(loc, memrefOffset + i);
-      Value loaded = builder.create<memref::LoadOp>(loc, tileSizesMemref, ValueRange{idx});
-      Value tileSizeIndex = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), loaded);
-      tileSizeValues.push_back(tileSizeIndex);
+      tileSizeValues.push_back(materializeDynamicApplyTileValue(tileCtx, tileSizeValues, i));
     }
 
     allTileSizeValues.push_back(tileSizeValues);
