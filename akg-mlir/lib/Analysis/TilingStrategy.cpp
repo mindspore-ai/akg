@@ -34,6 +34,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/MathExtras.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -3605,6 +3606,38 @@ int64_t getAxisSearchUpper(const NpuBandContext &ctx, size_t axisIdx) {
   return std::max<int64_t>(extent, 1);
 }
 
+bool canExtendDynamicVectorSearch(const NpuBandContext &ctx, size_t axisIdx) {
+  if (axisIdx + 1 >= ctx.axes.size() || axisIdx >= ctx.axesAlignUnits.size()) {
+    return false;
+  }
+  const AxisPtr &axis = ctx.axes[axisIdx];
+  auto step = axis ? axis->getStep().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
+  return axis && axis->hasConstantLowerBound() && axis->getConstantLowerBound() == 0 && step && step.value() == 1 &&
+         ctx.axesAlignUnits[axisIdx] > 0 && !hasUnsupportedVectorAccess(axis) &&
+         !hasAxisAttr(axis, kNotInnerDimensionBroadcastLoopAttr) && !isReductionAxis(axis);
+}
+
+int64_t findDynamicVectorMaxTile(const NpuBandContext &ctx, size_t targetAxis) {
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
+  int64_t maxTile = 1;
+  for (int64_t i = static_cast<int64_t>(targetAxis); i >= 0; --i) {
+    size_t axisIdx = static_cast<size_t>(i);
+    if (axisIdx != targetAxis && !canExtendDynamicVectorSearch(ctx, axisIdx)) {
+      break;
+    }
+    int64_t upper = getAxisSearchUpper(ctx, axisIdx);
+    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, upper);
+    if (tile == kInvalidTileSize) {
+      break;
+    }
+    maxTile = multiplyAndCap(maxTile, tile);
+    if (tile < upper) {
+      break;
+    }
+  }
+  return maxTile;
+}
+
 void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   plan.outerTiles.assign(ctx.axes.size(), 1);
   plan.innerTiles.assign(ctx.axes.size(), 1);
@@ -3686,12 +3719,7 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
   }
 
   initDynamicSingleAxisPlan(ctx, plan);
-  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
-  int64_t alignUnit =
-    *targetAxis < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[*targetAxis], 1) : 1;
-  int64_t upper = std::max<int64_t>(ctx.vectorUbCapacityElems, alignUnit);
-  int64_t tile = std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, *targetAxis, upper), 1);
-  plan.innerTiles[*targetAxis] = saturateToTileValue(tile);
+  plan.innerTiles[*targetAxis] = saturateToTileValue(std::max<int64_t>(findDynamicVectorMaxTile(ctx, *targetAxis), 1));
   plan.multiVecAxisMask[*targetAxis] = true;
   plan.usesMultiVecScheme = true;
   return true;
