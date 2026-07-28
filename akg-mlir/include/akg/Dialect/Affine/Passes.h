@@ -50,7 +50,6 @@
 #include "akg/Dialect/Affine/Transforms/LegalizeTypeForAscend.h"
 #include "akg/Dialect/Affine/Transforms/BroadcastLoopHoist.h"
 #include "akg/Dialect/Affine/Transforms/Normalize.h"
-#include "akg/Dialect/Affine/Transforms/HoistLoopIndependentOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
