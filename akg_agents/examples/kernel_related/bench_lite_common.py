@@ -1103,39 +1103,64 @@ def _measure_latency(
     """Measure kernel latency with warmup, multi-trial median.
 
     Uses CUDA events for GPU-side timing when available (avoids CPU-GPU
-    synchronization overhead).  Falls back to ``time.perf_counter`` on
-    CPU / NPU backends.
+    synchronization overhead), ``profiler_npu`` for NPU kernel timing,
+    and ``time.perf_counter`` on CPU.
     """
     device = _get_torch_device(backend)
-    use_events = _use_cuda_events(device)
-
-    for _ in range(warmup_runs):
-        fn(*args)
-    _sync_torch_device(device)
 
     trial_times: List[float] = []
+    timing_method: str
 
-    if use_events:
-        import torch  # type: ignore
+    if device == "npu":
+        from akg_agents.op.verifier.profiler import profiler_npu
+
+        def npu_benchmark_fn() -> Any:
+            return fn(*args)
+
         for _ in range(num_trials):
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            start_event.record()
-            for _ in range(iterations):
-                fn(*args)
-            end_event.record()
-            torch.cuda.synchronize()
-            elapsed_ms = start_event.elapsed_time(end_event)
-            trial_times.append(elapsed_ms / iterations)
+            elapsed_us = profiler_npu(
+                npu_benchmark_fn,
+                warmup=warmup_runs,
+                active=iterations,
+                prof_dir_name="bench_lite_perf",
+                keep_res=False,
+                suppress_warnings=True,
+                clear_l2_cache=True,
+                dsl="triton_ascend",
+            )
+            elapsed_ms = elapsed_us / 1000.0
+            if not math.isfinite(elapsed_ms) or elapsed_ms <= 0:
+                raise RuntimeError(f"profiler_npu returned invalid latency: {elapsed_us!r} us")
+            trial_times.append(elapsed_ms)
+        timing_method = "profiler_npu"
     else:
-        for _ in range(num_trials):
-            _sync_torch_device(device)
-            start = time.perf_counter()
-            for _ in range(iterations):
-                fn(*args)
-            _sync_torch_device(device)
-            elapsed = time.perf_counter() - start
-            trial_times.append((elapsed / iterations) * 1000)
+        for _ in range(warmup_runs):
+            fn(*args)
+        _sync_torch_device(device)
+
+        if _use_cuda_events(device):
+            import torch  # type: ignore
+            for _ in range(num_trials):
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+                start_event.record()
+                for _ in range(iterations):
+                    fn(*args)
+                end_event.record()
+                torch.cuda.synchronize()
+                elapsed_ms = start_event.elapsed_time(end_event)
+                trial_times.append(elapsed_ms / iterations)
+            timing_method = "cuda_events"
+        else:
+            for _ in range(num_trials):
+                _sync_torch_device(device)
+                start = time.perf_counter()
+                for _ in range(iterations):
+                    fn(*args)
+                _sync_torch_device(device)
+                elapsed = time.perf_counter() - start
+                trial_times.append((elapsed / iterations) * 1000)
+            timing_method = "cpu_perf_counter"
 
     trial_times.sort()
     n = len(trial_times)
@@ -1155,7 +1180,7 @@ def _measure_latency(
         "std_ms": round(std_ms, 6),
         "cv": round(cv, 6),
         "stable": cv <= CV_STABLE_THRESHOLD,
-        "timing_method": "cuda_events" if use_events else "cpu_perf_counter",
+        "timing_method": timing_method,
         "all_trials_ms": [round(t, 6) for t in trial_times],
     }
 

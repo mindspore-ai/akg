@@ -138,9 +138,37 @@ assert torch.allclose(ref_output, your_output, atol=1e-2, rtol=1e-2)
 ### 性能评分
 
 - **Speedup 计算**: `speedup = baseline_time / solution_time`
+- **统一计时口径**:
+  - Ascend NPU: 使用 `akg_agents.op.verifier.profiler.profiler_npu`
+  - 每个 trial 内由 `profiler_npu` 执行 warmup 和 active 采样，并清理 L2 cache
+  - 多个 trial 取中位数；默认 `warmup=10`、`active=100`、`trials=3`
+  - 本地自行使用 `triton.testing.do_bench`、CPU wall time 或 profiler 得到的结果仅供调试，正式 speedup 以 runner 重测结果为准
 - **评分规则**:
   - `speedup < 1.0`: 比 baseline 慢，线性折扣 `[0, 60)` 分
   - `speedup == 1.0`: 基础分 60 分
   - `speedup > 1.0`: 从 60 向 100 递增，`speedup >= 5.0` 时封顶 100 分
 - **Tier 权重**: t1 (1.0x), t2 (1.5x), t3 (2.0x)
 - **最终得分**: `raw_score * tier_weight`
+
+### 统一评测入口
+
+已有提交使用以下目录结构：
+
+```text
+submissions/
+└── team_name/
+    ├── meta.json
+    ├── t1/
+    │   └── gelu.py
+    └── t2/
+        └── rope.py
+```
+
+运行统一正确性与性能评测：
+
+```bash
+python benchmark/akg_kernels_bench_lite/tools/run_bench.py \
+  submissions \
+  --team team_name \
+  --output results
+```
