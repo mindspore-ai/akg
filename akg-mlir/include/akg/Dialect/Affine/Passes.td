@@ -302,15 +302,6 @@ def Normalize : Pass<"normalize", "func::FuncOp"> {
     let constructor = "mlir::createNormalizePass()";
   }
 
-def HoistLoopIndependentOps: Pass<"hoist-loop-independent-ops", "func::FuncOp"> {
-  let summary = "Hoist top-level non-affine ops before the first affine.for when dependency-safe";
-  let description = [{
-    HoistLoopIndependentOps pass performs preprocessing operations before loop fusion.
-    It hoist top-level non-affine ops before the first affine.for when dependency-safe.
-  }];
-  let constructor = "mlir::createHoistLoopIndependentOpsPass()";
-}
-
 def BroadcastLoopHoist : Pass<"broadcast-loop-hoist", "func::FuncOp"> {
   let summary = "Hoist broadcast loops outward to enable vectorization";
   let description = [{
