@@ -33,6 +33,7 @@
 import argparse
 import importlib.util
 import json
+import math
 import os
 import platform
 import signal
@@ -270,19 +271,44 @@ def measure_latency(
     """测量 kernel 延迟。多轮试验取中位数，每轮内多次迭代取平均。"""
     device = _get_device()
 
-    for _ in range(warmup_runs):
-        fn(*args)
-    _sync_device(device)
-
     trial_times = []
-    for _ in range(num_trials):
-        _sync_device(device)
-        start = time.perf_counter()
-        for _ in range(iterations):
+    timing_method = "cuda_synchronized_perf_counter" if device == "cuda" else "cpu_perf_counter"
+
+    if device == "npu":
+        from akg_agents.op.verifier.profiler import profiler_npu
+
+        def npu_benchmark_fn():
+            return fn(*args)
+
+        for _ in range(num_trials):
+            elapsed_us = profiler_npu(
+                npu_benchmark_fn,
+                warmup=warmup_runs,
+                active=iterations,
+                prof_dir_name="bench_lite_perf",
+                keep_res=False,
+                suppress_warnings=True,
+                clear_l2_cache=True,
+                dsl="triton_ascend",
+            )
+            elapsed_s = elapsed_us / 1_000_000.0
+            if not math.isfinite(elapsed_s) or elapsed_s <= 0:
+                raise RuntimeError(f"profiler_npu returned invalid latency: {elapsed_us!r} us")
+            trial_times.append(elapsed_s)
+        timing_method = "profiler_npu"
+    else:
+        for _ in range(warmup_runs):
             fn(*args)
         _sync_device(device)
-        elapsed = time.perf_counter() - start
-        trial_times.append(elapsed / iterations)
+
+        for _ in range(num_trials):
+            _sync_device(device)
+            start = time.perf_counter()
+            for _ in range(iterations):
+                fn(*args)
+            _sync_device(device)
+            elapsed = time.perf_counter() - start
+            trial_times.append(elapsed / iterations)
 
     trial_times.sort()
     median_s = trial_times[len(trial_times) // 2]
@@ -291,6 +317,7 @@ def measure_latency(
         "min_ms": trial_times[0] * 1000,
         "max_ms": trial_times[-1] * 1000,
         "all_trials_ms": [t * 1000 for t in trial_times],
+        "timing_method": timing_method,
     }
 
 
@@ -401,6 +428,7 @@ def run_single_case(
         result["speedup"] = round(speedup, 4)
         result["score"] = round(compute_case_score(speedup), 2)
         result["weighted_score"] = round(compute_weighted_score(tier, speedup), 2)
+        result["timing_method"] = solution["timing_method"]
         result["baseline_detail"] = baseline
         result["solution_detail"] = solution
         result["error"] = None

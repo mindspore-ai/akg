@@ -16,6 +16,7 @@
 import importlib.util
 import math
 import sys
+import types
 from pathlib import Path
 
 import torch
@@ -291,3 +292,75 @@ def test_common_eval_single_case_rejects_cached_output_across_random_trials(tmp_
     assert result["status"] == "fail"
     assert result["correctness"] is False
     assert "trial=2/3" in result["correctness_detail"]
+
+
+def test_submission_runner_uses_profiler_npu_for_npu_latency(monkeypatch):
+    run_bench = _load_run_bench()
+    monkeypatch.setattr(run_bench, "_get_device", lambda: "npu")
+
+    calls = []
+    samples_us = iter([120.0, 100.0, 110.0])
+    profiler_module = types.ModuleType("akg_agents.op.verifier.profiler")
+
+    def fake_profiler_npu(fn, **kwargs):
+        calls.append(kwargs)
+        assert fn() == 3
+        return next(samples_us)
+
+    profiler_module.profiler_npu = fake_profiler_npu
+    monkeypatch.setitem(sys.modules, "akg_agents.op.verifier.profiler", profiler_module)
+
+    result = run_bench.measure_latency(
+        lambda value: value + 1,
+        [2],
+        warmup_runs=7,
+        iterations=11,
+        num_trials=3,
+    )
+
+    assert result["timing_method"] == "profiler_npu"
+    assert math.isclose(result["median_ms"], 0.11)
+    assert len(calls) == 3
+    assert all(call["warmup"] == 7 for call in calls)
+    assert all(call["active"] == 11 for call in calls)
+    assert all(call["clear_l2_cache"] is True for call in calls)
+    assert all(call["dsl"] == "triton_ascend" for call in calls)
+
+
+def test_common_runner_uses_profiler_npu_for_npu_latency(monkeypatch):
+    common = _load_bench_lite_common()
+    monkeypatch.setattr(common, "_get_torch_device", lambda _backend=None: "npu")
+
+    def fail_if_cuda_timing_is_probed(_device):
+        raise AssertionError("CUDA timing must not be probed on NPU")
+
+    monkeypatch.setattr(common, "_use_cuda_events", fail_if_cuda_timing_is_probed)
+
+    calls = []
+    samples_us = iter([220.0, 180.0, 200.0])
+    profiler_module = types.ModuleType("akg_agents.op.verifier.profiler")
+
+    def fake_profiler_npu(fn, **kwargs):
+        calls.append(kwargs)
+        assert fn() == 5
+        return next(samples_us)
+
+    profiler_module.profiler_npu = fake_profiler_npu
+    monkeypatch.setitem(sys.modules, "akg_agents.op.verifier.profiler", profiler_module)
+
+    result = common._measure_latency(
+        lambda value: value + 1,
+        [4],
+        warmup_runs=5,
+        iterations=13,
+        num_trials=3,
+        backend="npu",
+    )
+
+    assert result["timing_method"] == "profiler_npu"
+    assert math.isclose(result["median_ms"], 0.2)
+    assert len(calls) == 3
+    assert all(call["warmup"] == 5 for call in calls)
+    assert all(call["active"] == 13 for call in calls)
+    assert all(call["clear_l2_cache"] is True for call in calls)
+    assert all(call["dsl"] == "triton_ascend" for call in calls)
