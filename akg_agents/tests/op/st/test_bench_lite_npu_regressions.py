@@ -162,6 +162,18 @@ def _run_common_case(common, ref_path: Path, sol_path: Path) -> dict:
     )
 
 
+def _assert_profile_result(label: str, result: dict):
+    print(
+        f"[{label}] timing_method={result.get('timing_method')} "
+        f"baseline_ms={result.get('baseline_ms')} "
+        f"solution_ms={result.get('solution_ms')} "
+        f"speedup={result.get('speedup')}"
+    )
+    assert result["timing_method"] == "profiler_npu"
+    assert result["baseline_ms"] > 0
+    assert result["solution_ms"] > 0
+
+
 def test_bench_lite_stateful_inputs_are_isolated_on_npu(tmp_path, monkeypatch):
     _require_npu()
     run_bench = _load_module(RUN_BENCH_PATH, "bench_lite_run_bench_npu_stateful")
@@ -175,12 +187,14 @@ def test_bench_lite_stateful_inputs_are_isolated_on_npu(tmp_path, monkeypatch):
     assert tools_result["correctness"] is True
     assert tools_result["max_abs_diff"] == 0.0
     assert tools_result["max_rel_diff"] == 0.0
+    _assert_profile_result("tools.run_bench", tools_result)
 
     common_result = _run_common_case(common, ref_path, sol_path)
     assert common_result["status"] == "pass"
     assert common_result["correctness"] is True
     assert common_result["max_abs_diff"] == 0.0
     assert common_result["max_rel_diff"] == 0.0
+    _assert_profile_result("bench_lite_common", common_result)
 
 
 def test_bench_lite_nan_outputs_fail_closed_on_npu(tmp_path, monkeypatch):

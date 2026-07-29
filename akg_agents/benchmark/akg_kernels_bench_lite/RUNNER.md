@@ -168,7 +168,8 @@ Phase 2: Submission Extraction
 Phase 3: Performance Evaluation
   └─ 加载 reference Model + generated ModelNew
   └─ 二次正确性验证 (atol/rtol)
-  └─ 性能测量: warmup → 多轮迭代 → 取中位数
+  └─ 性能测量: NPU 使用 profiler_npu，GPU 使用 CUDA Event，CPU 使用 perf_counter
+  └─ 每个 trial 执行 warmup + 多轮迭代，多个 trial 取中位数
   └─ 计算 speedup 和加权分数
 
 Phase 4: Report
