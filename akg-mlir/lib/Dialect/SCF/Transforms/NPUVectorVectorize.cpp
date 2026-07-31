@@ -1714,21 +1714,18 @@ static bool intersectStoreAxesWithValueAxes(memref::StoreOp storeOp, ArrayRef<in
 
 struct StoreVectorAxisAdjustParams {
   mutable memref::StoreOp storeOp;
-  LoopVectorizationCtx &ctx;
   Location loc;
   ArrayRef<int> valueDimOrd;
   ArrayRef<int> storeDimOrder;
   ArrayRef<int> intersectStoreDimOrder;
-  Value &vectorValue;
 };
 
-static bool transposeStoreVectorIfAxesDiffer(const StoreVectorAxisAdjustParams &params) {
+static bool transposeStoreVectorIfAxesDiffer(LoopVectorizationCtx &ctx, Value &vectorValue,
+                                             const StoreVectorAxisAdjustParams &params) {
   memref::StoreOp storeOp = params.storeOp;
-  LoopVectorizationCtx &ctx = params.ctx;
   Location loc = params.loc;
   ArrayRef<int> valueDimOrd = params.valueDimOrd;
   ArrayRef<int> intersectStoreDimOrder = params.intersectStoreDimOrder;
-  Value &vectorValue = params.vectorValue;
 
   if (valueDimOrd == intersectStoreDimOrder) {
     return true;
@@ -1756,12 +1753,11 @@ static bool transposeStoreVectorIfAxesDiffer(const StoreVectorAxisAdjustParams &
   return true;
 }
 
-static bool rankLiftStoreVectorIfExtraIndices(const StoreVectorAxisAdjustParams &params) {
+static bool rankLiftStoreVectorIfExtraIndices(LoopVectorizationCtx &ctx, Value &vectorValue,
+                                              const StoreVectorAxisAdjustParams &params) {
   memref::StoreOp storeOp = params.storeOp;
-  LoopVectorizationCtx &ctx = params.ctx;
   ArrayRef<int> storeDimOrder = params.storeDimOrder;
   ArrayRef<int> intersectStoreDimOrder = params.intersectStoreDimOrder;
-  Value &vectorValue = params.vectorValue;
 
   if (storeDimOrder.size() <= intersectStoreDimOrder.size()) {
     return true;
@@ -1803,12 +1799,11 @@ static bool reorderStoreVectorForIndices(memref::StoreOp storeOp, LoopVectorizat
   if (!intersectStoreAxesWithValueAxes(storeOp, storeDimOrder, valueDimOrd, intersectStoreDimOrder)) {
     return false;
   }
-  StoreVectorAxisAdjustParams adjustParams{storeOp,    ctx, loc, valueDimOrd, storeDimOrder, intersectStoreDimOrder,
-                                           vectorValue};
-  if (!transposeStoreVectorIfAxesDiffer(adjustParams)) {
+  StoreVectorAxisAdjustParams adjustParams{storeOp, loc, valueDimOrd, storeDimOrder, intersectStoreDimOrder};
+  if (!transposeStoreVectorIfAxesDiffer(ctx, vectorValue, adjustParams)) {
     return false;
   }
-  return rankLiftStoreVectorIfExtraIndices(adjustParams);
+  return rankLiftStoreVectorIfExtraIndices(ctx, vectorValue, adjustParams);
 }
 
 static SmallVector<int> collectStoreDimOrder(memref::StoreOp storeOp, const LoopVectorizationCtx &ctx) {

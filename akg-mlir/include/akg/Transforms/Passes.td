@@ -136,4 +136,14 @@ def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
   let constructor = "mlir::createAddOutParameterPass()";
 }
 
+def HoistLoopIndependentOps: Pass<"hoist-loop-independent-ops", "func::FuncOp"> {
+  let summary = "Hoist loop-invariant loads/reads/pure ops out of affine.for/scf.for when safe";
+  let description = [{
+    (1) Hoist loop-invariant affine.load / memref.load / npuvector.transfer_read and
+    memory-effect-free (Pure) ops out of affine.for / scf.for nests.
+    (2) Move top-level ops before the first affine.for when dependency-safe (fusion preprocess).
+  }];
+  let constructor = "mlir::createHoistLoopIndependentOpsPass()";
+}
+
 #endif // AKG_MLIR_TRANSFORMS_PASSES

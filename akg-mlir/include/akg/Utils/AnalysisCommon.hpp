@@ -81,6 +81,7 @@ constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+constexpr auto kDynamicMaxTileAttr = "dynamic_maxtile";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kTransposeLoopAttr = "transpose";
 constexpr auto kVectorFunctionAttr = "hivm.vector_function";

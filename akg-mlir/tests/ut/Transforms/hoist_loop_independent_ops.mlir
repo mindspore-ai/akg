@@ -110,7 +110,6 @@
 // CHECK:    }
 // CHECK:    return %memspacecast : memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "1", "s2", "s1"]}>
 // CHECK:  }
-// CHECK:}
 
 func.func @akg_fused__npu_dtype_cast_add_masked_fill_rsub_1_auto_fallback(%arg0: memref<256x10xi32, {SymShapeAttr = ["s0", "s1"]}>, %arg1: memref<10x10xi1, {SymShapeAttr = ["s2", "s1"]}>) -> memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "1", "s2", "s1"]}> attributes {OperatorType = "Default", hacc.function_kind = #hacc.function_kind<HOST>} {
   %cst = arith.constant 1.000000e+00 : f32
@@ -227,4 +226,25 @@ func.func @akg_fused__npu_dtype_cast_add_masked_fill_rsub_1_auto_fallback(%arg0:
   %expand_shape = memref.expand_shape %alloc_13 [[0], [1, 2], [3]] output_shape [256, 1, 10, 10] : memref<256x10x10xf32, {SymShapeAttr = ["s0", "s2", "s1"]}> into memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "s2", "s1"]}>
   %memspacecast = memref.memory_space_cast %expand_shape : memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "s2", "s1"]}> to memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "1", "s2", "s1"]}>
   return %memspacecast : memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "1", "s2", "s1"]}>
+}
+
+// Hoist loop-invariant npuvector.transfer_read + Pure(extf) out of scf.for.
+// CHECK-LABEL: func.func @hoist_transfer_read_extf
+// CHECK: %[[RD:.*]] = npuvector.transfer_read %arg0
+// CHECK: %[[EX:.*]] = npuvector.extf %[[RD]]
+// CHECK: scf.for
+// CHECK: npuvector.transfer_write
+func.func @hoist_transfer_read_extf(%arg0: memref<1024xbf16>, %arg1: memref<16x1024xf32>) {
+  %c0 = arith.constant 0 : index
+  %c16 = arith.constant 16 : index
+  %c1 = arith.constant 1 : index
+  %c1024 = arith.constant 1024 : index
+  %cst = arith.constant 0.000000e+00 : bf16
+  scf.for %i = %c0 to %c16 step %c1 {
+    %v = npuvector.transfer_read %arg0[%c0] [%c1024] [%c1024], %cst : memref<1024xbf16>, !npuvector<1024xbf16>
+    %e = npuvector.extf %v : !npuvector<1024xbf16> to !npuvector<1024xf32>
+    %b = npuvector.broadcast %e[%c1, %c1024] [%c1, %c1024] : !npuvector<1024xf32> to !npuvector<1x1024xf32> {dimension = array<i64: 1>}
+    npuvector.transfer_write %b, %arg1[%i, %c0] : !npuvector<1x1024xf32>, memref<16x1024xf32>
+  }
+  return
 }
