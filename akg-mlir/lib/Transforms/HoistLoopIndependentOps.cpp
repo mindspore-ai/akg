@@ -14,27 +14,31 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Transforms/HoistLoopIndependentOps.h"
+#include "akg/Transforms/HoistLoopIndependentOps.h"
 
 #include <algorithm>
 
+#include "akg/Dialect/NPUVector/IR/NPUVector.h"
+#include "akg/Utils/Constants.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
-#include "akg/Utils/Constants.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_HOISTLOOPINDEPENDENTOPS
 #define GEN_PASS_DECL_HOISTLOOPINDEPENDENTOPS
-#include "akg/Dialect/Affine/Passes.h.inc"
+#include "akg/Transforms/Passes.h.inc"
 
 }  // namespace mlir
 
@@ -127,6 +131,10 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
         readMemRefs.insert(memLoad.getMemRef());
       } else if (auto memStore = dyn_cast<memref::StoreOp>(op)) {
         writtenMemRefs.insert(memStore.getMemRef());
+      } else if (auto transferRead = dyn_cast<npuvector::TransferReadOp>(op)) {
+        readMemRefs.insert(transferRead.getSource());
+      } else if (auto transferWrite = dyn_cast<npuvector::TransferWriteOp>(op)) {
+        writtenMemRefs.insert(transferWrite.getSource());
       }
     });
   }
@@ -169,9 +177,8 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
       }
     }
 
+    // No top-level affine.for (e.g. post-vectorize scf-only IR): skip phase B.
     if (firstAffineFor == nullptr) {
-      llvm::errs() << "[AKG] HoistLoopIndependentOps: no top-level affine.for found in func " << funcOp.getName()
-                   << "\n";
       return;
     }
 
@@ -224,8 +231,6 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
 
     if (toMove.empty()) {
-      llvm::errs() << "[AKG] HoistLoopIndependentOps: no independent ops to move "
-                   << "after first top-level affine.for in func " << funcOp.getName() << "\n";
       return;
     }
 
@@ -235,112 +240,144 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
   }
 
-  // Helper function to check if a value depends on a loop IV
-  bool valueDependsOnIV(Value value, Value iv) {
-    if (value == iv) {
-      return true;
+  // ----- Phase A: hoist loop-invariant loads / transfer_read / pure ops -----
+
+  // affine.for and scf.for
+  static bool isForLoop(Operation *op) {
+    return isa<affine::AffineForOp, scf::ForOp>(op);
+  }
+
+  static Block *getForBody(Operation *loopOp) {
+    if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
+      return affineFor.getBody();
+    }
+    if (auto scfFor = dyn_cast<scf::ForOp>(loopOp)) {
+      return scfFor.getBody();
+    }
+    return nullptr;
+  }
+
+  // Memref of a read op.
+  static Value getLoadedMemRef(Operation *op) {
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+      return loadOp.getMemRef();
+    }
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      return loadOp.getMemRef();
+    }
+    if (auto transferRead = dyn_cast<npuvector::TransferReadOp>(op)) {
+      return transferRead.getSource();
+    }
+    return Value();
+  }
+
+  // Memref of a write op.
+  static Value getStoredMemRef(Operation *op) {
+    if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
+      return storeOp.getMemRef();
+    }
+    if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      return storeOp.getMemRef();
+    }
+    if (auto transferWrite = dyn_cast<npuvector::TransferWriteOp>(op)) {
+      return transferWrite.getSource();
+    }
+    return Value();
+  }
+
+  // True iff `value` is defined outside all enclosing fors (IV/iter_args/in-loop SSA).
+  static bool isDefinedOutsideLoops(Value value, ArrayRef<Operation *> enclosingLoops) {
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      Block *owner = blockArg.getOwner();
+      return !llvm::any_of(enclosingLoops,
+                           [owner](Operation *loopOp) { return owner == getForBody(loopOp); });
     }
 
     Operation *defOp = value.getDefiningOp();
     if (defOp == nullptr) {
-      return false;
+      return true;
     }
-
-    bool depends = false;
-    defOp->walk([&depends, &iv](Operation *op) {
-      if (std::any_of(op->getOperands().begin(), op->getOperands().end(),
-                      [&iv](Value operand) { return operand == iv; })) {
-        depends = true;
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
-
-    return depends;
+    return !llvm::any_of(enclosingLoops,
+                         [defOp](Operation *loopOp) { return loopOp->isAncestor(defOp); });
   }
 
-  // Helper function to check if a memref is invariant to all loops
-  bool isMemrefInvariantToAllLoops(affine::AffineLoadOp loadOp,
-                                   const SmallVector<affine::AffineForOp> &allEnclosingLoops) {
-    Value memref = loadOp.getMemRef();
-
-    for (auto enclosingFor : allEnclosingLoops) {
-      Value iv = enclosingFor.getInductionVar();
-      // Check if memref depends on loop IV
-      if (valueDependsOnIV(memref, iv)) {
-        return false;
-      }
-
-      // Check if indices depend on loop IV
-      for (Value operand : loadOp.getIndices()) {
-        if (operand == iv) {
-          return false;
-        }
-        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
-          if (blockArg.getOwner() == enclosingFor.getBody()) {
-            return false;
-          }
-        }
-      }
-    }
-
-    return true;
+  // Safe to hoist only when every operand already dominates the loop nest.
+  static bool isOpInvariantToLoops(Operation *op, ArrayRef<Operation *> enclosingLoops) {
+    return llvm::all_of(op->getOperands(),
+                        [&](Value operand) { return isDefinedOutsideLoops(operand, enclosingLoops); });
   }
 
   // Helper function to check if there are any stores to the memref in the loop subtree
-  bool hasStoreToMemrefInLoopTree(affine::AffineForOp forOp, Value memref) {
+  bool hasStoreToMemrefInLoopTree(Operation *loopOp, Value memref) {
     bool hasStore = false;
-    forOp.walk([&hasStore, &memref](Operation *op) {
-      if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
-        if (storeOp.getMemRef() == memref) {
-          hasStore = true;
-          return WalkResult::interrupt();
-        }
+    loopOp->walk([&hasStore, memref](Operation *op) {
+      Value written = getStoredMemRef(op);
+      if (written && written == memref) {
+        hasStore = true;
+        return WalkResult::interrupt();
       }
       return WalkResult::advance();
     });
     return hasStore;
   }
 
-  // Collect loop-invariant loads that are candidates for hoisting
-  SmallVector<Operation *> collectLoopInvariantLoads(affine::AffineForOp outermostLoop) {
-    SmallVector<affine::AffineForOp> nestedLoops;
-    outermostLoop.walk([&nestedLoops](affine::AffineForOp forOp) { nestedLoops.push_back(forOp); });
+  // Collect enclosing fors (inner to outer).
+  static void collectEnclosingFors(Operation *op, SmallVectorImpl<Operation *> &loops) {
+    for (Operation *parent = op->getParentOp(); parent != nullptr; parent = parent->getParentOp()) {
+      if (isForLoop(parent)) {
+        loops.push_back(parent);
+      }
+    }
+  }
+
+  // Collect invariant reads (incl. transfer_read) and pure followers (e.g. extf).
+  SmallVector<Operation *> collectLoopInvariantOps(Operation *outermostLoop) {
+    SmallVector<Operation *> nestedLoops;
+    outermostLoop->walk([&nestedLoops](Operation *op) {
+      if (isForLoop(op)) {
+        nestedLoops.push_back(op);
+      }
+    });
 
     SmallVector<Operation *> toHoist;
-    for (auto forOp : nestedLoops) {
-      for (Operation &op : forOp.getBody()->getOperations()) {
-        auto loadOp = dyn_cast<affine::AffineLoadOp>(&op);
-        if (!loadOp) {
+    for (Operation *forOp : nestedLoops) {
+      Block *body = getForBody(forOp);
+      if (body == nullptr) {
+        continue;
+      }
+      for (Operation &opRef : body->getOperations()) {
+        Operation *op = &opRef;
+        // Skip terminators, nested fors, and ops with regions.
+        if (op->hasTrait<OpTrait::IsTerminator>() || isForLoop(op) || op->getNumRegions() != 0u) {
           continue;
         }
 
-        Value memref = loadOp.getMemRef();
-        Operation *memrefDefOp = memref.getDefiningOp();
-        if ((memrefDefOp == nullptr) || !isa<memref::AllocOp>(memrefDefOp)) {
+        Value loadedMemRef = getLoadedMemRef(op);
+        bool isRead = static_cast<bool>(loadedMemRef);
+        // Candidates: reads, or memory-effect-free (Pure) ops such as extf.
+        if (!isRead && !isMemoryEffectFree(op)) {
           continue;
         }
 
-        SmallVector<affine::AffineForOp> allEnclosingLoops;
-        affine::getAffineForIVs(*loadOp, &allEnclosingLoops);
-        allEnclosingLoops.push_back(forOp);
-
-        if (!isMemrefInvariantToAllLoops(loadOp, allEnclosingLoops)) {
+        SmallVector<Operation *, kSmallVectorSizeEight> enclosingLoops;
+        collectEnclosingFors(op, enclosingLoops);
+        if (!isOpInvariantToLoops(op, enclosingLoops)) {
           continue;
         }
 
-        if (hasStoreToMemrefInLoopTree(forOp, memref)) {
+        // Reject reads if the outermost nest may write the same memref.
+        if (isRead && hasStoreToMemrefInLoopTree(outermostLoop, loadedMemRef)) {
           continue;
         }
 
-        toHoist.push_back(loadOp);
+        toHoist.push_back(op);
       }
     }
     return toHoist;
   }
 
   // Try to find a scalar store value that can be forwarded to replace a load
-  std::pair<Value, affine::AffineStoreOp> tryForwardStoreToLoad(Value memref, affine::AffineForOp outermostLoop) {
+  std::pair<Value, affine::AffineStoreOp> tryForwardStoreToLoad(Value memref, Operation *outermostLoop) {
     Block *block = outermostLoop->getBlock();
     for (auto it = Block::iterator(outermostLoop); it != block->begin(); --it) {
       auto storeOp = dyn_cast<affine::AffineStoreOp>(&*it);
@@ -358,56 +395,73 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   }
 
   // Eliminate a load by forwarding a stored value, or fall back to hoisting
-  void eliminateOrHoistLoad(Operation *op, affine::AffineForOp outermostLoop) {
-    auto loadOp = cast<affine::AffineLoadOp>(op);
-    Value memref = loadOp.getMemRef();
+  void eliminateOrHoistOp(Operation *op, Operation *outermostLoop) {
+    // Keep store-to-load forwarding for affine.load; otherwise just hoist.
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+      Value memref = loadOp.getMemRef();
+      auto [forwardedValue, matchedStore] = tryForwardStoreToLoad(memref, outermostLoop);
+      if (forwardedValue) {
+        loadOp.getResult().replaceAllUsesWith(forwardedValue);
+        SmallVector<Operation *, kSmallVectorSizeFour> toErase;
+        toErase.push_back(op);
 
-    auto [forwardedValue, matchedStore] = tryForwardStoreToLoad(memref, outermostLoop);
-    if (!forwardedValue) {
-      op->moveBefore(outermostLoop);
-      return;
-    }
-
-    loadOp.getResult().replaceAllUsesWith(forwardedValue);
-    SmallVector<Operation *, kSmallVectorSizeFour> toErase;
-    toErase.push_back(op);
-
-    if (matchedStore) {
-      auto users = memref.getUsers();
-      bool memrefStillUsed = std::any_of(users.begin(), users.end(), [&op, &matchedStore](Operation *user) {
-        return user != op && user != matchedStore.getOperation();
-      });
-      if (!memrefStillUsed) {
-        toErase.push_back(matchedStore.getOperation());
-        Operation *memrefDefOp = memref.getDefiningOp();
-        if (memrefDefOp != nullptr) {
-          toErase.push_back(memrefDefOp);
+        if (matchedStore) {
+          auto users = memref.getUsers();
+          bool memrefStillUsed = std::any_of(users.begin(), users.end(), [&op, &matchedStore](Operation *user) {
+            return user != op && user != matchedStore.getOperation();
+          });
+          if (!memrefStillUsed) {
+            toErase.push_back(matchedStore.getOperation());
+            Operation *memrefDefOp = memref.getDefiningOp();
+            if (memrefDefOp != nullptr) {
+              toErase.push_back(memrefDefOp);
+            }
+          }
         }
+
+        for (Operation *eraseOp : toErase) {
+          eraseOp->erase();
+        }
+        return;
       }
     }
 
-    for (Operation *eraseOp : toErase) {
-      eraseOp->erase();
-    }
+    op->moveBefore(outermostLoop);
   }
 
   void hoistLoopInvariantLoad(func::FuncOp funcOp) {
-    SmallVector<affine::AffineForOp> outermostLoops;
-    funcOp.walk([&outermostLoops](affine::AffineForOp forOp) {
-      if (!forOp->getParentOfType<affine::AffineForOp>()) {
-        outermostLoops.push_back(forOp);
+    SmallVector<Operation *> outermostLoops;
+    funcOp.walk([&outermostLoops](Operation *op) {
+      if (!isForLoop(op)) {
+        return;
+      }
+      // Outermost: no parent affine.for / scf.for.
+      bool hasParentFor = false;
+      for (Operation *parent = op->getParentOp(); parent != nullptr; parent = parent->getParentOp()) {
+        if (isForLoop(parent)) {
+          hasParentFor = true;
+          break;
+        }
+      }
+      if (!hasParentFor) {
+        outermostLoops.push_back(op);
       }
     });
 
-    for (auto outermostLoop : outermostLoops) {
-      SmallVector<Operation *> toHoist = collectLoopInvariantLoads(outermostLoop);
-      for (Operation *op : toHoist) {
-        eliminateOrHoistLoad(op, outermostLoop);
+    for (Operation *outermostLoop : outermostLoops) {
+      // Fixpoint: hoist read first, then Pure users (e.g. extf) once operands dominate.
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        SmallVector<Operation *> toHoist = collectLoopInvariantOps(outermostLoop);
+        for (Operation *op : toHoist) {
+          eliminateOrHoistOp(op, outermostLoop);
+          changed = true;
+        }
       }
     }
   }
 };
-
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass() {

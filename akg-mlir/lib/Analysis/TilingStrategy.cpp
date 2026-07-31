@@ -34,6 +34,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/MathExtras.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -42,6 +43,8 @@
 namespace mlir {
 namespace autotiling {
 static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
+static constexpr const char *kDynamicVectorAlignUnitAttr = "dynamic_vector_align_unit";
+static constexpr const char *kDynamicVectorCaseMaxTilesAttr = "dynamic_vector_case_max_tiles";
 using akg::alignUpInt64;
 using akg::ceilDivInt64;
 using akg::computeBishengStrideAlignedStorageBytes;
@@ -984,6 +987,7 @@ struct BandTilePlan {
   // The mask may be sparse; apply consumes each marked point loop without
   // requiring all intervening axes to participate.
   SmallVector<bool, kSmallVectorSizeSix> multiVecAxisMask;
+  SmallVector<int64_t, kSmallVectorSizeThree> dynamicVectorCaseMaxTiles;
   // When true, the plan used multi-dimensional vectorization greedy search;
   // `tagMultiVecLoops` consumes `multiVecAxisMask` on the apply path.
   bool usesMultiVecScheme{false};
@@ -2319,14 +2323,15 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   PeakAnalysisInput input;
   input.func = ctx.func;
   for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
+    int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
+    int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
     auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
     if (!forOp) continue;
-    int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
-    int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
     tile = std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1));
     setTileUpperBoundForLoop(input, forOp, tile);
     input.isReduceXorAllVectorizeLoop[forOp] = false;
+    input.isWholeTiledLoop[forOp] = (tile >= extent);
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
@@ -3603,6 +3608,77 @@ int64_t getAxisSearchUpper(const NpuBandContext &ctx, size_t axisIdx) {
   return std::max<int64_t>(extent, 1);
 }
 
+bool canExtendDynamicVectorSearch(const NpuBandContext &ctx, size_t axisIdx) {
+  if (axisIdx + 1 >= ctx.axes.size() || axisIdx >= ctx.axesAlignUnits.size()) {
+    return false;
+  }
+  const AxisPtr &axis = ctx.axes[axisIdx];
+  auto step = axis ? axis->getStep().getDefiningOp<arith::ConstantIndexOp>() : arith::ConstantIndexOp{};
+  return axis && axis->hasConstantLowerBound() && axis->getConstantLowerBound() == 0 && step && step.value() == 1 &&
+         ctx.axesAlignUnits[axisIdx] > 0 && !hasUnsupportedVectorAccess(axis) &&
+         !hasAxisAttr(axis, kNotInnerDimensionBroadcastLoopAttr) && !isReductionAxis(axis);
+}
+
+int64_t getDynamicVectorMinTile(const NpuBandContext &ctx, size_t axisIdx) {
+  if (!hasRuntimeExtent(ctx.axes[axisIdx])) {
+    return getAxisSearchUpper(ctx, axisIdx);
+  }
+  return axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+}
+
+int64_t getAxisTileProduct(ArrayRef<int64_t> axisTiles) {
+  return std::accumulate(axisTiles.begin(), axisTiles.end(), int64_t{1},
+                         [](int64_t product, int64_t tile) { return multiplyAndCap(product, tile); });
+}
+
+SmallVector<int64_t, kSmallVectorSizeThree> findDynamicVectorCaseMaxTiles(const NpuBandContext &ctx,
+                                                                          size_t targetAxis) {
+  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
+  SmallVector<int64_t, kSmallVectorSizeThree> maxTiles;
+  int64_t firstDynamicAxis = -1;
+  for (int64_t i = static_cast<int64_t>(targetAxis); i >= 0; --i) {
+    size_t axisIdx = static_cast<size_t>(i);
+    if (axisIdx != targetAxis && !canExtendDynamicVectorSearch(ctx, axisIdx)) {
+      break;
+    }
+    int64_t upper = getAxisSearchUpper(ctx, axisIdx);
+    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, upper);
+    if (tile == kInvalidTileSize) {
+      break;
+    }
+    axisTiles[axisIdx] = tile;
+    if (hasRuntimeExtent(ctx.axes[axisIdx])) {
+      firstDynamicAxis = i;
+      break;
+    }
+    if (tile < upper) {
+      break;
+    }
+  }
+  maxTiles.push_back(getAxisTileProduct(axisTiles));
+  if (firstDynamicAxis < 0) {
+    return maxTiles;
+  }
+
+  for (int64_t outer = firstDynamicAxis - 1; outer >= 0 && maxTiles.size() < kSmallVectorSizeThree; --outer) {
+    size_t axisIdx = static_cast<size_t>(outer);
+    if (!canExtendDynamicVectorSearch(ctx, axisIdx)) {
+      break;
+    }
+    std::fill(axisTiles.begin(), axisTiles.end(), 1);
+    for (size_t inner = axisIdx + 1; inner <= targetAxis; ++inner) {
+      axisTiles[inner] = getDynamicVectorMinTile(ctx, inner);
+    }
+    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, getAxisSearchUpper(ctx, axisIdx));
+    if (tile == kInvalidTileSize) {
+      break;
+    }
+    axisTiles[axisIdx] = tile;
+    maxTiles.push_back(std::min(getAxisTileProduct(axisTiles), maxTiles.back()));
+  }
+  return maxTiles;
+}
+
 void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   plan.outerTiles.assign(ctx.axes.size(), 1);
   plan.innerTiles.assign(ctx.axes.size(), 1);
@@ -3612,11 +3688,9 @@ void initDynamicSingleAxisPlan(const NpuBandContext &ctx, BandTilePlan &plan) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     const AxisPtr &axis = ctx.axes[i];
     bool hasRuntime = hasRuntimeExtent(axis);
-    if (isReductionAxis(axis) && !hasRuntime) {
-      continue;
-    }
-    plan.outerTiles[i] =
+    unsigned tile =
       hasRuntime ? static_cast<unsigned>(UINT_MAX) : saturateToTileValue(std::max<int64_t>(ctx.extents[i], 1));
+    plan.outerTiles[i] = plan.innerTiles[i] = tile;
   }
 }
 
@@ -3657,6 +3731,7 @@ bool tryBuildDynamicTransposeSingleAxisPlan(const NpuBandContext &ctx, BandTileP
   }
 
   initDynamicSingleAxisPlan(ctx, plan);
+  plan.innerTiles.assign(ctx.axes.size(), 1);
 
   SmallVector<size_t, kSmallVectorSizeSix> searchAxisOrder;
   for (size_t i = *outermostTransposeIdx; i < ctx.axes.size(); ++i) {
@@ -3685,10 +3760,10 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
   }
 
   initDynamicSingleAxisPlan(ctx, plan);
-  SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
-  int64_t tile =
-    std::max<int64_t>(findMaxFittingTile(ctx, axisTiles, *targetAxis, getAxisSearchUpper(ctx, *targetAxis)), 1);
-  plan.innerTiles[*targetAxis] = saturateToTileValue(tile);
+  plan.dynamicVectorCaseMaxTiles = findDynamicVectorCaseMaxTiles(ctx, *targetAxis);
+  plan.innerTiles[*targetAxis] = saturateToTileValue(std::max<int64_t>(plan.dynamicVectorCaseMaxTiles.front(), 1));
+  plan.multiVecAxisMask[*targetAxis] = true;
+  plan.usesMultiVecScheme = true;
   return true;
 }
 
@@ -3699,26 +3774,37 @@ bool tryBuildDynamicSingleAxisVectorPlan(const NpuBandContext &ctx, BandTilePlan
 // The dynamic-shape pipeline re-enters the strategy for the same band twice
 // (memref-size pre-pass + actual apply); clearing stale markers first keeps
 // the second pass authoritative when the chosen plan changes.
-void tagMultiVecLoops(const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes, const BandTilePlan &plan) {
+void tagMultiVecLoops(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes,
+                      const BandTilePlan &plan) {
   for (const AxisPtr &axis : bandAxes) {
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
-    if ((loopOp != nullptr) && loopOp->hasAttr(kMultiVecLoopAttr)) {
+    if (loopOp != nullptr) {
       loopOp->removeAttr(kMultiVecLoopAttr);
+      loopOp->removeAttr(kDynamicVectorAlignUnitAttr);
+      loopOp->removeAttr(kDynamicVectorCaseMaxTilesAttr);
     }
   }
   if (!plan.usesMultiVecScheme) {
     return;
   }
-  for (size_t i = 0; i < bandAxes.size() && i < plan.multiVecAxisMask.size(); ++i) {
-    if (!plan.multiVecAxisMask[i]) {
-      continue;
-    }
+  bool attachedCaseMaxTiles = false;
+  for (size_t i = 0; i < bandAxes.size(); ++i) {
     Operation *loopOp = bandAxes[i] ? bandAxes[i]->getLoopOperation() : nullptr;
     if (loopOp == nullptr) {
       continue;
     }
     OpBuilder builder(loopOp);
-    loopOp->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+    int64_t alignUnit = hasUnsupportedVectorAccess(ctx.axes[i])
+                          ? 0
+                          : std::max<int64_t>(i < ctx.axesAlignUnits.size() ? ctx.axesAlignUnits[i] : 1, 1);
+    loopOp->setAttr(kDynamicVectorAlignUnitAttr, builder.getI64IntegerAttr(alignUnit));
+    if (i < plan.multiVecAxisMask.size() && plan.multiVecAxisMask[i]) {
+      loopOp->setAttr(kMultiVecLoopAttr, builder.getUnitAttr());
+      if (!attachedCaseMaxTiles && !plan.dynamicVectorCaseMaxTiles.empty()) {
+        loopOp->setAttr(kDynamicVectorCaseMaxTilesAttr, builder.getDenseI64ArrayAttr(plan.dynamicVectorCaseMaxTiles));
+        attachedCaseMaxTiles = true;
+      }
+    }
   }
 }
 
@@ -4148,8 +4234,10 @@ void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSm
       }
       tileConfig->constraints.clear();
       unsigned tileValue = (level == 0) ? plan.outerTiles[i] : plan.innerTiles[i];
-      int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
-      tileValue = saturateReductionTileValue(alignUnit, axis, tileValue);
+      if (level == 0 || tileValue <= plan.outerTiles[i]) {
+        int64_t alignUnit = i < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[i], 1) : 1;
+        tileValue = saturateReductionTileValue(alignUnit, axis, tileValue);
+      }
       tileConfig->value = static_cast<int>(tileValue);
       axis->tryAddConstraint(static_cast<int>(level), Constraint({static_cast<int>(tileValue)}));
     }
@@ -4274,7 +4362,7 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
-      tagMultiVecLoops(bandAxes, bandPlan);
+      tagMultiVecLoops(bandCtx, bandAxes, bandPlan);
       continue;
     }
 

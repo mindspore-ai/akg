@@ -11,6 +11,8 @@ add_mlir_dialect_library(AKGTransformsPasses
   DEPENDS
   AKGTransformsPassIncGen
   MLIRCPUDialect
+  MLIRSCFDialect
+  AKGNPUVectorDialect
 
   LINK_LIBS PUBLIC
   MLIRIR
@@ -18,10 +20,12 @@ add_mlir_dialect_library(AKGTransformsPasses
   MLIRAffineDialect
   MLIRMemRefDialect
   MLIRMemRefTransforms
+  MLIRSCFDialect
   MLIRSideEffectInterfaces
   MLIRSupport
   MLIRTransformUtils
   MLIRCPUDialect
+  AKGNPUVectorDialect
 
   akg::nlohmann_json
   )
