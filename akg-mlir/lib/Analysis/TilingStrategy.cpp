@@ -1089,6 +1089,8 @@ inline bool isDynamicAxis(const AxisPtr &axis) {
   return axis && axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kDynamic) > 0;
 }
 
+bool hasRuntimeExtent(const AxisPtr &axis) { return !axis || isDynamicAxis(axis) || !axis->hasConstantBounds(); }
+
 inline bool isTransposeAxis(const AxisPtr &axis) {
   if (!axis || !axis->loop) {
     return false;
@@ -2319,7 +2321,8 @@ bool satisfiesStrideAlignWithoutExpansion(const NpuBandContext &ctx, const Vecto
                                           ArrayRef<int64_t> axisTiles) {
   return computeReserveBytes(ctx, reserve, axisTiles) <= computeLogicalReserveBytes(reserve, axisTiles);
 }
-int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
+int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles,
+                                      bool allowRuntimeTileBeyondExtent = false) {
   PeakAnalysisInput input;
   input.func = ctx.func;
   for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
@@ -2328,10 +2331,12 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
     auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
     if (!forOp) continue;
-    tile = std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1));
+    const bool runtimeExtent = hasRuntimeExtent(axis);
+    const bool clampToExtent = !runtimeExtent || !allowRuntimeTileBeyondExtent;
+    tile = clampToExtent ? std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1)) : std::max<int64_t>(tile, 1);
     setTileUpperBoundForLoop(input, forOp, tile);
     input.isReduceXorAllVectorizeLoop[forOp] = false;
-    input.isWholeTiledLoop[forOp] = (tile >= extent);
+    input.isWholeTiledLoop[forOp] = clampToExtent && tile >= extent;
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
@@ -2478,12 +2483,12 @@ bool satisfiesStrideAlignedTranspose(ArrayRef<int64_t> shape, ArrayRef<size_t> s
   }
   return true;
 }
-bool fitsVectorUb(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
-  return computeVectorPeakReserveBytes(ctx, axisTiles) <= getVectorUbBytes(ctx);
+bool fitsVectorUb(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles, bool allowRuntimeTileBeyondExtent = false) {
+  return computeVectorPeakReserveBytes(ctx, axisTiles, allowRuntimeTileBeyondExtent) <= getVectorUbBytes(ctx);
 }
 
 int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &axisTiles, size_t axisIdx,
-                           int64_t upper) {
+                           int64_t upper, bool allowRuntimeTileBeyondExtent = false) {
   int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
   int64_t safeUpper = std::max<int64_t>(upper, 1);
   // Enumerate by `alignUnit` cells. The last cell may be `alignUp(upper, alignUnit)`,
@@ -2496,7 +2501,7 @@ int64_t findMaxFittingTile(const NpuBandContext &ctx, SmallVectorImpl<int64_t> &
     int64_t cell = (low + high) / 2;
     int64_t mid = cell * alignUnit;
     axisTiles[axisIdx] = mid;
-    if (fitsVectorUb(ctx, axisTiles)) {
+    if (fitsVectorUb(ctx, axisTiles, allowRuntimeTileBeyondExtent)) {
       best = mid;
       low = cell + 1;
     } else {
@@ -3498,8 +3503,6 @@ bool hasAxisAttr(const AxisPtr &axis, StringRef attrName) {
   return (loopOp != nullptr) && loopOp->hasAttr(attrName);
 }
 
-bool hasRuntimeExtent(const AxisPtr &axis) { return !axis || isDynamicAxis(axis) || !axis->hasConstantBounds(); }
-
 std::optional<size_t> findOutermostTransposeAxis(const NpuBandContext &ctx) {
   for (size_t i = 0; i < ctx.axes.size(); ++i) {
     if (isTransposeAxis(ctx.axes[i])) {
@@ -3608,6 +3611,14 @@ int64_t getAxisSearchUpper(const NpuBandContext &ctx, size_t axisIdx) {
   return std::max<int64_t>(extent, 1);
 }
 
+int64_t getDynamicVectorCaseAxisSearchUpper(const NpuBandContext &ctx, size_t axisIdx) {
+  if (axisIdx >= ctx.axes.size() || hasRuntimeExtent(ctx.axes[axisIdx])) {
+    int64_t alignUnit = axisIdx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[axisIdx], 1) : 1;
+    return std::max<int64_t>(ctx.rawUbElems, alignUnit);
+  }
+  return getAxisSearchUpper(ctx, axisIdx);
+}
+
 bool canExtendDynamicVectorSearch(const NpuBandContext &ctx, size_t axisIdx) {
   if (axisIdx + 1 >= ctx.axes.size() || axisIdx >= ctx.axesAlignUnits.size()) {
     return false;
@@ -3631,6 +3642,27 @@ int64_t getAxisTileProduct(ArrayRef<int64_t> axisTiles) {
                          [](int64_t product, int64_t tile) { return multiplyAndCap(product, tile); });
 }
 
+int64_t findExtendedDynamicVectorCaseMaxTile(const NpuBandContext &ctx, size_t outerAxis, size_t targetAxis,
+                                             SmallVectorImpl<int64_t> &axisTiles) {
+  std::fill(axisTiles.begin(), axisTiles.end(), 1);
+  for (size_t axis = outerAxis; axis <= targetAxis; ++axis) {
+    axisTiles[axis] = getDynamicVectorMinTile(ctx, axis);
+  }
+  const ArrayRef<AxisPtr> activeAxes(ctx.axes.data() + outerAxis, targetAxis - outerAxis + 1);
+  const auto searchIt = llvm::find_if(activeAxes, hasRuntimeExtent);
+  if (searchIt == activeAxes.end()) {
+    return kInvalidTileSize;
+  }
+  const size_t searchAxis = outerAxis + static_cast<size_t>(searchIt - activeAxes.begin());
+  const int64_t tile =
+    findMaxFittingTile(ctx, axisTiles, searchAxis, getDynamicVectorCaseAxisSearchUpper(ctx, searchAxis), true);
+  if (tile == kInvalidTileSize) {
+    return kInvalidTileSize;
+  }
+  axisTiles[searchAxis] = tile;
+  return getAxisTileProduct(axisTiles);
+}
+
 SmallVector<int64_t, kSmallVectorSizeThree> findDynamicVectorCaseMaxTiles(const NpuBandContext &ctx,
                                                                           size_t targetAxis) {
   SmallVector<int64_t, kSmallVectorSizeSix> axisTiles(ctx.axes.size(), 1);
@@ -3641,8 +3673,8 @@ SmallVector<int64_t, kSmallVectorSizeThree> findDynamicVectorCaseMaxTiles(const 
     if (axisIdx != targetAxis && !canExtendDynamicVectorSearch(ctx, axisIdx)) {
       break;
     }
-    int64_t upper = getAxisSearchUpper(ctx, axisIdx);
-    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, upper);
+    int64_t upper = getDynamicVectorCaseAxisSearchUpper(ctx, axisIdx);
+    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, upper, true);
     if (tile == kInvalidTileSize) {
       break;
     }
@@ -3665,16 +3697,11 @@ SmallVector<int64_t, kSmallVectorSizeThree> findDynamicVectorCaseMaxTiles(const 
     if (!canExtendDynamicVectorSearch(ctx, axisIdx)) {
       break;
     }
-    std::fill(axisTiles.begin(), axisTiles.end(), 1);
-    for (size_t inner = axisIdx + 1; inner <= targetAxis; ++inner) {
-      axisTiles[inner] = getDynamicVectorMinTile(ctx, inner);
-    }
-    int64_t tile = findMaxFittingTile(ctx, axisTiles, axisIdx, getAxisSearchUpper(ctx, axisIdx));
-    if (tile == kInvalidTileSize) {
+    const int64_t maxTile = findExtendedDynamicVectorCaseMaxTile(ctx, axisIdx, targetAxis, axisTiles);
+    if (maxTile == kInvalidTileSize) {
       break;
     }
-    axisTiles[axisIdx] = tile;
-    maxTiles.push_back(std::min(getAxisTileProduct(axisTiles), maxTiles.back()));
+    maxTiles.push_back(maxTile);
   }
   return maxTiles;
 }
