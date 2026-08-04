@@ -47,11 +47,14 @@ from typing import Any
 import torch
 
 DEFAULT_BENCH_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(REPO_ROOT / "examples" / "kernel_related"))
+from bench_lite_common import check_torch_outputs
 from scoring import compute_case_score, compute_weighted_score, get_tier_weight
 
-# ──────────────────────── 精度与性能参数 (参考业界标准) ────────────────────────
+# ──────────────────────── 精度与性能参数 ──────────────────────────────────────
 
 DEFAULT_RTOL = 1e-2
 DEFAULT_ATOL = 1e-2
@@ -113,109 +116,11 @@ def _make_seeded_inputs(get_inputs, device: str, seed: int = EVAL_SEED) -> Any:
 def check_correctness(
     ref_outputs: Any,
     sol_outputs: Any,
-    rtol: float,
-    atol: float,
+    rtol: float = DEFAULT_RTOL,
+    atol: float = DEFAULT_ATOL,
 ) -> dict:
-    """验证 solution 输出与 reference 输出的一致性。
-
-    支持单 tensor、tuple/list of tensors。
-    返回 {"correct": bool, "max_abs_diff": float, "max_rel_diff": float, "detail": str}
-    """
-    if isinstance(ref_outputs, torch.Tensor):
-        ref_list = [ref_outputs]
-        sol_list = [sol_outputs] if isinstance(sol_outputs, torch.Tensor) else [sol_outputs]
-    elif isinstance(ref_outputs, (tuple, list)):
-        ref_list = list(ref_outputs)
-        sol_list = list(sol_outputs) if isinstance(sol_outputs, (tuple, list)) else [sol_outputs]
-    else:
-        return {
-            "correct": False,
-            "max_abs_diff": float("inf"),
-            "max_rel_diff": float("inf"),
-            "detail": f"不支持的输出类型: {type(ref_outputs)}",
-        }
-
-    if len(ref_list) != len(sol_list):
-        return {
-            "correct": False,
-            "max_abs_diff": float("inf"),
-            "max_rel_diff": float("inf"),
-            "detail": f"输出数量不匹配: ref={len(ref_list)}, sol={len(sol_list)}",
-        }
-
-    max_abs = 0.0
-    max_rel = 0.0
-
-    for i, (ref_t, sol_t) in enumerate(zip(ref_list, sol_list)):
-        if not isinstance(ref_t, torch.Tensor) or not isinstance(sol_t, torch.Tensor):
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] 不是 Tensor",
-            }
-        if ref_t.shape != sol_t.shape:
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] shape 不匹配: ref={ref_t.shape}, sol={sol_t.shape}",
-            }
-
-        ref_f = ref_t.float()
-        sol_f = sol_t.float()
-
-        ref_non_finite = ~torch.isfinite(ref_f)
-        if ref_non_finite.any().item():
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] reference 包含 NaN/Inf: count={int(ref_non_finite.sum().item())}",
-            }
-
-        sol_non_finite = ~torch.isfinite(sol_f)
-        if sol_non_finite.any().item():
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] solution 包含 NaN/Inf: count={int(sol_non_finite.sum().item())}",
-            }
-
-        abs_diff = (ref_f - sol_f).abs()
-        rel_diff = abs_diff / (ref_f.abs() + 1e-8)
-
-        abs_non_finite = ~torch.isfinite(abs_diff)
-        if abs_non_finite.any().item():
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] abs_diff 包含 NaN/Inf: count={int(abs_non_finite.sum().item())}",
-            }
-
-        rel_non_finite = ~torch.isfinite(rel_diff)
-        if rel_non_finite.any().item():
-            return {
-                "correct": False,
-                "max_abs_diff": float("inf"),
-                "max_rel_diff": float("inf"),
-                "detail": f"输出[{i}] rel_diff 包含 NaN/Inf: count={int(rel_non_finite.sum().item())}",
-            }
-
-        max_abs = max(max_abs, abs_diff.max().item())
-        max_rel = max(max_rel, rel_diff.max().item())
-
-    correct = (max_abs <= atol) and (max_rel <= rtol)
-    detail = "PASS" if correct else f"max_abs_diff={max_abs:.6e}, max_rel_diff={max_rel:.6e}"
-
-    return {
-        "correct": correct,
-        "max_abs_diff": max_abs,
-        "max_rel_diff": max_rel,
-        "detail": detail,
-    }
+    """Use the shared Bench Lite allclose and non-finite checks."""
+    return check_torch_outputs(ref_outputs, sol_outputs, rtol=rtol, atol=atol)
 
 
 def _check_correctness_trials(
@@ -640,7 +545,7 @@ def main():
     print(f"=== AKG Bench Lite ===")
     print(f"题库: {bench_root}")
     print(f"队伍: {', '.join(teams)}")
-    print(f"精度: rtol={args.rtol}, atol={args.atol}")
+    print(f"精度: torch.allclose, rtol={args.rtol}, atol={args.atol}, NaN/Inf fail-closed")
     print(f"性能: warmup={args.warmup}, iterations={args.iterations}, trials={args.num_trials}")
     print(f"输出: {output_dir}")
     print()

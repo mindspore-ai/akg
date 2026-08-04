@@ -409,7 +409,10 @@ async def run_single_backend(args: argparse.Namespace, backend: str) -> Tuple[Di
         print(f"Max Concurrent: {args.max_concurrent}")
         if args.mode in ("performance", "full"):
             print(f"Perf Warmup: {args.warmup}  Iterations: {args.iterations}  Trials: {args.num_trials}")
-            print(f"Perf Tolerance: rtol={args.rtol}  atol={args.atol}")
+            print(
+                f"Perf Precision: torch.allclose rtol={args.rtol} atol={args.atol}, "
+                "NaN/Inf fail-closed"
+            )
         print()
 
         discovery = discover_bench_lite_cases(
