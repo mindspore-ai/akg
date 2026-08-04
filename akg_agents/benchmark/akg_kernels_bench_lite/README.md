@@ -108,18 +108,27 @@ inputs = get_inputs()
 output = model(*inputs)
 ```
 
-### 正确性验证
+### 本地验证方式
+
+Bench Lite 在性能评分前使用以下标准做二次正确性校验：
 
 ```python
-# 参考实现
-ref_output = Model(*get_init_inputs())(*get_inputs())
-
-# 你的实现
-your_output = ModelNew(*get_init_inputs())(*get_inputs())
-
-# 验证
-assert torch.allclose(ref_output, your_output, atol=1e-2, rtol=1e-2)
+assert torch.isfinite(ref_output).all()
+assert torch.isfinite(your_output).all()
+assert torch.allclose(
+    your_output.float(),
+    ref_output.float(),
+    atol=1e-2,
+    rtol=1e-2,
+    equal_nan=False,
+)
 ```
+
+reference 放在 `torch.allclose` 的第二个参数，使相对容差项以 `|ref|` 为基准。
+runner 还会使用 3 个 seed 重复校验，并使用相同 seed 为 reference 和 solution
+分别生成独立输入，避免缓存输出以及 stateful / in-place 操作相互污染。完整实现以
+[`bench_lite_common.py`](../../examples/kernel_related/bench_lite_common.py) 中的
+`check_torch_outputs()` 为准。
 
 ## 评分标准
 
@@ -131,9 +140,23 @@ assert torch.allclose(ref_output, your_output, atol=1e-2, rtol=1e-2)
 2. **输出数量匹配**: `len(ref_outputs) == len(sol_outputs)`
 3. **Shape 匹配**: 每个输出 Tensor 的 shape 必须完全一致
 4. **数值精度检查**:
-   - 计算绝对误差: `max_abs_diff = max(|ref - sol|)`
-   - 计算相对误差: `max_rel_diff = max(|ref - sol| / (|ref| + 1e-8))`
-   - 通过条件: `max_abs_diff <= atol (1e-2)` **且** `max_rel_diff <= rtol (1e-2)`
+   - reference 或 solution 中出现任意 NaN/Inf，直接失败
+   - 有限值转为 FP32 后使用 `torch.allclose(sol, ref, atol=1e-2, rtol=1e-2)`
+   - 等价的逐元素条件为 `|sol - ref| <= atol + rtol * |ref|`
+   - `max_abs_diff` 和 `max_rel_diff` 仅作为诊断信息输出，不分别作为通过门槛
+
+#### 标准来源
+
+Bench Lite 流程包含两次用途不同的正确性验证：
+
+| 阶段 | 用途 | 标准与源码位置 |
+| --- | --- | --- |
+| Agent 生成阶段 | 判断生成的 kernel 是否正确，即 `Pass@N` | 由 [`KernelVerifier`](../../python/akg_agents/op/verifier/kernel_verifier.py) 按 framework 和 DSL 选择标准。常规 framework 路径使用按 dtype 分层的 adapter；声明 `uses_cannbench_precision=True` 的 DSL 使用 [`cann_correctness`](../../python/akg_agents/op/cann_correctness/) 标准 |
+| 性能评分前二次校验 | 对已提取或已有 submission 再次验证，错误 case 不计性能分 | Bench Lite 专用的 `torch.allclose(atol=1e-2, rtol=1e-2)` 加 NaN/Inf fail-closed 标准。两个入口共用 [`bench_lite_common.py`](../../examples/kernel_related/bench_lite_common.py) 的 `check_torch_outputs()`；已有 submission 从 [`tools/run_bench.py`](./tools/run_bench.py) 进入 |
+
+因此，性能评分前的二次校验是 Bench Lite 自身的固定标准，不等同于
+[`torch.py`](../../python/akg_agents/op/verifier/adapters/framework/torch.py) 中
+framework verifier 使用的 dtype 分层标准。
 
 ### 性能评分
 

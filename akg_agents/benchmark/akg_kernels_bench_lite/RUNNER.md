@@ -157,9 +157,9 @@ Runner 支持三种运行模式，通过 `--mode` 参数选择：
 
 ### 5.1 `full` 模式流程
 
-```
+```text
 Phase 1: Correctness (Pass@N)
-  └─ Agent (LangGraphTask) 生成 kernel → 验证正确性
+  └─ Agent (LangGraphTask) 生成 kernel → KernelVerifier 按 framework/DSL 选择标准并验证正确性
 
 Phase 2: Submission Extraction
   └─ 从成功 attempt 的 final_state['coder_code'] 提取 ModelNew 代码
@@ -167,7 +167,7 @@ Phase 2: Submission Extraction
 
 Phase 3: Performance Evaluation
   └─ 加载 reference Model + generated ModelNew
-  └─ 二次正确性验证 (atol/rtol)
+  └─ 使用 torch.allclose + NaN/Inf fail-closed 做二次正确性验证
   └─ 性能测量: NPU 使用 profiler_npu，GPU 使用 CUDA Event，CPU 使用 perf_counter
   └─ 每个 trial 执行 warmup + 多轮迭代，多个 trial 取中位数
   └─ 计算 speedup 和加权分数
@@ -177,6 +177,29 @@ Phase 4: Report
   └─ JSON artifact (含 correctness + performance)
   └─ leaderboard.json (可选)
 ```
+
+Phase 1 由
+[`KernelVerifier`](../../python/akg_agents/op/verifier/kernel_verifier.py) 按 framework/DSL
+选择标准。常规路径使用
+[`adapters/framework/`](../../python/akg_agents/op/verifier/adapters/framework/)
+中各 framework adapter 的 dtype 分层参数；声明
+`uses_cannbench_precision=True` 的 DSL 使用
+[`cann_correctness`](../../python/akg_agents/op/cann_correctness/) 标准。
+
+Phase 3 使用 Bench Lite 专用的 `torch.allclose` 标准，由
+[`bench_lite_common.py`](../../examples/kernel_related/bench_lite_common.py) 的
+`check_torch_outputs()` 实现。Agent 生成 submission 和已有 submission 两个入口均复用
+该函数；后者由 [`tools/run_bench.py`](./tools/run_bench.py) 委托调用。reference 或
+solution 中出现任意 NaN/Inf 都直接失败；其余数值转为 FP32 后执行：
+
+```python
+torch.allclose(sol_f, ref_f, atol=1e-2, rtol=1e-2, equal_nan=False)
+```
+
+reference 位于第二个参数，因此相对误差项以 `|ref|` 为基准。默认容差均为
+`1e-2`，可通过 `--rtol`、`--atol` 覆盖。`max_abs_diff` 和 `max_rel_diff`
+仅用于诊断，不分别作为通过门槛。该标准不同于 Phase 1 framework adapter 的
+dtype 分层标准。
 
 ### 5.2 评分规则
 
@@ -245,8 +268,8 @@ Phase 4: Report
 | `--warmup` | `int` | `10` | 性能测量预热轮数（仅 performance/full 模式） |
 | `--iterations` | `int` | `100` | 性能测量每轮迭代次数（仅 performance/full 模式） |
 | `--num-trials` | `int` | `3` | 性能测量试验轮数（仅 performance/full 模式） |
-| `--rtol` | `float` | `1e-2` | 二次正确性验证相对误差容差 |
-| `--atol` | `float` | `1e-2` | 二次正确性验证绝对误差容差 |
+| `--rtol` | `float` | `1e-2` | 二次正确性验证的 `torch.allclose` 相对容差 |
+| `--atol` | `float` | `1e-2` | 二次正确性验证的 `torch.allclose` 绝对容差 |
 | `--timeout` | `int` | `300` | 单 case 性能评测超时秒数（仅 performance/full 模式） |
 | `--team-name` | `str` | `aikg_agent` | 提交者/团队标识，用于 submission 目录名和 leaderboard |
 | `--workflow` | `str` | `coder_only_workflow` | LangGraph workflow 名称 |
@@ -423,7 +446,7 @@ Phase 4: Report
 | 3 | 共享模块仍位于 `examples/kernel_related/`，因为当前只被 runner 使用 |
 | 4 | `--mode full` 下的性能评测是串行的，不支持并发性能测量 |
 | 5 | 性能评测的 `--timeout` 基于子进程隔离（`multiprocessing` spawn 模式），超时后通过 `terminate()` / `kill()` 终止工作进程并释放 GPU/NPU 资源。超时错误信息包含 `last phase` 用于诊断（可能的阶段：`startup` / `loading_modules` / `model_init` / `correctness_check` / `measuring_baseline` / `measuring_solution`） |
-| 6 | 二次正确性验证使用严格 AND 语义（`max_abs_diff <= atol` 且 `max_rel_diff <= rtol` 必须同时满足），比 `torch.allclose` 更严格；reference 与 solution 使用相同 seed 重新生成的独立输入，避免 stateful / in-place 输入互相污染；任一 reference、solution 或 diff 中出现 NaN/Inf 都直接判定失败 |
+| 6 | 性能评分前的二次正确性验证使用 Bench Lite 专用的 `torch.allclose` 加 NaN/Inf fail-closed 标准；reference 与 solution 使用相同 seed 重新生成的独立输入，并使用 3 个 seed 防止缓存输出。具体规则见 5.1 节 |
 
 ## 9. 推荐使用方式
 
@@ -495,12 +518,13 @@ python akg_agents/examples/kernel_related/run_torch_bench_lite.py \
   --backend gpu \
   --pass-n 5 \
   --warmup 20 --iterations 200 --num-trials 5 \
-  --rtol 1e-3 --atol 1e-3 \
+  --rtol 1e-2 --atol 1e-2 \
   --timeout 600 \
   --output results.json
 ```
 
-> 缺省 `--warmup 10`、`--iterations 100`、`--num-trials 3`、`--rtol 1e-2`、`--atol 1e-2`、`--timeout 300`。
+> 缺省 `--warmup 10`、`--iterations 100`、`--num-trials 3`、`--rtol 1e-2`、
+> `--atol 1e-2`、`--timeout 300`。
 
 #### 示例 3：NPU correctness + 覆盖 DSL 和架构
 
