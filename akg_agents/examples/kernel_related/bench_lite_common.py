@@ -744,6 +744,7 @@ def print_backend_summary(backend_name: str, summary: Dict[str, object], results
 # Phase 2: Submission extraction from Agent results
 # ------------------------------------------------------------------------------
 
+# Bench Lite performance recheck uses torch.allclose with fixed defaults.
 DEFAULT_PERF_RTOL = 1e-2
 DEFAULT_PERF_ATOL = 1e-2
 DEFAULT_PERF_WARMUP = 10
@@ -970,13 +971,13 @@ def _make_seeded_torch_inputs(
     return inputs
 
 
-def _check_correctness(
+def check_torch_outputs(
     ref_outputs: Any,
     sol_outputs: Any,
-    rtol: float,
-    atol: float,
+    rtol: float = DEFAULT_PERF_RTOL,
+    atol: float = DEFAULT_PERF_ATOL,
 ) -> Dict[str, Any]:
-    """Verify solution outputs against reference outputs."""
+    """Verify finite outputs with torch.allclose; reject any NaN or Inf."""
     import torch  # type: ignore
 
     if isinstance(ref_outputs, torch.Tensor):
@@ -993,6 +994,7 @@ def _check_correctness(
         return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
                 "detail": f"Output count mismatch: ref={len(ref_list)}, sol={len(sol_list)}"}
 
+    # Retain maxima as diagnostics only; torch.allclose determines the verdict.
     max_abs = 0.0
     max_rel = 0.0
     for i, (ref_t, sol_t) in enumerate(zip(ref_list, sol_list)):
@@ -1002,40 +1004,69 @@ def _check_correctness(
         if ref_t.shape != sol_t.shape:
             return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
                     "detail": f"Output[{i}] shape mismatch: ref={ref_t.shape}, sol={sol_t.shape}"}
-        ref_f = ref_t.float()
-        sol_f = sol_t.float()
+
+        ref_f = ref_t.detach().cpu().float()
+        sol_f = sol_t.detach().cpu().float()
 
         ref_non_finite = ~torch.isfinite(ref_f)
         if ref_non_finite.any().item():
-            return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
-                    "detail": f"Output[{i}] reference contains NaN/Inf: count={int(ref_non_finite.sum().item())}"}
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": (
+                    f"Output[{i}] reference contains NaN/Inf: "
+                    f"count={int(ref_non_finite.sum().item())}"
+                ),
+            }
 
         sol_non_finite = ~torch.isfinite(sol_f)
         if sol_non_finite.any().item():
-            return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
-                    "detail": f"Output[{i}] solution contains NaN/Inf: count={int(sol_non_finite.sum().item())}"}
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": (
+                    f"Output[{i}] solution contains NaN/Inf: "
+                    f"count={int(sol_non_finite.sum().item())}"
+                ),
+            }
 
         abs_diff = (ref_f - sol_f).abs()
-        rel_diff = abs_diff / (ref_f.abs() + 1e-8)
+        raw_rel = float((abs_diff / (ref_f.abs() + 1e-8)).max().item())
+        tensor_max_abs = float(abs_diff.max().item())
+        max_abs = max(max_abs, tensor_max_abs)
+        max_rel = max(max_rel, raw_rel)
 
-        abs_non_finite = ~torch.isfinite(abs_diff)
-        if abs_non_finite.any().item():
-            return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
-                    "detail": f"Output[{i}] abs_diff contains NaN/Inf: count={int(abs_non_finite.sum().item())}"}
+        # Put reference second so the relative term is based on |ref|.
+        if not torch.allclose(sol_f, ref_f, rtol=rtol, atol=atol, equal_nan=False):
+            return {
+                "correct": False,
+                "max_abs_diff": max_abs,
+                "max_rel_diff": max_rel,
+                "detail": (
+                    f"Output[{i}] torch.allclose failed: "
+                    f"max_abs_diff={max_abs:.6e}, max_rel_diff={max_rel:.6e}, "
+                    f"rtol={rtol:.6e}, atol={atol:.6e}"
+                ),
+            }
 
-        rel_non_finite = ~torch.isfinite(rel_diff)
-        if rel_non_finite.any().item():
-            return {"correct": False, "max_abs_diff": float("inf"), "max_rel_diff": float("inf"),
-                    "detail": f"Output[{i}] rel_diff contains NaN/Inf: count={int(rel_non_finite.sum().item())}"}
+    return {
+        "correct": True,
+        "max_abs_diff": max_abs,
+        "max_rel_diff": max_rel,
+        "detail": "PASS",
+    }
 
-        max_abs = max(max_abs, abs_diff.max().item())
-        max_rel = max(max_rel, rel_diff.max().item())
-        # Strict AND semantics: absolute AND relative tolerance must both pass
-        if max_abs > atol or max_rel > rtol:
-            detail = f"max_abs_diff={max_abs:.6e}, max_rel_diff={max_rel:.6e}"
-            return {"correct": False, "max_abs_diff": max_abs, "max_rel_diff": max_rel, "detail": detail}
 
-    return {"correct": True, "max_abs_diff": max_abs, "max_rel_diff": max_rel, "detail": "PASS"}
+def _check_correctness(
+    ref_outputs: Any,
+    sol_outputs: Any,
+    rtol: float = DEFAULT_PERF_RTOL,
+    atol: float = DEFAULT_PERF_ATOL,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for Agent-generated Bench Lite submissions."""
+    return check_torch_outputs(ref_outputs, sol_outputs, rtol=rtol, atol=atol)
 
 
 def _check_correctness_trials(

@@ -100,14 +100,12 @@ def test_check_correctness_rejects_solution_nan():
     result = run_bench.check_correctness(
         torch.zeros(2),
         torch.tensor([float("nan"), 0.0]),
-        rtol=1e-2,
-        atol=1e-2,
     )
 
     assert result["correct"] is False
     assert math.isinf(result["max_abs_diff"])
     assert math.isinf(result["max_rel_diff"])
-    assert "solution 包含 NaN/Inf" in result["detail"]
+    assert "solution contains NaN/Inf" in result["detail"]
 
 
 def test_common_check_correctness_rejects_solution_nan():
@@ -116,14 +114,62 @@ def test_common_check_correctness_rejects_solution_nan():
     result = common._check_correctness(
         torch.zeros(2),
         torch.tensor([float("nan"), 0.0]),
-        rtol=1e-2,
-        atol=1e-2,
     )
 
     assert result["correct"] is False
     assert math.isinf(result["max_abs_diff"])
     assert math.isinf(result["max_rel_diff"])
     assert "solution contains NaN/Inf" in result["detail"]
+
+
+def test_bench_lite_paths_use_elementwise_allclose_semantics():
+    run_bench = _load_run_bench()
+    common = _load_bench_lite_common()
+
+    near_zero_ref = torch.tensor([5.117739e-08], dtype=torch.float32)
+    near_zero_sol = torch.tensor([8.663523e-08], dtype=torch.float32)
+
+    # The first element needs atol and the second needs rtol. Both should pass
+    # even though the global max absolute and relative diagnostics exceed 1e-2.
+    mixed_ref = torch.tensor([0.0, 1000.0], dtype=torch.float32)
+    mixed_sol = torch.tensor([0.005, 1005.0], dtype=torch.float32)
+
+    cases = (
+        (near_zero_ref, near_zero_sol, True),
+        (mixed_ref, mixed_sol, True),
+        (torch.tensor([0.0]), torch.tensor([0.011]), False),
+        (torch.tensor([1000.0]), torch.tensor([1011.0]), False),
+    )
+    for ref, sol, expected in cases:
+        standalone = run_bench.check_correctness(ref, sol, rtol=1e-2, atol=1e-2)
+        generated = common._check_correctness(ref, sol, rtol=1e-2, atol=1e-2)
+        assert standalone["correct"] is expected
+        assert generated["correct"] is expected
+        assert standalone["correct"] is generated["correct"]
+
+    near_zero_result = run_bench.check_correctness(near_zero_ref, near_zero_sol)
+    assert near_zero_result["correct"] is True
+    assert near_zero_result["max_rel_diff"] > 0.5
+
+    mixed_result = run_bench.check_correctness(mixed_ref, mixed_sol)
+    assert mixed_result["correct"] is True
+    assert mixed_result["max_abs_diff"] > 1e-2
+    assert mixed_result["max_rel_diff"] > 1e-2
+
+
+def test_bench_lite_paths_reject_matching_non_finite_outputs():
+    run_bench = _load_run_bench()
+    common = _load_bench_lite_common()
+
+    for value in (float("nan"), float("inf"), float("-inf")):
+        ref = torch.tensor([value], dtype=torch.float32)
+        sol = ref.clone()
+        standalone = run_bench.check_correctness(ref, sol)
+        generated = common._check_correctness(ref, sol)
+        assert standalone["correct"] is False
+        assert generated["correct"] is False
+        assert "reference contains NaN/Inf" in standalone["detail"]
+        assert "reference contains NaN/Inf" in generated["detail"]
 
 
 def test_run_single_case_replays_seed_for_stateful_inputs(tmp_path, monkeypatch):
