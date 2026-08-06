@@ -1225,7 +1225,7 @@ static SmallVector<int64_t, kSmallVectorSizeThree> collectDynamicVectorCaseMaxTi
 
 static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> &allBandTileSizes,
                                 const std::vector<SmallVector<int, kSmallVectorSizeSix>> &allBandConstraintMaxs,
-                                ArrayRef<int64_t> maxTiles) {
+                                bool isDynamicShape, ArrayRef<int64_t> maxTiles) {
   llvm::dbgs() << "=== All Band Tile Sizes ===\n";
   for (size_t i = 0; i < allBandTileSizes.size(); ++i) {
     llvm::dbgs() << "Band " << i << " tile sizes: [";
@@ -1243,7 +1243,7 @@ static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVe
     }
     llvm::dbgs() << "]\n";
   }
-  if (!maxTiles.empty()) {
+  if (isDynamicShape) {
     llvm::dbgs() << "maxTiles: [";
     llvm::interleaveComma(maxTiles, llvm::dbgs());
     llvm::dbgs() << "]\n";
@@ -1333,8 +1333,9 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
     allBandConstraintMaxs.push_back(bandConstraintMaxs);
   }
 
-  const SmallVector<int64_t, kSmallVectorSizeThree> maxTiles = collectDynamicVectorCaseMaxTiles(bandsToUse);
-  logAllBandTileSizes(allBandTileSizes, allBandConstraintMaxs, maxTiles);
+  SmallVector<int64_t, kSmallVectorSizeThree> maxTiles =
+    isDynamicShape ? collectDynamicVectorCaseMaxTiles(bandsToUse) : SmallVector<int64_t, kSmallVectorSizeThree>{};
+  logAllBandTileSizes(allBandTileSizes, allBandConstraintMaxs, isDynamicShape, maxTiles);
 
   return success();
 }
