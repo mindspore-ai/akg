@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(REPO_ROOT / "examples" / "kernel_related"))
-from bench_lite_common import check_torch_outputs
+from bench_lite_common import check_torch_mutable_inputs, check_torch_outputs
 from scoring import compute_case_score, compute_weighted_score, get_tier_weight
 
 # ──────────────────────── 精度与性能参数 ──────────────────────────────────────
@@ -131,6 +131,7 @@ def _check_correctness_trials(
     rtol: float,
     atol: float,
     trials: int = DEFAULT_CORRECTNESS_TRIALS,
+    case_name: str | None = None,
 ) -> dict:
     """Run correctness on multiple random input sets using the same model instances."""
     max_abs = 0.0
@@ -154,6 +155,23 @@ def _check_correctness_trials(
                 "max_abs_diff": corr["max_abs_diff"],
                 "max_rel_diff": corr["max_rel_diff"],
                 "detail": f"trial={trial_idx + 1}/{trials}, seed={seed}: {corr['detail']}",
+            }
+
+        state_corr = check_torch_mutable_inputs(
+            case_name,
+            ref_inputs,
+            sol_inputs,
+            rtol=rtol,
+            atol=atol,
+        )
+        max_abs = max(max_abs, state_corr["max_abs_diff"])
+        max_rel = max(max_rel, state_corr["max_rel_diff"])
+        if not state_corr["correct"]:
+            return {
+                "correct": False,
+                "max_abs_diff": state_corr["max_abs_diff"],
+                "max_rel_diff": state_corr["max_rel_diff"],
+                "detail": f"trial={trial_idx + 1}/{trials}, seed={seed}: {state_corr['detail']}",
             }
 
     return {
@@ -288,6 +306,7 @@ def run_single_case(
             device,
             rtol=rtol,
             atol=atol,
+            case_name=ref_path.stem,
         )
         result["correctness"] = corr["correct"]
         result["max_abs_diff"] = corr["max_abs_diff"]
