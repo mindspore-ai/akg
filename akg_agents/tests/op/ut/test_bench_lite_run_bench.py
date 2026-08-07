@@ -94,6 +94,50 @@ class ModelNew(nn.Module):
     return ref_path, sol_path
 
 
+def _write_causal_conv1d_without_state_update(tmp_path):
+    ref_dir = tmp_path / "ref"
+    sol_dir = tmp_path / "sol"
+    ref_dir.mkdir()
+    sol_dir.mkdir()
+    ref_path = ref_dir / "causal_conv1d.py"
+    sol_path = sol_dir / "causal_conv1d.py"
+
+    ref_path.write_text(
+        """
+import torch
+import torch.nn as nn
+
+
+class Model(nn.Module):
+    def forward(self, x, conv_state):
+        out = x + conv_state
+        conv_state.copy_(x)
+        return out
+
+
+def get_inputs():
+    return [torch.ones(8), torch.zeros(8)]
+
+
+def get_init_inputs():
+    return []
+""",
+        encoding="utf-8",
+    )
+    sol_path.write_text(
+        """
+import torch.nn as nn
+
+
+class ModelNew(nn.Module):
+    def forward(self, x, conv_state):
+        return x + conv_state
+""",
+        encoding="utf-8",
+    )
+    return ref_path, sol_path
+
+
 def test_check_correctness_rejects_solution_nan():
     run_bench = _load_run_bench()
 
@@ -256,6 +300,28 @@ def test_run_single_case_rejects_cached_output_across_random_trials(tmp_path, mo
     assert "trial=2/3" in result["correctness_detail"]
 
 
+def test_run_single_case_rejects_missing_causal_conv_state_update(tmp_path, monkeypatch):
+    run_bench = _load_run_bench()
+    monkeypatch.setattr(run_bench, "_get_device", lambda: "cpu")
+    ref_path, sol_path = _write_causal_conv1d_without_state_update(tmp_path)
+
+    result = run_bench.run_single_case(
+        ref_path=ref_path,
+        sol_path=sol_path,
+        tier="t3",
+        rtol=1e-2,
+        atol=1e-2,
+        warmup_runs=0,
+        iterations=1,
+        num_trials=1,
+        timeout=30,
+    )
+
+    assert result["status"] == "fail"
+    assert result["correctness"] is False
+    assert "Mutable input[1] state mismatch" in result["correctness_detail"]
+
+
 def test_common_eval_single_case_replays_seed_for_stateful_inputs(tmp_path, monkeypatch):
     common = _load_bench_lite_common()
     monkeypatch.setattr(common, "_get_torch_device", lambda _backend=None: "cpu")
@@ -338,6 +404,28 @@ def test_common_eval_single_case_rejects_cached_output_across_random_trials(tmp_
     assert result["status"] == "fail"
     assert result["correctness"] is False
     assert "trial=2/3" in result["correctness_detail"]
+
+
+def test_common_eval_rejects_missing_causal_conv_state_update(tmp_path, monkeypatch):
+    common = _load_bench_lite_common()
+    monkeypatch.setattr(common, "_get_torch_device", lambda _backend=None: "cpu")
+    ref_path, sol_path = _write_causal_conv1d_without_state_update(tmp_path)
+
+    result = common._eval_single_case_inner(
+        ref_path=ref_path,
+        sol_path=sol_path,
+        tier="t3",
+        rtol=1e-2,
+        atol=1e-2,
+        warmup_runs=0,
+        iterations=1,
+        num_trials=1,
+        backend="cpu",
+    )
+
+    assert result["status"] == "fail"
+    assert result["correctness"] is False
+    assert "Mutable input[1] state mismatch" in result["correctness_detail"]
 
 
 def test_submission_runner_uses_profiler_npu_for_npu_latency(monkeypatch):

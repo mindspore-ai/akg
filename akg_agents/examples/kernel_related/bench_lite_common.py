@@ -1059,6 +1059,54 @@ def check_torch_outputs(
     }
 
 
+_MUTABLE_INPUT_INDICES = {
+    "causal_conv1d": (1,),  # conv_state
+}
+
+
+def check_torch_mutable_inputs(
+    case_name: Optional[str],
+    ref_inputs: Any,
+    sol_inputs: Any,
+    rtol: float = DEFAULT_PERF_RTOL,
+    atol: float = DEFAULT_PERF_ATOL,
+) -> Dict[str, Any]:
+    """Compare case-specific input tensors that are mutated by ``forward``."""
+    indices = _MUTABLE_INPUT_INDICES.get(case_name or "", ())
+    max_abs = 0.0
+    max_rel = 0.0
+
+    for input_idx in indices:
+        try:
+            ref_state = ref_inputs[input_idx]
+            sol_state = sol_inputs[input_idx]
+        except (IndexError, KeyError, TypeError):
+            return {
+                "correct": False,
+                "max_abs_diff": float("inf"),
+                "max_rel_diff": float("inf"),
+                "detail": f"Mutable input[{input_idx}] is missing",
+            }
+
+        corr = check_torch_outputs(ref_state, sol_state, rtol=rtol, atol=atol)
+        max_abs = max(max_abs, corr["max_abs_diff"])
+        max_rel = max(max_rel, corr["max_rel_diff"])
+        if not corr["correct"]:
+            return {
+                "correct": False,
+                "max_abs_diff": corr["max_abs_diff"],
+                "max_rel_diff": corr["max_rel_diff"],
+                "detail": f"Mutable input[{input_idx}] state mismatch: {corr['detail']}",
+            }
+
+    return {
+        "correct": True,
+        "max_abs_diff": max_abs,
+        "max_rel_diff": max_rel,
+        "detail": "PASS",
+    }
+
+
 def _check_correctness(
     ref_outputs: Any,
     sol_outputs: Any,
@@ -1077,6 +1125,7 @@ def _check_correctness_trials(
     rtol: float,
     atol: float,
     trials: int = DEFAULT_CORRECTNESS_TRIALS,
+    case_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run correctness on multiple random input sets using the same model instances."""
     import torch  # type: ignore
@@ -1102,6 +1151,23 @@ def _check_correctness_trials(
                 "max_abs_diff": corr["max_abs_diff"],
                 "max_rel_diff": corr["max_rel_diff"],
                 "detail": f"trial={trial_idx + 1}/{trials}, seed={seed}: {corr['detail']}",
+            }
+
+        state_corr = check_torch_mutable_inputs(
+            case_name,
+            ref_inputs,
+            sol_inputs,
+            rtol=rtol,
+            atol=atol,
+        )
+        max_abs = max(max_abs, state_corr["max_abs_diff"])
+        max_rel = max(max_rel, state_corr["max_rel_diff"])
+        if not state_corr["correct"]:
+            return {
+                "correct": False,
+                "max_abs_diff": state_corr["max_abs_diff"],
+                "max_rel_diff": state_corr["max_rel_diff"],
+                "detail": f"trial={trial_idx + 1}/{trials}, seed={seed}: {state_corr['detail']}",
             }
 
     return {
@@ -1293,6 +1359,7 @@ def _eval_single_case_inner(
             device,
             rtol=rtol,
             atol=atol,
+            case_name=ref_path.stem,
         )
         result["correctness"] = corr["correct"]
         result["max_abs_diff"] = corr["max_abs_diff"]
