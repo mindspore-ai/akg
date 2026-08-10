@@ -2080,6 +2080,19 @@ static bool shouldPropagateTransposeAttrToTileLoop(int tileLevel, int tileNum, m
   return tileLevel == tileNum || origLoop->hasAttr(kTreeLeafAttr);
 }
 
+static bool hasProvablySingleTileIteration(ArrayRef<Value> tileSizeValues, int previousTile, int currentTile) {
+  if (previousTile < 0 || previousTile >= static_cast<int>(tileSizeValues.size()) ||
+      currentTile >= static_cast<int>(tileSizeValues.size())) {
+    return false;
+  }
+  if (tileSizeValues[currentTile] == tileSizeValues[previousTile]) {
+    return true;
+  }
+  auto previousTileSize = getConstantIndexValue(tileSizeValues[previousTile]);
+  auto currentTileSize = getConstantIndexValue(tileSizeValues[currentTile]);
+  return previousTileSize && currentTileSize && *previousTileSize <= *currentTileSize;
+}
+
 static bool shouldDeleteRedundantTileWrapper(const TileLoopParams &p, mlir::scf::ForOp origLoop) {
   int i = p.i;
   int j = p.j;
@@ -2095,25 +2108,16 @@ static bool shouldDeleteRedundantTileWrapper(const TileLoopParams &p, mlir::scf:
     return false;
   }
   int lastTile = curTile - bandSize;
-  if (i > 0 && lastTile >= 0 && curTile < static_cast<int>(tileSizeValues.size()) &&
-      tileSizeValues[curTile] == tileSizeValues[lastTile]) {
-    return true;
+  if (i > 0) {
+    return hasProvablySingleTileIteration(tileSizeValues, lastTile, curTile);
   }
   unsigned curTileSize = tileSizesInt[curTile];
   if (curTileSize == 0 || curTileSize == static_cast<unsigned>(-1)) {
     return false;
   }
 
-  if (i == 0) {
-    int64_t tripCount = 0;
-    return getStaticTripCount(origLoop, tripCount) && tripCount <= static_cast<int64_t>(curTileSize);
-  }
-
-  if (lastTile < 0 || lastTile >= static_cast<int>(tileSizesInt.size())) {
-    return false;
-  }
-  unsigned prevTileSize = tileSizesInt[lastTile];
-  return prevTileSize != 0 && prevTileSize != static_cast<unsigned>(-1) && prevTileSize <= curTileSize;
+  int64_t tripCount = 0;
+  return getStaticTripCount(origLoop, tripCount) && tripCount <= static_cast<int64_t>(curTileSize);
 }
 
 // Bundled params for updateLoopAttrsForTileLoop to stay under readability-function-size_parameters limit.
