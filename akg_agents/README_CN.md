@@ -225,3 +225,11 @@ akg_agents/
 - **[Server Architecture](./docs/v1/CN/ServerArchitecture.md)** - 服务化架构（Client-Server-Worker）
 - **[TaskPool](./docs/v1/CN/TaskPool.md)** - 任务池管理
 - **[DevicePool](./docs/v1/CN/DevicePool.md)** - 设备池管理
+
+## 📌 7. 项目使用范围与安全说明
+
+`akg_agents` 是基于 Apache 2.0 协议开源的项目，面向 AI 基础设施和高性能计算领域的技术研究、开发、基准测试、本地验证及其他实验性场景使用。项目**不面向商业交付，也不作为对外生产服务部署**。
+
+仓库中的 LLM 接入遵循标准的模型服务商 API 和 OpenAI 兼容协议调用流程，具体服务地址及连接配置由使用者根据实际环境提供。`server`、`client`、`worker` 等组件是为本地或受信任内网环境下的实验、远程 NPU/GPU 验证和开发调试提供的辅助能力，并非产品化的对外服务接口。用于下载第三方 benchmark 或模型、验证 Python 包发布结果的脚本属于开发和评测工具，按需手动执行，不是核心运行链路的必要组成部分。
+
+使用上述实验性组件时，请根据实际环境的安全要求配置监听地址、端口、TLS、鉴权和网络访问控制。除非已针对具体部署场景完成必要的安全加固和评审，否则应将这些组件限制在本地或其他受信任环境中使用。
