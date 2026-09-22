@@ -226,3 +226,11 @@ akg_agents/
 - **[Server Architecture](./docs/v1/ServerArchitecture.md)** - Service architecture (Client-Server-Worker)
 - **[TaskPool](./docs/v1/TaskPool.md)** - Task pool management
 - **[DevicePool](./docs/v1/DevicePool.md)** - Device pool management
+
+## 📌 7. Project Usage Scope and Security Statement
+
+`akg_agents` is an open-source project released under the Apache 2.0 license. It is intended for AI infrastructure and high-performance computing research, development, benchmarking, local verification, and other technical experimentation. The project is **not intended for commercial delivery or deployment as an external production service**.
+
+The LLM integrations in this repository follow standard provider and OpenAI-compatible API workflows, with service endpoints and related connection settings supplied by users according to their own environments. The `server`, `client`, and `worker` components are auxiliary capabilities provided for local or trusted-intranet experiments, remote NPU/GPU verification, and development troubleshooting; they are not productized service interfaces. The scripts for downloading third-party benchmarks or models and for package-release verification are development and evaluation utilities that are invoked manually when needed.
+
+When using these experimental components, users should configure the listening address, ports, TLS settings, authentication, and network access controls according to the security requirements of their own environment. These components should be restricted to local or otherwise trusted environments unless they have been separately hardened and reviewed for the intended deployment scenario.
