@@ -1,0 +1,731 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Huawei Technologies Co., Ltd
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// This file was copied from project tenstorrent/tt-mlir
+// (https://github.com/tenstorrent/tt-mlir) and modified for AKG-MLIR.
+
+#ifndef AKG_DIALECT_EMITPY_IR_EMITPYOPS_TD
+#define AKG_DIALECT_EMITPY_IR_EMITPYOPS_TD
+
+include "EmitPyAttrs.td"
+include "EmitPyBase.td"
+include "EmitPyInterfaces.td"
+include "EmitPyTypes.td"
+
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/BuiltinAttributes.td"
+include "mlir/IR/CommonTypeConstraints.td"
+include "mlir/IR/CommonAttrConstraints.td"
+include "mlir/IR/OpBase.td"
+include "mlir/IR/RegionKindInterface.td"
+include "mlir/IR/SymbolInterfaces.td"
+
+//===----------------------------------------------------------------------===//
+// EmitPy ops definitions.
+//===----------------------------------------------------------------------===//
+
+def EmitPy_CallOpaqueOp : EmitPy_Op<"call_opaque", [PyExpressionInterface]> {
+  let summary = "Opaque call operation";
+  let description = [{
+    The `emitpy.call_opaque` operation represents a Python function call. The callee
+    can be an arbitrary non-empty string.
+
+    Example:
+
+    ```mlir
+    %2 = emitpy.call_opaque "np.add"(%0, %1) {args = [0 : index, 1 : index, #emitpy.opaque<"64">], keyword_args = ["", "", "size"]} : (!emitpy.opaque<"np.ndarray">, !emitpy.opaque<"np.ndarray">) -> !emitpy.opaque<"np.ndarray">
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<StrAttr, "the Python function to call">:$callee,
+    Arg<OptionalAttr<ArrayAttr>, "the order of operands and further attributes">:$args,
+    Variadic<AnyType>:$operands,
+    Arg<OptionalAttr<StrArrayAttr>>:$keyword_args
+  );
+
+  let results = (outs Variadic<AnyType>);
+
+  let builders = [
+    OpBuilder<(ins
+      "::mlir::TypeRange":$result_types,
+      "::llvm::StringRef":$callee,
+      "::mlir::ValueRange":$operands,
+      CArg<"::mlir::ArrayAttr", "{}">:$args,
+      CArg<"::mlir::ArrayAttr", "{}">:$keyword_args), [{
+        build($_builder, $_state, result_types, callee, args, operands, keyword_args);
+      }]
+    >
+  ];
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{$callee `(` $operands `)` attr-dict `:` functional-type($operands, results)}];
+}
+
+def EmitPy_ImportOp : EmitPy_Op<"import"> {
+  let summary = "Import operation";
+  let description = [{
+     The `emitpy.import` operation allows to define a Python module import
+     via various forms of the `import` statement.
+
+    Example:
+
+    ```mlir
+     emitpy.import import "np" as "numpy"
+     ```
+  }];
+
+  let arguments = (ins
+    Arg<StrAttr, "module to import">:$module_name,
+    Arg<OptionalAttr<StrAttr>, "module alias">:$module_alias,
+    Arg<OptionalAttr<StrArrayAttr>, "specific members to import from the module">:$members_to_import,
+    Arg<OptionalAttr<StrArrayAttr>, "aliases for the module or the single imported members">:$member_aliases,
+    Arg<OptionalAttr<UnitAttr>, "import all members with *">:$import_all
+  );
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def EmitPy_LiteralOp : EmitPy_Op<"literal", [Pure, PyExpressionInterface]> {
+  let summary = "Literal operation";
+  let description = [{
+    The `emitpy.literal` operation produces an SSA value equal to some constant
+    specified by an attribute.
+
+    Example:
+
+    ```mlir
+    %0 = emitpy.literal "0" : index
+    ```
+  }];
+
+  let arguments = (ins StrAttr:$value);
+
+  let results = (outs Index:$result);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$value attr-dict `:` type($result)";
+}
+
+def EmitPy_SubscriptOp : EmitPy_Op<"subscript", [Pure, PyExpressionInterface]> {
+  let summary = "Subscript operation";
+  let description = [{
+    The `emitpy.subscript` operation represents Python subscript access.
+    This is the read counterpart to `emitpy.assign`.
+
+    Supports reading from any subscriptable object (e.g. arrays, dicts)
+    with integer or string keys.
+
+    Example:
+
+    ```mlir
+    %0 = emitpy.literal "0" : index
+    %1 = emitpy.subscript %arg0[%0] : (!emitpy.opaque<"[np.ndarray]">, index) -> !emitpy.opaque<"np.ndarray">
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<AnyTypeOf<[EmitPy_OpaqueType, EmitPy_DictType]>, "the container to subscript">:$container,
+    Arg<AnyTypeOf<[Index, EmitPy_StringType]>, "index or key value">:$index);
+
+  let results = (outs EmitPy_Type:$result);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$container `[` $index `]` attr-dict `:` functional-type(operands, results)";
+}
+
+def EmitPy_GetAttrOp : EmitPy_Op<"get_attr", [Pure, PyExpressionInterface]> {
+  let summary = "Get attribute from an object";
+  let description = [{
+    The `emitpy.get_attr` operation represents Python attribute access
+    via the dot operator.
+
+    Example:
+
+    ```mlir
+    %w = emitpy.get_attr %self, "weight" : (!emitpy.class<"Model">) -> !emitpy.opaque<"np.ndarray">
+    ```
+  }];
+
+  let arguments = (ins
+    AnyType:$object,
+    Arg<StrAttr, "attribute name">:$attr_name
+  );
+
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$object `,` $attr_name attr-dict `:` functional-type(operands, results)";
+}
+
+def EmitPy_SetAttrOp : EmitPy_Op<"set_attr"> {
+  let summary = "Set attribute on an object";
+  let description = [{
+    The `emitpy.set_attr` operation represents Python attribute assignment
+    via the dot operator.
+
+    Example:
+
+    ```mlir
+    emitpy.set_attr %self, "weight", %w : (!emitpy.opaque<"Model">, !emitpy.opaque<"np.ndarray">)
+    ```
+  }];
+
+  let arguments = (ins
+    AnyType:$object,
+    Arg<StrAttr, "attribute name">:$attr_name,
+    AnyType:$value
+  );
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$object `,` $attr_name `,` $value attr-dict `:` `(` type($object) `,` type($value) `)`";
+}
+
+def EmitPy_ClassOp : EmitPy_Op<"class", [Symbol, SymbolTable, IsolatedFromAbove,
+                                        SingleBlock, NoTerminator]> {
+  let summary = "Class definition";
+  let description = [{
+    The `emitpy.class` operation represents a Python class definition.
+    It is a symbol and contains a single-region body with class members.
+
+    Example:
+
+    ```mlir
+    emitpy.class @Model(#emitpy.opaque<"object">) {
+      func.func @__init__(%self: !emitpy.class<"Model">) {
+        %w = emitpy.call_opaque "np.zeros"() : () -> !emitpy.opaque<"np.ndarray">
+        emitpy.set_attr %self, "weight", %w : (!emitpy.class<"Model">, !emitpy.opaque<"np.ndarray">)
+        return
+      }
+    }
+    ```
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<ArrayAttr>:$base_classes
+  );
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def EmitPy_CreateDictOp : EmitPy_Op<"create_dict", [Pure]> {
+  let summary = "Create dictionary operation";
+  let description = [{
+    Creates a Python dictionary with a specified name.
+
+    Can be created in two ways:
+    1. From key-value pairs (items operands) - pairs are alternating key, value
+    2. From a Python literal expression (literal_expr attribute)
+
+    When literal_expr is provided, items must be empty.
+    When items are provided, they must be even count (key-value pairs).
+
+    Example:
+
+    ```mlir
+    %dict1 = emitpy.create_dict "my_dict" {literal_expr = "{}"} : () -> !emitpy.dict
+    %dict2 = emitpy.create_dict "cache" (%k0, %v0) : (index, !emitpy.opaque<"None">) -> !emitpy.dict
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<StrAttr>:$dict_name,
+    Variadic<AnyType>:$items,
+    OptionalAttr<StrAttr>:$literal_expr
+  );
+
+  let results = (outs EmitPy_DictType:$result);
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $dict_name (`(` $items^ `)`)? attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def EmitPy_AssignOp : EmitPy_Op<"assign",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Assign operation";
+  let description = [{
+    The `emitpy.assign` operation represents Python variable assignment.
+
+    For subscript assignment (e.g., `dict[5] = value`), wrap the subscript
+    in an `emitpy.expression` and use its result as the assign target.
+    The expression computes the lvalue; the assign performs the write.
+
+    Examples:
+
+    ```mlir
+    // Simple assignment
+    emitpy.assign %target = %value : (!emitpy.opaque<"int">, !emitpy.opaque<"int">)
+    ...
+    // Subscript assignment (expression computes subscript lvalue)
+    %dict = emitpy.create_dict "dict" {literal_expr = "{}"} : () -> !emitpy.dict
+    %key = emitpy.literal "5" : index
+    %sub = emitpy.expression(%dict, %key) : (!emitpy.dict, index) -> !emitpy.opaque<"[np.ndarray]"> {
+    ^bb0(%d: !emitpy.dict, %k: index):
+      %s = emitpy.subscript %d[%k] : (!emitpy.dict, index) -> !emitpy.opaque<"[np.ndarray]">
+      emitpy.yield %s : !emitpy.opaque<"[np.ndarray]">
+    }
+    emitpy.assign %sub = %value : (!emitpy.opaque<"[np.ndarray]">, !emitpy.opaque<"[np.ndarray]">)
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<EmitPy_Type, "target">:$target,
+    Arg<EmitPy_Type, "value to assign">:$value
+  );
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def EmitPy_IfOp : EmitPy_Op<"if", [NoTerminator]> {
+  let summary = "If statement with optional else";
+  let description = [{
+    The `emitpy.if` operation represents a Python `if` statement with an
+    optional `else` clause. The condition is a format string with `{}`
+    placeholders that are replaced by the condition arguments.
+
+    An `elif` chain is represented by nesting an `emitpy.if` as the sole
+    operation inside the else region without its own else clause. The Python
+    emitter detects this pattern and emits `elif` instead of `else: if`.
+
+    Example:
+
+    ```mlir
+    emitpy.if "{} > {}" args %a, %b : (index, index) {
+      // then body
+    } else {
+      // else body
+    }
+    ```
+  }];
+
+  let arguments = (ins
+    StrAttr:$condition,
+    Variadic<AnyType>:$cond_args
+  );
+
+  let regions = (region
+    SizedRegion<1>:$thenRegion,
+    MaxSizedRegion<1>:$elseRegion
+  );
+
+  let extraClassDeclaration = [{
+    FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
+  }];
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $condition (`args` $cond_args^ `:` `(` type($cond_args) `)`)? $thenRegion
+    (`else` $elseRegion^)? attr-dict
+  }];
+}
+
+def EmitPy_WhileOp : EmitPy_Op<"while",
+    [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"WhileYieldOp">]> {
+  let summary = "Loop statement";
+  let description = [{
+    The `emitpy.while` operation represents a Python loop.
+
+    Loop-carried values stay in SSA form: `inits` seeds them, the body block
+    arguments are the current iteration's values, `emitpy.while_yield` hands
+    the next iteration's values back, and the op's results are the values the
+    loop exits with. Python has no SSA, so the emitter gives each carried
+    value one named local that all four of those refer to.
+
+    The loop bound is either a `trip_count`, emitted as `for _ in range(n)`,
+    or a `condition` format string whose `{}` placeholders are filled by
+    `cond_args`, emitted as `while <condition>`. Exactly one of the two must
+    be present.
+
+    Example:
+
+    ```mlir
+    %r = emitpy.while trip_count 4 inits(%a : !emitpy.opaque<"np.ndarray">) {
+    ^bb0(%acc: !emitpy.opaque<"np.ndarray">):
+      %0 = emitpy.call_opaque "np.add"(%acc, %acc) : (...) -> ...
+      emitpy.while_yield %0 : !emitpy.opaque<"np.ndarray">
+    } -> (!emitpy.opaque<"np.ndarray">)
+    ```
+  }];
+
+  let arguments = (ins
+    OptionalAttr<StrAttr>:$condition,
+    Variadic<AnyType>:$cond_args,
+    Variadic<EmitPy_Type>:$inits,
+    OptionalAttr<I64Attr>:$trip_count
+  );
+
+  let results = (outs Variadic<EmitPy_Type>:$results);
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let extraClassDeclaration = [{
+    FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
+
+    /// The terminator carrying the next iteration's values. Defined out of
+    /// line because ODS emits op classes in alphabetical order, so
+    /// WhileYieldOp is still incomplete here.
+    WhileYieldOp getYield();
+  }];
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    ($condition^ (`args` $cond_args^ `:` `(` type($cond_args) `)`)?)?
+    (`trip_count` $trip_count^)?
+    (`inits` `(` $inits^ `:` type($inits) `)`)?
+    $body (`->` `(` type($results)^ `)`)? attr-dict
+  }];
+}
+
+def EmitPy_WhileYieldOp : EmitPy_Op<"while_yield",
+    [Pure, ReturnLike, Terminator, HasParent<"WhileOp">]> {
+  let summary = "Loop-carried value terminator";
+  let description = [{
+    The `emitpy.while_yield` operation terminates an `emitpy.while` body with
+    the loop-carried values the next iteration starts from. Its operand types
+    match the parent's `inits`, body block arguments and results.
+
+    Example:
+
+    ```mlir
+    emitpy.while_yield %0, %1 : !emitpy.opaque<"np.ndarray">, !emitpy.opaque<"np.ndarray">
+    ```
+  }];
+
+  let arguments = (ins Variadic<EmitPy_Type>:$results);
+
+  // Carries nothing by default, so SingleBlockImplicitTerminator can insert
+  // one into a freshly built region.
+  let builders = [OpBuilder<(ins), [{ /* nothing to do */ }]>];
+
+  let assemblyFormat = "($results^ `:` type($results))? attr-dict";
+}
+
+def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
+  let summary = "Counted for loop with an induction variable";
+  let description = [{
+    The `emitpy.for` operation represents a counted Python `for` loop. The
+    three operands are the lower bound, upper bound and step; the single
+    body block argument is the induction variable. Loop-carried values are
+    not represented. The PyPTO emitter prints it as
+    `for <induction> in pl.range(<lower>, <upper>, <step>)`.
+
+    Example:
+
+    ```mlir
+    emitpy.for %lb to %ub step %step {
+    ^bb0(%i: index):
+      emitpy.call_opaque "f"(%i) : (index) -> ()
+    }
+    ```
+  }];
+
+  let arguments = (ins AnyType:$lower_bound, AnyType:$upper_bound, AnyType:$step);
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = "$lower_bound `to` $upper_bound `step` $step "
+                       "`:` type($lower_bound) type($upper_bound) "
+                       "type($step) $body attr-dict";
+}
+
+def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
+  let summary = "SPMD multi-core launch scope";
+  let description = [{
+    The `emitpy.spmd_scope` operation represents a PyPTO SPMD launch over
+    `core_num` cores. The body executes once per core of the grid and the
+    single body block argument (index type) is the executing core's block
+    index. The Python emitter prints the scope as `with pl.spmd(N):` and
+    materializes the block-index binding
+    (`<induction> = pl.tile.get_block_idx()`) as the first body statement.
+
+    Example:
+
+    ```mlir
+    emitpy.spmd_scope core_num 64 {
+    ^bb0(%blk: index):
+      emitpy.call_opaque "f"(%blk) : (index) -> ()
+    }
+    ```
+  }];
+
+  let arguments = (ins I64Attr:$core_num);
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = "`core_num` $core_num $body attr-dict";
+}
+
+def EmitPy_VerbatimOp : EmitPy_Op<"verbatim"> {
+  let summary = "Verbatim operation";
+  let description = [{
+    The `emitpy.verbatim` operation produces no results and the value is emitted as is
+    followed by a line break ('\n' character) during translation.
+
+    This operation can be used in situations where a more suitable operation is
+    not yet implemented in the dialect.
+
+    Note: Use with caution. This operation can have arbitrary effects on the
+    semantics of the emitted code. Use semantically more meaningful operations
+    whenever possible. Additionally this op is *NOT* intended to be used to
+    inject large snippets of code.
+  }];
+
+  let extraClassDeclaration = [{
+    FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
+  }];
+
+  let arguments = (ins StrAttr:$value, Variadic<AnyType>:$fmtArgs);
+
+  let builders = [OpBuilder<(ins "::mlir::StringAttr":$value), [{ build($_builder, $_state, value, {}); }]>,
+                  OpBuilder<(ins "::llvm::StringRef":$value), [{ build($_builder, $_state, value, {}); }]>];
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$value (`args` $fmtArgs^ `:` type($fmtArgs))? attr-dict";
+}
+
+def EmitPy_ConstantOp : EmitPy_Op<"constant", [ConstantLike, PyExpressionInterface]> {
+  let summary = "Constant operation";
+  let description = [{
+    The `emitpy.constant` operation produces an SSA value equal to some constant
+    specified by an attribute. This can be used to form simple integer and
+    floating point constants, as well as more exotic things like tensor
+    constants.
+  }];
+
+  let arguments = (ins EmitPy_OpaqueOrTypedAttr:$value);
+  let results = (outs AnyType:$result);
+
+  let hasVerifier = 1;
+}
+
+def EmitPy_GlobalOp : EmitPy_Op<"global", [Symbol]> {
+  let summary = "A global variable";
+  let description = [{
+    The `emitpy.global` operation defines a named global variable.
+
+    Example:
+
+    ```mlir
+    emitpy.global @x : #emitpy.opaque<"[]">
+    ```
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       EmitPy_OpaqueOrTypedAttr:$initial_value);
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+       $sym_name custom<EmitPyGlobalOpInitialValue>($initial_value) attr-dict
+  }];
+}
+
+def EmitPy_GlobalStatementOp : EmitPy_Op<"global_statement",
+    [Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Marks a variable as global for the current function scope";
+  let description = [{
+    The `emitpy.global_statement` operation represents a Python `global`
+    statement.
+
+    It marks an identifier, specified by its symbol `@name`, as
+    referring to a variable in the global (module) scope, rather
+    than a new local variable.
+
+    Example:
+
+    ```mlir
+    %0 = emitpy.global_statement @x : !emitpy.opaque<"[np.ndarray]">
+    ```
+  }];
+
+  let arguments = (ins FlatSymbolRefAttr:$name);
+  let results = (outs AnyType:$result);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$name `:` type($result) attr-dict";
+}
+
+def EmitPy_AssignGlobalOp : EmitPy_Op<"assign_global",
+    [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Assign a value to a global variable";
+  let description = [{
+    The `emitpy.assign_global` assigns the value to an existing named global variable.
+
+    Example:
+
+    ```mlir
+    emitpy.assign_global @value = %arg0 : !emitpy.opaque<"[np.ndarray]">
+    ```
+  }];
+
+  let arguments = (ins FlatSymbolRefAttr:$name,
+                       AnyType:$value);
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def EmitPy_YieldOp : EmitPy_Op<"yield", [Pure, ReturnLike, Terminator,
+                                          ParentOneOf<["ExpressionOp"]>]> {
+  let summary = "Yield operation for expression termination";
+  let description = [{
+    The `emitpy.yield` terminates its parent EmitPy operation's region, optionally yielding
+    an SSA value. The semantics of how the values are yielded is defined by the
+    parent operation.
+
+    Example:
+
+    ```mlir
+    %0 = emitpy.expression(%arg0, %arg1) : (!emitpy.opaque, !emitpy.opaque) -> !emitpy.opaque {
+    ^bb0(%a: !emitpy.opaque, %b: !emitpy.opaque):
+      %1 = emitpy.call_opaque "foo"(%a, %b) : (!emitpy.opaque, !emitpy.opaque) -> !emitpy.opaque
+      emitpy.yield %1 : !emitpy.opaque
+    }
+    ```
+  }];
+
+  let arguments = (ins AnyType:$result);
+  let assemblyFormat = "$result attr-dict `:` type($result)";
+}
+
+def EmitPy_ExpressionOp : EmitPy_Op<"expression", [
+    HasOnlyGraphRegion, IsolatedFromAbove,
+    SingleBlockImplicitTerminator<"YieldOp">]> {
+  let summary = "Expression operation to inline Python code";
+  let description = [{
+    The `emitpy.expression` operation returns a single SSA value yielded by its
+    single-basic-block region. The operations inside the region must form a DAG
+    (directed acyclic graph) of computations that produces a single result value.
+    The expression's operands are mapped to block arguments and can be used
+    within the expression body.
+
+    When generating Python code, operations within the expression body are emitted
+    inline without intermediate variable assignments, producing cleaner code.
+
+    The optional `do_not_inline` attribute can be used to force the translator to
+    emit the expression as separate statements rather than inline.
+
+    Example:
+
+    ```mlir
+    %expression = emitpy.expression(%a, %b) : (!emitpy.opaque, !emitpy.opaque) -> !emitpy.opaque {
+    ^bb0(%arg0: !emitpy.opaque, %arg1: !emitpy.opaque):
+      %0 = emitpy.call_opaque "np.multiply"(%arg0, %arg1) : (!emitpy.opaque, !emitpy.opaque) -> !emitpy.opaque
+      %1 = emitpy.call_opaque "np.add"(%0, %arg1) : (!emitpy.opaque, !emitpy.opaque) -> !emitpy.opaque
+      emitpy.yield %1 : !emitpy.opaque
+    }
+    return %expression : !emitpy.opaque
+    ```
+
+    This would generate:
+    ```python
+    return np.add(np.multiply(a, b), b)
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$operands,
+                       UnitAttr:$do_not_inline);
+  let results = (outs AnyType:$result);
+  let regions = (region SizedRegion<1>:$body);
+
+  let extraClassDeclaration = [{
+    /// Get the body region of the expression.
+    Region &getBodyRegion() { return getBody(); }
+
+    /// Get the block of the body region.
+    Block *getBodyBlock() { return &getBody().front(); }
+  }];
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def EmitPy_NestedFuncReturnOp : EmitPy_Op<"nested_func_return",
+    [Pure, ReturnLike, Terminator, ParentOneOf<["NestedFuncOp"]>]> {
+  let summary = "Return operation for emitpy.nested_func";
+  let description = [{
+    Terminates an `emitpy.nested_func` body, emitting a Python `return`.
+    Optionally returns one or more values.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = "($operands^ `:` type($operands))? attr-dict";
+
+  // Zero-argument builder so SingleBlockImplicitTerminator can insert an
+  // empty `return`.
+  let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
+}
+
+def EmitPy_NestedFuncOp : EmitPy_Op<"nested_func", [
+    AutomaticAllocationScope, IsolatedFromAbove, SingleBlock,
+    SingleBlockImplicitTerminator<"NestedFuncReturnOp">]> {
+  let summary = "Nested (local) Python function definition";
+  let description = [{
+    The `emitpy.nested_func` operation represents a nested Python `def` emitted
+    inside another function body. Its single-block region's arguments are the
+    function parameters, and `emitpy.nested_func_return` terminates it. Unlike
+    `func.func` it is not a module-level symbol, so it can live inside another
+    function's body.
+
+    Example:
+
+    ```mlir
+    emitpy.nested_func "impl" (%a: !emitpy.opaque<"np.ndarray">) {
+      %0 = emitpy.call_opaque "np.negative"(%a) : (!emitpy.opaque<"np.ndarray">) -> !emitpy.opaque<"np.ndarray">
+      emitpy.nested_func_return %0 : !emitpy.opaque<"np.ndarray">
+    }
+    ```
+  }];
+
+  let arguments = (ins StrAttr:$sym_name);
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = "$sym_name $body attr-dict";
+}
+
+def EmitPy_FileOp
+    : EmitPy_Op<"file", [IsolatedFromAbove, NoRegionArguments, SymbolTable,
+                        NoTerminator]> {
+  let summary = "A file container operation";
+  let description = [{
+    A `file` represents a single Python file.
+
+    If `-pypto-file-id=id` flag is used with `akg-translate`,
+    then only the matching `emitpy.file` op is emitted.
+
+    Example:
+
+    ```mlir
+    emitpy.file "main" {
+      func.func @func_one() {
+        return
+      }
+    }
+    ```
+  }];
+
+  let arguments = (ins Builtin_StringAttr:$id);
+  let regions = (region SizedRegion<1>:$bodyRegion);
+
+  let assemblyFormat = "$id attr-dict-with-keyword $bodyRegion";
+  let builders = [OpBuilder<(ins CArg<"StringRef">:$id)>];
+
+  // We need to ensure that the body region has a block;
+  // the auto-generated builders do not guarantee that.
+  let skipDefaultBuilders = 1;
+}
+
+#endif // AKG_DIALECT_EMITPY_IR_EMITPYOPS_TD
