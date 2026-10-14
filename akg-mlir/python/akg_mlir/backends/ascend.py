@@ -218,6 +218,12 @@ def _build_compile_cmd(input_file, output_file, block_dim,
                        enable_auto_multi_buffer, enable_bin_relocation,
                        dump_ir, arch):
     """Build bishengir-compile command list."""
+    if not arch:
+        try:
+            import acl  # pylint: disable=import-outside-toplevel
+            arch = acl.get_soc_name()
+        except ImportError:
+            pass
     compile_cmd = [
         "bishengir-compile",
         input_file,

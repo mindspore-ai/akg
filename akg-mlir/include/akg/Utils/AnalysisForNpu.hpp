@@ -62,6 +62,7 @@ constexpr auto kSoc950PR_9579 = "Ascend950PR_9579";
 constexpr auto kSoc950PR_9581 = "Ascend950PR_9581";
 constexpr auto kSoc950PR_9589 = "Ascend950PR_9589";
 constexpr auto kSoc950PR_9599 = "Ascend950PR_9599";
+constexpr auto kSoc950DT_9581 = "Ascend950DT_9581";
 
 class HardwareConfig {
  public:
@@ -99,6 +100,7 @@ inline const std::vector<std::pair<std::string, HardwareConfig>> &getHardwareCon
     {kSoc950PR_9581, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
     {kSoc950PR_9589, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
     {kSoc950PR_9599, HardwareConfig{36, 72, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
+    {kSoc950DT_9581, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
   };
   return kHardwareConfigs;
 }

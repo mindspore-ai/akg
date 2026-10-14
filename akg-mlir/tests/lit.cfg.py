@@ -1,15 +1,11 @@
 # -*- Python -*-
+"""Configuration for the akg-mlir lit test suite."""
 
 import os
-import sys
-import re
-import platform
-import subprocess
 
 import lit.util
 import lit.formats
 from lit.llvm import llvm_config
-from lit.llvm.subst import FindTool
 from lit.llvm.subst import ToolSubst
 
 # name: The name of this test suite.
@@ -38,7 +34,8 @@ tool_dirs = [
     config.akg_tools_dir
 ]
 tool_names = [
-    'akg-opt'
+    'akg-opt',
+    'akg-translate'
 ]
 tools = [ToolSubst(s, unresolved='ignore') for s in tool_names]
 tools.extend([ToolSubst('%mlir_lib_dir', config.mlir_lib_dir, unresolved='ignore')])
@@ -51,4 +48,3 @@ config.substitutions.append(('%shlibext', config.llvm_shlib_ext))
 
 # for PTX tests
 #llvm_config.with_system_environment(['CUDA_HOME'])
-
