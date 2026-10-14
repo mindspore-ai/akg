@@ -15,12 +15,14 @@
  */
 
 #include "akg/Target/PTX/ToPTX.h"
+#include "akg/Target/Pypto/PyptoEmitter.h"
 #include "mlir/InitAllTranslations.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
 
 int main(int argc, char **argv) {
   mlir::registerToPTXTranslation();
+  mlir::emitpy::registerToPyptoTranslation();
 
   return static_cast<int>(failed(mlir::mlirTranslateMain(argc, argv, "Akg Translation Testing Tool")));
 }

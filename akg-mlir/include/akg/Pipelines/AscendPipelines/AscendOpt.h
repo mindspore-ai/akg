@@ -46,6 +46,10 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
   Option<bool> enableHIVMCompile{*this, "enable-hivm-compile", llvm::cl::desc("Enable HIMV compile pipeline"),
                                  llvm::cl::init(false)};
 
+  Option<bool> enableEmitPypto{*this, "enable-emitpypto",
+                               llvm::cl::desc("lower the vectorized IR to the EmitPy (pypto Python) backend"),
+                               llvm::cl::init(false)};
+
   Option<bool> enableAutoMultiBuffer{*this, "enable-auto-multi-buffer", llvm::cl::desc("Enable auto multi buffer"),
                                      llvm::cl::init(true)};
 

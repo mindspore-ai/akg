@@ -192,4 +192,23 @@ def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
   let constructor = "mlir::createNPUVectorToVectorPass()";
 }
 
+//===----------------------------------------------------------------------===//
+// ConvertVectorToEmitPy
+//===----------------------------------------------------------------------===//
+
+def ConvertVectorToEmitPy : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
+  let summary = "Convert tile-level vector computations to EmitPy (NumPy) ops";
+  let description = [{
+    Pass that rewrites tile-level operations from the NPUVector, Vector, Arith,
+    Math and MemRef dialects into `emitpy.call_opaque` operations whose callees
+    are NumPy functions, so the module can be printed as executable Python via
+    `akg-translate --mlir-to-pypto`.
+  }];
+  let constructor = "mlir::createVectorToEmitPyConversionPass()";
+  // NOTE: dependent dialects are registered via `getDependentDialects()` in
+  // VectorToPypto.cpp instead of `dependentDialects` here, because several
+  // translation units include Passes.h.inc directly and do not see the
+  // EmitPy dialect headers.
+}
+
 #endif // AKG_CONVERSION_PASSES

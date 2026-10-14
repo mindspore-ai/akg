@@ -271,6 +271,18 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(npuvector::createRefineNPUVectorStaticShapePass());
     pm.addPass(npuvector::createEliminateNPUVectorRedundantOpsPass());
     pm.addPass(createCSEPass());
+    if (options.enableEmitPypto) {
+      // The EmitPy backend consumes the vectorized (npuvector) IR directly
+      // and stops after the pypto kernel IR conversion: the executable
+      // Python is produced downstream by 'akg-translate --mlir-to-pypto',
+      // replacing the HIVM/bishengir lowering entirely (register-tile
+      // splitting, device specs and binary codegen all belong to that
+      // path).
+      pm.nest<func::FuncOp>().addPass(createVectorToEmitPyConversionPass());
+      // Drop module-level constant buffers left dead by the conversion.
+      pm.addPass(createSymbolDCEPass());
+      return;
+    }
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
       pm.addPass(npuvector::createOutlineVectorFunctionPass());
       pm.addPass(createNPUVectorToVectorPass());

@@ -1,2 +1,3 @@
 add_subdirectory(PTX)
 add_subdirectory(MindsporeDialect)
+add_subdirectory(Pypto)
