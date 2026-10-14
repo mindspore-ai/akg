@@ -23,6 +23,7 @@
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/Vector/Passes.h"
 #include "akg/Dialect/Tensor/Passes.h"
+#include "akg/Dialect/EmitPy/IR/EmitPy.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
@@ -88,6 +89,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::hacc::HACCDialect>();
   registry.insert<mlir::hivm::HIVMDialect>();
   registry.insert<mlir::npuvector::NPUVectorDialect>();
+  registry.insert<mlir::emitpy::EmitPyDialect>();
   registerLLVMDialectTranslation(registry);
 
   bishengir::hivm::registerHIVMDialectExtension(registry);
