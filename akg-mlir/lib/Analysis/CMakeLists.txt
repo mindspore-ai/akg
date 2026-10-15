@@ -22,6 +22,7 @@ add_mlir_library(AKGMLIRAnalysis
   LINK_LIBS PUBLIC
   AKGAffinePasses
   BiShengIRHACCDialect
+  BiShengIRHIVMDialect
   MLIRAffineDialect
   MLIRAnalysis
   MLIRBufferizationTransforms

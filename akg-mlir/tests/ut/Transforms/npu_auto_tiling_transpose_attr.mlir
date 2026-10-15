@@ -2,8 +2,8 @@
 
 // Non-innermost permutation only swaps the middle axes, so transpose marking must stay off.
 // CHECK-LABEL: func.func @transpose_middle_axes_no_mark(
+// CHECK: scf.forall
 // CHECK: } {vector
-// CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<4x512x12x64xf32>
 module {
   func.func @transpose_middle_axes_no_mark(%arg0: memref<48x512x64xf32>, %arg1: memref<4x512x12x64xf32>) -> memref<4x512x12x64xf32> attributes {OperatorType = "Transpose"} {
@@ -32,8 +32,8 @@ module {
 
 // Full 2D transpose changes the innermost axis, so transpose marking must be kept.
 // CHECK-LABEL: func.func @transpose_2d_mark(
+// CHECK: scf.forall
 // CHECK: } {vector
-// CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<64x32xf32>
 module {
   func.func @transpose_2d_mark(%arg0: memref<32x64xf32>, %arg1: memref<64x32xf32>) -> memref<64x32xf32> attributes {OperatorType = "Transpose"} {
@@ -55,8 +55,8 @@ module {
 
 // Stable prefix + last-two-axis swap still changes the band innermost loop, so transpose must be marked.
 // CHECK-LABEL: func.func @transpose_last_two_axes_mark(
+// CHECK: scf.forall
 // CHECK: } {vector
-// CHECK: } {map_for_to_forall}
 // CHECK: return %arg1 : memref<4x12x64x32xf32>
 module {
   func.func @transpose_last_two_axes_mark(%arg0: memref<4x12x32x64xf32>, %arg1: memref<4x12x64x32xf32>) -> memref<4x12x64x32xf32> attributes {OperatorType = "Transpose"} {
@@ -85,7 +85,7 @@ module {
 // Valueless non-mapforall broadcast tags should be cleaned in post-processing.
 // CHECK-LABEL: func.func @clear_valueless_broadcast_attr(
 // CHECK-NOT: } {.*broadcast
-// CHECK: } {map_for_to_forall}
+// CHECK: scf.forall
 // CHECK: return %arg1 : memref<4x12x64xf32>
 module {
   func.func @clear_valueless_broadcast_attr(%arg0: memref<4x12x64xf32>, %arg1: memref<4x12x64xf32>) -> memref<4x12x64xf32> attributes {OperatorType = "Elementwise"} {
