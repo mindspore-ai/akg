@@ -76,6 +76,31 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
 
 // -----
 
+func.func @test_tensor_view(%arg0 : memref<64x64xi32>, %arg1 : memref<64x64xi32>) {
+  // CHECK-LABEL: def test_tensor_view(
+  // A view of a kernel parameter is reshaped at host level, before the
+  // CORE_GROUP scope: inside it pl.reshape would be materialized as a tile
+  // op on the tensor parameter. The tile-level reshape of the loaded value
+  // stays inside the scope.
+  // CHECK: {{.*}} = pl.reshape(inputs, [4096])
+  // CHECK: {{.*}} = pl.reshape(inputs_0, [4096])
+  // CHECK: with pl.at(level=pl.Level.CORE_GROUP):
+  // CHECK: {{.*}} = pl.load({{.*}}, [0], [4096])
+  // CHECK: {{.*}} = pl.reshape({{.*}}, [1, 4096])
+  // CHECK: pl.store(
+  // CHECK: return inputs_0
+
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0 : i32
+  %in = memref.collapse_shape %arg0 [[0, 1]] : memref<64x64xi32> into memref<4096xi32>
+  %out = memref.collapse_shape %arg1 [[0, 1]] : memref<64x64xi32> into memref<4096xi32>
+  %v = vector.transfer_read %in[%c0], %cst : memref<4096xi32>, vector<4096xi32>
+  vector.transfer_write %v, %out[%c0] : vector<4096xi32>, memref<4096xi32>
+  return
+}
+
+// -----
+
 func.func @test_spmd_tile_loop(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024x1024xf32>) {
   // CHECK-LABEL: def test_spmd_tile_loop(
   // Multi-core kernels launch an SPMD grid instead of a pl.at scope; the
