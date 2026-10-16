@@ -23,8 +23,10 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/IndentedOstream.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/LogicalResult.h"
@@ -127,7 +129,13 @@ struct PythonEmitter {
 
   /// Emits an assignment for a variable or
   /// returns failure.
-  LogicalResult emitVariableAssignment(OpResult result, Operation &op);
+  LogicalResult emitVariableAssignment(Operation &op);
+
+  /// Allocates a variable name for the single result of `op`, reserving and
+  /// mapping it, without emitting any text. Used by statements that need the
+  /// result's name before emitting (e.g. util_select's if/else form); the
+  /// naming mirrors emitVariableAssignment.
+  std::string allocateResultName(Operation &op);
 
   /// Emits the variable declaration and assignment prefix for 'op'.
   /// - emits multiple variables separated with comma for multi-valued
@@ -243,6 +251,23 @@ struct PythonEmitter {
 }  // namespace
 
 // Implementation of ExpressionBuilder methods
+
+/// Infix operator for a scalar comparison pseudo-callee, or an empty string
+/// if `callee` is not one. The PyPTO parser accepts plain Python comparison
+/// expressions (`a < b`), which it maps onto ir.eq/ne/lt/le/gt/ge; its
+/// runtime's `pl.cmp` is a Tensor/Tile-only API, so scalar comparisons must
+/// be spelled as infix comparisons in the emitted Python.
+static StringRef infixCmpOpForCallee(StringRef callee) {
+  return llvm::StringSwitch<StringRef>(callee)
+      .Case("util_cmp_eq", "==")
+      .Case("util_cmp_ne", "!=")
+      .Case("util_cmp_lt", "<")
+      .Case("util_cmp_le", "<=")
+      .Case("util_cmp_gt", ">")
+      .Case("util_cmp_ge", ">=")
+      .Default(StringRef());
+}
+
 FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
   // Check if already cached
   if (expressionCache.count(value)) {
@@ -286,6 +311,65 @@ FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
 FailureOr<std::string> ExpressionBuilder::buildCallOpaqueExpr(CallOpaqueOp op) {
   std::string expr;
   llvm::raw_string_ostream os(expr);
+
+  // Pseudo-callee printed as an infix floor division: `(a // b)`.
+  if (op.getCallee() == "util_floordiv") {
+    if (op.getNumOperands() != 2) {
+      return op.emitOpError("util_floordiv expects two operands");
+    }
+    auto lhsExpr = buildExpression(op.getOperand(0));
+    if (failed(lhsExpr)) {
+      return failure();
+    }
+    auto rhsExpr = buildExpression(op.getOperand(1));
+    if (failed(rhsExpr)) {
+      return failure();
+    }
+    os << "(" << *lhsExpr << " // " << *rhsExpr << ")";
+    return expr;
+  }
+
+  // Pseudo-callee printed as a Python infix comparison: `(a < b)`.
+  if (StringRef cmpOp = infixCmpOpForCallee(op.getCallee()); !cmpOp.empty()) {
+    if (op.getNumOperands() != 2) {
+      return op.emitOpError(op.getCallee())
+             << " expects two operands";
+    }
+    auto lhsExpr = buildExpression(op.getOperand(0));
+    if (failed(lhsExpr)) {
+      return failure();
+    }
+    auto rhsExpr = buildExpression(op.getOperand(1));
+    if (failed(rhsExpr)) {
+      return failure();
+    }
+    os << "(" << *lhsExpr << " " << cmpOp << " " << *rhsExpr << ")";
+    return expr;
+  }
+
+  // Pseudo-callee printed as a Python conditional expression: operands are
+  // (condition, trueValue, falseValue) in the IR, Python spells it
+  // `(trueValue if condition else falseValue)`.
+  if (op.getCallee() == "util_select") {
+    if (op.getNumOperands() != 3) {
+      return op.emitOpError("util_select expects three operands");
+    }
+    auto condExpr = buildExpression(op.getOperand(0));
+    if (failed(condExpr)) {
+      return failure();
+    }
+    auto trueExpr = buildExpression(op.getOperand(1));
+    if (failed(trueExpr)) {
+      return failure();
+    }
+    auto falseExpr = buildExpression(op.getOperand(2));
+    if (failed(falseExpr)) {
+      return failure();
+    }
+    os << "(" << *trueExpr << " if " << *condExpr << " else " << *falseExpr
+       << ")";
+    return expr;
+  }
 
   bool isList = (op.getCallee() == "util_create_list");
   os << (isList ? "[" : op.getCallee().str() + "(");
@@ -493,13 +577,85 @@ static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op,
   return success();
 }
 
+static LogicalResult printUtilSelect(PythonEmitter &emitter, Operation &op) {
+  raw_indented_ostream &os = emitter.ostream();
+  if (op.getNumOperands() != 3)
+    return op.emitOpError("util_select expects three operands");
+  if (op.getNumResults() != 1)
+    return op.emitOpError("util_select expects a single result");
+  std::string name = emitter.allocateResultName(op);
+  os << "if ";
+  if (failed(emitter.emitOperand(op.getOperand(0), "print_arg")))
+    return failure();
+  os << ":\n";
+  os.indent();
+  os << name << " = ";
+  if (failed(emitter.emitOperand(op.getOperand(1), "print_arg")))
+    return failure();
+  os << "\n";
+  os.unindent();
+  os << "else:\n";
+  os.indent();
+  os << name << " = ";
+  if (failed(emitter.emitOperand(op.getOperand(2), "print_arg")))
+    return failure();
+  os << "\n";
+  os.unindent();
+  return success();
+}
+
 static LogicalResult printOperation(PythonEmitter &emitter,
                                     CallOpaqueOp callOpaqueOp) {
   raw_indented_ostream &os = emitter.ostream();
   Operation &op = *callOpaqueOp.getOperation();
   StringRef callee = callOpaqueOp.getCallee();
+
+  // Pseudo-callee printed as a Python if/else statement: operands are
+  // (condition, trueValue, falseValue) in the IR. The PyPTO parser has no
+  // support for Python conditional expressions (IfExp), so a scalar select
+  // is spelled as an if/else that assigns the same variable in both
+  // branches; the parser leaks the branch-local variable and its
+  // ConvertToSSA pass inserts the phi.
+  if (callee == "util_select")
+    return printUtilSelect(emitter, op);
+
   if (failed(emitter.emitAssignPrefix(op))) {
     return failure();
+  }
+
+  // Pseudo-callee printed as an infix floor division: `(a // b)`.
+  if (callee == "util_floordiv") {
+    if (op.getNumOperands() != 2) {
+      return op.emitOpError("util_floordiv expects two operands");
+    }
+    os << "(";
+    if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
+      return failure();
+    }
+    os << " // ";
+    if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
+      return failure();
+    }
+    os << ")";
+    return success();
+  }
+
+  // Pseudo-callee printed as a Python infix comparison: `(a < b)`, which the
+  // PyPTO parser maps onto scalar ir.eq/ne/lt/le/gt/ge comparisons.
+  if (StringRef cmpOp = infixCmpOpForCallee(callee); !cmpOp.empty()) {
+    if (op.getNumOperands() != 2) {
+      return op.emitOpError(callee) << " expects two operands";
+    }
+    os << "(";
+    if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
+      return failure();
+    }
+    os << " " << cmpOp << " ";
+    if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
+      return failure();
+    }
+    os << ")";
+    return success();
   }
 
   if (callee == "util_create_list") {
@@ -698,11 +854,44 @@ static LogicalResult printFunctionBody(PythonEmitter &emitter, Operation &op,
   return success();
 }
 
+/// Returns true if `type` is an opaque `pl.Tensor` annotation, as opposed to
+/// device-level opaque values such as `pl.Tile` or `pl.Scalar`.
+static bool isPyptoTensorType(Type type) {
+  auto opaqueType = dyn_cast<mlir::emitpy::OpaqueType>(type);
+  return opaqueType && opaqueType.getValue().starts_with("pl.Tensor");
+}
+
+/// Collects the tensor-level view ops of a PyPTO kernel body: ops that view
+/// an opaque pl.Tensor (a kernel parameter or another tensor-level view) and
+/// produce a memref, e.g. the pl.reshape calls generated from
+/// memref.collapse_shape/expand_shape. Such ops must be emitted at host
+/// level: inside the CORE_GROUP scope of pl.at they would be materialized as
+/// tile ops operating on tensor values, which tile-level loads reject.
+static llvm::DenseSet<Operation *> collectTensorViewOps(Block &entry) {
+  llvm::DenseSet<Operation *> viewOps;
+  for (Operation &op : entry.without_terminator()) {
+    if (op.getNumResults() != 1 ||
+        !isa<MemRefType>(op.getResult(0).getType())) {
+      continue;
+    }
+    bool viewsTensor = llvm::any_of(op.getOperands(), [&](Value operand) {
+      Operation *defOp = operand.getDefiningOp();
+      return isPyptoTensorType(operand.getType()) ||
+             (defOp != nullptr && viewOps.contains(defOp));
+    });
+    if (viewsTensor) {
+      viewOps.insert(&op);
+    }
+  }
+  return viewOps;
+}
+
 /// Prints the body of a @pl.jit PyPTO kernel: the operations are wrapped in
 /// a pl.at scope with the terminating return outside it. Multi-core kernels
 /// replace that scope with an SPMD launch: a pl.at wrapping pl.spmd has no
 /// device counterpart, so kernels containing an spmd_scope emit their body
-/// without the wrapper.
+/// without the wrapper. Tensor-level views of the kernel parameters are
+/// emitted before the device scope (see collectTensorViewOps).
 static LogicalResult printPyptoKernelBody(PythonEmitter &emitter,
                                           func::FuncOp functionOp) {
   raw_indented_ostream &os = emitter.ostream();
@@ -713,18 +902,31 @@ static LogicalResult printPyptoKernelBody(PythonEmitter &emitter,
   bool hasSpmd = false;
   entry.walk([&](SpmdScopeOp) { hasSpmd = true; });
   os.indent();
+  llvm::DenseSet<Operation *> viewOps = collectTensorViewOps(entry);
+  for (Operation &bodyOp : entry.without_terminator()) {
+    if (!viewOps.contains(&bodyOp)) {
+      continue;
+    }
+    if (failed(emitter.emitOperation(bodyOp))) {
+      return failure();
+    }
+  }
   if (!hasSpmd) {
     os << "with pl.at(level=pl.Level.CORE_GROUP):\n";
     os.indent();
   }
-  if (entry.without_terminator().empty()) {
-    os << "pass\n";
-  } else {
-    for (Operation &bodyOp : entry.without_terminator()) {
-      if (failed(emitter.emitOperation(bodyOp))) {
-        return failure();
-      }
+  bool emittedInScope = false;
+  for (Operation &bodyOp : entry.without_terminator()) {
+    if (viewOps.contains(&bodyOp)) {
+      continue;
     }
+    if (failed(emitter.emitOperation(bodyOp))) {
+      return failure();
+    }
+    emittedInScope = true;
+  }
+  if (!emittedInScope) {
+    os << "pass\n";
   }
   if (!hasSpmd) {
     os.unindent();
@@ -1502,8 +1704,7 @@ LogicalResult PythonEmitter::emitAssignPrefix(Operation &op) {
   case 0:
     break;
   case 1: {
-    OpResult result = op.getResult(0);
-    if (failed(emitVariableAssignment(result, op))) {
+    if (failed(emitVariableAssignment(op))) {
       return failure();
     }
     break;
@@ -1562,9 +1763,8 @@ std::string validateVariableName(const std::string &name) {
   return result;
 }
 
-// Assign a variable name to the result of the operation.
-LogicalResult PythonEmitter::emitVariableAssignment(OpResult result,
-                                                    Operation &op) {
+// Allocate a variable name for the single result of the operation.
+std::string PythonEmitter::allocateResultName(Operation &op) {
   std::string name = "";
 
   if (auto suggestNameAttr = op.getAttr("emitpy.name")) {
@@ -1574,7 +1774,12 @@ LogicalResult PythonEmitter::emitVariableAssignment(OpResult result,
   if (name.empty()) {
     name = "var_" + std::to_string(valueInScopeCount.top()++);
   }
-  os << getOrCreateName(result, name) << " = ";
+  return getOrCreateName(op.getResult(0), name).str();
+}
+
+// Assign a variable name to the result of the operation.
+LogicalResult PythonEmitter::emitVariableAssignment(Operation &op) {
+  os << allocateResultName(op) << " = ";
   return success();
 }
 
