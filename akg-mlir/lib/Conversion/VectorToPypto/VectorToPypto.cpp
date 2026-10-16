@@ -39,6 +39,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -229,6 +230,32 @@ static std::optional<int64_t> constIndexValue(Value idx) {
   return std::nullopt;
 }
 
+/// Extracts the integer value of a mixed static/dynamic bound or step, as
+/// exposed by scf.forall: an IntegerAttr is the static form, a value (a
+/// constant op) the dynamic one.
+static std::optional<int64_t> mixedIndexValue(OpFoldResult bound) {
+  if (bound.is<Attribute>()) {
+    auto intAttr = dyn_cast<IntegerAttr>(bound.get<Attribute>());
+    if (!intAttr) {
+      return std::nullopt;
+    }
+    return intAttr.getInt();
+  }
+  return constIndexValue(bound.get<Value>());
+}
+
+/// PTOAS allocates tiles in whole 32-byte rows: a constant tile extent is
+/// rounded up so `extent * elemBytes` is a multiple of 32. Only the
+/// allocation is padded -- the valid shape still bounds the data actually
+/// moved and computed, so tail iterations stay within the source buffer.
+static int64_t alignExtentTo32B(int64_t extent, unsigned elemBytes) {
+  if (elemBytes == 0 || extent <= 0) {
+    return extent;
+  }
+  int64_t bytes = extent * static_cast<int64_t>(elemBytes);
+  return llvm::alignTo(bytes, 32) / static_cast<int64_t>(elemBytes);
+}
+
 /// Renders constant index operands as a Python list literal, e.g.
 /// "%c0, %c1" -> "[0, 1]". Returns nullopt when any index is not a constant.
 static std::optional<std::string> constIndicesToText(ValueRange indices) {
@@ -268,6 +295,100 @@ static Attribute buildOffsetsArg(ConversionPatternRewriter &rewriter,
     items.push_back(rewriter.getIndexAttr(operands.size() - 1));
   }
   return rewriter.getArrayAttr(items);
+}
+
+/// Extracts the constant integer of a mixed static/dynamic entry, or nullopt
+/// when the entry is a runtime value.
+static std::optional<int64_t> staticIntValue(OpFoldResult value) {
+  if (!value.is<Attribute>()) {
+    return std::nullopt;
+  }
+  auto intAttr = dyn_cast<IntegerAttr>(value.get<Attribute>());
+  if (!intAttr) {
+    return std::nullopt;
+  }
+  return intAttr.getInt();
+}
+
+/// Builds a `[v0, v1, ...]` list argument from mixed static/dynamic entries,
+/// the OpFoldResult counterpart of buildOffsetsArg: constants render inline
+/// as an opaque list literal, dynamic values become operand references and
+/// the values are appended to `operands` (the emitter prints such a list as
+/// `[<operand names and literals>]`).
+static Attribute buildMixedListArg(ConversionPatternRewriter &rewriter,
+                                   ArrayRef<OpFoldResult> values,
+                                   SmallVectorImpl<Value> &operands) {
+  if (llvm::all_of(values, [](OpFoldResult value) {
+        return staticIntValue(value).has_value();
+      })) {
+    std::string text = "[";
+    bool first = true;
+    for (OpFoldResult value : values) {
+      if (!first) {
+        text += ", ";
+      }
+      first = false;
+      text += std::to_string(*staticIntValue(value));
+    }
+    text += "]";
+    return rewriter.getAttr<emitpy::OpaqueAttr>(text);
+  }
+  SmallVector<Attribute> items;
+  for (OpFoldResult value : values) {
+    auto cst = staticIntValue(value);
+    if (cst) {
+      items.push_back(
+          rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(*cst)));
+      continue;
+    }
+    operands.push_back(value.get<Value>());
+    items.push_back(rewriter.getIndexAttr(operands.size() - 1));
+  }
+  return rewriter.getArrayAttr(items);
+}
+
+/// Renders dropped-axis indices as a Python list literal, e.g. {0, 2} ->
+/// "[0, 2]".
+static std::string dimsToPythonText(ArrayRef<unsigned> dims) {
+  std::string text;
+  llvm::raw_string_ostream rso(text);
+  rso << "[";
+  llvm::interleaveComma(dims, rso);
+  rso << "]";
+  rso.flush();
+  return text;
+}
+
+/// Replaces a view op with `pl.slice(src, [window], [offsets],
+/// drop_dims=[...])`: the window is full-rank over the source, with unit
+/// dims standing in for the axes a rank-reducing view drops (an empty
+/// `droppedDims` keeps the call rank-preserving). `operands` already holds
+/// the source as its first entry and collects the dynamic offsets.
+static void replaceWithSliceCall(Operation *op, Value result,
+                                 SmallVectorImpl<Value> &operands,
+                                 ArrayRef<int64_t> window,
+                                 ArrayRef<OpFoldResult> offsets,
+                                 ArrayRef<unsigned> droppedDims,
+                                 ConversionPatternRewriter &rewriter) {
+  SmallVector<Attribute> args{
+      rewriter.getIndexAttr(0),
+      rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(window)),
+      buildMixedListArg(rewriter, offsets, operands)};
+  SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
+                                  rewriter.getStringAttr(""),
+                                  rewriter.getStringAttr("")};
+  if (!droppedDims.empty()) {
+    args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(
+        dimsToPythonText(droppedDims)));
+    keywords.push_back(rewriter.getStringAttr("drop_dims"));
+  }
+  // The replacement keeps the original result type: the type converter is
+  // the identity, so a type-changing replacement would demand a
+  // materialization at already-converted users and abort the full
+  // conversion.
+  rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+      op, result.getType(), "pl.slice", ValueRange(operands),
+      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
 }
 
 /// Creates a scratch tile: `pl.create_tile(shape, dtype=...,
@@ -354,6 +475,34 @@ class OpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
   StringRef callee;
 };
 
+/// Rewrites signed min/max into a callee chosen by operand kind: scalars go
+/// to `pl.min`/`pl.max` (PyPTO's scalar-only forms), tiles keep
+/// `pl.minimum`/`pl.maximum` (elementwise, tile-only forms).
+template <typename SourceOp>
+class MinMaxToCallOpaquePattern : public OpConversionPattern<SourceOp> {
+ public:
+  MinMaxToCallOpaquePattern(TypeConverter &typeConverter, MLIRContext *context,
+                            StringRef scalarCallee, StringRef tileCallee)
+      : OpConversionPattern<SourceOp>(typeConverter, context),
+        scalarCallee(scalarCallee), tileCallee(tileCallee) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    StringRef callee = isa<VectorType, npuvector::NPUVectorType>(
+                           op.getLhs().getType())
+                           ? tileCallee
+                           : scalarCallee;
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op->getResultTypes(), callee, op->getOperands());
+    return success();
+  }
+
+ private:
+  StringRef scalarCallee;
+  StringRef tileCallee;
+};
+
 /// `pl.cmp` comparison type codes: 0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge.
 static std::optional<unsigned> cmpTypeCodeFor(arith::CmpIPredicate predicate) {
   switch (predicate) {
@@ -398,7 +547,22 @@ static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate predicate) {
   }
 }
 
+/// Scalar comparison pseudo-callees, indexed by the `pl.cmp` type code
+/// (0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge). The PyPTO runtime's `pl.cmp`
+/// accepts Tensor/Tile operands only, so scalar comparisons (e.g. the
+/// cmp/div/select chains left behind by the built-in affine floordiv
+/// lowering) go through these pseudo-callees, which the Python translator
+/// prints as infix comparisons that the PyPTO parser maps onto ir.lt etc.
+static StringRef scalarCmpCalleeFor(unsigned cmpTypeCode) {
+  static const StringRef callees[] = {"util_cmp_eq", "util_cmp_ne",
+                                      "util_cmp_lt", "util_cmp_le",
+                                      "util_cmp_gt", "util_cmp_ge"};
+  return cmpTypeCode < std::size(callees) ? callees[cmpTypeCode] : StringRef();
+}
+
 /// Rewrites an integer/float comparison into `pl.cmp(a, b, cmp_type=N)`.
+/// Comparisons without vector operands (scalars) become infix-comparison
+/// pseudo-callees instead, since `pl.cmp` has no scalar overload.
 template <typename SourceOp>
 class CmpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
  public:
@@ -411,6 +575,14 @@ class CmpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
     if (!code) {
       return rewriter.notifyMatchFailure(
           op, "comparison predicate has no pl.cmp counterpart");
+    }
+    if (!llvm::any_of(op->getOperands(), [](Value operand) {
+          return isa<VectorType, npuvector::NPUVectorType>(operand.getType());
+        })) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+          op, op->getResult(0).getType(), scalarCmpCalleeFor(*code),
+          op->getOperands());
+      return success();
     }
     SmallVector<Attribute> args{rewriter.getIndexAttr(0),
                                 rewriter.getIndexAttr(1),
@@ -582,6 +754,11 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
 
 /// Rewrites `transfer_read` into
 /// `%r = pl.load(src, [o...], [shape])`; offsets may be loop-dependent.
+/// A dynamic `npuvector.transfer_read src[off] [sizes] [max], pad` instead
+/// becomes `pl.load(src, [o...], shapes, valid_shape)`: `shapes` takes the
+/// per-dimension upper bounds (`maxSizes`) so the tile is allocated at the
+/// full extent, and `valid_shape` takes the runtime sizes so a tail tile
+/// never reads or stores past the end of the source.
 template <typename TransferReadOp>
 class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
  public:
@@ -594,7 +771,17 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       return rewriter.notifyMatchFailure(op, "masked reads are not supported");
     }
     auto shaped = dyn_cast<ShapedType>(op.getVector().getType());
-    if (!shaped || !shaped.hasStaticShape()) {
+    if (!shaped) {
+      return rewriter.notifyMatchFailure(op,
+                                         "read result must be a shaped type");
+    }
+    if constexpr (std::is_same_v<TransferReadOp,
+                                 npuvector::TransferReadOp>) {
+      if (!shaped.hasStaticShape()) {
+        return rewriteDynamicRead(op, shaped, rewriter);
+      }
+    }
+    if (!shaped.hasStaticShape()) {
       return rewriter.notifyMatchFailure(
           op, "read result must be statically shaped");
     }
@@ -613,6 +800,67 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
         op, op.getVector().getType(),
         "pl.load", ValueRange(loadOperands), rewriter.getArrayAttr(args),
         rewriter.getArrayAttr(keywords));
+    return success();
+  }
+
+ private:
+  /// Dynamic-extent read: one `dynamicSizes` value per `?` in the result
+  /// shape. Static extents pass through unchanged; `maxSizes` (when present,
+  /// same arity as `dynamicSizes`) names the tile's allocated extent.
+  LogicalResult rewriteDynamicRead(npuvector::TransferReadOp op,
+                                   ShapedType shaped,
+                                   ConversionPatternRewriter &rewriter) const {
+    unsigned numDynamic =
+        llvm::count(shaped.getShape(), ShapedType::kDynamic);
+    if (op.getDynamicSizes().size() != numDynamic) {
+      return rewriter.notifyMatchFailure(
+          op, "dynamic sizes must match the read's dynamic extents");
+    }
+    Location loc = op.getLoc();
+    ValueRange maxSizes = op.getMaxSizes();
+    SmallVector<Value> loadOperands{op.getSource()};
+    Attribute offsetsArg = buildOffsetsArg(rewriter, loc, op.getIndices(),
+                                           loadOperands);
+    // Per dimension: the tile's allocated extent, and the valid extent.
+    SmallVector<Value> shapeValues;
+    SmallVector<Value> validValues;
+    unsigned dynIdx = 0;
+    for (int64_t dim : shaped.getShape()) {
+      if (dim == ShapedType::kDynamic) {
+        Value size = op.getDynamicSizes()[dynIdx];
+        validValues.push_back(size);
+        Value alloc = dynIdx < maxSizes.size() ? maxSizes[dynIdx] : size;
+        // PTOAS allocates whole 32-byte rows: pad a constant bound so the
+        // allocation is addressable; the valid extent still bounds the
+        // data actually moved.
+        if (auto bound = constIndexValue(alloc)) {
+          unsigned elemBytes =
+              shaped.getElementType().getIntOrFloatBitWidth() / 8;
+          alloc = rewriter.create<arith::ConstantIndexOp>(
+              loc, alignExtentTo32B(*bound, elemBytes));
+        }
+        shapeValues.push_back(alloc);
+        ++dynIdx;
+        continue;
+      }
+      Value extent = rewriter.create<arith::ConstantIndexOp>(loc, dim);
+      shapeValues.push_back(extent);
+      validValues.push_back(extent);
+    }
+    // Constant-only lists fold into literals (e.g. `[86]`); runtime values
+    // become operand references, exactly like offsets.
+    Attribute shapesArg =
+        buildOffsetsArg(rewriter, loc, shapeValues, loadOperands);
+    Attribute validArg =
+        buildOffsetsArg(rewriter, loc, validValues, loadOperands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg,
+                                shapesArg, validArg};
+    SmallVector<Attribute> keywords{
+        rewriter.getStringAttr(""), rewriter.getStringAttr(""),
+        rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op.getVector().getType(), "pl.load", ValueRange(loadOperands),
+        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -668,8 +916,10 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // Rank-1 values go through a [1, N] reshape: tile stores need a 2D
     // tile. The destination is either rank-1 (a row offset of 0 is
     // prepended) or rank-2 (the tile's own row offset is used directly).
+    // The value extent may be dynamic; the read that allocated the tile
+    // bounds N.
     if (valueType && destType && valueType.getRank() == 1 &&
-        valueType.hasStaticShape() && destType.hasStaticShape() &&
+        destType.hasStaticShape() &&
         (destType.getRank() == 1 || destType.getRank() == 2)) {
       if (failed(storeRankOneViaReshape(rewriter, loc, op, vector, destType,
                                         valueType))) {
@@ -800,20 +1050,137 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
         rewriter.getArrayAttr(writeKeywords));
   }
 
+  /// The allocation bound of a dynamic rank-1 tile produced by an
+  /// unconverted `transfer_read`: its first `maxSizes` entry, padded to
+  /// whole 32-byte rows as the read's rewrite will do.
+  static std::optional<int64_t> readAllocationBound(npuvector::TransferReadOp read, Value v) {
+    ValueRange maxSizes = read.getMaxSizes();
+    if (maxSizes.empty()) {
+      return std::nullopt;
+    }
+    auto bound = constIndexValue(maxSizes[0]);
+    if (!bound) {
+      return std::nullopt;
+    }
+    if (auto shaped = dyn_cast<ShapedType>(v.getType())) {
+      unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+      return alignExtentTo32B(*bound, elemBytes);
+    }
+    return bound;
+  }
+
+  /// The allocation bound carried by a rewritten dynamic read: a `pl.load`
+  /// whose constant-only shapes list stays an opaque "[n]" literal.
+  static std::optional<int64_t> loadAllocationBound(emitpy::CallOpaqueOp call, Value v) {
+    // A rewritten dynamic read: args are [view, offsets, shapes, valid].
+    std::optional<ArrayAttr> args = call.getArgs();
+    if (!args || args->size() < 3) {
+      return std::nullopt;
+    }
+    auto shapes = dyn_cast<emitpy::OpaqueAttr>((*args)[2]);
+    if (!shapes) {
+      return std::nullopt;
+    }
+    StringRef text = shapes.getValue().trim();
+    if (!text.consume_front("[") || !text.consume_back("]")) {
+      return std::nullopt;
+    }
+    int64_t extent;
+    if (!llvm::to_integer(text.trim(), extent)) {
+      return std::nullopt;
+    }
+    // The shapes literal already carries the padded allocation when the
+    // read was rewritten first; padding again is a no-op then, and
+    // repairs an unpadded literal otherwise.
+    if (auto shaped = dyn_cast<ShapedType>(v.getType())) {
+      unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+      return alignExtentTo32B(extent, elemBytes);
+    }
+    return extent;
+  }
+
+  /// Whether `callee` names a converted element-wise tile op that keeps
+  /// the producing read's allocation.
+  static bool isElementWiseTileCallee(StringRef callee) {
+    return callee == "pl.add" || callee == "pl.mul" || callee == "pl.sub" || callee == "pl.div" ||
+           callee == "pl.maximum" || callee == "pl.minimum";
+  }
+
+  /// The statically-known allocated extent of a dynamic rank-1 tile: the
+  /// tile was allocated by a `transfer_read` whose `maxSizes` bound its `?`
+  /// extent, and element-wise users keep that allocation. Both the
+  /// unconverted read and its `pl.load` form are handled because patterns
+  /// run in arbitrary order.
+  static std::optional<int64_t> dynamicTileExtent(Value v,
+                                                  unsigned depth = 0) {
+    if (depth > 8) {
+      return std::nullopt;
+    }
+    Operation *def = v.getDefiningOp();
+    if (!def) {
+      return std::nullopt;
+    }
+    auto tryOperands = [&](Operation *owner) -> std::optional<int64_t> {
+      for (Value operand : owner->getOperands()) {
+        if (!isa<ShapedType>(operand.getType())) {
+          continue;
+        }
+        if (auto extent = dynamicTileExtent(operand, depth + 1)) {
+          return extent;
+        }
+      }
+      return std::nullopt;
+    };
+    if (auto read = dyn_cast<npuvector::TransferReadOp>(def)) {
+      return readAllocationBound(read, v);
+    }
+    if (auto call = dyn_cast<emitpy::CallOpaqueOp>(def)) {
+      StringRef callee = call.getCallee();
+      if (callee == "pl.load") {
+        return loadAllocationBound(call, v);
+      }
+      // Converted element-wise tile ops keep the read's allocation.
+      if (isElementWiseTileCallee(callee)) {
+        return tryOperands(call);
+      }
+      return std::nullopt;
+    }
+    // Unconverted element-wise ops keep the read's allocation.
+    if (isa<arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp,
+            arith::SubIOp, arith::SubFOp, arith::DivSIOp, arith::DivUIOp,
+            arith::DivFOp, arith::MaxSIOp, arith::MinSIOp>(def)) {
+      return tryOperands(def);
+    }
+    return std::nullopt;
+  }
+
   /// Stores a rank-1 value through a `[1, N]` reshape: tile stores need a
   /// 2D tile. The destination is either rank-1 (a row offset of 0 is
   /// prepended) or rank-2 (the tile's own row offset is used directly).
-  /// Sub-32-byte rows cannot hold a tile and fall back to element-wise
-  /// `pl.write`s, which require a rank-1 destination and a constant base
-  /// offset.
+  /// A dynamic extent resolves to the tile's allocated bound; the tile's
+  /// valid shape still limits what is written, so tail iterations stay in
+  /// bounds. Statically-sized sub-32-byte rows cannot hold a tile and fall
+  /// back to element-wise `pl.write`s, which require a rank-1 destination
+  /// and a constant base offset.
   static LogicalResult
   storeRankOneViaReshape(ConversionPatternRewriter &rewriter, Location loc,
                          TransferWriteOp op, Value vector, ShapedType destType,
                          ShapedType valueType) {
     Type elemType = valueType.getElementType();
+    // A dynamic extent names no element count of its own: the tile was
+    // allocated by the producing read, whose maxSizes bound it.
+    std::optional<int64_t> dynamicExtent;
     int64_t n = valueType.getNumElements();
+    if (n == ShapedType::kDynamic) {
+      dynamicExtent = dynamicTileExtent(vector);
+      if (!dynamicExtent) {
+        return rewriter.notifyMatchFailure(
+            op, "dynamic rank-1 store needs the tile's allocated extent");
+      }
+      n = *dynamicExtent;
+    }
     unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
-    if (n * elemBytes % 32 != 0) {
+    if (!dynamicExtent && n * elemBytes % 32 != 0) {
       if (destType.getRank() != 1) {
         return rewriter.notifyMatchFailure(
             op, "sub-32B rows cannot back a 2D tile store");
@@ -838,13 +1205,50 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     }
     Value reshaped = reshapeTileOp(rewriter, loc, vector, 1, n, elemType);
     SmallVector<Value> offsetItems;
+    Value storeDest = op.getSource();
     if (destType.getRank() == 1) {
-      // Prepend the [1, N] row offset.
+      // Prepend the [1, N] row offset, and store through a [1, N] view of
+      // the flat destination: PTOAS matches both the offset count and the
+      // partition shape to the destination's rank, so a 2D tile needs a
+      // 2D destination view.
       offsetItems.push_back(rewriter.create<emitpy::LiteralOp>(
           loc, rewriter.getIndexType(), "0"));
+      Type viewType;
+      if (auto memrefType = dyn_cast<MemRefType>(destType)) {
+        viewType = MemRefType::get({1, memrefType.getNumElements()},
+                                   memrefType.getElementType());
+      } else {
+        auto tensorType = cast<RankedTensorType>(destType);
+        viewType = RankedTensorType::get({1, tensorType.getNumElements()},
+                                         tensorType.getElementType());
+      }
+      SmallVector<Attribute> viewArgs{
+          rewriter.getIndexAttr(0),
+          rewriter.getAttr<emitpy::OpaqueAttr>(
+              shapeToPythonListText(cast<ShapedType>(viewType).getShape()))};
+      SmallVector<Attribute> viewKeywords{rewriter.getStringAttr(""),
+                                          rewriter.getStringAttr("")};
+      // The view is a tensor-level reshape: create it at function scope,
+      // next to the destination's own view chain, not beside the store.
+      // The PyPTO emitter hoists entry-level view ops above the device
+      // scope; created inside it, the reshape would be materialized as a
+      // tile op, which tile.store rejects as its destination.
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Operation *destDef = op.getSource().getDefiningOp()) {
+        rewriter.setInsertionPointAfter(destDef);
+      } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
+        rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+      }
+      storeDest = rewriter
+                      .create<emitpy::CallOpaqueOp>(
+                          loc, viewType, "pl.reshape",
+                          ValueRange(op.getSource()),
+                          rewriter.getArrayAttr(viewArgs),
+                          rewriter.getArrayAttr(viewKeywords))
+                      .getResult(0);
     }
     llvm::append_range(offsetItems, op.getIndices());
-    SmallVector<Value> storeOperands{reshaped, op.getSource()};
+    SmallVector<Value> storeOperands{reshaped, storeDest};
     Attribute indexArg =
         buildOffsetsArg(rewriter, loc, offsetItems, storeOperands);
     SmallVector<Attribute> args{
@@ -1169,12 +1573,56 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
   }
 };
 
+template <typename BroadcastOp>
+static FailureOr<Attribute> buildBroadcastShape(
+    BroadcastOp op, ShapedType resultType, Location loc,
+    ConversionPatternRewriter &rewriter, SmallVectorImpl<Value> &operands) {
+  if (resultType.hasStaticShape())
+    return rewriter.getAttr<emitpy::OpaqueAttr>(
+        shapeToPythonListText(resultType.getShape()));
+  if constexpr (std::is_same_v<BroadcastOp, npuvector::BroadcastOp>) {
+    unsigned numDynamic = llvm::count(resultType.getShape(), ShapedType::kDynamic);
+    if (op.getDynamicSizes().size() != numDynamic)
+      return rewriter.notifyMatchFailure(
+          op, "dynamic sizes must match the broadcast's dynamic extents");
+    ValueRange maxSizes = op.getMaxSizes();
+    SmallVector<Value> shapeValues;
+    unsigned dynIdx = 0;
+    for (int64_t dim : resultType.getShape()) {
+      if (dim == ShapedType::kDynamic) {
+        Value alloc = dynIdx < maxSizes.size()
+                          ? maxSizes[dynIdx]
+                          : op.getDynamicSizes()[dynIdx];
+        // Pad a constant bound to whole 32-byte rows, matching the extent
+        // a dynamic transfer_read allocates, so broadcast tiles stay
+        // shape-compatible with the loads they combine with.
+        if (auto bound = constIndexValue(alloc)) {
+          unsigned elemBytes =
+              resultType.getElementType().getIntOrFloatBitWidth() / 8;
+          alloc = rewriter.create<arith::ConstantIndexOp>(
+              loc, alignExtentTo32B(*bound, elemBytes));
+        }
+        shapeValues.push_back(alloc);
+        ++dynIdx;
+      } else {
+        shapeValues.push_back(
+            rewriter.create<arith::ConstantIndexOp>(loc, dim));
+      }
+    }
+    return buildOffsetsArg(rewriter, loc, shapeValues, operands);
+  }
+  return rewriter.notifyMatchFailure(
+      op, "only statically-shaped broadcasts are supported");
+}
+
 /// Rewrites a scalar broadcast:
 /// - constant scalars materialize directly as `pl.tile.full(shape, dtype, v)`;
 /// - runtime scalars are broadcast by adding them onto a zero carrier tile:
 ///   `pl.add(pl.tile.full(shape, dtype, 0), scalar)`. `pl.expands` has no
 ///   codegen on current device backends, while the scalar form of `pl.add`
 ///   broadcasts for free.
+/// Dynamic `!npuvector` results take their `maxSizes` upper bounds as the
+/// tile shape, matching the extent a dynamic transfer_read allocates.
 /// Tile-to-tile broadcasts have no PyPTO counterpart.
 template <typename BroadcastOp>
 class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
@@ -1185,9 +1633,14 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
   matchAndRewrite(BroadcastOp op, typename BroadcastOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto resultType = dyn_cast<ShapedType>(op->getResult(0).getType());
-    if (!resultType || !resultType.hasStaticShape()) {
-      return rewriter.notifyMatchFailure(
-          op, "only statically-shaped broadcasts are supported");
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "broadcast result must be shaped");
+    }
+    if constexpr (!std::is_same_v<BroadcastOp, npuvector::BroadcastOp>) {
+      if (!resultType.hasStaticShape()) {
+        return rewriter.notifyMatchFailure(
+            op, "only statically-shaped broadcasts are supported");
+      }
     }
     auto dtype = pyptoDtypeName(resultType.getElementType());
     if (!dtype) {
@@ -1201,8 +1654,16 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     }
 
     Location loc = op.getLoc();
-    std::string shapeText = shapeToPythonListText(resultType.getShape());
     Type convertedResult = op->getResult(0).getType();
+
+    // The tile's allocated extent: static dims render as a list literal;
+    // dynamic dims take their `maxSizes` upper bound (constants fold into
+    // the literal, runtime bounds become operand references like offsets).
+    SmallVector<Value> fullOperands;
+    FailureOr<Attribute> shapeArg =
+        buildBroadcastShape(op, resultType, loc, rewriter, fullOperands);
+    if (failed(shapeArg))
+      return failure();
 
     std::optional<std::string> constText;
     if (auto constOp =
@@ -1219,7 +1680,7 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     Value result;
     if (constText) {
       SmallVector<Attribute> args{
-          rewriter.getAttr<emitpy::OpaqueAttr>(shapeText),
+          *shapeArg,
           rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
           rewriter.getAttr<emitpy::OpaqueAttr>(*constText)};
       SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
@@ -1227,14 +1688,14 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
                                       rewriter.getStringAttr("")};
       result = rewriter
                    .create<emitpy::CallOpaqueOp>(
-                       loc, convertedResult, "pl.tile.full", ValueRange{},
-                       rewriter.getArrayAttr(args),
+                       loc, convertedResult, "pl.tile.full",
+                       ValueRange(fullOperands), rewriter.getArrayAttr(args),
                        rewriter.getArrayAttr(keywords))
                    .getResult(0);
     } else {
       std::string zero = isa<FloatType>(sourceType) ? "0.0" : "0";
       SmallVector<Attribute> carrierArgs{
-          rewriter.getAttr<emitpy::OpaqueAttr>(shapeText),
+          *shapeArg,
           rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
           rewriter.getAttr<emitpy::OpaqueAttr>(zero)};
       SmallVector<Attribute> carrierKeywords{rewriter.getStringAttr(""),
@@ -1243,7 +1704,8 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
       Value carrier = rewriter
                           .create<emitpy::CallOpaqueOp>(
                               loc, convertedResult, "pl.tile.full",
-                              ValueRange{}, rewriter.getArrayAttr(carrierArgs),
+                              ValueRange(fullOperands),
+                              rewriter.getArrayAttr(carrierArgs),
                               rewriter.getArrayAttr(carrierKeywords))
                           .getResult(0);
       SmallVector<Value> broadcastOperands{carrier, op.getSource()};
@@ -1314,7 +1776,10 @@ class TransposePattern : public OpConversionPattern<TransposeOp> {
 
 /// Rewrites a select into `pl.sel(cond, lhs, rhs, tmp)` with an inline
 /// scratch tile. Constant scalar branches are materialized as
-/// `pl.tile.full`, since pl.sel requires tile operands.
+/// `pl.tile.full`, since pl.sel requires tile operands. Scalar selects
+/// (e.g. the branchless floordiv chain left by the built-in affine
+/// lowering) map onto the `util_select` pseudo-callee, which the
+/// translator prints as a Python conditional expression.
 template <typename SelectOp>
 class SelectPattern : public OpConversionPattern<SelectOp> {
  public:
@@ -1323,6 +1788,13 @@ class SelectPattern : public OpConversionPattern<SelectOp> {
   LogicalResult
   matchAndRewrite(SelectOp op, typename SelectOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Operand order is (condition, trueValue, falseValue) in both the IR
+    // and the pseudo-callee; the translator reorders for Python syntax.
+    if (!isa<ShapedType>(op->getResult(0).getType())) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+          op, op->getResult(0).getType(), "util_select", op->getOperands());
+      return success();
+    }
     auto resultType = dyn_cast<ShapedType>(op->getResult(0).getType());
     if (!resultType || !resultType.hasStaticShape()) {
       return rewriter.notifyMatchFailure(op,
@@ -1392,6 +1864,348 @@ class SelectPattern : public OpConversionPattern<SelectOp> {
   }
 };
 
+/// Rewrites `memref.collapse_shape` into `pl.reshape(src, [shape])`: the
+/// flattened tensor view PyPTO loads and stores through. Only statically
+/// shaped views are supported.
+class CollapseShapePattern
+    : public OpConversionPattern<memref::CollapseShapeOp> {
+ public:
+  using OpConversionPattern<memref::CollapseShapeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::CollapseShapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<ShapedType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(
+          op, "only statically shaped collapse views are supported");
+    }
+    SmallVector<Attribute> reshapeArgs{
+        rewriter.getIndexAttr(0),
+        rewriter.getAttr<emitpy::OpaqueAttr>(
+            shapeToPythonListText(resultType.getShape()))};
+    SmallVector<Attribute> reshapeKeywords{rewriter.getStringAttr(""),
+                                           rewriter.getStringAttr("")};
+    // The replacement keeps the original result type: the type converter is
+    // the identity, so a type-changing replacement would demand a
+    // materialization at already-converted users (e.g. a live `pl.load`) and
+    // abort the full conversion. The Python emitter tracks SSA names, and
+    // boundary annotations are re-derived by hand in rewriteSignature.
+    // The raw source operand is used on purpose: signature rewriting happens
+    // by hand after the conversion, so the memref stays as-is.
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op.getResult().getType(), "pl.reshape", ValueRange(op.getSrc()),
+        rewriter.getArrayAttr(reshapeArgs),
+        rewriter.getArrayAttr(reshapeKeywords));
+    return success();
+  }
+};
+
+/// Rewrites `memref.expand_shape` into `pl.reshape(src, [shape])`, the
+/// mirror of the collapse handling. Only statically shaped views are
+/// supported.
+class ExpandShapePattern : public OpConversionPattern<memref::ExpandShapeOp> {
+ public:
+  using OpConversionPattern<memref::ExpandShapeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::ExpandShapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<ShapedType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(
+          op, "only statically shaped expand views are supported");
+    }
+    SmallVector<Attribute> reshapeArgs{
+        rewriter.getIndexAttr(0),
+        rewriter.getAttr<emitpy::OpaqueAttr>(
+            shapeToPythonListText(resultType.getShape()))};
+    SmallVector<Attribute> reshapeKeywords{rewriter.getStringAttr(""),
+                                           rewriter.getStringAttr("")};
+    // Same materialization constraints as the collapse handling: the
+    // replacement keeps the original result type.
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op.getResult().getType(), "pl.reshape", ValueRange(op.getSrc()),
+        rewriter.getArrayAttr(reshapeArgs),
+        rewriter.getArrayAttr(reshapeKeywords));
+    return success();
+  }
+};
+
+/// Rewrites `memref.transpose` into `pl.transpose(src, i, j)`: PyPTO swaps
+/// exactly two axes, so the permutation must be a single transposition (or
+/// the identity, which folds away). The memref permutation is an AffineMap
+/// whose result dim i comes from source dim `getDimPosition(i)`, the same
+/// convention as the vector transpose.
+class MemrefTransposePattern
+    : public OpConversionPattern<memref::TransposeOp> {
+ public:
+  using OpConversionPattern<memref::TransposeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::TransposeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    AffineMap permutation = op.getPermutation();
+    SmallVector<int64_t> mapping(permutation.getNumResults());
+    for (auto [axis, dim] : llvm::enumerate(mapping)) {
+      dim = permutation.getDimPosition(axis);
+    }
+    std::optional<std::pair<int64_t, int64_t>> swap;
+    for (auto [axis, target] : llvm::enumerate(mapping)) {
+      if (target == static_cast<int64_t>(axis)) {
+        continue;
+      }
+      if (swap) {
+        // The far end of the same transposition is expected; anything else
+        // is a second, independent displacement.
+        if (static_cast<int64_t>(axis) == swap->second &&
+            target == swap->first) {
+          continue;
+        }
+        return rewriter.notifyMatchFailure(
+            op, "permutation is not a single axis swap");
+      }
+      if (target < 0 || target >= static_cast<int64_t>(mapping.size()) ||
+          mapping[target] != static_cast<int64_t>(axis)) {
+        return rewriter.notifyMatchFailure(
+            op, "permutation is not a single axis swap");
+      }
+      swap = std::make_pair(static_cast<int64_t>(axis), target);
+    }
+    if (!swap) {
+      // Identity permutation: the value passes through unchanged.
+      rewriter.replaceOp(op, op.getIn());
+      return success();
+    }
+    SmallVector<Attribute> args{
+        rewriter.getIndexAttr(0),
+        rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(swap->first)),
+        rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(swap->second))};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
+                                    rewriter.getStringAttr(""),
+                                    rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op.getResult().getType(), "pl.transpose", ValueRange(op.getIn()),
+        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    return success();
+  }
+};
+
+/// Rewrites `memref.reshape` into `pl.reshape(src, [shape])`, matching the
+/// collapse/expand handling. Only statically shaped results are supported;
+/// the shape operand itself becomes dead and is swept by eraseDeadOps.
+class ReshapePattern : public OpConversionPattern<memref::ReshapeOp> {
+ public:
+  using OpConversionPattern<memref::ReshapeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::ReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<ShapedType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(
+          op, "only statically shaped reshapings are supported");
+    }
+    SmallVector<Attribute> reshapeArgs{
+        rewriter.getIndexAttr(0),
+        rewriter.getAttr<emitpy::OpaqueAttr>(
+            shapeToPythonListText(resultType.getShape()))};
+    SmallVector<Attribute> reshapeKeywords{rewriter.getStringAttr(""),
+                                           rewriter.getStringAttr("")};
+    // Same materialization constraints as the collapse handling: the
+    // replacement keeps the original result type.
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, op.getResult().getType(), "pl.reshape", ValueRange(op.getSource()),
+        rewriter.getArrayAttr(reshapeArgs),
+        rewriter.getArrayAttr(reshapeKeywords));
+    return success();
+  }
+};
+
+/// Rewrites `memref.subview` into `pl.slice(src, [window], [offsets])`: the
+/// window is the subview's sizes (full-rank over the source, with unit dims
+/// standing in for the axes a rank-reducing view drops) and the offsets
+/// carry any dynamic entries. Non-unit strides have no PyPTO lowering.
+class SubviewPattern : public OpConversionPattern<memref::SubViewOp> {
+ public:
+  using OpConversionPattern<memref::SubViewOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::SubViewOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<ShapedType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(
+          op, "only statically shaped subviews are supported");
+    }
+    auto srcType = dyn_cast<ShapedType>(op.getSource().getType());
+    if (!srcType) {
+      return rewriter.notifyMatchFailure(op,
+                                         "unranked sources are unsupported");
+    }
+    for (OpFoldResult stride : op.getMixedStrides()) {
+      auto cst = staticIntValue(stride);
+      if (!cst || *cst != 1) {
+        return rewriter.notifyMatchFailure(
+            op, "only unit-stride subviews are supported");
+      }
+    }
+    SmallVector<OpFoldResult> offsets = op.getMixedOffsets();
+    SmallVector<int64_t> window(resultType.getShape().begin(),
+                                resultType.getShape().end());
+    SmallVector<unsigned> droppedDims;
+    if (resultType.getRank() < srcType.getRank()) {
+      // A rank-reducing view: recover the full-rank window from the sizes,
+      // where the dropped axes appear as unit dims, and record them for the
+      // drop_dims argument of pl.slice.
+      SmallVector<int64_t> sizes;
+      for (OpFoldResult size : op.getMixedSizes()) {
+        auto cst = staticIntValue(size);
+        if (!cst) {
+          return rewriter.notifyMatchFailure(
+              op, "rank-reducing subviews need static sizes");
+        }
+        sizes.push_back(*cst);
+      }
+      auto dropped = computeRankReductionMask(sizes, resultType.getShape());
+      if (!dropped) {
+        return rewriter.notifyMatchFailure(
+            op, "cannot map the rank-reduced window onto pl.slice");
+      }
+      window = std::move(sizes);
+      droppedDims.assign(dropped->begin(), dropped->end());
+      llvm::sort(droppedDims);
+    }
+    SmallVector<Value> operands{op.getSource()};
+    replaceWithSliceCall(op, op.getResult(), operands, window, offsets,
+                         droppedDims, rewriter);
+    return success();
+  }
+};
+
+/// Builds the full-rank slice coordinates for a reinterpret cast with a
+/// static flat offset.
+static LogicalResult buildStaticReinterpretWindow(
+    memref::ReinterpretCastOp op, MemRefType srcType, MemRefType resultType,
+    ArrayRef<int64_t> srcStrides, ConversionPatternRewriter &rewriter,
+    SmallVectorImpl<OpFoldResult> &offsets,
+    SmallVectorImpl<int64_t> &window,
+    SmallVectorImpl<unsigned> &droppedDims) {
+  int64_t rem = *staticIntValue(op.getMixedOffsets().front());
+  unsigned srcRank = srcType.getRank();
+  unsigned resultRank = resultType.getRank();
+  for (unsigned axis = 0; axis < srcRank; ++axis) {
+    int64_t coord = rem / srcStrides[axis];
+    rem %= srcStrides[axis];
+    offsets.push_back(rewriter.getIndexAttr(coord));
+    if (axis < srcRank - resultRank) {
+      window.push_back(1);
+      droppedDims.push_back(axis);
+    } else {
+      window.push_back(resultType.getDimSize(axis - (srcRank - resultRank)));
+    }
+  }
+  if (rem != 0)
+    return rewriter.notifyMatchFailure(
+        op, "offset does not decompose into source coordinates");
+  return success();
+}
+
+/// Builds the full-rank slice coordinates for a reinterpret cast with a
+/// dynamic flat offset.
+static LogicalResult buildDynamicReinterpretWindow(
+    memref::ReinterpretCastOp op, MemRefType srcType, MemRefType resultType,
+    ArrayRef<OpFoldResult> strides, ConversionPatternRewriter &rewriter,
+    SmallVectorImpl<OpFoldResult> &offsets,
+    SmallVectorImpl<int64_t> &window,
+    SmallVectorImpl<unsigned> &droppedDims) {
+  auto stride0 = staticIntValue(strides[0]);
+  if (resultType.getRank() != 1 || !stride0 || *stride0 != 1)
+    return rewriter.notifyMatchFailure(
+        op, "dynamic offsets only map onto the last source axis");
+  unsigned srcRank = srcType.getRank();
+  OpFoldResult flatOffset = op.getMixedOffsets().front();
+  for (unsigned axis = 0; axis < srcRank; ++axis) {
+    if (axis + 1 == srcRank) {
+      offsets.push_back(flatOffset);
+      window.push_back(resultType.getDimSize(0));
+    } else {
+      offsets.push_back(rewriter.getIndexAttr(0));
+      window.push_back(1);
+      droppedDims.push_back(axis);
+    }
+  }
+  return success();
+}
+
+/// Rewrites `memref.reinterpret_cast` into `pl.slice(src, [window],
+/// [offsets])` when the cast re-windows a region of its source that follows
+/// the source's own trailing strides: the flat element offset (counted from
+/// the source's base, per the descriptor semantics of the op) decomposes
+/// into per-axis coordinates. Dynamic offsets only map when the window runs
+/// along the last source axis, where the flat offset is that axis's
+/// coordinate.
+class ReinterpretCastPattern
+    : public OpConversionPattern<memref::ReinterpretCastOp> {
+ public:
+  using OpConversionPattern<memref::ReinterpretCastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::ReinterpretCastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcType = dyn_cast<MemRefType>(op.getSource().getType());
+    auto resultType = dyn_cast<MemRefType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(
+          op, "only statically shaped reinterpretations are supported");
+    }
+    if (!srcType) {
+      return rewriter.notifyMatchFailure(op,
+                                         "unranked sources are unsupported");
+    }
+    unsigned srcRank = srcType.getRank();
+    unsigned resultRank = resultType.getRank();
+    if (resultRank == 0 || resultRank > srcRank) {
+      return rewriter.notifyMatchFailure(
+          op, "result rank must fit inside the source");
+    }
+    SmallVector<int64_t> srcStrides;
+    int64_t srcOffset = 0;
+    if (failed(getStridesAndOffset(srcType, srcStrides, srcOffset)) ||
+        srcOffset != 0) {
+      return rewriter.notifyMatchFailure(
+          op, "only zero-offset strided sources are supported");
+    }
+    // The result axes must walk the source's trailing axes one element at a
+    // time for pl.slice to express the window.
+    auto strides = op.getMixedStrides();
+    for (unsigned axis = 0; axis < resultRank; ++axis) {
+      auto cst = staticIntValue(strides[axis]);
+      if (!cst || *cst != srcStrides[srcRank - resultRank + axis]) {
+        return rewriter.notifyMatchFailure(
+            op, "strides must match the source's trailing layout");
+      }
+    }
+    SmallVector<OpFoldResult> offsets;
+    SmallVector<int64_t> window;
+    SmallVector<unsigned> droppedDims;
+    if (staticIntValue(op.getMixedOffsets().front())) {
+      if (failed(buildStaticReinterpretWindow(
+              op, srcType, resultType, srcStrides, rewriter, offsets, window,
+              droppedDims)))
+        return failure();
+    } else if (failed(buildDynamicReinterpretWindow(
+                   op, srcType, resultType, strides, rewriter, offsets, window,
+                   droppedDims))) {
+      return failure();
+    }
+    SmallVector<Value> operands{op.getSource()};
+    replaceWithSliceCall(op, op.getResult(), operands, window, offsets,
+                         droppedDims, rewriter);
+    return success();
+  }
+};
+
 /// Drops `memref.dealloc`: the buffers become kernel arguments whose
 /// lifetime the runtime manages.
 class DeallocPattern : public OpConversionPattern<memref::DeallocOp> {
@@ -1447,6 +2261,45 @@ class ScfParallelPattern : public OpConversionPattern<scf::ParallelOp> {
   }
 };
 
+/// Rewrites `scf.forall` into the same `emitpy.spmd_scope` multi-core
+/// launch as scf.parallel: a single induction variable sweeping `[0, N)`
+/// with step 1 becomes the executing core's block index. forall stores its
+/// bounds as mixed static/dynamic pairs, so both spellings of a constant
+/// grid are accepted. The trailing in_parallel region only wraps tensor
+/// merge writes (parallel_insert_slice), which have no PyPTO counterpart,
+/// so it must be empty.
+class ScfForallPattern : public OpConversionPattern<scf::ForallOp> {
+ public:
+  using OpConversionPattern<scf::ForallOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(scf::ForallOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (op.getRank() != 1 || !op.getOutputs().empty()) {
+      return rewriter.notifyMatchFailure(op,
+                                         "only single-induction forall loops without shared outputs map "
+                                         "onto an SPMD grid");
+    }
+    auto lb = mixedIndexValue(op.getMixedLowerBound()[0]);
+    auto ub = mixedIndexValue(op.getMixedUpperBound()[0]);
+    auto step = mixedIndexValue(op.getMixedStep()[0]);
+    if (!lb || !ub || !step || *lb != 0 || *step != 1 || *ub <= 0) {
+      return rewriter.notifyMatchFailure(op, "SPMD grids are non-empty sweeps [0, N) with step 1");
+    }
+    Block &body = op.getRegion().front();
+    auto inParallel = dyn_cast<scf::InParallelOp>(body.getTerminator());
+    // The in_parallel region hosts the parallel merge writes; it must hold
+    // nothing but its (possibly absent) empty block.
+    if (!inParallel || (!inParallel.getRegion().empty() && !inParallel.getRegion().front().empty())) {
+      return rewriter.notifyMatchFailure(op, "parallel merge writes have no PyPTO lowering");
+    }
+    auto spmd = rewriter.create<emitpy::SpmdScopeOp>(op.getLoc(), rewriter.getI64IntegerAttr(*ub));
+    rewriter.inlineRegionBefore(op.getRegion(), spmd.getBody(), spmd.getBody().end());
+    rewriter.eraseOp(inParallel);
+    rewriter.replaceOp(op, spmd);
+    return success();
+  }
+};
+
 /// Rewrites `scf.for` into `emitpy.for` (emitted as
 /// `for <iv> in pl.range(lb, ub, step)`): the per-core tile loop.
 /// Loop-carried values are rejected: the generated kernels are straight-line
@@ -1491,7 +2344,26 @@ static constexpr StringLiteral kInOutArgsAttr = "emitpy.inout_args";
 /// scope around the body.
 static constexpr StringLiteral kPyptoKernelAttr = "emitpy.pypto_kernel";
 
+/// Returns the buffer a store into `value` ultimately writes when `value`
+/// is a view chain (collapse_shape, subview, memory_space_cast, ...)
+/// rooted in that buffer; returns `value` itself otherwise. The
+/// bufferization routes stores through reshaped views of parameters, so
+/// the write analysis has to look through them.
+static Value stripViewChain(Value value) {
+  while (Operation *defOp = value.getDefiningOp()) {
+    if (auto view = dyn_cast<ViewLikeOpInterface>(defOp)) {
+      value = view.getViewSource();
+    } else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(defOp)) {
+      value = castOp.getSource();
+    } else {
+      break;
+    }
+  }
+  return value;
+}
+
 static void markWriteDest(Value dest, DenseSet<unsigned> &writeDests) {
+  dest = stripViewChain(dest);
   if (auto arg = dyn_cast<BlockArgument>(dest)) {
     writeDests.insert(arg.getArgNumber());
   }
@@ -1510,11 +2382,41 @@ static bool isStoreInto(OpOperand &use) {
   return false;
 }
 
+static bool viewChainOnlyWritten(Value buffer);
+
+/// Returns true when `use` does not read its operand: it either stores
+/// into it, or turns it into the buffer of another view chain that is
+/// itself only written.
+static bool useIsStoreOrWrittenView(OpOperand &use) {
+  if (isStoreInto(use)) {
+    return true;
+  }
+  Operation *owner = use.getOwner();
+  if (auto view = dyn_cast<ViewLikeOpInterface>(owner)) {
+    return use.get() == view.getViewSource() &&
+           viewChainOnlyWritten(view.getOperation()->getResult(0));
+  }
+  if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(owner)) {
+    return use.get() == castOp.getSource() &&
+           viewChainOnlyWritten(castOp.getOperation()->getResult(0));
+  }
+  return false;
+}
+
+/// Returns true when every use of `buffer` writes into it, directly or
+/// through further view chains: such a buffer is never read.
+static bool viewChainOnlyWritten(Value buffer) {
+  return llvm::all_of(buffer.getUses(),
+                      [&](OpOperand &use) {
+                        return useIsStoreOrWrittenView(use);
+                      });
+}
+
 /// Returns true when `arg` is used by anything other than a store into it,
 /// i.e. it is also read.
 static bool argHasNonWriteUse(BlockArgument arg) {
   for (OpOperand &use : arg.getUses()) {
-    if (!isStoreInto(use)) {
+    if (!useIsStoreOrWrittenView(use)) {
       return true;
     }
   }
@@ -2035,12 +2937,18 @@ struct ConvertVectorToEmitPyPass
     target.addIllegalDialect<npuvector::NPUVectorDialect, vector::VectorDialect,
                              arith::ArithDialect, math::MathDialect>();
     // Control flow maps onto SPMD launches and tile loops; any other scf
-    // construct has no PyPTO counterpart.
+    // construct has no PyPTO counterpart. scf.forall lowers through the
+    // same SPMD grid as scf.parallel.
     target.addIllegalDialect<scf::SCFDialect>();
     // Allocations are handled by rewriteFunctionOutputs; any survivor means
-    // a use this backend cannot express.
-    target.addIllegalOp<memref::AllocOp, memref::AllocaOp, memref::DeallocOp,
-                        memref::LoadOp, memref::StoreOp>();
+    // a use this backend cannot express. The view ops must become `pl.*`
+    // tiles: the Python emitter has no memref form, so leaving them legal
+    // lets them survive the conversion as raw memrefs.
+    target.addIllegalOp<
+        memref::AllocOp, memref::AllocaOp, memref::DeallocOp,
+        memref::LoadOp, memref::StoreOp, memref::CollapseShapeOp,
+        memref::ExpandShapeOp, memref::TransposeOp, memref::ReshapeOp,
+        memref::SubViewOp, memref::ReinterpretCastOp>();
     // The signature itself stays untouched by the conversion: retyping
     // parameters through the framework would materialize
     // unrealized_conversion_cast ops that a full conversion rejects. The
@@ -2122,10 +3030,14 @@ static void populateIntArithPatterns(RewritePatternSet &patterns,
                                                       "pl.fmod");
   patterns.add<OpToCallOpaquePattern<arith::RemUIOp>>(typeConverter, ctx,
                                                       "pl.fmod");
-  patterns.add<OpToCallOpaquePattern<arith::MaxSIOp>>(typeConverter, ctx,
-                                                      "pl.maximum");
-  patterns.add<OpToCallOpaquePattern<arith::MinSIOp>>(typeConverter, ctx,
-                                                      "pl.minimum");
+  patterns.add<MinMaxToCallOpaquePattern<arith::MaxSIOp>>(
+      typeConverter, ctx, "pl.max", "pl.maximum");
+  patterns.add<MinMaxToCallOpaquePattern<arith::MinSIOp>>(
+      typeConverter, ctx, "pl.min", "pl.minimum");
+  // Floor division maps onto Python's `//` operator: the translator prints
+  // the `util_floordiv` pseudo-callee as an infix `(a // b)` expression.
+  patterns.add<OpToCallOpaquePattern<arith::FloorDivSIOp>>(typeConverter, ctx,
+                                                           "util_floordiv");
   patterns.add<OpToCallOpaquePattern<arith::MaxUIOp>>(typeConverter, ctx,
                                                       "pl.maximum");
   patterns.add<OpToCallOpaquePattern<arith::MinUIOp>>(typeConverter, ctx,
@@ -2249,11 +3161,18 @@ static void populateTileAndControlFlowPatterns(RewritePatternSet &patterns,
   patterns.add<TransposePattern<vector::TransposeOp>>(typeConverter, ctx);
 
   // memref management ops.
+  patterns.add<CollapseShapePattern>(typeConverter, ctx);
+  patterns.add<ExpandShapePattern>(typeConverter, ctx);
+  patterns.add<MemrefTransposePattern>(typeConverter, ctx);
+  patterns.add<ReshapePattern>(typeConverter, ctx);
+  patterns.add<SubviewPattern>(typeConverter, ctx);
+  patterns.add<ReinterpretCastPattern>(typeConverter, ctx);
   patterns.add<DeallocPattern>(typeConverter, ctx);
 
-  // Control flow: scf.parallel is the multi-core SPMD grid, scf.for the
-  // per-core tile loop.
+  // Control flow: scf.parallel and scf.forall are the multi-core SPMD grid,
+  // scf.for the per-core tile loop.
   patterns.add<ScfParallelPattern>(typeConverter, ctx);
+  patterns.add<ScfForallPattern>(typeConverter, ctx);
   patterns.add<ScfForPattern>(typeConverter, ctx);
 }
 
