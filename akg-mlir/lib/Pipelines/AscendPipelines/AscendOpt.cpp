@@ -278,6 +278,10 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
       // replacing the HIVM/bishengir lowering entirely (register-tile
       // splitting, device specs and binary codegen all belong to that
       // path).
+      // Expand the remaining affine.apply/min/max (loop bounds and dynamic
+      // vector sizes) into arith first: the conversion below has no
+      // legalization for affine ops.
+      pm.addPass(createLowerAffinePass());
       pm.nest<func::FuncOp>().addPass(createVectorToEmitPyConversionPass());
       // Drop module-level constant buffers left dead by the conversion.
       pm.addPass(createSymbolDCEPass());
