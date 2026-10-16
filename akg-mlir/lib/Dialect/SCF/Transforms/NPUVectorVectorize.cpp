@@ -78,6 +78,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -122,10 +123,12 @@ struct ScratchTileMeta {
   SmallVector<int> allocDimOfTileDim;
   /// Parallel: scf.for Operation* that owned the axis at store time (for shadow rebind).
   SmallVector<Operation *> tileDimToLoop;
-  /// Parallel: store IV lower bound for alloc-backed dims (0 for shadow).
-  SmallVector<int64_t> storeLowerBoundOfTileDim;
-  /// Each entry is (allocDim, tileGlobalAxis, loopLowerBound). Kept for empty-channel full-tile path.
-  SmallVector<std::tuple<int, int, int64_t>> channelDims;
+  /// Scratch address of lane zero of the recorded tile (0 for shadow dims).
+  /// Reduction loops may retain several tiles, so this is the mapped tile IV
+  /// plus the access offset, rather than the original loop lower bound.
+  SmallVector<OpFoldResult> storeOriginOfTileDim;
+  /// Each entry is (allocDim, tileGlobalAxis). Kept for empty-channel full-tile path.
+  SmallVector<std::pair<int, int>> channelDims;
   SmallVector<OpFoldResult> storeRootIndices;
   int allocRank = 0;
 };
@@ -3649,30 +3652,73 @@ static bool isLocalNonEscapingScratch(Value root) {
   return true;
 }
 
-static FailureOr<int64_t> getConstantVectorIndexLowerBound(Value idxVal) {
-  auto blockArg = dyn_cast<BlockArgument>(idxVal);
-  if (!blockArg) {
-    return failure();
+/// Express a scratch index in terms of one IV. Other nonconstant values are
+/// deliberately rejected when recording a store origin: this extension covers
+/// contiguous IV + C accesses, not general gathers or mixed-axis indexing.
+static FailureOr<AffineExpr> getScratchIndexExpr(Value index, Value iv) {
+  MLIRContext *context = index.getContext();
+  if (index == iv) {
+    return getAffineDimExpr(0, context);
   }
-  auto forOp = dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
-  if (!forOp) {
-    return failure();
+  if (std::optional<int64_t> c = tryConstantIndex(index)) {
+    return getAffineConstantExpr(*c, context);
   }
-  auto c = forOp.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-  if (!c) {
-    return failure();
+  Operation *def = index.getDefiningOp();
+  if (isa_and_nonnull<arith::AddIOp, arith::SubIOp>(def)) {
+    FailureOr<AffineExpr> lhs = getScratchIndexExpr(def->getOperand(0), iv);
+    FailureOr<AffineExpr> rhs = getScratchIndexExpr(def->getOperand(1), iv);
+    if (failed(lhs) || failed(rhs)) {
+      return failure();
+    }
+    return isa<arith::AddIOp>(def) ? *lhs + *rhs : *lhs - *rhs;
   }
-  return c.value();
+  if (auto apply = dyn_cast_or_null<affine::AffineApplyOp>(def)) {
+    SmallVector<AffineExpr> operands;
+    for (Value operand : apply.getMapOperands()) {
+      FailureOr<AffineExpr> expr = getScratchIndexExpr(operand, iv);
+      if (failed(expr)) {
+        return failure();
+      }
+      operands.push_back(*expr);
+    }
+    ArrayRef<AffineExpr> replacements(operands);
+    unsigned numDims = apply.getAffineMap().getNumDims();
+    return apply.getAffineMap().getResult(0).replaceDimsAndSymbols(replacements.take_front(numDims),
+                                                                 replacements.drop_front(numDims));
+  }
+  return failure();
+}
+
+static FailureOr<OpFoldResult> getScratchTileOrigin(Value index, int axis, LoopVectorizationCtx &ctx, Location loc) {
+  SmallVector<std::pair<Value, int>> axes;
+  collectVectorAxes(ctx, axes);
+  for (auto [iv, dim] : axes) {
+    if (dim != axis) {
+      continue;
+    }
+    FailureOr<AffineExpr> expr = getScratchIndexExpr(index, iv);
+    int64_t coeff = 0;
+    int64_t offset = 0;
+    if (failed(expr) || !decomposeAffineOneDimension(*expr, coeff, offset) || coeff != 1) {
+      return failure();
+    }
+    // Rebuild from the mapped IV, so metadata never references an index op in
+    // the original scalar loop that will be erased after vectorization.
+    OpFoldResult mappedIV = getAsOpFoldResult(ctx.valueMapping.lookupOrDefault(iv));
+    return affine::makeComposedFoldedAffineApply(
+      ctx.builder, loc, getAffineDimExpr(0, ctx.builder.getContext()) + offset, {mappedIV});
+  }
+  return failure();
 }
 
 static FailureOr<ScratchTileMeta> buildScratchTileMeta(const NormalizedScratchAccess &norm, MemRefType rootType,
-                                                       ArrayRef<int> vdo, const LoopVectorizationCtx &ctx) {
+                                                       ArrayRef<int> vdo, LoopVectorizationCtx &ctx, Location loc) {
   ScratchTileMeta meta;
   meta.tileAxisOrder.assign(vdo.begin(), vdo.end());
   meta.allocRank = rootType.getRank();
   meta.allocDimOfTileDim.assign(vdo.size(), -1);
   meta.tileDimToLoop.assign(vdo.size(), nullptr);
-  meta.storeLowerBoundOfTileDim.assign(vdo.size(), 0);
+  meta.storeOriginOfTileDim.assign(vdo.size(), zeroIndexOFR(ctx.builder.getContext()));
 
   for (const auto &[loop, dim] : ctx.allLoopToVectorDim) {
     for (unsigned tileDim = 0; tileDim < vdo.size(); ++tileDim) {
@@ -3691,17 +3737,17 @@ static FailureOr<ScratchTileMeta> buildScratchTileMeta(const NormalizedScratchAc
     if (axis < 0 || !llvm::is_contained(vdo, axis)) {
       continue;
     }
-    FailureOr<int64_t> lb = getConstantVectorIndexLowerBound(idxVal);
-    if (failed(lb)) {
+    FailureOr<OpFoldResult> origin = getScratchTileOrigin(idxVal, axis, ctx, loc);
+    if (failed(origin)) {
       return failure();
     }
-    meta.channelDims.push_back({static_cast<int>(d), axis, *lb});
+    meta.channelDims.push_back({static_cast<int>(d), axis});
     for (unsigned tileDim = 0; tileDim < vdo.size(); ++tileDim) {
       if (vdo[tileDim] != axis) {
         continue;
       }
       meta.allocDimOfTileDim[tileDim] = static_cast<int>(d);
-      meta.storeLowerBoundOfTileDim[tileDim] = *lb;
+      meta.storeOriginOfTileDim[tileDim] = *origin;
     }
   }
   if (meta.channelDims.empty()) {
@@ -3757,6 +3803,26 @@ struct ComputeScratchSliceProjectionParams {
   ScratchSlicePlan &plan;
 };
 
+static Value getScratchRelativeOffset(OpFoldResult index, OpFoldResult origin, LoopVectorizationCtx &ctx,
+                                      Location loc) {
+  MLIRContext *context = ctx.builder.getContext();
+  OpFoldResult offset = affine::makeComposedFoldedAffineApply(
+    ctx.builder, loc, getAffineDimExpr(0, context) - getAffineDimExpr(1, context), {index, origin});
+  return getValueOrCreateConstantIndexOp(ctx.builder, loc, offset);
+}
+
+static bool scratchSliceFitsStaticExtent(Value offset, Value size, int64_t extent) {
+  std::optional<int64_t> offsetConst = tryConstantIndex(offset);
+  std::optional<int64_t> sizeConst = tryConstantIndex(size);
+  if (offsetConst && *offsetConst < 0) {
+    return false;
+  }
+  if (offsetConst && sizeConst && extent != ShapedType::kDynamic) {
+    return *offsetConst <= extent && *sizeConst <= extent - *offsetConst;
+  }
+  return true;
+}
+
 static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionParams &params) {
   params.plan.dropDim.assign(params.tileRank, false);
   params.plan.offsets.assign(params.tileRank, Value());
@@ -3766,7 +3832,7 @@ static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionPar
   params.plan.cacheable = true;
 
   if (params.meta.allocDimOfTileDim.size() != params.tileRank || params.meta.tileDimToLoop.size() != params.tileRank ||
-      params.meta.storeLowerBoundOfTileDim.size() != params.tileRank) {
+      params.meta.storeOriginOfTileDim.size() != params.tileRank) {
     return false;
   }
 
@@ -3803,14 +3869,22 @@ static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionPar
       return false;
     }
     OpFoldResult rootIndex = params.norm.rootIndices[allocDim];
-    const int64_t storeLb = params.meta.storeLowerBoundOfTileDim[tileDim];
+    OpFoldResult storeOrigin = params.meta.storeOriginOfTileDim[tileDim];
 
     if (std::optional<int64_t> c = getConstantIntValue(rootIndex)) {
       params.plan.dropDim[tileDim] = true;
-      params.plan.offsets[tileDim] = params.ctx.builder.create<arith::ConstantIndexOp>(params.loc, *c - storeLb);
+      Value offset = getScratchRelativeOffset(rootIndex, storeOrigin, params.ctx, params.loc);
+      if (!scratchSliceFitsStaticExtent(offset, c1, params.tileType.getShape()[tileDim])) {
+        return false;
+      }
+      params.plan.offsets[tileDim] = offset;
       params.plan.sizes[tileDim] = c1;
       params.plan.resultAxisForTileDim[tileDim] = -1;
-      params.plan.cacheKey.push_back(*c - storeLb);
+      if (std::optional<int64_t> offsetConst = tryConstantIndex(offset)) {
+        params.plan.cacheKey.push_back(*offsetConst);
+      } else {
+        params.plan.cacheable = false;
+      }
       continue;
     }
 
@@ -3822,20 +3896,30 @@ static bool computeScratchSliceProjection(const ComputeScratchSliceProjectionPar
     if (loadAxis < 0) {
       return false;
     }
-    Value mappedIdx = params.ctx.valueMapping.lookupOrDefault(idxVal);
-    Value offset = mappedIdx;
-    if (storeLb != 0) {
-      Value lbVal = params.ctx.builder.create<arith::ConstantIndexOp>(params.loc, storeLb);
-      offset = createAffineSub(params.ctx.builder, params.loc, mappedIdx, lbVal);
-    }
+    FailureOr<OpFoldResult> loadOrigin = getScratchTileOrigin(idxVal, loadAxis, params.ctx, params.loc);
+    // Preserve the existing load path for axis-invariant dynamic offsets.
+    // Rebuilding IV + C above enables folding even independently cloned addi
+    // expressions; other recognized load indices already have a scalar mapping.
+    OpFoldResult loadIndex = succeeded(loadOrigin)
+                               ? *loadOrigin
+                               : getAsOpFoldResult(params.ctx.valueMapping.lookupOrDefault(idxVal));
+    Value offset = getScratchRelativeOffset(loadIndex, storeOrigin, params.ctx, params.loc);
     Value tileSize = getRuntimeVectorSizeValue(params.ctx, static_cast<unsigned>(loadAxis), params.loc);
+    if (!scratchSliceFitsStaticExtent(offset, tileSize, params.tileType.getShape()[tileDim])) {
+      return false;
+    }
     params.plan.dropDim[tileDim] = false;
     params.plan.offsets[tileDim] = offset;
     params.plan.sizes[tileDim] = tileSize;
     params.plan.resultAxisForTileDim[tileDim] = loadAxis;
     params.plan.cacheKey.push_back(kCacheKeyRuntimeIndexDimTag);
     params.plan.cacheKey.push_back(loadAxis);
-    if (!tryConstantIndex(offset).has_value() || !tryConstantIndex(tileSize).has_value()) {
+    std::optional<int64_t> offsetConst = tryConstantIndex(offset);
+    std::optional<int64_t> sizeConst = tryConstantIndex(tileSize);
+    if (offsetConst && sizeConst) {
+      params.plan.cacheKey.push_back(*offsetConst);
+      params.plan.cacheKey.push_back(*sizeConst);
+    } else {
       params.plan.cacheable = false;
     }
   }
@@ -3950,6 +4034,21 @@ static bool scratchIndicesMatch(ArrayRef<OpFoldResult> storeIndices, ArrayRef<Op
   return true;
 }
 
+/// Check the new insertion point, not the original scalar load's position.
+/// A tile/origin defined inside a retained reduction loop cannot escape to an
+/// outer or sibling loop simply by copying the context's metadata.
+static bool scratchValueIsAvailable(Value value, OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  if (!block) {
+    return false;
+  }
+  DominanceInfo dominance;
+  if (builder.getInsertionPoint() != block->end()) {
+    return dominance.properlyDominates(value, &*builder.getInsertionPoint());
+  }
+  return value.getParentBlock() == block || dominance.properlyDominates(value, block->getParentOp());
+}
+
 static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizationCtx &ctx) {
   if (ctx.scratchMeta.empty()) {
     return false;
@@ -3975,6 +4074,16 @@ static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizatio
     return false;
   }
   const ScratchTileMeta &meta = metaIt->second;
+  if (!scratchValueIsAvailable(tile, ctx.builder)) {
+    return false;
+  }
+  for (OpFoldResult origin : meta.storeOriginOfTileDim) {
+    if (Value value = llvm::dyn_cast_if_present<Value>(origin)) {
+      if (!scratchValueIsAvailable(value, ctx.builder)) {
+        return false;
+      }
+    }
+  }
   if (static_cast<int64_t>(norm->rootIndices.size()) != meta.allocRank) {
     return false;
   }
@@ -4004,7 +4113,8 @@ static bool tryForwardVirtualScratchLoad(memref::LoadOp loadOp, LoopVectorizatio
   return true;
 }
 
-static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
+static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, LoopVectorizationCtx &ctx,
+                                                   bool updateRecordedScratch = false) {
   if (ctx.vf1FuncLevelNoAnchor) {
     return false;
   }
@@ -4035,7 +4145,7 @@ static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, Loo
     }
   }
   const bool hasMissingAxis = llvm::any_of(vdo, [&](int a) { return !llvm::is_contained(storeAxes, a); });
-  if (!hasMissingAxis) {
+  if (!hasMissingAxis && !updateRecordedScratch) {
     return false;
   }
 
@@ -4052,15 +4162,16 @@ static FailureOr<bool> tryRecordVirtualScratchStore(memref::StoreOp storeOp, Loo
     return false;
   }
 
-  FailureOr<ScratchTileMeta> meta = buildScratchTileMeta(*norm, rootType, vdo, ctx);
+  FailureOr<ScratchTileMeta> meta = buildScratchTileMeta(*norm, rootType, vdo, ctx, storeOp.getLoc());
   if (failed(meta)) {
     storeOp.emitError(
       "npuvector-vectorize: virtual scratch forwarding requires scratch indices "
-      "mapped to vector axes to be direct scf.for induction variables with constant lower bounds");
+      "mapped to vector axes to be a single scf.for induction variable plus a constant offset");
     return failure();
   }
   ctx.allocBypass[root] = vectorValue;
   ctx.scratchMeta[root] = std::move(*meta);
+  ctx.scratchSliceCache.clear();
   return true;
 }
 
@@ -4097,6 +4208,20 @@ static LogicalResult vectorizeMemrefLoadLike(memref::LoadOp loadOp, LoopVectoriz
 }
 
 static LogicalResult vectorizeMemrefStoreLike(memref::StoreOp storeOp, LoopVectorizationCtx &ctx) {
+  if (!ctx.scratchMeta.empty()) {
+    FailureOr<NormalizedScratchAccess> norm = normalizeMemrefAccess(storeOp.getMemRef(), storeOp.getIndices(), ctx);
+    if (succeeded(norm) && ctx.scratchMeta.contains(norm->root)) {
+      FailureOr<bool> recorded = tryRecordVirtualScratchStore(storeOp, ctx, true);
+      if (failed(recorded)) {
+        return failure();
+      }
+      if (!*recorded) {
+        return storeOp.emitError("npuvector-vectorize: cannot update recorded virtual scratch store");
+      }
+      return success();
+    }
+  }
+
   Value memRef = storeOp.getMemRef();
   Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
   auto bypassIt = ctx.allocBypass.find(mappedMemRef);
