@@ -1,6 +1,10 @@
 // RUN: akg-opt %s --npuvector-vectorize --mlir-disable-threading --allow-unregistered-dialect | FileCheck %s
+// RUN: akg-opt %s --npuvector-vectorize --mlir-disable-threading --allow-unregistered-dialect | FileCheck %s --check-prefix=NO-SCRATCH
 
 // CHECK-DAG: #[[SKIP_MIDDLE_MAP:map[0-9]*]] = affine_map<(d0, d1, d2) -> (d0, d2)>
+// CHECK-DAG: #[[SUB_MAP:map[0-9]*]] = affine_map<(d0, d1) -> (d0 - d1)>
+// CHECK-DAG: #[[SCRATCH_LB_MAP:map[0-9]*]] = affine_map<(d0) -> (d0 * 2 - (d0 floordiv 2) * 4)>
+// CHECK-DAG: #[[SCRATCH_UB_MAP:map[0-9]*]] = affine_map<(d0) -> (d0 * 2 - (d0 floordiv 2) * 4 + 2)>
 
 // ============================================================================
 // 1. 1-D Elementwise static and dynamic
@@ -2259,6 +2263,128 @@ func.func @test_scratch_reduction_store_sibling_load(
         } {vector = 8 : i64}
       } {vector = 16 : i64}
     }
+  } {vector = 2 : i64}
+  return
+}
+
+// -----
+
+// Reproduce a sliced-input reduction with a shrunk scratch buffer. Keep the
+// original dynamic block bounds, collapsed 7x7 dimensions, input offset 970,
+// vector width 56 over 49 elements, and independently computed scratch +10
+// indices. The input tile is transposed before forwarding its zero-offset
+// slice to the reduction; the scratch address omits both parallel vector axes.
+// CHECK-LABEL: func.func @scratch_offset_slice_reduction
+// CHECK: %[[INPUT_BIAS:.*]] = arith.constant 970 : index
+// CHECK: %[[SRC_A:.*]] = memref.collapse_shape {{.*}} into memref<4x1024x49xf32>
+// CHECK: %[[SRC_B:.*]] = memref.collapse_shape {{.*}} into memref<4x992x49xf32>
+// CHECK: %[[DST:.*]] = memref.collapse_shape {{.*}} into memref<4x49xf32>
+// CHECK: scf.for %[[BLOCK:.*]] =
+// CHECK: %[[LB:.*]] = affine.apply #[[SCRATCH_LB_MAP]](%[[BLOCK]])
+// CHECK: %[[UB:.*]] = affine.apply #[[SCRATCH_UB_MAP]](%[[BLOCK]])
+// CHECK: %[[BATCH_SIZE:.*]] = affine.min {{.*}}(%[[UB]], %[[LB]], %{{.*}})
+// CHECK: %[[LOOP_RESULT:.*]] = scf.for %[[RIV:.*]] = {{.*}} iter_args(%[[ACC0:.*]] = {{.*}}) -> (!npuvector<?x49x16xf32>) {
+// CHECK: %[[INDEX_A:.*]] = arith.addi %[[RIV]], %[[INPUT_BIAS]] : index
+// CHECK: %[[READ_A:.*]] = npuvector.transfer_read %[[SRC_A]][%[[LB]], %[[INDEX_A]], %{{.*}}] {{.*}} : memref<4x1024x49xf32>, !npuvector<?x16x49xf32>
+// CHECK: %[[X0:.*]] = npuvector.transpose %[[READ_A]], [0, 2, 1] : !npuvector<?x16x49xf32> to !npuvector<?x49x16xf32>
+// CHECK: %[[INDEX_B:.*]] = arith.addi %[[RIV]], %[[INPUT_BIAS]] : index
+// CHECK: %[[READ_B:.*]] = npuvector.transfer_read %[[SRC_B]][%[[LB]], %[[INDEX_B]], %{{.*}}] {{.*}} : memref<4x992x49xf32>, !npuvector<?x16x49xf32>
+// CHECK: %[[Y0:.*]] = npuvector.transpose %[[READ_B]], [0, 2, 1] : !npuvector<?x16x49xf32> to !npuvector<?x49x16xf32>
+// CHECK: %[[TILE0:.*]] = arith.addf %[[X0]], %[[Y0]] : !npuvector<?x49x16xf32>
+// CHECK: %[[SHADOW_ZERO:.*]] = arith.constant 0 : index
+// CHECK: %[[REDUCTION_ZERO:.*]] = arith.constant 0 : index
+// CHECK: %[[SLICE0:.*]] = npuvector.extract_slice %[[TILE0]][%[[SHADOW_ZERO]], %[[SHADOW_ZERO]], %[[REDUCTION_ZERO]]] [%[[BATCH_SIZE]], {{.*}}] {{.*}} {keep_dims = array<i64: 0, 1, 2>} : !npuvector<?x49x16xf32> to !npuvector<?x49x16xf32>
+// CHECK: arith.addf %[[SLICE0]], %[[ACC0]] {{.*}} : !npuvector<?x49x16xf32>
+// CHECK: %[[REDUCED:.*]] = npuvector.reduction <add>, %[[LOOP_RESULT]] {reduction_dims = array<i64: 2>} : !npuvector<?x49x16xf32> into !npuvector<?x49xf32>
+// CHECK: npuvector.transfer_write %[[REDUCED]], %[[DST]][%[[LB]], %{{.*}}]
+// NO-SCRATCH-LABEL: func.func @scratch_offset_slice_reduction
+// NO-SCRATCH: %[[S0:.*]] = memref.alloc() {{.*}} : memref<1x32x1xf32>
+// NO-SCRATCH-NOT: npuvector.transfer_read %[[S0]]
+// NO-SCRATCH-NOT: npuvector.transfer_write {{.*}}, %[[S0]]
+// NO-SCRATCH: return
+func.func @scratch_offset_slice_reduction(%a: memref<4x1024x7x7xf32>, %b: memref<4x992x7x7xf32>,
+                                         %out: memref<4x1x7x7xf32>)
+    attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c49 = arith.constant 49 : index
+  %c10 = arith.constant 10 : index
+  %c16 = arith.constant 16 : index
+  %c970 = arith.constant 970 : index
+  %zero = arith.constant 0.0 : f32
+  %a_view = memref.collapse_shape %a [[0], [1], [2, 3]] : memref<4x1024x7x7xf32> into memref<4x1024x49xf32>
+  %b_view = memref.collapse_shape %b [[0], [1], [2, 3]] : memref<4x992x7x7xf32> into memref<4x992x49xf32>
+  %scratch = memref.alloc() {alignment = 64 : i64} : memref<1x32x1xf32>
+  %out_view = memref.collapse_shape %out [[0], [1, 2, 3]] : memref<4x1x7x7xf32> into memref<4x49xf32>
+  scf.for %block = %c0 to %c2 step %c1 {
+    %lb = affine.apply affine_map<(d0) -> (d0 * 2 - (d0 floordiv 2) * 4)>(%block)
+    %ub = affine.apply affine_map<(d0) -> (d0 * 2 - (d0 floordiv 2) * 4 + 2)>(%block)
+    scf.for %i = %lb to %ub step %c1 {
+      scf.for %j = %c0 to %c49 step %c1 {
+        %sum = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc = %zero) -> f32 {
+          %input_index_a = arith.addi %k, %c970 : index
+          %x = memref.load %a_view[%i, %input_index_a, %j] : memref<4x1024x49xf32>
+          %input_index_b = arith.addi %k, %c970 : index
+          %y = memref.load %b_view[%i, %input_index_b, %j] : memref<4x992x49xf32>
+          %value = arith.addf %x, %y : f32
+          %store_index = arith.addi %k, %c10 : index
+          memref.store %value, %scratch[%c0, %store_index, %c0] : memref<1x32x1xf32>
+          %load_index = arith.addi %k, %c10 : index
+          %loaded = memref.load %scratch[%c0, %load_index, %c0] : memref<1x32x1xf32>
+          %next = arith.addf %loaded, %acc {reduction_axes = [1 : index], reduction_type = "y"} : f32
+          scf.yield %next : f32
+        } {reduction_x = 16 : i64}
+        memref.store %sum, %out_view[%i, %j] : memref<4x49xf32>
+      } {vector = 56 : i64}
+    } {vector = 2 : i64}
+  } {map_for_to_forall}
+  return
+}
+
+// -----
+
+// ReductionX emits several tiles and a tail. Its mapped IV, rather than the
+// original loop lower bound, determines each recorded scratch tile's origin.
+// CHECK-LABEL: func.func @scratch_offset_reduction_tiles_and_tail
+// CHECK: %[[LB2:.*]] = arith.constant 5 : index
+// CHECK: %[[UB2:.*]] = arith.constant 24 : index
+// CHECK: %[[VF2:.*]] = arith.constant 8 : index
+// CHECK: scf.for %[[IV2:.*]] = %[[LB2]] to %[[UB2]] step %[[VF2]] iter_args
+// CHECK: %[[REMAIN2:.*]] = affine.apply #[[SUB_MAP]](%[[UB2]], %[[IV2]])
+// CHECK: %[[SIZE2:.*]] = affine.min {{.*}}(%[[REMAIN2]], %[[VF2]])
+// CHECK: %[[TILE2:.*]] = npuvector.transfer_read {{.*}}[%{{.*}}, %[[IV2]]] [%{{.*}}, %[[SIZE2]]] {{.*}} : memref<2x32xf32>, !npuvector<2x?xf32>
+// CHECK: %[[ZERO20:.*]] = arith.constant 0 : index
+// CHECK: %[[ZERO21:.*]] = arith.constant 0 : index
+// CHECK: %[[SLICE2:.*]] = npuvector.extract_slice %[[TILE2]][%[[ZERO20]], %[[ZERO21]]] [%{{.*}}, %[[SIZE2]]] {{.*}} : !npuvector<2x?xf32> to !npuvector<2x?xf32>
+// CHECK: %[[NEXT2:.*]] = arith.addf %[[SLICE2]], {{.*}} : !npuvector<2x?xf32>
+// CHECK: npuvector.insert_slice %[[NEXT2]] into
+// NO-SCRATCH-LABEL: func.func @scratch_offset_reduction_tiles_and_tail
+// NO-SCRATCH: %[[S2:.*]] = memref.alloc() : memref<1x40xf32>
+// NO-SCRATCH-NOT: npuvector.transfer_read %[[S2]]
+// NO-SCRATCH-NOT: npuvector.transfer_write {{.*}}, %[[S2]]
+// NO-SCRATCH: return
+func.func @scratch_offset_reduction_tiles_and_tail(%a: memref<2x32xf32>, %out: memref<2xf32>)
+    attributes {hacc.function_kind = #hacc.function_kind<DEVICE>} {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c5 = arith.constant 5 : index
+  %c10 = arith.constant 10 : index
+  %c24 = arith.constant 24 : index
+  %zero = arith.constant 0.0 : f32
+  %scratch = memref.alloc() : memref<1x40xf32>
+  scf.for %i = %c0 to %c2 step %c1 {
+    %sum = scf.for %k = %c5 to %c24 step %c1 iter_args(%acc = %zero) -> f32 {
+      %value = memref.load %a[%i, %k] : memref<2x32xf32>
+      %store_index = arith.addi %c10, %k : index
+      memref.store %value, %scratch[%c0, %store_index] : memref<1x40xf32>
+      %load_index = affine.apply affine_map<(d0) -> (d0 + 10)>(%k)
+      %loaded = memref.load %scratch[%c0, %load_index] : memref<1x40xf32>
+      %next = arith.addf %loaded, %acc {reduction_axes = [1 : index], reduction_type = "x"} : f32
+      scf.yield %next : f32
+    } {reduction_x = 8 : i64}
+    memref.store %sum, %out[%i] : memref<2xf32>
   } {vector = 2 : i64}
   return
 }
