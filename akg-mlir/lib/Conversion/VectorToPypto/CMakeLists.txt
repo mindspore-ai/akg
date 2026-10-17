@@ -20,4 +20,5 @@ add_mlir_conversion_library(AKGVectorToEmitPy
   MLIRVectorDialect
   AKGEmitPyDialect
   AKGNPUVectorDialect
+  AKGPyptoDialect
 )

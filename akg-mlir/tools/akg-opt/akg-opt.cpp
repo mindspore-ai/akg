@@ -28,6 +28,9 @@
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Dialect/Pypto/IR/Pypto.h"
+#include "akg/Dialect/Pypto/IR/PyptoOps.h"
+#include "akg/Dialect/Pypto/IR/PyptoTypes.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
@@ -90,6 +93,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::hivm::HIVMDialect>();
   registry.insert<mlir::npuvector::NPUVectorDialect>();
   registry.insert<mlir::emitpy::EmitPyDialect>();
+  registry.insert<mlir::pypto::PyptoDialect>();
   registerLLVMDialectTranslation(registry);
 
   bishengir::hivm::registerHIVMDialectExtension(registry);
