@@ -30,6 +30,7 @@
 #include "akg/Conversion/TosaToLinalgUpdate/TosaMultiReduceToLinalg.h"
 #include "akg/Conversion/VectorTransferLower/VectorTransferLower.h"
 #include "akg/Conversion/VectorToPypto/VectorToPypto.h"
+#include "akg/Conversion/PyptoToEmitPy/PyptoToEmitPy.h"
 #include "akg/Conversion/AffineToSCF/AffineToSCF.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"

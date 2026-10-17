@@ -1,0 +1,10 @@
+set(LLVM_TARGET_DEFINITIONS PyptoOps.td)
+add_mlir_dialect(PyptoOps pypto)
+
+set(LLVM_TARGET_DEFINITIONS PyptoAttrs.td)
+mlir_tablegen(PyptoEnums.h.inc -gen-enum-decls)
+mlir_tablegen(PyptoEnums.cpp.inc -gen-enum-defs)
+mlir_tablegen(PyptoAttrs.h.inc -gen-attrdef-decls)
+mlir_tablegen(PyptoAttrs.cpp.inc -gen-attrdef-defs)
+add_public_tablegen_target(AKGPyptoAttrsIncGen)
+add_dependencies(mlir-headers AKGPyptoAttrsIncGen)
