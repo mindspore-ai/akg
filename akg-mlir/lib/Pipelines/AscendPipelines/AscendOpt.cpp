@@ -303,6 +303,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     createHIVMPipeline(pm, options);
   } else {
     pm.addPass(hivm::createInferFuncCoreTypePass());
+    // Lower block-mapped forall scopes before handing IR to bishengir-compile:
+    // its initial memref.copy legalization does not handle these scopes.
+    pm.nest<func::FuncOp>().addPass(hivm::createHIVMMapForallToBlocksPass());
   }
 }
 }  // namespace

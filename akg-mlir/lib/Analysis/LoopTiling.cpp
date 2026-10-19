@@ -56,6 +56,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HIVM/IR/HIVM.h"
 #include "akg/Utils/Constants.h"
 
 using llvm::DenseMap;
@@ -114,7 +115,7 @@ struct ApplyTilingParams {
   ArrayRef<unsigned> tileSizesInt;
   OpBuilder &builder;
   std::map<int64_t, Value> &constantCache;
-  mutable mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   mutable mlir::scf::ForOp parallelTileLoop;
   Value parallelTileCoord;
   bool useRuntimeTileCounts;
@@ -165,7 +166,7 @@ struct TileLoopParams {
 // Lives only on the stack and references caller-owned containers.
 struct TileRewriteContext {
   const llvm::DenseSet<mlir::Operation *> &escapeReduceLoops;
-  mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   mlir::scf::ForOp parallelTileLoop;
   Value parallelTileCoord;
   int64_t dynamicTileCoreNum = kDefaultNpuCoreNum;
@@ -455,14 +456,14 @@ static bool isMultiVecPointLoop(mlir::scf::ForOp loop);
 static void sinkMultiVecPointLoops(func::FuncOp funcOp);
 static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                mlir::OpBuilder &builder);
-static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
+static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, Operation *userAnchorLoop,
                                                 llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet);
 static void collectOpsInOrderAfter(Operation *startOp,
                                    const llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet,
                                    SmallVectorImpl<Operation *> &opsInOrder);
 static void moveOpsAfterLoop(mlir::scf::ForOp destLoop, ArrayRef<Operation *> ops, OpBuilder &builder);
 static void replaceUsesInOps(ValueRange oldResults, ValueRange newResults, ArrayRef<Operation *> ops);
-static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
+static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoop, Operation *userAnchorLoop,
                                                         llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                         unsigned tileSizesNum, unsigned bandSize,
                                                         mlir::OpBuilder &builder);
@@ -1440,35 +1441,34 @@ static void constructTiledLoopStatic(const ConstructTiledLoopParams &params) {
   }
 }
 
-// Build a map-for-to-forall wrapper loop directly in front of the band root and
-// move the band root into its body. The wrapper carries the block-id iteration
-// space `[0, useCore)`; downstream lowering replaces it with `get_block_idx`.
-static mlir::scf::ForOp createParallelMapLoop(func::FuncOp funcOp, mlir::scf::ForOp bandRoot, int64_t useCore,
-                                              OpBuilder &builder) {
+// Create the block-id iteration space directly in the form consumed by the backend.
+static Operation *createParallelMapLoop(func::FuncOp funcOp, scf::ForOp bandRoot, int64_t useCore, OpBuilder &builder) {
   if (!bandRoot || useCore <= 0) {
-    return {};
+    return nullptr;
   }
   OpBuilder::InsertionGuard guard(builder);
-  mlir::Location loc = bandRoot.getLoc();
+  Location loc = bandRoot.getLoc();
   builder.setInsertionPoint(bandRoot);
   Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
   Value core = builder.create<arith::ConstantIndexOp>(loc, useCore);
-  auto mapLoop =
-    builder.create<mlir::scf::ForOp>(loc, c0, core, c1, ValueRange{},
-                                     [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value,
-                                        mlir::ValueRange) { nestedBuilder.create<mlir::scf::YieldOp>(nestedLoc); });
-  mapLoop->setAttr(kMapForToForallAttr, builder.getUnitAttr());
+  auto mapLoop = builder.create<scf::ForallOp>(
+    loc, ArrayRef<OpFoldResult>{c0}, ArrayRef<OpFoldResult>{core}, ArrayRef<OpFoldResult>{c1}, ValueRange{},
+    builder.getArrayAttr({hivm::HIVMBlockMappingAttr::get(builder.getContext())}));
   funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(useCore));
   bandRoot->moveBefore(mapLoop.getBody()->getTerminator());
-  return mapLoop;
+  return mapLoop.getOperation();
+}
+
+static Value getParallelMapInductionVar(Operation *loop) {
+  return cast<scf::ForallOp>(loop).getInductionVars().front();
 }
 
 // Bundled params for buildParallelTileCoordMap to stay under readability-function-size_parameters limit.
 struct ParallelTileCoordMapParams {
   ArrayRef<unsigned> parallelDims;
   ArrayRef<Value> tileCountsByDim;
-  mutable mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   mutable mlir::scf::ForOp parallelTileLoop;
   mutable mlir::scf::ForOp insertBeforeLoop;
   OpBuilder &builder;
@@ -1492,7 +1492,7 @@ static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
   const auto &parallelDims = params.parallelDims;
   const auto &tileCountsByDim = params.tileCountsByDim;
   mlir::scf::ForOp insertBeforeLoop = params.insertBeforeLoop;
-  auto &parallelMapLoop = params.parallelMapLoop;
+  const auto &parallelMapLoop = params.parallelMapLoop;
   auto &parallelTileLoop = params.parallelTileLoop;
   auto &builder = params.builder;
   Value remaining = params.linearTaskId;
@@ -1508,7 +1508,7 @@ static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
     AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
     auto taskIdMap = AffineMap::get(2, 0, taskLoopExpr + mapLoopExpr, builder.getContext());
     remaining = builder.create<affine::AffineApplyOp>(
-      loc, taskIdMap, ValueRange{parallelTileLoop.getInductionVar(), parallelMapLoop.getInductionVar()});
+      loc, taskIdMap, ValueRange{parallelTileLoop.getInductionVar(), getParallelMapInductionVar(parallelMapLoop)});
   }
   AffineExpr remainingExpr = builder.getAffineDimExpr(0);
   AffineExpr tileCountExpr = builder.getAffineSymbolExpr(0);
@@ -1533,7 +1533,7 @@ static void buildParallelTileCoordMap(const ParallelTileCoordMapParams &params,
 
 // Bundled params for createParallelTileLoop to stay under readability-function-size_parameters limit.
 struct ParallelTileLoopParams {
-  mutable mlir::scf::ForOp mapLoop;
+  Operation *mapLoop;
   mutable mlir::scf::ForOp bandRoot;
   Value totalTiles;
   int64_t useCore;
@@ -1541,7 +1541,7 @@ struct ParallelTileLoopParams {
 };
 
 static mlir::scf::ForOp createParallelTileLoop(const ParallelTileLoopParams &params) {
-  auto &mapLoop = params.mapLoop;
+  const auto &mapLoop = params.mapLoop;
   auto &bandRoot = params.bandRoot;
   const auto &totalTiles = params.totalTiles;
   const auto &useCore = params.useCore;
@@ -1559,7 +1559,7 @@ static mlir::scf::ForOp createParallelTileLoop(const ParallelTileLoopParams &par
   AffineExpr mapLoopExpr = builder.getAffineDimExpr(1);
   auto taskUbMap = AffineMap::get(2, 0, taskNumExpr - mapLoopExpr, builder.getContext());
   Value taskUb =
-    builder.create<affine::AffineApplyOp>(loc, taskUbMap, ValueRange{totalTiles, mapLoop.getInductionVar()});
+    builder.create<affine::AffineApplyOp>(loc, taskUbMap, ValueRange{totalTiles, getParallelMapInductionVar(mapLoop)});
   auto tileLoop =
     builder.create<mlir::scf::ForOp>(loc, c0, taskUb, step, ValueRange{},
                                      [](mlir::OpBuilder &nestedBuilder, mlir::Location nestedLoc, mlir::Value,
@@ -1581,7 +1581,7 @@ struct ParallelMapTileInput {
 
 // Bundled output params for createParallelMapAndTileLoop.
 struct ParallelMapTileOutput {
-  mlir::scf::ForOp &parallelMapLoop;
+  Operation *&parallelMapLoop;
   mlir::scf::ForOp &parallelTileLoop;
   SmallVectorImpl<Value> &parallelTileCoordByDim;
   int64_t &parallelUseCore;
@@ -1637,7 +1637,7 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
   auto &parallelTileLoop = out.parallelTileLoop;
   auto &parallelTileCoordByDim = out.parallelTileCoordByDim;
   auto &parallelUseCore = out.parallelUseCore;
-  parallelMapLoop = mlir::scf::ForOp();
+  parallelMapLoop = nullptr;
   parallelTileLoop = mlir::scf::ForOp();
   parallelUseCore = 0;
   parallelTileCoordByDim.assign(band.size(), Value());
@@ -1676,7 +1676,7 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
 
   if (useRuntimeTileCounts || totalTiles <= parallelUseCore) {
     buildParallelTileCoordMap({parallelDims, tileCountsByDim, parallelMapLoop, parallelTileLoop, root, builder,
-                               parallelMapLoop.getInductionVar(), useRuntimeTileCounts},
+                               getParallelMapInductionVar(parallelMapLoop), useRuntimeTileCounts},
                               parallelTileCoordByDim);
     return;
   }
@@ -2234,7 +2234,7 @@ struct TileLoopContext {
   SmallVectorImpl<SmallVector<std::pair<Value, Value>, kSmallVectorSizeFour>> &tileLevelInfo;
 };
 
-static bool moveFirstTileLoopBodyToParallelScope(mlir::scf::ForOp loop, mlir::scf::ForOp parallelScopeLoop,
+static bool moveFirstTileLoopBodyToParallelScope(mlir::scf::ForOp loop, Operation *parallelScopeLoop,
                                                  Value parallelTileCoord, const TileLoopContext &tlc) {
   const auto &i = tlc.i;
   const auto &j = tlc.j;
@@ -2247,6 +2247,16 @@ static bool moveFirstTileLoopBodyToParallelScope(mlir::scf::ForOp loop, mlir::sc
     return false;
   }
 
+  if (isa<scf::ForallOp>(parallelScopeLoop)) {
+    // Keep serial tile scaffolding for result wiring; post-processing inlines it.
+    OpBuilder builder(loop);
+    loop.setUpperBound(builder.create<arith::ConstantIndexOp>(loop.getLoc(), 1));
+    loop.getInductionVar().replaceAllUsesWith(parallelTileCoord);
+    loop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
+    recordTileLevelInfoForLoop(TileInfoContext{i, j, tileNum, curTile, tileSizeValues, tileLevelInfo}, loop,
+                               parallelTileCoord);
+    return true;
+  }
   loop.getInductionVar().replaceAllUsesWith(parallelTileCoord);
   Block *body = loop.getBody();
   Operation *terminator = body->getTerminator();
@@ -2254,9 +2264,9 @@ static bool moveFirstTileLoopBodyToParallelScope(mlir::scf::ForOp loop, mlir::sc
     body->front().moveBefore(loop);
   }
   loop.erase();
-  newLoops[curTile] = parallelScopeLoop;
-  recordTileLevelInfoForLoop(TileInfoContext{i, j, tileNum, curTile, tileSizeValues, tileLevelInfo}, parallelScopeLoop,
-                             parallelTileCoord);
+  newLoops[curTile] = cast<scf::ForOp>(parallelScopeLoop);
+  recordTileLevelInfoForLoop(TileInfoContext{i, j, tileNum, curTile, tileSizeValues, tileLevelInfo},
+                             cast<scf::ForOp>(parallelScopeLoop), parallelTileCoord);
   return true;
 }
 
@@ -2267,7 +2277,8 @@ static bool tryMapFirstTileLoopToParallelWork(const TileLoopContext &tlc, const 
   if (!ctx.parallelTileCoord || i != 0) {
     return false;
   }
-  mlir::scf::ForOp parallelScopeLoop = (ctx.parallelTileLoop != nullptr) ? ctx.parallelTileLoop : ctx.parallelMapLoop;
+  auto tileLoop = ctx.parallelTileLoop;
+  Operation *parallelScopeLoop = tileLoop ? tileLoop.getOperation() : ctx.parallelMapLoop;
   return moveFirstTileLoopBodyToParallelScope(newLoops[curTile], parallelScopeLoop, ctx.parallelTileCoord, tlc);
 }
 
@@ -2555,7 +2566,7 @@ struct FinalizeRootLoopParams {
   unsigned tileSizesNum;
   unsigned forNum;
   const llvm::DenseSet<mlir::Operation *> &escapeReduceLoops;
-  mutable mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   bool dropMappedOutermostFirstLevelIterArgs;
   OpBuilder &builder;
 };
@@ -2572,7 +2583,7 @@ static LogicalResult finalizeRootLoopAfterTiling(const FinalizeRootLoopParams &p
       const auto &tileSizesNum = params.tileSizesNum;
       const auto &forNum = params.forNum;
       auto &builder = params.builder;
-      mlir::scf::ForOp userAnchorLoop = parallelMapLoop ? parallelMapLoop : tiledLoops[0];
+      Operation *userAnchorLoop = parallelMapLoop ? parallelMapLoop : tiledLoops[0].getOperation();
       if (failed(sinkReduceLoopResultsToMiddleLevel(rootScfForOp, userAnchorLoop, tiledLoops, tileSizesNum, forNum,
                                                     builder))) {
         return failure();
@@ -2617,16 +2628,17 @@ static LogicalResult applyTilingToLoop(const ApplyTilingParams &params) {
   unsigned tileSizesNum = tileSizeValues.size();
 
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeOne> band{loop};
-  // The band root is "outermost" w.r.t. its tile nest if either it has no
-  // surrounding scf.for at all, or its only surrounding scf.for is the
-  // parallel map loop created by the caller.
-  auto parentFor = loop->getParentOfType<mlir::scf::ForOp>();
+  // Both serial and forall map scopes delimit the surrounding tile nest.
+  Operation *parentLoop = loop->getParentOp();
+  while (parentLoop && !isa<scf::ForOp, scf::ForallOp>(parentLoop)) {
+    parentLoop = parentLoop->getParentOp();
+  }
   unsigned width = tileSizesNum + 1;
   SmallVector<mlir::scf::ForOp, kSmallVectorSizeSix> tiledLoops(width);
 
   llvm::DenseSet<mlir::Operation *> escapeReduceLoops = collectEscapingReductionLoops(band);
   func::FuncOp funcOp = loop->getParentOfType<func::FuncOp>();
-  const bool dropMappedOutermostFirstLevelIterArgs = !parentFor || parentFor == parallelMapLoop;
+  const bool dropMappedOutermostFirstLevelIterArgs = !parentLoop || parentLoop == parallelMapLoop;
   TileRewriteContext ctx{escapeReduceLoops,
                          parallelMapLoop,
                          parallelTileLoop,
@@ -2700,7 +2712,7 @@ struct DecoupledAxisParams {
   ArrayRef<mlir::scf::ForOp> band;
   ArrayRef<Value> tileSizeValues;
   ArrayRef<unsigned> tileSizesInt;
-  mutable mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   mutable mlir::scf::ForOp parallelTileLoop;
   ArrayRef<Value> parallelTileCoordByDim;
   bool useRuntimeTileCounts;
@@ -4497,7 +4509,7 @@ static LogicalResult applySingleLinearBandDecoupled(const SingleLinearBandParams
   SmallVector<unsigned, kSmallVectorSizeSix> parallelDims;
   collectParallelPrefixDims(band, tileSizesInt, parallelDims);
   int64_t parallelUseCore = 0;
-  mlir::scf::ForOp parallelMapLoop;
+  Operation *parallelMapLoop = nullptr;
   mlir::scf::ForOp parallelTileLoop;
   SmallVector<Value, kSmallVectorSizeSix> parallelTileCoordByDim;
   createParallelMapAndTileLoop(
@@ -4626,7 +4638,7 @@ static LogicalResult applyLeafBandsByNodeId(const ApplyLeafBandsParams &params) 
                                          activeBand,
                                          branchTileValues,
                                          branchTileSizesInt,
-                                         mlir::scf::ForOp(),
+                                         nullptr,
                                          mlir::scf::ForOp(),
                                          {},
                                          params.useRuntimeTileCounts},
@@ -4666,7 +4678,7 @@ static LogicalResult applySingleLeafBranchBandDecoupled(const SingleLeafBranchBa
   int64_t prefixParallelUseCore = 0;
   SmallVector<unsigned, kSmallVectorSizeSix> prefixParallelDims;
   collectParallelPrefixDims(prefixBand, prefixTileSizesInt, prefixParallelDims);
-  mlir::scf::ForOp prefixParallelMapLoop;
+  Operation *prefixParallelMapLoop = nullptr;
   mlir::scf::ForOp prefixParallelTileLoop;
   SmallVector<Value, kSmallVectorSizeSix> prefixParallelTileCoordByDim;
   createParallelMapAndTileLoop(
@@ -5187,7 +5199,7 @@ static void forwardIterArgsThroughWrapperLoops(llvm::MutableArrayRef<mlir::scf::
   }
 }
 
-static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
+static LogicalResult collectReduceResultUserOps(mlir::scf::ForOp rootLoop, Operation *userAnchorLoop,
                                                 llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> &opSet) {
   Block *sourceBlock = userAnchorLoop->getBlock();
   SmallVector<Value, kSmallVectorSizeEight> worklist(rootLoop.getResults().begin(), rootLoop.getResults().end());
@@ -5328,7 +5340,7 @@ static void recreateConstantsForMovedOps(ArrayRef<Operation *> movedOps,
   }
 }
 
-static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoop, mlir::scf::ForOp userAnchorLoop,
+static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoop, Operation *userAnchorLoop,
                                                         llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                         unsigned tileSizesNum, unsigned bandSize,
                                                         mlir::OpBuilder &builder) {
@@ -5369,12 +5381,12 @@ static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoo
   llvm::SmallSet<Operation *, kSmallVectorSizeSixteen> recreateOps;
   llvm::DenseSet<Value> ignoreValues;
   ignoreValues.insert(rootResults.begin(), rootResults.end());
-  if (failed(collectOperandClosure(userAnchorLoop.getOperation(), opSet, recreateOps, ignoreValues))) {
+  if (failed(collectOperandClosure(userAnchorLoop, opSet, recreateOps, ignoreValues))) {
     return failure();
   }
 
   SmallVector<Operation *, kSmallVectorSizeSixteen> opsInOrder;
-  collectOpsInOrderAfter(userAnchorLoop.getOperation(), opSet, opsInOrder);
+  collectOpsInOrderAfter(userAnchorLoop, opSet, opsInOrder);
   moveOpsAfterLoop(middleLoop, opsInOrder, builder);
   recreateConstantsForMovedOps(opsInOrder, recreateOps, builder);
   replaceUsesInOps(rootResults, middleLoop.getResults(), opsInOrder);
