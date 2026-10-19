@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef AKG_CONVERSION_VECTORTOEMITPY_VECTORTOEMITPY_H
-#define AKG_CONVERSION_VECTORTOEMITPY_VECTORTOEMITPY_H
+#ifndef AKG_CONVERSION_VECTORTOPYPTO_VECTORTOPYPTO_H
+#define AKG_CONVERSION_VECTORTOPYPTO_VECTORTOPYPTO_H
 
 #include <memory>
 #include "mlir/IR/PatternMatch.h"
@@ -23,24 +23,24 @@
 
 namespace mlir {
 
-#define GEN_PASS_DECL_CONVERTVECTORTOEMITPY
+#define GEN_PASS_DECL_CONVERTVECTORTOPYPTO
 #include "akg/Conversion/Passes.h.inc"
 
 class TypeConverter;
 
-namespace vector_to_emitpy {
+namespace vector_to_pypto {
 
 /// Collects a set of patterns that rewrite tile-level NPUVector/Vector/Arith/
-/// Math/MemRef operations into `emitpy.call_opaque` operations whose callees
-/// are NumPy functions, ready for `akg-translate --mlir-to-pypto`.
-void populateVectorToEmitPyConversionPatterns(RewritePatternSet &patterns,
+/// Math/MemRef operations into typed `pypto` ops that keep the source result
+/// types, ready for the downstream `convert-pypto-to-emitpy` pass.
+void populateVectorToPyptoConversionPatterns(RewritePatternSet &patterns,
                                               TypeConverter &typeConverter);
 
-}  // namespace vector_to_emitpy
+}  // namespace vector_to_pypto
 
-/// Creates a pass that converts tile-level vector computations to EmitPy ops.
-std::unique_ptr<Pass> createVectorToEmitPyConversionPass();
+/// Creates a pass that converts tile-level vector computations to pypto ops.
+std::unique_ptr<Pass> createVectorToPyptoConversionPass();
 
 }  // namespace mlir
 
-#endif  // AKG_CONVERSION_VECTORTOEMITPY_VECTORTOEMITPY_H
+#endif  // AKG_CONVERSION_VECTORTOPYPTO_VECTORTOPYPTO_H
