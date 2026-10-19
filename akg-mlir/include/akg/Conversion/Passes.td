@@ -193,28 +193,21 @@ def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
-// ConvertVectorToEmitPy
+// ConvertVectorToPypto
 //===----------------------------------------------------------------------===//
 
-def ConvertVectorToEmitPy : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
-  let summary = "Convert tile-level vector computations to EmitPy (NumPy) ops";
+def ConvertVectorToPypto : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
+  let summary = "Convert tile-level vector computations to pypto tile ops";
   let description = [{
     Pass that rewrites tile-level operations from the NPUVector, Vector, Arith,
-    Math and MemRef dialects into `emitpy.call_opaque` operations whose callees
-    are NumPy functions, so the module can be printed as executable Python via
+    Math and MemRef dialects into typed `pypto` ops that keep the source
+    result types, so the intermediate PyPTO layer stays visible in the IR.
+    The downstream `convert-pypto-to-emitpy` pass lowers the pypto layer into
+    `emitpy.call_opaque` operations whose callees are PyPTO runtime functions,
+    so the module can be printed as executable Python via
     `akg-translate --mlir-to-pypto`.
-
-    The lowering is staged: the elementwise dataflow first becomes typed
-    `pypto` ops (keeping the source result types), and a final sweep lowers
-    them back into the emitpy forms, leaving the emitted Python unchanged.
-    Pass `emit-pypto` to stop after the first stage and keep the intermediate
-    pypto layer in the output.
   }];
-  let options = [
-    Option<"emitPypto", "emit-pypto", "bool", /*default=*/"false",
-           "Keep the intermediate pypto layer instead of lowering it to emitpy">
-  ];
-  let constructor = "mlir::createVectorToEmitPyConversionPass()";
+  let constructor = "mlir::createVectorToPyptoConversionPass()";
   // NOTE: dependent dialects are registered via `getDependentDialects()` in
   // VectorToPypto.cpp instead of `dependentDialects` here, because several
   // translation units include Passes.h.inc directly and do not see the
@@ -236,7 +229,7 @@ def ConvertPyptoToEmitPy : Pass<"convert-pypto-to-emitpy", "func::FuncOp"> {
   }];
   let constructor = "mlir::createPyptoToEmitPyConversionPass()";
   // NOTE: dependent dialects are registered via `getDependentDialects()` in
-  // PyptoToEmitPy.cpp, for the same reason as ConvertVectorToEmitPy above.
+  // PyptoToEmitPy.cpp, for the same reason as ConvertVectorToPypto above.
 }
 
 #endif // AKG_CONVERSION_PASSES

@@ -1,5 +1,5 @@
-// RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s
-// RUN: akg-opt %s -convert-vector-to-pypto=emit-pypto | FileCheck %s --check-prefix=PYPTO
+// RUN: akg-opt %s -convert-vector-to-pypto -convert-pypto-to-emitpy | FileCheck %s
+// RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s --check-prefix=PYPTO
 
 func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
   // CHECK-LABEL: func.func @test_elementwise(
@@ -12,9 +12,10 @@ func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>
   // CHECK: %[[EXP:.*]] = emitpy.call_opaque "pl.exp"(%[[SUM]])
   // CHECK: emitpy.call_opaque "pl.store"(%[[EXP]], %arg2)
 
-  // With `emit-pypto` the first-stage elementwise dataflow stays in the
-  // pypto layer with the source result types; the signature keeps its
-  // original memref form and the sweep is skipped entirely.
+  // After the first stage (`convert-vector-to-pypto` alone) the elementwise
+  // dataflow stays in the pypto layer with the source result types; the
+  // signature keeps its original memref form and the finalize/sweep steps
+  // are left to `convert-pypto-to-emitpy`.
   // PYPTO-LABEL: func.func @test_elementwise(
   // PYPTO-SAME: %arg0: memref<32x32xf32>
   // PYPTO-SAME: %arg2: memref<32x32xf32>
@@ -61,16 +62,16 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // The scalar result is written straight into the [1] output tensor.
   // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}})
 
-  // The transpose view, the broadcast carrier, the elementwise ops and the
-  // reduction chain all sit in the pypto layer; only the scratch tile
-  // stays an inline pl.create_tile.
+  // The transpose view, the broadcast carrier, the elementwise ops, the
+  // scratch tile and the reduction chain all sit in the pypto layer after
+  // the first stage.
   // PYPTO-LABEL: func.func @test_npuvector_ops(
   // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   // PYPTO: %[[CARRIER:.*]] = pypto.tile_full "0.0" : !npuvector<16x8xf32>
   // PYPTO: %[[B:.*]] = pypto.add %[[CARRIER]], %arg1 : !npuvector<16x8xf32>, f32 to !npuvector<16x8xf32>
   // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %[[B]] : !npuvector<16x8xf32>, !npuvector<16x8xf32> to !npuvector<16x8xf32>
   // The full row reduction works in the scratch tile and yields a scalar.
-  // PYPTO: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [16, 8]>
   // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !npuvector<16x8xf32>, {{.*}} -> f32
   // The surviving rows are read out and combined with scalar pypto adds.
   // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
@@ -104,11 +105,11 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // CHECK: %[[E0:.*]] = emitpy.call_opaque "pl.read"(%[[W]])
   // CHECK: emitpy.call_opaque "pl.write"(%arg1, %[[E0]])
 
-  // The partial reduction, the dtype casts, the scalar reads and the
-  // element-wise [4] store all ride in the pypto layer; only the scratch
-  // tile stays an inline pl.create_tile.
+  // The partial reduction, the dtype casts, the scalar reads, the scratch
+  // tile and the element-wise [4] store all ride in the pypto layer after
+  // the first stage.
   // PYPTO-LABEL: func.func @test_partial_reduction_and_casts(
-  // PYPTO: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[TMP:.*]] = pypto.create_tile : <i32, [4, 8]>
   // PYPTO: %[[R:.*]] = pypto.reduction max, row, %arg0, %[[TMP]] : !npuvector<4x8xi32>, {{.*}} -> !npuvector<4xi32>
   // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !npuvector<4xi32> to !npuvector<4xi64>
   // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !npuvector<4xi64> to !npuvector<4xi32>
@@ -145,12 +146,12 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
   // The scalar result is written straight into the [1] output tensor.
   // CHECK: emitpy.call_opaque "pl.write"(%arg1, {{.*}})
 
-  // The [8, N/8] reshape view and the scratch tile stay inline emitpy
-  // calls; the reduction, the scalar reads and the combine chain ride in
-  // the pypto layer.
+  // The [8, N/8] reshape view, the scratch tile, the reduction, the scalar
+  // reads and the combine chain all ride in the pypto layer after the
+  // first stage.
   // PYPTO-LABEL: func.func @test_rank1_full_reduction(
-  // PYPTO: emitpy.call_opaque "pl.reshape"
-  // PYPTO: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: pypto.reshape %arg0 : !npuvector<3072xf32> to !pypto.tile<f32, [8, 384]>
+  // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [8, 384]>
   // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, {{.*}}, %[[ROW_TMP]] : {{.*}} -> f32
   // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
   // PYPTO: %[[S1:.*]] = pypto.read %[[ROW]] [1, 0] : f32 -> f32
@@ -186,13 +187,13 @@ func.func @test_select_alloc(%arg0 : vector<8xf32>, %arg1 : vector<8xf32>) -> me
   // CHECK: %[[R2:.*]] = emitpy.call_opaque "pl.reshape"(%[[SEL]])
   // CHECK: emitpy.call_opaque "pl.store"(%[[R2]], %[[OUT]])
 
-  // The splat constant, the comparison and the select ride in the pypto
-  // layer; the scratch tile stays an inline emitpy operand and the store
-  // side keeps its [1, 8] reshape glue as call_opaque.
+  // The splat constant, the comparison, the select, the scratch tile and
+  // the store side with its [1, 8] reshape glue all ride in the pypto
+  // layer after the first stage.
   // PYPTO-LABEL: func.func @test_select_alloc(
   // PYPTO: %[[C:.*]] = pypto.tile_full "1.0" : vector<8xf32>
   // PYPTO: %[[CMP:.*]] = pypto.cmp lt, %arg0, %arg1 : vector<8xf32>, vector<8xf32> -> vector<8xi1>
-  // PYPTO: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[TMP:.*]] = pypto.create_tile : <f32, [8]>
   // PYPTO: %[[SEL:.*]] = pypto.select %[[CMP]], %arg0, %[[C]], %[[TMP]] : vector<8xi1>, vector<8xf32>, vector<8xf32>, {{.*}} to vector<8xf32>
 
   %c = arith.constant dense<1.0> : vector<8xf32>
@@ -318,13 +319,14 @@ func.func @test_store_through_view(%arg0 : memref<64x64xi32>, %arg1 : memref<64x
   // CHECK: %[[OUT:.*]] = emitpy.call_opaque "pl.reshape"(%[[ROUT]]) {args = [0 : index, #emitpy.opaque<"{{\[1, 4096\]}}">
   // CHECK: emitpy.call_opaque "pl.store"({{.*}}, %[[OUT]])
 
-  // The collapse views of the parameters ride in the pypto layer; the [1, N]
-  // store-destination reshape stays an emitpy call.
+  // The collapse views of the parameters, the [1, N] store-destination
+  // reshape and the tile store all ride in the pypto layer after the
+  // first stage.
   // PYPTO-LABEL: func.func @test_store_through_view(
   // PYPTO: %[[RIN:.*]] = pypto.reshape %arg0 : memref<64x64xi32> to memref<4096xi32>
   // PYPTO: %[[ROUT:.*]] = pypto.reshape %arg1 : memref<64x64xi32> to memref<4096xi32>
-  // PYPTO: emitpy.call_opaque "pl.reshape"(%[[ROUT]])
-  // PYPTO: emitpy.call_opaque "pl.store"
+  // PYPTO: %[[OUT:.*]] = pypto.reshape %[[ROUT]] : memref<4096xi32> to memref<1x4096xi32>
+  // PYPTO: pypto.store {{.*}}, %[[OUT]][{{.*}}] : !pypto.tile<i32, [1, 88]>, memref<1x4096xi32>
 
   %c0 = arith.constant 0 : index
   %c86 = arith.constant 86 : index
@@ -531,11 +533,14 @@ func.func @test_scalar_select(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024
   // CHECK: emitpy.call_opaque "pl.load"(%arg0, %[[SEL]], %{{.+}}) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, #emitpy.opaque<"{{\[8, 1024\]}}">
   // CHECK: emitpy.call_opaque "pl.store"(%{{.+}}, %arg1, %[[SEL]], %{{.+}}) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, 1 : index]
 
-  // Scalar comparisons and selects belong to the Python syntax layer: they
-  // keep their util_ pseudo-callees even under emit-pypto.
+  // Scalar comparisons and selects belong to the Python syntax layer: the
+  // loop-invariant mul already rides in the pypto layer, while the scalar
+  // cmp/select keep their arith form until the second stage lowers them
+  // into the util_ pseudo-callees.
   // PYPTO-LABEL: func.func @test_scalar_select(
-  // PYPTO: emitpy.call_opaque "util_cmp_lt"
-  // PYPTO: emitpy.call_opaque "util_select"
+  // PYPTO: %[[MUL:.*]] = pypto.mul %{{.+}}, %{{.+}} : index, index to index
+  // PYPTO: %[[CMP:.*]] = arith.cmpi slt, %{{.+}}, %{{.+}} : index
+  // PYPTO: arith.select %[[CMP]], %[[MUL]], %{{.+}} : index
 
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
