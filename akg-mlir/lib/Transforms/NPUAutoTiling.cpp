@@ -48,6 +48,7 @@
 
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HIVM/IR/HIVM.h"
 #include "akg/Utils/Constants.h"
 
 #define DEBUG_TYPE "npu-auto-tiling"
@@ -1158,6 +1159,10 @@ class PureElemwiseTiling : public TilingBase {
 
 struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
   explicit NPUAutoTiling(StringRef arch = StringRef()) : arch(arch.str()) {}
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<scf::SCFDialect, hivm::HIVMDialect>();
+  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
