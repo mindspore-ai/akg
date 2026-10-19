@@ -282,7 +282,12 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
       // vector sizes) into arith first: the conversion below has no
       // legalization for affine ops.
       pm.addPass(createLowerAffinePass());
-      pm.nest<func::FuncOp>().addPass(createVectorToEmitPyConversionPass());
+      // Two stages: tile-level ops first become typed pypto ops, then the
+      // pypto layer is lowered to the emitpy call_opaque forms. Keeping the
+      // stages as separate passes makes the intermediate pypto IR visible
+      // in the pass dumps.
+      pm.nest<func::FuncOp>().addPass(createVectorToPyptoConversionPass());
+      pm.nest<func::FuncOp>().addPass(createPyptoToEmitPyConversionPass());
       // Drop module-level constant buffers left dead by the conversion.
       pm.addPass(createSymbolDCEPass());
       return;

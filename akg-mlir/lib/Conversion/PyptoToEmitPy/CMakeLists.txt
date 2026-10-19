@@ -10,6 +10,7 @@ add_mlir_conversion_library(AKGPyptoToEmitPy
   MLIRIR
   MLIRArithDialect
   MLIRFuncDialect
+  MLIRSCFDialect
   MLIRPass
   MLIRTransformUtils
   AKGEmitPyDialect
