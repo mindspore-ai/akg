@@ -1,4 +1,4 @@
-// RUN: akg-opt %s -convert-vector-to-pypto | akg-translate --mlir-to-pypto | FileCheck %s
+// RUN: akg-opt %s -convert-vector-to-pypto -convert-pypto-to-emitpy | akg-translate --mlir-to-pypto | FileCheck %s
 
 func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
   // CHECK: import pypto.language as pl
