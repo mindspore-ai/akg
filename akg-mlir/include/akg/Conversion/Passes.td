@@ -203,12 +203,40 @@ def ConvertVectorToEmitPy : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
     Math and MemRef dialects into `emitpy.call_opaque` operations whose callees
     are NumPy functions, so the module can be printed as executable Python via
     `akg-translate --mlir-to-pypto`.
+
+    The lowering is staged: the elementwise dataflow first becomes typed
+    `pypto` ops (keeping the source result types), and a final sweep lowers
+    them back into the emitpy forms, leaving the emitted Python unchanged.
+    Pass `emit-pypto` to stop after the first stage and keep the intermediate
+    pypto layer in the output.
   }];
+  let options = [
+    Option<"emitPypto", "emit-pypto", "bool", /*default=*/"false",
+           "Keep the intermediate pypto layer instead of lowering it to emitpy">
+  ];
   let constructor = "mlir::createVectorToEmitPyConversionPass()";
   // NOTE: dependent dialects are registered via `getDependentDialects()` in
   // VectorToPypto.cpp instead of `dependentDialects` here, because several
   // translation units include Passes.h.inc directly and do not see the
   // EmitPy dialect headers.
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertPyptoToEmitPy
+//===----------------------------------------------------------------------===//
+
+def ConvertPyptoToEmitPy : Pass<"convert-pypto-to-emitpy", "func::FuncOp"> {
+  let summary = "Convert pypto tile ops to EmitPy (PyPTO) opaque calls";
+  let description = [{
+    Pass that lowers the typed `pypto` tile layer (`!pypto.tile` types and
+    `pypto.load`/`pypto.store`) into `emitpy.call_opaque` operations whose
+    callees are PyPTO runtime functions. Tile types become opaque PyPTO
+    annotations (`pl.Tile[[shape], dtype]`), so the stringly-typed Python
+    encoding is produced in exactly one place.
+  }];
+  let constructor = "mlir::createPyptoToEmitPyConversionPass()";
+  // NOTE: dependent dialects are registered via `getDependentDialects()` in
+  // PyptoToEmitPy.cpp, for the same reason as ConvertVectorToEmitPy above.
 }
 
 #endif // AKG_CONVERSION_PASSES

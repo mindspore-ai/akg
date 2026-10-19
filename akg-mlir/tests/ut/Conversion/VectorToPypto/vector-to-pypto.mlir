@@ -1,4 +1,5 @@
 // RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s
+// RUN: akg-opt %s -convert-vector-to-pypto=emit-pypto | FileCheck %s --check-prefix=PYPTO
 
 func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
   // CHECK-LABEL: func.func @test_elementwise(
@@ -10,6 +11,18 @@ func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>
   // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[V0]], %[[V1]])
   // CHECK: %[[EXP:.*]] = emitpy.call_opaque "pl.exp"(%[[SUM]])
   // CHECK: emitpy.call_opaque "pl.store"(%[[EXP]], %arg2)
+
+  // With `emit-pypto` the first-stage elementwise dataflow stays in the
+  // pypto layer with the source result types; the signature keeps its
+  // original memref form and the sweep is skipped entirely.
+  // PYPTO-LABEL: func.func @test_elementwise(
+  // PYPTO-SAME: %arg0: memref<32x32xf32>
+  // PYPTO-SAME: %arg2: memref<32x32xf32>
+  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<32x32xf32> -> vector<32x32xf32>
+  // PYPTO: %[[V1:.*]] = pypto.load %arg1[{{.*}}] : memref<32x32xf32> -> vector<32x32xf32>
+  // PYPTO: %[[SUM:.*]] = pypto.add %[[V0]], %[[V1]] : vector<32x32xf32>, vector<32x32xf32> to vector<32x32xf32>
+  // PYPTO: %[[EXP:.*]] = pypto.exp %[[SUM]] : vector<32x32xf32> to vector<32x32xf32>
+  // PYPTO: pypto.store %[[EXP]], %arg2[{{.*}}] : vector<32x32xf32>, memref<32x32xf32>
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -48,6 +61,24 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // The scalar result is written straight into the [1] output tensor.
   // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}})
 
+  // The transpose view, the broadcast carrier, the elementwise ops and the
+  // reduction chain all sit in the pypto layer; only the scratch tile
+  // stays an inline pl.create_tile.
+  // PYPTO-LABEL: func.func @test_npuvector_ops(
+  // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !npuvector<8x16xf32> to !npuvector<16x8xf32>
+  // PYPTO: %[[CARRIER:.*]] = pypto.tile_full "0.0" : !npuvector<16x8xf32>
+  // PYPTO: %[[B:.*]] = pypto.add %[[CARRIER]], %arg1 : !npuvector<16x8xf32>, f32 to !npuvector<16x8xf32>
+  // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %[[B]] : !npuvector<16x8xf32>, !npuvector<16x8xf32> to !npuvector<16x8xf32>
+  // The full row reduction works in the scratch tile and yields a scalar.
+  // PYPTO: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !npuvector<16x8xf32>, {{.*}} -> f32
+  // The surviving rows are read out and combined with scalar pypto adds.
+  // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
+  // PYPTO: %[[R1:.*]] = pypto.read %[[ROW]] [1, 0] : f32 -> f32
+  // PYPTO: pypto.add %[[R0]], %[[R1]] : f32, f32 to f32
+  // The scalar result goes straight into the [1] output tensor.
+  // PYPTO: pypto.write %arg2[{{.*}}], {{.*}} : memref<1xf32>, f32
+
   %t = npuvector.transpose %arg0, [1, 0] : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   %b = npuvector.broadcast %arg1 : f32 to !npuvector<16x8xf32>
   %m = arith.mulf %t, %b : !npuvector<16x8xf32>
@@ -72,6 +103,18 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // element by element.
   // CHECK: %[[E0:.*]] = emitpy.call_opaque "pl.read"(%[[W]])
   // CHECK: emitpy.call_opaque "pl.write"(%arg1, %[[E0]])
+
+  // The partial reduction, the dtype casts, the scalar reads and the
+  // element-wise [4] store all ride in the pypto layer; only the scratch
+  // tile stays an inline pl.create_tile.
+  // PYPTO-LABEL: func.func @test_partial_reduction_and_casts(
+  // PYPTO: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[R:.*]] = pypto.reduction max, row, %arg0, %[[TMP]] : !npuvector<4x8xi32>, {{.*}} -> !npuvector<4xi32>
+  // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !npuvector<4xi32> to !npuvector<4xi64>
+  // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !npuvector<4xi64> to !npuvector<4xi32>
+  // The short output row is written element by element.
+  // PYPTO: %[[E0:.*]] = pypto.read %[[W]] [0] : !npuvector<4xi32> -> i32
+  // PYPTO: pypto.write %arg1[{{.*}}], %[[E0]] : memref<4xi32>, i32
 
   %r = npuvector.reduction <maxsi>, %arg0 {reduction_dims = array<i64: 1>} : !npuvector<4x8xi32> into !npuvector<4xi32>
   %e = npuvector.extsi %r : !npuvector<4xi32> to !npuvector<4xi64>
@@ -102,6 +145,18 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
   // The scalar result is written straight into the [1] output tensor.
   // CHECK: emitpy.call_opaque "pl.write"(%arg1, {{.*}})
 
+  // The [8, N/8] reshape view and the scratch tile stay inline emitpy
+  // calls; the reduction, the scalar reads and the combine chain ride in
+  // the pypto layer.
+  // PYPTO-LABEL: func.func @test_rank1_full_reduction(
+  // PYPTO: emitpy.call_opaque "pl.reshape"
+  // PYPTO: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, {{.*}}, %[[ROW_TMP]] : {{.*}} -> f32
+  // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
+  // PYPTO: %[[S1:.*]] = pypto.read %[[ROW]] [1, 0] : f32 -> f32
+  // PYPTO: %[[A:.*]] = pypto.add %[[S0]], %[[S1]] : f32, f32 to f32
+  // PYPTO: pypto.write %arg1[{{.*}}], {{.*}} : memref<1xf32>, f32
+
   %r = npuvector.reduction <add>, %arg0 : !npuvector<3072xf32> into f32
   return %r : f32
 }
@@ -130,6 +185,15 @@ func.func @test_select_alloc(%arg0 : vector<8xf32>, %arg1 : vector<8xf32>) -> me
   // through the matching view and stored into it.
   // CHECK: %[[R2:.*]] = emitpy.call_opaque "pl.reshape"(%[[SEL]])
   // CHECK: emitpy.call_opaque "pl.store"(%[[R2]], %[[OUT]])
+
+  // The splat constant, the comparison and the select ride in the pypto
+  // layer; the scratch tile stays an inline emitpy operand and the store
+  // side keeps its [1, 8] reshape glue as call_opaque.
+  // PYPTO-LABEL: func.func @test_select_alloc(
+  // PYPTO: %[[C:.*]] = pypto.tile_full "1.0" : vector<8xf32>
+  // PYPTO: %[[CMP:.*]] = pypto.cmp lt, %arg0, %arg1 : vector<8xf32>, vector<8xf32> -> vector<8xi1>
+  // PYPTO: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // PYPTO: %[[SEL:.*]] = pypto.select %[[CMP]], %arg0, %[[C]], %[[TMP]] : vector<8xi1>, vector<8xf32>, vector<8xf32>, {{.*}} to vector<8xf32>
 
   %c = arith.constant dense<1.0> : vector<8xf32>
   %cmp = arith.cmpf olt, %arg0, %arg1 : vector<8xf32>
@@ -254,6 +318,14 @@ func.func @test_store_through_view(%arg0 : memref<64x64xi32>, %arg1 : memref<64x
   // CHECK: %[[OUT:.*]] = emitpy.call_opaque "pl.reshape"(%[[ROUT]]) {args = [0 : index, #emitpy.opaque<"{{\[1, 4096\]}}">
   // CHECK: emitpy.call_opaque "pl.store"({{.*}}, %[[OUT]])
 
+  // The collapse views of the parameters ride in the pypto layer; the [1, N]
+  // store-destination reshape stays an emitpy call.
+  // PYPTO-LABEL: func.func @test_store_through_view(
+  // PYPTO: %[[RIN:.*]] = pypto.reshape %arg0 : memref<64x64xi32> to memref<4096xi32>
+  // PYPTO: %[[ROUT:.*]] = pypto.reshape %arg1 : memref<64x64xi32> to memref<4096xi32>
+  // PYPTO: emitpy.call_opaque "pl.reshape"(%[[ROUT]])
+  // PYPTO: emitpy.call_opaque "pl.store"
+
   %c0 = arith.constant 0 : index
   %c86 = arith.constant 86 : index
   %c0_i32 = arith.constant 0 : i32
@@ -327,6 +399,15 @@ func.func @test_collapse_and_dynamic_npuvector(%arg0 : memref<64x64xi32>, %arg1 
   // CHECK: %[[RTILE:.*]] = emitpy.call_opaque "pl.reshape"(%[[SUM]]) {args = [0 : index, #emitpy.opaque<"{{\[1, 88\]}}">
   // CHECK: emitpy.call_opaque "pl.store"(%[[RTILE]], %[[OUT]], {{.+}}, %[[BEG]]) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, 1 : index]
 
+  // The collapse views ride in the pypto layer together with the scalar
+  // index arithmetic; the floor division keeps its util_ pseudo-callee for
+  // Python floor semantics.
+  // PYPTO-LABEL: func.func @test_collapse_and_dynamic_npuvector(
+  // PYPTO: %[[FLAT0:.*]] = pypto.reshape %arg0 : memref<64x64xi32> to memref<4096xi32>
+  // PYPTO: %[[FLAT1:.*]] = pypto.reshape %arg1 : memref<64x64xi32> to memref<4096xi32>
+  // PYPTO: %[[BEG:.*]] = pypto.min {{.*}} : index, index to index
+  // PYPTO: %[[V:.*]] = pypto.load %[[FLAT0]][%[[BEG]]] padded[{{.*}}] valid[{{.*}}] : memref<4096xi32> -> !npuvector<?xi32>
+
   %c-1 = arith.constant -1 : index
   %c4096 = arith.constant 4096 : index
   %c0 = arith.constant 0 : index
@@ -371,6 +452,12 @@ func.func @test_expand_shape(%arg0 : memref<4096xf32>, %arg1 : memref<64x64xf32>
   // CHECK: %[[V:.*]] = emitpy.call_opaque "pl.load"(%[[VIEW]])
   // CHECK: emitpy.call_opaque "pl.store"(%[[V]], %arg1)
 
+  // The expand view rides in the pypto layer; its memref result type feeds
+  // the pypto.load directly.
+  // PYPTO-LABEL: func.func @test_expand_shape(
+  // PYPTO: %[[VIEW:.*]] = pypto.reshape %arg0 : memref<4096xf32> to memref<64x64xf32>
+  // PYPTO: %[[V:.*]] = pypto.load %[[VIEW]][{{.*}}] : memref<64x64xf32> -> vector<32x32xf32>
+
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
   %view = memref.expand_shape %arg0 [[0, 1]] output_shape [64, 64] : memref<4096xf32> into memref<64x64xf32>
@@ -388,6 +475,12 @@ func.func @test_memref_shape_views(%arg0 : memref<64x32xf32>, %arg1 : memref<32x
   // CHECK: %[[S:.*]] = emitpy.call_opaque "pl.slice"(%[[R]])
   // CHECK-SAME: -> memref<16x16xf32, strided<[128, 1]>>
   // CHECK: emitpy.call_opaque "pl.store"
+
+  // The transpose, reshape and subview all ride in the pypto layer.
+  // PYPTO-LABEL: func.func @test_memref_shape_views(
+  // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : memref<64x32xf32> to memref<32x64xf32, #map>
+  // PYPTO: %[[R:.*]] = pypto.reshape %arg1 : memref<32x64xf32> to memref<16x128xf32>
+  // PYPTO: %[[S:.*]] = pypto.slice %[[R]][{{.*}}], [16, 16] : memref<16x128xf32> to memref<16x16xf32, strided<[128, 1]>>
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -408,6 +501,10 @@ func.func @test_memref_reinterpret_cast(%arg0 : memref<64xf32>, %arg1 : memref<1
   // CHECK: %[[S:.*]] = emitpy.call_opaque "pl.slice"(%arg0)
   // CHECK-SAME: -> memref<16xf32, strided<[1], offset: 16>>
   // CHECK: emitpy.call_opaque "pl.store"
+
+  // A reinterpret_cast with a static offset lands as a pypto.slice.
+  // PYPTO-LABEL: func.func @test_memref_reinterpret_cast(
+  // PYPTO: %[[S:.*]] = pypto.slice %arg0[{{.*}}], [16] : memref<64xf32> to memref<16xf32, strided<[1], offset: 16>>
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -433,6 +530,12 @@ func.func @test_scalar_select(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024
   // CHECK: %[[SEL:.*]] = emitpy.call_opaque "util_select"(%[[CMP]], %[[MUL]], %{{.+}}) : (i1, index, index) -> index
   // CHECK: emitpy.call_opaque "pl.load"(%arg0, %[[SEL]], %{{.+}}) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, #emitpy.opaque<"{{\[8, 1024\]}}">
   // CHECK: emitpy.call_opaque "pl.store"(%{{.+}}, %arg1, %[[SEL]], %{{.+}}) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, 1 : index]
+
+  // Scalar comparisons and selects belong to the Python syntax layer: they
+  // keep their util_ pseudo-callees even under emit-pypto.
+  // PYPTO-LABEL: func.func @test_scalar_select(
+  // PYPTO: emitpy.call_opaque "util_cmp_lt"
+  // PYPTO: emitpy.call_opaque "util_select"
 
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
