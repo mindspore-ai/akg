@@ -242,10 +242,8 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
   // ----- Phase A: hoist loop-invariant loads / transfer_read / pure ops -----
 
-  // affine.for and scf.for
-  static bool isForLoop(Operation *op) {
-    return isa<affine::AffineForOp, scf::ForOp>(op);
-  }
+  // affine.for, scf.for and scf.forall
+  static bool isForLoop(Operation *op) { return isa<affine::AffineForOp, scf::ForOp, scf::ForallOp>(op); }
 
   static Block *getForBody(Operation *loopOp) {
     if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
@@ -253,6 +251,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
     }
     if (auto scfFor = dyn_cast<scf::ForOp>(loopOp)) {
       return scfFor.getBody();
+    }
+    if (auto forall = dyn_cast<scf::ForallOp>(loopOp)) {
+      return forall.getBody();
     }
     return nullptr;
   }
