@@ -271,10 +271,8 @@ static Block *getCommonBlockInAffineScope(Operation *opA, Operation *opB) {
   Block *commonBlock = nullptr;
   // Use size_t indices to avoid mixing signed and unsigned types in arithmetic
   // on SmallVector::size() (which returns size_t).
-  for (size_t i = srcAncestorBlocks.size() - kLastIndexOffset,
-                j = dstAncestorBlocks.size() - kLastIndexOffset;
-       i < srcAncestorBlocks.size() && j < dstAncestorBlocks.size() &&
-           srcAncestorBlocks[i] == dstAncestorBlocks[j];
+  for (size_t i = srcAncestorBlocks.size() - kLastIndexOffset, j = dstAncestorBlocks.size() - kLastIndexOffset;
+       i < srcAncestorBlocks.size() && j < dstAncestorBlocks.size() && srcAncestorBlocks[i] == dstAncestorBlocks[j];
        i--, j--) {
     commonBlock = srcAncestorBlocks[i];
   }
@@ -826,34 +824,6 @@ static unsigned findOrInsertDimOperand(SmallVector<Value, kSmallVectorSizeFour> 
   return idx;
 }
 
-// Undo dependence-driven slice tightening that comes from an inner affine.if gating
-// the source op. getOpIndexSet folds every enclosing AffineIfOp's set into the source
-// access domain, so when the producer store is wrapped in e.g. `affine.if (-d0 >= 0)(%arg8)`
-// the slice IV for %arg8 gets pinned to a single point. That is correct for the specific
-// dependence pair, but fuseLoops clones only the slice and erases the producer nest —
-// so any sibling work in that loop body OUTSIDE the gating if (e.g. an unconditional load/
-// store on a separate memref) is silently dropped at the non-pinned iterations.
-// For each slice level whose IV is constrained by a gating AffineIfOp on src's parent
-// chain, this checks the enclosing producer loop's body for ops that (a) are not on src's
-// path and (b) are not nested under any of those gating ifs. If such "outside-the-gating"
-// work exists, the slice level is reset to the loop's full constant domain so the cloned
-// body preserves all original producer iterations.
-static void collectGatingIfsAndIVs(Operation *src, SmallPtrSet<Operation *, kSmallVectorSizeFour> &gatingIfs,
-                                   DenseSet<Value> &gatedIVs) {
-  for (Operation *p = src->getParentOp(); p != nullptr; p = p->getParentOp()) {
-    auto ifOp = dyn_cast<AffineIfOp>(p);
-    if (!ifOp) {
-      continue;
-    }
-    gatingIfs.insert(p);
-    for (Value operand : ifOp->getOperands()) {
-      if (getForInductionVarOwner(operand)) {
-        gatedIVs.insert(operand);
-      }
-    }
-  }
-}
-
 static bool sliceLevelAlreadyAtFullRange(const ComputationSliceState &slice, unsigned k, int64_t loopLb,
                                          int64_t loopUb) {
   AffineMap lbMap = slice.lbs[k];
@@ -866,62 +836,127 @@ static bool sliceLevelAlreadyAtFullRange(const ComputationSliceState &slice, uns
   return lbC && ubC && lbC.getValue() == loopLb && ubC.getValue() == loopUb;
 }
 
-static bool buildPathToLoop(Operation *src, AffineForOp loop, SmallPtrSet<Operation *, kSmallVectorSizeEight> &onPath) {
-  for (Operation *p = src; p != nullptr; p = p->getParentOp()) {
-    onPath.insert(p);
-    if (p == loop.getOperation()) {
-      return true;
-    }
-  }
-  return false;
+// Reset slice level k's bounds back to the producer loop's full constant [lb, ub) domain
+// and drop all bound operands. Caller must have verified that `loop` has constant lb/ub.
+// Shared by the expand* helpers that recover over-tightened slice levels.
+static void resetSliceLevelToFullDomain(ComputationSliceState &slice, unsigned k, AffineForOp loop) {
+  MLIRContext *ctx = loop->getContext();
+  int64_t lb = loop.getConstantLowerBound();
+  int64_t ub = loop.getConstantUpperBound();
+  slice.lbs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(lb, ctx));
+  slice.ubs[k] = AffineMap::get(/*dimCount=*/0, /*symbolCount=*/0, getAffineConstantExpr(ub, ctx));
+  slice.lbOperands[k].clear();
+  slice.ubOperands[k].clear();
 }
 
-static bool loopBodyHasWorkOutsideGating(Operation *loopOp,
-                                         const SmallPtrSet<Operation *, kSmallVectorSizeEight> &onPath,
-                                         const SmallPtrSet<Operation *, kSmallVectorSizeFour> &gatingIfs) {
-  bool hasOutsideWork = false;
-  loopOp->walk([&hasOutsideWork, loopOp, &onPath, &gatingIfs](Operation *op) {
-    if (op == loopOp) {
-      return WalkResult::advance();
-    }
-    if (onPath.contains(op)) {
-      return WalkResult::advance();
-    }
-    if (op->hasTrait<OpTrait::IsTerminator>()) {
-      return WalkResult::advance();
-    }
-    for (Operation *gif : gatingIfs) {
-      if (gif->isAncestor(op)) {
-        return WalkResult::advance();
-      }
-    }
-    hasOutsideWork = true;
-    return WalkResult::interrupt();
-  });
-  return hasOutsideWork;
+// Match `dim mod c` at the top of an affine expression. Returns dim position
+// and modulus on success.
+static bool matchDimModConst(AffineExpr e, unsigned &dimPos, int64_t &modulus) {
+  auto bin = dyn_cast<AffineBinaryOpExpr>(e);
+  if (!bin || bin.getKind() != AffineExprKind::Mod) return false;
+  auto dim = dyn_cast<AffineDimExpr>(bin.getLHS());
+  auto rhs = dyn_cast<AffineConstantExpr>(bin.getRHS());
+  if (!dim || !rhs || rhs.getValue() <= 1) return false;
+  dimPos = dim.getPosition();
+  modulus = rhs.getValue();
+  return true;
 }
 
-static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsigned numSliceLoopIVs,
-                                              ArrayRef<Operation *> opsA) {
-  if (opsA.empty()) {
-    return;
-  }
-  Operation *src = opsA.front();
+// A slice bound of the form `lb = d mod c, ub = d mod c + 1` looks like a
+// single-iteration slice, but across the partner loop's full range the union
+// of `d mod c` covers [0, c). If the producer's domain is exactly [0, c) and
+// the partner loop sweeps ≥ c with unit step, the slice is over-tightened and
+// fuseLoops drops the producer for-loop. Reset such a level to the producer's
+// full domain; extra writes go to unread cells and are idempotent.
+static bool partnerLoopCoversModRange(ComputationSliceState &slice, unsigned k, AffineMap lbMap, unsigned dimPos,
+                                      int64_t modulus) {
+  if (dimPos >= lbMap.getNumDims() || dimPos >= slice.lbOperands[k].size()) return false;
+  Value partnerIV = slice.lbOperands[k][dimPos];
+  AffineForOp partnerLoop = getForInductionVarOwner(partnerIV);
+  if (!partnerLoop || !partnerLoop.hasConstantLowerBound() || !partnerLoop.hasConstantUpperBound()) return false;
+  if (partnerLoop.getStepAsInt() != 1) return false;
+  int64_t partnerLen = partnerLoop.getConstantUpperBound() - partnerLoop.getConstantLowerBound();
+  return partnerLen >= modulus;
+}
 
-  SmallPtrSet<Operation *, kSmallVectorSizeFour> gatingIfs;
-  DenseSet<Value> gatedIVs;
-  collectGatingIfsAndIVs(src, gatingIfs, gatedIVs);
-  if (gatingIfs.empty() || gatedIVs.empty()) {
-    return;
+static AffineForOp getLoopToExpandSliceLevel(ComputationSliceState &slice, unsigned k) {
+  AffineMap lbMap = slice.lbs[k];
+  AffineMap ubMap = slice.ubs[k];
+  if (!lbMap || !ubMap || lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) return AffineForOp();
+
+  AffineForOp loop = getForInductionVarOwner(slice.ivs[k]);
+  if (!loop || !loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) return AffineForOp();
+  if (loop.getStepAsInt() != 1) return AffineForOp();
+
+  AffineExpr lbExpr = lbMap.getResult(0);
+  AffineExpr diff = ubMap.getResult(0) - lbExpr;
+  auto diffC = dyn_cast<AffineConstantExpr>(diff);
+  if (!diffC || diffC.getValue() != 1) return AffineForOp();
+
+  unsigned dimPos = 0;
+  int64_t modulus = 0;
+  if (!matchDimModConst(lbExpr, dimPos, modulus)) return AffineForOp();
+
+  int64_t pLb = loop.getConstantLowerBound();
+  int64_t pUb = loop.getConstantUpperBound();
+  if (pLb != 0 || pUb != modulus) return AffineForOp();
+
+  if (!partnerLoopCoversModRange(slice, k, lbMap, dimPos, modulus)) return AffineForOp();
+
+  return loop;
+}
+
+static void expandSliceBoundsForModCoverage(ComputationSliceState &slice, unsigned numSliceLoopIVs) {
+  for (unsigned k = 0; k < numSliceLoopIVs; ++k) {
+    AffineForOp loop = getLoopToExpandSliceLevel(slice, k);
+    if (!loop) continue;
+    resetSliceLevelToFullDomain(slice, k, loop);
   }
+}
+
+// Slice levels whose lb/ub bind a partner IV deeper than the requested fusion depth
+// would produce invalid fused IR: the slice gets inserted at
+// surroundingLoops[loopDepth-1].body, but the deeper IV is not yet in scope there,
+// so the cloned producer body references an undeclared SSA value. Reset such levels
+// to the producer's full constant domain so they survive as inner for-loops in the
+// fused nest instead of being inlined against an out-of-scope IV.
+//
+// Example: src writes alloc[*,*,arg4_src] for arg4_src ∈ [0,128); dst reads
+// alloc[*,*,arg4_dst*2] for arg4_dst ∈ [0,32). The producer-consumer dependence
+// pins arg4_src = arg4_dst*2, but at fusion depth 2 arg4_dst is past the insert
+// point — without this expansion, fuseLoops would inline the src body referencing
+// an undeclared arg4_dst. After expansion, src.arg4 covers its original [0,128)
+// range as an independent inner for-loop in the fused nest. Extra writes (vs. the
+// d*2 pattern) land on cells dst does not read and are idempotent — same per-outer
+// execution count as the original src.
+static void expandSliceBoundsForOutOfScopeIV(ComputationSliceState &slice, unsigned numSliceLoopIVs, unsigned loopDepth,
+                                             ArrayRef<AffineForOp> surroundingLoops) {
+  SmallPtrSet<Value, 4> inScopeIVs;
+  for (unsigned i = 0; i < loopDepth && i < surroundingLoops.size(); ++i) {
+    AffineForOp surroundingLoop = surroundingLoops[i];
+    inScopeIVs.insert(surroundingLoop.getInductionVar());
+  }
+
+  auto bindsOutOfScopeIV = [&](AffineMap m, ArrayRef<Value> operands) -> bool {
+    if (!m) return false;
+    unsigned numDims = m.getNumDims();
+    for (unsigned d = 0; d < numDims && d < operands.size(); ++d) {
+      if (!m.isFunctionOfDim(d)) continue;
+      Value v = operands[d];
+      if (!getForInductionVarOwner(v)) continue;
+      if (!inScopeIVs.contains(v)) return true;
+    }
+    return false;
+  };
 
   for (unsigned k = 0; k < numSliceLoopIVs; ++k) {
-    if (!gatedIVs.contains(slice.ivs[k])) {
+    AffineForOp loop = getForInductionVarOwner(slice.ivs[k]);
+    if (!loop || !loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) {
       continue;
     }
 
-    AffineForOp loop = getForInductionVarOwner(slice.ivs[k]);
-    if (!loop || !loop.hasConstantLowerBound() || !loop.hasConstantUpperBound()) {
+    if (!bindsOutOfScopeIV(slice.lbs[k], slice.lbOperands[k]) &&
+        !bindsOutOfScopeIV(slice.ubs[k], slice.ubOperands[k])) {
       continue;
     }
     int64_t loopLb = loop.getConstantLowerBound();
@@ -929,24 +964,7 @@ static void expandSliceBoundsForInnerIfGating(ComputationSliceState &slice, unsi
     if (sliceLevelAlreadyAtFullRange(slice, k, loopLb, loopUb)) {
       continue;
     }
-
-    SmallPtrSet<Operation *, kSmallVectorSizeEight> onPath;
-    if (!buildPathToLoop(src, loop, onPath)) {
-      continue;
-    }
-
-    if (!loopBodyHasWorkOutsideGating(loop.getOperation(), onPath, gatingIfs)) {
-      continue;
-    }
-
-    MLIRContext *ctx = loop->getContext();
-    // dimCount = 0, symbolCount = 0: constant affine map (no dims/symbols).
-    slice.lbs[k] = AffineMap::get(kZeroDimCount, kZeroSymbolCount,
-                                  getAffineConstantExpr(loopLb, ctx));
-    slice.ubs[k] = AffineMap::get(kZeroDimCount, kZeroSymbolCount,
-                                  getAffineConstantExpr(loopUb, ctx));
-    slice.lbOperands[k].clear();
-    slice.ubOperands[k].clear();
+    resetSliceLevelToFullDomain(slice, k, loop);
   }
 }
 
@@ -1396,8 +1414,7 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
 
   // Get slice bounds from slice union constraints 'sliceUnionCst'.
   // offset: start position of slice loop IVs (kStartPos).
-  sliceUnionCst.getSliceBounds(kStartPos, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs,
-                               &sliceUnion->ubs);
+  sliceUnionCst.getSliceBounds(kStartPos, numSliceLoopIVs, opsA[0]->getContext(), &sliceUnion->lbs, &sliceUnion->ubs);
 
   // Add slice bound operands of union.
   SmallVector<Value, kSmallVectorSizeFour> sliceBoundOperands;
@@ -1412,11 +1429,16 @@ SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef
   sliceUnion->lbOperands.resize(numSliceLoopIVs, sliceBoundOperands);
   sliceUnion->ubOperands.resize(numSliceLoopIVs, sliceBoundOperands);
 
-  // Producer levels gated by an inner affine.if get pinned to a single iteration in
-  // the dependence-driven slice. If the gated loop has work outside that if (siblings of
-  // the gating chain), preserve those iterations by expanding back to the loop's full
-  // constant domain — fuseLoops would otherwise drop them when erasing the producer nest.
-  expandSliceBoundsForInnerIfGating(*sliceUnion, numSliceLoopIVs, opsA);
+  // Recover producer levels whose 1-iter parametric bound (d mod c) hides a
+  // partner-side range that actually covers [0, c) — keeps the inner for alive
+  // for downstream interchange/sinking instead of letting fuseLoops drop it.
+  expandSliceBoundsForModCoverage(*sliceUnion, numSliceLoopIVs);
+
+  // Drop bounds that reference a partner IV deeper than loopDepth — those IVs
+  // are not in scope at the insert point and would yield use-before-def in the
+  // cloned producer body. Runs before alignSliceWithPartnerLoops so outer levels
+  // that get reset here can be re-tightened to in-scope partner IVs by align.
+  expandSliceBoundsForOutOfScopeIV(*sliceUnion, numSliceLoopIVs, loopDepth, surroundingLoops);
 
   // Outer-level structural alignment runs before insertPoint selection so
   // sliceHasInnerFor sees the post-alignment lbs/ubs.
