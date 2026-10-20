@@ -128,7 +128,7 @@ struct FusionPlan {
   FuseEdge fusedGroup{FuseEdge(0, 0)};
   FuseEdge fusedBand{FuseEdge(0, 0)};
 
-  DependenceInfo depInfo;
+  std::vector<DependenceInfo> depInfo;
   std::string fusionType{"H"};
   LoopTransform loopTransform{LoopTransform::Merge};
 };

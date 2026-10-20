@@ -56,20 +56,17 @@ void FoldMemRefSubViewOnlyPass::runOnOperation() {
   memref::populateFoldMemRefAliasOpPatterns(patterns);
   FrozenRewritePatternSet frozen(std::move(patterns));
 
-  // Starting from every memref.subview, walk forward through collapse_shape /
-  // expand_shape (and subview) chains. The subview itself, intermediate
-  // reshapes, and the final non-reshape consumers (load/store/transfer/copy)
-  // all go into the worklist so that:
-  //   - SubViewOfSubViewFolder fires on subviews;
-  //   - Load/Store-of-SubView folders fire on the consumers;
-  //   - Load/Store-of-Collapse/ExpandShape folders fire on the same consumers
-  //     after the subview is peeled off, peeling reshapes that sit between
-  //     the subview and its consumer.
-  // Reshape chains that never touch a subview are never reached and therefore
-  // stay intact, matching the "only fold if subview is in the chain" intent.
+  // Start from every memref.subview and add only the subview itself, nested
+  // subviews, and their direct non-view users. Do not add collapse_shape or
+  // expand_shape operations: the upstream pattern set also contains folders
+  // for those operations, and running them here would fold reshapes as a side
+  // effect of folding a subview.
   llvm::SetVector<Operation *> targetSet;
-  auto isReshape = [](Operation *op) { return isa<memref::CollapseShapeOp, memref::ExpandShapeOp>(op); };
-  func.walk([&targetSet, &isReshape](memref::SubViewOp subview) {
+  auto isViewOp = [](Operation *op) {
+    return isa<memref::CastOp, memref::CollapseShapeOp, memref::ExpandShapeOp, memref::MemorySpaceCastOp,
+               memref::ReinterpretCastOp, memref::ReshapeOp, memref::SubViewOp>(op);
+  };
+  func.walk([&targetSet, &isViewOp](memref::SubViewOp subview) {
     SmallVector<Operation *> queue{subview};
     while (!queue.empty()) {
       Operation *op = queue.pop_back_val();
@@ -77,9 +74,9 @@ void FoldMemRefSubViewOnlyPass::runOnOperation() {
         continue;
       }
       for (Operation *user : op->getUsers()) {
-        if (isReshape(user) || isa<memref::SubViewOp>(user)) {
+        if (isa<memref::SubViewOp>(user)) {
           queue.push_back(user);
-        } else {
+        } else if (!isViewOp(user)) {
           targetSet.insert(user);
         }
       }
@@ -92,7 +89,9 @@ void FoldMemRefSubViewOnlyPass::runOnOperation() {
 
   SmallVector<Operation *> targets(targetSet.begin(), targetSet.end());
   GreedyRewriteConfig config;
-  config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+  // A subview folder replaces a consumer with a new operation. Keep that
+  // replacement out of this worklist so reshape folders cannot run on it.
+  config.strictMode = GreedyRewriteStrictness::ExistingOps;
   (void)applyOpPatternsAndFold(targets, frozen, config);
 }
 

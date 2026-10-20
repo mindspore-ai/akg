@@ -76,7 +76,6 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   OperatorTemplate funcOperatorType = OperatorTemplate::Default;
 
  private:
-  bool areNonOverlappingSubviewStores(unsigned nodeIdA, unsigned nodeIdB);
   void collectLoadNodeIdsAndNonForNodes(
     Value memref, const llvm::SetVector<unsigned> &nodeIds, llvm::SmallVector<unsigned> &loadNodeIds,
     llvm::SmallVector<std::pair<unsigned, bool>, kSmallVectorSizeSixteen> &nonForNodesWithStore,
@@ -111,88 +110,6 @@ struct FusionAccessInfo {
   llvm::SmallVector<Operation *, kSmallVectorSizeFour> dstAccesses;
 };
 
-// Guard condition applied to cloned operations during subview fusion.
-struct FusionGuard {
-  // ExtraDimEqLB: secondary has fewer loops;
-  // cloned ops execute only when the extra dimension's IV equals its lower bound (boundValue - IV >= 0).
-
-  // SmallerUB: same loop count, one dimension has a smaller upper bound;
-  // cloned ops execute only when IV < boundValue (boundValue-1-IV >= 0).
-  enum class Kind { None, ExtraDimEqLB, SmallerUB };
-  Kind kind = Kind::None;
-  // Which primary loop dimension to guard on.
-  unsigned dimPos = 0;
-  // LB for ExtraDimEqLB, UB for SmallerUB.
-  int64_t boundValue = 0;
-  // Subview offset in the guarded dimension.  When non-zero the guard becomes
-  // "primaryIV >= offset" and the secondary IV is shifted by this offset
-  // (secondaryIV = primaryIV - offset).
-  int64_t offset = 0;
-
-  bool isNeeded() const { return kind != Kind::None; }
-
-  // Builds an IntegerSet encoding the guard condition over a single dimension.
-  // When offset != 0, the condition becomes "d0 - offset >= 0".
-  IntegerSet buildCondSet(MLIRContext *ctx) const;
-};
-
-struct SubviewFusionPlan {
-  FusionLoopNestInfo *srcInfo;
-  FusionLoopNestInfo *dstInfo;
-  // true when the src side provides the loop structure (kept)
-  bool srcIsPrimary;
-  // dimMap[i] maps secondary loop i → primary loop dimMap[i] for IV alignment
-  llvm::SmallVector<int, kSmallVectorSizeFour> dimMap;
-  // optional condition wrapping the cloned operations
-  FusionGuard guard;
-
-  FusionLoopNestInfo *primaryInfo() const { return srcIsPrimary ? srcInfo : dstInfo; }
-  FusionLoopNestInfo *secondaryInfo() const { return srcIsPrimary ? dstInfo : srcInfo; }
-};
-
-using CloneStage = llvm::SmallVector<Operation *, kSmallVectorSizeEight>;
-struct SubviewFusionHelper {
-  // Attempts subview fusion between src and dst loop nests.
-  // srcRank/dstRank: memref ranks of the dependency accesses (-1 → falls back to loop depth).
-  // Returns the fusion plan if fusion was performed, nullopt otherwise.
-  std::optional<SubviewFusionPlan> tryFuse(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
-                                           int dstRank);
-
- private:
-  // Builds a fusion plan into this->plan. Returns true on success.
-  // Dispatches to buildExtraDimPlan or buildSameRankPlan.
-  bool buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank, int dstRank);
-
-  // Handles ranks differing by exactly one (one nest has an extra loop dimension).
-  bool buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank, int dstRank);
-
-  // Handles same-rank case: all bounds match (trivial) or exactly one UB differs.
-  bool buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
-
-  // Handles same-depth case with permuted dimensions: tries all non-identity
-  // permutations to find a mapping where bounds align (at most one UB mismatch).
-  bool buildPermutedPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
-
-  // Collects clone stages from the secondary side's loop body.
-  // Perfect nest → 1 stage; imperfect nest → one stage per level from perfectDepth-1.
-  llvm::SmallVector<CloneStage> collectCloneStages(const FusionLoopNestInfo &info);
-
-  // Builds IV mapping (with optional subview-offset shift) and emits all clone
-  // stages into the primary side's innermost body with an optional guard.
-  void emitCloneStages(const llvm::SmallVector<CloneStage> &stages);
-
-  // Detects the subview static offset in the guarded dimension by walking
-  // secondary loop accesses. Returns 0 when no subview offset applies.
-  // secondaryGuardDim: the secondary loop dimension that maps to the guarded primary dimension.
-  int64_t detectGuardDimSubviewOffset(unsigned secondaryGuardDim);
-
-  // When offset + secondaryUB > primaryUB, expands the primary loop's upper
-  // bound and wraps its existing body in an affine.if guard to prevent OOB.
-  void expandPrimaryLoopForOffset();
-
-  SubviewFusionPlan plan;
-};
-
 struct FusionCodeGenHelper {
  public:
   explicit FusionCodeGenHelper(MemRefDependenceGraphForFusion &mdg) : mdg(mdg) {}
@@ -211,15 +128,19 @@ struct FusionCodeGenHelper {
   // accessInfo: pre-collected accesses in true src/dst order; srcDstReversed swaps references internally.
   unsigned findMaxLegalFusionDepth(
     const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
-    llvm::SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> &depthSliceUnions, const FusionPlan &plan,
-    FusionAccessInfo &accessInfo, bool srcDstReversed = false);
+    llvm::SmallVector<affine::ComputationSliceState, kSmallVectorSizeEight> &depthSliceUnions,
+    const FusionPlan &plan, const DependenceInfo &depInfo, FusionAccessInfo &accessInfo,
+    bool srcDstReversed = false);
+
+  // Selects the most appropriate DependenceInfo from plan.depInfo for the fusion:
+  // the one whose memref appears latest (last access) in srcAffineForOp, so the fused
+  // slice is placed closest to the producer of the dependency.
+  const DependenceInfo *selectDepInfo(const FusionPlan &plan,
+                                       affine::AffineForOp srcAffineForOp) const;
 
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, kSmallVectorSizeFour> &strategyOpsA);
 
-  bool trySubviewFuse(unsigned srcGroupId, unsigned dstGroupId, const FusionAccessInfo &accessInfo,
-                      FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, const FusionPlan &plan);
-  affine::FusionStrategy getFusionStrategy(const FusionPlan &plan) const;
   void applySliceFusion(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
                         FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, bool keepSrcDst,
                         affine::ComputationSliceState &bestSlice, const FusionAccessInfo &accessInfo,
@@ -231,7 +152,6 @@ struct FusionCodeGenHelper {
 
   MemRefDependenceGraphForFusion &mdg;
   std::unordered_map<unsigned, unsigned> nodeAlias;
-  SubviewFusionHelper subviewHelper;
 };
 
 }  // namespace akg
