@@ -19,14 +19,14 @@
 
 include "mlir/Pass/PassBase.td"
 
-
 //===----------------------------------------------------------------------===//
 // TosaToLinalgUpdate
 //===----------------------------------------------------------------------===//
 
 def TosaMultiReduceToLinalg : Pass<"tosa-multi-reduce-to-linalg", "func::FuncOp"> {
   let summary = "Convert multi tosa.reduce to one linalg.reduce if is possible.";
-  let description = [{
+  let description =
+    [{
     Pass that converts multi tosa.reduce to one linalg.reduce. Use this pass to enable
     multi-dims reduction.
   }];
@@ -48,7 +48,8 @@ def ConvertFusionToMemVec : Pass<"lower-fusion"> {
 
 def VectorTransferLower : Pass<"vector-transfer-lower"> {
   let summary = "VectorTransferLower";
-  let description = [{
+  let description =
+    [{
     Pass that converts vector transfer read/write to vector load/store.
   }];
   let constructor = "mlir::createVectorTransferLowerPass()";
@@ -60,7 +61,8 @@ def VectorTransferLower : Pass<"vector-transfer-lower"> {
 
 def ConvertMindSporeToTosa : Pass<"convert-mindspore-to-tosa", "func::FuncOp"> {
   let summary = "Convert MindSpore ops to TOSA ops";
-  let description = [{
+  let description =
+    [{
     This pass assumes that TOSA ops are responsible for emitting error
     guards in case of shape mismatches.
   }];
@@ -72,7 +74,8 @@ def ConvertMindSporeToTosa : Pass<"convert-mindspore-to-tosa", "func::FuncOp"> {
 //===----------------------------------------------------------------------===//
 def ConvertMindSporeToLinalg : Pass<"convert-mindspore-to-linalg", "func::FuncOp"> {
   let summary = "Convert MindSpore ops to Linalg ops";
-  let description = [{
+  let description =
+    [{
     ...
   }];
   let constructor = "mlir::createMindSporeToLinalgPass()";
@@ -83,7 +86,8 @@ def ConvertMindSporeToLinalg : Pass<"convert-mindspore-to-linalg", "func::FuncOp
 //===----------------------------------------------------------------------===//
 def ConvertMindSporeToLinalgNamed : Pass<"convert-mindspore-to-linalg-named", "func::FuncOp"> {
   let summary = "Convert MindSpore ops to Linalg named ops";
-  let description = [{
+  let description =
+    [{
     ...
   }];
   let constructor = "mlir::createMindSporeToLinalgNamedPass()";
@@ -94,7 +98,8 @@ def ConvertMindSporeToLinalgNamed : Pass<"convert-mindspore-to-linalg-named", "f
 //===----------------------------------------------------------------------===//
 def ConvertArithToLinalg : Pass<"convert-arith-to-linalg", "func::FuncOp"> {
   let summary = "Convert Arith ops to Linalg ops";
-  let description = [{
+  let description =
+    [{
     Pass that converts element-wise arithmetic and math operations from the Arith and Math dialects
     to equivalent generic operations in the Linalg dialect.
   }];
@@ -106,7 +111,8 @@ def ConvertArithToLinalg : Pass<"convert-arith-to-linalg", "func::FuncOp"> {
 //===----------------------------------------------------------------------===//
 def ConvertArithToHIVM : Pass<"convert-arith-to-hivm", "func::FuncOp"> {
   let summary = "Convert arith ops to HIVM ops";
-  let description = [{
+  let description =
+    [{
     Pass that converts element-wise arithmetic operations from the Arith dialect
     to equivalent operations in the HIVM dialect to enable further lowering.
   }];
@@ -118,7 +124,8 @@ def ConvertArithToHIVM : Pass<"convert-arith-to-hivm", "func::FuncOp"> {
 //===----------------------------------------------------------------------===//
 def MindSporeFinalizingLower : Pass<"mindspore-finalizing-lower", "func::FuncOp"> {
   let summary = "Convert MindSpore ops to Linalg ops";
-  let description = [{
+  let description =
+    [{
     ...
   }];
   let constructor = "mlir::createMindSporeFinalizingLowerPass()";
@@ -130,15 +137,14 @@ def MindSporeFinalizingLower : Pass<"mindspore-finalizing-lower", "func::FuncOp"
 
 def LinalgExtLower : Pass<"linalg-ext-lower", "func::FuncOp"> {
   let summary = "LinalgExtLower";
-  let description = [{
+  let description =
+    [{
     Pass that converts LinalgExt operations to the equivalent operations using the
     operations in Affine Dialect.
   }];
   let constructor = "mlir::createLinalgExtLowerPass()";
-  let options = [
-    Option<"vectorSize", "virtual-vector-size", "int64_t", /*default=*/"8",
-               "Specify a vector size for vectorization">
-  ];
+  let options = [Option<"vectorSize", "virtual-vector-size", "int64_t", /*default=*/"8",
+                        "Specify a vector size for vectorization">];
 }
 
 //===----------------------------------------------------------------------===//
@@ -146,7 +152,8 @@ def LinalgExtLower : Pass<"linalg-ext-lower", "func::FuncOp"> {
 //===----------------------------------------------------------------------===//
 def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
   let summary = "lower OpenMP dialect to LLVM dialect";
-  let description = [{
+  let description =
+    [{
     This pass only deal with openmp dialect, while MLIR's convert-openmp-to-llvm
     also converts func, arith, memref and other related dialects.
   }];
@@ -163,16 +170,13 @@ def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
 
 def ConvertAffineToSCF : Pass<"convert-affine-to-scf", "func::FuncOp"> {
   let summary = "Convert affine.for to scf.for, preserving all attributes";
-  let description = [{
+  let description =
+    [{
     This pass converts affine.for operations to scf.for operations while
     preserving all attributes from the original affine.for operation.
   }];
   let constructor = "mlir::createConvertAffineToSCFPass()";
-  let dependentDialects = [
-    "affine::AffineDialect",
-    "scf::SCFDialect",
-    "arith::ArithDialect",
-  ];
+  let dependentDialects = ["affine::AffineDialect", "scf::SCFDialect", "arith::ArithDialect", ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -181,7 +185,8 @@ def ConvertAffineToSCF : Pass<"convert-affine-to-scf", "func::FuncOp"> {
 
 def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
   let summary = "Lower NPUVector ops to MLIR community vector/arith on vector types";
-  let description = [{
+  let description =
+    [{
     After npuvector-vectorize, rewrites npuvector.transfer_read/write, reduction, broadcast,
     transpose, and npuvector elementwise cast/cmp ops to vector.transfer_* and arith.*; refreshes
     arith that still use npuvector-typed results.
@@ -193,12 +198,27 @@ def NPUVectorToVector : Pass<"npuvector-to-vector", "mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// ConvertLinalgToPypto
+//===----------------------------------------------------------------------===//
+
+def ConvertLinalgToPypto : Pass<"convert-linalg-to-pypto", "mlir::ModuleOp"> {
+  let summary = "Convert Linalg operations to typed PyPTO operations";
+  let description =
+    [{
+    Provides extensible lowering patterns from Linalg operations to their
+    corresponding typed PyPTO operations, preserving operation semantics.
+  }];
+  let constructor = "mlir::createLinalgToPyptoConversionPass()";
+}
+
+//===----------------------------------------------------------------------===//
 // ConvertVectorToPypto
 //===----------------------------------------------------------------------===//
 
 def ConvertVectorToPypto : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
   let summary = "Convert tile-level vector computations to pypto tile ops";
-  let description = [{
+  let description =
+    [{
     Pass that rewrites tile-level operations from the NPUVector, Vector, Arith,
     Math and MemRef dialects into typed `pypto` ops that keep the source
     result types, so the intermediate PyPTO layer stays visible in the IR.
@@ -220,7 +240,8 @@ def ConvertVectorToPypto : Pass<"convert-vector-to-pypto", "func::FuncOp"> {
 
 def ConvertPyptoToEmitPy : Pass<"convert-pypto-to-emitpy", "func::FuncOp"> {
   let summary = "Convert pypto tile ops to EmitPy (PyPTO) opaque calls";
-  let description = [{
+  let description =
+    [{
     Pass that lowers the typed `pypto` tile layer (`!pypto.tile` types and
     `pypto.load`/`pypto.store`) into `emitpy.call_opaque` operations whose
     callees are PyPTO runtime functions. Tile types become opaque PyPTO

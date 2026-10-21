@@ -16,7 +16,9 @@
 
 #include "akg/Conversion/PyptoToEmitPy/PyptoToEmitPy.h"
 
+#include <algorithm>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -381,6 +383,160 @@ class OpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
   StringRef callee;
 };
 
+/// Bound GM-to-L1 windows; PyPTO retains responsibility for L0 tiling.
+class MatmulEmitter {
+ public:
+  MatmulEmitter(ConversionPatternRewriter &rewriter, pypto::MatmulOp op)
+      : rewriter(rewriter),
+        loc(op.getLoc()),
+        outputType(op.getResult().getType()),
+        lhsType(op.getLhs().getType()),
+        rhsType(op.getRhs().getType()) {}
+
+  Value emit(Value lhs, Value rhs, Value init) {
+    Value output =
+      call("pl.create_tensor", outputType, {},
+           {opaque(shapeToPythonListText(outputType.getShape())), opaque(*resultDtypeName(outputType))}, {"", "dtype"});
+    auto rows = loop(0, outputType.getDimSize(0), true);
+    Value m = rows.getBody().front().getArgument(0);
+    auto columns = loop(0, outputType.getDimSize(1), true);
+    Value n = columns.getBody().front().getArgument(0);
+    auto scope = rewriter.create<emitpy::WithOp>(loc, "pl.at(level=pl.Level.CORE_GROUP)");
+    rewriter.createBlock(&scope.getBody());
+    emitBlock(output, lhs, rhs, init, m, n);
+    rewriter.setInsertionPointAfter(rows);
+    return output;
+  }
+
+ private:
+  static constexpr int64_t kTile = 64;
+  ConversionPatternRewriter &rewriter;
+  Location loc;
+  RankedTensorType outputType, lhsType, rhsType;
+
+  Attribute opaque(StringRef text) { return rewriter.getAttr<emitpy::OpaqueAttr>(text); }
+
+  Value integer(int64_t value) {
+    return rewriter.create<emitpy::LiteralOp>(loc, rewriter.getIndexType(), std::to_string(value));
+  }
+
+  RankedTensorType blockType(Type element) { return RankedTensorType::get({kTile, kTile}, element); }
+
+  Value call(StringRef callee, Type type, ValueRange operands, ArrayRef<Attribute> args = {},
+             ArrayRef<StringRef> keywords = {}) {
+    SmallVector<Attribute> names;
+    std::transform(keywords.begin(), keywords.end(), std::back_inserter(names),
+                   [&](StringRef keyword) { return rewriter.getStringAttr(keyword); });
+    return rewriter
+      .create<emitpy::CallOpaqueOp>(loc, type, callee, operands,
+                                    args.empty() ? ArrayAttr() : rewriter.getArrayAttr(args),
+                                    names.empty() ? ArrayAttr() : rewriter.getArrayAttr(names))
+      .getResult(0);
+  }
+
+  emitpy::ForOp loop(int64_t lower, int64_t upper, bool parallel = false) {
+    auto result = rewriter.create<emitpy::ForOp>(loc, integer(lower), integer(upper), integer(kTile),
+                                                 parallel ? rewriter.getUnitAttr() : UnitAttr());
+    rewriter.createBlock(&result.getBody(), {}, {rewriter.getIndexType()}, {loc});
+    return result;
+  }
+
+  Value paddedLoad(Value source, RankedTensorType type, Value row, Value column) {
+    auto window = blockType(type.getElementType());
+    SmallVector<Value> operands{source};
+    Attribute offsets = buildOffsetsArg(rewriter, ValueRange{row, column}, operands);
+    Value block = call("pl.slice", window, operands,
+                       {rewriter.getIndexAttr(0), opaque("[64, 64]"), offsets, opaque("0"), opaque("True")},
+                       {"", "", "", "pad_value", "clamp"});
+    // Expansion initializes padded K positions and makes them valid for the Cube.
+    return call("pl.fillpad_expand", window, block, {rewriter.getIndexAttr(0), opaque("[64, 64]")}, {"", ""});
+  }
+
+  Value load(Value source, RankedTensorType type, Value row, Value column) {
+    if (type.getDimSize(0) % kTile == 0 && type.getDimSize(1) % kTile == 0) {
+      return rewriter.create<emitpy::TensorSliceOp>(loc, blockType(type.getElementType()), source,
+                                                    ValueRange{row, column});
+    }
+    return paddedLoad(source, type, row, column);
+  }
+
+  Value castTo(Value source, Type element) {
+    if (cast<RankedTensorType>(source.getType()).getElementType() == element) return source;
+    auto type = RankedTensorType::get(cast<RankedTensorType>(source.getType()).getShape(), element);
+    return call("pl.cast", type, source,
+                {rewriter.getIndexAttr(0), opaque(*resultDtypeName(type)), rewriter.getStringAttr("rint")},
+                {"", "", "mode"});
+  }
+
+  Value validExtent(int64_t size, Value offset) {
+    if (size <= kTile || size % kTile == 0) return integer(std::min(size, kTile));
+    Value remaining = call("subi", rewriter.getIndexType(), {integer(size), offset});
+    return call("pl.min", rewriter.getIndexType(), {integer(kTile), remaining});
+  }
+
+  Value finish(Value accumulator, Value init, Value m, Value n) {
+    if (init) {
+      Value initial = load(init, outputType, m, n);
+      initial = castTo(initial, cast<RankedTensorType>(accumulator.getType()).getElementType());
+      accumulator = call("pl.add", accumulator.getType(), {accumulator, initial});
+    }
+    Value result = castTo(accumulator, outputType.getElementType());
+    if (outputType.getDimSize(0) % kTile == 0 && outputType.getDimSize(1) % kTile == 0) return result;
+    if (result == accumulator && !init) {
+      // Materialize a local Vec tile before changing a loop result's valid shape.
+      result = call("pl.add", result.getType(), result, {rewriter.getIndexAttr(0), opaque("0")}, {"", ""});
+    }
+    return call("pl.set_validshape", result.getType(),
+                {result, validExtent(outputType.getDimSize(0), m), validExtent(outputType.getDimSize(1), n)});
+  }
+
+  void emitBlock(Value output, Value lhs, Value rhs, Value init, Value m, Value n) {
+    Type element =
+      isa<FloatType>(outputType.getElementType()) ? Type(rewriter.getF32Type()) : Type(rewriter.getI32Type());
+    auto type = blockType(element);
+    Value firstA = load(lhs, lhsType, m, integer(0));
+    Value firstB = load(rhs, rhsType, integer(0), n);
+    Value accumulator =
+      call("pl.matmul", type, {firstA, firstB},
+           {rewriter.getIndexAttr(0), rewriter.getIndexAttr(1), opaque(*resultDtypeName(type))}, {"", "", "out_dtype"});
+    if (lhsType.getDimSize(1) > kTile) {
+      auto reduction = loop(kTile, lhsType.getDimSize(1));
+      Value k = reduction.getBody().front().getArgument(0);
+      Value a = load(lhs, lhsType, m, k);
+      Value b = load(rhs, rhsType, k, n);
+      Value next = call("pl.matmul_acc", type, {accumulator, a, b});
+      rewriter.create<emitpy::AssignOp>(loc, accumulator, next);
+      rewriter.setInsertionPointAfter(reduction);
+    }
+    Value result = finish(accumulator, init, m, n);
+    Value target =
+      rewriter.create<emitpy::TensorSliceOp>(loc, blockType(outputType.getElementType()), output, ValueRange{m, n});
+    rewriter.create<emitpy::AssignOp>(loc, target, result);
+  }
+};
+
+class MatmulOpPattern : public OpConversionPattern<pypto::MatmulOp> {
+ public:
+  using OpConversionPattern<pypto::MatmulOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(pypto::MatmulOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto lhs = op.getLhs().getType(), rhs = op.getRhs().getType(), type = op.getResult().getType();
+    if (lhs.getRank() != 2 || rhs.getRank() != 2 || type.getRank() != 2 || !lhs.hasStaticShape() ||
+        !rhs.hasStaticShape() || !type.hasStaticShape()) {
+      return rewriter.notifyMatchFailure(op, "matmul tiling requires static 2D tensors");
+    }
+    if (!resultDtypeName(type)) return rewriter.notifyMatchFailure(op, "matmul result has no PyPTO dtype");
+    if (lhs.getDimSize(0) <= 0 || lhs.getDimSize(1) <= 0 || rhs.getDimSize(1) <= 0) {
+      return rewriter.notifyMatchFailure(op, "matmul tiling requires positive dimensions");
+    }
+    MatmulEmitter emitter(rewriter, op);
+    Value result = emitter.emit(adaptor.getLhs(), adaptor.getRhs(), adaptor.getAccumulator());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// Rewrites `pypto.select` into `pl.tile.select`: the runtime's composite
 /// synthesizes the architecture-defined scratch tile, so no scratch is
 /// materialized here and dynamic result shapes are legal. A constant
@@ -600,8 +756,8 @@ class RangeOpPattern : public OpConversionPattern<pypto::RangeOp> {
 
   LogicalResult matchAndRewrite(pypto::RangeOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    auto loop =
-      rewriter.create<emitpy::ForOp>(op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(), adaptor.getStep());
+    auto loop = rewriter.create<emitpy::ForOp>(op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(),
+                                               adaptor.getStep(), UnitAttr());
     rewriter.inlineRegionBefore(op.getBody(), loop.getBody(), loop.getBody().end());
     rewriter.replaceOp(op, loop);
     return success();
@@ -1298,7 +1454,8 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
     populateReturnOpTypeConversionPattern(patterns, typeConverter);
     patterns.add<ConstantOpPattern, TileFullOpPattern, CreateTileOpPattern, SliceOpPattern, ReshapeOpPattern,
                  TransposeOpPattern, ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern, ReductionOpPattern,
-                 ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern>(typeConverter, patterns.getContext());
+                 ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern, MatmulOpPattern>(typeConverter,
+                                                                                                patterns.getContext());
     patterns.add<IndexConstantOpPattern, SpmdOpPattern, RangeOpPattern>(typeConverter, patterns.getContext());
     // Scalar comparisons kept by stage one lower onto the eq/ne/lt/le/gt/ge
     // pseudo-callees (`pl.cmp` has no scalar overload).

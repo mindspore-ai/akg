@@ -29,7 +29,8 @@ include "mlir/IR/SymbolInterfaces.td"
 
 def EmitPy_CallOpaqueOp : EmitPy_Op<"call_opaque", [PyExpressionInterface]> {
   let summary = "Opaque call operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.call_opaque` operation represents a Python function call. The callee
     can be an arbitrary non-empty string.
 
@@ -40,26 +41,18 @@ def EmitPy_CallOpaqueOp : EmitPy_Op<"call_opaque", [PyExpressionInterface]> {
     ```
   }];
 
-  let arguments = (ins
-    Arg<StrAttr, "the Python function to call">:$callee,
-    Arg<OptionalAttr<ArrayAttr>, "the order of operands and further attributes">:$args,
-    Variadic<AnyType>:$operands,
-    Arg<OptionalAttr<StrArrayAttr>>:$keyword_args
-  );
+  let arguments = (ins Arg<StrAttr, "the Python function to call">:$callee,
+    Arg<OptionalAttr<ArrayAttr>, "the order of operands and further attributes">:$args, Variadic<AnyType>:$operands,
+    Arg<OptionalAttr<StrArrayAttr>>:$keyword_args);
 
   let results = (outs Variadic<AnyType>);
 
-  let builders = [
-    OpBuilder<(ins
-      "::mlir::TypeRange":$result_types,
-      "::llvm::StringRef":$callee,
-      "::mlir::ValueRange":$operands,
-      CArg<"::mlir::ArrayAttr", "{}">:$args,
-      CArg<"::mlir::ArrayAttr", "{}">:$keyword_args), [{
+  let builders = [OpBuilder<(ins "::mlir::TypeRange":$result_types, "::llvm::StringRef":$callee,
+                              "::mlir::ValueRange":$operands, CArg<"::mlir::ArrayAttr", "{}">:$args,
+                              CArg<"::mlir::ArrayAttr", "{}">:$keyword_args),
+                            [{
         build($_builder, $_state, result_types, callee, args, operands, keyword_args);
-      }]
-    >
-  ];
+      }]>];
 
   let hasVerifier = 1;
   let assemblyFormat = [{$callee `(` $operands `)` attr-dict `:` functional-type($operands, results)}];
@@ -67,7 +60,8 @@ def EmitPy_CallOpaqueOp : EmitPy_Op<"call_opaque", [PyExpressionInterface]> {
 
 def EmitPy_ImportOp : EmitPy_Op<"import"> {
   let summary = "Import operation";
-  let description = [{
+  let description =
+    [{
      The `emitpy.import` operation allows to define a Python module import
      via various forms of the `import` statement.
 
@@ -78,13 +72,11 @@ def EmitPy_ImportOp : EmitPy_Op<"import"> {
      ```
   }];
 
-  let arguments = (ins
-    Arg<StrAttr, "module to import">:$module_name,
+  let arguments = (ins Arg<StrAttr, "module to import">:$module_name,
     Arg<OptionalAttr<StrAttr>, "module alias">:$module_alias,
     Arg<OptionalAttr<StrArrayAttr>, "specific members to import from the module">:$members_to_import,
     Arg<OptionalAttr<StrArrayAttr>, "aliases for the module or the single imported members">:$member_aliases,
-    Arg<OptionalAttr<UnitAttr>, "import all members with *">:$import_all
-  );
+    Arg<OptionalAttr<UnitAttr>, "import all members with *">:$import_all);
 
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
@@ -92,7 +84,8 @@ def EmitPy_ImportOp : EmitPy_Op<"import"> {
 
 def EmitPy_LiteralOp : EmitPy_Op<"literal", [Pure, PyExpressionInterface]> {
   let summary = "Literal operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.literal` operation produces an SSA value equal to some constant
     specified by an attribute.
 
@@ -113,7 +106,8 @@ def EmitPy_LiteralOp : EmitPy_Op<"literal", [Pure, PyExpressionInterface]> {
 
 def EmitPy_SubscriptOp : EmitPy_Op<"subscript", [Pure, PyExpressionInterface]> {
   let summary = "Subscript operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.subscript` operation represents Python subscript access.
     This is the read counterpart to `emitpy.assign`.
 
@@ -128,8 +122,7 @@ def EmitPy_SubscriptOp : EmitPy_Op<"subscript", [Pure, PyExpressionInterface]> {
     ```
   }];
 
-  let arguments = (ins
-    Arg<AnyTypeOf<[EmitPy_OpaqueType, EmitPy_DictType]>, "the container to subscript">:$container,
+  let arguments = (ins Arg<AnyTypeOf<[EmitPy_OpaqueType, EmitPy_DictType]>, "the container to subscript">:$container,
     Arg<AnyTypeOf<[Index, EmitPy_StringType]>, "index or key value">:$index);
 
   let results = (outs EmitPy_Type:$result);
@@ -138,9 +131,19 @@ def EmitPy_SubscriptOp : EmitPy_Op<"subscript", [Pure, PyExpressionInterface]> {
   let assemblyFormat = "$container `[` $index `]` attr-dict `:` functional-type(operands, results)";
 }
 
+def EmitPy_TensorSliceOp : EmitPy_Op<"tensor_slice", [Pure]> {
+  let summary = "Static tensor window, emitted as a Python subscript";
+  let description = [{The result is an inline view, also usable as an assignment target.}];
+  let arguments = (ins AnyRankedTensor:$source, Variadic<Index>:$offsets);
+  let results = (outs AnyRankedTensor:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offsets `]` attr-dict `:` functional-type(operands, results)";
+}
+
 def EmitPy_GetAttrOp : EmitPy_Op<"get_attr", [Pure, PyExpressionInterface]> {
   let summary = "Get attribute from an object";
-  let description = [{
+  let description =
+    [{
     The `emitpy.get_attr` operation represents Python attribute access
     via the dot operator.
 
@@ -151,10 +154,7 @@ def EmitPy_GetAttrOp : EmitPy_Op<"get_attr", [Pure, PyExpressionInterface]> {
     ```
   }];
 
-  let arguments = (ins
-    AnyType:$object,
-    Arg<StrAttr, "attribute name">:$attr_name
-  );
+  let arguments = (ins AnyType:$object, Arg<StrAttr, "attribute name">:$attr_name);
 
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
@@ -163,7 +163,8 @@ def EmitPy_GetAttrOp : EmitPy_Op<"get_attr", [Pure, PyExpressionInterface]> {
 
 def EmitPy_SetAttrOp : EmitPy_Op<"set_attr"> {
   let summary = "Set attribute on an object";
-  let description = [{
+  let description =
+    [{
     The `emitpy.set_attr` operation represents Python attribute assignment
     via the dot operator.
 
@@ -174,20 +175,16 @@ def EmitPy_SetAttrOp : EmitPy_Op<"set_attr"> {
     ```
   }];
 
-  let arguments = (ins
-    AnyType:$object,
-    Arg<StrAttr, "attribute name">:$attr_name,
-    AnyType:$value
-  );
+  let arguments = (ins AnyType:$object, Arg<StrAttr, "attribute name">:$attr_name, AnyType:$value);
 
   let hasVerifier = 1;
   let assemblyFormat = "$object `,` $attr_name `,` $value attr-dict `:` `(` type($object) `,` type($value) `)`";
 }
 
-def EmitPy_ClassOp : EmitPy_Op<"class", [Symbol, SymbolTable, IsolatedFromAbove,
-                                        SingleBlock, NoTerminator]> {
+def EmitPy_ClassOp : EmitPy_Op<"class", [Symbol, SymbolTable, IsolatedFromAbove, SingleBlock, NoTerminator]> {
   let summary = "Class definition";
-  let description = [{
+  let description =
+    [{
     The `emitpy.class` operation represents a Python class definition.
     It is a symbol and contains a single-region body with class members.
 
@@ -204,10 +201,7 @@ def EmitPy_ClassOp : EmitPy_Op<"class", [Symbol, SymbolTable, IsolatedFromAbove,
     ```
   }];
 
-  let arguments = (ins
-    SymbolNameAttr:$sym_name,
-    OptionalAttr<ArrayAttr>:$base_classes
-  );
+  let arguments = (ins SymbolNameAttr:$sym_name, OptionalAttr<ArrayAttr>:$base_classes);
 
   let regions = (region SizedRegion<1>:$body);
 
@@ -217,7 +211,8 @@ def EmitPy_ClassOp : EmitPy_Op<"class", [Symbol, SymbolTable, IsolatedFromAbove,
 
 def EmitPy_CreateDictOp : EmitPy_Op<"create_dict", [Pure]> {
   let summary = "Create dictionary operation";
-  let description = [{
+  let description =
+    [{
     Creates a Python dictionary with a specified name.
 
     Can be created in two ways:
@@ -235,24 +230,21 @@ def EmitPy_CreateDictOp : EmitPy_Op<"create_dict", [Pure]> {
     ```
   }];
 
-  let arguments = (ins
-    Arg<StrAttr>:$dict_name,
-    Variadic<AnyType>:$items,
-    OptionalAttr<StrAttr>:$literal_expr
-  );
+  let arguments = (ins Arg<StrAttr>:$dict_name, Variadic<AnyType>:$items, OptionalAttr<StrAttr>:$literal_expr);
 
   let results = (outs EmitPy_DictType:$result);
 
   let hasVerifier = 1;
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $dict_name (`(` $items^ `)`)? attr-dict `:` functional-type(operands, results)
   }];
 }
 
-def EmitPy_AssignOp : EmitPy_Op<"assign",
-    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def EmitPy_AssignOp : EmitPy_Op<"assign", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Assign operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.assign` operation represents Python variable assignment.
 
     For subscript assignment (e.g., `dict[5] = value`), wrap the subscript
@@ -277,10 +269,8 @@ def EmitPy_AssignOp : EmitPy_Op<"assign",
     ```
   }];
 
-  let arguments = (ins
-    Arg<EmitPy_Type, "target">:$target,
-    Arg<EmitPy_Type, "value to assign">:$value
-  );
+  let arguments = (ins Arg<AnyTypeOf<[EmitPy_Type, AnyRankedTensor]>, "target">:$target,
+    Arg<AnyTypeOf<[EmitPy_Type, AnyRankedTensor]>, "value to assign">:$value);
 
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
@@ -288,7 +278,8 @@ def EmitPy_AssignOp : EmitPy_Op<"assign",
 
 def EmitPy_IfOp : EmitPy_Op<"if", [NoTerminator]> {
   let summary = "If statement with optional else";
-  let description = [{
+  let description =
+    [{
     The `emitpy.if` operation represents a Python `if` statement with an
     optional `else` clause. The condition is a format string with `{}`
     placeholders that are replaced by the condition arguments.
@@ -308,31 +299,27 @@ def EmitPy_IfOp : EmitPy_Op<"if", [NoTerminator]> {
     ```
   }];
 
-  let arguments = (ins
-    StrAttr:$condition,
-    Variadic<AnyType>:$cond_args
-  );
+  let arguments = (ins StrAttr:$condition, Variadic<AnyType>:$cond_args);
 
-  let regions = (region
-    SizedRegion<1>:$thenRegion,
-    MaxSizedRegion<1>:$elseRegion
-  );
+  let regions = (region SizedRegion<1>:$thenRegion, MaxSizedRegion<1>:$elseRegion);
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration =
+    [{
     FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
   }];
 
   let hasVerifier = 1;
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $condition (`args` $cond_args^ `:` `(` type($cond_args) `)`)? $thenRegion
     (`else` $elseRegion^)? attr-dict
   }];
 }
 
-def EmitPy_WhileOp : EmitPy_Op<"while",
-    [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"WhileYieldOp">]> {
+def EmitPy_WhileOp : EmitPy_Op<"while", [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"WhileYieldOp">]> {
   let summary = "Loop statement";
-  let description = [{
+  let description =
+    [{
     The `emitpy.while` operation represents a Python loop.
 
     Loop-carried values stay in SSA form: `inits` seeds them, the body block
@@ -357,18 +344,15 @@ def EmitPy_WhileOp : EmitPy_Op<"while",
     ```
   }];
 
-  let arguments = (ins
-    OptionalAttr<StrAttr>:$condition,
-    Variadic<AnyType>:$cond_args,
-    Variadic<EmitPy_Type>:$inits,
-    OptionalAttr<I64Attr>:$trip_count
-  );
+  let arguments = (ins OptionalAttr<StrAttr>:$condition, Variadic<AnyType>:$cond_args, Variadic<EmitPy_Type>:$inits,
+    OptionalAttr<I64Attr>:$trip_count);
 
   let results = (outs Variadic<EmitPy_Type>:$results);
 
   let regions = (region SizedRegion<1>:$body);
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration =
+    [{
     FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
 
     /// The terminator carrying the next iteration's values. Defined out of
@@ -378,7 +362,8 @@ def EmitPy_WhileOp : EmitPy_Op<"while",
   }];
 
   let hasVerifier = 1;
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     ($condition^ (`args` $cond_args^ `:` `(` type($cond_args) `)`)?)?
     (`trip_count` $trip_count^)?
     (`inits` `(` $inits^ `:` type($inits) `)`)?
@@ -386,10 +371,10 @@ def EmitPy_WhileOp : EmitPy_Op<"while",
   }];
 }
 
-def EmitPy_WhileYieldOp : EmitPy_Op<"while_yield",
-    [Pure, ReturnLike, Terminator, HasParent<"WhileOp">]> {
+def EmitPy_WhileYieldOp : EmitPy_Op<"while_yield", [Pure, ReturnLike, Terminator, HasParent<"WhileOp">]> {
   let summary = "Loop-carried value terminator";
-  let description = [{
+  let description =
+    [{
     The `emitpy.while_yield` operation terminates an `emitpy.while` body with
     the loop-carried values the next iteration starts from. Its operand types
     match the parent's `inits`, body block arguments and results.
@@ -412,12 +397,14 @@ def EmitPy_WhileYieldOp : EmitPy_Op<"while_yield",
 
 def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
   let summary = "Counted for loop with an induction variable";
-  let description = [{
+  let description =
+    [{
     The `emitpy.for` operation represents a counted Python `for` loop. The
     three operands are the lower bound, upper bound and step; the single
     body block argument is the induction variable. Loop-carried values are
     not represented. The PyPTO emitter prints it as
-    `for <induction> in pl.range(<lower>, <upper>, <step>)`.
+    `for <induction> in pl.range(<lower>, <upper>, <step>)`, or `pl.parallel`
+    when the `parallel` attribute is present.
 
     Example (mirrors `scf.for`'s spelling; the induction variable is bound
     inline instead of through an explicit `^bb0` header):
@@ -429,7 +416,7 @@ def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
     ```
   }];
 
-  let arguments = (ins AnyType:$lower_bound, AnyType:$upper_bound, AnyType:$step);
+  let arguments = (ins AnyType:$lower_bound, AnyType:$upper_bound, AnyType:$step, OptionalAttr<UnitAttr>:$parallel);
 
   let regions = (region SizedRegion<1>:$body);
 
@@ -438,9 +425,17 @@ def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
   let hasVerifier = 1;
 }
 
+def EmitPy_WithOp : EmitPy_Op<"with", [SingleBlock, NoTerminator]> {
+  let summary = "Python context manager scope";
+  let arguments = (ins StrAttr:$expression);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$expression $body attr-dict";
+}
+
 def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
   let summary = "SPMD multi-core launch scope";
-  let description = [{
+  let description =
+    [{
     The `emitpy.spmd_scope` operation represents a PyPTO SPMD launch over
     `core_num` cores. The body executes once per core of the grid and the
     single body block argument (index type) is the executing core's block
@@ -469,7 +464,8 @@ def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
 
 def EmitPy_VerbatimOp : EmitPy_Op<"verbatim"> {
   let summary = "Verbatim operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.verbatim` operation produces no results and the value is emitted as is
     followed by a line break ('\n' character) during translation.
 
@@ -482,7 +478,8 @@ def EmitPy_VerbatimOp : EmitPy_Op<"verbatim"> {
     inject large snippets of code.
   }];
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration =
+    [{
     FailureOr<SmallVector<::mlir::emitpy::ReplacementItem>> parseFormatString();
   }];
 
@@ -497,7 +494,8 @@ def EmitPy_VerbatimOp : EmitPy_Op<"verbatim"> {
 
 def EmitPy_ConstantOp : EmitPy_Op<"constant", [ConstantLike, PyExpressionInterface]> {
   let summary = "Constant operation";
-  let description = [{
+  let description =
+    [{
     The `emitpy.constant` operation produces an SSA value equal to some constant
     specified by an attribute. This can be used to form simple integer and
     floating point constants, as well as more exotic things like tensor
@@ -512,7 +510,8 @@ def EmitPy_ConstantOp : EmitPy_Op<"constant", [ConstantLike, PyExpressionInterfa
 
 def EmitPy_GlobalOp : EmitPy_Op<"global", [Symbol]> {
   let summary = "A global variable";
-  let description = [{
+  let description =
+    [{
     The `emitpy.global` operation defines a named global variable.
 
     Example:
@@ -522,19 +521,19 @@ def EmitPy_GlobalOp : EmitPy_Op<"global", [Symbol]> {
     ```
   }];
 
-  let arguments = (ins SymbolNameAttr:$sym_name,
-                       EmitPy_OpaqueOrTypedAttr:$initial_value);
+  let arguments = (ins SymbolNameAttr:$sym_name, EmitPy_OpaqueOrTypedAttr:$initial_value);
 
   let hasVerifier = 1;
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
        $sym_name custom<EmitPyGlobalOpInitialValue>($initial_value) attr-dict
   }];
 }
 
-def EmitPy_GlobalStatementOp : EmitPy_Op<"global_statement",
-    [Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+def EmitPy_GlobalStatementOp : EmitPy_Op<"global_statement", [Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Marks a variable as global for the current function scope";
-  let description = [{
+  let description =
+    [{
     The `emitpy.global_statement` operation represents a Python `global`
     statement.
 
@@ -556,10 +555,10 @@ def EmitPy_GlobalStatementOp : EmitPy_Op<"global_statement",
   let assemblyFormat = "$name `:` type($result) attr-dict";
 }
 
-def EmitPy_AssignGlobalOp : EmitPy_Op<"assign_global",
-    [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+def EmitPy_AssignGlobalOp : EmitPy_Op<"assign_global", [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Assign a value to a global variable";
-  let description = [{
+  let description =
+    [{
     The `emitpy.assign_global` assigns the value to an existing named global variable.
 
     Example:
@@ -569,17 +568,16 @@ def EmitPy_AssignGlobalOp : EmitPy_Op<"assign_global",
     ```
   }];
 
-  let arguments = (ins FlatSymbolRefAttr:$name,
-                       AnyType:$value);
+  let arguments = (ins FlatSymbolRefAttr:$name, AnyType:$value);
 
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
-def EmitPy_YieldOp : EmitPy_Op<"yield", [Pure, ReturnLike, Terminator,
-                                          ParentOneOf<["ExpressionOp"]>]> {
+def EmitPy_YieldOp : EmitPy_Op<"yield", [Pure, ReturnLike, Terminator, ParentOneOf<["ExpressionOp"]>]> {
   let summary = "Yield operation for expression termination";
-  let description = [{
+  let description =
+    [{
     The `emitpy.yield` terminates its parent EmitPy operation's region, optionally yielding
     an SSA value. The semantics of how the values are yielded is defined by the
     parent operation.
@@ -599,11 +597,11 @@ def EmitPy_YieldOp : EmitPy_Op<"yield", [Pure, ReturnLike, Terminator,
   let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
-def EmitPy_ExpressionOp : EmitPy_Op<"expression", [
-    HasOnlyGraphRegion, IsolatedFromAbove,
-    SingleBlockImplicitTerminator<"YieldOp">]> {
+def EmitPy_ExpressionOp
+    : EmitPy_Op<"expression", [HasOnlyGraphRegion, IsolatedFromAbove, SingleBlockImplicitTerminator<"YieldOp">]> {
   let summary = "Expression operation to inline Python code";
-  let description = [{
+  let description =
+    [{
     The `emitpy.expression` operation returns a single SSA value yielded by its
     single-basic-block region. The operations inside the region must form a DAG
     (directed acyclic graph) of computations that produces a single result value.
@@ -634,12 +632,12 @@ def EmitPy_ExpressionOp : EmitPy_Op<"expression", [
     ```
   }];
 
-  let arguments = (ins Variadic<AnyType>:$operands,
-                       UnitAttr:$do_not_inline);
+  let arguments = (ins Variadic<AnyType>:$operands, UnitAttr:$do_not_inline);
   let results = (outs AnyType:$result);
   let regions = (region SizedRegion<1>:$body);
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration =
+    [{
     /// Get the body region of the expression.
     Region &getBodyRegion() { return getBody(); }
 
@@ -651,10 +649,11 @@ def EmitPy_ExpressionOp : EmitPy_Op<"expression", [
   let hasCustomAssemblyFormat = 1;
 }
 
-def EmitPy_NestedFuncReturnOp : EmitPy_Op<"nested_func_return",
-    [Pure, ReturnLike, Terminator, ParentOneOf<["NestedFuncOp"]>]> {
+def EmitPy_NestedFuncReturnOp
+    : EmitPy_Op<"nested_func_return", [Pure, ReturnLike, Terminator, ParentOneOf<["NestedFuncOp"]>]> {
   let summary = "Return operation for emitpy.nested_func";
-  let description = [{
+  let description =
+    [{
     Terminates an `emitpy.nested_func` body, emitting a Python `return`.
     Optionally returns one or more values.
   }];
@@ -667,11 +666,11 @@ def EmitPy_NestedFuncReturnOp : EmitPy_Op<"nested_func_return",
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
 }
 
-def EmitPy_NestedFuncOp : EmitPy_Op<"nested_func", [
-    AutomaticAllocationScope, IsolatedFromAbove, SingleBlock,
-    SingleBlockImplicitTerminator<"NestedFuncReturnOp">]> {
+def EmitPy_NestedFuncOp : EmitPy_Op<"nested_func", [AutomaticAllocationScope, IsolatedFromAbove, SingleBlock,
+                                                    SingleBlockImplicitTerminator<"NestedFuncReturnOp">]> {
   let summary = "Nested (local) Python function definition";
-  let description = [{
+  let description =
+    [{
     The `emitpy.nested_func` operation represents a nested Python `def` emitted
     inside another function body. Its single-block region's arguments are the
     function parameters, and `emitpy.nested_func_return` terminates it. Unlike
@@ -694,11 +693,10 @@ def EmitPy_NestedFuncOp : EmitPy_Op<"nested_func", [
   let assemblyFormat = "$sym_name $body attr-dict";
 }
 
-def EmitPy_FileOp
-    : EmitPy_Op<"file", [IsolatedFromAbove, NoRegionArguments, SymbolTable,
-                        NoTerminator]> {
+def EmitPy_FileOp : EmitPy_Op<"file", [IsolatedFromAbove, NoRegionArguments, SymbolTable, NoTerminator]> {
   let summary = "A file container operation";
-  let description = [{
+  let description =
+    [{
     A `file` represents a single Python file.
 
     If `-pypto-file-id=id` flag is used with `akg-translate`,

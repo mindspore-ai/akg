@@ -1,4 +1,5 @@
 // RUN: akg-opt %s -convert-pypto-to-emitpy | FileCheck %s
+// RUN: akg-opt %s -convert-pypto-to-emitpy | akg-translate --allow-unregistered-dialect --mlir-to-pypto | FileCheck %s --check-prefix=PYTHON
 
 // End-to-end check of the pypto -> emitpy lowering:
 //   pypto.load / pypto.store  ->  emitpy.call_opaque "pl.load" / "pl.store"
@@ -235,4 +236,113 @@ func.func @tile_read_write(%a : !pypto.tile<f32, [4, 8]>) {
   %s = pypto.read %a[1, 2] : !pypto.tile<f32, [4, 8]> -> f32
   pypto.write %a[%c0, %c3], %s : !pypto.tile<f32, [4, 8]>, f32
   return
+}
+
+// -----
+
+func.func @matmul_fp16(%a: tensor<8x16xf16>, %b: tensor<16x12xf16>) -> tensor<8x12xf16> {
+  // CHECK-LABEL: func.func @matmul_fp16(
+  // CHECK: %[[OUT:.*]] = emitpy.call_opaque "pl.create_tensor"
+  // CHECK: emitpy.with "pl.at(level=pl.Level.CORE_GROUP)"
+  // CHECK: "pl.slice"(%arg0
+  // CHECK-SAME: "pad_value", "clamp"
+  // CHECK: "pl.fillpad_expand"
+  // CHECK: "pl.matmul"
+  // CHECK-SAME: #emitpy.opaque<"pl.FP32">
+  // CHECK: "pl.cast"
+  // CHECK-SAME: #emitpy.opaque<"pl.FP16">
+  // CHECK: %[[TARGET:.*]] = emitpy.tensor_slice %[[OUT]]
+  // CHECK: emitpy.assign %[[TARGET]]
+  // CHECK: return %[[OUT]]
+  %r = pypto.matmul %a, %b : (tensor<8x16xf16>, tensor<16x12xf16>) -> tensor<8x12xf16>
+  return %r : tensor<8x12xf16>
+}
+
+func.func @matmul_fp16_init(%a: tensor<130x129xf16>, %b: tensor<129x70xf16>,
+                          %init: tensor<130x70xf16>) -> tensor<130x70xf16> {
+  // CHECK-LABEL: func.func @matmul_fp16_init(
+  // CHECK: %[[OUT:.*]] = emitpy.call_opaque "pl.create_tensor"
+  // CHECK: %[[M:.*]] = emitpy.call_opaque "pl.matmul"
+  // CHECK-SAME: #emitpy.opaque<"pl.FP32">
+  // CHECK: emitpy.for
+  // CHECK: %[[NEXT:[a-zA-Z0-9_]+]] = emitpy.call_opaque "pl.matmul_acc"(%[[M]]
+  // CHECK-NEXT: emitpy.assign %[[M]] = %[[NEXT]]
+  // CHECK: "pl.slice"(%arg2
+  // CHECK: %[[I:.*]] = emitpy.call_opaque "pl.cast"
+  // CHECK-SAME: #emitpy.opaque<"pl.FP32">
+  // CHECK-NEXT: %[[A:.*]] = emitpy.call_opaque "pl.add"(%[[M]], %[[I]])
+  // CHECK-NEXT: emitpy.call_opaque "pl.cast"(%[[A]])
+  // CHECK-SAME: #emitpy.opaque<"pl.FP16">
+  // CHECK: "pl.set_validshape"
+  // CHECK: emitpy.assign
+  // CHECK: return %[[OUT]]
+  // PYTHON-LABEL: def matmul_fp16_init(
+  // PYTHON: for [[TM:.*]] in pl.parallel(0, 130, 64):
+  // PYTHON-NEXT: for [[TN:.*]] in pl.parallel(0, 70, 64):
+  // PYTHON-NEXT: with pl.at(level=pl.Level.CORE_GROUP):
+  // PYTHON-NEXT: {{.*}} = pl.slice(inputs, [64, 64], {{\[}}[[TM]], 0], pad_value=0, clamp=True)
+  // PYTHON: pl.matmul(
+  // PYTHON-NEXT: for [[TK:.*]] in pl.range(64, 129, 64):
+  // PYTHON-NEXT: {{.*}} = pl.slice(inputs, [64, 64], {{\[}}[[TM]], [[TK]]], pad_value=0, clamp=True)
+  // PYTHON: pl.matmul_acc(
+  // PYTHON: pl.slice(inputs_1, [64, 64], {{\[}}[[TM]], [[TN]]], pad_value=0, clamp=True)
+  // PYTHON: pl.set_validshape(
+  // PYTHON-NOT: for
+  // PYTHON-NOT: if
+  // PYTHON: return
+  %r = pypto.matmul %a, %b init %init : (tensor<130x129xf16>, tensor<129x70xf16>, tensor<130x70xf16>) -> tensor<130x70xf16>
+  return %r : tensor<130x70xf16>
+}
+
+func.func @matmul_large(%a: tensor<384x384xf16>, %b: tensor<384x384xf16>) -> tensor<384x384xf16> {
+  // CHECK-LABEL: func.func @matmul_large(
+  // CHECK: emitpy.for
+  // CHECK: emitpy.for
+  // CHECK: emitpy.with
+  // CHECK: "pl.matmul"
+  // CHECK: emitpy.for
+  // CHECK: "pl.matmul_acc"
+  // CHECK: emitpy.assign
+  // PYTHON-LABEL: def matmul_large(
+  // PYTHON-NOT: pl.slice
+  // PYTHON-NOT: pl.fillpad_expand
+  // PYTHON: for [[M:.*]] in pl.parallel(0, 384, 64):
+  // PYTHON-NEXT: for [[N:.*]] in pl.parallel(0, 384, 64):
+  // PYTHON-NEXT: with pl.at(level=pl.Level.CORE_GROUP):
+  // PYTHON-NEXT: [[ACC:[a-zA-Z0-9_]+]] = pl.matmul(inputs{{\[}}[[M]]:[[M]] + 64, 0:64], inputs_0{{\[}}0:64, [[N]]:[[N]] + 64], out_dtype=pl.FP32)
+  // PYTHON-NEXT: for [[K:.*]] in pl.range(64, 384, 64):
+  // PYTHON-NEXT: [[NEXT:[a-zA-Z0-9_]+]] = pl.matmul_acc([[ACC]], inputs{{\[}}[[M]]:[[M]] + 64, [[K]]:[[K]] + 64], inputs_0{{\[}}[[K]]:[[K]] + 64, [[N]]:[[N]] + 64])
+  // PYTHON-NEXT: [[ACC]] = [[NEXT]]
+  // PYTHON-NEXT: [[RESULT:[a-zA-Z0-9_]+]] = pl.cast([[ACC]], pl.FP16, mode="rint")
+  // PYTHON-NEXT: {{.*}}[[M]]:[[M]] + 64, [[N]]:[[N]] + 64] = [[RESULT]]
+  // PYTHON-NEXT: return
+  %r = pypto.matmul %a, %b : (tensor<384x384xf16>, tensor<384x384xf16>) -> tensor<384x384xf16>
+  return %r : tensor<384x384xf16>
+}
+
+// Mixed boundary: two row blocks and one padded column/reduction block.
+func.func @matmul_65x63(%a: tensor<65x63xf16>, %b: tensor<63x63xf16>) -> tensor<65x63xf16> {
+  // CHECK-LABEL: func.func @matmul_65x63(
+  // CHECK: "pl.slice"(%arg0
+  // CHECK-SAME: "pad_value", "clamp"
+  // CHECK: "pl.fillpad_expand"
+  // CHECK: "pl.slice"(%arg1
+  // CHECK: "pl.matmul"
+  // CHECK-NOT: "pl.matmul_acc"
+  // CHECK: "pl.set_validshape"
+  // CHECK: emitpy.assign
+  // PYTHON-LABEL: def matmul_65x63(
+  // PYTHON: for [[ROW:.*]] in pl.parallel(0, 65, 64):
+  // PYTHON-NEXT: for {{.*}} in pl.parallel(0, 63, 64):
+  // PYTHON: pl.slice(inputs, [64, 64], {{\[}}[[ROW]], 0], pad_value=0, clamp=True)
+  // PYTHON: pl.matmul(
+  // PYTHON-NOT: pl.matmul_acc
+  // PYTHON: [[REMAIN:[a-zA-Z0-9_]+]] = (65 - [[ROW]])
+  // PYTHON-NEXT: [[VALID:[a-zA-Z0-9_]+]] = pl.min(64, [[REMAIN]])
+  // PYTHON-NEXT: {{.*}} = pl.set_validshape({{.*}}, [[VALID]], 63)
+  // PYTHON-NOT: for
+  // PYTHON-NOT: if
+  // PYTHON: return
+  %r = pypto.matmul %a, %b : (tensor<65x63xf16>, tensor<63x63xf16>) -> tensor<65x63xf16>
+  return %r : tensor<65x63xf16>
 }
