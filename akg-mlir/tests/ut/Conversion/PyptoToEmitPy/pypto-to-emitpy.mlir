@@ -121,13 +121,12 @@ func.func @tile_cmp_select(%a : !pypto.tile<f32, [4, 8]>, %b : !pypto.tile<f32, 
   // CHECK-LABEL: func.func @tile_cmp_select(
   // The predicate enum value doubles as the cmp_type code (lt == 2).
   // CHECK: %[[P:.*]] = emitpy.call_opaque "pl.cmp"(%arg0, %arg1) {args = [0 : index, 1 : index, #emitpy.opaque<"2">], keyword_args = ["", "", "cmp_type"]}
-  // CHECK: %[[O:.*]] = emitpy.call_opaque "pl.create_tile"() {args = [#emitpy.opaque<"[4, 8]">, #emitpy.opaque<"pl.FP32">, #emitpy.opaque<"pl.MemorySpace.Vec">], keyword_args = ["", "dtype", "target_memory"]}
-  // The scratch tile is an explicit positional operand of pl.sel.
-  // CHECK: %[[S:.*]] = emitpy.call_opaque "pl.sel"(%[[P]], %arg0, %arg1, %[[O]])
+  // pl.tile.select is the composite form: the runtime synthesizes the
+  // architecture-defined scratch tile.
+  // CHECK: %[[S:.*]] = emitpy.call_opaque "pl.tile.select"(%[[P]], %arg0, %arg1)
 
   %p = pypto.cmp lt, %a, %b : !pypto.tile<f32, [4, 8]>, !pypto.tile<f32, [4, 8]> -> !pypto.tile<i1, [4, 8]>
-  %o = pypto.create_tile : !pypto.tile<f32, [4, 8]>
-  %s = pypto.select %p, %a, %b, %o : !pypto.tile<i1, [4, 8]>, !pypto.tile<f32, [4, 8]>, !pypto.tile<f32, [4, 8]>, !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
+  %s = pypto.select %p, %a, %b : !pypto.tile<i1, [4, 8]>, !pypto.tile<f32, [4, 8]>, !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
   return
 }
 

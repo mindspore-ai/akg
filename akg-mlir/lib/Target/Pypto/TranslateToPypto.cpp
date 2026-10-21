@@ -32,18 +32,16 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
-using namespace mlir;        // NOLINT(build/namespaces)
+using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::emitpy;  // NOLINT(build/namespaces)
 using llvm::formatv;
 
 /// Convenience functions to produce interleaved output with functions returning
 /// a LogicalResult. This is different than those in STLExtras which typically
 /// do not handle error propagation.
-template <typename ForwardIterator, typename UnaryFunctor,
-          typename NullaryFunctor>
-inline LogicalResult
-interleaveWithError(ForwardIterator begin, ForwardIterator end,
-                    UnaryFunctor eachFn, NullaryFunctor betweenFn) {
+template <typename ForwardIterator, typename UnaryFunctor, typename NullaryFunctor>
+inline LogicalResult interleaveWithError(ForwardIterator begin, ForwardIterator end, UnaryFunctor eachFn,
+                                         NullaryFunctor betweenFn) {
   if (begin == end) {
     return success();
   }
@@ -61,19 +59,13 @@ interleaveWithError(ForwardIterator begin, ForwardIterator end,
 }
 
 template <typename Container, typename UnaryFunctor, typename NullaryFunctor>
-inline LogicalResult interleaveWithError(const Container &container,
-                                         UnaryFunctor eachFn,
-                                         NullaryFunctor betweenFn) {
-  return interleaveWithError(container.begin(), container.end(), eachFn,
-                             betweenFn);
+inline LogicalResult interleaveWithError(const Container &container, UnaryFunctor eachFn, NullaryFunctor betweenFn) {
+  return interleaveWithError(container.begin(), container.end(), eachFn, betweenFn);
 }
 
 template <typename Container, typename UnaryFunctor>
-inline LogicalResult interleaveCommaWithError(const Container container,
-                                              raw_ostream &os,
-                                              UnaryFunctor eachFn) {
-  return interleaveWithError(container.begin(), container.end(), eachFn,
-                             [&]() { os << ", "; });
+inline LogicalResult interleaveCommaWithError(const Container container, raw_ostream &os, UnaryFunctor eachFn) {
+  return interleaveWithError(container.begin(), container.end(), eachFn, [&]() { os << ", "; });
 }
 
 namespace {
@@ -87,9 +79,7 @@ class ExpressionBuilder {
   explicit ExpressionBuilder(PythonEmitter &emitter) {}
 
   /// Register a block argument with its corresponding name
-  void mapBlockArgument(Value blockArg, StringRef name) {
-    blockArgNames[blockArg] = name.str();
-  }
+  void mapBlockArgument(Value blockArg, StringRef name) { blockArgNames[blockArg] = name.str(); }
 
   /// Build an expression string for a value recursively
   FailureOr<std::string> buildExpression(Value value);
@@ -97,6 +87,7 @@ class ExpressionBuilder {
  private:
   /// Build expression for specific operation types
   FailureOr<std::string> buildCallOpaqueExpr(CallOpaqueOp op);
+  FailureOr<std::string> buildBinaryInfixExpr(CallOpaqueOp op, StringRef infix);
   FailureOr<std::string> buildConstantExpr(ConstantOp op);
   FailureOr<std::string> buildLiteralExpr(LiteralOp op);
   FailureOr<std::string> buildSubscriptExpr(SubscriptOp op);
@@ -111,8 +102,7 @@ class ExpressionBuilder {
 
 /// Emitter that uses dialect specific emitters to emit Python code.
 struct PythonEmitter {
-  explicit PythonEmitter(raw_ostream &os, std::optional<std::string> fileId)
-      : os(os), fileId(std::move(fileId)) {
+  explicit PythonEmitter(raw_ostream &os, std::optional<std::string> fileId) : os(os), fileId(std::move(fileId)) {
     valueInScopeCount.push(0);
     usedNames.push(std::set<std::string>());
   }
@@ -133,7 +123,7 @@ struct PythonEmitter {
 
   /// Allocates a variable name for the single result of `op`, reserving and
   /// mapping it, without emitting any text. Used by statements that need the
-  /// result's name before emitting (e.g. util_select's if/else form); the
+  /// result's name before emitting (e.g. select's if/else form); the
   /// naming mirrors emitVariableAssignment.
   std::string allocateResultName(Operation &op);
 
@@ -185,8 +175,7 @@ struct PythonEmitter {
 
   /// RAII helper function to manage entering/exiting Python scopes.
   struct Scope {
-    explicit Scope(PythonEmitter &emitter)
-        : valueMapperScope(emitter.valueMapper), emitter(emitter) {
+    explicit Scope(PythonEmitter &emitter) : valueMapperScope(emitter.valueMapper), emitter(emitter) {
       emitter.valueInScopeCount.push(emitter.valueInScopeCount.top());
       emitter.usedNames.push(emitter.usedNames.top());
     }
@@ -207,9 +196,7 @@ struct PythonEmitter {
 
   /// RAII helper function to manage entering/exiting Python class scopes.
   struct ClassScope {
-    explicit ClassScope(PythonEmitter &emitter) : emitter(&emitter) {
-      emitter.classDepth++;
-    }
+    explicit ClassScope(PythonEmitter &emitter) : emitter(&emitter) { emitter.classDepth++; }
     ~ClassScope() { emitter->classDepth--; }
 
    private:
@@ -259,13 +246,36 @@ struct PythonEmitter {
 /// be spelled as infix comparisons in the emitted Python.
 static StringRef infixCmpOpForCallee(StringRef callee) {
   return llvm::StringSwitch<StringRef>(callee)
-      .Case("util_cmp_eq", "==")
-      .Case("util_cmp_ne", "!=")
-      .Case("util_cmp_lt", "<")
-      .Case("util_cmp_le", "<=")
-      .Case("util_cmp_gt", ">")
-      .Case("util_cmp_ge", ">=")
-      .Default(StringRef());
+    .Case("eq", "==")
+    .Case("ne", "!=")
+    .Case("lt", "<")
+    .Case("le", "<=")
+    .Case("gt", ">")
+    .Case("ge", ">=")
+    .Default(StringRef());
+}
+
+/// Infix operator for a scalar arithmetic pseudo-callee, or an empty string
+/// if `callee` is not one. The PyPTO parser accepts plain Python arithmetic
+/// expressions (`a + b`), which it maps onto pto.addi/subi/muli and, for
+/// `/`, pto.divi on integers (truncated division, result stays integer) and
+/// pto.divf on floats. Callees are the arith op names themselves; the
+/// runtime's `pl.fmod` is a Tile-only API, so scalar remainders must be
+/// spelled as the plain Python `%` operator in the emitted kernel.
+static StringRef infixArithOpForCallee(StringRef callee) {
+  return llvm::StringSwitch<StringRef>(callee)
+    .Case("addi", "+")
+    .Case("addf", "+")
+    .Case("subi", "-")
+    .Case("subf", "-")
+    .Case("muli", "*")
+    .Case("mulf", "*")
+    .Case("divf", "/")
+    .Case("divsi", "/")
+    .Case("floordivsi", "//")
+    .Case("remsi", "%")
+    .Case("remui", "%")
+    .Default(StringRef());
 }
 
 FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
@@ -298,8 +308,7 @@ FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
   } else if (auto getAttrOp = dyn_cast<GetAttrOp>(defOp)) {
     result = buildGetAttrExpr(getAttrOp);
   } else {
-    return defOp->emitOpError(
-        "operation type not supported in inline expression");
+    return defOp->emitOpError("operation type not supported in inline expression");
   }
 
   if (succeeded(result)) {
@@ -308,51 +317,45 @@ FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
   return result;
 }
 
+FailureOr<std::string> ExpressionBuilder::buildBinaryInfixExpr(CallOpaqueOp op, StringRef infix) {
+  if (op.getNumOperands() != 2) {
+    return op.emitOpError(op.getCallee()) << " expects two operands";
+  }
+  auto lhsExpr = buildExpression(op.getOperand(0));
+  if (failed(lhsExpr)) {
+    return failure();
+  }
+  auto rhsExpr = buildExpression(op.getOperand(1));
+  if (failed(rhsExpr)) {
+    return failure();
+  }
+  std::string expr;
+  llvm::raw_string_ostream os(expr);
+  os << "(" << *lhsExpr << " " << infix << " " << *rhsExpr << ")";
+  return expr;
+}
+
 FailureOr<std::string> ExpressionBuilder::buildCallOpaqueExpr(CallOpaqueOp op) {
   std::string expr;
   llvm::raw_string_ostream os(expr);
 
-  // Pseudo-callee printed as an infix floor division: `(a // b)`.
-  if (op.getCallee() == "util_floordiv") {
-    if (op.getNumOperands() != 2) {
-      return op.emitOpError("util_floordiv expects two operands");
-    }
-    auto lhsExpr = buildExpression(op.getOperand(0));
-    if (failed(lhsExpr)) {
-      return failure();
-    }
-    auto rhsExpr = buildExpression(op.getOperand(1));
-    if (failed(rhsExpr)) {
-      return failure();
-    }
-    os << "(" << *lhsExpr << " // " << *rhsExpr << ")";
-    return expr;
+  // Pseudo-callee printed as a Python infix arithmetic expression:
+  // `(a + b)` (floordivsi prints `//`, remsi/remui print `%`).
+  if (StringRef arithOp = infixArithOpForCallee(op.getCallee()); !arithOp.empty()) {
+    return buildBinaryInfixExpr(op, arithOp);
   }
 
   // Pseudo-callee printed as a Python infix comparison: `(a < b)`.
   if (StringRef cmpOp = infixCmpOpForCallee(op.getCallee()); !cmpOp.empty()) {
-    if (op.getNumOperands() != 2) {
-      return op.emitOpError(op.getCallee())
-             << " expects two operands";
-    }
-    auto lhsExpr = buildExpression(op.getOperand(0));
-    if (failed(lhsExpr)) {
-      return failure();
-    }
-    auto rhsExpr = buildExpression(op.getOperand(1));
-    if (failed(rhsExpr)) {
-      return failure();
-    }
-    os << "(" << *lhsExpr << " " << cmpOp << " " << *rhsExpr << ")";
-    return expr;
+    return buildBinaryInfixExpr(op, cmpOp);
   }
 
   // Pseudo-callee printed as a Python conditional expression: operands are
   // (condition, trueValue, falseValue) in the IR, Python spells it
   // `(trueValue if condition else falseValue)`.
-  if (op.getCallee() == "util_select") {
+  if (op.getCallee() == "select") {
     if (op.getNumOperands() != 3) {
-      return op.emitOpError("util_select expects three operands");
+      return op.emitOpError("select expects three operands");
     }
     auto condExpr = buildExpression(op.getOperand(0));
     if (failed(condExpr)) {
@@ -366,8 +369,7 @@ FailureOr<std::string> ExpressionBuilder::buildCallOpaqueExpr(CallOpaqueOp op) {
     if (failed(falseExpr)) {
       return failure();
     }
-    os << "(" << *trueExpr << " if " << *condExpr << " else " << *falseExpr
-       << ")";
+    os << "(" << *trueExpr << " if " << *condExpr << " else " << *falseExpr << ")";
     return expr;
   }
 
@@ -425,9 +427,7 @@ FailureOr<std::string> ExpressionBuilder::buildConstantExpr(ConstantOp op) {
   return op.emitOpError("unsupported constant attribute type in expression");
 }
 
-FailureOr<std::string> ExpressionBuilder::buildLiteralExpr(LiteralOp op) {
-  return std::string(op.getValue());
-}
+FailureOr<std::string> ExpressionBuilder::buildLiteralExpr(LiteralOp op) { return std::string(op.getValue()); }
 
 FailureOr<std::string> ExpressionBuilder::buildSubscriptExpr(SubscriptOp op) {
   std::string expr;
@@ -495,9 +495,7 @@ std::string PythonEmitter::getSubscriptName(SubscriptOp op) {
   return name;
 }
 
-void PythonEmitter::mapValueToName(Value value, StringRef name) {
-  registerDeferredValue(value, name);
-}
+void PythonEmitter::mapValueToName(Value value, StringRef name) { registerDeferredValue(value, name); }
 
 void PythonEmitter::registerDeferredValue(Value value, StringRef str) {
   if (!valueMapper.count(value)) {
@@ -505,20 +503,15 @@ void PythonEmitter::registerDeferredValue(Value value, StringRef str) {
   }
 }
 
-bool PythonEmitter::shouldEmitFile(FileOp fileOp) {
-  return isEmittingMultipleFiles() || *fileId == fileOp.getId();
-}
+bool PythonEmitter::shouldEmitFile(FileOp fileOp) { return isEmittingMultipleFiles() || *fileId == fileOp.getId(); }
 
-void PythonEmitter::emitFileLabel(FileOp fileOp) {
-  os << "# File: " << fileOp.getId() << "\n";
-}
+void PythonEmitter::emitFileLabel(FileOp fileOp) { os << "# File: " << fileOp.getId() << "\n"; }
 
 /// Prints one CallOpaqueOp argument: an operand reference (an IntegerAttr of
 /// index type), a list mixing operand references with opaque source text
 /// (an ArrayAttr), or a plain attribute.
 template <typename PairT>
-static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op,
-                                       raw_indented_ostream &os,
+static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op, raw_indented_ostream &os,
                                        const PairT &pair) {
   auto [attr, keywordArg] = pair;
   auto keywordArgStr = mlir::cast<StringAttr>(keywordArg).getValue();
@@ -529,8 +522,7 @@ static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op,
       int64_t idx = iAttr.getInt();
       Value operand = op.getOperand(idx);
       if (!emitter.hasValueInScope(operand)) {
-        return op.emitOpError("operand ")
-               << idx << "'s value not defined in scope";
+        return op.emitOpError("operand ") << idx << "'s value not defined in scope";
       }
       if (failed(emitter.emitOperand(operand, "print_arg"))) {
         return failure();
@@ -553,8 +545,7 @@ static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op,
         if (iElem.getType().isIndex()) {
           Value operand = op.getOperand(iElem.getInt());
           if (!emitter.hasValueInScope(operand)) {
-            return op.emitOpError("operand ")
-                   << iElem.getInt() << "'s value not defined in scope";
+            return op.emitOpError("operand ") << iElem.getInt() << "'s value not defined in scope";
           }
           if (failed(emitter.emitOperand(operand, "print_arg"))) {
             return failure();
@@ -579,33 +570,57 @@ static LogicalResult emitCallOpaqueArg(PythonEmitter &emitter, Operation &op,
 
 static LogicalResult printUtilSelect(PythonEmitter &emitter, Operation &op) {
   raw_indented_ostream &os = emitter.ostream();
-  if (op.getNumOperands() != 3)
-    return op.emitOpError("util_select expects three operands");
-  if (op.getNumResults() != 1)
-    return op.emitOpError("util_select expects a single result");
+  if (op.getNumOperands() != 3) {
+    return op.emitOpError("select expects three operands");
+  }
+  if (op.getNumResults() != 1) {
+    return op.emitOpError("select expects a single result");
+  }
   std::string name = emitter.allocateResultName(op);
   os << "if ";
-  if (failed(emitter.emitOperand(op.getOperand(0), "print_arg")))
+  if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
     return failure();
+  }
   os << ":\n";
   os.indent();
   os << name << " = ";
-  if (failed(emitter.emitOperand(op.getOperand(1), "print_arg")))
+  if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
     return failure();
+  }
   os << "\n";
   os.unindent();
   os << "else:\n";
   os.indent();
   os << name << " = ";
-  if (failed(emitter.emitOperand(op.getOperand(2), "print_arg")))
+  if (failed(emitter.emitOperand(op.getOperand(2), "print_arg"))) {
     return failure();
+  }
   os << "\n";
   os.unindent();
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    CallOpaqueOp callOpaqueOp) {
+/// Prints a two-operand pseudo-callee as `(lhs <infix> rhs)` after the
+/// assign prefix has already been emitted.
+static LogicalResult printBinaryInfixCall(PythonEmitter &emitter, CallOpaqueOp callOpaqueOp, StringRef infix) {
+  raw_indented_ostream &os = emitter.ostream();
+  Operation &op = *callOpaqueOp.getOperation();
+  if (op.getNumOperands() != 2) {
+    return op.emitOpError(callOpaqueOp.getCallee()) << " expects two operands";
+  }
+  os << "(";
+  if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
+    return failure();
+  }
+  os << " " << infix << " ";
+  if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
+    return failure();
+  }
+  os << ")";
+  return success();
+}
+
+static LogicalResult printOperation(PythonEmitter &emitter, CallOpaqueOp callOpaqueOp) {
   raw_indented_ostream &os = emitter.ostream();
   Operation &op = *callOpaqueOp.getOperation();
   StringRef callee = callOpaqueOp.getCallee();
@@ -616,46 +631,25 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   // is spelled as an if/else that assigns the same variable in both
   // branches; the parser leaks the branch-local variable and its
   // ConvertToSSA pass inserts the phi.
-  if (callee == "util_select")
+  if (callee == "select") {
     return printUtilSelect(emitter, op);
+  }
 
   if (failed(emitter.emitAssignPrefix(op))) {
     return failure();
   }
 
-  // Pseudo-callee printed as an infix floor division: `(a // b)`.
-  if (callee == "util_floordiv") {
-    if (op.getNumOperands() != 2) {
-      return op.emitOpError("util_floordiv expects two operands");
-    }
-    os << "(";
-    if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
-      return failure();
-    }
-    os << " // ";
-    if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
-      return failure();
-    }
-    os << ")";
-    return success();
+  // Pseudo-callee printed as a Python infix arithmetic expression:
+  // `(a + b)` (floordivsi prints `//`, remsi/remui print `%`), which the
+  // PyPTO parser maps onto scalar pto.addi/subi/muli/divi (divf) operations.
+  if (StringRef arithOp = infixArithOpForCallee(callee); !arithOp.empty()) {
+    return printBinaryInfixCall(emitter, callOpaqueOp, arithOp);
   }
 
   // Pseudo-callee printed as a Python infix comparison: `(a < b)`, which the
   // PyPTO parser maps onto scalar ir.eq/ne/lt/le/gt/ge comparisons.
   if (StringRef cmpOp = infixCmpOpForCallee(callee); !cmpOp.empty()) {
-    if (op.getNumOperands() != 2) {
-      return op.emitOpError(callee) << " expects two operands";
-    }
-    os << "(";
-    if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
-      return failure();
-    }
-    os << " " << cmpOp << " ";
-    if (failed(emitter.emitOperand(op.getOperand(1), "print_arg"))) {
-      return failure();
-    }
-    os << ")";
-    return success();
+    return printBinaryInfixCall(emitter, callOpaqueOp, cmpOp);
   }
 
   if (callee == "util_create_list") {
@@ -667,11 +661,8 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   } else {
     os << callee << "(";
     if (callOpaqueOp.getArgs()) {
-      auto args =
-          llvm::zip(*callOpaqueOp.getArgs(), *callOpaqueOp.getKeywordArgs());
-      auto emitArgs = [&](const auto &pair) {
-        return emitCallOpaqueArg(emitter, op, os, pair);
-      };
+      auto args = llvm::zip(*callOpaqueOp.getArgs(), *callOpaqueOp.getKeywordArgs());
+      auto emitArgs = [&](const auto &pair) { return emitCallOpaqueArg(emitter, op, os, pair); };
       if (failed(interleaveCommaWithError(args, os, emitArgs))) {
         return failure();
       }
@@ -715,8 +706,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ImportOp importOp) {
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    func::CallOp callOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, func::CallOp callOp) {
   Operation &op = *callOp.getOperation();
   StringRef callee = callOp.getCallee();
   raw_indented_ostream &os = emitter.ostream();
@@ -737,8 +727,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ModuleOp moduleOp) {
 
   // When file ops exist, emit the content of a specified file if the fileId
   // is present, otherwise emit each file's contents with a label separator.
-  bool hasFileOps =
-      llvm::any_of(moduleOp.getOps<FileOp>(), [](FileOp) { return true; });
+  bool hasFileOps = llvm::any_of(moduleOp.getOps<FileOp>(), [](FileOp) { return true; });
 
   if (hasFileOps) {
     for (auto fileOp : moduleOp.getOps<FileOp>()) {
@@ -777,32 +766,24 @@ static constexpr llvm::StringLiteral kInOutArgsAttr = "emitpy.inout_args";
 
 /// Returns whether `argNumber` appears in a dense i64 array attribute.
 static bool pyptoArgAttrContains(DenseI64ArrayAttr attr, unsigned argNumber) {
-  return attr && llvm::is_contained(attr.asArrayRef(),
-                                    static_cast<int64_t>(argNumber));
+  return attr && llvm::is_contained(attr.asArrayRef(), static_cast<int64_t>(argNumber));
 }
 
 /// Emits the PyPTO parameter annotation for a kernel argument: the verbatim
 /// opaque type text (e.g. `pl.Tensor[[4, 8], pl.FP32]`), wrapped in
 /// `pl.Out[...]` for outputs and `pl.InOut[...]` for read-modify-write
 /// parameters as the PyPTO kernel model requires.
-static LogicalResult
-emitPyptoParamAnnotation(PythonEmitter &emitter, func::FuncOp functionOp,
-                         BlockArgument arg) {
+static LogicalResult emitPyptoParamAnnotation(PythonEmitter &emitter, func::FuncOp functionOp, BlockArgument arg) {
   raw_indented_ostream &os = emitter.ostream();
-  auto opaqueType =
-      dyn_cast<mlir::emitpy::OpaqueType>(arg.getType());
+  auto opaqueType = dyn_cast<mlir::emitpy::OpaqueType>(arg.getType());
   if (!opaqueType) {
     return functionOp.emitOpError("PyPTO kernel parameter ")
            << arg.getArgNumber() << " must have an opaque annotation type";
   }
   os << ": ";
-  if (pyptoArgAttrContains(
-          functionOp->getAttrOfType<DenseI64ArrayAttr>(kOutArgsAttr),
-          arg.getArgNumber())) {
+  if (pyptoArgAttrContains(functionOp->getAttrOfType<DenseI64ArrayAttr>(kOutArgsAttr), arg.getArgNumber())) {
     os << "pl.Out[" << opaqueType.getValue() << "]";
-  } else if (pyptoArgAttrContains(
-                 functionOp->getAttrOfType<DenseI64ArrayAttr>(kInOutArgsAttr),
-                 arg.getArgNumber())) {
+  } else if (pyptoArgAttrContains(functionOp->getAttrOfType<DenseI64ArrayAttr>(kInOutArgsAttr), arg.getArgNumber())) {
     os << "pl.InOut[" << opaqueType.getValue() << "]";
   } else {
     os << opaqueType.getValue();
@@ -810,16 +791,14 @@ emitPyptoParamAnnotation(PythonEmitter &emitter, func::FuncOp functionOp,
   return success();
 }
 
-static LogicalResult printFunctionArgs(PythonEmitter &emitter, Operation &op,
-                                       Region::BlockArgListType arguments) {
+static LogicalResult printFunctionArgs(PythonEmitter &emitter, Operation &op, Region::BlockArgListType arguments) {
   raw_indented_ostream &os = emitter.ostream();
   func::FuncOp functionOp = mlir::cast<func::FuncOp>(op);
   bool isPyptoKernel = functionOp->getAttr(kPyptoKernelAttr) != nullptr;
 
   return interleaveCommaWithError(arguments, os, [&](BlockArgument arg) {
     std::string argName = "inputs";
-    if (auto suggestNameAttr =
-            functionOp.getArgAttr(arg.getArgNumber(), "emitpy.name")) {
+    if (auto suggestNameAttr = functionOp.getArgAttr(arg.getArgNumber(), "emitpy.name")) {
       argName = mlir::cast<StringAttr>(suggestNameAttr).getValue();
     } else if (emitter.isInClassScope() && arg.getArgNumber() == 0) {
       argName = "self";
@@ -834,15 +813,14 @@ static LogicalResult printFunctionArgs(PythonEmitter &emitter, Operation &op,
   });
 }
 
-static LogicalResult printFunctionBody(PythonEmitter &emitter, Operation &op,
-                                       Region::BlockListType &blocks) {
+static LogicalResult printFunctionBody(PythonEmitter &emitter, Operation &op, Region::BlockListType &blocks) {
   raw_indented_ostream &os = emitter.ostream();
   os.indent();
   if (blocks.size() > 1) {
     return op.emitOpError(
-        "PythonEmitter's printFunctionBody currently only supports "
-        "single-block functions directly "
-        "or relies on prior passes to structure control flow.");
+      "PythonEmitter's printFunctionBody currently only supports "
+      "single-block functions directly "
+      "or relies on prior passes to structure control flow.");
   }
 
   for (Operation &bodyOp : blocks.front().getOperations()) {
@@ -870,14 +848,12 @@ static bool isPyptoTensorType(Type type) {
 static llvm::DenseSet<Operation *> collectTensorViewOps(Block &entry) {
   llvm::DenseSet<Operation *> viewOps;
   for (Operation &op : entry.without_terminator()) {
-    if (op.getNumResults() != 1 ||
-        !isa<MemRefType>(op.getResult(0).getType())) {
+    if (op.getNumResults() != 1 || !isa<MemRefType>(op.getResult(0).getType())) {
       continue;
     }
     bool viewsTensor = llvm::any_of(op.getOperands(), [&](Value operand) {
       Operation *defOp = operand.getDefiningOp();
-      return isPyptoTensorType(operand.getType()) ||
-             (defOp != nullptr && viewOps.contains(defOp));
+      return isPyptoTensorType(operand.getType()) || (defOp != nullptr && viewOps.contains(defOp));
     });
     if (viewsTensor) {
       viewOps.insert(&op);
@@ -892,8 +868,7 @@ static llvm::DenseSet<Operation *> collectTensorViewOps(Block &entry) {
 /// device counterpart, so kernels containing an spmd_scope emit their body
 /// without the wrapper. Tensor-level views of the kernel parameters are
 /// emitted before the device scope (see collectTensorViewOps).
-static LogicalResult printPyptoKernelBody(PythonEmitter &emitter,
-                                          func::FuncOp functionOp) {
+static LogicalResult printPyptoKernelBody(PythonEmitter &emitter, func::FuncOp functionOp) {
   raw_indented_ostream &os = emitter.ostream();
   if (functionOp.getBlocks().size() > 1) {
     return functionOp.emitOpError("PyPTO kernels must have a single block");
@@ -931,8 +906,7 @@ static LogicalResult printPyptoKernelBody(PythonEmitter &emitter,
   if (!hasSpmd) {
     os.unindent();
   }
-  LogicalResult terminatorStatus =
-      emitter.emitOperation(entry.getOperations().back());
+  LogicalResult terminatorStatus = emitter.emitOperation(entry.getOperations().back());
   os.unindent();
   if (failed(terminatorStatus)) {
     return failure();
@@ -940,8 +914,7 @@ static LogicalResult printPyptoKernelBody(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    func::FuncOp functionOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, func::FuncOp functionOp) {
   if (functionOp.isDeclaration()) {
     return success();
   }
@@ -951,12 +924,10 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   StringRef callee = functionOp.getName();
   emitter.reserveName(callee.str());
   bool isPyptoKernel = functionOp->getAttr(kPyptoKernelAttr) != nullptr;
-  if (auto methodKindAttr =
-          functionOp->getAttrOfType<StringAttr>("emitpy.method_kind")) {
+  if (auto methodKindAttr = functionOp->getAttrOfType<StringAttr>("emitpy.method_kind")) {
     StringRef methodKind = methodKindAttr.getValue();
     if (!emitter.isInClassScope()) {
-      return functionOp.emitOpError(
-          "emitpy.method_kind is only valid inside a class");
+      return functionOp.emitOpError("emitpy.method_kind is only valid inside a class");
     }
     if (methodKind == "classmethod") {
       os << "@classmethod\n";
@@ -994,18 +965,15 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    func::ReturnOp returnOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, func::ReturnOp returnOp) {
   raw_indented_ostream &os = emitter.ostream();
   os << "return";
   // PyPTO kernels hand results back through their Out parameters: the IR
   // return carries no operands and the emitter reconstructs the value list
   // from the recorded output argument indices.
   func::FuncOp funcOp = returnOp->getParentOfType<func::FuncOp>();
-  if (returnOp.getNumOperands() == 0 && funcOp &&
-      funcOp->getAttr(kPyptoKernelAttr)) {
-    if (auto outArgs =
-            funcOp->getAttrOfType<DenseI64ArrayAttr>(kOutArgsAttr)) {
+  if (returnOp.getNumOperands() == 0 && funcOp && funcOp->getAttr(kPyptoKernelAttr)) {
+    if (auto outArgs = funcOp->getAttrOfType<DenseI64ArrayAttr>(kOutArgsAttr)) {
       bool first = true;
       for (int64_t idx : outArgs.asArrayRef()) {
         if (!first) {
@@ -1013,8 +981,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
         }
         first = false;
         os << " ";
-        if (failed(
-                emitter.emitOperand(funcOp.getArgument(idx), "out_arg"))) {
+        if (failed(emitter.emitOperand(funcOp.getArgument(idx), "out_arg"))) {
           return failure();
         }
       }
@@ -1022,27 +989,26 @@ static LogicalResult printOperation(PythonEmitter &emitter,
     return success();
   }
   switch (returnOp.getNumOperands()) {
-  case 0:
-    break;
-  case 1: {
-    os << " ";
-    if (failed(emitter.emitOperand(returnOp.getOperand(0), "return_arg"))) {
-      return failure();
+    case 0:
+      break;
+    case 1: {
+      os << " ";
+      if (failed(emitter.emitOperand(returnOp.getOperand(0), "return_arg"))) {
+        return failure();
+      }
+      break;
     }
-    break;
-  }
-  default: {
-    os << " ";
-    if (failed(emitter.emitOperands(*returnOp.getOperation()))) {
-      return failure();
+    default: {
+      os << " ";
+      if (failed(emitter.emitOperands(*returnOp.getOperation()))) {
+        return failure();
+      }
     }
-  }
   }
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    SubscriptOp subscriptOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, SubscriptOp subscriptOp) {
   if (failed(emitter.emitAssignPrefix(*subscriptOp))) {
     return failure();
   }
@@ -1057,8 +1023,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    GetAttrOp getAttrOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, GetAttrOp getAttrOp) {
   if (failed(emitter.emitAssignPrefix(*getAttrOp))) {
     return failure();
   }
@@ -1072,8 +1037,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    SetAttrOp setAttrOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, SetAttrOp setAttrOp) {
   raw_indented_ostream &os = emitter.ostream();
   if (failed(emitter.emitOperand(setAttrOp.getObject(), "object"))) {
     return failure();
@@ -1086,8 +1050,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult emitClassBase(Attribute baseAttr,
-                                   raw_indented_ostream &os) {
+static LogicalResult emitClassBase(Attribute baseAttr, raw_indented_ostream &os) {
   if (auto symbolRef = dyn_cast<SymbolRefAttr>(baseAttr)) {
     os << symbolRef.getLeafReference();
     return success();
@@ -1109,9 +1072,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ClassOp classOp) {
     if (!baseClasses->empty()) {
       os << "(";
       if (failed(interleaveCommaWithError(*baseClasses, os,
-                                          [&](Attribute baseAttr) {
-                                            return emitClassBase(baseAttr, os);
-                                          }))) {
+                                          [&](Attribute baseAttr) { return emitClassBase(baseAttr, os); }))) {
         return classOp.emitOpError("invalid class base attribute");
       }
       os << ")";
@@ -1136,8 +1097,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ClassOp classOp) {
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    NestedFuncOp funcOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, NestedFuncOp funcOp) {
   emitter.reserveName(funcOp.getSymName().str());
   PythonEmitter::Scope scope(emitter);
   raw_indented_ostream &os = emitter.ostream();
@@ -1145,9 +1105,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   os << "def " << funcOp.getSymName() << "(";
   Block &body = funcOp.getBody().front();
   if (failed(interleaveCommaWithError(body.getArguments(), os,
-                                      [&](BlockArgument arg) {
-                                        return emitter.emitOperand(arg, "arg");
-                                      }))) {
+                                      [&](BlockArgument arg) { return emitter.emitOperand(arg, "arg"); }))) {
     return failure();
   }
   os << "): \n";
@@ -1162,8 +1120,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    NestedFuncReturnOp returnOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, NestedFuncReturnOp returnOp) {
   raw_indented_ostream &os = emitter.ostream();
   os << "return";
   if (returnOp.getNumOperands() > 0) {
@@ -1175,8 +1132,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    ConstantOp constantOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, ConstantOp constantOp) {
   Attribute value = constantOp.getValue();
 
   if (failed(emitter.emitAssignPrefix(*constantOp))) {
@@ -1189,36 +1145,30 @@ static LogicalResult printOperation(PythonEmitter &emitter,
 static LogicalResult printOperation(PythonEmitter &emitter, GlobalOp globalOp) {
   raw_indented_ostream &os = emitter.ostream();
   os << globalOp.getSymName() << " = ";
-  if (failed(emitter.emitAttribute(globalOp->getLoc(),
-                                   globalOp.getInitialValue()))) {
+  if (failed(emitter.emitAttribute(globalOp->getLoc(), globalOp.getInitialValue()))) {
     return failure();
   }
 
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    AssignGlobalOp assignGlobalOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, AssignGlobalOp assignGlobalOp) {
   raw_indented_ostream &os = emitter.ostream();
   os << assignGlobalOp.getName() << " = ";
-  if (failed(emitter.emitOperand(assignGlobalOp.getValue(),
-                                 assignGlobalOp.getName().str()))) {
+  if (failed(emitter.emitOperand(assignGlobalOp.getValue(), assignGlobalOp.getName().str()))) {
     return failure();
   }
 
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    GlobalStatementOp globalStatementOp) {
-  emitter.registerDeferredValue(globalStatementOp.getResult(),
-                                globalStatementOp.getName());
+static LogicalResult printOperation(PythonEmitter &emitter, GlobalStatementOp globalStatementOp) {
+  emitter.registerDeferredValue(globalStatementOp.getResult(), globalStatementOp.getName());
 
   return emitter.emitGlobalStatement(globalStatementOp);
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    CreateDictOp createDictOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, CreateDictOp createDictOp) {
   raw_indented_ostream &os = emitter.ostream();
   StringRef dictName = createDictOp.getDictName();
 
@@ -1273,23 +1223,19 @@ static LogicalResult printOperation(PythonEmitter &emitter, YieldOp yieldOp) {
   return yieldOp.emitOpError("yield operation should not be directly emitted");
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    WhileYieldOp yieldOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, WhileYieldOp yieldOp) {
   // The loop-carried assignment is emitted by the parent, which is the only
   // place that knows the variable names.
-  return yieldOp.emitOpError(
-      "while_yield operation should not be directly emitted");
+  return yieldOp.emitOpError("while_yield operation should not be directly emitted");
 }
 
 // Helper function to build an expression string
-static FailureOr<std::string> buildExpressionString(ExpressionOp expressionOp,
-                                                    PythonEmitter &emitter) {
+static FailureOr<std::string> buildExpressionString(ExpressionOp expressionOp, PythonEmitter &emitter) {
   ExpressionBuilder builder(emitter);
 
   // Map block arguments to operands
   Block *bodyBlock = expressionOp.getBodyBlock();
-  for (auto [blockArg, operand] :
-       llvm::zip(bodyBlock->getArguments(), expressionOp.getOperands())) {
+  for (auto [blockArg, operand] : llvm::zip(bodyBlock->getArguments(), expressionOp.getOperands())) {
     // Get the name from the parent emitter and register it in the builder
     std::string argName = emitter.getOrCreateName(operand, "expr_arg").str();
     builder.mapBlockArgument(blockArg, argName);
@@ -1306,8 +1252,7 @@ static FailureOr<std::string> buildExpressionString(ExpressionOp expressionOp,
 static LogicalResult printOperation(PythonEmitter &emitter, IfOp ifOp) {
   raw_indented_ostream &os = emitter.ostream();
 
-  auto emitConditionAndThenBody = [&](IfOp op,
-                                      StringRef keyword) -> LogicalResult {
+  auto emitConditionAndThenBody = [&](IfOp op, StringRef keyword) -> LogicalResult {
     os << keyword;
 
     auto items = op.parseFormatString();
@@ -1347,8 +1292,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, IfOp ifOp) {
     Block &elseBlock = ifOp.getElseRegion().front();
     auto *firstOp = &elseBlock.front();
     if (auto nestedIf = dyn_cast<IfOp>(firstOp);
-        nestedIf && elseBlock.getOperations().size() == 1 &&
-        nestedIf.getElseRegion().empty()) {
+        nestedIf && elseBlock.getOperations().size() == 1 && nestedIf.getElseRegion().empty()) {
       if (failed(emitConditionAndThenBody(nestedIf, "elif "))) {
         return failure();
       }
@@ -1369,8 +1313,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, IfOp ifOp) {
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    VerbatimOp verbatimOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, VerbatimOp verbatimOp) {
   raw_indented_ostream &os = emitter.ostream();
 
   auto items = verbatimOp.parseFormatString();
@@ -1405,8 +1348,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, WhileOp whileOp) {
   SmallVector<std::string> names;
   names.reserve(whileOp.getInits().size());
   for (auto [index, init] : llvm::enumerate(whileOp.getInits())) {
-    names.emplace_back(emitter.getOrCreateName(
-        body.getArgument(index), "carried_" + std::to_string(index)));
+    names.emplace_back(emitter.getOrCreateName(body.getArgument(index), "carried_" + std::to_string(index)));
     const std::string &name = names.back();
     emitter.mapValueToName(whileOp.getResult(index), name);
 
@@ -1460,9 +1402,8 @@ static LogicalResult printOperation(PythonEmitter &emitter, WhileOp whileOp) {
     // value it still has to read.
     llvm::interleaveComma(names, os);
     os << " = ";
-    if (failed(interleaveCommaWithError(
-            whileOp.getYield().getResults(), os,
-            [&](Value value) { return emitter.emitOperand(value, ""); }))) {
+    if (failed(interleaveCommaWithError(whileOp.getYield().getResults(), os,
+                                        [&](Value value) { return emitter.emitOperand(value, ""); }))) {
       return failure();
     }
     os << "\n";
@@ -1479,8 +1420,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ForOp forOp) {
   // The induction variable is the loop header's Python variable. No Scope is
   // opened for the body: a Python loop body does not introduce one (mirrors
   // emitpy.while).
-  std::string name =
-      emitter.getOrCreateName(body.getArgument(0), "loop_var").str();
+  std::string name = emitter.getOrCreateName(body.getArgument(0), "loop_var").str();
   os << "for " << name << " in pl.range(";
   if (failed(emitter.emitOperand(forOp.getLowerBound(), ""))) {
     return failure();
@@ -1509,16 +1449,14 @@ static LogicalResult printOperation(PythonEmitter &emitter, ForOp forOp) {
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    SpmdScopeOp spmdOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, SpmdScopeOp spmdOp) {
   raw_indented_ostream &os = emitter.ostream();
   Block &body = spmdOp.getBody().front();
 
   // The block-index argument is the executing core's id; bind it to
   // pl.tile.get_block_idx() as the first body statement. No Scope is opened
   // for the body: a Python `with` block does not introduce one.
-  std::string name =
-      emitter.getOrCreateName(body.getArgument(0), "block_idx").str();
+  std::string name = emitter.getOrCreateName(body.getArgument(0), "block_idx").str();
   os << "with pl.spmd(" << spmdOp.getCoreNum() << "):\n";
   os.indent();
   os << name << " = pl.tile.get_block_idx()\n";
@@ -1532,8 +1470,7 @@ static LogicalResult printOperation(PythonEmitter &emitter,
   return success();
 }
 
-static LogicalResult printOperation(PythonEmitter &emitter,
-                                    ExpressionOp expressionOp) {
+static LogicalResult printOperation(PythonEmitter &emitter, ExpressionOp expressionOp) {
   Block *bodyBlock = expressionOp.getBodyBlock();
 
   bool shouldInline = !expressionOp.getDoNotInline();
@@ -1555,10 +1492,8 @@ static LogicalResult printOperation(PythonEmitter &emitter,
     PythonEmitter::Scope scope(emitter);
 
     // Map block arguments to operands
-    for (auto [blockArg, operand] :
-         llvm::zip(bodyBlock->getArguments(), expressionOp.getOperands())) {
-      emitter.registerDeferredValue(
-          blockArg, emitter.getOrCreateName(operand, "expr_arg"));
+    for (auto [blockArg, operand] : llvm::zip(bodyBlock->getArguments(), expressionOp.getOperands())) {
+      emitter.registerDeferredValue(blockArg, emitter.getOrCreateName(operand, "expr_arg"));
     }
 
     // Emit all operations in the body except the yield
@@ -1596,26 +1531,21 @@ static LogicalResult printOperation(PythonEmitter &emitter, FileOp fileOp) {
 
 LogicalResult PythonEmitter::emitOperation(Operation &op) {
   LogicalResult status =
-      llvm::TypeSwitch<Operation *, LogicalResult>(&op)
-          // Builtin ops.
-          .Case<ModuleOp>([&](auto op) { return printOperation(*this, op); })
-          // EmitPy ops.
-          .Case<CallOpaqueOp, ImportOp, AssignOp, GetAttrOp, SetAttrOp,
-                ConstantOp, SubscriptOp, ClassOp, GlobalOp, AssignGlobalOp,
-                GlobalStatementOp, CreateDictOp, ExpressionOp, YieldOp, IfOp,
-                WhileOp, WhileYieldOp, VerbatimOp, NestedFuncOp,
-                NestedFuncReturnOp, FileOp, ForOp, SpmdScopeOp>(
-              [&](auto op) { return printOperation(*this, op); })
-          .Case<LiteralOp>([&](auto op) {
-            registerDeferredValue(op.getResult(), op.getValue());
-            return success();
-          })
-          // Func ops.
-          .Case<func::CallOp, func::FuncOp, func::ReturnOp>(
-              [&](auto op) { return printOperation(*this, op); })
-          .Default([&](Operation *) {
-            return op.emitOpError("unable to find printer for op");
-          });
+    llvm::TypeSwitch<Operation *, LogicalResult>(&op)
+      // Builtin ops.
+      .Case<ModuleOp>([&](auto op) { return printOperation(*this, op); })
+      // EmitPy ops.
+      .Case<CallOpaqueOp, ImportOp, AssignOp, GetAttrOp, SetAttrOp, ConstantOp, SubscriptOp, ClassOp, GlobalOp,
+            AssignGlobalOp, GlobalStatementOp, CreateDictOp, ExpressionOp, YieldOp, IfOp, WhileOp, WhileYieldOp,
+            VerbatimOp, NestedFuncOp, NestedFuncReturnOp, FileOp, ForOp, SpmdScopeOp>(
+        [&](auto op) { return printOperation(*this, op); })
+      .Case<LiteralOp>([&](auto op) {
+        registerDeferredValue(op.getResult(), op.getValue());
+        return success();
+      })
+      // Func ops.
+      .Case<func::CallOp, func::FuncOp, func::ReturnOp>([&](auto op) { return printOperation(*this, op); })
+      .Default([&](Operation *) { return op.emitOpError("unable to find printer for op"); });
 
   if (failed(status)) {
     return failure();
@@ -1701,27 +1631,26 @@ LogicalResult PythonEmitter::emitAttribute(Location loc, Attribute attr) {
 
 LogicalResult PythonEmitter::emitAssignPrefix(Operation &op) {
   switch (op.getNumResults()) {
-  case 0:
-    break;
-  case 1: {
-    if (failed(emitVariableAssignment(op))) {
-      return failure();
+    case 0:
+      break;
+    case 1: {
+      if (failed(emitVariableAssignment(op))) {
+        return failure();
+      }
+      break;
     }
-    break;
-  }
-  default: {
-    interleaveComma(op.getResults(), os, [&](Value result) {
-      std::string name = "v_" + std::to_string(valueInScopeCount.top()++);
-      os << getOrCreateName(result, name);
-    });
-    os << " = ";
-  }
+    default: {
+      interleaveComma(op.getResults(), os, [&](Value result) {
+        std::string name = "v_" + std::to_string(valueInScopeCount.top()++);
+        os << getOrCreateName(result, name);
+      });
+      os << " = ";
+    }
   }
   return success();
 }
 
-LogicalResult
-PythonEmitter::emitGlobalStatement(GlobalStatementOp globalStatementOp) {
+LogicalResult PythonEmitter::emitGlobalStatement(GlobalStatementOp globalStatementOp) {
   os << "global " << globalStatementOp.getName();
 
   return success();
@@ -1730,14 +1659,12 @@ PythonEmitter::emitGlobalStatement(GlobalStatementOp globalStatementOp) {
 bool isValidPythonIdentifier(const std::string &name) {
   static const std::regex pattern(R"(^[A-Za-z_][A-Za-z0-9_]*$)");
   static const std::unordered_set<std::string> keywords = {
-      "False",  "None",   "True",    "and",      "as",       "assert", "async",
-      "await",  "break",  "class",   "continue", "def",      "del",    "elif",
-      "else",   "except", "finally", "for",      "from",     "global", "if",
-      "import", "in",     "is",      "lambda",   "nonlocal", "not",    "or",
-      "pass",   "raise",  "return",  "try",      "while",    "with",   "yield"};
+    "False", "None",     "True",  "and",    "as",   "assert", "async",  "await",    "break",
+    "class", "continue", "def",   "del",    "elif", "else",   "except", "finally",  "for",
+    "from",  "global",   "if",    "import", "in",   "is",     "lambda", "nonlocal", "not",
+    "or",    "pass",     "raise", "return", "try",  "while",  "with",   "yield"};
 
-  return std::regex_match(name, pattern) &&
-         (keywords.find(name) == keywords.end());
+  return std::regex_match(name, pattern) && (keywords.find(name) == keywords.end());
 }
 
 std::string validateVariableName(const std::string &name) {
@@ -1783,9 +1710,7 @@ LogicalResult PythonEmitter::emitVariableAssignment(Operation &op) {
   return success();
 }
 
-LogicalResult
-mlir::emitpy::translateToPython(Operation *op, raw_ostream &os,
-                                     std::optional<std::string> fileId) {
+LogicalResult mlir::emitpy::translateToPython(Operation *op, raw_ostream &os, std::optional<std::string> fileId) {
   PythonEmitter emitter(os, std::move(fileId));
   return emitter.emitOperation(*op);
 }

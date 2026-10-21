@@ -16,7 +16,10 @@
 
 #include "akg/Conversion/PyptoToEmitPy/PyptoToEmitPy.h"
 
+#include <iomanip>
+#include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 
 #include "akg/Dialect/EmitPy/IR/EmitPyOps.h"
@@ -73,18 +76,18 @@ static std::optional<std::string> pyptoDtypeName(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
     bool unsignedInt = intType.isUnsigned();
     switch (intType.getWidth()) {
-    case 1:
-      return std::string("pl.BOOL");
-    case 8:
-      return std::string(unsignedInt ? "pl.UINT8" : "pl.INT8");
-    case 16:
-      return std::string(unsignedInt ? "pl.UINT16" : "pl.INT16");
-    case 32:
-      return std::string(unsignedInt ? "pl.UINT32" : "pl.INT32");
-    case 64:
-      return std::string(unsignedInt ? "pl.UINT64" : "pl.INT64");
-    default:
-      return std::nullopt;
+      case 1:
+        return std::string("pl.BOOL");
+      case 8:
+        return std::string(unsignedInt ? "pl.UINT8" : "pl.INT8");
+      case 16:
+        return std::string(unsignedInt ? "pl.UINT16" : "pl.INT16");
+      case 32:
+        return std::string(unsignedInt ? "pl.UINT32" : "pl.INT32");
+      case 64:
+        return std::string(unsignedInt ? "pl.UINT64" : "pl.INT64");
+      default:
+        return std::nullopt;
     }
   }
   if (isa<IndexType>(type)) {
@@ -122,6 +125,76 @@ static std::optional<std::string> intToPythonText(const APInt &value) {
   return std::to_string(value.getSExtValue());
 }
 
+/// Renders a float value as Python source text. Mirrors the helper in
+/// VectorToPypto.cpp; kept local so the pass stays self-contained.
+static std::string floatToPythonText(APFloat value) {
+  if (value.isInfinity()) {
+    return value.isNegative() ? "float('-inf')" : "float('inf')";
+  }
+  if (value.isNaN()) {
+    return "float('nan')";
+  }
+  std::ostringstream oss;
+  oss << std::setprecision(std::numeric_limits<double>::max_digits10) << value.convertToDouble();
+  std::string text = oss.str();
+  if (text.find('.') == std::string::npos && text.find('e') == std::string::npos &&
+      text.find('E') == std::string::npos) {
+    text += ".0";
+  }
+  return text;
+}
+
+/// Renders a constant scalar operand as `pl.const(value, dtype)` source
+/// text: the raw `arith.constant` has no emitpy printer, and a bare
+/// Python literal would default to float64/int semantics instead of the
+/// operand's dtype. Accepts every spelling the fixpoint may present —
+/// arith.constant, pypto.constant, and the emitpy pl.const call the
+/// constant pattern lowers it to. Non-constant scalars return nullopt.
+static std::optional<std::string> constScalarText(Value value) {
+  // A pypto.constant carries the Python literal text directly; the DSL
+  // parser only keeps a pl.const call a compile-time constant when it is
+  // written inline at the use site, so the emitpy form must spell it out
+  // here rather than reference a bound pl.const statement.
+  if (auto pyptoConst = value.getDefiningOp<pypto::ConstantOp>()) {
+    auto dtype = resultDtypeName(value.getType());
+    if (!dtype) {
+      return std::nullopt;
+    }
+    return "pl.const(" + pyptoConst.getValue().str() + ", " + *dtype + ")";
+  }
+  // When the constant pattern has already run, the value is an emitpy
+  // pl.const call; recover the literal from its opaque args.
+  if (auto call = value.getDefiningOp<emitpy::CallOpaqueOp>();
+      call && call.getCallee() == "pl.const" && call->getNumOperands() == 0) {
+    auto args = call.getArgs();
+    if (args && args->size() == 2 && isa<emitpy::OpaqueAttr>((*args)[0]) && isa<emitpy::OpaqueAttr>((*args)[1])) {
+      return "pl.const(" + cast<emitpy::OpaqueAttr>((*args)[0]).getValue().str() + ", " +
+             cast<emitpy::OpaqueAttr>((*args)[1]).getValue().str() + ")";
+    }
+    return std::nullopt;
+  }
+  auto constOp = value.getDefiningOp<arith::ConstantOp>();
+  if (!constOp) {
+    return std::nullopt;
+  }
+  std::optional<std::string> text;
+  if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
+    text = floatToPythonText(floatAttr.getValue());
+  } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+    if (!intAttr.getType().isInteger(1)) {
+      text = intToPythonText(intAttr.getValue());
+    }
+  }
+  if (!text) {
+    return std::nullopt;
+  }
+  auto dtype = resultDtypeName(value.getType());
+  if (!dtype) {
+    return std::nullopt;
+  }
+  return "pl.const(" + *text + ", " + *dtype + ")";
+}
+
 /// Extracts the constant integer of an index operand, or nullopt when the
 /// operand is a runtime value. Stage one keeps index constants as
 /// `arith.constant`; this pass rewrites them into `emitpy.literal`, and
@@ -144,30 +217,14 @@ static std::optional<int64_t> constIndexValue(Value idx) {
   return std::nullopt;
 }
 
-/// Extracts the integer value of a mixed static/dynamic bound or step, as
-/// exposed by scf.forall: an IntegerAttr is the static form, a value (a
-/// constant op) the dynamic one.
-static std::optional<int64_t> mixedIndexValue(OpFoldResult bound) {
-  if (bound.is<Attribute>()) {
-    auto intAttr = dyn_cast<IntegerAttr>(bound.get<Attribute>());
-    if (!intAttr) {
-      return std::nullopt;
-    }
-    return intAttr.getInt();
-  }
-  return constIndexValue(bound.get<Value>());
-}
-
 /// Builds the `[i0, i1, ...]` offsets argument for pl.load/pl.store.
 /// Constant-only offsets render directly as an opaque list literal; dynamic
 /// offsets become operand references (IntegerAttr of index type) and the
 /// index values are appended to `operands`, matching the call_opaque
 /// argument protocol used by the vector-to-emitpy lowering.
-static Attribute buildOffsetsArg(ConversionPatternRewriter &rewriter,
-                                 ValueRange offsets,
+static Attribute buildOffsetsArg(ConversionPatternRewriter &rewriter, ValueRange offsets,
                                  SmallVectorImpl<Value> &operands) {
-  bool allConstant = llvm::all_of(
-      offsets, [](Value offset) { return constIndexValue(offset).has_value(); });
+  bool allConstant = llvm::all_of(offsets, [](Value offset) { return constIndexValue(offset).has_value(); });
   if (allConstant) {
     std::string text = "[";
     bool first = true;
@@ -192,14 +249,14 @@ static Attribute buildOffsetsArg(ConversionPatternRewriter &rewriter,
 /// The reduce-kind suffix shared by the `pl.row_*` / `pl.col_*` families.
 static StringRef reduceKindSuffix(pypto::ReduceKind kind) {
   switch (kind) {
-  case pypto::ReduceKind::sum:
-    return "sum";
-  case pypto::ReduceKind::prod:
-    return "prod";
-  case pypto::ReduceKind::min:
-    return "min";
-  case pypto::ReduceKind::max:
-    return "max";
+    case pypto::ReduceKind::sum:
+      return "sum";
+    case pypto::ReduceKind::prod:
+      return "prod";
+    case pypto::ReduceKind::min:
+      return "min";
+    case pypto::ReduceKind::max:
+      return "max";
   }
   return "";
 }
@@ -208,37 +265,33 @@ static StringRef reduceKindSuffix(pypto::ReduceKind kind) {
 /// last axis, `col` the first one.
 static StringRef reduceAxisPrefix(pypto::ReduceAxis axis) {
   switch (axis) {
-  case pypto::ReduceAxis::row:
-    return "row_";
-  case pypto::ReduceAxis::col:
-    return "col_";
+    case pypto::ReduceAxis::row:
+      return "row_";
+    case pypto::ReduceAxis::col:
+      return "col_";
   }
   return "";
 }
 
 /// Renders the opaque PyPTO annotation `wrapper[[shape], dtype]` for a
 /// statically known shape, e.g. `pl.Tensor[[512], pl.FP32]`.
-static Type pyptoShapedOpaque(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                              Type elemType, StringRef wrapper) {
+static Type pyptoShapedOpaque(MLIRContext *ctx, ArrayRef<int64_t> shape, Type elemType, StringRef wrapper) {
   auto dtype = pyptoDtypeName(elemType);
   if (!dtype) {
     return Type();
   }
   std::string text;
   llvm::raw_string_ostream rso(text);
-  rso << wrapper << "[" << shapeToPythonListText(shape) << ", " << *dtype
-      << "]";
+  rso << wrapper << "[" << shapeToPythonListText(shape) << ", " << *dtype << "]";
   rso.flush();
   return emitpy::OpaqueType::get(ctx, text);
 }
 
-static Type pyptoShapedOpaque(MLIRContext *ctx, ShapedType type,
-                              StringRef wrapper) {
+static Type pyptoShapedOpaque(MLIRContext *ctx, ShapedType type, StringRef wrapper) {
   if (!type.hasStaticShape()) {
     return Type();
   }
-  return pyptoShapedOpaque(ctx, type.getShape(), type.getElementType(),
-                           wrapper);
+  return pyptoShapedOpaque(ctx, type.getShape(), type.getElementType(), wrapper);
 }
 
 /// Renders the opaque PyPTO annotation `pl.Scalar[dtype]`.
@@ -284,9 +337,7 @@ class PyptoToEmitPyTypeConverter : public TypeConverter {
       // A `?` extent cannot be spelled in the annotation; dynamic tiles
       // keep their source type, which the Python translator accepts for
       // call_opaque results (as it already does for dynamic vector tiles).
-      if (llvm::any_of(type.getShape(), [](int64_t dim) {
-            return ShapedType::isDynamic(dim);
-          })) {
+      if (llvm::any_of(type.getShape(), [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
         return type;
       }
       auto dtype = pyptoDtypeName(type.getElementType());
@@ -295,8 +346,7 @@ class PyptoToEmitPyTypeConverter : public TypeConverter {
       }
       std::string text;
       llvm::raw_string_ostream rso(text);
-      rso << "pl.Tile[" << shapeToPythonListText(type.getShape()) << ", "
-          << *dtype << "]";
+      rso << "pl.Tile[" << shapeToPythonListText(type.getShape()) << ", " << *dtype << "]";
       rso.flush();
       return emitpy::OpaqueType::get(type.getContext(), text);
     });
@@ -310,27 +360,20 @@ class PyptoToEmitPyTypeConverter : public TypeConverter {
 /// Rewrites an op into `emitpy.call_opaque` with the given callee and all
 /// operands passed positionally, e.g.
 /// `pypto.add %a, %b` -> `%r = pl.add(a, b)`.
-/// Covers the elementwise binaries/unaries, the scalar combines and
-/// `pypto.select` (whose scratch tile is an explicit operand, unlike the
-/// vector-side select that has to materialize one).
+/// Covers the elementwise binaries/unaries and the scalar combines.
 template <typename SourceOp>
 class OpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
  public:
-  OpToCallOpaquePattern(TypeConverter &typeConverter, MLIRContext *context,
-                        StringRef callee)
+  OpToCallOpaquePattern(TypeConverter &typeConverter, MLIRContext *context, StringRef callee)
       : OpConversionPattern<SourceOp>(typeConverter, context), callee(callee) {}
 
-  LogicalResult
-  matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        this->getTypeConverter()->convertType(op->getResult(0).getType());
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = this->getTypeConverter()->convertType(op->getResult(0).getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee,
-                                                      adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee, adaptor.getOperands());
     return success();
   }
 
@@ -338,117 +381,168 @@ class OpToCallOpaquePattern : public OpConversionPattern<SourceOp> {
   StringRef callee;
 };
 
-//===----------------------------------------------------------------------===//
-// Stage-one survivors: scalar arith forms and scf control flow
-//===----------------------------------------------------------------------===//
-
-/// `pl.cmp` comparison type codes: 0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge.
-static std::optional<unsigned> cmpTypeCodeFor(arith::CmpIPredicate predicate) {
-  switch (predicate) {
-  case arith::CmpIPredicate::eq:
-    return 0u;
-  case arith::CmpIPredicate::ne:
-    return 1u;
-  case arith::CmpIPredicate::slt:
-  case arith::CmpIPredicate::ult:
-    return 2u;
-  case arith::CmpIPredicate::sle:
-  case arith::CmpIPredicate::ule:
-    return 3u;
-  case arith::CmpIPredicate::sgt:
-  case arith::CmpIPredicate::ugt:
-    return 4u;
-  case arith::CmpIPredicate::sge:
-  case arith::CmpIPredicate::uge:
-    return 5u;
-  }
-  return std::nullopt;
-}
-
-static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate predicate) {
-  switch (predicate) {
-  case arith::CmpFPredicate::OEQ:
-    return 0u;
-  case arith::CmpFPredicate::ONE:
-  case arith::CmpFPredicate::UNE:
-    return 1u;
-  case arith::CmpFPredicate::OLT:
-    return 2u;
-  case arith::CmpFPredicate::OLE:
-    return 3u;
-  case arith::CmpFPredicate::OGT:
-    return 4u;
-  case arith::CmpFPredicate::OGE:
-    return 5u;
-  default:
-    // NaN-sensitive unordered predicates have no pl.cmp counterpart.
-    return std::nullopt;
-  }
-}
-
-/// Scalar comparison pseudo-callees, indexed by the `pl.cmp` type code
-/// (0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge). The PyPTO runtime's `pl.cmp`
-/// accepts Tensor/Tile operands only, so the scalar comparisons kept by
-/// stage one (e.g. the cmp/div/select chains of the built-in affine
-/// floordiv lowering) go through these pseudo-callees, which the Python
-/// translator prints as infix comparisons that the PyPTO parser maps onto
-/// ir.lt etc.
-static StringRef scalarCmpCalleeFor(unsigned cmpTypeCode) {
-  static const StringRef callees[] = {"util_cmp_eq", "util_cmp_ne",
-                                      "util_cmp_lt", "util_cmp_le",
-                                      "util_cmp_gt", "util_cmp_ge"};
-  return cmpTypeCode < std::size(callees) ? callees[cmpTypeCode] : StringRef();
-}
-
-/// Rewrites the scalar comparisons kept by stage one onto the infix
-/// comparison pseudo-callees: `pl.cmp` has no scalar overload. Tile
-/// comparisons must already be `pypto.cmp` by then.
-template <typename SourceOp>
-class ScalarCmpPattern : public OpConversionPattern<SourceOp> {
+/// Rewrites `pypto.select` into `pl.tile.select`: the runtime's composite
+/// synthesizes the architecture-defined scratch tile, so no scratch is
+/// materialized here and dynamic result shapes are legal. A constant
+/// scalar branch rides inline as `pl.const(...)` text — the composite
+/// materializes it with `tile.full`, which demands a literal, and the
+/// raw `arith.constant` has no emitpy printer.
+class SelectOpPattern : public OpConversionPattern<pypto::SelectOp> {
  public:
-  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpConversionPattern<pypto::SelectOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (llvm::any_of(op->getOperands(), [](Value operand) {
-          return isa<VectorType, npuvector::NPUVectorType>(operand.getType());
-        })) {
-      return rewriter.notifyMatchFailure(
-          op, "tile comparisons must be pypto.cmp by stage one");
+  LogicalResult matchAndRewrite(pypto::SelectOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
-    auto code = cmpTypeCodeFor(op.getPredicate());
-    if (!code) {
-      return rewriter.notifyMatchFailure(
-          op, "comparison predicate has no util_cmp counterpart");
+    auto isTile = [](Value value) { return isa<ShapedType, pypto::TileType>(value.getType()); };
+    // Fast path: every operand tile-typed is a plain positional call,
+    // byte-identical to the generic pattern.
+    if (llvm::all_of(op->getOperands(), isTile)) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.tile.select", adaptor.getOperands());
+      return success();
     }
-    // Raw operands: values already rewritten (e.g. index constants turned
-    // into emitpy.literal) resolve to their replacements.
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, op->getResult(0).getType(), scalarCmpCalleeFor(*code),
-        op->getOperands());
+    // Scalar-branch path: a constant branch inlines as pl.const(...) text —
+    // the DSL parser keeps a pl.const a compile-time constant only when it
+    // appears inline at the call site, so a referenced constant statement
+    // would arrive as a runtime Var, which the composite cannot materialize.
+    // Anything else is a runtime scalar, likewise rejected.
+    SmallVector<Value> operands;
+    SmallVector<Attribute> args;
+    SmallVector<Operation *> inlinedDefs;
+    auto converted = adaptor.getOperands();
+    for (auto [value, convertedValue] : llvm::zip(op->getOperands(), converted)) {
+      if (isTile(value)) {
+        args.push_back(rewriter.getIndexAttr(operands.size()));
+        operands.push_back(convertedValue);
+        continue;
+      }
+      if (auto text = constScalarText(value)) {
+        args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(*text));
+        inlinedDefs.push_back(value.getDefiningOp());
+        continue;
+      }
+      return rewriter.notifyMatchFailure(op, "scalar select branch must be a constant");
+    }
+    if (operands.size() < 2) {
+      return rewriter.notifyMatchFailure(op, "select needs at least one tile branch");
+    }
+    SmallVector<Attribute> keywords(3, rewriter.getStringAttr(""));
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.tile.select", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    // Constants consumed inline as text leave their raw arith.constant
+    // dead; drop them so the translator never has to print them.
+    for (Operation *def : inlinedDefs) {
+      if (def->use_empty()) {
+        rewriter.eraseOp(def);
+      }
+    }
     return success();
   }
 };
 
-/// Rewrites the scalar selects kept by stage one onto the `util_select`
-/// pseudo-callee, which the translator prints as a Python conditional
-/// expression. Operand order is (condition, trueValue, falseValue) in both
-/// the IR and the pseudo-callee; the translator reorders for Python
-/// syntax. Tile selects must already be `pypto.select` by then.
-class ScalarSelectPattern : public OpConversionPattern<arith::SelectOp> {
- public:
-  using OpConversionPattern<arith::SelectOp>::OpConversionPattern;
+/// Callee for a scalar arith op: the operation's own name minus the
+/// dialect prefix ("arith.addi" -> "addi"), so the emitpy IR spells scalar
+/// math with the arith mnemonic itself instead of a parallel `util_*`
+/// pseudo-callee family.
+template <typename ArithOp>
+static StringRef scalarArithCallee() {
+  return ArithOp::getOperationName().split('.').second;
+}
 
-  LogicalResult
-  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (isa<ShapedType>(op->getResult(0).getType())) {
-      return rewriter.notifyMatchFailure(
-          op, "tile selects must be pypto.select by stage one");
+/// Registers one OpToCallOpaquePattern per scalar arith op, with the
+/// callee derived from each op's name (no hand-spelled callee strings).
+template <typename... ArithOps>
+static void addScalarArithPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+  (patterns.add<OpToCallOpaquePattern<ArithOps>>(typeConverter, patterns.getContext(), scalarArithCallee<ArithOps>()),
+   ...);
+}
+
+//===----------------------------------------------------------------------===//
+// Stage-one survivors: scalar pseudo-callees and index constants
+//===----------------------------------------------------------------------===//
+
+/// Scalar comparison pseudo-callees, indexed by comparison kind
+/// (0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge) — the arith predicate mnemonics
+/// with signed/unsigned collapsed. The PyPTO runtime's `pl.cmp`
+/// accepts Tensor/Tile operands only, so scalar comparisons (e.g. the
+/// cmp/div/select chains of the built-in affine floordiv lowering) go
+/// through these pseudo-callees, which the Python translator prints as
+/// infix comparisons that the PyPTO parser maps onto ir.lt etc.
+static StringRef scalarCmpCalleeFor(unsigned cmpTypeCode) {
+  static const StringRef callees[] = {"eq", "ne", "lt", "le", "gt", "ge"};
+  return cmpTypeCode < std::size(callees) ? callees[cmpTypeCode] : StringRef();
+}
+
+/// Comparison kind codes shared with the pypto.cmp predicate values:
+/// 0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge. Signed and unsigned integer
+/// predicates collapse onto the same kind; the runtime treats index math
+/// as signed.
+static std::optional<unsigned> cmpTypeCodeFor(arith::CmpIPredicate p) {
+  switch (p) {
+    case arith::CmpIPredicate::eq:
+      return 0u;
+    case arith::CmpIPredicate::ne:
+      return 1u;
+    case arith::CmpIPredicate::slt:
+    case arith::CmpIPredicate::ult:
+      return 2u;
+    case arith::CmpIPredicate::sle:
+    case arith::CmpIPredicate::ule:
+      return 3u;
+    case arith::CmpIPredicate::sgt:
+    case arith::CmpIPredicate::ugt:
+      return 4u;
+    case arith::CmpIPredicate::sge:
+    case arith::CmpIPredicate::uge:
+      return 5u;
+  }
+  return std::nullopt;
+}
+
+static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate p) {
+  switch (p) {
+    case arith::CmpFPredicate::OEQ:
+      return 0u;
+    case arith::CmpFPredicate::ONE:
+    case arith::CmpFPredicate::UNE:
+      return 1u;
+    case arith::CmpFPredicate::OLT:
+      return 2u;
+    case arith::CmpFPredicate::OLE:
+      return 3u;
+    case arith::CmpFPredicate::OGT:
+      return 4u;
+    case arith::CmpFPredicate::OGE:
+      return 5u;
+    default:
+      // NaN-sensitive unordered predicates have no infix counterpart.
+      return std::nullopt;
+  }
+}
+
+/// Rewrites a scalar `arith.cmpi`/`arith.cmpf` (kept by stage one) onto
+/// the infix comparison pseudo-callees: `pl.cmp` has no scalar overload.
+/// Tile comparisons were rewritten to `pypto.cmp` by stage one and lower
+/// through CmpOpPattern instead.
+template <typename SourceOp>
+class ArithCmpPattern : public OpConversionPattern<SourceOp> {
+ public:
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto code = cmpTypeCodeFor(op.getPredicate());
+    if (!code) {
+      return rewriter.notifyMatchFailure(op, "comparison predicate has no infix counterpart");
     }
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, op->getResult(0).getType(), "util_select", op->getOperands());
+    StringRef callee = scalarCmpCalleeFor(*code);
+    if (callee.empty()) {
+      return rewriter.notifyMatchFailure(op, "unknown comparison kind");
+    }
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, op->getResult(0).getType(), callee, op->getOperands());
     return success();
   }
 };
@@ -459,9 +553,8 @@ class IndexConstantOpPattern : public OpConversionPattern<arith::ConstantOp> {
  public:
   using OpConversionPattern<arith::ConstantOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     if (!isa<IndexType>(op.getType())) {
       return rewriter.notifyMatchFailure(op, "not an index constant");
     }
@@ -473,117 +566,43 @@ class IndexConstantOpPattern : public OpConversionPattern<arith::ConstantOp> {
     if (!text) {
       return rewriter.notifyMatchFailure(op, "unsupported index constant");
     }
-    rewriter.replaceOpWithNewOp<emitpy::LiteralOp>(
-        op, rewriter.getIndexType(), *text);
+    rewriter.replaceOpWithNewOp<emitpy::LiteralOp>(op, rewriter.getIndexType(), *text);
     return success();
   }
 };
 
-/// Rewrites `scf.parallel` into an `emitpy.spmd_scope` multi-core launch:
-/// a reduction-free single induction variable sweeping `[0, N)` with step 1
-/// maps onto a PyPTO SPMD grid of N cores, the induction variable being the
-/// executing core's block index.
-class ScfParallelPattern : public OpConversionPattern<scf::ParallelOp> {
+//===----------------------------------------------------------------------===//
+// Structured control flow
+//===----------------------------------------------------------------------===//
+
+/// Rewrites `pypto.spmd` into `emitpy.spmd_scope` one-to-one: stage one
+/// already resolved the multi-core grid (core count, body, block index),
+/// so this stage only retargets the op onto its emitpy spelling.
+class SpmdOpPattern : public OpConversionPattern<pypto::SpmdOp> {
  public:
-  using OpConversionPattern<scf::ParallelOp>::OpConversionPattern;
+  using OpConversionPattern<pypto::SpmdOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(scf::ParallelOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (op.getNumLoops() != 1 || !op.getInitVals().empty() ||
-        op.getNumResults() != 0) {
-      return rewriter.notifyMatchFailure(
-          op, "only reduction-free single-induction parallel loops map onto "
-              "an SPMD grid");
-    }
-    auto lb = constIndexValue(op.getLowerBound()[0]);
-    auto ub = constIndexValue(op.getUpperBound()[0]);
-    auto step = constIndexValue(op.getStep()[0]);
-    if (!lb || !ub || !step || *lb != 0 || *step != 1) {
-      return rewriter.notifyMatchFailure(
-          op, "SPMD grids sweep [0, N) with step 1");
-    }
-    Block &body = op.getRegion().front();
-    // Even a reduction-free scf.parallel ends in an (empty) scf.reduce.
-    auto reduce = dyn_cast<scf::ReduceOp>(body.getTerminator());
-    if (!reduce || reduce.getNumOperands() != 0) {
-      return rewriter.notifyMatchFailure(op,
-                                         "reductions have no PyPTO lowering");
-    }
-    auto spmd = rewriter.create<emitpy::SpmdScopeOp>(
-        op.getLoc(), rewriter.getI64IntegerAttr(*ub));
-    rewriter.inlineRegionBefore(op.getRegion(), spmd.getBody(),
-                                spmd.getBody().end());
-    rewriter.eraseOp(reduce);
-    rewriter.replaceOp(op, spmd);
-    return success();
-  }
-};
-
-/// Rewrites `scf.forall` into the same `emitpy.spmd_scope` multi-core
-/// launch as scf.parallel: a single induction variable sweeping `[0, N)`
-/// with step 1 becomes the executing core's block index. forall stores its
-/// bounds as mixed static/dynamic pairs, so both spellings of a constant
-/// grid are accepted. The trailing in_parallel region only wraps tensor
-/// merge writes (parallel_insert_slice), which have no PyPTO counterpart,
-/// so it must be empty.
-class ScfForallPattern : public OpConversionPattern<scf::ForallOp> {
- public:
-  using OpConversionPattern<scf::ForallOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(scf::ForallOp op, OpAdaptor adaptor,
+  LogicalResult matchAndRewrite(pypto::SpmdOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (op.getRank() != 1 || !op.getOutputs().empty()) {
-      return rewriter.notifyMatchFailure(op,
-                                         "only single-induction forall loops without shared outputs map "
-                                         "onto an SPMD grid");
-    }
-    auto lb = mixedIndexValue(op.getMixedLowerBound()[0]);
-    auto ub = mixedIndexValue(op.getMixedUpperBound()[0]);
-    auto step = mixedIndexValue(op.getMixedStep()[0]);
-    if (!lb || !ub || !step || *lb != 0 || *step != 1 || *ub <= 0) {
-      return rewriter.notifyMatchFailure(op, "SPMD grids are non-empty sweeps [0, N) with step 1");
-    }
-    Block &body = op.getRegion().front();
-    auto inParallel = dyn_cast<scf::InParallelOp>(body.getTerminator());
-    // The in_parallel region hosts the parallel merge writes; it must hold
-    // nothing but its (possibly absent) empty block.
-    if (!inParallel || (!inParallel.getRegion().empty() && !inParallel.getRegion().front().empty())) {
-      return rewriter.notifyMatchFailure(op, "parallel merge writes have no PyPTO lowering");
-    }
-    auto spmd = rewriter.create<emitpy::SpmdScopeOp>(op.getLoc(), rewriter.getI64IntegerAttr(*ub));
-    rewriter.inlineRegionBefore(op.getRegion(), spmd.getBody(), spmd.getBody().end());
-    rewriter.eraseOp(inParallel);
+    auto spmd = rewriter.create<emitpy::SpmdScopeOp>(op.getLoc(), op.getCoreNum());
+    rewriter.inlineRegionBefore(op.getBody(), spmd.getBody(), spmd.getBody().end());
     rewriter.replaceOp(op, spmd);
     return success();
   }
 };
 
-/// Rewrites `scf.for` into `emitpy.for` (emitted as
-/// `for <iv> in pl.range(lb, ub, step)`): the per-core tile loop.
-/// Loop-carried values are rejected: the generated kernels are straight-line
-/// tile code with all results flowing through tile stores.
-class ScfForPattern : public OpConversionPattern<scf::ForOp> {
+/// Rewrites `pypto.range` into `emitpy.for` (emitted as
+/// `for <iv> in pl.range(lb, ub, step)`): the per-core tile loop. Stage
+/// one already resolved the loop, so this is a direct retargeting.
+class RangeOpPattern : public OpConversionPattern<pypto::RangeOp> {
  public:
-  using OpConversionPattern<scf::ForOp>::OpConversionPattern;
+  using OpConversionPattern<pypto::RangeOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(scf::ForOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (!op.getInitArgs().empty()) {
-      return rewriter.notifyMatchFailure(
-          op, "loop-carried values have no PyPTO lowering");
-    }
-    Block &body = op.getRegion().front();
-    auto yield = dyn_cast<scf::YieldOp>(body.getTerminator());
-    if (!yield || yield.getNumOperands() != 0) {
-      return rewriter.notifyMatchFailure(op, "unexpected loop terminator");
-    }
-    auto loop = rewriter.create<emitpy::ForOp>(
-        op.getLoc(), op.getLowerBound(), op.getUpperBound(), op.getStep());
-    rewriter.inlineRegionBefore(op.getRegion(), loop.getBody(),
-                                loop.getBody().end());
-    rewriter.eraseOp(yield);
+  LogicalResult matchAndRewrite(pypto::RangeOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto loop =
+      rewriter.create<emitpy::ForOp>(op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(), adaptor.getStep());
+    rewriter.inlineRegionBefore(op.getBody(), loop.getBody(), loop.getBody().end());
     rewriter.replaceOp(op, loop);
     return success();
   }
@@ -600,28 +619,21 @@ class ConstantOpPattern : public OpConversionPattern<pypto::ConstantOp> {
  public:
   using OpConversionPattern<pypto::ConstantOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::ConstantOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     auto dtype = resultDtypeName(op.getResult().getType());
     if (!dtype) {
-      return rewriter.notifyMatchFailure(op,
-                                         "constant type has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "constant type has no PyPTO dtype");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
-    SmallVector<Attribute> args{
-        rewriter.getAttr<emitpy::OpaqueAttr>(op.getValue()),
-        rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.const", ValueRange{}, rewriter.getArrayAttr(args),
-        rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{rewriter.getAttr<emitpy::OpaqueAttr>(op.getValue()),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.const", ValueRange{},
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -635,9 +647,8 @@ class TileFullOpPattern : public OpConversionPattern<pypto::TileFullOp> {
  public:
   using OpConversionPattern<pypto::TileFullOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::TileFullOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::TileFullOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     // The result keeps the source type during the staged migration, so it
     // is either a `!pypto.tile<...>` (TileType is not a ShapedType) or
     // the original vector/npuvector type; both spell the element type
@@ -648,9 +659,7 @@ class TileFullOpPattern : public OpConversionPattern<pypto::TileFullOp> {
     bool hasStaticShape = false;
     if (auto tile = dyn_cast<pypto::TileType>(sourceType)) {
       elementType = tile.getElementType();
-      if (!llvm::any_of(tile.getShape(), [](int64_t dim) {
-            return ShapedType::isDynamic(dim);
-          })) {
+      if (!llvm::any_of(tile.getShape(), [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
         staticShape = SmallVector<int64_t>(tile.getShape());
         hasStaticShape = true;
       }
@@ -661,42 +670,31 @@ class TileFullOpPattern : public OpConversionPattern<pypto::TileFullOp> {
         hasStaticShape = true;
       }
     } else {
-      return rewriter.notifyMatchFailure(op,
-                                         "tile_full result must be shaped");
+      return rewriter.notifyMatchFailure(op, "tile_full result must be shaped");
     }
     auto dtype = pyptoDtypeName(elementType);
     if (!dtype) {
-      return rewriter.notifyMatchFailure(op,
-                                         "element type has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "element type has no PyPTO dtype");
     }
     Type resultType = getTypeConverter()->convertType(sourceType);
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> fullOperands;
     Attribute shapeArg;
     if (adaptor.getOperands().empty()) {
       if (!hasStaticShape) {
-        return rewriter.notifyMatchFailure(
-            op, "tile_full without extents must be statically shaped");
+        return rewriter.notifyMatchFailure(op, "tile_full without extents must be statically shaped");
       }
-      shapeArg = rewriter.getAttr<emitpy::OpaqueAttr>(
-          shapeToPythonListText(staticShape));
+      shapeArg = rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(staticShape));
     } else {
-      shapeArg =
-          buildOffsetsArg(rewriter, adaptor.getOperands(), fullOperands);
+      shapeArg = buildOffsetsArg(rewriter, adaptor.getOperands(), fullOperands);
     }
-    SmallVector<Attribute> args{
-        shapeArg,
-        rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
-        rewriter.getAttr<emitpy::OpaqueAttr>(op.getValue())};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.tile.full", ValueRange(fullOperands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{shapeArg, rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(op.getValue())};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.tile.full", ValueRange(fullOperands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -708,36 +706,27 @@ class CreateTileOpPattern : public OpConversionPattern<pypto::CreateTileOp> {
  public:
   using OpConversionPattern<pypto::CreateTileOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::CreateTileOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::CreateTileOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     auto tile = llvm::cast<pypto::TileType>(op.getResult().getType());
-    if (llvm::any_of(tile.getShape(),
-                     [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
-      return rewriter.notifyMatchFailure(
-          op, "pl.create_tile requires a statically shaped result");
+    if (llvm::any_of(tile.getShape(), [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
+      return rewriter.notifyMatchFailure(op, "pl.create_tile requires a statically shaped result");
     }
     auto dtype = pyptoDtypeName(tile.getElementType());
     if (!dtype) {
-      return rewriter.notifyMatchFailure(op,
-                                         "element type has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "element type has no PyPTO dtype");
     }
     Type resultType = getTypeConverter()->convertType(tile);
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
-    SmallVector<Attribute> args{
-        rewriter.getAttr<emitpy::OpaqueAttr>(
-            shapeToPythonListText(tile.getShape())),
-        rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
-        rewriter.getAttr<emitpy::OpaqueAttr>("pl.MemorySpace.Vec")};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("dtype"),
+    SmallVector<Attribute> args{rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(tile.getShape())),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
+                                rewriter.getAttr<emitpy::OpaqueAttr>("pl.MemorySpace.Vec")};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("dtype"),
                                     rewriter.getStringAttr("target_memory")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.create_tile", ValueRange{},
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.create_tile", ValueRange{},
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -753,36 +742,26 @@ class SliceOpPattern : public OpConversionPattern<pypto::SliceOp> {
  public:
   using OpConversionPattern<pypto::SliceOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::SliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+  LogicalResult matchAndRewrite(pypto::SliceOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    Attribute offsetsArg =
-        buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        rewriter.getAttr<emitpy::OpaqueAttr>(
-            shapeToPythonListText(op.getWindow())),
-        offsetsArg};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(op.getWindow())),
+                                offsetsArg};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
     if (auto dropDims = op.getDropDims()) {
       if (!dropDims->empty()) {
-        args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(
-            shapeToPythonListText(*dropDims)));
+        args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(*dropDims)));
         keywords.push_back(rewriter.getStringAttr("drop_dims"));
       }
     }
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.slice", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.slice", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -790,43 +769,46 @@ class SliceOpPattern : public OpConversionPattern<pypto::SliceOp> {
 /// Rewrites `pypto.reshape` into `pl.reshape(src, [shape])`. Handles both
 /// the spike tile form and the pipeline form, where the intermediate
 /// layer keeps the source result type (vector/memref) until this stage.
+/// Dynamically shaped results carry per-dimension `extents` (the op's own
+/// model, mirroring `pypto.tile_full`); their shape list mixes literals
+/// and operand references the same way load offsets do.
 class ReshapeOpPattern : public OpConversionPattern<pypto::ReshapeOp> {
  public:
   using OpConversionPattern<pypto::ReshapeOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::ReshapeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::ReshapeOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     SmallVector<int64_t> shape;
     if (auto tile = dyn_cast<pypto::TileType>(op.getResult().getType())) {
       shape = llvm::to_vector(tile.getShape());
-    } else if (auto shaped =
-                   dyn_cast<ShapedType>(op.getResult().getType())) {
+    } else if (auto shaped = dyn_cast<ShapedType>(op.getResult().getType())) {
       shape = llvm::to_vector(shaped.getShape());
     } else {
-      return rewriter.notifyMatchFailure(
-          op, "reshape result must be a shaped type");
+      return rewriter.notifyMatchFailure(op, "reshape result must be a shaped type");
     }
-    if (llvm::any_of(shape,
-                     [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
-      return rewriter.notifyMatchFailure(
-          op, "reshape result must be statically shaped");
+    bool dynamic = llvm::any_of(shape, [](int64_t dim) { return ShapedType::isDynamic(dim); });
+    if (dynamic && adaptor.getExtents().size() != shape.size()) {
+      return rewriter.notifyMatchFailure(op, "dynamic reshape needs one extent per result dimension");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape))};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.reshape", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    Attribute shapeArg;
+    if (!dynamic) {
+      shapeArg = rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape));
+    } else {
+      // The identity fallback keeps the npuvector/memref spelling; a `?`
+      // extent cannot be spelled as an annotation, and the Python
+      // translator accepts the source type for call_opaque results (as it
+      // does for dynamic loads).
+      shapeArg = buildOffsetsArg(rewriter, adaptor.getExtents(), operands);
+    }
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), shapeArg};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.reshape", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -836,26 +818,19 @@ class TransposeOpPattern : public OpConversionPattern<pypto::TransposeOp> {
  public:
   using OpConversionPattern<pypto::TransposeOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::TransposeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+  LogicalResult matchAndRewrite(pypto::TransposeOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(op.getI())),
-        rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(op.getJ()))};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.transpose", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(op.getI())),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(op.getJ()))};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.transpose", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -863,34 +838,25 @@ class TransposeOpPattern : public OpConversionPattern<pypto::TransposeOp> {
 /// Rewrites `pypto.reinterpret_view` into
 /// `pl.reinterpret_view(src, dtype)`: a bit-level reinterpretation of the
 /// payload.
-class ReinterpretViewOpPattern
-    : public OpConversionPattern<pypto::ReinterpretViewOp> {
+class ReinterpretViewOpPattern : public OpConversionPattern<pypto::ReinterpretViewOp> {
  public:
-  using OpConversionPattern<
-      pypto::ReinterpretViewOp>::OpConversionPattern;
+  using OpConversionPattern<pypto::ReinterpretViewOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::ReinterpretViewOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::ReinterpretViewOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     auto dtype = resultDtypeName(op.getResult().getType());
     if (!dtype) {
-      return rewriter.notifyMatchFailure(op,
-                                         "view type has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "view type has no PyPTO dtype");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
-                                rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.reinterpret_view", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.reinterpret_view", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -900,28 +866,21 @@ class CastOpPattern : public OpConversionPattern<pypto::CastOp> {
  public:
   using OpConversionPattern<pypto::CastOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::CastOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::CastOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     auto dtype = resultDtypeName(op.getResult().getType());
     if (!dtype) {
-      return rewriter.notifyMatchFailure(op,
-                                         "cast target has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "cast target has no PyPTO dtype");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
-                                rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.cast", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.cast", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -931,32 +890,41 @@ class CastOpPattern : public OpConversionPattern<pypto::CastOp> {
 //===----------------------------------------------------------------------===//
 
 /// Rewrites `pypto.cmp` into `pl.cmp(lhs, rhs, cmp_type=code)`: the enum
-/// values already match the PyPTO comparison codes.
+/// values already match the PyPTO comparison codes. A scalar rhs lowers
+/// onto the tile-scalar `pl.tile.cmps` form instead; a constant scalar
+/// rides inline as `pl.const(...)` text (the raw `arith.constant` has no
+/// emitpy printer), while a runtime scalar stays an operand reference.
 class CmpOpPattern : public OpConversionPattern<pypto::CmpOp> {
  public:
   using OpConversionPattern<pypto::CmpOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::CmpOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+  LogicalResult matchAndRewrite(pypto::CmpOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
+    bool scalarRhs = !isa<ShapedType, pypto::TileType>(op.getRhs().getType());
     SmallVector<Value> operands{adaptor.getLhs(), adaptor.getRhs()};
     SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        rewriter.getIndexAttr(1),
-        rewriter.getAttr<emitpy::OpaqueAttr>(
-            std::to_string(static_cast<uint32_t>(op.getPredicate())))};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
+      rewriter.getIndexAttr(0), rewriter.getIndexAttr(1),
+      rewriter.getAttr<emitpy::OpaqueAttr>(std::to_string(static_cast<uint32_t>(op.getPredicate())))};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""),
                                     rewriter.getStringAttr("cmp_type")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.cmp", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    if (scalarRhs) {
+      if (auto text = constScalarText(op.getRhs())) {
+        args[1] = rewriter.getAttr<emitpy::OpaqueAttr>(*text);
+        operands.pop_back();
+      }
+    }
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, scalarRhs ? "pl.tile.cmps" : "pl.cmp",
+                                                      ValueRange(operands), rewriter.getArrayAttr(args),
+                                                      rewriter.getArrayAttr(keywords));
+    // A constant consumed inline as text leaves the raw arith.constant
+    // dead; drop it so the translator never has to print it.
+    if (auto constOp = op.getRhs().getDefiningOp<arith::ConstantOp>(); constOp && constOp->use_empty()) {
+      rewriter.eraseOp(constOp);
+    }
     return success();
   }
 };
@@ -972,25 +940,20 @@ class ReductionOpPattern : public OpConversionPattern<pypto::ReductionOp> {
  public:
   using OpConversionPattern<pypto::ReductionOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::ReductionOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::ReductionOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     StringRef prefix = reduceAxisPrefix(op.getAxis());
     StringRef suffix = reduceKindSuffix(op.getKind());
     if (prefix.empty() || suffix.empty()) {
-      return rewriter.notifyMatchFailure(
-          op, "reduction kind/axis has no PyPTO counterpart");
+      return rewriter.notifyMatchFailure(op, "reduction kind/axis has no PyPTO counterpart");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     std::string callee = "pl." + prefix.str() + suffix.str();
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, callee,
-        ValueRange{adaptor.getVector(), adaptor.getScratch()});
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee,
+                                                      ValueRange{adaptor.getVector(), adaptor.getScratch()});
     return success();
   }
 };
@@ -1001,25 +964,18 @@ class ReadOpPattern : public OpConversionPattern<pypto::ReadOp> {
  public:
   using OpConversionPattern<pypto::ReadOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::ReadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+  LogicalResult matchAndRewrite(pypto::ReadOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "result type has no emitpy counterpart");
+      return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        rewriter.getAttr<emitpy::OpaqueAttr>(
-            shapeToPythonListText(op.getIndices()))};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.read", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(op.getIndices()))};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.read", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -1029,20 +985,14 @@ class WriteOpPattern : public OpConversionPattern<pypto::WriteOp> {
  public:
   using OpConversionPattern<pypto::WriteOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::WriteOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::WriteOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     SmallVector<Value> operands{adaptor.getDest(), adaptor.getValue()};
-    Attribute offsetsArg =
-        buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0), offsetsArg, rewriter.getIndexAttr(1)};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.create<emitpy::CallOpaqueOp>(
-        op.getLoc(), TypeRange{}, "pl.write", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg, rewriter.getIndexAttr(1)};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), TypeRange{}, "pl.write", ValueRange(operands),
+                                          rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     rewriter.eraseOp(op);
     return success();
   }
@@ -1063,9 +1013,8 @@ class LoadOpPattern : public OpConversionPattern<pypto::LoadOp> {
  public:
   using OpConversionPattern<pypto::LoadOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::LoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::LoadOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     if (op.getPaddedShapes().empty()) {
       return rewriteStaticRead(op, adaptor, rewriter);
     }
@@ -1073,70 +1022,60 @@ class LoadOpPattern : public OpConversionPattern<pypto::LoadOp> {
   }
 
  private:
-  LogicalResult rewriteStaticRead(pypto::LoadOp op, OpAdaptor adaptor,
-                                  ConversionPatternRewriter &rewriter) const {
+  LogicalResult rewriteStaticRead(pypto::LoadOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
     SmallVector<int64_t> shape;
     if (auto tile = dyn_cast<pypto::TileType>(op.getResult().getType())) {
       shape = llvm::to_vector(tile.getShape());
-    } else if (auto shaped =
-                   dyn_cast<ShapedType>(op.getResult().getType())) {
+    } else if (auto shaped = dyn_cast<ShapedType>(op.getResult().getType())) {
       shape = llvm::to_vector(shaped.getShape());
     } else {
-      return rewriter.notifyMatchFailure(op,
-                                         "load result must be a shaped type");
+      return rewriter.notifyMatchFailure(op, "load result must be a shaped type");
     }
-    if (llvm::any_of(shape,
-                     [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
-      return rewriter.notifyMatchFailure(
-          op, "static load result must have a static shape");
+    if (llvm::any_of(shape, [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
+      return rewriter.notifyMatchFailure(op, "static load result must have a static shape");
     }
-    Type resultType =
-        getTypeConverter()->convertType(op.getResult().getType());
+    // A rank-reduced load (source rank > tile rank) drops leading source
+    // dimensions; the offsets still address every source dimension, and
+    // pl.load requires offsets and shapes to share the source's coordinate
+    // system -- pad the tile's shape with leading ones up to the source
+    // rank.
+    if (auto srcType = dyn_cast<ShapedType>(op.getSource().getType())) {
+      if (srcType.getRank() > shape.size()) {
+        shape.insert(shape.begin(), srcType.getRank() - shape.size(), 1);
+      }
+    }
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
-      return rewriter.notifyMatchFailure(
-          op, "tile element type has no PyPTO dtype");
+      return rewriter.notifyMatchFailure(op, "tile element type has no PyPTO dtype");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    Attribute offsetsArg =
-        buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0),
-        offsetsArg,
-        rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape))};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, resultType, "pl.load", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg,
+                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape))};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.load", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 
-  LogicalResult rewriteDynamicRead(pypto::LoadOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
+  LogicalResult rewriteDynamicRead(pypto::LoadOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
     ValueRange paddedShapes = adaptor.getPaddedShapes();
     ValueRange validExtents = adaptor.getValidExtents();
     if (validExtents.size() != paddedShapes.size()) {
-      return rewriter.notifyMatchFailure(
-          op, "dynamic load needs per-dimension padded/valid extents");
+      return rewriter.notifyMatchFailure(op, "dynamic load needs per-dimension padded/valid extents");
     }
     // A `?` extent cannot be spelled as an annotation; the call keeps the
     // source result type, which the Python translator accepts for
     // call_opaque results (as it does for dynamic vector tiles).
     SmallVector<Value> operands{adaptor.getSource()};
-    Attribute offsetsArg =
-        buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
     Attribute shapesArg = buildOffsetsArg(rewriter, paddedShapes, operands);
     Attribute validArg = buildOffsetsArg(rewriter, validExtents, operands);
-    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg,
-                                shapesArg, validArg};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg, shapesArg, validArg};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr(""),
                                     rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
-        op, op.getResult().getType(), "pl.load", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, op.getResult().getType(), "pl.load", ValueRange(operands),
+                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
 };
@@ -1147,20 +1086,14 @@ class StoreOpPattern : public OpConversionPattern<pypto::StoreOp> {
  public:
   using OpConversionPattern<pypto::StoreOp>::OpConversionPattern;
 
-  LogicalResult
-  matchAndRewrite(pypto::StoreOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(pypto::StoreOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     SmallVector<Value> operands{adaptor.getValue(), adaptor.getDest()};
-    Attribute offsetsArg =
-        buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
-    SmallVector<Attribute> args{
-        rewriter.getIndexAttr(0), offsetsArg, rewriter.getIndexAttr(1)};
-    SmallVector<Attribute> keywords{rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr(""),
-                                    rewriter.getStringAttr("")};
-    rewriter.create<emitpy::CallOpaqueOp>(
-        op.getLoc(), TypeRange{}, "pl.store", ValueRange(operands),
-        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg, rewriter.getIndexAttr(1)};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), TypeRange{}, "pl.store", ValueRange(operands),
+                                          rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     rewriter.eraseOp(op);
     return success();
   }
@@ -1199,25 +1132,17 @@ static void eraseDeadOps(func::FuncOp funcOp) {
 
 /// Loads a tile parameter into the local (core) view: the entry block
 /// argument becomes a `pl.load` of the annotated parameter.
-static void loadTileParameter(OpBuilder &builder, BlockArgument arg,
-                              ShapedType shaped) {
+static void loadTileParameter(OpBuilder &builder, BlockArgument arg, ShapedType shaped) {
   SmallVector<Attribute> loadArgs{
-      builder.getIndexAttr(0),
-      builder.getAttr<emitpy::OpaqueAttr>(
-          shapeToPythonListText(SmallVector<int64_t>(shaped.getRank(), 0))),
-      builder.getAttr<emitpy::OpaqueAttr>(
-          shapeToPythonListText(shaped.getShape()))};
-  SmallVector<Attribute> loadKeywords{builder.getStringAttr(""),
-                                      builder.getStringAttr(""),
-                                      builder.getStringAttr("")};
+    builder.getIndexAttr(0),
+    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(SmallVector<int64_t>(shaped.getRank(), 0))),
+    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shaped.getShape()))};
+  SmallVector<Attribute> loadKeywords{builder.getStringAttr(""), builder.getStringAttr(""), builder.getStringAttr("")};
   SmallVector<Value> loadOperands{arg};
   Value load = builder
-                   .create<emitpy::CallOpaqueOp>(
-                       arg.getLoc(), shaped, "pl.load",
-                       ValueRange(loadOperands),
-                       builder.getArrayAttr(loadArgs),
-                       builder.getArrayAttr(loadKeywords))
-                   .getResult(0);
+                 .create<emitpy::CallOpaqueOp>(arg.getLoc(), shaped, "pl.load", ValueRange(loadOperands),
+                                               builder.getArrayAttr(loadArgs), builder.getArrayAttr(loadKeywords))
+                 .getResult(0);
   for (OpOperand &use : llvm::make_early_inc_range(arg.getUses())) {
     if (use.getOwner() == load.getDefiningOp()) {
       continue;
@@ -1247,26 +1172,21 @@ static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx) {
     if (outOnlyArgs.contains(static_cast<unsigned>(idx))) {
       if (auto shaped = dyn_cast<ShapedType>(type);
           shaped && shaped.getRank() == 1 && shaped.hasStaticShape() &&
-          shaped.getNumElements() *
-                  (shaped.getElementType().getIntOrFloatBitWidth() / 8) % 32 ==
-              0) {
-        annotation = pyptoShapedOpaque(
-            ctx, SmallVector<int64_t>{1, shaped.getDimSize(0)},
-            shaped.getElementType(), "pl.Tensor");
+          shaped.getNumElements() * (shaped.getElementType().getIntOrFloatBitWidth() / 8) % 32 == 0) {
+        annotation =
+          pyptoShapedOpaque(ctx, SmallVector<int64_t>{1, shaped.getDimSize(0)}, shaped.getElementType(), "pl.Tensor");
       }
     }
     if (!annotation) {
       annotation = pyptoAnnotation(ctx, type);
     }
     if (!annotation) {
-      return funcOp->emitError("parameter ") << idx
-                                             << " has no PyPTO annotation";
+      return funcOp->emitError("parameter ") << idx << " has no PyPTO annotation";
     }
     newInputs.push_back(annotation);
     BlockArgument arg = entry.getArgument(idx);
     arg.setType(annotation);
-    if ((isa<VectorType>(type) || isa<npuvector::NPUVectorType>(type)) &&
-        !arg.use_empty()) {
+    if ((isa<VectorType>(type) || isa<npuvector::NPUVectorType>(type)) && !arg.use_empty()) {
       loadTileParameter(builder, arg, cast<ShapedType>(type));
     }
   }
@@ -1277,9 +1197,7 @@ static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx) {
 /// Strips the hacc.* bookkeeping attributes the pipeline attached to the
 /// kernel and its parameters.
 static void stripHaccAttrs(func::FuncOp funcOp) {
-  auto isHaccAttr = [](NamedAttribute attr) {
-    return attr.getName().strref().starts_with("hacc.");
-  };
+  auto isHaccAttr = [](NamedAttribute attr) { return attr.getName().strref().starts_with("hacc."); };
   SmallVector<StringAttr> toRemove;
   for (NamedAttribute attr : funcOp->getAttrs()) {
     if (isHaccAttr(attr)) {
@@ -1306,77 +1224,36 @@ static void stripHaccAttrs(func::FuncOp funcOp) {
 
 /// Registers the pypto arithmetic, comparison and select ops that lower to
 /// emitpy.call_opaque "pl.*" helper calls.
-static void populateCallOpaquePatterns(RewritePatternSet &patterns,
-                                       TypeConverter &typeConverter) {
-  patterns.add<OpToCallOpaquePattern<pypto::AddOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.add");
-  patterns.add<OpToCallOpaquePattern<pypto::SubOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.sub");
-  patterns.add<OpToCallOpaquePattern<pypto::MulOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.mul");
-  patterns.add<OpToCallOpaquePattern<pypto::DivOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.div");
-  patterns.add<OpToCallOpaquePattern<pypto::FmodOp>>(typeConverter,
-                                                     patterns.getContext(),
-                                                     "pl.fmod");
-  patterns.add<OpToCallOpaquePattern<pypto::MaximumOp>>(typeConverter,
-                                                        patterns.getContext(),
-                                                        "pl.maximum");
-  patterns.add<OpToCallOpaquePattern<pypto::MinimumOp>>(typeConverter,
-                                                        patterns.getContext(),
-                                                        "pl.minimum");
-  patterns.add<OpToCallOpaquePattern<pypto::AndOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.and_");
-  patterns.add<OpToCallOpaquePattern<pypto::OrOp>>(typeConverter,
-                                                   patterns.getContext(),
-                                                   "pl.or_");
-  patterns.add<OpToCallOpaquePattern<pypto::XorOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.xor");
-  patterns.add<OpToCallOpaquePattern<pypto::ShlOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.shl");
-  patterns.add<OpToCallOpaquePattern<pypto::ShrOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.shr");
-  patterns.add<OpToCallOpaquePattern<pypto::NegOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.neg");
-  patterns.add<OpToCallOpaquePattern<pypto::AbsOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.abs");
-  patterns.add<OpToCallOpaquePattern<pypto::ExpOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.exp");
-  patterns.add<OpToCallOpaquePattern<pypto::LogOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.log");
-  patterns.add<OpToCallOpaquePattern<pypto::SqrtOp>>(typeConverter,
-                                                     patterns.getContext(),
-                                                     "pl.sqrt");
-  patterns.add<OpToCallOpaquePattern<pypto::RsqrtOp>>(typeConverter,
-                                                      patterns.getContext(),
-                                                      "pl.rsqrt");
-  patterns.add<OpToCallOpaquePattern<pypto::SinOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.sin");
-  patterns.add<OpToCallOpaquePattern<pypto::CosOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.cos");
-  patterns.add<OpToCallOpaquePattern<pypto::MaxOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.max");
-  patterns.add<OpToCallOpaquePattern<pypto::MinOp>>(typeConverter,
-                                                    patterns.getContext(),
-                                                    "pl.min");
-  patterns.add<OpToCallOpaquePattern<pypto::SelectOp>>(typeConverter,
-                                                       patterns.getContext(),
-                                                       "pl.sel");
+static void populateCallOpaquePatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+  patterns.add<OpToCallOpaquePattern<pypto::AddOp>>(typeConverter, patterns.getContext(), "pl.add");
+  patterns.add<OpToCallOpaquePattern<pypto::SubOp>>(typeConverter, patterns.getContext(), "pl.sub");
+  patterns.add<OpToCallOpaquePattern<pypto::MulOp>>(typeConverter, patterns.getContext(), "pl.mul");
+  patterns.add<OpToCallOpaquePattern<pypto::DivOp>>(typeConverter, patterns.getContext(), "pl.div");
+  // Row-broadcast binaries: the [rows, 1] row vector operand broadcasts
+  // across the tile's columns at runtime.
+  patterns.add<OpToCallOpaquePattern<pypto::RowExpandAddOp>>(typeConverter, patterns.getContext(), "pl.row_expand_add");
+  patterns.add<OpToCallOpaquePattern<pypto::RowExpandSubOp>>(typeConverter, patterns.getContext(), "pl.row_expand_sub");
+  patterns.add<OpToCallOpaquePattern<pypto::RowExpandMulOp>>(typeConverter, patterns.getContext(), "pl.row_expand_mul");
+  patterns.add<OpToCallOpaquePattern<pypto::RowExpandDivOp>>(typeConverter, patterns.getContext(), "pl.row_expand_div");
+  patterns.add<OpToCallOpaquePattern<pypto::FmodOp>>(typeConverter, patterns.getContext(), "pl.fmod");
+  patterns.add<OpToCallOpaquePattern<pypto::MaximumOp>>(typeConverter, patterns.getContext(), "pl.maximum");
+  patterns.add<OpToCallOpaquePattern<pypto::MinimumOp>>(typeConverter, patterns.getContext(), "pl.minimum");
+  patterns.add<OpToCallOpaquePattern<pypto::AndOp>>(typeConverter, patterns.getContext(), "pl.and_");
+  patterns.add<OpToCallOpaquePattern<pypto::OrOp>>(typeConverter, patterns.getContext(), "pl.or_");
+  patterns.add<OpToCallOpaquePattern<pypto::XorOp>>(typeConverter, patterns.getContext(), "pl.xor");
+  patterns.add<OpToCallOpaquePattern<pypto::ShlOp>>(typeConverter, patterns.getContext(), "pl.shl");
+  patterns.add<OpToCallOpaquePattern<pypto::ShrOp>>(typeConverter, patterns.getContext(), "pl.shr");
+  patterns.add<OpToCallOpaquePattern<pypto::NegOp>>(typeConverter, patterns.getContext(), "pl.neg");
+  patterns.add<OpToCallOpaquePattern<pypto::AbsOp>>(typeConverter, patterns.getContext(), "pl.abs");
+  patterns.add<OpToCallOpaquePattern<pypto::ExpOp>>(typeConverter, patterns.getContext(), "pl.exp");
+  patterns.add<OpToCallOpaquePattern<pypto::LogOp>>(typeConverter, patterns.getContext(), "pl.log");
+  patterns.add<OpToCallOpaquePattern<pypto::SqrtOp>>(typeConverter, patterns.getContext(), "pl.sqrt");
+  patterns.add<OpToCallOpaquePattern<pypto::RsqrtOp>>(typeConverter, patterns.getContext(), "pl.rsqrt");
+  patterns.add<OpToCallOpaquePattern<pypto::SinOp>>(typeConverter, patterns.getContext(), "pl.sin");
+  patterns.add<OpToCallOpaquePattern<pypto::CosOp>>(typeConverter, patterns.getContext(), "pl.cos");
+  patterns.add<OpToCallOpaquePattern<pypto::MaxOp>>(typeConverter, patterns.getContext(), "pl.max");
+  patterns.add<OpToCallOpaquePattern<pypto::MinOp>>(typeConverter, patterns.getContext(), "pl.min");
+  patterns.add<SelectOpPattern>(typeConverter, patterns.getContext());
 }
 
 }  // namespace
@@ -1385,14 +1262,11 @@ static void populateCallOpaquePatterns(RewritePatternSet &patterns,
 // Pass definition
 //===----------------------------------------------------------------------===//
 
-struct ConvertPyptoToEmitPyPass
-    : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToEmitPyPass> {
-  using impl::ConvertPyptoToEmitPyBase<
-      ConvertPyptoToEmitPyPass>::ConvertPyptoToEmitPyBase;
+struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToEmitPyPass> {
+  using impl::ConvertPyptoToEmitPyBase<ConvertPyptoToEmitPyPass>::ConvertPyptoToEmitPyBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<emitpy::EmitPyDialect, func::FuncDialect,
-                    arith::ArithDialect, scf::SCFDialect>();
+    registry.insert<emitpy::EmitPyDialect, func::FuncDialect, arith::ArithDialect, scf::SCFDialect>();
   }
 
   void runOnOperation() override {
@@ -1401,56 +1275,44 @@ struct ConvertPyptoToEmitPyPass
     ConversionTarget target(getContext());
     target.addIllegalDialect<pypto::PyptoDialect>();
     target.addLegalDialect<emitpy::EmitPyDialect>();
-    // Stage-one survivors that this pass lowers onto the `util_*`
-    // pseudo-callees and `emitpy.literal`: scalar compares and selects
-    // (`pl.cmp`/`pl.sel` are tile-only), the floordivsi of the affine
-    // floordiv chain, and index constants (tile compares still convert).
-    // The dynamic predicates mirror stage one, keeping the tile forms that
-    // never reach this pass legal so a mis-fed input fails loudly in the
-    // pattern rather than being silently retained.
-    target.addDynamicallyLegalOp<arith::CmpIOp, arith::CmpFOp>(
-        [](Operation *op) {
-          return llvm::any_of(op->getOperands(), [](Value operand) {
-            return isa<VectorType, npuvector::NPUVectorType>(
-                operand.getType());
-          });
-        });
-    target.addDynamicallyLegalOp<arith::SelectOp>([](arith::SelectOp op) {
-      return isa<ShapedType>(op->getResult(0).getType());
-    });
-    target.addDynamicallyLegalOp<arith::ConstantOp>(
-        [](arith::ConstantOp op) { return !isa<IndexType>(op.getType()); });
-    // Control flow: scf.parallel/scf.forall map onto SPMD launches and
-    // scf.for onto the per-core tile loop; any other scf construct has no
-    // PyPTO counterpart.
+    // Stage-one survivors lowered here: the scalar arith arithmetic kept
+    // by stage one (pypto is a tile dialect) onto infix pseudo-callees
+    // named after the arith op itself (addi, floordivsi, select, ...),
+    // and the index constants feeding subscripts and
+    // `emitpy.for` bounds onto `emitpy.literal`. Stage one already
+    // rewrote all control flow into `pypto.spmd`/`pypto.range`, so this
+    // pass is a straight pypto -> emitpy retargeting plus the scalar
+    // arith lowering; any raw tile arith/scf reaching it means an input
+    // stage one never saw, and fails loudly here.
+    target.addDynamicallyLegalOp<arith::ConstantOp>([](arith::ConstantOp op) { return !isa<IndexType>(op.getType()); });
+    target.addIllegalOp<arith::CmpIOp, arith::CmpFOp, arith::SelectOp>();
     target.addIllegalDialect<scf::SCFDialect>();
     // Tile-typed block arguments must be legalized together with their
     // signature, otherwise the conversion leaves dangling materializations.
-    target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
-      return typeConverter.isSignatureLegal(op.getFunctionType());
-    });
-    target.addDynamicallyLegalOp<func::ReturnOp>([&](func::ReturnOp op) {
-      return typeConverter.isLegal(op);
-    });
+    target.addDynamicallyLegalOp<func::FuncOp>(
+      [&](func::FuncOp op) { return typeConverter.isSignatureLegal(op.getFunctionType()); });
+    target.addDynamicallyLegalOp<func::ReturnOp>([&](func::ReturnOp op) { return typeConverter.isLegal(op); });
 
     RewritePatternSet patterns(&getContext());
-    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns,
-                                                                   typeConverter);
+    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
     populateReturnOpTypeConversionPattern(patterns, typeConverter);
-    patterns.add<ConstantOpPattern, TileFullOpPattern, CreateTileOpPattern,
-                 SliceOpPattern, ReshapeOpPattern, TransposeOpPattern,
-                 ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern,
-                 ReductionOpPattern, ReadOpPattern, WriteOpPattern,
-                 LoadOpPattern, StoreOpPattern>(typeConverter,
-                                                patterns.getContext());
-    patterns.add<IndexConstantOpPattern, ScalarSelectPattern,
-                 ScfParallelPattern, ScfForallPattern, ScfForPattern>(
-        typeConverter, patterns.getContext());
-    patterns.add<ScalarCmpPattern<arith::CmpIOp>,
-                 ScalarCmpPattern<arith::CmpFOp>>(typeConverter,
-                                                  patterns.getContext());
-    patterns.add<OpToCallOpaquePattern<arith::FloorDivSIOp>>(
-        typeConverter, patterns.getContext(), "util_floordiv");
+    patterns.add<ConstantOpPattern, TileFullOpPattern, CreateTileOpPattern, SliceOpPattern, ReshapeOpPattern,
+                 TransposeOpPattern, ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern, ReductionOpPattern,
+                 ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern>(typeConverter, patterns.getContext());
+    patterns.add<IndexConstantOpPattern, SpmdOpPattern, RangeOpPattern>(typeConverter, patterns.getContext());
+    // Scalar comparisons kept by stage one lower onto the eq/ne/lt/le/gt/ge
+    // pseudo-callees (`pl.cmp` has no scalar overload).
+    patterns.add<ArithCmpPattern<arith::CmpIOp>, ArithCmpPattern<arith::CmpFOp>>(typeConverter, patterns.getContext());
+    // Scalar arithmetic kept by stage one lowers onto call_opaque ops
+    // named after the arith op itself (addi, subf, divsi, floordivsi,
+    // remsi, select, ...), which the translator prints as Python
+    // expressions. The DSL's `/` maps integer operands onto divi-style
+    // truncated division (result stays integer) and floats onto divf.
+    // Scalar integer remainders survive stage one as arith ops
+    // (`pl.fmod` is tile-only).
+    addScalarArithPatterns<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::AddFOp, arith::SubFOp, arith::MulFOp,
+                           arith::DivFOp, arith::DivSIOp, arith::SelectOp, arith::FloorDivSIOp, arith::RemSIOp,
+                           arith::RemUIOp>(patterns, typeConverter);
     populateCallOpaquePatterns(patterns, typeConverter);
 
     if (failed(applyPartialConversion(funcOp, target, std::move(patterns)))) {
@@ -1475,6 +1337,4 @@ struct ConvertPyptoToEmitPyPass
 
 }  // namespace mlir
 
-std::unique_ptr<Pass> mlir::createPyptoToEmitPyConversionPass() {
-  return std::make_unique<ConvertPyptoToEmitPyPass>();
-}
+std::unique_ptr<Pass> mlir::createPyptoToEmitPyConversionPass() { return std::make_unique<ConvertPyptoToEmitPyPass>(); }
