@@ -466,7 +466,7 @@ static bool hasDeferredEmission(Operation *op) {
   if (auto exprOp = dyn_cast_or_null<ExpressionOp>(op)) {
     return !exprOp.getDoNotInline();
   }
-  return isa_and_nonnull<LiteralOp>(op);
+  return isa_and_nonnull<LiteralOp, TensorSliceOp>(op);
 }
 
 StringRef PythonEmitter::getOrCreateName(Value value, std::string name) {
@@ -1023,6 +1023,28 @@ static LogicalResult printOperation(PythonEmitter &emitter, SubscriptOp subscrip
   return success();
 }
 
+static LogicalResult printOperation(PythonEmitter &emitter, TensorSliceOp op) {
+  std::string expression;
+  llvm::raw_string_ostream os(expression);
+  os << emitter.getOrCreateName(op.getSource(), "tensor") << "[";
+  auto sourceType = op.getSource().getType();
+  auto shape = op.getResult().getType().getShape();
+  for (auto [i, offset] : llvm::enumerate(op.getOffsets())) {
+    if (i) os << ", ";
+    StringRef start = emitter.getOrCreateName(offset, "offset");
+    if (start == "0" && shape[i] == sourceType.getDimSize(i)) {
+      os << ":";
+    } else {
+      os << start << ":";
+      if (start != "0") os << start << " + ";
+      os << shape[i];
+    }
+  }
+  os << "]";
+  emitter.registerDeferredValue(op.getResult(), expression);
+  return success();
+}
+
 static LogicalResult printOperation(PythonEmitter &emitter, GetAttrOp getAttrOp) {
   if (failed(emitter.emitAssignPrefix(*getAttrOp))) {
     return failure();
@@ -1421,7 +1443,7 @@ static LogicalResult printOperation(PythonEmitter &emitter, ForOp forOp) {
   // opened for the body: a Python loop body does not introduce one (mirrors
   // emitpy.while).
   std::string name = emitter.getOrCreateName(body.getArgument(0), "loop_var").str();
-  os << "for " << name << " in pl.range(";
+  os << "for " << name << (forOp.getParallel() ? " in pl.parallel(" : " in pl.range(");
   if (failed(emitter.emitOperand(forOp.getLowerBound(), ""))) {
     return failure();
   }
@@ -1446,6 +1468,18 @@ static LogicalResult printOperation(PythonEmitter &emitter, ForOp forOp) {
   }
   os.unindent();
 
+  return success();
+}
+
+static LogicalResult printOperation(PythonEmitter &emitter, WithOp withOp) {
+  raw_indented_ostream &os = emitter.ostream();
+  os << "with " << withOp.getExpression() << ":\n";
+  os.indent();
+  if (withOp.getBody().front().empty()) os << "pass\n";
+  for (Operation &op : withOp.getBody().front()) {
+    if (failed(emitter.emitOperation(op))) return failure();
+  }
+  os.unindent();
   return success();
 }
 
@@ -1535,9 +1569,9 @@ LogicalResult PythonEmitter::emitOperation(Operation &op) {
       // Builtin ops.
       .Case<ModuleOp>([&](auto op) { return printOperation(*this, op); })
       // EmitPy ops.
-      .Case<CallOpaqueOp, ImportOp, AssignOp, GetAttrOp, SetAttrOp, ConstantOp, SubscriptOp, ClassOp, GlobalOp,
-            AssignGlobalOp, GlobalStatementOp, CreateDictOp, ExpressionOp, YieldOp, IfOp, WhileOp, WhileYieldOp,
-            VerbatimOp, NestedFuncOp, NestedFuncReturnOp, FileOp, ForOp, SpmdScopeOp>(
+      .Case<CallOpaqueOp, ImportOp, AssignOp, GetAttrOp, SetAttrOp, ConstantOp, SubscriptOp, TensorSliceOp, ClassOp,
+            GlobalOp, AssignGlobalOp, GlobalStatementOp, CreateDictOp, ExpressionOp, YieldOp, IfOp, WhileOp,
+            WhileYieldOp, VerbatimOp, NestedFuncOp, NestedFuncReturnOp, FileOp, ForOp, WithOp, SpmdScopeOp>(
         [&](auto op) { return printOperation(*this, op); })
       .Case<LiteralOp>([&](auto op) {
         registerDeferredValue(op.getResult(), op.getValue());
@@ -1555,7 +1589,7 @@ LogicalResult PythonEmitter::emitOperation(Operation &op) {
     return success();
   }
 
-  if (!isa<IfOp, WhileOp, ForOp, SpmdScopeOp>(op)) {
+  if (!isa<IfOp, WhileOp, ForOp, WithOp, SpmdScopeOp>(op)) {
     os << "\n";
   }
 
