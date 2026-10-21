@@ -83,7 +83,7 @@ def FoldMemRefSubViewOnly : Pass<"fold-memref-subview-only", "func::FuncOp"> {
     A subview-restricted variant of upstream `fold-memref-alias-ops`. It
     reuses `memref::populateFoldMemRefAliasOpPatterns` verbatim, but feeds
     the greedy driver only operations that touch a `memref.subview`
-    (the subview itself and its direct users). The expand_shape and
+    (the subview itself and its direct non-view users). The expand_shape and
     collapse_shape folders in the same pattern set therefore never match.
   }];
   let constructor = "mlir::createFoldMemRefSubViewOnlyPass()";

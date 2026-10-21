@@ -29,6 +29,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 
 namespace mlir {
@@ -151,6 +152,70 @@ class AffineIfToSCFPattern : public OpRewritePattern<affine::AffineIfOp> {
   }
 };
 
+/// Lower affine memory accesses while keeping their index expressions in the
+/// affine dialect. The generic affine-to-standard patterns materialize these
+/// expressions with arith operations, which loses the structure consumed by
+/// later vectorization passes.
+static SmallVector<Value> materializeAffineIndices(AffineMap map, ValueRange operands, Location loc,
+                                                   PatternRewriter &rewriter) {
+  SmallVector<Value> canonicalOperands(operands.begin(), operands.end());
+  affine::canonicalizeMapAndOperands(&map, &canonicalOperands);
+  // After the enclosing affine loop is converted to scf, its induction
+  // variables are dimensions rather than affine symbols. Flatten the map so
+  // every operand is represented as a dimension in the generated affine.apply.
+  SmallVector<AffineExpr> dimReplacements;
+  dimReplacements.reserve(map.getNumDims());
+  for (unsigned i = 0; i < map.getNumDims(); ++i) {
+    dimReplacements.push_back(getAffineDimExpr(i, rewriter.getContext()));
+  }
+  SmallVector<AffineExpr> symbolReplacements;
+  symbolReplacements.reserve(map.getNumSymbols());
+  for (unsigned i = 0; i < map.getNumSymbols(); ++i) {
+    symbolReplacements.push_back(
+        getAffineDimExpr(map.getNumDims() + i, rewriter.getContext()));
+  }
+  map = map.replaceDimsAndSymbols(dimReplacements, symbolReplacements, map.getNumInputs(), 0);
+  SmallVector<Value> indices;
+  indices.reserve(map.getNumResults());
+  for (AffineExpr expr : map.getResults()) {
+    AffineMap resultMap = AffineMap::get(map.getNumDims(), 0, expr, rewriter.getContext());
+    indices.push_back(rewriter.create<affine::AffineApplyOp>(loc, resultMap, canonicalOperands).getResult());
+  }
+  return indices;
+}
+
+class AffineLoadToMemRefPattern : public OpRewritePattern<affine::AffineLoadOp> {
+ public:
+  using OpRewritePattern<affine::AffineLoadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(affine::AffineLoadOp op, PatternRewriter &rewriter) const override {
+    SmallVector<Value> indices =
+        materializeAffineIndices(op.getAffineMap(), op.getMapOperands(), op.getLoc(), rewriter);
+    auto load = rewriter.create<memref::LoadOp>(op.getLoc(), op.getMemRef(), indices);
+    if (Attribute nontemporal = op->getAttr("nontemporal")) {
+      load->setAttr("nontemporal", nontemporal);
+    }
+    rewriter.replaceOp(op, load.getResult());
+    return success();
+  }
+};
+
+class AffineStoreToMemRefPattern : public OpRewritePattern<affine::AffineStoreOp> {
+ public:
+  using OpRewritePattern<affine::AffineStoreOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(affine::AffineStoreOp op, PatternRewriter &rewriter) const override {
+    SmallVector<Value> indices =
+        materializeAffineIndices(op.getAffineMap(), op.getMapOperands(), op.getLoc(), rewriter);
+    auto store = rewriter.create<memref::StoreOp>(op.getLoc(), op.getValueToStore(), op.getMemRef(), indices);
+    if (Attribute nontemporal = op->getAttr("nontemporal")) {
+      store->setAttr("nontemporal", nontemporal);
+    }
+    rewriter.replaceOp(op, store.getOperation());
+    return success();
+  }
+};
+
 class ConvertAffineToSCF : public impl::ConvertAffineToSCFBase<ConvertAffineToSCF> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -161,22 +226,37 @@ class ConvertAffineToSCF : public impl::ConvertAffineToSCFBase<ConvertAffineToSC
     target.addLegalDialect<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
     target.addLegalOp<affine::AffineApplyOp, affine::AffineMinOp, affine::AffineMaxOp>();
 
+    // Lower memory accesses while they are still nested in affine loops. Once
+    // an affine loop is converted to scf, its induction variables are no
+    // longer valid affine symbols, so delaying this rewrite makes affine
+    // memory operations unverifiable.
+    RewritePatternSet memoryPatterns(context);
+    memoryPatterns.add<AffineLoadToMemRefPattern, AffineStoreToMemRefPattern>(context);
+    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(memoryPatterns)))) {
+      return signalPassFailure();
+    }
+
     RewritePatternSet patterns(context);
-    patterns.add<AffineForToSCFPattern, AffineIfToSCFPattern>(context);
+    patterns.add<AffineForToSCFPattern, AffineIfToSCFPattern, AffineLoadToMemRefPattern, AffineStoreToMemRefPattern>(
+        context);
     populateAffineToStdConversionPatterns(patterns);
     // Erase AffineApplyLowering, AffineMinLowering, AffineMaxLowering from
     // patterns (caller keeps affine.apply/min/max).
     OperationName applyName("affine.apply", context);
     OperationName minName("affine.min", context);
     OperationName maxName("affine.max", context);
+    OperationName loadName("affine.load", context);
+    OperationName storeName("affine.store", context);
     auto &nativePatterns = patterns.getNativePatterns();
     nativePatterns.erase(std::remove_if(nativePatterns.begin(), nativePatterns.end(),
-                                        [&applyName, &minName, &maxName](const std::unique_ptr<RewritePattern> &p) {
+                                        [&applyName, &minName, &maxName, &loadName, &storeName](
+                                            const std::unique_ptr<RewritePattern> &p) {
                                           std::optional<OperationName> root = p->getRootKind();
                                           if (!root) {
                                             return false;
                                           }
-                                          return *root == applyName || *root == minName || *root == maxName;
+                                          return *root == applyName || *root == minName || *root == maxName ||
+                                                 *root == loadName || *root == storeName;
                                         }),
                          nativePatterns.end());
     populateAffineToVectorConversionPatterns(patterns);
