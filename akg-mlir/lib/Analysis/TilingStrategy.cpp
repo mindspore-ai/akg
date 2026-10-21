@@ -1491,7 +1491,8 @@ VectorOpKind classifyVectorOp(Operation *op) {
   const llvm::StringRef compareOps[] = {"arith.cmpf", "arith.cmpi"};
   const llvm::StringRef heavyPatterns[] = {"arith.div", "math.exp", "math.log", "math.erf"};
   const llvm::StringRef genericPatterns[] = {"arith.add", "arith.sub", "arith.mul", "arith.max",
-                                             "arith.min", "arith.and", "arith.or",  "arith.xor"};
+                                             "arith.min", "arith.and", "arith.or",  "arith.xor",
+                                             "arith.negf"};
   if (op->getNumResults() == 1 && llvm::is_contained(compareOps, name)) {
     return VectorOpKind::Compare;
   }
