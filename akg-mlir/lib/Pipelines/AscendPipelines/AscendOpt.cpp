@@ -241,24 +241,25 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(createFoldMemRefSubViewOnlyPass());
 
     // fusion
-    nestedFusionPM.addPass(createRemoveRedundantLoopsPass());
-    nestedFusionPM.addPass(createCanonicalizerPass());
-    nestedFusionPM.addPass(affine::createAffineReductionAnnotationPass());
-    nestedFusionPM.addPass(createLoopSliceSplitPass());
-    nestedFusionPM.addPass(createHoistLoopIndependentOpsPass());
-    nestedFusionPM.addPass(createAKGLoopFusionPass());
-    nestedFusionPM.addPass(createStoreLoadElimPass());
-    nestedFusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
-    nestedFusionPM.addPass(createCanonicalizerPass());
+    OpPassManager &fusionPM = pm.nest<func::FuncOp>();
+    fusionPM.addPass(createRemoveRedundantLoopsPass());
+    fusionPM.addPass(createCanonicalizerPass());
+    fusionPM.addPass(affine::createAffineReductionAnnotationPass());
+    fusionPM.addPass(createLoopSliceSplitPass());
+    fusionPM.addPass(createHoistLoopIndependentOpsPass());
+    fusionPM.addPass(createAKGLoopFusionPass());
+    fusionPM.addPass(createStoreLoadElimPass());
+    fusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
+    fusionPM.addPass(createCanonicalizerPass());
 
-    nestedFusionPM.addPass(createReductionSiblingRecomputePass());
-    nestedFusionPM.addPass(createAffineIteratorConversionPass());
-    nestedFusionPM.addPass(createStoreLoadElimPass());
-    nestedFusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel));
+    fusionPM.addPass(createReductionSiblingRecomputePass());
+    fusionPM.addPass(createAffineIteratorConversionPass());
+    fusionPM.addPass(createStoreLoadElimPass());
+    fusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel));
     // The pypto backend keeps math.rsqrt (first-class pypto.rsqrt); the
     // 1/sqrt expansion only serves the HIVM lowering.
-    nestedFusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
-    nestedFusionPM.addPass(createConvertAffineToSCFPass());
+    fusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
+    fusionPM.addPass(createConvertAffineToSCFPass());
 
 
     pm.addPass(createAddOutParameterPass());
