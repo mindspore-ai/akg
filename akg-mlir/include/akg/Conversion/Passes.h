@@ -21,6 +21,7 @@
 #include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 #include "akg/Conversion/FusionToMemVec/FusionToMemVecPass.h"
 #include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
+#include "akg/Conversion/LinalgToPypto/LinalgToPypto.h"
 #include "akg/Conversion/MindSporeFinalizingLower/MindSporeFinalizingLower.h"
 #include "akg/Conversion/MindSporeToLinalg/MindSporeToLinalg.h"
 #include "akg/Conversion/MindSporeToLinalg/MindSporeToLinalgNamed.h"
