@@ -419,11 +419,11 @@ def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
     not represented. The PyPTO emitter prints it as
     `for <induction> in pl.range(<lower>, <upper>, <step>)`.
 
-    Example:
+    Example (mirrors `scf.for`'s spelling; the induction variable is bound
+    inline instead of through an explicit `^bb0` header):
 
     ```mlir
-    emitpy.for %lb to %ub step %step {
-    ^bb0(%i: index):
+    emitpy.for %i = %lb to %ub step %step : index {
       emitpy.call_opaque "f"(%i) : (index) -> ()
     }
     ```
@@ -433,11 +433,9 @@ def EmitPy_ForOp : EmitPy_Op<"for", [SingleBlock, NoTerminator]> {
 
   let regions = (region SizedRegion<1>:$body);
 
-  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 
-  let assemblyFormat = "$lower_bound `to` $upper_bound `step` $step "
-                       "`:` type($lower_bound) type($upper_bound) "
-                       "type($step) $body attr-dict";
+  let hasVerifier = 1;
 }
 
 def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
@@ -450,11 +448,11 @@ def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
     materializes the block-index binding
     (`<induction> = pl.tile.get_block_idx()`) as the first body statement.
 
-    Example:
+    Example (mirrors `scf.forall`'s normalized spelling; the block index is
+    bound inline instead of through an explicit `^bb0` header):
 
     ```mlir
-    emitpy.spmd_scope core_num 64 {
-    ^bb0(%blk: index):
+    emitpy.spmd_scope (%blk) in (64) {
       emitpy.call_opaque "f"(%blk) : (index) -> ()
     }
     ```
@@ -464,9 +462,9 @@ def EmitPy_SpmdScopeOp : EmitPy_Op<"spmd_scope", [SingleBlock, NoTerminator]> {
 
   let regions = (region SizedRegion<1>:$body);
 
-  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 
-  let assemblyFormat = "`core_num` $core_num $body attr-dict";
+  let hasVerifier = 1;
 }
 
 def EmitPy_VerbatimOp : EmitPy_Op<"verbatim"> {

@@ -139,22 +139,24 @@ def Pypto_SliceOp : Pypto_Op<"slice"> {
 }
 
 def Pypto_ReshapeOp : Pypto_Op<"reshape"> {
-  let summary = "View a tile or tensor under a different static shape";
+  let summary = "View a tile or tensor under a different shape";
   let description = [{
     Syntax:
 
     ```
     %v = pypto.reshape %src : src-type to result-type
+    %w = pypto.reshape %src extents [%n, %c1] : src-type to result-type
     ```
 
     The new shape is the result type's shape; the element count must be
-    preserved.
+    preserved. `extents` carries the runtime bound of every dimension and is
+    left out for statically shaped results (mirroring `pypto.tile_full`).
 
     The emitpy lowering emits `pl.reshape(src, [shape])`.
   }];
-  let arguments = (ins AnyType:$source);
+  let arguments = (ins AnyType:$source, Variadic<Index>:$extents);
   let results = (outs AnyType:$result);
-  let assemblyFormat = "$source attr-dict `:` type($source) `to` type($result)";
+  let assemblyFormat = "$source (`extents` `[` $extents^ `]`)? attr-dict `:` type($source) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -237,7 +239,7 @@ def Pypto_CmpOp : Pypto_Op<"cmp"> {
 
     The emitpy lowering emits `pl.cmp(lhs, rhs, cmp_type=...)` with the
     code passed as the `cmp_type` keyword argument. Scalar comparisons
-    lower to the `util_cmp_*` syntax helpers and never produce this op.
+    lower to the eq/ne/lt/le/gt/ge syntax helpers and never produce this op.
   }];
   let arguments = (ins
     Pypto_CmpPredicateAttr:$predicate,
@@ -258,27 +260,30 @@ def Pypto_SelectOp : Pypto_Op<"select"> {
     Syntax:
 
     ```
-    %v = pypto.select %cond, %trueValue, %falseValue, %output : result-type
+    %v = pypto.select %cond, %trueValue, %falseValue : result-type
     ```
 
-    `output` is a scratch tile of the result shape the runtime writes into.
-    Scalar selections lower to the `util_select` syntax helper and never
-    produce this op.
+    Scratch geometry is architecture-defined and synthesized by the
+    runtime's composite-op lowering, so the result shape may be dynamic.
+    Scalar selections lower to the `select` syntax helper and never
+    produce this op. Exactly one branch may instead be a scalar: the
+    runtime's composite materializes it with `tile.full`, which demands
+    a compile-time literal.
 
-    The emitpy lowering emits `pl.sel(condition, trueValue, falseValue,
-    output)` with all arguments positional.
+    The emitpy lowering emits `pl.tile.select(condition, trueValue,
+    falseValue)` with all arguments positional; a constant scalar branch
+    rides inline as `pl.const(value, dtype)` text.
   }];
   let arguments = (ins
     AnyType:$condition,
     AnyType:$trueValue,
-    AnyType:$falseValue,
-    AnyType:$output
+    AnyType:$falseValue
   );
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $condition `,` $trueValue `,` $falseValue `,` $output attr-dict `:`
-    type($condition) `,` type($trueValue) `,` type($falseValue) `,`
-    type($output) `to` type($result)
+    $condition `,` $trueValue `,` $falseValue attr-dict `:`
+    type($condition) `,` type($trueValue) `,` type($falseValue) `to`
+    type($result)
   }];
   let hasVerifier = 1;
 }
@@ -330,6 +335,37 @@ def Pypto_ShlOp : Pypto_BinaryOp<"shl"> {
 }
 def Pypto_ShrOp : Pypto_BinaryOp<"shr"> {
   let summary = "Elementwise or scalar right shift (`pl.shr`)";
+}
+
+//===----------------------------------------------------------------------===//
+// D2. Row-broadcast binary ops
+//===----------------------------------------------------------------------===//
+
+// The row_expand family: `tile OP row_vec` where the [rows, 1] row vector is
+// broadcast across the tile's columns by the runtime (PTOAS-native row
+// broadcast, valid semantics included). The verifier mirrors the runtime's
+// DeduceTileRowExpandType contract: both operands carry at least two
+// dimensions, the row vector's last dimension is one, and the row counts
+// agree.
+class Pypto_RowExpandOp<string mnemonic> : Pypto_Op<mnemonic> {
+  let arguments = (ins AnyType:$tile, AnyType:$rowVec);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+    "$tile `,` $rowVec attr-dict `:` type($tile) `,` type($rowVec) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def Pypto_RowExpandAddOp : Pypto_RowExpandOp<"row_expand_add"> {
+  let summary = "Row-broadcast addition (`pl.row_expand_add`)";
+}
+def Pypto_RowExpandSubOp : Pypto_RowExpandOp<"row_expand_sub"> {
+  let summary = "Row-broadcast subtraction (`pl.row_expand_sub`)";
+}
+def Pypto_RowExpandMulOp : Pypto_RowExpandOp<"row_expand_mul"> {
+  let summary = "Row-broadcast multiplication (`pl.row_expand_mul`)";
+}
+def Pypto_RowExpandDivOp : Pypto_RowExpandOp<"row_expand_div"> {
+  let summary = "Row-broadcast division (`pl.row_expand_div`)";
 }
 
 //===----------------------------------------------------------------------===//
@@ -477,9 +513,12 @@ def Pypto_LoadOp : Pypto_Op<"load", [AttrSizedOperandSegments]> {
     ```
 
     Reads a `!pypto.tile` from the source buffer starting at the given
-    element offsets. The number of offsets must equal the tile's rank. The
-    source is a PyPTO tensor-typed value (in practice an `!emitpy.opaque`
-    carrying the `pl.Tensor[[...], dtype]` annotation).
+    element offsets. The number of offsets must equal the source's rank:
+    a rank-reduced load (source rank > tile rank, as produced by
+    `vector.transfer_read` lowering) drops leading source dimensions that
+    stay addressed by the offsets alone. The source is a PyPTO tensor-typed
+    value (in practice an `!emitpy.opaque` carrying the `pl.Tensor[[...],
+    dtype]` annotation).
 
     With empty `paddedShapes`/`validExtents` the tile is statically shaped
     and the emitpy lowering emits `pl.load(src, [offsets], [shape])`.
@@ -512,8 +551,8 @@ def Pypto_StoreOp : Pypto_Op<"store"> {
     ```
 
     Writes a `!pypto.tile` back to the destination buffer starting at the
-    given element offsets. The number of offsets must equal the tile's
-    rank.
+    given element offsets. The number of offsets must equal the
+    destination's rank (see `pypto.load` on rank-reduced accesses).
 
     The emitpy lowering emits `pl.store(tile, [offsets], dest)`.
   }];
@@ -525,6 +564,78 @@ def Pypto_StoreOp : Pypto_Op<"store"> {
   let assemblyFormat = [{
     $value `,` $dest `[` $offsets `]` attr-dict `:` type($value) `,` type($dest)
   }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// H. SPMD and loop structure
+//
+// The two structured ops below let the pypto layer carry the loop/SPMD
+// skeleton end to end: `-convert-vector-to-pypto` lowers `scf.forall`
+// onto `pypto.spmd` and `scf.for` onto `pypto.range`, so the intermediate
+// IR is pure pypto. The emitpy lowering then maps them one-to-one onto
+// `emitpy.spmd_scope`/`emitpy.for` with the bodies inlined unchanged.
+//===----------------------------------------------------------------------===//
+
+def Pypto_SpmdOp : Pypto_Op<"spmd", [SingleBlock, NoTerminator]> {
+  let summary = "SPMD multi-core launch scope";
+
+  let description = [{
+    Syntax (mirrors `scf.forall`'s normalized spelling; the block index is
+    bound inline instead of through an explicit `^bb0` header):
+
+    ```
+    pypto.spmd (%blk) in (48) {
+      ...
+    }
+    ```
+
+    The body executes once per core of a `core_num`-core grid; the single
+    body block argument (index type) is the executing core's block index.
+    `core_num` is always static: the vector-to-pypto lowering folds the
+    forall bound (an IntegerAttr or a constant value) into this attribute.
+
+    The emitpy lowering maps it onto `emitpy.spmd_scope` verbatim.
+  }];
+
+  let arguments = (ins I64Attr:$core_num);
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let hasVerifier = 1;
+}
+
+def Pypto_RangeOp : Pypto_Op<"range", [SingleBlock, NoTerminator]> {
+  let summary = "Counted per-core loop with an induction variable";
+
+  let description = [{
+    Syntax (mirrors `scf.for`'s spelling; the induction variable is bound
+    inline instead of through an explicit `^bb0` header):
+
+    ```
+    pypto.range %i = %lb to %ub step %step {
+      ...
+    }
+    ```
+
+    The three index operands are the lower bound, upper bound and step;
+    the single body block argument (index type) is the induction variable.
+    Loop-carried values are not represented: the lowering accepts only
+    `scf.for` loops without iter_args and with an empty yield, so all
+    results flow through tile stores.
+
+    The emitpy lowering maps it onto `emitpy.for`, which prints as
+    `for <iv> in pl.range(<lb>, <ub>, <step>)`.
+  }];
+
+  let arguments = (ins Index:$lower_bound, Index:$upper_bound, Index:$step);
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasCustomAssemblyFormat = 1;
+
   let hasVerifier = 1;
 }
 

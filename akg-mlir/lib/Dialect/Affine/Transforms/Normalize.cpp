@@ -177,11 +177,11 @@ static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpa
     case TaylerMode::SIN: {
       //   tayler(x) ≈ x * (1 + c1*x^2 + c2*x^4 + c3*x^6 + c4*x^8)
       if (taylerExpansionNum == kTaylerExpansionNum) {
-        taylerParams.push_back(1.0);             // index 0
-        taylerParams.push_back(kSinTaylerC1);    // c1
-        taylerParams.push_back(kSinTaylerC2);    // c2
-        taylerParams.push_back(kSinTaylerC3);    // c3
-        taylerParams.push_back(kSinTaylerC4);    // c4
+        taylerParams.push_back(1.0);           // index 0
+        taylerParams.push_back(kSinTaylerC1);  // c1
+        taylerParams.push_back(kSinTaylerC2);  // c2
+        taylerParams.push_back(kSinTaylerC3);  // c3
+        taylerParams.push_back(kSinTaylerC4);  // c4
         return taylerParams;
       }
       // Fallback: standard Taylor expansion.
@@ -772,31 +772,48 @@ struct NormalizeRSqrtOp : public OpRewritePattern<math::RsqrtOp> {
 
 }  // namespace
 
-void populateNormalizeMathPatterns(RewritePatternSet &patterns) {
+void populateNormalizeMathPatterns(RewritePatternSet &patterns, bool expandRsqrt) {
   patterns.add<NormalizePowfOp>(patterns.getContext());
   patterns.add<NormalizeSinOp>(patterns.getContext());
   patterns.add<NormalizeCosOp>(patterns.getContext());
   patterns.add<NormalizeTanhOp>(patterns.getContext());
-  patterns.add<NormalizeRSqrtOp>(patterns.getContext());
+  // The 1/sqrt expansion feeds the HIVM path, which has no rsqrt. The
+  // pypto backend keeps math.rsqrt: it maps to a first-class pypto.rsqrt
+  // (runtime tile.rsqrt), and the expanded div would instead pair a
+  // statically-valid tile carrier with dynamically-valid tiles, which the
+  // runtime's tdiv contract rejects.
+  if (expandRsqrt) {
+    patterns.add<NormalizeRSqrtOp>(patterns.getContext());
+  }
 }
 
 namespace {
 
 struct NormalizePass : public impl::NormalizeBase<NormalizePass> {
  public:
+  explicit NormalizePass(bool expandRsqrt) : expandRsqrt_(expandRsqrt) {}
+
   void runOnOperation() final {
     getContext().getOrLoadDialect<mlir::hivm::HIVMDialect>();
 
     RewritePatternSet patterns(&getContext());
-    populateNormalizeMathPatterns(patterns);
+    populateNormalizeMathPatterns(patterns, expandRsqrt_);
     if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
   }
+
+ private:
+  bool expandRsqrt_;
 };
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createNormalizePass() { return std::make_unique<NormalizePass>(); }
+std::unique_ptr<OperationPass<func::FuncOp>> createNormalizePass(bool expandRsqrt) {
+  return std::make_unique<NormalizePass>(expandRsqrt);
+}
+// Default for the tablegen pass registration: the HIVM lowering needs the
+// rsqrt expansion.
+std::unique_ptr<OperationPass<func::FuncOp>> createNormalizePass() { return std::make_unique<NormalizePass>(true); }
 
 }  // namespace mlir

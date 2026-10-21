@@ -24,6 +24,9 @@
 
 namespace mlir {
 
-std::unique_ptr<OperationPass<func::FuncOp>> createNormalizePass();
+/// Runs the math normalization patterns. `expandRsqrt` lowers math.rsqrt to
+/// 1/sqrt for the HIVM backend; the pypto backend passes false to keep the
+/// first-class rsqrt op.
+std::unique_ptr<OperationPass<func::FuncOp>> createNormalizePass(bool expandRsqrt = true);
 }  // namespace mlir
 #endif  // AKG_DIALECT_AFFINE_TRANSFORMS_NORMALIZE_H_

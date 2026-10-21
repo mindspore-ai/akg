@@ -297,7 +297,8 @@ def LegalizeBool : Pass<"legalize-bool", "func::FuncOp"> {
 def Normalize : Pass<"normalize", "func::FuncOp"> {
     let summary = "Normalize Math ops";
     let description = [{
-      This pass normalizes complex math ops.
+      This pass normalizes complex math ops. The rsqrt-to-1/sqrt expansion
+      is disabled for the pypto backend, which keeps a first-class rsqrt.
     }];
     let constructor = "mlir::createNormalizePass()";
   }
