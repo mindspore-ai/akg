@@ -1297,25 +1297,25 @@ static bool isScfRegionBlockInput(Value val, Operation *op) {
 static std::optional<int64_t> memrefDimForIvOnAccess(Operation *MemrefOp, Value iv) {
   if (auto loadOp = dyn_cast<affine::AffineLoadOp>(MemrefOp)) {
     for (auto [d, idxVal] : llvm::enumerate(loadOp.getIndices())) {
-      if (idxVal == iv) {
+      if (CommonUtils::valueDependsOnTarget(idxVal, iv)) {
         return static_cast<int64_t>(d);
       }
     }
   } else if (auto loadOp = dyn_cast<memref::LoadOp>(MemrefOp)) {
     for (auto [d, idxVal] : llvm::enumerate(loadOp.getIndices())) {
-      if (idxVal == iv) {
+      if (CommonUtils::valueDependsOnTarget(idxVal, iv)) {
         return static_cast<int64_t>(d);
       }
     }
   } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(MemrefOp)) {
     for (auto [d, idxVal] : llvm::enumerate(storeOp.getIndices())) {
-      if (idxVal == iv) {
+      if (CommonUtils::valueDependsOnTarget(idxVal, iv)) {
         return static_cast<int64_t>(d);
       }
     }
   } else if (auto storeOp = dyn_cast<memref::StoreOp>(MemrefOp)) {
     for (auto [d, idxVal] : llvm::enumerate(storeOp.getIndices())) {
-      if (idxVal == iv) {
+      if (CommonUtils::valueDependsOnTarget(idxVal, iv)) {
         return static_cast<int64_t>(d);
       }
     }
