@@ -237,16 +237,20 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createCSEPass());
     nestedFusionPM.addPass(createCanonicalizerPass());
 
+    pm.addPass(createSymbolicRemovalPass());
+    pm.addPass(createFoldMemRefSubViewOnlyPass());
+
     // fusion
     nestedFusionPM.addPass(createRemoveRedundantLoopsPass());
     nestedFusionPM.addPass(createCanonicalizerPass());
     nestedFusionPM.addPass(affine::createAffineReductionAnnotationPass());
+    nestedFusionPM.addPass(createLoopSliceSplitPass());
     nestedFusionPM.addPass(createHoistLoopIndependentOpsPass());
     nestedFusionPM.addPass(createAKGLoopFusionPass());
     nestedFusionPM.addPass(createStoreLoadElimPass());
     nestedFusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
     nestedFusionPM.addPass(createCanonicalizerPass());
-    nestedFusionPM.addPass(createSubviewAllocElimPass());
+
     nestedFusionPM.addPass(createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(createAffineIteratorConversionPass());
     nestedFusionPM.addPass(createStoreLoadElimPass());
@@ -256,7 +260,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
     nestedFusionPM.addPass(createConvertAffineToSCFPass());
 
-    pm.addPass(createSymbolicRemovalPass());
+
     pm.addPass(createAddOutParameterPass());
     pm.addPass(createCanonicalizerPass());
     pm.addPass(createLegalizeBoolPass());
