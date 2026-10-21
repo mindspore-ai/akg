@@ -38,9 +38,26 @@ include "mlir/IR/OpBase.td"
 // A. Constants and allocation
 //===----------------------------------------------------------------------===//
 
+def Pypto_MatmulOp : Pypto_Op<"matmul"> {
+  let summary = "Tensor matrix multiplication with an optional initial accumulator";
+  let description =
+    [{
+    Without `init`, computes lhs @ rhs. With `init`, preserves the Linalg
+    destination semantics: init + lhs @ rhs. The result type selects the
+    output dtype.
+  }];
+  let arguments = (ins AnyRankedTensor:$lhs, AnyRankedTensor:$rhs, Optional<AnyRankedTensor>:$accumulator);
+  let results = (outs AnyRankedTensor:$result);
+  let assemblyFormat =
+    [{
+    $lhs `,` $rhs (`init` $accumulator^)? attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Pypto_ConstantOp : Pypto_Op<"constant"> {
   let summary = "Produce a Python scalar with an exact PyPTO dtype";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -62,7 +79,8 @@ def Pypto_ConstantOp : Pypto_Op<"constant"> {
 
 def Pypto_TileFullOp : Pypto_Op<"tile_full"> {
   let summary = "Allocate a tile filled with a splat value";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -86,7 +104,8 @@ def Pypto_TileFullOp : Pypto_Op<"tile_full"> {
 
 def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
   let summary = "Allocate an uninitialized scratch tile";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -108,7 +127,8 @@ def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
 
 def Pypto_SliceOp : Pypto_Op<"slice"> {
   let summary = "Cut a statically shaped window out of a tile or tensor";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -124,14 +144,11 @@ def Pypto_SliceOp : Pypto_Op<"slice"> {
     `pl.slice(src, [window], [offsets], drop_dims=[...])` where the last
     keyword argument only appears for rank-reducing slices.
   }];
-  let arguments = (ins
-    AnyType:$source,
-    DenseI64ArrayAttr:$window,
-    Variadic<Index>:$offsets,
-    OptionalAttr<DenseI64ArrayAttr>:$dropDims
-  );
+  let arguments = (ins AnyType:$source, DenseI64ArrayAttr:$window, Variadic<Index>:$offsets,
+    OptionalAttr<DenseI64ArrayAttr>:$dropDims);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $source `[` $offsets `]` `,` $window (`drop_dims` `=` $dropDims^)?
     attr-dict `:` type($source) `to` type($result)
   }];
@@ -140,7 +157,8 @@ def Pypto_SliceOp : Pypto_Op<"slice"> {
 
 def Pypto_ReshapeOp : Pypto_Op<"reshape"> {
   let summary = "View a tile or tensor under a different shape";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -162,7 +180,8 @@ def Pypto_ReshapeOp : Pypto_Op<"reshape"> {
 
 def Pypto_TransposeOp : Pypto_Op<"transpose"> {
   let summary = "Swap two axes of a tile or tensor";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -177,14 +196,14 @@ def Pypto_TransposeOp : Pypto_Op<"transpose"> {
   }];
   let arguments = (ins AnyType:$source, I64Attr:$i, I64Attr:$j);
   let results = (outs AnyType:$result);
-  let assemblyFormat =
-    "$source `,` $i `,` $j attr-dict `:` type($source) `to` type($result)";
+  let assemblyFormat = "$source `,` $i `,` $j attr-dict `:` type($source) `to` type($result)";
   let hasVerifier = 1;
 }
 
 def Pypto_ReinterpretViewOp : Pypto_Op<"reinterpret_view"> {
   let summary = "Reinterpret a tile's bits under a different dtype";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -208,7 +227,8 @@ def Pypto_ReinterpretViewOp : Pypto_Op<"reinterpret_view"> {
 
 def Pypto_CastOp : Pypto_Op<"cast"> {
   let summary = "Convert a scalar or tile to another dtype";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -228,7 +248,8 @@ def Pypto_CastOp : Pypto_Op<"cast"> {
 
 def Pypto_CmpOp : Pypto_Op<"cmp"> {
   let summary = "Elementwise comparison of two tiles";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -241,13 +262,10 @@ def Pypto_CmpOp : Pypto_Op<"cmp"> {
     code passed as the `cmp_type` keyword argument. Scalar comparisons
     lower to the eq/ne/lt/le/gt/ge syntax helpers and never produce this op.
   }];
-  let arguments = (ins
-    Pypto_CmpPredicateAttr:$predicate,
-    AnyType:$lhs,
-    AnyType:$rhs
-  );
+  let arguments = (ins Pypto_CmpPredicateAttr:$predicate, AnyType:$lhs, AnyType:$rhs);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $predicate `,` $lhs `,` $rhs attr-dict `:`
     type($lhs) `,` type($rhs) `->` type($result)
   }];
@@ -256,7 +274,8 @@ def Pypto_CmpOp : Pypto_Op<"cmp"> {
 
 def Pypto_SelectOp : Pypto_Op<"select"> {
   let summary = "Elementwise selection between two tiles";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -274,13 +293,10 @@ def Pypto_SelectOp : Pypto_Op<"select"> {
     falseValue)` with all arguments positional; a constant scalar branch
     rides inline as `pl.const(value, dtype)` text.
   }];
-  let arguments = (ins
-    AnyType:$condition,
-    AnyType:$trueValue,
-    AnyType:$falseValue
-  );
+  let arguments = (ins AnyType:$condition, AnyType:$trueValue, AnyType:$falseValue);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $condition `,` $trueValue `,` $falseValue attr-dict `:`
     type($condition) `,` type($trueValue) `,` type($falseValue) `to`
     type($result)
@@ -295,47 +311,22 @@ def Pypto_SelectOp : Pypto_Op<"select"> {
 class Pypto_BinaryOp<string mnemonic> : Pypto_Op<mnemonic> {
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results = (outs AnyType:$result);
-  let assemblyFormat =
-    "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `to` type($result)";
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `to` type($result)";
   let hasVerifier = 1;
 }
 
-def Pypto_AddOp : Pypto_BinaryOp<"add"> {
-  let summary = "Elementwise or scalar addition (`pl.add`)";
-}
-def Pypto_SubOp : Pypto_BinaryOp<"sub"> {
-  let summary = "Elementwise or scalar subtraction (`pl.sub`)";
-}
-def Pypto_MulOp : Pypto_BinaryOp<"mul"> {
-  let summary = "Elementwise or scalar multiplication (`pl.mul`)";
-}
-def Pypto_DivOp : Pypto_BinaryOp<"div"> {
-  let summary = "Elementwise or scalar division (`pl.div`)";
-}
-def Pypto_FmodOp : Pypto_BinaryOp<"fmod"> {
-  let summary = "Elementwise or scalar remainder (`pl.fmod`)";
-}
-def Pypto_MaximumOp : Pypto_BinaryOp<"maximum"> {
-  let summary = "Elementwise maximum (`pl.maximum`)";
-}
-def Pypto_MinimumOp : Pypto_BinaryOp<"minimum"> {
-  let summary = "Elementwise minimum (`pl.minimum`)";
-}
-def Pypto_AndOp : Pypto_BinaryOp<"and"> {
-  let summary = "Elementwise or scalar bitwise and (`pl.and_`)";
-}
-def Pypto_OrOp : Pypto_BinaryOp<"or"> {
-  let summary = "Elementwise or scalar bitwise or (`pl.or_`)";
-}
-def Pypto_XorOp : Pypto_BinaryOp<"xor"> {
-  let summary = "Elementwise or scalar bitwise xor (`pl.xor`)";
-}
-def Pypto_ShlOp : Pypto_BinaryOp<"shl"> {
-  let summary = "Elementwise or scalar left shift (`pl.shl`)";
-}
-def Pypto_ShrOp : Pypto_BinaryOp<"shr"> {
-  let summary = "Elementwise or scalar right shift (`pl.shr`)";
-}
+def Pypto_AddOp : Pypto_BinaryOp<"add"> { let summary = "Elementwise or scalar addition (`pl.add`)"; }
+def Pypto_SubOp : Pypto_BinaryOp<"sub"> { let summary = "Elementwise or scalar subtraction (`pl.sub`)"; }
+def Pypto_MulOp : Pypto_BinaryOp<"mul"> { let summary = "Elementwise or scalar multiplication (`pl.mul`)"; }
+def Pypto_DivOp : Pypto_BinaryOp<"div"> { let summary = "Elementwise or scalar division (`pl.div`)"; }
+def Pypto_FmodOp : Pypto_BinaryOp<"fmod"> { let summary = "Elementwise or scalar remainder (`pl.fmod`)"; }
+def Pypto_MaximumOp : Pypto_BinaryOp<"maximum"> { let summary = "Elementwise maximum (`pl.maximum`)"; }
+def Pypto_MinimumOp : Pypto_BinaryOp<"minimum"> { let summary = "Elementwise minimum (`pl.minimum`)"; }
+def Pypto_AndOp : Pypto_BinaryOp<"and"> { let summary = "Elementwise or scalar bitwise and (`pl.and_`)"; }
+def Pypto_OrOp : Pypto_BinaryOp<"or"> { let summary = "Elementwise or scalar bitwise or (`pl.or_`)"; }
+def Pypto_XorOp : Pypto_BinaryOp<"xor"> { let summary = "Elementwise or scalar bitwise xor (`pl.xor`)"; }
+def Pypto_ShlOp : Pypto_BinaryOp<"shl"> { let summary = "Elementwise or scalar left shift (`pl.shl`)"; }
+def Pypto_ShrOp : Pypto_BinaryOp<"shr"> { let summary = "Elementwise or scalar right shift (`pl.shr`)"; }
 
 //===----------------------------------------------------------------------===//
 // D2. Row-broadcast binary ops
@@ -350,8 +341,7 @@ def Pypto_ShrOp : Pypto_BinaryOp<"shr"> {
 class Pypto_RowExpandOp<string mnemonic> : Pypto_Op<mnemonic> {
   let arguments = (ins AnyType:$tile, AnyType:$rowVec);
   let results = (outs AnyType:$result);
-  let assemblyFormat =
-    "$tile `,` $rowVec attr-dict `:` type($tile) `,` type($rowVec) `to` type($result)";
+  let assemblyFormat = "$tile `,` $rowVec attr-dict `:` type($tile) `,` type($rowVec) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -375,46 +365,25 @@ def Pypto_RowExpandDivOp : Pypto_RowExpandOp<"row_expand_div"> {
 class Pypto_UnaryOp<string mnemonic> : Pypto_Op<mnemonic> {
   let arguments = (ins AnyType:$input);
   let results = (outs AnyType:$result);
-  let assemblyFormat =
-    "$input attr-dict `:` type($input) `to` type($result)";
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
   let hasVerifier = 1;
 }
 
-def Pypto_NegOp : Pypto_UnaryOp<"neg"> {
-  let summary = "Elementwise negation (`pl.neg`)";
-}
-def Pypto_AbsOp : Pypto_UnaryOp<"abs"> {
-  let summary = "Elementwise absolute value (`pl.abs`)";
-}
-def Pypto_ExpOp : Pypto_UnaryOp<"exp"> {
-  let summary = "Elementwise exponential (`pl.exp`)";
-}
-def Pypto_LogOp : Pypto_UnaryOp<"log"> {
-  let summary = "Elementwise natural logarithm (`pl.log`)";
-}
-def Pypto_SqrtOp : Pypto_UnaryOp<"sqrt"> {
-  let summary = "Elementwise square root (`pl.sqrt`)";
-}
-def Pypto_RsqrtOp : Pypto_UnaryOp<"rsqrt"> {
-  let summary = "Elementwise reciprocal square root (`pl.rsqrt`)";
-}
-def Pypto_SinOp : Pypto_UnaryOp<"sin"> {
-  let summary = "Elementwise sine (`pl.sin`)";
-}
-def Pypto_CosOp : Pypto_UnaryOp<"cos"> {
-  let summary = "Elementwise cosine (`pl.cos`)";
-}
+def Pypto_NegOp : Pypto_UnaryOp<"neg"> { let summary = "Elementwise negation (`pl.neg`)"; }
+def Pypto_AbsOp : Pypto_UnaryOp<"abs"> { let summary = "Elementwise absolute value (`pl.abs`)"; }
+def Pypto_ExpOp : Pypto_UnaryOp<"exp"> { let summary = "Elementwise exponential (`pl.exp`)"; }
+def Pypto_LogOp : Pypto_UnaryOp<"log"> { let summary = "Elementwise natural logarithm (`pl.log`)"; }
+def Pypto_SqrtOp : Pypto_UnaryOp<"sqrt"> { let summary = "Elementwise square root (`pl.sqrt`)"; }
+def Pypto_RsqrtOp : Pypto_UnaryOp<"rsqrt"> { let summary = "Elementwise reciprocal square root (`pl.rsqrt`)"; }
+def Pypto_SinOp : Pypto_UnaryOp<"sin"> { let summary = "Elementwise sine (`pl.sin`)"; }
+def Pypto_CosOp : Pypto_UnaryOp<"cos"> { let summary = "Elementwise cosine (`pl.cos`)"; }
 
 //===----------------------------------------------------------------------===//
 // F. Scalar combines
 //===----------------------------------------------------------------------===//
 
-def Pypto_MaxOp : Pypto_BinaryOp<"max"> {
-  let summary = "Scalar maximum (`pl.max`); the tile form is `pypto.maximum`";
-}
-def Pypto_MinOp : Pypto_BinaryOp<"min"> {
-  let summary = "Scalar minimum (`pl.min`); the tile form is `pypto.minimum`";
-}
+def Pypto_MaxOp : Pypto_BinaryOp<"max"> { let summary = "Scalar maximum (`pl.max`); the tile form is `pypto.maximum`"; }
+def Pypto_MinOp : Pypto_BinaryOp<"min"> { let summary = "Scalar minimum (`pl.min`); the tile form is `pypto.minimum`"; }
 
 //===----------------------------------------------------------------------===//
 // G. Reduction and scalar IO
@@ -422,7 +391,8 @@ def Pypto_MinOp : Pypto_BinaryOp<"min"> {
 
 def Pypto_ReductionOp : Pypto_Op<"reduction"> {
   let summary = "Reduce the first or last axis of a tile in place";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -440,14 +410,10 @@ def Pypto_ReductionOp : Pypto_Op<"reduction"> {
     The emitpy lowering emits `pl.row_<kind>(vector, scratch)` /
     `pl.col_<kind>(vector, scratch)` with both operands positional.
   }];
-  let arguments = (ins
-    Pypto_ReduceKindAttr:$kind,
-    Pypto_ReduceAxisAttr:$axis,
-    AnyType:$vector,
-    AnyType:$scratch
-  );
+  let arguments = (ins Pypto_ReduceKindAttr:$kind, Pypto_ReduceAxisAttr:$axis, AnyType:$vector, AnyType:$scratch);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $kind `,` $axis `,` $vector `,` $scratch attr-dict `:`
     type($vector) `,` type($scratch) `->` type($result)
   }];
@@ -456,7 +422,8 @@ def Pypto_ReductionOp : Pypto_Op<"reduction"> {
 
 def Pypto_ReadOp : Pypto_Op<"read"> {
   let summary = "Read one element out of a tile";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -469,7 +436,8 @@ def Pypto_ReadOp : Pypto_Op<"read"> {
   }];
   let arguments = (ins AnyType:$source, DenseI64ArrayAttr:$indices);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $source $indices attr-dict `:` type($source) `->` type($result)
   }];
   let hasVerifier = 1;
@@ -477,7 +445,8 @@ def Pypto_ReadOp : Pypto_Op<"read"> {
 
 def Pypto_WriteOp : Pypto_Op<"write"> {
   let summary = "Write one scalar element into a tile";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -486,12 +455,9 @@ def Pypto_WriteOp : Pypto_Op<"write"> {
 
     The emitpy lowering emits `pl.write(dest, [offsets], value)`.
   }];
-  let arguments = (ins
-    AnyType:$dest,
-    AnyType:$value,
-    Variadic<Index>:$offsets
-  );
-  let assemblyFormat = [{
+  let arguments = (ins AnyType:$dest, AnyType:$value, Variadic<Index>:$offsets);
+  let assemblyFormat =
+    [{
     $dest `[` $offsets `]` `,` $value attr-dict `:` type($dest) `,` type($value)
   }];
   let hasVerifier = 1;
@@ -503,7 +469,8 @@ def Pypto_WriteOp : Pypto_Op<"write"> {
 
 def Pypto_LoadOp : Pypto_Op<"load", [AttrSizedOperandSegments]> {
   let summary = "Load a tile from a PyPTO tensor at the given offsets";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -526,14 +493,11 @@ def Pypto_LoadOp : Pypto_Op<"load", [AttrSizedOperandSegments]> {
     bounds (`paddedShapes`) and the actual extents (`validExtents`) and
     emits `pl.load(src, [offsets], [shapes], [valid])`.
   }];
-  let arguments = (ins
-    AnyType:$source,
-    Variadic<Index>:$offsets,
-    Variadic<Index>:$paddedShapes,
-    Variadic<Index>:$validExtents
-  );
+  let arguments = (ins AnyType:$source, Variadic<Index>:$offsets, Variadic<Index>:$paddedShapes,
+    Variadic<Index>:$validExtents);
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
+  let assemblyFormat =
+    [{
     $source `[` $offsets `]`
     (`padded` `[` $paddedShapes^ `]` `valid` `[` $validExtents `]`)?
     attr-dict `:` type($source) `->` type($result)
@@ -543,7 +507,8 @@ def Pypto_LoadOp : Pypto_Op<"load", [AttrSizedOperandSegments]> {
 
 def Pypto_StoreOp : Pypto_Op<"store"> {
   let summary = "Store a tile back to a PyPTO tensor at the given offsets";
-  let description = [{
+  let description =
+    [{
     Syntax:
 
     ```
@@ -556,12 +521,9 @@ def Pypto_StoreOp : Pypto_Op<"store"> {
 
     The emitpy lowering emits `pl.store(tile, [offsets], dest)`.
   }];
-  let arguments = (ins
-    AnyType:$value,
-    AnyType:$dest,
-    Variadic<Index>:$offsets
-  );
-  let assemblyFormat = [{
+  let arguments = (ins AnyType:$value, AnyType:$dest, Variadic<Index>:$offsets);
+  let assemblyFormat =
+    [{
     $value `,` $dest `[` $offsets `]` attr-dict `:` type($value) `,` type($dest)
   }];
   let hasVerifier = 1;
@@ -580,7 +542,8 @@ def Pypto_StoreOp : Pypto_Op<"store"> {
 def Pypto_SpmdOp : Pypto_Op<"spmd", [SingleBlock, NoTerminator]> {
   let summary = "SPMD multi-core launch scope";
 
-  let description = [{
+  let description =
+    [{
     Syntax (mirrors `scf.forall`'s normalized spelling; the block index is
     bound inline instead of through an explicit `^bb0` header):
 
@@ -610,7 +573,8 @@ def Pypto_SpmdOp : Pypto_Op<"spmd", [SingleBlock, NoTerminator]> {
 def Pypto_RangeOp : Pypto_Op<"range", [SingleBlock, NoTerminator]> {
   let summary = "Counted per-core loop with an induction variable";
 
-  let description = [{
+  let description =
+    [{
     Syntax (mirrors `scf.for`'s spelling; the induction variable is bound
     inline instead of through an explicit `^bb0` header):
 

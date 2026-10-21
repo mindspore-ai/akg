@@ -593,6 +593,15 @@ LogicalResult SubscriptOp::verify() {
   return success();
 }
 
+LogicalResult TensorSliceOp::verify() {
+  auto type = getResult().getType();
+  if (!type.hasStaticShape() || type.getRank() != getSource().getType().getRank() ||
+      static_cast<size_t>(type.getRank()) != getOffsets().size()) {
+    return emitOpError("requires a static result and one offset per source dimension");
+  }
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // VerbatimOp
 //===----------------------------------------------------------------------===//
