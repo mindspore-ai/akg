@@ -37,11 +37,12 @@ func.func @test_tile_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 {
   // CHECK: {{.*}} = pl.add({{.*}}, inputs_0)
   // CHECK: {{.*}} = pl.mul(
   // A full reduction row-reduces on device; the surviving rows are read out
-  // and combined with scalar adds, and the result is written straight into
+  // and combined with scalar arith -- spelled as the infix `+` the parser
+  // maps onto pto.addf -- and the result is written straight into
   // the [1] output tensor.
   // CHECK: {{.*}} = pl.row_sum(
   // CHECK: {{.*}} = pl.read(
-  // CHECK: {{.*}} = pl.add(
+  // CHECK: {{.*}} = ({{.*}} + {{.*}})
   // CHECK: pl.write(inputs_1,
   // CHECK: return inputs_1
 
@@ -59,14 +60,15 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
   // CHECK: inputs: pl.Tensor{{.*}}pl.FP32], inputs_0: pl.Out{{.*}}pl.FP32
   // CHECK: with pl.at(level=pl.Level.CORE_GROUP):
   // A rank-1 tile is viewed as [8, N/8]: the row reduction leaves an
-  // allocatable [8, 1] tile and the surviving sums are combined as scalars.
+  // allocatable [8, 1] tile and the surviving sums are combined as scalars
+  // through the infix `+`.
   // CHECK: {{.*}} = pl.load(inputs,
   // CHECK: {{.*}} = pl.reshape({{.*}}, [8, 384])
   // CHECK: {{.*}} = pl.create_tile([8, 384],
   // CHECK: {{.*}} = pl.row_sum(
   // CHECK: {{.*}} = pl.read(
   // CHECK: {{.*}} = pl.read(
-  // CHECK: {{.*}} = pl.add(
+  // CHECK: {{.*}} = ({{.*}} + {{.*}})
   // CHECK: pl.write(inputs_0,
   // CHECK: return inputs_0
 
@@ -109,8 +111,12 @@ func.func @test_spmd_tile_loop(%arg0 : memref<1024x1024xf32>, %arg1 : memref<102
   // CHECK-NOT: with pl.at
   // CHECK: with pl.spmd(64):
   // CHECK: block_idx = pl.tile.get_block_idx()
-  // CHECK: {{.*}} = pl.mul(block_idx, 16)
+  // Scalar index math rides on plain Python arithmetic: the parser maps
+  // `*` onto pto.muli and `+` onto pto.addi.
+  // CHECK: {{.*}} = (block_idx * 16)
   // CHECK: for loop_var in pl.range(0, 2, 1):
+  // CHECK: {{.*}} = (loop_var * 8)
+  // CHECK: {{.*}} = ({{.*}} + {{.*}})
   // CHECK: {{.*}} = pl.load(inputs, {{\[.*0\]}}, {{\[8, 1024\]}})
   // CHECK: pl.store({{.*}}, {{\[.*0\]}}, inputs_0)
   // CHECK: return inputs_0

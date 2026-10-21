@@ -251,7 +251,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     nestedFusionPM.addPass(createAffineIteratorConversionPass());
     nestedFusionPM.addPass(createStoreLoadElimPass());
     nestedFusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel));
-    nestedFusionPM.addPass(createNormalizePass());
+    // The pypto backend keeps math.rsqrt (first-class pypto.rsqrt); the
+    // 1/sqrt expansion only serves the HIVM lowering.
+    nestedFusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
     nestedFusionPM.addPass(createConvertAffineToSCFPass());
 
     pm.addPass(createSymbolicRemovalPass());
