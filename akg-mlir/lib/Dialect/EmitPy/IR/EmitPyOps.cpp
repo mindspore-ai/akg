@@ -18,7 +18,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
-using namespace mlir;        // NOLINT(build/namespaces)
+using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::emitpy;  // NOLINT(build/namespaces)
 
 //===----------------------------------------------------------------------===//
@@ -31,10 +31,8 @@ using namespace mlir::emitpy;  // NOLINT(build/namespaces)
 /// In the format string, all `{}` are replaced by Placeholders, except if the
 /// `{` is escaped by `{{` - then it doesn't start a placeholder.
 template <class ArgType>
-FailureOr<SmallVector<ReplacementItem>>
-parseFormatString(StringRef toParse, ArgType fmtArgs,
-                  std::optional<llvm::function_ref<mlir::InFlightDiagnostic()>>
-                      emitError = {}) {
+FailureOr<SmallVector<ReplacementItem>> parseFormatString(
+  StringRef toParse, ArgType fmtArgs, std::optional<llvm::function_ref<mlir::InFlightDiagnostic()>> emitError = {}) {
   SmallVector<ReplacementItem> items;
 
   // If there are not operands, the format string is not interpreted.
@@ -57,8 +55,7 @@ parseFormatString(StringRef toParse, ArgType fmtArgs,
       continue;
     }
     if (toParse.size() < 2) {
-      return (*emitError)()
-             << "expected '}' after unescaped '{' at end of string";
+      return (*emitError)() << "expected '}' after unescaped '{' at end of string";
     }
     // toParse contains at least two characters and starts with `{`.
     char nextChar = toParse[1];
@@ -84,8 +81,7 @@ parseFormatString(StringRef toParse, ArgType fmtArgs,
 
 /// Check that the type of the initial value is compatible with the operations
 /// result type.
-static LogicalResult verifyInitializationAttribute(Operation *op,
-                                                   Attribute value) {
+static LogicalResult verifyInitializationAttribute(Operation *op, Attribute value) {
   assert(op->getNumResults() == 1 && "operation must have 1 result");
 
   if (llvm::isa<mlir::emitpy::OpaqueAttr>(value)) {
@@ -95,24 +91,19 @@ static LogicalResult verifyInitializationAttribute(Operation *op,
   Type resultType = op->getResult(0).getType();
   Type attrType = cast<TypedAttr>(value).getType();
   if (resultType != attrType) {
-    return op->emitOpError()
-           << "requires attribute to either be an #emitpy.opaque attribute or "
-              "it's type ("
-           << attrType << ") to match the op's result type (" << resultType
-           << ")";
+    return op->emitOpError() << "requires attribute to either be an #emitpy.opaque attribute or "
+                                "it's type ("
+                             << attrType << ") to match the op's result type (" << resultType << ")";
   }
 
   return success();
 }
 
 template <typename SourceOp>
-LogicalResult verifyNearestGlobalSymbol(SourceOp op,
-                                        SymbolTableCollection &symbolTable) {
-  auto global =
-      symbolTable.lookupNearestSymbolFrom<GlobalOp>(op, op.getNameAttr());
+LogicalResult verifyNearestGlobalSymbol(SourceOp op, SymbolTableCollection &symbolTable) {
+  auto global = symbolTable.lookupNearestSymbolFrom<GlobalOp>(op, op.getNameAttr());
   if (!global) {
-    return op.emitOpError("'")
-           << op.getName() << "' does not reference a valid emitpy.global";
+    return op.emitOpError("'") << op.getName() << "' does not reference a valid emitpy.global";
   }
 
   Type resultType = op.getResult().getType();
@@ -122,9 +113,8 @@ LogicalResult verifyNearestGlobalSymbol(SourceOp op,
   if (auto typedAttr = llvm::dyn_cast<TypedAttr>(initialValue)) {
     Type globalType = typedAttr.getType();
     if (resultType != globalType) {
-      return op.emitOpError()
-             << "result type (" << resultType
-             << ") does not match global's type (" << globalType << ")";
+      return op.emitOpError() << "result type (" << resultType << ") does not match global's type (" << globalType
+                              << ")";
     }
   }
   // For opaque attributes, we allow any type since the type is not specified
@@ -139,11 +129,10 @@ LogicalResult isValidPythonIdentifier(Operation *op, StringRef name) {
   }
 
   static constexpr std::array<std::string_view, 35> pythonKeywords = {
-      "False",  "None",   "True",    "and",      "as",       "assert", "async",
-      "await",  "break",  "class",   "continue", "def",      "del",    "elif",
-      "else",   "except", "finally", "for",      "from",     "global", "if",
-      "import", "in",     "is",      "lambda",   "nonlocal", "not",    "or",
-      "pass",   "raise",  "return",  "try",      "while",    "with",   "yield"};
+    "False", "None",     "True",  "and",    "as",   "assert", "async",  "await",    "break",
+    "class", "continue", "def",   "del",    "elif", "else",   "except", "finally",  "for",
+    "from",  "global",   "if",    "import", "in",   "is",     "lambda", "nonlocal", "not",
+    "or",    "pass",     "raise", "return", "try",  "while",  "with",   "yield"};
 
   if (llvm::is_contained(pythonKeywords, static_cast<std::string_view>(name))) {
     return op->emitOpError() << "variable name must not be a keyword";
@@ -170,16 +159,14 @@ LogicalResult isValidPythonIdentifier(Operation *op, StringRef name) {
 
 /// Parses and validates the `emitpy.method_kind` attribute of a class method.
 /// Leaves `methodKind` as "instance" when the attribute is absent.
-static LogicalResult parseMethodKind(func::FuncOp funcOp,
-                                     StringRef &methodKind) {
+static LogicalResult parseMethodKind(func::FuncOp funcOp, StringRef &methodKind) {
   methodKind = "instance";
-  if (auto methodKindAttr =
-          funcOp->getAttrOfType<StringAttr>("emitpy.method_kind")) {
+  if (auto methodKindAttr = funcOp->getAttrOfType<StringAttr>("emitpy.method_kind")) {
     methodKind = methodKindAttr.getValue();
-    if (methodKind != "instance" && methodKind != "staticmethod" &&
-        methodKind != "classmethod") {
-      funcOp->emitOpError("emitpy.method_kind must be one of "
-                          "'instance', 'staticmethod', or 'classmethod'");
+    if (methodKind != "instance" && methodKind != "staticmethod" && methodKind != "classmethod") {
+      funcOp->emitOpError(
+        "emitpy.method_kind must be one of "
+        "'instance', 'staticmethod', or 'classmethod'");
       return failure();
     }
   }
@@ -188,9 +175,7 @@ static LogicalResult parseMethodKind(func::FuncOp funcOp,
 
 /// Checks one func method nested in a class body: its method kind, the
 /// __init__ shape, and the receiver argument.
-static LogicalResult verifyClassMethod(func::FuncOp funcOp,
-                                       StringRef className,
-                                       int &initCount) {
+static LogicalResult verifyClassMethod(func::FuncOp funcOp, StringRef className, int &initCount) {
   StringRef methodKind;
   if (failed(parseMethodKind(funcOp, methodKind))) {
     return failure();
@@ -207,18 +192,16 @@ static LogicalResult verifyClassMethod(func::FuncOp funcOp,
   }
 
   unsigned numInputs = funcOp.getFunctionType().getNumInputs();
-  if (methodKind == "instance" || methodKind == "classmethod" ||
-      funcOp.getName() == "__init__") {
+  if (methodKind == "instance" || methodKind == "classmethod" || funcOp.getName() == "__init__") {
     if (numInputs < 1) {
-      return funcOp.emitOpError("instance and class methods must take a "
-                                "receiver argument");
+      return funcOp.emitOpError(
+        "instance and class methods must take a "
+        "receiver argument");
     }
     StringRef expectedReceiver = methodKind == "classmethod" ? "cls" : "self";
-    if (auto argNameAttr =
-            funcOp.getArgAttrOfType<StringAttr>(0, "emitpy.name")) {
+    if (auto argNameAttr = funcOp.getArgAttrOfType<StringAttr>(0, "emitpy.name")) {
       if (argNameAttr.getValue() != expectedReceiver) {
-        return funcOp.emitOpError() << "first argument must be named '"
-                                    << expectedReceiver << "' via emitpy.name";
+        return funcOp.emitOpError() << "first argument must be named '" << expectedReceiver << "' via emitpy.name";
       }
     }
     if (methodKind != "classmethod") {
@@ -227,21 +210,16 @@ static LogicalResult verifyClassMethod(func::FuncOp funcOp,
         return funcOp.emitOpError("self argument must have !emitpy.class type");
       }
       if (classType.getName() != className) {
-        return funcOp.emitOpError() << "self type must match class name '"
-                                    << className << "'";
+        return funcOp.emitOpError() << "self type must match class name '" << className << "'";
       }
     }
   }
   return success();
 }
 
-LogicalResult GetAttrOp::verify() {
-  return isValidPythonIdentifier(*this, getAttrName());
-}
+LogicalResult GetAttrOp::verify() { return isValidPythonIdentifier(*this, getAttrName()); }
 
-LogicalResult SetAttrOp::verify() {
-  return isValidPythonIdentifier(*this, getAttrName());
-}
+LogicalResult SetAttrOp::verify() { return isValidPythonIdentifier(*this, getAttrName()); }
 
 LogicalResult ClassOp::verify() {
   if (failed(isValidPythonIdentifier(*this, getSymName()))) {
@@ -251,8 +229,7 @@ LogicalResult ClassOp::verify() {
   if (auto baseClasses = getBaseClasses()) {
     for (Attribute base : *baseClasses) {
       if (!isa<SymbolRefAttr, OpaqueAttr>(base)) {
-        return emitOpError(
-            "base_classes must be symbol refs or #emitpy.opaque");
+        return emitOpError("base_classes must be symbol refs or #emitpy.opaque");
       }
     }
   }
@@ -268,14 +245,13 @@ LogicalResult ClassOp::verify() {
     }
 
     // Allow EmitPy ops (e.g., class-level assignments/imports) in class body.
-    if (op.getDialect() != nullptr &&
-        op.getDialect()->getNamespace() ==
-            getOperation()->getDialect()->getNamespace()) {
+    if (op.getDialect() != nullptr && op.getDialect()->getNamespace() == getOperation()->getDialect()->getNamespace()) {
       continue;
     }
 
-    return op.emitOpError("only emitpy or func operations are allowed in a "
-                          "class body");
+    return op.emitOpError(
+      "only emitpy or func operations are allowed in a "
+      "class body");
   }
 
   if (initCount > 1) {
@@ -291,9 +267,7 @@ void ClassOp::print(OpAsmPrinter &p) {
   if (auto baseClasses = getBaseClasses()) {
     if (!baseClasses->empty()) {
       p << "(";
-      llvm::interleaveComma(*baseClasses, p, [&](Attribute baseAttr) {
-        p.printAttribute(baseAttr);
-      });
+      llvm::interleaveComma(*baseClasses, p, [&](Attribute baseAttr) { p.printAttribute(baseAttr); });
       p << ")";
     }
   }
@@ -309,9 +283,8 @@ void ClassOp::print(OpAsmPrinter &p) {
   }
   if (hasExtraAttrs) {
     p << " attributes ";
-    p.printOptionalAttrDict(
-        getOperation()->getAttrs(),
-        /*elidedAttrs=*/{getSymNameAttrName(), "base_classes"});
+    p.printOptionalAttrDict(getOperation()->getAttrs(),
+                            /*elidedAttrs=*/{getSymNameAttrName(), "base_classes"});
   }
   p << " ";
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
@@ -341,8 +314,7 @@ ParseResult ClassOp::parse(OpAsmParser &parser, OperationState &result) {
       }
     }
     if (!baseClasses.empty()) {
-      result.addAttribute("base_classes",
-                          ArrayAttr::get(parser.getContext(), baseClasses));
+      result.addAttribute("base_classes", ArrayAttr::get(parser.getContext(), baseClasses));
     }
   }
 
@@ -375,13 +347,12 @@ LogicalResult CallOpaqueOp::verify() {
   if ((getArgs() && !getKeywordArgs()) || (!getArgs() && getKeywordArgs())) {
     return emitOpError("args and keyword_args must be specified together");
   }
-  if (getArgs() && getKeywordArgs() &&
-      getArgs()->size() != getKeywordArgs()->size()) {
-    return emitOpError("args and keyword_args must have the same size (empty "
-                       "strings are allowed), but got "
-                       "args size = ")
-           << getArgs()->size()
-           << " and keyword_args size = " << getKeywordArgs()->size();
+  if (getArgs() && getKeywordArgs() && getArgs()->size() != getKeywordArgs()->size()) {
+    return emitOpError(
+             "args and keyword_args must have the same size (empty "
+             "strings are allowed), but got "
+             "args size = ")
+           << getArgs()->size() << " and keyword_args size = " << getKeywordArgs()->size();
   }
   return success();
 }
@@ -402,8 +373,7 @@ void ImportOp::print(OpAsmPrinter &p) {
     // Print 'from <moduleName> import <membersToImport> [as <memberAliases>]'
     // case.
     auto hasAliasAt = [&](size_t i) -> bool {
-      if (!memberAliases || memberAliases->empty() ||
-          i >= memberAliases->size()) {
+      if (!memberAliases || memberAliases->empty() || i >= memberAliases->size()) {
         return false;
       }
       if (auto alias = dyn_cast_if_present<StringAttr>((*memberAliases)[i])) {
@@ -416,8 +386,7 @@ void ImportOp::print(OpAsmPrinter &p) {
 
     bool first = true;
     for (size_t i = 0; i < membersToImport->size(); ++i) {
-      auto member =
-          llvm::dyn_cast_if_present<StringAttr>((*membersToImport)[i]);
+      auto member = llvm::dyn_cast_if_present<StringAttr>((*membersToImport)[i]);
       if (!member || member.empty()) {
         continue;
       }
@@ -441,8 +410,7 @@ void ImportOp::print(OpAsmPrinter &p) {
   }
 }
 
-ParseResult ImportOp::parse(::mlir::OpAsmParser &parser,
-                            ::mlir::OperationState &result) {
+ParseResult ImportOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
   Builder &builder = parser.getBuilder();
 
   StringAttr moduleNameAttr;
@@ -453,14 +421,12 @@ ParseResult ImportOp::parse(::mlir::OpAsmParser &parser,
 
   if (succeeded(parser.parseOptionalKeyword("from"))) {
     if (parser.parseAttribute(moduleNameAttr)) {
-      return parser.emitError(parser.getNameLoc())
-             << "expected string attribute for module name";
+      return parser.emitError(parser.getNameLoc()) << "expected string attribute for module name";
     }
     result.addAttribute("module_name", moduleNameAttr);
 
     if (parser.parseKeyword("import")) {
-      return parser.emitError(parser.getNameLoc())
-             << "expected string literal 'import'";
+      return parser.emitError(parser.getNameLoc()) << "expected string literal 'import'";
     }
 
     if (succeeded(parser.parseOptionalStar())) {
@@ -476,13 +442,11 @@ ParseResult ImportOp::parse(::mlir::OpAsmParser &parser,
       SmallVector<StringRef> memberAliases;
 
       if (parser.parseAttribute(member)) {
-        return parser.emitError(parser.getNameLoc())
-               << "expected string attribute for member name";
+        return parser.emitError(parser.getNameLoc()) << "expected string attribute for member name";
       }
       if (succeeded(parser.parseOptionalKeyword("as"))) {
         if (parser.parseAttribute(memberAlias)) {
-          return parser.emitError(parser.getNameLoc())
-                 << "expected string attribute for alias";
+          return parser.emitError(parser.getNameLoc()) << "expected string attribute for alias";
         }
       }
       members.push_back(member.getValue());
@@ -490,14 +454,12 @@ ParseResult ImportOp::parse(::mlir::OpAsmParser &parser,
 
       while (succeeded(parser.parseOptionalComma())) {
         if (parser.parseAttribute(member)) {
-          return parser.emitError(parser.getNameLoc())
-                 << "expected string attribute for member name";
+          return parser.emitError(parser.getNameLoc()) << "expected string attribute for member name";
         }
         memberAlias = builder.getStringAttr("");
         if (succeeded(parser.parseOptionalKeyword("as"))) {
           if (parser.parseAttribute(memberAlias)) {
-            return parser.emitError(parser.getNameLoc())
-                   << "expected string attribute for alias";
+            return parser.emitError(parser.getNameLoc()) << "expected string attribute for alias";
           }
         }
         members.push_back(member.getValue());
@@ -512,20 +474,17 @@ ParseResult ImportOp::parse(::mlir::OpAsmParser &parser,
   } else {
     // Parse 'import <moduleName> [as <moduleAlias>]' case.
     if (parser.parseKeyword("import")) {
-      return parser.emitError(parser.getNameLoc())
-             << "expected string literal 'import'";
+      return parser.emitError(parser.getNameLoc()) << "expected string literal 'import'";
     }
 
     if (parser.parseAttribute(moduleNameAttr)) {
-      return parser.emitError(parser.getNameLoc())
-             << "expected string attribute for module name";
+      return parser.emitError(parser.getNameLoc()) << "expected string attribute for module name";
     }
     result.addAttribute("module_name", moduleNameAttr);
 
     if (succeeded(parser.parseOptionalKeyword("as"))) {
       if (parser.parseAttribute(moduleAliasAttr)) {
-        return parser.emitError(parser.getNameLoc())
-               << "expected string attribute for module alias";
+        return parser.emitError(parser.getNameLoc()) << "expected string attribute for module alias";
       }
       result.addAttribute("module_alias", moduleAliasAttr);
     }
@@ -592,17 +551,17 @@ LogicalResult ImportOp::verify() {
         return emitOpError("member aliases must not be empty array");
       }
       if (membersToImport->size() != memberAliases->size()) {
-        return emitOpError("the number of members' aliases must be equal to "
-                           "the number of members to import; empty string is "
-                           "considered valid member alias");
+        return emitOpError(
+          "the number of members' aliases must be equal to "
+          "the number of members to import; empty string is "
+          "considered valid member alias");
       }
     }
     return success();
   }
 
   if (memberAliases) {
-    return emitOpError(
-        "cannot specify member aliases without specifying members to import");
+    return emitOpError("cannot specify member aliases without specifying members to import");
   }
 
   // Verify 'import <moduleName>' case.
@@ -629,8 +588,7 @@ LogicalResult SubscriptOp::verify() {
   Type valueType = getContainer().getType();
   Type indexType = getIndex().getType();
   if (isa<StringType>(indexType) && !isa<DictType>(valueType)) {
-    return emitOpError() << "cannot use string index on non-dict type "
-                         << valueType;
+    return emitOpError() << "cannot use string index on non-dict type " << valueType;
   }
   return success();
 }
@@ -640,21 +598,16 @@ LogicalResult SubscriptOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult VerbatimOp::verify() {
-  auto errorCallback = [&]() -> InFlightDiagnostic {
-    return this->emitOpError();
-  };
-  FailureOr<SmallVector<ReplacementItem>> fmt =
-      ::parseFormatString(getValue(), getFmtArgs(), errorCallback);
+  auto errorCallback = [&]() -> InFlightDiagnostic { return this->emitOpError(); };
+  FailureOr<SmallVector<ReplacementItem>> fmt = ::parseFormatString(getValue(), getFmtArgs(), errorCallback);
   if (failed(fmt)) {
     return failure();
   }
-  size_t numPlaceholders = llvm::count_if(*fmt, [](ReplacementItem &item) {
-    return std::holds_alternative<Placeholder>(item);
-  });
+  size_t numPlaceholders =
+    llvm::count_if(*fmt, [](ReplacementItem &item) { return std::holds_alternative<Placeholder>(item); });
 
   if (numPlaceholders != getFmtArgs().size()) {
-    return emitOpError()
-           << "requires operands for each placeholder in the format string";
+    return emitOpError() << "requires operands for each placeholder in the format string";
   }
   return success();
 }
@@ -682,26 +635,20 @@ LogicalResult IfOp::verify() {
       return emitOpError() << "else region must have exactly one block";
     }
     if (getElseRegion().front().empty()) {
-      return emitOpError()
-             << "else block must contain at least one operation if present";
+      return emitOpError() << "else block must contain at least one operation if present";
     }
   }
 
-  auto errorCallback = [&]() -> InFlightDiagnostic {
-    return this->emitOpError();
-  };
-  FailureOr<SmallVector<ReplacementItem>> fmt =
-      ::parseFormatString(getCondition(), getCondArgs(), errorCallback);
+  auto errorCallback = [&]() -> InFlightDiagnostic { return this->emitOpError(); };
+  FailureOr<SmallVector<ReplacementItem>> fmt = ::parseFormatString(getCondition(), getCondArgs(), errorCallback);
   if (failed(fmt)) {
     return failure();
   }
-  size_t numPlaceholders = llvm::count_if(*fmt, [](ReplacementItem &item) {
-    return std::holds_alternative<Placeholder>(item);
-  });
+  size_t numPlaceholders =
+    llvm::count_if(*fmt, [](ReplacementItem &item) { return std::holds_alternative<Placeholder>(item); });
 
   if (numPlaceholders != getCondArgs().size()) {
-    return emitOpError()
-           << "requires operands for each placeholder in the condition string";
+    return emitOpError() << "requires operands for each placeholder in the condition string";
   }
   return success();
 }
@@ -715,16 +662,13 @@ FailureOr<SmallVector<ReplacementItem>> IfOp::parseFormatString() {
 // WhileOp
 //===----------------------------------------------------------------------===//
 
-WhileYieldOp WhileOp::getYield() {
-  return llvm::cast<WhileYieldOp>(getBody().front().getTerminator());
-}
+WhileYieldOp WhileOp::getYield() { return llvm::cast<WhileYieldOp>(getBody().front().getTerminator()); }
 
 LogicalResult WhileOp::verify() {
   std::optional<StringRef> condition = getCondition();
 
   if (condition.has_value() == getTripCount().has_value()) {
-    return emitOpError()
-           << "requires exactly one of `condition` or `trip_count`";
+    return emitOpError() << "requires exactly one of `condition` or `trip_count`";
   }
 
   if (!condition && !getCondArgs().empty()) {
@@ -736,17 +680,13 @@ LogicalResult WhileOp::verify() {
       return emitOpError() << "condition string must not be empty";
     }
 
-    auto errorCallback = [&]() -> InFlightDiagnostic {
-      return this->emitOpError();
-    };
-    FailureOr<SmallVector<ReplacementItem>> fmt =
-        ::parseFormatString(*condition, getCondArgs(), errorCallback);
+    auto errorCallback = [&]() -> InFlightDiagnostic { return this->emitOpError(); };
+    FailureOr<SmallVector<ReplacementItem>> fmt = ::parseFormatString(*condition, getCondArgs(), errorCallback);
     if (failed(fmt)) {
       return failure();
     }
-    size_t numPlaceholders = llvm::count_if(*fmt, [](ReplacementItem &item) {
-      return std::holds_alternative<Placeholder>(item);
-    });
+    size_t numPlaceholders =
+      llvm::count_if(*fmt, [](ReplacementItem &item) { return std::holds_alternative<Placeholder>(item); });
 
     if (numPlaceholders != getCondArgs().size()) {
       return emitOpError() << "requires operands for each placeholder in the "
@@ -761,14 +701,12 @@ LogicalResult WhileOp::verify() {
   auto checkTypes = [&](TypeRange types, StringRef what) -> LogicalResult {
     if (types.size() != initTypes.size()) {
       return emitOpError() << "expected " << initTypes.size() << " " << what
-                           << " to match its loop-carried values, got "
-                           << types.size();
+                           << " to match its loop-carried values, got " << types.size();
     }
     for (size_t index = 0; index < types.size(); ++index) {
       if (types[index] != initTypes[index]) {
-        return emitOpError()
-               << what << " #" << index << " has type " << types[index]
-               << " but init #" << index << " has type " << initTypes[index];
+        return emitOpError() << what << " #" << index << " has type " << types[index] << " but init #" << index
+                             << " has type " << initTypes[index];
       }
     }
     return success();
@@ -803,12 +741,43 @@ FailureOr<SmallVector<ReplacementItem>> WhileOp::parseFormatString() {
 
 LogicalResult ForOp::verify() {
   Block &body = getBody().front();
-  if (body.getNumArguments() != 1 ||
-      !isa<IndexType>(body.getArgument(0).getType())) {
-    return emitOpError()
-           << "expects exactly one index-typed induction variable";
+  if (body.getNumArguments() != 1 || !isa<IndexType>(body.getArgument(0).getType())) {
+    return emitOpError() << "expects exactly one index-typed induction variable";
   }
   return success();
+}
+
+ParseResult ForOp::parse(OpAsmParser &parser, OperationState &result) {
+  // emitpy.for %i = %lb to %ub step %step : index { ... }
+  OpAsmParser::Argument iv;
+  OpAsmParser::UnresolvedOperand lb, ub, step;
+  Type boundType;
+  if (parser.parseArgument(iv) || parser.parseEqual() || parser.parseOperand(lb) || parser.parseKeyword("to") ||
+      parser.parseOperand(ub) || parser.parseKeyword("step") || parser.parseOperand(step) || parser.parseColon() ||
+      parser.parseType(boundType)) {
+    return failure();
+  }
+  if (parser.resolveOperand(lb, boundType, result.operands) || parser.resolveOperand(ub, boundType, result.operands) ||
+      parser.resolveOperand(step, boundType, result.operands)) {
+    return failure();
+  }
+  iv.type = boundType;
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, iv)) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  return success();
+}
+
+void ForOp::print(OpAsmPrinter &p) {
+  p << " " << getBody().front().getArgument(0) << " = " << getLowerBound() << " to " << getUpperBound() << " step "
+    << getStep() << " : " << getLowerBound().getType() << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/false);
+  p.printOptionalAttrDict((*this)->getAttrs());
 }
 
 //===----------------------------------------------------------------------===//
@@ -820,12 +789,42 @@ LogicalResult SpmdScopeOp::verify() {
     return emitOpError() << "expects a positive core count";
   }
   Block &body = getBody().front();
-  if (body.getNumArguments() != 1 ||
-      !isa<IndexType>(body.getArgument(0).getType())) {
-    return emitOpError()
-           << "expects exactly one index-typed block index argument";
+  if (body.getNumArguments() != 1 || !isa<IndexType>(body.getArgument(0).getType())) {
+    return emitOpError() << "expects exactly one index-typed block index argument";
   }
   return success();
+}
+
+ParseResult SpmdScopeOp::parse(OpAsmParser &parser, OperationState &result) {
+  // emitpy.spmd_scope (%blk) in (<core-num>) { ... }
+  SmallVector<OpAsmParser::Argument, 1> blockArgs;
+  if (parser.parseArgumentList(blockArgs, AsmParser::Delimiter::Paren)) {
+    return failure();
+  }
+  // The block index is always index-typed.
+  for (auto &arg : blockArgs) {
+    arg.type = parser.getBuilder().getIndexType();
+  }
+  IntegerAttr coreNum;
+  if (parser.parseKeyword("in") || parser.parseLParen() ||
+      parser.parseAttribute(coreNum, "core_num", result.attributes) || parser.parseRParen()) {
+    return failure();
+  }
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, blockArgs)) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  return success();
+}
+
+void SpmdScopeOp::print(OpAsmPrinter &p) {
+  p << " (" << getBody().front().getArgument(0) << ") in (" << getCoreNum() << ") ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/false);
+  p.printOptionalAttrDict((*this)->getAttrs(), {"core_num"});
 }
 
 //===----------------------------------------------------------------------===//
@@ -849,22 +848,18 @@ LogicalResult ConstantOp::verify() {
 // GlobalOp
 //===----------------------------------------------------------------------===//
 
-static void printEmitPyGlobalOpInitialValue(OpAsmPrinter &p, GlobalOp op,
-                                            Attribute initialValue) {
+static void printEmitPyGlobalOpInitialValue(OpAsmPrinter &p, GlobalOp op, Attribute initialValue) {
   p << "= ";
   p.printAttribute(initialValue);
 }
 
-static ParseResult parseEmitPyGlobalOpInitialValue(OpAsmParser &parser,
-                                                   Attribute &initialValue) {
+static ParseResult parseEmitPyGlobalOpInitialValue(OpAsmParser &parser, Attribute &initialValue) {
   if (parser.parseEqual()) {
-    return parser.emitError(parser.getNameLoc(),
-                            "expected '=' after symbol name");
+    return parser.emitError(parser.getNameLoc(), "expected '=' after symbol name");
   }
 
   if (parser.parseAttribute(initialValue)) {
-    return parser.emitError(parser.getNameLoc(),
-                            "expected initial value for global variable");
+    return parser.emitError(parser.getNameLoc(), "expected initial value for global variable");
   }
 
   return success();
@@ -890,27 +885,23 @@ void AssignGlobalOp::print(OpAsmPrinter &p) {
   p << " = " << getValue() << " : " << getValue().getType();
 }
 
-ParseResult AssignGlobalOp::parse(::mlir::OpAsmParser &parser,
-                                  ::mlir::OperationState &result) {
+ParseResult AssignGlobalOp::parse(::mlir::OpAsmParser &parser, ::mlir::OperationState &result) {
   StringAttr symName;
   if (parser.parseSymbolName(symName)) {
     return parser.emitError(parser.getNameLoc(), "expected symbol name");
   }
-  FlatSymbolRefAttr nameAttr =
-      FlatSymbolRefAttr::get(parser.getContext(), symName);
+  FlatSymbolRefAttr nameAttr = FlatSymbolRefAttr::get(parser.getContext(), symName);
   result.addAttribute("name", nameAttr);
 
   if (parser.parseEqual()) {
-    return parser.emitError(parser.getNameLoc(),
-                            "expected '=' after symbol name");
+    return parser.emitError(parser.getNameLoc(), "expected '=' after symbol name");
   }
 
   OpAsmParser::UnresolvedOperand initialValue;
   Type valueType;
   if (parser.parseOperand(initialValue) || parser.parseColonType(valueType) ||
       parser.resolveOperand(initialValue, valueType, result.operands)) {
-    return parser.emitError(parser.getNameLoc(),
-                            "expected initial value for global variable");
+    return parser.emitError(parser.getNameLoc(), "expected initial value for global variable");
   }
   return success();
 }
@@ -920,13 +911,10 @@ LogicalResult AssignGlobalOp::verify() {
   return isValidPythonIdentifier(getOperation(), name);
 }
 
-LogicalResult
-AssignGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  auto global =
-      symbolTable.lookupNearestSymbolFrom<GlobalOp>(*this, getNameAttr());
+LogicalResult AssignGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto global = symbolTable.lookupNearestSymbolFrom<GlobalOp>(*this, getNameAttr());
   if (!global) {
-    return emitOpError("'")
-           << getName() << "' does not reference a valid emitpy.global";
+    return emitOpError("'") << getName() << "' does not reference a valid emitpy.global";
   }
 
   Type valueType = getValue().getType();
@@ -936,9 +924,7 @@ AssignGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (auto typedAttr = llvm::dyn_cast<TypedAttr>(initialValue)) {
     Type globalType = typedAttr.getType();
     if (valueType != globalType) {
-      return emitOpError() << "value type (" << valueType
-                           << ") does not match global's type (" << globalType
-                           << ")";
+      return emitOpError() << "value type (" << valueType << ") does not match global's type (" << globalType << ")";
     }
   }
   // For opaque attributes, we allow any type since the type is not specified
@@ -956,8 +942,7 @@ LogicalResult GlobalStatementOp::verify() {
   return isValidPythonIdentifier(getOperation(), name);
 }
 
-LogicalResult
-GlobalStatementOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+LogicalResult GlobalStatementOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   return verifyNearestGlobalSymbol<GlobalStatementOp>(*this, symbolTable);
 }
 
@@ -977,25 +962,23 @@ LogicalResult CreateDictOp::verify() {
     }
     if (!getItems().empty()) {
       return emitOpError(
-          "cannot have both literal_expr and items operands; use either "
-          "literal_expr for Python dict literals or items for key-value pairs");
+        "cannot have both literal_expr and items operands; use either "
+        "literal_expr for Python dict literals or items for key-value pairs");
     }
   } else {
     if (getItems().empty()) {
       return emitOpError(
-          "cannot have both literal_expr and items empty; for an "
-          "empty dict, use literal_expr = \"{}\" instead");
+        "cannot have both literal_expr and items empty; for an "
+        "empty dict, use literal_expr = \"{}\" instead");
     }
     if (getItems().size() % 2 != 0) {
-      return emitOpError(
-          "items must be alternating key-value pairs (even count required)");
+      return emitOpError("items must be alternating key-value pairs (even count required)");
     }
     for (size_t i = 0; i < getItems().size(); i += 2) {
       Type keyType = getItems()[i].getType();
       if (!isa<IndexType, StringType>(keyType)) {
-        return emitOpError()
-               << "dictionary keys must be index or string type, but got "
-               << keyType << " at position " << i;
+        return emitOpError() << "dictionary keys must be index or string type, but got " << keyType << " at position "
+                             << i;
       }
     }
   }
@@ -1007,20 +990,16 @@ LogicalResult CreateDictOp::verify() {
 // AssignOp
 //===----------------------------------------------------------------------===//
 
-void AssignOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
+void AssignOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>> &effects) {
   // Assign modifies the target in-place
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), SideEffects::DefaultResource::get());
 }
 
 LogicalResult AssignOp::verify() {
   auto targetType = getTarget().getType();
   auto valueType = getValue().getType();
   if (targetType != valueType) {
-    return emitOpError() << "target type (" << targetType
-                         << ") does not match value type (" << valueType << ")";
+    return emitOpError() << "target type (" << targetType << ") does not match value type (" << valueType << ")";
   }
 
   return success();
@@ -1040,16 +1019,13 @@ ParseResult AssignOp::parse(OpAsmParser &parser, OperationState &result) {
   Type targetType, valueType;
 
   // Parse: %target = %value : (target_type, value_type)
-  if (parser.parseOperand(target) || parser.parseEqual() ||
-      parser.parseOperand(value)) {
+  if (parser.parseOperand(target) || parser.parseEqual() || parser.parseOperand(value)) {
     return parser.emitError(parser.getNameLoc(), "expected '%target = %value'");
   }
 
-  if (parser.parseColon() || parser.parseLParen() ||
-      parser.parseType(targetType) || parser.parseComma() ||
+  if (parser.parseColon() || parser.parseLParen() || parser.parseType(targetType) || parser.parseComma() ||
       parser.parseType(valueType) || parser.parseRParen()) {
-    return parser.emitError(parser.getNameLoc(),
-                            "expected ': (target_type, value_type)'");
+    return parser.emitError(parser.getNameLoc(), "expected ': (target_type, value_type)'");
   }
 
   if (parser.resolveOperand(target, targetType, result.operands) ||
@@ -1136,8 +1112,7 @@ LogicalResult ExpressionOp::verify() {
     worklist.pop_back();
     if (visited.contains(op)) {
       if (cast<PyExpressionInterface>(op).hasSideEffects()) {
-        return emitOpError(
-            "requires exactly one use for operations with side effects");
+        return emitOpError("requires exactly one use for operations with side effects");
       }
     }
     visited.insert(op);
@@ -1200,8 +1175,7 @@ ParseResult ExpressionOp::parse(OpAsmParser &parser, OperationState &result) {
   }
 
   if (!operands.empty()) {
-    if (parser.parseLParen() || parser.parseTypeList(operandTypes) ||
-        parser.parseRParen()) {
+    if (parser.parseLParen() || parser.parseTypeList(operandTypes) || parser.parseRParen()) {
       return failure();
     }
   }
@@ -1227,8 +1201,7 @@ ParseResult ExpressionOp::parse(OpAsmParser &parser, OperationState &result) {
   }
 
   // Resolve operands
-  if (parser.resolveOperands(operands, operandTypes, parser.getNameLoc(),
-                             result.operands)) {
+  if (parser.resolveOperands(operands, operandTypes, parser.getNameLoc(), result.operands)) {
     return failure();
   }
 
@@ -1241,8 +1214,7 @@ ParseResult ExpressionOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void FileOp::build(OpBuilder &builder, OperationState &state, StringRef id) {
   state.addRegion()->emplaceBlock();
-  state.attributes.push_back(
-      builder.getNamedAttr("id", builder.getStringAttr(id)));
+  state.attributes.push_back(builder.getNamedAttr("id", builder.getStringAttr(id)));
 }
 
 #define GET_OP_CLASSES
