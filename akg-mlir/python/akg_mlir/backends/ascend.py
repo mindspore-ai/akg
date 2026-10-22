@@ -111,13 +111,14 @@ def get_akg_opt_path(akg_tools_dir=None):
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
 
 
-def _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch):
+def _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch, opt_level=2):
     """Build the --ascend-opt option string, resolving arch if needed."""
     options = []
     if dyn_shape:
         options.append("dynamic-shape=true")
     if not enable_loop_fusion:
         options.append("enable-loop-fusion=false")
+    options.append(f"opt-level={opt_level}")
     if not arch:
         try:
             import acl  # pylint: disable=import-outside-toplevel
@@ -141,6 +142,7 @@ def akg_opt(
     dump_ir=False,
     mlir_timing=False,
     dump_ir_path=None,
+    opt_level=2,
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -154,13 +156,14 @@ def akg_opt(
         dump_ir: Whether to dump IR after all passes
         mlir_timing: Whether to print every pass time
         dump_ir_path: Path to dump log file (optional)
+        opt_level: Ascend optimization level passed to the C++ pipeline
 
     Raises:
         RuntimeError: If akg-opt execution fails
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    ascend_opt_option = _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch)
+    ascend_opt_option = _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch, opt_level)
 
     cmd = [get_akg_opt_path(), input_file, ascend_opt_option, "-o", output_file]
 
@@ -331,7 +334,8 @@ def ascend_compile(
     arch=None,
     dump_ir=False,
     mlir_timing=False,
-    dump_ir_path=None):
+    dump_ir_path=None,
+    opt_level=2):
     """
     Run MLIR compile for Ascend backend.
 
@@ -343,6 +347,7 @@ def ascend_compile(
         dump_ir: Whether to dump IR after all passes
         mlir_timing: Whether to print every pass time
         dump_ir_path: Path to dump log file (optional)
+        opt_level: Ascend optimization level passed to the C++ pipeline
 
     Returns:
         subprocess.CompletedProcess result
@@ -363,6 +368,7 @@ def ascend_compile(
         dump_ir=dump_ir,
         mlir_timing=mlir_timing,
         dump_ir_path=dump_ir_path,
+        opt_level=opt_level,
     )
     block_dim = get_block_dim_from_mlir(opt_file)
     bisheng_compile(
