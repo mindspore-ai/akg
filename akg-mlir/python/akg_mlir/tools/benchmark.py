@@ -120,6 +120,7 @@ def run_a_kernel(desc, file_path, compile_args, static_desc=None):
                              profiling_trails=compile_args.prof_trails,
                              runtime_provider="MLIR",
                              enable_loop_fusion=compile_args.akg_fusion,
+                             opt_level=compile_args.opt_level,
                              arch=arch)
 
     mlir_driver.compile()
@@ -273,6 +274,9 @@ def main(args=None):
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
+    parser.add_argument("-O", "-ol", "--opt-level", dest="opt_level", type=int, default=2,
+                        help="Ascend optimization level passed to --ascend-opt (default: 2). "
+                             "Supports -O1/-O2 and -ol 1/-ol 2.")
     args = parser.parse_args()
     if args.dir:
         files = [
