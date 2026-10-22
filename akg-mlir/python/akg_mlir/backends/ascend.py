@@ -34,14 +34,112 @@ import pathlib
 import json
 import logging
 import subprocess
+import shlex
+import runpy
+from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 
-from ..ascend_launch import akg_ascend_run
+from ..ascend_launch import akg_ascend_run, get_device_function, get_host_functions, torch_launch
 from ..utils.dynamic_utils import get_device_shape
 
 REG_BASED_ARCH_PREFIXES = ("Ascend910_95", "Ascend950DT", "Ascend950PR")
 # Matches device func attrs like: hacc.block_dim = 40 : i64
 _BLOCK_DIM_MLIR_RE = re.compile(r"hacc\.block_dim\s*=\s*(\d+)\s*:\s*i64")
+
+
+@dataclass
+class KernelLaunch:
+    """Launcher and cached paths returned to Kernel.compile."""
+    path: str
+    launcher: object
+    binary_path: Optional[str] = None
+    metadata_path: Optional[str] = None
+    supports_autotune: bool = True
+
+
+def _load_bisheng_launch(kernel_name, output_dir, dynamic=False, torch_path=None, **_options):
+    """Reuse the existing binary launcher, loading functions on first execution."""
+    binary_path = os.path.join(output_dir, f"lib{kernel_name}.so" if dynamic else f"{kernel_name}.o")
+    metadata_path = os.path.join(output_dir, kernel_name + ".json")
+    check_ascend_compile(binary_path)
+    block_dim = int(json.loads(pathlib.Path(metadata_path).read_text(encoding="utf-8"))["blockDim"])
+    functions = None
+
+    def launch(*args, stream=None):
+        nonlocal functions
+        if functions is None:
+            if dynamic:
+                kernel, tiling, _, size = get_host_functions(kernel_name, binary_path)
+                functions = (kernel, tiling, size)
+            else:
+                functions = (get_device_function(kernel_name, binary_path), 0, 0)
+        if torch_path is None or stream is None:
+            import torch_npu  # pylint: disable=import-outside-toplevel
+            library_path = torch_path or str(pathlib.Path(torch_npu.__file__).parent)
+            if stream is None:
+                stream = torch_npu.npu.current_stream().npu_stream
+        else:
+            library_path = torch_path
+        torch_launch(kernel_name, library_path, *functions, block_dim, stream, dynamic, *args)
+
+    return {"path": binary_path, "launcher": launch, "binary_path": binary_path, "metadata_path": metadata_path}
+
+
+def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, **_options):
+    """Load a prebuilt kernel and execute borrowed buffers on the caller's stream."""
+    # Keep optional PyPTO dependencies out of the binary backend's import path.
+    # pylint: disable=import-outside-toplevel
+    from pypto._artifact_contract import ArtifactExecutionMode
+    from pypto.ir.compiled_artifact import CompiledArtifact
+    from pypto.ir.param_info import _DATATYPE_TO_CTYPE
+    from pypto.jit._artifact_manifest import BuildKind
+    from pypto.runtime._prebuilt import load_prebuilt
+    from pypto.torch.interop import CallSignature
+    from simpler.buffer import AddressSpace, TensorTransfer
+    from simpler.task_interface import (CallConfig, ChipStorageTaskArgs, ChipTensor, _ChipWorker,
+                                       _initialize_chip_runtime, scalar_to_uint64)
+    from simpler_setup.runtime_builder import RuntimeBuilder
+    from simpler_setup.torch_interop import torch_dtype_to_datatype
+
+    build_dir = os.path.join(output_dir, kernel_name + "_build")
+    artifact = CompiledArtifact.from_dir(build_dir)
+    artifact.execution_capabilities.require(ArtifactExecutionMode.KERNEL)
+    platform = artifact.platform
+    actual_outputs = len(artifact.metadata.return_aliases)
+    if num_outputs is not None and actual_outputs != num_outputs:
+        raise ValueError(f"PyPTO kernel {kernel_name}: expected {num_outputs} outputs, got {actual_outputs}")
+    chip_callable, runtime_name, runtime_config = load_prebuilt(
+        artifact.output_dir, platform, BuildKind.SINGLE_CHIP)["."]
+    signature = CallSignature(artifact.metadata.parameters, return_aliases=artifact.metadata.return_aliases,
+                              caller_name=kernel_name, platform=platform)
+    binaries = RuntimeBuilder(platform).get_binaries(runtime_name)
+    config = CallConfig()
+    config.aicpu_thread_num = runtime_config.get("aicpu_thread_num", 0)
+
+    def launch(*args, stream):
+        caller_stream = int(stream)
+        frame = signature.describe_call(args)
+        worker = _ChipWorker()
+        try:
+            _initialize_chip_runtime(worker, frame.device_index, binaries, borrowed_context_generation=1)
+            handle = worker.register_callable(chip_callable)
+            packed = ChipStorageTaskArgs()
+            for argument in frame.tensors:
+                tensor = argument.tensor
+                packed.add_tensor(ChipTensor.make(tensor.data_ptr(), tuple(tensor.shape),
+                                                 torch_dtype_to_datatype(tensor.dtype),
+                                                 address_space=AddressSpace.DEVICE), transfer=TensorTransfer.NONE)
+            for scalar in frame.scalars:
+                packed.add_scalar(scalar_to_uint64(_DATATYPE_TO_CTYPE[str(scalar.dtype)](scalar.value)))
+            # Wait while args still own the borrowed NPU storage.
+            run = worker._submit_chip_run_direct(  # pylint: disable=protected-access
+                handle, packed, config, caller_stream=caller_stream)
+            run.wait()
+        finally:
+            worker.finalize()
+
+    return {"path": build_dir, "launcher": launch, "supports_autotune": False}
 
 
 def write_code(js_dict, fname):
@@ -111,21 +209,35 @@ def get_akg_opt_path(akg_tools_dir=None):
     return os.path.join(akg_tools_dir, "bin", "akg-opt")
 
 
-def _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch, opt_level=2):
-    """Build the --ascend-opt option string, resolving arch if needed."""
-    options = []
-    if dyn_shape:
-        options.append("dynamic-shape=true")
-    if not enable_loop_fusion:
-        options.append("enable-loop-fusion=false")
-    options.append(f"opt-level={opt_level}")
+def get_akg_translate_path():
+    """Use the translator shipped alongside akg-opt."""
+    return str(pathlib.Path(get_akg_opt_path()).with_name("akg-translate"))
+
+
+def _resolve_arch(arch):
+    """Resolve an omitted architecture from the current Ascend device."""
     if not arch:
         try:
             import acl  # pylint: disable=import-outside-toplevel
             arch = acl.get_soc_name()
         except ImportError as err:
             raise ImportError("Please run 'source set_env.sh' in the CANN installation path.") from err
-    options.append(f"arch={arch}")
+    return arch
+
+
+def _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch, opt_level=2, backend="bisheng"):
+    """Build the --ascend-opt option string, resolving arch if needed."""
+    if backend not in ("pypto", "bisheng"):
+        raise ValueError(f"Unknown Ascend backend: {backend}")
+    options = []
+    if backend == "pypto":
+        options.append("enable-emitpypto=true")
+    if dyn_shape:
+        options.append("dynamic-shape=true")
+    if not enable_loop_fusion:
+        options.append("enable-loop-fusion=false")
+    options.append(f"opt-level={opt_level}")
+    options.append(f"arch={_resolve_arch(arch)}")
     ascend_opt_option = "--ascend-opt"
     if options:
         ascend_opt_option += "=" + " ".join(options)
@@ -143,6 +255,7 @@ def akg_opt(
     mlir_timing=False,
     dump_ir_path=None,
     opt_level=2,
+    backend="bisheng",
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -157,13 +270,15 @@ def akg_opt(
         mlir_timing: Whether to print every pass time
         dump_ir_path: Path to dump log file (optional)
         opt_level: Ascend optimization level passed to the C++ pipeline
+        backend: Compiler backend, either "bisheng" or "pypto"
 
     Raises:
         RuntimeError: If akg-opt execution fails
     """
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
-    ascend_opt_option = _build_ascend_opt_option(dyn_shape, enable_loop_fusion, arch, opt_level)
+    ascend_opt_option = _build_ascend_opt_option(
+        dyn_shape, enable_loop_fusion, arch, opt_level=opt_level, backend=backend)
 
     cmd = [get_akg_opt_path(), input_file, ascend_opt_option, "-o", output_file]
 
@@ -178,9 +293,12 @@ def akg_opt(
             if not dump_ir_path:
                 dump_ir_path = pathlib.Path(output_file).with_suffix(".log")
             with os.fdopen(os.open(dump_ir_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), "a") as f:
-                f.write(result.stderr)
+                f.write("COMMAND: " + shlex.join(map(str, cmd)) + "\n\n" + result.stderr)
         logging.debug("akg-opt pipeline success")
     except subprocess.CalledProcessError as e:
+        if dump_ir:
+            pathlib.Path(dump_ir_path or pathlib.Path(output_file).with_suffix(".log")).write_text(
+                "COMMAND: " + shlex.join(map(str, cmd)) + "\n\n" + e.stderr, encoding="utf-8")
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
@@ -272,29 +390,34 @@ def _handle_dump_ir(result, dump_ir, dump_ir_path, output_file):
 
 
 def bisheng_compile(input_file,
-                    output_file,
+                    output_dir,
+                    kernel_name,
                     enable_hfusion_compile=False,
                     enable_hivm_compile=True,
                     enable_auto_multi_buffer=True,
                     enable_bin_relocation=False,
-                    block_dim=40,
                     dump_ir=False,
                     dump_ir_path=None,
                     arch=None,
+                    dyn_shape=False,
                     ):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
         input_file: Input MLIR file path
-        output_file: Output file
+        output_dir: Cache directory for compiled binaries and metadata
+        kernel_name: Name of the kernel
         enable_hfusion_compile: Whether hfusion compile pipeline
         enable_hivm_compile: Whether hivm compile pipeline
         enable_auto_multi_buffer: Whether enabled auto mulit buffer in hivm compile pipeline
         enable_bin_relocation: Whether enabled relocation,
         dump_ir: Whether to dump bishengir-compile stderr log
         dump_ir_path: Optional path to dump bishengir-compile log.
+        dyn_shape: Whether to generate a shared library in the cache directory.
 
     """
+    output_file = os.path.join(output_dir, f"lib{kernel_name}.so" if dyn_shape else f"{kernel_name}.o")
+    block_dim = get_block_dim_from_mlir(input_file)
     dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
     compile_cmd = _build_compile_cmd(
@@ -320,28 +443,57 @@ def bisheng_compile(input_file,
         raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
     logging.debug("generate ascend binary success")
 
-    kernel_name = os.path.splitext(os.path.basename(output_file))[0]
-    if kernel_name.startswith("lib"):
-        kernel_name = kernel_name[3:]
-    dump_ascend_meta_data(os.path.dirname(output_file), kernel_name, block_dim=block_dim)
+    dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
+
+
+def pypto_compile(input_file, output_dir, kernel_name, arch, dump_ir=False, **_options):
+    """Translate optimized AKG IR and save the compiled PyPTO kernel."""
+    # pylint: disable=import-outside-toplevel
+    from pypto._artifact_contract import ArtifactExecutionMode
+    from pypto.ir.compile import _compile_artifact
+    from pypto.jit._artifact_manifest import BuildKind
+    from pypto.runtime._prebuilt import BINARY_MANIFEST, prepare_prebuilt
+
+    output_file = os.path.join(output_dir, kernel_name + ".py")
+    command = [get_akg_translate_path(), input_file, "--mlir-to-pypto", "-o", output_file]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"akg-translate --mlir-to-pypto failed: {error.stderr}") from error
+    except OSError as error:
+        raise RuntimeError(f"Cannot execute {command[0]}; ensure akg-translate is installed and executable") from error
+    function = runpy.run_path(output_file)[kernel_name]
+    platform = "a5" if _is_reg_based_arch(arch) else "a2a3"
+    build_dir = os.path.join(output_dir, kernel_name + "_build")
+    # A failed rebuild must not pair fresh metadata with stale binaries.
+    (pathlib.Path(build_dir) / BINARY_MANIFEST).unlink(missing_ok=True)
+    artifact = _compile_artifact(
+        function.specialize(), contract=ArtifactExecutionMode.KERNEL, platform=platform,
+        output_dir=build_dir, dump_passes=dump_ir)
+    prepare_prebuilt(pathlib.Path(artifact.output_dir), platform, BuildKind.SINGLE_CHIP)
 
 
 def ascend_compile(
     input_file,
-    output_file,
+    output_dir,
     dyn_shape=False,
     enable_loop_fusion=True,
     arch=None,
     dump_ir=False,
     mlir_timing=False,
     dump_ir_path=None,
-    opt_level=2):
+    opt_level=2,
+    backend="bisheng",
+    need_compile=True,
+    kernel_name=None,
+    torch_path=None,
+    num_outputs=None):
     """
     Run MLIR compile for Ascend backend.
 
     Args:
         input_file: Input MLIR file path
-        output_file: Output ascend binary file
+        output_dir: Cache directory; compiled files are resolved by the backend.
         dyn_shape: Whether to enable dynamic shape optimization
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
@@ -350,36 +502,30 @@ def ascend_compile(
         opt_level: Ascend optimization level passed to the C++ pipeline
 
     Returns:
-        subprocess.CompletedProcess result
+        KernelLaunch with a callable and optional binary paths.
 
     Raises:
         RuntimeError: If compile execution fails
     """
 
-    output_dir = os.path.dirname(output_file)
-    opt_file_name = os.path.basename(output_file) + "_opt"
-    opt_file = os.path.join(output_dir, f"{opt_file_name}.mlir")
-    akg_opt(
-        input_file=input_file,
-        output_file=opt_file,
-        dyn_shape=dyn_shape,
-        enable_loop_fusion=enable_loop_fusion,
-        arch=arch,
-        dump_ir=dump_ir,
-        mlir_timing=mlir_timing,
-        dump_ir_path=dump_ir_path,
-        opt_level=opt_level,
-    )
-    block_dim = get_block_dim_from_mlir(opt_file)
-    bisheng_compile(
-        opt_file,
-        output_file,
-        enable_hfusion_compile=not enable_loop_fusion,
-        block_dim=block_dim,
-        dump_ir=dump_ir,
-        dump_ir_path=dump_ir_path,
-        arch=arch,
-    )
+    if backend == "pypto":
+        compile_backend, load_backend = pypto_compile, _load_pypto_launch
+    elif backend == "bisheng":
+        compile_backend, load_backend = bisheng_compile, _load_bisheng_launch
+    else:
+        raise ValueError(f"Unknown Ascend backend: {backend}")
+    name = kernel_name or pathlib.Path(input_file).stem
+    opt_file = os.path.join(output_dir, name + "_opt.mlir")
+    if need_compile:
+        arch = _resolve_arch(arch)
+        akg_opt(input_file, opt_file, dyn_shape=dyn_shape, enable_loop_fusion=enable_loop_fusion,
+                arch=arch, dump_ir=dump_ir, mlir_timing=mlir_timing, dump_ir_path=dump_ir_path,
+                opt_level=opt_level, backend=backend)
+        compile_backend(opt_file, output_dir, kernel_name=name,
+                        arch=arch, dump_ir=dump_ir, dyn_shape=dyn_shape,
+                        enable_hfusion_compile=not enable_loop_fusion, dump_ir_path=dump_ir_path)
+    return KernelLaunch(**load_backend(name, output_dir, dynamic=dyn_shape, torch_path=torch_path,
+                                      num_outputs=num_outputs))
 
 
 def _get_device_shape_for_dyn(data, kernel_name, work_dir):

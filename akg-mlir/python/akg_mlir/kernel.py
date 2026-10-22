@@ -1,136 +1,56 @@
-# Copyright 2025 Huawei Technologies Co., Ltd
-#
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-""" Module for akg support ascend_npu_ir test """
+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+"""Backend-neutral AKG compilation and TorchNPU execution interface."""
 
 __all__ = ["Kernel"]
 
 import os
-import logging
-import json
-
+from pathlib import Path
 from .backends.ascend import ascend_compile
-from .ascend_launch import get_host_functions, get_device_function, torch_launch
-
-
-logging.basicConfig(level=logging.INFO,
-                    format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
 
 
 class Kernel:
-    """ Kernel for support ascend_npu_ir """
+    """Keep operator selection and DSL generation in the compiler pipeline."""
+
     def __init__(self, kernel_name, torch_path=None, kernel_meta=None):
         self.kernel_name = kernel_name
-        self.dynamic = kernel_meta.get('dynamic')
-        self.arch = kernel_meta.get('device_name')
-        self.work_dir = os.getenv("KERNEL_META_DIR", default=os.path.expanduser("~/.akg"))
-        self.torch_path = str(torch_path)
+        self.kernel_meta = dict(kernel_meta or {})
+        self.dynamic = self.kernel_meta.get("dynamic", False)
+        self.arch = self.kernel_meta.get("device_name")
+        self.backend = self.kernel_meta.get("akg_backend", "pypto")
+        self.allow_fallback = self.backend == "bisheng"
+        self.torch_path = str(torch_path) if torch_path is not None else None
+        self.work_dir = os.getenv("KERNEL_META_DIR", os.path.expanduser("~/.akg"))
+        self._compile_dir = None
+        self._artifact = None
         self.launcher = None
 
-    @staticmethod
-    def _write_mlir(input_mlir, mlir_path):
-        with open(mlir_path, "w", encoding="utf-8") as f:
-            f.write(input_mlir)
-        return mlir_path
-
-    @staticmethod
-    def get_block_dim(meta_json_path):
-        """Get block dimension from the metadata JSON file."""
-        if not meta_json_path:
-            raise ValueError("meta_json_path is required")
-        with open(meta_json_path, "r", encoding="utf-8") as f:
-            return int(json.load(f)["blockDim"])
-
-    def get_launcher(self, block_dim, lib_path):
-        """Bind launch to ``lib_path`` (absolute path to ``.o`` / ``lib*.so``). Caller must supply it
-        when the kernel was loaded from cache and never ran :meth:`compile` in this process.
-        """
-        if not lib_path:
-            raise ValueError("lib_path is required (path to compiled Ascend binary)")
-        if self.dynamic:
-            kernel_func, tiling_func, _, tiling_size = get_host_functions(self.kernel_name, lib_path)
-        else:
-            kernel_func = get_device_function(self.kernel_name, lib_path)
-            tiling_func = 0
-            tiling_size = 0
-
-        def kernel_call(*args, stream=None):
-            torch_launch(self.kernel_name, self.torch_path, kernel_func, tiling_func, tiling_size,
-                         block_dim, stream, self.dynamic, *args)
-
-        return kernel_call
-
-    def compile(
-        self,
-        input_mlir: str,
-        work_dir: str = None,
-        need_compile: bool = True,
-        debug: bool = False,
-        opt_level: int = 2,
-    ):
-        """Compile MLIR under ``work_dir`` or the default output directory.
-
-        All intermediates and bishengir outputs live in that directory:
-
-        - ``{work_dir}/{kernel_name}.mlir`` — input written for ``akg-opt``
-        - ``{work_dir}/{kernel_name}_out.mlir`` — ``akg-opt`` output
-        - ``{work_dir}/lib{kernel_name}.so`` (dynamic) or ``{work_dir}/{kernel_name}.o``
-          — ``bishengir-compile`` ``-o`` target; ``{work_dir}/{kernel_name}.json`` meta
-        """
-        if not work_dir:
-            work_dir = self.work_dir
-        work_dir = os.path.abspath(work_dir)
-        self.work_dir = work_dir
-        os.makedirs(work_dir, exist_ok=True)
-
-        kernel_bin_name = f"lib{self.kernel_name}.so" if self.dynamic else f"{self.kernel_name}.o"
-        compile_bin_name = f"{self.kernel_name}.so" if self.dynamic else kernel_bin_name
-        input_file = os.path.join(work_dir, f"{self.kernel_name}.mlir")
-        binary_file = os.path.join(work_dir, kernel_bin_name)
-        compile_output_file = os.path.join(work_dir, compile_bin_name)
-
+    def compile(self, input_mlir, work_dir=None, need_compile=True, debug=False,
+                opt_level=2, force_compile=False):
+        """Generate the kernel and bind the callable supplied by Ascend."""
+        need_compile = need_compile or force_compile
+        directory = Path(work_dir or self.work_dir)
+        if not work_dir and not need_compile:
+            directory = self._compile_dir or directory
+        directory.mkdir(parents=True, exist_ok=True)
+        input_file = directory / f"{self.kernel_name}.mlir"
         if need_compile:
-            self._write_mlir(input_mlir, input_file)
-
-            dump_ir_path = os.path.join(work_dir, f"{self.kernel_name}.log") if debug else None
-            try:
-                ascend_compile(
-                    input_file=input_file,
-                    output_file=compile_output_file,
-                    dyn_shape=self.dynamic,
-                    arch=self.arch,
-                    dump_ir=debug,
-                    mlir_timing=True,
-                    dump_ir_path=dump_ir_path,
-                    opt_level=opt_level,
-                )
-                logging.debug("compile finish, binary save to %s", os.path.abspath(binary_file))
-            except Exception as compile_err:
-                raise RuntimeError(
-                    f"compile MLIR failed, error message: {str(compile_err)}"
-                ) from compile_err
-
-        meta_json_path = os.path.join(work_dir, f"{self.kernel_name}.json")
-        block_dim = self.get_block_dim(meta_json_path)
-
-        self.launcher = self.get_launcher(block_dim, binary_file)
+            input_file.write_text(input_mlir, encoding="utf-8")
+        artifact = ascend_compile(
+            str(input_file), str(directory), dyn_shape=self.dynamic, arch=self.arch,
+            dump_ir=debug, mlir_timing=True, dump_ir_path=str(directory / f"{self.kernel_name}_akg-opt.log"),
+            opt_level=opt_level, backend=self.backend, need_compile=need_compile,
+            kernel_name=self.kernel_name, torch_path=self.torch_path,
+            num_outputs=self.kernel_meta.get("num_outputs"))
+        self.launcher = artifact.launcher
+        self._compile_dir = directory
+        self._artifact = artifact
+        return artifact
 
     def run(self, *args, **kwargs):
-        """ launch .so file by akg_ascend_backend. """
-        try:
-            self.launcher(*args, **kwargs)
-            logging.debug("success launch kernel: %s", {self.kernel_name})
-        except Exception as running_err:
-            raise RuntimeError(
-                f"exec {self.kernel_name}.so error, error msg: {str(running_err)}"
-            ) from running_err
+        """Invoke the launcher supplied by the selected compiler backend."""
+        if self.launcher is None:
+            raise RuntimeError("AKG kernel has not been compiled or loaded")
+        return self.launcher(*args, **kwargs)

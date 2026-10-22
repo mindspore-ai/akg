@@ -26,7 +26,7 @@ import numpy as np
 from .utils.cpu_profiling_wrapper import wrap_timer_func
 from .utils.dynamic_utils import get_device_shape
 from .utils.gen_runtime_code import ProfilingParams, gen_cuda_runtime_code
-from .backends.ascend import akg_opt, write_code, bisheng_compile, get_block_dim_from_mlir
+from .backends.ascend import akg_opt, write_code, bisheng_compile
 from .backends.ascend import benchmark_launch as launch
 from .ascend_profilier.cann_file_parser import CANNFileParser
 from .ascend_profilier.op_summary_parser import OpSummaryParser
@@ -527,15 +527,14 @@ class MlirDriver:
         """compile mlir to binary for ascend."""
         logging.info("bishengir-compile code generator:")
         input_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
-        so_file = os.path.join(self.output_dir, kernel_name + ".so")
         dump_log = os.path.join(self.output_dir, kernel_name + "_bisheng.log")
 
-        block_dim = get_block_dim_from_mlir(input_file)
         bisheng_compile(
             input_file=input_file,
-            output_file=so_file,
+            output_dir=self.output_dir,
+            kernel_name=kernel_name,
+            dyn_shape=self.dynamic_shape,
             enable_hfusion_compile=not self.enable_loop_fusion,
-            block_dim=block_dim,
             dump_ir=self.dump_ir,
             dump_ir_path=dump_log,
             arch=self.arch,
