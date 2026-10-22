@@ -271,6 +271,7 @@ class MlirDriver:
         enable_loop_fusion=True,
         arch="Ascend910B1",
         backend="ascend",
+        opt_level=2,
     ):
         super().__init__()
 
@@ -293,6 +294,7 @@ class MlirDriver:
         self.arch = arch
         self.backend = backend
         self.dynamic_shape = dynamic_shape
+        self.opt_level = opt_level
 
     def compile(self):
         """
@@ -518,6 +520,7 @@ class MlirDriver:
             dump_ir=self.dump_ir,
             mlir_timing=self.mlir_timing,
             dump_ir_path=dump_ir_path,
+            opt_level=self.opt_level,
         )
 
     def _run_ascend_generate_binary(self, kernel_name):

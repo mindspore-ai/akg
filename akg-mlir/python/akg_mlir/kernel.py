@@ -76,6 +76,7 @@ class Kernel:
         work_dir: str = None,
         need_compile: bool = True,
         debug: bool = False,
+        opt_level: int = 2,
     ):
         """Compile MLIR under ``work_dir`` or the default output directory.
 
@@ -110,7 +111,8 @@ class Kernel:
                     arch=self.arch,
                     dump_ir=debug,
                     mlir_timing=True,
-                    dump_ir_path=dump_ir_path
+                    dump_ir_path=dump_ir_path,
+                    opt_level=opt_level,
                 )
                 logging.debug("compile finish, binary save to %s", os.path.abspath(binary_file))
             except Exception as compile_err:
