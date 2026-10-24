@@ -288,6 +288,11 @@ LogicalResult CastOp::verify() {
     return emitOpError("cast must preserve the shape: ")
            << shapeToString(*srcShape) << " vs " << shapeToString(*dstShape);
   }
+  if (auto mode = getMode()) {
+    if (!llvm::is_contained(ArrayRef<StringRef>{"round", "floor", "ceil"}, *mode)) {
+      return emitOpError("unknown float-to-int rounding mode: ") << *mode;
+    }
+  }
   return success();
 }
 
@@ -372,6 +377,51 @@ LogicalResult RowExpandSubOp::verify() { return verifyRowExpand(*this); }
 LogicalResult RowExpandMulOp::verify() { return verifyRowExpand(*this); }
 LogicalResult RowExpandDivOp::verify() { return verifyRowExpand(*this); }
 
+// Shared verifier for the col_expand family, mirroring the runtime's
+// DeduceTileColExpandType contract: both operands carry at least two
+// dimensions (the last two drive the broadcast), the column vector's
+// second-to-last dimension is one, the column counts agree, and the result
+// matches the tile. Checks that depend on dynamic (`?`) extents are skipped,
+// matching the runtime's provable-mismatch-only policy.
+template <typename OpTy>
+static LogicalResult verifyColExpand(OpTy op) {
+  std::optional<SmallVector<int64_t>> tileShape = getShapeIfKnown(op.getTile().getType());
+  std::optional<SmallVector<int64_t>> colShape = getShapeIfKnown(op.getColVec().getType());
+  if (tileShape && tileShape->size() < 2) {
+    return op.emitOpError("tile must have at least 2 dimensions, got ") << shapeToString(*tileShape);
+  }
+  if (colShape && colShape->size() < 2) {
+    return op.emitOpError("column vector must have at least 2 dimensions, got ") << shapeToString(*colShape);
+  }
+  if (colShape && !ShapedType::isDynamic((*colShape)[colShape->size() - 2]) &&
+      (*colShape)[colShape->size() - 2] != 1) {
+    return op.emitOpError("column vector's second-to-last dimension must be 1, got ")
+        << shapeToString(*colShape);
+  }
+  if (tileShape && colShape) {
+    int64_t tileCols = tileShape->back();
+    int64_t vecCols = colShape->back();
+    if (!ShapedType::isDynamic(tileCols) && !ShapedType::isDynamic(vecCols) && tileCols != vecCols) {
+      return op.emitOpError("column counts must match: tile has ")
+          << tileCols << " columns, column vector has " << vecCols;
+    }
+  }
+  if (failed(verifySameShape(op.getOperation(), {op.getTile(), op.getResult()}))) {
+    return failure();
+  }
+  std::optional<Type> tileElem = getElementTypeIfKnown(op.getTile().getType());
+  std::optional<Type> colElem = getElementTypeIfKnown(op.getColVec().getType());
+  if (tileElem && colElem && *tileElem != *colElem) {
+    return op.emitOpError("tile and column vector must share one element type");
+  }
+  return success();
+}
+
+LogicalResult ColExpandAddOp::verify() { return verifyColExpand(*this); }
+LogicalResult ColExpandSubOp::verify() { return verifyColExpand(*this); }
+LogicalResult ColExpandMulOp::verify() { return verifyColExpand(*this); }
+LogicalResult ColExpandDivOp::verify() { return verifyColExpand(*this); }
+
 //===----------------------------------------------------------------------===//
 // E. Elementwise unary ops
 //===----------------------------------------------------------------------===//
@@ -409,9 +459,27 @@ LogicalResult ReductionOp::verify() {
     return emitOpError("cannot reduce a rank-0 tile");
   }
   std::optional<SmallVector<int64_t>> scratchShape = getShapeIfKnown(getScratch().getType());
-  if (scratchShape && *scratchShape != *vectorShape) {
-    return emitOpError("scratch shape ") << shapeToString(*scratchShape) << " must match the vector shape "
-                                         << shapeToString(*vectorShape);
+  if (scratchShape) {
+    if (scratchShape->size() != vectorShape->size()) {
+      return emitOpError("scratch shape ") << shapeToString(*scratchShape) << " must have the vector's rank "
+                                          << shapeToString(*vectorShape);
+    }
+    // The runtime requires the scratch to cover the vector in every
+    // dimension: a static vector dim must be matched exactly, while a
+    // dynamic dim names no element count of its own and the scratch
+    // materializes its allocation bound statically.
+    for (auto [scratchDim, vectorDim] : llvm::zip(*scratchShape, *vectorShape)) {
+      if (ShapedType::isDynamic(vectorDim)) {
+        if (ShapedType::isDynamic(scratchDim)) {
+          return emitOpError("scratch shape ") << shapeToString(*scratchShape)
+                                               << " must materialize a static bound for the dynamic vector shape "
+                                               << shapeToString(*vectorShape);
+        }
+      } else if (ShapedType::isDynamic(scratchDim) || scratchDim < vectorDim) {
+        return emitOpError("scratch shape ") << shapeToString(*scratchShape) << " must cover the vector shape "
+                                             << shapeToString(*vectorShape);
+      }
+    }
   }
 
   std::optional<SmallVector<int64_t>> resultShape = getShapeIfKnown(getResult().getType());
@@ -436,6 +504,21 @@ LogicalResult ReductionOp::verify() {
   return success();
 }
 
+// Index coordinates come from `arith.constant`; matching the operation by
+// name and reading its value attribute keeps this IR library free of the
+// arith dependency.
+static std::optional<int64_t> constantIndexValue(Value index) {
+  Operation *def = index.getDefiningOp();
+  if (!def || def->getName().getStringRef() != "arith.constant") {
+    return std::nullopt;
+  }
+  auto attr = dyn_cast<IntegerAttr>(def->getAttr("value"));
+  if (!attr) {
+    return std::nullopt;
+  }
+  return attr.getInt();
+}
+
 LogicalResult ReadOp::verify() {
   std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(getSource().getType());
   if (!shape) {
@@ -446,11 +529,13 @@ LogicalResult ReadOp::verify() {
            << getIndices().size() << ") must match the source rank (" << shape->size() << ")";
   }
   for (auto [index, dim] : llvm::zip(getIndices(), *shape)) {
-    if (ShapedType::isDynamic(dim)) {
+    auto constant = constantIndexValue(index);
+    if (!constant || ShapedType::isDynamic(dim)) {
+      // Runtime coordinates (loop-dependent reads) are checked at runtime.
       continue;
     }
-    if (index < 0 || index >= dim) {
-      return emitOpError("index ") << index << " is out of range for dim " << dim;
+    if (*constant < 0 || *constant >= dim) {
+      return emitOpError("index ") << *constant << " is out of range for dim " << dim;
     }
   }
   return success();

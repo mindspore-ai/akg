@@ -28,13 +28,11 @@
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;          // NOLINT(build/namespaces)
 using namespace mlir::emitpy;  // NOLINT(build/namespaces)
-using llvm::formatv;
 
 /// Convenience functions to produce interleaved output with functions returning
 /// a LogicalResult. This is different than those in STLExtras which typically
@@ -278,6 +276,19 @@ static StringRef infixArithOpForCallee(StringRef callee) {
     .Default(StringRef());
 }
 
+/// True when `callee` is a math pseudo-callee that can only be emitted as a
+/// statement, never as an inline expression: the PIL scalar layer has no
+/// math functions, so sqrt/rsqrt/log/exp must go through the tile detour
+/// (printScalarMathDetour) instead.
+static bool isStatementOnlyMathCallee(StringRef callee) {
+  return llvm::StringSwitch<bool>(callee)
+    .Case("sqrt", true)
+    .Case("rsqrt", true)
+    .Case("log", true)
+    .Case("exp", true)
+    .Default(false);
+}
+
 FailureOr<std::string> ExpressionBuilder::buildExpression(Value value) {
   // Check if already cached
   if (expressionCache.count(value)) {
@@ -373,6 +384,29 @@ FailureOr<std::string> ExpressionBuilder::buildCallOpaqueExpr(CallOpaqueOp op) {
     return expr;
   }
 
+  // Pseudo-callee printed as a Python unary expression: `(-x)` for negf.
+  // The runtime's pl.neg is a Tensor/Tile-only API, so scalar negation kept
+  // by stage one must be spelled as a plain Python expression, which the
+  // parser maps onto ir.neg. sqrt/rsqrt/log/exp cannot appear inline: the PIL
+  // scalar layer has no math functions, so they are only supported as
+  // statements (printScalarMathDetour).
+  if (StringRef callee = op.getCallee(); callee == "negf") {
+    if (op.getNumOperands() != 1) {
+      return op.emitOpError(callee) << " expects one operand";
+    }
+    auto operandExpr = buildExpression(op.getOperand(0));
+    if (failed(operandExpr)) {
+      return failure();
+    }
+    return std::string("(-") + *operandExpr + ")";
+  }
+
+  if (isStatementOnlyMathCallee(op.getCallee())) {
+    return op.emitOpError(op.getCallee())
+      << " cannot be printed as an inline expression: the PIL scalar layer has no math "
+         "functions; hoist the op to a statement so the tile detour can be emitted";
+  }
+
   bool isList = (op.getCallee() == "util_create_list");
   os << (isList ? "[" : op.getCallee().str() + "(");
 
@@ -411,11 +445,18 @@ FailureOr<std::string> ExpressionBuilder::buildConstantExpr(ConstantOp op) {
   }
   if (auto fAttr = dyn_cast<FloatAttr>(attr)) {
     APFloat value = fAttr.getValue();
-    if (value.isInfinity()) {
-      return std::string(value.isNegative() ? "float('-inf')" : "float('inf')");
-    }
-    if (value.isNaN()) {
-      return std::string("float('nan')");
+    if (value.isInfinity() || value.isNaN()) {
+      // Non-finite values have no Python numeric literal, and the PIL parser
+      // rejects a float('inf') call ("Unsupported function call") wherever it
+      // appears (pl.const argument, tile.full fill value). Spell the exact
+      // IEEE 754 binary64 bit pattern with the lossless dump form instead.
+      bool losesInfo = false;
+      value.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven, &losesInfo);
+      // Inf/NaN exponent bits are all ones, so the unsigned hexadecimal form is
+      // always exactly the 16 digits the dump spelling requires.
+      SmallString<32> bits;
+      value.bitcastToAPInt().toString(bits, 16, false, false, false);
+      return "pl._dump.float64('" + std::string(bits.begin(), bits.end()) + "')";
     }
     SmallString<128> strValue;
     value.toString(strValue);
@@ -620,6 +661,61 @@ static LogicalResult printBinaryInfixCall(PythonEmitter &emitter, CallOpaqueOp c
   return success();
 }
 
+/// Prints a scalar math pseudo-callee (sqrt/rsqrt/log/exp) as a
+/// tile-lowered statement sequence. The runtime's pl.sqrt/pl.rsqrt/pl.log/
+/// pl.exp are Tensor/Tile-only APIs and the PIL scalar layer exposes only
+/// Python operators, no math functions: spelling sqrt as a power expression
+/// (`x ** 0.5`) maps onto the scalar ir.pow, whose backend evaluation is
+/// numerically wrong (pow(x, e) returns the exponent e), and there is no
+/// scalar spelling for log/exp at all. Route the scalar through a minimal
+/// 32-byte-aligned tile instead, where the tile ops are correct:
+///   <res>_t0 = pl.tile.full([lanes], pl.FPxx, 1.0)
+///   <res>_t1 = pl.tile.muls(<res>_t0, <operand>)
+///   <res>_t2 = pl.tile.<callee>(<res>_t1)         # sqrt/rsqrt/log/exp
+///   <res> = pl.read(<res>_t2, [0])
+static LogicalResult printScalarMathDetour(PythonEmitter &emitter, CallOpaqueOp callOpaqueOp, StringRef callee) {
+  raw_indented_ostream &os = emitter.ostream();
+  Operation &op = *callOpaqueOp.getOperation();
+  if (op.getNumOperands() != 1) {
+    return op.emitOpError(callee) << " expects one operand";
+  }
+  if (op.getNumResults() != 1) {
+    return op.emitOpError(callee) << " expects a single result";
+  }
+
+  // Tile rows must stay 32-byte aligned: 8 lanes of f32, 16 of f16/bf16,
+  // 4 of f64.
+  Type type = op.getResult(0).getType();
+  StringRef dtype;
+  unsigned lanes;
+  if (isa<Float32Type>(type)) {
+    dtype = "pl.FP32";
+    lanes = 8;
+  } else if (isa<Float16Type>(type)) {
+    dtype = "pl.FP16";
+    lanes = 16;
+  } else if (isa<BFloat16Type>(type)) {
+    dtype = "pl.BF16";
+    lanes = 16;
+  } else if (isa<Float64Type>(type)) {
+    dtype = "pl.FP64";
+    lanes = 4;
+  } else {
+    return op.emitOpError(callee) << " expects a floating-point result, got " << type;
+  }
+
+  std::string name = emitter.allocateResultName(op);
+  os << name << "_t0 = pl.tile.full([" << lanes << "], " << dtype << ", 1.0)\n";
+  os << name << "_t1 = pl.tile.muls(" << name << "_t0, ";
+  if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
+    return failure();
+  }
+  os << ")\n";
+  os << name << "_t2 = pl.tile." << callee << "(" << name << "_t1)\n";
+  os << name << " = pl.read(" << name << "_t2, [0])\n";
+  return success();
+}
+
 static LogicalResult printOperation(PythonEmitter &emitter, CallOpaqueOp callOpaqueOp) {
   raw_indented_ostream &os = emitter.ostream();
   Operation &op = *callOpaqueOp.getOperation();
@@ -633,6 +729,13 @@ static LogicalResult printOperation(PythonEmitter &emitter, CallOpaqueOp callOpa
   // ConvertToSSA pass inserts the phi.
   if (callee == "select") {
     return printUtilSelect(emitter, op);
+  }
+
+  // Scalar sqrt/rsqrt/log/exp lower onto a multi-statement tile detour (see
+  // printScalarMathDetour): they must be intercepted before the assign
+  // prefix is emitted.
+  if (callee == "sqrt" || callee == "rsqrt" || callee == "log" || callee == "exp") {
+    return printScalarMathDetour(emitter, callOpaqueOp, callee);
   }
 
   if (failed(emitter.emitAssignPrefix(op))) {
@@ -650,6 +753,24 @@ static LogicalResult printOperation(PythonEmitter &emitter, CallOpaqueOp callOpa
   // PyPTO parser maps onto scalar ir.eq/ne/lt/le/gt/ge comparisons.
   if (StringRef cmpOp = infixCmpOpForCallee(callee); !cmpOp.empty()) {
     return printBinaryInfixCall(emitter, callOpaqueOp, cmpOp);
+  }
+
+  // Pseudo-callee printed as a Python unary expression: `(-x)` for negf.
+  // The runtime's pl.neg is a Tensor/Tile-only API, so scalar negation kept
+  // by stage one must be spelled as a plain Python expression, which the
+  // parser maps onto ir.neg. (sqrt/rsqrt/log/exp are intercepted above and
+  // routed through printScalarMathDetour; the PIL scalar layer has no math
+  // functions, so they cannot be spelled as plain expressions.)
+  if (callee == "negf") {
+    if (op.getNumOperands() != 1) {
+      return op.emitOpError(callee) << " expects one operand";
+    }
+    os << "(-";
+    if (failed(emitter.emitOperand(op.getOperand(0), "print_arg"))) {
+      return failure();
+    }
+    os << ")";
+    return success();
   }
 
   if (callee == "util_create_list") {
@@ -1638,10 +1759,18 @@ LogicalResult PythonEmitter::emitAttribute(Location loc, Attribute attr) {
   // Print float attributes.
   if (auto fAttr = dyn_cast<FloatAttr>(attr)) {
     APFloat value = fAttr.getValue();
-    if (value.isInfinity()) {
-      os << (value.isNegative() ? "float('-inf')" : "float('inf')");
-    } else if (value.isNaN()) {
-      os << "float('nan')";
+    if (value.isInfinity() || value.isNaN()) {
+      // Non-finite values have no Python numeric literal, and the PIL parser
+      // rejects a float('inf') call ("Unsupported function call") wherever it
+      // appears (pl.const argument, tile.full fill value). Spell the exact
+      // IEEE 754 binary64 bit pattern with the lossless dump form instead.
+      bool losesInfo = false;
+      value.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven, &losesInfo);
+      // Inf/NaN exponent bits are all ones, so the unsigned hexadecimal form is
+      // always exactly the 16 digits the dump spelling requires.
+      SmallString<32> bits;
+      value.bitcastToAPInt().toString(bits, 16, false, false, false);
+      os << "pl._dump.float64('" << std::string(bits.begin(), bits.end()) << "')";
     } else {
       SmallString<128> strValue;
       value.toString(strValue);

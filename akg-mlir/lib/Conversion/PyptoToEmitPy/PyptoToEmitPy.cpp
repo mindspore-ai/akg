@@ -33,6 +33,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -40,6 +41,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallString.h"
 
 using namespace mlir;  // NOLINT(build/namespaces)
 
@@ -130,11 +132,18 @@ static std::optional<std::string> intToPythonText(const APInt &value) {
 /// Renders a float value as Python source text. Mirrors the helper in
 /// VectorToPypto.cpp; kept local so the pass stays self-contained.
 static std::string floatToPythonText(APFloat value) {
-  if (value.isInfinity()) {
-    return value.isNegative() ? "float('-inf')" : "float('inf')";
-  }
-  if (value.isNaN()) {
-    return "float('nan')";
+  if (value.isInfinity() || value.isNaN()) {
+    // Non-finite values have no Python numeric literal, and the PIL parser
+    // rejects a float('inf') call ("Unsupported function call") wherever it
+    // appears (pl.const argument, tile.full fill value). Spell the exact
+    // IEEE 754 binary64 bit pattern with the lossless dump form instead.
+    bool losesInfo = false;
+    value.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven, &losesInfo);
+    // Inf/NaN exponent bits are all ones, so the unsigned hexadecimal form is
+    // always exactly the 16 digits the dump spelling requires.
+    SmallString<32> bits;
+    value.bitcastToAPInt().toString(bits, 16, false, false, false);
+    return "pl._dump.float64('" + std::string(bits.begin(), bits.end()) + "')";
   }
   std::ostringstream oss;
   oss << std::setprecision(std::numeric_limits<double>::max_digits10) << value.convertToDouble();
@@ -666,15 +675,21 @@ static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate p) {
     case arith::CmpFPredicate::UNE:
       return 1u;
     case arith::CmpFPredicate::OLT:
+    case arith::CmpFPredicate::ULT:
       return 2u;
     case arith::CmpFPredicate::OLE:
+    case arith::CmpFPredicate::ULE:
       return 3u;
     case arith::CmpFPredicate::OGT:
+    case arith::CmpFPredicate::UGT:
       return 4u;
     case arith::CmpFPredicate::OGE:
+    case arith::CmpFPredicate::UGE:
       return 5u;
     default:
-      // NaN-sensitive unordered predicates have no infix counterpart.
+      // The remaining NaN-sensitive predicates (UEQ, ONE-with-NaN) have no
+      // infix counterpart: torch-mlir lowers plain comparisons onto the
+      // unordered spellings, which differ only on NaN operands.
       return std::nullopt;
   }
 }
@@ -1017,7 +1032,9 @@ class ReinterpretViewOpPattern : public OpConversionPattern<pypto::ReinterpretVi
   }
 };
 
-/// Rewrites `pypto.cast` into `pl.cast(src, dtype)`.
+/// Rewrites `pypto.cast` into `pl.cast(src, dtype, mode=...)`; the rounding
+/// mode keyword only appears when the op names one (the runtime default is
+/// "round").
 class CastOpPattern : public OpConversionPattern<pypto::CastOp> {
  public:
   using OpConversionPattern<pypto::CastOp>::OpConversionPattern;
@@ -1035,6 +1052,10 @@ class CastOpPattern : public OpConversionPattern<pypto::CastOp> {
     SmallVector<Value> operands{adaptor.getSource()};
     SmallVector<Attribute> args{rewriter.getIndexAttr(0), rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    if (auto mode = op.getMode()) {
+      args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>("\"" + mode->str() + "\""));
+      keywords.push_back(rewriter.getStringAttr("mode"));
+    }
     rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.cast", ValueRange(operands),
                                                       rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
@@ -1114,8 +1135,9 @@ class ReductionOpPattern : public OpConversionPattern<pypto::ReductionOp> {
   }
 };
 
-/// Rewrites `pypto.read` into `pl.read(src, [indices])`: the constant
-/// coordinates render as a Python index list.
+/// Rewrites `pypto.read` into `pl.read(src, [indices])`: constant
+/// coordinates render as a Python index list, loop-dependent ones become
+/// operand references (the same protocol load/store offsets use).
 class ReadOpPattern : public OpConversionPattern<pypto::ReadOp> {
  public:
   using OpConversionPattern<pypto::ReadOp>::OpConversionPattern;
@@ -1127,8 +1149,8 @@ class ReadOpPattern : public OpConversionPattern<pypto::ReadOp> {
       return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    SmallVector<Attribute> args{rewriter.getIndexAttr(0),
-                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(op.getIndices()))};
+    Attribute indicesArg = buildOffsetsArg(rewriter, adaptor.getIndices(), operands);
+    SmallVector<Attribute> args{rewriter.getIndexAttr(0), indicesArg};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
     rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.read", ValueRange(operands),
                                                       rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
@@ -1194,7 +1216,8 @@ class LoadOpPattern : public OpConversionPattern<pypto::LoadOp> {
     // dimensions; the offsets still address every source dimension, and
     // pl.load requires offsets and shapes to share the source's coordinate
     // system -- pad the tile's shape with leading ones up to the source
-    // rank.
+    // rank. The reshape restoring the tile's physical rank is inserted by
+    // convert-vector-to-pypto right after the load.
     if (auto srcType = dyn_cast<ShapedType>(op.getSource().getType())) {
       if (srcType.getRank() > shape.size()) {
         shape.insert(shape.begin(), srcType.getRank() - shape.size(), 1);
@@ -1391,6 +1414,12 @@ static void populateCallOpaquePatterns(RewritePatternSet &patterns, TypeConverte
   patterns.add<OpToCallOpaquePattern<pypto::RowExpandSubOp>>(typeConverter, patterns.getContext(), "pl.row_expand_sub");
   patterns.add<OpToCallOpaquePattern<pypto::RowExpandMulOp>>(typeConverter, patterns.getContext(), "pl.row_expand_mul");
   patterns.add<OpToCallOpaquePattern<pypto::RowExpandDivOp>>(typeConverter, patterns.getContext(), "pl.row_expand_div");
+  // Column-broadcast binaries: the [1, cols] column vector operand
+  // broadcasts across the tile's rows at runtime.
+  patterns.add<OpToCallOpaquePattern<pypto::ColExpandAddOp>>(typeConverter, patterns.getContext(), "pl.col_expand_add");
+  patterns.add<OpToCallOpaquePattern<pypto::ColExpandSubOp>>(typeConverter, patterns.getContext(), "pl.col_expand_sub");
+  patterns.add<OpToCallOpaquePattern<pypto::ColExpandMulOp>>(typeConverter, patterns.getContext(), "pl.col_expand_mul");
+  patterns.add<OpToCallOpaquePattern<pypto::ColExpandDivOp>>(typeConverter, patterns.getContext(), "pl.col_expand_div");
   patterns.add<OpToCallOpaquePattern<pypto::FmodOp>>(typeConverter, patterns.getContext(), "pl.fmod");
   patterns.add<OpToCallOpaquePattern<pypto::MaximumOp>>(typeConverter, patterns.getContext(), "pl.maximum");
   patterns.add<OpToCallOpaquePattern<pypto::MinimumOp>>(typeConverter, patterns.getContext(), "pl.minimum");
@@ -1469,7 +1498,21 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
     // (`pl.fmod` is tile-only).
     addScalarArithPatterns<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::AddFOp, arith::SubFOp, arith::MulFOp,
                            arith::DivFOp, arith::DivSIOp, arith::SelectOp, arith::FloorDivSIOp, arith::RemSIOp,
-                           arith::RemUIOp>(patterns, typeConverter);
+                           arith::RemUIOp, arith::NegFOp>(patterns, typeConverter);
+    // Scalar float math kept by stage one (pl.sqrt/pl.rsqrt/pl.log/pl.exp are
+    // Tensor/Tile-only APIs) lowers onto the same pseudo-callee convention,
+    // named after the math op itself; the translator routes the statement
+    // forms through a 32-byte tile detour (pl.tile.full/muls/sqrt, pl.read),
+    // since the scalar `** 0.5` spelling maps onto ir.pow, which the backend
+    // evaluates incorrectly, and the runtime has no scalar log/exp at all.
+    patterns.add<OpToCallOpaquePattern<math::SqrtOp>>(typeConverter, patterns.getContext(),
+                                                      math::SqrtOp::getOperationName().split('.').second);
+    patterns.add<OpToCallOpaquePattern<math::RsqrtOp>>(typeConverter, patterns.getContext(),
+                                                      math::RsqrtOp::getOperationName().split('.').second);
+    patterns.add<OpToCallOpaquePattern<math::LogOp>>(typeConverter, patterns.getContext(),
+                                                      math::LogOp::getOperationName().split('.').second);
+    patterns.add<OpToCallOpaquePattern<math::ExpOp>>(typeConverter, patterns.getContext(),
+                                                      math::ExpOp::getOperationName().split('.').second);
     populateCallOpaquePatterns(patterns, typeConverter);
 
     if (failed(applyPartialConversion(funcOp, target, std::move(patterns)))) {

@@ -232,8 +232,10 @@ func.func @tile_read_write(%a : !pypto.tile<f32, [4, 8]>) {
   // CHECK: emitpy.call_opaque "pl.write"(%arg0, %[[S]]) {args = [0 : index, #emitpy.opaque<"{{\[0, 3\]}}">, 1 : index], keyword_args = ["", "", ""]}
 
   %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
   %c3 = arith.constant 3 : index
-  %s = pypto.read %a[1, 2] : !pypto.tile<f32, [4, 8]> -> f32
+  %s = pypto.read %a[%c1, %c2] : !pypto.tile<f32, [4, 8]> -> f32
   pypto.write %a[%c0, %c3], %s : !pypto.tile<f32, [4, 8]>, f32
   return
 }

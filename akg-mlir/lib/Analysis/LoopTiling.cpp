@@ -1627,6 +1627,39 @@ static void collectParallelTileCounts(const ParallelMapTileInput &in, int64_t co
   }
 }
 
+// The runtime commits sub-line stores as full 64-byte cache lines, so
+// blocks whose cyclic tiles share a line silently clobber each other's
+// writes. A block distribution is therefore only safe when the innermost
+// tile spans whole lines; anything narrower is pinned to a single block,
+// where the cyclic tile loop degenerates into a full sequential sweep.
+static bool innermostTileSpansCacheLines(ArrayRef<mlir::scf::ForOp> band, ArrayRef<unsigned> tileSizesInt) {
+  if (band.empty() || tileSizesInt.size() < band.size()) {
+    return false;
+  }
+  unsigned innermostTile = tileSizesInt[band.size() - 1];
+  if (innermostTile == 0 || innermostTile == static_cast<unsigned>(-1)) {
+    return true;  // unknown (dynamic) tile: keep the default distribution
+  }
+  unsigned elemBits = 0;
+  band.back()->walk([&](Operation *op) {
+    Type elem;
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      elem = store.getMemRefType().getElementType();
+    } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+      elem = cast<MemRefType>(copy.getSource().getType()).getElementType();
+    }
+    if (elem && elem.isIntOrFloat()) {
+      unsigned bits = elem.getIntOrFloatBitWidth();
+      elemBits = elemBits == 0 ? bits : std::min(elemBits, bits);
+    }
+  });
+  if (elemBits == 0) {
+    return true;  // no scalar stores inside: line sharing cannot lose data
+  }
+  uint64_t tileBytes = static_cast<uint64_t>(innermostTile) * elemBits / 8;
+  return tileBytes != 0 && tileBytes % 64 == 0;
+}
+
 static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, ParallelMapTileOutput out) {
   const auto &funcOp = in.funcOp;
   const auto &band = in.band;
@@ -1669,6 +1702,9 @@ static void createParallelMapAndTileLoop(const ParallelMapTileInput &in, Paralle
   }
   parallelUseCore =
     parallelDims.empty() ? 1 : (useRuntimeTileCounts ? coreNum : std::min<int64_t>(coreNum, totalTiles));
+  if (parallelUseCore > 1 && !innermostTileSpansCacheLines(band, in.tileSizesInt)) {
+    parallelUseCore = 1;
+  }
   parallelMapLoop = createParallelMapLoop(funcOp, root, parallelUseCore, builder);
   if (!parallelMapLoop || parallelDims.empty()) {
     return;

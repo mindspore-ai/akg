@@ -31,11 +31,9 @@ func.func @test_tile_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 {
   // Tile parameters are loaded into tiles at the entry.
   // CHECK: {{.*}} = pl.load(inputs,
   // CHECK: {{.*}} = pl.transpose({{.*}}, 0, 1)
-  // A broadcast scalar is carried by a zero tile; the scalar form of pl.add
-  // broadcasts it onto the carrier.
-  // CHECK: {{.*}} = pl.tile.full(
-  // CHECK: {{.*}} = pl.add({{.*}}, inputs_0)
-  // CHECK: {{.*}} = pl.mul(
+  // A broadcast scalar feeding the arith mul fuses onto its native
+  // tile-first scalar operand: no carrier tile is materialized.
+  // CHECK: {{.*}} = pl.mul({{.*}}, inputs_0)
   // A full reduction row-reduces on device; the surviving rows are read out
   // and combined with scalar arith -- spelled as the infix `+` the parser
   // maps onto pto.addf -- and the result is written straight into
