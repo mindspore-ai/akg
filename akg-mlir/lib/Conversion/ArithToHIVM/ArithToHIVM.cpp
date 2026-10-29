@@ -2981,12 +2981,11 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
   }
 };
 
-static bool needsRank1StrideAlignedTransferReadBuffer(Value source, npuvector::NPUVectorType npuVecType) {
+static bool needsRank1StrideAlignedTransferBuffer(MemRefType sourceTy, npuvector::NPUVectorType npuVecType) {
   if (npuVecType.getRank() != 1 || !npuVecType.hasDynamicShape()) {
     return false;
   }
 
-  auto sourceTy = dyn_cast<MemRefType>(source.getType());
   if (!sourceTy || sourceTy.getRank() != 1) {
     return false;
   }
@@ -3039,7 +3038,7 @@ static LogicalResult setTransferReadBufferSizeMarkIfNeeded(const SetTransferRead
   }
 
   // BiShengIR later materializes rank-1 non-contiguous loads as padded 2D UB storage.
-  if (needsRank1StrideAlignedTransferReadBuffer(params.source, params.npuVecType)) {
+  if (needsRank1StrideAlignedTransferBuffer(dyn_cast<MemRefType>(params.source.getType()), params.npuVecType)) {
     int64_t strideAlignedBytes =
       computeRank1StrideAlignedTransferReadBytes(*folded, params.npuVecType, params.elemType);
     if (strideAlignedBytes > 0) {
@@ -5200,6 +5199,22 @@ static AllocReadWriteForwardOutcome tryForwardOrAliasAllocReadWrite(
   return AllocReadWriteForwardOutcome::Failed;
 }
 
+// Compute the padded physical size before emitting the store. An unknown bound
+// must not silently leave a strided source buffer with an undersized mark.
+static FailureOr<int64_t> computeTransferWriteStrideAlignedBytes(npuvector::TransferWriteOp op, MemRefType resultType,
+                                                                 MemRefType dataMemRefType) {
+  auto npuVecType = dyn_cast<npuvector::NPUVectorType>(op.getVector().getType());
+  if (!npuVecType || !needsRank1StrideAlignedTransferBuffer(resultType, npuVecType)) {
+    return int64_t{0};
+  }
+  auto maxShape = inferNPUVectorMaxShape(op.getVector());
+  if (failed(maxShape)) {
+    return failure();
+  }
+  return computeBishengRank1StrideAlignedStorageBytes(*maxShape, dataMemRefType.getShape(),
+                                                      dataMemRefType.getElementType());
+}
+
 struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
   using OpConversionPattern<npuvector::TransferWriteOp>::OpConversionPattern;
 
@@ -5275,9 +5290,19 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
         {op, loc, dest, dataToWrite, resultType, offsets, sizes, strides, rewriter});
     }
 
+    // CANN 9.1 does not update byte-size marks when storage alignment adds
+    // an axis for a non-contiguous store. Mark its source and producer chain
+    // using the same rank-1 layout as non-contiguous transfer reads.
+    auto storeAlignedBytes = computeTransferWriteStrideAlignedBytes(op, cast<MemRefType>(resultType), dataMemRefType);
+    if (failed(storeAlignedBytes)) {
+      return rewriter.notifyMatchFailure(op, "cannot infer non-contiguous store buffer bound");
+    }
     rewriter.setInsertionPoint(op);
     Value slicedDest =
       rewriter.create<memref::SubViewOp>(loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
+    if (*storeAlignedBytes > 0) {
+      markInplaceProducerChainBufferSizeAtLeast(rewriter, loc, dataToWrite, op.getOperation(), *storeAlignedBytes);
+    }
     rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, slicedDest);
     rewriter.eraseOp(op);
     return success();
