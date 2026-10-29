@@ -181,15 +181,37 @@ static bool isSameShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
   return true;
 }
 
-static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+// Return true when the load/store access maps differ only by a permutation of
+// their result expressions. This describes the actual accessed indices and is
+// more precise than comparing the complete MemRef shapes: a load may access a
+// slice of a larger MemRef, as in a transpose with a partial input view.
+static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b,
+                               affine::AffineLoadOp load, affine::AffineStoreOp store) {
   if (a.size() != b.size()) {
     return false;
   }
-  llvm::SmallVector<int64_t, kSmallVectorSizeFour> aSorted(a.begin(), a.end());
-  llvm::SmallVector<int64_t, kSmallVectorSizeFour> bSorted(b.begin(), b.end());
-  std::sort(aSorted.begin(), aSorted.end());
-  std::sort(bSorted.begin(), bSorted.end());
-  return isSameShape(aSorted, bSorted);
+
+  auto loadMap = load.getAffineMap();
+  auto storeMap = store.getAffineMap();
+  if (loadMap.getNumResults() != a.size() || storeMap.getNumResults() != b.size()) {
+    return false;
+  }
+
+  llvm::SmallVector<bool, kSmallVectorSizeFour> matched(storeMap.getNumResults(), false);
+  for (auto loadExpr : loadMap.getResults()) {
+    bool found = false;
+    for (unsigned i = 0; i < storeMap.getNumResults(); ++i) {
+      if (!matched[i] && loadExpr == storeMap.getResult(i)) {
+        matched[i] = true;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static bool isBroadcastLike(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
@@ -558,7 +580,7 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
       return OperatorTemplate::Reshape;
     }
 
-    if (isPermutationShape(inShape, outShape)) {
+    if (isPermutationShape(inShape, outShape, load, store)) {
       return OperatorTemplate::Transpose;
     }
 
@@ -915,10 +937,6 @@ static bool isDependenceAxisRelationUnresolved(const SmallVector<Operation *, kS
       if (!dstType) {
         continue;
       }
-      // Different rank: the two views cannot describe the same logical shape.
-      if (srcType.getRank() != dstType.getRank()) {
-        return true;
-      }
       // Fully static and same rank: concrete bounds are validated by the regular path.
       if (srcType.hasStaticShape() && dstType.hasStaticShape()) {
         continue;
@@ -1009,6 +1027,135 @@ static void performLoopFusion(SmallVector<affine::AffineForOp, kSmallVectorSizeF
       builder.clone(op, mapper);
     }
   }
+}
+
+// Scan the host loop after a simulated fusion for reads that precede a
+// dependent write without an initialization outside the candidate loops.
+static bool hasReadBeforeWriteInLoop(affine::AffineForOp hostLoop, affine::AffineForOp srcRoot,
+                                     affine::AffineForOp dstRoot, affine::AffineForOp clonedSrcRoot) {
+  DenseSet<Value> outsideStores;
+  Operation *container = dstRoot->getParentOfType<func::FuncOp>();
+  if (container) {
+    container->walk([&](Operation *op) {
+      auto write = dyn_cast<affine::AffineWriteOpInterface>(op);
+      auto enclosingFor = op->getParentOfType<affine::AffineForOp>();
+      if (!write || !enclosingFor || srcRoot->isAncestor(op) || dstRoot->isAncestor(op) ||
+          hostLoop->isAncestor(op) || clonedSrcRoot->isAncestor(op))
+        return;
+      outsideStores.insert(affine::getSourceMemRef(write.getMemRef()));
+    });
+  }
+
+  DenseMap<Value, SmallVector<Operation *, kSmallVectorSizeFour>> priorWrites;
+  DenseMap<Value, SmallVector<Operation *, kSmallVectorSizeFour>> pendingReads;
+  bool invalid = false;
+  auto dependenceExists = [](Operation *first, Operation *second) {
+    affine::AKGMemRefAccess firstAccess(first);
+    affine::AKGMemRefAccess secondAccess(second);
+    auto result = affine::checkMemrefAccessDependenceAKG(firstAccess, secondAccess, 1, nullptr, nullptr,
+                                                          /*allowRAR=*/false,
+                                                          /*checkSrcBeforeDst=*/false);
+    return result.value != affine::DependenceResult::NoDependence;
+  };
+  auto sameElementIsProven = [](Operation *writeOp, Operation *readOp) {
+    affine::AKGMemRefAccess writeAccess(writeOp);
+    affine::AKGMemRefAccess readAccess(readOp);
+    auto result = affine::checkMemrefAccessDependenceAKG(writeAccess, readAccess, 1, nullptr, nullptr,
+                                                          /*allowRAR=*/false,
+                                                          /*checkSrcBeforeDst=*/false);
+    return result.value == affine::DependenceResult::HasDependence;
+  };
+  hostLoop.walk([&](Operation *op) {
+    if (invalid) return;
+    if (isa<affine::AffineReadOpInterface>(op)) {
+      auto read = cast<affine::AffineReadOpInterface>(op);
+      Value memref = affine::getSourceMemRef(read.getMemRef());
+      if (outsideStores.contains(memref)) return;
+      bool initialized = false;
+      for (Operation *writeOp : priorWrites[memref]) {
+        if (sameElementIsProven(writeOp, op)) {
+          initialized = true;
+          break;
+        }
+      }
+      if (!initialized) pendingReads[memref].push_back(op);
+      return;
+    }
+    auto write = dyn_cast<affine::AffineWriteOpInterface>(op);
+    if (!write) return;
+    Value writeMemref = affine::getSourceMemRef(write.getMemRef());
+    if (!outsideStores.contains(writeMemref)) {
+      for (Operation *readOp : pendingReads[writeMemref]) {
+        if (dependenceExists(readOp, write.getOperation())) {
+          invalid = true;
+          return;
+        }
+      }
+    }
+    priorWrites[writeMemref].push_back(write.getOperation());
+  });
+  return invalid;
+}
+
+// Simulate the candidate fusion on temporary clones and report whether its
+// resulting host loop can read an element before the first write to that
+// element.  The caller passes the roots in the same order as fuseLoops; it
+// swaps them before calling this helper when the physical fusion direction is
+// reversed.  A store to the same memref in another affine.for initializes the
+// buffer and makes the read-before-write sequence legal.
+static bool hasReadBeforeWriteAfterFusion(affine::AffineForOp srcRoot, affine::AffineForOp dstRoot,
+                                          const affine::ComputationSliceState &slice) {
+  if (!srcRoot || !dstRoot || slice.ivs.empty()) {
+    return false;
+  }
+
+  if (srcRoot->getBlock() != dstRoot->getBlock()) {
+    return false;
+  }
+
+  // Clone both roots into the original block, fuse the clones, inspect the
+  // resulting host loop, and erase all clones afterwards. No original root is
+  // passed to fuseLoops and the original IR is restored before returning.
+  IRMapping mapper;
+  OpBuilder builder(srcRoot->getBlock(), srcRoot->getBlock()->end());
+  affine::AffineForOp clonedSrc;
+  affine::AffineForOp clonedDst;
+  auto cloneRoot = [&](affine::AffineForOp root) {
+    return cast<affine::AffineForOp>(builder.clone(*root.getOperation(), mapper));
+  };
+  if (srcRoot->isBeforeInBlock(dstRoot)) {
+    clonedSrc = cloneRoot(srcRoot);
+    clonedDst = cloneRoot(dstRoot);
+  } else {
+    clonedDst = cloneRoot(dstRoot);
+    clonedSrc = cloneRoot(srcRoot);
+  }
+
+  affine::ComputationSliceState clonedSlice = slice;
+  auto mapValue = [&](Value value) { return mapper.lookupOrDefault(value); };
+  for (Value &value : clonedSlice.ivs) value = mapValue(value);
+  for (auto &values : clonedSlice.lbOperands)
+    for (Value &value : values) value = mapValue(value);
+  for (auto &values : clonedSlice.ubOperands)
+    for (Value &value : values) value = mapValue(value);
+  Operation *mappedInsert = mapper.lookupOrDefault(&*slice.insertPoint);
+  if (!mappedInsert) {
+    clonedDst.erase();
+    clonedSrc.erase();
+    return true;
+  }
+  clonedSlice.insertPoint = mappedInsert->getIterator();
+
+  // The caller swaps the roots before invoking this helper when the actual
+  // fusion is reversed, so these arguments are always in the same guest/host
+  // order as the real fuseLoops call.
+  affine::fuseLoops(clonedSrc, clonedDst, clonedSlice);
+
+  bool invalid = hasReadBeforeWriteInLoop(clonedDst, srcRoot, dstRoot, clonedSrc);
+
+  if (clonedDst && clonedDst->getBlock()) clonedDst.erase();
+  if (clonedSrc && clonedSrc->getBlock()) clonedSrc.erase();
+  return invalid;
 }
 
 // Effective dep depth for ProducerConsumer fusion:
@@ -1789,6 +1936,15 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     affine::SliceComputationResult res =
       computeSliceUnionAKG(strategyOpsA, dstAccesses, depth, kDefaultNumCommonLoops, !srcDstReversed, &sliceState);
     if (res.value == affine::SliceComputationResult::Success) {
+      // Imperfect nests use fuseImperfectLoops in applySliceFusion, so the
+      // fuseLoops-based read-before-write simulation does not describe the
+      // operation order that will actually be emitted.  Keep the check for
+      // perfect nests, where fuseLoops is the implementation used below.
+      if ((srcInfo.isPerfect || dstInfo.isPerfect) &&
+          hasReadBeforeWriteAfterFusion(srcAffineForOp, dstAffineForOp, sliceState)) {
+        llvm::dbgs() << "Skipping fusion depth " << depth << " due to read-before-write\n";
+        continue;
+      }
       maxDepth = depth;
       break;
     }
