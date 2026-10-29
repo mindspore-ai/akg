@@ -2329,7 +2329,14 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
     Operation *loopOp = axis ? axis->getLoopOperation() : nullptr;
     auto forOp = dyn_cast_or_null<scf::ForOp>(loopOp);
     if (!forOp) continue;
-    tile = std::clamp<int64_t>(tile, 1, std::max<int64_t>(extent, 1));
+    tile = std::max<int64_t>(tile, 1);
+    // Estimate the physical vector tile emitted by alignPlanTiles, including
+    // padding beyond the logical extent. Transpose search aligns its own axes.
+    if (tile > 1 && ctx.transposeInfos.empty() &&
+        !llvm::any_of(ctx.axes, [](const AxisPtr &axis) { return isTransposeAxis(axis); })) {
+      int64_t alignUnit = idx < ctx.axesAlignUnits.size() ? std::max<int64_t>(ctx.axesAlignUnits[idx], 1) : 1;
+      tile = alignUpInt64(tile, alignUnit);
+    }
     setTileUpperBoundForLoop(input, forOp, tile);
     input.isReduceXorAllVectorizeLoop[forOp] = false;
     input.isWholeTiledLoop[forOp] = (tile >= extent);
