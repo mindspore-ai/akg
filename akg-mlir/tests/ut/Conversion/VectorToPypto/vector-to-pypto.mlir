@@ -48,11 +48,9 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // back into tiles at the entry.
   // CHECK: %[[V0:.*]] = emitpy.call_opaque "pl.load"(%arg0)
   // CHECK: %[[T:.*]] = emitpy.call_opaque "pl.transpose"(%[[V0]])
-  // A broadcast scalar is carried by a zero tile; the scalar form of pl.add
-  // broadcasts it onto the carrier.
-  // CHECK: %[[CARRIER:.*]] = emitpy.call_opaque "pl.tile.full"()
-  // CHECK: %[[B:.*]] = emitpy.call_opaque "pl.add"(%[[CARRIER]], %arg1)
-  // CHECK: %[[M:.*]] = emitpy.call_opaque "pl.mul"(%[[T]], %[[B]])
+  // A broadcast scalar feeding the arith mul fuses onto its native
+  // tile-first scalar operand: no carrier tile is materialized.
+  // CHECK: %[[M:.*]] = emitpy.call_opaque "pl.mul"(%[[T]], %arg1)
   // A full reduction row-reduces on device, then reads out and combines the
   // surviving rows with scalar-form adds.
   // CHECK: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
@@ -65,20 +63,19 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // The scalar result is written straight into the [1] output tensor.
   // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}})
 
-  // The transpose view, the broadcast carrier, the elementwise ops, the
+  // The transpose view, the fused scalar operands, the elementwise ops, the
   // scratch tile and the reduction chain all sit in the pypto layer after
   // the first stage.
   // PYPTO-LABEL: func.func @test_npuvector_ops(
   // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !npuvector<8x16xf32> to !npuvector<16x8xf32>
-  // PYPTO: %[[CARRIER:.*]] = pypto.tile_full "0.0" : !npuvector<16x8xf32>
-  // PYPTO: %[[B:.*]] = pypto.add %[[CARRIER]], %arg1 : !npuvector<16x8xf32>, f32 to !npuvector<16x8xf32>
-  // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %[[B]] : !npuvector<16x8xf32>, !npuvector<16x8xf32> to !npuvector<16x8xf32>
+  // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %arg1 : !npuvector<16x8xf32>, f32 to !npuvector<16x8xf32>
   // The full row reduction works in the scratch tile and yields a scalar.
   // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [16, 8]>
   // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !npuvector<16x8xf32>, {{.*}} -> f32
-  // The surviving rows are read out and combined with scalar arith.
-  // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
-  // PYPTO: %[[R1:.*]] = pypto.read %[[ROW]] [1, 0] : f32 -> f32
+  // The surviving rows are read out and combined with scalar arith; the
+  // coordinates are arith constants named after their values.
+  // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
+  // PYPTO: %[[R1:.*]] = pypto.read %[[ROW]][%c1, %c0_1] : f32 -> f32
   // PYPTO: arith.addf %[[R0]], %[[R1]] : f32
   // The scalar result goes straight into the [1] output tensor.
   // PYPTO: pypto.write %arg2[{{.*}}], {{.*}} : memref<1xf32>, f32
@@ -188,7 +185,7 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !npuvector<4xi32> to !npuvector<4xi64>
   // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !npuvector<4xi64> to !npuvector<4xi32>
   // The short output row is written element by element.
-  // PYPTO: %[[E0:.*]] = pypto.read %[[W]] [0] : !npuvector<4xi32> -> i32
+  // PYPTO: %[[E0:.*]] = pypto.read %[[W]][%c0_0] : !npuvector<4xi32> -> i32
   // PYPTO: pypto.write %arg1[{{.*}}], %[[E0]] : memref<4xi32>, i32
 
   %r = npuvector.reduction <maxsi>, %arg0 {reduction_dims = array<i64: 1>} : !npuvector<4x8xi32> into !npuvector<4xi32>
@@ -228,8 +225,8 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
   // PYPTO: pypto.reshape %arg0 : !npuvector<3072xf32> to !pypto.tile<f32, [8, 384]>
   // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [8, 384]>
   // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, {{.*}}, %[[ROW_TMP]] : {{.*}} -> f32
-  // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]] [0, 0] : f32 -> f32
-  // PYPTO: %[[S1:.*]] = pypto.read %[[ROW]] [1, 0] : f32 -> f32
+  // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
+  // PYPTO: %[[S1:.*]] = pypto.read %[[ROW]][%c1, %c0_1] : f32 -> f32
   // PYPTO: %[[A:.*]] = arith.addf %[[S0]], %[[S1]] : f32
   // PYPTO: pypto.write %arg1[{{.*}}], {{.*}} : memref<1xf32>, f32
 
@@ -509,10 +506,11 @@ func.func @test_collapse_and_dynamic_npuvector(%arg0 : memref<64x64xi32>, %arg1 
   // runtime valid extent as an operand reference.
   // CHECK: %[[V:.*]] = emitpy.call_opaque "pl.load"(%[[FLAT0]], %[[BEG]], %[[LEN]]) {args = [0 : index, {{\[[0-9]+ : index\]}}, #emitpy.opaque<"{{\[88\]}}">, {{\[[0-9]+ : index\]}}
   // CHECK-SAME: -> !npuvector<?xi32>
-  // A scalar broadcast onto a dynamic tile is a zero tile whose allocated
-  // extent comes from the padded maxSizes bound; the folded constant fills it.
-  // CHECK: %[[B:.*]] = emitpy.call_opaque "pl.tile.full"() {args = [#emitpy.opaque<"{{\[88\]}}">, #emitpy.opaque<"pl.INT32">, #emitpy.opaque<"1">
-  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[V]], %[[B]])
+  // A broadcast scalar feeding the arith add fuses onto its native
+  // tile-first scalar operand: no carrier tile is materialized, so the
+  // dtype-relative 32B padding of a carrier never drifts from the load's
+  // own allocation.
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[V]], %{{.+}}) : (!npuvector<?xi32>, i32) -> !npuvector<?xi32>
   // The dynamic tile is reshaped into a matching [1, 88] tile and stored
   // through the 2D view, its base offset riding along as a dynamic operand.
   // CHECK: %[[RTILE:.*]] = emitpy.call_opaque "pl.reshape"(%[[SUM]]) {args = [0 : index, #emitpy.opaque<"{{\[1, 88\]}}">
@@ -675,5 +673,66 @@ func.func @test_scalar_select(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024
       vector.transfer_write %v, %arg1[%row, %c0] : vector<8x1024xf32>, memref<1024x1024xf32>
     }
   }
+  return
+}
+
+// -----
+
+// A column-uniform row vector lifted to a rank-2 tile by
+// `npuvector.broadcast {dimension = [1]}` never materializes: the consumer
+// folds onto the runtime-native col_expand family. The addf takes the
+// broadcast on its lhs, exercising the commutative operand swap.
+
+func.func @test_col_broadcast_fusion_static(%arg0 : memref<8x32xf32>, %arg1 : memref<32xf32>, %arg2 : memref<8x32xf32>) {
+  // CHECK-LABEL: func.func @test_col_broadcast_fusion_static(
+  // CHECK: %[[TILE:.*]] = emitpy.call_opaque "pl.load"(%arg0)
+  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.load"(%arg1)
+  // CHECK: %[[VEC:.*]] = emitpy.call_opaque "pl.reshape"(%[[ROW]])
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.col_expand_add"(%[[TILE]], %[[VEC]])
+  // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %arg2)
+
+  // PYPTO-LABEL: func.func @test_col_broadcast_fusion_static(
+  // PYPTO: %[[TILE:.*]] = pypto.load %arg0[{{.*}}] : memref<8x32xf32> -> !npuvector<8x32xf32>
+  // PYPTO: %[[ROW:.*]] = pypto.load %arg1[{{.*}}] : memref<32xf32> -> !npuvector<32xf32>
+  // PYPTO: %[[VEC:.*]] = pypto.reshape %[[ROW]] : !npuvector<32xf32> to !npuvector<1x32xf32>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_add %[[TILE]], %[[VEC]] : !npuvector<8x32xf32>, !npuvector<1x32xf32> to !npuvector<8x32xf32>
+  // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<8x32xf32>, memref<8x32xf32>
+
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.0 : f32
+  %tile = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<8x32xf32>, !npuvector<8x32xf32>
+  %row = npuvector.transfer_read %arg1[%c0], %cst : memref<32xf32>, !npuvector<32xf32>
+  %bcast = npuvector.broadcast %row : !npuvector<32xf32> to !npuvector<8x32xf32> {dimension = array<i64: 1>}
+  %sum = arith.addf %bcast, %tile : !npuvector<8x32xf32>
+  npuvector.transfer_write %sum, %arg2[%c0, %c0] : !npuvector<8x32xf32>, memref<8x32xf32>
+  return
+}
+
+// -----
+
+// Dynamic-rows variant: the broadcast carries per-dimension runtime sizes
+// and max bounds; the subf keeps the broadcast on its rhs (no operand swap
+// for non-commutative ops).
+
+func.func @test_col_broadcast_fusion_dynamic(%arg0 : memref<8x32xf32>, %arg1 : memref<32xf32>, %arg2 : memref<8x32xf32>) {
+  // CHECK-LABEL: func.func @test_col_broadcast_fusion_dynamic(
+  // CHECK: %[[VEC:.*]] = emitpy.call_opaque "pl.reshape"({{.*}})
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.col_expand_sub"({{.*}}, %[[VEC]])
+  // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %arg2)
+
+  // PYPTO-LABEL: func.func @test_col_broadcast_fusion_dynamic(
+  // PYPTO: %[[VEC:.*]] = pypto.reshape {{.*}} : !npuvector<32xf32> to !npuvector<1x32xf32>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_sub {{.*}}, %[[VEC]] : !npuvector<?x32xf32>, !npuvector<1x32xf32> to !npuvector<?x32xf32>
+  // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<?x32xf32>, memref<8x32xf32>
+
+  %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
+  %c32 = arith.constant 32 : index
+  %cst = arith.constant 0.0 : f32
+  %tile = npuvector.transfer_read %arg0[%c0, %c0] [%c8, %c32] [%c8, %c32], %cst : memref<8x32xf32>, !npuvector<?x32xf32>
+  %row = npuvector.transfer_read %arg1[%c0] [%c32] [%c32], %cst : memref<32xf32>, !npuvector<32xf32>
+  %bcast = npuvector.broadcast %row[%c8, %c32] [%c8, %c32] : !npuvector<32xf32> to !npuvector<?x32xf32> {dimension = array<i64: 1>}
+  %diff = arith.subf %tile, %bcast : !npuvector<?x32xf32>
+  npuvector.transfer_write %diff, %arg2[%c0, %c0] : !npuvector<?x32xf32>, memref<8x32xf32>
   return
 }

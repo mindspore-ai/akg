@@ -238,9 +238,12 @@ def Pypto_CastOp : Pypto_Op<"cast"> {
     The shape is preserved; the target dtype comes from the result type.
     Bit-preserving reinterpretation is `pypto.reinterpret_view` instead.
 
-    The emitpy lowering emits `pl.cast(src, dtype)`.
+    `mode` names the float-to-int rounding mode ("round"/"floor"/"ceil", the
+    runtime `pl.cast` default "round" when absent).
+
+    The emitpy lowering emits `pl.cast(src, dtype)` (+ `mode=`).
   }];
-  let arguments = (ins AnyType:$source);
+  let arguments = (ins AnyType:$source, OptionalAttr<StrAttr>:$mode);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$source attr-dict `:` type($source) `to` type($result)";
   let hasVerifier = 1;
@@ -358,6 +361,32 @@ def Pypto_RowExpandDivOp : Pypto_RowExpandOp<"row_expand_div"> {
   let summary = "Row-broadcast division (`pl.row_expand_div`)";
 }
 
+// The col_expand family: `tile OP col_vec` where the [1, cols] column vector
+// is broadcast across the tile's rows by the runtime (PTOAS-native column
+// broadcast, valid semantics included). The verifier mirrors the runtime's
+// DeduceTileColExpandType contract: both operands carry at least two
+// dimensions (the last two drive the broadcast), the column vector's
+// second-to-last dimension is one, and the column counts agree.
+class Pypto_ColExpandOp<string mnemonic> : Pypto_Op<mnemonic> {
+  let arguments = (ins AnyType:$tile, AnyType:$colVec);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$tile `,` $colVec attr-dict `:` type($tile) `,` type($colVec) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def Pypto_ColExpandAddOp : Pypto_ColExpandOp<"col_expand_add"> {
+  let summary = "Column-broadcast addition (`pl.col_expand_add`)";
+}
+def Pypto_ColExpandSubOp : Pypto_ColExpandOp<"col_expand_sub"> {
+  let summary = "Column-broadcast subtraction (`pl.col_expand_sub`)";
+}
+def Pypto_ColExpandMulOp : Pypto_ColExpandOp<"col_expand_mul"> {
+  let summary = "Column-broadcast multiplication (`pl.col_expand_mul`)";
+}
+def Pypto_ColExpandDivOp : Pypto_ColExpandOp<"col_expand_div"> {
+  let summary = "Column-broadcast division (`pl.col_expand_div`)";
+}
+
 //===----------------------------------------------------------------------===//
 // E. Elementwise unary ops
 //===----------------------------------------------------------------------===//
@@ -427,18 +456,20 @@ def Pypto_ReadOp : Pypto_Op<"read"> {
     Syntax:
 
     ```
-    %s = pypto.read %src[0, 1] : tile-type to scalar-type
+    %s = pypto.read %src[%i, %j] : tile-type to scalar-type
     ```
 
-    `indices` are constant coordinates into the tile.
+    `indices` are the coordinates into the tile, one per source dimension;
+    they may be loop-dependent (the runtime `pl.read` accepts index
+    expressions).
 
     The emitpy lowering emits `pl.read(src, [indices])`.
   }];
-  let arguments = (ins AnyType:$source, DenseI64ArrayAttr:$indices);
+  let arguments = (ins AnyType:$source, Variadic<Index>:$indices);
   let results = (outs AnyType:$result);
   let assemblyFormat =
     [{
-    $source $indices attr-dict `:` type($source) `->` type($result)
+    $source `[` $indices `]` attr-dict `:` type($source) `->` type($result)
   }];
   let hasVerifier = 1;
 }
