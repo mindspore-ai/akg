@@ -45,6 +45,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -642,6 +643,9 @@ class MemoryPeakEstimator {
 
  private:
   PeakAnalysisInput input_;
+  llvm::DenseSet<Operation *> hoistedOps_;
+  void collectHoistedOps_();
+  void extendLoopInvariantLifetimes_(int64_t lastOpTime);
 
   llvm::SmallVector<scf::ForOp, kSmallVectorSizeEight> orderedForOps_;
   llvm::DenseMap<scf::ForOp, int64_t> forOpToIndex_;
@@ -677,7 +681,6 @@ class MemoryPeakEstimator {
   void inferShapeFromInput_(ArrayRef<int64_t> inputBufferIndexes, BufferInfo &outputBufferInfo, OpRecord &rec,
                             Operation *op, bool recordInlineBroadcastExtraBuffer = true);
   void buildForOpWalkOrder_();
-  void alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType);
   void assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex);
   void DimLoopIndicesToShape(ArrayRef<int64_t> dimLoopIndices, SmallVectorImpl<int64_t> &outBounds) const;
   void inferEnclosingDimLoopIndices_(Operation *op, SmallVectorImpl<int64_t> &outIndices) const;
@@ -1799,7 +1802,7 @@ static int64_t computeLastAxisAlignBrcElems(const InlineBrcExtraBufferContext &c
     secondLastLoop <= static_cast<int64_t>(ctx.orderedForOps.size())) {
     scf::ForOp forOp = ctx.orderedForOps[static_cast<size_t>(secondLastLoop - 1)];
     if (!ctx.isWholeTiledLoop.lookup(forOp)) {
-      return ctx.outputUpperLimitElems;
+      return std::max<int64_t>(2 * ctx.outputUpperLimitElems, kSrcNumPerRepeatOfVBRCBIntrin * numPerBlock);
     }
   }
   if (!srcHasSecondLast) {
@@ -1809,8 +1812,7 @@ static int64_t computeLastAxisAlignBrcElems(const InlineBrcExtraBufferContext &c
   if (secondLastBound == 1) {
     return numPerBlock;
   }
-  const int64_t numGroups = (secondLastBound + kSrcNumPerRepeatOfVBRCBIntrin - 1) / kSrcNumPerRepeatOfVBRCBIntrin;
-  return numPerBlock * numGroups;
+  return numPerBlock * ceilFactor(secondLastBound, kSrcNumPerRepeatOfVBRCBIntrin);
 }
 
 static void appendBroadcastMismatchExtraBuffer(const InlineBrcExtraBufferContext &ctx, OpRecord &rec,
@@ -1870,6 +1872,9 @@ static void appendSelectInlineBroadcastExtraBuffers(arith::SelectOp selectOp, Ar
     const bool isBrcCstInput =
       ctx.est.isMaterializedCstBufferIndex(index) || isConstantSsaValue(inputInfo.originalValue);
     if (!isBrcCstInput && !inputInfo.dimLoopIndices.empty()) {
+      if (ArrayRef(inputInfo.dimLoopIndices) != ctx.outputDimLoopIndices) {
+        appendBroadcastMismatchExtraBuffer(ctx, rec, inputInfo.elementType);
+      }
       appendNormalInlineBrcExtraBufferForInput(index, ctx, rec);
       continue;
     }
@@ -2064,24 +2069,11 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   }
   SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   DimLoopIndicesToShape(info.dimLoopIndices, bounds);
+  // Pad physical rows without changing the shared logical tile bounds.
+  if (input_.alignBufferSizeTo256Bits && !bounds.empty()) {
+    bounds.back() = ceilFactor(bounds.back(), lastAxis32ByteAlignElems(info.elementType));
+  }
   return totalBitsFromShape(bounds, info.elementType, input_.alignBufferSizeTo256Bits);
-}
-
-void MemoryPeakEstimator::alignLastAxisTileBoundInMap_(ArrayRef<int64_t> dimLoopIndices, Type elementType) {
-  if (dimLoopIndices.empty() || dimLoopIndices.size() < kMinDimsForLastAxis) {
-    return;
-  }
-  const int64_t lastLoop = dimLoopIndices.back();
-  if (lastLoop <= 0 || lastLoop > static_cast<int64_t>(orderedForOps_.size())) {
-    return;
-  }
-  scf::ForOp forOp = orderedForOps_[static_cast<size_t>(lastLoop - 1)];
-  const int64_t currentBound = DimLoopIndexToBound(lastLoop, orderedForOps_, input_.tileUpperBoundPerLoop);
-  const int64_t alignElems = lastAxis32ByteAlignElems(elementType);
-  const int64_t aligned = ceilFactor(currentBound, alignElems);
-  if (aligned != currentBound) {
-    input_.tileUpperBoundPerLoop[forOp] = aligned;
-  }
 }
 
 void MemoryPeakEstimator::assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex) {
@@ -2221,7 +2213,6 @@ int64_t MemoryPeakEstimator::resolveOperandBufferIndex_(Value input, Operation *
   filterActiveTileDimLoopIndices(inputBufferInfo.dimLoopIndices, inputBufferInfo.dimLoopIndices, orderedForOps_,
                                  input_.tileUpperBoundPerLoop);
   inputBufferInfo.isValid = isInsideScfForBody(op);
-  alignLastAxisTileBoundInMap_(inputBufferInfo.dimLoopIndices, inputBufferInfo.elementType);
   inputBufferInfo.totalBufferSize = totalBitsfromBuffer(inputBufferInfo);
   bufferInfoIndexMap_[input] = valIndex;
   return valIndex;
@@ -2260,7 +2251,6 @@ int64_t MemoryPeakEstimator::getOrCreateBrcCstBuffer_(Value cst, ArrayRef<int64_
   materializedInfo.dimLoopIndices.assign(filteredDimLoopIndices.begin(), filteredDimLoopIndices.end());
   materializedInfo.isScalar = false;
   materializedInfo.isValid = true;
-  alignLastAxisTileBoundInMap_(materializedInfo.dimLoopIndices, materializedInfo.elementType);
   materializedInfo.totalBufferSize = totalBitsfromBuffer(materializedInfo);
   brcCstBufferMap_.push_back({key, valIndex});
   rec.generatedBufferIndexes.push_back(valIndex);
@@ -3058,10 +3048,91 @@ void MemoryPeakEstimator::assignOpTimeline_(Operation *op, int64_t &opTimeIndex)
   opRecord.opTimeIndex = opTimeIndex++;
 }
 
+// Model the same invariant reads and pure followers that Hoist moves after
+// vectorization. A full vector axis disappears; a partial tile still depends
+// on its offset and tail length and cannot be treated as invariant.
+static bool isInvariantAfterVectorization(Value value, const PeakAnalysisInput &input,
+                                          llvm::DenseMap<Value, bool> &invariant) {
+  if (auto it = invariant.find(value); it != invariant.end()) {
+    return it->second;
+  }
+  bool result = false;
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    auto loop = dyn_cast_or_null<scf::ForOp>(arg.getOwner()->getParentOp());
+    result = loop ? arg.getArgNumber() == 0 && input.isWholeTiledLoop.lookup(loop)
+                  : isa<func::FuncOp>(arg.getOwner()->getParentOp());
+  } else if (Operation *def = value.getDefiningOp()) {
+    result = isMemoryEffectFree(def) && def->getNumRegions() == 0 && llvm::all_of(def->getOperands(), [&](Value v) {
+               return isInvariantAfterVectorization(v, input, invariant);
+             });
+  }
+  invariant[value] = result;
+  return result;
+}
+
+static bool isInScfLoopNest(Operation *op, func::FuncOp func) {
+  for (Operation *parent = op->getParentOp(); parent && parent != func; parent = parent->getParentOp()) {
+    if (!isa<scf::ForOp>(parent)) return false;
+  }
+  return true;
+}
+
+void MemoryPeakEstimator::collectHoistedOps_() {
+  llvm::DenseMap<Value, bool> invariant;
+  for (const OpRecord &rec : perOpList_) {
+    Operation *op = rec.sourceOp;
+    if (!op || op->getNumRegions() != 0 || rec.outputBufferIndex < 0) {
+      continue;
+    }
+    const BufferInfo &info = bufferInfoList_[rec.outputBufferIndex];
+    if (!info.isValid || !llvm::all_of(info.dimLoopIndices, [&](int64_t dim) {
+          return dim < 0 || isWholeTiledLoopIndex(dim, orderedForOps_, input_.isWholeTiledLoop);
+        })) {
+      continue;
+    }
+    auto load = dyn_cast<memref::LoadOp>(op);
+    if (!isInScfLoopNest(op, input_.func) || (!load && !isMemoryEffectFree(op)) ||
+        !llvm::all_of(op->getOperands(),
+                      [&](Value v) { return isInvariantAfterVectorization(v, input_, invariant); })) {
+      continue;
+    }
+    bool written = false;
+    if (load) {
+      input_.func.walk([&](memref::StoreOp store) { written |= store.getMemRef() == load.getMemRef(); });
+    }
+    if (!written) {
+      hoistedOps_.insert(op);
+      for (Value result : op->getResults()) invariant[result] = true;
+    }
+  }
+}
+
+void MemoryPeakEstimator::extendLoopInvariantLifetimes_(int64_t lastOpTime) {
+  for (BufferInfo &info : bufferInfoList_) {
+    if (info.allocTime < 0) {
+      continue;
+    }
+    const OpRecord &originRec = perOpList_[static_cast<size_t>(info.OriginOpRecordIndex)];
+    const bool usedInLoop =
+      hoistedOps_.contains(originRec.sourceOp) && llvm::any_of(perOpList_, [&](const OpRecord &user) {
+        return !hoistedOps_.contains(user.sourceOp) && llvm::is_contained(user.inputBufferIndexes, info.Index);
+      });
+    if (!isInsideScfForBody(originRec.sourceOp) || usedInLoop) {
+      info.freeTime = lastOpTime;
+    }
+  }
+}
+
 void MemoryPeakEstimator::computeBufferLifetimes() {
   // record TimelineOpIndexList, only record op whose output bufferinfo
   // update generatedBufferIndexes、killedBufferIndexes、allocTime、freeTime、opTimeIndex
   int64_t opTimeIndex = 0;
+  collectHoistedOps_();
+  for (const OpRecord &rec : perOpList_) {
+    if (hoistedOps_.contains(rec.sourceOp)) {
+      assignOpTimeline_(rec.sourceOp, opTimeIndex);
+    }
+  }
   walkFuncBodyUntilReturn(input_.func, WalkOrder::PreOrder, [this, &opTimeIndex](Operation *op) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       assignForEntryTimeline_(forOp, opTimeIndex);
@@ -3072,19 +3143,13 @@ void MemoryPeakEstimator::computeBufferLifetimes() {
       assignForExitTimeline_(op, opTimeIndex);
       return;
     }
-    assignOpTimeline_(op, opTimeIndex);
+    if (!hoistedOps_.contains(op)) {
+      assignOpTimeline_(op, opTimeIndex);
+    }
   });
 
   const int64_t lastOpTime = opTimeIndex > 0 ? opTimeIndex : 0;
-  for (BufferInfo &info : bufferInfoList_) {
-    if (info.allocTime < 0) {
-      continue;
-    }
-    const OpRecord &originRec = perOpList_[static_cast<size_t>(info.OriginOpRecordIndex)];
-    if (!isInsideScfForBody(originRec.sourceOp)) {
-      info.freeTime = lastOpTime;
-    }
-  }
+  extendLoopInvariantLifetimes_(lastOpTime);
 
   for (int64_t index : TimelineOpIndexList) {
     OpRecord &opRecord = perOpList_[index];
@@ -3385,6 +3450,9 @@ void MemoryPeakEstimator::markMultiBuffer() {
   for (int64_t index : TimelineOpIndexList) {
     OpRecord &opRecord = perOpList_[index];
     if (opRecord.opType == kOpTypeMemRefLoad) {
+      if (hoistedOps_.contains(opRecord.sourceOp)) {
+        continue;
+      }
       auto loadOp = dyn_cast<memref::LoadOp>(opRecord.sourceOp);
       const auto loadMemTy = loadOp ? dyn_cast<MemRefType>(loadOp.getMemRef().getType()) : MemRefType();
       if (!loadOp || !loadMemTy || loadMemTy.getRank() == 0 || opRecord.outputBufferIndex < 0 ||
