@@ -49,6 +49,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
 namespace mlir {
@@ -1390,11 +1391,7 @@ static int64_t totalBitsFromShape(ArrayRef<int64_t> shape, Type elementType, boo
 
 // 32B = 256bit alignment on last axis element count: f16/bf16 -> 16, f32/i32 -> 8, i8 -> 32, etc.
 static int64_t lastAxis32ByteAlignElems(Type elementType) {
-  const unsigned bitWidth = getElementTypeOrSelf(elementType).getIntOrFloatBitWidth();
-  if (bitWidth == 0 || (kVectorBlockSizeBit % bitWidth) != 0) {
-    return 1;
-  }
-  return kVectorBlockSizeBit / static_cast<int64_t>(bitWidth);
+  return akg::getBishengStrideAlignTargetForBits(akg::getElementBitWidth(elementType));
 }
 
 // Cast-like ops that change element type (cmp excluded).
@@ -1660,8 +1657,7 @@ struct StoreChainAlignAxisInfo {
 
 static StoreChainAlignAxisInfo resolveLoadUseChainStoreAlignAxisInfo(
   Value loadResult, const llvm::DenseMap<scf::ForOp, int64_t> &forOpToIndex, ArrayRef<scf::ForOp> orderedForOps,
-  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop,
-  const llvm::DenseMap<scf::ForOp, bool> &isWholeTiledLoop) {
+  const llvm::DenseMap<scf::ForOp, int64_t> &tileUpperBoundPerLoop) {
   StoreChainAlignAxisInfo info;
   llvm::SmallPtrSet<Value, kSmallVectorSizeSixteen> visited;
   SmallVector<Value, kSmallVectorSizeEight> worklist;
@@ -1686,8 +1682,9 @@ static StoreChainAlignAxisInfo resolveLoadUseChainStoreAlignAxisInfo(
         if (const std::optional<int64_t> lastVectorizedLoop =
               lastVectorizedLoopIndexBeforeNonVectorizedLastAxis(rawStoreDimLoopIndices, orderedForOps,
                                                                  tileUpperBoundPerLoop);
-            lastVectorizedLoop &&
-            isWholeTiledLoopIndex(*lastVectorizedLoop, orderedForOps, isWholeTiledLoop)) {
+            lastVectorizedLoop) {
+          // Non-contiguous stores require the same physical padding for full
+          // and partial tiles; a dynamic tail does not make the store contiguous.
           info.applyAlignAxis = true;
         }
         continue;
@@ -2069,11 +2066,13 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   }
   SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   DimLoopIndicesToShape(info.dimLoopIndices, bounds);
-  // Pad physical rows without changing the shared logical tile bounds.
-  if (input_.alignBufferSizeTo256Bits && !bounds.empty()) {
-    bounds.back() = ceilFactor(bounds.back(), lastAxis32ByteAlignElems(info.elementType));
+  // Share the physical row layout with ArithToHIVM's buffer-size marks.
+  // Appended alignment axes are already represented in these storage bounds.
+  if (input_.alignBufferSizeTo256Bits) {
+    return akg::computeBishengStructuredNpuVectorStorageBytes(bounds, bounds, info.elementType) *
+           akg::kNpuBitsPerByte;
   }
-  return totalBitsFromShape(bounds, info.elementType, input_.alignBufferSizeTo256Bits);
+  return totalBitsFromShape(bounds, info.elementType, false);
 }
 
 void MemoryPeakEstimator::assignBlockInputBufferAllocTime_(scf::ForOp forOp, int64_t opTimeIndex) {
@@ -2485,7 +2484,7 @@ LoadAlignAxisResolution MemoryPeakEstimator::resolveLoadAppendAlignAxis_(memref:
     }
   }
   const StoreChainAlignAxisInfo storeChainInfo = resolveLoadUseChainStoreAlignAxisInfo(
-    loadOp.getResult(), forOpToIndex_, orderedForOps_, input_.tileUpperBoundPerLoop, input_.isWholeTiledLoop);
+    loadOp.getResult(), forOpToIndex_, orderedForOps_, input_.tileUpperBoundPerLoop);
   if (storeChainInfo.applyAlignAxis) {
     resolution.appendAlignAxis = true;
     resolution.propagateAlignAxis = true;

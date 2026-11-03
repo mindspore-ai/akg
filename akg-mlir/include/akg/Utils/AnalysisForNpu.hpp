@@ -418,6 +418,9 @@ inline int64_t computeBishengNpuVectorStorageBytes(ArrayRef<int64_t> maxPerRankD
     elementBits);
 }
 
+// A rank-1 non-contiguous transfer pads a trailing storage axis, even
+// when its logical vector extent is a dynamic partial tile. Both reads and
+// writes must use this layout; element type changes select their own factor.
 inline int64_t computeBishengRank1StrideAlignedStorageBytes(ArrayRef<int64_t> maxPerRankDim,
                                                             ArrayRef<int64_t> typeShape, Type elemType) {
   int64_t elementBits = getElementBitWidth(elemType);
