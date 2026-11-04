@@ -64,12 +64,15 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "bishengir/Dialect/HACC/Utils/Utils.h"
+#include "mlir/Dialect/Affine/Analysis/AffineStructures.h"
+#include "mlir/Dialect/Affine/IR/AffineValueMap.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Utils/AffineCanonicalizationUtils.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -179,6 +182,8 @@ struct LoopVectorizationCtx {
 
   scf::ForOp scalarLoop;
   scf::ForOp vecLoop;
+  std::optional<int64_t> scalarTripCount;
+  bool staticReductionTile = false;
   VectorizationMode mode;
   unsigned localDim = 0;
 
@@ -416,12 +421,28 @@ static bool shouldCloneScalarOp(Operation &op, LoopVectorizationCtx &ctx) {
   return op.hasAttr(kSkipVectorizeAttr);
 }
 
-static int64_t computeStaticVectorSize(scf::ForOp loop, int64_t maxStep) {
+static std::optional<int64_t> getStaticLoopTripCount(scf::ForOp loop) {
   auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
   auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
   if (ubConst && lbConst) {
-    int64_t tripCount = ubConst.value() - lbConst.value();
-    return std::min(tripCount, maxStep);
+    return std::max<int64_t>(ubConst.value() - lbConst.value(), 0);
+  }
+
+  MLIRContext *context = loop.getContext();
+  AffineMap difference = AffineMap::get(2, 0, getAffineDimExpr(0, context) - getAffineDimExpr(1, context));
+  SmallVector<Value> operands{loop.getUpperBound(), loop.getLowerBound()};
+  affine::fullyComposeAffineMapAndOperands(&difference, &operands);
+  affine::canonicalizeMapAndOperands(&difference, &operands);
+  difference = simplifyAffineMap(difference);
+  if (auto constant = dyn_cast<AffineConstantExpr>(difference.getResult(0))) {
+    return std::max<int64_t>(constant.getValue(), 0);
+  }
+  return std::nullopt;
+}
+
+static int64_t computeStaticVectorSize(std::optional<int64_t> tripCount, int64_t maxStep) {
+  if (tripCount) {
+    return std::min(*tripCount, maxStep);
   }
 
   return maxStep;
@@ -493,16 +514,20 @@ static VectorizationMode getVectorizationMode(scf::ForOp loop, int64_t &maxStepF
   return VectorizationMode::None;
 }
 
-static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
+static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop, std::optional<int64_t> *staticTripCount = nullptr) {
   auto stepConst = loop.getStep().getDefiningOp<arith::ConstantIndexOp>();
   if (!stepConst || stepConst.value() != 1) {
     return {true, false};
   }
 
-  auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
-  auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-
-  bool isDynamic = !(ubConst && lbConst);
+  std::optional<int64_t> tripCount = getStaticLoopTripCount(loop);
+  if (staticTripCount) {
+    *staticTripCount = tripCount;
+  }
+  if (tripCount && *tripCount == 0) {
+    return {true, false};
+  }
+  bool isDynamic = !tripCount.has_value();
 
   return {false, isDynamic};
 }
@@ -557,25 +582,21 @@ static Value createNeutralValue(arith::AtomicRMWKind kind, Type elemType, LoopVe
 
   npuvector::NPUVectorType vecType = ctx.getVectorType(elemType);
 
-  Value neutralVec;
-  if (ctx.isDynamic()) {
-    Value neutralScalar = ctx.builder.create<arith::ConstantOp>(loc, mlir::cast<TypedAttr>(neutralAttr));
+  // Keep neutral initialization as a scalar broadcast; storage optimization
+  // belongs to downstream lowering for both static and dynamic shapes.
+  Value neutralScalar = ctx.builder.create<arith::ConstantOp>(loc, mlir::cast<TypedAttr>(neutralAttr));
 
-    // One (extent, max) pair per result *rank* (not only `?` dims), matching
-    // npuvector.transfer_read in `vectorizeLoad` and `allocBroadcastBuffer` when
-    // dynamicSizes.size() == npuVecType.getRank().
-    SmallVector<Value> dynamicSizes;
-    SmallVector<Value> maxSizes;
-    for (unsigned i = 0; i < ctx.allVectorSizes.size(); ++i) {
-      maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[i]));
-      dynamicSizes.push_back(getRuntimeVectorSizeValue(ctx, i, loc));
-    }
-    neutralVec = ctx.builder.create<npuvector::BroadcastOp>(loc, vecType, neutralScalar, ValueRange(dynamicSizes),
-                                                            ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
-  } else {
-    auto vecAttr = DenseElementsAttr::get(vecType, neutralAttr);
-    neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
+  // One (extent, max) pair per result *rank* (not only `?` dims), matching
+  // npuvector.transfer_read in `vectorizeLoad` and `allocBroadcastBuffer` when
+  // dynamicSizes.size() == npuVecType.getRank().
+  SmallVector<Value> dynamicSizes;
+  SmallVector<Value> maxSizes;
+  for (unsigned i = 0; i < ctx.allVectorSizes.size(); ++i) {
+    maxSizes.push_back(ctx.valueMapping.lookupOrDefault(ctx.allMaxStepValues[i]));
+    dynamicSizes.push_back(getRuntimeVectorSizeValue(ctx, i, loc));
   }
+  Value neutralVec = ctx.builder.create<npuvector::BroadcastOp>(
+    loc, vecType, neutralScalar, ValueRange(dynamicSizes), ValueRange(maxSizes), ctx.builder.getDenseI64ArrayAttr({}));
 
   SmallVector<int> dimOrder;
   dimOrder.reserve(ctx.allVectorSizes.size());
@@ -684,9 +705,8 @@ static void markStaticReductionXTailAxisDynamic(LoopVectorizationCtx &ctx) {
     return;
   }
 
-  std::optional<int64_t> ubOpt = tryConstantIndex(ctx.scalarLoop.getUpperBound());
-  std::optional<int64_t> lbOpt = tryConstantIndex(ctx.scalarLoop.getLowerBound());
-  if (!ubOpt || !lbOpt || ((*ubOpt - *lbOpt) % ctx.allVectorSizes[axisIdx] == 0)) {
+  std::optional<int64_t> tripCount = ctx.scalarTripCount;
+  if (!tripCount || (*tripCount % ctx.allVectorSizes[axisIdx] == 0)) {
     return;
   }
 
@@ -808,16 +828,15 @@ static bool appendLoopToMergedReductionGroup(scf::ForOp loop, scf::ForOp root, O
     return false;
   }
 
-  auto [skip, isDynamic] = checkLoopEligibility(loop);
+  std::optional<int64_t> tripCount;
+  auto [skip, isDynamic] = checkLoopEligibility(loop, &tripCount);
   if (skip || !collectReductionKindsForGroup(loop, builder, group)) {
     return false;
   }
 
-  int64_t vecSize = computeStaticVectorSize(loop, maxStep);
+  int64_t vecSize = computeStaticVectorSize(tripCount, maxStep);
   Value vecSizeValue = nullptr;
 
-  std::optional<int64_t> ubOpt = tryConstantIndex(loop.getUpperBound());
-  std::optional<int64_t> lbOpt = tryConstantIndex(loop.getLowerBound());
   if (isDynamic) {
     if (loop != root && (valueDefinedInsideOp(loop.getLowerBound(), root.getOperation()) ||
                          valueDefinedInsideOp(loop.getUpperBound(), root.getOperation()))) {
@@ -828,8 +847,6 @@ static bool appendLoopToMergedReductionGroup(scf::ForOp loop, scf::ForOp root, O
   Value maxStepValue = builder.create<arith::ConstantIndexOp>(loop.getLoc(), maxStep);
   if (isDynamic) {
     vecSizeValue = computeDynamicVectorSize(loop, maxStepValue, builder, loop.getLoc(), nullptr);
-  } else if (ubOpt && lbOpt && ((*ubOpt - *lbOpt) % vecSize != 0)) {
-    vecSizeValue = maxStepValue;
   }
 
   group.loops.push_back(loop);
@@ -1190,7 +1207,7 @@ static Value createCurrentTileSlice(Value vecArg, LoopVectorizationCtx &ctx, Arr
     }
     sizes.push_back(size);
     if (static_cast<unsigned>(axis) == tileAxis) {
-      resultShape[dim] = ShapedType::kDynamic;
+      resultShape[dim] = tryConstantIndex(size).value_or(ShapedType::kDynamic);
     }
     keepDims.push_back(static_cast<int64_t>(dim));
   }
@@ -3359,18 +3376,20 @@ static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorization
   if (isMergedReductionLoop(ctx) && llvm::is_contained(ctx.mergedReductionLoops, nestedForOp.getOperation())) {
     updateNestedLoopOperands(nestedForOp, ctx);
     LoopVectorizationCtx childCtx = LoopVectorizationCtx::createMergedReductionChild(ctx, nestedForOp);
+    childCtx.scalarTripCount = getStaticLoopTripCount(nestedForOp);
     processLoop(childCtx);
     registerChildResults(childCtx, ctx);
     return success();
   }
 
-  auto [skip, isDynamic] = checkLoopEligibility(nestedForOp);
+  std::optional<int64_t> tripCount;
+  auto [skip, isDynamic] = checkLoopEligibility(nestedForOp, &tripCount);
   if (skip) {
     cloneScalarOp(*nestedForOp.getOperation(), ctx);
     return success();
   }
 
-  int64_t childVecSize = computeStaticVectorSize(nestedForOp, nestedMaxStep);
+  int64_t childVecSize = computeStaticVectorSize(tripCount, nestedMaxStep);
   Value childMaxStep = ctx.builder.create<arith::ConstantIndexOp>(nestedForOp.getLoc(), nestedMaxStep);
   Value childVecSizeVal = isDynamic ? computeDynamicVectorSize(nestedForOp, childMaxStep, ctx.builder,
                                                                nestedForOp.getLoc(), &ctx.valueMapping)
@@ -3380,6 +3399,7 @@ static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorization
 
   LoopVectorizationCtx childCtx = LoopVectorizationCtx::createChild(
     CreateChildParams{ctx, nestedForOp, nestedMode, childVecSize, childVecSizeVal, childMaxStep});
+  childCtx.scalarTripCount = tripCount;
 
   processLoop(childCtx);
   registerChildResults(childCtx, ctx);
@@ -4349,7 +4369,7 @@ static LogicalResult vectorizeRegion(Region &region, LoopVectorizationCtx &ctx) 
 }
 
 static void recordReductionXCurrentTileSize(LoopVectorizationCtx &ctx) {
-  if (ctx.mode != VectorizationMode::ReductionX || !ctx.vecLoop) {
+  if (ctx.mode != VectorizationMode::ReductionX || !ctx.vecLoop || ctx.staticReductionTile) {
     return;
   }
 
@@ -4364,9 +4384,8 @@ static void recordReductionXCurrentTileSize(LoopVectorizationCtx &ctx) {
   }
 
   Location loc = ctx.vecLoop.getLoc();
-  std::optional<int64_t> ubOpt = tryConstantIndex(ctx.vecLoop.getUpperBound());
-  std::optional<int64_t> lbOpt = tryConstantIndex(ctx.vecLoop.getLowerBound());
-  if (ubOpt && lbOpt && ((*ubOpt - *lbOpt) % ctx.allVectorSizes[axisIdx] == 0)) {
+  std::optional<int64_t> tripCount = ctx.scalarTripCount;
+  if (tripCount && (*tripCount % ctx.allVectorSizes[axisIdx] == 0)) {
     return;
   }
 
@@ -4525,6 +4544,231 @@ static Value combineReductionResults(OpBuilder &builder, Location loc, Value lhs
       return builder.create<arith::MinUIOp>(loc, lhs, rhs);
     default:
       return lhs;
+  }
+}
+
+static Value createStaticLoopOffset(OpBuilder &builder, Location loc, Value base, int64_t offset) {
+  if (std::optional<int64_t> constant = tryConstantIndex(base)) {
+    return builder.create<arith::ConstantIndexOp>(loc, *constant + offset);
+  }
+  AffineExpr expr = builder.getAffineDimExpr(0) + offset;
+  return builder.create<affine::AffineApplyOp>(loc, AffineMap::get(1, 0, expr), ValueRange{base});
+}
+
+static scf::ForOp cloneStaticVectorLoop(scf::ForOp loop, Value lower, Value upper, int64_t width,
+                                        ValueRange initializers, OpBuilder &builder) {
+  IRMapping mapping;
+  auto clone = cast<scf::ForOp>(builder.clone(*loop.getOperation(), mapping));
+  clone.getLowerBoundMutable().set(lower);
+  clone.getUpperBoundMutable().set(upper);
+  clone.getInitArgsMutable().assign(initializers);
+  StringRef attr = loop->hasAttr(kReductionXLoopAttr)     ? kReductionXLoopAttr
+                   : loop->hasAttr(kReductionAllLoopAttr) ? kReductionAllLoopAttr
+                                                          : kVectorAttr;
+  for (StringRef other :
+       {kVectorAttr, kReductionXLoopAttr, kReductionYLoopAttr, kReductionAllLoopAttr, kBroadcastLoopAttr}) {
+    clone->removeAttr(other);
+  }
+  clone->setAttr(attr, builder.getI64IntegerAttr(width));
+  return clone;
+}
+
+static void splitElementwiseLoop(scf::ForOp loop, int64_t width, Value bodyEnd, int64_t tailSize, bool isPiecewise,
+                                 OpBuilder &builder) {
+  Location loc = loop.getLoc();
+  Value step = builder.create<arith::ConstantIndexOp>(loc, width);
+  auto body = builder.create<scf::ForOp>(loc, loop.getLowerBound(), bodyEnd, step);
+  OpBuilder pointBuilder = OpBuilder::atBlockBegin(body.getBody());
+  Value pointEnd = createStaticLoopOffset(pointBuilder, loc, body.getInductionVar(), width);
+  cloneStaticVectorLoop(loop, body.getInductionVar(), pointEnd, width, ValueRange{}, pointBuilder);
+  if (tailSize != 0) {
+    if (isPiecewise) {
+      Value tailStep = builder.create<arith::ConstantIndexOp>(loc, tailSize);
+      auto tail = builder.create<scf::ForOp>(loc, bodyEnd, loop.getUpperBound(), tailStep);
+      OpBuilder tailBuilder = OpBuilder::atBlockBegin(tail.getBody());
+      Value tailEnd = createStaticLoopOffset(tailBuilder, loc, tail.getInductionVar(), tailSize);
+      cloneStaticVectorLoop(loop, tail.getInductionVar(), tailEnd, tailSize, ValueRange{}, tailBuilder);
+    } else {
+      cloneStaticVectorLoop(loop, bodyEnd, loop.getUpperBound(), tailSize, ValueRange{}, builder);
+    }
+  }
+  loop.erase();
+}
+
+static LogicalResult buildPiecewiseLoopDomain(scf::ForOp loop, SmallVectorImpl<affine::AffineValueMap> &bounds,
+                                              affine::FlatAffineValueConstraints &domain) {
+  for (Value bound : {loop.getLowerBound(), loop.getUpperBound()}) {
+    affine::AffineValueMap map(AffineMap::getMultiDimIdentityMap(1, loop.getContext()), ValueRange{bound});
+    if (auto minOp = bound.getDefiningOp<affine::AffineMinOp>()) {
+      map.reset(minOp.getAffineMap(), minOp.getMapOperands());
+    }
+    map.composeSimplifyAndCanonicalize();
+    bounds.push_back(map);
+  }
+  for (const auto &bound : bounds) {
+    for (Value operand : bound.getOperands()) {
+      if (domain.containsVar(operand)) {
+        continue;
+      }
+      OpFoldResult lower, upper, step;
+      if (succeeded(scf::matchForLikeLoop(operand, lower, upper, step))) {
+        if (failed(scf::addLoopRangeConstraints(domain, operand, lower, upper, step))) {
+          return failure();
+        }
+      } else {
+        domain.appendSymbolVar(ValueRange{operand});
+      }
+    }
+  }
+  return success();
+}
+
+static bool isPiecewiseBoundNonnegative(const affine::AffineValueMap &bound,
+                                        const affine::FlatAffineValueConstraints &domain) {
+  affine::FlatAffineValueConstraints negative(domain);
+  if (failed(negative.composeMap(&bound))) {
+    return false;
+  }
+  negative.addBound(presburger::BoundType::UB, 0, -1);
+  return negative.isIntegerEmpty();
+}
+
+static LogicalResult constrainPiecewiseMin(const affine::AffineValueMap &bounds,
+                                           const affine::AffineValueMap &candidate,
+                                           affine::FlatAffineValueConstraints &domain) {
+  for (unsigned i = 0; i < bounds.getNumResults(); ++i) {
+    affine::AffineValueMap other(bounds.getAffineMap().getSubMap({i}), bounds.getOperands());
+    affine::AffineValueMap difference;
+    affine::AffineValueMap::difference(other, candidate, &difference);
+    if (failed(domain.composeMap(&difference))) {
+      return failure();
+    }
+    domain.addBound(presburger::BoundType::LB, 0, 0);
+  }
+  return success();
+}
+
+static bool updatePiecewiseTailSize(const affine::AffineValueMap &bound,
+                                    const affine::FlatAffineValueConstraints &domain, int64_t width,
+                                    int64_t &tailSize) {
+  affine::FlatAffineValueConstraints partial(domain);
+  if (failed(partial.composeMap(&bound))) {
+    return false;
+  }
+  partial.addBound(presburger::BoundType::LB, 0, 1);
+  partial.addBound(presburger::BoundType::UB, 0, width - 1);
+  auto sample = partial.findIntegerSample();
+  if (!sample) {
+    return true;
+  }
+  int64_t remainder = int64_t((*sample)[0]);
+  affine::FlatAffineValueConstraints below(partial), above(partial);
+  below.addBound(presburger::BoundType::UB, 0, remainder - 1);
+  above.addBound(presburger::BoundType::LB, 0, remainder + 1);
+  if (!below.isIntegerEmpty() || !above.isIntegerEmpty() || (tailSize != 0 && tailSize != remainder)) {
+    return false;
+  }
+  tailSize = remainder;
+  return true;
+}
+
+// Prove the actual length in every active min region is zero, a full tile, or
+// the same positive tail. Inactive caps do not constrain the tail size.
+static std::optional<int64_t> getPiecewiseLoopTailSize(scf::ForOp loop, int64_t width) {
+  if (!loop.getUpperBound().getDefiningOp<affine::AffineMinOp>()) {
+    return std::nullopt;
+  }
+  SmallVector<affine::AffineValueMap, 2> bounds;
+  affine::FlatAffineValueConstraints domain;
+  if (failed(buildPiecewiseLoopDomain(loop, bounds, domain)) || domain.isIntegerEmpty()) {
+    return std::nullopt;
+  }
+  const auto &lower = bounds[0];
+  const auto &upper = bounds[1];
+  int64_t tailSize = 0;
+  for (unsigned i = 0; i < lower.getNumResults(); ++i) {
+    affine::AffineValueMap low(lower.getAffineMap().getSubMap({i}), lower.getOperands());
+    affine::FlatAffineValueConstraints lowerDomain(domain);
+    if (failed(constrainPiecewiseMin(lower, low, lowerDomain))) {
+      return std::nullopt;
+    }
+    for (unsigned j = 0; j < upper.getNumResults(); ++j) {
+      affine::AffineValueMap high(upper.getAffineMap().getSubMap({j}), upper.getOperands());
+      affine::FlatAffineValueConstraints activeDomain(lowerDomain);
+      if (failed(constrainPiecewiseMin(upper, high, activeDomain))) {
+        return std::nullopt;
+      }
+      if (activeDomain.isIntegerEmpty()) {
+        continue;
+      }
+      affine::AffineValueMap length;
+      affine::AffineValueMap::difference(high, low, &length);
+      AffineMap map = length.getAffineMap();
+      AffineExpr remaining = getAffineConstantExpr(width, loop.getContext()) - map.getResult(0);
+      affine::AffineValueMap capacity(AffineMap::get(map.getNumDims(), map.getNumSymbols(), remaining),
+                                      length.getOperands());
+      // Negative lengths cannot use the existing floor-divided body end.
+      if (!isPiecewiseBoundNonnegative(length, activeDomain) || !isPiecewiseBoundNonnegative(capacity, activeDomain) ||
+          !updatePiecewiseTailSize(length, activeDomain, width, tailSize)) {
+        return std::nullopt;
+      }
+    }
+  }
+  return tailSize;
+}
+
+static bool parentHasTaggedVectorLoop(scf::ForOp loop);
+
+static std::optional<int64_t> getVectorLoopTailSize(scf::ForOp loop, VectorizationMode mode, int64_t width,
+                                                    std::optional<int64_t> tripCount) {
+  if (mode == VectorizationMode::Elementwise && loop.getNumResults() != 0) {
+    return std::nullopt;
+  }
+  if (tripCount) {
+    if (*tripCount <= width || (mode == VectorizationMode::ReductionX && *tripCount % width == 0)) {
+      return std::nullopt;
+    }
+    return *tripCount % width;
+  }
+  if (parentHasTaggedVectorLoop(loop)) {
+    return std::nullopt;
+  }
+  return getPiecewiseLoopTailSize(loop, width);
+}
+
+// Split elementwise loops before creating vectorization contexts so cloned loop axes
+// and scratch metadata are analyzed independently for the body and the tail.
+static void prepareStaticVectorLoops(func::FuncOp funcOp) {
+  SmallVector<scf::ForOp> loops;
+  funcOp.walk<WalkOrder::PostOrder>([&loops](scf::ForOp loop) {
+    if (hasVectorizationAttr(loop)) {
+      loops.push_back(loop);
+    }
+  });
+  for (scf::ForOp loop : loops) {
+    int64_t width = -1;
+    VectorizationMode mode = getVectorizationMode(loop, width);
+    std::optional<int64_t> tripCount;
+    if (mode != VectorizationMode::Elementwise || width <= 0 || checkLoopEligibility(loop, &tripCount).first) {
+      continue;
+    }
+    auto tailSize = getVectorLoopTailSize(loop, mode, width, tripCount);
+    if (!tailSize) {
+      continue;
+    }
+    OpBuilder builder(loop);
+    const bool isPiecewise = !tripCount;
+    Value bodyEnd;
+    if (tripCount) {
+      bodyEnd = createStaticLoopOffset(builder, loop.getLoc(), loop.getLowerBound(), *tripCount - *tailSize);
+    } else {
+      AffineExpr lower = builder.getAffineDimExpr(0);
+      AffineExpr length = builder.getAffineDimExpr(1) - lower;
+      auto map = AffineMap::get(2, 0, lower + length.floorDiv(width) * width);
+      bodyEnd = builder.create<affine::AffineApplyOp>(loop.getLoc(), map,
+                                                      ValueRange{loop.getLowerBound(), loop.getUpperBound()});
+    }
+    splitElementwiseLoop(loop, width, bodyEnd, *tailSize, isPiecewise, builder);
   }
 }
 
@@ -4844,9 +5088,109 @@ static void recordReductionXResultDimOrders(LoopVectorizationCtx &ctx, ArrayRef<
   }
 }
 
+static FailureOr<scf::ForOp> vectorizeReductionSegment(LoopVectorizationCtx &ctx, Value lower, Value upper,
+                                                       int64_t width, ValueRange initializers) {
+  // Each segment analyzes its own scalar copy so failed vectorization and
+  // nested-loop operand remapping cannot change the original fallback loop.
+  IRMapping mapping;
+  auto scalarCopy = cast<scf::ForOp>(ctx.builder.clone(*ctx.scalarLoop.getOperation(), mapping));
+  OpBuilder::InsertPoint continuation(scalarCopy->getBlock(), std::next(scalarCopy->getIterator()));
+  LoopVectorizationCtx segment = ctx;
+  segment.scalarLoop = scalarCopy;
+  segment.staticReductionTile = true;
+  segment.iterArgTileSlices.clear();
+  segment.allLoopToVectorDim.clear();
+  for (auto [loop, axis] : ctx.allLoopToVectorDim) {
+    segment.allLoopToVectorDim[mapping.lookupOrDefault(loop)] = axis;
+  }
+  for (Operation *&loop : segment.mergedReductionLoops) {
+    loop = mapping.lookupOrDefault(loop);
+  }
+  unsigned axis = segment.allLoopToVectorDim.lookup(scalarCopy);
+  segment.allVectorSizes[axis] = width;
+  segment.allVectorSizeValues[axis] = nullptr;
+  ctx.builder.setInsertionPoint(scalarCopy);
+  Location loc = scalarCopy.getLoc();
+  Value step = ctx.builder.create<arith::ConstantIndexOp>(loc, width);
+  segment.allMaxStepValues[axis] = step;
+  segment.currentVectorSizeValues[axis] = width == ctx.allVectorSizes[axis] ? Value() : step;
+  segment.vecLoop = ctx.builder.create<scf::ForOp>(loc, lower, upper, step, initializers,
+                                                   [](OpBuilder &, Location, Value, ValueRange) {});
+  SmallVector<Value> yields;
+  auto scalarYield = cast<scf::YieldOp>(scalarCopy.getBody()->getTerminator());
+  if (failed(vectorizeLoopBody(segment)) || failed(collectReductionXYieldValues(segment, scalarYield, yields))) {
+    segment.vecLoop.erase();
+    scalarCopy.erase();
+    ctx.builder.restoreInsertionPoint(continuation);
+    return failure();
+  }
+  ctx.builder.create<scf::YieldOp>(loc, yields);
+  recordReductionXResultDimOrders(segment, yields);
+  for (Value result : segment.vecLoop.getResults()) {
+    ctx.valueDimOrder[result] = segment.valueDimOrder.lookup(result);
+  }
+  scalarCopy.erase();
+  ctx.builder.setInsertionPointAfter(segment.vecLoop);
+  return segment.vecLoop;
+}
+
+static LogicalResult reductionXBodyTailVectorize(LoopVectorizationCtx &ctx, int64_t tailSize) {
+  Location loc = ctx.scalarLoop.getLoc();
+  unsigned axis = ctx.allLoopToVectorDim.lookup(ctx.scalarLoop);
+  int64_t width = ctx.allVectorSizes[axis];
+  ctx.allVectorSizeValues[axis] = nullptr;
+  SmallVector<Value> initializers;
+  if (!collectReductionNeutralVecs(ctx, loc, initializers) || initializers.empty()) {
+    return failure();
+  }
+  Value lower = ctx.scalarLoop.getLowerBound();
+  Value upper = ctx.scalarLoop.getUpperBound();
+  Value bodyEnd;
+  if (ctx.scalarTripCount) {
+    bodyEnd = createStaticLoopOffset(ctx.builder, loc, lower, *ctx.scalarTripCount - tailSize);
+  } else {
+    AffineExpr low = ctx.builder.getAffineDimExpr(0);
+    AffineExpr length = ctx.builder.getAffineDimExpr(1) - low;
+    auto map = AffineMap::get(2, 0, low + length.floorDiv(width) * width);
+    bodyEnd = ctx.builder.create<affine::AffineApplyOp>(loc, map, ValueRange{lower, upper});
+  }
+  auto body = vectorizeReductionSegment(ctx, lower, bodyEnd, width, initializers);
+  if (failed(body)) {
+    return failure();
+  }
+  ctx.vecLoop = *body;
+  if (tailSize != 0) {
+    auto tail = vectorizeReductionSegment(ctx, bodyEnd, upper, tailSize, body->getResults());
+    if (failed(tail)) {
+      for (Value result : body->getResults()) {
+        ctx.valueDimOrder.erase(result);
+      }
+      ctx.builder.setInsertionPointAfter(*body);
+      body->erase();
+      ctx.vecLoop = nullptr;
+      return failure();
+    }
+    ctx.vecLoop = *tail;
+  }
+  SmallVector<Value> results;
+  for (unsigned lane = 0; lane < initializers.size(); ++lane) {
+    if (isMergedReductionLoop(ctx) && !isMergedReductionRoot(ctx)) {
+      results.push_back(ctx.vecLoop.getResult(lane));
+    } else {
+      results.push_back(buildReductionXLaneFinalResult(ctx, loc, lane));
+    }
+  }
+  finalizeReductionXOutputs(ctx, results);
+  return success();
+}
+
 static LogicalResult reductionXVectorize(LoopVectorizationCtx &ctx) {
   if (ctx.parent == nullptr) {
     ctx.builder.setInsertionPoint(ctx.scalarLoop);
+  }
+  unsigned axis = ctx.allLoopToVectorDim.lookup(ctx.scalarLoop);
+  if (auto tailSize = getVectorLoopTailSize(ctx.scalarLoop, ctx.mode, ctx.allVectorSizes[axis], ctx.scalarTripCount)) {
+    return reductionXBodyTailVectorize(ctx, *tailSize);
   }
   ctx.vecLoop = createEmptyVectorizedLoop(ctx);
   if (!ctx.vecLoop) {
@@ -5479,7 +5823,7 @@ static LogicalResult runPhase2RankZeroSweep(func::FuncOp funcOp) {
 }
 
 static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder &builder, int64_t maxStepFromAttr,
-                             bool isDynamic) {
+                             std::optional<int64_t> tripCount) {
   OpBuilder attrBuilder(builder.getContext());
   attrBuilder.setInsertionPoint(loop);
   if (mode == VectorizationMode::ReductionX) {
@@ -5492,21 +5836,23 @@ static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder 
         ctx.mergedReductionLoops.push_back(groupLoop.getOperation());
       }
       ctx.localDim = 0;
+      ctx.scalarTripCount = tripCount;
       processLoop(ctx);
       return;
     }
   }
 
-  int64_t actualStep = computeStaticVectorSize(loop, maxStepFromAttr);
+  int64_t actualStep = computeStaticVectorSize(tripCount, maxStepFromAttr);
   Value maxStepValue = attrBuilder.create<arith::ConstantIndexOp>(loop.getLoc(), maxStepFromAttr);
   Value vectorSizeValue =
-    isDynamic ? computeDynamicVectorSize(loop, maxStepValue, attrBuilder, loop.getLoc(), nullptr) : Value();
+    !tripCount ? computeDynamicVectorSize(loop, maxStepValue, attrBuilder, loop.getLoc(), nullptr) : Value();
 
   SmallVector<int64_t> vecSizes = {actualStep};
   SmallVector<Value> vecSizeValues = {vectorSizeValue};
   SmallVector<Value> maxSteps = {maxStepValue};
   LoopVectorizationCtx ctx(LoopVectorizationInit{builder, std::move(vecSizes), std::move(vecSizeValues),
                                                  std::move(maxSteps), mode, loop, loop.getInductionVar()});
+  ctx.scalarTripCount = tripCount;
 
   const bool innerIvIsScalar = (mode == VectorizationMode::ReductionY || mode == VectorizationMode::Broadcast);
   if (!innerIvIsScalar) {
@@ -5538,6 +5884,8 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
     if (!hacc::utils::isDevice(funcOp)) {
       return;
     }
+
+    prepareStaticVectorLoops(funcOp);
 
     OpBuilder builder(&getContext());
 
@@ -5572,12 +5920,12 @@ class NPUVectorVectorize : public mlir::scf::impl::NPUVectorVectorizeBase<NPUVec
         continue;
       }
 
-      auto [skip, isDynamic] = checkLoopEligibility(loop);
-      if (skip) {
+      std::optional<int64_t> tripCount;
+      if (checkLoopEligibility(loop, &tripCount).first) {
         continue;
       }
 
-      runVectorization(loop, mode, builder, maxStepFromAttr, isDynamic);
+      runVectorization(loop, mode, builder, maxStepFromAttr, tripCount);
     }
 
     if (failed(runPhase2RankZeroSweep(funcOp))) {
